@@ -1,0 +1,38 @@
+Worked example output: glibc-2.28 (RHEL8) -> glibc-2.34 (RHEL9)
+Reproduced by running the three scripts in order (see ../README.md).
+
+$ ./audit-locale-diff.sh glibc-2.28 glibc-2.34
+Total de locales con cambios de contenido: 283
+---
+¿Cambió la tabla maestra de collation (afecta a casi todos por herencia)?
+(empty output -- unchanged)
+---
+Lista completa en /tmp/changed_locales.txt
+
+$ git diff -U0 glibc-2.28..glibc-2.34 -- localedata/locales/ > /tmp/localedata_full.diff
+$ python3 filter_lc_collate_changes.py glibc-2.28
+Archivos chequeados: 283
+Archivos con cambios dentro de LC_COLLATE: 2
+localedata/locales/or_IN
+localedata/locales/sv_SE
+
+$ python3 resolve_copy_closure.py glibc-2.34 or_IN sv_SE
+Directly changed (own LC_COLLATE diff): ['or_IN', 'sv_SE']
+Additionally affected via copy-chain inheritance: 2
+  sv_FI -> copy "sv_SE"
+  sv_FI@euro -> copy "sv_SE"
+
+Full affected set (locale identifiers): ['or_IN', 'sv_FI', 'sv_FI@euro', 'sv_SE']
+
+--- Confirmed empirically on real RHEL8/RHEL9 nodes running PostgreSQL 18 ---
+
+sv_SE / sv_FI, printf 'va\nVasa\nvind\nwa\nWasa\nwind\n' | LC_COLLATE=<locale>.utf8 sort:
+  glibc 2.28:  va, wa, Vasa, Wasa, vind, wind
+  glibc 2.34:  va, Vasa, vind, wa, Wasa, wind
+
+or_IN, printf 'ହ\nକ୍ଷ\nଔ\nଁ\nଂ\nଃ\nକ\n' | LC_COLLATE=or_IN sort:
+  glibc 2.28:  ଔ, କ, ହ, କ୍ଷ, ଂ, ଃ, ଁ
+  glibc 2.34:  ଔ, ଁ, ଂ, ଃ, କ, ହ, କ୍ଷ
+
+Negative controls (en_US wiki test, de_DE, fr_FR): identical output on both
+glibc versions -- confirms the audit correctly excludes them.
