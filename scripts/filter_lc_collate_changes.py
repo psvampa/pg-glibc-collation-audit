@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-A partir de un diff unificado (-U0) de localedata/locales/ entre dos tags de glibc,
-determina cuales de los archivos cambiados tienen el cambio DENTRO de la seccion
-LC_COLLATE...END LC_COLLATE (la unica que afecta el orden de sort), descartando
-cambios en LC_TIME, LC_MONETARY, comentarios, etc.
+Given a unified diff (-U0) of localedata/locales/ between two glibc tags,
+determine which of the changed files have their change INSIDE the
+LC_COLLATE...END LC_COLLATE section (the only one that affects sort order),
+discarding changes in LC_TIME, LC_MONETARY, comments, etc.
 
-Uso:
+Usage:
   cd glibc
-  git diff -U0 <tag_viejo>..<tag_nuevo> -- localedata/locales/ > /tmp/localedata_full.diff
-  python3 filter_lc_collate_changes.py <tag_viejo>
+  git diff -U0 <old_tag>..<new_tag> -- localedata/locales/ > /tmp/localedata_full.diff
+  python3 filter_lc_collate_changes.py <old_tag>
 """
 import re, subprocess, sys
 
@@ -51,7 +51,7 @@ for fname, ranges in files.items():
     if overlap:
         changed_lc_collate.append(fname)
 
-print(f"Archivos chequeados: {len(files)}")
-print(f"Archivos con cambios dentro de LC_COLLATE: {len(changed_lc_collate)}")
+print(f"Files checked: {len(files)}")
+print(f"Files with changes inside LC_COLLATE: {len(changed_lc_collate)}")
 for fn in sorted(changed_lc_collate):
     print(fn)
