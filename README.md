@@ -13,8 +13,7 @@ moving the reported version. It's a version comparison, not a check of the
 real sort rules. This tool answers the real question directly, from glibc's
 own source.
 
-<details>
-<summary><strong>The method</strong> (click to expand: step-by-step technical detail)</summary>
+## The method
 
 If the source file that defines a locale's collation rules did not change
 between two glibc releases, that locale's sort order **cannot** have
@@ -54,8 +53,6 @@ exactly which ones.
 The output of steps 3 and 4 together is the real, complete set of affected
 locale identifiers for that version pair, plus the short list that needs
 empirical confirmation regardless of what the diff says.
-
-</details>
 
 ## Confirming on a real system
 
