@@ -173,8 +173,3 @@ expansion needs an empirical check no matter what the diff says.
 `git`, `python3` (stdlib only), `bash`. The confirmation step needs a real
 PostgreSQL instance with the relevant `glibc-langpack-*` packages installed
 on each OS under test.
-
-## Background
-
-Written to accompany a Percona blog post on glibc collation risk across
-RHEL OS upgrades. Link: TBD once published.
