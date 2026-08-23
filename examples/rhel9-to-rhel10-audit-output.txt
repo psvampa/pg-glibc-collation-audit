@@ -1,0 +1,55 @@
+Worked example output: glibc-2.34 (RHEL9) -> glibc-2.39 (RHEL10)
+Reproduced by running the four scripts in order (see ../README.md).
+
+$ ./audit-locale-diff.sh glibc-2.34 glibc-2.39
+Total locale files with content changes: 318
+---
+Did the master collation table change? (affects nearly everything via inheritance)
+(empty output -- unchanged)
+---
+Full list in /tmp/changed_locales.txt
+
+$ git diff -U0 glibc-2.34..glibc-2.39 -- localedata/locales/ > /tmp/localedata_full.diff
+$ python3 filter_lc_collate_changes.py glibc-2.34
+Files checked: 318
+Files with changes inside LC_COLLATE: 3
+localedata/locales/ber_DZ
+localedata/locales/kab_DZ
+localedata/locales/th_TH
+
+$ python3 resolve_copy_closure.py glibc-2.39 ber_DZ kab_DZ th_TH
+Directly changed (own LC_COLLATE diff): ['ber_DZ', 'kab_DZ', 'th_TH']
+Additionally affected via copy-chain inheritance: 0
+
+Full affected set (locale identifiers): ['ber_DZ', 'kab_DZ', 'th_TH']
+
+$ python3 flag_algorithmic_ranges.py glibc-2.39
+Locales at glibc-2.39 whose LC_COLLATE uses range-expansion syntax (algorithmic, not explicit): 1
+  ko_KR
+
+--- What ber_DZ / kab_DZ actually changed: not a rule, a role swap ---
+
+At glibc 2.34, ber_DZ held the full explicit Amazigh/Berber collation rules
+and kab_DZ did `copy "ber_DZ"`. At glibc 2.39, kab_DZ holds the same rules
+verbatim and ber_DZ does `copy "kab_DZ"`. Both files are correctly flagged
+as changed (their content differs byte-for-byte), but the ruleset itself is
+identical, just relocated to the other file.
+
+--- Confirmed empirically on real RHEL9/RHEL10 nodes running PostgreSQL 18 ---
+
+ber_DZ, kab_DZ: identical sort order on both nodes (consistent with the
+role-swap theory above -- no observable difference).
+
+th_TH: real rewrite of dozens of `collating-element` definitions for Thai
+consonant + vowel-before-consonant sequences. Our basic sample showed no
+observable difference, but this locale deserves a broader empirical check
+than we ran here before trusting that result for a real workload.
+
+ko_KR: identical sort order on both nodes for this pair. Still flagged by
+step 4 as structurally unresolved by any file diff -- "no observed
+difference here" is not the same claim as "provably safe". ardentperf's
+own checksum table shows the same badge for RHEL9 and RHEL10 across every
+language they test, consistent with what we found for this specific pair
+(their reported ko_KR difference was for RHEL8 vs RHEL9, not this pair).
+
+en_US (negative control): identical, as expected.

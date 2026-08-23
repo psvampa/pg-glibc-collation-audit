@@ -99,6 +99,64 @@ Full output and the PostgreSQL confirmation script for this pair:
 [`examples/rhel8-to-rhel9-audit-output.txt`](examples/rhel8-to-rhel9-audit-output.txt),
 [`examples/rhel8-to-rhel9.sql`](examples/rhel8-to-rhel9.sql).
 
+## Worked example: RHEL9 to RHEL10 (glibc 2.34 to 2.39)
+
+Same steps, different pair. Result: **`ber_DZ`, `kab_DZ`, `th_TH`** flagged
+by steps 1 to 3, `ko_KR` flagged again by step 4. On inspection, `ber_DZ`
+and `kab_DZ` turned out to be a role swap (the same collation ruleset,
+relocated to the other file), not an actual rule change, confirmed by an
+empirical test showing no observable difference. `th_TH` is a real
+rewrite; our own empirical sample showed no difference but was narrow, so
+treat it as a candidate for a broader check on real Thai data, not as
+cleared. Full output: [`examples/rhel9-to-rhel10-audit-output.txt`](examples/rhel9-to-rhel10-audit-output.txt).
+
+## Tested on
+
+- **RHEL8 to RHEL9** (glibc 2.28 to 2.34) and **RHEL9 to RHEL10** (glibc
+  2.34 to 2.39): full method run, confirmed against real nodes running
+  PostgreSQL, not just the source diff.
+- **RHEL7 to RHEL8** (glibc 2.17 to 2.28, the large jump that rewrote the
+  master table): source-diff steps run and documented, but not confirmed
+  against real RHEL7 nodes (RHEL7's `systemd` doesn't boot under a
+  cgroups-v2-only container host, a limitation of our test environment,
+  not of the method).
+
+## Known limitation: `ko_KR`
+
+As of glibc 2.39 (the newest tag checked), `ko_KR` is still the only locale
+flagged by step 4, on every version pair we've run. We cannot currently
+resolve whether its sort order actually changes between any two glibc
+versions; only that a file diff alone can never answer that question for
+this specific locale, because its collation weights are computed by
+`localedef`, not stored in its source file. If you run `ko_KR` and are
+migrating across a glibc boundary, treat it as unresolved and run your own
+empirical test against representative data, not as cleared by this tool.
+
+## Relationship to ardentperf/glibc-unicode-sorting
+
+This tool is a complement to [ardentperf/glibc-unicode-sorting](https://github.com/ardentperf/glibc-unicode-sorting),
+not a replacement for it. Different method, different blind spots:
+
+- **ardentperf sorts ~25 million real strings and checksums the result.**
+  Broad, sampled, empirical. It can catch a real behavior change from
+  *anywhere* in glibc, including changes this tool cannot see by
+  construction, like the `localedata/charmaps/UTF-8` update or the
+  `ko_KR` range-expansion case above. It found a `ko_KR` difference
+  between RHEL8 and RHEL9 that this tool cannot confirm or deny.
+- **This tool diffs glibc's locale source and proves the negative.** It
+  isn't sampled, so it covers all ~355 locales, not the roughly nine
+  languages ardentperf's fixed test set covers. Running the RHEL9-to-RHEL10
+  audit found real `LC_COLLATE` changes in `ber_DZ`, `kab_DZ`, and `th_TH`
+  (Berber, Kabyle, and Thai), none of which are in ardentperf's tested
+  language list, so none of them would show up there one way or the other.
+
+If your locale is one of the roughly nine languages ardentperf tests,
+check both: their result plus this tool's result gives you sampled
+evidence and a deterministic proof for whatever this tool can prove. If
+your locale isn't in their list, this tool is the only one of the two that
+says anything about it at all, except for the `ko_KR`-style edge case
+where only a broader sampled test like theirs can settle it.
+
 ## Scope
 
 This audits **sort order (`LC_COLLATE`) only**. It says nothing about
