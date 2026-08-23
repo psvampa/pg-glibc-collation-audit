@@ -89,7 +89,7 @@ flagged by a plain file diff. `ko_KR` is flagged by step 4 as needing
 empirical confirmation regardless of its (unchanged) file diff. Every other
 locale (`en_US`, `de_DE`, `fr_FR`, ...) is unaffected, confirmed both by the
 empty master-table diff and by running real `sort`/PostgreSQL tests on
-RHEL8 and RHEL9 nodes. We ran the empirical test for `ko_KR` too (everyday
+RHEL8 and RHEL9 nodes. I ran the empirical test for `ko_KR` too (everyday
 Korean text and the specific Hangul range touched by a related glibc bug
 fix) and found no observable difference on this version pair, though a
 third-party broader test using a much larger string corpus reports one, so
@@ -106,7 +106,7 @@ by steps 1 to 3, `ko_KR` flagged again by step 4. On inspection, `ber_DZ`
 and `kab_DZ` turned out to be a role swap (the same collation ruleset,
 relocated to the other file), not an actual rule change, confirmed by an
 empirical test showing no observable difference. `th_TH` is a real
-rewrite; our own empirical sample showed no difference but was narrow, so
+rewrite; my own empirical sample showed no difference but was narrow, so
 treat it as a candidate for a broader check on real Thai data, not as
 cleared. Full output: [`examples/rhel9-to-rhel10-audit-output.txt`](examples/rhel9-to-rhel10-audit-output.txt).
 
@@ -118,13 +118,13 @@ cleared. Full output: [`examples/rhel9-to-rhel10-audit-output.txt`](examples/rhe
 - **RHEL7 to RHEL8** (glibc 2.17 to 2.28, the large jump that rewrote the
   master table): source-diff steps run and documented, but not confirmed
   against real RHEL7 nodes (RHEL7's `systemd` doesn't boot under a
-  cgroups-v2-only container host, a limitation of our test environment,
+  cgroups-v2-only container host, a limitation of my test environment,
   not of the method).
 
 ## Known limitation: `ko_KR`
 
 As of glibc 2.39 (the newest tag checked), `ko_KR` is still the only locale
-flagged by step 4, on every version pair we've run. We cannot currently
+flagged by step 4, on every version pair I've run. I cannot currently
 resolve whether its sort order actually changes between any two glibc
 versions; only that a file diff alone can never answer that question for
 this specific locale, because its collation weights are computed by

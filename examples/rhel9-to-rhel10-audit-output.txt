@@ -41,15 +41,15 @@ ber_DZ, kab_DZ: identical sort order on both nodes (consistent with the
 role-swap theory above -- no observable difference).
 
 th_TH: real rewrite of dozens of `collating-element` definitions for Thai
-consonant + vowel-before-consonant sequences. Our basic sample showed no
+consonant + vowel-before-consonant sequences. My basic sample showed no
 observable difference, but this locale deserves a broader empirical check
-than we ran here before trusting that result for a real workload.
+than I ran here before trusting that result for a real workload.
 
 ko_KR: identical sort order on both nodes for this pair. Still flagged by
 step 4 as structurally unresolved by any file diff -- "no observed
 difference here" is not the same claim as "provably safe". ardentperf's
 own checksum table shows the same badge for RHEL9 and RHEL10 across every
-language they test, consistent with what we found for this specific pair
+language they test, consistent with what I found for this specific pair
 (their reported ko_KR difference was for RHEL8 vs RHEL9, not this pair).
 
 en_US (negative control): identical, as expected.
