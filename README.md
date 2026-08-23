@@ -132,30 +132,32 @@ this specific locale, because its collation weights are computed by
 migrating across a glibc boundary, treat it as unresolved and run your own
 empirical test against representative data, not as cleared by this tool.
 
-## Relationship to ardentperf/glibc-unicode-sorting
+## Relationship to broader sampled testing approaches
 
-This tool is a complement to [ardentperf/glibc-unicode-sorting](https://github.com/ardentperf/glibc-unicode-sorting),
-not a replacement for it. Different method, different blind spots:
+This tool is a complement to broad, sampled empirical approaches (sorting
+millions of real strings and comparing checksums across OS/glibc
+versions), not a replacement for them. Different method, different blind
+spots:
 
-- **ardentperf sorts ~25 million real strings and checksums the result.**
-  Broad, sampled, empirical. It can catch a real behavior change from
-  *anywhere* in glibc, including changes this tool cannot see by
-  construction, like the `localedata/charmaps/UTF-8` update or the
-  `ko_KR` range-expansion case above. It found a `ko_KR` difference
+- **A sampled test** can catch a real behavior change from *anywhere* in
+  glibc, including changes this tool cannot see by construction, like the
+  `localedata/charmaps/UTF-8` update or the `ko_KR` range-expansion case
+  above. A public dataset of that kind reported a `ko_KR` difference
   between RHEL8 and RHEL9 that this tool cannot confirm or deny.
-- **This tool diffs glibc's locale source and proves the negative.** It
-  isn't sampled, so it covers all ~355 locales, not the roughly nine
-  languages ardentperf's fixed test set covers. Running the RHEL9-to-RHEL10
-  audit found real `LC_COLLATE` changes in `ber_DZ`, `kab_DZ`, and `th_TH`
-  (Berber, Kabyle, and Thai), none of which are in ardentperf's tested
-  language list, so none of them would show up there one way or the other.
+- **This tool** diffs glibc's locale source and proves the negative. It
+  isn't sampled, so it covers all ~355 locales, not just a handful of
+  major languages a fixed sampled test set happens to cover. Running the
+  RHEL9-to-RHEL10 audit found real `LC_COLLATE` changes in `ber_DZ`,
+  `kab_DZ`, and `th_TH` (Berber, Kabyle, and Thai), languages outside what
+  a typical sampled test set covers, so none of them would show up there
+  one way or the other.
 
-If your locale is one of the roughly nine languages ardentperf tests,
-check both: their result plus this tool's result gives you sampled
-evidence and a deterministic proof for whatever this tool can prove. If
-your locale isn't in their list, this tool is the only one of the two that
-says anything about it at all, except for the `ko_KR`-style edge case
-where only a broader sampled test like theirs can settle it.
+If your locale is one of the handful of major languages a sampled test
+covers, check both: sampled evidence plus a deterministic proof for
+whatever this tool can prove. If your locale isn't in that kind of test's
+language list, this tool is the one that says anything about it at all,
+except for the `ko_KR`-style edge case where only a broader sampled test
+can settle it.
 
 ## Scope
 
