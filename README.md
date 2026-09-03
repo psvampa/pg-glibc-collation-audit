@@ -143,6 +143,10 @@ Two version pairs run end to end. The two middle columns are the answer;
 | CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>inherited by 328 locales | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
 | everything else — `en_US`, `de_DE`,<br>`fr_FR`, `zh_CN`, … | ⚪ Unaffected | ⚪ Unaffected | `LC_COLLATE` and code both unchanged |
 
+If you saved a result from this tool before 2026-09-03, check
+[CHANGELOG.md](CHANGELOG.md) first — `ko_KR` was reported unaffected for the
+RHEL8-to-RHEL9 pair and it changes.
+
 - 🔴 **Changed** — sort order moves. Reindex.
 - 🟡 **Unresolved** — flagged and *not* cleared. Treat as changed until tested.
 - 🟢 **No difference** — the audit flagged it, but a targeted test or a
@@ -161,6 +165,12 @@ Note that `ko_KR` is the row a data-only audit gets wrong, and `C.UTF-8` the
 row no source diff can reach.
 
 ### Worked example: RHEL8 to RHEL9 (glibc 2.28 to 2.34)
+
+`or_IN`, `sv_SE`, `sv_FI`, `sv_FI@euro` and `ko_KR` change. Everything else is
+clear, including `zh_CN`.
+
+<details>
+<summary><strong>The full run, and the evidence for each verdict</strong></summary>
 
 ```sh
 cd scripts
@@ -213,11 +223,39 @@ Every other locale (`en_US`, `de_DE`, `fr_FR`, `zh_CN`, ...) is unaffected,
 confirmed by the unchanged templates and by real `sort`/PostgreSQL tests on
 RHEL8 and RHEL9 nodes.
 
+#### The `ko_KR` mechanism, and its minimal test case
+
+`ko_KR`'s `LC_COLLATE` is `<UAC00>` / `..` / `<UD7A3>` (the Hangul syllables),
+immediately followed by the Hanja list starting at `<U4F3D>`. Before the fix
+the cursor was left on `<UD7A2>` instead of `<UD7A3>` after expanding the
+ellipsis, so the first Hanja was linked in *before* `<UD7A3>` — leaving the
+last Hangul syllable dangling at the very end of the section:
+
+```
+$ printf '가\n힢\n힣\n伽\n佳\n' | LC_ALL=ko_KR.UTF-8 sort | tr '\n' ' '
+glibc 2.28:  가 힢 伽 佳 힣      <- U+D7A3 dangling at the end
+glibc 2.34:  가 힢 힣 伽 佳      <- U+D7A3 back in place
+```
+
+That is the whole difference: `힣` (U+D7A3) versus any Hanja. It is also why a
+hand-picked sample of everyday Korean text shows nothing — U+D7A3 is the last
+syllable of the Hangul block, and text essentially never reaches it. Derive
+test strings from the rule that changed; for a `localedef` change that means
+the boundaries of the affected range.
+
 Full output and the PostgreSQL confirmation script for this pair:
 [`examples/rhel8-to-rhel9-audit-output.txt`](examples/rhel8-to-rhel9-audit-output.txt),
 [`examples/rhel8-to-rhel9.sql`](examples/rhel8-to-rhel9.sql).
 
+</details>
+
 ### Worked example: RHEL9 to RHEL10 (glibc 2.34 to 2.39)
+
+`ber_DZ`, `kab_DZ` and `th_TH` are flagged; only `th_TH` stays unresolved.
+`ko_KR` is flagged by step 4 and then cleared by step 5.
+
+<details>
+<summary><strong>The full run, and how step 5 clears a step-4 locale</strong></summary>
 
 Same steps, different pair. Result: **`ber_DZ`, `kab_DZ`, `th_TH`** flagged
 by steps 1 to 3, `ko_KR` flagged again by step 4. On inspection, `ber_DZ`
@@ -240,6 +278,8 @@ step-4 locale, rather than only ever flagging it, is the point of step 5.
 
 Full output: [`examples/rhel9-to-rhel10-audit-output.txt`](examples/rhel9-to-rhel10-audit-output.txt).
 
+</details>
+
 ## Tested on
 
 - **RHEL8 to RHEL9** (glibc 2.28 to 2.34): full method run, plus empirical
@@ -255,38 +295,6 @@ Full output: [`examples/rhel9-to-rhel10-audit-output.txt`](examples/rhel9-to-rhe
   against real RHEL7 nodes (RHEL7's `systemd` doesn't boot under a
   cgroups-v2-only container host, a limitation of my test environment,
   not of the method).
-
-## Resolved: `ko_KR` between glibc 2.28 and 2.34
-
-Earlier versions of this document listed `ko_KR` as unresolved. It is not:
-it **changes** between glibc 2.28 and 2.34, and the cause is commit
-`82292c99b2` (Bug 22668) in `locale/programs/ld-collate.c`, which corrected
-the collation cursor at the end of an ellipsis expansion. `ko_KR`'s own
-source file is byte-identical across those tags, so only step 5 finds this.
-
-The mechanism, which also gives the minimal test case. `ko_KR`'s `LC_COLLATE`
-is `<UAC00>` / `..` / `<UD7A3>` (the Hangul syllables), immediately followed
-by the Hanja list starting at `<U4F3D>`. Before the fix, the cursor was left
-on `<UD7A2>` instead of `<UD7A3>` after expanding the ellipsis, so the first
-Hanja was linked in *before* `<UD7A3>` — leaving the last Hangul syllable
-dangling at the very end of the section. Confirmed on real RHEL8 and RHEL9
-nodes:
-
-```
-$ printf '가\n힢\n힣\n伽\n佳\n' | LC_ALL=ko_KR.UTF-8 sort | tr '\n' ' '
-glibc 2.28:  가 힢 伽 佳 힣      <- U+D7A3 dangling at the end
-glibc 2.34:  가 힢 힣 伽 佳      <- U+D7A3 back in place
-```
-
-That is the whole difference: `힣` (U+D7A3) versus any Hanja. My earlier
-empirical test came back negative because it used everyday Korean text, and
-U+D7A3 is the last syllable of the Hangul block — text essentially never
-reaches it. The lesson is about the empirical step in general: a hand-picked
-sample that shows no difference is weak evidence, and much weaker than it
-feels. Derive the test strings from the rule that changed, which for a
-`localedef` change means the boundaries of the affected range.
-
-If you run `ko_KR` across a 2.28-to-2.34 boundary (RHEL8 to RHEL9), reindex.
 
 ## Known limitations
 
@@ -318,7 +326,18 @@ If you run `ko_KR` across a 2.28-to-2.34 boundary (RHEL8 to RHEL9), reindex.
 ## Relationship to ardentperf/glibc-unicode-sorting
 
 This tool is a complement to [ardentperf/glibc-unicode-sorting](https://github.com/ardentperf/glibc-unicode-sorting),
-not a replacement for it. Different method, different blind spots:
+not a replacement for it: they sort ~25 million real strings and checksum the
+result across roughly nine languages, this diffs glibc's source across all
+~355 locales. Check both where they overlap.
+
+One thing to know before reading their tables: they report a `glibc` **and**
+an `icu` engine. Between RHEL8 and RHEL9 every locale changes under ICU (60.3
+to 67, a full CLDR jump) while only `ko` and `C.UTF-8` change under glibc, so
+a `zh` change read off those tables is an ICU result and carries no `REINDEX`
+implication for a libc collation.
+
+<details>
+<summary><strong>Where each method is blind, and how their tables read</strong></summary>
 
 - **ardentperf sorts ~25 million real strings and checksums the result.**
   Broad, empirical, and covering every Unicode code point. It can catch a
@@ -349,6 +368,8 @@ tables is an ICU result, not a glibc one, and carries no `REINDEX`
 implication for a libc collation. Their set also contains no `sv` or
 `or_IN`, the two locales this tool finds for the same pair, so the two
 results do not overlap as much as they first appear.
+
+</details>
 
 ## Scope
 
