@@ -1,38 +1,229 @@
 Worked example output: glibc-2.28 (RHEL8) -> glibc-2.34 (RHEL9)
-Reproduced by running the three scripts in order (see ../README.md).
+Reproduced by running the five scripts in order (see ../README.md).
+Long result lists are written to $PG_GLIBC_AUDIT_OUT (default
+/tmp/pg-glibc-collation-audit/) and referenced, not inlined.
 
 $ ./audit-locale-diff.sh glibc-2.28 glibc-2.34
 Total locale files with content changes: 283
+Full list in /tmp/pg-glibc-collation-audit/changed_locales.txt
 ---
-Did the master collation table change? (affects nearly everything via inheritance)
-(empty output -- unchanged)
+Collation templates -- did they change?
+  iso14651_t1            UNCHANGED
+  iso14651_t1_common     UNCHANGED
+  iso14651_t1_pinyin     UNCHANGED
 ---
-Full list in /tmp/changed_locales.txt
+Collation templates by blast radius at glibc-2.34 (locales inheriting via `copy`):
+   333 locales inherit from iso14651_t1_common
+   328 locales inherit from iso14651_t1
+    32 locales inherit from es_ES  <== has some change in this version pair
+    15 locales inherit from am_ET  <== has some change in this version pair
+     9 locales inherit from hi_IN  <== has some change in this version pair
+     7 locales inherit from ti_ER  <== has some change in this version pair
+     6 locales inherit from ca_ES  <== has some change in this version pair
+     5 locales inherit from en_DK  <== has some change in this version pair
+     4 locales inherit from hr_HR
+     2 locales inherit from da_DK
 
-$ git diff -U0 glibc-2.28..glibc-2.34 -- localedata/locales/ > /tmp/localedata_full.diff
-$ python3 filter_lc_collate_changes.py glibc-2.28
-Files checked: 283
+Changed files that others inherit from (33) -- reach if the change turns out to be in LC_COLLATE.
+NOT a collation verdict: most of these changed LC_TIME or LC_MONETARY. Step 2 filters.
+  es_ES: 32 dependent locale(s)
+  am_ET: 15 dependent locale(s)
+  hi_IN: 9 dependent locale(s)
+  ti_ER: 7 dependent locale(s)
+  ca_ES: 6 dependent locale(s)
+  en_DK: 5 dependent locale(s)
+  sv_SE: 2 dependent locale(s)
+  so_SO: 2 dependent locale(s)
+  ... and 25 more with 1-2 dependents: nl_NL, ne_NP, fr_BE, en_ZA, en_CA, dz_BT, wa_BE, tr_TR, ta_IN, sq_AL, ru_RU, ks_IN, fr_FR, fil_PH, en_US, de_DE, de_CH, cs_CZ, crh_UA, br_FR, bo_CN, bn_IN, bho_IN, ber_DZ, aa_ER
+---
+Next: python3 filter_lc_collate_changes.py glibc-2.28 glibc-2.34
+
+$ python3 filter_lc_collate_changes.py glibc-2.28 glibc-2.34
+Locale files changed between glibc-2.28 and glibc-2.34: 283
+  modified: 281   added: 2   deleted: 0   renamed: 0
+Of the 281 content-changed file(s): 2 touch LC_COLLATE, 271 do not, 8 have no LC_COLLATE block
+
 Files with changes inside LC_COLLATE: 2
-localedata/locales/or_IN
-localedata/locales/sv_SE
+  localedata/locales/or_IN
+  localedata/locales/sv_SE
+
+Locale names for step 3:
+  python3 resolve_copy_closure.py glibc-2.34 or_IN sv_SE
+
+Added at glibc-2.34 (2), not analysed for a change of order -- they had no previous order to change. They cannot affect an existing index, but do check them if you plan to start using them:
+  localedata/locales/ckb_IQ
+  localedata/locales/mnw_MM
 
 $ python3 resolve_copy_closure.py glibc-2.34 or_IN sv_SE
 Directly changed (own LC_COLLATE diff): ['or_IN', 'sv_SE']
 Additionally affected via copy-chain inheritance: 2
-  sv_FI -> copy "sv_SE"
-  sv_FI@euro -> copy "sv_SE"
+  sv_FI: copy "sv_SE" -> reaches sv_SE
+  sv_FI@euro: copy "sv_SE" -> reaches sv_SE
 
-Full affected set (locale identifiers): ['or_IN', 'sv_FI', 'sv_FI@euro', 'sv_SE']
+Full affected set (4 locale source file(s)): ['or_IN', 'sv_FI', 'sv_FI@euro', 'sv_SE']
 
---- Confirmed empirically on real RHEL8/RHEL9 nodes running PostgreSQL 18 ---
+Generated locales per localedata/SUPPORTED -- these are the names `locale -a` and pg_collation show (6):
+  or_IN
+  sv_FI
+  sv_FI.UTF-8
+  sv_FI@euro
+  sv_SE
+  sv_SE.UTF-8
 
-sv_SE / sv_FI, printf 'va\nVasa\nvind\nwa\nWasa\nwind\n' | LC_COLLATE=<locale>.utf8 sort:
-  glibc 2.28:  va, wa, Vasa, Wasa, vind, wind
-  glibc 2.34:  va, Vasa, vind, wa, Wasa, wind
+Full list also written to /tmp/pg-glibc-collation-audit/step3_affected_locales.txt
 
-or_IN, printf 'ହ\nକ୍ଷ\nଔ\nଁ\nଂ\nଃ\nକ\n' | LC_COLLATE=or_IN sort:
-  glibc 2.28:  ଔ, କ, ହ, କ୍ଷ, ଂ, ଃ, ଁ
-  glibc 2.34:  ଔ, ଁ, ଂ, ଃ, କ, ହ, କ୍ଷ
+$ python3 flag_algorithmic_ranges.py glibc-2.34
+Locales checked at glibc-2.34: 355
+Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 2
+  iso14651_t1
+      .. ..;IGNORE;IGNORE;IGNORE
+  ko_KR
+      ..
 
-Negative controls (en_US wiki test, de_DE, fr_FR): identical output on both
-glibc versions -- confirms the audit correctly excludes them.
+Additionally exposed via `copy` inheritance: 328
+  via iso14651_t1: 328 locale(s)
+      aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, agr_PE, ak_GH, am_ET, an_ES, anp_IN, ar_AE, ar_BH, ...
+
+Full set needing empirical confirmation: 330 locale source file(s), 473 generated locale name(s) per localedata/SUPPORTED
+  e.g. aa_DJ, aa_DJ.UTF-8, aa_ER, aa_ER@saaho, aa_ET, af_ZA, af_ZA.UTF-8, agr_PE, ...
+  full list of generated names: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
+
+These cannot be cleared by a source diff alone. Run
+  python3 diff_collation_code.py <old_tag> glibc-2.34
+to see whether localedef's expansion logic changed between your two
+versions; if it did, test these empirically before trusting a
+'not flagged' result from steps 1-3.
+
+$ python3 diff_collation_code.py glibc-2.28 glibc-2.34
+Collation code changes between glibc-2.28 and glibc-2.34
+
+TIER 1 -- weight assignment and comparison
+  (a change here can reorder any locale, including ones whose data file is unchanged)
+  locale/programs/ld-collate.c: 2 substantive hunk(s), 4 comment/copyright hunk(s) filtered
+      @@ -1483,6 +1483,9 @@ order for `%.*s' already defined at %s:%Zu"),
+         +  /* Move the cursor to the last entry in the ellipsis.
+         +     Subsequent operations need to start from the last entry.  */
+      >> +  collate->cursor = endp;
+      @@ -2401,8 +2404,8 @@ collate_output (struct localedef_t *locale, const struct charmap_t *charmap,
+         -  /* Add 40% and find the next prime number.  */
+      >> -  elem_size = next_prime (elem_size * 1.4);
+         +  /* Add 50% and find the next prime number.  */
+      >> +  elem_size = next_prime (elem_size + (elem_size >> 1));
+      commits:
+        82292c99b2 LC_COLLATE: Fix last character ellipsis handling (Bug 22668)
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        14ef9c185b treewide: fix incorrect spelling of indices in comments
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        5abcddd794 Fix parentheses error in iconvconfig.c and ld-collate.c [BZ #24372]
+        ac64195ccd iconv, localedef: avoid floating point rounding differences [BZ #24372]
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
+  string/strcoll_l.c: no substantive change (2 comment/copyright hunk(s) filtered)
+  string/strxfrm_l.c: no substantive change (3 comment/copyright hunk(s) filtered)
+  locale/weight.h: no substantive change (2 comment/copyright hunk(s) filtered)
+  locale/weightwc.h: no substantive change (2 comment/copyright hunk(s) filtered)
+  locale/coll-lookup.h: no substantive change (2 comment/copyright hunk(s) filtered)
+
+TIER 2 -- parsing and serialisation
+  (a change here can alter the compiled tables without touching the weight logic)
+  locale/programs/linereader.c: no substantive change (2 comment/copyright hunk(s) filtered)
+  locale/programs/locfile.c: 2 substantive hunk(s), 2 comment/copyright hunk(s) filtered
+      @@ -702,7 +702,7 @@ write_locale_data (const char *output_path, int catidx, const char *category,
+      >> -  const char **other_paths;
+      >> +  const char **other_paths = NULL;
+      @@ -827,9 +827,22 @@ failure while writing data for category `%s'"), category);
+         -  /* Compare the file with the locale data files for the same category in
+         -     other locales, and see if we can reuse it, to save disk space.  */
+      >> -  other_paths = siblings (output_path);
+         +  /* Compare the file with the locale data files for the same category
+         +     in other locales, and see if we can reuse it, to save disk space.
+         +     If the user specified --no-hard-links to localedef then hard_links
+         +     is false, other_paths remains NULL and we skip the optimization
+         +     below.  The use of --no-hard-links is distribution specific since
+         +     some distros have post-processing hard-link steps and so doing this
+         +     here is a waste of time.  Worse than a waste of time in rpm-based
+         +     distributions it can result in build determinism issues from
+         +     build-to-build since some files may get a hard link in one pass but
+         +     not in another (if the files happened to be created in parallel).  */
+      >> +  if (hard_links)
+      >> +    other_paths = siblings (output_path);
+         +
+         +  /* If there are other paths, then walk the sibling paths looking for
+         +     files with the same content so we can hard link and reduce disk
+         +     space usage.  */
+      commits:
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
+        8cebd4ffe6 Add --no-hard-links option to localedef (bug 23923)
+  locale/programs/locfile.h: no substantive change (2 comment/copyright hunk(s) filtered)
+  locale/programs/3level.h: no substantive change (2 comment/copyright hunk(s) filtered)
+
+4 substantive hunk(s) found. Locale data alone does not settle this pair.
+Lines marked >> are the code changes; read them and decide whether they can
+move weights. If any can, every locale listed by
+  python3 flag_algorithmic_ranges.py glibc-2.34
+needs an empirical sort-order test, however clean its data diff is.
+
+--- Confirmed empirically: Rocky 8 (glibc 2.28-251.el8_10.40) vs Rocky 9
+    (glibc 2.34-275.el9_8), both PostgreSQL 16.15, deployed with anydbver.
+    Same glibc package versions as ardentperf's RHEL8/RHEL9 rows. ---
+
+CHANGED
+
+  sv_SE   printf 'va\nVasa\nvind\nwa\nWasa\nwind\n' | LC_ALL=sv_SE.UTF-8 sort
+    2.28:  va wa Vasa Wasa vind wind
+    2.34:  va Vasa vind wa Wasa wind
+
+  or_IN   printf 'ହ\nକ୍ଷ\nଔ\nଁ\nଂ\nଃ\nକ\n' | LC_ALL=or_IN sort
+    2.28:  ଔ କ ହ କ୍ଷ ଂ ଃ ଁ
+    2.34:  ଔ ଁ ଂ ଃ କ ହ କ୍ଷ
+    (matches the source diff exactly. A side measurement: strcoll ties among
+    ~21,700 random pairs drop from 5,315 on 2.28 to 29 on 2.34 -- the or_IN
+    rewrite filled in weights that were previously absent.)
+
+  ko_KR   printf '가\n힢\n힣\n伽\n佳\n' | LC_ALL=ko_KR.UTF-8 sort
+    2.28:  가 힢 伽 佳 힣      <- U+D7A3 dangling at the end
+    2.34:  가 힢 힣 伽 佳
+    Data file byte-identical between the tags; found only by step 5
+    (commit 82292c99b2, Bug 22668). This is the case a data-only audit
+    gets wrong.
+
+  C.utf8  U+10FFFF, U+FFFF, U+07FF, U+007F
+    2.28:  FFFF, 10FFFF, 007F, 07FF     <- not codepoint order
+    2.34:  007F, 07FF, FFFF, 10FFFF
+    Not visible to this audit at all: no upstream source file before 2.35.
+    See README, Known limitations.
+
+UNCHANGED (negative controls -- the audit correctly excludes these)
+
+  en_US, de_DE, fr_FR: identical output on both versions.
+  zh_CN  (inherits iso14651_t1_pinyin, byte-identical 2.28..2.42):
+    2.28 == 2.34:  伽 假 一 龥
+  en_US / zh_TW over the iso14651_t1 Han range (U+4E00..U+9FA5), the range
+  step 4 flags and step 5 cannot clear from source:
+    2.28 == 2.34:  龦 一 龤 龥
+    Unchanged because an explicit <U9FA5> line follows the ellipsis, so the
+    stale cursor re-inserts U+9FA5 where it already was. Predicted from the
+    source, then confirmed.
+
+SQL TEMPLATE (sql/collation_confirmation_template.sql, PostgreSQL 16.15)
+
+  All seven queries run clean on both nodes. collversion reads 2.28 on the
+  el8 node and 2.34 on the el9 node. The inventory queries return the
+  expected rows against a purpose-built schema: a btree index, a text
+  RANGE-partitioned table (the case REINDEX does not fix), five columns, and
+  a CHECK constraint doing a text range comparison.
+
+  One correction to an earlier claim about this template: PostgreSQL breaks
+  strcoll ties itself by comparing bytes, so ORDER BY on a libc collation is
+  already a total, plan-independent order. Verified two ways -- empirically
+  across seqscan and index-scan plans on both versions, and in the PostgreSQL
+  source: the strcmp tie-break sits in both the row comparator and the
+  sortsupport comparator in every release from 13 to 18, abbreviated keys
+  return "indeterminate" rather than "equal" on a tie and so cannot bypass
+  it, and nondeterministic collations (the only case that skips the
+  tie-break) are rejected for every provider except ICU. The COLLATE "C" is
+  a no-op. Tie order IS unspecified in sort(1), which resolves tied lines by
+  input order, so feed both sides byte-identical input.
