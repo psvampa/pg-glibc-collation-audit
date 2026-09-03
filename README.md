@@ -19,10 +19,17 @@ If the source file that defines a locale's collation rules did not change
 between two glibc releases, that locale's sort order **cannot** have
 changed — provided the code that compiles and compares those rules did not
 change either. That's deterministic, not sampled: no need to guess or
-brute-force-test every string. Steps 1 to 3 check the data; step 4 identifies
-exactly which locales the data alone cannot settle, and step 5 checks the
-code, which is what decides whether step 4's list matters for your two
-versions.
+brute-force-test every string.
+
+Five steps. **1 to 3** check the locale data: what changed, whether the
+change was inside `LC_COLLATE`, and which other locales inherit it.
+**Step 4** identifies the locales the data alone can never settle, because
+their weights are computed by `localedef` rather than stored in the file.
+**Step 5** diffs that code, which is what decides whether step 4's list
+matters for your two versions.
+
+<details>
+<summary><strong>The five steps in detail</strong> — what each one does and why</summary>
 
 1. **`scripts/audit-locale-diff.sh <old_tag> <new_tag>`** clones glibc
    (shallow, blobs on demand), lists every locale file with *any* change
@@ -71,6 +78,8 @@ never clear on its own; step 5 says whether that matters for your two
 versions. If step 5 reports no substantive change, a clean data diff is
 sufficient even for the locales step 4 flags. If it reports one, every
 locale step 4 lists needs an empirical test regardless of its data diff.
+
+</details>
 
 ## Confirming on a real system
 
