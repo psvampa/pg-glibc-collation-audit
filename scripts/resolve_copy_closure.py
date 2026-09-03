@@ -1,66 +1,98 @@
 #!/usr/bin/env python3
 """
-Given the set of locale files with a REAL (non-inherited) LC_COLLATE change
-between two glibc tags (output of filter_lc_collate_changes.py), find every
-OTHER locale file that inherits its LC_COLLATE via `copy "<name>"` from one
-of those changed files -- directly or transitively.
+Given the locale files with a REAL (non-inherited) LC_COLLATE change between
+two glibc tags (output of filter_lc_collate_changes.py), find every OTHER
+locale that inherits its LC_COLLATE via `copy "<name>"` -- directly or
+transitively.
 
 This closes a gap in filter_lc_collate_changes.py: that script only flags
 files whose OWN LC_COLLATE block changed. A locale that just does
-`copy "sv_SE"` and adds no tailoring of its own will never show up in a
-source diff (its file didn't change), but its actual sort order changes
-whenever sv_SE's does.
+`copy "sv_SE"` and adds no tailoring of its own never shows up in a source
+diff (its file didn't change), but its actual sort order changes whenever
+sv_SE's does.
+
+Two things this gets right that are easy to get wrong:
+
+  * Arguments may be bare names or full paths. Step 2 prints paths
+    (localedata/locales/sv_SE); comparing those against bare names matches
+    nothing and reports "0 additionally affected" without any error, which is
+    exactly the wrong answer in the reassuring direction. Names are
+    normalised, and unknown names are a hard error rather than a silent miss.
+  * A locale can carry more than one `copy`. om_ET copies both am_ET and
+    om_KE; following only the first hides any change to the second.
 
 Usage:
-  python3 resolve_copy_closure.py <tag> <changed_file1> [<changed_file2> ...]
+  python3 resolve_copy_closure.py <tag> <locale> [<locale> ...] [--repo <path>]
 
 Example:
   python3 resolve_copy_closure.py glibc-2.34 or_IN sv_SE
 """
-import re, subprocess, sys
+import argparse
+import os
+import sys
 
-tag = sys.argv[1]
-changed_direct = set(sys.argv[2:])
+import glibc_locale_data as g
 
-files = subprocess.run(
-    ['git', 'ls-tree', '-r', '--name-only', tag, '--', 'localedata/locales/'],
-    capture_output=True, timeout=30
-).stdout.decode('utf-8', errors='replace').splitlines()
 
-copy_of = {}
-for f in files:
-    name = f.split('/')[-1]
-    content = subprocess.run(['git', 'show', f'{tag}:{f}'],
-                              capture_output=True, timeout=30).stdout.decode('utf-8', errors='replace')
-    m = re.search(r'\nLC_COLLATE\b(.*?)\nEND LC_COLLATE', content, re.S)
-    if not m:
-        continue
-    cm = re.search(r'copy\s+"([^"]+)"', m.group(1))
-    if cm:
-        copy_of[name] = cm.group(1)
+def main(argv):
+    ap = argparse.ArgumentParser(
+        description="Close a set of changed locales over the LC_COLLATE `copy` graph.")
+    ap.add_argument('tag', help="glibc tag whose copy graph to walk")
+    ap.add_argument('locales', nargs='+',
+                    help="changed locales, as bare names or paths")
+    ap.add_argument('--repo', help="path to the glibc clone (autodetected)")
+    opts = ap.parse_args(argv)
 
-def resolve_chain(name, seen=None):
-    if seen is None:
-        seen = []
-    if name in seen:
-        return seen
-    seen = seen + [name]
-    if name in copy_of:
-        return resolve_chain(copy_of[name], seen)
-    return seen
+    repo = g.find_repo(opts.repo)
+    g.check_refs(repo, opts.tag)
 
-affected_by_inheritance = {}
-for loc in copy_of:
-    if loc in changed_direct:
-        continue
-    chain = resolve_chain(loc)
-    hit = next((c for c in chain[1:] if c in changed_direct), None)
-    if hit:
-        affected_by_inheritance[loc] = hit
+    changed = {os.path.basename(name.strip()) for name in opts.locales
+               if name.strip()}
+    graph = g.build_copy_graph(repo, opts.tag)
 
-print(f"Directly changed (own LC_COLLATE diff): {sorted(changed_direct)}")
-print(f"Additionally affected via copy-chain inheritance: {len(affected_by_inheritance)}")
-for loc, via in sorted(affected_by_inheritance.items()):
-    print(f"  {loc} -> copy \"{via}\"")
-print()
-print(f"Full affected set (locale identifiers): {sorted(changed_direct | set(affected_by_inheritance))}")
+    known = {os.path.basename(p) for p in g.list_locale_files(repo, opts.tag)}
+    unknown = sorted(changed - known)
+    if unknown:
+        g.die(f"not locale file(s) at {opts.tag}: {', '.join(unknown)}\n"
+              f"       (a typo here would otherwise look like "
+              f"'nothing else is affected')")
+    no_collate = sorted(changed - set(graph))
+    if no_collate:
+        print(f"note: {', '.join(no_collate)} have no LC_COLLATE block at "
+              f"{opts.tag}; nothing can inherit collation from them.",
+              file=sys.stderr)
+
+    inherited = g.inherited_from(graph, changed)
+    supported = g.supported_map(repo, opts.tag)
+
+    print(f"Directly changed (own LC_COLLATE diff): {sorted(changed)}")
+    print(f"Additionally affected via copy-chain inheritance: {len(inherited)}")
+    for loc, via in sorted(inherited.items()):
+        shown = ', '.join(f'copy "{t}"' for t in graph.get(loc, [])) or '?'
+        print(f"  {loc}: {shown} -> reaches {via}")
+
+    affected = sorted(changed | set(inherited))
+    print()
+    print(f"Full affected set ({len(affected)} locale source file(s)): {affected}")
+
+    # The audit works in source file names, but an admin and pg_collation see
+    # generated names with codesets. Map one to the other.
+    generated = sorted({n for loc in affected for n in supported.get(loc, [])})
+    unbuilt = [loc for loc in affected if not supported.get(loc)]
+    print()
+    if generated:
+        print(f"Generated locales per localedata/SUPPORTED -- these are the "
+              f"names `locale -a` and pg_collation show ({len(generated)}):")
+        for name in generated:
+            print(f"  {name}")
+    if unbuilt:
+        print(f"Not listed in localedata/SUPPORTED (not built by default, so "
+              f"normally absent from `locale -a`): {', '.join(unbuilt)}")
+    if len(affected) > len(changed):
+        path = g.write_list('step3_affected_locales.txt', generated or affected)
+        print(f"\nFull list also written to {path}")
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))
