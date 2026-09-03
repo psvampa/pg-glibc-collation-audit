@@ -118,6 +118,19 @@ step 3 prints (`sv_SE.UTF-8`), not the source file names.
   tie-break is skipped, are rejected for every provider except ICU. So
   `ORDER BY` on a libc collation is always a total, plan-independent order.
   The `COLLATE "C"` in the template is a no-op kept to state intent.
+- **The database default is the answer for most columns, and it is a
+  separate question.** A `text` column with no explicit `COLLATE` does not
+  carry a libc collation — it carries OID 100, `default`, a pointer resolved
+  at runtime from `pg_database`. In a typical database that is most text
+  columns; in a container it is usually all of them, because `initdb`
+  inherits the locale from the environment and minimal images ship
+  `LANG=C.UTF-8`. The template asks `pg_database` first and says plainly
+  whether the database is exposed, then treats default-collated columns as in
+  scope when it is. `C.UTF-8` under the `libc` provider **is** exposed:
+  PostgreSQL special-cases only the literal strings `C` and `POSIX` to byte
+  comparison, so libc `C.UTF-8` goes through `strcoll` like any other locale.
+  The `builtin` provider's `C.UTF-8` (PG 17+) is a different implementation
+  and is not exposed.
 - Besides the index inventory, it reports **text partition keys**, every
   column carrying an affected collation, and a manual-review list of
   `CHECK`/`EXCLUDE` constraints. A partition key matters most: if the
@@ -318,6 +331,14 @@ Full output: [`examples/rhel9-to-rhel10-audit-output.txt`](examples/rhel9-to-rhe
 
   This does not affect `COLLATE "C"`, which is byte order and immutable, but
   it does affect indexes built on `C.UTF-8`. Test that one empirically.
+
+  This is the configuration to watch, because it is the default almost
+  everywhere `initdb` runs in a container: a `libc` provider with `C.UTF-8` as
+  the database collation means every text column without an explicit `COLLATE`
+  is exposed to a glibc upgrade, while the source-diff audit is structurally
+  blind to that locale. The SQL template covers the PostgreSQL half; nothing
+  covers the source half, so for `C.UTF-8` the empirical comparison is not
+  optional.
 - **Upstream tags are not your distro's glibc.** RHEL8 ships
   `glibc-2.28-251.el8` with hundreds of backports; a backported collation
   change would be invisible to a `glibc-2.28..glibc-2.34` diff. The

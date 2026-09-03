@@ -12,14 +12,65 @@
 -- Notes before you run it:
 --   * It DROPS AND RECREATES a table named collation_test in the current
 --     schema. Point it at a scratch database.
---   * The last query uses pg_collation_actual_version(), which requires
---     PostgreSQL 15 or newer. On 13/14, delete that block.
+--   * Needs PostgreSQL 15 or newer: it reads pg_database.datlocprovider and
+--     calls pg_collation_actual_version(). On 13/14, drop the datlocprovider
+--     conditions (no database can use a non-libc provider there) and delete
+--     the actual-version block.
 --   * Use the generated locale names the audit prints (sv_SE.UTF-8, not
 --     sv_SE), and check `locale -a` first: if a locale is not generated on the
 --     box, sort/PostgreSQL silently fall back to C, and two boxes both missing
 --     it will agree with each other while proving nothing.
 
 SELECT pg_import_system_collations('pg_catalog');
+
+-- READ THIS FIRST. It changes how every inventory below reads.
+--
+-- A column declared `text` with no explicit COLLATE does not get a libc
+-- collation. It gets OID 100, `default`, whose collprovider is 'd' -- a
+-- pointer resolved at runtime from pg_database. In a typical database that is
+-- MOST text columns, and in a container it is usually all of them, because
+-- initdb inherits the locale from the environment and minimal images ship
+-- LANG=C.UTF-8.
+--
+-- So the question "is this database exposed to a glibc collation change?" is
+-- answered here, once, and not per column. If datlocprovider is 'c' and
+-- datcollate is anything other than C or POSIX, every default-collated column
+-- in the database is exposed -- C.UTF-8 very much included: PostgreSQL
+-- special-cases only the literal strings "C" and "POSIX" to byte comparison
+-- (src/backend/utils/adt/pg_locale_libc.c), so libc C.UTF-8 goes through
+-- strcoll like any other locale. The `builtin` provider's C.UTF-8 (PG 17+) is
+-- a different thing and is not exposed.
+\echo '--- is this database exposed at all? ---'
+SELECT d.datname,
+       d.datlocprovider AS provider,
+       d.datcollate,
+       CASE
+         WHEN d.datlocprovider <> 'c'
+           THEN 'not libc -- a glibc change does not affect the default'
+         WHEN d.datcollate IN ('C', 'POSIX')
+           THEN 'byte order -- immune'
+         ELSE 'EXPOSED -- every column with no explicit COLLATE uses this'
+       END AS default_collation_status
+FROM pg_database d
+WHERE d.datname = current_database();
+
+-- One definition of "exposed", used by every inventory below: an explicit
+-- libc collation other than C/POSIX, OR the database default when that
+-- resolves to one. Temporary and session-scoped -- it disappears when you
+-- disconnect and changes nothing in the database.
+CREATE TEMP VIEW exposed_collation AS
+SELECT c.oid AS colloid,
+       c.collname,
+       CASE WHEN c.collprovider = 'd'
+            THEN 'database default -> ' || d.datcollate
+            ELSE c.collname
+       END AS effective_collation
+FROM pg_collation c
+CROSS JOIN pg_database d
+WHERE d.datname = current_database()
+  AND ( (c.collprovider = 'c' AND c.collname NOT IN ('C', 'POSIX'))
+     OR (c.collprovider = 'd' AND d.datlocprovider = 'c'
+         AND d.datcollate NOT IN ('C', 'POSIX')) );
 
 -- Confirms which glibc version this collation was imported against.
 SELECT collname, collcollate, collversion
@@ -73,15 +124,13 @@ ORDER BY pos;
 SELECT i.indexrelid::regclass AS index_name,
        i.indrelid::regclass   AS table_name,
        am.amname              AS access_method,
-       c.collname
+       x.effective_collation
 FROM pg_index i
 JOIN pg_class ir ON ir.oid = i.indexrelid
 JOIN pg_am am ON am.oid = ir.relam
 CROSS JOIN LATERAL unnest(i.indcollation::oid[]) AS ic(oid)
-JOIN pg_collation c ON c.oid = ic.oid
-WHERE c.collprovider = 'c'
-  AND c.collname NOT IN ('C', 'POSIX')
-  AND ir.relnamespace NOT IN ('pg_catalog'::regnamespace,
+JOIN exposed_collation x ON x.colloid = ic.oid
+WHERE ir.relnamespace NOT IN ('pg_catalog'::regnamespace,
                               'information_schema'::regnamespace)
 ORDER BY table_name, index_name;
 
@@ -92,13 +141,11 @@ ORDER BY table_name, index_name;
 -- moved. Check this before you migrate, not after.
 \echo '--- partitioned tables keyed on a non-C/POSIX libc collation (REINDEX does NOT fix these) ---'
 SELECT pt.partrelid::regclass AS partitioned_table,
-       c.collname,
+       x.effective_collation,
        pg_get_partkeydef(pt.partrelid) AS partition_key
 FROM pg_partitioned_table pt
 CROSS JOIN LATERAL unnest(pt.partcollation::oid[]) AS pc(oid)
-JOIN pg_collation c ON c.oid = pc.oid
-WHERE c.collprovider = 'c'
-  AND c.collname NOT IN ('C', 'POSIX')
+JOIN exposed_collation x ON x.colloid = pc.oid
 ORDER BY partitioned_table;
 
 -- Every column carrying such a collation, indexed or not. This is the full
@@ -108,16 +155,14 @@ ORDER BY partitioned_table;
 SELECT a.attrelid::regclass AS table_name,
        a.attname            AS column_name,
        t.typname            AS type,
-       c.collname
+       x.effective_collation
 FROM pg_attribute a
 JOIN pg_class k ON k.oid = a.attrelid
 JOIN pg_type t ON t.oid = a.atttypid
-JOIN pg_collation c ON c.oid = a.attcollation
+JOIN exposed_collation x ON x.colloid = a.attcollation
 WHERE a.attnum > 0
   AND NOT a.attisdropped
   AND k.relkind IN ('r', 'p', 'm', 'f')
-  AND c.collprovider = 'c'
-  AND c.collname NOT IN ('C', 'POSIX')
   AND k.relnamespace NOT IN ('pg_catalog'::regnamespace,
                              'information_schema'::regnamespace)
 ORDER BY table_name, column_name;
@@ -142,12 +187,10 @@ WHERE con.contype IN ('c', 'x')
   AND EXISTS (
         SELECT 1
         FROM pg_attribute a
-        JOIN pg_collation c ON c.oid = a.attcollation
+        JOIN exposed_collation x ON x.colloid = a.attcollation
         WHERE a.attrelid = con.conrelid
           AND a.attnum > 0
-          AND NOT a.attisdropped
-          AND c.collprovider = 'c'
-          AND c.collname NOT IN ('C', 'POSIX'))
+          AND NOT a.attisdropped)
 ORDER BY table_name, constraint_name;
 
 -- PostgreSQL's own signal: fires on ANY glibc version bump, whether or not
@@ -155,8 +198,20 @@ ORDER BY table_name, constraint_name;
 -- patches collation data without moving the reported version. Conservative in
 -- one direction, blind in the other -- which is why this audit exists.
 -- Requires PostgreSQL 15+.
-\echo '--- collversion mismatch check (PostgreSQL 15+) ---'
+\echo '--- collversion mismatch, named collations (PostgreSQL 15+) ---'
 SELECT collname, collversion, pg_collation_actual_version(oid) AS actual
 FROM pg_collation
 WHERE collprovider = 'c'
   AND collversion IS DISTINCT FROM pg_collation_actual_version(oid);
+
+-- The database default has its own version field, and pg_collation has no row
+-- for it -- the query above cannot see it. This is the same blind spot the
+-- inventories had: ask pg_database, not pg_collation.
+\echo '--- collversion mismatch, the database default (PostgreSQL 15+) ---'
+SELECT datname,
+       datcollate,
+       datcollversion,
+       pg_database_collation_actual_version(oid) AS actual
+FROM pg_database
+WHERE datlocprovider = 'c'
+  AND datcollversion IS DISTINCT FROM pg_database_collation_actual_version(oid);

@@ -4,6 +4,42 @@ Findings live in the [README](README.md). This file records what this tool
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-03 (second entry)
+
+### The SQL template reported nothing for columns using the database default
+
+If you ran `sql/collation_confirmation_template.sql` and it reported no
+affected indexes, run it again. On a database whose default collation is a
+libc locale other than `C`/`POSIX` — which is the norm, and is what `initdb`
+produces in a container from `LANG=C.UTF-8` — it reported **zero** while real
+indexes were exposed.
+
+A `text` column declared with no explicit `COLLATE` does not carry a libc
+collation. `pg_type` gives `text` a `typcollation` of `default`, so the column
+gets OID 100, whose `collprovider` is `'d'` — a pointer resolved at runtime
+from `pg_database` by `init_database_collation()`. Every inventory query in
+the template filtered `collprovider = 'c'`, so all of those columns fell
+outside it. In a typical database that is most text columns.
+
+Measured on a real PostgreSQL 18 instance with 45 databases, all
+`libc` + `C.UTF-8`: the template reported **0** exposed indexes where **119**
+were exposed, across 19 databases.
+
+The template now asks `pg_database` first, states plainly whether the
+database is exposed at all, and treats default-collated columns as in scope
+when it is. Every inventory row now names its effective collation, so a row
+reads either `sv_SE.utf8` or `database default -> C.UTF-8`. Also added the
+missing counterpart to the `collversion` check: `pg_collation` has no row for
+the database default, so that mismatch is now read from
+`pg_database.datcollversion` via `pg_database_collation_actual_version()`.
+
+Worth stating explicitly, because it compounds the `C.UTF-8` limitation
+below: for a `libc` + `C.UTF-8` database this tool used to be blind end to
+end — the source diff cannot see `C.UTF-8` (no upstream file before glibc
+2.35) and the SQL template could not see the columns using it. The SQL half
+is fixed. The source half cannot be, so for that configuration the empirical
+comparison is not optional.
+
 ## 2026-09-03
 
 ### `ko_KR` was reported unaffected between glibc 2.28 and 2.34. It changes.
