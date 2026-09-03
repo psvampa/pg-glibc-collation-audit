@@ -96,7 +96,13 @@ regardless of whether it showed up in steps 1 to 3.
 psql -f sql/collation_confirmation_template.sql   # edit placeholders first
 ```
 
-Two things about that script worth knowing:
+Check `locale -a` before comparing: if a locale isn't generated on the box,
+`sort`/PostgreSQL silently fall back to `C`, and two boxes both missing it
+will agree with each other while proving nothing. Use the generated names
+step 3 prints (`sv_SE.UTF-8`), not the source file names.
+
+<details>
+<summary><strong>What the template checks, and two traps</strong></summary>
 
 - **Feed both sides byte-identical input.** glibc's `strcoll` really does
   report distinct strings as equal — measured on RHEL8/RHEL9, about 0.1% of
@@ -119,12 +125,42 @@ Two things about that script worth knowing:
   they are stored in, and no amount of reindexing fixes that — the rows have
   to be moved. A `REINDEX` list is not the whole answer.
 
-Check `locale -a` before comparing: if a locale isn't generated on the box,
-`sort`/PostgreSQL silently fall back to `C`, and two boxes both missing it
-will agree with each other while proving nothing. Use the generated names
-step 3 prints (`sv_SE.UTF-8`), not the source file names.
+</details>
 
-## Worked example: RHEL8 to RHEL9 (glibc 2.28 to 2.34)
+## Results
+
+Two version pairs run end to end. The two middle columns are the answer;
+**Caught by** is which step got there, and whether a data diff was enough.
+
+| Locale | RHEL8 → RHEL9<br>glibc 2.28 → 2.34 | RHEL9 → RHEL10<br>glibc 2.34 → 2.39 | Caught by |
+|---|---|---|---|
+| `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | ⚪ Unaffected | steps 1–3 — `sv_FI` only via `copy` |
+| `or_IN` | 🔴 **Changed** | ⚪ Unaffected | steps 1–3 |
+| `ko_KR` | 🔴 **Changed** | 🟢 No difference | **step 5** — its `LC_COLLATE` is unchanged in *both* pairs |
+| `C.UTF-8` | 🔴 **Changed** | 🟢 No difference <sup>†</sup> | nothing — outside this method entirely |
+| `th_TH` | ⚪ Unaffected | 🟡 **Unresolved** | steps 1–3 |
+| `ber_DZ`, `kab_DZ` | ⚪ Unaffected | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap |
+| CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>inherited by 328 locales | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
+| everything else — `en_US`, `de_DE`,<br>`fr_FR`, `zh_CN`, … | ⚪ Unaffected | ⚪ Unaffected | `LC_COLLATE` and code both unchanged |
+
+- 🔴 **Changed** — sort order moves. Reindex.
+- 🟡 **Unresolved** — flagged and *not* cleared. Treat as changed until tested.
+- 🟢 **No difference** — the audit flagged it, but a targeted test or a
+  mechanism argument shows the order does not move. Weaker than "unaffected".
+- ⚪ **Unaffected** — neither the locale's `LC_COLLATE` nor the collation code
+  changed. Note that a locale's *file* often changes without this being
+  disturbed: most of the 283 files that differ between 2.28 and 2.34 changed
+  only `LC_TIME` or `LC_MONETARY`. This is the deterministic verdict the
+  method exists to produce.
+
+<sup>†</sup> `C.UTF-8` is not auditable by this method at all — see
+[Known limitations](#known-limitations). Its RHEL9→RHEL10 verdict is
+ardentperf's checksum, not my own test.
+
+Note that `ko_KR` is the row a data-only audit gets wrong, and `C.UTF-8` the
+row no source diff can reach.
+
+### Worked example: RHEL8 to RHEL9 (glibc 2.28 to 2.34)
 
 ```sh
 cd scripts
@@ -181,7 +217,7 @@ Full output and the PostgreSQL confirmation script for this pair:
 [`examples/rhel8-to-rhel9-audit-output.txt`](examples/rhel8-to-rhel9-audit-output.txt),
 [`examples/rhel8-to-rhel9.sql`](examples/rhel8-to-rhel9.sql).
 
-## Worked example: RHEL9 to RHEL10 (glibc 2.34 to 2.39)
+### Worked example: RHEL9 to RHEL10 (glibc 2.34 to 2.39)
 
 Same steps, different pair. Result: **`ber_DZ`, `kab_DZ`, `th_TH`** flagged
 by steps 1 to 3, `ko_KR` flagged again by step 4. On inspection, `ber_DZ`
