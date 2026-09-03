@@ -136,8 +136,10 @@ UTF-8 input encoding) is a refactor of the tokeniser, not of the weights.
 
 Nothing changed ellipsis expansion. That is what lets this pair CLEAR ko_KR
 rather than only flag it: step 4 still lists ko_KR (its LC_COLLATE still
-uses `..`), but with the expansion logic unchanged, its byte-identical data
-file is now sufficient proof. Steps 1-4 alone could never reach that
+uses `..`), but with the expansion logic unchanged, its unchanged LC_COLLATE
+is now sufficient proof. Note that ko_KR's FILE does change in this pair --
+lines 6109+, in LC_MONETARY and LC_TIME -- which is exactly why step 2
+compares against the LC_COLLATE block rather than the whole file. Steps 1-4 alone could never reach that
 conclusion. ardentperf's checksums agree: all ten of their locales,
 ko included, are identical between RHEL9 and RHEL10.
 
