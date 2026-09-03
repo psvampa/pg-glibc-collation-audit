@@ -289,12 +289,17 @@ Full output: [`examples/rhel9-to-rhel10-audit-output.txt`](examples/rhel9-to-rhe
   the worked example is measured, not inferred; see
   [`examples/rhel8-to-rhel9-audit-output.txt`](examples/rhel8-to-rhel9-audit-output.txt).
 - **RHEL9 to RHEL10** (glibc 2.34 to 2.39): full method run, confirmed
-  against real nodes running PostgreSQL, not just the source diff.
+  against real nodes running PostgreSQL, not just the source diff; see
+  [`examples/rhel9-to-rhel10-audit-output.txt`](examples/rhel9-to-rhel10-audit-output.txt).
+  The empirical lines in that file predate step 5 and are marked as such.
 - **RHEL7 to RHEL8** (glibc 2.17 to 2.28, the large jump that rewrote the
-  master table): source-diff steps run and documented, but not confirmed
-  against real RHEL7 nodes (RHEL7's `systemd` doesn't boot under a
-  cgroups-v2-only container host, a limitation of my test environment,
-  not of the method).
+  master table): source-diff steps run, but **not** confirmed against real
+  RHEL7 nodes, and no output file is kept for it. RHEL7's `systemd` doesn't
+  boot under a cgroups-v2-only container host — a limitation of my test
+  environment, not of the method. The short version: all three collation
+  templates changed, and 86 of the 310 content-changed locale files have the
+  change inside `LC_COLLATE`, so on this pair essentially everything is
+  affected and the audit is not the interesting part.
 
 ## Known limitations
 
