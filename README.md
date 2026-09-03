@@ -401,8 +401,19 @@ results do not overlap as much as they first appear.
 
 This audits **sort order (`LC_COLLATE`) only**. It says nothing about
 `LC_CTYPE` behavior (`upper()`, `lower()`, character classification, pattern
-matching), and nothing about ICU collations, which version their CLDR data
-independently of the OS. Within `LC_COLLATE`, steps 4 and 5 are what keep
+matching).
+
+It is also about glibc, so in PostgreSQL terms it applies to the **`libc`
+provider** and nothing else. ICU collations version their CLDR data
+independently of the OS. The `builtin` provider (PG 17+) implements `C`,
+`C.UTF-8` and `PG_UNICODE_FAST` inside PostgreSQL, in code-point order, with
+no call into glibc — so `initdb --locale-provider=builtin --locale=C.UTF-8`
+is immune to everything this tool looks for, and is the mitigation if the
+`C.UTF-8` limitation above is what you are worried about. Note that `initdb`
+still defaults to `libc` in PG 16, 17 and 18, so you have to ask for
+`builtin`.
+
+Within `LC_COLLATE`, steps 4 and 5 are what keep
 "a clean diff proves nothing changed" honest: a locale relying on range
 expansion needs an empirical check whenever step 5 reports a change in the
 expansion logic. See **Known limitations** above for what this method
@@ -410,6 +421,17 @@ structurally cannot see.
 
 ## Requirements
 
-`git`, `python3` (stdlib only), `bash`. The confirmation step needs a real
-PostgreSQL instance with the relevant `glibc-langpack-*` packages installed
-on each OS under test.
+For the source audit (steps 1 to 5): `git`, `python3` (stdlib only), `bash`.
+Nothing else, and no PostgreSQL.
+
+For the confirmation step: a real PostgreSQL instance on each OS under test,
+**version 15 or newer** — `sql/collation_confirmation_template.sql` reads
+`pg_database.datlocprovider` and calls `pg_collation_actual_version()` and
+`pg_database_collation_actual_version()`, all of which arrived in 15. The
+template's header says what to drop to run it on 13 or 14.
+
+Install the relevant `glibc-langpack-*` packages on each node first. If you
+install them *after* `initdb`, the collations will not exist yet and
+`CREATE TABLE ... COLLATE "sv_SE.utf8"` fails with `collation ... does not
+exist` — which is why the template calls `pg_import_system_collations()`
+before anything else. Re-run it after adding a langpack.
