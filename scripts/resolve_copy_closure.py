@@ -65,15 +65,17 @@ def main(argv):
     inherited = g.inherited_from(graph, changed)
     supported = g.supported_map(repo, opts.tag)
 
-    print(f"Directly changed (own LC_COLLATE diff): {sorted(changed)}")
+    print(f"Directly changed (own LC_COLLATE diff): "
+          f"{', '.join(sorted(changed))}")
     print(f"Additionally affected via copy-chain inheritance: {len(inherited)}")
-    for loc, via in sorted(inherited.items()):
+    for loc, roots in sorted(inherited.items()):
         shown = ', '.join(f'copy "{t}"' for t in graph.get(loc, [])) or '?'
-        print(f"  {loc}: {shown} -> reaches {via}")
+        print(f"  {loc}: {shown} -> reaches {', '.join(roots)}")
 
     affected = sorted(changed | set(inherited))
     print()
-    print(f"Full affected set ({len(affected)} locale source file(s)): {affected}")
+    print(f"Full affected set ({len(affected)} locale source file(s)): "
+          f"{', '.join(affected)}")
 
     # The audit works in source file names, but an admin and pg_collation see
     # generated names with codesets. Map one to the other.
@@ -81,6 +83,10 @@ def main(argv):
     unbuilt = [loc for loc in affected if not supported.get(loc)]
     print()
     if generated:
+        # Normalised by glibc_locale_data.normalize_locale_name: localedef
+        # lowercases and strips the codeset when it builds the locale, so the
+        # installed name is sv_SE.utf8, not the SUPPORTED spelling sv_SE.UTF-8.
+        # COLLATE "sv_SE.UTF-8" does not exist in pg_collation.
         print(f"Generated locales per localedata/SUPPORTED -- these are the "
               f"names `locale -a` and pg_collation show ({len(generated)}):")
         for name in generated:

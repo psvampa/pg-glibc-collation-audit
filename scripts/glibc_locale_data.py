@@ -20,15 +20,36 @@ import sys
 
 LOCALES_DIR = 'localedata/locales'
 
-# All ellipsis forms glibc's localedef accepts on an order line. A range like
+# Every ellipsis form glibc's localedef accepts. A range like
 # `<UAC00>`/`..`/`<UD7A3>` is expanded algorithmically by localedef at build
 # time, so the weights are NOT in the locale source and a source diff cannot
 # prove the locale's order is unchanged.
 #
-# Longest alternatives first so `...` is never matched as `..`.
+# The forms come from locale/programs/linereader.c, which has already consumed
+# one `.` before it compares the rest: `..`, `...`, `....`, `..(2)..` and
+# `....(2)....`. The count is always a literal 2, never an arbitrary number.
+#
+# This must NOT be anchored to the start of the line. The dominant form in
+# glibc is inline -- `collating-symbol <SAC00>..<SD7A3>` in iso14651_t1_common
+# carries the constructed Hangul and Han weights -- and anchoring it missed
+# every one of them, which cleared zh_CN and its pinyin siblings.
+#
+# Longest alternatives first, plus dot boundaries, so one run of dots yields
+# exactly one match and `....` is never read as two `..`.
 ELLIPSIS_RE = re.compile(
-    r'^\s*(\.\.\.\(\d+\)\.\.\.|\.\.\(\d+\)\.\.|\.\.\.|\.\.)(\s|$)'
+    r'(?<!\.)('
+    r'\.\.\.\.\(2\)\.\.\.\.'
+    r'|\.\.\.\.'
+    r'|\.\.\.'
+    r'|\.\.\(2\)\.\.'
+    r'|\.\.'
+    r')(?!\.)'
 )
+
+# Locale files declare their comment character; every one in glibc uses `%`.
+# Prose in a comment ("2.28..2.34", "and so on ...") is not a range, so
+# comments are stripped before looking for one.
+_COMMENT_CHAR_RE = re.compile(r'^\s*comment_char\s+(\S)', re.M)
 
 _COLLATE_BLOCK_RE = re.compile(r'\nLC_COLLATE\b(.*?)\nEND LC_COLLATE', re.S)
 _COPY_RE = re.compile(r'^\s*copy\s+"([^"]+)"', re.M)
@@ -37,6 +58,27 @@ _COPY_RE = re.compile(r'^\s*copy\s+"([^"]+)"', re.M)
 def die(msg, code=2):
     print(f"error: {msg}", file=sys.stderr)
     sys.exit(code)
+
+
+def _is_glibc_clone(path):
+    """Is `path` a git clone of glibc?
+
+    Asked of git, not of the filesystem. audit-locale-diff.sh clones with
+    `--no-checkout`, so the clone has no working tree at all and a
+    `localedata/locales` directory never appears on disk -- every step used to
+    die with "run audit-locale-diff.sh first" on the very run that had just
+    cloned it.
+    """
+    if not os.path.isdir(path):
+        return False
+    if run_git(['rev-parse', '--git-dir'], path, allow_fail=True).returncode != 0:
+        return False
+    if os.path.isdir(os.path.join(path, LOCALES_DIR)):
+        return True
+    # No working tree: ask the object store instead. `--filter=blob:none`
+    # keeps every tree, so this needs no network.
+    return run_git(['cat-file', '-e', f'HEAD:{LOCALES_DIR}'],
+                   path, allow_fail=True).returncode == 0
 
 
 def find_repo(explicit=None):
@@ -56,11 +98,11 @@ def find_repo(explicit=None):
                        os.path.join(here, 'glibc'),
                        os.path.join(here, os.pardir, 'glibc')]
     for c in candidates:
-        if os.path.isdir(os.path.join(c, LOCALES_DIR)) and \
-           os.path.isdir(os.path.join(c, '.git')):
+        if _is_glibc_clone(c):
             return os.path.abspath(c)
-    die("could not find the glibc clone (no <dir>/localedata/locales with a "
-        ".git alongside it). Run scripts/audit-locale-diff.sh first, or pass "
+    die("could not find the glibc clone (no git repository containing "
+        "localedata/locales among the paths tried). Run "
+        "scripts/audit-locale-diff.sh first, or pass "
         "--repo <path-to-glibc-clone>.")
 
 
@@ -164,6 +206,24 @@ def collate_bounds(text):
     return (start, len(lines)) if start is not None else None
 
 
+def ellipsis_hits(block, comment_char='%'):
+    """Lines of an LC_COLLATE block that use an algorithmic ellipsis range.
+
+    Returns the original lines, stripped, so the caller can show what it found.
+    """
+    hits = []
+    for line in block.split('\n'):
+        if ELLIPSIS_RE.search(line.split(comment_char)[0]):
+            hits.append(line.strip())
+    return hits
+
+
+def comment_char(text):
+    """The locale file's comment character, `%` unless it says otherwise."""
+    m = _COMMENT_CHAR_RE.search(text)
+    return m.group(1) if m else '%'
+
+
 def copy_targets(text):
     """Every `copy "..."` target inside LC_COLLATE, in order.
 
@@ -191,26 +251,30 @@ def build_copy_graph(repo, tag):
 
 
 def inherited_from(graph, roots):
-    """{locale: root it inherits from} for every locale reaching `roots`.
+    """{locale: [roots it inherits from]} for every locale reaching `roots`.
 
-    Walks all parents, not a single chain, and guards against cycles.
+    Walks all parents, not a single chain, and guards against cycles. Reports
+    EVERY root reached, not the first one a depth-first walk happens to find:
+    the traversal order is an artefact of `stack.pop()`, and attributing a
+    locale to an arbitrary one of several roots makes the "reaches X"
+    explanation untrue even when the affected set is right.
     """
     result = {}
     for name in graph:
         if name in roots:
             continue
-        seen, stack, hit = set(), list(graph[name]), None
+        seen, stack, hits = set(), list(graph[name]), set()
         while stack:
             cur = stack.pop()
             if cur in seen:
                 continue
             seen.add(cur)
             if cur in roots:
-                hit = cur
-                break
+                hits.add(cur)
+                continue
             stack.extend(graph.get(cur, ()))
-        if hit:
-            result[name] = hit
+        if hits:
+            result[name] = sorted(hits)
     return result
 
 
@@ -219,19 +283,40 @@ def fan_in(graph):
     return {name: len(inherited_from(graph, {name})) for name in graph}
 
 
-_CODESET_RE = re.compile(r'\.[^.@]+(?=@|$)')
+_CODESET_RE = re.compile(r'\.([^.@]+)(?=@|$)')
+
+
+def normalize_locale_name(entry):
+    """A SUPPORTED entry as `locale -a` and pg_collation actually spell it.
+
+    localedef normalises the codeset when it builds the locale -- lowercase,
+    punctuation dropped, `iso` prefixed to an all-digit codeset -- so
+    `sv_SE.UTF-8` is installed, listed and imported into pg_collation as
+    `sv_SE.utf8`. Printing the raw SUPPORTED spelling and calling it "the name
+    locale -a shows" sends people to `COLLATE "sv_SE.UTF-8"`, which fails with
+    `collation ... does not exist`.
+    """
+    def norm(m):
+        cs = ''.join(c for c in m.group(1) if c.isalnum()).lower()
+        return '.' + ('iso' + cs if cs.isdigit() else cs)
+    return _CODESET_RE.sub(norm, entry)
 
 
 def supported_map(repo, tag):
     """{source file name: [generated locale names]} from localedata/SUPPORTED.
 
     The audit works in source file names (sv_FI@euro), but `locale -a` and
-    pg_collation show generated names with codesets (sv_FI.UTF-8, sv_FI). This
-    is the mapping between them.
+    pg_collation show generated names with codesets (sv_FI.utf8, sv_FI). This
+    is the mapping between them, in the spelling those tools use.
     """
     contents, missing = read_blobs(repo, tag, ['localedata/SUPPORTED'])
     if missing:
-        return {}
+        # Returning {} here made every locale print as "not listed in
+        # SUPPORTED, so normally absent from `locale -a`" -- a false and
+        # reassuring claim -- and wrote an empty step4 list under the heading
+        # "full list of generated names".
+        die(f"localedata/SUPPORTED does not exist at {tag}; cannot map source "
+            f"file names to the generated names `locale -a` shows.")
     out = {}
     for line in contents['localedata/SUPPORTED'].split('\n'):
         line = line.strip().rstrip('\\').strip()
@@ -240,7 +325,10 @@ def supported_map(repo, tag):
         entry = line.split('/')[0].strip()
         if not entry:
             continue
-        out.setdefault(_CODESET_RE.sub('', entry), []).append(entry)
+        source = _CODESET_RE.sub('', entry)
+        generated = normalize_locale_name(entry)
+        if generated not in out.setdefault(source, []):
+            out[source].append(generated)
     return out
 
 

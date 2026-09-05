@@ -49,16 +49,22 @@ mkdir -p "$OUT_DIR"
 CHANGED="$OUT_DIR/changed_locales.txt"
 
 git diff --name-only "$OLD..$NEW" -- localedata/locales/ | sort > "$CHANGED"
-echo "Total locale files with content changes: $(wc -l < "$CHANGED" | tr -d ' ')"
+# --name-only lists additions and deletions too, so this is not a count of
+# modified files. Step 2 separates them.
+echo "Locale files added, modified or deleted: $(wc -l < "$CHANGED" | tr -d ' ')"
 echo "Full list in $CHANGED"
 echo "---"
 
 # Explicit verdict per collation template. `git diff --quiet` exits non-zero
 # when there are differences, so a real error can no longer read as
 # "unchanged" the way empty `--stat` output did.
+#
+# Existence is asked with `ls-tree`, not `cat-file -e`: on a
+# `--filter=blob:none` clone the latter must fetch the blob to answer, and
+# calls a file that exists ABSENT whenever that fetch cannot happen.
 echo "Collation templates -- did they change?"
 for tmpl in iso14651_t1 iso14651_t1_common iso14651_t1_pinyin; do
-  if ! git cat-file -e "$NEW:localedata/locales/$tmpl" 2>/dev/null; then
+  if [ -z "$(git ls-tree --name-only "$NEW" -- "localedata/locales/$tmpl")" ]; then
     printf '  %-22s ABSENT at %s\n' "$tmpl" "$NEW"
   elif git diff --quiet "$OLD..$NEW" -- "localedata/locales/$tmpl"; then
     printf '  %-22s UNCHANGED\n' "$tmpl"
