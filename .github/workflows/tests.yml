@@ -1,0 +1,58 @@
+# Runs the audit's own test suite against a fresh glibc clone.
+#
+# Why a fresh clone rather than a cached one: the suite pins each tag to the
+# commit it must resolve to (tests/_harness.py, EXPECTED_SHA). That is what
+# makes cloning fresh safe -- a moved tag or a mirror serving different content
+# fails as "the tag moved", with a message saying not to read the other
+# mismatches as a code regression. Without that pin, a fresh clone would turn
+# any upstream change into an ambiguous red build, and ambiguous red builds get
+# ignored.
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # The scripts are stdlib-only by design (README, Requirements). Nothing
+      # is installed here on purpose: if this job ever needs a pip install, the
+      # promise broke and the job should be what says so.
+
+      - name: Clone glibc
+        run: |
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/bminor/glibc.git scripts/glibc
+          git -C scripts/glibc fetch --tags --quiet
+
+      - name: Report tag provenance
+        # Printed before anything else, and kept in the log: these are the
+        # commit ids the run actually read. An invalid signature aborts here.
+        run: |
+          python3 scripts/glibc_locale_data.py provenance \
+            glibc-2.28 glibc-2.34 glibc-2.39
+
+      - name: Run the suite
+        # Run once, then check the summary. A skipped layer is not a passing
+        # layer: without a usable glibc clone the git-backed tests skip BY
+        # DESIGN, which is right on a contributor's laptop and wrong here -- a
+        # broken clone step would otherwise leave this job green with only the
+        # pure-function layer having actually run.
+        run: |
+          set -o pipefail
+          python3 -m unittest discover -s tests -t tests -v 2>&1 | tee /tmp/out.txt
+          if grep -q 'skipped=' /tmp/out.txt; then
+            echo "::error::tests were SKIPPED in CI: the glibc clone is unusable, so the published results were never checked"
+            exit 1
+          fi
