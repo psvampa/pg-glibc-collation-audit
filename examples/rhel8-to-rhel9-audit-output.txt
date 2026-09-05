@@ -42,6 +42,7 @@ $ python3 filter_lc_collate_changes.py glibc-2.28 glibc-2.34
 Locale files changed between glibc-2.28 and glibc-2.34: 283
   modified: 281   added: 2   deleted: 0   renamed: 0
 Of the 281 content-changed file(s): 2 touch LC_COLLATE, 271 do not, 8 have no LC_COLLATE block
+  (no LC_COLLATE on either side, so no sort order to change: i18n_ctype, translit_circle, translit_cjk_compat, translit_combining, translit_compat, translit_font, translit_fraction, translit_neutral)
 
 Files with changes inside LC_COLLATE: 2
   localedata/locales/or_IN
@@ -50,9 +51,22 @@ Files with changes inside LC_COLLATE: 2
 Locale names for step 3:
   python3 resolve_copy_closure.py glibc-2.34 or_IN sv_SE
 
-Added at glibc-2.34 (2), not analysed for a change of order -- they had no previous order to change. They cannot affect an existing index, but do check them if you plan to start using them:
-  localedata/locales/ckb_IQ
-  localedata/locales/mnw_MM
+!! localedata/locales/C exists at NEITHER glibc-2.28 nor glibc-2.34, but
+   C.UTF-8 is BACKPORTED by the distros this audit targets -- so it very
+   likely DOES exist on your old system, with an order of its own, and that
+   order can change. There is no source file to diff on the old side, so this
+   audit is blind to it: a clean result above says nothing about C.UTF-8.
+   PostgreSQL will not cover the gap either -- collversion is NULL for every
+   collation whose name starts with 'C.', so no version mismatch can ever
+   fire. Compare C.UTF-8 empirically on both nodes. See README, Known
+   limitations.
+
+Added at glibc-2.34 (2), not analysed for a change of order. An added file
+cannot affect an existing index ONLY IF the locale did not exist on the old system.
+An upstream source diff cannot establish that -- distros backport. Confirm with
+`locale -a` on the OLD node before treating these as out of scope:
+  localedata/locales/ckb_IQ -> ckb_IQ
+  localedata/locales/mnw_MM -> mnw_MM
 
 $ python3 resolve_copy_closure.py glibc-2.34 or_IN sv_SE
 Directly changed (own LC_COLLATE diff): or_IN, sv_SE
@@ -107,7 +121,7 @@ to see whether localedef's expansion logic changed between your two
 versions; if it did, test these empirically before trusting a
 'not flagged' result from steps 1-3.
 
-$ python3 diff_collation_code.py glibc-2.28 glibc-2.34
+$ python3 diff_collation_code.py glibc-2.28 glibc-2.34   # TIER 1/2 hunk bodies abridged; TIER 3 in full
 Collation code changes between glibc-2.28 and glibc-2.34
 
 Tracked files that exist at neither tag -- nothing to read, and nothing to
@@ -116,118 +130,267 @@ miss, for this version range:
 
 TIER 1 -- weight assignment and comparison
   (a change here can reorder any locale, including ones whose data file is unchanged)
-  locale/programs/ld-collate.c: 2 substantive hunk(s), 4 comment/licence hunk(s) filtered
-      @@ -1483,6 +1483,9 @@ order for `%.*s' already defined at %s:%Zu"),
-         +  /* Move the cursor to the last entry in the ellipsis.
-         +     Subsequent operations need to start from the last entry.  */
-      >> +  collate->cursor = endp;
-      @@ -2401,8 +2404,8 @@ collate_output (struct localedef_t *locale, const struct charmap_t *charmap,
-         -  /* Add 40% and find the next prime number.  */
-      >> -  elem_size = next_prime (elem_size * 1.4);
-         +  /* Add 50% and find the next prime number.  */
-      >> +  elem_size = next_prime (elem_size + (elem_size >> 1));
-      commits:
-        82292c99b2 LC_COLLATE: Fix last character ellipsis handling (Bug 22668)
-        2b778ceb40 Update copyright dates with scripts/update-copyrights
-        14ef9c185b treewide: fix incorrect spelling of indices in comments
-        d614a75396 Update copyright dates with scripts/update-copyrights.
-        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        5abcddd794 Fix parentheses error in iconvconfig.c and ld-collate.c [BZ #24372]
-        ac64195ccd iconv, localedef: avoid floating point rounding differences [BZ #24372]
-        04277e02d7 Update copyright dates with scripts/update-copyrights.
+  locale/programs/ld-collate.c: 2 substantive hunk(s), 4 comment/licence hunk(s) filtered   [hunks abridged]
   string/strcoll_l.c: no substantive change (2 comment/licence hunk(s) filtered)
   string/strxfrm_l.c: no substantive change (3 comment/licence hunk(s) filtered)
   locale/weight.h: no substantive change (2 comment/licence hunk(s) filtered)
   locale/weightwc.h: no substantive change (2 comment/licence hunk(s) filtered)
   locale/coll-lookup.h: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/coll-lookup.c: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/lc-collate.c: no substantive change (2 comment/licence hunk(s) filtered)
   locale/C-collate.c: no substantive change (2 comment/licence hunk(s) filtered)
 
 TIER 2 -- parsing and serialisation
   (a change here can alter the compiled tables without touching the weight logic)
   locale/programs/linereader.c: no substantive change (2 comment/licence hunk(s) filtered)
-  locale/programs/locfile.c: 2 substantive hunk(s), 2 comment/licence hunk(s) filtered
-      @@ -702,7 +702,7 @@ write_locale_data (const char *output_path, int catidx, const char *category,
-      >> -  const char **other_paths;
-      >> +  const char **other_paths = NULL;
-      @@ -827,9 +827,22 @@ failure while writing data for category `%s'"), category);
-         -  /* Compare the file with the locale data files for the same category in
-         -     other locales, and see if we can reuse it, to save disk space.  */
-      >> -  other_paths = siblings (output_path);
-         +  /* Compare the file with the locale data files for the same category
-         +     in other locales, and see if we can reuse it, to save disk space.
-         +     If the user specified --no-hard-links to localedef then hard_links
-         +     is false, other_paths remains NULL and we skip the optimization
-         +     below.  The use of --no-hard-links is distribution specific since
-         +     some distros have post-processing hard-link steps and so doing this
-         +     here is a waste of time.  Worse than a waste of time in rpm-based
-         +     distributions it can result in build determinism issues from
-         +     build-to-build since some files may get a hard link in one pass but
-         +     not in another (if the files happened to be created in parallel).  */
-      >> +  if (hard_links)
-      >> +    other_paths = siblings (output_path);
-         +
-         +  /* If there are other paths, then walk the sibling paths looking for
-         +     files with the same content so we can hard link and reduce disk
-         +     space usage.  */
+  locale/programs/locfile.c: 2 substantive hunk(s), 2 comment/licence hunk(s) filtered   [hunks abridged]
+  locale/programs/locfile.h: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/programs/3level.h: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/loadlocale.c: 3 substantive hunk(s), 2 comment/licence hunk(s) filtered   [hunks abridged]
+  locale/localeinfo.h: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered   [hunks abridged]
+  locale/programs/locfile-kw.gperf: no substantive change (2 comment/licence hunk(s) filtered)
+
+TIER 3 -- reachable from the collation entry points, not classified
+  (derived by walking #include from ld-collate.c, strcoll_l.c, strxfrm_l.c and the
+   wide-char variants, bounded to locale/, plus the sibling .c of every header
+   reached -- so this list grows on its own as glibc changes)
+  locale/programs/charmap.h: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -60,7 +60,7 @@ struct charseq
+      >> -  unsigned char bytes[0];
+      >> +  unsigned char bytes[];
       commits:
         2b778ceb40 Update copyright dates with scripts/update-copyrights
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        1471fa556a localedef: Use initializer for flexible array member [BZ #24950]
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
+  locale/programs/linereader.h: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -29,7 +29,7 @@
+      >> -typedef const struct keyword_t *(*kw_hash_fct_t) (const char *, unsigned int);
+      >> +typedef const struct keyword_t *(*kw_hash_fct_t) (const char *, size_t);
+      commits:
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        3f02b772a4 Regenerate charmap-kw.h, locfile-kw.h
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
+  locale/programs/localedef.c: 12 substantive hunk(s), 3 comment/licence hunk(s) filtered
+      @@ -85,6 +85,9 @@ static bool replace_archive;
+         +/* If true create hard links to other locales (default).  */
+      >> +bool hard_links = true;
+         +
+      @@ -105,6 +108,7 @@ void (*argp_program_version_hook) (FILE *, struct argp_state *) = print_version;
+      >> +#define OPT_NO_HARD_LINKS 404
+      @@ -120,6 +124,8 @@ static const struct argp_option options[] =
+      >> +  { "no-hard-links", OPT_NO_HARD_LINKS, NULL, 0,
+      >> +    N_("Do not create hard links between installed locales") },
+      @@ -174,14 +180,14 @@ static struct argp argp =
+      >> -static const char *construct_output_path (char *path);
+      >> -static const char *normalize_codeset (const char *codeset, size_t name_len);
+      >> +static char *construct_output_path (char *path);
+      >> +static char *normalize_codeset (const char *codeset, size_t name_len);
+      >> -  const char *output_path;
+      >> +  char *output_path;
+      @@ -226,7 +232,8 @@ main (int argc, char *argv[])
+         -     If the described files cannot be written return a NULL pointer.  */
+      >> +     If the described files cannot be written return a NULL pointer.
+         +     We don't free output_path because we will exit.  */
+      @@ -389,6 +396,10 @@ parse_opt (int key, char *arg, struct argp_state *state)
+      >> +    case OPT_NO_HARD_LINKS:
+         +      /* Do not hard link to other locales.  */
+      >> +      hard_links = false;
+      >> +      break;
+      @@ -424,20 +435,16 @@ more_help (int key, const char *text, void *input)
+      >> -      if (asprintf (&tp, gettext ("\
+      >> +      tp = xasprintf (gettext ("\
+      >> -%s.\n"), REPORT_BUGS_TO) < 0)
+      >> -	return NULL;
+      >> -      if (asprintf (&cp, gettext ("\
+      >> +%s.\n"), REPORT_BUGS_TO);
+      >> +      cp = xasprintf (gettext ("\
+      >> -		    CHARMAP_PATH, REPERTOIREMAP_PATH, LOCALE_PATH, tp) < 0)
+      >> -	{
+      >> -	  free (tp);
+      >> -	  return NULL;
+      >> -	}
+      >> +		    CHARMAP_PATH, REPERTOIREMAP_PATH, LOCALE_PATH, tp);
+      >> +      free (tp);
+      @@ -454,7 +461,7 @@ print_version (FILE *stream, struct argp_state *state)
+      >> -"), "2018");
+      >> +"), "2021");
+      @@ -467,15 +474,13 @@ error_print (void)
+         -/* The parameter to localedef describes the output path.  If it does
+         -   contain a '/' character it is a relative path.  Otherwise it names the
+         -   locale this definition is for.  */
+      >> -static const char *
+         +/* The parameter to localedef describes the output path.  If it does contain a
+         +   '/' character it is a relative path.  Otherwise it names the locale this
+         +   definition is for.   The returned path must be freed by the caller. */
+      >> +static char *
+      >> -  const char *normal = NULL;
+      >> -  char *endp;
+      @@ -483,50 +488,44 @@ construct_output_path (char *path)
+      >> +      char *endp = NULL;
+      >> +      char *normal = NULL;
+         -      /* We must be prepared for finding a CEN name or a location of
+         -	 the introducing `.' where it is not possible anymore.  */
+         +      /* Either we have a '@' which starts a CEN name or '.' which starts the
+         +	 codeset specification.  The CEN name starts with '@' and may also have
+         +	 a codeset specification, but we do not normalize the string after '@'.
+         +	 If we only find the codeset specification then we normalize only the codeset
+         +	 specification (but not anything after a subsequent '@').  */
+         +
+         +	  /* Stop at the first '@', and don't normalize anything past that.  */
+      >> -      else
+         -	/* This is to keep gcc quiet.  */
+      >> -	endp = NULL;
+         -      /* We put an additional '\0' at the end of the string because at
+         -	 the end of the function we need another byte for the trailing
+         -	 '/'.  */
+      >> -      ssize_t n;
+      >> -	n = asprintf (&result, "%s%s/%s%c", output_prefix ?: "",
+      >> -		      COMPLOCALEDIR, path, '\0');
+      >> +	result = xasprintf ("%s%s/%s/", output_prefix ?: "",
+      >> +			    COMPLOCALEDIR, path);
+      >> -	n = asprintf (&result, "%s%s/%.*s%s%s%c",
+      >> -		      output_prefix ?: "", COMPLOCALEDIR,
+      >> -		      (int) (startp - path), path, normal, endp, '\0');
+         -
+      >> -      if (n < 0)
+      >> -	return NULL;
+         -
+      >> -      endp = result + n - 1;
+      >> +	result = xasprintf ("%s%s/%.*s%s%s/",
+      >> +			    output_prefix ?: "", COMPLOCALEDIR,
+      >> +			    (int) (startp - path), path, normal, endp ?: "");
+         +      /* Free the allocated normalized codeset name.  */
+      >> +      free (normal);
+         -      /* This is a user path.  Please note the additional byte in the
+         -	 memory allocation.  */
+      >> -      size_t len = strlen (path) + 1;
+      >> -      result = xmalloc (len + 1);
+      >> -      endp = mempcpy (result, path, len) - 1;
+         +      /* This is a user path.  */
+      >> +      result = xasprintf ("%s/", path);
+      @@ -536,25 +535,41 @@ construct_output_path (char *path)
+         -    /* Perhaps the directory does not exist now.  Try to create it.  */
+      >> -    if (errno == ENOENT)
+      >> -      {
+      >> -	errno = 0;
+      >> -	if (mkdir (result, 0777) < 0)
+      >> -	  return NULL;
+      >> -      }
+         -
+         -  *endp++ = '/';
+         -  *endp = '\0';
+      >> +    {
+         +      /* Perhaps the directory does not exist now.  Try to create it.  */
+      >> +      if (errno == ENOENT)
+      >> +	{
+      >> +	  errno = 0;
+      >> +	  if (mkdir (result, 0777) < 0)
+      >> +	    {
+      >> +	      record_verbose (stderr,
+      >> +			      _("cannot create output path \'%s\': %s"),
+      >> +			      result, strerror (errno));
+      >> +	      free (result);
+      >> +	      return NULL;
+      >> +	    }
+      >> +	}
+      >> +      else
+      >> +	record_verbose (stderr,
+      >> +			_("no write permission to output path \'%s\': %s"),
+      >> +			result, strerror (errno));
+      >> +    }
+         -/* Normalize codeset name.  There is no standard for the codeset
+         -   names.  Normalization allows the user to use any of the common
+         -   names.  */
+      >> -static const char *
+         +/* Normalize codeset name.  There is no standard for the codeset names.
+         +   Normalization allows the user to use any of the common names e.g. UTF-8,
+         +   utf-8, utf8, UTF8 etc.
+         +
+         +   We normalize using the following rules:
+         +   - Remove all non-alpha-numeric characters
+         +   - Lowercase all characters.
+         +   - If there are only digits assume it's an ISO standard and prefix with 'iso'
+         +
+         +   We return the normalized string which needs to be freed by free.  */
+      >> +static char *
+      @@ -572,25 +588,24 @@ normalize_codeset (const char *codeset, size_t name_len)
+      >> -  retval = (char *) malloc ((only_digit ? 3 : 0) + len + 1);
+         +  /* If there were only digits we assume it's an ISO standard and we will
+         +     prefix with 'iso' so include space for that.  We fill in the required
+         +     space from codeset up to the converted length.  */
+      >> +  wp = retval = xasprintf ("%s%.*s", only_digit ? "iso" : "", len, codeset);
+      >> -  if (retval != NULL)
+      >> -    {
+      >> -      if (only_digit)
+      >> -	wp = stpcpy (retval, "iso");
+      >> -      else
+      >> -	wp = retval;
+         -
+      >> -      for (cnt = 0; cnt < name_len; ++cnt)
+      >> -	if (isalpha (codeset[cnt]))
+         -	  *wp++ = tolower (codeset[cnt]);
+      >> -	else if (isdigit (codeset[cnt]))
+         -	  *wp++ = codeset[cnt];
+         +  /* Skip "iso".  */
+      >> +  if (only_digit)
+      >> +    wp += 3;
+         -      *wp = '\0';
+      >> -    }
+         +  /* Lowercase all characters. */
+      >> +  for (cnt = 0; cnt < name_len; ++cnt)
+      >> +    if (isalpha (codeset[cnt]))
+         +      *wp++ = tolower (codeset[cnt]);
+      >> +    else if (isdigit (codeset[cnt]))
+         +      *wp++ = codeset[cnt];
+      >> -  return (const char *) retval;
+         +  /* Return allocated and converted name for caller to free.  */
+      >> +  return retval;
+      commits:
+        9fcdec7386 Update copyright dates not handled by scripts/update-copyrights.
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        92954ffa5a localedef: Add verbose messages for failure paths.
+        5f72f9800b Update copyright dates not handled by scripts/update-copyrights.
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        c9123888d8 Update copyright dates not handled by scripts/update-copyrights.
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
+        8cebd4ffe6 Add --no-hard-links option to localedef (bug 23923)
+  locale/programs/localedef.h: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -118,10 +118,12 @@ extern const char *repertoire_global;
+      >> +extern bool hard_links;
+      >> +#include <programs/xasprintf.h>
+      commits:
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        92954ffa5a localedef: Add verbose messages for failure paths.
         d614a75396 Update copyright dates with scripts/update-copyrights.
         5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
         04277e02d7 Update copyright dates with scripts/update-copyrights.
         8cebd4ffe6 Add --no-hard-links option to localedef (bug 23923)
-  locale/programs/locfile.h: no substantive change (2 comment/licence hunk(s) filtered)
-  locale/programs/3level.h: no substantive change (2 comment/licence hunk(s) filtered)
-  locale/loadlocale.c: 3 substantive hunk(s), 2 comment/licence hunk(s) filtered
-      @@ -167,7 +167,7 @@ _nl_load_locale (struct loaded_l10nfile *file, int category)
-      >> -  struct stat64 st;
-      >> +  struct __stat64_t64 st;
-      @@ -180,7 +180,7 @@ _nl_load_locale (struct loaded_l10nfile *file, int category)
-      >> -  if (__builtin_expect (__fxstat64 (_STAT_VER, fd, &st), 0) < 0)
-      >> +  if (__glibc_unlikely (__fstat64_time64 (fd, &st) < 0))
-      @@ -199,15 +199,14 @@ _nl_load_locale (struct loaded_l10nfile *file, int category)
-      >> -			    "/SYS_", 5),
-      >> -		 _nl_category_names.str + _nl_category_name_idxs[category],
-      >> +			    "/SYS_", 5), _nl_category_names_get (category),
-      >> -      if (__builtin_expect (__fxstat64 (_STAT_VER, fd, &st), 0) < 0)
-      >> +      if (__glibc_unlikely (__fstat64_time64 (fd, &st) < 0))
-      commits:
-        52a5fe70a2 Use 64 bit time_t stat internally
-        2b778ceb40 Update copyright dates with scripts/update-copyrights
-        04986243d1 Remove internal usage of extensible stat functions
-        d614a75396 Update copyright dates with scripts/update-copyrights.
-        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        de18a7061c locale: Avoid zero-length array in _nl_category_names [BZ #24962]
-        04277e02d7 Update copyright dates with scripts/update-copyrights.
-  locale/localeinfo.h: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
-      @@ -183,23 +183,29 @@ enum
-         -/* Category name handling variables.  */
-         +/* Category name handling variables.  Concatenate all the strings in a
-         +   single object to minimize relocations.  Individual strings can be
-         +   accessed using _nl_category_names.  */
-      >> -extern const union catnamestr_t
-      >> +extern const struct catnamestr_t
-      >> -  struct
-      >> -  {
-      >> -    char CATNAMEMF (__LINE__)[sizeof (category_name)];
-      >> +  char CATNAMEMF (__LINE__)[sizeof (category_name)];
-      >> -  };
-      >> -  char str[0];
-         +/* Return the name of the category INDEX, which must be nonnegative
-         +   and less than _LC_LAST.  */
-      >> +static inline const char *
-      >> +_nl_category_names_get (int index)
-      >> +{
-      >> +  return (const char *) &_nl_category_names + _nl_category_name_idxs[index];
-      >> +}
-         +
+  locale/programs/repertoire.c: 2 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -37,7 +37,7 @@
+      >> -						   unsigned int len);
+      >> +						   size_t len);
+      @@ -358,7 +358,7 @@ repertoire_compare (const void *p1, const void *p2)
+      >> -repertoiremap_hash (const char *str, unsigned int len)
+      >> +repertoiremap_hash (const char *str, size_t len)
       commits:
         2b778ceb40 Update copyright dates with scripts/update-copyrights
         d614a75396 Update copyright dates with scripts/update-copyrights.
+        3f02b772a4 Regenerate charmap-kw.h, locfile-kw.h
         5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        de18a7061c locale: Avoid zero-length array in _nl_category_names [BZ #24962]
         04277e02d7 Update copyright dates with scripts/update-copyrights.
+  (15 further file(s) reached and read, with no substantive change)
 
-8 substantive hunk(s) found. Locale data alone does not settle this pair.
+Coverage: 27 file(s) reached by the include walk, 20 of them beyond
+TIER 1/2. The walk cannot follow a macro-computed include (`#include WEIGHT_H`) or
+reach a translation unit with no header of its own -- locale/weight.h, weightwc.h,
+lc-collate.c and C-collate.c are in TIER 1 by hand for exactly that reason.
+
+25 substantive hunk(s) found. Locale data alone does not settle this pair.
 Lines marked >> are the code changes; read them and decide whether they can
 move weights. If any can, every locale listed by
   python3 flag_algorithmic_ranges.py glibc-2.34
