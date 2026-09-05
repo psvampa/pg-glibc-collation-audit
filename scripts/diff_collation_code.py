@@ -33,10 +33,37 @@ Example:
   python3 diff_collation_code.py glibc-2.28 glibc-2.34
 """
 import argparse
+import os
 import re
 import sys
 
 import glibc_locale_data as g
+
+# The code that turns locale data into weights reaches this audit two ways.
+#
+# TIER1/TIER2 below are CURATED: a human ranking of what to read first. They are
+# no longer the ceiling of what gets read -- reachable_from_entry_points() walks
+# glibc's own #include graph and everything it finds is reported too, under
+# TIER 3. Before this, a file absent from these lists was indistinguishable from
+# a file that did not change, and `locale/programs/linereader.h` (lr_getc) and
+# `locale/elem-hash.h` (elem_hash) both changed over 2.34..2.39 unseen.
+#
+# So do NOT add a path here just because it looks collation-related: if the
+# include walk already reaches it, listing it here only freezes by hand what the
+# walk derives. Add a path only when the walk STRUCTURALLY cannot reach it, and
+# say which blind spot it falls into. There are two, both marked below:
+#
+#   (macro)  reached by a macro-computed #include, which a regex cannot resolve
+#   (TU)     a separately compiled translation unit with no header of its own,
+#            linked rather than included
+ENTRY_POINTS = [
+    'locale/programs/ld-collate.c',   # localedef: the collation compiler
+    'string/strcoll_l.c',             # runtime comparison
+    'string/strxfrm_l.c',             # runtime sort-key generation
+    'wcsmbs/wcscoll_l.c',             # the wide-char variants, which #define
+    'wcsmbs/wcsxfrm_l.c',             # their way into the two above
+    'locale/loadlocale.c',            # reads the compiled tables back in
+]
 
 # Weight assignment and comparison: a change here can reorder any locale.
 TIER1 = [
@@ -44,13 +71,22 @@ TIER1 = [
                                       # sections, reorder-after
     'string/strcoll_l.c',             # runtime comparison
     'string/strxfrm_l.c',             # runtime sort-key generation
+    # (macro) strcoll_l.c reaches these as `#include WEIGHT_H`, where WEIGHT_H is
+    # defined by whoever includes IT -- weight.h for the narrow build, weightwc.h
+    # for the wide one. Nothing resolves that without a preprocessor, and
+    # locale/weight.h does change over 2.34..2.39.
     'locale/weight.h',
     'locale/weightwc.h',
     'locale/coll-lookup.h',
+    # (TU) __collidx_table_lookup, compiled and linked, included by nobody.
+    'locale/coll-lookup.c',
+    # (TU) installs the _NL_COLLATE_* pointers when a locale is loaded.
+    'locale/lc-collate.c',
     # The C locale's own collation sequence. ld-collate.c does
     # `#include "C-collate-seq.c"`, so tracking only ld-collate.c showed the
     # include line and none of the 100 lines of weights behind it. Both change
     # over 2.34..2.39 -- the RHEL9-to-RHEL10 pair.
+    # (TU) C-collate.c has no header; the walk cannot reach it.
     'locale/C-collate.c',
     'locale/C-collate-seq.c',
 ]
@@ -64,7 +100,27 @@ TIER2 = [
     'locale/programs/3level.h',       # the weight table representation
     'locale/loadlocale.c',            # reads the compiled tables back in
     'locale/localeinfo.h',            # the structs those tables live in
+    # The keyword table is generated from this by gperf. The generated
+    # locfile-kw.h IS reachable, but it is a machine-built hash table -- 20
+    # substantive hunks over 2.34..2.39, none of them readable. This is the
+    # source those hunks mean, one line per keyword.
+    'locale/programs/locfile-kw.gperf',
 ]
+
+# Where the include walk descends. Following #include anywhere pulls in all of
+# libc -- measured at 265 files and 243 substantive hunks over 2.34..2.39,
+# dominated by stdio.h, unistd.h and sys/cdefs.h, none of which can move a
+# collation weight. Bounded to locale/, the same walk yields 28 files and finds
+# exactly the collation code.
+_WALK_PREFIX = 'locale/'
+
+_INCLUDE_RE = re.compile(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]', re.M)
+
+# Where an #include is looked up: the including file's own directory first, then
+# glibc's include roots. Enough to resolve everything under locale/; anything
+# unresolved is by construction outside _WALK_PREFIX and would be dropped anyway.
+_INCLUDE_ROOTS = ['', 'include/', 'locale/', 'locale/programs/', 'string/',
+                  'wcsmbs/']
 
 _HUNK_SPLIT_RE = re.compile(r'^(@@ .*?@@.*)$', re.M)
 _ATTRIBUTION_RE = re.compile(r'^(Contributed by|Written by)\b')
@@ -151,6 +207,68 @@ def split_hunks(diff_text):
     return hunks
 
 
+def _tracked_files(repo, tag):
+    """Every path in the tree at `tag`, as a set. One ls-tree, no blob fetch."""
+    out = g.run_git(['ls-tree', '-r', '--name-only', tag], repo)
+    return set(out.stdout.decode('utf-8', 'replace').split('\n')) - {''}
+
+
+def reachable_from_entry_points(repo, tag):
+    """Collation code reachable from ENTRY_POINTS by #include, at `tag`.
+
+    The point of this is that TIER1/TIER2 stop being the ceiling. A hand list
+    can only contain what somebody thought of; this walks what glibc actually
+    includes, so a file that becomes part of the collation path in a future
+    release is picked up without anyone editing a list.
+
+    Two bounds keep it useful rather than merely complete:
+
+      * The walk descends only into _WALK_PREFIX. Unbounded, it reaches 265
+        files whose diffs are dominated by stdio.h and sys/cdefs.h -- correct,
+        and unreadable.
+      * For every header reached, the sibling .c is added if it exists. glibc
+        links coll-lookup.c, simple-hash.c and locfile.c rather than including
+        them, so an #include walk alone sees their declarations and never their
+        code.
+
+    What it CANNOT see is recorded in the TIER1/TIER2 comments: macro-computed
+    includes (`#include WEIGHT_H`) and translation units with no header at all.
+    Those are why the curated lists still exist.
+    """
+    tracked = _tracked_files(repo, tag)
+
+    def resolve(inc, from_dir):
+        for base in ([from_dir + '/'] if from_dir else []) + _INCLUDE_ROOTS:
+            cand = os.path.normpath(base + inc) if base else inc
+            if cand in tracked:
+                return cand
+        return None
+
+    seen, frontier = set(), [p for p in ENTRY_POINTS if p in tracked]
+    while frontier:
+        batch = [p for p in frontier if p not in seen]
+        seen.update(batch)
+        # Strict: every path here came out of the tree at this same tag, so
+        # an unreadable one is a failed read, not an absent file. Letting it
+        # through would quietly shorten the walk, and a shorter walk reports
+        # fewer changed files -- the reassuring direction.
+        contents = g.read_blobs_strict(repo, tag, batch,
+                                       'the collation include walk')
+        frontier = []
+        for path in batch:
+            text = contents.get(path)
+            if text is None:
+                continue
+            for inc in _INCLUDE_RE.findall(text):
+                target = resolve(inc, os.path.dirname(path))
+                if (target is not None and target not in seen
+                        and target.startswith(_WALK_PREFIX)):
+                    frontier.append(target)
+
+    siblings = {p[:-2] + '.c' for p in seen if p.endswith('.h')}
+    return (seen | (siblings & tracked)) - set(ENTRY_POINTS)
+
+
 def check_paths(repo, paths, old_tag, new_tag):
     """Classify tracked paths that do not exist at both tags.
 
@@ -217,8 +335,9 @@ def report_file(repo, path, rng, show_all, quiet_when_clean=False):
             filtered += 1
 
     if not kept:
-        print(f"  {path}: no substantive change "
-              f"({filtered} comment/licence hunk(s) filtered)")
+        if not quiet_when_clean:
+            print(f"  {path}: no substantive change "
+                  f"({filtered} comment/licence hunk(s) filtered)")
         return 0
 
     note = f", {filtered} comment/licence hunk(s) filtered" if filtered else ""
@@ -253,7 +372,18 @@ def main(argv):
     print(f"Collation code changes between {opts.old_tag} and {opts.new_tag}")
     print()
 
-    vanished, outside = check_paths(repo, TIER1 + TIER2,
+    # Derived at BOTH tags and unioned: the walk at the new tag alone cannot
+    # see a file that existed at the old one and was removed or renamed away,
+    # which is the same "reads exactly like unchanged" failure check_paths()
+    # exists for.
+    derived = (reachable_from_entry_points(repo, opts.old_tag)
+               | reachable_from_entry_points(repo, opts.new_tag))
+    tiered = set(TIER1) | set(TIER2)
+    tier3 = sorted(derived - tiered)
+
+    # ENTRY_POINTS included: if one is renamed away the whole walk collapses to
+    # nothing, and a collapsed walk reads exactly like a clean result.
+    vanished, outside = check_paths(repo, ENTRY_POINTS + TIER1 + TIER2,
                                     opts.old_tag, opts.new_tag)
     if vanished:
         print(f"Tracked files present at {opts.old_tag} and GONE at "
@@ -289,6 +419,33 @@ def main(argv):
     for path in TIER2:
         tier2 += report_file(repo, path, rng, opts.all)
     total += tier2
+
+    print()
+    print("TIER 3 -- reachable from the collation entry points, not classified")
+    print("  (derived by walking #include from ld-collate.c, strcoll_l.c, "
+          "strxfrm_l.c and the")
+    print("   wide-char variants, bounded to locale/, plus the sibling .c of "
+          "every header")
+    print("   reached -- so this list grows on its own as glibc changes)")
+    tier3_clean = 0
+    for path in tier3:
+        n = report_file(repo, path, rng, opts.all, quiet_when_clean=True)
+        total += n
+        if n == 0:
+            tier3_clean += 1
+    if tier3_clean:
+        print(f"  ({tier3_clean} further file(s) reached and read, with no "
+              f"substantive change)")
+
+    print()
+    print(f"Coverage: {len(derived)} file(s) reached by the include walk, "
+          f"{len(tier3)} of them beyond")
+    print(f"TIER 1/2. The walk cannot follow a macro-computed include "
+          f"(`#include WEIGHT_H`) or")
+    print(f"reach a translation unit with no header of its own -- "
+          f"locale/weight.h, weightwc.h,")
+    print(f"lc-collate.c and C-collate.c are in TIER 1 by hand for exactly "
+          f"that reason.")
 
     print()
     if total == 0 and vanished:
