@@ -171,9 +171,14 @@ def check_paths(repo, paths, old_tag, new_tag):
     a clone always has.
     """
     def present(tag, path):
-        out = g.run_git(['ls-tree', '--name-only', tag, '--', path],
-                        repo, allow_fail=True)
-        return out.returncode == 0 and bool(out.stdout.strip())
+        # No allow_fail: `git ls-tree` exits 0 with empty output for a path
+        # that is not in the tree, and non-zero only on a real error (a bad
+        # tag, an unreadable object). Suppressing that turned an error into
+        # `False` for BOTH tags, which check_paths then filed under "exists at
+        # neither tag -- nothing to read, and nothing to miss" and printed as
+        # harmless, for a file that exists and was never read.
+        out = g.run_git(['ls-tree', '--name-only', tag, '--', path], repo)
+        return bool(out.stdout.strip())
 
     vanished, outside = [], []
     for path in paths:
@@ -185,9 +190,21 @@ def check_paths(repo, paths, old_tag, new_tag):
     return vanished, outside
 
 
-def report_file(repo, path, rng, show_all):
-    diff_text = g.run_git(['diff', rng, '--', path], repo,
-                          allow_fail=True).stdout.decode('utf-8', 'replace')
+def report_file(repo, path, rng, show_all, quiet_when_clean=False):
+    """Print one file's substantive hunks; return how many there were.
+
+    `quiet_when_clean` suppresses the "no substantive change" line. TIER 1 and
+    TIER 2 are curated and short, so naming every file that was checked is the
+    point. TIER 3 is derived and mostly clean -- 14 of 20 files over
+    2.34..2.39 -- and a line each buries the two hunks that matter. The count
+    is reported in the coverage line instead, so nothing goes unaccounted for.
+    """
+    # No allow_fail: `git diff` without --quiet exits 0 whether or not there
+    # are differences, so a non-zero exit is always a real error. With it
+    # suppressed, a failed diff gave empty stdout and returned 0 here -- the
+    # file was reported as having no substantive change, without a word.
+    diff_text = g.run_git(['diff', rng, '--', path],
+                          repo).stdout.decode('utf-8', 'replace')
     if not diff_text.strip():
         return 0
     hunks = split_hunks(diff_text)
@@ -211,7 +228,7 @@ def report_file(repo, path, rng, show_all):
         for ln, noise in marked:
             print(f"      {'  ' if noise else '>>'} {ln}")
     log = g.run_git(['log', '--oneline', '--no-merges', rng, '--', path],
-                    repo, allow_fail=True).stdout.decode('utf-8', 'replace')
+                    repo).stdout.decode('utf-8', 'replace')
     if log.strip():
         print("      commits:")
         for line in log.strip().split('\n'):
