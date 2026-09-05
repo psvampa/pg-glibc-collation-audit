@@ -2,7 +2,7 @@ Worked example output: glibc-2.34 (RHEL9) -> glibc-2.39 (RHEL10)
 Reproduced by running the five scripts in order (see ../README.md).
 
 $ ./audit-locale-diff.sh glibc-2.34 glibc-2.39
-Total locale files with content changes: 318
+Locale files added, modified or deleted: 318
 Full list in /tmp/pg-glibc-collation-audit/changed_locales.txt
 ---
 Collation templates -- did they change?
@@ -66,32 +66,45 @@ Renamed (1) -- judged against the old path's LC_COLLATE:
   localedata/locales/aa_ER@saaho -> localedata/locales/ssy_ER
 
 $ python3 resolve_copy_closure.py glibc-2.39 ber_DZ kab_DZ th_TH
-Directly changed (own LC_COLLATE diff): ['ber_DZ', 'kab_DZ', 'th_TH']
+Directly changed (own LC_COLLATE diff): ber_DZ, kab_DZ, th_TH
 Additionally affected via copy-chain inheritance: 0
 
-Full affected set (3 locale source file(s)): ['ber_DZ', 'kab_DZ', 'th_TH']
+Full affected set (3 locale source file(s)): ber_DZ, kab_DZ, th_TH
 
 Generated locales per localedata/SUPPORTED -- these are the names `locale -a` and pg_collation show (4):
   ber_DZ
   kab_DZ
   th_TH
-  th_TH.UTF-8
+  th_TH.utf8
 
 $ python3 flag_algorithmic_ranges.py glibc-2.39
-Locales checked at glibc-2.39: 366
-Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 2
+Files at glibc-2.39: 366, of which 352 define LC_COLLATE
+Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 4
+  i18n
+      collating-symbol <S0200>..<S1100> % 0x0200..0x1100
+      collating-symbol <S4E00>..<S9FA5> % Symbols for Han
+      collating-symbol <SAC00>..<SD7A3> % Symbols for Hangul
+      ... and 1 more
   iso14651_t1
       .. ..;IGNORE;IGNORE;IGNORE
+  iso14651_t1_common
+      collating-symbol <S0009>..<S327F> % Alphabetics, syllabics, general symbols
+      collating-symbol <S4DC0>..<S4DFF> % Yijing hexagram symbols
+      collating-symbol <SA000>..<SABFF> % Alphabetics, syllabics, general symbols
+      ... and 20 more
   ko_KR
       ..
 
-Additionally exposed via `copy` inheritance: 338
-  via iso14651_t1: 338 locale(s)
+Additionally exposed via `copy` inheritance: 341
+  via iso14651_t1: 337 locale(s)
       aa_DJ, aa_ER, aa_ET, ab_GE, af_ZA, agr_PE, ak_GH, am_ET, an_ES, anp_IN, ar_AE, ar_BH, ...
+  via iso14651_t1_common: 4 locale(s)
+      cmn_TW, cns11643_stroke, iso14651_t1_pinyin, zh_CN
 
-Full set needing empirical confirmation: 340 locale source file(s), 483 generated locale name(s) per localedata/SUPPORTED
-  e.g. aa_DJ, aa_DJ.UTF-8, aa_ER, aa_ET, af_ZA, af_ZA.UTF-8, agr_PE, ak_GH, ...
-  full list of generated names: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
+Full set needing empirical confirmation: 345 locale source file(s), 488 generated locale name(s) per localedata/SUPPORTED
+  e.g. aa_DJ, aa_DJ.utf8, aa_ER, aa_ET, af_ZA, af_ZA.utf8, agr_PE, ak_GH, ...
+  not in SUPPORTED (templates, not built by default): ab_GE, cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
+  full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
 
 These cannot be cleared by a source diff alone. Run
   python3 diff_collation_code.py <old_tag> glibc-2.39
@@ -104,14 +117,17 @@ Collation code changes between glibc-2.34 and glibc-2.39
 
 TIER 1 -- weight assignment and comparison
   (a change here can reorder any locale, including ones whose data file is unchanged)
-  locale/programs/ld-collate.c: 13 substantive hunk(s), 3 comment/copyright hunk(s) filtered
+  locale/programs/ld-collate.c: 15 substantive hunk(s), 1 comment/licence hunk(s) filtered
+      @@ -24,6 +23,7 @@
+      >> +#include <array_length.h>
       @@ -195,6 +195,9 @@ struct name_list
          +  /* Does the locale use code points to compare the encoding?  */
       >> +  bool codepoint_collation;
+         +
   [...full hunk list omitted; see the command output...]
-  locale/programs/3level.h: no substantive change (1 comment/copyright hunk(s) filtered)
+  locale/localeinfo.h: 4 substantive hunk(s), 2 comment/licence hunk(s) filtered
 
-34 substantive hunk(s) found. Locale data alone does not settle this pair.
+48 substantive hunk(s) found. Locale data alone does not settle this pair.
 Lines marked >> are the code changes; read them and decide whether they can
 move weights. If any can, every locale listed by
   python3 flag_algorithmic_ranges.py glibc-2.39

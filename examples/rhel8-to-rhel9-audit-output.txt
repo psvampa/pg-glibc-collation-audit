@@ -4,7 +4,7 @@ Long result lists are written to $PG_GLIBC_AUDIT_OUT (default
 /tmp/pg-glibc-collation-audit/) and referenced, not inlined.
 
 $ ./audit-locale-diff.sh glibc-2.28 glibc-2.34
-Total locale files with content changes: 283
+Locale files added, modified or deleted: 283
 Full list in /tmp/pg-glibc-collation-audit/changed_locales.txt
 ---
 Collation templates -- did they change?
@@ -55,38 +55,51 @@ Added at glibc-2.34 (2), not analysed for a change of order -- they had no previ
   localedata/locales/mnw_MM
 
 $ python3 resolve_copy_closure.py glibc-2.34 or_IN sv_SE
-Directly changed (own LC_COLLATE diff): ['or_IN', 'sv_SE']
+Directly changed (own LC_COLLATE diff): or_IN, sv_SE
 Additionally affected via copy-chain inheritance: 2
   sv_FI: copy "sv_SE" -> reaches sv_SE
   sv_FI@euro: copy "sv_SE" -> reaches sv_SE
 
-Full affected set (4 locale source file(s)): ['or_IN', 'sv_FI', 'sv_FI@euro', 'sv_SE']
+Full affected set (4 locale source file(s)): or_IN, sv_FI, sv_FI@euro, sv_SE
 
 Generated locales per localedata/SUPPORTED -- these are the names `locale -a` and pg_collation show (6):
   or_IN
   sv_FI
-  sv_FI.UTF-8
+  sv_FI.utf8
   sv_FI@euro
   sv_SE
-  sv_SE.UTF-8
+  sv_SE.utf8
 
 Full list also written to /tmp/pg-glibc-collation-audit/step3_affected_locales.txt
 
 $ python3 flag_algorithmic_ranges.py glibc-2.34
-Locales checked at glibc-2.34: 355
-Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 2
+Files at glibc-2.34: 355, of which 342 define LC_COLLATE
+Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 4
+  i18n
+      collating-symbol <S0200>..<S1100> % 0x0200..0x1100
+      collating-symbol <S4E00>..<S9FA5> % Symbols for Han
+      collating-symbol <SAC00>..<SD7A3> % Symbols for Hangul
+      ... and 1 more
   iso14651_t1
       .. ..;IGNORE;IGNORE;IGNORE
+  iso14651_t1_common
+      collating-symbol <S0009>..<S327F> % Alphabetics, syllabics, general symbols
+      collating-symbol <S4DC0>..<S4DFF> % Yijing hexagram symbols
+      collating-symbol <SA000>..<SABFF> % Alphabetics, syllabics, general symbols
+      ... and 20 more
   ko_KR
       ..
 
-Additionally exposed via `copy` inheritance: 328
-  via iso14651_t1: 328 locale(s)
+Additionally exposed via `copy` inheritance: 331
+  via iso14651_t1: 327 locale(s)
       aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, agr_PE, ak_GH, am_ET, an_ES, anp_IN, ar_AE, ar_BH, ...
+  via iso14651_t1_common: 4 locale(s)
+      cmn_TW, cns11643_stroke, iso14651_t1_pinyin, zh_CN
 
-Full set needing empirical confirmation: 330 locale source file(s), 473 generated locale name(s) per localedata/SUPPORTED
-  e.g. aa_DJ, aa_DJ.UTF-8, aa_ER, aa_ER@saaho, aa_ET, af_ZA, af_ZA.UTF-8, agr_PE, ...
-  full list of generated names: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
+Full set needing empirical confirmation: 335 locale source file(s), 478 generated locale name(s) per localedata/SUPPORTED
+  e.g. aa_DJ, aa_DJ.utf8, aa_ER, aa_ER@saaho, aa_ET, af_ZA, af_ZA.utf8, agr_PE, ...
+  not in SUPPORTED (templates, not built by default): cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
+  full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
 
 These cannot be cleared by a source diff alone. Run
   python3 diff_collation_code.py <old_tag> glibc-2.34
@@ -97,9 +110,13 @@ versions; if it did, test these empirically before trusting a
 $ python3 diff_collation_code.py glibc-2.28 glibc-2.34
 Collation code changes between glibc-2.28 and glibc-2.34
 
+Tracked files that exist at neither tag -- nothing to read, and nothing to
+miss, for this version range:
+  locale/C-collate-seq.c
+
 TIER 1 -- weight assignment and comparison
   (a change here can reorder any locale, including ones whose data file is unchanged)
-  locale/programs/ld-collate.c: 2 substantive hunk(s), 4 comment/copyright hunk(s) filtered
+  locale/programs/ld-collate.c: 2 substantive hunk(s), 4 comment/licence hunk(s) filtered
       @@ -1483,6 +1483,9 @@ order for `%.*s' already defined at %s:%Zu"),
          +  /* Move the cursor to the last entry in the ellipsis.
          +     Subsequent operations need to start from the last entry.  */
@@ -118,16 +135,17 @@ TIER 1 -- weight assignment and comparison
         5abcddd794 Fix parentheses error in iconvconfig.c and ld-collate.c [BZ #24372]
         ac64195ccd iconv, localedef: avoid floating point rounding differences [BZ #24372]
         04277e02d7 Update copyright dates with scripts/update-copyrights.
-  string/strcoll_l.c: no substantive change (2 comment/copyright hunk(s) filtered)
-  string/strxfrm_l.c: no substantive change (3 comment/copyright hunk(s) filtered)
-  locale/weight.h: no substantive change (2 comment/copyright hunk(s) filtered)
-  locale/weightwc.h: no substantive change (2 comment/copyright hunk(s) filtered)
-  locale/coll-lookup.h: no substantive change (2 comment/copyright hunk(s) filtered)
+  string/strcoll_l.c: no substantive change (2 comment/licence hunk(s) filtered)
+  string/strxfrm_l.c: no substantive change (3 comment/licence hunk(s) filtered)
+  locale/weight.h: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/weightwc.h: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/coll-lookup.h: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/C-collate.c: no substantive change (2 comment/licence hunk(s) filtered)
 
 TIER 2 -- parsing and serialisation
   (a change here can alter the compiled tables without touching the weight logic)
-  locale/programs/linereader.c: no substantive change (2 comment/copyright hunk(s) filtered)
-  locale/programs/locfile.c: 2 substantive hunk(s), 2 comment/copyright hunk(s) filtered
+  locale/programs/linereader.c: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/programs/locfile.c: 2 substantive hunk(s), 2 comment/licence hunk(s) filtered
       @@ -702,7 +702,7 @@ write_locale_data (const char *output_path, int catidx, const char *category,
       >> -  const char **other_paths;
       >> +  const char **other_paths = NULL;
@@ -157,10 +175,59 @@ TIER 2 -- parsing and serialisation
         5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
         04277e02d7 Update copyright dates with scripts/update-copyrights.
         8cebd4ffe6 Add --no-hard-links option to localedef (bug 23923)
-  locale/programs/locfile.h: no substantive change (2 comment/copyright hunk(s) filtered)
-  locale/programs/3level.h: no substantive change (2 comment/copyright hunk(s) filtered)
+  locale/programs/locfile.h: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/programs/3level.h: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/loadlocale.c: 3 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -167,7 +167,7 @@ _nl_load_locale (struct loaded_l10nfile *file, int category)
+      >> -  struct stat64 st;
+      >> +  struct __stat64_t64 st;
+      @@ -180,7 +180,7 @@ _nl_load_locale (struct loaded_l10nfile *file, int category)
+      >> -  if (__builtin_expect (__fxstat64 (_STAT_VER, fd, &st), 0) < 0)
+      >> +  if (__glibc_unlikely (__fstat64_time64 (fd, &st) < 0))
+      @@ -199,15 +199,14 @@ _nl_load_locale (struct loaded_l10nfile *file, int category)
+      >> -			    "/SYS_", 5),
+      >> -		 _nl_category_names.str + _nl_category_name_idxs[category],
+      >> +			    "/SYS_", 5), _nl_category_names_get (category),
+      >> -      if (__builtin_expect (__fxstat64 (_STAT_VER, fd, &st), 0) < 0)
+      >> +      if (__glibc_unlikely (__fstat64_time64 (fd, &st) < 0))
+      commits:
+        52a5fe70a2 Use 64 bit time_t stat internally
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        04986243d1 Remove internal usage of extensible stat functions
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        de18a7061c locale: Avoid zero-length array in _nl_category_names [BZ #24962]
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
+  locale/localeinfo.h: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -183,23 +183,29 @@ enum
+         -/* Category name handling variables.  */
+         +/* Category name handling variables.  Concatenate all the strings in a
+         +   single object to minimize relocations.  Individual strings can be
+         +   accessed using _nl_category_names.  */
+      >> -extern const union catnamestr_t
+      >> +extern const struct catnamestr_t
+      >> -  struct
+      >> -  {
+      >> -    char CATNAMEMF (__LINE__)[sizeof (category_name)];
+      >> +  char CATNAMEMF (__LINE__)[sizeof (category_name)];
+      >> -  };
+      >> -  char str[0];
+         +/* Return the name of the category INDEX, which must be nonnegative
+         +   and less than _LC_LAST.  */
+      >> +static inline const char *
+      >> +_nl_category_names_get (int index)
+      >> +{
+      >> +  return (const char *) &_nl_category_names + _nl_category_name_idxs[index];
+      >> +}
+         +
+      commits:
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        de18a7061c locale: Avoid zero-length array in _nl_category_names [BZ #24962]
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
 
-4 substantive hunk(s) found. Locale data alone does not settle this pair.
+8 substantive hunk(s) found. Locale data alone does not settle this pair.
 Lines marked >> are the code changes; read them and decide whether they can
 move weights. If any can, every locale listed by
   python3 flag_algorithmic_ranges.py glibc-2.34
@@ -199,7 +266,10 @@ CHANGED
 UNCHANGED (negative controls -- the audit correctly excludes these)
 
   en_US, de_DE, fr_FR: identical output on both versions.
-  zh_CN  (inherits iso14651_t1_pinyin, byte-identical 2.28..2.42):
+  zh_CN  (copy "iso14651_t1_pinyin" -> "iso14651_t1_common"; both files are
+         byte-identical 2.28..2.42, but iso14651_t1_common carries the
+         constructed Han/Hangul ranges, so step 4 flags zh_CN and only this
+         measurement clears it):
     2.28 == 2.34:  伽 假 一 龥
   en_US / zh_TW over the iso14651_t1 Han range (U+4E00..U+9FA5), the range
   step 4 flags and step 5 cannot clear from source:

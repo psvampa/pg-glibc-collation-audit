@@ -50,7 +50,10 @@ matters for your two versions.
    a file, not just the first — and adds every locale that inherits from a
    directly-changed one. It also maps the result through
    `localedata/SUPPORTED` to the generated names `locale -a` and
-   `pg_collation` actually show (`sv_SE.UTF-8`, not `sv_SE`).
+   `pg_collation` actually show. Note the spelling: `localedef` normalises
+   the codeset when it builds the locale, so `SUPPORTED` says `sv_SE.UTF-8`
+   while the installed locale, `locale -a` and `pg_collation` all say
+   `sv_SE.utf8` — and `COLLATE "sv_SE.UTF-8"` does not exist.
 4. **`scripts/flag_algorithmic_ranges.py <tag>`** finds locales whose
    `LC_COLLATE` uses range-expansion (ellipsis) syntax instead of an
    explicit per-character weight. Such a range is expanded algorithmically by
@@ -58,19 +61,27 @@ matters for your two versions.
    locale file itself. If the expansion logic changes between two releases,
    every character in the range can get a different weight with zero change
    to the locale's own source, so steps 1 to 3 alone cannot prove that
-   locale is safe. Two files do this as of glibc 2.34: `ko_KR` (all 11,172
-   precomposed Hangul syllables) and `iso14651_t1` (the CJK block
-   U+4E00..U+9FA5), the latter inherited by 328 locales including `en_US`,
-   `de_DE`, `fr_FR`, `zh_TW`, `zh_HK` and `zh_SG` — so this step closes its
-   own result over the `copy` graph too.
+   locale is safe. The range may sit on its own line or, more often, inline
+   on a `collating-symbol` line — both count. Four files do this as of glibc
+   2.34: `ko_KR` (all 11,172 precomposed Hangul syllables), `iso14651_t1`
+   (the CJK block U+4E00..U+9FA5), and `iso14651_t1_common` and `i18n`
+   (the constructed Hangul and Han weight symbols). Between them they are
+   inherited by 331 further locales — `en_US`, `de_DE`, `fr_FR`, `zh_CN`,
+   `zh_TW`, `zh_HK`, `zh_SG` — so this step closes its own result over the
+   `copy` graph too, reaching 335 of the 342 locales that define
+   `LC_COLLATE`.
 5. **`scripts/diff_collation_code.py <old_tag> <new_tag>`** diffs the glibc
    *code* that turns locale data into weights: `localedef`'s collation
    compiler and the runtime comparison functions. Steps 1 to 4 compare data;
    this compares the other half of the input. It is not hypothetical — the
    only sort-order-relevant change between glibc 2.28 and 2.34 lives here,
-   not in `localedata/` (see the worked example). Comment and copyright
-   hunks are filtered out, with the filtered count always shown and `--all`
-   to see everything.
+   not in `localedata/` (see the worked example). Comment and licence hunks
+   are filtered out, with the filtered count always shown and `--all` to see
+   everything. The filter only drops what it can prove is prose: a
+   preprocessor directive, a label or a bare declarator counts as code,
+   because a hunk dropped here is a hunk nobody reads. It also reports any
+   tracked path that is absent at either tag, since `git diff` over a missing
+   file is empty rather than an error.
 
 Steps 3 and 5 together give the real, complete set of affected locale
 identifiers for that version pair. Step 4 says which locales a data diff can
@@ -99,7 +110,7 @@ psql -f sql/collation_confirmation_template.sql   # edit placeholders first
 Check `locale -a` before comparing: if a locale isn't generated on the box,
 `sort`/PostgreSQL silently fall back to `C`, and two boxes both missing it
 will agree with each other while proving nothing. Use the generated names
-step 3 prints (`sv_SE.UTF-8`), not the source file names.
+step 3 prints (`sv_SE.utf8`), not the source file names.
 
 <details>
 <summary><strong>What the template checks, and two traps</strong></summary>
@@ -154,11 +165,13 @@ Two version pairs run end to end. The two middle columns are the answer;
 | `th_TH` | ⚪ Unaffected | 🟡 **Unresolved** | steps 1–3 |
 | `ber_DZ`, `kab_DZ` | ⚪ Unaffected | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap |
 | CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>inherited by 328 locales | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
-| everything else — `en_US`, `de_DE`,<br>`fr_FR`, `zh_CN`, … | ⚪ Unaffected | ⚪ Unaffected | `LC_COLLATE` and code both unchanged |
+| `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | step 4 flagged them via `iso14651_t1_common`; cleared by measurement |
+| everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | ⚪ Unaffected | ⚪ Unaffected | `LC_COLLATE` and code both unchanged |
 
-If you saved a result from this tool before 2026-09-03, check
-[CHANGELOG.md](CHANGELOG.md) first — `ko_KR` was reported unaffected for the
-RHEL8-to-RHEL9 pair and it changes.
+If you saved a result from this tool before 2026-09-05, check
+[CHANGELOG.md](CHANGELOG.md) first. Two verdicts have moved since: `ko_KR`
+was once reported unaffected for the RHEL8-to-RHEL9 pair and it changes, and
+step 4 used to clear `zh_CN` and three siblings that it should have flagged.
 
 - 🔴 **Changed** — sort order moves. Reindex.
 - 🟡 **Unresolved** — flagged and *not* cleared. Treat as changed until tested.
@@ -179,8 +192,9 @@ row no source diff can reach.
 
 ### Worked example: RHEL8 to RHEL9 (glibc 2.28 to 2.34)
 
-`or_IN`, `sv_SE`, `sv_FI`, `sv_FI@euro` and `ko_KR` change. Everything else is
-clear, including `zh_CN`.
+`or_IN`, `sv_SE`, `sv_FI`, `sv_FI@euro` and `ko_KR` change. Everything else
+that this method can settle is clear; `zh_CN` and its pinyin siblings are
+flagged by step 4 and cleared only by measurement.
 
 <details>
 <summary><strong>The full run, and the evidence for each verdict</strong></summary>
@@ -200,7 +214,7 @@ no working directory to get wrong.
 
 Result, from the data diff: **`or_IN`, `sv_SE`, `sv_FI`, `sv_FI@euro`** change
 sort order between glibc 2.28 and 2.34 (as generated locales: `or_IN`,
-`sv_SE`, `sv_SE.UTF-8`, `sv_FI`, `sv_FI.UTF-8`, `sv_FI@euro`). `sv_FI` comes
+`sv_SE`, `sv_SE.utf8`, `sv_FI`, `sv_FI.utf8`, `sv_FI@euro`). `sv_FI` comes
 in only via inheritance from `sv_SE` and is never flagged by a plain file
 diff.
 
@@ -232,9 +246,11 @@ where this particular bug lives, not a broad CJK corpus, and `zh_TW`/`zh_HK`/
 `zh_SG` are absent from ardentperf's set. For those three the evidence is a
 mechanism argument plus a targeted test, not a broad empirical sweep.
 
-Every other locale (`en_US`, `de_DE`, `fr_FR`, `zh_CN`, ...) is unaffected,
-confirmed by the unchanged templates and by real `sort`/PostgreSQL tests on
-RHEL8 and RHEL9 nodes.
+Every other locale (`en_US`, `de_DE`, `fr_FR`, ...) is unaffected, confirmed
+by the unchanged templates and by real `sort`/PostgreSQL tests on RHEL8 and
+RHEL9 nodes. `zh_CN` is not in that group: it reaches
+`iso14651_t1_common` through `iso14651_t1_pinyin`, so step 4 flags it and the
+`sort` measurement — not the clean data diff — is what clears it.
 
 #### The `ko_KR` mechanism, and its minimal test case
 
@@ -336,14 +352,58 @@ Full output: [`examples/rhel9-to-rhel10-audit-output.txt`](examples/rhel9-to-rhe
   everywhere `initdb` runs in a container: a `libc` provider with `C.UTF-8` as
   the database collation means every text column without an explicit `COLLATE`
   is exposed to a glibc upgrade, while the source-diff audit is structurally
-  blind to that locale. The SQL template covers the PostgreSQL half; nothing
-  covers the source half, so for `C.UTF-8` the empirical comparison is not
-  optional.
+  blind to that locale.
+
+  PostgreSQL is blind to it too, which is worth knowing before you rely on a
+  `collversion` mismatch as your warning. Under the `libc` provider,
+  `get_collation_actual_version()` returns NULL for `C`, for `POSIX` and for
+  **anything whose name starts with `C.`** — the `pg_strncasecmp("C.", ...)`
+  test, present in every branch from PG 14 on
+  (`src/backend/utils/adt/pg_locale.c` through PG 17,
+  `pg_locale_libc.c` from PG 18). So `collversion` and `datcollversion`
+  stay NULL for `C.UTF-8`, the mismatch check in the SQL template can never
+  fire for it, and neither can PostgreSQL's own warning on a version bump.
+  Nothing covers the source half and nothing covers the catalog half, so for
+  `C.UTF-8` the empirical comparison is not optional.
 - **Upstream tags are not your distro's glibc.** RHEL8 ships
   `glibc-2.28-251.el8` with hundreds of backports; a backported collation
   change would be invisible to a `glibc-2.28..glibc-2.34` diff. The
   confirmation step on real nodes is the only cover for this, and it is the
   main reason not to skip it.
+- **The migration's DESTINATION must be glibc 2.24 or newer** — RHEL 8+,
+  Ubuntu 18.04+, Debian 9+, SLES 15+. Note the direction: auditing *from* an
+  older system is fine, so `RHEL 7 -> RHEL 8` is correct. What is out of scope
+  is auditing *towards* RHEL 7 or older.
+
+  In glibc 2.23 and earlier, the three master templates (`iso14651_t1`,
+  `iso14651_t1_common`, `iso14651_t1_pinyin`) begin with `LC_COLLATE` on the
+  very first byte of the file, and the block reader does not recognise them
+  there. Steps 3 and 4 walk the `copy` graph at the **new** tag, so when that
+  tag is old the graph loses its three roots and the inheritance closure
+  collapses — silently, in the reassuring direction.
+
+  Measured on `glibc-2.12 -> glibc-2.17`, a RHEL 6 to RHEL 7 audit: step 2
+  correctly finds `iso14651_t1_common` changed, then step 3 reports **11**
+  affected locales where there are **278**, and step 4 reports **2** exposed
+  where there are **279**. The 267 names it drops include `en_US`, `de_DE`,
+  `fr_FR`, `es_ES`, `it_IT`, `nl_NL`, `pt_BR`, `ru_RU`, `sv_SE`, `zh_CN` and
+  `zh_TW`. What actually changes over that pair is 109 Tibetan code points
+  gaining a collation weight in `iso14651_t1_common`.
+
+  There is no guard for this: run the tool outside the supported range and it
+  answers confidently and wrongly.
+- **Character repertoire changes are not audited.** `localedata/charmaps/`
+  is an input to `localedef` — it decides which characters exist to be given a
+  weight — and no step looks at it. `charmaps/UTF-8` gains 1632 code points
+  over 2.28..2.34, 1658 over 2.34..2.39 and 5235 over 2.39..2.41.
+
+  Measured rather than assumed: 99 of those newly added code points, mixed
+  with pre-existing reference characters and sorted on real RHEL8 and RHEL9
+  nodes, come out in **identical order** under `en_US`, `sv_SE`, `de_DE`,
+  `ar_SA` and `zh_CN`. Adding a character to the repertoire gives that
+  character a weight; it does not move the characters that already had one. So
+  this is a gap in coverage with no demonstrated impact — but it is a gap, and
+  only data containing those characters could ever be affected by it.
 - **Step 5 reports, it does not decide.** It cannot tell a weight-changing
   commit from a harmless one — over 2.28..2.34 it surfaces both the ellipsis
   fix (which reorders `ko_KR`) and a hash-table sizing change (which reorders
@@ -387,11 +447,20 @@ says anything about it at all.
 One thing worth knowing when reading their tables: they report both a
 `glibc` and an `icu` engine. Between RHEL8 and RHEL9, **every** locale
 changes under ICU (60.3 to 67, a full CLDR jump) while only `ko` and
-`C.UTF-8` change under glibc. `zh_CN` in particular is **unchanged** under
-glibc for this pair — it inherits `iso14651_t1_pinyin`, which is
-byte-identical from 2.28 through 2.42 — so a `zh` change read off those
-tables is an ICU result, not a glibc one, and carries no `REINDEX`
-implication for a libc collation. Their set also contains no `sv` or
+`C.UTF-8` change under glibc. `zh_CN` in particular came out **unchanged**
+under glibc for this pair when I measured it on RHEL8 and RHEL9 nodes, so a
+`zh` change read off those tables is an ICU result, not a glibc one, and
+carries no `REINDEX` implication for a libc collation.
+
+  Note what that argument does *not* rest on. `zh_CN` and
+  `iso14651_t1_pinyin` are both byte-identical from 2.28 through 2.42, but
+  that proves nothing on its own: the chain ends at `iso14651_t1_common`,
+  whose `collating-symbol <SAC00>..<SD7A3>` and `<RFB40>..<RFB41>` ranges are
+  expanded by `localedef` at build time and are exactly what step 4 exists to
+  flag. Step 4 does flag `zh_CN`; the evidence that clears it is the
+  measurement, not the diff. Earlier versions of this tool missed the inline
+  ellipsis form and cleared it from source alone — see
+  [CHANGELOG.md](CHANGELOG.md). Their set also contains no `sv` or
 `or_IN`, the two locales this tool finds for the same pair, so the two
 results do not overlap as much as they first appear.
 
@@ -434,4 +503,21 @@ Install the relevant `glibc-langpack-*` packages on each node first. If you
 install them *after* `initdb`, the collations will not exist yet and
 `CREATE TABLE ... COLLATE "sv_SE.utf8"` fails with `collation ... does not
 exist` — which is why the template calls `pg_import_system_collations()`
-before anything else. Re-run it after adding a langpack.
+before anything else.
+
+**Restart PostgreSQL after installing a langpack, before re-running that
+function.** Re-running it alone is not enough, and it fails quietly: the
+function reports a plausible count and returns success while importing only
+the locales that existed when the postmaster started. `pg_import_system_collations()`
+takes its list from `locale -a` — a fresh subprocess, which sees the new
+locales — but it then validates each one with `setlocale()` inside the
+backend, and that resolves against the `locale-archive` the postmaster
+already has mapped. Measured on Rocky 8 with PostgreSQL 16.15, installing
+`glibc-all-langpacks` and calling the function without a restart imported
+**72** collations and left `sv_SE.utf8` absent; `systemctl restart
+postgresql-16` and the same call imported **931** more, for 1007 in total.
+
+Minimal container images add a second trap ahead of that one: they ship
+`/etc/rpm/macros.image-language-conf` containing `%_install_langs en_US`, so
+`dnf install glibc-all-langpacks` reports success and installs nothing beyond
+English — `locale -a` stayed at 59 entries. Remove that file and reinstall.

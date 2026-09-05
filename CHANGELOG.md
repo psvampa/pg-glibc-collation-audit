@@ -4,6 +4,261 @@ Findings live in the [README](README.md). This file records what this tool
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-05 (second entry)
+
+### Declared a version floor: the migration's destination must be glibc 2.24+
+
+Not a fix — a documented limit. If you audited a pair whose **new** tag is
+glibc 2.23 or older, the result was wrong in the reassuring direction and
+still is; the tool now says so in Known limitations instead of pretending
+otherwise.
+
+Steps 3 and 4 walk the `copy` graph at the new tag. In glibc <= 2.23 the three
+master templates (`iso14651_t1`, `iso14651_t1_common`, `iso14651_t1_pinyin`)
+begin with `LC_COLLATE` on the very first byte of the file, and the block
+reader requires a preceding newline, so it decides those files define no
+collation at all. The graph loses its three roots and the closure collapses.
+
+Measured on `glibc-2.12 -> glibc-2.17` (RHEL 6 to RHEL 7):
+
+| | reported | correct |
+|---|---|---|
+| step 3, affected locales | **11** | **278** |
+| step 4, exposed locales | **2** | **279** |
+
+The 267 names dropped by step 3 include `en_US`, `de_DE`, `fr_FR`, `es_ES`,
+`it_IT`, `nl_NL`, `pt_BR`, `ru_RU`, `sv_SE`, `zh_CN` and `zh_TW`. What changes
+over that pair is 109 Tibetan code points gaining a collation weight in
+`iso14651_t1_common` — every one of those 278 locales inherits it.
+
+Direction matters and is easy to misread: auditing *from* an old system is
+fine (`RHEL 7 -> RHEL 8` is correct, its new tag is 2.28). Only auditing
+*towards* RHEL 7 or older is out of scope. There is no guard in the code; run
+it outside the range and it answers confidently and wrongly.
+
+### Step 5 was not reading the C locale's collation data
+
+`TIER1` gains `locale/C-collate.c` and `locale/C-collate-seq.c`. The second is
+`#include`d by `ld-collate.c:2098`, which was already tracked — so the audit
+printed the `#include` line and never read the 100 lines of collation sequence
+behind it. Both change over 2.34..2.39, the RHEL9-to-RHEL10 pair this repo
+ships as a worked example.
+
+`TIER2` gains `locale/loadlocale.c` and `locale/localeinfo.h`, which are how
+the compiled `LC_COLLATE` tables are read back and what structures they live
+in. Both have substantive changes in every pair measured.
+
+Reported hunk counts rise accordingly: 2.28..2.34 goes from 4 to 8, and
+2.34..2.39 from 38 to 48. Both worked examples are regenerated.
+
+### `git cat-file -e` reported files that exist as absent
+
+The existence checks in `audit-locale-diff.sh` and in step 5 used
+`git cat-file -e`. On a `--filter=blob:none` clone that has to fetch the blob
+to answer, and calls a file that exists ABSENT whenever the fetch cannot
+happen — offline, or against a dead promisor. Confirmed with
+`manual/intro.texi` at glibc-2.17: `ls-tree` lists it, `cat-file -e` denies it.
+Both now ask `git ls-tree`, which reads the tree such a clone always has.
+
+Step 5's absence report is also narrower now. It used to warn for any path
+missing at either tag, which fired on `locale/C-collate-seq.c` for
+2.28..2.34 — a file that simply did not exist yet — and withheld the clean
+verdict over it. It now distinguishes a path that vanished before the new tag
+(a rename the audit cannot see: a real blind spot, verdict withheld) from one
+absent at both tags (nothing to read and nothing to miss: a note).
+
+### Character repertoire changes are documented as unaudited
+
+`localedata/charmaps/` is an input to `localedef` and no step looks at it.
+`charmaps/UTF-8` gains 1632 code points over 2.28..2.34, 1658 over 2.34..2.39
+and 5235 over 2.39..2.41. Measured before writing it down: 99 of those newly
+added code points, mixed with pre-existing references and sorted on real RHEL8
+and RHEL9 nodes, come out in identical order under `en_US`, `sv_SE`, `de_DE`,
+`ar_SA` and `zh_CN`. A gap in coverage, not a demonstrated loss.
+
+## 2026-09-05
+
+### Step 4 cleared `zh_CN` and three siblings that it should have flagged
+
+If you saved a `flag_algorithmic_ranges.py` result before this date, re-run
+it. Its ellipsis matcher was anchored to the start of a line, so it only saw
+a range that occupied a whole line — `ko_KR`'s bare `..` and the one in
+`iso14651_t1`. The dominant form in glibc is inline:
+
+    collating-symbol <SAC00>..<SD7A3>  % Hangul syllables (weights constructed)
+    collating-symbol <RFB40>..<RFB41>  % first element of Han computed weights
+
+Those lines live in `iso14651_t1_common`, which is reached by 333 of the 342
+locales that define `LC_COLLATE` and which carries precisely the
+`localedef`-constructed weights step 4 exists to flag. Missing them cleared
+**`zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`, `cns11643_stroke`** and
+`iso14651_t1_common` itself: at glibc 2.34 the tool reported an exposed set
+of 330 source files where it should have reported 335.
+
+The contradiction was visible in the tool's own output — step 1 printed
+`333 locales inherit from iso14651_t1_common` while step 4 claimed 330
+exposed — and the README leaned on the gap, arguing that `zh_CN` was
+unaffected because its file and `iso14651_t1_pinyin` are byte-identical from
+2.28 through 2.42. That premise is true and beside the point: it is exactly
+the reasoning step 4 exists to refute. The empirical `sort` measurement on
+RHEL8/RHEL9 nodes still shows `zh_CN` unchanged for that pair, so the verdict
+in the README stands — but it now rests on the measurement, not on a data
+diff that could never have settled it.
+
+The matcher now recognises every form `localedef` accepts (`..`, `...`,
+`....`, `..(2)..`, `....(2)....`, per `locale/programs/linereader.c`)
+anywhere on a line, outside comments. Two of those forms were also simply
+wrong before: it looked for `...(N)...` and `..(N)..` with an arbitrary N,
+where glibc accepts `....(2)....` and `..(2)..` with a literal 2.
+
+### Step 5 discarded real code as "comment/copyright"
+
+`diff_collation_code.py` classified a changed line as noise unless it
+contained one of `; { } = ( )`. That covers most C statements and none of
+its declarations, so preprocessor directives, labels and bare declarators
+were all filed as comments. Because a hunk is dropped only when every line
+in it is noise, whole hunks vanished under the heading "no substantive
+change":
+
+| Pair | File | Discarded |
+|---|---|---|
+| 2.34 → 2.41 | `locale/programs/ld-collate.c` | `+#include "C-collate-seq.c"` |
+| 2.34 → 2.41 | `locale/programs/ld-collate.c` | `+#include <array_length.h>` |
+| 2.17 → 2.28 | `locale/programs/ld-collate.c` | `-#define NO_FINALIZE` / `+#define NO_ADD_LOCALE` |
+| 2.17 → 2.28 | `string/strxfrm_l.c` | `-# define STRCMP strcmp` |
+
+and inside surviving hunks, lines such as `case tok_codepoint_collation:`
+were shown without the `>>` marker readers are told to scan for. In a tool
+whose zero-hunk output is the verdict "every locale whose data file is
+unchanged is genuinely unaffected", that is the one direction of error that
+matters.
+
+The test now runs the other way: a line is noise only when it can be shown
+to be comment, attribution or licence text, tracking open block comments
+within each hunk so continuation lines are still recognised. Verified across
+eight tag pairs from 2.17 to 2.41: no hunk containing a preprocessor
+directive, label, declarator or keyword is dropped.
+
+The reported counts for the two worked examples changed as a result:
+2.34 → 2.39 now finds 38 substantive hunks where it reported 34.
+
+### Nothing ran on a clean machine
+
+`audit-locale-diff.sh` clones glibc with `--no-checkout`, so the clone has no
+working tree. Every Python step located that clone by looking for a
+`localedata/locales` **directory** on disk, which therefore never existed, and
+all five steps died with `could not find the glibc clone [...] Run
+scripts/audit-locale-diff.sh first` — on the very run that had just cloned it.
+Repository detection now goes through git, so a clone with no working tree
+works. Anyone who had a checked-out clone from an earlier version never saw
+this.
+
+### Step 5 could not tell "unchanged" from "not there"
+
+`git diff` over a path that does not exist is empty and exits 0, so a
+renamed or dropped file in `TIER1`/`TIER2` read exactly like "this file did
+not change" and fed the no-change verdict. All ten paths do exist at 2.28,
+2.34 and 2.41, so no result was wrong because of this — but a future glibc
+rename would have been silent. Step 5 now reports `ABSENT at <tag>`, as
+step 1 already did for the collation templates, and withholds the clean
+verdict when any path is missing.
+
+### `locale -a` does not spell locales the way the audit printed them
+
+Step 3 printed the raw `localedata/SUPPORTED` entry — `sv_SE.UTF-8` — and
+called it "the name `locale -a` and pg_collation show". `localedef`
+normalises the codeset when it builds the locale, so the installed locale,
+`locale -a` and `pg_collation` all say `sv_SE.utf8`, and
+`COLLATE "sv_SE.UTF-8"` fails with `collation ... does not exist`. The README
+used the correct spelling in one place and the wrong one in another. Both
+scripts now print the normalised form.
+
+### `pg_collation.collversion` can never flag `C.UTF-8`
+
+Not a bug in this tool, but a blind spot the SQL template did not name.
+Under the `libc` provider, `get_collation_actual_version()` returns NULL for
+`C`, for `POSIX` and for anything whose name starts with `C.` — the
+`pg_strncasecmp("C.", ...)` test, present in every branch from PG 14 on
+(`src/backend/utils/adt/pg_locale.c` through PG 17, `pg_locale_libc.c` from
+PG 18). So `collversion` and `datcollversion` stay
+NULL for `C.UTF-8`, and the mismatch queries in the template — like
+PostgreSQL's own upgrade warning — can never fire for it. That is the same
+locale the README already flags as exposed and un-auditable from source, and
+it is the container default. Both the template and the README now say so.
+
+### `pg_import_system_collations()` under-imports without a server restart
+
+New, and found only by running the template on real nodes. Install a langpack
+after `initdb`, call `pg_import_system_collations()` as the template says, and
+it returns success with a plausible count — while importing only the locales
+that existed when the postmaster started. It reads `locale -a` in a fresh
+subprocess, which does see the new locales, then validates each with
+`setlocale()` in the backend, which resolves against the `locale-archive` the
+postmaster already mapped.
+
+Measured on Rocky 8 / PostgreSQL 16.15 with `glibc-all-langpacks` installed
+after `initdb`:
+
+| | collations imported | `sv_SE.utf8` present |
+|---|---|---|
+| `pg_import_system_collations()` alone | 72 | no |
+| after `systemctl restart postgresql-16` | +931 (1007 total) | yes |
+
+The README told you to re-run the function after adding a langpack, which is
+not enough and fails in the reassuring direction. Both it and the template now
+say to restart first. The README also notes the trap ahead of it: minimal
+container images ship `/etc/rpm/macros.image-language-conf` with
+`%_install_langs en_US`, so `dnf install glibc-all-langpacks` succeeds and
+installs nothing but English.
+
+### Verified on real nodes
+
+Everything above was re-checked on freshly deployed Rocky 8 (glibc
+2.28-251.el8_10.40) and Rocky 9 (glibc 2.34-275.el9_8) nodes, both running
+PostgreSQL 16.15. Same script, byte-identical input, both sides:
+
+| Locale | glibc 2.28 | glibc 2.34 | |
+|---|---|---|---|
+| `sv_SE.utf8` | `va wa Vasa Wasa vind wind` | `va Vasa vind wa Wasa wind` | changed |
+| `or_IN` | `ଔ କ ହ କ୍ଷ ଂ ଃ ଁ` | `ଔ ଁ ଂ ଃ କ ହ କ୍ଷ` | changed |
+| `ko_KR.utf8` | `가 힢 伽 佳 힣` | `가 힢 힣 伽 佳` | changed — data file identical, only step 5 finds it |
+| `zh_CN.utf8` | `伽 假 一 龥` | `伽 假 一 龥` | unchanged — step 4 flags it, this clears it |
+| `en_US.utf8` | `一 伽 假 龥` | `一 伽 假 龥` | unchanged |
+
+`C.UTF-8` was confirmed on both counts at once. Its order **does** change —
+sorting U+007F, U+07FF, U+FFFF and U+10FFFF under `COLLATE "C.utf8"` gives
+`ffff, 10ffff, 7f, 7ff` on 2.28 and `7f, 7ff, ffff, 10ffff` on 2.34 — and
+PostgreSQL stays **silent**: `collversion` and `pg_collation_actual_version()`
+are both NULL for it on both nodes, where `sv_SE.utf8` correctly reports 2.28
+and 2.34. Both mismatch queries in the template return zero rows for `C.*`.
+The containers' own databases run `datlocprovider = 'c'`,
+`datcollate = C.UTF-8` with a NULL `datcollversion`, so their default
+collation reordered with no signal of any kind — the exact configuration the
+README calls out.
+
+The name finding was settled the same way: `pg_collation` has `sv_SE.utf8`
+and no `sv_SE.UTF-8`, and `COLLATE "sv_SE.UTF-8"` fails with
+`collation "sv_SE.UTF-8" for encoding "UTF8" does not exist`.
+
+### Smaller corrections
+
+- `supported_map()` returned an empty map when `localedata/SUPPORTED` was
+  missing, which made every locale print as "not built by default, so
+  normally absent from `locale -a`" and wrote an empty `step4` list under the
+  heading "full list of generated names". It now fails loudly.
+- `inherited_from()` reported a single inherited root, whichever a
+  depth-first walk happened to reach first. The affected set was right; the
+  `-> reaches X` explanation was not necessarily. It now reports every root.
+- Step 4's `step4_exposed_locales.txt` silently omitted locales absent from
+  `SUPPORTED`; it now follows the same rule as step 3 and names them.
+- Step 4 reported "Locales checked: 355" counting every file, not the 342
+  that define `LC_COLLATE`. Step 1 said "Total locale files with content
+  changes" for a count that includes additions and deletions.
+- The SQL template's temp view is now `CREATE OR REPLACE`, so re-running the
+  script in one session works; inventory queries order by name rather than by
+  OID; and the header warns that `pg_import_system_collations()` writes to
+  `pg_catalog` and needs superuser.
+
 ## 2026-09-03 (second entry)
 
 ### The SQL template reported nothing for columns using the database default
