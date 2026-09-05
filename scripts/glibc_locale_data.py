@@ -107,7 +107,19 @@ def find_repo(explicit=None):
 
 
 def run_git(args, repo, allow_fail=False):
-    """Run git, aborting on failure unless explicitly allowed."""
+    """Run git, aborting on failure unless explicitly allowed.
+
+    `allow_fail=True` is for EXISTENCE PROBES only -- where the caller inspects
+    `returncode` and a non-zero exit is itself the answer (`_is_glibc_clone`,
+    `check_refs`). Never use it to READ CONTENT. git prints nothing on stdout
+    when it fails, so a suppressed failure is indistinguishable from "there is
+    nothing here", and in this tool "nothing here" means "this file did not
+    change" -- a clean verdict, produced by not having looked. That is what
+    `report_file` and `check_paths` used to do, on a --filter=blob:none clone
+    whose fetches really do fail:
+
+        fatal: could not fetch <oid> from promisor remote
+    """
     p = subprocess.run(['git', *args], cwd=repo, capture_output=True)
     if p.returncode != 0 and not allow_fail:
         die(f"`git {' '.join(args)}` failed in {repo}:\n"
@@ -176,6 +188,30 @@ def read_blobs(repo, tag, paths):
     return contents, missing
 
 
+def read_blobs_strict(repo, tag, paths, what):
+    """read_blobs, but every path MUST exist at `tag`; otherwise abort.
+
+    For callers whose path list came from the tree at this same tag, so a
+    missing blob is not "that file isn't there" but "I could not read what I
+    was just told exists". Dropping those silently shrinks whatever is built
+    from them -- the `copy` graph, the include walk -- and a smaller graph
+    yields a shorter affected-locale list, which is the reassuring direction.
+
+    `what` names what was being read, so the error says which analysis is
+    incomplete rather than just listing paths.
+    """
+    contents, missing = read_blobs(repo, tag, paths)
+    if missing:
+        die(f"{len(missing)} of {len(paths)} file(s) listed at {tag} could not "
+            f"be read while building {what}: "
+            f"{', '.join(sorted(missing)[:5])}"
+            f"{', ...' if len(missing) > 5 else ''}.\n"
+            f"       These came from the tree at {tag}, so they exist -- the "
+            f"read failed. On a --filter=blob:none clone that usually means a "
+            f"fetch could not happen. Re-run with the promisor reachable.")
+    return contents
+
+
 def list_locale_files(repo, tag):
     """Every file under localedata/locales/ at `tag`, as repo-relative paths."""
     out = run_git(['ls-tree', '-r', '--name-only', tag, '--', LOCALES_DIR + '/'],
@@ -241,7 +277,7 @@ def build_copy_graph(repo, tag):
     set of names that define collation at this tag.
     """
     paths = list_locale_files(repo, tag)
-    contents, _ = read_blobs(repo, tag, paths)
+    contents = read_blobs_strict(repo, tag, paths, 'the LC_COLLATE copy graph')
     graph = {}
     for path, text in contents.items():
         if collate_block(text) is None:

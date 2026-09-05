@@ -4,6 +4,68 @@ Findings live in the [README](README.md). This file records what this tool
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-05 (fifth entry)
+
+### A failed `git` was indistinguishable from "this file did not change"
+
+The one family of bug in this tool that can invert a verdict with nobody
+noticing. Everything else here is deterministic; this was not.
+
+Not hypothetical — it happened on this clone, mid-session:
+
+```
+fatal: unable to access 'https://github.com/bminor/glibc.git/': Recv failure: Operation timed out
+fatal: could not fetch 07100e5ff962c7582baa0157a73f1602bda04fa6 from promisor remote
+```
+
+The clone is `--filter=blob:none`, so every run without a reachable promisor
+goes through that path.
+
+**Two live faults, both in step 5.** `run_git(..., allow_fail=True)` suppresses
+the abort, and git writes nothing to stdout when it fails, so:
+
+- `report_file()` read an empty diff and returned 0 — the file was reported as
+  having **no substantive change**, without a word of warning. Demonstrated
+  with an invalid revision range: git exits 128 with 0 bytes of output, and the
+  function returned 0.
+- `check_paths()` got `False` for both tags and filed the path under *"exists
+  at neither tag — nothing to read, and nothing to miss"*, printing it as
+  harmless. For `locale/programs/ld-collate.c`, a file that exists and whose
+  diff was never read.
+
+**Two latent ones, stated without inflation.** `build_copy_graph()` and
+`reachable_from_entry_points()` both discarded the `missing` set from
+`read_blobs`, which would silently shrink the `copy` graph and the include
+walk. Measured: their path lists come from `ls-tree` at the same tag, so
+`missing` is empty at 2.28, 2.34 and 2.39 (353/355/366 paths, 0 absent).
+**Neither could fire today.** They are fixed because an unguarded invariant is
+cheap to close, not because a result was wrong.
+
+While here: the comment added in the previous entry claiming `read_blobs`
+"dies on an unreadable blob" was false — it returns the blob in a second value
+that the same line discarded. A comment asserting a guarantee that does not
+exist is worse than no comment.
+
+**The fix removes a silencer rather than adding code.** `run_git` already
+aborts with git's own stderr; three call sites were configured not to let it.
+Verified before relying on it: `git ls-tree` exits 0 with empty output for a
+path that is not in the tree and non-zero only on a real error, and `git diff`
+without `--quiet` exits 0 whether or not there are differences. So in both, a
+non-zero exit always means a real failure and never "there is nothing here" —
+aborting introduces no false alarms.
+
+A new `read_blobs_strict()` names the invariant for callers whose paths came
+from the tree at that same tag, and `run_git` now documents that
+`allow_fail=True` is for existence probes only, never for reading content.
+
+**No output changed.** All five steps produce byte-identical output on both
+pairs — that was the acceptance criterion, since this only changes what happens
+when git fails. The worked examples are untouched for the same reason.
+
+Left alone deliberately: `audit-locale-diff.sh` uses `git diff --quiet`, which
+exits 128 on error, and the script reads that as `CHANGED`. Already the safe
+direction.
+
 ## 2026-09-05 (third entry)
 
 ### Step 2 called `C.UTF-8` harmless, then said nothing about it at all
