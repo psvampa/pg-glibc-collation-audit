@@ -20,31 +20,30 @@ import sys
 
 LOCALES_DIR = 'localedata/locales'
 
-# Every ellipsis form glibc's localedef accepts. A range like
-# `<UAC00>`/`..`/`<UD7A3>` is expanded algorithmically by localedef at build
-# time, so the weights are NOT in the locale source and a source diff cannot
-# prove the locale's order is unchanged.
+# Does a line use an ellipsis range? A range like `<UAC00>`/`..`/`<UD7A3>` is
+# expanded algorithmically by localedef at build time, so the weights are NOT in
+# the locale source and a source diff cannot prove the locale's order is
+# unchanged.
 #
-# The forms come from locale/programs/linereader.c, which has already consumed
-# one `.` before it compares the rest: `..`, `...`, `....`, `..(2)..` and
-# `....(2)....`. The count is always a literal 2, never an arbitrary number.
+# locale/programs/linereader.c accepts exactly five ellipsis tokens, having
+# already consumed one `.` before it compares the rest: `..`, `...`, `....`,
+# `..(2)..` and `....(2)....`. The count is always a literal 2, never an
+# arbitrary number. That list is worth keeping written down -- it is the part
+# that took reading glibc's tokeniser to learn.
 #
-# This must NOT be anchored to the start of the line. The dominant form in
-# glibc is inline -- `collating-symbol <SAC00>..<SD7A3>` in iso14651_t1_common
-# carries the constructed Hangul and Han weights -- and anchoring it missed
-# every one of them, which cleared zh_CN and its pinyin siblings.
+# The pattern does not enumerate them, because every one is a run of two or more
+# dots and this only has to answer yes or no. Spelling out the five alternatives
+# also silently excluded anything longer: a run of five dots, which glibc reads
+# as `....` plus a stray `.`, matched no alternative and fell through the
+# dot-boundary guards as "no ellipsis here". Measured identical to the old
+# pattern across glibc 2.28, 2.34, 2.39 and 2.42 -- every dot run in the corpus
+# is length 2, so the alternatives were doing no work.
 #
-# Longest alternatives first, plus dot boundaries, so one run of dots yields
-# exactly one match and `....` is never read as two `..`.
-ELLIPSIS_RE = re.compile(
-    r'(?<!\.)('
-    r'\.\.\.\.\(2\)\.\.\.\.'
-    r'|\.\.\.\.'
-    r'|\.\.\.'
-    r'|\.\.\(2\)\.\.'
-    r'|\.\.'
-    r')(?!\.)'
-)
+# It must NOT be anchored to the start of the line. The dominant form in glibc
+# is inline -- `collating-symbol <SAC00>..<SD7A3>` in iso14651_t1_common carries
+# the constructed Hangul and Han weights -- and anchoring it missed every one of
+# them, which cleared zh_CN and its pinyin siblings.
+ELLIPSIS_RE = re.compile(r'(?<!\.)\.{2,}')
 
 # Locale files declare their comment character; every one in glibc uses `%`.
 # Prose in a comment ("2.28..2.34", "and so on ...") is not a range, so

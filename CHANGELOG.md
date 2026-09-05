@@ -4,6 +4,57 @@ Findings live in the [README](README.md). This file records what this tool
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-05 (ninth entry)
+
+### Two silent paths closed, and one of them by deleting code
+
+The last two of the six. Neither could move a verdict — stated plainly so they
+are not read as more than they are. They are unguarded paths, closed because a
+silent path is the defect class this repo exists to hunt, not because a result
+was wrong.
+
+**A run of five or more dots was not read as an ellipsis range.** `ELLIPSIS_RE`
+spelled out the five tokens `locale/programs/linereader.c` accepts, with dot
+boundaries at each end. glibc reads `.....` as `....` plus a stray `.` — a real
+range — while the pattern matched no alternative and every starting offset then
+failed the guards, so the line read as "no ellipsis here". In the one step whose
+job is to refuse to clear a locale, that is the wrong direction.
+
+The fix is **smaller than what it replaced**. All five tokens are runs of two or
+more dots, and the pattern only has to answer yes or no, so `(?<!\.)\.{2,}`
+covers every one and also covers a run longer than any named token. Measured
+identical to the old pattern across glibc 2.28, 2.34, 2.39 and 2.42 — every dot
+run in the corpus is length 2, so the alternatives were doing no work. The
+comment recording the five forms and where they come from is kept: that is the
+part that cost something to learn.
+
+**Files with no `LC_COLLATE` block were counted and never named**, and nothing
+checked whether the new side had gained one. A file that acquires a block
+acquires a sort order, so folding that case in with the files that never had one
+would hide a real collation change behind a number. It now has its own verdict,
+lands in the changed list, and gets called out.
+
+Measured before writing the guard: across **five pairs from glibc 2.17 to
+2.42**, no file has ever gained or lost an `LC_COLLATE` block, and the bucket is
+always the same `translit_*` and `i18n_ctype` transliteration tables. That is
+precisely why it needed a test rather than a comment — an unguarded path nothing
+exercises is one nobody notices when it finally fires. It is now tested by
+injection, by handing the classifier two strings.
+
+**Mutation testing caught the same mistake as last time**, in a new place.
+Removing the line that folds a gained block into the changed list left all 108
+tests green: the verdict was computed correctly and then thrown away, because
+only the classifier was under test and nothing checked what the report *did*
+with its answer. Deciding what a file is and deciding what to do about it are
+different mistakes, so they are now different functions —
+`classify_change()` and `partition_verdicts()` — with tests on each. Five mutants
+are caught where four were before.
+
+Output is unchanged except for one new line naming the files with no block.
+That was the acceptance criterion: every other step is byte-identical, and the
+published counts hold at 2 and 3 files touching `LC_COLLATE`, 4 locales with
+ellipsis ranges, and 25 and 53 substantive hunks.
+
 ## 2026-09-05 (fifth entry)
 
 ### A failed `git` was indistinguishable from "this file did not change"

@@ -68,6 +68,64 @@ def hunk_touches_block(start, length, lc_start, lc_end):
     return not (hi < lc_start or lo > lc_end)
 
 
+def classify_change(old_text, new_text, ranges):
+    """How does one content-changed file relate to LC_COLLATE?
+
+    Returns one of:
+      'collate'        -- a hunk falls inside the old LC_COLLATE block
+      'gained-collate' -- the old version had no block and the new one does
+      'other'          -- has a block, but nothing changed inside it
+      'no-collate'     -- no block on either side; cannot affect sort order
+
+    `gained-collate` is its own answer rather than being filed under
+    "no LC_COLLATE block". A file that acquires one changes its sort order by
+    definition -- it had none and now has rules -- so folding it in with the
+    files that never had one would hide a real collation change behind a count.
+    It has never happened in glibc between 2.17 and 2.42, which is exactly why
+    it needs a name: an unguarded path that nothing exercises is one nobody
+    notices when it finally fires.
+
+    Pure so that `gained-collate` can be tested by handing it two strings,
+    rather than by fabricating a glibc clone in which it occurs.
+    """
+    bounds = g.collate_bounds(old_text)
+    if bounds is None:
+        if new_text is not None and g.collate_bounds(new_text) is not None:
+            return 'gained-collate'
+        return 'no-collate'
+    lc_start, lc_end = bounds
+    if any(hunk_touches_block(s, ln, lc_start, lc_end) for s, ln in ranges):
+        return 'collate'
+    return 'other'
+
+
+def partition_verdicts(verdicts):
+    """Group {path: verdict} into the four lists the report prints.
+
+    Separate from classify_change() because deciding what a file IS and
+    deciding what to DO about it are different mistakes. Mutation testing found
+    that the hard way: with only the classifier under test, dropping the line
+    that folds `gained-collate` into the changed list left the whole suite
+    green -- the verdict was computed correctly and then thrown away.
+
+    Returns (changed, gained, unchanged, no_collate). `gained` appears BOTH in
+    its own list, so the report can call it out, and inside `changed`, because
+    a file that acquires an LC_COLLATE block acquires a sort order.
+    """
+    changed, gained, unchanged, no_collate = [], [], [], []
+    for path, verdict in verdicts:
+        if verdict == 'collate':
+            changed.append(path)
+        elif verdict == 'gained-collate':
+            gained.append(path)
+            changed.append(path)
+        elif verdict == 'no-collate':
+            no_collate.append(path)
+        else:
+            unchanged.append(path)
+    return changed, gained, unchanged, no_collate
+
+
 def parse_diff(diff_text):
     """{old_path: [(old_start, old_length), ...]} from a -U0 diff."""
     files = {}
@@ -147,18 +205,22 @@ def main(argv):
               f"and the tags disagree -- if you passed --diff-file, it does not "
               f"match these tags.")
 
-    changed_collate, no_collate_block, unchanged_collate = [], [], []
-    for path in content_changed:
-        bounds = g.collate_bounds(old_contents[path])
-        if bounds is None:
-            no_collate_block.append(path)
-            continue
-        lc_start, lc_end = bounds
-        ranges = hunks.get(path, [])
-        if any(hunk_touches_block(s, ln, lc_start, lc_end) for s, ln in ranges):
-            changed_collate.append(path)
-        else:
-            unchanged_collate.append(path)
+    # The new side is needed only for the files with no block in the old one:
+    # those are the only ones that could have gained a block. Reading just
+    # those keeps this to one extra batch of a handful of blobs.
+    without_old_block = [p for p in content_changed
+                         if g.collate_bounds(old_contents[p]) is None]
+    new_contents = g.read_blobs_strict(
+        repo, opts.new_tag, without_old_block,
+        'the check for files that gained an LC_COLLATE block'
+    ) if without_old_block else {}
+
+    verdicts = [(path, classify_change(old_contents[path],
+                                       new_contents.get(path),
+                                       hunks.get(path, [])))
+                for path in content_changed]
+    (changed_collate, gained_collate,
+     unchanged_collate, no_collate_block) = partition_verdicts(verdicts)
 
     total = len(modified) + len(added) + len(deleted) + len(renamed)
     print(f"Locale files changed between {opts.old_tag} and {opts.new_tag}: {total}")
@@ -168,6 +230,21 @@ def main(argv):
           f"{len(changed_collate)} touch LC_COLLATE, "
           f"{len(unchanged_collate)} do not, "
           f"{len(no_collate_block)} have no LC_COLLATE block")
+    if no_collate_block:
+        # Named, not just counted. These are LC_CTYPE transliteration tables
+        # and character-class data, which define no collation on either side --
+        # but printing only a number leaves a reader unable to tell that from a
+        # locale that was skipped by mistake.
+        names = ', '.join(sorted(os.path.basename(p) for p in no_collate_block))
+        print(f"  (no LC_COLLATE on either side, so no sort order to change: "
+              f"{names})")
+    if gained_collate:
+        print(f"\n!! {len(gained_collate)} file(s) GAINED an LC_COLLATE block "
+              f"at {opts.new_tag}. They had no")
+        print(f"   sort order before and have one now, so they are counted as "
+              f"changed above:")
+        for path in sorted(gained_collate):
+            print(f"     {path}")
 
     print(f"\nFiles with changes inside LC_COLLATE: {len(changed_collate)}")
     for path in sorted(changed_collate):
