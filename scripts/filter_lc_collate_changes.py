@@ -9,10 +9,13 @@ This generates its own diff from the two tags. It used to read a hardcoded
 tags being audited, so a leftover diff from an earlier run against different
 versions would be analysed silently and reported as if it were the answer.
 
-Files added in the new tag are reported separately rather than skipped: no
-pre-existing index can depend on a locale that did not exist, but silently
-dropping them made the "files checked" count untrue and hid genuine read
-failures in the same code path.
+Files added in the new tag are reported separately rather than skipped. They
+used to carry the blanket claim that they "cannot affect an existing index",
+which is only true if the locale did not exist on the OLD system -- something
+an upstream source diff cannot establish, because distros backport. `C.UTF-8`
+is the case that makes this concrete: RHEL8 and RHEL9 both ship it, its order
+does change, and upstream adds localedata/locales/C only at 2.35, so the tool
+reported the single most dangerous locale as harmless.
 
 Usage:
   python3 filter_lc_collate_changes.py <old_tag> <new_tag> [--repo <path>]
@@ -25,11 +28,30 @@ import argparse
 import os
 import re
 import sys
+import textwrap
 
 import glibc_locale_data as g
 
 _FILE_HDR_RE = re.compile(r'^diff --git a/(\S+) b/(\S+)$', re.M)
 _HUNK_RE = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@', re.M)
+
+# Locale source files that arrive upstream at some tag but are ALREADY SHIPPED,
+# backported, by the distros this audit targets. For these, "added upstream"
+# does not mean "new on your system": the locale exists on the old node, has an
+# order, and that order can change.
+#
+# This is hardcoded because it is not derivable. `localedata/SUPPORTED` cannot
+# tell them apart -- measured at 2.34 -> 2.39, `C` is absent from SUPPORTED at
+# the old tag and present at the new one, exactly like the genuinely new `tok`,
+# `crh_RU` and `gbm_IN`. The difference lives in what the distro backports,
+# which by definition is not in an upstream tag.
+#
+# Keep this minimal: every entry asserts something about what a distro ships,
+# and only C.UTF-8 is measured (RHEL8 and RHEL9 nodes, see README "Known
+# limitations"). Do not add a locale here on the strength of a guess.
+KNOWN_BACKPORTED = {
+    'C': 'C.UTF-8',
+}
 
 
 def hunk_touches_block(start, length, lc_start, lc_end):
@@ -156,13 +178,69 @@ def main(argv):
         print(f"\nLocale names for step 3:")
         print(f"  python3 resolve_copy_closure.py {opts.new_tag} {' '.join(names)}")
 
-    if added:
-        print(f"\nAdded at {opts.new_tag} ({len(added)}), not analysed for a "
-              f"change of order -- they had no previous order to change. They "
-              f"cannot affect an existing index, but do check them if you plan "
-              f"to start using them:")
-        for path in sorted(added):
-            print(f"  {path}")
+    # KNOWN_BACKPORTED locales the audit is structurally blind to on the OLD
+    # side: no source file at the old tag means nothing to diff against,
+    # whether or not the file shows up at the new one.
+    #
+    # Reported whenever the old side is missing, NOT only when the file happens
+    # to be ADDED in this range. The silent case is the one that matters: over
+    # 2.28 -> 2.34 (RHEL8 -> RHEL9) localedata/locales/C is in neither tag, so
+    # nothing was printed at all -- for the pair where C.UTF-8 demonstrably
+    # does change (Bug 22668).
+    blind = []
+    for name in sorted(KNOWN_BACKPORTED):
+        path = f'{g.LOCALES_DIR}/{name}'
+        # ls-tree, not cat-file -e: on a --filter=blob:none clone the latter
+        # must fetch the blob to answer, and calls a file that exists absent
+        # whenever that fetch cannot happen.
+        at_old = g.run_git(['ls-tree', '--name-only', opts.old_tag, '--', path],
+                           repo).stdout.strip()
+        if at_old:
+            continue          # present at the old tag: judged like any file
+        at_new = g.run_git(['ls-tree', '--name-only', opts.new_tag, '--', path],
+                           repo).stdout.strip()
+        blind.append((path, KNOWN_BACKPORTED[name], bool(at_new)))
+
+    for path, locale_name, at_new in blind:
+        where = (f"is new UPSTREAM at {opts.new_tag}" if at_new
+                 else f"exists at NEITHER {opts.old_tag} nor {opts.new_tag}")
+        # Wrapped at runtime rather than hand-wrapped: tag and locale names
+        # vary in length, and a ragged block reads like a formatting bug in the
+        # one message the reader most needs to take seriously.
+        print()
+        print(textwrap.fill(
+            f"{path} {where}, but {locale_name} is BACKPORTED by the distros "
+            f"this audit targets -- so it very likely DOES exist on your old "
+            f"system, with an order of its own, and that order can change. "
+            f"There is no source file to diff on the old side, so this audit "
+            f"is blind to it: a clean result above says nothing about "
+            f"{locale_name}. PostgreSQL will not cover the gap either -- "
+            f"collversion is NULL for every collation whose name starts with "
+            f"'C.', so no version mismatch can ever fire. Compare "
+            f"{locale_name} empirically on both nodes. See README, Known "
+            f"limitations.",
+            width=78, initial_indent='!! ', subsequent_indent='   '))
+
+    blind_paths = {path for path, _, _ in blind}
+    rest = [path for path in added if path not in blind_paths]
+    if rest:
+        supported = g.supported_map(repo, opts.new_tag)
+        # Generated names, not source file names: `locale -a` and pg_collation
+        # spell it sv_SE.utf8, and the reader is about to go grep for it.
+        def generated(path):
+            names = supported.get(os.path.basename(path), [])
+            return ', '.join(names) if names else '(not in SUPPORTED)'
+
+        print(f"\nAdded at {opts.new_tag} ({len(rest)}), not analysed for a "
+              f"change of order. An added file")
+        print(f"cannot affect an existing index ONLY IF the locale did not "
+              f"exist on the old system.")
+        print(f"An upstream source diff cannot establish that -- distros "
+              f"backport. Confirm with")
+        print(f"`locale -a` on the OLD node before treating these as out of "
+              f"scope:")
+        for path in sorted(rest):
+            print(f"  {path} -> {generated(path)}")
     if deleted:
         print(f"\nDeleted at {opts.new_tag} ({len(deleted)}) -- any index using "
               f"one of these will fail to sort on the new system at all:")
