@@ -66,6 +66,71 @@ Left alone deliberately: `audit-locale-diff.sh` uses `git diff --quiet`, which
 exits 128 on error, and the script reads that as `CHANGED`. Already the safe
 direction.
 
+## 2026-09-05 (fourth entry)
+
+### Step 5's file list was the ceiling of what it could see
+
+`diff_collation_code.py` chose what to diff from two hand-written lists,
+`TIER1` and `TIER2`. A file absent from them was never read, and "not read"
+produced the same output as "did not change" — a clean verdict.
+
+Two files with real changes over **2.34..2.39 (RHEL9 → RHEL10)** were outside
+both lists:
+
+```
+locale/programs/linereader.h   lr_getc, the tokeniser's character reader
+locale/elem-hash.h             elem_hash, the collating-element hash
+```
+
+That pair is exactly where it hurts: the RHEL9-to-RHEL10 verdict **clears
+`ko_KR`** on the argument that nothing changed ellipsis expansion, and that
+argument is made by reading the hunks step 5 prints.
+
+**What changed.** The lists stay, and stop being the ceiling. A new walk
+follows glibc's own `#include` graph from the collation entry points
+(`ld-collate.c`, `strcoll_l.c`, `strxfrm_l.c`, the wide-char variants,
+`loadlocale.c`), and everything it reaches is reported under a new **TIER 3**.
+The walk is derived from the source, so it picks up files that become part of
+the collation path in future releases with nobody editing anything.
+
+Two bounds keep it readable, both measured rather than guessed:
+
+- It descends only into `locale/`. Unbounded, the same walk reaches 265 files
+  and 243 substantive hunks over 2.34..2.39, dominated by `stdio.h`,
+  `unistd.h` and `sys/cdefs.h` — correct, and unreadable. Bounded, it reaches
+  28 files and finds the collation code.
+- A plain directory sweep was rejected for the same reason: it adds 72 and 77
+  hunks on the two pairs, including `ld-monetary.c`, `iso-639.def`, `md5.c`
+  and `Makefile`, and `locfile-kw.h` alone contributes 20 hunks of a
+  gperf-generated hash table. The readable source of those 20 is one line in
+  `locfile-kw.gperf`, which is now tracked instead.
+
+**The lists were not replaced, and could not be.** The walk cannot follow a
+macro-computed include (`#include WEIGHT_H`, how `strcoll_l.c` reaches
+`weight.h`) and cannot reach a translation unit with no header of its own
+(`lc-collate.c`, `C-collate.c`, and `coll-lookup.c`, now added). `locale/weight.h`
+is one of these **and has a substantive change over 2.34..2.39** — replacing
+the lists with the walk would have lost it. Each hand-listed path now carries
+a one-line note saying which blind spot puts it there.
+
+**Reported hunk counts rise**: 2.28..2.34 from 8 to 25, and 2.34..2.39 from 48
+to 53. Both worked examples are regenerated.
+
+**No verdict moved.** The two newly visible hunks were read, and neither moves
+a weight: `linereader.h` is commit 19d4944459, "locale: Fix signed char bug in
+lr_getc", which changes which bytes are read out of a source file, not how a
+range is expanded — and no glibc locale file contains the `\32` sentinel it
+drops. `elem-hash.h` is commit 535e935a28, a tree-wide
+`{u}int_fast` → `{u}int32_t` sweep on a length argument, leaving the hash
+value unchanged. So `ko_KR` is still cleared for RHEL9 → RHEL10. What changed
+is the standing of that verdict: it used to rest on not having looked at these
+files, and now rests on having read them.
+
+Also fixed here: if one of the entry points is ever renamed away, the walk
+collapses to nothing, which would read exactly like a clean result. The
+existing `check_paths` vanished/absent check now covers `ENTRY_POINTS` too, so
+a collapsed walk blocks the clean verdict instead of producing one.
+
 ## 2026-09-05 (third entry)
 
 ### Step 2 called `C.UTF-8` harmless, then said nothing about it at all
