@@ -12,6 +12,7 @@ and blobs are read in a single `git cat-file --batch` stream.
 
 Also runnable directly, for the shell script:
   python3 glibc_locale_data.py fanin <tag> [changed_files.txt]
+  python3 glibc_locale_data.py provenance <tag> [<tag> ...]
 """
 import os
 import re
@@ -145,6 +146,91 @@ def check_refs(repo, *refs):
                         repo, allow_fail=True).returncode != 0]
     if still:
         die(f"unknown git ref(s) after fetching tags: {', '.join(still)}")
+
+
+def verify_tag(repo, tag):
+    """Check a tag's GPG signature. Returns (status, detail).
+
+    status is one of:
+      'good'      -- signature verified against a key in the local keyring
+      'bad'       -- signature present and INVALID. Stop.
+      'no-key'    -- signed, but the signing key is not in the keyring
+      'no-gpg'    -- gpg is not installed, so nothing was checked
+      'unsigned'  -- the tag carries no signature
+      'not-a-tag' -- a lightweight tag or a commit; nothing to verify
+
+    Why this exists: this audit reads glibc from a THIRD-PARTY MIRROR
+    (github.com/bminor/glibc), and a git tag is a mutable pointer. Nothing else
+    in the tool checks that the source it diffed is the source the glibc
+    maintainers released. The release tags are signed; this is the only
+    mechanism available that answers that question.
+
+    Why it returns a status instead of a bool: `git verify-tag` exits 1 for
+    "gpg is missing", "I do not have that key" and "the signature is forged"
+    alike. Collapsing those loses the only distinction that matters -- the
+    first two mean "unchecked", the third means "stop". A tool that reports
+    "unverified" identically to "invalid" trains people to ignore both.
+    """
+    kind = run_git(['cat-file', '-t', tag], repo, allow_fail=True)
+    if kind.returncode != 0:
+        return 'not-a-tag', f'{tag} does not resolve'
+    if kind.stdout.strip() != b'tag':
+        return 'not-a-tag', 'lightweight tag or commit -- no signature to check'
+
+    body = run_git(['cat-file', 'tag', tag], repo, allow_fail=True).stdout
+    if b'-----BEGIN PGP SIGNATURE-----' not in body:
+        return 'unsigned', 'the tag object carries no signature'
+
+    signer = ''
+    for line in body.decode('utf-8', 'replace').split('\n'):
+        if line.startswith('tagger '):
+            signer = line[len('tagger '):].rsplit(' ', 2)[0]
+            break
+
+    p = run_git(['verify-tag', '--raw', tag], repo, allow_fail=True)
+    err = p.stderr.decode('utf-8', 'replace')
+    if 'cannot run gpg' in err or 'gpg: not found' in err:
+        return 'no-gpg', 'gpg is not installed; the signature was NOT checked'
+    if 'NO_PUBKEY' in err or 'errsig' in err.lower():
+        return 'no-key', f'signed by {signer}, whose key is not in your keyring'
+    if 'BADSIG' in err or 'ERRSIG' in err:
+        return 'bad', f'INVALID signature on {tag}'
+    if p.returncode == 0 or 'GOODSIG' in err or 'VALIDSIG' in err:
+        return 'good', f'signed by {signer}'
+    return 'no-key', f'signed by {signer}; could not verify ({err.strip()[:80]})'
+
+
+def report_tag_provenance(repo, *tags):
+    """Print what is known about where each tag's content came from.
+
+    Aborts on a bad signature. Everything else is reported and the audit
+    continues -- an unchecked signature is a gap in evidence, not proof of
+    tampering, and refusing to run without gpg would make the tool unusable on
+    a stock container for no gain in truth.
+    """
+    print("Tag provenance (this audit reads a third-party mirror; a tag is a "
+          "mutable pointer):")
+    worst = 'good'
+    for tag in tags:
+        status, detail = verify_tag(repo, tag)
+        sha = run_git(['rev-parse', f'{tag}^{{commit}}'], repo,
+                      allow_fail=True).stdout.decode().strip()
+        mark = {'good': 'OK      ', 'bad': 'INVALID ', 'no-key': 'UNCHECKED',
+                'no-gpg': 'UNCHECKED', 'unsigned': 'UNSIGNED',
+                'not-a-tag': 'UNSIGNED'}[status]
+        print(f"  {mark} {tag} = {sha[:12]}  {detail}")
+        if status == 'bad':
+            worst = 'bad'
+        elif status != 'good' and worst == 'good':
+            worst = status
+    if worst == 'bad':
+        die("a tag's signature is INVALID. The source this would audit is not "
+            "what the glibc maintainers released. Refusing to continue.")
+    if worst != 'good':
+        print("  NOTE: signatures were not checked. The commit ids above are "
+              "what was actually read;")
+        print("        compare them against a source you trust "
+              "(sourceware.org/git/glibc.git) if it matters.")
 
 
 def read_blobs(repo, tag, paths):
@@ -385,6 +471,11 @@ def write_list(name, items):
 
 
 def _main(argv):
+    if len(argv) >= 2 and argv[0] == 'provenance':
+        repo = find_repo()
+        check_refs(repo, *argv[1:])
+        report_tag_provenance(repo, *argv[1:])
+        return 0
     if len(argv) >= 2 and argv[0] == 'fanin':
         repo = find_repo()
         tag = argv[1]
