@@ -44,6 +44,14 @@ if [ -n "$missing" ]; then
   done
 fi
 
+# Say where this content came from before saying anything about it. The clone
+# is a third-party mirror and a tag is a mutable pointer; the release tags are
+# signed, and that is the only check available that the source about to be
+# diffed is the source glibc released. Aborts on an invalid signature; an
+# unchecked one is reported and the audit continues.
+python3 "$HERE/glibc_locale_data.py" provenance "$OLD" "$NEW"
+echo "---"
+
 OUT_DIR=${PG_GLIBC_AUDIT_OUT:-/tmp/pg-glibc-collation-audit}
 mkdir -p "$OUT_DIR"
 CHANGED="$OUT_DIR/changed_locales.txt"

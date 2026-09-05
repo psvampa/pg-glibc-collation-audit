@@ -55,6 +55,54 @@ That was the acceptance criterion: every other step is byte-identical, and the
 published counts hold at 2 and 3 files touching `LC_COLLATE`, 4 locales with
 ellipsis ranges, and 25 and 53 substantive hunks.
 
+## 2026-09-05 (seventh entry)
+
+### The audit never checked that it was reading the glibc glibc released
+
+Every result in this repo is stated against `glibc-2.28`, `glibc-2.34` and
+`glibc-2.39`. Two things that was quietly trusting, and neither was checked:
+
+- **`github.com/bminor/glibc` is a third-party mirror** of sourceware. The tool
+  clones it and diffs whatever it serves.
+- **A git tag is a mutable pointer.** If a tag were ever re-cut, the audit would
+  read different source under the same name and say nothing.
+
+Nothing here was wrong — the tags resolve to the same commits they always did.
+This closes the gap between "the numbers are right" and "the numbers are right
+*about the source glibc published*", which are not the same claim.
+
+**Step 1 now prints provenance before it diffs anything**: the commit id behind
+each tag and the state of its GPG signature. The glibc release tags are signed.
+An **invalid** signature aborts the run. An **unverifiable** one — no `gpg`
+installed, or no key for that signer — is reported as unchecked and the audit
+continues, because refusing to run on a stock container buys no truth. The
+commit id is printed either way, so a reader who cannot verify a signature can
+still compare it against a source they trust.
+
+That distinction is the whole reason `verify_tag()` returns a status rather than
+a boolean: `git verify-tag` exits 1 for "gpg is missing", "I do not have that
+key" and "this signature is forged" alike. Collapsing them loses the only
+difference that matters, and a tool that reports "unchecked" the same way it
+reports "forged" trains people to ignore both.
+
+**The test suite pins the three tags to their commit ids.** Without it, a moved
+tag would surface as `the count is 51, expected 53` — indistinguishable from a
+regression in this repo's own code. Now it surfaces as "the tag moved", and the
+failure message says outright not to read the known-answer mismatches as a code
+regression until that is explained.
+
+**Mutation testing again earned its place**, and again by failing. Three
+mutants passed the suite on the first attempt: `verify_tag` reporting `good`
+when it could not verify at all, a forged signature not aborting, and `BADSIG`
+downgraded to "unchecked". None of them could be caught by a machine that has
+no forged glibc tag to hand, so the classifier is now driven with faked git
+output. Seven tests were added and all three mutants are caught.
+
+Honest limit: a commit id is a SHA-1. For this purpose that is solid — forging a
+commit with a chosen id is not a practical attack — but it is a weaker guarantee
+than the signature, which is why signature reporting exists alongside it rather
+than instead of it.
+
 ## 2026-09-05 (sixth entry)
 
 ### There were no tests. There are now: 85, and each one guards a shipped bug
