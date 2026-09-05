@@ -55,6 +55,47 @@ That was the acceptance criterion: every other step is byte-identical, and the
 published counts hold at 2 and 3 files touching `LC_COLLATE`, 4 locales with
 ellipsis ranges, and 25 and 53 substantive hunks.
 
+## 2026-09-05 (sixth entry)
+
+### There were no tests. There are now: 85, and each one guards a shipped bug
+
+Not a fix — coverage for everything above. This file documents more than twenty
+failures, nearly all of the same family: the tool answered "did not change" when
+it had not looked. Several were reintroduced once already. Nothing prevented
+that.
+
+`tests/`, stdlib `unittest`, no dependencies, ~16 seconds. Three layers:
+pure functions (no clone needed), the git-backed helpers, and the five steps end
+to end on both pairs against the results the README publishes. Without a glibc
+clone the last two skip with a reason and the first still runs.
+
+**Assertions pin behaviour, not wording** — counts and names parsed out of the
+output, not whole-text comparison. The printed prose changed three times in a
+single session; a suite that fails on a reworded sentence gets switched off, and
+a switched-off suite guards nothing.
+
+**Each test cites the CHANGELOG entry it freezes**, in its docstring. The ones
+worth naming: the four ellipsis forms that went unmatched (which cleared
+`zh_CN`), `copy` files with two targets, the three code hunks the comment filter
+swallowed, the generated-name spelling, `check_paths` telling "unchanged" from
+"not there", and the Bug 22668 commit that makes `ko_KR` change.
+
+**The suite was validated by breaking things on purpose.** Eight mutants, each
+reverting one fix; all eight are caught. That step earned its keep immediately:
+reverting `build_copy_graph` to discard the `missing` set left **every test
+green**. The test checked `read_blobs_strict` in isolation while nothing asserted
+that `build_copy_graph` *called* it — and because that path's blobs always come
+from `ls-tree` at the same tag, the difference is invisible without injecting a
+missing blob. Two tests now do exactly that. A test that does not fail when its
+subject breaks is not coverage, and only mutation showed which ones those were.
+
+`tests/README.md` states what is **not** covered, deliberately and in the file
+itself: the SQL template (needs live PostgreSQL on two operating systems, and it
+is half the method), the empirical confirmation on real nodes, distro backports,
+and any glibc pair other than 2.28/2.34/2.39. "The tests pass" must not be read
+as "the audit is correct" — that misreading is the reassuring-direction failure
+this repo exists to prevent.
+
 ## 2026-09-05 (fifth entry)
 
 ### A failed `git` was indistinguishable from "this file did not change"
