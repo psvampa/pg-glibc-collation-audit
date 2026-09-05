@@ -12,14 +12,32 @@
 -- Notes before you run it:
 --   * It DROPS AND RECREATES a table named collation_test in the current
 --     schema. Point it at a scratch database.
+--   * The first statement, pg_import_system_collations(), WRITES TO
+--     pg_catalog and needs superuser. It is idempotent and only adds
+--     collations already present in `locale -a`, but it is a catalog change:
+--     if you are running the inventory queries against production, run them
+--     without that line and accept that a langpack installed after initdb
+--     will be missing from pg_collation.
+--   * RESTART PostgreSQL after installing a langpack, BEFORE running this.
+--     The function takes its list from `locale -a` (a fresh subprocess, which
+--     sees the new locales) but validates each one with setlocale() in the
+--     backend, which resolves against the locale-archive the postmaster
+--     already mapped. Without a restart it returns success with a plausible
+--     count and silently imports only the old set: measured on Rocky 8 /
+--     PG 16.15, 72 collations imported and sv_SE.utf8 still absent, versus
+--     1007 after a restart.
 --   * Needs PostgreSQL 15 or newer: it reads pg_database.datlocprovider and
 --     calls pg_collation_actual_version(). On 13/14, drop the datlocprovider
 --     conditions (no database can use a non-libc provider there) and delete
 --     the actual-version block.
---   * Use the generated locale names the audit prints (sv_SE.UTF-8, not
---     sv_SE), and check `locale -a` first: if a locale is not generated on the
---     box, sort/PostgreSQL silently fall back to C, and two boxes both missing
---     it will agree with each other while proving nothing.
+--   * Use the generated locale names step 3 prints (sv_SE.utf8), and check
+--     `locale -a` first: if a locale is not generated on the box,
+--     sort/PostgreSQL silently fall back to C, and two boxes both missing it
+--     will agree with each other while proving nothing. Note the spelling:
+--     localedef normalises the codeset when it builds the locale, so
+--     localedata/SUPPORTED says sv_SE.UTF-8 while `locale -a` and
+--     pg_collation both say sv_SE.utf8. COLLATE "sv_SE.UTF-8" does not
+--     exist.
 
 SELECT pg_import_system_collations('pg_catalog');
 
@@ -58,7 +76,7 @@ WHERE d.datname = current_database();
 -- libc collation other than C/POSIX, OR the database default when that
 -- resolves to one. Temporary and session-scoped -- it disappears when you
 -- disconnect and changes nothing in the database.
-CREATE TEMP VIEW exposed_collation AS
+CREATE OR REPLACE TEMP VIEW exposed_collation AS
 SELECT c.oid AS colloid,
        c.collname,
        CASE WHEN c.collprovider = 'd'
@@ -75,7 +93,7 @@ WHERE d.datname = current_database()
 -- Confirms which glibc version this collation was imported against.
 SELECT collname, collcollate, collversion
 FROM pg_collation
-WHERE collname IN ('<LOCALE>');  -- e.g. 'sv_SE','sv_FI','or_IN'
+WHERE collname IN ('<LOCALE>');  -- e.g. 'sv_SE.utf8','sv_FI.utf8','or_IN'
 
 DROP TABLE IF EXISTS collation_test;
 CREATE TABLE collation_test (w text COLLATE "<LOCALE>");
@@ -132,7 +150,11 @@ CROSS JOIN LATERAL unnest(i.indcollation::oid[]) AS ic(oid)
 JOIN exposed_collation x ON x.colloid = ic.oid
 WHERE ir.relnamespace NOT IN ('pg_catalog'::regnamespace,
                               'information_schema'::regnamespace)
-ORDER BY table_name, index_name;
+-- The expressions are repeated rather than ordering by the output aliases:
+-- ORDER BY on a bare regclass sorts by OID, not by name, and `alias::text` is
+-- an expression, so its names resolve against the FROM clause and not against
+-- the SELECT list.
+ORDER BY i.indrelid::regclass::text, i.indexrelid::regclass::text;
 
 -- The severe one, and the reason a REINDEX list is not the whole answer: a
 -- text partition key is evaluated with a collation. If the collation changes,
@@ -146,7 +168,7 @@ SELECT pt.partrelid::regclass AS partitioned_table,
 FROM pg_partitioned_table pt
 CROSS JOIN LATERAL unnest(pt.partcollation::oid[]) AS pc(oid)
 JOIN exposed_collation x ON x.colloid = pc.oid
-ORDER BY partitioned_table;
+ORDER BY pt.partrelid::regclass::text;
 
 -- Every column carrying such a collation, indexed or not. This is the full
 -- surface: anything comparing these columns (a query plan, a constraint, a
@@ -165,7 +187,7 @@ WHERE a.attnum > 0
   AND k.relkind IN ('r', 'p', 'm', 'f')
   AND k.relnamespace NOT IN ('pg_catalog'::regnamespace,
                              'information_schema'::regnamespace)
-ORDER BY table_name, column_name;
+ORDER BY a.attrelid::regclass::text, a.attname;
 
 -- CHECK and EXCLUDE constraints on tables holding such columns. Unlike indexes
 -- and partition keys, a constraint does not record its collations in a
@@ -191,13 +213,25 @@ WHERE con.contype IN ('c', 'x')
         WHERE a.attrelid = con.conrelid
           AND a.attnum > 0
           AND NOT a.attisdropped)
-ORDER BY table_name, constraint_name;
+ORDER BY con.conrelid::regclass::text, con.conname;
 
 -- PostgreSQL's own signal: fires on ANY glibc version bump, whether or not
 -- your data would actually sort differently, and stays silent if a distro
 -- patches collation data without moving the reported version. Conservative in
 -- one direction, blind in the other -- which is why this audit exists.
 -- Requires PostgreSQL 15+.
+--
+-- THIRD blind spot, and the one that bites hardest here: neither this query
+-- nor the one after it can ever report a C.* collation. Under the libc
+-- provider, get_collation_actual_version() returns NULL for "C", for
+-- "POSIX", and for anything whose name STARTS WITH "C." -- the
+-- pg_strncasecmp("C.", ...) test, present in every branch from PG 14 on
+-- (src/backend/utils/adt/pg_locale.c through PG 17, pg_locale_libc.c from
+-- PG 18). So collversion stays NULL, the
+-- IS DISTINCT FROM never fires, and libc C.UTF-8 -- which the note at the top
+-- of this file explains IS exposed, and which is the default in most
+-- containers -- is invisible to both. For C.UTF-8 the empirical ORDER BY
+-- comparison above is the only signal you get.
 \echo '--- collversion mismatch, named collations (PostgreSQL 15+) ---'
 SELECT collname, collversion, pg_collation_actual_version(oid) AS actual
 FROM pg_collation
@@ -206,7 +240,9 @@ WHERE collprovider = 'c'
 
 -- The database default has its own version field, and pg_collation has no row
 -- for it -- the query above cannot see it. This is the same blind spot the
--- inventories had: ask pg_database, not pg_collation.
+-- inventories had: ask pg_database, not pg_collation. Same C.* caveat: a
+-- database created with datcollate = C.UTF-8 under the libc provider carries
+-- a NULL datcollversion and will never show up here.
 \echo '--- collversion mismatch, the database default (PostgreSQL 15+) ---'
 SELECT datname,
        datcollate,
