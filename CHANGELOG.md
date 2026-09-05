@@ -4,6 +4,58 @@ Findings live in the [README](README.md). This file records what this tool
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-05 (third entry)
+
+### Step 2 called `C.UTF-8` harmless, then said nothing about it at all
+
+Both wrong, in the reassuring direction, for the locale with the widest
+exposure of any in this audit.
+
+`localedata/locales/C` arrives upstream only at glibc 2.35. Step 2 classified
+it as an added file and printed the whole added-file group under this text:
+
+> *Added at glibc-2.39 (11), not analysed for a change of order — they had no
+> previous order to change. **They cannot affect an existing index**, but do
+> check them if you plan to start using them.*
+
+RHEL8 and RHEL9 both ship a backported `C.UTF-8`. The locale **does** exist on
+the old node, **does** have an order, and that order **does** change (Bug
+22668). So on `RHEL9 -> RHEL10` the tool actively told you the opposite of the
+truth, and on `RHEL8 -> RHEL9` — where the file is in neither tag — it said
+nothing whatsoever. Silence is the worse of the two: the pair where `C.UTF-8`
+demonstrably changes is the pair that produced no mention of it.
+
+This matters more than the locale count suggests. `C.UTF-8` is what `initdb`
+picks up in most container images, which makes it the database default, which
+makes every `text` column without an explicit `COLLATE` ride on it. And
+PostgreSQL cannot warn you either: `get_collation_actual_version()` returns
+NULL for anything whose name starts with `C.`, so `collversion` and
+`datcollversion` stay NULL and no mismatch can fire.
+
+**What changed.** The blanket claim is gone. An added file cannot affect an
+existing index *only if* the locale did not exist on the old system, and an
+upstream source diff cannot establish that — distros backport. The added list
+now states that condition, names `locale -a` on the **old** node as the way to
+settle it, and prints each file's generated name so there is something to grep
+for. Separately, a named warning fires for `C.UTF-8` whenever
+`localedata/locales/C` is absent at the **old** tag — which covers both the
+"added in this range" case and the silent "in neither tag" case.
+
+**What did not change.** No verdict moved: the affected-locale sets for both
+pairs are the same as before (`or_IN`, `sv_SE`, `sv_FI`, `sv_FI@euro` for
+`RHEL8 -> RHEL9`; `ber_DZ`, `kab_DZ`, `th_TH` for `RHEL9 -> RHEL10`), and the
+counts of files touching `LC_COLLATE` are unchanged at 2 and 3. If you saved a
+result from this tool earlier, its locale list is still right — what was
+missing is the `C.UTF-8` caveat beside it.
+
+**What was tried and does not work.** Deriving the distinction from
+`localedata/SUPPORTED`. Measured over `2.34 -> 2.39`: `C` is absent from
+SUPPORTED at the old tag and present at the new one — behaving exactly like
+the genuinely new `tok`, `crh_RU` and `gbm_IN`. Upstream tags do not contain
+the information, because the difference is what a distro backports. The list
+of such locales is therefore hardcoded, deliberately minimal, and carries only
+`C.UTF-8`, which is the only entry measured on real nodes.
+
 ## 2026-09-05 (second entry)
 
 ### Declared a version floor: the migration's destination must be glibc 2.24+
