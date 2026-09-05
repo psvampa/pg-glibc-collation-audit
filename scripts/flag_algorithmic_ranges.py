@@ -13,6 +13,11 @@ range such as
     .. ..;IGNORE;IGNORE;IGNORE
     <U9FA5> <U9FA5>;IGNORE;IGNORE;IGNORE
 
+or, far more commonly, inline on one line:
+
+    collating-symbol <SAC00>..<SD7A3>  % Hangul syllables (weights constructed)
+    collating-symbol <RFB40>..<RFB41>  % first element of Han computed weights
+
 is not expanded in the data file -- glibc's locale compiler (localedef)
 expands it algorithmically at build time. If that expansion logic changes
 between two glibc releases, every character in the range can get a different
@@ -21,6 +26,13 @@ audit would wrongly report "unaffected". This is not hypothetical: glibc 2.34
 took commit 82292c99b2 ("LC_COLLATE: Fix last character ellipsis handling",
 Bug 22668), which is why ko_KR sorts differently on RHEL9 than on RHEL8
 despite localedata/locales/ko_KR being byte-identical between the two.
+
+The inline form is the one that matters most and the one this script used to
+miss: it lives in iso14651_t1_common, which carries the constructed Hangul and
+Han weights and is reached by 333 of the 342 locales that define LC_COLLATE.
+Matching only a line-leading ellipsis cleared zh_CN, cmn_TW,
+iso14651_t1_pinyin and cns11643_stroke -- a false "unaffected" for the exact
+class of locale this script exists to catch.
 
 Use diff_collation_code.py to check whether the expansion logic actually
 changed for the version pair you care about. If it did, every locale printed
@@ -58,16 +70,18 @@ def main(argv):
         g.die(f"{len(missing)} file(s) listed at {tag} could not be read: "
               f"{', '.join(sorted(missing)[:5])}")
 
-    flagged = {}
+    flagged, with_collate = {}, 0
     for path, text in contents.items():
         block = g.collate_block(text)
         if block is None:
             continue
-        hits = [ln.strip() for ln in block.split('\n') if g.ELLIPSIS_RE.match(ln)]
+        with_collate += 1
+        hits = g.ellipsis_hits(block, g.comment_char(text))
         if hits:
             flagged[os.path.basename(path)] = hits
 
-    print(f"Locales checked at {tag}: {len(contents)}")
+    print(f"Files at {tag}: {len(contents)}, of which {with_collate} define "
+          f"LC_COLLATE")
     print(f"Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: "
           f"{len(flagged)}")
     for name in sorted(flagged):
@@ -90,9 +104,12 @@ def main(argv):
     supported = g.supported_map(repo, tag)
 
     print(f"\nAdditionally exposed via `copy` inheritance: {len(inherited)}")
+    # A locale can reach more than one flagged template, so it can appear under
+    # more than one heading here; the exposed set below counts it once.
     by_root = {}
-    for loc, via in inherited.items():
-        by_root.setdefault(via, []).append(loc)
+    for loc, roots in inherited.items():
+        for via in roots:
+            by_root.setdefault(via, []).append(loc)
     for via in sorted(by_root):
         locs = sorted(by_root[via])
         print(f"  via {via}: {len(locs)} locale(s)")
@@ -101,12 +118,18 @@ def main(argv):
 
     exposed = sorted(set(flagged) | set(inherited))
     generated = sorted({n for loc in exposed for n in supported.get(loc, [])})
+    unbuilt = [loc for loc in exposed if not supported.get(loc)]
     print(f"\nFull set needing empirical confirmation: {len(exposed)} locale "
           f"source file(s), {len(generated)} generated locale name(s) per "
           f"localedata/SUPPORTED")
-    print(f"  e.g. {', '.join(generated[:8])}, ...")
-    out_path = g.write_list('step4_exposed_locales.txt', generated)
-    print(f"  full list of generated names: {out_path}")
+    if generated:
+        print(f"  e.g. {', '.join(generated[:8])}, ...")
+    if unbuilt:
+        print(f"  not in SUPPORTED (templates, not built by default): "
+              f"{', '.join(unbuilt)}")
+    # Same rule as step 3: never write a list narrower than what was reported.
+    out_path = g.write_list('step4_exposed_locales.txt', generated or exposed)
+    print(f"  full list: {out_path}")
 
     print()
     print("These cannot be cleared by a source diff alone. Run")
