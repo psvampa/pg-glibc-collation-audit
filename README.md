@@ -317,6 +317,8 @@ Full output: [`examples/rhel9-to-rhel10-audit-output.txt`](examples/rhel9-to-rhe
   versions ardentperf tested — both running PostgreSQL 16.15. Every claim in
   the worked example is measured, not inferred; see
   [`examples/rhel8-to-rhel9-audit-output.txt`](examples/rhel8-to-rhel9-audit-output.txt).
+  The distro-versus-upstream backport check under [Known
+  limitations](#known-limitations) was measured on these same two nodes.
 - **RHEL9 to RHEL10** (glibc 2.34 to 2.39): full method run, confirmed
   against real nodes running PostgreSQL, not just the source diff; see
   [`examples/rhel9-to-rhel10-audit-output.txt`](examples/rhel9-to-rhel10-audit-output.txt).
@@ -367,9 +369,45 @@ Full output: [`examples/rhel9-to-rhel10-audit-output.txt`](examples/rhel9-to-rhe
   `C.UTF-8` the empirical comparison is not optional.
 - **Upstream tags are not your distro's glibc.** RHEL8 ships
   `glibc-2.28-251.el8` with hundreds of backports; a backported collation
-  change would be invisible to a `glibc-2.28..glibc-2.34` diff. The
-  confirmation step on real nodes is the only cover for this, and it is the
-  main reason not to skip it.
+  change would be invisible to a `glibc-2.28..glibc-2.34` diff, which is the
+  main reason not to skip the confirmation step on real nodes.
+
+  For the flagship `RHEL8 -> RHEL9` pair this is measured rather than left
+  open. Comparing every distro locale source in `/usr/share/i18n/locales/`
+  (package `glibc-locale-source`) against the same file at the upstream tag:
+  `glibc-2.28-251.el8_10.40` differs from `glibc-2.28` in **73 of 355** files,
+  and `glibc-2.34-275.el9_8` differs from `glibc-2.34` in **2 of 356**. In
+  **none** of them does the difference fall inside the `LC_COLLATE` block. The
+  backports on both sides land in other categories, so for every locale this
+  method can audit, the tag diff is reading the same collation data the nodes
+  run.
+
+  The exception is the one named above: `C.UTF-8` is a backported collation
+  change on exactly this pair, and it is invisible here for the same reason it
+  is invisible to the audit — the file it comes from exists at neither tag, so
+  there is nothing to compare it against. This measurement is a statement about
+  the locales the method covers, and it does not rescue the one it does not.
+
+  A comparison that always answered "identical" would produce that same zero,
+  so the check carries a positive control against locales whose answer is known
+  from step 2: the same method marks `sv_SE` and `or_IN` as different from
+  `glibc-2.34` and identical to `glibc-2.28`, and `ko_KR` identical to both.
+
+  The claim is bounded by what was compared — these two package versions
+  against these two tags — and is not a general result that distro backports
+  never touch collation. The other two pairs stand differently, and the
+  difference is worth being explicit about:
+
+  | Pair | Backports measured? | What covers the gap |
+  |---|---|---|
+  | `RHEL8 -> RHEL9` | **yes**, the numbers above | the measurement itself |
+  | `RHEL9 -> RHEL10` | no — it needs a RHEL10 node, and the measurement above was taken on Rocky 8 / Rocky 9 only | the empirical confirmation in [`examples/rhel9-to-rhel10-audit-output.txt`](examples/rhel9-to-rhel10-audit-output.txt), run on RHEL9 / RHEL10 nodes |
+  | `RHEL7 -> RHEL8` | no | **nothing** — the pair was never confirmed on real nodes either |
+
+  So for `RHEL9 -> RHEL10` the cover is empirical, not analytical: it rests on
+  observed sort order on real nodes rather than on knowing the distro's
+  collation data matches the tag. And on `RHEL7 -> RHEL8` a backported
+  collation change would still pass unnoticed today.
 - **The migration's DESTINATION must be glibc 2.24 or newer** — RHEL 8+,
   Ubuntu 18.04+, Debian 9+, SLES 15+. Note the direction: auditing *from* an
   older system is fine, so `RHEL 7 -> RHEL 8` is correct. What is out of scope
