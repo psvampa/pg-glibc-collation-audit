@@ -32,7 +32,13 @@ matters for your two versions.
 <summary><strong>The five steps in detail</strong> — what each one does and why</summary>
 
 1. **`scripts/audit-locale-diff.sh <old_tag> <new_tag>`** clones glibc
-   (shallow, blobs on demand), lists every locale file with *any* change
+   (shallow, blobs on demand) and, before diffing anything, prints where that
+   content came from: the commit id behind each tag and the state of its GPG
+   signature. The clone is a third-party mirror and a git tag is a mutable
+   pointer, so "I audited glibc-2.39" is a weaker claim than it looks. An
+   invalid signature aborts; an unverifiable one — no `gpg`, or no key for that
+   signer — is reported as unchecked and the run continues, since refusing to
+   run buys no truth. Then it lists every locale file with *any* change
    (mostly noise: `LC_TIME`, `LC_MONETARY`, comments), and gives an explicit
    `CHANGED`/`UNCHANGED` verdict for the collation templates. It also
    computes each file's blast radius from the `copy` graph, so a change to a
@@ -41,7 +47,14 @@ matters for your two versions.
    that list to files whose change falls **inside** the
    `LC_COLLATE...END LC_COLLATE` block, the only part that can move sort
    order. Files added, deleted or renamed between the two tags are reported
-   separately rather than dropped.
+   separately rather than dropped, and so are the ones with no `LC_COLLATE`
+   block on either side — named, not just counted, so a transliteration table
+   cannot be confused with a locale skipped by mistake. An added file is only
+   harmless if the locale did not exist on the old system, which an upstream
+   diff cannot establish because distros backport; `C.UTF-8` gets a warning of
+   its own whenever `localedata/locales/C` is missing at the old tag, which is
+   both the pair where it is added upstream and the pair where it is in neither
+   tag.
 3. **`scripts/resolve_copy_closure.py <tag> <locale> [...]`** closes a gap in
    step 2: a locale with no tailoring of its own, that just does
    `copy "some_other_locale"`, never shows up in a source diff (its file
@@ -82,6 +95,18 @@ matters for your two versions.
    because a hunk dropped here is a hunk nobody reads. It also reports any
    tracked path that is absent at either tag, since `git diff` over a missing
    file is empty rather than an error.
+
+   Its two curated tiers are **not** the ceiling of what it reads. A third tier
+   is derived by walking glibc's own `#include` graph from the collation entry
+   points — `ld-collate.c`, `strcoll_l.c`, `strxfrm_l.c`, the wide-char
+   variants and `loadlocale.c` — bounded to `locale/`, plus the sibling `.c` of
+   every header reached, for the units glibc links rather than includes. That
+   list grows on its own as glibc changes, which a hand-written one cannot: it
+   is what surfaced `linereader.h` and `elem-hash.h`, both changed over
+   2.34..2.39 and in neither tier. The curated tiers stay because the walk
+   structurally cannot follow a macro-computed include (`#include WEIGHT_H`,
+   how `strcoll_l.c` reaches `locale/weight.h`, which does change over that
+   pair) or reach a translation unit with no header of its own.
 
 Steps 3 and 5 together give the real, complete set of affected locale
 identifiers for that version pair. Step 4 says which locales a data diff can
@@ -161,7 +186,7 @@ Two version pairs run end to end. The two middle columns are the answer;
 | `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | ⚪ Unaffected | steps 1–3 — `sv_FI` only via `copy` |
 | `or_IN` | 🔴 **Changed** | ⚪ Unaffected | steps 1–3 |
 | `ko_KR` | 🔴 **Changed** | 🟢 No difference | **step 5** — its `LC_COLLATE` is unchanged in *both* pairs |
-| `C.UTF-8` | 🔴 **Changed** | 🟢 No difference <sup>†</sup> | nothing — outside this method entirely |
+| `C.UTF-8` | 🔴 **Changed** | 🟢 No difference <sup>†</sup> | **step 2 warns**, but cannot settle it; both verdicts are empirical |
 | `th_TH` | ⚪ Unaffected | 🟡 **Unresolved** | steps 1–3 |
 | `ber_DZ`, `kab_DZ` | ⚪ Unaffected | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap |
 | CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>inherited by 328 locales | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
@@ -173,6 +198,13 @@ If you saved a result from this tool before 2026-09-05, check
 was once reported unaffected for the RHEL8-to-RHEL9 pair and it changes, and
 step 4 used to clear `zh_CN` and three siblings that it should have flagged.
 
+No verdict moved on 2026-09-05, but six ways of reaching one silently did, so a
+run from that day prints things an earlier one did not: a `C.UTF-8` warning on
+both pairs, the files with no `LC_COLLATE` block named rather than counted, and
+a third tier in step 5 that raises its hunk counts from 8 to 25 and from 48 to
+53. A saved result whose locale lists match is still right; what it was missing
+is the caveats beside them.
+
 - 🔴 **Changed** — sort order moves. Reindex.
 - 🟡 **Unresolved** — flagged and *not* cleared. Treat as changed until tested.
 - 🟢 **No difference** — the audit flagged it, but a targeted test or a
@@ -183,9 +215,11 @@ step 4 used to clear `zh_CN` and three siblings that it should have flagged.
   only `LC_TIME` or `LC_MONETARY`. This is the deterministic verdict the
   method exists to produce.
 
-<sup>†</sup> `C.UTF-8` is not auditable by this method at all — see
-[Known limitations](#known-limitations). Its RHEL9→RHEL10 verdict is
-ardentperf's checksum, not my own test.
+<sup>†</sup> `C.UTF-8` is still not *auditable* by this method — its source
+file is in neither tag for the first pair — but step 2 no longer passes over it
+in silence: it names the locale and says why the clean result above says nothing
+about it. See [Known limitations](#known-limitations). Its RHEL9→RHEL10 verdict
+is ardentperf's checksum, not my own test.
 
 Note that `ko_KR` is the row a data-only audit gets wrong, and `C.UTF-8` the
 row no source diff can reach.
@@ -297,7 +331,10 @@ cleared.
 
 This pair also shows step 5 working in the other direction. `ko_KR` is
 flagged by step 4 here too, but step 5 finds no change to ellipsis expansion
-between 2.34 and 2.39 — the tier-1 changes in that range are `%Z`-to-`%z`
+between 2.34 and 2.39 — a verdict that now rests on having **read** the two
+tier-3 hunks (`lr_getc` in `linereader.h`, `elem_hash` in `elem-hash.h`) and
+found that neither moves a weight, rather than on their never having been
+printed — the tier-1 changes in that range are `%Z`-to-`%z`
 format fixes, integer type replacements, and a new opt-in
 `codepoint_collation` keyword that no pre-existing locale uses. So `ko_KR`
 is genuinely unaffected across RHEL9 to RHEL10, which steps 1 to 4 alone
@@ -367,6 +404,15 @@ Full output: [`examples/rhel9-to-rhel10-audit-output.txt`](examples/rhel9-to-rhe
   fire for it, and neither can PostgreSQL's own warning on a version bump.
   Nothing covers the source half and nothing covers the catalog half, so for
   `C.UTF-8` the empirical comparison is not optional.
+
+  The tool cannot fix that, but it no longer stays quiet about it. Step 2 emits
+  a named warning whenever `localedata/locales/C` is absent at the old tag —
+  which is every pair where this bites — saying that the locale very likely
+  exists on your old system, that its order can change, that PostgreSQL will
+  not warn, and that the clean result above says nothing about it. Read this
+  bullet as the reason for that warning, not as a substitute for it: a step
+  that prints nothing about `C.UTF-8` and a step that has cleared it look
+  identical on a terminal, and that is how this locale gets missed.
 - **Upstream tags are not your distro's glibc.** RHEL8 ships
   `glibc-2.28-251.el8` with hundreds of backports; a backported collation
   change would be invisible to a `glibc-2.28..glibc-2.34` diff, which is the
