@@ -55,6 +55,34 @@ That was the acceptance criterion: every other step is byte-identical, and the
 published counts hold at 2 and 3 files touching `LC_COLLATE`, 4 locales with
 ellipsis ranges, and 25 and 53 substantive hunks.
 
+## 2026-09-05 (eighth entry)
+
+### CI, and one thing it has to refuse to do
+
+`.github/workflows/tests.yml` runs the full suite on every push and pull
+request, against a **freshly cloned** glibc.
+
+Fresh rather than cached, and that is only defensible because of the previous
+entry: with each tag pinned to its commit id, a moved tag fails as *a moved
+tag*. Without that pin, cloning fresh would turn any upstream change into a red
+build indistinguishable from a regression here -- and an ambiguous red build
+gets ignored, which is the same failure as a switched-off test suite.
+
+The job **fails if any test was skipped**. The git-backed layers skip by design
+when there is no glibc clone, which is correct on a contributor's laptop and
+wrong in CI: a broken clone step would otherwise leave the job green with only
+the pure-function layer having run. Green-because-nothing-ran is precisely the
+reassuring-direction failure this repo exists to catch, and it would have been
+easy to ship.
+
+Provenance is printed as its own step, so the commit ids the run actually read
+stay in the log.
+
+No badge, deliberately. "Tests passing" would be read as "this audit is
+correct", and it is not: the SQL template, the empirical confirmation on real
+nodes and distro backports have no automated coverage at all. See
+`tests/README.md`.
+
 ## 2026-09-05 (seventh entry)
 
 ### The audit never checked that it was reading the glibc glibc released
