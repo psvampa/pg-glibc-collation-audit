@@ -160,7 +160,7 @@ identifiers.
 | `or_IN` | 🔴 **Changed** | ⚪ Unaffected | steps 1–3 |
 | `ko_KR` | 🔴 **Changed** | 🟢 No difference | **step 5** — its `LC_COLLATE` is unchanged in *both* pairs |
 | `C.UTF-8` | 🔴 **Changed** | 🟢 No difference <sup>†</sup> | **step 2 warns**, but cannot settle it; both verdicts are empirical |
-| `th_TH` | ⚪ Unaffected | 🟡 **Unresolved** | steps 1–3 |
+| `th_TH` | ⚪ Unaffected | 🔴 **Changed** | steps 1–3 |
 | `ber_DZ`, `kab_DZ` | ⚪ Unaffected | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap |
 | CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>inherited by 328 locales | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
 | `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | step 4 flagged them via `iso14651_t1_common`; cleared by measurement |
