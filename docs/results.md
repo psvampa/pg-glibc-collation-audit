@@ -29,10 +29,17 @@ RHEL9→RHEL10 verdict is ardentperf's checksum, not my own test.
 
 ## If you saved an earlier result
 
-If you saved a result from this tool before 2026-09-05, check
-[CHANGELOG.md](../CHANGELOG.md) first. Two verdicts have moved since: `ko_KR`
-was once reported unaffected for the RHEL8-to-RHEL9 pair and it changes, and
-step 4 used to clear `zh_CN` and three siblings that it should have flagged.
+If you saved a result from this tool before 2026-09-07, check
+[CHANGELOG.md](../CHANGELOG.md) first. Three verdicts have moved since:
+
+- **`th_TH` for the RHEL9-to-RHEL10 pair** was reported 🟡 Unresolved until
+  2026-09-06 and it **changes** — indexes on it need a `REINDEX` across that
+  upgrade. This is the most recent move, and the one most likely to affect a
+  result you are still holding.
+- **`ko_KR` for the RHEL8-to-RHEL9 pair** was once reported unaffected and it
+  changes.
+- **`zh_CN` and three siblings** used to be cleared by step 4, which should
+  have flagged them.
 
 No verdict moved on 2026-09-05, but six ways of reaching one silently did, so
 a run from that day prints things an earlier one did not: a `C.UTF-8` warning
@@ -203,19 +210,31 @@ step 5.
 
 ## Tested on
 
+Both pairs are now confirmed on **PostgreSQL 18.6**, so no verdict on this
+page rests on a different PostgreSQL from any other.
+
 - **RHEL8 to RHEL9** (glibc 2.28 to 2.34): full method run, plus empirical
-  confirmation on side-by-side Rocky 8 / Rocky 9 nodes carrying
-  `glibc-2.28-251.el8_10.40` and `glibc-2.34-275.el9_8` — the same package
-  versions ardentperf tested — both running PostgreSQL 16.15. Every claim in
-  the worked example is measured, not inferred; see
+  confirmation on side-by-side Rocky Linux 8.9 / Rocky Linux 9.3 nodes
+  carrying `glibc-2.28-251.el8_10.40` and `glibc-2.34-275.el9_8` — the same
+  package builds ardentperf tested — both running **PostgreSQL 18.6**,
+  re-measured 2026-09-06. Every claim in the worked example is measured, not
+  inferred; see
   [`examples/rhel8-to-rhel9-audit-output.txt`](../examples/rhel8-to-rhel9-audit-output.txt).
   The distro-versus-upstream backport check under
   [limitations.md](limitations.md#upstream-tags-are-not-your-distros-glibc)
-  was measured on these same two nodes.
+  was measured on these same two builds.
+
+  This block was first measured on PostgreSQL 16.15, on the same OS and the
+  same glibc builds. Every sort-order result reproduced unchanged on 18.6,
+  which is what a glibc-level finding should do — PostgreSQL calls `strcoll`,
+  it does not implement the order.
 - **RHEL9 to RHEL10** (glibc 2.34 to 2.39): full method run, confirmed
-  against real nodes running PostgreSQL, not just the source diff; see
+  against real nodes running **PostgreSQL 18.6**, not just the source diff;
+  see
   [`examples/rhel9-to-rhel10-audit-output.txt`](../examples/rhel9-to-rhel10-audit-output.txt).
-  The empirical lines in that file predate step 5 and are marked as such.
+  The `ber_DZ`, `kab_DZ`, `ko_KR` and `en_US` lines in that file predate step
+  5 and are marked as such; the `th_TH` line was re-measured on 2026-09-06,
+  after step 5 existed, and is what moved that verdict.
 
 ---
 

@@ -23,9 +23,12 @@
 --     sees the new locales) but validates each one with setlocale() in the
 --     backend, which resolves against the locale-archive the postmaster
 --     already mapped. Without a restart it returns success with a plausible
---     count and silently imports only the old set: measured on Rocky 8 /
---     PG 16.15, 72 collations imported and sv_SE.utf8 still absent, versus
---     1007 after a restart.
+--     count and silently imports only the old set: measured on Rocky Linux
+--     8.9 / glibc-2.28-251.el8_10.40 / PostgreSQL 18.6, 72 collations
+--     imported and sv_SE.utf8 still absent, versus 1006 libc collations after
+--     `systemctl restart postgresql-18`. The same 72 was measured on
+--     PG 16.15: the mechanism is glibc's locale-archive mapping, not
+--     anything PostgreSQL versions.
 --   * Needs PostgreSQL 15 or newer: it reads pg_database.datlocprovider and
 --     calls pg_collation_actual_version(). On 13/14, drop the datlocprovider
 --     conditions (no database can use a non-libc provider there) and delete
@@ -55,9 +58,10 @@ SELECT pg_import_system_collations('pg_catalog');
 -- datcollate is anything other than C or POSIX, every default-collated column
 -- in the database is exposed -- C.UTF-8 very much included: PostgreSQL
 -- special-cases only the literal strings "C" and "POSIX" to byte comparison
--- (src/backend/utils/adt/pg_locale_libc.c), so libc C.UTF-8 goes through
--- strcoll like any other locale. The `builtin` provider's C.UTF-8 (PG 17+) is
--- a different thing and is not exposed.
+-- (src/backend/utils/adt/pg_locale.c through PG 17, pg_locale_libc.c from
+-- PG 18), so libc C.UTF-8 goes through strcoll like any other locale. The
+-- `builtin` provider's C.UTF-8 (PG 17+) is a different thing and is not
+-- exposed.
 \echo '--- is this database exposed at all? ---'
 SELECT d.datname,
        d.datlocprovider AS provider,

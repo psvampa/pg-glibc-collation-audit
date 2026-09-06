@@ -3,8 +3,9 @@
 This tool is a complement to
 [ardentperf/glibc-unicode-sorting](https://github.com/ardentperf/glibc-unicode-sorting),
 not a replacement for it: they sort ~25 million real strings and checksum the
-result across roughly nine languages, this diffs glibc's source across all
-~355 locales. Check both where they overlap.
+result across ten locales — nine languages plus `C.UTF-8` — while this
+diffs glibc's source across every locale in the tree (355 at glibc 2.34, 366
+at 2.39). Check both where they overlap.
 
 ## Reading their tables: `glibc` vs `icu`
 
@@ -40,20 +41,26 @@ from source alone — see [CHANGELOG.md](../CHANGELOG.md).
   RHEL9 is what prompted step 5 of this tool, which now root-causes it to
   Bug 22668.
 - **This tool diffs glibc's locale source and proves the negative.** It
-  isn't sampled, so it covers all ~355 locales, not the roughly nine
-  languages ardentperf's fixed test set covers. Running the RHEL9-to-RHEL10
-  audit found real `LC_COLLATE` changes in `ber_DZ`, `kab_DZ`, and `th_TH`
-  (Berber, Kabyle, and Thai), none of which are in ardentperf's tested
-  language list, so none of them would show up there one way or the other.
+  isn't sampled, so it covers every locale in the tree, not the nine
+  languages plus `C.UTF-8` that ardentperf's fixed test set covers. Running
+  the RHEL9-to-RHEL10 audit found real `LC_COLLATE` changes in `ber_DZ`,
+  `kab_DZ`, and `th_TH` (Berber, Kabyle, and Thai), none of which are in
+  ardentperf's tested language list, so none of them would show up there one
+  way or the other.
 
 Their set also contains no `sv` or `or_IN`, the two locales this tool finds
-for the RHEL8-to-RHEL9 pair, so the two results overlap less than they first
-appear.
+for the RHEL8-to-RHEL9 pair, and no `zh_TW`, `zh_HK` or `zh_SG`, so the two
+results overlap less than they first appear.
+
+Where they do overlap they overlap tightly: their RHEL8 and RHEL9 rows run
+`glibc-2.28-251.el8_10.40` and `glibc-2.34-275.el9_8`, the same two package
+builds [results.md](results.md#tested-on) reports this tool's empirical
+confirmation on. Checked against their repository on 2026-09-06.
 
 ## Which one to use
 
-If your locale is one of the roughly nine languages ardentperf tests, check
-both: their result plus this tool's result gives you empirical evidence and a
+If your locale is one of the nine languages ardentperf tests, check both:
+their result plus this tool's result gives you empirical evidence and a
 deterministic proof for whatever this tool can prove. If your locale isn't in
 their list, this tool is the only one of the two that says anything about it
 at all.

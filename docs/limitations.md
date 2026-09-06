@@ -1,8 +1,9 @@
 # Known limitations
 
-Five things this method structurally cannot see. The first two are the ones
-that can change your answer; the third is a hard kill condition; the last is
-the manual step in an otherwise mechanical method.
+Five things this method structurally cannot see. The first two can change
+your answer; the third is a hard kill condition; the fourth is a gap in
+coverage with no demonstrated impact; the fifth is the manual step in an
+otherwise mechanical method.
 
 1. [`C.UTF-8` cannot be audited by this method](#cutf-8-cannot-be-audited-by-this-method)
 2. [Upstream tags are not your distro's glibc](#upstream-tags-are-not-your-distros-glibc)
@@ -28,8 +29,18 @@ glibc 2.28:  FFFF, 10FFFF, 007F, 07FF     <- not codepoint order
 glibc 2.34:  007F, 07FF, FFFF, 10FFFF     <- correct
 ```
 
+Re-measured 2026-09-06 on `glibc-2.28-251.el8_10.40` and
+`glibc-2.34-275.el9_8`, both PostgreSQL 18.6, and confirmed by direct
+`strcoll` as well as `sort`: U+007F sorts *after* U+FFFF at 2.28 and *before*
+it at 2.34.
+
 This does not affect `COLLATE "C"`, which is byte order and immutable, but it
 does affect indexes built on `C.UTF-8`. Test that one empirically.
+
+Note what the [positive control](glossary.md) looks like here, because it
+inverts: at 2.34 `C.utf8` produces *exactly* byte order, so agreeing with
+`LC_ALL=C` is the corrected behaviour rather than the usual sign that a locale
+was never generated. At 2.28 it is the disagreement that shows the bug.
 
 ### Why this is the configuration to watch
 
@@ -71,9 +82,9 @@ look identical on a terminal, and that is how this locale gets missed.
 
 ## Upstream tags are not your distro's glibc
 
-RHEL8 ships `glibc-2.28-251.el8` with hundreds of backports. A backported
-collation change would be invisible to a `glibc-2.28..glibc-2.34` diff, which
-is the main reason not to skip
+RHEL8 ships `glibc-2.28-251.el8_10.40` with hundreds of backports. A
+backported collation change would be invisible to a `glibc-2.28..glibc-2.34`
+diff, which is the main reason not to skip
 [the confirmation step on real nodes](confirming-on-a-real-system.md).
 
 ### Where each pair stands
@@ -82,6 +93,7 @@ is the main reason not to skip
 |---|---|---|
 | `RHEL8 -> RHEL9` | **yes**, the numbers below | the measurement itself |
 | `RHEL9 -> RHEL10` | **yes**, since 2026-09-06 | the measurement itself, plus the empirical confirmation in [`examples/rhel9-to-rhel10-audit-output.txt`](../examples/rhel9-to-rhel10-audit-output.txt) |
+
 Both audited pairs are now covered analytically as well as empirically.
 
 ### Measured, on all three OS versions

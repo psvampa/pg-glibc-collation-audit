@@ -396,15 +396,30 @@ move weights. If any can, every locale listed by
   python3 flag_algorithmic_ranges.py glibc-2.34
 needs an empirical sort-order test, however clean its data diff is.
 
---- Confirmed empirically: Rocky 8 (glibc 2.28-251.el8_10.40) vs Rocky 9
-    (glibc 2.34-275.el9_8), both PostgreSQL 16.15, deployed with anydbver.
-    Same glibc package versions as ardentperf's RHEL8/RHEL9 rows. ---
+--- Confirmed empirically: Rocky Linux 8.9 (glibc-2.28-251.el8_10.40) vs
+    Rocky Linux 9.3 (glibc-2.34-275.el9_8), both PostgreSQL 18.6, deployed
+    with anydbver. Same glibc package builds as ardentperf's RHEL8/RHEL9
+    rows (checked against their repository 2026-09-06).
+
+    Re-measured on PostgreSQL 18.6 on 2026-09-06. The sort results below
+    were first taken on PostgreSQL 16.15, on the same OS and the same glibc
+    builds, and every one of them reproduced unchanged -- which is what a
+    glibc-level finding should do, since PostgreSQL calls strcoll rather
+    than implementing the order.
+
+    Both sides were fed byte-identical input, built on each node by the same
+    script rather than copied in, and every line count and input checksum was
+    asserted equal before comparing. Every locale below was confirmed to sort
+    differently from LC_ALL=C, so none of them had silently fallen back to C
+    -- except C.utf8 at 2.34, where matching byte order IS the fix. ---
 
 CHANGED
 
   sv_SE   printf 'va\nVasa\nvind\nwa\nWasa\nwind\n' | LC_ALL=sv_SE.UTF-8 sort
     2.28:  va wa Vasa Wasa vind wind
     2.34:  va Vasa vind wa Wasa wind
+    Direct strcoll, not only sort: 'wa' < 'Vasa' at 2.28, 'wa' > 'Vasa' at
+    2.34, so this is not a tie-break artifact.
 
   or_IN   printf 'ହ\nକ୍ଷ\nଔ\nଁ\nଂ\nଃ\nକ\n' | LC_ALL=or_IN sort
     2.28:  ଔ କ ହ କ୍ଷ ଂ ଃ ଁ
@@ -412,6 +427,7 @@ CHANGED
     (matches the source diff exactly. A side measurement: strcoll ties among
     ~21,700 random pairs drop from 5,315 on 2.28 to 29 on 2.34 -- the or_IN
     rewrite filled in weights that were previously absent.)
+    Direct strcoll: U+0B15 < U+0B02 at 2.28, U+0B15 > U+0B02 at 2.34.
 
   ko_KR   printf '가\n힢\n힣\n伽\n佳\n' | LC_ALL=ko_KR.UTF-8 sort
     2.28:  가 힢 伽 佳 힣      <- U+D7A3 dangling at the end
@@ -419,12 +435,16 @@ CHANGED
     Data file byte-identical between the tags; found only by step 5
     (commit 82292c99b2, Bug 22668). This is the case a data-only audit
     gets wrong.
+    Direct strcoll: U+D7A3 > U+4F3D at 2.28, U+D7A3 < U+4F3D at 2.34.
 
   C.utf8  U+10FFFF, U+FFFF, U+07FF, U+007F
     2.28:  FFFF, 10FFFF, 007F, 07FF     <- not codepoint order
     2.34:  007F, 07FF, FFFF, 10FFFF
     Not visible to this audit at all: no upstream source file before 2.35.
     See docs/limitations.md.
+    Direct strcoll: U+007F > U+FFFF at 2.28, U+007F < U+FFFF at 2.34. At 2.34
+    C.utf8 reproduces LC_ALL=C byte order exactly; at 2.28 it does not, and
+    that disagreement is the bug.
 
 UNCHANGED (negative controls -- the audit correctly excludes these)
 
@@ -435,19 +455,33 @@ UNCHANGED (negative controls -- the audit correctly excludes these)
          measurement clears it):
     2.28 == 2.34:  伽 假 一 龥
   en_US / zh_TW over the iso14651_t1 Han range (U+4E00..U+9FA5), the range
-  step 4 flags and step 5 cannot clear from source:
+  step 4 flags and step 5 cannot clear from source (zh_TW.utf8 is present in
+  locale -a on both nodes, so this is a real comparison, not two fallbacks):
     2.28 == 2.34:  龦 一 龤 龥
     Unchanged because an explicit <U9FA5> line follows the ellipsis, so the
     stale cursor re-inserts U+9FA5 where it already was. Predicted from the
     source, then confirmed.
 
-SQL TEMPLATE (sql/collation_confirmation_template.sql, PostgreSQL 16.15)
+SQL TEMPLATE (sql/collation_confirmation_template.sql)
 
-  All seven queries run clean on both nodes. collversion reads 2.28 on the
-  el8 node and 2.34 on the el9 node. The inventory queries return the
-  expected rows against a purpose-built schema: a btree index, a text
-  RANGE-partitioned table (the case REINDEX does not fix), five columns, and
-  a CHECK constraint doing a text range comparison.
+  Re-confirmed on PostgreSQL 18.6, 2026-09-06:
+    collversion and pg_collation_actual_version() both read 2.28 on the el8
+      node and 2.34 on the el9 node, for sv_SE.utf8, or_IN, ko_KR.utf8 and
+      en_US.utf8.
+    C.utf8 returns NULL for BOTH on BOTH nodes -- the blind spot in
+      docs/limitations.md, so the template's mismatch check cannot fire for
+      it and neither can PostgreSQL's own warning.
+    The container database is datlocprovider='c', datcollate=C.UTF-8 with a
+      NULL datcollversion, so its default collation reordered across the
+      upgrade with no signal of any kind. That is the configuration the
+      README calls out, reproduced on 18.6.
+
+  From the PostgreSQL 16.15 run, not re-run on 18.6: all seven queries run
+  clean on both nodes, and the inventory queries return the expected rows
+  against a purpose-built schema -- a btree index, a text RANGE-partitioned
+  table (the case REINDEX does not fix), five columns, and a CHECK constraint
+  doing a text range comparison. Said separately because it was measured
+  separately.
 
   One correction to an earlier claim about this template: PostgreSQL breaks
   strcoll ties itself by comparing bytes, so ORDER BY on a libc collation is

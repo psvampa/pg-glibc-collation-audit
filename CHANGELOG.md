@@ -4,6 +4,122 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-07 (fifteenth entry)
+
+A documentation correctness sweep. **No source-level verdict moved**, and no
+locale changed sides. What moved is which PostgreSQL the published empirical
+results rest on, and a stale notice that was telling people the opposite of
+the truth.
+
+### The "if you saved an earlier result" notice was wrong about th_TH
+
+**If you saved a RHEL9-to-RHEL10 result on 2026-09-05 or 2026-09-06, re-read
+it.** `docs/results.md` and the README both carried a block saying *saved a
+result before 2026-09-05 → two verdicts have moved*. `th_TH` moved from
+🟡 Unresolved to 🔴 **Changed** on **2026-09-06**, in the thirteenth entry
+below. That entry updated the verdict table, the worked example and this file,
+and left the notice alone — so the one paragraph whose entire job is to tell
+you your saved answer went stale was itself stale, in the reassuring
+direction. It now names three verdicts and reads from 2026-09-07.
+
+Indexes on `th_TH` need a `REINDEX` across RHEL9 → RHEL10.
+
+### Both pairs are now confirmed on the same PostgreSQL
+
+The RHEL8-to-RHEL9 empirical confirmation was measured on PostgreSQL 16.15;
+everything since the thirteenth entry was measured on PostgreSQL 18.6. Both
+records were honest, neither said which era it came from, and the result read
+as an error.
+
+Re-measured 2026-09-06 on Rocky Linux 8.9 (`glibc-2.28-251.el8_10.40`) and
+Rocky Linux 9.3 (`glibc-2.34-275.el9_8`), both **PostgreSQL 18.6**, both sides
+fed byte-identical input built on the node rather than copied in, with line
+counts and input checksums asserted equal first:
+
+| Locale | glibc 2.28 | glibc 2.34 | |
+|---|---|---|---|
+| `sv_SE.utf8` | `va wa Vasa Wasa vind wind` | `va Vasa vind wa Wasa wind` | changed |
+| `or_IN` | `ଔ କ ହ କ୍ଷ ଂ ଃ ଁ` | `ଔ ଁ ଂ ଃ କ ହ କ୍ଷ` | changed |
+| `ko_KR.utf8` | `가 힢 伽 佳 힣` | `가 힢 힣 伽 佳` | changed |
+| `C.utf8` | U+FFFF, U+10FFFF, U+007F, U+07FF | U+007F, U+07FF, U+FFFF, U+10FFFF | changed |
+| `zh_CN.utf8` | `伽 假 一 龥` | identical | unchanged |
+| `en_US`/`zh_TW` Han boundary | `龦 一 龤 龥` | identical | unchanged |
+| `en_US`, `de_DE`, `fr_FR` | identical | identical | unchanged |
+
+Every row reproduced its PostgreSQL 16.15 result exactly. That is the expected
+outcome and worth stating rather than assuming: PostgreSQL calls `strcoll`, it
+does not implement the order, so a glibc-level finding should survive a
+PostgreSQL major version. Each change was confirmed by direct `strcoll` on a
+specific pair, not only by a `sort` checksum, and every locale was confirmed
+to sort differently from `LC_ALL=C` so none had silently fallen back.
+
+On PostgreSQL 18.6, `collversion` and `pg_collation_actual_version()` read
+2.28 and 2.34 respectively for `sv_SE.utf8`, `or_IN`, `ko_KR.utf8` and
+`en_US.utf8`, and both return **NULL for `C.utf8` on both nodes** — the blind
+spot in `docs/limitations.md`, now confirmed on PG 18 as well as PG 16.
+
+### The restart trap, re-measured on PostgreSQL 18.6
+
+Same numbers, new PostgreSQL, and the instruction no longer hardcodes a
+version. On Rocky Linux 8.9 / `glibc-2.28-251.el8_10.40` / PostgreSQL 18.6,
+with `glibc-all-langpacks` installed after `initdb`:
+
+| | collations imported | `sv_SE.utf8` present |
+|---|---|---|
+| `pg_import_system_collations()` alone | 72 | no |
+| after `systemctl restart postgresql-18` | +931 (1006 `libc` in total) | yes |
+
+`72` and `+931` are exactly what PostgreSQL 16.15 gave, which is the point:
+the mechanism is glibc's `locale-archive` mapping in the postmaster, not
+anything PostgreSQL versions. The docs said `systemctl restart postgresql-16`
+as an instruction, which is wrong on any other major version.
+
+### Installing langpacks can move your glibc build
+
+Found while measuring the above, and newly documented. `glibc-all-langpacks`
+is version-locked to `glibc`, so `dnf` pulls the newest build of both: the
+node went from `glibc-2.28-236.el8_9.7` to `glibc-2.28-251.el8_10.40` as a
+side effect of installing langpacks. A measurement is bound to the build it
+ran on, and this is a way to change that build without meaning to. Re-check
+`rpm -q glibc` after installing langpacks.
+
+### ardentperf covers ten locales, which is nine languages plus C.UTF-8
+
+`docs/comparison-ardentperf.md` said "roughly nine languages" in three places
+while `docs/results.md` said "all ten of their locales". Both were reaching
+for the same fact from different sides. Checked against their repository on
+2026-09-06: the set is `de`, `en`, `fr`, `ru`, `ar`, `es`, `ja`, `ko`, `zh`
+and `C.UTF-8`. The docs now say it once, precisely.
+
+Confirmed at the same time, because this repository cites it: their RHEL8 and
+RHEL9 rows really do run `glibc-2.28-251.el8_10.40` and `glibc-2.34-275.el9_8`,
+the same two builds as the confirmation above.
+
+### Smaller corrections
+
+- `docs/requirements.md` said "two of its three layers" need the glibc clone.
+  The suite has **six** modules and five need it; only
+  `test_pure_functions.py` runs without one.
+- `docs/README.md` said `examples/` carried "the confirmation SQL for one"
+  pair. It has carried one for each since the thirteenth entry.
+- `docs/results.md` said the RHEL9-to-RHEL10 empirical lines all predate step
+  5. The `th_TH` line does not — it was re-measured after, and is what moved
+  that verdict.
+- `examples/rhel9-to-rhel10.sql` still described `th_TH` as "verdict open" in
+  the very file whose run closed it.
+- `sql/collation_confirmation_template.sql` cited
+  `src/backend/utils/adt/pg_locale_libc.c` for the `C`/`POSIX` special case
+  without qualification. That file exists only from PG 18; the template
+  supports PG 15+, where it is `pg_locale.c`.
+- The README never mentioned the distro-versus-upstream check added in the
+  twelfth entry, so the entry point described five steps and no distro layer.
+  It now shows the `--old-locales-dir` / `--new-locales-dir` invocation.
+- `docs/limitations.md` described "hundreds of backports" in
+  `glibc-2.28-251.el8`, a build string no `rpm -q` prints, and its intro
+  accounted for four of its five items.
+- "all ~355 locales" is the glibc 2.34 file count. At 2.39 it is 366. Both
+  pairs are published, so the docs now give both.
+
 ## 2026-09-06 (fourteenth entry)
 
 ### RHEL7 is out of scope

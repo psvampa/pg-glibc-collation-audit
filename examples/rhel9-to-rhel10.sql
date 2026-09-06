@@ -19,7 +19,8 @@
 --   systemctl restart postgresql-18             # BEFORE importing collations
 --
 -- Locales under test, from this pair's findings (see ../docs/results.md):
---   affected:     th_TH            -- real LC_COLLATE rewrite, verdict open
+--   affected:     th_TH            -- real LC_COLLATE rewrite; CHANGED, and
+--                                    -- running this file is what proved it
 --                 ber_DZ, kab_DZ   -- flagged; believed a role swap
 --   step 4 only:  ko_KR            -- flagged by step 4, cleared by step 5
 --   not affected: en_US, de_DE, fr_FR (negative controls)
