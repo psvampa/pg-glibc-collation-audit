@@ -53,11 +53,12 @@ before anything is compared:
 | `glibc-2.34-275.el9_8` | yes | 0 |
 | `glibc-2.39-128.el10_2` | yes | 0 |
 
-On RHEL8 ASCII sorts at position 31 — behind the last code point of every
-declared range and behind all 22 values from the planes no range declares. Four
-values still sort after it, and this project does not explain why: the *first*
-code point of four declared ranges. The RHEL9 and RHEL10 outputs are
-byte-identical to each other.
+On RHEL8 ASCII sorts at position 31, and the 30 values ahead of it account for
+themselves exactly: U+0001, the last code point of all six declared ranges, all
+22 values from the eleven planes no range declares, and U+E0000. Four values
+sort after ASCII — the *first* code point of four declared ranges — while
+U+E0000, the first of a fifth, sorts at 27. This records that; it does not
+explain it. The RHEL9 and RHEL10 outputs are byte-identical to each other.
 Full output in
 [`examples/c-utf8-probe-rhel8-vs-rhel9.txt`](../examples/c-utf8-probe-rhel8-vs-rhel9.txt)
 and

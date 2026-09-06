@@ -208,10 +208,30 @@ Whether the summary's node-to-node block should be louder than a `NOT RUN`
 line. It is the only thing standing between a clean-looking summary and a
 reader concluding `C.UTF-8` was covered, and one line may not be enough.
 
-And whether the checkable half of all this belongs in the test suite: counts,
-quoted output blocks, and "the only X" claims could be asserted mechanically
-against the scripts rather than re-read by a person. Two correction passes in
-one day is the argument for it; nothing has been built yet.
+### The checkable half is now a test
+
+`tests/test_published_claims.py`, an eighth layer needing no glibc clone. It
+asserts what a re-read was doing by hand: that the probe's header quotes
+exactly the six ranges the real RHEL8 file declares (the fixture *is* that
+file, so the two can be compared); that no corpus row is labelled after a range
+that does not exist, and that every `(NO range)` plane really is one the header
+omits; that the corpus arithmetic adds to 41; that every position and count the
+docs state about the published output matches the published output; that the
+RHEL9 output really is code point order, which nothing else checked; that the
+`NOT RUN` heading the docs quote is still the one `audit.sh` prints; and that
+no document states a test count.
+
+Mutation-checked, including a control: seven deliberate corruptions each fail
+it, and an unrelated prose edit does not. It would have caught the range-label
+defect, both drifted counts and both stale positions on the day they were
+written.
+
+What it cannot do is read prose, and it does not pretend to. The judgement
+calls — whether a sentence is true of the data under it, whether "the only X"
+is still the only X — stay human.
+
+Still not decided: whether the summary's node-to-node block should be louder
+than a `NOT RUN` line.
 
 ## 2026-09-07 (fifteenth entry)
 

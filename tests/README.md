@@ -22,10 +22,11 @@ somebody deletes during a refactor.
 | `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, generated locale names, hunk/block overlap, the comment filter |
 | `test_git_helpers.py` | yes | the silent-failure class — code that cannot tell "nothing here" from "could not look" |
 | `test_known_answers.py` | yes | the five steps end to end on both pairs, against the results [docs/results.md](../docs/results.md) publishes |
+| `test_published_claims.py` | no | **the numbers and quotes the documentation publishes.** Two correction passes in one day found the same class of defect — a count, a position or a quoted line that no longer matched the tool or the measurement. This is that, mechanised: it cannot check prose and does not try |
 | `test_node_modes.py` | yes | **the two modes that read a node's own files.** A tag stands in for a node and the backported `C` is written out, because that file exists at no tag — which is the whole point. Includes the test that says the `C.UTF-8` limitation is closed on the data half |
 
 Without a clone at `scripts/glibc`, every layer marked "yes" **skips with a
-reason** and `test_pure_functions.py` still runs. A skip is never a pass: read
+reason**; `test_pure_functions.py` and `test_published_claims.py` still run. A skip is never a pass: read
 what it says. CI clones fresh and fails on any skip, so a layer that skips
 there is a red build, not a quiet gap.
 
