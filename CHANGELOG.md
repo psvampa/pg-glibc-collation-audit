@@ -4,6 +4,30 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-06 (fourteenth entry)
+
+### RHEL7 is out of scope
+
+The scope is two pairs: **RHEL8 → RHEL9** and **RHEL9 → RHEL10**. The docs
+stated it as a *floor* instead — "the destination must be glibc 2.24 or newer"
+— which admits `RHEL7 → RHEL8` and led to it being documented as a third,
+unconfirmed pair. RHEL7 has been end-of-life for years. Documenting it bought
+nothing and the floor framing kept re-admitting it.
+
+Removed: the `RHEL7 to RHEL8` section of `docs/results.md`, and its row in the
+backport table.
+
+Kept, reframed: the glibc 2.24 limit is still real, because nothing enforces it
+— point the tool below it and it answers confidently and wrongly rather than
+refusing. It is now "Below glibc 2.24 the method breaks silently", a property
+of the method, rather than an invitation to audit a third pair. The measured
+failure that justifies it (`glibc-2.12 -> glibc-2.17`: step 3 reports 11
+affected locales where there are 278) stays, now labelled as a demonstration
+rather than an audit.
+
+No code changed. The references to glibc 2.17 in `scripts/` and `tests/` are
+prose inside docstrings, not support for that version.
+
 ## 2026-09-06 (thirteenth entry)
 
 ### The backport check becomes a script, and corrects two of its own numbers
