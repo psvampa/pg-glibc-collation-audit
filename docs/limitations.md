@@ -6,7 +6,7 @@ the manual step in an otherwise mechanical method.
 
 1. [`C.UTF-8` cannot be audited by this method](#cutf-8-cannot-be-audited-by-this-method)
 2. [Upstream tags are not your distro's glibc](#upstream-tags-are-not-your-distros-glibc)
-3. [The destination must be glibc 2.24 or newer](#the-destination-must-be-glibc-224-or-newer)
+3. [Below glibc 2.24 the method breaks silently](#below-glibc-224-the-method-breaks-silently)
 4. [Character repertoire changes are not audited](#character-repertoire-changes-are-not-audited)
 5. [Step 5 reports, it does not decide](#step-5-reports-it-does-not-decide)
 
@@ -82,12 +82,7 @@ is the main reason not to skip
 |---|---|---|
 | `RHEL8 -> RHEL9` | **yes**, the numbers below | the measurement itself |
 | `RHEL9 -> RHEL10` | **yes**, since 2026-09-06 | the measurement itself, plus the empirical confirmation in [`examples/rhel9-to-rhel10-audit-output.txt`](../examples/rhel9-to-rhel10-audit-output.txt) |
-| `RHEL7 -> RHEL8` | no | **nothing** — the pair was never confirmed on real nodes either |
-
-Both documented pairs are now covered analytically as well as empirically. On
-`RHEL7 -> RHEL8` a backported collation change would still pass unnoticed
-today: it needs a RHEL7 node, which is the same environment limitation that
-leaves that pair unconfirmed.
+Both audited pairs are now covered analytically as well as empirically.
 
 ### Measured, on all three OS versions
 
@@ -181,14 +176,14 @@ CI, the same position `sql/collation_confirmation_template.sql` is in.
 `--new-locales-dir`: steps 1 to 5 read the clone alone, and this needs a node's
 files.
 
-## The destination must be glibc 2.24 or newer
+## Below glibc 2.24 the method breaks silently
 
-RHEL 8+, Ubuntu 18.04+, Debian 9+, SLES 15+. Note the direction: auditing
-*from* an older system is fine, so `RHEL 7 -> RHEL 8` is correct. What is out
-of scope is auditing *towards* RHEL 7 or older.
+This project audits RHEL8 → RHEL9 and RHEL9 → RHEL10, both comfortably above
+that floor. The limit matters anyway, because nothing enforces it: point the
+tool at an older pair and it answers confidently and wrongly rather than
+refusing.
 
-**There is no guard for this: run the tool outside the supported range and it
-answers confidently and wrongly.**
+**There is no guard for this.**
 
 ### Why it fails, and by how much
 
@@ -200,7 +195,8 @@ at the **new** tag, so when that tag is old the graph loses its three roots
 and the inheritance closure collapses — silently, in the reassuring
 direction.
 
-Measured on `glibc-2.12 -> glibc-2.17`, a RHEL 6 to RHEL 7 audit: step 2
+Measured on `glibc-2.12 -> glibc-2.17` — a pair far below the floor, run only
+to show what the failure looks like, not because it is audited: step 2
 correctly finds `iso14651_t1_common` changed, then step 3 reports **11**
 affected locales where there are **278**, and step 4 reports **2** exposed
 where there are **279**. The 267 names it drops include `en_US`, `de_DE`,

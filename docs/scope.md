@@ -9,12 +9,14 @@ behavior: `upper()`, `lower()`, character classification, pattern matching.
 is the only provider it applies to. ICU collations version their CLDR data
 independently of the OS.
 
-**Upgrades landing on glibc 2.24 or newer** — RHEL 8+, Ubuntu 18.04+,
-Debian 9+, SLES 15+. Note the direction: auditing *from* an older system is
-fine, so `RHEL 7 -> RHEL 8` is correct. What is out of scope is auditing
-*towards* RHEL 7 or older, and there is no guard — outside that range the
-tool answers confidently and wrongly. See
-[limitations.md](limitations.md#the-destination-must-be-glibc-224-or-newer).
+**Two upgrade pairs: RHEL8 → RHEL9 and RHEL9 → RHEL10.** Those are what this
+project audits and publishes results for. RHEL7 is out of scope — it is years
+past end of life, and documenting it bought nothing.
+
+The method itself works on any pair where both sides are glibc 2.24 or newer,
+so equivalents on other distros (Ubuntu 18.04+, Debian 9+, SLES 15+) behave the
+same. Below 2.24 it breaks silently and there is no guard. See
+[limitations.md](limitations.md#below-glibc-224-the-method-breaks-silently).
 
 ## The `builtin` provider is the way out
 

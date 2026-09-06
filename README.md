@@ -51,12 +51,13 @@ Run `ldd --version` on the old and the new node. Those two numbers are the
 tags you pass, as `glibc-<version>` — glibc 2.28 and 2.34 become `glibc-2.28`
 and `glibc-2.34`.
 
-**The version you are upgrading *to* must be glibc 2.24 or newer** — RHEL 8+,
-Ubuntu 18.04+, Debian 9+, SLES 15+. Auditing *from* something older is fine,
-so `RHEL 7 -> RHEL 8` is correct; auditing *towards* RHEL 7 or older is not,
-and there is no guard for it — outside that range the tool answers
-confidently and wrongly. See
-[docs/limitations.md](docs/limitations.md#the-destination-must-be-glibc-224-or-newer).
+**The audited pairs are RHEL8 → RHEL9 and RHEL9 → RHEL10** — the two
+adjacent upgrades this project publishes results for. Equivalents on other
+distros work the same way, provided both sides are glibc 2.24 or newer.
+
+Below glibc 2.24 the method breaks silently, and there is no guard: the tool
+answers confidently and wrongly. See
+[docs/limitations.md](docs/limitations.md#below-glibc-224-the-method-breaks-silently).
 
 ### Run the audit
 
@@ -192,7 +193,7 @@ two verdicts have moved since.
 
 Sort order (`LC_COLLATE`) only, and in PostgreSQL terms the **`libc` provider**
 only. Nothing about `LC_CTYPE` (`upper()`, `lower()`, pattern matching), ICU,
-or the `builtin` provider — plus the glibc 2.24 floor above.
+or the `builtin` provider — and the two pairs named above.
 
 Full scope, including the `builtin` provider as a mitigation:
 [docs/scope.md](docs/scope.md). The five things this method structurally cannot

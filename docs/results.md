@@ -217,20 +217,6 @@ step 5.
   [`examples/rhel9-to-rhel10-audit-output.txt`](../examples/rhel9-to-rhel10-audit-output.txt).
   The empirical lines in that file predate step 5 and are marked as such.
 
-## RHEL7 to RHEL8 — audited, not confirmed
-
-glibc 2.17 to 2.28, the large jump that rewrote the master table. The
-source-diff steps were run; the pair was **not** confirmed against real RHEL7
-nodes, and no output file is kept for it. RHEL7's `systemd` doesn't boot
-under a cgroups-v2-only container host — a limitation of my test environment,
-not of the method.
-
-The short version: all three collation templates changed, and 86 of the 310
-content-changed locale files have the change inside `LC_COLLATE`. On this
-pair essentially everything is affected and the audit is not the interesting
-part. Note also that nothing covers the backport question here — see
-[limitations.md](limitations.md#upstream-tags-are-not-your-distros-glibc).
-
 ---
 
 [Documentation index](README.md) · [The method](method.md) ·
