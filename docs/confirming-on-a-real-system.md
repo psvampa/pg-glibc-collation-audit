@@ -103,6 +103,20 @@ nothing in the directory carries a version. The script refuses a directory too
 small to be a real copy, because a partial copy reports "0 differ inside
 `LC_COLLATE`" and that is indistinguishable from a clean result.
 
+`./audit.sh` runs the same check on both sides of a pair in one command, given
+each node's sources and its build id:
+
+```sh
+./audit.sh glibc-2.28 glibc-2.34 \
+  --old-locales-dir ./el8-locales --old-build-id glibc-2.28-251.el8_10.40 \
+  --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
+```
+
+It is optional there for the same reason it is a separate page here: steps 1
+to 5 read the glibc clone alone, and this needs files off a real node. A
+`--*-locales-dir` without its matching `--*-build-id` is refused rather than
+half-used, because a result nobody can bind to a build cannot be cited.
+
 This compares locale **data**. glibc's collation **code** is step 5's job, and
 step 5 reads it between the two upstream tags — that is how Bug 22668, the
 change that reorders `ko_KR`, was found. What neither covers is the distro

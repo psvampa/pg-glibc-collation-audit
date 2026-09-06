@@ -34,17 +34,16 @@ nodes before you act:
 
 ### Install
 
-Needs `git`, `python3` (stdlib only) and `bash`. Nothing else, and no
-PostgreSQL for the audit itself.
+Needs `git`, `python3` (stdlib only) and `bash` — no PostgreSQL for the audit
+itself, and no other dependency.
 
 ```sh
 git clone https://github.com/psvampa/pg-glibc-collation-audit.git
 cd pg-glibc-collation-audit
 ```
 
-Step 1 below clones glibc from `github.com/bminor/glibc`, so the first run
-needs outbound network and about **370 MB** of disk. Later runs reuse that
-clone.
+The first run also clones glibc, which needs network and disk:
+[docs/requirements.md](docs/requirements.md).
 
 ### Pick the two glibc versions
 
@@ -52,13 +51,12 @@ Run `ldd --version` on the old and the new node. Those two numbers are the
 tags you pass, as `glibc-<version>` — glibc 2.28 and 2.34 become `glibc-2.28`
 and `glibc-2.34`.
 
-**The audited pairs are RHEL8 → RHEL9 and RHEL9 → RHEL10** — the two
-adjacent upgrades this project publishes results for. Equivalents on other
-distros work the same way, provided both sides are glibc 2.24 or newer.
-
-Below glibc 2.24 the method breaks silently, and there is no guard: the tool
-answers confidently and wrongly. See
-[docs/limitations.md](docs/limitations.md#below-glibc-224-the-method-breaks-silently).
+**The audited pairs are RHEL8 → RHEL9 and RHEL9 → RHEL10** — the two adjacent
+upgrades this project publishes results for ([docs/scope.md](docs/scope.md)).
+Other distros work the same way above glibc 2.24; below it the method breaks
+silently and nothing stops it, so read
+[docs/limitations.md](docs/limitations.md#below-glibc-224-the-method-breaks-silently)
+first.
 
 ### Run the audit
 
@@ -69,11 +67,8 @@ pair, as an example:
 ./audit.sh glibc-2.28 glibc-2.34
 ```
 
-It runs the audit's five steps in order, hands each step's result to the next
-so you never retype a locale name, and ends with a consolidated summary. The
-five scripts still work individually, which is what you want for re-running
-one step against a hand-picked locale list — see
-[docs/method.md](docs/method.md).
+It runs the five steps in order, hands each step's result to the next so you
+never retype a locale name, and ends with a consolidated summary.
 
 Real output from both pairs, start to finish, is in
 [`examples/`](examples/) — read that before running anything if you want to
@@ -84,24 +79,14 @@ know what you are getting.
 
 ### Read the output
 
-The run ends with an `AUDIT SUMMARY` block: what to reindex, what still needs
-an empirical test, every warning repeated in full, and what the tool did
-*not* decide for you. Long result lists are written to files under
-`$PG_GLIBC_AUDIT_OUT` (default `/tmp/pg-glibc-collation-audit/`) and
-referenced rather than inlined.
+The run ends with an `AUDIT SUMMARY` block. One thing to know before you read
+it: **`!!` marks a warning that the clean-looking result above it does not
+cover something**, and the summary repeats every one of them, because a
+warning that scrolled past 400 lines ago has not been delivered.
 
-Two markers carry the weight:
-
-- **`!!`** is a warning that the clean-looking result above it does not cover
-  something. The `C.UTF-8` warning in step 2 is one of these, and it fires on
-  both documented pairs.
-- **`>>`** marks the actual code changes in step 5's hunks.
-
-Steps 1 to 4 give you lists. **Step 5 gives you C diffs and does not decide
-for you** — it cannot tell a weight-changing commit from a harmless one. If
-nobody will read those hunks, treat every locale step 4 flagged as unresolved
-and [confirm it on real nodes](docs/confirming-on-a-real-system.md) instead;
-that path needs no source reading and is stronger evidence anyway.
+The rest of the output format — the `>>` code markers, where long result
+lists are written, and why step 5 hands you C diffs instead of a verdict —
+is in [docs/method.md](docs/method.md#reading-the-output).
 
 ### Confirm on a real system
 
@@ -116,67 +101,34 @@ The template is
 [`sql/collation_confirmation_template.sql`](sql/collation_confirmation_template.sql).
 
 Run it on both the old and the new OS, for every locale steps 1 to 3 flagged
-and — if step 5 found a [substantive code change](docs/glossary.md) — for every locale step 4
-flagged too. Besides the index inventory it reports text partition keys, which
-no `REINDEX` fixes: the rows have to be moved.
+and — if step 5 found a [substantive code change](docs/glossary.md) — for
+every locale step 4 flagged too.
 
-Three traps make such a comparison agree with itself while proving nothing —
-chiefly a locale that is not generated on either box, which makes both fall
-back to `C`. Those, and what else the template reports:
-[docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md).
-It needs PostgreSQL 15 or newer, and a langpack installed in the wrong order
-will hand you a clean result that means nothing —
-[docs/requirements.md](docs/requirements.md).
+Two things about it fail in the reassuring direction: three traps make the
+comparison agree with itself while proving nothing
+([docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md)),
+and it needs PostgreSQL 15 or newer with langpacks installed in the right
+order ([docs/requirements.md](docs/requirements.md)). It also reports more
+than indexes — text partition keys among them, which no `REINDEX` fixes.
 
 </details>
 
 ## How it works
 
 If neither the locale's rules nor the code that compiles them changed, its
-sort order cannot have changed. That is a proof, not a sample — the reasoning
-is in [docs/method.md](docs/method.md).
+sort order cannot have changed. That is a proof, not a sample.
 
-1. **`audit-locale-diff.sh`** — clones glibc, prints the commit id and GPG
-   signature state behind each tag, then gives an explicit
-   `CHANGED`/`UNCHANGED` verdict for the collation templates, with each file's
-   [blast radius](docs/glossary.md) over the [`copy` graph](docs/glossary.md).
-2. **`filter_lc_collate_changes.py`** — narrows that to files whose change
-   falls *inside* the `LC_COLLATE` block, the only part that can move sort
-   order. Added, deleted and renamed files are reported separately, not
-   dropped.
-3. **`resolve_copy_closure.py`** — adds the locales that inherit a changed one
-   through `copy` and so never appear in a file diff, mapped to the names
-   `locale -a` and `pg_collation` actually show (`sv_SE.utf8`, not
-   `sv_SE.UTF-8`).
-4. **`flag_algorithmic_ranges.py`** — lists the locales steps 1 to 3 can never
-   clear from data alone, because their weights are computed by `localedef`
-   from an [ellipsis range](docs/glossary.md) rather than stored in the locale file.
-5. **`diff_collation_code.py`** — diffs the glibc *code* that turns locale data
-   into weights. The only sort-order-relevant change between glibc 2.28 and
-   2.34 lives here, not in `localedata/`, and this step is what decides whether
-   step 4's list matters for your pair.
+Five steps, all run by `./audit.sh`: what changed (1), which of those changes
+fall inside `LC_COLLATE` (2), which locales inherit them through `copy` (3),
+which locales a data diff can never clear (4), and whether the code that
+computes weights changed (5). Steps 3 and 5 together give the complete set of
+affected locale identifiers.
 
-Steps 3 and 5 together give the real, complete set of affected locale
-identifiers.
+Beyond those five, an optional check compares a real node's locale sources
+against upstream — the only way to see your distro's backports.
 
-Those five steps read upstream glibc only. A sixth check answers the question
-they structurally cannot — **does your distro's own patching touch
-`LC_COLLATE`?** — by comparing a node's `/usr/share/i18n/locales/` against the
-upstream tag:
-
-```sh
-./audit.sh glibc-2.28 glibc-2.34 \
-  --old-locales-dir ./el8-locales --old-build-id glibc-2.28-251.el8_10.40 \
-  --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
-```
-
-It is optional because it needs files off a real node, not just the clone.
-Both audited pairs have been measured this way and every difference landed
-outside `LC_COLLATE` — the numbers, and how to copy the sources off a node,
-are in
-[docs/limitations.md](docs/limitations.md#upstream-tags-are-not-your-distros-glibc)
-and
-[docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md#checking-the-distros-own-patches).
+The five steps in detail, the decision procedure they add up to, and how to
+read what the run prints: [docs/method.md](docs/method.md).
 
 ## Results for the two RHEL pairs
 

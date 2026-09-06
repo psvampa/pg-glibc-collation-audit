@@ -23,6 +23,12 @@ for you. Each is also a standalone script, which is what you want to re-run
 one step against a hand-picked locale list — the invocations below are those
 standalone forms.
 
+The wrapper also runs one check that is *not* one of these five: given a copy
+of a real node's locale sources it compares them against the upstream tag,
+which is the only way to see your distro's own patching. It is not a sixth
+step because steps 1 to 5 read the clone alone and this needs files off a
+node. See
+[confirming-on-a-real-system.md](confirming-on-a-real-system.md#checking-the-distros-own-patches).
 
 ### Step 1 — `scripts/audit-locale-diff.sh <old_tag> <new_tag>`
 
@@ -134,6 +140,28 @@ The curated tiers stay because the walk structurally cannot follow a
 macro-computed include (`#include WEIGHT_H`, how `strcoll_l.c` reaches
 `locale/weight.h`, which does change over that pair) or reach a translation
 unit with no header of its own.
+
+## Reading the output
+
+The run ends with an `AUDIT SUMMARY` block: what to reindex, what still needs
+an empirical test, every warning repeated in full, and what the tool did
+*not* decide for you. Long result lists are written to files under
+`$PG_GLIBC_AUDIT_OUT` (default `/tmp/pg-glibc-collation-audit/`) and
+referenced rather than inlined, so the summary stays readable.
+
+Two markers carry the weight:
+
+- **`!!`** is a warning that the clean-looking result above it does not cover
+  something. The `C.UTF-8` warning in step 2 is one of these, and it fires on
+  both documented pairs. The summary repeats every one of them verbatim,
+  because a warning that scrolled past 400 lines ago has not been delivered.
+- **`>>`** marks the actual code changes in step 5's [hunks](glossary.md).
+
+Steps 1 to 4 give you lists. **Step 5 gives you C diffs and does not decide
+for you** — it cannot tell a weight-changing commit from a harmless one. If
+nobody will read those hunks, treat every locale step 4 flagged as unresolved
+and [confirm it on real nodes](confirming-on-a-real-system.md) instead; that
+path needs no source reading and is stronger evidence anyway.
 
 ## The decision procedure
 

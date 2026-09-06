@@ -17,7 +17,7 @@
 
 | Document | What's in it |
 |---|---|
-| [method.md](method.md) | The five steps in detail, and the decision procedure they add up to |
+| [method.md](method.md) | The five steps in detail, how to read what a run prints, and the decision procedure they add up to |
 | [results.md](results.md) | The evidence behind each verdict, both worked examples, and what was tested on which nodes |
 | [confirming-on-a-real-system.md](confirming-on-a-real-system.md) | Running the SQL template on both nodes, and the three traps that make a comparison lie |
 | [scope.md](scope.md) | What this audits — `LC_COLLATE` and the `libc` provider — and the `builtin` provider as a way out |
