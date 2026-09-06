@@ -282,5 +282,6 @@ step 5 script existed and are carried over unchanged; only the source-level
 analysis is new. The th_TH line was re-measured on 2026-09-06 on freshly
 deployed Rocky Linux 9.3 (glibc-2.34-83.el9.7) and Rocky Linux 10.1
 (glibc-2.39-58.el10_1.2) nodes, both PostgreSQL 18.6, with the other four
-locales identical on both as controls. The RHEL8-to-RHEL9 example was
+locales identical on both as controls. Re-confirmed on the newer builds
+glibc-2.34-275.el9_8 and glibc-2.39-128.el10_2: unchanged. The RHEL8-to-RHEL9 example was
 re-measured end to end on fresh nodes.

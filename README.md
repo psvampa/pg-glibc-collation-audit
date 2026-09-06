@@ -77,6 +77,9 @@ Real output from both pairs, start to finish, is in
 [`examples/`](examples/) — read that before running anything if you want to
 know what you are getting.
 
+<details>
+<summary><strong>Reading the output, and confirming on a real system</strong> — what the run prints, and the empirical half of the method</summary>
+
 ### Read the output
 
 The run ends with an `AUDIT SUMMARY` block: what to reindex, what still needs
@@ -122,6 +125,8 @@ back to `C`. Those, and what else the template reports:
 It needs PostgreSQL 15 or newer, and a langpack installed in the wrong order
 will hand you a clean result that means nothing —
 [docs/requirements.md](docs/requirements.md).
+
+</details>
 
 ## How it works
 

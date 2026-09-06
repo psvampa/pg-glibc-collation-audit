@@ -175,7 +175,9 @@ glibc 2.39:  ก เก ไก ไก่ ฤ เฤ ฦ เฦ ฮ      <- each 
 Confirmed by direct `strcoll`, not only `ORDER BY`, so it is not a tie-break
 artifact: `เฤ` > `ฮ` at 2.34 and `เฤ` < `ฮ` at 2.39, and likewise for `เฦ`.
 Measured on Rocky Linux 9.3 (`glibc-2.34-83.el9.7`) and Rocky Linux 10.1
-(`glibc-2.39-58.el10_1.2`), both PostgreSQL 18.6, with `ber_DZ`, `kab_DZ`,
+(`glibc-2.39-58.el10_1.2`), both PostgreSQL 18.6, and re-confirmed unchanged on
+the newer builds `glibc-2.34-275.el9_8` and `glibc-2.39-128.el10_2` — so no
+backport between those builds moves it. With `ber_DZ`, `kab_DZ`,
 `ko_KR`, `en_US`, `de_DE` and `fr_FR` identical on both nodes as controls.
 Reproduce with [`examples/rhel9-to-rhel10.sql`](../examples/rhel9-to-rhel10.sql).
 

@@ -81,26 +81,43 @@ is the main reason not to skip
 | Pair | Backports measured? | What covers the gap |
 |---|---|---|
 | `RHEL8 -> RHEL9` | **yes**, the numbers below | the measurement itself |
-| `RHEL9 -> RHEL10` | no — it needs a RHEL10 node, and the measurement below was taken on Rocky 8 / Rocky 9 only | the empirical confirmation in [`examples/rhel9-to-rhel10-audit-output.txt`](../examples/rhel9-to-rhel10-audit-output.txt), run on RHEL9 / RHEL10 nodes |
+| `RHEL9 -> RHEL10` | **yes**, since 2026-09-06 | the measurement itself, plus the empirical confirmation in [`examples/rhel9-to-rhel10-audit-output.txt`](../examples/rhel9-to-rhel10-audit-output.txt) |
 | `RHEL7 -> RHEL8` | no | **nothing** — the pair was never confirmed on real nodes either |
 
-So for `RHEL9 -> RHEL10` the cover is empirical, not analytical: it rests on
-observed sort order on real nodes rather than on knowing the distro's
-collation data matches the tag. And on `RHEL7 -> RHEL8` a backported
-collation change would still pass unnoticed today.
+Both documented pairs are now covered analytically as well as empirically. On
+`RHEL7 -> RHEL8` a backported collation change would still pass unnoticed
+today: it needs a RHEL7 node, which is the same environment limitation that
+leaves that pair unconfirmed.
 
-### Measured for RHEL8 → RHEL9
+### Measured, on all three OS versions
 
-For the flagship pair this is measured rather than left open. Comparing every
-distro locale source in `/usr/share/i18n/locales/` (package
-`glibc-locale-source`) against the same file at the upstream tag:
-`glibc-2.28-251.el8_10.40` differs from `glibc-2.28` in **73 of 355** files,
-and `glibc-2.34-275.el9_8` differs from `glibc-2.34` in **2 of 356**. In
-**none** of them does the difference fall inside the `LC_COLLATE` block.
+Comparing every distro locale source in `/usr/share/i18n/locales/` (package
+`glibc-locale-source`) against the same file at the upstream tag, using the
+audit's own `LC_COLLATE` block parser to decide whether a difference lands
+inside the block:
 
-The backports on both sides land in other categories, so for every locale
+| Distro package | Upstream tag | Files differing | Inside `LC_COLLATE` | Absent upstream |
+|---|---|---|---|---|
+| `glibc-2.28-251.el8_10.40` | `glibc-2.28` | 73 of 355 | **0** | `C`, `en_US@ampm` |
+| `glibc-2.34-275.el9_8` | `glibc-2.34` | 2 of 356 | **0** | `C` |
+| `glibc-2.39-128.el10_2` | `glibc-2.39` | 3 of 366 | **0** | none |
+
+The backports on every side land in other categories, so for every locale
 this method can audit, the tag diff is reading the same collation data the
 nodes run.
+
+The first two rows reproduce the earlier measurement exactly, re-run on
+independently provisioned Rocky Linux nodes. The third is new: it needed a
+RHEL10 node, which is why that pair's row above used to say "no". The three
+files differing at `el10` are `bg_BG`, `hr_HR` and `ssy_ER`, none inside
+`LC_COLLATE`.
+
+To reproduce: install `glibc-locale-source` on the node, copy
+`/usr/share/i18n/locales/` off it, and compare each file against
+`localedata/locales/<name>` at the tag, using
+`glibc_locale_data.collate_bounds()` to extract the block from each side. This
+is still a manual procedure rather than a step of the audit — see the note at
+the end of this section.
 
 ### What that measurement does not cover
 
@@ -110,15 +127,40 @@ invisible to the audit — the file it comes from exists at neither tag, so
 there is nothing to compare it against. This measurement is a statement about
 the locales the method covers, and it does not rescue the one it does not.
 
-A comparison that always answered "identical" would produce that same zero,
+A comparison that always answered "identical" would produce those same zeros,
 so the check carries a [positive control](glossary.md) against locales whose
-answer is known from step 2: the same method marks `sv_SE` and `or_IN` as
-different from `glibc-2.34` and identical to `glibc-2.28`, and `ko_KR`
-identical to both.
+answer is known from step 2. Run against the `el8` node's sources:
 
-The claim is bounded by what was compared — these two package versions
-against these two tags — and is not a general result that distro backports
-never touch collation.
+| Locale | vs `glibc-2.28` | vs `glibc-2.34` |
+|---|---|---|
+| `sv_SE` | identical | **different** |
+| `ko_KR` | identical | identical |
+| `or_IN` | **different** | **different** |
+
+`sv_SE` and `ko_KR` are what step 2 predicts. `or_IN` is the one to read
+carefully, and it corrects what this page used to claim: the file is **not**
+identical to `glibc-2.28`. It differs by a single line, in
+`LC_IDENTIFICATION`, where the distro renamed the language:
+
+```
+-language    "Oriya"
++language    "Odia"
+```
+
+Its `LC_COLLATE` block is byte-identical, which is why `or_IN` sits among the
+73 differing files while contributing nothing to the zero above. That is the
+distinction this whole section rests on — a locale file changing is not a
+locale's sort order changing — and the positive control happens to demonstrate
+it.
+
+The claim is bounded by what was compared: **these** package builds against
+these tags. It is not a general result that distro backports never touch
+collation, and a different build of the same distro release is a different
+measurement. Say which build a result was taken on.
+
+**Still not automated.** This is a manual procedure recorded as prose, not a
+step the audit runs, so it is not re-checked when anything changes. Automating
+it is the obvious next improvement to this page.
 
 ## The destination must be glibc 2.24 or newer
 

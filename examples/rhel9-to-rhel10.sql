@@ -9,6 +9,9 @@
 -- adds backports the upstream tag diff cannot see):
 --   RHEL9  side: Rocky Linux 9.3,  glibc-2.34-83.el9.7,     PostgreSQL 18.6
 --   RHEL10 side: Rocky Linux 10.1, glibc-2.39-58.el10_1.2,  PostgreSQL 18.6
+-- Re-confirmed on the newer distro builds glibc-2.34-275.el9_8 and
+-- glibc-2.39-128.el10_2: same result, so a backport between those builds does
+-- not change it either.
 --
 -- Requires, on each node:
 --   rm -f /etc/rpm/macros.image-language-conf   # or dnf installs English only
