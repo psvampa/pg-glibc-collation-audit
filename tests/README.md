@@ -1,7 +1,7 @@
 # Tests
 
 ```sh
-python3 -m unittest discover -s tests -t tests          # everything, ~16s
+python3 -m unittest discover -s tests -t tests          # everything, ~17s
 python3 -m unittest discover -s tests -t tests -q -k pure_functions   # no clone needed
 ```
 
