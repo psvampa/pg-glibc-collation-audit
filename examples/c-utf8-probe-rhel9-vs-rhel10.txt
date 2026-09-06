@@ -1,0 +1,107 @@
+C.UTF-8 probe output: RHEL9 -> RHEL10
+
+Produced by running ../sql/c_utf8_probe.sql, unedited, on both nodes and
+diffing the two outputs.
+
+Measured 2026-09-06 on:
+  RHEL9  side: Rocky Linux 9.3,  glibc-2.34-275.el9_8,    PostgreSQL 18.6
+  RHEL10 side: Rocky Linux 10.1, glibc-2.39-128.el10_2,   PostgreSQL 18.6
+
+VERDICT: UNCHANGED, and structurally so. Both nodes' localedata/locales/C is
+byte-identical and declares codepoint_collation, which glibc documents as
+discarding all collation information in favour of strcmp/wcscmp. C.UTF-8 is
+byte order by construction on both sides, so there is no expansion logic left
+for a localedef change to move.
+
+The two outputs are IDENTICAL apart from the node identity block at the top:
+
+  $ diff <(tail -n +5 rhel9.out) <(tail -n +5 rhel10.out)
+  $                                     # no output
+
+--- the inverted positive control (query 2), both nodes -------------------
+   c_utf8_equals_byte_order | positions_differing 
+  --------------------------+---------------------
+   t                        |                   0
+  (1 row)
+
+--- the named pairs (query 3), both nodes ---------------------------------
+          pair        | holds 
+  --------------------+-------
+   U+007F  < U+FFFF   | t
+   U+07FF  < U+FFFF   | t
+   U+FFFF  < U+10FFFF | t
+   U+10000 < U+20000  | t
+   U+FFFFF < U+100000 | t
+  (5 rows)
+
+--- the tie detector (query 6b), both nodes -------------------------------
+The sort keys ARE the UTF-8 encodings of the code points, which is what
+codepoint_collation means: strxfrm is the identity. So the "true" above is
+real byte order and not tied weights rescued by PostgreSQL's strcmp
+tie-break -- the third reading query 2 warns about.
+
+  U+10000 key: f0908080
+  U+20000 key: f0a08080
+  distinct weights
+
+--- the order, both nodes (query 1) ---------------------------------------
+This is code point order, exactly.
+
+   pos |    cp    |        kind         
+  -----+----------+---------------------
+     1 | U+0001   | UTF-8 1-byte
+     2 | U+0041   | ASCII anchor A
+     3 | U+005A   | ASCII anchor Z
+     4 | U+0061   | ASCII anchor a
+     5 | U+007F   | UTF-8 1-byte last
+     6 | U+0080   | UTF-8 2-byte first
+     7 | U+07FF   | UTF-8 2-byte last
+     8 | U+0800   | UTF-8 3-byte first
+     9 | U+FFFF   | range 1 end / BMP
+    10 | U+10000  | range 2 start
+    11 | U+1FFFF  | range 2 end
+    12 | U+20000  | range 3 start
+    13 | U+2FFFF  | range 3 end
+    14 | U+30000  | range 4 start
+    15 | U+3FFFF  | range 4 end
+    16 | U+40000  | range 5 start
+    17 | U+4FFFF  | range 5 end
+    18 | U+50000  | range 6 start
+    19 | U+5FFFF  | range 6 end
+    20 | U+60000  | range 7 start
+    21 | U+6FFFF  | range 7 end
+    22 | U+70000  | range 8 start
+    23 | U+7FFFF  | range 8 end
+    24 | U+80000  | range 9 start
+    25 | U+8FFFF  | range 9 end
+    26 | U+90000  | range 10 start
+    27 | U+9FFFF  | range 10 end
+    28 | U+A0000  | range 11 start
+    29 | U+AFFFF  | range 11 end
+    30 | U+B0000  | range 12 start
+    31 | U+BFFFF  | range 12 end
+    32 | U+C0000  | range 13 start
+    33 | U+CFFFF  | range 13 end
+    34 | U+D0000  | range 14 start
+    35 | U+DFFFF  | range 14 end
+    36 | U+E0000  | range 15 start
+    37 | U+EFFFF  | range 15 end
+    38 | U+F0000  | range 16 start
+    39 | U+FFFFF  | range 16 end
+    40 | U+100000 | range 17 start
+    41 | U+10FFFF | range 17 end / last
+  (41 rows)
+
+--- node identity, for the record -----------------------------------------
+RHEL9:
+  SET
+  === 0. node identity: a result is bound to the build it ran on ===
+  glibc-2.34-275.el9_8.x86_64
+  ldd (GNU libc) 2.34
+  C.utf8
+RHEL10:
+  SET
+  === 0. node identity: a result is bound to the build it ran on ===
+  glibc-2.39-128.el10_2.x86_64
+  ldd (GNU libc) 2.39
+  C.utf8

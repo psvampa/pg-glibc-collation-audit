@@ -19,9 +19,9 @@
 |---|---|
 | [method.md](method.md) | The five steps in detail, how to read what a run prints, and the decision procedure they add up to |
 | [results.md](results.md) | The evidence behind each verdict, both worked examples, and what was tested on which nodes |
-| [confirming-on-a-real-system.md](confirming-on-a-real-system.md) | Running the SQL template on both nodes, and the three traps that make a comparison lie |
+| [confirming-on-a-real-system.md](confirming-on-a-real-system.md) | Running the SQL template and the `C.UTF-8` probe on both nodes, and the four traps that make a comparison lie |
 | [scope.md](scope.md) | What this audits — `LC_COLLATE` and the `libc` provider — and the `builtin` provider as a way out |
-| [limitations.md](limitations.md) | The five things it structurally cannot see, `C.UTF-8` among them |
+| [limitations.md](limitations.md) | The five things it structurally cannot see — `C.UTF-8` among them, and now covered three other ways |
 | [requirements.md](requirements.md) | Dependencies, the test suite, and the three setup traps on the confirmation side |
 | [comparison-ardentperf.md](comparison-ardentperf.md) | How this relates to ardentperf/glibc-unicode-sorting, and how to read their tables |
 | [glossary.md](glossary.md) | `copy` graph, blast radius, hunk, tier, ellipsis range, role swap |

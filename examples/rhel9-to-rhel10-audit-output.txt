@@ -288,3 +288,67 @@ glibc-2.34-275.el9_8 and glibc-2.39-128.el10_2: unchanged.
 The RHEL8-to-RHEL9 example was re-measured end to end on fresh nodes, and
 again on 2026-09-06 on PostgreSQL 18.6, so both pairs on this repository now
 rest on the same PostgreSQL.
+
+================================================================
+Added 2026-09-06: step 8, node to node
+================================================================
+
+$ ./audit.sh glibc-2.34 glibc-2.39 \
+    --old-locales-dir ./el9-locales --old-build-id glibc-2.34-275.el9_8 \
+    --new-locales-dir ./el10-locales --new-build-id glibc-2.39-128.el10_2
+
+(per-file diff bodies, fingerprints and temporary paths trimmed)
+
+== NODE TO NODE  does glibc-2.34-275.el9_8's collation data differ from glibc-2.39-128.el10_2's?
+================================================================
+Node-to-node comparison of locale SOURCES. Both sides are authoritative:
+  old: glibc-2.34-275.el9_8
+  new: glibc-2.39-128.el10_2
+
+Compared 355 file(s) present on both nodes:
+  identical:                  49
+  differ outside LC_COLLATE:  295
+  differ INSIDE LC_COLLATE:   3
+  no LC_COLLATE either node:  8
+  only on the old node:       1
+  only on the new node:       11
+
+Differ INSIDE LC_COLLATE (3) -- these two nodes do not carry the same collation rules:
+  ber_DZ  (both, differing, explicit -> copy-only)
+  kab_DZ  (both, differing, copy-only -> explicit)
+  th_TH  (both, differing, explicit on both)
+
+  All of those exist at one of the two tags, so the tag diff could see them.
+
+Only on the new node (11) -- locales this upgrade adds:
+  ab_GE: pure copy; inherits its order
+  crh_RU: weights spelled out in the file
+  gbm_IN: pure copy; inherits its order
+  kv_RU: pure copy; inherits its order
+  rif_MA: pure copy; inherits its order
+  ssy_ER: pure copy; inherits its order
+  su_ID: pure copy; inherits its order
+  syr: pure copy; inherits its order
+  tok: pure copy; inherits its order
+  translit_emojis: no LC_COLLATE block
+  zgh_MA: pure copy; inherits its order
+
+Only on the old node (1) -- locales this upgrade REMOVES. An index built on one of these does not just sort differently on the new node; the collation is gone:
+  aa_ER@saaho: pure copy; inherits its order
+
+Backported locales, reported whether or not they differ (these are why this comparison exists):
+  C (C.UTF-8): present on both nodes, byte-identical
+      glibc-2.34-275.el9_8: codepoint_collation -- byte order by construction
+      glibc-2.39-128.el10_2: codepoint_collation -- byte order by construction
+
+Full result written to /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.34-275.el9_8..glibc-2.39-128.el10_2.txt
+
+ber_DZ, kab_DZ and th_TH are exactly what step 2 reports for this tag pair.
+C is byte-identical between these two nodes and declares codepoint_collation
+on both, so C.UTF-8 cannot change across this pair -- a structural statement,
+not a measurement that came out clean. Note that the summary block therefore
+does NOT carry the "C (C.UTF-8): DIFFERS" line the other pair's does.
+
+aa_ER@saaho is a locale REMOVED by this upgrade, which no step reports.
+
+Probe output for this pair: c-utf8-probe-rhel9-vs-rhel10.txt.

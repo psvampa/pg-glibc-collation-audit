@@ -494,3 +494,86 @@ SQL TEMPLATE (sql/collation_confirmation_template.sql)
   tie-break) are rejected for every provider except ICU. The COLLATE "C" is
   a no-op. Tie order IS unspecified in sort(1), which resolves tied lines by
   input order, so feed both sides byte-identical input.
+
+================================================================
+Added 2026-09-06: step 8, node to node
+================================================================
+
+Steps 1-5 above read upstream source only, so they never see
+localedata/locales/C -- it exists upstream from glibc 2.35 and is in neither
+of these two tags. RHEL8 and RHEL9 both ship it by backport, so it is on both
+NODES, and comparing the nodes to each other is what settles it. Run with
+both sides' locale sources (package glibc-locale-source), tar'd off each node:
+
+$ ./audit.sh glibc-2.28 glibc-2.34 \
+    --old-locales-dir ./el8-locales --old-build-id glibc-2.28-251.el8_10.40 \
+    --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
+
+(per-file diff bodies trimmed below; the fingerprints and directory paths are
+this run's temporary ones and are trimmed too)
+
+== NODE TO NODE  does glibc-2.28-251.el8_10.40's collation data differ from glibc-2.34-275.el9_8's?
+================================================================
+Node-to-node comparison of locale SOURCES. Both sides are authoritative:
+  old: glibc-2.28-251.el8_10.40
+  new: glibc-2.34-275.el9_8
+
+Compared 354 file(s) present on both nodes:
+  identical:                  82
+  differ outside LC_COLLATE:  261
+  differ INSIDE LC_COLLATE:   3
+  no LC_COLLATE either node:  8
+  only on the old node:       1
+  only on the new node:       2
+
+Differ INSIDE LC_COLLATE (3) -- these two nodes do not carry the same collation rules:
+  C  (both, differing, ellipsis -> codepoint)
+  or_IN  (both, differing, explicit on both)
+  sv_SE  (both, differing, explicit on both)
+
+  1 of those exist at NEITHER tag, so no tag-to-tag diff could see them: C
+
+Only on the new node (2) -- locales this upgrade adds:
+  ckb_IQ: weights spelled out in the file
+  mnw_MM: pure copy; inherits its order
+
+Only on the old node (1) -- locales this upgrade REMOVES. An index built on one of these does not just sort differently on the new node; the collation is gone:
+  en_US@ampm: pure copy; inherits its order
+
+Backported locales, reported whether or not they differ (these are why this comparison exists):
+  C (C.UTF-8): present on both nodes, LC_COLLATE DIFFERS
+      glibc-2.28-251.el8_10.40: ellipsis ranges -- weights computed by localedef (6 hit(s))
+      glibc-2.34-275.el9_8: codepoint_collation -- byte order by construction
+      exists at neither tag: nothing in steps 1-5 can see this file at all
+      an ellipsis range means localedef computes the weights, so identical data does NOT clear the order
+
+Full result written to /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.28-251.el8_10.40..glibc-2.34-275.el9_8.txt
+
+or_IN and sv_SE are exactly what step 2 reports for this tag pair, reached by
+a different algorithm -- which is what makes the answer about C worth citing.
+en_US@ampm is neither: it is a locale REMOVED by the upgrade, which no step
+reports because it is a change to the set of locales rather than to one.
+
+The summary block this adds:
+
+-- Node-to-node locale data (glibc-2.28-251.el8_10.40 -> glibc-2.34-275.el9_8)
+     3 locale(s) differ inside LC_COLLATE between the two
+     nodes' OWN sources; full list: /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.28-251.el8_10.40..glibc-2.34-275.el9_8.txt
+     C (C.UTF-8): DIFFERS  <- in neither tag; no other step sees it
+
+Without --old-locales-dir/--new-locales-dir that block reads:
+
+  -- Node-to-node locale data: NOT RUN
+       Pass --old-locales-dir and --new-locales-dir with their build ids.
+       Without it nothing above says anything about C.UTF-8: its
+       source file is in neither tag, and PostgreSQL reports collversion
+       as NULL for every C.* collation, so no mismatch can ever fire.
+       Then run sql/c_utf8_probe.sql on both nodes.
+
+Absent is not empty: a summary that simply omits the section reads exactly
+like one that cleared the locale.
+
+The ORDER is not settled here -- an ellipsis range's weights are computed by
+localedef at build time, so identical data is not identical order. That half
+is ../sql/c_utf8_probe.sql, and its output for this pair is in
+c-utf8-probe-rhel8-vs-rhel9.txt.

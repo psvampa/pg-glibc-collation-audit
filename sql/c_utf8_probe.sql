@@ -53,6 +53,14 @@
 --     literals below. Checked, not assumed.
 \set ON_ERROR_STOP on
 
+-- Notices are suppressed on purpose. "table c_utf8_probe does not exist,
+-- skipping" fires only on the FIRST run on a node, so running this twice on
+-- one node and once on the other makes the two outputs differ by a line that
+-- has nothing to do with glibc. Measured on 2026-09-06 -- it interleaved into
+-- the middle of query 3's heading. Errors are unaffected: ON_ERROR_STOP is on
+-- and every guard below raises rather than notices.
+SET client_min_messages = warning;
+
 \echo '=== 0. node identity: a result is bound to the build it ran on ==='
 \! rpm -q glibc 2>/dev/null || echo 'rpm not available -- record the glibc build by hand'
 \! ldd --version | head -1

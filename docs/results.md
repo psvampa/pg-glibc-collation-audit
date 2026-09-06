@@ -7,12 +7,14 @@ so there is only ever one copy of it to keep current. This page is the
 evidence behind each row.
 
 Two version pairs were run end to end. `ko_KR` is the row a data-only audit
-gets wrong, and `C.UTF-8` the row no source diff can reach — it is not
-*auditable* by this method, since its source file is in neither tag for the
-first pair. Step 2 names it and says why the clean result says nothing about
-it, rather than settling it; see
-[limitations.md](limitations.md#cutf-8-cannot-be-audited-by-this-method). Its
-RHEL9→RHEL10 verdict is ardentperf's checksum, not my own test.
+gets wrong, and `C.UTF-8` the row no *tag* diff can reach — its source file is
+in neither tag for the first pair, so steps 1-5 are blind to it and step 2
+names it rather than settling it. It is settled by reading the file where it
+does exist, on the nodes themselves: both its verdicts were measured directly
+on 2026-09-06, replacing ardentperf's checksum as the basis for the
+RHEL9→RHEL10 column. See
+[limitations.md](limitations.md#cutf-8-is-invisible-to-a-tag-diff) and the
+worked-example section below.
 
 ## How to read the verdicts
 
@@ -40,6 +42,11 @@ If you saved a result from this tool before 2026-09-07, check
   changes.
 - **`zh_CN` and three siblings** used to be cleared by step 4, which should
   have flagged them.
+
+No verdict moved on 2026-09-06 when `C.UTF-8` was measured directly for the
+first time, but the *basis* of its RHEL9→RHEL10 🟢 did: it was ardentperf's
+checksum and is now a byte comparison of both nodes' own locale sources plus a
+41-code-point probe on each.
 
 No verdict moved on 2026-09-05, but six ways of reaching one silently did, so
 a run from that day prints things an earlier one did not: a `C.UTF-8` warning
@@ -133,6 +140,46 @@ is where this particular bug lives, not a broad CJK corpus, and
 evidence is a mechanism argument plus a targeted test, not a broad empirical
 sweep. They are 🟢 on weaker evidence than the other 🟢 rows.
 
+### `C.UTF-8` — from the nodes' own files, because no tag has them
+
+Every other 🔴 row on this page was reached by steps 1-5. This one cannot be:
+`localedata/locales/C` exists upstream only from glibc 2.35, so for a
+`2.28..2.34` comparison it is in neither tag. RHEL8 and RHEL9 both ship it by
+backport, so it is on both **nodes** — and comparing the nodes to each other is
+what settles it.
+
+Measured 2026-09-06 on `glibc-2.28-251.el8_10.40` and `glibc-2.34-275.el9_8`,
+both PostgreSQL 18.6:
+
+| | RHEL8 | RHEL9 |
+|---|---|---|
+| its `LC_COLLATE` | six **ellipsis ranges** — planes 0, 1, 2, 14, 15, 16, then `UNDEFINED` | the single keyword **`codepoint_collation`** |
+| step 4 over the node's directory | flagged | byte order by construction |
+| `C.utf8` equals byte order? | **no**, 40 of 41 probed code points in a different position | yes, 0 |
+| `strxfrm` key for U+10000 | `ef85b5` — a computed weight | `f0908080` — the UTF-8 bytes themselves |
+| database `datcollate` / `datcollversion` | `C.UTF-8` / NULL | `C.UTF-8` / NULL |
+
+So it **changed**, and the mechanism is fully accounted for rather than merely
+observed. An ellipsis range carries no weights — `localedef` computes them, and
+glibc 2.34 took the Bug 22668 commit that changed exactly that expansion. On
+top of it, planes 3 through 13 have no range at all in the RHEL8 file (Red Hat
+bug 1361965), so those code points fall to `UNDEFINED`; that is why the RHEL8
+order is scrambled rather than merely shifted, with ASCII landing at position
+31. RHEL9 backported upstream's `codepoint_collation`, which discards all
+collation information in favour of `strcmp`.
+
+Two things make this row worth reading twice. The `datcollversion` was NULL on
+both nodes — as it always is for a `C.*` name — so **nothing warned**, and the
+databases' default collation was `C.UTF-8` on both, which is what an `initdb`
+in a container gives you. And the [positive control](glossary.md) inverts here:
+RHEL9's agreement with byte order is the *fix*, not the usual sign that a
+locale was never generated. The `strxfrm` row is what rules out the third
+reading, where tied weights are rescued by PostgreSQL's own `strcmp`
+tie-break.
+
+Full output:
+[`examples/c-utf8-probe-rhel8-vs-rhel9.txt`](../examples/c-utf8-probe-rhel8-vs-rhel9.txt).
+
 ### Everything else
 
 Every other locale (`en_US`, `de_DE`, `fr_FR`, ...) is unaffected, confirmed
@@ -146,7 +193,14 @@ clean data diff — is what clears it.
 ## Worked example: RHEL9 to RHEL10 (glibc 2.34 to 2.39)
 
 `ber_DZ`, `kab_DZ` and `th_TH` are flagged; `th_TH` changes sort order.
-`ko_KR` is flagged by step 4 and then cleared by step 5.
+`ko_KR` is flagged by step 4 and then cleared by step 5. `C.UTF-8` **cannot**
+change across this pair, and that is a structural statement rather than a
+measurement that happened to come out clean: both nodes'
+`/usr/share/i18n/locales/C` is byte-identical and declares
+`codepoint_collation`, so there is no expansion logic left for a `localedef`
+change to move. The 41-code-point probe returns identical output on both
+nodes, down to the sort keys —
+[`examples/c-utf8-probe-rhel9-vs-rhel10.txt`](../examples/c-utf8-probe-rhel9-vs-rhel10.txt).
 
 Full output:
 [`examples/rhel9-to-rhel10-audit-output.txt`](../examples/rhel9-to-rhel10-audit-output.txt).
@@ -222,7 +276,11 @@ page rests on a different PostgreSQL from any other.
   [`examples/rhel8-to-rhel9-audit-output.txt`](../examples/rhel8-to-rhel9-audit-output.txt).
   The distro-versus-upstream backport check under
   [limitations.md](limitations.md#upstream-tags-are-not-your-distros-glibc)
-  was measured on these same two builds.
+  was measured on these same two builds, and so were the node-to-node
+  comparison and the `C.UTF-8` probe added on 2026-09-06. Those two are
+  separate measurements from the ones above even though the builds match:
+  they read files (`/usr/share/i18n/locales/`) that the earlier runs never
+  looked at.
 
   This block was first measured on PostgreSQL 16.15, on the same OS and the
   same glibc builds. Every sort-order result reproduced unchanged on 18.6,
@@ -234,7 +292,10 @@ page rests on a different PostgreSQL from any other.
   [`examples/rhel9-to-rhel10-audit-output.txt`](../examples/rhel9-to-rhel10-audit-output.txt).
   The `ber_DZ`, `kab_DZ`, `ko_KR` and `en_US` lines in that file predate step
   5 and are marked as such; the `th_TH` line was re-measured on 2026-09-06,
-  after step 5 existed, and is what moved that verdict.
+  after step 5 existed, and is what moved that verdict. The node-to-node
+  comparison and the `C.UTF-8` probe were measured on `glibc-2.34-275.el9_8`
+  and `glibc-2.39-128.el10_2`, Rocky Linux 9.3 and 10.1, PostgreSQL 18.6, on
+  2026-09-06.
 
 ---
 

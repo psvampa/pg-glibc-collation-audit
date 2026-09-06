@@ -29,7 +29,7 @@ initdb --locale-provider=builtin --locale=C.UTF-8
 ```
 
 is immune to everything this tool looks for, and is the mitigation if
-[the `C.UTF-8` limitation](limitations.md#cutf-8-cannot-be-audited-by-this-method)
+[the `C.UTF-8` limitation](limitations.md#cutf-8-is-invisible-to-a-tag-diff)
 is what you are worried about.
 
 Note that `initdb` still defaults to `libc` in PG 16, 17 and 18, so you have

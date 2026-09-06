@@ -474,11 +474,11 @@ class CollationStyle(unittest.TestCase):
     C.UTF-8 story into something the tool decides."""
 
     def test_the_backported_C_is_ellipsis_based(self):
-        """RHEL8's and RHEL9's C: one ellipsis range per plane, so localedef
-        computes every weight and a data diff can never clear it."""
+        """RHEL8's C: six ellipsis ranges, so localedef computes every weight
+        and a data diff can never clear it. Measured on collaudit8."""
         text = _harness.backported_c()
         self.assertEqual(g.classify_collation_style(text), 'ellipsis')
-        self.assertEqual(len(g.ellipsis_hits(g.collate_text(text))), 17)
+        self.assertEqual(len(g.ellipsis_hits(g.collate_text(text))), 6)
 
     def test_the_2_35_C_is_byte_order_by_construction(self):
         self.assertEqual(g.classify_collation_style(_harness.upstream_c()),

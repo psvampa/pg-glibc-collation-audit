@@ -157,20 +157,34 @@ def locale_file(*body, comment='%'):
 
 
 def backported_c():
-    """The shape Fedora's glibc-c-utf8-locale.patch adds as localedata/locales/C.
+    """localedata/locales/C as RHEL8 actually ships it.
 
-    One ellipsis range per plane -- 17 of them -- which is why step 4 flags it
-    and why Bug 22668 ("LC_COLLATE: Fix last character ellipsis handling")
-    could move C.UTF-8's order without touching this file.
+    Copied from glibc-2.28-251.el8_10.40 on collaudit8, 2026-09-06 -- not
+    invented. Six ellipsis ranges, which is why step 4 flags it and why Bug
+    22668 ("LC_COLLATE: Fix last character ellipsis handling") could move
+    C.UTF-8's order with this file untouched.
+
+    Note which planes are NOT here: 3 through 13 have no range at all, so
+    every code point in them falls to UNDEFINED. That is the defect Red Hat
+    bug 1361965 fixed in glibc-2.28-93.el8, and it is why 40 of 41 measured
+    code points sort out of code point order on RHEL8.
     """
-    body = ['order_start forward', '<U0000>', '..', '<UFFFF>']
-    for plane in range(1, 17):
-        body += [f'<U{plane:04X}0000>', '..', f'<U{plane:04X}FFFF>']
-    return locale_file(*body, 'UNDEFINED', 'order_end')
+    return locale_file(
+        'order_start forward',
+        '<U0000>', '..', '<UFFFF>',
+        '<U00010000>', '..', '<U0001FFFF>',
+        '<U00020000>', '..', '<U0002FFFF>',
+        '<U000E0000>', '..', '<U000EFFFF>',
+        '<U000F0000>', '..', '<U000FFFFF>',
+        '<U00100000>', '..', '<U0010FFFF>',
+        'UNDEFINED',
+        'order_end')
 
 
 def upstream_c():
-    """What upstream replaced all of that with in glibc 2.35.
+    """What replaced all of that: upstream from glibc 2.35, and RHEL9 by
+    backport -- collaudit9's and collaudit10's C are byte-identical to each
+    other and carry exactly this block.
 
     The prose above the keyword is quoted from the real file, and is the trap:
     it names codepoint_collation three lines before declaring it.

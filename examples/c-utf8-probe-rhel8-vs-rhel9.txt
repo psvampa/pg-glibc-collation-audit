@@ -1,0 +1,150 @@
+C.UTF-8 probe output: RHEL8 -> RHEL9
+
+Produced by running ../sql/c_utf8_probe.sql, unedited, on both nodes and
+diffing the two outputs. This is the locale the source audit is blind to:
+localedata/locales/C exists upstream only from glibc 2.35, so for this pair it
+is in NEITHER tag -- see ../docs/limitations.md.
+
+Measured 2026-09-06 on:
+  RHEL8 side: Rocky Linux 8.9,  glibc-2.28-251.el8_10.40, PostgreSQL 18.6
+  RHEL9 side: Rocky Linux 9.3,  glibc-2.34-275.el9_8,     PostgreSQL 18.6
+
+VERDICT: CHANGED. C.UTF-8 is not code point order on RHEL8 and is on RHEL9.
+40 of the 41 probed code points sit in a different position.
+
+Both databases were created with datcollate = C.UTF-8 under the libc provider
+and a NULL datcollversion, which is the configuration the limitation is about:
+every text column without an explicit COLLATE depends on this order, and no
+version mismatch can ever warn about it.
+
+$ psql -X -f c_utf8_probe.sql        # on each node, then diff
+
+--- the inverted positive control (query 2) -------------------------------
+Read "equals byte order = true" as the CORRECT answer here, not as the usual
+sign that a locale was never generated.
+
+RHEL8:
+   c_utf8_equals_byte_order | positions_differing 
+  --------------------------+---------------------
+   f                        |                  40
+  (1 row)
+RHEL9:
+   c_utf8_equals_byte_order | positions_differing 
+  --------------------------+---------------------
+   t                        |                   0
+  (1 row)
+
+--- the named pairs (query 3) ---------------------------------------------
+U+007F < U+FFFF is the inversion docs/limitations.md records. U+10000 <
+U+20000 covers the intra-RHEL8 change, where those code points had no weights
+at all before glibc-2.28-93.el8.
+
+RHEL8:
+          pair        | holds 
+  --------------------+-------
+   U+007F  < U+FFFF   | f
+   U+07FF  < U+FFFF   | f
+   U+FFFF  < U+10FFFF | t
+   U+10000 < U+20000  | t
+   U+FFFFF < U+100000 | t
+  (5 rows)
+RHEL9:
+          pair        | holds 
+  --------------------+-------
+   U+007F  < U+FFFF   | t
+   U+07FF  < U+FFFF   | t
+   U+FFFF  < U+10FFFF | t
+   U+10000 < U+20000  | t
+   U+FFFFF < U+100000 | t
+  (5 rows)
+
+--- the tie detector (query 6b) -------------------------------------------
+PostgreSQL breaks a strcoll tie with strcmp, so tied weights are
+indistinguishable through SQL from correct byte order. These are strxfrm sort
+keys, which cannot hide a tie. RHEL9's keys ARE the UTF-8 bytes, because
+codepoint_collation makes strxfrm the identity; RHEL8's are computed weights
+and bear no relation to the code point.
+
+RHEL8:
+  U+10000 key: ef85b5
+  U+20000 key: f0948b95
+  distinct weights
+RHEL9:
+  U+10000 key: f0908080
+  U+20000 key: f0a08080
+  distinct weights
+
+--- the whole order, RHEL8 (query 1) --------------------------------------
+Code point order would be U+0001, U+0041, U+005A, U+0061, U+007F, U+0080,
+U+07FF, U+0800, U+FFFF, U+10000, ... U+10FFFF -- which is exactly what RHEL9
+produces. RHEL8 produces this instead. Note where ASCII lands: at position 31,
+after every plane-14-to-16 noncharacter. And note the planes the backported
+file declares no range for at all -- 3 through 13 -- whose endpoints sort ahead
+of ASCII while their starts sort behind it.
+
+   pos |    cp    |        kind         
+  -----+----------+---------------------
+     1 | U+0001   | UTF-8 1-byte
+     2 | U+FFFF   | range 1 end / BMP
+     3 | U+1FFFF  | range 2 end
+     4 | U+2FFFF  | range 3 end
+     5 | U+30000  | range 4 start
+     6 | U+3FFFF  | range 4 end
+     7 | U+40000  | range 5 start
+     8 | U+4FFFF  | range 5 end
+     9 | U+50000  | range 6 start
+    10 | U+5FFFF  | range 6 end
+    11 | U+60000  | range 7 start
+    12 | U+6FFFF  | range 7 end
+    13 | U+70000  | range 8 start
+    14 | U+7FFFF  | range 8 end
+    15 | U+80000  | range 9 start
+    16 | U+8FFFF  | range 9 end
+    17 | U+90000  | range 10 start
+    18 | U+9FFFF  | range 10 end
+    19 | U+A0000  | range 11 start
+    20 | U+AFFFF  | range 11 end
+    21 | U+B0000  | range 12 start
+    22 | U+BFFFF  | range 12 end
+    23 | U+C0000  | range 13 start
+    24 | U+CFFFF  | range 13 end
+    25 | U+D0000  | range 14 start
+    26 | U+DFFFF  | range 14 end
+    27 | U+E0000  | range 15 start
+    28 | U+EFFFF  | range 15 end
+    29 | U+FFFFF  | range 16 end
+    30 | U+10FFFF | range 17 end / last
+    31 | U+0041   | ASCII anchor A
+    32 | U+005A   | ASCII anchor Z
+    33 | U+0061   | ASCII anchor a
+    34 | U+007F   | UTF-8 1-byte last
+    35 | U+0080   | UTF-8 2-byte first
+    36 | U+07FF   | UTF-8 2-byte last
+    37 | U+0800   | UTF-8 3-byte first
+    38 | U+10000  | range 2 start
+    39 | U+20000  | range 3 start
+    40 | U+F0000  | range 16 start
+    41 | U+100000 | range 17 start
+  (41 rows)
+
+--- what the database default was on both nodes (query 5) -----------------
+   datname  | datlocprovider | datcollate |                        verdict                        
+  ----------+----------------+------------+-------------------------------------------------------
+   postgres | c              | C.UTF-8    | EXPOSED via C.UTF-8, and no collversion can ever warn
+  (1 row)
+
+--- collversion, asserted as expected-NULL (query 4) ----------------------
+Not a mismatch check: a mismatch check can never fire for a C.* name. This
+asserts the blind spot instead, and it held on both nodes.
+
+   collname | collversion | actual | both_null_as_expected 
+  ----------+-------------+--------+-----------------------
+   C.utf8   |             |        | t
+  (1 row)
+  
+    datname  | datcollate | datcollversion | actual | both_null_as_expected 
+  -----------+------------+----------------+--------+-----------------------
+   postgres  | C.UTF-8    |                |        | t
+   template1 | C.UTF-8    |                |        | t
+   template0 | C.UTF-8    |                |        | t
+  (3 rows)

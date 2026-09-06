@@ -99,6 +99,21 @@ effect of installing langpacks. Re-check `rpm -q glibc` afterwards: a
 measurement is bound to the build it ran on, and this is a way to change that
 build without meaning to.
 
+## Which nodes need `glibc-locale-source`
+
+**Both of them**, if you want the file comparisons. `diff_distro_locales.py`
+needs one node's `/usr/share/i18n/locales/`; `diff_node_locales.py` — the only
+check that can see a backported locale such as `C` — needs both. Confirmed
+present on all three fixtures: 355, 356 and 366 files on
+`glibc-2.28-251.el8_10.40`, `glibc-2.34-275.el9_8` and
+`glibc-2.39-128.el10_2`, `localedata/locales/C` among them.
+
+`sql/c_utf8_probe.sql` needs neither langpacks nor that package — `C.utf8`
+exists on every node regardless — but it does need
+`pg_import_system_collations()` after a postmaster restart, like everything
+else here, and it refuses to run rather than silently fall back if the
+collation is missing.
+
 ---
 
 [Documentation index](README.md) ·

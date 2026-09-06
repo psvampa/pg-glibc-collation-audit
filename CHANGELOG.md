@@ -4,6 +4,130 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-07 (sixteenth entry, measured 2026-09-06)
+
+`C.UTF-8` stops being a locale this tool can only warn about. **No verdict
+moved**, but the basis of one did, and one new fact invalidates a conclusion
+people were reasonably drawing.
+
+### What it used to say, and why that was as far as it could go
+
+`docs/limitations.md` opened with *"`C.UTF-8` cannot be audited by this
+method"*, and the README footnote said it was *"not auditable by this method at
+all"*. Both were true of the **tag diff** and were being read as true of the
+project. `localedata/locales/C` exists upstream only from glibc 2.35, RHEL8 and
+RHEL9 both ship a backported copy, so for the pair that matters the file is in
+neither tag — and no choice of tags fixes that. Step 2 named the locale and
+said the clean result meant nothing for it. That was honest and it was all the
+five steps could do.
+
+What was missed is that the file is absent from both tags and **present on both
+nodes**. Comparing the nodes to each other needs no tag at all.
+
+### What changed
+
+- **`scripts/diff_node_locales.py`** — a new comparison, and step 8 of
+  `audit.sh` when both nodes' locale sources are supplied. Node against node,
+  no tag in the middle. It reports every known backported locale whether or not
+  it differs, names which findings exist at neither tag, and reports locales
+  present on only one node. A separate script rather than a flag on
+  `diff_distro_locales.py`: that one asks "is the audit reading what this node
+  runs?", where the node is authoritative and upstream is the reference; this
+  asks "did what the two nodes run actually change?", where both sides are
+  authoritative and the verdict is the delta.
+- **`flag_algorithmic_ranges.py --locales-dir`** — step 4 over a node's own
+  directory, which is the only way it sees a backported locale. It also names
+  the locales declaring `codepoint_collation` instead of leaving them among the
+  unflagged, because cleared and unexamined look identical on a terminal.
+- **`sql/c_utf8_probe.sql`** — the empirical half, and it takes no editing. Its
+  corpus is derived from the rule that changed rather than sampled: every
+  endpoint and every start of every range the backported locale declares, plus
+  the UTF-8 length boundaries, 41 values, asserted as 41 before anything is
+  compared. It carries the **inverted positive control** — for `C.UTF-8`,
+  agreeing with byte order is the fix, not the usual sign that a locale was
+  never generated — and a `strxfrm` check for the third reading, where tied
+  weights are rescued by PostgreSQL's own `strcmp` tie-break.
+- The `docs/limitations.md` heading is now *"`C.UTF-8` is invisible to a tag
+  diff"*, with all six links to the old anchor updated.
+
+### Measured, 2026-09-06
+
+On the three fixtures — `glibc-2.28-251.el8_10.40`, `glibc-2.34-275.el9_8` and
+`glibc-2.39-128.el10_2`, Rocky Linux 8.9 / 9.3 / 10.1, all PostgreSQL 18.6.
+`/usr/share/i18n/locales/C` exists on all three: 355, 356 and 366 files copied
+off, counts asserted on both sides of the transport.
+
+| | RHEL8 | RHEL9 | RHEL10 |
+|---|---|---|---|
+| its `LC_COLLATE` | six **ellipsis ranges**, planes 0/1/2/14/15/16, then `UNDEFINED` | `codepoint_collation` | byte-identical to RHEL9's |
+| step 4 over the node's files | flagged (5th file) | byte order by construction | byte order by construction |
+| `C.utf8` equals byte order? | **no** — 40 of 41 positions differ | yes | yes |
+| `strxfrm` key, U+10000 | `ef85b5` (a weight) | `f0908080` (the UTF-8 bytes) | `f0908080` |
+
+So RHEL8 → RHEL9 **changed** — which the README already said, on an empirical
+four-code-point test — and now the mechanism is accounted for from source: an
+ellipsis range carries no weights, `localedef` computes them, glibc 2.34 took
+the Bug 22668 commit that changed exactly that expansion, and on top of it
+planes 3 through 13 have no range at all in the RHEL8 file, so those code
+points fall to `UNDEFINED`. That is why RHEL8's order is scrambled rather than
+shifted, with ASCII at position 31.
+
+RHEL9 → RHEL10 stays 🟢, and **its basis moved**: it rested on ardentperf's
+checksum and now rests on both nodes' own files being byte-identical and
+byte order by construction, plus a 41-code-point probe returning identical
+output on both. That is a structural statement, not a measurement that came out
+clean.
+
+The node-to-node comparison also reproduced step 2's answer on both pairs by a
+different algorithm — `or_IN`/`sv_SE`, then `ber_DZ`/`kab_DZ`/`th_TH` — which
+is what makes its answer about `C` worth citing. And it found two things no
+step reports, because they are changes to the *set* of locales rather than to
+one: `en_US@ampm` is removed at RHEL9, `aa_ER@saaho` at RHEL10.
+
+### A new fact that invalidates a saved conclusion
+
+**"We are staying on RHEL8, so `C.UTF-8` is fine" was wrong.** Its order also
+changed *within* one major: `glibc-2.28-93.el8` (RHEL 8.2,
+[RHSA-2020:1828](https://access.redhat.com/errata/RHSA-2020:1828), Red Hat bug
+1361965) rewrote those ellipsis expressions and code points above U+10000
+gained weights, growing the compiled locale by 5.3 MiB. The node's own
+changelog says so: `rpm -q --changelog glibc | grep -i collat` prints *"Fix
+C.UTF-8 locale source ellipsis expressions (#1361965)"* on RHEL8, and nothing
+at all on RHEL9 and RHEL10 — from changelogs of 158 and 112 entries, which is
+what that grep is worth.
+
+Both sides of such an upgrade are upstream glibc 2.28, so the tag pair is
+`glibc-2.28..glibc-2.28` and steps 1-5 have nothing to compare. `audit.sh` now
+says so when both tags match, instead of reporting a clean everything.
+
+### What this still does not close
+
+The **order** on RHEL8/RHEL9 is not derivable from source, because `localedef`
+computes those weights at build time. Node-to-node clears the data half only
+and says so in a warning of its own. The compiled locale
+(`/usr/lib/locale/locale-archive`) is still not compared, which would be the
+strictly stronger check and would have caught that 5.3 MiB directly.
+
+### Two things the measurement itself caught
+
+Both are the failure mode this repository exists to prevent, found by running
+the thing rather than by planning it.
+
+- The probe's `DROP TABLE IF EXISTS` emitted a notice **only on the first run
+  on a node**, so running it twice on one node and once on the other made the
+  two outputs differ by a line that has nothing to do with glibc. Notices are
+  now suppressed; errors are not.
+- The test fixture for the backported `C` was written from the Fedora patch's
+  general shape and had one range per plane. The real RHEL8 file has six, and
+  the planes it omits are the entire reason the order was wrong. The fixture is
+  now the file copied off `collaudit8`.
+
+### Not decided here
+
+Whether the summary's node-to-node block should be louder than a `NOT RUN`
+line. It is the only thing standing between a clean-looking summary and a
+reader concluding `C.UTF-8` was covered, and one line may not be enough.
+
 ## 2026-09-07 (fifteenth entry)
 
 A documentation correctness sweep. **No source-level verdict moved**, and no
