@@ -1,6 +1,6 @@
 # Changelog
 
-Findings live in the [README](README.md). This file records what this tool
+Findings live in [docs/results.md](docs/results.md). This file records what this tool
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 

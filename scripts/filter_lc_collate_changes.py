@@ -47,8 +47,8 @@ _HUNK_RE = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@', re.M)
 # which by definition is not in an upstream tag.
 #
 # Keep this minimal: every entry asserts something about what a distro ships,
-# and only C.UTF-8 is measured (RHEL8 and RHEL9 nodes, see README "Known
-# limitations"). Do not add a locale here on the strength of a guess.
+# and only C.UTF-8 is measured (RHEL8 and RHEL9 nodes, see
+# docs/limitations.md). Do not add a locale here on the strength of a guess.
 KNOWN_BACKPORTED = {
     'C': 'C.UTF-8',
 }
@@ -294,8 +294,8 @@ def main(argv):
             f"{locale_name}. PostgreSQL will not cover the gap either -- "
             f"collversion is NULL for every collation whose name starts with "
             f"'C.', so no version mismatch can ever fire. Compare "
-            f"{locale_name} empirically on both nodes. See README, Known "
-            f"limitations.",
+            f"{locale_name} empirically on both nodes. See "
+            f"docs/limitations.md.",
             width=78, initial_indent='!! ', subsequent_indent='   '))
 
     blind_paths = {path for path, _, _ in blind}

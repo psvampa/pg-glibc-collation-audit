@@ -1,5 +1,5 @@
 Worked example output: glibc-2.28 (RHEL8) -> glibc-2.34 (RHEL9)
-Reproduced by running the five scripts in order (see ../README.md).
+Reproduced by running the five scripts in order (see ../README.md, Quickstart).
 Long result lists are written to $PG_GLIBC_AUDIT_OUT (default
 /tmp/pg-glibc-collation-audit/) and referenced, not inlined.
 
@@ -58,8 +58,7 @@ Locale names for step 3:
    audit is blind to it: a clean result above says nothing about C.UTF-8.
    PostgreSQL will not cover the gap either -- collversion is NULL for every
    collation whose name starts with 'C.', so no version mismatch can ever
-   fire. Compare C.UTF-8 empirically on both nodes. See README, Known
-   limitations.
+   fire. Compare C.UTF-8 empirically on both nodes. See docs/limitations.md.
 
 Added at glibc-2.34 (2), not analysed for a change of order. An added file
 cannot affect an existing index ONLY IF the locale did not exist on the old system.
@@ -424,7 +423,7 @@ CHANGED
     2.28:  FFFF, 10FFFF, 007F, 07FF     <- not codepoint order
     2.34:  007F, 07FF, FFFF, 10FFFF
     Not visible to this audit at all: no upstream source file before 2.35.
-    See README, Known limitations.
+    See docs/limitations.md.
 
 UNCHANGED (negative controls -- the audit correctly excludes these)
 
