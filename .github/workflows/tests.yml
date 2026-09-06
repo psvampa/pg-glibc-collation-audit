@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: '3.x'
 
-      # The scripts are stdlib-only by design (README, Requirements). Nothing
+      # The scripts are stdlib-only by design (docs/requirements.md). Nothing
       # is installed here on purpose: if this job ever needs a pip install, the
       # promise broke and the job should be what says so.
 

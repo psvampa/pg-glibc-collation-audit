@@ -5,7 +5,7 @@ python3 -m unittest discover -s tests -t tests          # everything, ~16s
 python3 -m unittest discover -s tests -t tests -q -k pure_functions   # no clone needed
 ```
 
-Stdlib `unittest`, no dependencies — the README promises `python3` (stdlib only),
+Stdlib `unittest`, no dependencies — [docs/requirements.md](../docs/requirements.md) promises `python3` (stdlib only),
 and breaking that would itself be a regression.
 
 Every test freezes a failure this tool actually shipped; the CHANGELOG entry it
@@ -19,7 +19,7 @@ somebody deletes during a refactor.
 | `test_provenance.py` | yes | **that the tags resolve to the pinned commits.** If these fail, every number in `test_known_answers.py` is suspect and a mismatch there must not be read as a code regression |
 | `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, generated locale names, hunk/block overlap, the comment filter |
 | `test_git_helpers.py` | yes | the silent-failure class — code that cannot tell "nothing here" from "could not look" |
-| `test_known_answers.py` | yes | the five steps end to end on both pairs, against the results the README publishes |
+| `test_known_answers.py` | yes | the five steps end to end on both pairs, against the results [docs/results.md](../docs/results.md) publishes |
 
 Without a clone at `scripts/glibc`, the last two **skip with a reason** and the
 first still runs. A skip is never a pass: read what it says.
@@ -37,7 +37,8 @@ prevent.
   check the reasoning applied to glibc's source. They say nothing about the sort
   order a given machine actually produces.
 - **Distro backports are invisible here**, by definition: they are not in the
-  upstream tags the suite reads. See README, *Known limitations*.
+  upstream tags the suite reads. See
+  [docs/limitations.md](../docs/limitations.md).
 - **The pinned numbers are for glibc 2.28, 2.34 and 2.39 only.** Audit a
   different pair and this suite says nothing about that result.
 - **`C.UTF-8` is asserted to be *warned about*, not to be correct.** No test can

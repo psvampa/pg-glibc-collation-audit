@@ -1,5 +1,5 @@
 Worked example output: glibc-2.34 (RHEL9) -> glibc-2.39 (RHEL10)
-Reproduced by running the five scripts in order (see ../README.md).
+Reproduced by running the five scripts in order (see ../README.md, Quickstart).
 
 $ ./audit-locale-diff.sh glibc-2.34 glibc-2.39
 Locale files added, modified or deleted: 318
@@ -57,7 +57,7 @@ Locale names for step 3:
    blind to it: a clean result above says nothing about C.UTF-8. PostgreSQL
    will not cover the gap either -- collversion is NULL for every collation
    whose name starts with 'C.', so no version mismatch can ever fire. Compare
-   C.UTF-8 empirically on both nodes. See README, Known limitations.
+   C.UTF-8 empirically on both nodes. See docs/limitations.md.
 
 Added at glibc-2.39 (10), not analysed for a change of order. An added file
 cannot affect an existing index ONLY IF the locale did not exist on the old system.
