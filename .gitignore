@@ -1,4 +1,4 @@
 scripts/glibc/
 /tmp/
 __pycache__/
-.claude/settings.local.json
+.claude/
