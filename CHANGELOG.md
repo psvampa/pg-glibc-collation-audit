@@ -4,6 +4,62 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-06 (eleventh entry)
+
+### th_TH changes after all, and the second pair finally has a script
+
+**A verdict moved. If you saved a RHEL9-to-RHEL10 result before today, `th_TH`
+was reported 🟡 Unresolved and it is 🔴 Changed.** Indexes on `th_TH` need a
+REINDEX across that upgrade.
+
+The old verdict rested on an empirical sample that was too narrow to reach the
+strings that move, and said so — `docs/results.md` asked for a broader check
+and gave nobody a way to run one, because `examples/` had a confirmation script
+for the first pair and none for the second. That asymmetry was backwards: the
+pair with the open question was the one without a tool.
+
+`examples/rhel9-to-rhel10.sql` is that tool, and running it is what moved the
+verdict.
+
+The strings are derived from the rule that changed rather than sampled, which
+is the difference between this measurement and the one it replaces. The diff
+deletes 220 `collating-element` definitions and adds `copy "iso14651_t1"` plus
+CLDR tailoring; those 220 are exactly the five Thai leading vowels
+(U+0E40..U+0E44) against 44 consonants. A leading vowel is written before its
+consonant but pronounced after, so each pair used to be a single collating
+element sorting at the consonant's position.
+
+Two code points in the consonant range never had such an element — U+0E24 (ฤ)
+and U+0E26 (ฦ), the vowel-like letters — and that asymmetry is exactly where
+the order moves:
+
+```
+glibc 2.34:  ก เก ไก ไก่ ฤ ฦ ฮ เฤ เฦ      <- เฤ/เฦ dangle after the last consonant
+glibc 2.39:  ก เก ไก ไก่ ฤ เฤ ฦ เฦ ฮ      <- each sorts beside its own consonant
+```
+
+Confirmed by direct `strcoll` rather than `ORDER BY` alone, so it cannot be a
+tie-break artifact: `เฤ` > `ฮ` at 2.34 and `เฤ` < `ฮ` at 2.39, likewise `เฦ`.
+
+Measured on freshly deployed Rocky Linux 9.3 (`glibc-2.34-83.el9.7`) and Rocky
+Linux 10.1 (`glibc-2.39-58.el10_1.2`), both PostgreSQL 18.6 — same vendor, same
+image lineage, so the only intended variable is glibc's version. `ber_DZ`,
+`kab_DZ`, `ko_KR`, `en_US`, `de_DE` and `fr_FR` were identical on both nodes,
+which is what makes the `th_TH` difference readable as a finding rather than as
+a broken setup. A positive control confirmed the Thai order differs from `C`
+byte order, so no side had silently fallen back to an ungenerated locale.
+
+Note what did **not** change: no source-level verdict moved. Steps 1 to 3
+flagged `th_TH` on this pair all along, and the audit was right to flag it. What
+was wrong was the empirical note that followed, which read the absence of a
+difference in a narrow sample as evidence there was none.
+
+Two smaller fixes alongside: `examples/rhel8-to-rhel9.sql` pointed at a
+"Worked example" section of the README that moved to `docs/results.md` in the
+documentation split, and the `th_TH` paragraph in
+`examples/rhel9-to-rhel10-audit-output.txt` now records the new measurement
+instead of the superseded one.
+
 ## 2026-09-06 (tenth entry)
 
 ### One command, and the handoff that used to be manual

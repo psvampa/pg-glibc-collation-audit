@@ -138,7 +138,7 @@ clean data diff — is what clears it.
 
 ## Worked example: RHEL9 to RHEL10 (glibc 2.34 to 2.39)
 
-`ber_DZ`, `kab_DZ` and `th_TH` are flagged; only `th_TH` stays unresolved.
+`ber_DZ`, `kab_DZ` and `th_TH` are flagged; `th_TH` changes sort order.
 `ko_KR` is flagged by step 4 and then cleared by step 5.
 
 Full output:
@@ -154,9 +154,30 @@ On inspection, `ber_DZ` and `kab_DZ` turned out to be a
 file — not an actual rule change, confirmed by an empirical test showing no
 observable difference.
 
-`th_TH` is a real rewrite. My own empirical sample showed no difference but
-was narrow, so treat it as a candidate for a broader check on real Thai data,
-**not as cleared**.
+`th_TH` is a real rewrite, and it **does** move sort order — measured on
+2026-09-06, after an earlier narrow sample had left it unresolved.
+
+The diff deletes 220 `collating-element` definitions and replaces them with
+`copy "iso14651_t1"` plus CLDR tailoring. Those 220 are exactly the five Thai
+leading vowels (U+0E40–U+0E44) against 44 consonants. A leading vowel is
+written before its consonant but pronounced after, so each pair used to be one
+collating element sorting at the consonant's position.
+
+Two code points in the consonant range never had such an element: U+0E24 (ฤ)
+and U+0E26 (ฦ), the vowel-like letters — and that asymmetry is where the order
+moves:
+
+```
+glibc 2.34:  ก เก ไก ไก่ ฤ ฦ ฮ เฤ เฦ      <- เฤ/เฦ dangle after the last consonant
+glibc 2.39:  ก เก ไก ไก่ ฤ เฤ ฦ เฦ ฮ      <- each sorts beside its own consonant
+```
+
+Confirmed by direct `strcoll`, not only `ORDER BY`, so it is not a tie-break
+artifact: `เฤ` > `ฮ` at 2.34 and `เฤ` < `ฮ` at 2.39, and likewise for `เฦ`.
+Measured on Rocky Linux 9.3 (`glibc-2.34-83.el9.7`) and Rocky Linux 10.1
+(`glibc-2.39-58.el10_1.2`), both PostgreSQL 18.6, with `ber_DZ`, `kab_DZ`,
+`ko_KR`, `en_US`, `de_DE` and `fr_FR` identical on both nodes as controls.
+Reproduce with [`examples/rhel9-to-rhel10.sql`](../examples/rhel9-to-rhel10.sql).
 
 ### `ko_KR` — how step 5 clears a step-4 locale
 

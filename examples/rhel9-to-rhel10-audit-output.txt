@@ -262,16 +262,25 @@ ko included, are identical between RHEL9 and RHEL10.
 ber_DZ, kab_DZ: identical sort order on both nodes (consistent with the
 role-swap theory above -- no observable difference).
 
-th_TH: real rewrite of dozens of `collating-element` definitions for Thai
-consonant + vowel-before-consonant sequences. My basic sample showed no
-observable difference, but this locale deserves a broader empirical check
-than I ran here before trusting that result for a real workload.
+th_TH: CHANGES. Re-measured 2026-09-06 and the earlier "no observable
+difference" was wrong -- the sample was too narrow to reach the strings that
+move. The rewrite deletes 220 `collating-element` definitions: the five Thai
+leading vowels (U+0E40..U+0E44) against 44 consonants. U+0E24 and U+0E26 never
+had one, and that is where the order moves:
+  glibc 2.34:  ก เก ไก ไก่ ฤ ฦ ฮ เฤ เฦ
+  glibc 2.39:  ก เก ไก ไก่ ฤ เฤ ฦ เฦ ฮ
+Confirmed by direct strcoll, not only ORDER BY: เฤ > ฮ at 2.34, เฤ < ฮ at 2.39.
+Reproduce with ../examples/rhel9-to-rhel10.sql.
 
 ko_KR: identical sort order on both nodes for this pair, now backed by the
 step 5 reasoning above rather than by absence of evidence.
 
 en_US (negative control): identical, as expected.
 
-Note: the empirical lines above were run before the step 5 script existed
-and are carried over unchanged; only the source-level analysis is new. The
-RHEL8-to-RHEL9 example was re-measured end to end on fresh nodes.
+Note: the ber_DZ, kab_DZ, ko_KR and en_US lines above were run before the
+step 5 script existed and are carried over unchanged; only the source-level
+analysis is new. The th_TH line was re-measured on 2026-09-06 on freshly
+deployed Rocky Linux 9.3 (glibc-2.34-83.el9.7) and Rocky Linux 10.1
+(glibc-2.39-58.el10_1.2) nodes, both PostgreSQL 18.6, with the other four
+locales identical on both as controls. The RHEL8-to-RHEL9 example was
+re-measured end to end on fresh nodes.

@@ -5,7 +5,7 @@
 --                  glibc-langpack-de glibc-langpack-fr
 --
 -- Locales under test were chosen from the audit output for this exact pair
--- (see ../README.md "Worked example"):
+-- (see ../docs/results.md, "Worked example: RHEL8 to RHEL9"):
 --   affected:     sv_SE, sv_FI, sv_FI@euro, or_IN
 --   not affected: en_US, de_DE, fr_FR (negative controls)
 
