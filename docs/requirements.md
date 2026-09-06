@@ -103,7 +103,8 @@ build without meaning to.
 
 **Both of them**, if you want the file comparisons. `diff_distro_locales.py`
 needs one node's `/usr/share/i18n/locales/`; `diff_node_locales.py` — the only
-check that can see a backported locale such as `C` — needs both. Confirmed
+check that compares a backported locale such as `C` *between* the two builds —
+needs both. Confirmed
 present on all three fixtures: 355, 356 and 366 files on
 `glibc-2.28-251.el8_10.40`, `glibc-2.34-275.el9_8` and
 `glibc-2.39-128.el10_2`, `localedata/locales/C` among them.

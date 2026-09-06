@@ -15,8 +15,10 @@ otherwise mechanical method.
 ## `C.UTF-8` is invisible to a tag diff
 
 Its source file, `localedata/locales/C`, only exists upstream from glibc
-**2.35**, but RHEL8, RHEL9 and RHEL10 all ship a backported `C.UTF-8` — and it
-**does** change between the first two. Comparing upstream 2.28 and 2.34 cannot see a
+**2.35**. RHEL8 and RHEL9 predate that and **backport** the file; RHEL10 is
+glibc 2.39 and simply has upstream's. So the file is on all three nodes, it is
+in neither tag of the RHEL8→RHEL9 pair, and `C.UTF-8`'s order **does** change
+between those two. Comparing upstream 2.28 and 2.34 cannot see a
 file that is in neither, and no choice of tags fixes that.
 
 What closes it is that the file is absent from both tags and **present on both
@@ -51,8 +53,11 @@ before anything is compared:
 | `glibc-2.34-275.el9_8` | yes | 0 |
 | `glibc-2.39-128.el10_2` | yes | 0 |
 
-On RHEL8 ASCII sorts at position 31, behind every plane-14-to-16
-noncharacter. The RHEL9 and RHEL10 outputs are byte-identical to each other.
+On RHEL8 ASCII sorts at position 31 — behind the last code point of every
+declared range and behind all 22 values from the planes no range declares. Four
+values still sort after it, and this project does not explain why: the *first*
+code point of four declared ranges. The RHEL9 and RHEL10 outputs are
+byte-identical to each other.
 Full output in
 [`examples/c-utf8-probe-rhel8-vs-rhel9.txt`](../examples/c-utf8-probe-rhel8-vs-rhel9.txt)
 and
@@ -173,9 +178,11 @@ something the clone does not have:
 | `flag_algorithmic_ranges.py --locales-dir` — step 4 over a node's own directory | that the node's `C` is ellipsis-based (RHEL8) or byte-order-by-construction (RHEL9, RHEL10). With step 5's Bug 22668 hunk this *derives* the measured inversion instead of only observing it | anything about a build whose `localedef` differs from both tags' |
 | [`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql) — run unedited on both nodes, then `diff` | the order, on the builds actually installed, with the inverted control made mechanical and the tie case ruled out | nothing else: it is one locale, on two nodes |
 
-Both node-reading checks refuse to report rather than report a clean zero: two
-equally truncated directories agree perfectly, and so does one directory
-compared with itself.
+Both node-reading checks refuse to report rather than report a clean zero
+instead: each has an absolute floor on how many files it will accept as a real
+copy, because a truncated directory reports nothing wrong. The node-to-node one
+additionally refuses two directories that resolve to the same path, since
+comparing a tree with itself is flawless and meaningless.
 
 The second one is **not** wired into `audit.sh` — the wrapper always runs step 4
 against the new tag, so run the directory mode by hand, once per node:
@@ -188,7 +195,9 @@ python3 scripts/flag_algorithmic_ranges.py \
 
 `--supported-tag` is optional and maps source file names to the
 [generated names](glossary.md) `locale -a` shows; a node ships no `SUPPORTED`
-file of its own.
+file of its own. Note that passing it is the one thing here that needs the
+glibc clone — without it the scan reads nothing but the directory, and `locale
+-a` on the node is your mapping.
 
 `audit.sh` runs the first as step 8 when given both nodes' directories, and
 when not given them **says so in the summary** rather than omitting the

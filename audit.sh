@@ -16,10 +16,11 @@
 #              [--new-locales-dir DIR --new-build-id NVR]
 #
 # The --*-locales-dir options are optional and read a node's own
-# /usr/share/i18n/locales/. One side adds the distro-versus-upstream check
-# (steps 6, 7); BOTH sides add the node-to-node comparison (step 8), which is
-# the only thing here that can see a locale the distro backports -- C.UTF-8
-# above all. See usage() below and docs/method.md.
+# /usr/share/i18n/locales/. Each side you supply adds the
+# distro-versus-upstream check for that side (step 6 for old, step 7 for new);
+# supplying BOTH additionally runs the node-to-node comparison (step 8), the
+# only thing here that can see a locale the distro backports -- C.UTF-8 above
+# all. See usage() below and docs/method.md.
 #
 # Example (the tags are examples -- run `ldd --version` on each node):
 #   ./audit.sh glibc-2.28 glibc-2.34
@@ -41,9 +42,11 @@ usage() {
   echo "       upstream tag diff structurally cannot see. Needs the node's" >&2
   echo "       build id too: a result is bound to the build it ran on." >&2
   echo >&2
-  echo "       Supply BOTH sides and the run also compares the two nodes to" >&2
-  echo "       each other. That is the only source-level evidence there is" >&2
-  echo "       about C.UTF-8, whose file is in neither tag." >&2
+  echo "       Either side on its own adds that check for that side (step 6" >&2
+  echo "       for old, step 7 for new). Supply BOTH and the run additionally" >&2
+  echo "       compares the two nodes to each other (step 8). That is the only" >&2
+  echo "       source-level evidence there is about C.UTF-8, whose file is in" >&2
+  echo "       neither tag of the RHEL8->RHEL9 pair." >&2
   exit 2
 }
 

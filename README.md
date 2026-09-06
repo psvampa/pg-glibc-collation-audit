@@ -20,11 +20,11 @@ rules that define a locale's sort order did not change, the order cannot have
 changed.
 
 **It is not a single, infallible answer, and does not try to be.** The five
-steps read source, so they cannot see what a machine actually does:
-build-time-computed weights are outside what any diff can settle, and a locale
-your distro adds is in no upstream tag at all. Two optional checks read a real
-node's own files to cover the second of those; nothing covers the first except
-measuring.
+steps read upstream source, so three things sit outside them: the weights
+`localedef` computes at build time, your distro's own patches to the locale
+data, and a locale your distro adds, which is in no upstream tag at all. Two
+optional checks read a real node's own files and cover the second and third.
+Nothing covers the first except measuring on the nodes.
 
 Use it as one input among several, cross-checked against an empirical method
 such as
@@ -75,10 +75,12 @@ pair, as an example:
 It runs the five steps in order, hands each step's result to the next so you
 never retype a locale name, and ends with a consolidated summary.
 
-**Give it both nodes' locale sources and it does more.** With them it also
+**Give it both nodes' locale sources and it does more.** Each side you supply
+adds a check that the node's own files match the tag the audit diffed — your
+distro's patching, which no tag diff can see. Supply **both** and it also
 compares the two nodes to each other, which is the only way to see a locale
-your distro adds — `C.UTF-8` above all, since its source file is in no upstream
-tag before glibc 2.35:
+your distro *adds* — `C.UTF-8` above all, since its source file exists upstream
+only from glibc 2.35 and RHEL8 and RHEL9 predate that:
 
 ```sh
 # on each node: dnf install -y glibc-locale-source, then tar the directory off
@@ -94,8 +96,8 @@ The build ids are required: a result is bound to the build it was taken on, and
 nothing in a directory of locale files carries a version. Without the
 directories the summary says so, in as many words, rather than leaving the
 section out — [`scripts/diff_node_locales.py`](scripts/diff_node_locales.py) is
-the only check that can reach `C.UTF-8`, and its silence must not read as a
-clean result.
+the only thing in the run that looks at that file at all, and its silence must
+not read as a clean result.
 
 That settles whether the two nodes' collation *data* differs. What it cannot
 settle is the resulting *order*, because the weights are computed when the
@@ -123,8 +125,10 @@ is in [docs/method.md](docs/method.md#reading-the-output).
 
 ### Confirm on a real system
 
-A source diff is an argument, not a proof of what actually runs in production,
-and it says nothing about your distro's backports.
+A source diff is an argument, not a proof of what actually runs in production.
+It says nothing about the weights `localedef` computes at build time, and
+nothing about your distro's patches unless you hand the run those two locale
+directories above.
 
 ```sh
 psql -f sql/collation_confirmation_template.sql   # edit placeholders first
@@ -245,7 +249,7 @@ short version:
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t tests   # about a minute
+python3 -m unittest discover -s tests -t tests   # about a minute and a half
 ```
 
 Every test freezes a failure this tool actually shipped, and CI runs the

@@ -69,9 +69,9 @@ words, "in any part of any LC_COLLATE immediately discards all collation
 information and causes the locale to use strcmp/wcscmp for collation
 comparison". A locale that declares it is byte order **by construction**, so no
 change to how `localedef` expands ranges can move it. Upstream's `C` declares
-it from glibc 2.35; RHEL9 and RHEL10 backport that file, RHEL8 ships the older
-ellipsis-based one. It is the whole reason `C.UTF-8` changed across
-RHEL8→RHEL9 and cannot change across RHEL9→RHEL10.
+it from glibc 2.35. RHEL9 backports that file, RHEL10 is glibc 2.39 and has it
+upstream, and RHEL8 ships the older ellipsis-based copy. It is the whole reason
+`C.UTF-8` changed across RHEL8→RHEL9 and cannot change across RHEL9→RHEL10.
 
 **node-to-node comparison** — comparing two nodes' own locale sources against
 each other, with no upstream tag in the middle

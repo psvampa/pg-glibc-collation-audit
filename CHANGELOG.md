@@ -146,11 +146,72 @@ shape on every run, including the RHEL9 → RHEL10 run whose own output reported
 `codepoint_collation` on both nodes a few lines above. That warning is now
 written from what was actually read, and two tests pin it in both directions.
 
+### A second correction pass, and what the first one broke
+
+The pass above was itself re-read. It had introduced a **code regression** and
+five new false statements, which is worth recording plainly: a correction pass
+is not self-verifying, and this one was not.
+
+The regression: making step 8's closing warning conditional split it into "is
+ellipsis-based" and "is not", and the second branch also fired when the
+backported locale could not be compared **at all** — absent from a node, or
+present on only one. So a run against nodes without `glibc-locale-source`
+printed *"this comparison says nothing about C.UTF-8"* and then closed with
+*"the data comparison is the whole story"*. A reassurance printed over an
+absence, which is the precise failure this script exists to remove, introduced
+while fixing a warning that was merely wrong in shape. There are now three
+branches — not-compared, ellipsis-based, neither — the first is checked first
+and independently, and three tests pin it.
+
+The five false statements, all introduced by the correction:
+
+- *"RHEL8, RHEL9 and RHEL10 all ship a backported `C.UTF-8`"*, written into
+  three files while fixing a narrower imprecision. RHEL10 is glibc 2.39 and
+  simply has upstream's copy — as the repo's own step 2 output says
+  (`new UPSTREAM at glibc-2.39`) and its own table says (el10's *absent
+  upstream* column: `none`).
+- *"ASCII sorts at position 31, behind every plane-14-to-16 noncharacter"* —
+  false on the data regenerated in the same commit: two plane-15/16 values sort
+  *after* ASCII, and none of the three named code points is a noncharacter.
+  The identical failure mode the pass congratulated itself for catching.
+- *"a file in neither tag"* and *"in no upstream tree at all"*, about the
+  RHEL9→RHEL10 pair, whose new tag contains the file.
+- Three mutually exclusive *"the only check that…"* claims for one locale.
+
+Also fixed, and left behind rather than introduced: the pre-correction corpus
+rationale was still published on the page that sends a reader to the probe; the
+probe's "exhaustive" claim did not add up to 41 because `U+0000` is absent
+(PostgreSQL `text` cannot hold a NUL) and nothing said so; and one command had
+three different documented runtimes. Every test count is now gone from the
+documentation rather than corrected — a number that cannot be stated cannot go
+stale, and it had already gone stale twice in one day.
+
+### A fourth test that guarded nothing
+
+`dd.warn` wraps at 78 columns, so a phrase of more than a few words is split
+across lines — which makes an `assertNotIn` on such a phrase **pass whether the
+text is there or not**. Two of this pass's own new tests were vacuous that way
+before the assertions were run through a whitespace-collapsing helper, and the
+same defect turned out to be sitting in
+`test_the_false_blanket_claim_is_gone`, from an earlier entry: it asserted
+`'They cannot affect an existing index'` against output that prints *"An added
+file"* / *"cannot affect an existing index ONLY IF…"* across two lines. It
+would have passed if the false blanket claim came back. Now asserted on
+collapsed output, and mutation-checked: restoring the claim fails the test.
+
+That is the fourth test in this suite found to guard nothing. The three earlier
+ones are in the tenth entry.
+
 ### Not decided here
 
 Whether the summary's node-to-node block should be louder than a `NOT RUN`
 line. It is the only thing standing between a clean-looking summary and a
 reader concluding `C.UTF-8` was covered, and one line may not be enough.
+
+And whether the checkable half of all this belongs in the test suite: counts,
+quoted output blocks, and "the only X" claims could be asserted mechanically
+against the scripts rather than re-read by a person. Two correction passes in
+one day is the argument for it; nothing has been built yet.
 
 ## 2026-09-07 (fifteenth entry)
 
@@ -320,7 +381,10 @@ Red Hat-only — in no upstream tag from 2.28 to 2.41 — and nothing in the too
 mentioned it. The script holds the node's copy, so it reads it: a pure `copy` of
 `iso14651_t1`, which was compared and is identical. Nothing is hidden. `C` is
 the opposite: it carries its own tailoring, so it is genuinely unauditable, and
-that is now shown mechanically rather than asserted.
+that is now shown mechanically rather than asserted. *(Superseded on
+2026-09-07 — see the sixteenth entry. It is unauditable against an upstream
+tag, which is what this entry was about, and auditable against the other
+node's copy of the same file, which is what that one added.)*
 
 Two design choices were forced by verification rather than taste, and both were
 silent-false-negative paths:

@@ -8,14 +8,15 @@
 -- Why C.UTF-8 gets its own file:
 --
 --   * The source-diff audit cannot see it. localedata/locales/C exists
---     upstream only from glibc 2.35, while RHEL8, RHEL9 and RHEL10 all ship a
---     BACKPORTED copy -- a file in neither tag of the RHEL8->RHEL9 pair, which
---     no tag-to-tag diff can compare. scripts/diff_node_locales.py compares
---     the two nodes' own copies and settles the DATA; it cannot settle the
---     ORDER wherever that file defines its collation with ellipsis ranges,
---     because localedef computes those weights when the locale is built. RHEL8
---     is such a node; RHEL9 and RHEL10 declare codepoint_collation instead,
---     which is byte order by construction.
+--     upstream only from glibc 2.35. RHEL8 and RHEL9 predate that and
+--     BACKPORT the file, so for the RHEL8->RHEL9 pair it is in neither tag and
+--     no tag-to-tag diff can compare it. (RHEL10 is glibc 2.39 and has
+--     upstream's copy.) scripts/diff_node_locales.py compares the two nodes'
+--     own copies and settles the DATA; it cannot settle the ORDER wherever
+--     that file defines its collation with ellipsis ranges, because localedef
+--     computes those weights when the locale is built. RHEL8 is such a node;
+--     RHEL9 and RHEL10 declare codepoint_collation instead, which is byte
+--     order by construction.
 --
 --   * PostgreSQL cannot warn either. Under the libc provider,
 --     get_collation_actual_version() returns NULL for "C", for "POSIX" and for
@@ -152,6 +153,11 @@ ORDER BY collname;
 --     scrambled rather than merely shifted;
 --   * the UTF-8 length boundaries, plus three ASCII anchors so a human can
 --     read the diff.
+--
+-- One declared endpoint is absent, and it is the only exception: U+0000, plane
+-- 0's first. PostgreSQL `text` cannot hold a NUL byte. That is why the arithmetic
+-- is 11 declared endpoints and not 12: 11 + 22 undeclared-plane values + 5
+-- UTF-8 boundaries + 3 ASCII anchors = 41.
 --
 -- 41 values, asserted below. The plane labels describe THAT file, because that
 -- is what the corpus is derived from; on a node whose C declares

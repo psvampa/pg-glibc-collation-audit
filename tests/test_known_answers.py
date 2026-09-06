@@ -131,10 +131,23 @@ class Step2Filter(StepRun):
                     out, re.compile(r'^!! localedata/locales/C\b', re.M))
 
     def test_the_false_blanket_claim_is_gone(self):
+        """Added files used to be reported as unable to affect an existing
+        index, flat. They can, if the locale existed on the old system --
+        distros backport, which is the whole C.UTF-8 story.
+
+        Asserted on whitespace-collapsed output, and that is the point of this
+        docstring: the claim is printed across two lines, so the original
+        `assertNotIn('They cannot affect an existing index', out)` matched
+        nothing whether the claim was there or not. It guarded the thing it
+        named and would have passed if the claim came back. Found 2026-09-06,
+        the fourth test in this suite caught guarding nothing.
+        """
         for old, new in ((OLD, MID), (MID, NEW)):
             with self.subTest(pair=f'{old}..{new}'):
-                out = self.step('filter_lc_collate_changes.py', old, new)
-                self.assertNotIn('They cannot affect an existing index', out)
+                out = ' '.join(
+                    self.step('filter_lc_collate_changes.py', old, new).split())
+                self.assertIn('cannot affect an existing index ONLY IF', out)
+                self.assertNotIn('cannot affect an existing index.', out)
 
     def test_the_files_with_no_collate_block_are_named_not_just_counted(self):
         """A count alone leaves a reader unable to tell a transliteration

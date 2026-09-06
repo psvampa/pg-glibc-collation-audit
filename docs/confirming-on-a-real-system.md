@@ -1,8 +1,10 @@
 # Confirming on a real system
 
 A source diff is an argument, not a proof of what actually runs in
-production — and it says nothing about your distro's backports. This is the
-step that produces evidence rather than inference, and for `C.UTF-8` it is
+production — and an *upstream* source diff says nothing about your distro's
+patches. The two file comparisons further down this page close that half from
+source; this page's SQL is what produces evidence rather than inference about
+the resulting order, and for `C.UTF-8` it is
 [not optional](limitations.md#cutf-8-is-invisible-to-a-tag-diff).
 
 Before you run it, check the setup traps in
@@ -109,9 +111,11 @@ psql -X -f sql/c_utf8_probe.sql > this-node.out
 Three reasons it is not a section of the template:
 
 - The template is placeholder-driven and *must* be edited before use. This one
-  is fully determined — its corpus is every endpoint of every range the
-  backported locale actually declares, plus the UTF-8 length boundaries, 41
-  values — and must **not** be edited.
+  is fully determined and must **not** be edited. Its corpus is read off the
+  RHEL8 file itself: the first and last code point of every range that file
+  declares, the first and last of every plane it declares **no** range for —
+  those are the ones with no weights at all — and the UTF-8 length boundaries.
+  41 values, asserted as 41 before anything is compared.
 - **The positive control inverts here.** Everywhere else, agreement with
   `LC_ALL=C` means the locale was never generated and the comparison proves
   nothing. For `C.UTF-8`, agreement with byte order is the *fix*: it is what

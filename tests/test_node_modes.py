@@ -44,6 +44,18 @@ def _tree(tag):
     return _TREES[tag]
 
 
+def flat(text):
+    """Output with every run of whitespace collapsed to one space.
+
+    dd.warn wraps at 78 columns, so a phrase of more than a few words is split
+    across lines. Asserting on the raw text makes a POSITIVE assertion brittle
+    and -- far worse -- makes a NEGATIVE one vacuous: `assertNotIn` on a phrase
+    that is always broken up passes whether the warning is printed or not.
+    Caught by exactly that, on 2026-09-06.
+    """
+    return ' '.join(text.split())
+
+
 def run(script, *args, out_dir=None):
     """One script as a subprocess. Returns (exit code, stdout+stderr).
 
@@ -141,7 +153,7 @@ class NodeToNodeSeesWhatNoTagCan(NodeCase):
         self.assertEqual(rc, 0, text)
         self.assertNotIn('C', self.result_names())
         self.assertIn('C (C.UTF-8): present on both nodes, byte-identical', text)
-        self.assertIn('identical data does NOT clear the order', text)
+        self.assertIn('identical data does NOT clear the order', flat(text))
 
     def test_the_ellipsis_shape_is_reported_for_both_sides(self):
         same = backported_c()
@@ -266,6 +278,41 @@ class NodeToNodeRefusesToGuess(NodeCase):
         self.assertEqual(rc, 0, text)
         self.assertIn('a_subdir', text)
 
+    def test_the_caveat_never_reassures_about_a_locale_it_could_not_compare(self):
+        """The regression the conditional warning introduced and this pins shut.
+
+        `computed` is empty both when nothing is ellipsis-based AND when
+        nothing could be compared at all, and collapsing the two printed "the
+        data comparison is the whole story" directly under "this comparison
+        says nothing about C.UTF-8". A reassurance over an absence is the exact
+        false negative this script exists to remove.
+        """
+        # Neither materialised tag has C, so it is absent from both nodes.
+        rc, text = self.node_to_node(self.node(OLD, 'a'), self.node(MID, 'b'),
+                                     'build-A', 'build-B')
+        self.assertEqual(rc, 0, text)
+        self.assertIn('on NEITHER node', flat(text))
+        self.assertNotIn('the data comparison is the whole story', flat(text))
+        self.assertIn('NOT compared by this run', flat(text))
+
+    def test_a_locale_on_one_node_only_is_not_reassured_about_either(self):
+        rc, text = self.node_to_node(
+            self.node(OLD, 'a', extra={'C': backported_c()}),
+            self.node(MID, 'b'), 'build-A', 'build-B')
+        self.assertEqual(rc, 0, text)
+        self.assertIn('present on the old node', flat(text))
+        self.assertNotIn('the data comparison is the whole story', flat(text))
+        self.assertIn('NOT compared by this run', flat(text))
+
+    def test_the_reassuring_branch_fires_only_when_it_was_actually_compared(self):
+        same = upstream_c()
+        rc, text = self.node_to_node(self.node(OLD, 'a', extra={'C': same}),
+                                     self.node(MID, 'b', extra={'C': same}),
+                                     'build-A', 'build-B')
+        self.assertEqual(rc, 0, text)
+        self.assertIn('the data comparison is the whole story', flat(text))
+        self.assertNotIn('NOT compared by this run', flat(text))
+
     def test_the_caveat_does_not_assert_a_shape_it_did_not_see(self):
         """It used to say "C.UTF-8, whose backported source IS built from
         ellipsis ranges" on every run -- including the RHEL9 -> RHEL10 run
@@ -277,9 +324,9 @@ class NodeToNodeRefusesToGuess(NodeCase):
                                      self.node(MID, 'b', extra={'C': same}),
                                      'build-A', 'build-B')
         self.assertEqual(rc, 0, text)
-        self.assertIn('codepoint_collation', text)
-        self.assertNotIn('built from ellipsis ranges', text)
-        self.assertIn('c_utf8_probe.sql', text)
+        self.assertIn('codepoint_collation', flat(text))
+        self.assertNotIn('built from ellipsis ranges', flat(text))
+        self.assertIn('c_utf8_probe.sql', flat(text))
 
     def test_the_caveat_names_the_locale_when_it_IS_ellipsis_based(self):
         rc, text = self.node_to_node(
@@ -288,7 +335,7 @@ class NodeToNodeRefusesToGuess(NodeCase):
             'build-A', 'build-B')
         self.assertEqual(rc, 0, text)
         self.assertIn('C.UTF-8: built from ellipsis ranges on at least one',
-                      text)
+                      flat(text))
 
     def test_the_data_only_caveat_is_printed(self):
         """Data equality is not order equality: Bug 22668 reordered ko_KR from
