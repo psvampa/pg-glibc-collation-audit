@@ -141,3 +141,42 @@ def run_wrapper(*args, out_dir=None, env_extra=None):
     p = subprocess.run([os.path.join(REPO_ROOT, 'audit.sh'), *args],
                        cwd=REPO_ROOT, env=env, capture_output=True)
     return p.returncode, (p.stdout + p.stderr).decode('utf-8', 'replace')
+
+
+# --- fixtures for the one locale that is in no tag ---------------------------
+#
+# C.UTF-8's source file exists upstream only from glibc 2.35, while RHEL8 and
+# RHEL9 ship a backported copy. Two test modules need both shapes, and neither
+# can get the backported one from the clone -- fabricating it is the only way
+# to test the locale this project's first false negative was about.
+
+def locale_file(*body, comment='%'):
+    """A minimal locale source file with an LC_COLLATE block."""
+    return '\n'.join([f'comment_char {comment}', 'escape_char /', '',
+                      'LC_COLLATE', *body, 'END LC_COLLATE', ''])
+
+
+def backported_c():
+    """The shape Fedora's glibc-c-utf8-locale.patch adds as localedata/locales/C.
+
+    One ellipsis range per plane -- 17 of them -- which is why step 4 flags it
+    and why Bug 22668 ("LC_COLLATE: Fix last character ellipsis handling")
+    could move C.UTF-8's order without touching this file.
+    """
+    body = ['order_start forward', '<U0000>', '..', '<UFFFF>']
+    for plane in range(1, 17):
+        body += [f'<U{plane:04X}0000>', '..', f'<U{plane:04X}FFFF>']
+    return locale_file(*body, 'UNDEFINED', 'order_end')
+
+
+def upstream_c():
+    """What upstream replaced all of that with in glibc 2.35.
+
+    The prose above the keyword is quoted from the real file, and is the trap:
+    it names codepoint_collation three lines before declaring it.
+    """
+    return locale_file(
+        "% The keyword 'codepoint_collation' in any part of any LC_COLLATE",
+        '% immediately discards all collation information and causes the',
+        '% locale to use strcmp/wcscmp for collation comparison.',
+        'codepoint_collation')

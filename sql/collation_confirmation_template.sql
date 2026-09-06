@@ -41,6 +41,12 @@
 --     localedata/SUPPORTED says sv_SE.UTF-8 while `locale -a` and
 --     pg_collation both say sv_SE.utf8. COLLATE "sv_SE.UTF-8" does not
 --     exist.
+--   * ONE LOCALE INVERTS THE RULE ABOVE: C.UTF-8. Agreement with LC_ALL=C is
+--     the CORRECT answer there -- it is what the glibc fix produces, and what
+--     upstream's codepoint_collation guarantees from 2.35 on -- so reading
+--     "it agrees with C, therefore it was never generated" is exactly
+--     backwards for that one locale. It has its own script for that reason:
+--     sql/c_utf8_probe.sql. Do not fold it into this one.
 
 SELECT pg_import_system_collations('pg_catalog');
 
@@ -234,8 +240,10 @@ ORDER BY con.conrelid::regclass::text, con.conname;
 -- PG 18). So collversion stays NULL, the
 -- IS DISTINCT FROM never fires, and libc C.UTF-8 -- which the note at the top
 -- of this file explains IS exposed, and which is the default in most
--- containers -- is invisible to both. For C.UTF-8 the empirical ORDER BY
--- comparison above is the only signal you get.
+-- containers -- is invisible to both. For C.UTF-8 use sql/c_utf8_probe.sql:
+-- it takes no editing, its corpus is derived from the ranges the backported
+-- locale actually declares, and it carries the inverted control described in
+-- the notes at the top of this file.
 \echo '--- collversion mismatch, named collations (PostgreSQL 15+) ---'
 SELECT collname, collversion, pg_collation_actual_version(oid) AS actual
 FROM pg_collation

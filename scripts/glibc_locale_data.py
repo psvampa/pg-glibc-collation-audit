@@ -51,6 +51,12 @@ ELLIPSIS_RE = re.compile(r'(?<!\.)\.{2,}')
 # comments are stripped before looking for one.
 _COMMENT_CHAR_RE = re.compile(r'^\s*comment_char\s+(\S)', re.M)
 
+# glibc's own keyword for "this locale sorts by code point, full stop"
+# (locale/programs/ld-collate.c). Present in upstream's C from 2.35 on, and the
+# thing that makes C.UTF-8 immovable from that release forward. Matched as a
+# whole token because the file that declares it also DISCUSSES it in a comment.
+_CODEPOINT_RE = re.compile(r'(?<![A-Za-z0-9_])codepoint_collation(?![A-Za-z0-9_])')
+
 _COLLATE_BLOCK_RE = re.compile(r'\nLC_COLLATE\b(.*?)\nEND LC_COLLATE', re.S)
 _COPY_RE = re.compile(r'^\s*copy\s+"([^"]+)"', re.M)
 
@@ -327,6 +333,25 @@ def collate_bounds(text):
     return (start, len(lines)) if start is not None else None
 
 
+def collate_text(text):
+    """The LC_COLLATE block as text, its header and footer lines included.
+
+    Sliced from collate_bounds' line numbers rather than taken from
+    collate_block: that regex requires a newline before LC_COLLATE, so a file
+    beginning with LC_COLLATE at byte 0 returns None from it. glibc 2.23 and
+    earlier write the three master templates exactly that way, so using
+    collate_block here would silently file iso14651_t1_common -- the highest
+    fan-in file in the corpus -- under "no block at all".
+
+    Lived in diff_distro_locales.py until three callers needed it.
+    """
+    bounds = collate_bounds(text)
+    if bounds is None:
+        return None
+    start, end = bounds
+    return '\n'.join(text.split('\n')[start - 1:end])
+
+
 def ellipsis_hits(block, comment_char='%'):
     """Lines of an LC_COLLATE block that use an algorithmic ellipsis range.
 
@@ -355,20 +380,96 @@ def copy_targets(text):
     return _COPY_RE.findall(block) if block else []
 
 
-def build_copy_graph(repo, tag):
-    """{locale_name: [copy targets]} for every locale with an LC_COLLATE block.
+def classify_collation_style(text):
+    """How does this locale's LC_COLLATE define its order? One of:
 
-    Locales with no `copy` map to an empty list, so the graph doubles as the
-    set of names that define collation at this tag.
+      'none'      -- no LC_COLLATE block; no sort order of its own
+      'codepoint' -- declares `codepoint_collation`. Byte order by
+                     construction, and nothing localedef does to ranges can
+                     move it. Upstream's C is this from glibc 2.35 on.
+      'ellipsis'  -- uses ellipsis ranges, whose weights localedef computes at
+                     build time, so a data diff can never clear it. RHEL8's and
+                     RHEL9's BACKPORTED C is this -- which is why C.UTF-8's
+                     order moved between them from a file no tag diff can see.
+      'copy-only' -- nothing but `copy`; its order is whatever it inherits
+      'explicit'  -- the weights are spelled out in this file
+
+    Precedence is deliberate. `codepoint_collation` "in any part of any
+    LC_COLLATE immediately discards all collation information" (glibc's own
+    comment), so it outranks an ellipsis in the same block; and 'ellipsis'
+    outranks 'copy-only' because a copy cannot undo a range this file declares.
+
+    Comments are stripped first and the keyword is matched as a whole token.
+    glibc-2.39:localedata/locales/C names `codepoint_collation` in prose three
+    lines ABOVE the declaration -- "The keyword 'codepoint_collation' in any
+    part of any LC_COLLATE..." -- so a substring search reads that comment as a
+    declaration. Which direction that fails in is what makes it worth a test:
+    it would report an ellipsis-based backport as byte order, i.e. clear the
+    one locale this whole classification exists to catch.
     """
-    paths = list_locale_files(repo, tag)
-    contents = read_blobs_strict(repo, tag, paths, 'the LC_COLLATE copy graph')
+    block = collate_text(text)
+    if block is None:
+        return 'none'
+    cc = comment_char(text)
+    body = [line.split(cc)[0] for line in block.split('\n')
+            if not line.startswith(('LC_COLLATE', 'END LC_COLLATE'))]
+    if any(_CODEPOINT_RE.search(line) for line in body):
+        return 'codepoint'
+    if any(ELLIPSIS_RE.search(line) for line in body):
+        return 'ellipsis'
+    content = [line.strip() for line in body if line.strip()]
+    if content and all(line.startswith('copy') for line in content):
+        return 'copy-only'
+    return 'explicit'
+
+
+def scan_ellipsis(texts):
+    """({name: [hit lines]}, how many of `texts` define LC_COLLATE).
+
+    Pure and shared, so a scan of a git tag and a scan of a node's
+    /usr/share/i18n/locales/ cannot drift on comment_char handling.
+
+    Uses collate_text, not collate_block: see collate_text. In a tag scan the
+    difference is nil (every file from 2.24 on opens with escape_char), but a
+    node directory holds arbitrary distro files, and there the regex's blind
+    spot would clear a template rather than flag it.
+    """
+    flagged, with_collate = {}, 0
+    for name, text in texts.items():
+        block = collate_text(text)
+        if block is None:
+            continue
+        with_collate += 1
+        hits = ellipsis_hits(block, comment_char(text))
+        if hits:
+            flagged[name] = hits
+    return flagged, with_collate
+
+
+def copy_graph_from_texts(texts):
+    """{name: [copy targets]} for every entry of `texts` defining LC_COLLATE.
+
+    Pure, so the graph can be built from a git tag (build_copy_graph) or from a
+    directory of locale sources with one implementation. Keys are used
+    verbatim: pass the names the caller wants to see, not paths.
+
+    Locales with no `copy` map to an empty list, so the graph doubles as the set
+    of names that define collation in this corpus.
+    """
     graph = {}
-    for path, text in contents.items():
+    for name, text in texts.items():
         if collate_block(text) is None:
             continue
-        graph[os.path.basename(path)] = copy_targets(text)
+        graph[name] = copy_targets(text)
     return graph
+
+
+def build_copy_graph(repo, tag):
+    """copy_graph_from_texts over every locale file at `tag`."""
+    paths = list_locale_files(repo, tag)
+    contents = read_blobs_strict(repo, tag, paths, 'the LC_COLLATE copy graph')
+    return copy_graph_from_texts(
+        {os.path.basename(path): text for path, text in contents.items()})
 
 
 def inherited_from(graph, roots):

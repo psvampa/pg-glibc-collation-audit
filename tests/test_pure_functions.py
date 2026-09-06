@@ -4,9 +4,12 @@ Every case here freezes a failure this tool actually shipped. The CHANGELOG
 entry each one guards is quoted in its docstring, because a test whose purpose
 is forgotten is a test somebody deletes during a refactor.
 """
+import os
+import shutil
+import tempfile
 import unittest
 
-import _harness  # noqa: F401  -- puts scripts/ on sys.path
+import _harness  # also puts scripts/ on sys.path
 
 import glibc_locale_data as g
 import diff_collation_code as d
@@ -461,3 +464,204 @@ class DistroDiff(unittest.TestCase):
         self.assertEqual(up.decode('utf-8', 'replace'),
                          node.decode('utf-8', 'replace'))   # the trap itself
         self.assertNotEqual(dd.classify_distro_diff(node, up), 'identical')
+
+
+class CollationStyle(unittest.TestCase):
+    """"Printed C.UTF-8 under 'cannot affect an existing index', then said
+    nothing about it at all on the other pair" -- false negative #1, and the
+    only one of the six the method could not see at all: the file is in
+    neither tag. classify_collation_style is what turns the hand-written
+    C.UTF-8 story into something the tool decides."""
+
+    def test_the_backported_C_is_ellipsis_based(self):
+        """RHEL8's and RHEL9's C: one ellipsis range per plane, so localedef
+        computes every weight and a data diff can never clear it."""
+        text = _harness.backported_c()
+        self.assertEqual(g.classify_collation_style(text), 'ellipsis')
+        self.assertEqual(len(g.ellipsis_hits(g.collate_text(text))), 17)
+
+    def test_the_2_35_C_is_byte_order_by_construction(self):
+        self.assertEqual(g.classify_collation_style(_harness.upstream_c()),
+                         'codepoint')
+
+    def test_the_word_in_a_comment_is_not_a_declaration(self):
+        """glibc-2.39:localedata/locales/C names codepoint_collation in prose
+        three lines ABOVE the keyword. A substring search reads that comment as
+        a declaration -- and would then report an ellipsis-based backport as
+        byte order, clearing the one locale this exists to catch."""
+        prose = collate(
+            "% The keyword 'codepoint_collation' in any part of any LC_COLLATE",
+            '% immediately discards all collation information.',
+            '<U0000>', '..', '<U10FFFF>')
+        self.assertEqual(g.classify_collation_style(prose), 'ellipsis')
+
+    def test_a_declared_comment_char_is_honoured(self):
+        text = '\n'.join(['comment_char #', '', 'LC_COLLATE',
+                          '# codepoint_collation is only discussed here',
+                          '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
+                          'END LC_COLLATE', ''])
+        self.assertEqual(g.classify_collation_style(text), 'explicit')
+
+    def test_a_longer_word_ending_in_the_keyword_is_not_the_keyword(self):
+        self.assertEqual(
+            g.classify_collation_style(collate('no_codepoint_collation')),
+            'explicit')
+
+    def test_codepoint_outranks_an_ellipsis_in_the_same_block(self):
+        """glibc: the keyword "in any part of any LC_COLLATE immediately
+        discards all collation information", so it cannot be outvoted by a
+        range sitting beside it."""
+        both = collate('codepoint_collation', '<U0000>', '..', '<U10FFFF>')
+        self.assertEqual(g.classify_collation_style(both), 'codepoint')
+
+    def test_copy_only_and_explicit_are_distinguished(self):
+        self.assertEqual(g.classify_collation_style(collate('copy "iso14651_t1"')),
+                         'copy-only')
+        self.assertEqual(
+            g.classify_collation_style(collate('<U0041> <U0041>;IGNORE')),
+            'explicit')
+
+    def test_no_block_is_none(self):
+        self.assertEqual(g.classify_collation_style('LC_TIME\nEND LC_TIME\n'),
+                         'none')
+
+
+class ScanEllipsis(unittest.TestCase):
+    """Shared by the tag scan and the node-directory scan, so the two cannot
+    drift on comment_char handling."""
+
+    def test_it_counts_only_files_with_a_block(self):
+        texts = {'C': _harness.backported_c(),
+                 'plain': collate('<U0041> <U0041>'),
+                 'no_collate': 'LC_TIME\nEND LC_TIME\n'}
+        flagged, with_collate = g.scan_ellipsis(texts)
+        self.assertEqual(sorted(flagged), ['C'])
+        self.assertEqual(with_collate, 2)
+
+    def test_a_block_on_the_first_line_is_still_scanned(self):
+        """collate_block's regex needs a newline before LC_COLLATE and returns
+        None for a file that opens with it -- the glibc <=2.23 shape. In a
+        directory scan the files are arbitrary distro files, so that blind spot
+        would CLEAR a template instead of flagging it."""
+        text = 'LC_COLLATE\n<U0000>\n..\n<U10FFFF>\nEND LC_COLLATE\n'
+        self.assertIsNone(g.collate_block(text))          # the trap itself
+        flagged, with_collate = g.scan_ellipsis({'iso14651_t1_common': text})
+        self.assertEqual(sorted(flagged), ['iso14651_t1_common'])
+        self.assertEqual(with_collate, 1)
+
+
+class CopyGraphFromTexts(unittest.TestCase):
+    """"Discarded unreadable blobs, silently shrinking the copy graph" --
+    false negative #3. The graph is now built by one pure function whether the
+    corpus came from a tag or from a node's directory."""
+
+    def test_a_graph_from_texts_matches_the_shape_build_copy_graph_returns(self):
+        texts = {'a': collate('copy "b"'),
+                 'b': collate('<U0041> <U0041>'),
+                 'c': 'LC_TIME\nEND LC_TIME\n'}
+        self.assertEqual(g.copy_graph_from_texts(texts), {'a': ['b'], 'b': []})
+
+    def test_a_node_only_file_participates_as_a_root(self):
+        """C is in no tag, so at a tag it can be neither a root nor a target.
+        Over a node's own corpus it is both."""
+        texts = {'C': _harness.backported_c(), 'zz_MADEUP': collate('copy "C"')}
+        graph = g.copy_graph_from_texts(texts)
+        self.assertEqual(g.inherited_from(graph, {'C'}), {'zz_MADEUP': ['C']})
+
+
+class NodeToNodeClassification(unittest.TestCase):
+    """classify_distro_diff, reused unchanged for two nodes. Only the labels
+    the caller puts on the sides change."""
+
+    def test_a_block_on_one_node_only_is_a_collate_finding(self):
+        with_block = collate('<U0041> <U0041>').encode()
+        without = b'comment_char %\nLC_TIME\nEND LC_TIME\n'
+        self.assertEqual(dd.classify_distro_diff(with_block, without), 'collate')
+        self.assertEqual(dd.classify_distro_diff(without, with_block), 'collate')
+
+    def test_it_is_symmetric(self):
+        a = collate('<U0041> <U0041>').encode()
+        b = collate('<U0042> <U0042>').encode()
+        self.assertEqual(dd.classify_distro_diff(a, b),
+                         dd.classify_distro_diff(b, a))
+
+    def test_a_non_utf8_difference_INSIDE_the_block_is_a_collate_finding(self):
+        """The existing bytes-not-text test puts the differing byte after END
+        LC_COLLATE, so it can only assert "not identical". Inside the block the
+        claim is stronger: a lossy decode would collapse both to U+FFFD, the
+        blocks would compare equal, and the verdict would drop from 'collate'
+        to 'other' -- a real sort-order change filed as a comment change."""
+        base = collate('<U0041> <U0041>;IGNORE % X')
+        a = base.replace('X', 'é').encode('latin-1')
+        b = base.replace('X', 'ü').encode('latin-1')
+        self.assertEqual(a.decode('utf-8', 'replace'),
+                         b.decode('utf-8', 'replace'))     # the trap itself
+        self.assertEqual(dd.classify_distro_diff(a, b), 'collate')
+
+
+class CorpusGuard(unittest.TestCase):
+    """"A half-copied directory would report '12 compared, 0 inside
+    LC_COLLATE', which is indistinguishable from a clean result." Pure, so
+    both truncation guards are checked with integers instead of a fabricated
+    directory."""
+
+    def test_expect_files_mismatch_is_refused(self):
+        self.assertIsNotNone(dd.corpus_problem(350, expect_files=353))
+
+    def test_a_short_corpus_against_an_upstream_reference_is_refused(self):
+        self.assertIsNotNone(dd.corpus_problem(3, reference=353))
+
+    def test_two_equally_truncated_sides_are_still_refused(self):
+        """The trap node-to-node adds and node-vs-tag never had: with no
+        upstream side there is nothing to take half of, three files intersect
+        three files, and every one of them is identical. An absolute floor is
+        the only thing standing between that and a flawless clean upgrade."""
+        self.assertIsNone(dd.corpus_problem(3))
+        self.assertIsNotNone(dd.corpus_problem(3, floor=dd.DEFAULT_MIN_FILES))
+
+    def test_a_real_corpus_passes_every_guard(self):
+        self.assertIsNone(dd.corpus_problem(353, expect_files=353,
+                                            reference=355,
+                                            floor=dd.DEFAULT_MIN_FILES))
+
+    def test_the_message_says_why_it_refuses(self):
+        for problem in (dd.corpus_problem(3, reference=353),
+                        dd.corpus_problem(3, floor=200)):
+            self.assertIn('indistinguishable from a clean run', problem)
+
+
+class SameTreeAndManifest(unittest.TestCase):
+    """Comparing a directory with itself, or two copies of one tar, reports
+    100% identical -- the most reassuring output the tool can print."""
+
+    def setUp(self):
+        self.base = tempfile.mkdtemp(prefix='pg-glibc-sametree-')
+        self.addCleanup(shutil.rmtree, self.base, ignore_errors=True)
+
+    def _dir(self, name, files=()):
+        path = os.path.join(self.base, name)
+        os.mkdir(path)
+        for fname, body in files:
+            with open(os.path.join(path, fname), 'w', encoding='utf-8') as fh:
+                fh.write(body)
+        return path
+
+    def test_the_same_directory_under_two_names_is_detected(self):
+        real = self._dir('real')
+        link = os.path.join(self.base, 'link')
+        os.symlink(real, link)
+        self.assertTrue(dd.same_tree(real, link))
+        self.assertTrue(dd.same_tree(real, os.path.join(real, '.')))
+        self.assertFalse(dd.same_tree(real, self._dir('other')))
+
+    def test_two_identical_trees_share_a_fingerprint(self):
+        files = (('C', _harness.backported_c()), ('en_US', collate('copy "x"')))
+        a, b = self._dir('a', files), self._dir('b', files)
+        self.assertEqual(dd.tree_manifest(a, ['C', 'en_US'])[2],
+                         dd.tree_manifest(b, ['C', 'en_US'])[2])
+
+    def test_a_different_size_changes_the_fingerprint(self):
+        a = self._dir('a', (('C', _harness.backported_c()),))
+        b = self._dir('b', (('C', _harness.upstream_c()),))
+        self.assertNotEqual(dd.tree_manifest(a, ['C'])[2],
+                            dd.tree_manifest(b, ['C'])[2])

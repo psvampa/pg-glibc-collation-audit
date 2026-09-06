@@ -16,7 +16,11 @@ import shutil
 import tempfile
 import unittest
 
-from _harness import MID, NEW, OLD, needs_clone, run_wrapper
+from _harness import (MID, NEW, OLD, backported_c, needs_clone,
+                      run_wrapper, upstream_c)
+
+import diff_distro_locales as dd
+from _harness import GLIBC_CLONE
 
 
 def pair_slug(old, new):
@@ -98,6 +102,17 @@ class Wrapper(unittest.TestCase):
         self.assertNotIn('python3 flag_algorithmic_ranges.py glibc-2.34\n',
                          self.out)
 
+    def test_summary_says_node_to_node_was_NOT_RUN(self):
+        """Absent is not empty, at the summary level.
+
+        Without node directories nothing in the whole audit says anything
+        about C.UTF-8 -- its source file is in neither tag and its collversion
+        is always NULL. A summary that simply omits the section reads exactly
+        like one that cleared it, which is false negative #1 in a new costume.
+        """
+        self.assertIn('-- Node-to-node locale data: NOT RUN', self.out)
+        self.assertIn('C.UTF-8', self.out)
+
 
 @needs_clone
 class WrapperEmptyPair(unittest.TestCase):
@@ -151,6 +166,16 @@ class WrapperEmptyPair(unittest.TestCase):
         self.assertTrue(os.path.exists(path), self.out)
         with open(path, encoding='utf-8') as fh:
             self.assertEqual(fh.read().strip(), '')
+
+    def test_one_tag_compared_with_itself_says_nothing_was_compared(self):
+        """An intra-major upgrade -- RHEL 8.1 -> 8.10 -- is two builds of one
+        upstream release, so the tag pair is 2.28..2.28 and steps 1-5 are
+        structurally empty. C.UTF-8's order moved across exactly such a bump
+        (glibc-2.28-93.el8), so "nothing changed" here must not read as a
+        clean result."""
+        self.assertIn('are the same tag', self.out)
+        self.assertIn('-- One tag, compared with itself', self.out)
+        self.assertIn("means", self.out)
 
 
 @needs_clone
@@ -217,6 +242,91 @@ class WrapperRefusesBadInput(unittest.TestCase):
         rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir)
         self.assertEqual(rc, 0, out)
         self.assertNotIn('no_SUCH_locale', out)
+
+
+@needs_clone
+class WrapperNodeToNode(unittest.TestCase):
+    """Step 8, driven by the wrapper. Two materialised tags stand in for the
+    two nodes, and the backported C is written into them -- it exists at no
+    tag, which is the entire point of the step."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-nodes-')
+        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-trees-')
+        cls.old_root = dd.materialise_tag(GLIBC_CLONE, OLD,
+                                          os.path.join(cls.nodes, 'a'))
+        cls.new_root = dd.materialise_tag(GLIBC_CLONE, MID,
+                                          os.path.join(cls.nodes, 'b'))
+        for root, body in ((cls.old_root, backported_c()),
+                           (cls.new_root, upstream_c())):
+            with open(os.path.join(root, 'C'), 'w', encoding='utf-8') as fh:
+                fh.write(body)
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID,
+            '--old-locales-dir', cls.old_root, '--old-build-id', 'build-old',
+            '--new-locales-dir', cls.new_root, '--new-build-id', 'build-new',
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    def test_it_runs_and_logs_as_step_8(self):
+        self.assertEqual(self.rc, 0, self.out)
+        self.assertIn('NODE TO NODE', self.out)
+        self.assertTrue(os.path.exists(os.path.join(
+            self.out_dir, f'step8.{pair_slug(OLD, MID)}.log')), self.out)
+
+    def test_the_summary_names_C_UTF_8_as_differing(self):
+        """The payoff line: a verdict on the one locale no other step sees."""
+        self.assertIn('C (C.UTF-8): DIFFERS', self.out)
+        self.assertIn('no other step sees it', self.out)
+
+    def test_the_count_excludes_the_provenance_header(self):
+        """count_lines would have counted the leading `#` line, reporting one
+        finding where there are none."""
+        path = os.path.join(self.out_dir,
+                            'node_collate_diffs.build-old..build-new.txt')
+        with open(path, encoding='utf-8') as fh:
+            names = [ln for ln in fh if ln.strip()
+                     and not ln.startswith('#')]
+        self.assertIn(f'{len(names)} locale(s) differ inside LC_COLLATE',
+                      self.out)
+
+    def test_the_same_caveat_from_three_steps_is_printed_once(self):
+        """Steps 6, 7 and 8 all close with the charmaps caveat. Repeating it
+        three times in the summary trains the reader to skip the section,
+        which costs more than the repetition buys."""
+        block = 'localedata/charmaps/ is NOT compared'
+        summary = self.out.split('-- Warnings the clean results above')[-1]
+        self.assertEqual(summary.count(block), 1, summary)
+
+
+@needs_clone
+class WrapperStaleNodeList(unittest.TestCase):
+    """Its own output directory: this run deliberately leaves the state the
+    other node-to-node tests read in a different one."""
+
+    def test_a_stale_node_to_node_file_is_not_summarised(self):
+        """Same invariant as the step 3 list: every file the summary reads was
+        written by this run. Build ids with no directories still set the path,
+        so the stale file is removed up front and the summary must fall back
+        to NOT RUN rather than reporting a previous pair's finding."""
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-stale-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        stale = os.path.join(out_dir,
+                             'node_collate_diffs.build-old..build-new.txt')
+        with open(stale, 'w', encoding='utf-8') as fh:
+            fh.write('no_SUCH_locale\n')
+        rc, out = run_wrapper(NEW, NEW,
+                              '--old-build-id', 'build-old',
+                              '--new-build-id', 'build-new',
+                              out_dir=out_dir)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('no_SUCH_locale', out)
+        self.assertIn('-- Node-to-node locale data: NOT RUN', out)
 
 
 if __name__ == '__main__':

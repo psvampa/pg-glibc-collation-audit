@@ -28,6 +28,8 @@ Example:
       --locales-dir ./el8-locales --build-id glibc-2.28-251.el8_10.40
 """
 import argparse
+import difflib
+import hashlib
 import os
 import re
 import subprocess
@@ -43,22 +45,17 @@ import glibc_locale_data as g
 # this decision for the same reason.
 SAFE_NAME = re.compile(r'^[A-Za-z0-9_@.+-]+$')
 
+# Several hundred files ship in glibc-locale-source; the three measured RHEL
+# corpora are 353, 355 and 366. A floor well below all of them still catches a
+# `docker cp` that landed three files, or a node without the package at all.
+# Used where there is no upstream side to take half of -- see corpus_problem.
+DEFAULT_MIN_FILES = 200
 
-def collate_text(text):
-    """The LC_COLLATE block as text, or None.
 
-    Sliced from collate_bounds' line numbers rather than taken from
-    collate_block: that regex requires a newline before LC_COLLATE, so a file
-    beginning with LC_COLLATE at byte 0 returns None from it. glibc 2.23 and
-    earlier write the three master templates exactly that way, so using
-    collate_block here would silently file iso14651_t1_common -- the highest
-    fan-in file in the corpus -- under "no block on either side".
-    """
-    bounds = g.collate_bounds(text)
-    if bounds is None:
-        return None
-    start, end = bounds
-    return '\n'.join(text.split('\n')[start - 1:end])
+# Moved to glibc_locale_data once step 4's directory mode and
+# diff_node_locales.py needed the same slicer. Re-exported under its old name:
+# it is what this module's docstrings and tests call it.
+collate_text = g.collate_text
 
 
 def classify_distro_diff(node_bytes, upstream_bytes):
@@ -141,6 +138,110 @@ def node_entries(root):
     return names, skipped
 
 
+def compare_trees(root_a, root_b, names, label_a='a', label_b='b'):
+    """classify_distro_diff over two directories of locale sources.
+
+    Returns (buckets, side, texts):
+      buckets  {verdict: [name]} using classify_distro_diff's four verdicts
+      side     for every 'collate' name, which side carries a block --
+               '<label_a> only' / '<label_b> only' / 'both, differing'
+      texts    the decoded pair for those same names, so the caller can show
+               the diff without opening and decoding both files a second time,
+               which is what the printing loop used to do
+
+    The labels are the caller's because the two questions are differently
+    shaped: here it is a node against an upstream tag, in diff_node_locales.py
+    it is one build against another.
+    """
+    buckets = {'identical': [], 'collate': [], 'other': [], 'no-collate': []}
+    side, texts = {}, {}
+    for name in names:
+        with open(os.path.join(root_a, name), 'rb') as fh:
+            raw_a = fh.read()
+        with open(os.path.join(root_b, name), 'rb') as fh:
+            raw_b = fh.read()
+        verdict = classify_distro_diff(raw_a, raw_b)
+        buckets[verdict].append(name)
+        if verdict == 'collate':
+            text_a = raw_a.decode('utf-8', 'surrogateescape')
+            text_b = raw_b.decode('utf-8', 'surrogateescape')
+            block_a, block_b = collate_text(text_a), collate_text(text_b)
+            side[name] = (f'{label_a} only' if block_b is None else
+                          f'{label_b} only' if block_a is None else
+                          'both, differing')
+            texts[name] = (text_a, text_b)
+    return buckets, side, texts
+
+
+def collate_diff_lines(text_a, text_b, label_a, label_b, limit=24):
+    """A truncated unified diff of two files' LC_COLLATE blocks."""
+    block_a = collate_text(text_a) or ''
+    block_b = collate_text(text_b) or ''
+    return list(difflib.unified_diff(block_a.split('\n'), block_b.split('\n'),
+                                     label_a, label_b, lineterm='',
+                                     n=1))[:limit]
+
+
+def corpus_problem(compared, expect_files=None, reference=None, floor=None,
+                   what='--locales-dir'):
+    """Why this corpus must not be reported on, or None if it is usable.
+
+    Pure -- counts in, a message or None out -- so the guard that decides
+    whether a whole result is publishable is testable without fabricating a
+    directory. Every branch exists because its failure mode reports ZERO
+    differences inside LC_COLLATE, which is indistinguishable from a clean run.
+
+    `reference` is an upstream file count, for a node compared against a tag.
+    `floor` is an absolute minimum, for a comparison with no reference side at
+    all: two equally truncated directories agree perfectly, and half of three
+    is one.
+    """
+    if expect_files is not None and compared != expect_files:
+        return (f"compared {compared} file(s), expected {expect_files}. "
+                f"Refusing to report: a partial copy of the node's locales "
+                f"yields a clean-looking zero.")
+    if reference is not None and compared < reference // 2:
+        return (f"only {compared} of {reference} upstream file(s) are present "
+                f"in {what}. That is too few to be a real copy; a partial copy "
+                f"reports 0 differences inside LC_COLLATE, which is "
+                f"indistinguishable from a clean run.")
+    if floor is not None and compared < floor:
+        return (f"only {compared} file(s) to compare in {what}, below the floor "
+                f"of {floor}. glibc-locale-source ships several hundred; this "
+                f"is a truncated copy or a node without the package. Refusing "
+                f"to report: too few files reports 0 differences inside "
+                f"LC_COLLATE, which is indistinguishable from a clean run.")
+    return None
+
+
+def tree_manifest(root, names):
+    """(file count, total bytes, short sha256) over the sorted name/size list.
+
+    A fingerprint per side. Two sides whose fingerprints match while their
+    build ids differ means one directory was copied twice, or one tar was
+    extracted over the other -- a transport error that otherwise prints as
+    100% identical, the most reassuring output this tool can produce.
+    """
+    digest = hashlib.sha256()
+    total = 0
+    for name in sorted(names):
+        size = os.path.getsize(os.path.join(root, name))
+        total += size
+        digest.update(f'{name}:{size}\n'.encode())
+    return len(names), total, digest.hexdigest()[:12]
+
+
+def same_tree(path_a, path_b):
+    """Do these two arguments name the same directory?
+
+    Comparing a directory with itself yields a flawless clean result, so it is
+    checked rather than trusted. Symlinks resolved: the recorded transport is a
+    tar unpacked into a temp dir, and a stale symlink between two of them is
+    exactly how this happens by accident.
+    """
+    return os.path.realpath(path_a) == os.path.realpath(path_b)
+
+
 def warn(text):
     print(textwrap.fill(text, width=78,
                         initial_indent='!! ', subsequent_indent='   '))
@@ -191,30 +292,14 @@ def main(argv):
         absent_on_node = sorted(up_names - set(names))
 
         # A truncated copy is the failure mode that looks like success.
-        if opts.expect_files is not None and len(both) != opts.expect_files:
-            g.die(f"compared {len(both)} file(s), expected "
-                  f"{opts.expect_files}. Refusing to report: a partial copy of "
-                  f"the node's locales yields a clean-looking zero.")
-        if len(both) < len(up_names) // 2:
-            g.die(f"only {len(both)} of {len(up_names)} upstream file(s) are "
-                  f"present in --locales-dir. That is too few to be a real "
-                  f"copy; a partial copy reports 0 differences inside "
-                  f"LC_COLLATE, which is indistinguishable from a clean run.")
+        problem = corpus_problem(len(both), expect_files=opts.expect_files,
+                                 reference=len(up_names))
+        if problem:
+            g.die(problem)
 
-        buckets = {'identical': [], 'collate': [], 'other': [], 'no-collate': []}
-        side = {}
-        for n in both:
-            with open(os.path.join(opts.locales_dir, n), 'rb') as fh:
-                node_bytes = fh.read()
-            with open(os.path.join(up_root, n), 'rb') as fh:
-                up_bytes = fh.read()
-            verdict = classify_distro_diff(node_bytes, up_bytes)
-            buckets[verdict].append(n)
-            if verdict == 'collate':
-                nb = collate_text(node_bytes.decode('utf-8', 'surrogateescape'))
-                ub = collate_text(up_bytes.decode('utf-8', 'surrogateescape'))
-                side[n] = ('node only' if ub is None else
-                           'upstream only' if nb is None else 'both, differing')
+        buckets, side, texts = compare_trees(opts.locales_dir, up_root, both,
+                                             label_a='node',
+                                             label_b='upstream')
 
         differ = len(buckets['collate']) + len(buckets['other'])
         print(f"\nCompared {len(both)} file(s) against {opts.tag}:")
@@ -231,14 +316,9 @@ def main(argv):
                   f"locales the upstream diff is NOT reading what the node runs:")
             for n in buckets['collate']:
                 print(f"  {n}  ({side[n]})")
-                nb = collate_text(open(os.path.join(opts.locales_dir, n), 'rb')
-                                  .read().decode('utf-8', 'surrogateescape'))
-                ub = collate_text(open(os.path.join(up_root, n), 'rb')
-                                  .read().decode('utf-8', 'surrogateescape'))
-                import difflib
-                for line in list(difflib.unified_diff(
-                        (ub or '').split('\n'), (nb or '').split('\n'),
-                        f'{opts.tag}', 'node', lineterm='', n=1))[:24]:
+                node_text, up_text = texts[n]
+                for line in collate_diff_lines(up_text, node_text,
+                                               opts.tag, 'node'):
                     print(f"      {line}")
         else:
             print(f"\nNothing differs inside LC_COLLATE. For every locale "
