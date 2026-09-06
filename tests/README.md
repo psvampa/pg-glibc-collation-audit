@@ -1,7 +1,7 @@
 # Tests
 
 ```sh
-python3 -m unittest discover -s tests -t tests          # everything, ~17s
+python3 -m unittest discover -s tests -t tests          # everything, ~40s
 python3 -m unittest discover -s tests -t tests -q -k pure_functions   # no clone needed
 ```
 
@@ -17,12 +17,15 @@ somebody deletes during a refactor.
 | file | needs the glibc clone | what it covers |
 |---|---|---|
 | `test_provenance.py` | yes | **that the tags resolve to the pinned commits.** If these fail, every number in `test_known_answers.py` is suspect and a mismatch there must not be read as a code regression |
+| `test_wrapper.py` | yes | **audit.sh end to end.** The wrapper removes a manual handoff, and automating a handoff is how the stale-result bug comes back; most of these tests are its failure modes, not its happy path |
 | `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, generated locale names, hunk/block overlap, the comment filter |
 | `test_git_helpers.py` | yes | the silent-failure class — code that cannot tell "nothing here" from "could not look" |
 | `test_known_answers.py` | yes | the five steps end to end on both pairs, against the results [docs/results.md](../docs/results.md) publishes |
 
-Without a clone at `scripts/glibc`, the last two **skip with a reason** and the
-first still runs. A skip is never a pass: read what it says.
+Without a clone at `scripts/glibc`, every layer marked "yes" **skips with a
+reason** and `test_pure_functions.py` still runs. A skip is never a pass: read
+what it says. CI clones fresh and fails on any skip, so a layer that skips
+there is a red build, not a quiet gap.
 
 ## What this suite does NOT cover
 
@@ -41,6 +44,14 @@ prevent.
   [docs/limitations.md](../docs/limitations.md).
 - **The pinned numbers are for glibc 2.28, 2.34 and 2.39 only.** Audit a
   different pair and this suite says nothing about that result.
+- **Three of audit.sh's guards are unreachable, so nothing tests them.** The
+  argv name validation, the up-front `rm -f` of the files the summary reads,
+  and the "step 2 wrote no file" check are all defence against a future
+  refactor: as the wrapper stands, step 2 always rewrites its list for the
+  pair being audited and `set -e` already ends the run if a step fails, so no
+  test can drive them. They are labelled as such in `audit.sh`. Reverting any
+  of the three leaves the suite green — which is the honest statement, not a
+  claim of coverage.
 - **`C.UTF-8` is asserted to be *warned about*, not to be correct.** No test can
   settle it from source; that is the point of the warning.
 - **Signatures are not verified here.** `test_provenance.py` asserts the release

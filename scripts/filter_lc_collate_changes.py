@@ -250,8 +250,36 @@ def main(argv):
     for path in sorted(changed_collate):
         print(f"  {path}")
 
-    names = sorted(os.path.basename(p) for p in changed_collate)
-    if names:
+    # Step 3 walks the copy graph at the NEW tag, so it can only be given
+    # names that exist there. A renamed file is judged against its OLD path
+    # (content_changed, above), and that path is gone at the new tag -- handing
+    # it to step 3 unchanged is an exit-2 abort on a legitimate finding. Map it
+    # to the new name instead of dropping it: the ruleset moved, it did not
+    # disappear, and the locale exposed at the new tag is the new one.
+    renamed_to = {old_path: new_path for old_path, new_path in renamed}
+    for_step3, translated = [], []
+    for path in changed_collate:
+        landed = renamed_to.get(path)
+        if landed:
+            translated.append((path, landed))
+        for_step3.append(os.path.basename(landed or path))
+    names = sorted(set(for_step3))
+
+    if translated:
+        print(f"\n{len(translated)} of those file(s) were renamed, so step 3 "
+              f"gets the name that exists at {opts.new_tag}:")
+        for old_path, new_path in sorted(translated):
+            print(f"  {os.path.basename(old_path)} -> "
+                  f"{os.path.basename(new_path)}")
+
+    # Written whether or not it is empty, and named after the pair. audit.sh
+    # reads this instead of the user retyping it, and an empty file for THIS
+    # pair is a different fact from a leftover file for another one -- the
+    # confusion this script's docstring exists to record.
+    g.write_list(f"step2_changed_collate.{g.pair_slug(opts.old_tag, opts.new_tag)}.txt",
+                 names)
+
+    if names and not g.wrapped():
         print(f"\nLocale names for step 3:")
         print(f"  python3 resolve_copy_closure.py {opts.new_tag} {' '.join(names)}")
 

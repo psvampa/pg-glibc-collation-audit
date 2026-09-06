@@ -8,6 +8,7 @@ either way somebody has to look.
 Run as subprocesses: the contract these tools offer is their printed output and
 their exit status.
 """
+import os
 import re
 import shutil
 import tempfile
@@ -63,6 +64,49 @@ class Step1Templates(StepRun):
 class Step2Filter(StepRun):
     EXPECTED = {(OLD, MID): (2, ['or_IN', 'sv_SE']),
                 (MID, NEW): (3, ['ber_DZ', 'kab_DZ', 'th_TH'])}
+
+    def test_the_step_3_list_is_written_for_each_pair(self):
+        """audit.sh reads this file instead of the user retyping the names.
+
+        Two things are pinned. The file must exist -- reverting step 2's write
+        fails here -- and it must be named for the version pair, because this
+        class runs step 2 four times into one scratch directory and a
+        pair-agnostic name would have each run clobber the last. That is the
+        same collision that, in the shared /tmp default, would hand step 3 a
+        list belonging to a different pair.
+        """
+        import glibc_locale_data as g
+        for (old, new), (_, names) in self.EXPECTED.items():
+            with self.subTest(pair=f'{old}..{new}'):
+                self.step('filter_lc_collate_changes.py', old, new)
+                path = os.path.join(
+                    self.out_dir,
+                    f'step2_changed_collate.{g.pair_slug(old, new)}.txt')
+                self.assertTrue(os.path.exists(path), f'{path} missing')
+                with open(path, encoding='utf-8') as fh:
+                    written = sorted(n.strip() for n in fh if n.strip())
+                self.assertEqual(written, sorted(names))
+
+    def test_the_written_list_matches_the_printed_command(self):
+        """Two representations of one list must not drift.
+
+        Step 2 both prints a paste-ready step-3 command and writes the file
+        audit.sh reads. If those ever disagree, a hand-run audit and a wrapped
+        one silently audit different locale sets.
+        """
+        import glibc_locale_data as g
+        for (old, new), (_, names) in self.EXPECTED.items():
+            with self.subTest(pair=f'{old}..{new}'):
+                out = self.step('filter_lc_collate_changes.py', old, new)
+                m = re.search(r'resolve_copy_closure\.py \S+ (.+)$', out, re.M)
+                self.assertIsNotNone(m, 'no step-3 command printed')
+                printed = sorted(m.group(1).split())
+                path = os.path.join(
+                    self.out_dir,
+                    f'step2_changed_collate.{g.pair_slug(old, new)}.txt')
+                with open(path, encoding='utf-8') as fh:
+                    written = sorted(n.strip() for n in fh if n.strip())
+                self.assertEqual(printed, written)
 
     def test_files_touching_lc_collate(self):
         for (old, new), (count, names) in self.EXPECTED.items():

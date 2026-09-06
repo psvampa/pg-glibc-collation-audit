@@ -23,7 +23,7 @@ matters, and what happens when `gpg` is unavailable, is in
 python3 -m unittest discover -s tests -t tests
 ```
 
-About 17 seconds. It pins the three tags to their commit ids, so a moved tag
+About 40 seconds. It pins the three tags to their commit ids, so a moved tag
 reports itself as a moved tag instead of as a change in the results. Two of
 its three layers need the glibc clone and skip themselves, with a reason, if
 it is absent. CI runs the whole suite on a fresh clone and fails on any skip.

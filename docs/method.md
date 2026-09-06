@@ -18,6 +18,12 @@ are in the [glossary](glossary.md).
 
 ## The five steps in detail
 
+`./audit.sh <old_tag> <new_tag>` runs all five in order and does the handoffs
+for you. Each is also a standalone script, which is what you want to re-run
+one step against a hand-picked locale list — the invocations below are those
+standalone forms.
+
+
 ### Step 1 — `scripts/audit-locale-diff.sh <old_tag> <new_tag>`
 
 Clones glibc (shallow, blobs on demand) and, before diffing anything, prints
