@@ -11,6 +11,7 @@ import _harness  # noqa: F401  -- puts scripts/ on sys.path
 import glibc_locale_data as g
 import diff_collation_code as d
 import filter_lc_collate_changes as f
+import diff_distro_locales as dd
 
 
 def collate(*body):
@@ -381,3 +382,82 @@ class CommentChar(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DistroDiff(unittest.TestCase):
+    """diff_distro_locales.py: the distro-versus-upstream classifier.
+
+    Two of these guard silent-false-negative paths found while designing the
+    script -- both would have reported a clean result on data that differs.
+    """
+
+    def test_identical_bytes_are_identical(self):
+        b = collate('order_start forward', '<a>').encode()
+        self.assertEqual(dd.classify_distro_diff(b, b), 'identical')
+
+    def test_a_change_inside_the_block_is_a_collation_finding(self):
+        up = collate('order_start forward', '<a>').encode()
+        node = collate('order_start forward', '<b>').encode()
+        self.assertEqual(dd.classify_distro_diff(node, up), 'collate')
+
+    def test_a_change_outside_the_block_is_not(self):
+        """The Oriya/Odia case: or_IN differs from upstream 2.28 by one line in
+        LC_IDENTIFICATION, and must not read as a backported collation change."""
+        up = collate('<a>') + 'language "Oriya"\n'
+        node = collate('<a>') + 'language "Odia"\n'
+        self.assertEqual(dd.classify_distro_diff(node.encode(), up.encode()),
+                         'other')
+
+    def test_LC_COLLATE_at_byte_zero_still_has_a_block(self):
+        """glibc <= 2.23 writes the three master templates with LC_COLLATE on
+        the first byte. collate_block's regex needs a preceding newline and
+        returns None there, which would file iso14651_t1_common -- the highest
+        fan-in file in the corpus -- under 'no block on either side'."""
+        up = 'LC_COLLATE\n<a>\nEND LC_COLLATE\n'
+        node = 'LC_COLLATE\n<b>\nEND LC_COLLATE\n'
+        self.assertIsNotNone(dd.collate_text(up))
+        self.assertEqual(dd.classify_distro_diff(node.encode(), up.encode()),
+                         'collate')
+
+    def test_whitespace_inside_the_block_still_counts(self):
+        """Conservative on purpose: the script cannot tell a cosmetic patch
+        from a meaningful one, so it reports and prints the diff."""
+        up = collate('<a>').encode()
+        node = collate('<a> ').encode()
+        self.assertEqual(dd.classify_distro_diff(node, up), 'collate')
+
+    def test_whitespace_at_the_block_edges_still_counts(self):
+        """Guards against normalising the block before comparing -- a .strip()
+        would erase a difference on the LC_COLLATE or END LC_COLLATE line
+        itself, which is inside the block and therefore inside the answer."""
+        up = 'LC_COLLATE\n<a>\nEND LC_COLLATE\n'
+        node = 'LC_COLLATE\n<a>\nEND LC_COLLATE   \n'
+        self.assertEqual(dd.classify_distro_diff(node.encode(), up.encode()),
+                         'collate')
+
+    def test_a_comment_inside_the_block_still_counts(self):
+        up = collate('<a>').encode()
+        node = collate('% distro note', '<a>').encode()
+        self.assertEqual(dd.classify_distro_diff(node, up), 'collate')
+
+    def test_block_on_one_side_only_is_a_collation_difference(self):
+        with_block = collate('<a>').encode()
+        without = b'comment_char %\nLC_TIME\nEND LC_TIME\n'
+        self.assertEqual(dd.classify_distro_diff(with_block, without), 'collate')
+        self.assertEqual(dd.classify_distro_diff(without, with_block), 'collate')
+
+    def test_no_block_on_either_side_cannot_affect_sort_order(self):
+        up = b'comment_char %\nLC_CTYPE\ntranslit_start\nEND LC_CTYPE\n'
+        node = b'comment_char %\nLC_CTYPE\ntranslit_end\nEND LC_CTYPE\n'
+        self.assertEqual(dd.classify_distro_diff(node, up), 'no-collate')
+
+    def test_a_non_utf8_byte_is_not_swallowed(self):
+        """read_blobs decodes with errors='replace'. Two files differing only
+        in a byte that decodes to U+FFFD would compare EQUAL through it, which
+        is a false negative in the reassuring direction. This compares bytes."""
+        up = collate('<a>').encode() + b'\x80'
+        node = collate('<a>').encode() + b'\x81'
+        self.assertNotEqual(up, node)
+        self.assertEqual(up.decode('utf-8', 'replace'),
+                         node.decode('utf-8', 'replace'))   # the trap itself
+        self.assertNotEqual(dd.classify_distro_diff(node, up), 'identical')

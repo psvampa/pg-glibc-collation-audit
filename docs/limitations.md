@@ -91,33 +91,45 @@ leaves that pair unconfirmed.
 
 ### Measured, on all three OS versions
 
-Comparing every distro locale source in `/usr/share/i18n/locales/` (package
-`glibc-locale-source`) against the same file at the upstream tag, using the
-audit's own `LC_COLLATE` block parser to decide whether a difference lands
-inside the block:
+`scripts/diff_distro_locales.py` answers this. It compares every file in a
+node's `/usr/share/i18n/locales/` (package `glibc-locale-source`) against the
+same file at the upstream tag, and reports whether any difference lands inside
+the `LC_COLLATE` block:
 
-| Distro package | Upstream tag | Files differing | Inside `LC_COLLATE` | Absent upstream |
-|---|---|---|---|---|
-| `glibc-2.28-251.el8_10.40` | `glibc-2.28` | 73 of 355 | **0** | `C`, `en_US@ampm` |
-| `glibc-2.34-275.el9_8` | `glibc-2.34` | 2 of 356 | **0** | `C` |
-| `glibc-2.39-128.el10_2` | `glibc-2.39` | 3 of 366 | **0** | none |
+```sh
+python3 scripts/diff_distro_locales.py glibc-2.28 \
+    --locales-dir ./el8-locales --build-id glibc-2.28-251.el8_10.40
+```
 
-The backports on every side land in other categories, so for every locale
-this method can audit, the tag diff is reading the same collation data the
-nodes run.
+| Node build | Upstream tag | Compared | Differing | Inside `LC_COLLATE` | Absent upstream |
+|---|---|---|---|---|---|
+| `glibc-2.28-251.el8_10.40` | `glibc-2.28` | 353 | 73 | **0** | `C`, `en_US@ampm` |
+| `glibc-2.34-275.el9_8` | `glibc-2.34` | 355 | 2 | **0** | `C` |
+| `glibc-2.39-128.el10_2` | `glibc-2.39` | 366 | 3 | **0** | none |
 
-The first two rows reproduce the earlier measurement exactly, re-run on
-independently provisioned Rocky Linux nodes. The third is new: it needed a
-RHEL10 node, which is why that pair's row above used to say "no". The three
-files differing at `el10` are `bg_BG`, `hr_HR` and `ssy_ER`, none inside
-`LC_COLLATE`.
+The backports on every side land in other categories, so for every locale this
+method can audit, the tag diff is reading the same collation data the nodes
+run. The three files differing at `el10` are `bg_BG`, `hr_HR` and `ssy_ER`.
 
-To reproduce: install `glibc-locale-source` on the node, copy
-`/usr/share/i18n/locales/` off it, and compare each file against
-`localedata/locales/<name>` at the tag, using
-`glibc_locale_data.collate_bounds()` to extract the block from each side. This
-is still a manual procedure rather than a step of the audit — see the note at
-the end of this section.
+**Compared is not the node's file count.** An earlier version of this page said
+"73 of 355", which conflated the two: upstream `glibc-2.28` has 353 locale
+files, and 353 is what could be compared — the node's other two exist upstream
+nowhere, and are the row's "absent" column rather than part of its denominator.
+
+The first two rows reproduce the earlier hand measurement exactly, re-run on
+independently provisioned nodes. The third is new: it needed a RHEL10 node,
+which is why that pair's row above used to say "no".
+
+**The two absent-upstream files are not equally blind**, and the script says
+which is which by reading the node's own copy:
+
+- `en_US@ampm` is a pure `copy` of `iso14651_t1`, which *was* compared and is
+  identical. It has no collation of its own, so nothing is hidden. It is Red
+  Hat-only — in no upstream tag from 2.28 to 2.41 — and until now nothing in
+  the tool mentioned it at all.
+- `C` carries its own tailoring, so it is genuinely unauditable from source.
+  That is the `C.UTF-8` limitation above, now confirmed mechanically rather
+  than asserted.
 
 ### What that measurement does not cover
 
@@ -158,9 +170,16 @@ these tags. It is not a general result that distro backports never touch
 collation, and a different build of the same distro release is a different
 measurement. Say which build a result was taken on.
 
-**Still not automated.** This is a manual procedure recorded as prose, not a
-step the audit runs, so it is not re-checked when anything changes. Automating
-it is the obvious next improvement to this page.
+**Automated, and self-checking without a node.** The script is exercised on
+every push by comparing two upstream tags against each other and asserting it
+reaches the same answer as step 2, which gets there by a completely different
+route — diff hunks overlapped against the old side's line numbers, versus
+whole-block equality. Only the transport off a real node stays un-exercised in
+CI, the same position `sql/collation_confirmation_template.sql` is in.
+
+`./audit.sh` runs it too, but only when given `--old-locales-dir` /
+`--new-locales-dir`: steps 1 to 5 read the clone alone, and this needs a node's
+files.
 
 ## The destination must be glibc 2.24 or newer
 

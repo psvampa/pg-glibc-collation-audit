@@ -78,6 +78,38 @@ only the literal strings `C` and `POSIX` to byte comparison, so libc
 provider's `C.UTF-8` (PG 17+) is a different implementation and is not
 exposed — see [scope.md](scope.md).
 
+## Checking the distro's own patches
+
+The template answers what the *running* system sorts. A second question sits
+beside it: do the distro's patches to glibc differ from the upstream source the
+audit reads at all? `scripts/diff_distro_locales.py` answers that, and unlike
+the template it needs no database:
+
+```sh
+# on the node
+dnf install -y glibc-locale-source
+
+# copy the sources off it -- tar, NOT `docker cp`, whose target /tmp is a
+# separate mount in these containers, so the copy silently does nothing and the
+# comparison then reports a clean zero over an empty directory
+docker exec <container> tar -cf - -C /usr/share/i18n/locales . | tar -xf - -C ./node-locales
+
+python3 scripts/diff_distro_locales.py glibc-2.34 \
+    --locales-dir ./node-locales --build-id "$(rpm -q glibc)"
+```
+
+`--build-id` is required: a result is bound to the build it was taken on, and
+nothing in the directory carries a version. The script refuses a directory too
+small to be a real copy, because a partial copy reports "0 differ inside
+`LC_COLLATE`" and that is indistinguishable from a clean result.
+
+This compares locale **data**. glibc's collation **code** is step 5's job, and
+step 5 reads it between the two upstream tags — that is how Bug 22668, the
+change that reorders `ko_KR`, was found. What neither covers is the distro
+backporting a code change present in neither tag, and **that** is what the
+empirical check on this page closes: it measures the glibc actually installed,
+patches and all. The three layers cover each other; none of them is optional.
+
 ## What else the template reports
 
 Besides the index inventory: **text partition keys**, every column carrying
