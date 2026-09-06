@@ -214,6 +214,11 @@ psql -c "SELECT pg_import_system_collations('pg_catalog')"   # 3 -> ~1006-1024
 dnf install -y glibc-locale-source          # -> /usr/share/i18n/locales/
 ```
 
+Comparing the distro's locale sources against upstream is
+`scripts/diff_distro_locales.py`; `glibc-locale-source` is what provides its
+input, and `docs/confirming-on-a-real-system.md` has the `tar` transport that
+works.
+
 **A measurement is bound to the build it ran on.** Record `rpm -q glibc` with
 every result. Two results on the same upstream version but different distro
 builds are two measurements, not one — a backport can sit between them. When a

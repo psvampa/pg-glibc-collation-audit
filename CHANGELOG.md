@@ -4,6 +4,77 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-06 (thirteenth entry)
+
+### The backport check becomes a script, and corrects two of its own numbers
+
+`docs/limitations.md` answered "do the distro's patches touch collation?" with
+hand-measured numbers in prose. Nothing re-checked them when a build changed —
+and builds change on their own: installing `glibc-locale-source` upgrades
+`glibc`, because the two are version-locked, which moved all three test nodes
+in the previous entry.
+
+`scripts/diff_distro_locales.py` answers it on demand. It takes a copy of a
+node's `/usr/share/i18n/locales/` and reports how many files differ from the
+upstream tag and — the part that matters — how many differ inside `LC_COLLATE`.
+It reproduces the published result on all three fixtures: 73, 2 and 3 files
+differing, **0 inside `LC_COLLATE`** in each.
+
+**A published denominator was wrong.** The page said "73 of 355" for the RHEL8
+node. Upstream `glibc-2.28` has **353** locale files; 355 was the node's count.
+The two files that make up the difference exist upstream nowhere, so they were
+never comparable and belong in the "absent" column, not the ratio. The script
+reports compared, differing, inside, no-block, absent-upstream and
+absent-on-node as separate numbers that add up.
+
+**One of those absent files turns out not to be a blind spot.** `en_US@ampm` is
+Red Hat-only — in no upstream tag from 2.28 to 2.41 — and nothing in the tool
+mentioned it. The script holds the node's copy, so it reads it: a pure `copy` of
+`iso14651_t1`, which was compared and is identical. Nothing is hidden. `C` is
+the opposite: it carries its own tailoring, so it is genuinely unauditable, and
+that is now shown mechanically rather than asserted.
+
+Two design choices were forced by verification rather than taste, and both were
+silent-false-negative paths:
+
+- **The block is sliced from `collate_bounds`, not taken from `collate_block`.**
+  That regex requires a newline before `LC_COLLATE`, so on a file starting with
+  `LC_COLLATE` at byte 0 it returns `None` — measured on `iso14651_t1_common` at
+  `glibc-2.17`, the highest fan-in file in the corpus, on the one pair that has
+  nothing else covering it. Using it would have filed that file under "no block
+  on either side" and reported it as unable to affect sort order.
+- **Bytes are compared, not decoded text.** `read_blobs` decodes with
+  `errors='replace'`, and hundreds of these files carry non-ASCII: two files
+  differing only in a byte that decodes to U+FFFD would compare equal. A test
+  now asserts the trap exists and that the script does not fall into it.
+
+The script is **self-checking without a node**, which is what stops it rotting
+back into prose. `tests/test_distro_diff.py` materialises one upstream tag as a
+stand-in node, compares it against the other, and asserts the same answer step 2
+reaches by a completely different route — diff hunks overlapped against old-side
+line numbers, versus whole-block equality. They agree exactly on both pairs. The
+relation asserted is `step 2's content-changed count == differing + renames`,
+because step 2 judges a renamed file by its old path; pair 1 has no rename and
+matches outright, pair 2's single rename accounts for its whole delta. Asserting
+raw equality would have failed confusingly.
+
+`./audit.sh` runs it too, but only when given `--old-locales-dir` /
+`--new-locales-dir` with their build ids. It is not a sixth step of the method:
+steps 1 to 5 read the clone alone. The summary's warning glob widened from
+`step[12345]` to `step[0-9]*` so the new warnings actually reach the summary —
+that glob is precisely why a bolted-on step would otherwise have been dropped
+in silence.
+
+Two `!!` warnings it always prints, because a clean result here is easy to
+over-read. The first names which layer covers what, rather than implying the
+audit ignores glibc's code: this script compares locale **data**; the **code**
+is step 5's job and is where Bug 22668 lives; the gap neither closes — a distro
+backporting a code change present in neither tag — is what the empirical check
+on real nodes exists for. The second: `charmaps/` is not compared, though
+`glibc-locale-source` ships it.
+
+Seven guards, seven mutations, each one turning a specific test red.
+
 ## 2026-09-06 (twelfth entry)
 
 ### The backport gap closes for the second pair

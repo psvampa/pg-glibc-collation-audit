@@ -17,15 +17,44 @@
 #   ./audit.sh glibc-2.28 glibc-2.34
 set -euo pipefail
 
-if [ $# -ne 2 ]; then
+usage() {
   echo "usage: $0 <old_tag> <new_tag>" >&2
+  echo "         [--old-locales-dir DIR --old-build-id NVR]" >&2
+  echo "         [--new-locales-dir DIR --new-build-id NVR]" >&2
   echo "       e.g. $0 glibc-2.28 glibc-2.34" >&2
   echo "       tags are glibc-<version>; run \`ldd --version\` on each node" >&2
+  echo >&2
+  echo "       The --*-locales-dir options are OPTIONAL. Given a copy of a" >&2
+  echo "       node's /usr/share/i18n/locales/, the run also checks whether" >&2
+  echo "       the distro's patches touch LC_COLLATE -- the one thing an" >&2
+  echo "       upstream tag diff structurally cannot see. Needs the node's" >&2
+  echo "       build id too: a result is bound to the build it ran on." >&2
   exit 2
-fi
+}
 
+[ $# -ge 2 ] || usage
 OLD=$1
 NEW=$2
+shift 2
+
+OLD_LOCALES=""; OLD_BUILD=""; NEW_LOCALES=""; NEW_BUILD=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    --old-locales-dir) OLD_LOCALES=${2:-}; shift 2 ;;
+    --old-build-id)    OLD_BUILD=${2:-};   shift 2 ;;
+    --new-locales-dir) NEW_LOCALES=${2:-}; shift 2 ;;
+    --new-build-id)    NEW_BUILD=${2:-};   shift 2 ;;
+    *) echo "error: unknown argument '$1'" >&2; usage ;;
+  esac
+done
+
+# A locales dir without its build id would produce a result that cannot be
+# cited, so refuse the pair rather than silently dropping half of it.
+if { [ -n "$OLD_LOCALES" ] && [ -z "$OLD_BUILD" ]; } ||
+   { [ -n "$NEW_LOCALES" ] && [ -z "$NEW_BUILD" ]; }; then
+  echo "error: --*-locales-dir requires the matching --*-build-id" >&2
+  exit 2
+fi
 HERE=$(cd "$(dirname "$0")" && pwd)
 SCRIPTS="$HERE/scripts"
 
@@ -134,6 +163,19 @@ run_step 4 python3 "$SCRIPTS/flag_algorithmic_ranges.py" "$NEW"
 banner "STEP 5  Did the code that computes weights change"
 run_step 5 python3 "$SCRIPTS/diff_collation_code.py" "$OLD" "$NEW"
 
+# Optional, and not a sixth step of the method: steps 1-5 read only the clone,
+# while this needs a node's files. It runs only when you supply them.
+if [ -n "$OLD_LOCALES" ]; then
+  banner "DISTRO CHECK  do $OLD_BUILD's patches touch LC_COLLATE?"
+  run_step 6 python3 "$SCRIPTS/diff_distro_locales.py" "$OLD" \
+    --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --node-label old
+fi
+if [ -n "$NEW_LOCALES" ]; then
+  banner "DISTRO CHECK  do $NEW_BUILD's patches touch LC_COLLATE?"
+  run_step 7 python3 "$SCRIPTS/diff_distro_locales.py" "$NEW" \
+    --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --node-label new
+fi
+
 # ---------------------------------------------------------------- summary ----
 
 count_lines() { [ -f "$1" ] && grep -c . "$1" || echo 0; }
@@ -171,7 +213,7 @@ WARNINGS=$(awk '
   /^!!/            { inblock = 1; print; next }
   inblock && /^   / { print; next }
   inblock          { inblock = 0 }
-' "$OUT_DIR"/step[12345]."$PAIR".log 2>/dev/null || true)
+' "$OUT_DIR"/step[0-9]*."$PAIR".log 2>/dev/null || true)
 
 if [ -n "$WARNINGS" ]; then
   echo
