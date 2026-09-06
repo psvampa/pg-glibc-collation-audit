@@ -133,6 +133,21 @@ How to write an entry:
 - **Keep it short.** A skill nobody can scan stops being read. Record the rule
   and the mechanism; the transcript keeps the narrative.
 
+One habit belongs here rather than in a rule of its own:
+
+- **Verify once, report it, then act on it.** Do not re-run a check already
+  reported in this session. Re-verify only when something could plausibly have
+  changed since — real time passed, another session or process wrote, the ref
+  moved, or the first check was partial — and say which of those applies.
+  Re-checking a result I reported myself reads as not trusting my own report:
+  if it was good enough to base a recommendation on, it is good enough to act
+  on when Pablo says go, and if it was not, the recommendation should not have
+  been made. It also turns a one-line confirmation into a table he has to read.
+  On 2026-09-06 I reported that branch `fix-collation-audit-false-negatives`
+  held nothing `main` lacked, recommended deleting it, and then re-ran the same
+  check when he said to delete — against a frozen ref, minutes later, where
+  nothing could have changed the answer.
+
 **Where it goes.** Procedures, rules and traps belong here, in the skill —
 that is what gets loaded when the work matches. Facts that are not procedure go
 to project memory instead: who Pablo is, how he wants to be worked with, where
@@ -154,9 +169,9 @@ command below.
 
 | Namespace | OS keyword | Deployed as | glibc | PostgreSQL |
 |---|---|---|---|---|
-| `collaudit8` | `os:el8` | Rocky Linux 8.9 | `glibc-2.28-236.el8_9.7` | 18.6 |
-| `collaudit9` | `os:el9` | Rocky Linux 9.3 | `glibc-2.34-83.el9.7` | 18.6 |
-| `collaudit10` | `os:el10` | Rocky Linux 10.1 | `glibc-2.39-58.el10_1.2` | 18.6 |
+| `collaudit8` | `os:el8` | Rocky Linux 8.9 | `glibc-2.28-251.el8_10.40` | 18.6 |
+| `collaudit9` | `os:el9` | Rocky Linux 9.3 | `glibc-2.34-275.el9_8` | 18.6 |
+| `collaudit10` | `os:el10` | Rocky Linux 10.1 | `glibc-2.39-128.el10_2` | 18.6 |
 
 All three come from the same vendor and image lineage, which is the control
 that matters: the only intended variable between two nodes is glibc's version.
@@ -189,7 +204,21 @@ dnf install -y glibc-all-langpacks          # -> 867 / 869 / 885 locales
 #    only the locales that existed when the postmaster started
 systemctl restart postgresql-18
 psql -c "SELECT pg_import_system_collations('pg_catalog')"   # 3 -> ~1006-1024
+
+# 3. only if you need to compare distro locale sources against upstream tags.
+#    WARNING: this UPGRADES glibc -- the two packages are version-locked, and
+#    dnf pulls the newest build of both. The nodes went from 2.28-236.el8_9.7 /
+#    2.34-83.el9.7 / 2.39-58.el10_1.2 to -251.el8_10.40 / -275.el9_8 /
+#    -128.el10_2 this way. Re-check `rpm -q glibc` afterwards and re-state the
+#    build in anything you already measured.
+dnf install -y glibc-locale-source          # -> /usr/share/i18n/locales/
 ```
+
+**A measurement is bound to the build it ran on.** Record `rpm -q glibc` with
+every result. Two results on the same upstream version but different distro
+builds are two measurements, not one — a backport can sit between them. When a
+finding survives a build change, say so: it is stronger evidence than a single
+build, and `th_TH` over 2.34..2.39 now holds on two build pairs.
 
 Verified on 2026-09-06: all ten locales the audit touches — `sv_SE.utf8`,
 `sv_FI.utf8`, `or_IN`, `th_TH.utf8`, `ber_DZ.utf8`, `kab_DZ.utf8`,

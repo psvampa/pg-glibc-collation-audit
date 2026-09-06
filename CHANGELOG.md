@@ -4,6 +4,58 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-06 (twelfth entry)
+
+### The backport gap closes for the second pair
+
+`docs/limitations.md` used to say the distro-versus-upstream backport check was
+measured for `RHEL8 -> RHEL9` and **not** for `RHEL9 -> RHEL10`, because that
+one needed a RHEL10 node. It has one now, so both documented pairs are covered
+analytically as well as empirically.
+
+Comparing every distro locale source in `/usr/share/i18n/locales/` against the
+same file at the upstream tag, using the audit's own `LC_COLLATE` block parser
+rather than a second implementation of it:
+
+| Distro package | Upstream tag | Files differing | Inside `LC_COLLATE` |
+|---|---|---|---|
+| `glibc-2.28-251.el8_10.40` | `glibc-2.28` | 73 of 355 | **0** |
+| `glibc-2.34-275.el9_8` | `glibc-2.34` | 2 of 356 | **0** |
+| `glibc-2.39-128.el10_2` | `glibc-2.39` | 3 of 366 | **0** |
+
+The first two reproduce the earlier numbers exactly, on independently
+provisioned nodes. The third is new.
+
+**A claim on this page was wrong and is corrected.** The positive control said
+the same method "marks `sv_SE` and `or_IN` as different from `glibc-2.34` and
+identical to `glibc-2.28`". `or_IN` is *not* identical to `glibc-2.28`: it
+differs by one line in `LC_IDENTIFICATION`, where the distro renamed the
+language from "Oriya" to "Odia". Its `LC_COLLATE` block is byte-identical,
+which is why it sits among the 73 differing files while contributing nothing to
+the zero. The conclusion never depended on it, but the sentence describing the
+control did, and a locale file changing is not a locale's sort order changing —
+the distinction the whole section rests on.
+
+Two more things worth knowing, both found the hard way:
+
+**Installing `glibc-locale-source` upgrades `glibc`.** The packages are
+version-locked and `dnf` takes the newest build of both, so the test nodes moved
+from `2.28-236.el8_9.7` / `2.34-83.el9.7` / `2.39-58.el10_1.2` to
+`-251.el8_10.40` / `-275.el9_8` / `-128.el10_2` as a side effect of installing
+the locale sources. Anything measured before that install is a measurement on
+the older build and has to say so.
+
+**`th_TH` still changes on the newer builds.** Re-checked after the upgrade,
+because a distro backport between two builds of the same upstream version is
+exactly what this section exists to worry about. `เฤ` > `ฮ` at
+`2.34-275.el9_8` and `เฤ` < `ฮ` at `2.39-128.el10_2`, identical to the result on
+the older pair. The verdict now rests on two build pairs rather than one.
+
+**Still not automated.** The comparison remains a manual procedure recorded as
+prose, so nothing re-checks it when a build changes — which, given the paragraph
+above, is not hypothetical. `docs/limitations.md` now says how to reproduce it
+and says plainly that it is manual.
+
 ## 2026-09-06 (eleventh entry)
 
 ### th_TH changes after all, and the second pair finally has a script
@@ -42,7 +94,9 @@ Confirmed by direct `strcoll` rather than `ORDER BY` alone, so it cannot be a
 tie-break artifact: `เฤ` > `ฮ` at 2.34 and `เฤ` < `ฮ` at 2.39, likewise `เฦ`.
 
 Measured on freshly deployed Rocky Linux 9.3 (`glibc-2.34-83.el9.7`) and Rocky
-Linux 10.1 (`glibc-2.39-58.el10_1.2`), both PostgreSQL 18.6 — same vendor, same
+Linux 10.1 (`glibc-2.39-58.el10_1.2`), and re-confirmed unchanged on the newer
+builds `glibc-2.34-275.el9_8` and `glibc-2.39-128.el10_2`, so no backport
+between those builds moves it — both PostgreSQL 18.6, same vendor, same
 image lineage, so the only intended variable is glibc's version. `ber_DZ`,
 `kab_DZ`, `ko_KR`, `en_US`, `de_DE` and `fr_FR` were identical on both nodes,
 which is what makes the `th_TH` difference readable as a finding rather than as
