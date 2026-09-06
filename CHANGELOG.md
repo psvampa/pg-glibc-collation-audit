@@ -4,6 +4,67 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-06 (tenth entry)
+
+### One command, and the handoff that used to be manual
+
+No verdict moved. Both documented pairs give exactly the sets
+[docs/results.md](docs/results.md) states — `or_IN`, `sv_SE`, `sv_FI`,
+`sv_FI@euro` for 2.28..2.34 and `ber_DZ`, `kab_DZ`, `th_TH` for 2.34..2.39 —
+and the five scripts print byte-identical output when run by hand. What
+changed is that you no longer have to run them by hand.
+
+`./audit.sh <old_tag> <new_tag>` runs all five steps and ends with a summary:
+what to reindex, what still needs an empirical test, every `!!` warning
+repeated in full, and what was not decided for you. Previously the only thing
+in the repo that ran all five steps was the test suite.
+
+The handoff it removes was a real defect, not just friction. Step 2 printed
+the locale names and the user retyped them into step 3. Step 2 now writes them
+to `step2_changed_collate.<old>..<new>.txt` and the wrapper reads that. Two
+things about the file matter more than the convenience:
+
+- It is named for the version pair. Every other file in
+  `$PG_GLIBC_AUDIT_OUT` is pair-agnostic, and this one becomes **argv** for a
+  later step. A leftover list from a different pair, fed to step 3 in silence,
+  is precisely the bug `filter_lc_collate_changes.py` was rewritten to remove
+  when it stopped reading a hardcoded `/tmp` diff.
+- It is written whether or not anything was found. Absent and empty are
+  different facts: empty means this pair has no `LC_COLLATE` change, absent
+  means step 2 never got there. Inferring the first from the second is how an
+  error becomes a clean audit.
+
+A latent bug surfaced while automating this. Step 2 judges a renamed file
+against its **old** path, and step 3 walks the copy graph at the **new** tag,
+where that path no longer exists — step 3 exits 2 on an unknown locale name.
+Retyping hid it, because a human reading `aa_ER@saaho -> ssy_ER` would type
+the name that exists. Step 2 now maps a renamed file to its new name and says
+so. Neither documented pair hits this, so no recorded output changed; on a
+pair where a renamed locale's `LC_COLLATE` did change, the old behaviour would
+have aborted a valid audit.
+
+The steps' "run this next" hints are suppressed under the wrapper, which is
+the only difference between wrapped and hand-run output. That is deliberate:
+manual output stays byte-identical, so `examples/` — which is partly
+hand-abridged and not mechanically reproducible — remains valid.
+
+Three of the wrapper's guards are unreachable and therefore untested: the argv
+name validation, the up-front removal of the files the summary reads, and the
+"step 2 wrote no file" check. Step 2 always rewrites its list for the pair
+being audited, and `set -e` ends the run before the last one can fire.
+Reverting any of the three leaves the suite green. They are kept as defence
+against a future refactor and labelled as untested in both `audit.sh` and
+`tests/README.md`, rather than covered by tests that would assert nothing —
+the failure mode this project has already found three times.
+
+`tests/test_wrapper.py` adds 15 tests, mostly failure modes: a bogus tag must
+fail without printing a summary, an empty step 2 must skip step 3 rather than
+call it with no arguments, a stale step-3 list must not be summarised, and
+`sv_FI` must appear for 2.28..2.34 — it is reachable only through the new
+tag's copy graph, so an old/new swap in the wrapper would otherwise produce a
+plausible reversed audit at exit 0. The suite is now about 40 seconds, up from
+17: wrapper tests run five real steps and cannot be memoised.
+
 ## 2026-09-05 (ninth entry)
 
 ### Two silent paths closed, and one of them by deleting code

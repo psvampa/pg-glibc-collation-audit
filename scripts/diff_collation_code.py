@@ -466,10 +466,15 @@ def main(argv):
               f"settle this pair.")
         print("Lines marked >> are the code changes; read them and decide "
               "whether they can")
-        print("move weights. If any can, every locale listed by")
-        print(f"  python3 flag_algorithmic_ranges.py {opts.new_tag}")
-        print("needs an empirical sort-order test, however clean its data diff "
-              "is.")
+        if g.wrapped():
+            print("move weights. If any can, every locale step 4 listed above "
+                  "needs an")
+            print("empirical sort-order test, however clean its data diff is.")
+        else:
+            print("move weights. If any can, every locale listed by")
+            print(f"  python3 flag_algorithmic_ranges.py {opts.new_tag}")
+            print("needs an empirical sort-order test, however clean its data "
+                  "diff is.")
     return 0
 
 

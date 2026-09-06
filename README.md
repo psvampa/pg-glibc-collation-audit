@@ -58,23 +58,20 @@ and there is no guard for it — outside that range the tool answers
 confidently and wrongly. See
 [docs/limitations.md](docs/limitations.md#the-destination-must-be-glibc-224-or-newer).
 
-### Run the five steps
+### Run the audit
 
-The RHEL8-to-RHEL9 pair, end to end:
+One command. Substitute your own two tags — these are the RHEL8-to-RHEL9
+pair, as an example:
 
 ```sh
-cd scripts
-./audit-locale-diff.sh               glibc-2.28 glibc-2.34   # step 1
-python3 filter_lc_collate_changes.py glibc-2.28 glibc-2.34   # step 2
-python3 resolve_copy_closure.py      glibc-2.34 or_IN sv_SE  # step 3
-python3 flag_algorithmic_ranges.py   glibc-2.34              # step 4
-python3 diff_collation_code.py       glibc-2.28 glibc-2.34   # step 5
+./audit.sh glibc-2.28 glibc-2.34
 ```
 
-Step 3 takes the locale names step 2 printed, so substitute your own. Each
-script finds the glibc clone on its own and generates whatever diff it needs
-from the two tags, so there is no intermediate file to keep in sync and no
-working directory to get wrong.
+It runs the audit's five steps in order, hands each step's result to the next
+so you never retype a locale name, and ends with a consolidated summary. The
+five scripts still work individually, which is what you want for re-running
+one step against a hand-picked locale list — see
+[docs/method.md](docs/method.md).
 
 Real output from both pairs, start to finish, is in
 [`examples/`](examples/) — read that before running anything if you want to
@@ -82,8 +79,9 @@ know what you are getting.
 
 ### Read the output
 
-Each step ends with a `Next:` line naming the command that follows, so the
-five runs chain. Long result lists are written to files under
+The run ends with an `AUDIT SUMMARY` block: what to reindex, what still needs
+an empirical test, every warning repeated in full, and what the tool did
+*not* decide for you. Long result lists are written to files under
 `$PG_GLIBC_AUDIT_OUT` (default `/tmp/pg-glibc-collation-audit/`) and
 referenced rather than inlined.
 
@@ -214,7 +212,7 @@ short version:
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t tests   # about 17 seconds
+python3 -m unittest discover -s tests -t tests   # about 40 seconds
 ```
 
 Every test freezes a failure this tool actually shipped, and CI runs the

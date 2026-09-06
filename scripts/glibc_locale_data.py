@@ -456,6 +456,28 @@ def supported_map(repo, tag):
 OUT_DIR = os.environ.get('PG_GLIBC_AUDIT_OUT', '/tmp/pg-glibc-collation-audit')
 
 
+def wrapped():
+    """True when audit.sh is driving this step, rather than a human.
+
+    The steps print a hint naming the command to run next, which is right for
+    a hand-run audit and wrong under the wrapper: it tells the reader to run a
+    step that has already run. Only the hints are suppressed -- never a
+    finding, a count or a warning.
+    """
+    return os.environ.get('PG_GLIBC_AUDIT_WRAPPED') == '1'
+
+
+def pair_slug(old_tag, new_tag):
+    """Filename fragment identifying a version pair.
+
+    A result list named after the pair it describes cannot be mistaken for a
+    leftover from a different one. That matters most where a file becomes argv
+    for a later step: see write_list.
+    """
+    safe = lambda tag: re.sub(r'[^A-Za-z0-9_.@+-]', '_', tag)
+    return f"{safe(old_tag)}..{safe(new_tag)}"
+
+
 def write_list(name, items):
     """Write a long result list to OUT_DIR and return the path.
 

@@ -94,6 +94,9 @@ def main(argv):
     if not flagged:
         print("\nNo locale uses ellipsis ranges at this tag; steps 1-3 are "
               "sufficient.")
+        # Silent, and empty: same reason as step 3. audit.sh must be able to
+        # tell "nothing exposed" from "step 4 did not run".
+        g.write_list('step4_exposed_locales.txt', [])
         return 0
 
     # A flagged template is only actionable together with everything that
@@ -132,11 +135,17 @@ def main(argv):
     print(f"  full list: {out_path}")
 
     print()
-    print("These cannot be cleared by a source diff alone. Run")
-    print(f"  python3 diff_collation_code.py <old_tag> {tag}")
-    print("to see whether localedef's expansion logic changed between your two")
-    print("versions; if it did, test these empirically before trusting a")
-    print("'not flagged' result from steps 1-3.")
+    if g.wrapped():
+        print("These cannot be cleared by a source diff alone. Step 5 below "
+              "decides whether")
+        print("that matters for this pair.")
+    else:
+        print("These cannot be cleared by a source diff alone. Run")
+        print(f"  python3 diff_collation_code.py <old_tag> {tag}")
+        print("to see whether localedef's expansion logic changed between your "
+              "two")
+        print("versions; if it did, test these empirically before trusting a")
+        print("'not flagged' result from steps 1-3.")
     return 0
 
 

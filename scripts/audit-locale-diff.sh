@@ -84,4 +84,8 @@ echo "---"
 
 python3 "$HERE/glibc_locale_data.py" fanin "$NEW" "$CHANGED"
 echo "---"
-echo "Next: python3 filter_lc_collate_changes.py $OLD $NEW"
+# Under audit.sh this hint names a step that has already run. Only the hint is
+# suppressed; every verdict above is printed either way.
+if [ "${PG_GLIBC_AUDIT_WRAPPED:-}" != "1" ]; then
+  echo "Next: python3 filter_lc_collate_changes.py $OLD $NEW"
+fi

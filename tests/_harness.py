@@ -96,7 +96,14 @@ def run_step(script, *args, out_dir=None):
     Memoised per (script, args, out_dir): the same step is asserted on from
     several tests, and step 5 takes ~3.5s a call. Caching turns the suite from
     ~40s into ~10s without any test losing its independence -- these scripts
-    are read-only against a fixed tag, so a second run cannot differ.
+    are read-only against a fixed tag, so a second run cannot print anything
+    different.
+
+    Note that a cached call does NOT repeat the step's side effects. Step 2
+    writes its locale list to out_dir (for audit.sh to read), so a test that
+    deletes that file and calls run_step again gets the memoised output and no
+    new file. Assert on files from the same (script, args, out_dir) that wrote
+    them, or use run_wrapper, which is not cached.
 
     A subprocess, not an in-process main(), for two reasons. The scripts read
     PG_GLIBC_AUDIT_OUT at import time (glibc_locale_data.OUT_DIR), so only a
@@ -117,3 +124,20 @@ def run_step(script, *args, out_dir=None):
         _STEP_CACHE[key] = (p.returncode,
                             (p.stdout + p.stderr).decode('utf-8', 'replace'))
     return _STEP_CACHE[key]
+
+
+def run_wrapper(*args, out_dir=None, env_extra=None):
+    """Run ./audit.sh as a subprocess. Returns (exit_code, stdout+stderr).
+
+    Deliberately NOT memoised: every wrapper test asserts on the files the run
+    leaves in out_dir, and a cached call would skip writing them.
+    """
+    env = dict(os.environ)
+    if out_dir:
+        env['PG_GLIBC_AUDIT_OUT'] = out_dir
+    env.pop('PG_GLIBC_AUDIT_WRAPPED', None)
+    if env_extra:
+        env.update(env_extra)
+    p = subprocess.run([os.path.join(REPO_ROOT, 'audit.sh'), *args],
+                       cwd=REPO_ROOT, env=env, capture_output=True)
+    return p.returncode, (p.stdout + p.stderr).decode('utf-8', 'replace')

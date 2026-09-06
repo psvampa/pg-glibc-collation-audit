@@ -94,8 +94,13 @@ def main(argv):
     if unbuilt:
         print(f"Not listed in localedata/SUPPORTED (not built by default, so "
               f"normally absent from `locale -a`): {', '.join(unbuilt)}")
+    # Written unconditionally: audit.sh reads the result of THIS run, and
+    # inferring an empty result from a missing file cannot distinguish "no
+    # inheritance to add" from "the step never ran". The announce stays gated
+    # on the list being longer than what was already printed inline, so
+    # terminal output for a hand-run audit is unchanged.
+    path = g.write_list('step3_affected_locales.txt', generated or affected)
     if len(affected) > len(changed):
-        path = g.write_list('step3_affected_locales.txt', generated or affected)
         print(f"\nFull list also written to {path}")
     return 0
 

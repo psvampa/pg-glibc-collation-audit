@@ -1,5 +1,6 @@
 Worked example output: glibc-2.34 (RHEL9) -> glibc-2.39 (RHEL10)
-Reproduced by running the five scripts in order (see ../README.md, Quickstart).
+Reproduced by running the five scripts in order, which is what
+../audit.sh now does in one command (see ../docs/method.md).
 
 $ ./audit-locale-diff.sh glibc-2.34 glibc-2.39
 Locale files added, modified or deleted: 318
