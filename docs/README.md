@@ -22,10 +22,10 @@
 | [confirming-on-a-real-system.md](confirming-on-a-real-system.md) | Running the SQL template on both nodes, and the three traps that make a comparison lie |
 | [scope.md](scope.md) | What this audits — `LC_COLLATE` and the `libc` provider — and the `builtin` provider as a way out |
 | [limitations.md](limitations.md) | The five things it structurally cannot see, `C.UTF-8` among them |
-| [requirements.md](requirements.md) | Dependencies, the test suite, and the two langpack traps on the confirmation side |
+| [requirements.md](requirements.md) | Dependencies, the test suite, and the three setup traps on the confirmation side |
 | [comparison-ardentperf.md](comparison-ardentperf.md) | How this relates to ardentperf/glibc-unicode-sorting, and how to read their tables |
 | [glossary.md](glossary.md) | `copy` graph, blast radius, hunk, tier, ellipsis range, role swap |
-| [../examples/](../examples/) | Real output from both pairs, plus the confirmation SQL for one |
+| [../examples/](../examples/) | Real output from both pairs, plus a confirmation SQL script for each |
 | [../CHANGELOG.md](../CHANGELOG.md) | What this tool used to get wrong, and when |
 | [../tests/README.md](../tests/README.md) | What the test suite covers, and what it does not |
 

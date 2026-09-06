@@ -15,8 +15,9 @@ real sort rules
 ([background](https://wiki.postgresql.org/wiki/Locale_data_changes)).
 
 This tool answers the real question from glibc's own source, deterministically
-and across all ~355 locales: if the rules that define a locale's sort order
-did not change, the order cannot have changed.
+and across every locale in the tree — 355 at glibc 2.34, 366 at 2.39: if the
+rules that define a locale's sort order did not change, the order cannot have
+changed.
 
 **It is not a single, infallible answer, and does not try to be.** It reads
 source, so it cannot see what a machine actually does — distro backports and
@@ -158,6 +159,25 @@ is in [docs/method.md](docs/method.md).
 Steps 3 and 5 together give the real, complete set of affected locale
 identifiers.
 
+Those five steps read upstream glibc only. A sixth check answers the question
+they structurally cannot — **does your distro's own patching touch
+`LC_COLLATE`?** — by comparing a node's `/usr/share/i18n/locales/` against the
+upstream tag:
+
+```sh
+./audit.sh glibc-2.28 glibc-2.34 \
+  --old-locales-dir ./el8-locales --old-build-id glibc-2.28-251.el8_10.40 \
+  --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
+```
+
+It is optional because it needs files off a real node, not just the clone.
+Both audited pairs have been measured this way and every difference landed
+outside `LC_COLLATE` — the numbers, and how to copy the sources off a node,
+are in
+[docs/limitations.md](docs/limitations.md#upstream-tags-are-not-your-distros-glibc)
+and
+[docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md#checking-the-distros-own-patches).
+
 ## Results for the two RHEL pairs
 
 | Locale | RHEL8 → RHEL9<br>glibc 2.28 → 2.34 | RHEL9 → RHEL10<br>glibc 2.34 → 2.39 | Caught by |
@@ -186,8 +206,8 @@ own test. See
 
 The evidence behind each row, both worked examples and the nodes each claim
 was measured on: [docs/results.md](docs/results.md). If you saved a result
-from this tool before 2026-09-05, check [CHANGELOG.md](CHANGELOG.md) first —
-two verdicts have moved since.
+from this tool before 2026-09-07, check [CHANGELOG.md](CHANGELOG.md) first —
+three verdicts have moved since, `th_TH` as recently as 2026-09-06.
 
 ## Scope
 
@@ -218,7 +238,7 @@ short version:
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t tests   # about 40 seconds
+python3 -m unittest discover -s tests -t tests   # about a minute
 ```
 
 Every test freezes a failure this tool actually shipped, and CI runs the

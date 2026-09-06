@@ -61,9 +61,16 @@ exist (`jammy`, `focal`, `noble`, `bookworm`, `sles15`) and are not used here.
 because they happen to be present on the host. Running `docker images` and
 choosing what looks suitable is exactly the mistake rule 3 exists to prevent.
 
-**Never touch an environment you did not create.** No `exec`, no writes, no
-reuse, however convenient. `collaudit8` and `collaudit9` are Pablo's
-namespaces — leave them alone and deploy your own.
+**Never touch an environment you did not create** — with one stated
+exception. No `exec`, no writes, no reuse of somebody's namespace, however
+convenient. `test` and `testpg14`..`testpg18` on dell3 are not yours: leave
+them alone and deploy your own.
+
+The exception is the three `collaudit*` fixtures below. Pablo set them up on
+2026-09-06 *to be used* for exactly this work, so measuring on them is what
+they are for. That is a deliberate carve-out, not a softening of the rule:
+everything outside that named list still gets deployed under your own
+namespace.
 
 *What went wrong:* I built a measurement on `dbcanvas-systemd` images I found
 via `docker images`, nobody having suggested them, and ran `docker exec` inside
@@ -133,6 +140,16 @@ How to write an entry:
 - **Keep it short.** A skill nobody can scan stops being read. Record the rule
   and the mechanism; the transcript keeps the narrative.
 
+**When a verdict moves, the notice that announces moved verdicts moves with
+it.** `docs/results.md` and the README carry a "if you saved a result before
+DATE, N verdicts have moved" block. On 2026-09-06 the `th_TH` change updated
+the table, the worked example and the CHANGELOG — and not that block, which
+went on saying "before 2026-09-05 … two verdicts" for a move made on the 6th.
+Anyone holding a result from the 5th was told nothing had changed for them.
+The verdict table is the obvious place to look and therefore the one that gets
+updated; the notice is the one that quietly rots. Grep for the previous date
+whenever a verdict moves.
+
 One habit belongs here rather than in a rule of its own:
 
 - **Verify once, report it, then act on it.** Do not re-run a check already
@@ -175,10 +192,11 @@ command below.
 
 All three come from the same vendor and image lineage, which is the control
 that matters: the only intended variable between two nodes is glibc's version.
-Note the distro package builds differ from the ones `docs/results.md` cites
-(`glibc-2.28-251.el8_10.40`, `glibc-2.34-275.el9_8`, measured on earlier
-nodes) — the upstream 2.28/2.34/2.39 lineage is the same, but say which build
-a measurement was taken on rather than assuming they match.
+The builds in that table are the ones `docs/results.md` cites for RHEL8→RHEL9
+and the ones ardentperf's RHEL8/RHEL9 rows use — verified 2026-09-06, not
+assumed. (This paragraph used to claim they *differed*, while listing the same
+strings; it was stale, and stale notes get acted on.) Still say which build a
+measurement was taken on rather than assuming two nodes match.
 
 ```sh
 anydbver --namespace=collaudit8  deploy os:el8  pg:18
@@ -196,7 +214,11 @@ run this on each node — every step is load-bearing:
 
 ```sh
 # 1. the trap: all three images ship %_install_langs en_US, so without this
-#    dnf reports success and installs English only
+#    dnf reports success and installs English only.
+#    WARNING: this also UPGRADES glibc -- langpacks are version-locked to
+#    glibc, so dnf pulls the newest build of both. A fresh el8 node went from
+#    2.28-236.el8_9.7 to 2.28-251.el8_10.40 just by installing langpacks.
+#    It is not only glibc-locale-source that does this. Re-check `rpm -q glibc`.
 rm -f /etc/rpm/macros.image-language-conf
 dnf install -y glibc-all-langpacks          # -> 867 / 869 / 885 locales
 
@@ -258,7 +280,10 @@ Four traps, each one measured rather than theorised:
   differently-ordered input differs for reasons unrelated to glibc.
 - **Keep a positive control.** Confirm the locale's order differs from `LC_ALL=C`
   byte order; otherwise an ungenerated locale silently fell back to `C` and the
-  two sides will agree while proving nothing.
+  two sides will agree while proving nothing. **`C.utf8` inverts this check**:
+  from glibc 2.34 its corrected order *is* byte order, so agreeing with
+  `LC_ALL=C` is the right answer there and disagreeing is the 2.28 bug. Do not
+  read that agreement as a fallback.
 
 When a difference does appear, confirm it with a direct `locale.strcoll`
 comparison on specific string pairs, not only a `sort` checksum — that rules

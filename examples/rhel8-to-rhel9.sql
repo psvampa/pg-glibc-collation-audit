@@ -1,8 +1,21 @@
 -- Worked example: glibc 2.28 (RHEL8) -> glibc 2.34 (RHEL9).
+--
 -- Run on both a RHEL8-family and a RHEL9-family node (Rocky/Alma/etc. are
--- binary-compatible for this purpose). Requires:
+-- binary-compatible for this purpose), and diff the two outputs. Feed both
+-- sides this identical file: a comparison of differently-ordered input differs
+-- for reasons that have nothing to do with glibc.
+--
+-- Measured on (state the build, not just the upstream version -- the distro
+-- adds backports the upstream tag diff cannot see):
+--   RHEL8 side: Rocky Linux 8.9, glibc-2.28-251.el8_10.40, PostgreSQL 18.6
+--   RHEL9 side: Rocky Linux 9.3, glibc-2.34-275.el9_8,     PostgreSQL 18.6
+-- Same two glibc builds ardentperf's RHEL8/RHEL9 rows use.
+--
+-- Requires, on each node:
+--   rm -f /etc/rpm/macros.image-language-conf   # or dnf installs English only
 --   dnf install -y glibc-langpack-sv glibc-langpack-or glibc-langpack-en \
 --                  glibc-langpack-de glibc-langpack-fr
+--   systemctl restart postgresql-18             # BEFORE importing collations
 --
 -- Locales under test were chosen from the audit output for this exact pair
 -- (see ../docs/results.md, "Worked example: RHEL8 to RHEL9"):
