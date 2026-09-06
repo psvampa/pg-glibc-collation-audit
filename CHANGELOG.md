@@ -40,10 +40,10 @@ nodes**. Comparing the nodes to each other needs no tag at all.
   the locales declaring `codepoint_collation` instead of leaving them among the
   unflagged, because cleared and unexamined look identical on a terminal.
 - **`sql/c_utf8_probe.sql`** — the empirical half, and it takes no editing. Its
-  corpus is derived from the rule that changed rather than sampled: every
-  endpoint and every start of every range the backported locale declares, plus
-  the UTF-8 length boundaries, 41 values, asserted as 41 before anything is
-  compared. It carries the **inverted positive control** — for `C.UTF-8`,
+  corpus is derived from the RHEL8 file itself rather than sampled: the first
+  and last code point of every range it declares, the first and last of every
+  plane it declares **no** range for, and the UTF-8 length boundaries. 41
+  values, asserted as 41 before anything is compared. It carries the **inverted positive control** — for `C.UTF-8`,
   agreeing with byte order is the fix, not the usual sign that a locale was
   never generated — and a `strxfrm` check for the third reading, where tied
   weights are rescued by PostgreSQL's own `strcmp` tie-break.
@@ -108,10 +108,10 @@ and says so in a warning of its own. The compiled locale
 (`/usr/lib/locale/locale-archive`) is still not compared, which would be the
 strictly stronger check and would have caught that 5.3 MiB directly.
 
-### Two things the measurement itself caught
+### Four things caught by measuring, and by re-reading what was written
 
-Both are the failure mode this repository exists to prevent, found by running
-the thing rather than by planning it.
+All four are the failure mode this repository exists to prevent, found by
+running and reading the thing rather than by planning it.
 
 - The probe's `DROP TABLE IF EXISTS` emitted a notice **only on the first run
   on a node**, so running it twice on one node and once on the other made the
@@ -121,6 +121,30 @@ the thing rather than by planning it.
   general shape and had one range per plane. The real RHEL8 file has six, and
   the planes it omits are the entire reason the order was wrong. The fixture is
   now the file copied off `collaudit8`.
+- **The probe carried that same wrong shape, and was not fixed with the
+  fixture.** Its header described one range per plane and its corpus rows were
+  labelled `range 3 start` … `range 17 end`, so 22 of the 41 values claimed to
+  be endpoints of ranges that do not exist — and those labels were printed in
+  both published example outputs, three lines below prose stating the truth.
+  The corpus itself was right and is unchanged: those 22 values are the first
+  and last code point of every plane the file declares **no** range for, which
+  is precisely why they have no weights. Only the labels and the rationale were
+  wrong, and a wrong label on correct evidence is how the evidence gets
+  misread. Both outputs were regenerated on all three nodes; every measured
+  answer came back identical, which is what says this was a labelling fix and
+  not a measurement change.
+- **A claim in the regenerated example was false on its own data.** It said
+  "the FIRST code point of each declared range sorts last (38-41)"; four of the
+  five in the corpus do, and `U+E0000` sorts at 27 instead. Corrected to say
+  what the output shows and to say plainly that it is not explained. No grep
+  could have found that one — it needed reading the table under the sentence.
+
+Two stale generalisations went with them: the step 4 docstring said "RHEL8's
+**and RHEL9's** `C` is built from ellipsis ranges" (RHEL9's declares
+`codepoint_collation`), and step 8's closing warning asserted the ellipsis
+shape on every run, including the RHEL9 → RHEL10 run whose own output reported
+`codepoint_collation` on both nodes a few lines above. That warning is now
+written from what was actually read, and two tests pin it in both directions.
 
 ### Not decided here
 

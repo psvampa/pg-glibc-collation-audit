@@ -44,9 +44,17 @@ If you saved a result from this tool before 2026-09-07, check
   have flagged them.
 
 No verdict moved on 2026-09-06 when `C.UTF-8` was measured directly for the
-first time, but the *basis* of its RHEL9→RHEL10 🟢 did: it was ardentperf's
-checksum and is now a byte comparison of both nodes' own locale sources plus a
-41-code-point probe on each.
+first time, but two things did.
+
+**A conclusion this page never contradicted turns out to be wrong:** *"we are
+staying on RHEL8, so `C.UTF-8` is fine"*. Its order also changed *within* RHEL8,
+in `glibc-2.28-93.el8` (RHEL 8.2) — see the `C.UTF-8` section of the
+RHEL8-to-RHEL9 worked example below. If you decided not to reindex because you
+were not crossing a major, that decision was made on incomplete information.
+
+And the *basis* of its RHEL9→RHEL10 🟢 moved: it was ardentperf's checksum and
+is now a byte comparison of both nodes' own locale sources plus a 41-code-point
+probe on each.
 
 No verdict moved on 2026-09-05, but six ways of reaching one silently did, so
 a run from that day prints things an earlier one did not: a `C.UTF-8` warning
@@ -176,6 +184,19 @@ RHEL9's agreement with byte order is the *fix*, not the usual sign that a
 locale was never generated. The `strxfrm` row is what rules out the third
 reading, where tied weights are rescued by PostgreSQL's own `strcmp`
 tie-break.
+
+**And it changed inside RHEL8 too.** `glibc-2.28-93.el8` (RHEL 8.2,
+[RHSA-2020:1828](https://access.redhat.com/errata/RHSA-2020:1828), Red Hat bug
+1361965) rewrote those ellipsis expressions so that the code points above
+U+10000 gained weights at all; the compiled locale grew 5.3 MiB. The node says
+so itself — `rpm -q --changelog glibc | grep -i collat` prints *"Fix C.UTF-8
+locale source ellipsis expressions (#1361965)"* on RHEL8, and nothing at all on
+RHEL9 or RHEL10, out of changelogs of 158 and 112 entries.
+
+Both sides of that upgrade are upstream glibc 2.28, so the tag pair is
+`glibc-2.28..glibc-2.28` and steps 1-5 have nothing to compare. This table is
+keyed on two major upgrades and cannot express it, so read it here: **staying
+on one RHEL major is not a control for this locale.**
 
 Full output:
 [`examples/c-utf8-probe-rhel8-vs-rhel9.txt`](../examples/c-utf8-probe-rhel8-vs-rhel9.txt).

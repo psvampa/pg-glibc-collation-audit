@@ -13,6 +13,10 @@ discarding all collation information in favour of strcmp/wcscmp. C.UTF-8 is
 byte order by construction on both sides, so there is no expansion logic left
 for a localedef change to move.
 
+Note on the labels below: they name the ranges the RHEL8-era backported file
+declares, because that is the file the corpus is derived from. Neither of these
+two nodes declares any range at all -- on them the labels are just names.
+
 The two outputs are IDENTICAL apart from the node identity block at the top:
 
   $ diff <(tail -n +5 rhel9.out) <(tail -n +5 rhel10.out)
@@ -47,8 +51,8 @@ tie-break -- the third reading query 2 warns about.
 --- the order, both nodes (query 1) ---------------------------------------
 This is code point order, exactly.
 
-   pos |    cp    |        kind         
-  -----+----------+---------------------
+   pos |    cp    |           kind            
+  -----+----------+---------------------------
      1 | U+0001   | UTF-8 1-byte
      2 | U+0041   | ASCII anchor A
      3 | U+005A   | ASCII anchor Z
@@ -57,39 +61,39 @@ This is code point order, exactly.
      6 | U+0080   | UTF-8 2-byte first
      7 | U+07FF   | UTF-8 2-byte last
      8 | U+0800   | UTF-8 3-byte first
-     9 | U+FFFF   | range 1 end / BMP
-    10 | U+10000  | range 2 start
-    11 | U+1FFFF  | range 2 end
-    12 | U+20000  | range 3 start
-    13 | U+2FFFF  | range 3 end
-    14 | U+30000  | range 4 start
-    15 | U+3FFFF  | range 4 end
-    16 | U+40000  | range 5 start
-    17 | U+4FFFF  | range 5 end
-    18 | U+50000  | range 6 start
-    19 | U+5FFFF  | range 6 end
-    20 | U+60000  | range 7 start
-    21 | U+6FFFF  | range 7 end
-    22 | U+70000  | range 8 start
-    23 | U+7FFFF  | range 8 end
-    24 | U+80000  | range 9 start
-    25 | U+8FFFF  | range 9 end
-    26 | U+90000  | range 10 start
-    27 | U+9FFFF  | range 10 end
-    28 | U+A0000  | range 11 start
-    29 | U+AFFFF  | range 11 end
-    30 | U+B0000  | range 12 start
-    31 | U+BFFFF  | range 12 end
-    32 | U+C0000  | range 13 start
-    33 | U+CFFFF  | range 13 end
-    34 | U+D0000  | range 14 start
-    35 | U+DFFFF  | range 14 end
-    36 | U+E0000  | range 15 start
-    37 | U+EFFFF  | range 15 end
-    38 | U+F0000  | range 16 start
-    39 | U+FFFFF  | range 16 end
-    40 | U+100000 | range 17 start
-    41 | U+10FFFF | range 17 end / last
+     9 | U+FFFF   | plane 0 last (declared)
+    10 | U+10000  | plane 1 first (declared)
+    11 | U+1FFFF  | plane 1 last (declared)
+    12 | U+20000  | plane 2 first (declared)
+    13 | U+2FFFF  | plane 2 last (declared)
+    14 | U+30000  | plane 3 first (NO range)
+    15 | U+3FFFF  | plane 3 last (NO range)
+    16 | U+40000  | plane 4 first (NO range)
+    17 | U+4FFFF  | plane 4 last (NO range)
+    18 | U+50000  | plane 5 first (NO range)
+    19 | U+5FFFF  | plane 5 last (NO range)
+    20 | U+60000  | plane 6 first (NO range)
+    21 | U+6FFFF  | plane 6 last (NO range)
+    22 | U+70000  | plane 7 first (NO range)
+    23 | U+7FFFF  | plane 7 last (NO range)
+    24 | U+80000  | plane 8 first (NO range)
+    25 | U+8FFFF  | plane 8 last (NO range)
+    26 | U+90000  | plane 9 first (NO range)
+    27 | U+9FFFF  | plane 9 last (NO range)
+    28 | U+A0000  | plane 10 first (NO range)
+    29 | U+AFFFF  | plane 10 last (NO range)
+    30 | U+B0000  | plane 11 first (NO range)
+    31 | U+BFFFF  | plane 11 last (NO range)
+    32 | U+C0000  | plane 12 first (NO range)
+    33 | U+CFFFF  | plane 12 last (NO range)
+    34 | U+D0000  | plane 13 first (NO range)
+    35 | U+DFFFF  | plane 13 last (NO range)
+    36 | U+E0000  | plane 14 first (declared)
+    37 | U+EFFFF  | plane 14 last (declared)
+    38 | U+F0000  | plane 15 first (declared)
+    39 | U+FFFFF  | plane 15 last (declared)
+    40 | U+100000 | plane 16 first (declared)
+    41 | U+10FFFF | plane 16 last (declared)
   (41 rows)
 
 --- node identity, for the record -----------------------------------------

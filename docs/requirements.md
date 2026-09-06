@@ -24,10 +24,10 @@ matters, and what happens when `gpg` is unavailable, is in
 python3 -m unittest discover -s tests -t tests
 ```
 
-About a minute. It pins the three tags to their commit ids, so a moved tag
-reports itself as a moved tag instead of as a change in the results. Five of
-its six layers need the glibc clone and skip themselves, with a reason, if it
-is absent; only `test_pure_functions.py` runs without one. CI runs the whole
+About a minute and a half. It pins the three tags to their commit ids, so a
+moved tag reports itself as a moved tag instead of as a change in the results.
+Six of its seven layers need the glibc clone and skip themselves, with a
+reason, if it is absent; only `test_pure_functions.py` runs without one. CI runs the whole
 suite on a fresh clone and fails on any skip.
 
 [`tests/README.md`](../tests/README.md) says what it covers and, more

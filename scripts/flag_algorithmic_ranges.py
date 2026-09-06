@@ -41,9 +41,13 @@ says.
 
 It also scans a DIRECTORY of locale sources -- a copy of a node's
 /usr/share/i18n/locales/ -- instead of a tag. That is the only way it can see a
-locale the distro BACKPORTS: RHEL8's and RHEL9's `C` is built from ellipsis
-ranges and exists at no upstream tag, which is why C.UTF-8's order can move
-with nothing in the audit able to say so. See docs/limitations.md.
+locale the distro BACKPORTS, and `C` is the case that matters: it exists at no
+upstream tag before 2.35, and RHEL8 builds it from six ellipsis ranges, so
+C.UTF-8's order there depends on how localedef expands them. Measured on
+glibc-2.28-251.el8_10.40, this mode flags it; on glibc-2.34-275.el9_8 and
+glibc-2.39-128.el10_2 the same file declares codepoint_collation and this mode
+reports it as byte order by construction. Either way it is this mode saying so,
+which is what the tag scan structurally cannot. See docs/limitations.md.
 
 Usage:
   python3 flag_algorithmic_ranges.py <tag> [--repo <path>]

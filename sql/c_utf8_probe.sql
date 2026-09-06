@@ -8,12 +8,14 @@
 -- Why C.UTF-8 gets its own file:
 --
 --   * The source-diff audit cannot see it. localedata/locales/C exists
---     upstream only from glibc 2.35, while RHEL8 and RHEL9 both ship a
---     BACKPORTED copy -- a file in neither tag, which no tag-to-tag diff can
---     compare. scripts/diff_node_locales.py compares the two nodes' own copies
---     and settles the DATA; it cannot settle the ORDER, because the backported
---     file defines its collation with ellipsis ranges and localedef computes
---     those weights when the locale is built.
+--     upstream only from glibc 2.35, while RHEL8, RHEL9 and RHEL10 all ship a
+--     BACKPORTED copy -- a file in neither tag of the RHEL8->RHEL9 pair, which
+--     no tag-to-tag diff can compare. scripts/diff_node_locales.py compares
+--     the two nodes' own copies and settles the DATA; it cannot settle the
+--     ORDER wherever that file defines its collation with ellipsis ranges,
+--     because localedef computes those weights when the locale is built. RHEL8
+--     is such a node; RHEL9 and RHEL10 declare codepoint_collation instead,
+--     which is byte order by construction.
 --
 --   * PostgreSQL cannot warn either. Under the libc provider,
 --     get_collation_actual_version() returns NULL for "C", for "POSIX" and for
@@ -123,19 +125,38 @@ WHERE collname IN ('C', 'POSIX', 'C.utf8', 'C.UTF-8', 'pg_c_utf8')
   AND collnamespace = 'pg_catalog'::regnamespace
 ORDER BY collname;
 
--- THE CORPUS. Not a sample: every value here is an endpoint of a range the
--- backported localedata/locales/C actually declares, or a UTF-8 length
--- boundary. Bug 22668 is "LC_COLLATE: Fix last character ellipsis handling",
--- so the first and last code point of each declared range are where an
--- expansion change shows up. The backport declares:
+-- THE CORPUS. Not a sample. It is derived from the RHEL8-era backported
+-- localedata/locales/C, copied off a node (glibc-2.28-251.el8_10.40) rather
+-- than from the patch's general shape, which is what it actually declares:
 --
 --     order_start forward
---     <U0000>..<UFFFF>
---     <U00010000>..<U0001FFFF>
---     ... one range per plane ...
---     <U00100000>..<U0010FFFF>
+--     <U0000>..<UFFFF>              % plane 0
+--     <U00010000>..<U0001FFFF>      % plane 1
+--     <U00020000>..<U0002FFFF>      % plane 2
+--     <U000E0000>..<U000EFFFF>      % plane 14
+--     <U000F0000>..<U000FFFFF>      % plane 15
+--     <U00100000>..<U0010FFFF>      % plane 16
 --     UNDEFINED
 --     order_end
+--
+-- SIX ranges, not one per plane. Read what is missing: planes 3 through 13 are
+-- declared by NO range at all, so every code point in them falls to UNDEFINED
+-- (Red Hat bug 1361965). So the corpus is three things, and it is exhaustive
+-- over each:
+--
+--   * the first and last code point of every DECLARED range -- Bug 22668 is
+--     "LC_COLLATE: Fix last character ellipsis handling", so a range's
+--     endpoints are exactly where an expansion change shows up;
+--   * the first and last code point of every plane declared by NO range --
+--     these are the UNDEFINED ones, and on RHEL8 they are why the order is
+--     scrambled rather than merely shifted;
+--   * the UTF-8 length boundaries, plus three ASCII anchors so a human can
+--     read the diff.
+--
+-- 41 values, asserted below. The plane labels describe THAT file, because that
+-- is what the corpus is derived from; on a node whose C declares
+-- codepoint_collation there are no ranges at all and the labels are just
+-- names.
 --
 -- Surrogates U+D800..U+DFFF are deliberately absent: they are not valid UTF-8
 -- and PostgreSQL rejects them. The U+xFFFF noncharacters ARE valid UTF-8 and
@@ -148,47 +169,47 @@ CREATE TABLE c_utf8_probe (
 );
 
 INSERT INTO c_utf8_probe (cp, kind, w) VALUES
-  ('U+0001',   'UTF-8 1-byte',        U&'\+000001'),
-  ('U+0041',   'ASCII anchor A',      U&'\+000041'),
-  ('U+005A',   'ASCII anchor Z',      U&'\+00005A'),
-  ('U+0061',   'ASCII anchor a',      U&'\+000061'),
-  ('U+007F',   'UTF-8 1-byte last',   U&'\+00007F'),
-  ('U+0080',   'UTF-8 2-byte first',  U&'\+000080'),
-  ('U+07FF',   'UTF-8 2-byte last',   U&'\+0007FF'),
-  ('U+0800',   'UTF-8 3-byte first',  U&'\+000800'),
-  ('U+FFFF',   'range 1 end / BMP',   U&'\+00FFFF'),
-  ('U+10000',  'range 2 start',       U&'\+010000'),
-  ('U+1FFFF',  'range 2 end',         U&'\+01FFFF'),
-  ('U+20000',  'range 3 start',       U&'\+020000'),
-  ('U+2FFFF',  'range 3 end',         U&'\+02FFFF'),
-  ('U+30000',  'range 4 start',       U&'\+030000'),
-  ('U+3FFFF',  'range 4 end',         U&'\+03FFFF'),
-  ('U+40000',  'range 5 start',       U&'\+040000'),
-  ('U+4FFFF',  'range 5 end',         U&'\+04FFFF'),
-  ('U+50000',  'range 6 start',       U&'\+050000'),
-  ('U+5FFFF',  'range 6 end',         U&'\+05FFFF'),
-  ('U+60000',  'range 7 start',       U&'\+060000'),
-  ('U+6FFFF',  'range 7 end',         U&'\+06FFFF'),
-  ('U+70000',  'range 8 start',       U&'\+070000'),
-  ('U+7FFFF',  'range 8 end',         U&'\+07FFFF'),
-  ('U+80000',  'range 9 start',       U&'\+080000'),
-  ('U+8FFFF',  'range 9 end',         U&'\+08FFFF'),
-  ('U+90000',  'range 10 start',      U&'\+090000'),
-  ('U+9FFFF',  'range 10 end',        U&'\+09FFFF'),
-  ('U+A0000',  'range 11 start',      U&'\+0A0000'),
-  ('U+AFFFF',  'range 11 end',        U&'\+0AFFFF'),
-  ('U+B0000',  'range 12 start',      U&'\+0B0000'),
-  ('U+BFFFF',  'range 12 end',        U&'\+0BFFFF'),
-  ('U+C0000',  'range 13 start',      U&'\+0C0000'),
-  ('U+CFFFF',  'range 13 end',        U&'\+0CFFFF'),
-  ('U+D0000',  'range 14 start',      U&'\+0D0000'),
-  ('U+DFFFF',  'range 14 end',        U&'\+0DFFFF'),
-  ('U+E0000',  'range 15 start',      U&'\+0E0000'),
-  ('U+EFFFF',  'range 15 end',        U&'\+0EFFFF'),
-  ('U+F0000',  'range 16 start',      U&'\+0F0000'),
-  ('U+FFFFF',  'range 16 end',        U&'\+0FFFFF'),
-  ('U+100000', 'range 17 start',      U&'\+100000'),
-  ('U+10FFFF', 'range 17 end / last', U&'\+10FFFF');
+  ('U+0001',   'UTF-8 1-byte',              U&'\+000001'),
+  ('U+0041',   'ASCII anchor A',            U&'\+000041'),
+  ('U+005A',   'ASCII anchor Z',            U&'\+00005A'),
+  ('U+0061',   'ASCII anchor a',            U&'\+000061'),
+  ('U+007F',   'UTF-8 1-byte last',         U&'\+00007F'),
+  ('U+0080',   'UTF-8 2-byte first',        U&'\+000080'),
+  ('U+07FF',   'UTF-8 2-byte last',         U&'\+0007FF'),
+  ('U+0800',   'UTF-8 3-byte first',        U&'\+000800'),
+  ('U+FFFF',   'plane 0 last (declared)',   U&'\+00FFFF'),
+  ('U+10000',  'plane 1 first (declared)',  U&'\+010000'),
+  ('U+1FFFF',  'plane 1 last (declared)',   U&'\+01FFFF'),
+  ('U+20000',  'plane 2 first (declared)',  U&'\+020000'),
+  ('U+2FFFF',  'plane 2 last (declared)',   U&'\+02FFFF'),
+  ('U+30000',  'plane 3 first (NO range)',  U&'\+030000'),
+  ('U+3FFFF',  'plane 3 last (NO range)',   U&'\+03FFFF'),
+  ('U+40000',  'plane 4 first (NO range)',  U&'\+040000'),
+  ('U+4FFFF',  'plane 4 last (NO range)',   U&'\+04FFFF'),
+  ('U+50000',  'plane 5 first (NO range)',  U&'\+050000'),
+  ('U+5FFFF',  'plane 5 last (NO range)',   U&'\+05FFFF'),
+  ('U+60000',  'plane 6 first (NO range)',  U&'\+060000'),
+  ('U+6FFFF',  'plane 6 last (NO range)',   U&'\+06FFFF'),
+  ('U+70000',  'plane 7 first (NO range)',  U&'\+070000'),
+  ('U+7FFFF',  'plane 7 last (NO range)',   U&'\+07FFFF'),
+  ('U+80000',  'plane 8 first (NO range)',  U&'\+080000'),
+  ('U+8FFFF',  'plane 8 last (NO range)',   U&'\+08FFFF'),
+  ('U+90000',  'plane 9 first (NO range)',  U&'\+090000'),
+  ('U+9FFFF',  'plane 9 last (NO range)',   U&'\+09FFFF'),
+  ('U+A0000',  'plane 10 first (NO range)', U&'\+0A0000'),
+  ('U+AFFFF',  'plane 10 last (NO range)',  U&'\+0AFFFF'),
+  ('U+B0000',  'plane 11 first (NO range)', U&'\+0B0000'),
+  ('U+BFFFF',  'plane 11 last (NO range)',  U&'\+0BFFFF'),
+  ('U+C0000',  'plane 12 first (NO range)', U&'\+0C0000'),
+  ('U+CFFFF',  'plane 12 last (NO range)',  U&'\+0CFFFF'),
+  ('U+D0000',  'plane 13 first (NO range)', U&'\+0D0000'),
+  ('U+DFFFF',  'plane 13 last (NO range)',  U&'\+0DFFFF'),
+  ('U+E0000',  'plane 14 first (declared)', U&'\+0E0000'),
+  ('U+EFFFF',  'plane 14 last (declared)',  U&'\+0EFFFF'),
+  ('U+F0000',  'plane 15 first (declared)', U&'\+0F0000'),
+  ('U+FFFFF',  'plane 15 last (declared)',  U&'\+0FFFFF'),
+  ('U+100000', 'plane 16 first (declared)', U&'\+100000'),
+  ('U+10FFFF', 'plane 16 last (declared)',  U&'\+10FFFF');
 
 -- A silently dropped code point is the same class of error as a truncated
 -- locale directory: it makes the comparison narrower and the result cleaner.

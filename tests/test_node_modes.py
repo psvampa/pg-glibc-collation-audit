@@ -266,6 +266,30 @@ class NodeToNodeRefusesToGuess(NodeCase):
         self.assertEqual(rc, 0, text)
         self.assertIn('a_subdir', text)
 
+    def test_the_caveat_does_not_assert_a_shape_it_did_not_see(self):
+        """It used to say "C.UTF-8, whose backported source IS built from
+        ellipsis ranges" on every run -- including the RHEL9 -> RHEL10 run
+        whose own output a few lines above reports codepoint_collation on both
+        nodes. A warning that contradicts the output beside it is a warning
+        nobody believes twice."""
+        same = upstream_c()
+        rc, text = self.node_to_node(self.node(OLD, 'a', extra={'C': same}),
+                                     self.node(MID, 'b', extra={'C': same}),
+                                     'build-A', 'build-B')
+        self.assertEqual(rc, 0, text)
+        self.assertIn('codepoint_collation', text)
+        self.assertNotIn('built from ellipsis ranges', text)
+        self.assertIn('c_utf8_probe.sql', text)
+
+    def test_the_caveat_names_the_locale_when_it_IS_ellipsis_based(self):
+        rc, text = self.node_to_node(
+            self.node(OLD, 'a', extra={'C': backported_c()}),
+            self.node(MID, 'b', extra={'C': upstream_c()}),
+            'build-A', 'build-B')
+        self.assertEqual(rc, 0, text)
+        self.assertIn('C.UTF-8: built from ellipsis ranges on at least one',
+                      text)
+
     def test_the_data_only_caveat_is_printed(self):
         """Data equality is not order equality: Bug 22668 reordered ko_KR from
         a byte-identical file. Without this the mode's cleanest result is also

@@ -91,8 +91,11 @@ So both file-reading scripts refuse rather than report: they check an absolute
 floor on the number of files compared, they resolve both paths and abort if
 they name the same directory, and they print a per-side fingerprint of file
 names and sizes so two equal fingerprints under two different build ids are
-visible. Assert the file count on both sides yourself as well —
-`--expect-files` exists for that.
+visible. Assert the file count on both sides yourself as well: the scripts print each
+side's count, and when you run them directly `--expect-files N` turns your
+expectation into a refusal. `./audit.sh` does not take that option, so through
+the wrapper the printed counts are the assertion — compare them against
+`ls /usr/share/i18n/locales/ | wc -l` on each node.
 
 ## The `C.UTF-8` probe
 

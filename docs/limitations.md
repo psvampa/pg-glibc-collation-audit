@@ -15,13 +15,14 @@ otherwise mechanical method.
 ## `C.UTF-8` is invisible to a tag diff
 
 Its source file, `localedata/locales/C`, only exists upstream from glibc
-**2.35**, but RHEL8 and RHEL9 both ship a backported `C.UTF-8` — and it
-**does** change between them. Comparing upstream 2.28 and 2.34 cannot see a
+**2.35**, but RHEL8, RHEL9 and RHEL10 all ship a backported `C.UTF-8` — and it
+**does** change between the first two. Comparing upstream 2.28 and 2.34 cannot see a
 file that is in neither, and no choice of tags fixes that.
 
 What closes it is that the file is absent from both tags and **present on both
-nodes**. Three checks read it there, and this section says what each one does
-and does not prove. None of them makes steps 1-5 able to see it.
+nodes**. Three checks reach it there — two read the file, the third measures the
+order it produces — and this section says what each one does and does not prove.
+None of them makes steps 1-5 able to see it.
 
 ### What was measured
 
@@ -38,10 +39,11 @@ Re-measured 2026-09-06 on `glibc-2.28-251.el8_10.40` and
 `strcoll` as well as `sort`: U+007F sorts *after* U+FFFF at 2.28 and *before*
 it at 2.34.
 
-Widened the same day to the whole set of code points the backported locale's
-own ranges turn on, by [`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql) —
-every range endpoint, every range start, the UTF-8 length boundaries, 41 values
-in all:
+Widened the same day by [`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql),
+whose corpus is derived from the RHEL8 file itself: the first and last code
+point of every range it declares, the first and last of every plane it declares
+**no** range for, and the UTF-8 length boundaries. 41 values, asserted as 41
+before anything is compared:
 
 | Node | `C.utf8` equals byte order? | Positions differing |
 |---|---|---|
@@ -175,6 +177,19 @@ Both node-reading checks refuse to report rather than report a clean zero: two
 equally truncated directories agree perfectly, and so does one directory
 compared with itself.
 
+The second one is **not** wired into `audit.sh` — the wrapper always runs step 4
+against the new tag, so run the directory mode by hand, once per node:
+
+```sh
+python3 scripts/flag_algorithmic_ranges.py \
+    --locales-dir ./el8-locales --build-id glibc-2.28-251.el8_10.40 \
+    --supported-tag glibc-2.28
+```
+
+`--supported-tag` is optional and maps source file names to the
+[generated names](glossary.md) `locale -a` shows; a node ships no `SUPPORTED`
+file of its own.
+
 `audit.sh` runs the first as step 8 when given both nodes' directories, and
 when not given them **says so in the summary** rather than omitting the
 section:
@@ -267,9 +282,11 @@ which is which by reading the node's own copy:
   identical. It has no collation of its own, so nothing is hidden. It is Red
   Hat-only — in no upstream tag from 2.28 to 2.41 — and until now nothing in
   the tool mentioned it at all.
-- `C` carries its own tailoring, so it is genuinely unauditable from source.
-  That is the `C.UTF-8` limitation above, now confirmed mechanically rather
-  than asserted.
+- `C` carries its own tailoring, so *this* comparison cannot audit it: there
+  is no upstream file to compare it against. That is the `C.UTF-8` limitation
+  above, now confirmed mechanically rather than asserted — and audited from
+  source anyway, by comparing the two nodes' copies to each other instead of
+  each one to a tag.
 
 ### What that measurement does not cover
 
@@ -318,9 +335,10 @@ route — diff hunks overlapped against the old side's line numbers, versus
 whole-block equality. Only the transport off a real node stays un-exercised in
 CI, the same position `sql/collation_confirmation_template.sql` is in.
 
-`./audit.sh` runs it too, but only when given `--old-locales-dir` /
-`--new-locales-dir`: steps 1 to 5 read the clone alone, and this needs a node's
-files.
+`./audit.sh` runs it too, per side, for whichever of `--old-locales-dir` and
+`--new-locales-dir` you give it: steps 1 to 5 read the clone alone, and this
+needs a node's files. Give it both and it additionally compares the two nodes to
+each other, which is a different question — see the first limitation.
 
 ## Below glibc 2.24 the method breaks silently
 

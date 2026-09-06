@@ -12,9 +12,20 @@
 #
 # Usage:
 #   ./audit.sh <old_tag> <new_tag>
+#              [--old-locales-dir DIR --old-build-id NVR]
+#              [--new-locales-dir DIR --new-build-id NVR]
+#
+# The --*-locales-dir options are optional and read a node's own
+# /usr/share/i18n/locales/. One side adds the distro-versus-upstream check
+# (steps 6, 7); BOTH sides add the node-to-node comparison (step 8), which is
+# the only thing here that can see a locale the distro backports -- C.UTF-8
+# above all. See usage() below and docs/method.md.
 #
 # Example (the tags are examples -- run `ldd --version` on each node):
 #   ./audit.sh glibc-2.28 glibc-2.34
+#   ./audit.sh glibc-2.28 glibc-2.34 \
+#     --old-locales-dir ./el8-locales --old-build-id glibc-2.28-251.el8_10.40 \
+#     --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
 set -euo pipefail
 
 usage() {

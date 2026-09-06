@@ -17,6 +17,11 @@ and a NULL datcollversion, which is the configuration the limitation is about:
 every text column without an explicit COLLATE depends on this order, and no
 version mismatch can ever warn about it.
 
+The corpus is derived from the RHEL8 file itself, which declares SIX ellipsis
+ranges -- planes 0, 1, 2, 14, 15, 16 -- and no range at all for planes 3
+through 13. The labels below say which is which, because that distinction is
+the finding: the values in undeclared planes fall to UNDEFINED.
+
 $ psql -X -f c_utf8_probe.sql        # on each node, then diff
 
 --- the inverted positive control (query 2) -------------------------------
@@ -77,43 +82,51 @@ RHEL9:
 --- the whole order, RHEL8 (query 1) --------------------------------------
 Code point order would be U+0001, U+0041, U+005A, U+0061, U+007F, U+0080,
 U+07FF, U+0800, U+FFFF, U+10000, ... U+10FFFF -- which is exactly what RHEL9
-produces. RHEL8 produces this instead. Note where ASCII lands: at position 31,
-after every plane-14-to-16 noncharacter. And note the planes the backported
-file declares no range for at all -- 3 through 13 -- whose endpoints sort ahead
-of ASCII while their starts sort behind it.
+produces. RHEL8 produces this instead, and the labels make the mechanism
+readable:
 
-   pos |    cp    |        kind         
-  -----+----------+---------------------
+  * positions 2-4 and 28-30 are the LAST code point of a declared range, all
+    six of them -- Bug 22668 is "Fix last character ellipsis handling";
+  * positions 5-26 are every code point of a plane the file declares no range
+    for, all 22 of them: they have no weight at all;
+  * ASCII lands at position 31, behind all of that;
+  * positions 38-41 are the FIRST code point of a declared range -- four of
+    the five that are in the corpus. The fifth, U+E0000, sorts at 27 instead,
+    among the weightless ones. This output records that; it does not explain
+    it, and neither does this project.
+
+   pos |    cp    |           kind            
+  -----+----------+---------------------------
      1 | U+0001   | UTF-8 1-byte
-     2 | U+FFFF   | range 1 end / BMP
-     3 | U+1FFFF  | range 2 end
-     4 | U+2FFFF  | range 3 end
-     5 | U+30000  | range 4 start
-     6 | U+3FFFF  | range 4 end
-     7 | U+40000  | range 5 start
-     8 | U+4FFFF  | range 5 end
-     9 | U+50000  | range 6 start
-    10 | U+5FFFF  | range 6 end
-    11 | U+60000  | range 7 start
-    12 | U+6FFFF  | range 7 end
-    13 | U+70000  | range 8 start
-    14 | U+7FFFF  | range 8 end
-    15 | U+80000  | range 9 start
-    16 | U+8FFFF  | range 9 end
-    17 | U+90000  | range 10 start
-    18 | U+9FFFF  | range 10 end
-    19 | U+A0000  | range 11 start
-    20 | U+AFFFF  | range 11 end
-    21 | U+B0000  | range 12 start
-    22 | U+BFFFF  | range 12 end
-    23 | U+C0000  | range 13 start
-    24 | U+CFFFF  | range 13 end
-    25 | U+D0000  | range 14 start
-    26 | U+DFFFF  | range 14 end
-    27 | U+E0000  | range 15 start
-    28 | U+EFFFF  | range 15 end
-    29 | U+FFFFF  | range 16 end
-    30 | U+10FFFF | range 17 end / last
+     2 | U+FFFF   | plane 0 last (declared)
+     3 | U+1FFFF  | plane 1 last (declared)
+     4 | U+2FFFF  | plane 2 last (declared)
+     5 | U+30000  | plane 3 first (NO range)
+     6 | U+3FFFF  | plane 3 last (NO range)
+     7 | U+40000  | plane 4 first (NO range)
+     8 | U+4FFFF  | plane 4 last (NO range)
+     9 | U+50000  | plane 5 first (NO range)
+    10 | U+5FFFF  | plane 5 last (NO range)
+    11 | U+60000  | plane 6 first (NO range)
+    12 | U+6FFFF  | plane 6 last (NO range)
+    13 | U+70000  | plane 7 first (NO range)
+    14 | U+7FFFF  | plane 7 last (NO range)
+    15 | U+80000  | plane 8 first (NO range)
+    16 | U+8FFFF  | plane 8 last (NO range)
+    17 | U+90000  | plane 9 first (NO range)
+    18 | U+9FFFF  | plane 9 last (NO range)
+    19 | U+A0000  | plane 10 first (NO range)
+    20 | U+AFFFF  | plane 10 last (NO range)
+    21 | U+B0000  | plane 11 first (NO range)
+    22 | U+BFFFF  | plane 11 last (NO range)
+    23 | U+C0000  | plane 12 first (NO range)
+    24 | U+CFFFF  | plane 12 last (NO range)
+    25 | U+D0000  | plane 13 first (NO range)
+    26 | U+DFFFF  | plane 13 last (NO range)
+    27 | U+E0000  | plane 14 first (declared)
+    28 | U+EFFFF  | plane 14 last (declared)
+    29 | U+FFFFF  | plane 15 last (declared)
+    30 | U+10FFFF | plane 16 last (declared)
     31 | U+0041   | ASCII anchor A
     32 | U+005A   | ASCII anchor Z
     33 | U+0061   | ASCII anchor a
@@ -121,10 +134,10 @@ of ASCII while their starts sort behind it.
     35 | U+0080   | UTF-8 2-byte first
     36 | U+07FF   | UTF-8 2-byte last
     37 | U+0800   | UTF-8 3-byte first
-    38 | U+10000  | range 2 start
-    39 | U+20000  | range 3 start
-    40 | U+F0000  | range 16 start
-    41 | U+100000 | range 17 start
+    38 | U+10000  | plane 1 first (declared)
+    39 | U+20000  | plane 2 first (declared)
+    40 | U+F0000  | plane 15 first (declared)
+    41 | U+100000 | plane 16 first (declared)
   (41 rows)
 
 --- what the database default was on both nodes (query 5) -----------------

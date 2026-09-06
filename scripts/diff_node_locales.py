@@ -12,15 +12,16 @@ verdict is about the delta between them.
 Why that is worth a separate comparison: a locale the DISTRO backports exists
 in neither tag, so no tag-to-tag diff can see it however the tags are chosen.
 `localedata/locales/C` is the case that matters -- upstream has it only from
-glibc 2.35, RHEL8 and RHEL9 both ship a backported copy, and C.UTF-8's order
-demonstrably differs between them. That file is on both nodes. Comparing the
-nodes to each other is the only source-level evidence about it that exists.
+glibc 2.35, the RHEL8/9/10 family all ship a backported copy, and C.UTF-8's
+order demonstrably differs between RHEL8 and RHEL9. That file is on both nodes.
+Comparing the nodes to each other is the only source-level evidence about it
+that exists.
 
-What this does NOT prove: that the ORDER is unchanged. The backported C defines
-its collation with ellipsis ranges, and localedef computes those weights at
-build time -- Bug 22668 reordered ko_KR from a byte-identical data file. Data
-equality clears the data half only. See the closing warnings, and
-sql/c_utf8_probe.sql for the half this cannot answer.
+What this does NOT prove: that the ORDER is unchanged. Wherever a locale defines
+its collation with ellipsis ranges -- as RHEL8's C does, with six of them --
+localedef computes those weights at build time, and Bug 22668 reordered ko_KR
+from a byte-identical data file. Data equality clears the data half only. See
+the closing warnings, and sql/c_utf8_probe.sql for the half this cannot answer.
 
 It takes two directories rather than reaching into two nodes, so the transport
 is the caller's problem and the comparison is testable without a node. It does
@@ -215,9 +216,17 @@ def report_backported(old, new, buckets, invisible):
     Absent is not empty. A run that says nothing about C.UTF-8 and a run that
     cleared it look identical on a terminal, and that is how this locale gets
     missed -- it is the false negative this whole script was written for.
+
+    Returns the backported locale names that are ellipsis-based on at least one
+    side, because that -- not the fact of being backported -- is what makes
+    identical data insufficient. The closing warning is written from it rather
+    than asserting the RHEL8 shape on every run: RHEL9 and RHEL10 declare
+    codepoint_collation, and a warning that contradicts the output eight lines
+    above it is a warning nobody believes twice.
     """
     print(f"\nBackported locales, reported whether or not they differ "
           f"(these are why this comparison exists):")
+    computed = []
     for name in sorted(KNOWN_BACKPORTED):
         locale_name = KNOWN_BACKPORTED[name]
         on_old = name in old.names
@@ -254,8 +263,10 @@ def report_backported(old, new, buckets, invisible):
         styles = (g.classify_collation_style(old_text),
                   g.classify_collation_style(new_text))
         if 'ellipsis' in styles:
+            computed.append(locale_name)
             print(f"      an ellipsis range means localedef computes the "
                   f"weights, so identical data does NOT clear the order")
+    return computed
 
 
 def main(argv):
@@ -331,7 +342,7 @@ def main(argv):
                                             label_b=new.build_id)
     report_buckets(old, new, buckets, side, texts, both, only_old, only_new,
                    invisible)
-    report_backported(old, new, buckets, invisible)
+    computed = report_backported(old, new, buckets, invisible)
 
     out = g.write_list(
         f"node_collate_diffs.{g.pair_slug(old.build_id, new.build_id)}.txt",
@@ -345,10 +356,25 @@ def main(argv):
             f"localedef when the locale is built, and that code differs "
             f"between two glibc builds. Bug 22668 (commit 82292c99b2) changed "
             f"exactly that and reordered ko_KR from a byte-identical file. So "
-            f"a clean result here clears the data half and nothing else. For "
-            f"C.UTF-8, whose backported source is built from ellipsis ranges "
-            f"and whose collversion PostgreSQL always reports as NULL, "
-            f"sql/c_utf8_probe.sql is the only thing that answers the order.")
+            f"a clean result here clears the data half and nothing else.")
+    # Written from what was actually read. Asserting the ellipsis shape on
+    # every run made this contradict the output a few lines above it whenever
+    # both nodes declared codepoint_collation -- which is the RHEL9 -> RHEL10
+    # case, and half of what this script is run for.
+    if computed:
+        dd.warn(f"{', '.join(computed)}: built from ellipsis ranges on at "
+                f"least one of these nodes, so the order is whatever localedef "
+                f"computed and is NOT settled above. PostgreSQL also reports "
+                f"collversion as NULL for every C.* name, so nothing warns "
+                f"either. sql/c_utf8_probe.sql is the only thing that answers "
+                f"the order.")
+    else:
+        dd.warn(f"No backported locale here is ellipsis-based, so for those "
+                f"the data comparison is the whole story. Run "
+                f"sql/c_utf8_probe.sql anyway if C.UTF-8 is your database "
+                f"collation: it is the only check that measures the order "
+                f"these builds actually produce, and PostgreSQL reports "
+                f"collversion as NULL for every C.* name.")
     dd.warn(f"Cheap complement, on each node: "
             f"rpm -q --changelog glibc | grep -i collat")
     dd.warn(f"localedata/charmaps/ is NOT compared. glibc-locale-source ships "

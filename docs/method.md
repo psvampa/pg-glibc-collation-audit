@@ -27,15 +27,22 @@ The wrapper also runs two checks that are *not* among these five, both of them
 needing files off a node rather than the clone — which is why neither is a
 sixth step. They answer different questions:
 
-- **node against its tag**, given one node's locale sources: is the audit
-  reading what that node runs? This is the only way to see your distro's own
-  patching.
-- **node against node**, given both, and printed as step 8: did what the two
-  nodes run actually change? This is the only way to see a locale the distro
-  **adds** — a file in neither tag, which no choice of tags can reach.
-  `C.UTF-8` is that locale, and it is usually the database collation in a
-  container. When you do not supply the directories, the summary says
-  `NOT RUN` rather than omitting the section.
+- **node against its tag** — `scripts/diff_distro_locales.py <tag>
+  --locales-dir <path> --build-id <nvr>`, run as step 6 and/or 7 for whichever
+  side you supply. Is the audit reading what that node runs? This is the only
+  way to see your distro's own patching.
+- **node against node** — `scripts/diff_node_locales.py --old-locales-dir
+  <path> --old-build-id <nvr> --new-locales-dir <path> --new-build-id <nvr>
+  [--old-tag <tag> --new-tag <tag>]`, run as step 8 when both sides are
+  supplied. Did what the two nodes run actually change? This is the only way to
+  see a locale the distro **adds** — a file in neither tag, which no choice of
+  tags can reach. `C.UTF-8` is that locale, and it is usually the database
+  collation in a container. When you do not supply the directories, the summary
+  says `NOT RUN` rather than omitting the section.
+
+Neither settles the resulting *order*: the weights for an ellipsis range are
+computed when the locale is built. `sql/c_utf8_probe.sql` is what does, for the
+one locale where nothing else can.
 
 See
 [confirming-on-a-real-system.md](confirming-on-a-real-system.md#checking-the-distros-own-patches).

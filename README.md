@@ -19,10 +19,15 @@ and across every locale in the tree — 355 at glibc 2.34, 366 at 2.39: if the
 rules that define a locale's sort order did not change, the order cannot have
 changed.
 
-**It is not a single, infallible answer, and does not try to be.** It reads
-source, so it cannot see what a machine actually does — distro backports and
-build-time-computed weights are outside what a diff can settle. Use it as one
-input among several, cross-checked against an empirical method such as
+**It is not a single, infallible answer, and does not try to be.** The five
+steps read source, so they cannot see what a machine actually does:
+build-time-computed weights are outside what any diff can settle, and a locale
+your distro adds is in no upstream tag at all. Two optional checks read a real
+node's own files to cover the second of those; nothing covers the first except
+measuring.
+
+Use it as one input among several, cross-checked against an empirical method
+such as
 [ardentperf/glibc-unicode-sorting](https://github.com/ardentperf/glibc-unicode-sorting),
 which sorts ~25 million real strings on real nodes. Where the two overlap,
 check both; where they disagree, the measurement wins. Confirm on your own
@@ -69,6 +74,34 @@ pair, as an example:
 
 It runs the five steps in order, hands each step's result to the next so you
 never retype a locale name, and ends with a consolidated summary.
+
+**Give it both nodes' locale sources and it does more.** With them it also
+compares the two nodes to each other, which is the only way to see a locale
+your distro adds — `C.UTF-8` above all, since its source file is in no upstream
+tag before glibc 2.35:
+
+```sh
+# on each node: dnf install -y glibc-locale-source, then tar the directory off
+#   (tar, not `docker cp`, whose target /tmp is a separate mount in a container)
+tar -cf - -C /usr/share/i18n/locales . | ...      # -> ./el8-locales, ./el9-locales
+
+./audit.sh glibc-2.28 glibc-2.34 \
+  --old-locales-dir ./el8-locales --old-build-id glibc-2.28-251.el8_10.40 \
+  --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
+```
+
+The build ids are required: a result is bound to the build it was taken on, and
+nothing in a directory of locale files carries a version. Without the
+directories the summary says so, in as many words, rather than leaving the
+section out — [`scripts/diff_node_locales.py`](scripts/diff_node_locales.py) is
+the only check that can reach `C.UTF-8`, and its silence must not read as a
+clean result.
+
+That settles whether the two nodes' collation *data* differs. What it cannot
+settle is the resulting *order*, because the weights are computed when the
+locale is built — for that, run
+[`sql/c_utf8_probe.sql`](sql/c_utf8_probe.sql) on both nodes and `diff` the
+outputs. It takes no editing.
 
 Real output from both pairs, start to finish, is in
 [`examples/`](examples/) — read that before running anything if you want to
