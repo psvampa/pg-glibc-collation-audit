@@ -7,9 +7,16 @@ specific locales change their sort order**, and therefore which PostgreSQL
 B-tree indexes on `text`/`varchar`/`char`/`citext` columns need a `REINDEX`
 after an OS upgrade or a physical migration?
 
-This tool answers that from glibc's own source, deterministically and across
-all ~355 locales: if the rules that define a locale's sort order did not
-change, the order cannot have changed.
+**PostgreSQL will not tell you.** `pg_collation.collversion` stores glibc's
+version string, so it warns on *any* version bump whether or not your data
+would sort differently, and stays silent when a distro patches collation data
+without moving that string. It is a version comparison, not a check of the
+real sort rules
+([background](https://wiki.postgresql.org/wiki/Locale_data_changes)).
+
+This tool answers the real question from glibc's own source, deterministically
+and across all ~355 locales: if the rules that define a locale's sort order
+did not change, the order cannot have changed.
 
 **It is not a single, infallible answer, and does not try to be.** It reads
 source, so it cannot see what a machine actually does — distro backports and
@@ -22,17 +29,9 @@ nodes before you act:
 [docs/comparison-ardentperf.md](docs/comparison-ardentperf.md),
 [docs/limitations.md](docs/limitations.md).
 
-## Why not just trust PostgreSQL's warning?
+## How to use
 
-`pg_collation.collversion` only stores glibc's version string, so it warns on
-*any* version bump, whether or not your data would actually sort differently,
-and it stays silent if a distro patches collation data without moving the
-reported version. It is a version comparison, not a check of the real sort
-rules.
-
-Background: [PostgreSQL wiki, Locale data changes](https://wiki.postgresql.org/wiki/Locale_data_changes).
-
-## Install
+### Install
 
 Needs `git`, `python3` (stdlib only) and `bash`. Nothing else, and no
 PostgreSQL for the audit itself.
@@ -42,15 +41,15 @@ git clone https://github.com/psvampa/pg-glibc-collation-audit.git
 cd pg-glibc-collation-audit
 ```
 
-Step 1 then clones glibc from `github.com/bminor/glibc`, so the first run
+Step 1 below clones glibc from `github.com/bminor/glibc`, so the first run
 needs outbound network and about **370 MB** of disk. Later runs reuse that
 clone.
 
-## Which glibc versions am I comparing?
+### Pick the two glibc versions
 
 Run `ldd --version` on the old and the new node. Those two numbers are the
-tags you pass, as `glibc-<version>` — glibc 2.28 and 2.34 become
-`glibc-2.28` and `glibc-2.34`.
+tags you pass, as `glibc-<version>` — glibc 2.28 and 2.34 become `glibc-2.28`
+and `glibc-2.34`.
 
 **The version you are upgrading *to* must be glibc 2.24 or newer** — RHEL 8+,
 Ubuntu 18.04+, Debian 9+, SLES 15+. Auditing *from* something older is fine,
@@ -59,7 +58,7 @@ and there is no guard for it — outside that range the tool answers
 confidently and wrongly. See
 [docs/limitations.md](docs/limitations.md#the-destination-must-be-glibc-224-or-newer).
 
-## Quickstart
+### Run the five steps
 
 The RHEL8-to-RHEL9 pair, end to end:
 
@@ -81,7 +80,7 @@ Real output from both pairs, start to finish, is in
 [`examples/`](examples/) — read that before running anything if you want to
 know what you are getting.
 
-## Reading the output
+### Read the output
 
 Each step ends with a `Next:` line naming the command that follows, so the
 five runs chain. Long result lists are written to files under
@@ -100,6 +99,31 @@ for you** — it cannot tell a weight-changing commit from a harmless one. If
 nobody will read those hunks, treat every locale step 4 flagged as unresolved
 and [confirm it on real nodes](docs/confirming-on-a-real-system.md) instead;
 that path needs no source reading and is stronger evidence anyway.
+
+### Confirm on a real system
+
+A source diff is an argument, not a proof of what actually runs in production,
+and it says nothing about your distro's backports.
+
+```sh
+psql -f sql/collation_confirmation_template.sql   # edit placeholders first
+```
+
+The template is
+[`sql/collation_confirmation_template.sql`](sql/collation_confirmation_template.sql).
+
+Run it on both the old and the new OS, for every locale steps 1 to 3 flagged
+and — if step 5 found a [substantive code change](docs/glossary.md) — for every locale step 4
+flagged too. Besides the index inventory it reports text partition keys, which
+no `REINDEX` fixes: the rows have to be moved.
+
+Three traps make such a comparison agree with itself while proving nothing —
+chiefly a locale that is not generated on either box, which makes both fall
+back to `C`. Those, and what else the template reports:
+[docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md).
+It needs PostgreSQL 15 or newer, and a langpack installed in the wrong order
+will hand you a clean result that means nothing —
+[docs/requirements.md](docs/requirements.md).
 
 ## How it works
 
@@ -160,31 +184,6 @@ The evidence behind each row, both worked examples and the nodes each claim
 was measured on: [docs/results.md](docs/results.md). If you saved a result
 from this tool before 2026-09-05, check [CHANGELOG.md](CHANGELOG.md) first —
 two verdicts have moved since.
-
-## Confirming on a real system
-
-A source diff is an argument, not a proof of what actually runs in production,
-and it says nothing about your distro's backports.
-
-```sh
-psql -f sql/collation_confirmation_template.sql   # edit placeholders first
-```
-
-The template is
-[`sql/collation_confirmation_template.sql`](sql/collation_confirmation_template.sql).
-
-Run it on both the old and the new OS, for every locale steps 1 to 3 flagged
-and — if step 5 found a [substantive code change](docs/glossary.md) — for every locale step 4
-flagged too. Besides the index inventory it reports text partition keys, which
-no `REINDEX` fixes: the rows have to be moved.
-
-Three traps make such a comparison agree with itself while proving nothing —
-chiefly a locale that is not generated on either box, which makes both fall
-back to `C`. Those, and what else the template reports:
-[docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md).
-It needs PostgreSQL 15 or newer, and a langpack installed in the wrong order
-will hand you a clean result that means nothing —
-[docs/requirements.md](docs/requirements.md).
 
 ## Scope
 
