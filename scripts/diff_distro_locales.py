@@ -46,12 +46,12 @@ import glibc_locale_data as g
 SAFE_NAME = re.compile(r'^[A-Za-z0-9_@.+-]+$')
 
 # Several hundred files ship in glibc-locale-source; the three measured RHEL
-# nodes carry 355, 356 and 366 files (docs/requirements.md). Not 353/355/366 --
-# those are the upstream counts at the three tags, which this floor never sees.
-# A floor well below all of them still catches a `docker cp` that landed three
-# files, or a node without the package at all.
-# Used where there is no upstream side to take half of -- see corpus_problem.
-DEFAULT_MIN_FILES = 200
+# nodes carry 355, 356 and 366 files (docs/requirements.md). A floor well below
+# all of them still catches a `docker cp` that landed three files, or a node
+# without the package at all. Used where there is no upstream side to take
+# half of -- see corpus_problem. One constant for nodes and tags alike, kept in
+# glibc_locale_data where the tag modes apply it, so the two cannot drift.
+DEFAULT_MIN_FILES = g.MIN_LOCALE_FILES
 
 
 # Moved to glibc_locale_data once step 4's directory mode and
