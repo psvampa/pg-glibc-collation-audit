@@ -14,7 +14,9 @@ import shutil
 import tempfile
 import unittest
 
-from _harness import MID, NEW, OLD, needs_clone, run_step
+from _harness import GLIBC_CLONE, MID, NEW, OLD, needs_clone, run_step
+
+import glibc_locale_data as g
 
 
 def one_int(pattern, text, what):
@@ -129,10 +131,23 @@ class Step2Filter(StepRun):
                     out, re.compile(r'^!! localedata/locales/C\b', re.M))
 
     def test_the_false_blanket_claim_is_gone(self):
+        """Added files used to be reported as unable to affect an existing
+        index, flat. They can, if the locale existed on the old system --
+        distros backport, which is the whole C.UTF-8 story.
+
+        Asserted on whitespace-collapsed output, and that is the point of this
+        docstring: the claim is printed across two lines, so the original
+        `assertNotIn('They cannot affect an existing index', out)` matched
+        nothing whether the claim was there or not. It guarded the thing it
+        named and would have passed if the claim came back. Found 2026-09-06,
+        the fourth test in this suite caught guarding nothing.
+        """
         for old, new in ((OLD, MID), (MID, NEW)):
             with self.subTest(pair=f'{old}..{new}'):
-                out = self.step('filter_lc_collate_changes.py', old, new)
-                self.assertNotIn('They cannot affect an existing index', out)
+                out = ' '.join(
+                    self.step('filter_lc_collate_changes.py', old, new).split())
+                self.assertIn('cannot affect an existing index ONLY IF', out)
+                self.assertNotIn('cannot affect an existing index.', out)
 
     def test_the_files_with_no_collate_block_are_named_not_just_counted(self):
         """A count alone leaves a reader unable to tell a transliteration
@@ -222,6 +237,40 @@ class Step4AlgorithmicRanges(StepRun):
         for name in ('zh_CN', 'cmn_TW', 'iso14651_t1_pinyin',
                      'cns11643_stroke'):
             self.assertIn(name, out)
+
+    def test_the_exposed_total_is_unchanged(self):
+        """335 at MID, from the README. Pinned here because scan_ellipsis
+        switched from collate_block to collate_text, which changes which files
+        count as defining LC_COLLATE for files that open with it."""
+        out = self.step('flag_algorithmic_ranges.py', MID)
+        self.assertIn('335 locale source file(s), 478 generated', out)
+        self.assertIn('of which 342 define LC_COLLATE', out)
+
+    def test_the_upstream_C_is_byte_order_from_2_35(self):
+        """localedata/locales/C exists upstream from glibc 2.35 and declares
+        codepoint_collation, so nothing localedef does to ranges can move
+        C.UTF-8 there. Said out loud rather than left unflagged: unflagged and
+        cleared look identical on a terminal."""
+        out = self.step('flag_algorithmic_ranges.py', NEW)
+        self.assertIn('Declare codepoint_collation, so no expansion change '
+                      'can move them: C', out)
+        self.assertNotRegex(out, re.compile(r'^  C$', re.M))
+
+    def test_the_prose_above_the_keyword_does_not_count(self):
+        """Driven by the real file, not a fixture. glibc-2.39's C names
+        codepoint_collation in a comment three lines above declaring it, so a
+        substring search reads the comment as the declaration -- and would
+        then report RHEL's ellipsis-based backport of the same file as byte
+        order."""
+        path = f'{g.LOCALES_DIR}/C'
+        contents, missing = g.read_blobs(GLIBC_CLONE, NEW, [path])
+        self.assertEqual(missing, set())
+        text = contents[path]
+        self.assertIn("The keyword 'codepoint_collation'", text)
+        self.assertEqual(g.classify_collation_style(text), 'codepoint')
+        # And the prose alone, with the declaration removed, must not.
+        prose_only = text.replace('\ncodepoint_collation', '\n% removed')
+        self.assertNotEqual(g.classify_collation_style(prose_only), 'codepoint')
 
 
 @needs_clone

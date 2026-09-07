@@ -1,7 +1,7 @@
 # Tests
 
 ```sh
-python3 -m unittest discover -s tests -t tests          # everything, ~1 min
+python3 -m unittest discover -s tests -t tests          # about a minute and a half
 python3 -m unittest discover -s tests -t tests -q -k pure_functions   # no clone needed
 ```
 
@@ -22,9 +22,11 @@ somebody deletes during a refactor.
 | `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, generated locale names, hunk/block overlap, the comment filter |
 | `test_git_helpers.py` | yes | the silent-failure class — code that cannot tell "nothing here" from "could not look" |
 | `test_known_answers.py` | yes | the five steps end to end on both pairs, against the results [docs/results.md](../docs/results.md) publishes |
+| `test_published_claims.py` | no | **the numbers and quotes the documentation publishes.** Two correction passes in one day found the same class of defect — a count, a position or a quoted line that no longer matched the tool or the measurement. This is that, mechanised: it cannot check prose and does not try |
+| `test_node_modes.py` | yes | **the two modes that read a node's own files.** A tag stands in for a node and the backported `C` is written out, because that file exists at no tag — which is the whole point. Includes the test that says the `C.UTF-8` limitation is closed on the data half |
 
 Without a clone at `scripts/glibc`, every layer marked "yes" **skips with a
-reason** and `test_pure_functions.py` still runs. A skip is never a pass: read
+reason**; `test_pure_functions.py` and `test_published_claims.py` still run. A skip is never a pass: read
 what it says. CI clones fresh and fails on any skip, so a layer that skips
 there is a red build, not a quiet gap.
 
@@ -34,9 +36,11 @@ Stated here because "the tests pass" must not be read as "the audit is correct".
 That misreading is the exact reassuring-direction failure this repo exists to
 prevent.
 
-- **`sql/collation_confirmation_template.sql` is untested.** It needs a live
-  PostgreSQL on two operating systems. It is half the method and has no
-  automated coverage at all.
+- **`sql/collation_confirmation_template.sql` and `sql/c_utf8_probe.sql` are
+  untested.** They need a live PostgreSQL on two operating systems. Between
+  them they are half the method and have no automated coverage at all. The
+  probe is untestable in CI by construction: what it measures is the glibc a
+  node has installed.
 - **The empirical confirmation on real nodes is irreplaceable.** These tests
   check the reasoning applied to glibc's source. They say nothing about the sort
   order a given machine actually produces.
@@ -53,8 +57,13 @@ prevent.
   test can drive them. They are labelled as such in `audit.sh`. Reverting any
   of the three leaves the suite green — which is the honest statement, not a
   claim of coverage.
-- **`C.UTF-8` is asserted to be *warned about*, not to be correct.** No test can
-  settle it from source; that is the point of the warning.
+- **`C.UTF-8` is asserted to be *warned about* and to reach a DATA verdict —
+  not to be correct.** `test_node_modes.py` checks that a backported file in
+  neither tag gets a verdict, that its `ellipsis`/`codepoint_collation` shape
+  is reported on both sides, and that it is named even when identical. What no
+  test can settle is the ORDER: an ellipsis range's weights are computed by
+  `localedef` when the locale is built, so that answer lives on a node and in
+  `sql/c_utf8_probe.sql`.
 - **Signatures are not verified here.** `test_provenance.py` asserts the release
   tags are still *signed* and that the tool reports an unverifiable signature as
   unchecked rather than good. Actually verifying one needs the glibc release

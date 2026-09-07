@@ -64,6 +64,28 @@ which one merely copies it. Both files show a large diff while the effective
 sort order does not move. `ber_DZ` and `kab_DZ` over glibc 2.34..2.39 are
 this case, not a rule change.
 
+**`codepoint_collation`** — a glibc `LC_COLLATE` keyword which, in glibc's own
+words, "in any part of any LC_COLLATE immediately discards all collation
+information and causes the locale to use strcmp/wcscmp for collation
+comparison". A locale that declares it is byte order **by construction**, so no
+change to how `localedef` expands ranges can move it. Upstream's `C` declares
+it from glibc 2.35. RHEL9 backports that file, RHEL10 is glibc 2.39 and has it
+upstream, and RHEL8 ships the older ellipsis-based copy. It is the whole reason
+`C.UTF-8` changed across RHEL8→RHEL9 and cannot change across RHEL9→RHEL10.
+
+**node-to-node comparison** — comparing two nodes' own locale sources against
+each other, with no upstream tag in the middle
+(`scripts/diff_node_locales.py`, step 8 of `audit.sh`). Distinct from the
+node-versus-tag check, which asks "is the audit reading what this node runs?";
+this asks "did what the two nodes run actually change?" It is the only check
+that can see a locale the distro **adds**, because such a file is in no tag and
+therefore in neither side of any tag diff.
+
+**inverted positive control** — the one place the rule below runs backwards.
+For `C.UTF-8`, agreeing with `LC_ALL=C` byte order is the *corrected*
+behaviour, not the usual sign that a locale was never generated. Reading it the
+normal way turns the fix into a false alarm and the bug into a clean result.
+
 **positive control** — a check deliberately run against cases whose answer is
 already known, to prove the check is capable of returning a non-null answer
 at all. A comparison that always reported "identical" would look the same as

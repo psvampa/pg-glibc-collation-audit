@@ -23,11 +23,28 @@ for you. Each is also a standalone script, which is what you want to re-run
 one step against a hand-picked locale list — the invocations below are those
 standalone forms.
 
-The wrapper also runs one check that is *not* one of these five: given a copy
-of a real node's locale sources it compares them against the upstream tag,
-which is the only way to see your distro's own patching. It is not a sixth
-step because steps 1 to 5 read the clone alone and this needs files off a
-node. See
+The wrapper also runs two checks that are *not* among these five, both of them
+needing files off a node rather than the clone — which is why neither is a
+sixth step. They answer different questions:
+
+- **node against its tag** — `scripts/diff_distro_locales.py <tag>
+  --locales-dir <path> --build-id <nvr>`, run as step 6 and/or 7 for whichever
+  side you supply. Is the audit reading what that node runs? This is the only
+  way to see your distro's own patching.
+- **node against node** — `scripts/diff_node_locales.py --old-locales-dir
+  <path> --old-build-id <nvr> --new-locales-dir <path> --new-build-id <nvr>
+  [--old-tag <tag> --new-tag <tag>]`, run as step 8 when both sides are
+  supplied. Did what the two nodes run actually change? This is the only way to
+  see a locale the distro **adds** — a file in neither tag, which no choice of
+  tags can reach. `C.UTF-8` is that locale, and it is usually the database
+  collation in a container. When you do not supply the directories, the summary
+  says `NOT RUN` rather than omitting the section.
+
+Neither settles the resulting *order*: the weights for an ellipsis range are
+computed when the locale is built. `sql/c_utf8_probe.sql` is what does, for the
+one locale where nothing else can.
+
+See
 [confirming-on-a-real-system.md](confirming-on-a-real-system.md#checking-the-distros-own-patches).
 
 ### Step 1 — `scripts/audit-locale-diff.sh <old_tag> <new_tag>`
@@ -61,7 +78,9 @@ and an upstream diff cannot establish that, because distros backport. So
 `C.UTF-8` gets a warning of its own whenever `localedata/locales/C` is
 missing at the old tag. That condition covers two different cases: the pair
 where the file is added upstream, and the pair where it is in neither tag.
-See [limitations.md](limitations.md#cutf-8-cannot-be-audited-by-this-method).
+The warning is all this step can do; the node-to-node check and
+[`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql) are what settle it. See
+[limitations.md](limitations.md#cutf-8-is-invisible-to-a-tag-diff).
 
 ### Step 3 — `scripts/resolve_copy_closure.py <tag> <locale> [...]`
 
@@ -80,7 +99,7 @@ locale, so `SUPPORTED` says `sv_SE.UTF-8` while the installed locale,
 `locale -a` and `pg_collation` all say `sv_SE.utf8` — and
 `COLLATE "sv_SE.UTF-8"` does not exist.
 
-### Step 4 — `scripts/flag_algorithmic_ranges.py <tag>`
+### Step 4 — `scripts/flag_algorithmic_ranges.py <tag>`, or `--locales-dir <path>`
 
 Finds locales whose `LC_COLLATE` uses [range-expansion (ellipsis)
 syntax](glossary.md) instead of an explicit per-character weight. Such a
@@ -92,6 +111,15 @@ range can get a different weight with zero change to the locale's own source,
 so steps 1 to 3 alone cannot prove that locale is safe. The range may sit on
 its own line or, more often, inline on a `collating-symbol` line — both
 count.
+
+Point it at a node's `/usr/share/i18n/locales/` instead of a tag
+(`--locales-dir` with `--build-id`) and it scans that node's own corpus, which
+is the only way it sees a **backported** locale. Measured on
+`glibc-2.28-251.el8_10.40`, that adds a fifth file: `C`, built from six
+ellipsis ranges. It also names the locales that declare
+`codepoint_collation` — byte order by construction, immune to any expansion
+change — rather than leaving them in the unflagged majority, where cleared and
+unexamined look the same.
 
 Four files do this as of glibc 2.34: `ko_KR` (all 11,172 precomposed Hangul
 syllables), `iso14651_t1` (the CJK block U+4E00..U+9FA5), and
@@ -154,8 +182,17 @@ Two markers carry the weight:
 - **`!!`** is a warning that the clean-looking result above it does not cover
   something. The `C.UTF-8` warning in step 2 is one of these, and it fires on
   both documented pairs. The summary repeats every one of them verbatim,
-  because a warning that scrolled past 400 lines ago has not been delivered.
+  because a warning that scrolled past 400 lines ago has not been delivered —
+  once each, though: three node-reading steps close with the same caveat, and
+  printing it three times teaches the reader to skip the section.
 - **`>>`** marks the actual code changes in step 5's [hunks](glossary.md).
+
+The summary also carries the node-to-node block, and this is the one place
+where **absent is not empty**: if it says `NOT RUN`, nothing in the whole run
+said anything about `C.UTF-8`. If both tags are the same — an intra-major
+upgrade, RHEL 8.1 to 8.10 — the summary says that too, because steps 1 to 5
+then compare upstream source with itself and can only report "nothing
+changed".
 
 Steps 1 to 4 give you lists. **Step 5 gives you C diffs and does not decide
 for you** — it cannot tell a weight-changing commit from a harmless one. If

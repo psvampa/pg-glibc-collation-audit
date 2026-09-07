@@ -24,10 +24,11 @@ matters, and what happens when `gpg` is unavailable, is in
 python3 -m unittest discover -s tests -t tests
 ```
 
-About a minute. It pins the three tags to their commit ids, so a moved tag
-reports itself as a moved tag instead of as a change in the results. Five of
-its six layers need the glibc clone and skip themselves, with a reason, if it
-is absent; only `test_pure_functions.py` runs without one. CI runs the whole
+About a minute and a half. It pins the three tags to their commit ids, so a
+moved tag reports itself as a moved tag instead of as a change in the results.
+Six of its eight layers need the glibc clone and skip themselves, with a
+reason, if it is absent; `test_pure_functions.py` and
+`test_published_claims.py` run without one. CI runs the whole
 suite on a fresh clone and fails on any skip.
 
 [`tests/README.md`](../tests/README.md) says what it covers and, more
@@ -98,6 +99,22 @@ upgraded glibc from `2.28-236.el8_9.7` to `2.28-251.el8_10.40` as a side
 effect of installing langpacks. Re-check `rpm -q glibc` afterwards: a
 measurement is bound to the build it ran on, and this is a way to change that
 build without meaning to.
+
+## Which nodes need `glibc-locale-source`
+
+**Both of them**, if you want the file comparisons. `diff_distro_locales.py`
+needs one node's `/usr/share/i18n/locales/`; `diff_node_locales.py` — the only
+check that compares a backported locale such as `C` *between* the two builds —
+needs both. Confirmed
+present on all three fixtures: 355, 356 and 366 files on
+`glibc-2.28-251.el8_10.40`, `glibc-2.34-275.el9_8` and
+`glibc-2.39-128.el10_2`, `localedata/locales/C` among them.
+
+`sql/c_utf8_probe.sql` needs neither langpacks nor that package — `C.utf8`
+exists on every node regardless — but it does need
+`pg_import_system_collations()` after a postmaster restart, like everything
+else here, and it refuses to run rather than silently fall back if the
+collation is missing.
 
 ---
 

@@ -12,9 +12,21 @@
 #
 # Usage:
 #   ./audit.sh <old_tag> <new_tag>
+#              [--old-locales-dir DIR --old-build-id NVR]
+#              [--new-locales-dir DIR --new-build-id NVR]
+#
+# The --*-locales-dir options are optional and read a node's own
+# /usr/share/i18n/locales/. Each side you supply adds the
+# distro-versus-upstream check for that side (step 6 for old, step 7 for new);
+# supplying BOTH additionally runs the node-to-node comparison (step 8), the
+# only thing here that can see a locale the distro backports -- C.UTF-8 above
+# all. See usage() below and docs/method.md.
 #
 # Example (the tags are examples -- run `ldd --version` on each node):
 #   ./audit.sh glibc-2.28 glibc-2.34
+#   ./audit.sh glibc-2.28 glibc-2.34 \
+#     --old-locales-dir ./el8-locales --old-build-id glibc-2.28-251.el8_10.40 \
+#     --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
 set -euo pipefail
 
 usage() {
@@ -29,6 +41,12 @@ usage() {
   echo "       the distro's patches touch LC_COLLATE -- the one thing an" >&2
   echo "       upstream tag diff structurally cannot see. Needs the node's" >&2
   echo "       build id too: a result is bound to the build it ran on." >&2
+  echo >&2
+  echo "       Either side on its own adds that check for that side (step 6" >&2
+  echo "       for old, step 7 for new). Supply BOTH and the run additionally" >&2
+  echo "       compares the two nodes to each other (step 8). That is the only" >&2
+  echo "       source-level evidence there is about C.UTF-8, whose file is in" >&2
+  echo "       neither tag of the RHEL8->RHEL9 pair." >&2
   exit 2
 }
 
@@ -78,6 +96,14 @@ STEP2_LIST="$OUT_DIR/step2_changed_collate.$PAIR.txt"
 STEP3_LIST="$OUT_DIR/step3_affected_locales.txt"
 STEP4_LIST="$OUT_DIR/step4_exposed_locales.txt"
 
+# Named after both builds, so a node-to-node result cannot be read as another
+# pair's. Empty unless both sides were supplied, which is what gates step 8.
+NODE_LIST=""
+if [ -n "$OLD_BUILD" ] && [ -n "$NEW_BUILD" ]; then
+  BUILDPAIR="${OLD_BUILD//[^A-Za-z0-9_.@+-]/_}..${NEW_BUILD//[^A-Za-z0-9_.@+-]/_}"
+  NODE_LIST="$OUT_DIR/node_collate_diffs.$BUILDPAIR.txt"
+fi
+
 mkdir -p "$OUT_DIR"
 
 # Every file this script later READS must have been written by this run. Step 3
@@ -85,7 +111,7 @@ mkdir -p "$OUT_DIR"
 # otherwise be summarised as if it were this pair's answer -- the exact bug
 # filter_lc_collate_changes.py's docstring records having removed. Targeted
 # removal only: $OUT_DIR is user-supplied and is not ours to wipe.
-rm -f "$STEP2_LIST" "$STEP3_LIST" "$STEP4_LIST"
+rm -f "$STEP2_LIST" "$STEP3_LIST" "$STEP4_LIST" ${NODE_LIST:+"$NODE_LIST"}
 
 banner() {
   echo
@@ -101,6 +127,23 @@ run_step() {
   local log="$OUT_DIR/step$num.$PAIR.log"
   "$@" 2>&1 | tee "$log"
 }
+
+# A minor-version upgrade inside one RHEL major is two builds of the SAME
+# upstream release, so every step below has nothing to compare and reports a
+# clean everything. That is not a clean result, and C.UTF-8 is the proof: its
+# order changed between RHEL 8.1 and 8.2, both of them upstream glibc 2.28.
+SAME_TAG=0
+if [ "$OLD" = "$NEW" ]; then
+  SAME_TAG=1
+  echo
+  echo "!! $OLD and $NEW are the same tag. Steps 1-5 compare upstream source"
+  echo "   against itself, so they can only report 'nothing changed' -- which"
+  echo "   for an intra-major upgrade (RHEL 8.1 -> 8.2, say) says nothing at"
+  echo "   all. The distro's own builds are where such a change lives: supply"
+  echo "   both --*-locales-dir, and run sql/c_utf8_probe.sql. C.UTF-8's order"
+  echo "   moved in glibc-2.28-93.el8 with the upstream tag unchanged."
+  echo "   See docs/limitations.md."
+fi
 
 banner "STEP 1  What changed, and how far it reaches"
 run_step 1 "$SCRIPTS/audit-locale-diff.sh" "$OLD" "$NEW"
@@ -176,9 +219,24 @@ if [ -n "$NEW_LOCALES" ]; then
     --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --node-label new
 fi
 
+# The only comparison that can see a locale the distro BACKPORTS: it takes both
+# sides from the nodes, so a file in neither tag is still in both inputs.
+if [ -n "$OLD_LOCALES" ] && [ -n "$NEW_LOCALES" ]; then
+  banner "NODE TO NODE  does $OLD_BUILD's collation data differ from $NEW_BUILD's?"
+  run_step 8 python3 "$SCRIPTS/diff_node_locales.py" \
+    --old-locales-dir "$OLD_LOCALES" --old-build-id "$OLD_BUILD" \
+    --new-locales-dir "$NEW_LOCALES" --new-build-id "$NEW_BUILD" \
+    --old-tag "$OLD" --new-tag "$NEW"
+fi
+
 # ---------------------------------------------------------------- summary ----
 
 count_lines() { [ -f "$1" ] && grep -c . "$1" || echo 0; }
+
+# Same, minus the `#` provenance header the node-to-node list carries. Counting
+# it would report one finding where there are none -- and "1 locale differs"
+# is the wrong direction to be wrong in.
+count_names() { [ -f "$1" ] && grep -c '^[^#]' "$1" || echo 0; }
 
 HUNKS=$(sed -n 's/^\([0-9][0-9]*\) substantive hunk(s) found.*/\1/p' \
         "$OUT_DIR/step5.$PAIR.log" | tail -1)
@@ -207,12 +265,58 @@ else
   echo "   the locales step 4 flagged."
 fi
 
+echo
+if [ -n "$NODE_LIST" ] && [ -f "$NODE_LIST" ]; then
+  echo "-- Node-to-node locale data ($OLD_BUILD -> $NEW_BUILD)"
+  NODE_DIFFS=$(count_names "$NODE_LIST")
+  if [ "$NODE_DIFFS" -gt 0 ]; then
+    echo "     $NODE_DIFFS locale(s) differ inside LC_COLLATE between the two"
+    echo "     nodes' OWN sources; full list: $NODE_LIST"
+  else
+    echo "     no locale differs inside LC_COLLATE between the two nodes'"
+    echo "     own sources. Data only -- the weights an ellipsis range expands"
+    echo "     to are computed by localedef, not stored in these files."
+  fi
+  if grep -q '^  C (C\.UTF-8): present on both nodes, LC_COLLATE DIFFERS' \
+       "$OUT_DIR/step8.$PAIR.log" 2>/dev/null; then
+    echo "     C (C.UTF-8): DIFFERS  <- in neither tag; no other step sees it"
+  fi
+else
+  # Absent is not empty. A summary that simply says nothing about C.UTF-8
+  # reads exactly like one that cleared it, and that is how this locale gets
+  # missed -- it is false negative #1 in a different costume.
+  echo "-- Node-to-node locale data: NOT RUN"
+  echo "     Pass --old-locales-dir and --new-locales-dir with their build"
+  echo "     ids. Without it nothing above says anything about C.UTF-8: its"
+  echo "     source file is in neither tag, and PostgreSQL reports collversion"
+  echo "     as NULL for every C.* collation, so no mismatch can ever fire."
+  echo "     Then run sql/c_utf8_probe.sql on both nodes."
+fi
+
+if [ "$SAME_TAG" = "1" ]; then
+  echo
+  echo "-- One tag, compared with itself"
+  echo "     $OLD -> $NEW. Everything above that says 'nothing changed' means"
+  echo "     'nothing was compared'. For an intra-major upgrade the evidence is"
+  echo "     the node-to-node check and sql/c_utf8_probe.sql, nothing else."
+fi
+
 # Repeated verbatim. A warning that scrolled past 400 lines ago has not been
 # delivered, and these are the cases where a clean result means nothing.
+#
+# Deduplicated by whole block. Three steps read node files and each closes with
+# the same charmaps caveat; printing it three times trains the reader to skip
+# the section, which costs more than the repetition buys. Identical text only --
+# two warnings that differ by one word are two warnings.
 WARNINGS=$(awk '
-  /^!!/            { inblock = 1; print; next }
-  inblock && /^   / { print; next }
-  inblock          { inblock = 0 }
+  function flush() {
+    if (cur != "") { if (!(cur in seen)) { seen[cur] = 1; printf "%s", cur } }
+    cur = ""
+  }
+  /^!!/             { flush(); cur = $0 "\n"; inblock = 1; next }
+  inblock && /^   / { cur = cur $0 "\n"; next }
+  inblock           { flush(); inblock = 0 }
+  END               { flush() }
 ' "$OUT_DIR"/step[0-9]*."$PAIR".log 2>/dev/null || true)
 
 if [ -n "$WARNINGS" ]; then
