@@ -104,10 +104,11 @@ STEP4_LIST="$OUT_DIR/step4_exposed_locales.txt"
 
 # Named after both builds, so a node-to-node result cannot be read as another
 # pair's. Empty unless both sides were supplied, which is what gates step 8.
-NODE_LIST=""
+NODE_LIST=""; NODE_INHERITED=""
 if [ -n "$OLD_BUILD" ] && [ -n "$NEW_BUILD" ]; then
   BUILDPAIR="${OLD_BUILD//[^A-Za-z0-9_.@+-]/_}..${NEW_BUILD//[^A-Za-z0-9_.@+-]/_}"
   NODE_LIST="$OUT_DIR/node_collate_diffs.$BUILDPAIR.txt"
+  NODE_INHERITED="$OUT_DIR/node_collate_inherited.$BUILDPAIR.txt"
 fi
 
 mkdir -p "$OUT_DIR"
@@ -126,7 +127,8 @@ mkdir -p "$OUT_DIR"
 # one of these nodes" when it read no node. The direction is conservative, which
 # is why it went unnoticed, but the statement is false and this file's rule is
 # that every file it reads was written by this run.
-rm -f "$STEP2_LIST" "$STEP3_LIST" "$STEP4_LIST" ${NODE_LIST:+"$NODE_LIST"}
+rm -f "$STEP2_LIST" "$STEP3_LIST" "$STEP4_LIST" ${NODE_LIST:+"$NODE_LIST"} \
+      ${NODE_INHERITED:+"$NODE_INHERITED"}
 rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
 
 banner() {
@@ -332,6 +334,16 @@ if [ -n "$NODE_LIST" ] && [ -f "$NODE_LIST" ]; then
   if [ "$NODE_DIFFS" -gt 0 ]; then
     echo "     $NODE_DIFFS locale(s) differ inside LC_COLLATE between the two"
     echo "     nodes' OWN sources; full list: $NODE_LIST"
+    # Their reach. Read from the list step 8 wrote, not from its prose; an
+    # absent list is reported as absent, because the step-5 summary once
+    # turned a missing line into a reassuring zero.
+    if [ -f "$NODE_INHERITED" ]; then
+      echo "     plus $(count_names "$NODE_INHERITED") locale(s) that inherit one of those files'"
+      echo "     LC_COLLATE via copy on $NEW_BUILD; full list: $NODE_INHERITED"
+    else
+      echo "     blast radius via copy: NOT REPORTED -- step 8 wrote no"
+      echo "     inheritance list; read its output above"
+    fi
   else
     echo "     no locale differs inside LC_COLLATE between the two nodes'"
     echo "     own sources. Data only -- the weights an ellipsis range expands"

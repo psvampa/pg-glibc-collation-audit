@@ -30,15 +30,20 @@ sixth step. They answer different questions:
 - **node against its tag** — `scripts/diff_distro_locales.py <tag>
   --locales-dir <path> --build-id <nvr>`, run as step 6 and/or 7 for whichever
   side you supply. Is the audit reading what that node runs? This is the only
-  way to see your distro's own patching.
+  way to see your distro's own patching. A file that differs inside
+  `LC_COLLATE` is reported with its reach through the node's `copy` graph.
 - **node against node** — `scripts/diff_node_locales.py --old-locales-dir
   <path> --old-build-id <nvr> --new-locales-dir <path> --new-build-id <nvr>
   [--old-tag <tag> --new-tag <tag>]`, run as step 8 when both sides are
   supplied. Did what the two nodes run actually change? This is the only way to
   see a locale the distro **adds** — a file in neither tag, which no choice of
   tags can reach. `C.UTF-8` is that locale, and it is usually the database
-  collation in a container. When you do not supply the directories, the summary
-  says `NOT RUN` rather than omitting the section.
+  collation in a container. Every differing file is followed by its reach
+  through the new node's own `copy` graph — the same closure step 3 takes —
+  so a backport to a template reads as the hundreds of locales it moves, not
+  as "1 locale(s) differ". The summary carries that count. When you do not
+  supply the directories, the summary says `NOT RUN` rather than omitting the
+  section.
 - **step 4 over a node's own directory** — `scripts/flag_algorithmic_ranges.py
   --locales-dir <path> --build-id <nvr> --supported-tag <tag>`, run as step 9
   and/or 10 for whichever side you supply. Does that node's own locale data use

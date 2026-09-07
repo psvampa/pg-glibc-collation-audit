@@ -252,6 +252,57 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
                           f'docs/results.md does not say {build} was measured')
 
 
+class TheExamplesCarryTheNodeSteps(unittest.TestCase):
+    """docs/limitations.md quotes the summary block steps 9 and 10 add, and
+    until 2026-09-07 that block appeared in no examples/*.txt and no test tied
+    it -- the one published place a reader could check it against was
+    missing. Both worked examples now carry steps 6 to 10 and the full summary
+    of a run given both nodes' directories."""
+
+    EXAMPLES = {
+        'rhel8-to-rhel9': ('glibc-2.28-251.el8_10.40', 'glibc-2.34-275.el9_8'),
+        'rhel9-to-rhel10': ('glibc-2.34-275.el9_8', 'glibc-2.39-128.el10_2'),
+    }
+
+    def example(self, name):
+        return read(os.path.join(REPO_ROOT, 'examples',
+                                 f'{name}-audit-output.txt'))
+
+    def test_every_node_step_banner_is_in_both_examples(self):
+        for name, (old, new) in self.EXAMPLES.items():
+            text = self.example(name)
+            for banner in (f"== DISTRO CHECK  do {old}'s patches touch LC_COLLATE?",
+                           f"== DISTRO CHECK  do {new}'s patches touch LC_COLLATE?",
+                           f"== NODE TO NODE  does {old}'s collation data differ from {new}'s?",
+                           f"== NODE ELLIPSIS  does {old}'s own locale data use ellipsis ranges?",
+                           f"== NODE ELLIPSIS  does {new}'s own locale data use ellipsis ranges?",
+                           '== AUDIT SUMMARY'):
+                with self.subTest(example=name, banner=banner[:30]):
+                    self.assertIn(banner, text)
+
+    def test_the_quoted_steps_9_10_block_is_verbatim_from_the_example(self):
+        """The fenced block under "What steps 9 and 10 add to the summary" in
+        docs/limitations.md, line for line in the RHEL8->RHEL9 example."""
+        limits = read(os.path.join(REPO_ROOT, 'docs', 'limitations.md'))
+        m = re.search(r'What steps 9 and 10 add to the summary.*?```\n(.*?)```',
+                      limits, re.S)
+        self.assertIsNotNone(m, 'the quoted block is gone from limitations.md')
+        self.assertIn(m.group(1), self.example('rhel8-to-rhel9'))
+
+    def test_the_summary_blast_radius_line_matches_step_8(self):
+        """The summary's "plus N locale(s) that inherit" is read from the list
+        step 8 writes; in the example, N must be the count step 8 printed."""
+        for name in self.EXAMPLES:
+            text = self.example(name)
+            step8 = re.search(r'Additionally affected via `copy` inheritance '
+                              r'at \S+: (\d+) locale', text)
+            summary = re.search(r'plus (\d+) locale\(s\) that inherit', text)
+            with self.subTest(example=name):
+                self.assertIsNotNone(step8, text[-2000:])
+                self.assertIsNotNone(summary)
+                self.assertEqual(step8.group(1), summary.group(1))
+
+
 def without_fences(text):
     """Markdown with its fenced code blocks removed: a `#` inside a shell
     snippet is a comment, not a heading. Inline code is kept, because a

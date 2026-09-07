@@ -498,7 +498,8 @@ SQL TEMPLATE (sql/collation_confirmation_template.sql)
   input order, so feed both sides byte-identical input.
 
 ================================================================
-Added 2026-09-06: step 8, node to node
+Added 2026-09-06: step 8, node to node. Steps 6, 7, 9 and 10 and the
+full summary added 2026-09-07.
 ================================================================
 
 Steps 1-5 above read upstream source only, so they never see
@@ -511,14 +512,97 @@ $ ./audit.sh glibc-2.28 glibc-2.34 \
     --old-locales-dir ./el8-locales --old-build-id glibc-2.28-251.el8_10.40 \
     --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
 
-(per-file diff bodies trimmed below; the fingerprints and directory paths are
-this run's temporary ones and are trimmed too)
+(per-file diff bodies in the node-to-node section trimmed; the node
+directories are shown as ./elN-locales and the output directory as
+/tmp/pg-glibc-collation-audit)
 
+================================================================
+== DISTRO CHECK  do glibc-2.28-251.el8_10.40's patches touch LC_COLLATE?
+================================================================
+Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
+  UNCHECKED glibc-2.28 = 3c03baca37fd  gpg is not installed; the signature was NOT checked
+  NOTE: signatures were not checked. The commit ids above are what was actually read;
+      (diff body trimmed)
+
+Node build under test: glibc-2.28-251.el8_10.40
+Node locale sources:   ./el8-locales
+
+Compared 353 file(s) against glibc-2.28:
+  identical:                 280
+  differ outside LC_COLLATE: 73
+  differ INSIDE LC_COLLATE:  0
+  no LC_COLLATE either side: 0
+  absent upstream:           2
+  absent on the node:        0
+  (73 of 353 differ in some way)
+
+Nothing differs inside LC_COLLATE. For every locale compared, the tag diff is reading the same collation data glibc-2.28-251.el8_10.40 runs.
+
+Absent upstream (2) -- backported locales this comparison is structurally blind to:
+  C: HAS ITS OWN TAILORING -- unauditable here
+  en_US@ampm: pure copy of iso14651_t1 (compared above)
+
+Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.glibc-2.28..old.txt
+
+!! This compares locale DATA. glibc's collation CODE is step 5's job
+   (diff_collation_code.py) -- that is where Bug 22668 lives, the change that
+   reorders ko_KR -- and step 5 reads it between the two upstream tags. What
+   neither step covers is a distro backporting a CODE change that is in
+   neither tag. That gap is closed by the empirical check on real nodes, which
+   measures the glibc actually installed, patches and all: docs/confirming-on-
+   a-real-system.md. Cheap complement: rpm -q --changelog glibc | grep -i
+   collat
+!! localedata/charmaps/ is NOT compared. glibc-locale-source ships it and it
+   is an input to localedef, so a repertoire change is outside this result as
+   well as outside the audit. See docs/limitations.md.
+
+================================================================
+== DISTRO CHECK  do glibc-2.34-275.el9_8's patches touch LC_COLLATE?
+================================================================
+Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
+  UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was NOT checked
+  NOTE: signatures were not checked. The commit ids above are what was actually read;
+      (diff body trimmed)
+
+Node build under test: glibc-2.34-275.el9_8
+Node locale sources:   ./el9-locales
+
+Compared 355 file(s) against glibc-2.34:
+  identical:                 353
+  differ outside LC_COLLATE: 2
+  differ INSIDE LC_COLLATE:  0
+  no LC_COLLATE either side: 0
+  absent upstream:           1
+  absent on the node:        0
+  (2 of 355 differ in some way)
+
+Nothing differs inside LC_COLLATE. For every locale compared, the tag diff is reading the same collation data glibc-2.34-275.el9_8 runs.
+
+Absent upstream (1) -- backported locales this comparison is structurally blind to:
+  C: HAS ITS OWN TAILORING -- unauditable here
+
+Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.glibc-2.34..new.txt
+
+!! This compares locale DATA. glibc's collation CODE is step 5's job
+   (diff_collation_code.py) -- that is where Bug 22668 lives, the change that
+   reorders ko_KR -- and step 5 reads it between the two upstream tags. What
+   neither step covers is a distro backporting a CODE change that is in
+   neither tag. That gap is closed by the empirical check on real nodes, which
+   measures the glibc actually installed, patches and all: docs/confirming-on-
+   a-real-system.md. Cheap complement: rpm -q --changelog glibc | grep -i
+   collat
+!! localedata/charmaps/ is NOT compared. glibc-locale-source ships it and it
+   is an input to localedef, so a repertoire change is outside this result as
+   well as outside the audit. See docs/limitations.md.
+
+================================================================
 == NODE TO NODE  does glibc-2.28-251.el8_10.40's collation data differ from glibc-2.34-275.el9_8's?
 ================================================================
 Node-to-node comparison of locale SOURCES. Both sides are authoritative:
   old: glibc-2.28-251.el8_10.40
+      (diff body trimmed)
   new: glibc-2.34-275.el9_8
+      (diff body trimmed)
 
 Compared 354 file(s) present on both nodes:
   identical:                  82
@@ -530,10 +614,17 @@ Compared 354 file(s) present on both nodes:
 
 Differ INSIDE LC_COLLATE (3) -- these two nodes do not carry the same collation rules:
   C  (both, differing, ellipsis -> codepoint)
+      (diff body trimmed)
   or_IN  (both, differing, explicit on both)
+      (diff body trimmed)
   sv_SE  (both, differing, explicit on both)
+      (diff body trimmed)
 
   1 of those exist at NEITHER tag, so no tag-to-tag diff could see them: C
+
+Additionally affected via `copy` inheritance at glibc-2.34-275.el9_8: 2 locale(s)
+  via sv_SE: 2 locale(s)
+      sv_FI, sv_FI@euro
 
 Only on the new node (2) -- locales this upgrade adds:
   ckb_IQ: weights spelled out in the file
@@ -551,19 +642,161 @@ Backported locales, reported whether or not they differ (these are why this comp
 
 Full result written to /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.28-251.el8_10.40..glibc-2.34-275.el9_8.txt
 
+!! This compares locale DATA. Identical data is NOT identical ORDER: the
+   weights for an ellipsis range are computed by localedef when the locale is
+   built, and that code differs between two glibc builds. Bug 22668 (commit
+   82292c99b2) changed exactly that and reordered ko_KR from a byte-identical
+   file. So a clean result here clears the data half and nothing else.
+!! C.UTF-8: built from ellipsis ranges on at least one of these nodes, so the
+   order is whatever localedef computed and is NOT settled above. PostgreSQL
+   also reports collversion as NULL for every C.* name, so nothing warns
+   either. sql/c_utf8_probe.sql is the only thing that answers the order.
+!! Cheap complement, on each node: rpm -q --changelog glibc | grep -i collat
+!! localedata/charmaps/ is NOT compared. glibc-locale-source ships it and it
+   is an input to localedef, so a repertoire change is outside this result as
+   well as outside the audit. See docs/limitations.md.
+
+================================================================
+== NODE ELLIPSIS  does glibc-2.28-251.el8_10.40's own locale data use ellipsis ranges?
+================================================================
+Files at glibc-2.28-251.el8_10.40 (./el8-locales): 355, of which 342 define LC_COLLATE
+Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 5
+  C
+      ..
+      ..
+      ..
+      ... and 3 more
+  i18n
+      collating-symbol <S0200>..<S1100> % 0x0200..0x1100
+      collating-symbol <S4E00>..<S9FA5> % Symbols for Han
+      collating-symbol <SAC00>..<SD7A3> % Symbols for Hangul
+      ... and 1 more
+  iso14651_t1
+      .. ..;IGNORE;IGNORE;IGNORE
+  iso14651_t1_common
+      collating-symbol <S0009>..<S327F> % Alphabetics, syllabics, general symbols
+      collating-symbol <S4DC0>..<S4DFF> % Yijing hexagram symbols
+      collating-symbol <SA000>..<SABFF> % Alphabetics, syllabics, general symbols
+      ... and 20 more
+  ko_KR
+      ..
+
+Additionally exposed via `copy` inheritance: 329
+  via iso14651_t1: 325 locale(s)
+      aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, agr_PE, ak_GH, am_ET, an_ES, anp_IN, ar_AE, ar_BH, ...
+  via iso14651_t1_common: 4 locale(s)
+      cmn_TW, cns11643_stroke, iso14651_t1_pinyin, zh_CN
+
+Full set needing empirical confirmation: 334 locale source file(s), 475 generated locale name(s) per localedata/SUPPORTED
+  e.g. aa_DJ, aa_DJ.utf8, aa_ER, aa_ER@saaho, aa_ET, af_ZA, af_ZA.utf8, agr_PE, ...
+  not in SUPPORTED (templates, not built by default): C, cns11643_stroke, en_US@ampm, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
+  full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.28-251.el8_10.40.txt
+
+These cannot be cleared by a source diff alone.
+This is one node's own data. Whether the WEIGHTS those ranges expand to
+differ between two nodes is a question about localedef, not about this
+directory: diff_collation_code.py for the two upstream tags, and
+`rpm -q --changelog glibc | grep -i collat` on each node.
+
+================================================================
+== NODE ELLIPSIS  does glibc-2.34-275.el9_8's own locale data use ellipsis ranges?
+================================================================
+Files at glibc-2.34-275.el9_8 (./el9-locales): 356, of which 343 define LC_COLLATE
+Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 4
+  i18n
+      collating-symbol <S0200>..<S1100> % 0x0200..0x1100
+      collating-symbol <S4E00>..<S9FA5> % Symbols for Han
+      collating-symbol <SAC00>..<SD7A3> % Symbols for Hangul
+      ... and 1 more
+  iso14651_t1
+      .. ..;IGNORE;IGNORE;IGNORE
+  iso14651_t1_common
+      collating-symbol <S0009>..<S327F> % Alphabetics, syllabics, general symbols
+      collating-symbol <S4DC0>..<S4DFF> % Yijing hexagram symbols
+      collating-symbol <SA000>..<SABFF> % Alphabetics, syllabics, general symbols
+      ... and 20 more
+  ko_KR
+      ..
+
+Declare codepoint_collation, so no expansion change can move them: C
+
+Additionally exposed via `copy` inheritance: 331
+  via iso14651_t1: 327 locale(s)
+      aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, agr_PE, ak_GH, am_ET, an_ES, anp_IN, ar_AE, ar_BH, ...
+  via iso14651_t1_common: 4 locale(s)
+      cmn_TW, cns11643_stroke, iso14651_t1_pinyin, zh_CN
+
+Full set needing empirical confirmation: 335 locale source file(s), 478 generated locale name(s) per localedata/SUPPORTED
+  e.g. aa_DJ, aa_DJ.utf8, aa_ER, aa_ER@saaho, aa_ET, af_ZA, af_ZA.utf8, agr_PE, ...
+  not in SUPPORTED (templates, not built by default): cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
+  full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.34-275.el9_8.txt
+
+These cannot be cleared by a source diff alone.
+This is one node's own data. Whether the WEIGHTS those ranges expand to
+differ between two nodes is a question about localedef, not about this
+directory: diff_collation_code.py for the two upstream tags, and
+`rpm -q --changelog glibc | grep -i collat` on each node.
+
+================================================================
+== AUDIT SUMMARY  glibc-2.28 -> glibc-2.34
+================================================================
+
+-- Reindex: sort order changes, confirm then REINDEX
+     or_IN
+     sv_FI
+     sv_FI.utf8
+     sv_FI@euro
+     sv_SE
+     sv_SE.utf8
+   (6 name(s); full list: /tmp/pg-glibc-collation-audit/step3_affected_locales.txt)
+
+-- Needs an empirical test: step 5 found 25 substantive hunk(s),
+   so a clean data diff CANNOT clear the locales step 4 flagged
+     478 generated name(s)
+     full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
+
+-- Node-to-node locale data (glibc-2.28-251.el8_10.40 -> glibc-2.34-275.el9_8)
+     3 locale(s) differ inside LC_COLLATE between the two
+     nodes' OWN sources; full list: /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.28-251.el8_10.40..glibc-2.34-275.el9_8.txt
+     plus 2 locale(s) that inherit one of those files'
+     LC_COLLATE via copy on glibc-2.34-275.el9_8; full list: /tmp/pg-glibc-collation-audit/node_collate_inherited.glibc-2.28-251.el8_10.40..glibc-2.34-275.el9_8.txt
+     C (C.UTF-8): DIFFERS  <- in neither tag; no other step sees it
+
+-- Node's own locale data, ellipsis scan (glibc-2.28-251.el8_10.40)
+     ellipsis-based locale(s): 5
+     C (C.UTF-8): ellipsis-based  <- localedef computes its weights,
+     so identical data does NOT mean identical order
+-- Node's own locale data, ellipsis scan (glibc-2.34-275.el9_8)
+     ellipsis-based locale(s): 4
+     C (C.UTF-8): codepoint_collation  <- byte order by construction
+
+-- Warnings the clean results above do NOT cover
+     !! localedata/locales/C exists at NEITHER glibc-2.28 nor glibc-2.34, but
+      (diff body trimmed)
+     !! This compares locale DATA. glibc's collation CODE is step 5's job
+      (diff body trimmed)
+     !! localedata/charmaps/ is NOT compared. glibc-locale-source ships it and it
+      (diff body trimmed)
+     !! This compares locale DATA. Identical data is NOT identical ORDER: the
+      (diff body trimmed)
+     !! C.UTF-8: built from ellipsis ranges on at least one of these nodes, so the
+      (diff body trimmed)
+     !! Cheap complement, on each node: rpm -q --changelog glibc | grep -i collat
+     (see docs/limitations.md)
+
+-- Not decided for you
+     25 hunk(s) marked >> in step 5. Whether any of them moves a
+     weight is a judgement call that needs someone to read C.
+     If nobody will, treat step 4's list as unresolved and confirm
+     empirically instead: docs/confirming-on-a-real-system.md
+
 or_IN and sv_SE are exactly what step 2 reports for this tag pair, reached by
 a different algorithm -- which is what makes the answer about C worth citing.
 en_US@ampm is neither: it is a locale REMOVED by the upgrade, which no step
 reports because it is a change to the set of locales rather than to one.
 
-The summary block this adds:
-
--- Node-to-node locale data (glibc-2.28-251.el8_10.40 -> glibc-2.34-275.el9_8)
-     3 locale(s) differ inside LC_COLLATE between the two
-     nodes' OWN sources; full list: /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.28-251.el8_10.40..glibc-2.34-275.el9_8.txt
-     C (C.UTF-8): DIFFERS  <- in neither tag; no other step sees it
-
-Without --old-locales-dir/--new-locales-dir that block reads:
+Without --old-locales-dir/--new-locales-dir the node-to-node block of the
+summary above reads instead:
 
   -- Node-to-node locale data: NOT RUN
        Pass --old-locales-dir and --new-locales-dir with their build ids.

@@ -186,7 +186,9 @@ something the clone does not have:
 Both node-reading checks refuse to report rather than report a clean zero
 instead: each has an absolute floor on how many files it will accept as a real
 copy, because a truncated directory reports nothing wrong. The tag-reading
-steps apply the same floor to each tag's tree. The node-to-node one
+steps apply the same floor to each tag's tree. Both also close a differing
+file over the node's `copy` graph, so a backport to `iso14651_t1` is reported
+as the 328 to 338 locales that inherit it, not as one file. The node-to-node one
 additionally refuses two directories that resolve to the same path, since
 comparing a tree with itself is flawless and meaningless.
 

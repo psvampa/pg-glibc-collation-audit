@@ -175,6 +175,44 @@ def compare_trees(root_a, root_b, names, label_a='a', label_b='b'):
     return buckets, side, texts
 
 
+def inherited_via_copy(texts, roots):
+    """{locale: [roots]} for every locale that is NOT one of `roots` and whose
+    LC_COLLATE reaches one of them through `copy`.
+
+    Pure: the same closure step 3 and step 4 take, applied to a node's own
+    files. A backport that edits iso14651_t1 changes the order of the 328 to
+    338 locales that copy it, and until this existed the node-reading checks
+    reported "1 locale(s) differ inside LC_COLLATE" for exactly that case --
+    the one check that can see a backport at all lost its blast radius on the
+    way to the summary. Roots are excluded from the result so a file that
+    both differs and copies another differing file is not counted twice.
+    """
+    roots = set(roots)
+    graph = g.copy_graph_from_texts(texts)
+    return {name: via for name, via in g.inherited_from(graph, roots).items()
+            if name not in roots}
+
+
+def print_inheritance(inherited, where, indent='  '):
+    """The blast-radius block under a list of differing files, in the shape
+    step 4 prints. Always printed when there is a list above it: a count of
+    zero is a fact, an absent line is not."""
+    print(f"\n{indent[:-2]}Additionally affected via `copy` inheritance at "
+          f"{where}: {len(inherited)} locale(s)")
+    if not inherited:
+        print(f"{indent}(no other locale copies any of those files)")
+        return
+    by_root = {}
+    for loc, roots in inherited.items():
+        for via in roots:
+            by_root.setdefault(via, []).append(loc)
+    for via in sorted(by_root):
+        locs = sorted(by_root[via])
+        print(f"{indent}via {via}: {len(locs)} locale(s)")
+        print(f"{indent}    {', '.join(locs[:12])}"
+              f"{', ...' if len(locs) > 12 else ''}")
+
+
 def collate_diff_lines(text_a, text_b, label_a, label_b, limit=24):
     """A truncated unified diff of two files' LC_COLLATE blocks."""
     block_a = collate_text(text_a) or ''
@@ -322,6 +360,13 @@ def main(argv):
                 for line in collate_diff_lines(up_text, node_text,
                                                opts.tag, 'node'):
                     print(f"      {line}")
+            # The reach of those files through the node's OWN copy graph.
+            node_texts = {}
+            for n in names:
+                with open(os.path.join(opts.locales_dir, n), 'rb') as fh:
+                    node_texts[n] = fh.read().decode('utf-8', 'surrogateescape')
+            inherited = inherited_via_copy(node_texts, buckets['collate'])
+            print_inheritance(inherited, opts.build_id)
         else:
             print(f"\nNothing differs inside LC_COLLATE. For every locale "
                   f"compared, the tag diff is reading the same collation data "
