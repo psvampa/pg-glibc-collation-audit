@@ -4,6 +4,39 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-07 (eighteenth entry)
+
+### Nothing checked that the documentation's links resolve
+
+Every internal link in the published Markdown, and every `docs/*.md` path that
+`audit.sh`, `sql/` and `examples/` name in prose, is now asserted by
+`tests/test_published_claims.py` (`EveryLinkResolves`), so CI fails on a
+retitled heading or a moved file. **No verdict moved and no output changed**:
+every link resolves today, which was measured before the test was written.
+
+### What it used to get wrong
+
+The check existed as a Python snippet in a private working-rules file, run by
+hand before a commit when somebody remembered. The seventeenth entry records two
+broken links found by such a hand run, one created by retitling the very
+section being documented; the eleventh records `examples/rhel8-to-rhel9.sql`
+pointing at a README section that had moved to `docs/results.md`. Plain
+relative file links -- the majority of the links in the docs -- were never
+checked at all. A check that depends on somebody remembering is not a check,
+which is the rule the seventeenth entry applied to the per-node ellipsis scan.
+
+### What was verified
+
+Mutation-checked, with a control: retitling one heading in
+`docs/limitations.md` fails the test once per link to that heading; breaking
+one relative link in `docs/README.md` fails it; making `audit.sh` name a page
+that does not exist fails it; an unrelated prose edit stays green. Fenced code
+blocks are ignored, so a `#` inside a shell snippet is not a heading, and
+inline code is ignored when looking for links, so a link-shaped example inside
+backticks is not one -- the first version of this entry tripped that itself.
+Each of the three tests also asserts that it found something to check, so a
+stale pattern fails instead of passing over nothing.
+
 ## 2026-09-06 (seventeenth entry)
 
 The glibc 2.24 version floor was a bug in one function, not a structural limit.
