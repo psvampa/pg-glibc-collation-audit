@@ -12,6 +12,7 @@ point. A wrapper that returns a plausible clean audit when a step crashed is
 worse than five commands.
 """
 import os
+import re
 import shutil
 import tempfile
 import unittest
@@ -195,6 +196,19 @@ class WrapperEmptyPair(unittest.TestCase):
         self.assertIn("none -- no locale's LC_COLLATE changed between these "
                       "two tags", self.out)
 
+    def test_the_clean_step_5_branch_is_the_one_printed(self):
+        """HUNKS == 0 used to be executed by this class and asserted by
+        nobody. The same tag against itself is the one real input that reaches
+        it: step 5 prints its clean sentence and the summary must say
+        "sufficient" -- and NOT the unresolved wording, which is what an absent
+        clean sentence produces."""
+        summary = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
+        self.assertIn('Step 5 found no substantive change, so a clean data '
+                      'diff is sufficient even for the locales step 4 flagged',
+                      summary)
+        self.assertIn('Nothing from step 5.', summary)
+        self.assertNotIn('did NOT reach a clean result', summary)
+
 
 @needs_clone
 class WrapperRefusesBadInput(unittest.TestCase):
@@ -302,6 +316,41 @@ class WrapperNodeToNode(unittest.TestCase):
         self.assertIn('C (C.UTF-8): DIFFERS', self.out)
         self.assertIn('no other step sees it', self.out)
 
+    def test_the_ellipsis_scan_lines_for_each_node_are_printed(self):
+        """audit.sh's steps 9/10 block prints "C (C.UTF-8): ellipsis-based"
+        for the backported C and "codepoint_collation" for the upstream one.
+        This class has always produced both lines and asserted neither."""
+        summary = self.out.split('AUDIT SUMMARY')[1]
+        self.assertIn("-- Node's own locale data, ellipsis scan (build-old)",
+                      summary)
+        self.assertIn("-- Node's own locale data, ellipsis scan (build-new)",
+                      summary)
+        self.assertEqual(summary.count('ellipsis-based locale(s):'), 2)
+        flat = ' '.join(summary.split())
+        self.assertIn('C (C.UTF-8): ellipsis-based <- localedef computes its '
+                      'weights, so identical data does NOT mean identical '
+                      'order', flat)
+        self.assertIn('C (C.UTF-8): codepoint_collation <- byte order by '
+                      'construction', flat)
+
+    def test_the_blast_radius_of_the_differing_files_is_in_the_summary(self):
+        """"Node-to-node did not close over the copy graph." The summary now
+        carries the count of locales inheriting a differing file's LC_COLLATE,
+        read from the list step 8 writes. For these two trees or_IN and sv_SE
+        differ and sv_FI copies sv_SE -- step 3's answer, from the node side.
+        """
+        flat = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
+        m = re.search(r"plus (\d+) locale\(s\) that inherit one of those "
+                      r"files' LC_COLLATE via copy on build-new", flat)
+        self.assertIsNotNone(m, flat)
+        path = os.path.join(self.out_dir,
+                            'node_collate_inherited.build-old..build-new.txt')
+        with open(path, encoding='utf-8') as fh:
+            names = [ln.strip() for ln in fh if ln.strip()
+                     and not ln.startswith('#')]
+        self.assertEqual(int(m.group(1)), len(names))
+        self.assertIn('sv_FI', names)
+
     def test_the_count_excludes_the_provenance_header(self):
         """count_lines would have counted the leading `#` line, reporting one
         finding where there are none."""
@@ -320,6 +369,84 @@ class WrapperNodeToNode(unittest.TestCase):
         block = 'localedata/charmaps/ is NOT compared'
         summary = self.out.split('-- Warnings the clean results above')[-1]
         self.assertEqual(summary.count(block), 1, summary)
+
+
+@needs_clone
+class WrapperOneSideOnly(unittest.TestCase):
+    """Only --old-locales-dir: steps 6 and 9 run, 7, 8 and 10 do not, and the
+    summary says which node-side questions went unasked. This branch of
+    audit.sh had no test at all."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-oneside-')
+        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-onetree-')
+        root = dd.materialise_tag(GLIBC_CLONE, OLD, os.path.join(cls.nodes, 'a'))
+        with open(os.path.join(root, 'C'), 'w', encoding='utf-8') as fh:
+            fh.write(backported_c())
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID, '--old-locales-dir', root, '--old-build-id', 'build-old',
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    def test_steps_6_and_9_run_and_7_8_10_do_not(self):
+        self.assertEqual(self.rc, 0, self.out)
+        self.assertIn("DISTRO CHECK  do build-old's patches", self.out)
+        self.assertIn("NODE ELLIPSIS  does build-old's own locale data",
+                      self.out)
+        self.assertNotIn('NODE TO NODE', self.out)
+        for n in (7, 8, 10):
+            self.assertFalse(os.path.exists(os.path.join(
+                self.out_dir, f'step{n}.{pair_slug(OLD, MID)}.log')), n)
+
+    def test_the_summary_says_node_to_node_was_NOT_RUN_but_scans_the_old_node(self):
+        summary = self.out.split('AUDIT SUMMARY')[1]
+        self.assertIn('-- Node-to-node locale data: NOT RUN', summary)
+        self.assertIn("-- Node's own locale data, ellipsis scan (build-old)",
+                      summary)
+        self.assertIn('C (C.UTF-8): ellipsis-based', summary)
+        self.assertNotIn('ellipsis scan (build-new)', summary)
+
+
+@needs_clone
+class WrapperNodesIdentical(unittest.TestCase):
+    """NODE_DIFFS == 0: two copies of one tree under two build ids. The
+    fingerprint warning fires, the run continues, and the summary takes the
+    "no locale differs" branch -- which no test had ever driven."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-same-')
+        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-sametrees-')
+        a = dd.materialise_tag(GLIBC_CLONE, MID, os.path.join(cls.nodes, 'a'))
+        b = dd.materialise_tag(GLIBC_CLONE, MID, os.path.join(cls.nodes, 'b'))
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID,
+            '--old-locales-dir', a, '--old-build-id', 'build-x',
+            '--new-locales-dir', b, '--new-build-id', 'build-y',
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    def test_the_no_difference_branch_is_printed_without_a_shell_error(self):
+        self.assertEqual(self.rc, 0, self.out)
+        self.assertNotIn('integer expression expected', self.out)
+        flat = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
+        self.assertIn("no locale differs inside LC_COLLATE between the two "
+                      "nodes' own sources", flat)
+        self.assertNotIn('locale(s) differ inside LC_COLLATE', flat)
+        self.assertNotIn('plus ', flat)
+
+    def test_the_identical_fingerprint_warning_reaches_the_summary(self):
+        summary = self.out.split('AUDIT SUMMARY')[1]
+        self.assertIn('same fingerprint', summary)
 
 
 @needs_clone

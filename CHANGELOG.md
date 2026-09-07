@@ -4,6 +4,80 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-07 (twenty-second entry)
+
+The two node-reading checks report the reach of what they find, the worked
+examples finally show steps 6 to 10, and three branches of the summary that
+no test had ever driven are driven. **No verdict moves.** Steps 1 to 5 print
+exactly what they printed; steps 6 and 7 too on the three fixtures, since no
+distro patch touches `LC_COLLATE` there. Step 8 gains one block.
+
+### What it used to get wrong
+
+**Node-to-node and the distro check did not close over the `copy` graph.**
+Every other list this tool produces is closed over inheritance -- step 3
+exists for nothing else, step 4 does it to its own result -- but the one check
+that can see a distro backport at all reported the differing files and stopped.
+A backport that edits `iso14651_t1` would have read as "1 locale(s) differ
+inside LC_COLLATE", with the 328 to 338 locales that copy it nowhere, in the
+step and in the summary. Not observed on the fixtures: no distro patch touches
+`LC_COLLATE` on any of the three. Reproduced by injection, a comment inside
+`iso14651_t1`'s block on a materialised tag: the old output named one file.
+
+**The steps 9/10 summary block was quoted in `docs/limitations.md` and
+published nowhere else.** No `examples/*.txt` carried a run of steps 6, 7, 9 or
+10 -- only step 8, spliced in on 2026-09-06 -- and no test tied the quoted
+block to anything. A reader could not check it, and nothing would have noticed
+it going stale.
+
+**Three summary branches had no test:** a run given only `--old-locales-dir`
+(steps 6 and 9 run, 7, 8 and 10 do not), two nodes with nothing differing
+inside `LC_COLLATE`, and the clean step 5 branch -- executed by the same-tag
+test since the tenth entry and asserted by nobody. The steps 9/10 lines
+`C (C.UTF-8): ellipsis-based` and `C (C.UTF-8): codepoint_collation` were
+produced by the node-to-node wrapper test on every run and asserted by nobody
+either.
+
+### What changed
+
+- `diff_node_locales.py` prints, under its differing-files list,
+  "Additionally affected via `copy` inheritance at <new build>: N locale(s)"
+  with the per-template breakdown step 4 uses, computed over the NEW node's
+  own files, and writes the names to `node_collate_inherited.<builds>.txt`.
+  `diff_distro_locales.py` prints the same block over the node's files. Roots
+  are excluded, so a file that differs and copies another differing file is
+  not counted twice. The closure itself is `inherited_via_copy()`, pure, in
+  `diff_distro_locales.py`, on top of the tested `copy_graph_from_texts` and
+  `inherited_from`.
+- `audit.sh` reads that list and prints "plus N locale(s) that inherit one of
+  those files' LC_COLLATE via copy" under the node-to-node count -- from the
+  file, not from the step's prose, and an absent file is reported as
+  `NOT REPORTED`, never as zero. The file is removed up front like every other
+  file the summary reads.
+- On the real fixtures, RHEL8→RHEL9: `sv_FI` and `sv_FI@euro` inherit from
+  `sv_SE`, the same two step 3 finds from the tag side. RHEL9→RHEL10: zero.
+- Both worked examples now carry steps 6, 7, 8, 9, 10 and the complete
+  summary of a run given both nodes' locale sources -- taken 2026-09-07 off
+  `collaudit8`/`9`/`10` (`glibc-2.28-251.el8_10.40`, `glibc-2.34-275.el9_8`,
+  `glibc-2.39-128.el10_2`; 355, 356 and 366 files, counts asserted on both
+  ends of the transport). Per-file diff bodies in step 8 are trimmed and
+  marked; nothing else is.
+- `tests/test_published_claims.py` ties the block `docs/limitations.md` quotes
+  to the RHEL8→RHEL9 example line for line, requires every node-step banner in
+  both examples, and checks the summary's "plus N" against step 8's N.
+
+### What was verified
+
+- Injection: a template edited inside its block on a materialised 2.39 tree
+  makes node-to-node and the distro check both report more than 300 inherited
+  locales, `en_US` among them, and the written list has exactly that many
+  names. Two unedited tag trees report `sv_FI, sv_FI@euro` via `sv_SE`.
+- Wrapper: one side only, two identical trees under different build ids
+  (fingerprint warning fires, "no locale differs" branch printed, no shell
+  error), the clean step 5 sentence on the same-tag pair, and both `C (C.UTF-8)`
+  ellipsis-scan lines in the two-node run.
+- Steps 1 to 7 byte-identical before and after on both audited pairs.
+
 ## 2026-09-07 (twenty-first entry)
 
 Three guards on the input, none of which existed. **No verdict moves, and both

@@ -157,7 +157,7 @@ def report_sides(old, new):
 
 
 def report_buckets(old, new, buckets, side, texts, both, only_old, only_new,
-                   invisible):
+                   invisible, inherited):
     print(f"\nCompared {len(both)} file(s) present on both nodes:")
     print(f"  identical:                  {len(buckets['identical'])}")
     print(f"  differ outside LC_COLLATE:  {len(buckets['other'])}")
@@ -193,6 +193,12 @@ def report_buckets(old, new, buckets, side, texts, both, only_old, only_new,
         else:
             print("  All of those exist at one of the two tags, so the tag "
                   "diff could see them.")
+
+    if buckets['collate']:
+        # Through the NEW node's own copy graph: the order those files define
+        # is inherited by whatever copies them, and a differing template is a
+        # differing template for all of its dependants.
+        dd.print_inheritance(inherited, new.build_id)
 
     if only_new:
         print(f"\nOnly on the new node ({len(only_new)}) -- locales this "
@@ -353,15 +359,24 @@ def main(argv):
     buckets, side, texts = dd.compare_trees(old.root, new.root, both,
                                             label_a=old.build_id,
                                             label_b=new.build_id)
+    inherited = dd.inherited_via_copy(read_texts(new.root, new.names),
+                                      buckets['collate'])
     report_buckets(old, new, buckets, side, texts, both, only_old, only_new,
-                   invisible)
+                   invisible, inherited)
     computed, unexamined = report_backported(old, new, buckets, invisible)
 
+    slug = g.pair_slug(old.build_id, new.build_id)
     out = g.write_list(
-        f"node_collate_diffs.{g.pair_slug(old.build_id, new.build_id)}.txt",
+        f"node_collate_diffs.{slug}.txt",
         [f"# {old.build_id} ({old.root}) vs {new.build_id} ({new.root})"]
         + buckets['collate'])
     print(f"\nFull result written to {out}")
+    # The dependants, in their own file: the differing files ARE the finding
+    # and the summary counts that list; this is its reach.
+    g.write_list(f"node_collate_inherited.{slug}.txt",
+                 [f"# locales inheriting LC_COLLATE, via copy at "
+                  f"{new.build_id}, from: {', '.join(buckets['collate'])}"]
+                 + sorted(inherited))
 
     print()
     dd.warn(f"This compares locale DATA. Identical data is NOT identical "

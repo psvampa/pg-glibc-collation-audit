@@ -14,6 +14,7 @@ the same position sql/ is in and recorded as such in tests/README.md.
 """
 import glob
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -189,6 +190,73 @@ class NodeToNodeSeesWhatNoTagCan(NodeCase):
         self.assertEqual(rc, 0, text)
         self.assertIn('zz_GONE', text)
         self.assertIn('the collation is gone', text)
+
+
+def with_edited_template(root, name='iso14651_t1'):
+    """Edit one line inside `name`'s LC_COLLATE block in a stand-in node --
+    the shape of a distro backport to a template."""
+    path = os.path.join(root, name)
+    with open(path, encoding='utf-8', errors='surrogateescape') as fh:
+        text = fh.read()
+    start, end = g.collate_bounds(text)
+    lines = text.split('\n')
+    lines.insert(start, '% injected by the test suite: a backport to a template')
+    with open(path, 'w', encoding='utf-8', errors='surrogateescape') as fh:
+        fh.write('\n'.join(lines))
+    return root
+
+
+@needs_clone
+class NodeChecksCloseOverCopy(NodeCase):
+    """"Node-to-node and the distro check did not close over the copy graph":
+    a template differing between nodes was "1 locale(s) differ", and the
+    hundreds of locales copying it were nowhere -- in the one check that can
+    see a backport at all. Injected, as every closure test is: no fixture
+    node carries a backport inside LC_COLLATE."""
+
+    def test_node_to_node_reports_the_reach_of_a_differing_template(self):
+        old_root = self.node(MID, 'a')
+        new_root = with_edited_template(self.node(NEW, 'b'))
+        rc, text = self.node_to_node(old_root, new_root, MID, NEW)
+        self.assertEqual(rc, 0, text)
+        self.assertIn('iso14651_t1', self.result_names())
+        m = re.search(r'^Additionally affected via `copy` inheritance at '
+                      + re.escape(NEW) + r': (\d+) locale\(s\)$', text, re.M)
+        self.assertIsNotNone(m, text)
+        self.assertGreater(int(m.group(1)), 300)
+        self.assertIn('via iso14651_t1:', text)
+        listed = glob.glob(os.path.join(self.out, 'node_collate_inherited.*.txt'))
+        self.assertEqual(len(listed), 1, listed)
+        with open(listed[0], encoding='utf-8') as fh:
+            names = [ln.strip() for ln in fh if ln.strip()
+                     and not ln.startswith('#')]
+        self.assertEqual(len(names), int(m.group(1)))
+        self.assertIn('en_US', names)
+
+    def test_a_differing_leaf_reports_its_small_reach(self):
+        """The closure is printed for every non-empty differing list, however
+        small; a zero would be printed as a zero, never omitted."""
+        old_root = self.node(OLD, 'a')
+        new_root = self.node(MID, 'b')
+        rc, text = self.node_to_node(old_root, new_root, OLD, MID)
+        self.assertEqual(rc, 0, text)
+        # or_IN and sv_SE differ; sv_FI and sv_FI@euro copy sv_SE -- the same
+        # answer step 3 gives for this pair, reached from the node side.
+        self.assertIn(f'Additionally affected via `copy` inheritance at '
+                      f'{MID}: 2 locale(s)', text)
+        self.assertIn('via sv_SE: 2 locale(s)', text)
+        self.assertIn('sv_FI, sv_FI@euro', text)
+
+    def test_the_distro_check_reports_the_reach_too(self):
+        node = with_edited_template(self.node(MID, 'n'))
+        rc, text = run('diff_distro_locales.py', MID, '--locales-dir', node,
+                       '--build-id', 'edited-build', '--node-label', 'n',
+                       out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        m = re.search(r'Additionally affected via `copy` inheritance at '
+                      r'edited-build: (\d+) locale\(s\)', text)
+        self.assertIsNotNone(m, text)
+        self.assertGreater(int(m.group(1)), 300)
 
 
 @needs_clone
