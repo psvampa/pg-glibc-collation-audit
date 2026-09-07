@@ -31,7 +31,7 @@ worked-example section below.
 
 ## If you saved an earlier result
 
-If you saved a result from this tool before 2026-09-07, check
+If you saved a result from this tool on or before 2026-09-06, check
 [CHANGELOG.md](../CHANGELOG.md) first. Three verdicts have moved since:
 
 - **`th_TH` for the RHEL9-to-RHEL10 pair** was reported 🟡 Unresolved until
