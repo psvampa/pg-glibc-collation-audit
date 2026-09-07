@@ -22,7 +22,7 @@ import tempfile
 import unittest
 
 from _harness import (GLIBC_CLONE, MID, NEW, OLD, SCRIPTS_DIR, backported_c,
-                      flat, needs_clone, upstream_c)
+                      flat, locale_file, needs_clone, upstream_c)
 
 import diff_distro_locales as dd
 import glibc_locale_data as g
@@ -500,6 +500,231 @@ class DirectoryModeStepFour(NodeCase):
         rc, text = run('flag_algorithmic_ranges.py', out_dir=self.out)
         self.assertEqual(rc, 2, text)
 
+    def test_the_written_list_is_never_narrower_than_what_was_reported(self):
+        """The file the output calls the "full list", under the flag audit.sh
+        always passes.
+
+        Mapping the exposed set through the TAG's SUPPORTED and writing only
+        the mapped names dropped every locale that tag does not build -- C
+        first among them, on the node where C.utf8 is the collation initdb
+        picked and `locale -a` does build it (measured on collaudit8,
+        glibc-2.28-251.el8_10.40, 2026-09-07: 867 locales, C.utf8 among them).
+        The reported set and the written set are one set.
+        """
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir', self.node(MID, 'n',
+                                                  extra={'C': backported_c()}),
+                       '--build-id', 'glibc-2.28-251.el8_10.40',
+                       '--supported-tag', MID, out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        counts = re.search(r'(\d+) locale source file\(s\), (\d+) generated '
+                           r'locale name\(s\)', text)
+        self.assertIsNotNone(counts, text)
+        unbuilt = re.search(r"^  not in \S+ SUPPORTED[^:]*: (.+)$", text, re.M)
+        self.assertIsNotNone(unbuilt, text)
+        unbuilt_names = unbuilt.group(1).split(', ')
+        with open(os.path.join(
+                self.out,
+                'step4_exposed_locales.glibc-2.28-251.el8_10.40.txt'),
+                encoding='utf-8') as fh:
+            written = [ln.strip() for ln in fh if ln.strip()]
+        self.assertIn('C', written)
+        for name in unbuilt_names:
+            self.assertIn(name, written)
+        self.assertEqual(len(written),
+                         int(counts.group(2)) + len(unbuilt_names))
+
+    def test_a_locale_the_node_builds_is_not_called_an_unbuilt_template(self):
+        """"Not in SUPPORTED" is a fact about the TAG, printed as a fact about
+        the NODE: C was labelled a template not built by default beside a node
+        that builds it and runs its databases on it."""
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir', self.node(MID, 'n',
+                                                  extra={'C': backported_c()}),
+                       '--build-id', 'glibc-2.28-251.el8_10.40',
+                       '--supported-tag', MID, out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertIn("the node's `locale -a` is the authority", flat(text))
+        self.assertNotIn('templates, not built by default', flat(text))
+
+    def test_each_backported_locale_gets_a_declared_status(self):
+        """Absent, cleared and unexamined are three answers; the wrapper could
+        distinguish two. It grepped the ellipsis list, then the codepoint line,
+        and printed NOTHING about C when it was neither -- which is what a run
+        that never looked also prints. The scan declares a status per locale
+        the distro is known to backport, and the wrapper reads it.
+        """
+        cases = ((backported_c(), 'C (C.UTF-8): ellipsis-based'),
+                 (upstream_c(), 'C (C.UTF-8): codepoint_collation'),
+                 (locale_file('order_start forward',
+                              '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
+                              'order_end'),
+                  'C (C.UTF-8): explicit weights'),
+                 (locale_file('copy "iso14651_t1"'),
+                  'C (C.UTF-8): copy-only'),
+                 (locale_file('copy "iso14651_t1"'),
+                  'it copies iso14651_t1, which this step flagged -- so this '
+                  'locale IS exposed'),
+                 (None, 'C (C.UTF-8): ABSENT from this directory'))
+        for i, (body, expected) in enumerate(cases):
+            with self.subTest(expected=expected):
+                extra = {'C': body} if body is not None else None
+                rc, text = run('flag_algorithmic_ranges.py',
+                               '--locales-dir',
+                               self.node(MID, f'declared{i}', extra=extra),
+                               '--build-id', 'fake', out_dir=self.out)
+                self.assertEqual(rc, 0, text)
+                self.assertIn(expected, text)
+
+    def test_a_copy_only_C_is_not_declared_clear_of_an_ellipsis_it_inherits(self):
+        """A `C` that copies `iso14651_t1` uses no ellipsis of its own and is
+        exposed by every weight that template computes. Reporting only its own
+        style is true of the file and false of the order -- and step 4 has the
+        closure in hand when it declares, so there is no excuse for the
+        summary to be told less than the step knows."""
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir',
+                       self.node(MID, 'copyc',
+                                 extra={'C': locale_file('copy "iso14651_t1"')}),
+                       '--build-id', 'fake', out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertIn('so this locale IS exposed', flat(text))
+        with open(os.path.join(self.out,
+                               'step4_exposed_locales.fake.txt'),
+                  encoding='utf-8') as fh:
+            self.assertIn('C', [ln.strip() for ln in fh])
+
+    def test_a_codepoint_C_is_not_called_exposed_by_a_copy_it_discards(self):
+        """The control on the line above: `codepoint_collation` discards all
+        collation information, inherited included, so a copy cannot expose it.
+        A fix that appended the exposure note unconditionally would clear
+        nothing and alarm about a locale glibc has already settled."""
+        body = upstream_c().replace('\ncodepoint_collation\n',
+                                    '\ncopy "iso14651_t1"\ncodepoint_collation\n')
+        self.assertIn('copy "iso14651_t1"', body)
+        self.assertEqual(body.count('codepoint_collation'), 2)  # prose + keyword
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir',
+                       self.node(MID, 'cpc', extra={'C': body}),
+                       '--build-id', 'fake', out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertIn('C (C.UTF-8): codepoint_collation', text)
+        self.assertNotIn('so this locale IS exposed', flat(text))
+
+    def test_a_copy_target_absent_from_the_corpus_is_named_not_followed(self):
+        """`inherited_from` treats an unknown target as a leaf, so a copy the
+        walk could not follow used to end in the same sentence as a copy
+        resolved to a clear file. What that target carries was never read: it
+        is unresolved, not clear. Measured 0 dangling targets at 2.28, 2.34 and
+        2.39 and on the three RHEL fixtures, so this is reachable only by a
+        directory that is not the closed source a node built from -- which is
+        the input the ABSENT wording already contemplates."""
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir',
+                       self.node(MID, 'dangling',
+                                 extra={'C': locale_file('copy "no_such_locale"'),
+                                        'sv_SE': locale_file('copy "no_such_locale"')}),
+                       '--build-id', 'fake', '--supported-tag', MID,
+                       out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertIn('no_such_locale', text)
+        self.assertIn('so this locale is NOT cleared', flat(text))
+        # Named, not just counted, and under the spelling pg_collation shows:
+        # a reader greps this list for the collation their database uses.
+        self.assertIn('sv_SE', flat(text))
+        with open(os.path.join(self.out, 'step4_exposed_locales.fake.txt'),
+                  encoding='utf-8') as fh:
+            written = [ln.strip() for ln in fh]
+        self.assertIn('C', written)
+        self.assertIn('sv_SE.utf8', written)
+
+    def test_an_absent_copy_target_is_not_cleared_by_an_empty_ellipsis_scan(self):
+        """The two reassuring things at once: nothing readable uses an
+        ellipsis, and the one file that might have is the one the corpus does
+        not contain. "steps 1-3 are sufficient" must not be what comes out."""
+        flat_body = locale_file('order_start forward',
+                                '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
+                                'order_end')
+        extra = {name: flat_body for name in
+                 ('i18n', 'iso14651_t1', 'iso14651_t1_common', 'ko_KR')}
+        extra['C'] = locale_file('copy "no_such_locale"')
+        extra['sv_SE'] = locale_file('copy "no_such_locale"')
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir', self.node(MID, 'flatdangle', extra=extra),
+                       '--build-id', 'fake', '--supported-tag', MID,
+                       out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertNotIn('steps 1-3 are sufficient', flat(text))
+        self.assertIn('steps 1-3 are NOT sufficient for those', flat(text))
+        self.assertIn('so this locale is NOT cleared', flat(text))
+        # Opened at the path the output NAMES, not at one this test knows:
+        # announcing a file nobody wrote sends the reader to "No such file",
+        # and a test that looks elsewhere cannot tell.
+        named = re.search(r'full list \((\d+) name\(s\)\): (\S+)', text)
+        self.assertIsNotNone(named, text)
+        with open(named.group(2), encoding='utf-8') as fh:
+            written = [ln.strip() for ln in fh if ln.strip()]
+        self.assertIn('C', written)
+        # This path maps through SUPPORTED too, and had no test saying so.
+        self.assertIn('sv_SE.utf8', written)
+        self.assertEqual(int(named.group(1)), len(written))
+
+    def test_a_codepoint_C_is_not_called_unresolved_by_a_copy_it_discards(self):
+        """The control the exposure note has and this one lacked:
+        `codepoint_collation` discards inherited collation information, so a
+        copy it cannot resolve cannot leave it unresolved either."""
+        body = upstream_c().replace('\ncodepoint_collation\n',
+                                    '\ncopy "no_such_locale"\ncodepoint_collation\n')
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir',
+                       self.node(MID, 'cpdangle', extra={'C': body}),
+                       '--build-id', 'fake', out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertIn('C (C.UTF-8): codepoint_collation', text)
+        self.assertNotIn('so this locale is NOT cleared', flat(text))
+
+    def test_a_corpus_with_no_collation_block_at_all_is_refused(self):
+        """The file-count floor asks whether enough files were read. This asks
+        whether any of them turned out to be a locale: a full corpus that
+        yields no LC_COLLATE block is a reader problem, and every sentence
+        below it would be the cleanest this step can print."""
+        tree = _tree(MID)
+        blockless = {name: open(os.path.join(tree, name), encoding='utf-8',
+                                errors='surrogateescape').read()
+                     .split('LC_COLLATE')[0]
+                     for name in os.listdir(tree)}
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir', self.node(MID, 'noblocks', extra=blockless),
+                       '--build-id', 'fake', out_dir=self.out)
+        self.assertEqual(rc, 2, text)
+        self.assertNotIn('No locale uses ellipsis ranges', text)
+        self.assertIn('not one defines LC_COLLATE', flat(text))
+
+    def test_a_directory_without_any_ellipsis_still_declares_C(self):
+        """The most reassuring output this step has -- "No locale uses ellipsis
+        ranges here; steps 1-3 are sufficient" -- returned before the
+        declaration, so the wrapper printed NOT DECLARED over a scan that had
+        looked and found an answer. Every path declares."""
+        flat_body = locale_file('order_start forward',
+                                '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
+                                'order_end')
+        extra = {name: flat_body for name in
+                 ('i18n', 'iso14651_t1', 'iso14651_t1_common', 'ko_KR')}
+        extra['C'] = upstream_c()
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir', self.node(MID, 'flat', extra=extra),
+                       '--build-id', 'fake', out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertIn('No locale uses ellipsis ranges here', text)
+        self.assertIn('C (C.UTF-8): codepoint_collation', text)
+
+    def test_the_tag_scan_declares_no_backported_status(self):
+        """A tag has no distro backports by construction, and a heading that
+        appeared there would invite the reader to trust a tag scan on the one
+        question it structurally cannot answer."""
+        rc, text = run('flag_algorithmic_ranges.py', NEW, out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertNotIn('C (C.UTF-8):', text)
 
 if __name__ == '__main__':
     unittest.main()

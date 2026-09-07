@@ -57,14 +57,16 @@ prevent.
   bug that made the method collapse there is fixed and tested on `2.12 -> 2.17`.
   Nothing here says an older pair behaves the same, and steps 2 and 5 have been
   run below the floor exactly once.
-- **Three of audit.sh's guards are unreachable, so nothing tests them.** The
+- **Four of audit.sh's guards are unreachable, so nothing tests them.** The
   argv name validation, the up-front `rm -f` of the files the summary reads,
-  and the "step 2 wrote no file" check are all defence against a future
-  refactor: as the wrapper stands, step 2 always rewrites its list for the
-  pair being audited and `set -e` already ends the run if a step fails, so no
-  test can drive them. They are labelled as such in `audit.sh`. Reverting any
-  of the three leaves the suite green — which is the honest statement, not a
-  claim of coverage.
+  the "step 2 wrote no file" check, and the `NOT DECLARED` branch of the
+  steps 9/10 block are all defence against a future refactor: as the wrapper
+  stands, step 2 always rewrites its list for the pair being audited, steps 9
+  and 10 always declare a status for every backported locale they know of, and
+  `set -e` already ends the run if a step fails, so no test can drive them.
+  Three carry that label in `audit.sh`; the up-front `rm -f` carries the run
+  it exists to stop reading instead. Reverting any of the four leaves the
+  suite green — which is the honest statement, not a claim of coverage.
 - **`C.UTF-8` is asserted to be *warned about* and to reach a DATA verdict —
   not to be correct.** `test_node_modes.py` checks that a backported file in
   neither tag gets a verdict, that its `ellipsis`/`codepoint_collation` shape

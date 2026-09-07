@@ -99,7 +99,12 @@ def main(argv):
     # inheritance to add" from "the step never ran". The announce stays gated
     # on the list being longer than what was already printed inline, so
     # terminal output for a hand-run audit is unchanged.
-    path = g.write_list('step3_affected_locales.txt', generated or affected)
+    # The union, not the mapped names alone: a locale the tag's
+    # SUPPORTED does not name is still affected, and writing only
+    # `generated` made the file narrower than the sentences above it.
+    # Same defect as step 4's list, where the dropped name was C.
+    path = g.write_list('step3_affected_locales.txt',
+                        sorted(set(generated) | set(unbuilt)))
     if len(affected) > len(changed):
         print(f"\nFull list also written to {path}")
     return 0

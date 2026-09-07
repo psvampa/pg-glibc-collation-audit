@@ -13,12 +13,15 @@ Both sides below are real runs of ./audit.sh glibc-2.12 glibc-2.17, against
 glibc-2.12 = e28c88707ef0 and glibc-2.17 = c758a6861537, the commits pinned in
 tests/_harness.py. "BEFORE" is the code as of the sixteenth CHANGELOG entry;
 "AFTER" is with collate_block built on collate_bounds instead of a regex that
-could not read a block starting at byte 0.
+could not read a block starting at byte 0, and with `copy` targets written in
+glibc's symbolic notation decoded (twenty-third entry), which adds ky_KG and
+uk_UA to the AFTER column -- three generated names, since uk_UA has two
+SUPPORTED lines at 2.17.
 
                                             BEFORE     AFTER
-  Step 3, affected locale source files          11       278
-  Step 4, needing empirical confirmation       277       279
-  Step 4, generated names per SUPPORTED        404       408
+  Step 3, affected locale source files          11       280
+  Step 4, needing empirical confirmation       277       281
+  Step 4, generated names per SUPPORTED        404       411
 
 The three files the bug dropped are iso14651_t1, iso14651_t1_common and
 iso14651_t1_pinyin -- in glibc 2.23 and earlier they open with LC_COLLATE on
@@ -131,13 +134,13 @@ Not listed in localedata/SUPPORTED (not built by default, so normally absent fro
 Full list also written to /tmp/pg-glibc-collation-audit/step3_affected_locales.txt
 
 ================================================================
-== STEP 3  AFTER -- 278, the whole inheritance closure
+== STEP 3  AFTER -- 280, the whole inheritance closure
 ================================================================
 
 == STEP 3  Which locales inherit those changes
 ================================================================
 Directly changed (own LC_COLLATE diff): dz_BT, fi_FI, hu_HU, iso14651_t1_common, se_NO, ug_CN
-Additionally affected via copy-chain inheritance: 272
+Additionally affected via copy-chain inheritance: 274
   aa_DJ: copy "iso14651_t1" -> reaches iso14651_t1_common
   aa_ER: copy "ti_ER" -> reaches iso14651_t1_common
   aa_ER@saaho: copy "aa_ER" -> reaches iso14651_t1_common
@@ -302,6 +305,7 @@ Additionally affected via copy-chain inheritance: 272
   ks_IN@devanagari: copy "ks_IN" -> reaches iso14651_t1_common
   ku_TR: copy "iso14651_t1" -> reaches iso14651_t1_common
   kw_GB: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ky_KG: copy "iso14651_t1" -> reaches iso14651_t1_common
   lb_LU: copy "iso14651_t1" -> reaches iso14651_t1_common
   lg_UG: copy "iso14651_t1" -> reaches iso14651_t1_common
   li_BE: copy "iso14651_t1" -> reaches iso14651_t1_common
@@ -389,6 +393,7 @@ Additionally affected via copy-chain inheritance: 272
   ts_ZA: copy "iso14651_t1" -> reaches iso14651_t1_common
   tt_RU: copy "iso14651_t1" -> reaches iso14651_t1_common
   tt_RU@iqtelif: copy "crh_UA" -> reaches iso14651_t1_common
+  uk_UA: copy "iso14651_t1" -> reaches iso14651_t1_common
   unm_US: copy "iso14651_t1" -> reaches iso14651_t1_common
   ur_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
   ur_PK: copy "en_DK" -> reaches iso14651_t1_common
@@ -411,9 +416,9 @@ Additionally affected via copy-chain inheritance: 272
   zh_TW: copy "iso14651_t1" -> reaches iso14651_t1_common
   zu_ZA: copy "iso14651_t1" -> reaches iso14651_t1_common
 
-Full affected set (278 locale source file(s)): aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, am_ET, an_ES, ar_AE, ...  [278 names in all, not all shown]
+Full affected set (280 locale source file(s)): aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, am_ET, an_ES, ar_AE, ...  [280 names in all, not all shown]
 
-Generated locales per localedata/SUPPORTED -- these are the names `locale -a` and pg_collation show (406):
+Generated locales per localedata/SUPPORTED -- these are the names `locale -a` and pg_collation show (409):
   aa_DJ
   aa_DJ.utf8
   aa_ER
@@ -422,7 +427,7 @@ Generated locales per localedata/SUPPORTED -- these are the names `locale -a` an
   af_ZA
   af_ZA.utf8
   am_ET
-  ...  [406 names in all, 398 not shown]
+  ...  [409 names in all, 401 not shown]
 Not listed in localedata/SUPPORTED (not built by default, so normally absent from `locale -a`): el_GR@euro, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
 
 Full list also written to /tmp/pg-glibc-collation-audit/step3_affected_locales.txt
@@ -462,7 +467,7 @@ These cannot be cleared by a source diff alone.
 Step 5 below decides whether that matters for this pair.
 
 ================================================================
-== STEP 4  AFTER -- 279 exposed
+== STEP 4  AFTER -- 281 exposed
 ================================================================
 
 == STEP 4  Which locales a data diff can never clear
@@ -483,16 +488,16 @@ Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 4
   ko_KR
       ..
 
-Additionally exposed via `copy` inheritance: 275
-  via iso14651_t1: 273 locale(s)
+Additionally exposed via `copy` inheritance: 277
+  via iso14651_t1: 275 locale(s)
       aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, am_ET, an_ES, ar_AE, ar_BH, ar_DZ, ar_EG, ar_IN, ...
   via iso14651_t1_common: 2 locale(s)
       iso14651_t1_pinyin, zh_CN
 
-Full set needing empirical confirmation: 279 locale source file(s), 408 generated locale name(s) per localedata/SUPPORTED
+Full set needing empirical confirmation: 281 locale source file(s), 411 generated locale name(s) per localedata/SUPPORTED
   e.g. aa_DJ, aa_DJ.utf8, aa_ER, aa_ER@saaho, aa_ET, af_ZA, af_ZA.utf8, am_ET, ...
   not in SUPPORTED (templates, not built by default): el_GR@euro, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
-  full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
+  full list (416 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
 
 These cannot be cleared by a source diff alone.
 Step 5 below decides whether that matters for this pair.

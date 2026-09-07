@@ -117,7 +117,7 @@ Additionally exposed via `copy` inheritance: 341
 Full set needing empirical confirmation: 345 locale source file(s), 488 generated locale name(s) per localedata/SUPPORTED
   e.g. aa_DJ, aa_DJ.utf8, aa_ER, aa_ET, af_ZA, af_ZA.utf8, agr_PE, ak_GH, ...
   not in SUPPORTED (templates, not built by default): ab_GE, cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
-  full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
+  full list (494 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
 
 These cannot be cleared by a source diff alone. Run
   python3 diff_collation_code.py <old_tag> glibc-2.39
@@ -477,14 +477,18 @@ Additionally exposed via `copy` inheritance: 331
 
 Full set needing empirical confirmation: 335 locale source file(s), 478 generated locale name(s) per localedata/SUPPORTED
   e.g. aa_DJ, aa_DJ.utf8, aa_ER, aa_ER@saaho, aa_ET, af_ZA, af_ZA.utf8, agr_PE, ...
-  not in SUPPORTED (templates, not built by default): cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
-  full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.34-275.el9_8.txt
+  not in glibc-2.34's SUPPORTED -- the node's `locale -a` is the authority on whether these are built: cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
+  full list (483 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.34-275.el9_8.txt
 
 These cannot be cleared by a source diff alone.
 This is one node's own data. Whether the WEIGHTS those ranges expand to
 differ between two nodes is a question about localedef, not about this
 directory: diff_collation_code.py for the two upstream tags, and
 `rpm -q --changelog glibc | grep -i collat` on each node.
+
+Distro-backported locales, declared one by one -- absent, cleared and
+unexamined are three different answers:
+  C (C.UTF-8): codepoint_collation  <- byte order by construction
 
 ================================================================
 == NODE ELLIPSIS  does glibc-2.39-128.el10_2's own locale data use ellipsis ranges?
@@ -516,14 +520,18 @@ Additionally exposed via `copy` inheritance: 341
 
 Full set needing empirical confirmation: 345 locale source file(s), 488 generated locale name(s) per localedata/SUPPORTED
   e.g. aa_DJ, aa_DJ.utf8, aa_ER, aa_ET, af_ZA, af_ZA.utf8, agr_PE, ak_GH, ...
-  not in SUPPORTED (templates, not built by default): ab_GE, cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
-  full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.39-128.el10_2.txt
+  not in glibc-2.39's SUPPORTED -- the node's `locale -a` is the authority on whether these are built: ab_GE, cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
+  full list (494 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.39-128.el10_2.txt
 
 These cannot be cleared by a source diff alone.
 This is one node's own data. Whether the WEIGHTS those ranges expand to
 differ between two nodes is a question about localedef, not about this
 directory: diff_collation_code.py for the two upstream tags, and
 `rpm -q --changelog glibc | grep -i collat` on each node.
+
+Distro-backported locales, declared one by one -- absent, cleared and
+unexamined are three different answers:
+  C (C.UTF-8): codepoint_collation  <- byte order by construction
 
 ================================================================
 == AUDIT SUMMARY  glibc-2.34 -> glibc-2.39
@@ -538,7 +546,8 @@ directory: diff_collation_code.py for the two upstream tags, and
 
 -- Needs an empirical test: step 5 found 53 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged
-     488 generated name(s)
+     494 name(s) to confirm: generated names, and
+     source names for the locales SUPPORTED does not list
      full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
 
 -- Node-to-node locale data (glibc-2.34-275.el9_8 -> glibc-2.39-128.el10_2)

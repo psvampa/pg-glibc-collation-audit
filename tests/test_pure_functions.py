@@ -589,6 +589,18 @@ class CollationStyle(unittest.TestCase):
                           'END LC_COLLATE', ''])
         self.assertEqual(g.classify_collation_style(text), 'explicit')
 
+    def test_the_keyword_in_angle_brackets_is_a_symbol_not_a_declaration(self):
+        """glibc's lexer reads `<name>` as a collating symbol and never as this
+        keyword, so a file that names one this way declares nothing. Reading it
+        as a declaration clears the locale outright -- the single most
+        reassuring verdict this classifier has."""
+        symbol = collate('collating-symbol <codepoint_collation>',
+                         '<U0041> <U0041>;IGNORE;IGNORE;IGNORE')
+        self.assertEqual(g.classify_collation_style(symbol), 'explicit')
+        with_range = collate('collating-symbol <codepoint_collation>',
+                             '<U0000>', '..', '<U10FFFF>')
+        self.assertEqual(g.classify_collation_style(with_range), 'ellipsis')
+
     def test_a_longer_word_ending_in_the_keyword_is_not_the_keyword(self):
         self.assertEqual(
             g.classify_collation_style(collate('no_codepoint_collation')),
@@ -600,6 +612,24 @@ class CollationStyle(unittest.TestCase):
         range sitting beside it."""
         both = collate('codepoint_collation', '<U0000>', '..', '<U10FFFF>')
         self.assertEqual(g.classify_collation_style(both), 'codepoint')
+
+    def test_a_symbolic_copy_target_is_the_locale_it_spells(self):
+        """`copy "<U0069><U0073><U006F>..."` is iso14651_t1 to localedef
+        (locale/programs/linereader.c decodes `<U....>` wherever it reads a
+        string), and was a name nothing matched here: ky_KG and uk_UA write it
+        that way at glibc-2.12 and 2.17, so both dropped out of the
+        iso14651_t1 closure and the floor pair reported them unaffected."""
+        escaped = ('<U0069><U0073><U006F><U0031><U0034><U0036><U0035>'
+                   '<U0031><U005F><U0074><U0031>')
+        self.assertEqual(g.copy_targets(collate(f'copy "{escaped}"')),
+                         ['iso14651_t1'])
+        self.assertEqual(g.copy_targets(collate('copy "iso14651_t1"')),
+                         ['iso14651_t1'])
+        graph = g.copy_graph_from_texts(
+            {'iso14651_t1': collate('<U0000>', '..', '<U10FFFF>'),
+             'ky_KG': collate(f'copy "{escaped}"')})
+        self.assertEqual(g.inherited_from(graph, {'iso14651_t1'}),
+                         {'ky_KG': ['iso14651_t1']})
 
     def test_copy_only_and_explicit_are_distinguished(self):
         self.assertEqual(g.classify_collation_style(collate('copy "iso14651_t1"')),
@@ -654,7 +684,7 @@ class CopyGraphFromTexts(unittest.TestCase):
         While collate_block missed those, copy_graph_from_texts skipped them
         entirely, so the highest fan-in files in the corpus were not in the
         graph and everything inheriting from them looked unaffected -- 11
-        locales reported on glibc-2.12..2.17 where there are 278."""
+        locales reported on glibc-2.12..2.17 where there are 280."""
         texts = {'iso14651_t1_common': 'LC_COLLATE\n<U0041> <U0041>\n'
                                        'END LC_COLLATE\n',
                  'en_US': collate('copy "iso14651_t1_common"')}

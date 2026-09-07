@@ -4,6 +4,198 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-07 (twenty-third entry)
+
+The list every step writes is the set that step reported, the node scan
+declares what it found for a distro-backported locale instead of leaving the
+summary to infer it from silence, and a `copy` target spelled in glibc's
+symbolic notation is the locale it spells. **No verdict moves** -- the two
+audited pairs print the same names, and the pair below the floor, which carries
+no verdict, gains two: `ky_KG` and `uk_UA`, cleared until now.
+
+### What it used to get wrong
+
+**The only list this tool publishes as the "full list" left `C.UTF-8` out of
+it.** `examples/rhel8-to-rhel9-audit-output.txt`, step 9 over
+`glibc-2.28-251.el8_10.40`, reported 334 exposed source files, flagged `C` as
+ellipsis-based at the top of that same step's output, and wrote a file of 475
+names with no `C` in it. A reader who built the empirical set from that file -- which the line above
+it calls the full list -- tested everything except the locale this project's
+first false negative was about. The mechanism was one expression,
+`write_list(out_name, generated or exposed)`: mapping the exposed set through
+the tag's `localedata/SUPPORTED` is a translation, and every name the tag could
+not translate fell out of the result instead of passing through. `C` is in
+neither of this pair's tags' `SUPPORTED`; upstream added
+`localedata/locales/C` at 2.35, and by 2.39 `SUPPORTED` carries
+`C.UTF-8/UTF-8`. The same expression sat in `resolve_copy_closure.py`,
+where step 3 dropped `el_GR@euro`, `i18n`, `iso14651_t1`, `iso14651_t1_common`
+and `iso14651_t1_pinyin` from the list the summary counts on the floor pair.
+
+**A `copy` target written in symbolic notation was a locale nothing matched.**
+`localedata/locales/ky_KG` and `uk_UA` say
+`copy "<U0069><U0073><U006F><U0031><U0034><U0036><U0035><U0031><U005F><U0074><U0031>"`,
+which is `iso14651_t1` to `localedef` -- `locale/programs/linereader.c` decodes
+`<U....>` wherever it reads a string. The copy graph kept the escaped spelling,
+found no such key, and `inherited_from` treats an unknown target as a leaf, so
+both locales looked like files that copy nothing reachable. `iso14651_t1` is
+ellipsis-based at every tag of the floor pair, so both were exposed and both
+were reported clear: step 3's closure said 278 where it is 280, and step 4's
+exposed set 279 where it is 281. Two files in the corpus do this and both are
+below the old version floor, so no audited pair and no published verdict is
+affected -- but "no audited pair" is where the last one was found too. Caught
+by the guard added in the same change, which reported one unresolvable `copy`
+target on that pair and named it.
+
+**A `copy` the walk could not follow ended in the same sentence as a copy
+resolved to a clear file.** `inherited_from` returns a leaf for a target the
+corpus does not contain, so "its order is whatever it inherits" was printed
+over a locale whose order had not been read at all. Step 4 now names every
+dangling target, names what reaches one, and puts those locales in its list
+under the spelling `locale -a` shows -- and names the file it wrote them to,
+which that path did not do, so the block promised a list and pointed at
+nothing. On the no-ellipsis path it no longer says "steps 1-3 are sufficient"
+over them. A corpus out of which not one file
+defines `LC_COLLATE` is refused outright, for the same reason: that is a reader
+problem, and every sentence after it would be the cleanest this step prints.
+Zero dangling targets at 2.28, 2.34 and 2.39 and on the three RHEL fixtures
+once the symbolic spellings decode, so this is the net under a corpus that is
+not the closed source a node built from.
+
+**A fact about the tag was printed as a fact about the node.** Those names were
+labelled "not in SUPPORTED (templates, not built by default)" in the scan of a
+node's own `/usr/share/i18n/locales/`, where the tag's `SUPPORTED` decides
+nothing. Measured 2026-09-07 on the three fixtures: no Rocky 8, 9 or 10 node
+has `/usr/share/i18n/SUPPORTED` and `glibc-locale-source` installs none, so the
+mapping can only come from a tag -- and `collaudit8`
+(`glibc-2.28-251.el8_10.40`) builds 867 locales with `C.utf8` among them, which
+`glibc-2.28`'s `SUPPORTED` does not list. The tool called a locale the node
+builds, and runs its databases on, a template that is not built.
+
+**The summary said nothing about `C` when `C` was neither ellipsis-based nor
+`codepoint_collation`.** `audit.sh` decided that line with two greps -- is `C`
+in step 9's ellipsis list, else does its codepoint line name it -- and printed
+no line at all when both answers were no. Nothing is also what it prints when
+the step never looked. A `C` present with explicit weights, a `C` that only
+copies another locale, and a locale directory with no `C` in it all reached the
+reader as silence, and with only one `--old-locales-dir` no other block filled
+the gap. The sixteenth entry recorded the same shape: cleared and unexamined
+must not look alike.
+
+### What changed
+
+- `flag_algorithmic_ranges.py` and `resolve_copy_closure.py` write
+  `sorted(set(generated) | set(unbuilt))`: the written list is never narrower
+  than the set the step printed. The step-4 lists go from 478 to 483 names on
+  `2.28 -> 2.34`, 488 to 494 on `2.34 -> 2.39`, 408 to 416 on the floor pair;
+  step 3's floor list from 406 to 414 -- the union adds the five names
+  SUPPORTED does not list, and the symbolic decode adds `ky_KG`, `uk_UA`
+  and `uk_UA.utf8`. The node scans go from 475 to 482 on
+  `glibc-2.28-251.el8_10.40` -- `C` among the seven added -- 478 to 483 on
+  `glibc-2.34-275.el9_8` and 488 to 494 on `glibc-2.39-128.el10_2`.
+- The summary line under "Needs an empirical test" now reads "N name(s) to
+  confirm: generated names, and source names for the locales SUPPORTED does
+  not list", because "N generated name(s)" is no longer what the file holds.
+- In directory mode the label names the tag it came from and says who the
+  authority is: "not in glibc-2.28's SUPPORTED -- the node's `locale -a` is the
+  authority on whether these are built". Tag mode keeps the old wording, where
+  it is true.
+- Steps 9 and 10 close with a status for every locale in `KNOWN_BACKPORTED`,
+  one line each: `ellipsis-based`, `codepoint_collation`, `explicit weights`,
+  `copy-only`, `present, but defines no LC_COLLATE block`, or `ABSENT from this
+  directory`. `audit.sh` reads that declared line instead of grepping for two
+  shapes, and prints a seventh state, `NOT DECLARED`, if the step wrote none.
+  That last branch is unreachable as the step stands -- the declaration also
+  runs on the path that returns early with "No locale uses ellipsis ranges
+  here", which is where a first version of this change left the summary
+  printing NOT DECLARED over a scan that had looked -- and it is labelled
+  untested in `tests/README.md`, with the other three.
+- `--help` for `--supported-tag` and `docs/limitations.md` say the node ships
+  no `SUPPORTED` as a measurement rather than an assertion, and name what the
+  mapping therefore cannot decide. `docs/method.md` says the mapping is a
+  translation, not a filter.
+- The declaration prints last, after the step's closing sentence. Wedged in
+  above it, "These cannot be cleared by a source diff alone" -- which names the
+  exposed set -- sat directly under `C (C.UTF-8): codepoint_collation` on the
+  RHEL9 and RHEL10 nodes, and read as covering a locale glibc settles by
+  construction.
+- The declaration carries step 4's own `copy` closure, so a backported locale
+  that uses no ellipsis but copies a template that does is declared exposed
+  rather than by its own style, and `audit.sh` relays the declared text whole
+  instead of appending a verdict of its own. `codepoint_collation` outranks the
+  copy, because glibc discards inherited collation information when it sees
+  that keyword.
+- `copy_targets` decodes `<U....>` through the new `decode_symbolic`, so the
+  graph is a claim about what `localedef` will build rather than about how the
+  file spells it. The floor pair's published figures move with it: step 3's
+  affected set 278 -> 280, step 4's exposed set 279 -> 281 and its generated
+  names 408 -> 411, in `docs/limitations.md`'s before/after table, the worked
+  example and the tests that pin them against the tool -- 280 and the step-3
+  header's 409, 281, 411 and both written-list lengths, 414 and 416.
+- `classify_collation_style` no longer reads `<codepoint_collation>` as the
+  keyword. glibc's lexer takes `<name>` as a collating symbol, and the wrong
+  reading clears a locale outright -- the single most reassuring verdict this
+  classifier has, and one the new copy-exposure note also defers to.
+- Two ties in `tests/test_published_claims.py`: every status
+  `docs/limitations.md` lists is one `report_backported` actually returns, the
+  statuses taken from the function rather than grepped out of the file -- a
+  first version searched the whole source and passed on a renamed status,
+  because the old wording still sat in a comment three lines above; and every
+  `full list (N name(s))` an example publishes equals the two numbers printed
+  above it, across all seven step-4 blocks in the three examples.
+
+### What was verified
+
+- The defect, on real node data: `flag_algorithmic_ranges.py --locales-dir`
+  over `collaudit8`'s own `/usr/share/i18n/locales/` (355 files, count asserted
+  on both ends of the transport) with `--supported-tag glibc-2.28` writes 482
+  names, `C` among them; before this change, 475 and no `C`.
+- Twenty-five mutations, twenty-five failing tests: the union reverted to
+  `generated` in each of the two scripts, the node label restored to "templates, not built
+  by default", the per-locale declaration removed, `audit.sh` returned to its
+  two greps, the declaration dropped from the no-ellipsis path, a status
+  renamed in the script, `NOT DECLARED` renamed in `audit.sh`, a status dropped
+  from `docs/limitations.md`, a published list count moved by one, the `copy`
+  closure not passed to the declaration, the exposure note appended
+  unconditionally, the summary guessing instead of relaying, dangling targets
+  followed into nothing, "steps 1-3 are sufficient" printed over an unread
+  file, an angle-bracketed symbol read as the keyword, a symbolic `copy`
+  target left undecoded, the written count put in the step-3 header, an
+  unresolved locale written under its source name only, one counted and never
+  named, a corpus with no collation block accepted, `codepoint_collation` not
+  excluded from the unresolved note, and the no-ellipsis path both writing
+  source names only and writing its list without naming it, and the announced
+  path not being the written one. The step-3 test asserts both halves -- `cns11643_stroke` and `sv_SE.utf8` -- so a fix
+  that traded one omission for the other fails too. Two controls: the tag scan
+  must declare no backported status, so a fix that printed the block everywhere
+  fails; and an unrelated sentence added to the documented list must fail
+  nothing.
+- The six declared states are driven by fixture, including the ones the summary
+  used to pass over: a `C` with explicit weights, a `C` that only copies
+  `iso14651_t1`, and a directory with no `C`. The copy-only shape goes through
+  the wrapper, asserting that the summary names what the copy reaches and that
+  it is reported as neither of the two settled states. A directory where
+  nothing at all uses an ellipsis still declares its `C`.
+- `doc-sweep`, on the working tree: four false or imprecise passages, all
+  fixed -- "`C` is in no tag's `SUPPORTED` at all" (it is in 2.39's, measured),
+  "a sixth state" for a seventh, a positional claim about the example that did
+  not hold, and a source comment pairing the RHEL8 node with a tag `audit.sh`
+  never passes for it. Plus the block placement above. Everything else it
+  checked reconciled. A second sweep of the finished tree caught five more,
+  four of them figures this change itself moved and one an example line the
+  tool never printed: the step-3 header counts generated names (409), not the
+  written list (414), and the first patch put the list count in the header.
+- `false-negative-reviewer`, on the diff: one finding, that the summary's
+  fall-through branch called a `C` copying `iso14651_t1` "neither
+  ellipsis-based nor codepoint_collation" -- true of the file, false of the
+  order, on an input the suite itself constructs. Fixed above and re-reviewed.
+  Everything else it drove came back honest, including eleven of its own
+  mutations and the arithmetic of all seven example blocks.
+- Acceptance: `DIFFERS` on all three pairs, in the lines listed above and
+  nowhere else. Both worked examples were re-measured against runs taken
+  2026-09-07 off `collaudit8`/`9`/`10`; every changed line in them appears
+  verbatim in one of those runs.
+- 298 tests, no skips.
+
 ## 2026-09-07 (twenty-second entry)
 
 The two node-reading checks report the reach of what they find, the worked
