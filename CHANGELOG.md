@@ -37,6 +37,15 @@ backticks is not one -- the first version of this entry tripped that itself.
 Each of the three tests also asserts that it found something to check, so a
 stale pattern fails instead of passing over nothing.
 
+### Also: one copy of the whitespace-collapsing helper
+
+`flat()`, the helper that makes an assertion on wrapped output mean something,
+lived in `tests/test_node_modes.py` alone, so the other seven test files could
+not use it without copying it -- and a copied helper is how two helpers drift,
+which this repository has already paid for twice. It now lives in
+`tests/_harness.py` and `test_node_modes.py` imports it. No test changed
+behaviour; the suite is byte-for-byte the same set of assertions.
+
 ## 2026-09-06 (seventeenth entry)
 
 The glibc 2.24 version floor was a bug in one function, not a structural limit.

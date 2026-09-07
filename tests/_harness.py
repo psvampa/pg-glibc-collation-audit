@@ -177,6 +177,20 @@ def run_wrapper(*args, out_dir=None, env_extra=None):
 # can get the backported one from the clone -- fabricating it is the only way
 # to test the locale this project's first false negative was about.
 
+def flat(text):
+    """Output with every run of whitespace collapsed to one space.
+
+    dd.warn wraps at 78 columns, so a phrase of more than a few words is split
+    across lines. Asserting on the raw text makes a POSITIVE assertion brittle
+    and -- far worse -- makes a NEGATIVE one vacuous: `assertNotIn` on a phrase
+    that is always broken up passes whether the warning is printed or not.
+    Caught by exactly that, on 2026-09-06 (sixteenth entry, "A fourth test that
+    guarded nothing"). Every layer that asserts on wrapped output goes through
+    this one copy; a second copy is how two helpers drift.
+    """
+    return ' '.join(text.split())
+
+
 def locale_file(*body, comment='%'):
     """A minimal locale source file with an LC_COLLATE block."""
     return '\n'.join([f'comment_char {comment}', 'escape_char /', '',

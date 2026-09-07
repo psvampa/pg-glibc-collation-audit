@@ -84,6 +84,11 @@ Pin behaviour, not wording. Assertions read counts and names out of the output
 rather than comparing whole text: the printed prose changes often, and a suite
 that fails on a reworded sentence gets switched off.
 
+Assert on wrapped output through `flat()` from `_harness.py`, never on the raw
+text: `dd.warn` wraps at 78 columns, so a negative assertion on a phrase of more
+than a few words passes whether the phrase is printed or not. Four tests have
+been found guarding nothing that way.
+
 Before trusting a new test, break the thing it claims to guard and confirm it
 fails. The suite was built that way, and it caught a real gap: the first version
 of the `read_blobs_strict` test checked the helper while nothing asserted that
