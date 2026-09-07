@@ -4,6 +4,72 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-07 (twenty-first entry)
+
+Three guards on the input, none of which existed. **No verdict moves, and both
+audited pairs' output is byte-identical before and after**, as is the floor
+pair's. Every case below was measured on the clone or on a fabricated
+repository before it was called latent; none has fired on an audited pair.
+
+### What it used to get wrong
+
+**No corpus floor in tag mode.** The node-reading modes have refused a
+directory of fewer than 200 locale files since they were written, because two
+truncated copies agree perfectly. The tag modes never checked. A tag whose tree
+holds no `localedata/locales/` — a restructured checkout, a tag from before the
+directory existed (glibc 2.0 has none, 2.2 has 148) — produced "Locale files
+changed: 0" from step 1, "0 touch LC_COLLATE" from step 2, "No locale uses
+ellipsis ranges here; steps 1-3 are sufficient" from step 4, and exit 0 from
+all three. Reproduced on a fabricated three-file repository.
+
+**Step 2 aborted on a rename whose old side had no `LC_COLLATE` block**, and
+could not see such a file gain one. The new side was read, and looked up, under
+the OLD path — which does not exist at the new tag once the file is renamed.
+Reading it died with "could not read"; had it not, the verdict would have been
+"no LC_COLLATE on either side" for a file that now has one. Latent: the only
+rename in the audited pairs (`aa_ER@saaho` → `ssy_ER`, 2.34..2.39) has a block
+on both sides. Reproduced on a fabricated repository where `x` becomes `y` and
+gains a block: the old code exited 2.
+
+**`git diff` obeyed the user's configuration.** Measured with git 2.50 on the
+2.34..2.39 pair: `diff.noprefix=true` drops the `a/ b/` the header regex
+expects (step 2 then dies, correctly, with "the diff does not cover");
+`diff.renameLimit=1` skips rename detection with a warning on stderr, so the
+renamed file becomes delete-plus-add and lands under "not analysed" —
+silently; `diff.renames=false` does the same to step 1, whose published count
+of 318 reads 319; `color.ui=always` writes escape codes into the pipe.
+`--find-renames` on the command line does **not** lift a configured limit.
+
+### What changed
+
+- `list_locale_files()` dies below `MIN_LOCALE_FILES` (200, one constant now
+  shared with the node modes' `DEFAULT_MIN_FILES`). Steps 2, 3 and 4 reach it
+  on every run; step 1 asks for it explicitly through a new silent
+  `glibc_locale_data.py corpus` subcommand, so its output stays byte-identical.
+- Step 2 reads the new side under each file's new name and looks the verdict
+  up the same way: `new_side_paths()` and `judge()`, both pure, both tested by
+  injection.
+- Every `git` the Python steps run carries `-c color.ui=false -c
+  diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.renames=true -c
+  diff.renameLimit=0`; step 1's shell `git diff` carries the same. Command-line
+  `-c` outranks every configuration source.
+
+### What was verified
+
+- Steps 1, 2 and 4 on 2.28..2.34, 2.34..2.39 and 2.12..2.17: byte-identical
+  output before and after, output-directory path aside.
+- Under a hostile `GIT_CONFIG_GLOBAL` (noprefix, mnemonicPrefix, renames off,
+  renameLimit 1, colour always) steps 1 and 2 print exactly what they print
+  without it, with a control asserting that the same config still changes a
+  bare `git diff`'s count to 319.
+- A fabricated three-file repository is refused by steps 1, 2 and 4 with the
+  floor named; the same repository at 200 files passes, so the guard refuses
+  size, not fabricated input. The rename case reports `gained-collate` and
+  hands step 3 the new name.
+- Mutation checks: with `--find-renames` alone in step 1 the hostile-config
+  test fails at 319 (that was the first version of this fix); with the lookup
+  under the old path restored, the rename test reads `no-collate`.
+
 ## 2026-09-07 (twentieth entry)
 
 Documentation only. No code path changes and no verdict moves; nothing a run

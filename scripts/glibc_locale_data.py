@@ -13,6 +13,7 @@ and blobs are read in a single `git cat-file --batch` stream.
 Also runnable directly, for the shell script:
   python3 glibc_locale_data.py fanin <tag> [changed_files.txt]
   python3 glibc_locale_data.py provenance <tag> [<tag> ...]
+  python3 glibc_locale_data.py corpus <tag> [<tag> ...]
 """
 import os
 import re
@@ -20,6 +21,30 @@ import subprocess
 import sys
 
 LOCALES_DIR = 'localedata/locales'
+
+# Fewer files than this under localedata/locales/ is not a glibc locale corpus.
+# The five pinned tags carry 286 (2.12), 312 (2.17), 353 (2.28), 355 (2.34) and
+# 366 (2.39); the three measured RHEL nodes 355, 356 and 366. The node-reading
+# modes have refused a directory below this floor since they were written; the
+# tag modes did not check at all, so a tag whose tree lacks localedata/locales/
+# -- a restructured checkout, a tag from before the directory existed -- produced
+# "0 files changed", "No locale uses ellipsis ranges here" and exit 0.
+MIN_LOCALE_FILES = 200
+
+# Prepended to every git invocation. `git diff` obeys the user's config, and
+# four settings change the text this tool parses. Measured with git 2.50 on the
+# 2.34..2.39 pair: diff.noprefix=true drops the a/ b/ that the file-header
+# regex in filter_lc_collate_changes.py expects (the step then dies, correctly,
+# with "the diff does not cover"); diff.renameLimit=1 turns the one rename into
+# delete+add with only a warning on stderr, so the added file lands in "not
+# analysed" -- silently; diff.renames=false does the same to step 1, whose
+# published count goes from 318 to 319; color.ui=always writes escape codes
+# into the pipe. -c on the command line outranks every configuration source.
+GIT_CONFIG_OVERRIDES = ['-c', 'color.ui=false',
+                        '-c', 'diff.noprefix=false',
+                        '-c', 'diff.mnemonicPrefix=false',
+                        '-c', 'diff.renames=true',
+                        '-c', 'diff.renameLimit=0']
 
 # Does a line use an ellipsis range? A range like `<UAC00>`/`..`/`<UD7A3>` is
 # expanded algorithmically by localedef at build time, so the weights are NOT in
@@ -125,7 +150,8 @@ def run_git(args, repo, allow_fail=False):
 
         fatal: could not fetch <oid> from promisor remote
     """
-    p = subprocess.run(['git', *args], cwd=repo, capture_output=True)
+    p = subprocess.run(['git', *GIT_CONFIG_OVERRIDES, *args], cwd=repo,
+                       capture_output=True)
     if p.returncode != 0 and not allow_fail:
         die(f"`git {' '.join(args)}` failed in {repo}:\n"
             f"{p.stderr.decode('utf-8', 'replace').strip()}")
@@ -303,10 +329,25 @@ def read_blobs_strict(repo, tag, paths, what):
 
 
 def list_locale_files(repo, tag):
-    """Every file under localedata/locales/ at `tag`, as repo-relative paths."""
+    """Every file under localedata/locales/ at `tag`, as repo-relative paths.
+
+    Aborts below MIN_LOCALE_FILES. Every caller builds a result from this list
+    -- the copy graph, the ellipsis scan, step 2's diff pathspec -- and a
+    result built from nothing reads as "nothing changed", which is the
+    reassuring direction. The node-reading modes had this guard from the
+    start; the tag modes did not.
+    """
     out = run_git(['ls-tree', '-r', '--name-only', tag, '--', LOCALES_DIR + '/'],
                   repo).stdout.decode('utf-8', 'replace')
-    return [ln for ln in out.splitlines() if ln.strip()]
+    paths = [ln for ln in out.splitlines() if ln.strip()]
+    if len(paths) < MIN_LOCALE_FILES:
+        die(f"only {len(paths)} file(s) under {LOCALES_DIR}/ at {tag}, below "
+            f"the floor of {MIN_LOCALE_FILES}. That is not a glibc locale "
+            f"corpus -- a restructured tree, or a tag from before the "
+            f"directory existed. Refusing to report: an empty corpus reads "
+            f"as 'nothing changed' and 'no locale uses ellipsis ranges', "
+            f"which is indistinguishable from a clean run.")
+    return paths
 
 
 def collate_block(text):
@@ -632,6 +673,14 @@ def _main(argv):
         repo = find_repo()
         check_refs(repo, *argv[1:])
         report_tag_provenance(repo, *argv[1:])
+        return 0
+    if len(argv) >= 2 and argv[0] == 'corpus':
+        # The corpus floor, for the shell step. Silent on success so that step
+        # 1's output stays byte-identical; list_locale_files dies otherwise.
+        repo = find_repo()
+        check_refs(repo, *argv[1:])
+        for tag in argv[1:]:
+            list_locale_files(repo, tag)
         return 0
     if len(argv) >= 2 and argv[0] == 'fanin':
         repo = find_repo()

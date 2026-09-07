@@ -45,7 +45,10 @@ def docs(include_changelog=False):
     """
     out = {}
     for root, dirs, files in os.walk(REPO_ROOT):
-        dirs[:] = [d for d in dirs if d not in ('.git', 'glibc')]
+        # .claude/ is gitignored whole (PR #18): the private working rules
+        # under it are not published documentation, and asserting them as
+        # such made every commit fail on files the repository does not carry.
+        dirs[:] = [d for d in dirs if d not in ('.git', 'glibc', '.claude')]
         for name in files:
             if not name.endswith('.md'):
                 continue

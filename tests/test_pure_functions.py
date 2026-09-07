@@ -127,6 +127,58 @@ class ClassifyChange(unittest.TestCase):
                          'no-collate')
 
 
+class RenamedFileOnTheNewSide(unittest.TestCase):
+    """"Step 2 aborted on a rename whose old side had no LC_COLLATE block", and
+    could not see such a file gain one: the new side was read and looked up
+    under the OLD path, which does not exist at the new tag. Latent -- the one
+    rename in the audited pairs has a block on both sides -- so it is tested
+    by injection, like gained-collate itself."""
+
+    OLD = {'localedata/locales/x': 'LC_CTYPE\ncopy "i18n"\nEND LC_CTYPE\n',
+           'localedata/locales/k': collate('order_start forward', '<U0041>',
+                                          'order_end')}
+    RENAMED = {'localedata/locales/x': 'localedata/locales/y'}
+
+    def test_a_renamed_file_is_read_under_its_new_name(self):
+        to_read = f.new_side_paths(list(self.OLD), self.OLD, self.RENAMED)
+        self.assertEqual(to_read, {'localedata/locales/x':
+                                   'localedata/locales/y'})
+
+    def test_a_file_with_an_old_block_is_not_read_again(self):
+        to_read = f.new_side_paths(list(self.OLD), self.OLD, {})
+        self.assertNotIn('localedata/locales/k', to_read)
+
+    def test_a_renamed_file_that_gained_a_block_is_gained_collate(self):
+        """Restore the lookup under the old path and this reads 'no-collate':
+        the new text is there, filed under a name nobody asks for."""
+        new = {'localedata/locales/y': collate('order_start forward',
+                                               '<U0042>', 'order_end')}
+        verdicts = dict(f.judge(list(self.OLD), self.OLD, new, {},
+                                self.RENAMED))
+        self.assertEqual(verdicts['localedata/locales/x'], 'gained-collate')
+
+    def test_an_unrenamed_file_still_finds_its_own_new_text(self):
+        new = {'localedata/locales/x': collate('order_start forward',
+                                               '<U0042>', 'order_end')}
+        verdicts = dict(f.judge(['localedata/locales/x'], self.OLD, new, {},
+                                {}))
+        self.assertEqual(verdicts['localedata/locales/x'], 'gained-collate')
+
+
+class CorpusFloorIsShared(unittest.TestCase):
+    """The node modes and the tag modes refuse the same size of corpus. Two
+    constants would drift the way two copies of a count do."""
+
+    def test_one_floor_for_tags_and_nodes(self):
+        self.assertIs(dd.DEFAULT_MIN_FILES, g.MIN_LOCALE_FILES)
+
+    def test_the_floor_is_below_every_pinned_tag_and_measured_node(self):
+        """286 is glibc-2.12, the smallest tag the suite pins; 355 the
+        smallest measured node."""
+        self.assertLess(g.MIN_LOCALE_FILES, 286)
+        self.assertGreater(g.MIN_LOCALE_FILES, 3)
+
+
 class PartitionVerdicts(unittest.TestCase):
     """What the report DOES with each verdict.
 

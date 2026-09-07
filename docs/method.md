@@ -71,6 +71,15 @@ for the [collation templates](glossary.md). It also computes each file's
 [blast radius](glossary.md) from the [`copy` graph](glossary.md), so a change
 to a template that 328 locales inherit cannot read as one line out of 283.
 
+Before any of that it checks that both tags hold a real locale corpus — at
+least 200 files under `localedata/locales/`, the same floor the node-reading
+checks apply — and refuses otherwise. Steps 2, 3 and 4 apply the same check
+on their own. Without it, a tag whose tree lacks that directory produced
+"0 files changed", "no locale uses ellipsis ranges" and a zero exit: a clean
+result from having compared nothing. The three `git diff` calls also pin
+rename detection on, its limit lifted, and colour off, so a user's git
+configuration cannot change a count or hide a rename.
+
 ### Step 2 — `scripts/filter_lc_collate_changes.py <old_tag> <new_tag>`
 
 Narrows that list to files whose change falls **inside** the

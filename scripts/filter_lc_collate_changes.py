@@ -126,6 +126,37 @@ def partition_verdicts(verdicts):
     return changed, gained, unchanged, no_collate
 
 
+def new_side_paths(content_changed, old_contents, renamed_to):
+    """Which paths to read at the NEW tag, and under which name.
+
+    Only files with no LC_COLLATE block on the old side need the new side --
+    they are the only ones that could have gained one. A renamed file lives
+    under its NEW name there: reading the old name aborted the whole step with
+    "could not read" on a legitimate rename, and looking the verdict up under
+    the old name made `gained-collate` undetectable for any renamed file.
+    Neither has happened in an audited pair -- the one rename, aa_ER@saaho to
+    ssy_ER over 2.34..2.39, has a block on the old side -- which is exactly why
+    it is a function with a test rather than two lookups in main().
+
+    Returns {old_path: new_path} for the files to read.
+    """
+    return {p: renamed_to.get(p, p) for p in content_changed
+            if g.collate_bounds(old_contents[p]) is None}
+
+
+def judge(content_changed, old_contents, new_contents, hunks, renamed_to):
+    """[(old_path, verdict)] for every content-changed file.
+
+    `new_contents` is keyed by the path at the NEW tag, as read_blobs returns
+    it; the lookup goes through `renamed_to` so a renamed file finds its own
+    new text.
+    """
+    return [(path, classify_change(old_contents[path],
+                                   new_contents.get(renamed_to.get(path, path)),
+                                   hunks.get(path, [])))
+            for path in content_changed]
+
+
 def parse_diff(diff_text):
     """{old_path: [(old_start, old_length), ...]} from a -U0 diff."""
     files = {}
@@ -155,6 +186,13 @@ def main(argv):
     rng = f'{opts.old_tag}..{opts.new_tag}'
     pathspec = g.LOCALES_DIR + '/'
 
+    # The corpus floor. `git diff` over a pathspec that matches nothing at
+    # either tag is empty and exits 0, and this step then reports "0 changed"
+    # -- the node-reading modes refuse a directory that small, and a tag
+    # deserves the same refusal. list_locale_files dies below the floor.
+    for tag in (opts.old_tag, opts.new_tag):
+        g.list_locale_files(repo, tag)
+
     # Classify every change first, so added/deleted/renamed files are reported
     # as such instead of vanishing into a `continue`.
     status = g.run_git(['diff', '--name-status', '--find-renames', rng,
@@ -173,6 +211,7 @@ def main(argv):
             deleted.append(parts[1])
         else:
             modified.append(parts[1])
+    renamed_to = {old_path: new_path for old_path, new_path in renamed}
 
     if opts.diff_file:
         with open(opts.diff_file, encoding='utf-8', errors='replace') as fh:
@@ -207,18 +246,16 @@ def main(argv):
 
     # The new side is needed only for the files with no block in the old one:
     # those are the only ones that could have gained a block. Reading just
-    # those keeps this to one extra batch of a handful of blobs.
-    without_old_block = [p for p in content_changed
-                         if g.collate_bounds(old_contents[p]) is None]
+    # those keeps this to one extra batch of a handful of blobs -- read under
+    # the name each file has at the new tag (see new_side_paths).
+    to_read = new_side_paths(content_changed, old_contents, renamed_to)
     new_contents = g.read_blobs_strict(
-        repo, opts.new_tag, without_old_block,
+        repo, opts.new_tag, sorted(set(to_read.values())),
         'the check for files that gained an LC_COLLATE block'
-    ) if without_old_block else {}
+    ) if to_read else {}
 
-    verdicts = [(path, classify_change(old_contents[path],
-                                       new_contents.get(path),
-                                       hunks.get(path, [])))
-                for path in content_changed]
+    verdicts = judge(content_changed, old_contents, new_contents, hunks,
+                     renamed_to)
     (changed_collate, gained_collate,
      unchanged_collate, no_collate_block) = partition_verdicts(verdicts)
 
@@ -256,7 +293,6 @@ def main(argv):
     # it to step 3 unchanged is an exit-2 abort on a legitimate finding. Map it
     # to the new name instead of dropping it: the ruleset moved, it did not
     # disappear, and the locale exposed at the new tag is the new one.
-    renamed_to = {old_path: new_path for old_path, new_path in renamed}
     for_step3, translated = [], []
     for path in changed_collate:
         landed = renamed_to.get(path)

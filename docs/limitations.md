@@ -185,7 +185,8 @@ something the clone does not have:
 
 Both node-reading checks refuse to report rather than report a clean zero
 instead: each has an absolute floor on how many files it will accept as a real
-copy, because a truncated directory reports nothing wrong. The node-to-node one
+copy, because a truncated directory reports nothing wrong. The tag-reading
+steps apply the same floor to each tag's tree. The node-to-node one
 additionally refuses two directories that resolve to the same path, since
 comparing a tree with itself is flawless and meaningless.
 

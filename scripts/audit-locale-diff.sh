@@ -52,11 +52,24 @@ fi
 python3 "$HERE/glibc_locale_data.py" provenance "$OLD" "$NEW"
 echo "---"
 
+# The corpus floor: both tags must hold a real locale corpus, or the diff
+# below is empty for a reason that has nothing to do with collation and reads
+# as "nothing changed". Silent on success; exits 2 with the count otherwise.
+python3 "$HERE/glibc_locale_data.py" corpus "$OLD" "$NEW"
+
 OUT_DIR=${PG_GLIBC_AUDIT_OUT:-/tmp/pg-glibc-collation-audit}
 mkdir -p "$OUT_DIR"
 CHANGED="$OUT_DIR/changed_locales.txt"
 
-git diff --name-only "$OLD..$NEW" -- localedata/locales/ | sort > "$CHANGED"
+# Rename detection pinned on, its limit lifted, and colour off, so the count
+# does not depend on the user's git config: with diff.renames=false OR a low
+# diff.renameLimit the one rename over 2.34..2.39 is listed as two paths and
+# the published 318 reads 319. --find-renames alone does not override the
+# limit -- measured: renameLimit=1 skipped detection with only a warning.
+# The Python steps apply the same overrides through glibc_locale_data.run_git.
+git -c color.ui=false -c diff.renames=true -c diff.renameLimit=0 \
+  diff --find-renames --name-only "$OLD..$NEW" -- localedata/locales/ \
+  | sort > "$CHANGED"
 # --name-only lists additions and deletions too, so this is not a count of
 # modified files. Step 2 separates them.
 echo "Locale files added, modified or deleted: $(wc -l < "$CHANGED" | tr -d ' ')"
