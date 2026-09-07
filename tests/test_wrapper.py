@@ -110,8 +110,11 @@ class Wrapper(unittest.TestCase):
         is always NULL. A summary that simply omits the section reads exactly
         like one that cleared it, which is false negative #1 in a new costume.
         """
-        self.assertIn('-- Node-to-node locale data: NOT RUN', self.out)
-        self.assertIn('C.UTF-8', self.out)
+        summary = self.out.split('AUDIT SUMMARY')[1]
+        self.assertIn('-- Node-to-node locale data: NOT RUN', summary)
+        # On the summary, not the whole run: step 2's own `!!` warning names
+        # C.UTF-8 on every pair, so the unsplit assertion could not fail.
+        self.assertIn('C.UTF-8', summary)
 
 
 @needs_clone
@@ -175,7 +178,22 @@ class WrapperEmptyPair(unittest.TestCase):
         clean result."""
         self.assertIn('are the same tag', self.out)
         self.assertIn('-- One tag, compared with itself', self.out)
-        self.assertIn("means", self.out)
+        # The whole sentence, whitespace collapsed. This used to assert the
+        # word "means", which every step's prose contains.
+        flat = ' '.join(self.out.split())
+        self.assertIn("Everything above that says 'nothing changed' means "
+                      "'nothing was compared'", flat)
+
+    def test_the_summary_counts_without_a_shell_error(self):
+        """count_lines was `grep -c . FILE || echo 0`. grep -c prints "0" AND
+        exits 1 on no match, so the fallback printed a second 0, `[ "0\\n0"
+        -gt 0 ]` failed with "integer expression expected" on stderr, and the
+        summary fell into the else branch -- the right one, by luck. Every
+        clean run printed that error. Restore the old function and this fails.
+        """
+        self.assertNotIn('integer expression expected', self.out)
+        self.assertIn("none -- no locale's LC_COLLATE changed between these "
+                      "two tags", self.out)
 
 
 @needs_clone
@@ -346,6 +364,85 @@ class WrapperStaleNodeList(unittest.TestCase):
         rc, out = run_wrapper(NEW, NEW, out_dir=out_dir)
         self.assertEqual(rc, 0, out)
         self.assertNotIn('a warning from a run that read a node', out)
+
+
+@needs_clone
+class WrapperStep5Unresolved(unittest.TestCase):
+    """"The summary contradicted step 5 when a tracked path vanished."
+
+    The summary read its hunk count from the line "N substantive hunk(s)
+    found". When step 5 finds a tracked path present at the old tag and gone
+    at the new one with nothing else to report, it prints "NOT a clean result"
+    and no such line -- and `HUNKS=${HUNKS:-0}` turned that absence into zero,
+    which is the branch that says "a clean data diff is sufficient even for
+    the locales step 4 flagged". Step 5 said one thing; the summary said the
+    opposite, 300 lines lower.
+
+    No tag pair can drive this branch for real: going forward in time no
+    tracked path has ever vanished, and reversed, 2.39 -> 2.34 loses
+    C-collate-seq.c but still finds 53 hunks. So step 5 is stood in for by a
+    `python3` shim on PATH that prints what the real script prints in that
+    state -- the same text test_known_answers ties to the real script on the
+    reversed pair -- and hands every other step to the real interpreter.
+    """
+
+    CANNED = (
+        "Collation code changes between glibc-2.39 and glibc-2.39\n"
+        "\n"
+        "!! 1 tracked path(s) present at glibc-2.39 and GONE at glibc-2.39."
+        " `git diff`\n"
+        "   over a missing path is empty, not an error, so a rename reads"
+        " exactly like\n"
+        '   "unchanged":\n'
+        "     locale/programs/ld-collate.c: ABSENT at glibc-2.39\n"
+        "   Find where each moved and add the new path to TIER1/TIER2 before"
+        " trusting\n"
+        "   a no-change result.\n"
+        "\n"
+        "No substantive change in the files this audit could read -- but 1"
+        " tracked\n"
+        "path(s) vanished before glibc-2.39, so this is NOT a clean result.\n"
+        "Resolve the paths listed above, then re-run.\n")
+
+    def setUp(self):
+        import sys
+        self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-vanished-')
+        self.addCleanup(shutil.rmtree, self.out_dir, ignore_errors=True)
+        shim_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-shim-')
+        self.addCleanup(shutil.rmtree, shim_dir, ignore_errors=True)
+        canned = os.path.join(shim_dir, 'step5.txt')
+        with open(canned, 'w', encoding='utf-8') as fh:
+            fh.write(self.CANNED)
+        shim = os.path.join(shim_dir, 'python3')
+        with open(shim, 'w', encoding='utf-8') as fh:
+            fh.write('#!/bin/sh\n'
+                     'case "$1" in\n'
+                     f'  *diff_collation_code.py) cat "{canned}"; exit 0 ;;\n'
+                     'esac\n'
+                     f'exec "{sys.executable}" "$@"\n')
+        os.chmod(shim, 0o755)
+        self.env = {'PATH': shim_dir + os.pathsep + os.environ.get('PATH', '')}
+
+    def test_a_vanished_path_leaves_step_4_unresolved(self):
+        rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
+                              env_extra=self.env)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('NOT a clean result', out, 'the shim did not run')
+        summary = out.split('AUDIT SUMMARY')[1]
+        flat = ' '.join(summary.split())
+        self.assertNotIn('a clean data diff is sufficient', flat)
+        self.assertNotIn('Nothing from step 5', flat)
+        self.assertIn('step 5 did NOT reach a clean result, so the locales '
+                      'step 4 flagged stay UNRESOLVED', flat)
+        self.assertIn('Step 5 reached no clean result', flat)
+
+    def test_the_vanished_path_is_repeated_in_the_warnings_block(self):
+        rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
+                              env_extra=self.env)
+        self.assertEqual(rc, 0, out)
+        warnings = out.split('-- Warnings the clean results above')[1]
+        self.assertIn('locale/programs/ld-collate.c: ABSENT at glibc-2.39',
+                      warnings)
 
 
 if __name__ == '__main__':

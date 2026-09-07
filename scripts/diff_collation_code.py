@@ -71,6 +71,15 @@ TIER1 = [
                                       # sections, reorder-after
     'string/strcoll_l.c',             # runtime comparison
     'string/strxfrm_l.c',             # runtime sort-key generation
+    # The wide-char comparison and sort-key wrappers: a handful of #defines
+    # (`STRCMP __wcscmp`, `WEIGHT_H "../locale/weightwc.h"`) and then
+    # `#include <string/strcoll_l.c>`. A change here moves wcscoll/wcsxfrm
+    # behaviour and nothing else. They are ENTRY_POINTS, and the walk subtracts
+    # its entry points from what it reports -- so until they were listed here
+    # they were checked for existence and never diffed. Measured over
+    # 2.28..2.39: copyright and URL lines only, so no verdict moved.
+    'wcsmbs/wcscoll_l.c',
+    'wcsmbs/wcsxfrm_l.c',
     # (macro) strcoll_l.c reaches these as `#include WEIGHT_H`, where WEIGHT_H is
     # defined by whoever includes IT -- weight.h for the narrow build, weightwc.h
     # for the wide one. Nothing resolves that without a preprocessor, and
@@ -124,6 +133,7 @@ _INCLUDE_ROOTS = ['', 'include/', 'locale/', 'locale/programs/', 'string/',
 
 _HUNK_SPLIT_RE = re.compile(r'^(@@ .*?@@.*)$', re.M)
 _ATTRIBUTION_RE = re.compile(r'^(Contributed by|Written by)\b')
+_STAR_COMMENT_RE = re.compile(r'^\*(\s|$|/)')
 
 
 def is_noise_line(line):
@@ -152,7 +162,16 @@ def is_noise_line(line):
     body = line[1:].strip()
     if not body:
         return True
-    if body.startswith(('/*', '*', '//')):
+    if body.startswith(('/*', '//')):
+        return True
+    # A leading `*` is a comment continuation only when it stands alone:
+    # followed by a space, the end of the line, or the `/` that closes the
+    # block. `*wp = '\0';`, `*endp++ = '/';` and `**argv` all start with `*`
+    # and are code. The old test was `startswith('*')`, which marked every
+    # one of them as noise -- ten such lines sat unmarked in the two
+    # published examples, and a hunk made only of them would have been
+    # dropped whole under "comment/licence hunk(s) filtered".
+    if _STAR_COMMENT_RE.match(body):
         return True
     # Continuation line that closes a block comment.
     if body.endswith('*/') and '/*' not in body:
@@ -382,20 +401,26 @@ def main(argv):
     tier3 = sorted(derived - tiered)
 
     # ENTRY_POINTS included: if one is renamed away the whole walk collapses to
-    # nothing, and a collapsed walk reads exactly like a clean result.
-    vanished, outside = check_paths(repo, ENTRY_POINTS + TIER1 + TIER2,
+    # nothing, and a collapsed walk reads exactly like a clean result. Each
+    # path once -- the wide-char wrappers are entry points AND in TIER1.
+    tracked_paths = list(dict.fromkeys(ENTRY_POINTS + TIER1 + TIER2))
+    vanished, outside = check_paths(repo, tracked_paths,
                                     opts.old_tag, opts.new_tag)
     if vanished:
-        print(f"Tracked files present at {opts.old_tag} and GONE at "
-              f"{opts.new_tag}. `git diff` over a")
-        print("missing path is empty, not an error, so a rename reads exactly "
-              "like")
-        print('"unchanged":')
+        # `!!` plus three-space continuation lines: the shape audit.sh's
+        # summary collects and repeats verbatim. Before this the notice was
+        # plain prose, printed 300 lines above a summary that went on to say
+        # "a clean data diff is sufficient".
+        print(f"!! {len(vanished)} tracked path(s) present at {opts.old_tag} "
+              f"and GONE at {opts.new_tag}. `git diff`")
+        print("   over a missing path is empty, not an error, so a rename "
+              "reads exactly like")
+        print('   "unchanged":')
         for path in vanished:
-            print(f"  {path}: ABSENT at {opts.new_tag}")
-        print("  Find where each moved and add the new path to TIER1/TIER2 "
+            print(f"     {path}: ABSENT at {opts.new_tag}")
+        print("   Find where each moved and add the new path to TIER1/TIER2 "
               "before trusting")
-        print("  a no-change result.")
+        print("   a no-change result.")
         print()
     if outside:
         print("Tracked files that exist at neither tag -- nothing to read, and "
@@ -449,6 +474,9 @@ def main(argv):
 
     print()
     if total == 0 and vanished:
+        # Deliberately NOT the "No substantive collation code change" sentence:
+        # audit.sh treats that exact sentence as the clean verdict, and this is
+        # not one.
         print(f"No substantive change in the files this audit could read -- "
               f"but {len(vanished)} tracked")
         print(f"path(s) vanished before {opts.new_tag}, so this is NOT a clean "

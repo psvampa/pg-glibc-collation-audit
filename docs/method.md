@@ -149,10 +149,13 @@ It is not hypothetical — the only sort-order-relevant change between glibc
 
 Comment and licence [hunks](glossary.md) are filtered out, with the filtered
 count always shown and `--all` to see everything. The filter only drops what
-it can prove is prose: a preprocessor directive, a label or a bare declarator
-counts as code, because a hunk dropped here is a hunk nobody reads. It also
-reports any tracked path that is absent at either tag, since `git diff` over
-a missing file is empty rather than an error.
+it can prove is prose: a preprocessor directive, a label, a bare declarator
+or a line that writes through a pointer (`*wp = '\0';`) counts as code,
+because a hunk dropped here is a hunk nobody reads. It also reports any
+tracked path that is absent at either tag, since `git diff` over a missing
+file is empty rather than an error — and a path present at the old tag and
+gone at the new one is a `!!` warning, not a clean result: the summary then
+leaves step 4's list **unresolved** instead of clearing it.
 
 What step 5 does **not** do is decide. It cannot tell a weight-changing
 commit from a harmless one — that judgement is yours, and it is the one part
@@ -175,7 +178,10 @@ it is what surfaced `linereader.h` and `elem-hash.h`, both changed over
 The curated tiers stay because the walk structurally cannot follow a
 macro-computed include (`#include WEIGHT_H`, how `strcoll_l.c` reaches
 `locale/weight.h`, which does change over that pair) or reach a translation
-unit with no header of its own.
+unit with no header of its own. The walk also does not report its own entry
+points, so the two wide-char wrappers (`wcscoll_l.c`, `wcsxfrm_l.c`) are
+listed in tier 1 by hand: until they were, they were checked for existence
+and never diffed.
 
 ## Reading the output
 
@@ -221,6 +227,9 @@ This is what the five answers add up to.
   - If it reports one, every locale step 4 lists needs
     [an empirical test](confirming-on-a-real-system.md) regardless of its
     data diff.
+  - If it reports neither — a tracked file vanished between the tags, or the
+    step did not finish — step 4's list is unresolved, and the summary says
+    so rather than treating silence as clean.
 
 ---
 

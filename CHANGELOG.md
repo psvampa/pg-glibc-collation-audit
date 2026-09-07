@@ -4,6 +4,109 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-07 (nineteenth entry)
+
+Three latent false negatives in step 5 and the summary that reads it, closed,
+plus a shell error the summary printed on every clean run. **No verdict
+moved**, and both published hunk counts hold at 25 and 53. What did change:
+seven lines of the RHEL8→RHEL9 worked example now carry the `>>` marker the
+documentation promised them, two files join step 5's first tier, and the
+summary has a third state where it used to have two.
+
+Every one of these was measured against the three tag pairs before it was
+called latent. None fired on a published pair. All four are in the reassuring
+direction, which is the direction this tool exists to distrust.
+
+### What it used to get wrong
+
+**The noise filter took C code for a comment.** `is_noise_line` called any
+changed line opening with `*` a comment continuation. `*wp = '\0';`,
+`*endp++ = '/';` and `*wch = result;` open with `*` and are code. Measured on
+the real diffs: ten such lines across the two documented pairs, seven of them
+printed in `examples/rhel8-to-rhel9-audit-output.txt` without the `>>` that
+[docs/method.md](docs/method.md) and the README say marks every code change.
+No whole hunk was lost: with the rule corrected, the hunk totals over
+2.28..2.34, 2.34..2.39 and 2.12..2.17 do not move by one, so no dropped hunk
+consisted only of such lines. But a hunk whose every changed line writes
+through a pointer would have been dropped whole under "comment/licence hunk(s)
+filtered", and step 5 would have gone on to say there was no substantive
+change. That is the same defect class as the
+first entry's inverted rule, in a new place.
+
+**The summary contradicted step 5 when a tracked path vanished.** Step 5
+already detected a path present at the old tag and absent at the new one, and
+printed "NOT a clean result". But it printed it as prose, without the
+"N substantive hunk(s) found" line, and `audit.sh` read its count from that
+line with `HUNKS=${HUNKS:-0}`. Absent became zero, and zero is the branch that
+prints "Step 5 found no substantive change, so a clean data diff is sufficient
+even for the locales step 4 flagged". A renamed `ld-collate.c` would have been
+reported correctly by the step and cleared by the summary 300 lines lower.
+Structural, not observed: no tracked path has vanished in any pair audited.
+
+**Two entry points were diffed by nobody.** `wcsmbs/wcscoll_l.c` and
+`wcsmbs/wcsxfrm_l.c` were in `ENTRY_POINTS`, in neither curated tier, and the
+include walk subtracts its entry points from what it reports. Their existence
+was checked; their diff was never read. They are the wide-char comparison and
+sort-key wrappers — a handful of `#define`s and then `#include` of the narrow
+implementation — so a change there moves `wcscoll`/`wcsxfrm` behaviour and
+nothing else sees it. Measured over 2.28..2.39: copyright and URL lines only,
+so no verdict moves.
+
+**The summary counted with a shell error.** `count_lines` was
+`grep -c . FILE || echo 0`. `grep -c` prints `0` *and* exits 1 when nothing
+matches, so the fallback printed a second `0`, `[ "0\n0" -gt 0 ]` failed with
+`integer expression expected` on stderr, and the summary fell into the else
+branch — the right one, by luck. Every run of a pair with no `LC_COLLATE`
+change printed that error; `tests/test_wrapper.py` ran exactly such a pair and
+did not look at stderr.
+
+### What changed
+
+- A leading `*` is comment text only when followed by a space, the end of the
+  line, or the `/` that closes the block. `*identifier`, `*(`, `**p` are code.
+- The vanished-path notice is a `!!` block with three-space continuation
+  lines, the shape the summary collects and repeats verbatim at the bottom.
+- The summary reads step 5 as one of three states: a hunk count; the exact
+  clean sentence "No substantive collation code change."; or neither, which is
+  **unresolved** — step 4's list stays open and the summary says why. The
+  vanished-path variant deliberately never prints the clean sentence. A
+  reworded script or a truncated log now lands in the unresolved branch, not
+  the reassuring one.
+- `wcscoll_l.c` and `wcsxfrm_l.c` are in TIER 1, with the reason recorded
+  beside them. Both documented pairs gain two "no substantive change" lines.
+  The floor pair `2.12 -> 2.17` goes from 63 to **65** hunks: each wrapper
+  contributes the 2012 FSF postal-address change, a licence continuation the
+  filter cannot prove is prose. Conservative, and now counted in
+  `examples/below-the-floor-2.12-to-2.17.txt` and tied to a test.
+- `count_lines`/`count_names` count with `awk`, one number, no fallback.
+- Both worked examples regenerated. The only differences are the seven `>>`
+  markers and the two new tier-1 lines — checked by rebuilding the abridged
+  section mechanically from a fresh run and diffing.
+
+### Two more tests that guarded nothing
+
+The fifth and sixth found in this suite. `assertIn("means", out)` on the
+wrapper's same-tag test: the word appears in every step's prose. And
+`assertIn('C.UTF-8', out)` on the NOT RUN test: it passed on step 2's own
+warning, not on the summary block it claimed to check. Both now assert the
+full sentence, on the summary alone.
+
+### What was verified
+
+- Step 5 output before and after on `2.28..2.34`, `2.34..2.39` and
+  `2.12..2.17`: the diff is exactly the marker changes and the two new tier-1
+  lines (plus the two licence hunks on the floor pair). 25 and 53 hold.
+- Reversed, `2.39 -> 2.34` loses `locale/C-collate-seq.c` for real, and the
+  `!!` block is asserted on that run. The summary's unresolved branch cannot be
+  reached with real tags — forward in time nothing has vanished, and the
+  reversed pair still finds 53 hunks — so `test_wrapper.py` stands step 5 in
+  with a `python3` shim on `PATH` that prints what the real script prints in
+  that state, and asserts "sufficient" is gone and UNRESOLVED is there.
+- Mutation checks: restoring `startswith('*')` fails the hunk-of-dereferences
+  test; restoring the old `count_lines` inside the real wrapper prints
+  `integer expression expected` once on the same-tag pair; restoring
+  `HUNKS=${HUNKS:-0}`'s default-to-clean makes the shim test fail.
+
 ## 2026-09-07 (eighteenth entry)
 
 ### Nothing checked that the documentation's links resolve
