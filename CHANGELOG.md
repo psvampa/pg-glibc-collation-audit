@@ -113,7 +113,7 @@ number. The step 3 figure of 11 was still exact.
   Two tests that recorded the old behaviour as a deliberate asymmetry now
   record that there is none.
 
-## 2026-09-07 (sixteenth entry, measured 2026-09-06)
+## 2026-09-06 (sixteenth entry)
 
 `C.UTF-8` stops being a locale this tool can only warn about. **No verdict
 moved**, but the basis of one did, and one new fact invalidates a conclusion
@@ -342,7 +342,7 @@ is still the only X — stay human.
 Still not decided: whether the summary's node-to-node block should be louder
 than a `NOT RUN` line.
 
-## 2026-09-07 (fifteenth entry)
+## 2026-09-06 (fifteenth entry)
 
 A documentation correctness sweep. **No source-level verdict moved**, and no
 locale changed sides. What moved is which PostgreSQL the published empirical
@@ -358,7 +358,7 @@ result before 2026-09-05 → two verdicts have moved*. `th_TH` moved from
 below. That entry updated the verdict table, the worked example and this file,
 and left the notice alone — so the one paragraph whose entire job is to tell
 you your saved answer went stale was itself stale, in the reassuring
-direction. It now names three verdicts and reads from 2026-09-07.
+direction. It now names three verdicts and reads from on or before 2026-09-06.
 
 Indexes on `th_TH` need a `REINDEX` across RHEL9 → RHEL10.
 
@@ -511,7 +511,7 @@ mentioned it. The script holds the node's copy, so it reads it: a pure `copy` of
 `iso14651_t1`, which was compared and is identical. Nothing is hidden. `C` is
 the opposite: it carries its own tailoring, so it is genuinely unauditable, and
 that is now shown mechanically rather than asserted. *(Superseded on
-2026-09-07 — see the sixteenth entry. It is unauditable against an upstream
+2026-09-06 — see the sixteenth entry. It is unauditable against an upstream
 tag, which is what this entry was about, and auditable against the other
 node's copy of the same file, which is what that one added.)*
 

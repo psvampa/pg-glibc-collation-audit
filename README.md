@@ -214,7 +214,7 @@ second column. See
 
 The evidence behind each row, both worked examples and the nodes each claim
 was measured on: [docs/results.md](docs/results.md). If you saved a result
-from this tool before 2026-09-07, check [CHANGELOG.md](CHANGELOG.md) first —
+from this tool on or before 2026-09-06, check [CHANGELOG.md](CHANGELOG.md) first —
 three verdicts have moved since, `th_TH` as recently as 2026-09-06. No verdict
 moved on 2026-09-06 when `C.UTF-8` was measured directly, but the basis of its
 RHEL9→RHEL10 🟢 did.
