@@ -32,10 +32,11 @@ worked-example section below.
 ## If you saved an earlier result
 
 If you saved a result from this tool on or before 2026-09-06, check
-[CHANGELOG.md](../CHANGELOG.md) first. Three verdicts have moved since:
+[CHANGELOG.md](../CHANGELOG.md) first. Three verdicts have moved, the last of
+them in the eleventh entry, dated 2026-09-06:
 
 - **`th_TH` for the RHEL9-to-RHEL10 pair** was reported 🟡 Unresolved until
-  2026-09-06 and it **changes** — indexes on it need a `REINDEX` across that
+  that entry and it **changes** — indexes on it need a `REINDEX` across that
   upgrade. This is the most recent move, and the one most likely to affect a
   result you are still holding.
 - **`ko_KR` for the RHEL8-to-RHEL9 pair** was once reported unaffected and it

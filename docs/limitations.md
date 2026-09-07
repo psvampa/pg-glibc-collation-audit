@@ -154,10 +154,11 @@ provider — see [scope.md](scope.md).
 
 Worth knowing before you rely on a `collversion` mismatch as your warning.
 Under the `libc` provider, `get_collation_actual_version()` returns NULL for
-`C`, for `POSIX` and for **anything whose name starts with `C.`** — the
-`pg_strncasecmp("C.", ...)` test, present in every branch from PG 14 on
-(`src/backend/utils/adt/pg_locale.c` through PG 17, `pg_locale_libc.c` from
-PG 18).
+`C`, for `POSIX` and for **anything whose name starts with `C.`**. PG 13,
+the first release to version `libc` collations at all, gets there by chopping
+the encoding suffix and comparing the rest to `c`; from PG 14 it is the
+`pg_strncasecmp("C.", ...)` test (`src/backend/utils/adt/pg_locale.c` through
+PG 17, `pg_locale_libc.c` from PG 18).
 
 So `collversion` and `datcollversion` stay NULL for `C.UTF-8`, the mismatch
 check in the SQL template can never fire for it, and neither can PostgreSQL's

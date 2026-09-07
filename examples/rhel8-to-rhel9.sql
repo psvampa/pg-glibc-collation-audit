@@ -21,6 +21,9 @@
 -- (see ../docs/results.md, "Worked example: RHEL8 to RHEL9"):
 --   affected:     sv_SE, sv_FI, sv_FI@euro, or_IN
 --   not affected: en_US, de_DE, fr_FR (negative controls)
+-- sv_FI@euro gets no table below: it is an ISO-8859-15 locale, and a UTF8
+-- database cannot use a single-byte-encoding collation. It changes exactly as
+-- sv_FI does (same `copy` of sv_SE), so sv_FI's result covers it.
 
 SELECT pg_import_system_collations('pg_catalog');
 SELECT collname, collcollate, collversion

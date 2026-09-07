@@ -4,6 +4,71 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-07 (twentieth entry)
+
+Documentation only. No code path changes and no verdict moves; nothing a run
+prints is different. The passages below said something false or stale about
+the tool; each is corrected, with what was checked.
+
+### What the docs used to say, and what is true
+
+- **"Two optional checks read a real node's own files"** (README, twice). There
+  have been three since the seventeenth entry: the distro-versus-upstream
+  comparison, the node-to-node comparison, and the ellipsis scan of each node's
+  own data (steps 9 and 10). The third is the only one that asks the ellipsis
+  question of the node's own `C`, since no tag of the RHEL8→RHEL9 pair holds
+  that file. `docs/method.md` and `audit.sh` already said three.
+- **"`diff_node_locales.py` is the only thing in the run that looks at that
+  file"** (README). False since the same entry: steps 9 and 10 read `C` too.
+- **PostgreSQL version attribution.** `docs/requirements.md` and both SQL
+  headers said `pg_collation_actual_version()` "arrived in 15" / "needs 15+".
+  Checked against the PostgreSQL catalogs on GitHub: the function exists since
+  PostgreSQL 10 (`pg_proc.h`, OID 3448) and returns a version for `libc`
+  collations from 13. What arrived in 15 is `pg_database.datlocprovider`,
+  `datcollversion` and `pg_database_collation_actual_version()`. The 15+
+  requirement stands; the reason did not, and the instruction "on 13/14 delete
+  the actual-version block" deleted a query that works there. The headers now
+  say which half to drop. Likewise, the `pg_strncasecmp("C.", ...)` test was
+  described as "present in every branch from PG 14 on" as if PG 13 lacked the
+  behaviour: PG 13 gets the same NULL by chopping the encoding suffix and
+  comparing the rest to `c` (`copy_suffix`, `pg_locale.c`, REL_13_STABLE);
+  the `pg_strncasecmp` form is 14+. Three files corrected.
+- **CHANGELOG cross-references.** The fifteenth entry said `th_TH` moved "in
+  the thirteenth entry below" and that `examples/` has carried a script for
+  each pair "since the thirteenth entry". Both happened in the **eleventh**
+  ("th_TH changes after all, and the second pair finally has a script").
+- **"inherited by 328 locales"** in the README's CJK row, which covers both
+  pairs. 328 is the blast radius at 2.34; at 2.39 it is 338
+  (`examples/rhel9-to-rhel10-audit-output.txt`). The row now states both, and
+  both are asserted against the clone in `tests/test_known_answers.py` — the
+  328 was stated in five files and tied in none.
+- **"four traps make the comparison agree with itself"** attributed all four to
+  the SQL template. `docs/confirming-on-a-real-system.md` is explicit that the
+  fourth, two truncated copies agreeing perfectly, belongs to the file
+  comparisons. The README now says three and one.
+- **`examples/rhel8-to-rhel9.sql`** lists `sv_FI@euro` as affected and creates
+  no table for it. A comment now says why: it is an ISO-8859-15 locale, unusable
+  as a collation in a UTF8 database, and it changes exactly as `sv_FI` does.
+- **The "if you saved an earlier result" notice** dated the last verdict move
+  "as recently as 2026-09-06" and then said "no verdict moved on 2026-09-06",
+  which reads as a contradiction to anyone who saved a result that afternoon.
+  It now names the eleventh entry as the move and says `C.UTF-8`'s direct
+  measurement came later the same day and moved a basis, not a verdict.
+- **A code comment** in `diff_distro_locales.py` called 353/355/366 "the three
+  measured RHEL corpora". Those are the upstream file counts at the three tags;
+  the nodes carry 355, 356 and 366 (`docs/requirements.md`).
+
+### What was verified
+
+- Every internal anchor resolves; no spelled-out count changed except
+  "two" → "three" optional checks, grepped across every file.
+- The PostgreSQL claims were checked by reading `pg_proc.h` at REL_10_STABLE,
+  `pg_proc.dat` at REL_12 through REL_15, `pg_database.h` at REL_14 and REL_15,
+  and `get_collation_actual_version()` in `pg_locale.c` at REL_13 and REL_14.
+- The 328/338 figures are now a known-answer test against the pinned tags.
+- No `\echo` label in either SQL file changed, so the published probe outputs
+  still match what the probe prints.
+
 ## 2026-09-07 (nineteenth entry)
 
 Three latent false negatives in step 5 and the summary that reads it, closed,
@@ -499,7 +564,7 @@ the truth.
 **If you saved a RHEL9-to-RHEL10 result on 2026-09-05 or 2026-09-06, re-read
 it.** `docs/results.md` and the README both carried a block saying *saved a
 result before 2026-09-05 → two verdicts have moved*. `th_TH` moved from
-🟡 Unresolved to 🔴 **Changed** on **2026-09-06**, in the thirteenth entry
+🟡 Unresolved to 🔴 **Changed** on **2026-09-06**, in the eleventh entry
 below. That entry updated the verdict table, the worked example and this file,
 and left the notice alone — so the one paragraph whose entire job is to tell
 you your saved answer went stale was itself stale, in the reassuring
@@ -584,7 +649,7 @@ the same two builds as the confirmation above.
   The suite has **six** modules and five need it; only
   `test_pure_functions.py` runs without one.
 - `docs/README.md` said `examples/` carried "the confirmation SQL for one"
-  pair. It has carried one for each since the thirteenth entry.
+  pair. It has carried one for each since the eleventh entry.
 - `docs/results.md` said the RHEL9-to-RHEL10 empirical lines all predate step
   5. The `th_TH` line does not — it was re-measured after, and is what moved
   that verdict.

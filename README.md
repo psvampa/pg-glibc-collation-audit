@@ -22,9 +22,10 @@ changed.
 **It is not a single, infallible answer, and does not try to be.** The five
 steps read upstream source, so three things sit outside them: the weights
 `localedef` computes at build time, your distro's own patches to the locale
-data, and a locale your distro adds, which is in no upstream tag at all. Two
-optional checks read a real node's own files and cover the second and third.
-Nothing covers the first except measuring on the nodes.
+data, and a locale your distro adds, which is in no upstream tag at all. Three
+optional checks read a real node's own files: two cover the second and third,
+and the third says whether the node's own `C.UTF-8` is a locale the first
+applies to. Nothing settles the first except measuring on the nodes.
 
 Use it as one input among several, cross-checked against an empirical method
 such as
@@ -95,9 +96,11 @@ tar -cf - -C /usr/share/i18n/locales . | ...      # -> ./el8-locales, ./el9-loca
 The build ids are required: a result is bound to the build it was taken on, and
 nothing in a directory of locale files carries a version. Without the
 directories the summary says so, in as many words, rather than leaving the
-section out — [`scripts/diff_node_locales.py`](scripts/diff_node_locales.py) is
-the only thing in the run that looks at that file at all, and its silence must
-not read as a clean result.
+section out — the node-to-node comparison
+([`scripts/diff_node_locales.py`](scripts/diff_node_locales.py)) and the
+ellipsis scan of each node's own data (steps 9 and 10) are the only things in
+the run that look at that file at all, and their silence must not read as a
+clean result.
 
 That settles whether the two nodes' collation *data* differs. What it cannot
 settle is the resulting *order*, because the weights are computed when the
@@ -141,8 +144,9 @@ Run it on both the old and the new OS, for every locale steps 1 to 3 flagged
 and — if step 5 found a [substantive code change](docs/glossary.md) — for
 every locale step 4 flagged too.
 
-Two things about it fail in the reassuring direction: four traps make the
-comparison agree with itself while proving nothing
+Two things about it fail in the reassuring direction: three traps on the SQL
+side and a fourth on the file comparisons make a comparison agree with itself
+while proving nothing
 ([docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md)),
 and it needs PostgreSQL 15 or newer with langpacks installed in the right
 order ([docs/requirements.md](docs/requirements.md)). It also reports more
@@ -166,12 +170,14 @@ which locales a data diff can never clear (4), and whether the code that
 computes weights changed (5). Steps 3 and 5 together give the complete set of
 affected locale identifiers.
 
-Beyond those five, two optional checks read a real node's locale sources.
+Beyond those five, three optional checks read a real node's locale sources.
 One compares a node against the upstream tag — the only way to see your
-distro's backports. The other compares the two **nodes to each other**, which
+distro's backports. Another compares the two **nodes to each other**, which
 is the only way to see a locale the distro adds that upstream does not have:
 `C.UTF-8` is that locale, and it is usually the database collation in a
-container.
+container. The third scans each node's own data for ellipsis ranges — the
+only way that question is asked of the node's `C` itself, since step 4 scans
+the tag and no tag of the RHEL8 → RHEL9 pair holds that file.
 
 The five steps in detail, the decision procedure they add up to, and how to
 read what the run prints: [docs/method.md](docs/method.md).
@@ -186,7 +192,7 @@ read what the run prints: [docs/method.md](docs/method.md).
 | `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | **step 2 warns** and cannot settle it <sup>†</sup> — the node-to-node check settles the data, `sql/c_utf8_probe.sql` the order |
 | `th_TH` | ⚪ Unaffected | 🔴 **Changed** | steps 1–3 |
 | `ber_DZ`, `kab_DZ` | ⚪ Unaffected | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap |
-| CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>inherited by 328 locales | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
+| CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>inherited by 328 locales at 2.34, 338 at 2.39 | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
 | `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | step 4 flagged them via `iso14651_t1_common`; cleared by measurement |
 | everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | ⚪ Unaffected | ⚪ Unaffected | `LC_COLLATE` and code both unchanged |
 
@@ -215,9 +221,9 @@ second column. See
 The evidence behind each row, both worked examples and the nodes each claim
 was measured on: [docs/results.md](docs/results.md). If you saved a result
 from this tool on or before 2026-09-06, check [CHANGELOG.md](CHANGELOG.md) first —
-three verdicts have moved since, `th_TH` as recently as 2026-09-06. No verdict
-moved on 2026-09-06 when `C.UTF-8` was measured directly, but the basis of its
-RHEL9→RHEL10 🟢 did.
+three verdicts have moved, `th_TH` most recently, in the eleventh entry (dated
+2026-09-06). Later that day `C.UTF-8` was measured directly: no verdict moved,
+but the basis of its RHEL9→RHEL10 🟢 did.
 
 ## Scope
 

@@ -62,6 +62,17 @@ class Step1Templates(StepRun):
         out = self.step('audit-locale-diff.sh', MID, NEW)
         self.assertRegex(out, r'\d+ locales inherit from iso14651_t1\b')
 
+    def test_the_blast_radius_the_readme_states_for_both_tags(self):
+        """The README's CJK row says iso14651_t1 is inherited by 328 locales at
+        2.34 and 338 at 2.39. The 328 sat in five files and the 338 in one
+        example, and nothing asserted either against the clone -- which is how
+        the step-4 "2" rotted. Step 1 computes the radius at the NEW tag."""
+        for old, new, radius in ((OLD, MID, 328), (MID, NEW, 338)):
+            with self.subTest(tag=new):
+                out = self.step('audit-locale-diff.sh', old, new)
+                self.assertIn(f'\n   {radius} locales inherit from iso14651_t1\n',
+                              out)
+
 
 @needs_clone
 class Step2Filter(StepRun):

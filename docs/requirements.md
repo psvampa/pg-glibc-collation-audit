@@ -42,9 +42,12 @@ have no automated coverage at all.
 
 A real PostgreSQL instance on each OS under test, **version 15 or newer** —
 [`sql/collation_confirmation_template.sql`](../sql/collation_confirmation_template.sql)
-reads `pg_database.datlocprovider` and calls `pg_collation_actual_version()`
-and `pg_database_collation_actual_version()`, all of which arrived in 15. The
-template's header says what to drop to run it on 13 or 14.
+reads `pg_database.datlocprovider` and `datcollversion` and calls
+`pg_database_collation_actual_version()`, all of which arrived in 15.
+`pg_collation_actual_version()` itself is older: it exists since PostgreSQL 10
+and has reported a version for `libc` collations since 13, so the
+named-collation mismatch check works on 13 and 14. The template's header says
+what to drop to run it there.
 
 ### Install the langpacks before `initdb`
 
