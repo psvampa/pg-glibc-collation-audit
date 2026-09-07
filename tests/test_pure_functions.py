@@ -234,14 +234,22 @@ class CollateBounds(unittest.TestCase):
     def test_no_block_returns_none(self):
         self.assertIsNone(g.collate_bounds('LC_TIME\nx\nEND LC_TIME\n'))
 
-    def test_block_on_the_very_first_line_is_found_by_bounds(self):
-        """The glibc <= 2.23 shape. collate_bounds sees it (line-based);
-        collate_block does not (it requires a preceding newline). That gap is
-        the documented 2.24 version floor -- asserted here so the asymmetry is
-        a recorded decision rather than a latent surprise."""
+    def test_block_on_the_very_first_line_is_found_by_both(self):
+        """The glibc <= 2.23 shape, and the whole of the old 2.24 version
+        floor. collate_bounds always saw it; collate_block used a regex needing
+        a preceding newline and did not, which dropped the three master
+        templates from the copy graph. There is no asymmetry left to record --
+        both see it, and this asserts they agree."""
         text = 'LC_COLLATE\ncopy "a"\nEND LC_COLLATE\n'
         self.assertEqual(g.collate_bounds(text), (1, 3))
-        self.assertIsNone(g.collate_block(text))
+        self.assertEqual(g.collate_block(text), '\ncopy "a"')
+
+    def test_an_unterminated_block_reaches_collate_block_too(self):
+        """collate_bounds runs an unterminated block to the end of the file;
+        collate_block now inherits that instead of returning None. The
+        conservative direction: the locale stays in the copy graph."""
+        text = 'LC_COLLATE\ncopy "a"\n'
+        self.assertEqual(g.collate_block(text), '\ncopy "a"\n')
 
 
 class HunkOverlap(unittest.TestCase):
@@ -539,12 +547,13 @@ class ScanEllipsis(unittest.TestCase):
         self.assertEqual(with_collate, 2)
 
     def test_a_block_on_the_first_line_is_still_scanned(self):
-        """collate_block's regex needs a newline before LC_COLLATE and returns
-        None for a file that opens with it -- the glibc <=2.23 shape. In a
-        directory scan the files are arbitrary distro files, so that blind spot
-        would CLEAR a template instead of flagging it."""
+        """A file opening with LC_COLLATE -- the glibc <=2.23 shape. In a
+        directory scan the files are arbitrary distro files, so a blind spot
+        here would CLEAR a template instead of flagging it. scan_ellipsis
+        reached it via collate_text before collate_block was fixed; now both
+        routes work, and this asserts the underlying one does too."""
         text = 'LC_COLLATE\n<U0000>\n..\n<U10FFFF>\nEND LC_COLLATE\n'
-        self.assertIsNone(g.collate_block(text))          # the trap itself
+        self.assertIsNotNone(g.collate_block(text))
         flagged, with_collate = g.scan_ellipsis({'iso14651_t1_common': text})
         self.assertEqual(sorted(flagged), ['iso14651_t1_common'])
         self.assertEqual(with_collate, 1)
@@ -560,6 +569,20 @@ class CopyGraphFromTexts(unittest.TestCase):
                  'b': collate('<U0041> <U0041>'),
                  'c': 'LC_TIME\nEND LC_TIME\n'}
         self.assertEqual(g.copy_graph_from_texts(texts), {'a': ['b'], 'b': []})
+
+    def test_a_template_opening_with_lc_collate_is_a_root_not_a_dropout(self):
+        """The glibc <=2.23 master templates open with LC_COLLATE at byte 0.
+        While collate_block missed those, copy_graph_from_texts skipped them
+        entirely, so the highest fan-in files in the corpus were not in the
+        graph and everything inheriting from them looked unaffected -- 11
+        locales reported on glibc-2.12..2.17 where there are 278."""
+        texts = {'iso14651_t1_common': 'LC_COLLATE\n<U0041> <U0041>\n'
+                                       'END LC_COLLATE\n',
+                 'en_US': collate('copy "iso14651_t1_common"')}
+        graph = g.copy_graph_from_texts(texts)
+        self.assertIn('iso14651_t1_common', graph)
+        self.assertEqual(g.inherited_from(graph, {'iso14651_t1_common'}),
+                         {'en_US': ['iso14651_t1_common']})
 
     def test_a_node_only_file_participates_as_a_root(self):
         """C is in no tag, so at a tag it can be neither a root nor a target.

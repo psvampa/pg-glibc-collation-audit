@@ -58,10 +58,10 @@ and `glibc-2.34`.
 
 **The audited pairs are RHEL8 → RHEL9 and RHEL9 → RHEL10** — the two adjacent
 upgrades this project publishes results for ([docs/scope.md](docs/scope.md)).
-Other distros work the same way above glibc 2.24; below it the method breaks
-silently and nothing stops it, so read
-[docs/limitations.md](docs/limitations.md#below-glibc-224-the-method-breaks-silently)
-first.
+Other distros work the same way. There used to be a hard floor at glibc 2.24,
+below which the method answered confidently and wrongly; that was a bug and it
+is fixed, though only one pair below it has been measured — see
+[docs/limitations.md](docs/limitations.md#below-glibc-224-the-method-rests-on-one-measured-pair).
 
 ### Run the audit
 
@@ -223,11 +223,13 @@ RHEL9→RHEL10 🟢 did.
 
 Sort order (`LC_COLLATE`) only, and in PostgreSQL terms the **`libc` provider**
 only. Nothing about `LC_CTYPE` (`upper()`, `lower()`, pattern matching), ICU,
-or the `builtin` provider — and the two pairs named above.
+or the `builtin` provider — and the two pairs named above. `LC_CTYPE` is the
+exclusion that can still cost you an index, and it is unmeasured in both
+directions.
 
 Full scope, including the `builtin` provider as a mitigation:
-[docs/scope.md](docs/scope.md). The five things this method structurally cannot
-see — `C.UTF-8` among them, and now covered three other ways:
+[docs/scope.md](docs/scope.md). The six things to know before acting on a clean
+result — `C.UTF-8` among them, and now covered three other ways:
 [docs/limitations.md](docs/limitations.md).
 
 ## Documentation
@@ -238,7 +240,7 @@ short version:
 - [docs/method.md](docs/method.md) — the five steps in detail, and the decision procedure
 - [docs/results.md](docs/results.md) — the evidence behind each verdict, both worked examples, tested-on
 - [docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md) — the empirical check
-- [docs/limitations.md](docs/limitations.md) — the five things it cannot see
+- [docs/limitations.md](docs/limitations.md) — the six things to know before acting on a clean result
 - [docs/scope.md](docs/scope.md) — what it audits, and the `builtin` provider as a way out
 - [docs/requirements.md](docs/requirements.md) — dependencies, test suite, setup traps
 - [docs/glossary.md](docs/glossary.md) — `copy` graph, blast radius, hunk, tier, ellipsis range

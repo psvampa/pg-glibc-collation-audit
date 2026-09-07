@@ -1,16 +1,19 @@
 # Known limitations
 
-Five things this method structurally cannot see. The first is invisible to the
-tag diff and covered three other ways, all of them now measured; the second can
-change your answer; the third is a hard kill condition; the fourth is a gap in
-coverage with no demonstrated impact; the fifth is the manual step in an
-otherwise mechanical method.
+Six things to know before acting on a clean result. The first is invisible to
+the tag diff and covered three other ways, all of them now measured; the second
+can change your answer; the third used to be a hard kill condition and is now a
+fixed bug resting on one measured pair; the fourth is a gap in coverage with no
+demonstrated impact; the fifth is the manual step in an otherwise mechanical
+method; the sixth is an entire category of glibc behaviour this project does
+not look at.
 
 1. [`C.UTF-8` is invisible to a tag diff](#cutf-8-is-invisible-to-a-tag-diff)
 2. [Upstream tags are not your distro's glibc](#upstream-tags-are-not-your-distros-glibc)
-3. [Below glibc 2.24 the method breaks silently](#below-glibc-224-the-method-breaks-silently)
+3. [Below glibc 2.24 the method rests on one measured pair](#below-glibc-224-the-method-rests-on-one-measured-pair)
 4. [Character repertoire changes are not audited](#character-repertoire-changes-are-not-audited)
 5. [Step 5 reports, it does not decide](#step-5-reports-it-does-not-decide)
+6. [`LC_CTYPE` is not audited at all](#lc_ctype-is-not-audited-at-all)
 
 ## `C.UTF-8` is invisible to a tag diff
 
@@ -185,8 +188,11 @@ copy, because a truncated directory reports nothing wrong. The node-to-node one
 additionally refuses two directories that resolve to the same path, since
 comparing a tree with itself is flawless and meaningless.
 
-The second one is **not** wired into `audit.sh` — the wrapper always runs step 4
-against the new tag, so run the directory mode by hand, once per node:
+`audit.sh` runs both once you give it the directories: the node-to-node
+comparison as step 8, and the directory-mode ellipsis scan as steps 9 and 10,
+one per side. This page used to say the second was **not** wired in and had to
+be run by hand, once per node — a check that depends on somebody remembering is
+not a check, so it is wired in now. By hand it is still:
 
 ```sh
 python3 scripts/flag_algorithmic_ranges.py \
@@ -198,11 +204,39 @@ python3 scripts/flag_algorithmic_ranges.py \
 [generated names](glossary.md) `locale -a` shows; a node ships no `SUPPORTED`
 file of its own. Note that passing it is the one thing here that needs the
 glibc clone — without it the scan reads nothing but the directory, and `locale
--a` on the node is your mapping.
+-a` on the node is your mapping. `audit.sh` always passes it, since it has the
+clone anyway.
 
-`audit.sh` runs the first as step 8 when given both nodes' directories, and
-when not given them **says so in the summary** rather than omitting the
-section:
+What steps 9 and 10 add to the summary, on a pair whose old node backports the
+ellipsis-based `C` and whose new node has `codepoint_collation`:
+
+```
+-- Node's own locale data, ellipsis scan (glibc-2.28-251.el8_10.40)
+     ellipsis-based locale(s): 5
+     C (C.UTF-8): ellipsis-based  <- localedef computes its weights,
+     so identical data does NOT mean identical order
+-- Node's own locale data, ellipsis scan (glibc-2.34-275.el9_8)
+     ellipsis-based locale(s): 4
+     C (C.UTF-8): codepoint_collation  <- byte order by construction
+```
+
+Given neither directory it reads instead:
+
+```
+-- Node's own ellipsis scan: NOT RUN
+     Pass --old-locales-dir and --new-locales-dir with their build
+     ids. Step 4 above scanned the tag, and no tag of this pair holds
+     localedata/locales/C, so nothing above says whether either node's
+     own C.UTF-8 is ellipsis-based -- which is the one thing a data
+     diff, including the node-to-node one, can never clear.
+```
+
+Same rule as the block below it, one level deeper: a summary that prints
+nothing about the locale looks exactly like one that cleared it.
+
+`audit.sh` runs the node-to-node comparison as step 8 when given both nodes'
+directories, and when not given them **says so in the summary** rather than
+omitting the section:
 
 ```
 -- Node-to-node locale data: NOT RUN
@@ -350,33 +384,72 @@ CI, the same position `sql/collation_confirmation_template.sql` is in.
 needs a node's files. Give it both and it additionally compares the two nodes to
 each other, which is a different question — see the first limitation.
 
-## Below glibc 2.24 the method breaks silently
+## Below glibc 2.24 the method rests on one measured pair
 
-This project audits RHEL8 → RHEL9 and RHEL9 → RHEL10, both comfortably above
-that floor. The limit matters anyway, because nothing enforces it: point the
-tool at an older pair and it answers confidently and wrongly rather than
-refusing.
+This section used to say the method **breaks silently** below glibc 2.24, and
+that *"there is no guard for this."* That floor was a bug in one function, not
+a structural limit, and it is fixed. What is left is thinner than a blind spot
+but still worth stating: exactly one pair below the old floor has been run end
+to end.
 
-**There is no guard for this.**
-
-### Why it fails, and by how much
+### What the bug was
 
 In glibc 2.23 and earlier, the three [collation templates](glossary.md)
 (`iso14651_t1`, `iso14651_t1_common`, `iso14651_t1_pinyin`) begin with
-`LC_COLLATE` on the very first byte of the file, and the block reader does
-not recognise them there. Steps 3 and 4 walk the [`copy` graph](glossary.md)
-at the **new** tag, so when that tag is old the graph loses its three roots
-and the inheritance closure collapses — silently, in the reassuring
-direction.
+`LC_COLLATE` on the very first byte of the file. `collate_block` was built on a
+regex requiring a newline before `LC_COLLATE`, so it returned `None` for
+exactly those three files — and `copy_graph_from_texts` skips whatever it gets
+`None` for. Steps 3 and 4 walk the [`copy` graph](glossary.md) at the **new**
+tag, so when that tag was old the graph lost its three roots, the highest
+fan-in files in the corpus, and the inheritance closure collapsed under it —
+silently, in the reassuring direction.
 
-Measured on `glibc-2.12 -> glibc-2.17` — a pair far below the floor, run only
-to show what the failure looks like, not because it is audited: step 2
-correctly finds `iso14651_t1_common` changed, then step 3 reports **11**
-affected locales where there are **278**, and step 4 reports **2** exposed
-where there are **279**. The 267 names it drops include `en_US`, `de_DE`,
-`fr_FR`, `es_ES`, `it_IT`, `nl_NL`, `pt_BR`, `ru_RU`, `sv_SE`, `zh_CN` and
-`zh_TW`. What actually changes over that pair is 109 Tibetan code points
+The same regex had already been worked around **twice, locally**: `collate_text`
+avoided it, and then `scan_ellipsis` avoided `collate_block` by calling
+`collate_text`. Each fix solved its own caller and left the function broken for
+the next one. It is now fixed in `collate_block` itself, so the two remaining
+callers — `copy_targets` and `copy_graph_from_texts` — inherit it rather than
+having to know about the trap.
+
+### Measured, before and after
+
+`glibc-2.12 -> glibc-2.17`, run end to end. Step 2 finds 6 files touching
+`LC_COLLATE` (`dz_BT`, `fi_FI`, `hu_HU`, `iso14651_t1_common`, `se_NO`,
+`ug_CN`); what actually changes over that pair is 109 Tibetan code points
 gaining a collation weight in `iso14651_t1_common`.
+
+| | Before the fix | After |
+|---|---|---|
+| Step 3, affected locale source files | **11** | **278** |
+| Step 4, needing empirical confirmation | 277 | **279** |
+| Step 4, generated names per `SUPPORTED` | 404 | **408** |
+
+The 267 names step 3 used to drop include `en_US`, `de_DE`, `fr_FR`, `es_ES`,
+`it_IT`, `nl_NL`, `pt_BR`, `ru_RU`, `sv_SE`, `zh_CN` and `zh_TW`. Both runs, side
+by side, are in
+[`examples/below-the-floor-2.12-to-2.17.txt`](../examples/below-the-floor-2.12-to-2.17.txt),
+and the figures are asserted in `tests/test_known_answers.py`
+(`BelowTheOldVersionFloor`) against the two tags pinned in
+`tests/_harness.py` — which is what the step 4 figure below lacked.
+
+**This page used to say step 4 reported 2, not 277.** That figure was already
+stale when it was quoted: migrating `scan_ellipsis` to `collate_text` had
+fixed the flagging half without anyone revisiting the number, leaving only the
+closure half broken. A measurement published once is not a measurement that
+stays true.
+
+### What is not claimed
+
+**The audited pairs did not move.** `./audit.sh glibc-2.28 glibc-2.34` and
+`./audit.sh glibc-2.34 glibc-2.39` produce byte-identical output before and
+after the fix, because from 2.24 on no locale file opens with `LC_COLLATE` at
+byte 0. The fix adds reach and changes no published result.
+
+**One pair is not "any pair".** `2.12 -> 2.17` is the only pair below the old
+floor that has been run, and steps 2 and 5 raised nothing there. That is
+evidence about that pair, not a general claim about every glibc old enough to
+predate it. There is no version guard, and nothing measured that would justify
+adding one.
 
 ## Character repertoire changes are not audited
 
@@ -406,6 +479,54 @@ that requires reading C. If nobody on hand will do that, treat every locale
 step 4 flags as unresolved and
 [confirm it empirically](confirming-on-a-real-system.md) instead — that path
 needs no source reading and is the stronger evidence anyway.
+
+## `LC_CTYPE` is not audited at all
+
+Every other section on this page is a way `LC_COLLATE` can be missed. This one
+is a whole category nothing here looks at.
+
+`LC_COLLATE` is one locale category. Under the `libc` provider PostgreSQL takes
+`LC_CTYPE` from glibc too, and that is what decides `upper()`, `lower()`,
+`initcap()`, character classification and pattern matching. A functional index
+on `lower(email)`, a unique index on `lower(username)`, a `CHECK` constraint
+calling `upper()` — all of them break on a glibc upgrade for the same reason a
+`COLLATE` index does: the function's output moves under an index built from the
+old output.
+
+**PostgreSQL warns less here than it does for collation, not more.**
+`collversion` and `datcollversion` version the *collation*. There is no ctype
+equivalent, so there is no mismatch to detect and no warning to miss — a ctype
+change leaves no version trail at all. Every caveat
+[the `C.UTF-8` section](#postgresql-is-blind-to-it-too) makes about NULL
+`collversion` applies here to every locale, not just to `C.*`.
+
+**The three OS versions this project audits cross three Unicode versions.**
+Read from the tags themselves, `localedata/unicode-gen/Makefile`:
+
+| Tag | OS | `UNICODE_VERSION` |
+|---|---|---|
+| `glibc-2.28` | RHEL8 | 11.0.0 |
+| `glibc-2.34` | RHEL9 | 13.0.0 |
+| `glibc-2.39` | RHEL10 | 15.1.0 |
+
+Case mappings and character classes are regenerated from the Unicode data files
+at each of those steps — over exactly the upgrades this project audits for
+collation.
+
+**None of that is measured here.** No step reads `LC_CTYPE`, no row of
+[results.md](results.md) covers it, and no verdict this project publishes says
+anything about it in either direction — including "unchanged". A 🟢 on this
+project's table is a statement about sort order and nothing else.
+
+This section exists so a clean collation result is not read as a clean upgrade.
+If a `lower()`-based index matters to you, confirm it the way this project
+confirms collation — empirically, on both nodes, naming the builds — because
+nothing here will do it for you.
+
+The remaining categories (`LC_NUMERIC`, `LC_TIME`, `LC_MONETARY`,
+`LC_MESSAGES`) are out of scope as well. They move `to_char()` output and
+message text rather than index order, so they are a correctness question rather
+than a corruption one — but no step reads them either.
 
 ---
 

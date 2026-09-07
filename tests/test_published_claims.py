@@ -191,6 +191,36 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
         found = [name for name, text in docs().items() if printed[0] in text]
         self.assertTrue(found, 'no doc quotes the NOT RUN heading any more')
 
+    def test_the_ellipsis_scan_NOT_RUN_block_is_quoted_verbatim(self):
+        """Same tie as the block above. The directory-mode scan used to be a
+        manual step nobody ran; wiring it into audit.sh only helps if its
+        absent-is-not-empty notice is real, so the doc quotes the heading and
+        this asserts the wrapper still prints exactly it."""
+        wrapper = read(os.path.join(REPO_ROOT, 'audit.sh'))
+        printed = [m.group(1) for m in
+                   re.finditer(r'^\s*echo "(-- Node\'s own ellipsis scan: NOT '
+                               r'RUN)"', wrapper, re.M)]
+        self.assertEqual(len(printed), 1, 'audit.sh no longer prints it')
+        found = [name for name, text in docs().items() if printed[0] in text]
+        self.assertTrue(found, 'no doc quotes the NOT RUN heading any more')
+
+    def test_the_below_floor_example_matches_the_asserted_numbers(self):
+        """The example is a saved run, so it can go stale exactly the way the
+        old step 4 figure did. Its table is tied to the same numbers
+        test_known_answers asserts against the pinned tags."""
+        path = os.path.join(REPO_ROOT, 'examples',
+                            'below-the-floor-2.12-to-2.17.txt')
+        text = read(path)
+        for label, before, after in (
+                ('Step 3, affected locale source files', '11', '278'),
+                ('Step 4, needing empirical confirmation', '277', '279'),
+                ('Step 4, generated names per SUPPORTED', '404', '408')):
+            self.assertRegex(
+                text, rf'{re.escape(label)}\s+{before}\s+{after}\b',
+                f'{label} no longer reads {before} -> {after}')
+        self.assertIn('Full affected set (278 locale source file(s))', text)
+        self.assertIn('279 locale source file(s), 408 generated', text)
+
     def test_no_doc_states_a_test_count(self):
         """It went stale twice in one day, so it was removed rather than
         corrected. A number that is not written down cannot rot."""

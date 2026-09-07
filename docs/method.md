@@ -23,8 +23,8 @@ for you. Each is also a standalone script, which is what you want to re-run
 one step against a hand-picked locale list — the invocations below are those
 standalone forms.
 
-The wrapper also runs two checks that are *not* among these five, both of them
-needing files off a node rather than the clone — which is why neither is a
+The wrapper also runs three checks that are *not* among these five, all of them
+needing files off a node rather than the clone — which is why none of them is a
 sixth step. They answer different questions:
 
 - **node against its tag** — `scripts/diff_distro_locales.py <tag>
@@ -39,10 +39,18 @@ sixth step. They answer different questions:
   tags can reach. `C.UTF-8` is that locale, and it is usually the database
   collation in a container. When you do not supply the directories, the summary
   says `NOT RUN` rather than omitting the section.
+- **step 4 over a node's own directory** — `scripts/flag_algorithmic_ranges.py
+  --locales-dir <path> --build-id <nvr> --supported-tag <tag>`, run as step 9
+  and/or 10 for whichever side you supply. Does that node's own locale data use
+  ellipsis ranges? Step 4 proper scans the **new tag**, which cannot hold a file
+  no tag has, so this is the only way the question is asked of `C` itself. It
+  was a manual step until the seventeenth CHANGELOG entry; a check that depends
+  on somebody remembering is not a check. Same rule as step 8 when the
+  directories are absent: the summary says `NOT RUN`.
 
-Neither settles the resulting *order*: the weights for an ellipsis range are
-computed when the locale is built. `sql/c_utf8_probe.sql` is what does, for the
-one locale where nothing else can.
+None of the three settles the resulting *order*: the weights for an ellipsis
+range are computed when the locale is built. `sql/c_utf8_probe.sql` is what
+does, for the one locale where nothing else can.
 
 See
 [confirming-on-a-real-system.md](confirming-on-a-real-system.md#checking-the-distros-own-patches).

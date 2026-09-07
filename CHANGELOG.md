@@ -4,6 +4,115 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-06 (seventeenth entry)
+
+The glibc 2.24 version floor was a bug in one function, not a structural limit.
+It is fixed, one published number turned out to have gone stale, `LC_CTYPE`
+becomes a stated limitation instead of a scope footnote, and a check that
+needed somebody to remember it is now wired into the wrapper. **No verdict
+moved, and no audited pair's output changed by a byte.**
+
+### What it used to get wrong
+
+`docs/limitations.md` said the method *"breaks silently"* below glibc 2.24 and
+closed with *"There is no guard for this."* Both were accurate descriptions of
+the symptom and neither located the cause, which was three lines of
+`glibc_locale_data.py`.
+
+`collate_block` was built on a regex requiring a newline before `LC_COLLATE`,
+so it returned `None` for any file opening with `LC_COLLATE` at byte 0 — which
+is exactly how glibc 2.23 and earlier write `iso14651_t1`,
+`iso14651_t1_common` and `iso14651_t1_pinyin`, the three highest fan-in files
+in the corpus. `copy_graph_from_texts` skips whatever it gets `None` for, so
+those three never entered the `copy` graph and every locale inheriting from
+them looked unaffected.
+
+The same regex had already been worked around **twice, locally**: `collate_text`
+avoided it, then `scan_ellipsis` avoided `collate_block` by calling
+`collate_text`. Each fix solved its own caller and left the function broken for
+the next. That is the transferable part of this entry — a bug routed around
+rather than repaired stays alive for whoever calls it next.
+
+### One published number had already gone stale
+
+This file's own convention is that a saved result may not still be true, and
+this is a case of it. `docs/limitations.md` said step 4 reported **2** exposed
+locales on `glibc-2.12 -> glibc-2.17`. Re-measured, the pre-fix figure is
+**277**: migrating `scan_ellipsis` to `collate_text` had already fixed the
+flagging half, leaving only the closure half broken, and nobody revisited the
+number. The step 3 figure of 11 was still exact.
+
+### What changed
+
+- **`scripts/glibc_locale_data.py`** — `collate_block` is now built on
+  `collate_bounds`, which is line-based and always saw these files. The two
+  remaining callers, `copy_targets` and `copy_graph_from_texts`, inherit the
+  fix rather than having to know about the trap. The dead regex is gone. It
+  also now accepts an unterminated block, running it to the end of the file,
+  because `collate_bounds` does: the conservative direction, and it makes the
+  two agree instead of disagreeing.
+- **`docs/limitations.md`** — section 3 is retitled *"Below glibc 2.24 the
+  method rests on one measured pair"* and carries the before/after table. It
+  claims what was measured and no more: `2.12 -> 2.17` is one pair, not "any
+  pair below the floor". No guard was added, because nothing measured justifies
+  one.
+- **`docs/limitations.md`** gains a sixth section, **`LC_CTYPE` is not audited
+  at all**. It was previously a one-line scope exclusion in two files, which
+  reads as "does not apply" rather than "can still cost you an index". A
+  functional index on `lower(email)` breaks on a glibc upgrade the same way a
+  `COLLATE` index does, and there is no `collversion` equivalent for ctype, so
+  PostgreSQL leaves no version trail at all. Read from the tags:
+  `UNICODE_VERSION` is 11.0.0 at `glibc-2.28`, 13.0.0 at `glibc-2.34` and
+  15.1.0 at `glibc-2.39` — three Unicode versions across the same upgrades this
+  project audits for collation. **It is unmeasured in both directions**, and
+  the section says so; a green row on this project's table is a statement about
+  sort order and nothing else. `LC_NUMERIC`, `LC_TIME`, `LC_MONETARY` and
+  `LC_MESSAGES` are named as out of scope for the first time.
+- **`audit.sh`** — `flag_algorithmic_ranges.py --locales-dir` runs as steps 9
+  and 10, one per node, whenever the locale directories are supplied. It was
+  documented as a manual step, run by hand once per node; a check that depends
+  on somebody remembering is not a check. Given no directories the summary says
+  `NOT RUN` and what that leaves uncovered, by the same absent-is-not-empty rule
+  as step 8, and a test ties that heading to the wrapper.
+
+- **`audit.sh` no longer inherits a previous run's warnings.** Found while
+  verifying the above, and older than any of it: the warnings block globs every
+  `step*.$PAIR.log` in the output directory, and the up-front `rm -f` cleared
+  the three result lists but not the logs. So a run given both nodes'
+  directories left its notices behind, and the next run of the same pair —
+  given no directories — reprinted them as its own, including *"C.UTF-8: built
+  from ellipsis ranges on at least one of these nodes"* from a run that read no
+  node. The direction was conservative, which is why it survived, but the
+  statement was false and the wrapper's own rule is that every file it reads was
+  written by this run. The logs for the pair are now cleared with the lists, and
+  a test drives it.
+- **`tests/_harness.py`** pins `glibc-2.12` and `glibc-2.17` alongside the
+  three audited tags, and `tests/test_known_answers.py` gains
+  `BelowTheOldVersionFloor`, which asserts the figures above against those
+  pinned commits. The numbers this entry publishes had no automated coverage
+  when they were written — which is precisely how the previous ones rotted, so
+  they are covered now. The floor pair gets its own skip decorator: a
+  contributor's clone need not carry two tags no published result depends on,
+  while CI fetches every tag and fails on any skip.
+- **`examples/below-the-floor-2.12-to-2.17.txt`** — both runs side by side,
+  clearly marked as not an audited pair and not a verdict. Its table is tied to
+  the same asserted numbers, so a saved example cannot drift from the code
+  either.
+
+### What was verified
+
+- `./audit.sh glibc-2.28 glibc-2.34` and `./audit.sh glibc-2.34 glibc-2.39`
+  produce **byte-identical** output before and after. From 2.24 on no locale
+  file opens with `LC_COLLATE`, so the fix adds reach and moves nothing
+  published.
+- `glibc-2.12 -> glibc-2.17` end to end: step 3 goes from 11 affected locale
+  source files to **278**, step 4 from 277 to **279** (404 to **408** generated
+  names). Steps 2 and 5 raised nothing new below the old floor.
+- Reverting `collate_block` to the regex fails four tests, including a new one
+  asserting a byte-0 template is a root of the graph rather than a dropout.
+  Two tests that recorded the old behaviour as a deliberate asymmetry now
+  record that there is none.
+
 ## 2026-09-07 (sixteenth entry, measured 2026-09-06)
 
 `C.UTF-8` stops being a locale this tool can only warn about. **No verdict

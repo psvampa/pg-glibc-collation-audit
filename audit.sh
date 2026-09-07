@@ -17,7 +17,8 @@
 #
 # The --*-locales-dir options are optional and read a node's own
 # /usr/share/i18n/locales/. Each side you supply adds the
-# distro-versus-upstream check for that side (step 6 for old, step 7 for new);
+# distro-versus-upstream check for that side (step 6 for old, step 7 for new)
+# and the ellipsis scan of that node's own data (step 9 for old, 10 for new);
 # supplying BOTH additionally runs the node-to-node comparison (step 8), the
 # only thing here that can see a locale the distro backports -- C.UTF-8 above
 # all. See usage() below and docs/method.md.
@@ -43,10 +44,15 @@ usage() {
   echo "       build id too: a result is bound to the build it ran on." >&2
   echo >&2
   echo "       Either side on its own adds that check for that side (step 6" >&2
-  echo "       for old, step 7 for new). Supply BOTH and the run additionally" >&2
-  echo "       compares the two nodes to each other (step 8). That is the only" >&2
-  echo "       source-level evidence there is about C.UTF-8, whose file is in" >&2
-  echo "       neither tag of the RHEL8->RHEL9 pair." >&2
+  echo "       for old, step 7 for new), and scans that node's own data for" >&2
+  echo "       ellipsis ranges (step 9 for old, step 10 for new) -- which is" >&2
+  echo "       the only way the question is asked of C itself, since step 4" >&2
+  echo "       scans the new TAG and no tag holds that file." >&2
+  echo >&2
+  echo "       Supply BOTH and the run also compares the two nodes to each" >&2
+  echo "       other (step 8). That is the only source-level evidence there is" >&2
+  echo "       about C.UTF-8, whose file is in neither tag of the RHEL8->RHEL9" >&2
+  echo "       pair." >&2
   exit 2
 }
 
@@ -111,7 +117,17 @@ mkdir -p "$OUT_DIR"
 # otherwise be summarised as if it were this pair's answer -- the exact bug
 # filter_lc_collate_changes.py's docstring records having removed. Targeted
 # removal only: $OUT_DIR is user-supplied and is not ours to wipe.
+#
+# The step logs count as files this run reads: the warnings block at the bottom
+# globs every step*.$PAIR.log to repeat the `!!` notices. Without this, a run
+# given both nodes' directories leaves step 6/7/8/9/10 logs behind, and the NEXT
+# run of the same pair -- given no directories at all -- reprints their node
+# findings as its own, down to "C.UTF-8: built from ellipsis ranges on at least
+# one of these nodes" when it read no node. The direction is conservative, which
+# is why it went unnoticed, but the statement is false and this file's rule is
+# that every file it reads was written by this run.
 rm -f "$STEP2_LIST" "$STEP3_LIST" "$STEP4_LIST" ${NODE_LIST:+"$NODE_LIST"}
+rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
 
 banner() {
   echo
@@ -229,6 +245,23 @@ if [ -n "$OLD_LOCALES" ] && [ -n "$NEW_LOCALES" ]; then
     --old-tag "$OLD" --new-tag "$NEW"
 fi
 
+# Step 4 again, over each NODE's own locale directory instead of the new tag.
+# Step 4 above scans the tag, which cannot hold a file no tag has -- C among
+# them -- and an ellipsis range is precisely what a data diff can never clear,
+# so the node-to-node comparison cannot settle it either. docs/limitations.md
+# used to say "run this by hand, once per node"; a check that depends on
+# somebody remembering is not a check.
+if [ -n "$OLD_LOCALES" ]; then
+  banner "NODE ELLIPSIS  does $OLD_BUILD's own locale data use ellipsis ranges?"
+  run_step 9 python3 "$SCRIPTS/flag_algorithmic_ranges.py" \
+    --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --supported-tag "$OLD"
+fi
+if [ -n "$NEW_LOCALES" ]; then
+  banner "NODE ELLIPSIS  does $NEW_BUILD's own locale data use ellipsis ranges?"
+  run_step 10 python3 "$SCRIPTS/flag_algorithmic_ranges.py" \
+    --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --supported-tag "$NEW"
+fi
+
 # ---------------------------------------------------------------- summary ----
 
 count_lines() { [ -f "$1" ] && grep -c . "$1" || echo 0; }
@@ -291,6 +324,37 @@ else
   echo "     source file is in neither tag, and PostgreSQL reports collversion"
   echo "     as NULL for every C.* collation, so no mismatch can ever fire."
   echo "     Then run sql/c_utf8_probe.sql on both nodes."
+fi
+
+# Same rule one level down: the node-to-node comparison answers whether the two
+# nodes carry the same collation DATA, and this answers whether that data is
+# the kind localedef expands at build time. Identical data is not identical
+# order when an ellipsis range computes the weights.
+echo
+if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
+  for side in old new; do
+    if [ "$side" = old ]; then dir=$OLD_LOCALES; build=$OLD_BUILD; n=9
+    else dir=$NEW_LOCALES; build=$NEW_BUILD; n=10; fi
+    [ -n "$dir" ] || continue
+    log="$OUT_DIR/step$n.$PAIR.log"
+    echo "-- Node's own locale data, ellipsis scan ($build)"
+    sed -n 's/^Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: /     ellipsis-based locale(s): /p' \
+      "$log" 2>/dev/null
+    if sed -n '/^Locales whose LC_COLLATE uses ellipsis/,/^$/p' "$log" 2>/dev/null \
+         | grep -q '^  C$'; then
+      echo "     C (C.UTF-8): ellipsis-based  <- localedef computes its weights,"
+      echo "     so identical data does NOT mean identical order"
+    elif grep -q '^Declare codepoint_collation.*\bC\b' "$log" 2>/dev/null; then
+      echo "     C (C.UTF-8): codepoint_collation  <- byte order by construction"
+    fi
+  done
+else
+  echo "-- Node's own ellipsis scan: NOT RUN"
+  echo "     Pass --old-locales-dir and --new-locales-dir with their build"
+  echo "     ids. Step 4 above scanned the tag, and no tag of this pair holds"
+  echo "     localedata/locales/C, so nothing above says whether either node's"
+  echo "     own C.UTF-8 is ellipsis-based -- which is the one thing a data"
+  echo "     diff, including the node-to-node one, can never clear."
 fi
 
 if [ "$SAME_TAG" = "1" ]; then

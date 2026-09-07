@@ -11,7 +11,8 @@ suspect, and reading a count mismatch there as a code regression would be wrong.
 import subprocess
 import unittest
 
-from _harness import EXPECTED_SHA, GLIBC_CLONE, MID, NEW, OLD, needs_clone
+from _harness import (EXPECTED_SHA, FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID,
+                       NEW, OLD, needs_clone)
 
 import glibc_locale_data as g
 
@@ -32,9 +33,12 @@ class TagsResolveToPinnedCommits(unittest.TestCase):
                     f"{expected}; do NOT read a mismatch there as a code "
                     f"regression until this is explained.")
 
-    def test_the_three_pinned_tags_are_the_ones_the_suite_uses(self):
-        """Guards against pinning one tag and testing another."""
-        self.assertEqual(sorted(EXPECTED_SHA), sorted([OLD, MID, NEW]))
+    def test_the_pinned_tags_are_the_ones_the_suite_uses(self):
+        """Guards against pinning one tag and testing another. The two floor
+        tags carry no published verdict, but docs/limitations.md quotes numbers
+        derived from them, so they are pinned on the same terms."""
+        self.assertEqual(sorted(EXPECTED_SHA),
+                         sorted([OLD, MID, NEW, FLOOR_OLD, FLOOR_NEW]))
 
 
 @needs_clone
