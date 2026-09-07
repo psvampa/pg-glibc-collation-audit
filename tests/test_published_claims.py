@@ -35,17 +35,20 @@ def read(path):
         return fh.read()
 
 
-def docs():
+def docs(include_changelog=False):
     """{relative path: text} for every published .md, CHANGELOG excluded.
 
     The CHANGELOG records what the docs used to say, so a phrase this suite
-    forbids elsewhere is correct there.
+    forbids elsewhere is correct there. Its LINKS still have to resolve, which
+    is what include_changelog is for.
     """
     out = {}
     for root, dirs, files in os.walk(REPO_ROOT):
         dirs[:] = [d for d in dirs if d not in ('.git', 'glibc')]
         for name in files:
-            if not name.endswith('.md') or name == 'CHANGELOG.md':
+            if not name.endswith('.md'):
+                continue
+            if name == 'CHANGELOG.md' and not include_changelog:
                 continue
             path = os.path.join(root, name)
             out[os.path.relpath(path, REPO_ROOT)] = read(path)
@@ -243,6 +246,104 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
         for build in BUILDS:
             self.assertIn(build, results,
                           f'docs/results.md does not say {build} was measured')
+
+
+def without_fences(text):
+    """Markdown with its fenced code blocks removed: a `#` inside a shell
+    snippet is a comment, not a heading. Inline code is kept, because a
+    heading's backticked words are part of its anchor."""
+    return re.sub(r'```.*?```', '', text, flags=re.S)
+
+
+def links_in(text):
+    """The `](target)` occurrences of a page, ignoring inline code: a
+    link-shaped string inside backticks is an example, not a link."""
+    return re.finditer(r'\]\(([^)\s]+)\)', re.sub(r'`[^`\n]*`', '', text))
+
+
+def slug(heading):
+    """The anchor GitHub derives from a heading: lower-cased, backticks
+    dropped, punctuation removed, runs of whitespace to one hyphen."""
+    s = heading.lower().replace('`', '')
+    s = re.sub(r'[^\w\s-]', '', s)
+    return re.sub(r'\s+', '-', s.strip())
+
+
+class EveryLinkResolves(unittest.TestCase):
+    """Retitling a heading breaks every `#the-old-title` link to it and
+    nothing errors. The seventeenth entry records two such links, one created
+    by retitling the very section being documented; the eleventh records
+    examples/rhel8-to-rhel9.sql pointing at a README section that had moved.
+    The check used to be a snippet run by hand before a commit, when somebody
+    remembered. A check that depends on somebody remembering is not a check.
+    """
+
+    def setUp(self):
+        self.pages = {path: without_fences(text)
+                      for path, text in docs(include_changelog=True).items()}
+        self.anchors = {
+            path: {slug(h) for h in re.findall(r'^#{1,6} (.+)$', text, re.M)}
+            for path, text in self.pages.items()}
+
+    def test_every_anchored_link_names_a_heading_that_exists(self):
+        seen = 0
+        for path, text in self.pages.items():
+            for m in links_in(text):
+                if '#' not in m.group(1):
+                    continue
+                target, anchor = m.group(1).rsplit('#', 1)
+                if not re.fullmatch(r'[\w-]+', anchor):
+                    continue
+                if '://' in target:
+                    continue
+                page = path if not target else os.path.normpath(
+                    os.path.join(os.path.dirname(path), target))
+                seen += 1
+                with self.subTest(link=m.group(0), in_file=path):
+                    self.assertIn(page, self.anchors,
+                                  f'{path} links to {target}, which is not a '
+                                  f'published page')
+                    self.assertIn(anchor, self.anchors[page],
+                                  f'{path} links to #{anchor}, and {page} has '
+                                  f'no such heading -- retitled?')
+        self.assertGreater(seen, 0, 'no anchored links found: pattern stale')
+
+    def test_every_relative_link_names_a_file_that_exists(self):
+        seen = 0
+        for path, text in self.pages.items():
+            for m in links_in(text):
+                target = m.group(1).split('#')[0]
+                if not target or '://' in target or ':' in target:
+                    continue
+                seen += 1
+                full = os.path.normpath(os.path.join(
+                    REPO_ROOT, os.path.dirname(path), target))
+                with self.subTest(link=m.group(1), in_file=path):
+                    self.assertTrue(os.path.exists(full),
+                                    f'{path} links to {target}, which does '
+                                    f'not exist')
+        self.assertGreater(seen, 0, 'no relative links found: pattern stale')
+
+    def test_every_doc_a_script_or_example_names_exists(self):
+        """audit.sh, sql/ and examples/ send the reader to docs/*.md by path
+        in plain text, outside any Markdown link."""
+        named = {}
+        candidates = [os.path.join(REPO_ROOT, 'audit.sh')]
+        for sub in ('sql', 'examples', 'scripts'):
+            folder = os.path.join(REPO_ROOT, sub)
+            candidates += [os.path.join(folder, f) for f in os.listdir(folder)
+                           if os.path.isfile(os.path.join(folder, f))]
+        for cand in candidates:
+            for rel in re.findall(r'\b((?:docs|tests)/[\w./-]+\.md)\b',
+                                  read(cand)):
+                named.setdefault(rel, set()).add(
+                    os.path.relpath(cand, REPO_ROOT))
+        self.assertTrue(named, 'nothing names a doc any more: pattern stale')
+        for rel, sources in sorted(named.items()):
+            with self.subTest(doc=rel):
+                self.assertTrue(os.path.isfile(os.path.join(REPO_ROOT, rel)),
+                                f'{rel} is named by {sorted(sources)} and '
+                                f'does not exist')
 
 
 if __name__ == '__main__':

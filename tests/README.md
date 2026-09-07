@@ -22,7 +22,7 @@ somebody deletes during a refactor.
 | `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, generated locale names, hunk/block overlap, the comment filter |
 | `test_git_helpers.py` | yes | the silent-failure class — code that cannot tell "nothing here" from "could not look" |
 | `test_known_answers.py` | yes | the five steps end to end on both pairs, against the results [docs/results.md](../docs/results.md) publishes — plus `glibc-2.12 -> glibc-2.17`, which is not an audited pair but is the one [docs/limitations.md](../docs/limitations.md) quotes figures from, and those figures had no test until they had already gone stale once |
-| `test_published_claims.py` | no | **the numbers and quotes the documentation publishes.** Two correction passes in one day found the same class of defect — a count, a position or a quoted line that no longer matched the tool or the measurement. This is that, mechanised: it cannot check prose and does not try |
+| `test_published_claims.py` | no | **the numbers and quotes the documentation publishes.** Two correction passes in one day found the same class of defect — a count, a position or a quoted line that no longer matched the tool or the measurement. This is that, mechanised: it cannot check prose and does not try. Also that every internal link and anchor in the published Markdown resolves, and that every `docs/*.md` path `audit.sh`, `sql/` or `examples/` names exists -- a retitled heading used to break links in silence |
 | `test_node_modes.py` | yes | **the two modes that read a node's own files.** A tag stands in for a node and the backported `C` is written out, because that file exists at no tag — which is the whole point. Includes the test that says the `C.UTF-8` limitation is closed on the data half |
 
 Without a clone at `scripts/glibc`, every layer marked "yes" **skips with a
@@ -83,6 +83,11 @@ prevent.
 Pin behaviour, not wording. Assertions read counts and names out of the output
 rather than comparing whole text: the printed prose changes often, and a suite
 that fails on a reworded sentence gets switched off.
+
+Assert on wrapped output through `flat()` from `_harness.py`, never on the raw
+text: `dd.warn` wraps at 78 columns, so a negative assertion on a phrase of more
+than a few words passes whether the phrase is printed or not. Four tests have
+been found guarding nothing that way.
 
 Before trusting a new test, break the thing it claims to guard and confirm it
 fails. The suite was built that way, and it caught a real gap: the first version

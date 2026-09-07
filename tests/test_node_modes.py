@@ -21,7 +21,7 @@ import tempfile
 import unittest
 
 from _harness import (GLIBC_CLONE, MID, NEW, OLD, SCRIPTS_DIR, backported_c,
-                      needs_clone, upstream_c)
+                      flat, needs_clone, upstream_c)
 
 import diff_distro_locales as dd
 import glibc_locale_data as g
@@ -43,17 +43,6 @@ def _tree(tag):
         _TREES[tag] = dd.materialise_tag(GLIBC_CLONE, tag, base)
     return _TREES[tag]
 
-
-def flat(text):
-    """Output with every run of whitespace collapsed to one space.
-
-    dd.warn wraps at 78 columns, so a phrase of more than a few words is split
-    across lines. Asserting on the raw text makes a POSITIVE assertion brittle
-    and -- far worse -- makes a NEGATIVE one vacuous: `assertNotIn` on a phrase
-    that is always broken up passes whether the warning is printed or not.
-    Caught by exactly that, on 2026-09-06.
-    """
-    return ' '.join(text.split())
 
 
 def run(script, *args, out_dir=None):
