@@ -21,7 +21,7 @@ somebody deletes during a refactor.
 | `test_wrapper.py` | yes | **audit.sh end to end.** The wrapper removes a manual handoff, and automating a handoff is how the stale-result bug comes back; most of these tests are its failure modes, not its happy path |
 | `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, generated locale names, hunk/block overlap, the comment filter |
 | `test_git_helpers.py` | yes | the silent-failure class — code that cannot tell "nothing here" from "could not look" |
-| `test_known_answers.py` | yes | the five steps end to end on both pairs, against the results [docs/results.md](../docs/results.md) publishes |
+| `test_known_answers.py` | yes | the five steps end to end on both pairs, against the results [docs/results.md](../docs/results.md) publishes — plus `glibc-2.12 -> glibc-2.17`, which is not an audited pair but is the one [docs/limitations.md](../docs/limitations.md) quotes figures from, and those figures had no test until they had already gone stale once |
 | `test_published_claims.py` | no | **the numbers and quotes the documentation publishes.** Two correction passes in one day found the same class of defect — a count, a position or a quoted line that no longer matched the tool or the measurement. This is that, mechanised: it cannot check prose and does not try |
 | `test_node_modes.py` | yes | **the two modes that read a node's own files.** A tag stands in for a node and the backported `C` is written out, because that file exists at no tag — which is the whole point. Includes the test that says the `C.UTF-8` limitation is closed on the data half |
 
@@ -47,8 +47,15 @@ prevent.
 - **Distro backports are invisible here**, by definition: they are not in the
   upstream tags the suite reads. See
   [docs/limitations.md](../docs/limitations.md).
-- **The pinned numbers are for glibc 2.28, 2.34 and 2.39 only.** Audit a
-  different pair and this suite says nothing about that result.
+- **The pinned numbers are for glibc 2.28, 2.34, 2.39 and the floor pair
+  2.12/2.17 only.** Audit a different pair and this suite says nothing about
+  that result. The floor pair carries no verdict of its own: it is pinned
+  because the documentation quotes numbers from it, not because anyone should
+  audit it.
+- **One pair below the old glibc 2.24 floor is not every pair below it.** The
+  bug that made the method collapse there is fixed and tested on `2.12 -> 2.17`.
+  Nothing here says an older pair behaves the same, and steps 2 and 5 have been
+  run below the floor exactly once.
 - **Three of audit.sh's guards are unreachable, so nothing tests them.** The
   argv name validation, the up-front `rm -f` of the files the summary reads,
   and the "step 2 wrote no file" check are all defence against a future

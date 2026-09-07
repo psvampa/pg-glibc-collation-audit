@@ -1,0 +1,498 @@
+Worked example output: glibc-2.12 -> glibc-2.17
+
+NOT AN AUDITED PAIR, and not a published verdict. This project audits
+RHEL8 -> RHEL9 and RHEL9 -> RHEL10; neither side here is a system anyone should
+be running. It is kept for one reason: this pair sits below the OLD glibc 2.24
+version floor, and it is what showed that floor was a bug in one function
+rather than something the method structurally could not do.
+
+See ../docs/limitations.md, "Below glibc 2.24 the method rests on one measured
+pair" -- this file is that pair.
+
+Both sides below are real runs of ./audit.sh glibc-2.12 glibc-2.17, against
+glibc-2.12 = e28c88707ef0 and glibc-2.17 = c758a6861537, the commits pinned in
+tests/_harness.py. "BEFORE" is the code as of the sixteenth CHANGELOG entry;
+"AFTER" is with collate_block built on collate_bounds instead of a regex that
+could not read a block starting at byte 0.
+
+                                            BEFORE     AFTER
+  Step 3, affected locale source files          11       278
+  Step 4, needing empirical confirmation       277       279
+  Step 4, generated names per SUPPORTED        404       408
+
+The three files the bug dropped are iso14651_t1, iso14651_t1_common and
+iso14651_t1_pinyin -- in glibc 2.23 and earlier they open with LC_COLLATE on
+the very first byte. They are the highest fan-in files in the corpus, so
+losing them as graph nodes made everything inheriting from them look
+unaffected.
+
+These numbers are asserted in tests/test_known_answers.py
+(BelowTheOldVersionFloor). The figure this page's predecessor carried for step 4
+was 2, and it had been wrong for some time before anyone re-ran it; a number
+nothing tests is a number that rots.
+
+Step 5 is not reproduced here. It prints 63 hunks over this pair and decides
+none of them, which is the fifth limitation rather than this one.
+
+Long comma-separated name lists below are trimmed, marked where cut.
+
+
+
+
+================================================================
+== STEP 2  (identical before and after: it reads LC_COLLATE block
+==          bounds, which the bug never touched)
+================================================================
+
+== STEP 2  Which of those changes are inside LC_COLLATE
+================================================================
+Locale files changed between glibc-2.12 and glibc-2.17: 142
+  modified: 116   added: 26   deleted: 0   renamed: 0
+Of the 116 content-changed file(s): 6 touch LC_COLLATE, 109 do not, 1 have no LC_COLLATE block
+  (no LC_COLLATE on either side, so no sort order to change: translit_neutral)
+
+Files with changes inside LC_COLLATE: 6
+  localedata/locales/dz_BT
+  localedata/locales/fi_FI
+  localedata/locales/hu_HU
+  localedata/locales/iso14651_t1_common
+  localedata/locales/se_NO
+  localedata/locales/ug_CN
+
+!! localedata/locales/C exists at NEITHER glibc-2.12 nor glibc-2.17, but
+   C.UTF-8 is BACKPORTED by the distros this audit targets -- so it very
+   likely DOES exist on your old system, with an order of its own, and that
+   order can change. There is no source file to diff on the old side, so this
+   audit is blind to it: a clean result above says nothing about C.UTF-8.
+   PostgreSQL will not cover the gap either -- collversion is NULL for every
+   collation whose name starts with 'C.', so no version mismatch can ever
+   fire. Compare C.UTF-8 empirically on both nodes. See docs/limitations.md.
+
+Added at glibc-2.17 (26), not analysed for a change of order. An added file
+cannot affect an existing index ONLY IF the locale did not exist on the old system.
+An upstream source diff cannot establish that -- distros backport. Confirm with
+`locale -a` on the OLD node before treating these as out of scope:
+  localedata/locales/ayc_PE -> ayc_PE
+  localedata/locales/bem_ZM -> bem_ZM
+  localedata/locales/bho_IN -> bho_IN
+  localedata/locales/brx_IN -> brx_IN
+  localedata/locales/doi_IN -> doi_IN
+  localedata/locales/en_ZM -> en_ZM
+  localedata/locales/es_CU -> es_CU
+  localedata/locales/ff_SN -> ff_SN
+  localedata/locales/ia_FR -> ia_FR
+  localedata/locales/lb_LU -> lb_LU
+  localedata/locales/lij_IT -> lij_IT
+  localedata/locales/mag_IN -> mag_IN
+  localedata/locales/mhr_RU -> mhr_RU
+  localedata/locales/mni_IN -> mni_IN
+  localedata/locales/nhn_MX -> nhn_MX
+  localedata/locales/niu_NU -> niu_NU
+  localedata/locales/niu_NZ -> niu_NZ
+  localedata/locales/os_RU -> os_RU
+  localedata/locales/sat_IN -> sat_IN
+  localedata/locales/sw_KE -> sw_KE
+  localedata/locales/sw_TZ -> sw_TZ
+  localedata/locales/szl_PL -> szl_PL
+  localedata/locales/ta_LK -> ta_LK
+  localedata/locales/unm_US -> unm_US
+  localedata/locales/wae_CH -> wae_CH
+  localedata/locales/yue_HK -> yue_HK
+
+================================================================
+== STEP 3  BEFORE -- the closure collapsed to 11
+================================================================
+
+== STEP 3  Which locales inherit those changes
+================================================================
+note: iso14651_t1_common have no LC_COLLATE block at glibc-2.17; nothing can inherit collation from them.
+Directly changed (own LC_COLLATE diff): dz_BT, fi_FI, hu_HU, iso14651_t1_common, se_NO, ug_CN
+Additionally affected via copy-chain inheritance: 5
+  bo_CN: copy "dz_BT" -> reaches dz_BT
+  bo_IN: copy "bo_CN" -> reaches dz_BT
+  fi_FI@euro: copy "fi_FI" -> reaches fi_FI
+  sv_FI: copy "fi_FI" -> reaches fi_FI
+  sv_FI@euro: copy "fi_FI" -> reaches fi_FI
+
+Full affected set (11 locale source file(s)): bo_CN, bo_IN, dz_BT, fi_FI, fi_FI@euro, hu_HU, iso14651_t1_common, se_NO, sv_FI, sv_FI@euro, ug_CN
+
+Generated locales per localedata/SUPPORTED -- these are the names `locale -a` and pg_collation show (13):
+  bo_CN
+  bo_IN
+  dz_BT
+  fi_FI
+  fi_FI.utf8
+  fi_FI@euro
+  hu_HU
+  hu_HU.utf8
+  ...  [13 names in all, 5 not shown]
+Not listed in localedata/SUPPORTED (not built by default, so normally absent from `locale -a`): iso14651_t1_common
+
+Full list also written to /tmp/pg-glibc-collation-audit/step3_affected_locales.txt
+
+================================================================
+== STEP 3  AFTER -- 278, the whole inheritance closure
+================================================================
+
+== STEP 3  Which locales inherit those changes
+================================================================
+Directly changed (own LC_COLLATE diff): dz_BT, fi_FI, hu_HU, iso14651_t1_common, se_NO, ug_CN
+Additionally affected via copy-chain inheritance: 272
+  aa_DJ: copy "iso14651_t1" -> reaches iso14651_t1_common
+  aa_ER: copy "ti_ER" -> reaches iso14651_t1_common
+  aa_ER@saaho: copy "aa_ER" -> reaches iso14651_t1_common
+  aa_ET: copy "am_ET" -> reaches iso14651_t1_common
+  af_ZA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  am_ET: copy "iso14651_t1" -> reaches iso14651_t1_common
+  an_ES: copy "es_ES" -> reaches iso14651_t1_common
+  ar_AE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_BH: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_DZ: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_EG: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_IQ: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_JO: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_KW: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_LB: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_LY: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_MA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_OM: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_QA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_SD: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_SY: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_TN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ar_YE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  as_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ast_ES: copy "es_ES" -> reaches iso14651_t1_common
+  ayc_PE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  az_AZ: copy "iso14651_t1" -> reaches iso14651_t1_common
+  be_BY: copy "iso14651_t1" -> reaches iso14651_t1_common
+  be_BY@latin: copy "iso14651_t1" -> reaches iso14651_t1_common
+  bem_ZM: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ber_DZ: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ber_MA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  bg_BG: copy "iso14651_t1" -> reaches iso14651_t1_common
+  bho_IN: copy "hi_IN" -> reaches iso14651_t1_common
+  bn_BD: copy "iso14651_t1" -> reaches iso14651_t1_common
+  bn_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  bo_CN: copy "dz_BT" -> reaches dz_BT
+  bo_IN: copy "bo_CN" -> reaches dz_BT
+  br_FR: copy "iso14651_t1" -> reaches iso14651_t1_common
+  br_FR@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  brx_IN: copy "hi_IN" -> reaches iso14651_t1_common
+  bs_BA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  byn_ER: copy "ti_ER" -> reaches iso14651_t1_common
+  ca_AD: copy "ca_ES" -> reaches iso14651_t1_common
+  ca_ES: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ca_ES@euro: copy "ca_ES" -> reaches iso14651_t1_common
+  ca_FR: copy "ca_ES" -> reaches iso14651_t1_common
+  ca_IT: copy "ca_ES" -> reaches iso14651_t1_common
+  crh_UA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  csb_PL: copy "iso14651_t1" -> reaches iso14651_t1_common
+  cv_RU: copy "iso14651_t1" -> reaches iso14651_t1_common
+  cy_GB: copy "iso14651_t1" -> reaches iso14651_t1_common
+  da_DK: copy "iso14651_t1" -> reaches iso14651_t1_common
+  de_AT: copy "iso14651_t1" -> reaches iso14651_t1_common
+  de_AT@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  de_BE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  de_BE@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  de_CH: copy "iso14651_t1" -> reaches iso14651_t1_common
+  de_DE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  de_DE@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  de_LU: copy "iso14651_t1" -> reaches iso14651_t1_common
+  de_LU@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  doi_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  dv_MV: copy "en_DK" -> reaches iso14651_t1_common
+  el_CY: copy "iso14651_t1" -> reaches iso14651_t1_common
+  el_GR: copy "iso14651_t1" -> reaches iso14651_t1_common
+  el_GR@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_AG: copy "en_GB" -> reaches iso14651_t1_common
+  en_AU: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_BW: copy "en_ZA" -> reaches iso14651_t1_common
+  en_CA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_DK: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_GB: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_HK: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_IE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_IE@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_NG: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_NZ: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_PH: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_SG: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_US: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_ZA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_ZM: copy "iso14651_t1" -> reaches iso14651_t1_common
+  en_ZW: copy "en_ZA" -> reaches iso14651_t1_common
+  es_AR: copy "es_ES" -> reaches iso14651_t1_common
+  es_BO: copy "es_ES" -> reaches iso14651_t1_common
+  es_CL: copy "es_ES" -> reaches iso14651_t1_common
+  es_CO: copy "es_ES" -> reaches iso14651_t1_common
+  es_CR: copy "es_ES" -> reaches iso14651_t1_common
+  es_CU: copy "iso14651_t1" -> reaches iso14651_t1_common
+  es_DO: copy "es_ES" -> reaches iso14651_t1_common
+  es_EC: copy "es_US" -> reaches iso14651_t1_common
+  es_ES: copy "iso14651_t1" -> reaches iso14651_t1_common
+  es_ES@euro: copy "es_ES" -> reaches iso14651_t1_common
+  es_GT: copy "es_ES" -> reaches iso14651_t1_common
+  es_HN: copy "es_ES" -> reaches iso14651_t1_common
+  es_MX: copy "es_ES" -> reaches iso14651_t1_common
+  es_NI: copy "es_ES" -> reaches iso14651_t1_common
+  es_PA: copy "es_ES" -> reaches iso14651_t1_common
+  es_PE: copy "es_ES" -> reaches iso14651_t1_common
+  es_PR: copy "es_ES" -> reaches iso14651_t1_common
+  es_PY: copy "es_ES" -> reaches iso14651_t1_common
+  es_SV: copy "es_ES" -> reaches iso14651_t1_common
+  es_US: copy "iso14651_t1" -> reaches iso14651_t1_common
+  es_UY: copy "es_ES" -> reaches iso14651_t1_common
+  es_VE: copy "es_ES" -> reaches iso14651_t1_common
+  eu_ES: copy "iso14651_t1" -> reaches iso14651_t1_common
+  eu_ES@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  fa_IR: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ff_SN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  fi_FI@euro: copy "fi_FI" -> reaches fi_FI
+  fil_PH: copy "iso14651_t1" -> reaches iso14651_t1_common
+  fo_FO: copy "da_DK" -> reaches iso14651_t1_common
+  fr_BE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  fr_BE@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  fr_CA: copy "en_CA" -> reaches iso14651_t1_common
+  fr_CH: copy "iso14651_t1" -> reaches iso14651_t1_common
+  fr_FR: copy "iso14651_t1" -> reaches iso14651_t1_common
+  fr_FR@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  fr_LU: copy "iso14651_t1" -> reaches iso14651_t1_common
+  fr_LU@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  fur_IT: copy "iso14651_t1" -> reaches iso14651_t1_common
+  fy_DE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  fy_NL: copy "nl_NL" -> reaches iso14651_t1_common
+  ga_IE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ga_IE@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  gd_GB: copy "en_DK" -> reaches iso14651_t1_common
+  gez_ER: copy "ti_ER" -> reaches iso14651_t1_common
+  gez_ER@abegede: copy "ti_ER" -> reaches iso14651_t1_common
+  gez_ET: copy "am_ET" -> reaches iso14651_t1_common
+  gez_ET@abegede: copy "gez_ER@abegede" -> reaches iso14651_t1_common
+  gl_ES: copy "es_ES" -> reaches iso14651_t1_common
+  gl_ES@euro: copy "es_ES" -> reaches iso14651_t1_common
+  gu_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  gv_GB: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ha_NG: copy "iso14651_t1" -> reaches iso14651_t1_common
+  he_IL: copy "iso14651_t1" -> reaches iso14651_t1_common
+  hi_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  hne_IN: copy "hi_IN" -> reaches iso14651_t1_common
+  ht_HT: copy "iso14651_t1" -> reaches iso14651_t1_common
+  hy_AM: copy "iso14651_t1" -> reaches iso14651_t1_common
+  i18n: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ia_FR: copy "fr_FR" -> reaches iso14651_t1_common
+  id_ID: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ig_NG: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ik_CA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  iso14651_t1: copy "iso14651_t1_common" -> reaches iso14651_t1_common
+  iso14651_t1_pinyin: copy "iso14651_t1_common" -> reaches iso14651_t1_common
+  it_CH: copy "iso14651_t1" -> reaches iso14651_t1_common
+  it_IT: copy "iso14651_t1" -> reaches iso14651_t1_common
+  it_IT@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  iu_CA: copy "en_CA" -> reaches iso14651_t1_common
+  iw_IL: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ka_GE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  kk_KZ: copy "iso14651_t1" -> reaches iso14651_t1_common
+  kl_GL: copy "da_DK" -> reaches iso14651_t1_common
+  kn_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  kok_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ks_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ks_IN@devanagari: copy "ks_IN" -> reaches iso14651_t1_common
+  ku_TR: copy "iso14651_t1" -> reaches iso14651_t1_common
+  kw_GB: copy "iso14651_t1" -> reaches iso14651_t1_common
+  lb_LU: copy "iso14651_t1" -> reaches iso14651_t1_common
+  lg_UG: copy "iso14651_t1" -> reaches iso14651_t1_common
+  li_BE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  li_NL: copy "iso14651_t1" -> reaches iso14651_t1_common
+  lij_IT: copy "iso14651_t1" -> reaches iso14651_t1_common
+  mag_IN: copy "hi_IN" -> reaches iso14651_t1_common
+  mai_IN: copy "hi_IN" -> reaches iso14651_t1_common
+  mg_MG: copy "iso14651_t1" -> reaches iso14651_t1_common
+  mhr_RU: copy "iso14651_t1" -> reaches iso14651_t1_common
+  mi_NZ: copy "iso14651_t1" -> reaches iso14651_t1_common
+  mk_MK: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ml_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  mn_MN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  mni_IN: copy "bn_IN" -> reaches iso14651_t1_common
+  mr_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ms_MY: copy "iso14651_t1" -> reaches iso14651_t1_common
+  mt_MT: copy "iso14651_t1" -> reaches iso14651_t1_common
+  my_MM: copy "iso14651_t1" -> reaches iso14651_t1_common
+  nan_TW@latin: copy "iso14651_t1" -> reaches iso14651_t1_common
+  nb_NO: copy "iso14651_t1" -> reaches iso14651_t1_common
+  nds_DE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  nds_NL: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ne_NP: copy "iso14651_t1" -> reaches iso14651_t1_common
+  nhn_MX: copy "iso14651_t1" -> reaches iso14651_t1_common
+  niu_NU: copy "iso14651_t1" -> reaches iso14651_t1_common
+  niu_NZ: copy "iso14651_t1" -> reaches iso14651_t1_common
+  nl_AW: copy "nl_NL" -> reaches iso14651_t1_common
+  nl_BE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  nl_BE@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  nl_NL: copy "iso14651_t1" -> reaches iso14651_t1_common
+  nl_NL@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  nn_NO: copy "nb_NO" -> reaches iso14651_t1_common
+  nr_ZA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  nso_ZA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  oc_FR: copy "en_DK" -> reaches iso14651_t1_common
+  om_ET: copy "am_ET", copy "om_KE" -> reaches iso14651_t1_common
+  om_KE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  os_RU: copy "iso14651_t1" -> reaches iso14651_t1_common
+  pa_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  pa_PK: copy "en_DK" -> reaches iso14651_t1_common
+  pap_AN: copy "en_DK" -> reaches iso14651_t1_common
+  ps_AF: copy "iso14651_t1" -> reaches iso14651_t1_common
+  pt_BR: copy "iso14651_t1" -> reaches iso14651_t1_common
+  pt_PT: copy "iso14651_t1" -> reaches iso14651_t1_common
+  pt_PT@euro: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ro_RO: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ru_RU: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ru_UA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  rw_RW: copy "iso14651_t1" -> reaches iso14651_t1_common
+  sa_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  sat_IN: copy "hi_IN" -> reaches iso14651_t1_common
+  sc_IT: copy "iso14651_t1" -> reaches iso14651_t1_common
+  sd_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  sd_IN@devanagari: copy "iso14651_t1" -> reaches iso14651_t1_common
+  shs_CA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  si_LK: copy "iso14651_t1" -> reaches iso14651_t1_common
+  sid_ET: copy "am_ET" -> reaches iso14651_t1_common
+  so_DJ: copy "so_SO" -> reaches iso14651_t1_common
+  so_ET: copy "am_ET" -> reaches iso14651_t1_common
+  so_KE: copy "so_SO" -> reaches iso14651_t1_common
+  so_SO: copy "iso14651_t1" -> reaches iso14651_t1_common
+  sq_AL: copy "iso14651_t1" -> reaches iso14651_t1_common
+  sq_MK: copy "sq_AL" -> reaches iso14651_t1_common
+  sr_ME: copy "sr_RS" -> reaches iso14651_t1_common
+  sr_RS: copy "iso14651_t1" -> reaches iso14651_t1_common
+  sr_RS@latin: copy "sr_RS" -> reaches iso14651_t1_common
+  ss_ZA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  st_ZA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  sv_FI: copy "fi_FI" -> reaches fi_FI
+  sv_FI@euro: copy "fi_FI" -> reaches fi_FI
+  sv_SE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  sw_KE: copy "iso14651_t1" -> reaches iso14651_t1_common
+  sw_TZ: copy "iso14651_t1" -> reaches iso14651_t1_common
+  szl_PL: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ta_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ta_LK: copy "ta_IN" -> reaches iso14651_t1_common
+  te_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  tg_TJ: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ti_ER: copy "am_ET" -> reaches iso14651_t1_common
+  ti_ET: copy "am_ET" -> reaches iso14651_t1_common
+  tig_ER: copy "ti_ER" -> reaches iso14651_t1_common
+  tk_TM: copy "iso14651_t1" -> reaches iso14651_t1_common
+  tl_PH: copy "iso14651_t1" -> reaches iso14651_t1_common
+  tn_ZA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ts_ZA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  tt_RU: copy "iso14651_t1" -> reaches iso14651_t1_common
+  tt_RU@iqtelif: copy "crh_UA" -> reaches iso14651_t1_common
+  unm_US: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ur_IN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ur_PK: copy "en_DK" -> reaches iso14651_t1_common
+  uz_UZ: copy "iso14651_t1" -> reaches iso14651_t1_common
+  uz_UZ@cyrillic: copy "iso14651_t1" -> reaches iso14651_t1_common
+  ve_ZA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  vi_VN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  wa_BE: copy "fr_BE" -> reaches iso14651_t1_common
+  wa_BE@euro: copy "wa_BE" -> reaches iso14651_t1_common
+  wae_CH: copy "iso14651_t1" -> reaches iso14651_t1_common
+  wal_ET: copy "am_ET" -> reaches iso14651_t1_common
+  wo_SN: copy "iso14651_t1" -> reaches iso14651_t1_common
+  xh_ZA: copy "iso14651_t1" -> reaches iso14651_t1_common
+  yi_US: copy "iso14651_t1" -> reaches iso14651_t1_common
+  yo_NG: copy "iso14651_t1" -> reaches iso14651_t1_common
+  yue_HK: copy "iso14651_t1" -> reaches iso14651_t1_common
+  zh_CN: copy "iso14651_t1_pinyin" -> reaches iso14651_t1_common
+  zh_HK: copy "iso14651_t1" -> reaches iso14651_t1_common
+  zh_SG: copy "iso14651_t1" -> reaches iso14651_t1_common
+  zh_TW: copy "iso14651_t1" -> reaches iso14651_t1_common
+  zu_ZA: copy "iso14651_t1" -> reaches iso14651_t1_common
+
+Full affected set (278 locale source file(s)): aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, am_ET, an_ES, ar_AE, ...  [278 names in all, not all shown]
+
+Generated locales per localedata/SUPPORTED -- these are the names `locale -a` and pg_collation show (406):
+  aa_DJ
+  aa_DJ.utf8
+  aa_ER
+  aa_ER@saaho
+  aa_ET
+  af_ZA
+  af_ZA.utf8
+  am_ET
+  ...  [406 names in all, 398 not shown]
+Not listed in localedata/SUPPORTED (not built by default, so normally absent from `locale -a`): el_GR@euro, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
+
+Full list also written to /tmp/pg-glibc-collation-audit/step3_affected_locales.txt
+
+================================================================
+== STEP 4  BEFORE -- 277 exposed
+================================================================
+
+== STEP 4  Which locales a data diff can never clear
+================================================================
+Files at glibc-2.17: 312, of which 300 define LC_COLLATE
+Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 4
+  i18n
+      collating-symbol <S0200>..<S1100> % 0x0200..0x1100
+      collating-symbol <S4E00>..<S9FA5> % Symbols for Han
+      collating-symbol <SAC00>..<SD7A3> % Symbols for Hangul
+      ... and 1 more
+  iso14651_t1
+      .. ..;IGNORE;IGNORE;IGNORE
+  iso14651_t1_common
+      # the definition of a locale (or I don't know how to do...)
+      # <U0000>......<U7FFFFFFF> IGNORE;IGNORE;IGNORE;<U0000>......<U7FFFFFFF>
+      #Fix Require for <U09F4>..<U09F9>
+  ko_KR
+      ..
+
+Additionally exposed via `copy` inheritance: 273
+  via iso14651_t1: 273 locale(s)
+      aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, am_ET, an_ES, ar_AE, ar_BH, ar_DZ, ar_EG, ar_IN, ...
+
+Full set needing empirical confirmation: 277 locale source file(s), 404 generated locale name(s) per localedata/SUPPORTED
+  e.g. aa_DJ, aa_DJ.utf8, aa_ER, aa_ER@saaho, aa_ET, af_ZA, af_ZA.utf8, am_ET, ...
+  not in SUPPORTED (templates, not built by default): el_GR@euro, i18n, iso14651_t1, iso14651_t1_common
+  full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
+
+These cannot be cleared by a source diff alone.
+Step 5 below decides whether that matters for this pair.
+
+================================================================
+== STEP 4  AFTER -- 279 exposed
+================================================================
+
+== STEP 4  Which locales a data diff can never clear
+================================================================
+Files at glibc-2.17: 312, of which 300 define LC_COLLATE
+Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 4
+  i18n
+      collating-symbol <S0200>..<S1100> % 0x0200..0x1100
+      collating-symbol <S4E00>..<S9FA5> % Symbols for Han
+      collating-symbol <SAC00>..<SD7A3> % Symbols for Hangul
+      ... and 1 more
+  iso14651_t1
+      .. ..;IGNORE;IGNORE;IGNORE
+  iso14651_t1_common
+      # the definition of a locale (or I don't know how to do...)
+      # <U0000>......<U7FFFFFFF> IGNORE;IGNORE;IGNORE;<U0000>......<U7FFFFFFF>
+      #Fix Require for <U09F4>..<U09F9>
+  ko_KR
+      ..
+
+Additionally exposed via `copy` inheritance: 275
+  via iso14651_t1: 273 locale(s)
+      aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, am_ET, an_ES, ar_AE, ar_BH, ar_DZ, ar_EG, ar_IN, ...
+  via iso14651_t1_common: 2 locale(s)
+      iso14651_t1_pinyin, zh_CN
+
+Full set needing empirical confirmation: 279 locale source file(s), 408 generated locale name(s) per localedata/SUPPORTED
+  e.g. aa_DJ, aa_DJ.utf8, aa_ER, aa_ER@saaho, aa_ET, af_ZA, af_ZA.utf8, am_ET, ...
+  not in SUPPORTED (templates, not built by default): el_GR@euro, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
+  full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
+
+These cannot be cleared by a source diff alone.
+Step 5 below decides whether that matters for this pair.

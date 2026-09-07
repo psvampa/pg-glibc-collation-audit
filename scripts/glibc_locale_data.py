@@ -57,7 +57,6 @@ _COMMENT_CHAR_RE = re.compile(r'^\s*comment_char\s+(\S)', re.M)
 # whole token because the file that declares it also DISCUSSES it in a comment.
 _CODEPOINT_RE = re.compile(r'(?<![A-Za-z0-9_])codepoint_collation(?![A-Za-z0-9_])')
 
-_COLLATE_BLOCK_RE = re.compile(r'\nLC_COLLATE\b(.*?)\nEND LC_COLLATE', re.S)
 _COPY_RE = re.compile(r'^\s*copy\s+"([^"]+)"', re.M)
 
 
@@ -311,9 +310,44 @@ def list_locale_files(repo, tag):
 
 
 def collate_block(text):
-    """The body of the LC_COLLATE...END LC_COLLATE block, or None."""
-    m = _COLLATE_BLOCK_RE.search(text)
-    return m.group(1) if m else None
+    """The body of the LC_COLLATE...END LC_COLLATE block, or None.
+
+    Built on collate_bounds, which is line-based, rather than on a regex
+    requiring a newline before LC_COLLATE. That regex returned None for a file
+    opening with LC_COLLATE at byte 0, and glibc 2.23 and earlier write the
+    three master templates -- iso14651_t1, iso14651_t1_common and
+    iso14651_t1_pinyin, the highest fan-in files in the corpus -- exactly that
+    way. copy_graph_from_texts skips whatever this returns None for, so the
+    graph lost its three roots and the inheritance closure collapsed under it.
+    That was the whole of the glibc 2.24 version floor: on glibc-2.12..2.17
+    step 3 reported 11 affected locales where there are 278.
+
+    collate_text worked around the same regex, and scan_ellipsis then worked
+    around collate_block. Fixing the function means the next caller inherits
+    the fix instead of having to know about the trap.
+
+    Returns the body WITHOUT the LC_COLLATE and END LC_COLLATE lines;
+    collate_text returns the block with them, and callers depend on that.
+
+    Unlike the regex this accepts an unterminated block, running it to the end
+    of the file, because collate_bounds does. That is the conservative
+    direction -- a locale stays in the copy graph rather than silently leaving
+    it -- and it makes the two agree. Measured over glibc-2.12, 2.17, 2.28,
+    2.34 and 2.39: the regex and this differ on exactly the three templates at
+    the first two tags, and on nothing at the last three.
+    """
+    bounds = collate_bounds(text)
+    if bounds is None:
+        return None
+    start, end = bounds
+    lines = text.split('\n')
+    head = lines[start - 1][len('LC_COLLATE'):]
+    # collate_bounds' end is the END LC_COLLATE line when there is one, and the
+    # file's last line of content when the block is unterminated. Drop it only
+    # in the first case, or an unterminated block loses its last line.
+    last = end - 1 if lines[end - 1].startswith('END LC_COLLATE') else end
+    body = lines[start:last]
+    return head + ('\n' + '\n'.join(body) if body else '')
 
 
 def collate_bounds(text):

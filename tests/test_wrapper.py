@@ -328,6 +328,25 @@ class WrapperStaleNodeList(unittest.TestCase):
         self.assertNotIn('no_SUCH_locale', out)
         self.assertIn('-- Node-to-node locale data: NOT RUN', out)
 
+    def test_a_previous_runs_step_log_does_not_supply_this_runs_warnings(self):
+        """The warnings block globs every step*.PAIR.log in OUT_DIR, so a run
+        given both nodes' directories used to leave its notices behind for the
+        next run of the same pair to reprint as its own -- including "C.UTF-8:
+        built from ellipsis ranges on at least one of these nodes" from a run
+        that read no node. Conservative in direction, false in content, and
+        against this wrapper's own rule that every file it reads was written by
+        this run.
+        """
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-stalelog-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        stale = os.path.join(out_dir, f'step9.{NEW}..{NEW}.log')
+        with open(stale, 'w', encoding='utf-8') as fh:
+            fh.write('!! a warning from a run that read a node\n'
+                     '   with its indented continuation line\n')
+        rc, out = run_wrapper(NEW, NEW, out_dir=out_dir)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('a warning from a run that read a node', out)
+
 
 if __name__ == '__main__':
     unittest.main()

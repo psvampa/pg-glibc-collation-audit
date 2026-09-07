@@ -14,7 +14,8 @@ import shutil
 import tempfile
 import unittest
 
-from _harness import GLIBC_CLONE, MID, NEW, OLD, needs_clone, run_step
+from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
+                       needs_clone, needs_floor_pair, run_step)
 
 import glibc_locale_data as g
 
@@ -318,6 +319,71 @@ class Step5CollationCode(StepRun):
         weights behind it."""
         out = self.step('diff_collation_code.py', MID, NEW)
         self.assertIn('locale/C-collate-seq.c', out)
+
+
+@needs_floor_pair
+class BelowTheOldVersionFloor(StepRun):
+    """glibc-2.12 -> glibc-2.17, the pair docs/limitations.md quotes.
+
+    Not an audited pair and not a published verdict: it is the pair that
+    demonstrated the pre-2.24 failure, and after that failure was fixed it is
+    what shows the fix reaches. These numbers are asserted because the last set
+    this page carried for this pair went stale silently -- it said step 4
+    reported 2 exposed locales long after a partial fix had moved that to 277,
+    and nothing caught it. That is the whole reason for this class.
+
+    The mechanism: in glibc 2.23 and earlier the three master templates open
+    with LC_COLLATE at byte 0. While collate_block could not read those, they
+    never entered the copy graph and everything inheriting from them looked
+    unaffected.
+    """
+
+    def test_the_three_templates_are_in_the_copy_graph(self):
+        """The root cause, asserted directly rather than through a count.
+        These three are the highest fan-in files in the corpus; dropping them
+        is what collapsed the closure."""
+        graph = g.build_copy_graph(GLIBC_CLONE, FLOOR_NEW)
+        for tmpl in ('iso14651_t1', 'iso14651_t1_common',
+                     'iso14651_t1_pinyin'):
+            self.assertIn(tmpl, graph,
+                          f'{tmpl} is not a node of the {FLOOR_NEW} copy '
+                          f'graph; collate_block has regressed to a form that '
+                          f'cannot read a block at byte 0')
+
+    def test_step_2_finds_six_locales_touching_lc_collate(self):
+        out = self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW)
+        self.assertEqual(
+            one_int(r'Files with changes inside LC_COLLATE: (\d+)', out,
+                    'the step 2 count'),
+            6)
+
+    def test_step_3_reaches_278_not_11(self):
+        """11 was what it reported with the three roots missing."""
+        out = self.step('resolve_copy_closure.py', FLOOR_NEW,
+                        'dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
+                        'se_NO', 'ug_CN')
+        self.assertEqual(
+            one_int(r'Full affected set \((\d+) locale', out, 'the set'),
+            278)
+
+    def test_step_4_reaches_279_not_277(self):
+        """277 was the pre-fix figure. The 2 this page used to publish was
+        older still, and already wrong when it was quoted."""
+        out = self.step('flag_algorithmic_ranges.py', FLOOR_NEW)
+        self.assertEqual(
+            one_int(r'Full set needing empirical confirmation: (\d+) locale',
+                    out, 'the exposed set'),
+            279)
+
+    def test_the_locales_the_bug_used_to_drop_are_reported(self):
+        """A count can be right for the wrong reason. These are named in
+        docs/limitations.md as examples of what was silently dropped."""
+        out = self.step('resolve_copy_closure.py', FLOOR_NEW,
+                        'dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
+                        'se_NO', 'ug_CN')
+        for name in ('en_US', 'de_DE', 'fr_FR', 'es_ES', 'it_IT', 'nl_NL',
+                     'pt_BR', 'ru_RU', 'sv_SE', 'zh_CN', 'zh_TW'):
+            self.assertIn(name, out, f'{name} is not in the affected set')
 
 
 if __name__ == '__main__':

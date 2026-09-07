@@ -23,6 +23,13 @@ if SCRIPTS_DIR not in sys.path:
 OLD, MID, NEW = 'glibc-2.28', 'glibc-2.34', 'glibc-2.39'
 PAIRS = ((OLD, MID), (MID, NEW))
 
+# The pair below the OLD version floor. Not audited and not published as a
+# result -- it is the pair that demonstrates what the pre-2.24 failure looked
+# like, and docs/limitations.md now quotes numbers from it. Those numbers need
+# the same pinning as any other: the last figure that page carried for this
+# pair went stale without anyone noticing, which is exactly what a test is for.
+FLOOR_OLD, FLOOR_NEW = 'glibc-2.12', 'glibc-2.17'
+
 # The commit each of those tags MUST resolve to.
 #
 # A git tag is a mutable pointer, and this audit reads a third-party mirror
@@ -38,6 +45,8 @@ EXPECTED_SHA = {
     'glibc-2.28': '3c03baca37fdcb52c3881e653ca392bba7a99c2b',
     'glibc-2.34': 'ae37d06c7d127817ba43850f0f898b793d42aea7',
     'glibc-2.39': 'ef321e23c20eebc6d6fb4044425c00e6df27b05f',
+    'glibc-2.12': 'e28c88707ef0529593fccedf1a94c3fce3df0ef3',
+    'glibc-2.17': 'c758a6861537815c759cba2018a3b1abb1943842',
 }
 
 
@@ -70,6 +79,9 @@ _SKIP_NO_CLONE = (
 _SKIP_NO_TAGS = (
     f"the glibc clone is missing one of {OLD}, {MID}, {NEW}; "
     f"run `git -C scripts/glibc fetch --tags`.")
+_SKIP_NO_FLOOR_TAGS = (
+    f"the glibc clone is missing {FLOOR_OLD} or {FLOOR_NEW}; "
+    f"run `git -C scripts/glibc fetch --tags`.")
 
 
 def needs_clone(cls):
@@ -84,6 +96,21 @@ def needs_clone(cls):
         return unittest.skip(_SKIP_NO_CLONE)(cls)
     if not has_tags(OLD, MID, NEW):
         return unittest.skip(_SKIP_NO_TAGS)(cls)
+    return cls
+
+
+def needs_floor_pair(cls):
+    """Class decorator: skip without the two tags below the old version floor.
+
+    Separate from needs_clone because these two are not part of any published
+    audit. A contributor whose clone was built for one audited pair should not
+    have the whole suite refuse over tags no result depends on -- but CI fetches
+    every tag and fails on any skip, so there it runs.
+    """
+    if not have_clone():
+        return unittest.skip(_SKIP_NO_CLONE)(cls)
+    if not has_tags(FLOOR_OLD, FLOOR_NEW):
+        return unittest.skip(_SKIP_NO_FLOOR_TAGS)(cls)
     return cls
 
 
