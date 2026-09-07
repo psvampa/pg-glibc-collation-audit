@@ -214,6 +214,14 @@ which this repository has already paid for twice. It now lives in
 `tests/_harness.py` and `test_node_modes.py` imports it. No test changed
 behaviour; the suite is byte-for-byte the same set of assertions.
 
+### Also: the private working rules are pinned unpublished
+
+The rules Claude follows in this repository were published once by accident
+and unpublished in PR #18; since then `.claude/` is ignored whole, on the
+strength of one line in `.gitignore` that nothing checked. Two tests now pin
+it: the line is present, and `git ls-files .claude` is empty. Removing the
+line fails the first; force-adding a file under `.claude/` fails the second.
+
 ## 2026-09-06 (seventeenth entry)
 
 The glibc 2.24 version floor was a bug in one function, not a structural limit.

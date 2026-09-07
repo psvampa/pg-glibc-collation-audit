@@ -14,6 +14,7 @@ No glibc clone needed -- everything here is in the repository.
 """
 import os
 import re
+import subprocess
 import unittest
 
 import _harness
@@ -344,6 +345,29 @@ class EveryLinkResolves(unittest.TestCase):
                 self.assertTrue(os.path.isfile(os.path.join(REPO_ROOT, rel)),
                                 f'{rel} is named by {sorted(sources)} and '
                                 f'does not exist')
+
+
+class ThePrivateRulesStayPrivate(unittest.TestCase):
+    """The working rules Claude follows in this repository -- the skill, the
+    hooks, the local settings -- live under .claude/ and name people, hosts
+    and test fixtures. They were published once by accident and unpublished in
+    PR #18; the decision since is that .claude/ is ignored whole. This pins
+    that decision, because it rests on one line of .gitignore and nothing
+    errors when that line goes.
+    """
+
+    def test_gitignore_ignores_the_whole_claude_directory(self):
+        lines = [l.strip() for l in read(os.path.join(REPO_ROOT, '.gitignore'))
+                 .splitlines()]
+        self.assertIn('.claude/', lines,
+                      '.gitignore no longer ignores .claude/ as a whole')
+
+    def test_nothing_under_claude_is_tracked(self):
+        tracked = subprocess.run(
+            ['git', '-C', REPO_ROOT, 'ls-files', '--', '.claude'],
+            capture_output=True, text=True, check=True).stdout.split()
+        self.assertEqual(tracked, [],
+                         f'private working files are tracked: {tracked}')
 
 
 if __name__ == '__main__':
