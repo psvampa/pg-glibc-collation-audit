@@ -30,9 +30,12 @@
 --     PG 16.15: the mechanism is glibc's locale-archive mapping, not
 --     anything PostgreSQL versions.
 --   * Needs PostgreSQL 15 or newer: it reads pg_database.datlocprovider and
---     calls pg_collation_actual_version(). On 13/14, drop the datlocprovider
---     conditions (no database can use a non-libc provider there) and delete
---     the actual-version block.
+--     datcollversion and calls pg_database_collation_actual_version(), all
+--     new in 15. On 13/14, drop the datlocprovider conditions (no database
+--     can use a non-libc provider there) and delete the database-default
+--     half of the collversion block. Keep the named-collation half:
+--     pg_collation_actual_version() exists since PG 10 and reports a libc
+--     version from 13 on.
 --   * Use the generated locale names step 3 prints (sv_SE.utf8), and check
 --     `locale -a` first: if a locale is not generated on the box,
 --     sort/PostgreSQL silently fall back to C, and two boxes both missing it
@@ -229,15 +232,16 @@ ORDER BY con.conrelid::regclass::text, con.conname;
 -- your data would actually sort differently, and stays silent if a distro
 -- patches collation data without moving the reported version. Conservative in
 -- one direction, blind in the other -- which is why this audit exists.
--- Requires PostgreSQL 15+.
+-- The named-collation query needs PostgreSQL 13+ (libc collations are
+-- versioned from 13); the database-default query needs 15+.
 --
 -- THIRD blind spot, and the one that bites hardest here: neither this query
 -- nor the one after it can ever report a C.* collation. Under the libc
 -- provider, get_collation_actual_version() returns NULL for "C", for
--- "POSIX", and for anything whose name STARTS WITH "C." -- the
--- pg_strncasecmp("C.", ...) test, present in every branch from PG 14 on
--- (src/backend/utils/adt/pg_locale.c through PG 17, pg_locale_libc.c from
--- PG 18). So collversion stays NULL, the
+-- "POSIX", and for anything whose name STARTS WITH "C.". PG 13 chops the
+-- encoding suffix and compares the rest to "c"; from PG 14 it is the
+-- pg_strncasecmp("C.", ...) test (src/backend/utils/adt/pg_locale.c through
+-- PG 17, pg_locale_libc.c from PG 18). So collversion stays NULL, the
 -- IS DISTINCT FROM never fires, and libc C.UTF-8 -- which the note at the top
 -- of this file explains IS exposed, and which is the default in most
 -- containers -- is invisible to both. For C.UTF-8 use sql/c_utf8_probe.sql:

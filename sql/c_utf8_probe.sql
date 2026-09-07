@@ -20,8 +20,9 @@
 --
 --   * PostgreSQL cannot warn either. Under the libc provider,
 --     get_collation_actual_version() returns NULL for "C", for "POSIX" and for
---     anything whose name STARTS WITH "C." -- the pg_strncasecmp("C.", ...)
---     test, in every branch from PG 14 on (src/backend/utils/adt/pg_locale.c
+--     anything whose name STARTS WITH "C.". PG 13 chops the encoding suffix
+--     and compares the rest to "c"; from PG 14 it is the
+--     pg_strncasecmp("C.", ...) test (src/backend/utils/adt/pg_locale.c
 --     through PG 17, pg_locale_libc.c from PG 18). So collversion and
 --     datcollversion stay NULL and no mismatch check can ever fire.
 --
@@ -50,8 +51,10 @@
 --     run SELECT pg_import_system_collations('pg_catalog'); as superuser --
 --     AFTER restarting PostgreSQL, or it imports the pre-restart set and
 --     reports success (measured: 72 collations versus 1006).
---   * Needs PostgreSQL 15+ for pg_collation_actual_version() and
---     datlocprovider. On 13/14 delete queries 4 and 5.
+--   * Needs PostgreSQL 15+ for datlocprovider, datcollversion and
+--     pg_database_collation_actual_version(). On 13/14 delete query 5 and
+--     the pg_database half of query 4; the pg_collation half works there,
+--     since pg_collation_actual_version() reports a libc version from 13 on.
 --   * Needs standard_conforming_strings on (the default) for the U&'\+xxxxxx'
 --     literals below. Checked, not assumed.
 \set ON_ERROR_STOP on
