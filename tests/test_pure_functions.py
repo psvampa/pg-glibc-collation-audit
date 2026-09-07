@@ -346,6 +346,33 @@ class NoiseFilter(unittest.TestCase):
         marked = d.classify_body(body)
         self.assertFalse(marked[1][1])
 
+    def test_a_pointer_dereference_is_code(self):
+        """"The noise filter took C code for a comment": every line opening
+        with `*` was noise, and `*wp = '\\0';` opens with `*`. Ten such lines
+        sat unmarked in the two published examples."""
+        for line in ("-      *wp = '\\0';", '-	  *wp++ = tolower (codeset[cnt]);',
+                     "-  *endp++ = '/';", '+      *wch = result;',
+                     '+  **argv = 0;', '+  *(p + 1) = 2;'):
+            with self.subTest(line=line):
+                self.assertFalse(d.is_noise_line(line), line)
+
+    def test_a_star_comment_continuation_is_still_noise(self):
+        for line in ('+ * continuation text', '+ *', '+ */',
+                     '+   *  indented star, then text'):
+            with self.subTest(line=line):
+                self.assertTrue(d.is_noise_line(line), line)
+
+    def test_a_hunk_made_only_of_dereferences_is_kept(self):
+        """The failure that mattered: a hunk is dropped only when EVERY line
+        is noise, so a hunk whose changed lines are all `*p = x;` vanished
+        whole under "comment/licence hunk(s) filtered" and step 5 went on to
+        say there was no substantive change. Restore `startswith('*')` and
+        this fails."""
+        body = ["-      *wp = '\\0';", "+      *wp = 0;"]
+        marked = d.classify_body(body)
+        self.assertTrue(any(not noise for _, noise in marked),
+                        'a hunk of pointer writes was filtered as comment')
+
 
 class DiffParsing(unittest.TestCase):
     DIFF = (

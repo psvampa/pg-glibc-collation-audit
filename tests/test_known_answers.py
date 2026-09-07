@@ -320,6 +320,56 @@ class Step5CollationCode(StepRun):
         out = self.step('diff_collation_code.py', MID, NEW)
         self.assertIn('locale/C-collate-seq.c', out)
 
+    def test_the_wide_char_wrappers_are_diffed_under_tier_1(self):
+        """"Two entry points of step 5 were diffed by nobody": wcscoll_l.c and
+        wcsxfrm_l.c were ENTRY_POINTS, in no tier, and the include walk
+        subtracts its entry points -- so their existence was checked and
+        their diff never read. Both pairs: named under TIER 1, with a verdict.
+        """
+        for old, new in ((OLD, MID), (MID, NEW)):
+            with self.subTest(pair=f'{old}..{new}'):
+                out = self.step('diff_collation_code.py', old, new)
+                tier1 = out.split('TIER 1 --')[1].split('TIER 2 --')[0]
+                for path in ('wcsmbs/wcscoll_l.c', 'wcsmbs/wcsxfrm_l.c'):
+                    self.assertRegex(
+                        tier1, rf'(?m)^  {re.escape(path)}: (no substantive '
+                               rf'change|\d+ substantive hunk)', path)
+
+    def test_a_vanished_path_is_a_warning_the_summary_can_repeat(self):
+        """"The summary contradicted step 5 when a tracked path vanished."
+        Real data: reversed, 2.39 -> 2.34 loses locale/C-collate-seq.c, which
+        exists only from 2.35. The notice must be a `!!` block with three-space
+        continuation lines, because that is the shape audit.sh collects and
+        repeats at the bottom; as plain prose it scrolled away 300 lines above
+        a summary that said the opposite."""
+        out = self.step('diff_collation_code.py', NEW, MID)
+        self.assertIn('\n!! 1 tracked path(s) present at glibc-2.39 and GONE '
+                      'at glibc-2.34.', out)
+        self.assertIn(f'\n     locale/C-collate-seq.c: ABSENT at {MID}\n', out)
+        block = out.split('!! ')[1].split('\n\n')[0]
+        for line in block.split('\n')[1:]:
+            self.assertTrue(line.startswith('   '), repr(line))
+
+    def test_the_clean_sentence_is_the_one_the_wrapper_keys_on(self):
+        """audit.sh takes exactly this sentence as step 5's clean verdict and
+        treats anything else as unresolved. Neither documented pair is clean,
+        so the sentence is tied to the source here: reword it in one place and
+        not the other, and every run would be summarised as unresolved.
+        The vanished-path variant must NOT say it -- that is the whole fix."""
+        src = open(os.path.join(_harness_scripts(), 'diff_collation_code.py'),
+                   encoding='utf-8').read()
+        self.assertIn('"No substantive collation code change. ', src)
+        audit = open(os.path.join(_harness_scripts(), '..', 'audit.sh'),
+                     encoding='utf-8').read()
+        self.assertIn("'^No substantive collation code change\\.'", audit)
+        out = self.step('diff_collation_code.py', NEW, MID)
+        self.assertNotIn('No substantive collation code change', out)
+
+
+def _harness_scripts():
+    from _harness import SCRIPTS_DIR
+    return SCRIPTS_DIR
+
 
 @needs_floor_pair
 class BelowTheOldVersionFloor(StepRun):
@@ -365,6 +415,17 @@ class BelowTheOldVersionFloor(StepRun):
         self.assertEqual(
             one_int(r'Full affected set \((\d+) locale', out, 'the set'),
             278)
+
+    def test_step_5_prints_65_hunks(self):
+        """examples/below-the-floor-2.12-to-2.17.txt quotes this figure in
+        prose. It was 63 until the two wide-char wrappers joined TIER 1: each
+        contributes one hunk, the 2012 FSF postal-address change, which the
+        filter keeps because it cannot prove a bare licence continuation is
+        prose. Conservative, and counted."""
+        out = self.step('diff_collation_code.py', FLOOR_OLD, FLOOR_NEW)
+        self.assertEqual(
+            one_int(r'(\d+) substantive hunk\(s\) found', out, 'the total'),
+            65)
 
     def test_step_4_reaches_279_not_277(self):
         """277 was the pre-fix figure. The 2 this page used to publish was

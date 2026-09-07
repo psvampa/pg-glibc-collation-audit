@@ -133,6 +133,8 @@ TIER 1 -- weight assignment and comparison
   locale/programs/ld-collate.c: 15 substantive hunk(s), 1 comment/licence hunk(s) filtered   [hunks abridged]
   string/strcoll_l.c: 2 substantive hunk(s), 1 comment/licence hunk(s) filtered   [hunks abridged]
   string/strxfrm_l.c: 3 substantive hunk(s), 1 comment/licence hunk(s) filtered   [hunks abridged]
+  wcsmbs/wcscoll_l.c: no substantive change (1 comment/licence hunk(s) filtered)
+  wcsmbs/wcsxfrm_l.c: no substantive change (1 comment/licence hunk(s) filtered)
   locale/weight.h: 1 substantive hunk(s), 1 comment/licence hunk(s) filtered   [hunks abridged]
   locale/weightwc.h: no substantive change (1 comment/licence hunk(s) filtered)
   locale/coll-lookup.h: no substantive change (1 comment/licence hunk(s) filtered)

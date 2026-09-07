@@ -31,7 +31,7 @@ These numbers are asserted in tests/test_known_answers.py
 was 2, and it had been wrong for some time before anyone re-ran it; a number
 nothing tests is a number that rots.
 
-Step 5 is not reproduced here. It prints 63 hunks over this pair and decides
+Step 5 is not reproduced here. It prints 65 hunks over this pair and decides
 none of them, which is the fifth limitation rather than this one.
 
 Long comma-separated name lists below are trimmed, marked where cut.

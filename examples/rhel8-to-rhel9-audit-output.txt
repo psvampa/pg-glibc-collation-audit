@@ -133,6 +133,8 @@ TIER 1 -- weight assignment and comparison
   locale/programs/ld-collate.c: 2 substantive hunk(s), 4 comment/licence hunk(s) filtered   [hunks abridged]
   string/strcoll_l.c: no substantive change (2 comment/licence hunk(s) filtered)
   string/strxfrm_l.c: no substantive change (3 comment/licence hunk(s) filtered)
+  wcsmbs/wcscoll_l.c: no substantive change (2 comment/licence hunk(s) filtered)
+  wcsmbs/wcsxfrm_l.c: no substantive change (2 comment/licence hunk(s) filtered)
   locale/weight.h: no substantive change (2 comment/licence hunk(s) filtered)
   locale/weightwc.h: no substantive change (2 comment/licence hunk(s) filtered)
   locale/coll-lookup.h: no substantive change (2 comment/licence hunk(s) filtered)
@@ -281,8 +283,8 @@ TIER 3 -- reachable from the collation entry points, not classified
       >> -	  return NULL;
       >> -      }
          -
-         -  *endp++ = '/';
-         -  *endp = '\0';
+      >> -  *endp++ = '/';
+      >> -  *endp = '\0';
       >> +    {
          +      /* Perhaps the directory does not exist now.  Try to create it.  */
       >> +      if (errno == ENOENT)
@@ -332,20 +334,20 @@ TIER 3 -- reachable from the collation entry points, not classified
          -
       >> -      for (cnt = 0; cnt < name_len; ++cnt)
       >> -	if (isalpha (codeset[cnt]))
-         -	  *wp++ = tolower (codeset[cnt]);
+      >> -	  *wp++ = tolower (codeset[cnt]);
       >> -	else if (isdigit (codeset[cnt]))
-         -	  *wp++ = codeset[cnt];
+      >> -	  *wp++ = codeset[cnt];
          +  /* Skip "iso".  */
       >> +  if (only_digit)
       >> +    wp += 3;
-         -      *wp = '\0';
+      >> -      *wp = '\0';
       >> -    }
          +  /* Lowercase all characters. */
       >> +  for (cnt = 0; cnt < name_len; ++cnt)
       >> +    if (isalpha (codeset[cnt]))
-         +      *wp++ = tolower (codeset[cnt]);
+      >> +      *wp++ = tolower (codeset[cnt]);
       >> +    else if (isdigit (codeset[cnt]))
-         +      *wp++ = codeset[cnt];
+      >> +      *wp++ = codeset[cnt];
       >> -  return (const char *) retval;
          +  /* Return allocated and converted name for caller to free.  */
       >> +  return retval;

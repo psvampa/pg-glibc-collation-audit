@@ -264,16 +264,35 @@ fi
 
 # ---------------------------------------------------------------- summary ----
 
-count_lines() { [ -f "$1" ] && grep -c . "$1" || echo 0; }
+# awk, not `grep -c ... || echo 0`: grep -c prints "0" AND exits 1 when
+# nothing matches, so the fallback printed a second "0" and every clean run
+# fed "0\n0" to `[ -gt ]`, which complained "integer expression expected" on
+# stderr and fell into the else branch. The right branch, by luck.
+count_lines() { [ -f "$1" ] || { echo 0; return; }; awk 'NF {n++} END {print n+0}' "$1"; }
 
 # Same, minus the `#` provenance header the node-to-node list carries. Counting
 # it would report one finding where there are none -- and "1 locale differs"
 # is the wrong direction to be wrong in.
-count_names() { [ -f "$1" ] && grep -c '^[^#]' "$1" || echo 0; }
+count_names() { [ -f "$1" ] || { echo 0; return; }; awk '!/^#/ && NF {n++} END {print n+0}' "$1"; }
 
+# Step 5 has three outcomes, not two. `hunks`: it printed a count. `clean`: it
+# printed its clean sentence. `unresolved`: neither -- which is what it prints
+# when a tracked path is present at the old tag and gone at the new one, and
+# is also what a reworded script or a truncated log would look like. This used
+# to be `HUNKS=${HUNKS:-0}`: anything that was not a count became zero, and
+# zero is the reassuring branch. A vanished ld-collate.c would have been
+# summarised as "a clean data diff is sufficient".
 HUNKS=$(sed -n 's/^\([0-9][0-9]*\) substantive hunk(s) found.*/\1/p' \
         "$OUT_DIR/step5.$PAIR.log" | tail -1)
-HUNKS=${HUNKS:-0}
+if [ -n "$HUNKS" ]; then
+  STEP5=hunks
+elif grep -q '^No substantive collation code change\.' "$OUT_DIR/step5.$PAIR.log"; then
+  STEP5=clean
+  HUNKS=0
+else
+  STEP5=unresolved
+  HUNKS=0
+fi
 
 banner "AUDIT SUMMARY  $OLD -> $NEW"
 
@@ -287,16 +306,24 @@ else
 fi
 
 echo
-if [ "$HUNKS" -gt 0 ]; then
-  echo "-- Needs an empirical test: step 5 found $HUNKS substantive hunk(s),"
-  echo "   so a clean data diff CANNOT clear the locales step 4 flagged"
-  echo "     $(count_lines "$STEP4_LIST") generated name(s)"
-  echo "     full list: $STEP4_LIST"
-else
-  echo "-- Needs an empirical test: none on this evidence. Step 5 found no"
-  echo "   substantive change, so a clean data diff is sufficient even for"
-  echo "   the locales step 4 flagged."
-fi
+case $STEP5 in
+  hunks)
+    echo "-- Needs an empirical test: step 5 found $HUNKS substantive hunk(s),"
+    echo "   so a clean data diff CANNOT clear the locales step 4 flagged"
+    echo "     $(count_lines "$STEP4_LIST") generated name(s)"
+    echo "     full list: $STEP4_LIST" ;;
+  clean)
+    echo "-- Needs an empirical test: none on this evidence. Step 5 found no"
+    echo "   substantive change, so a clean data diff is sufficient even for"
+    echo "   the locales step 4 flagged." ;;
+  *)
+    echo "-- Needs an empirical test: step 5 did NOT reach a clean result, so"
+    echo "   the locales step 4 flagged stay UNRESOLVED. Read step 5's output:"
+    echo "   a tracked file vanished between the tags, or the step did not"
+    echo "   finish."
+    echo "     $(count_lines "$STEP4_LIST") generated name(s)"
+    echo "     full list: $STEP4_LIST" ;;
+esac
 
 echo
 if [ -n "$NODE_LIST" ] && [ -f "$NODE_LIST" ]; then
@@ -395,14 +422,19 @@ fi
 
 echo
 echo "-- Not decided for you"
-if [ "$HUNKS" -gt 0 ]; then
-  echo "     $HUNKS hunk(s) marked >> in step 5. Whether any of them moves a"
-  echo "     weight is a judgement call that needs someone to read C."
-  echo "     If nobody will, treat step 4's list as unresolved and confirm"
-  echo "     empirically instead: docs/confirming-on-a-real-system.md"
-else
-  echo "     Nothing from step 5. Still confirm on real nodes before acting:"
-  echo "     an upstream diff cannot see your distro's backports."
-  echo "     docs/confirming-on-a-real-system.md"
-fi
+case $STEP5 in
+  hunks)
+    echo "     $HUNKS hunk(s) marked >> in step 5. Whether any of them moves a"
+    echo "     weight is a judgement call that needs someone to read C."
+    echo "     If nobody will, treat step 4's list as unresolved and confirm"
+    echo "     empirically instead: docs/confirming-on-a-real-system.md" ;;
+  clean)
+    echo "     Nothing from step 5. Still confirm on real nodes before acting:"
+    echo "     an upstream diff cannot see your distro's backports."
+    echo "     docs/confirming-on-a-real-system.md" ;;
+  *)
+    echo "     Step 5 reached no clean result (see above). Until it does, step"
+    echo "     4's list is unresolved: confirm empirically instead:"
+    echo "     docs/confirming-on-a-real-system.md" ;;
+esac
 echo
