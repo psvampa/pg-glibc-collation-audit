@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Usage: ./audit-locale-diff.sh <old_tag> <new_tag>
+# Usage: ./audit-locale-diff.sh <old_tag> <new_tag> [--allow-reverse]
 # Example: ./audit-locale-diff.sh glibc-2.28 glibc-2.34
 #
-# Step 1 of the audit: for any pair of glibc tags, list which locale files
-# under localedata/locales/ changed, and report the blast radius of each change
-# through the LC_COLLATE `copy` graph.
+# Step 1 of the audit: for a pair of glibc tags, OLD first, list which locale
+# files under localedata/locales/ changed, and report the blast radius of each
+# change through the LC_COLLATE `copy` graph. A pair given the other way round
+# is refused here rather than reported on, unless --allow-reverse says it is
+# deliberate.
 #
 # This used to hardcode iso14651_t1_common as "the master collation table" and
 # signal "unchanged" by printing nothing -- indistinguishable from an error --
@@ -12,12 +14,17 @@
 # actually inherit from. The fan-in is now computed from the copy graph.
 set -euo pipefail
 
-if [ $# -ne 2 ]; then
-  echo "usage: $0 <old_tag> <new_tag>" >&2
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+  echo "usage: $0 <old_tag> <new_tag> [--allow-reverse]" >&2
   exit 2
 fi
 OLD=$1
 NEW=$2
+ALLOW=${3:-}
+if [ -n "$ALLOW" ] && [ "$ALLOW" != --allow-reverse ]; then
+  echo "error: unknown argument '$ALLOW'" >&2
+  exit 2
+fi
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 if [ ! -d "$HERE/glibc" ]; then
@@ -46,6 +53,16 @@ if [ -n "$missing" ]; then
     fi
   done
 fi
+
+# Which of the two is the newer commit, before a single finding is printed.
+# This is the first step that has a clone to ask, and it is also a hand-run
+# entry point taking a pair: reversed, everything below is about the other
+# direction -- the fan-in is computed at the tag that is actually the older
+# one -- and nothing in the output said so. Silent when the pair is forward,
+# so the audited pairs' output does not move; the status word on stdout is for
+# audit.sh, which asks again for it, and is dropped here.
+python3 "$HERE/glibc_locale_data.py" order ${ALLOW:+"$ALLOW"} "$OLD" "$NEW" \
+  >/dev/null
 
 # Say where this content came from before saying anything about it. The clone
 # is a third-party mirror and a tag is a mutable pointer; the release tags are

@@ -295,6 +295,18 @@ class NodeToNodeRefusesToGuess(NodeCase):
                 rc, text = run('diff_node_locales.py', *args, out_dir=self.out)
                 self.assertEqual(rc, 2, text)
 
+    def test_a_reversed_tag_pair_is_refused(self):
+        """The two tags decide which side's SUPPORTED maps which node's
+        names, so a reversed pair labels the older node as the new one. This
+        guard had no test: deleting the call left every test in this file
+        green, because no other assertion here depends on the tags' order."""
+        rc, text = self.node_to_node(self.node(OLD, 'a'), self.node(MID, 'b'),
+                                     'x', 'y', '--old-tag', MID,
+                                     '--new-tag', OLD)
+        self.assertEqual(rc, 2, text)
+        self.assertIn('REVERSED', text)
+        self.assertNotIn('exists at neither tag', text)
+
     def test_one_tag_without_the_other_is_refused(self):
         rc, text = self.node_to_node(self.node(OLD, 'a'), self.node(MID, 'b'),
                                      'x', 'y', '--old-tag', OLD)

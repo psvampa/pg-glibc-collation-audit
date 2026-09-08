@@ -23,6 +23,27 @@ for you. Each is also a standalone script, which is what you want to re-run
 one step against a hand-picked locale list — the invocations below are those
 standalone forms.
 
+**Old first, new second.** The order is not a formality: every step assumes
+the second tag is the newer one. Given the pair backwards, the run used to go
+to the end at exit 0 with a plausible clean summary — step 4 scanning the
+older tag, so locales added in the newer one drop out of its list, and step 2
+reporting a locale *deleted* in the real upgrade as an addition it did not
+analyse. The audit now asks git which of the two commits is newer, in step 1,
+and refuses a reversed pair with exit 2 before printing a single finding.
+*Newer* is git's own answer — is one commit an ancestor of the other — and for
+two commits on different branches, the glibc release behind each one: a commit
+on `release/2.28/master` is a 2.28, whatever its date. Only the release counts,
+never what follows it — a point release (`glibc-2.12.2`) or the snapshot tag
+that opens master for the next release (`glibc-2.28.9000`) says where inside or
+after a release a commit sits, which cannot order two lines off that release.
+Commit dates decide nothing, because a release branch carries commits dated
+years after the next release. The standalone steps
+that take a pair accept `--allow-reverse` for a deliberate backwards read
+(each script's `--help`, or its usage line), and then print a `!!` block
+saying so; the wrapper has no
+such flag, because a reversed audit answers none of the questions on this
+page.
+
 The wrapper also runs three checks that are *not* among these five, all of them
 needing files off a node rather than the clone — which is why none of them is a
 sixth step. They answer different questions:
@@ -235,10 +256,22 @@ Two markers carry the weight:
 
 The summary also carries the node-to-node block, and this is the one place
 where **absent is not empty**: if it says `NOT RUN`, nothing in the whole run
-said anything about `C.UTF-8`. If both tags are the same — an intra-major
-upgrade, RHEL 8.1 to 8.10 — the summary says that too, because steps 1 to 5
-then compare upstream source with itself and can only report "nothing
-changed".
+said anything about `C.UTF-8`. If both tags are the same commit — an
+intra-major upgrade, RHEL 8.1 to 8.10 — the summary says that too, because
+steps 1 to 5 then compare upstream source with itself and can only report
+"nothing changed". *The same* is asked of git rather than of the two strings:
+`glibc-2.39` and the commit sha the run's own provenance line prints for it
+are one commit spelt two ways, and comparing the text let that pair through as
+if it were two versions.
+
+One case is left over: two commits on different branches off the same release
+— a master commit against a backport branch — or with no glibc tag behind them
+the clone can name. Nothing there settles the direction, and saying nothing
+would read as having checked, so the summary says which it is:
+
+```
+-- Direction of the pair: NOT ESTABLISHED
+```
 
 Steps 1 to 4 give you lists. **Step 5 gives you C diffs and does not decide
 for you** — it cannot tell a weight-changing commit from a harmless one. If

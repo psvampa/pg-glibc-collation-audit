@@ -17,8 +17,8 @@ import shutil
 import tempfile
 import unittest
 
-from _harness import (MID, NEW, OLD, backported_c, locale_file,
-                      needs_clone, run_wrapper, upstream_c)
+from _harness import (EXPECTED_SHA, MID, NEW, OLD, backported_c, flat,
+                      locale_file, needs_clone, run_wrapper, upstream_c)
 
 import diff_distro_locales as dd
 from _harness import GLIBC_CLONE
@@ -177,13 +177,18 @@ class WrapperEmptyPair(unittest.TestCase):
         structurally empty. C.UTF-8's order moved across exactly such a bump
         (glibc-2.28-93.el8), so "nothing changed" here must not read as a
         clean result."""
-        self.assertIn('are the same tag', self.out)
-        self.assertIn('-- One tag, compared with itself', self.out)
+        # Through flat(): the notice is one `warn()` block now, wrapped at
+        # 78 columns, so the phrase is split across lines in the raw text.
+        self.assertIn('are the same commit', flat(self.out))
+        self.assertIn('-- One commit, compared with itself', self.out)
+        # And it is repeated at the bottom, where a reader who scrolled past
+        # step 1 will see it.
+        warnings = self.out.split('-- Warnings the clean results above')[1]
+        self.assertIn('are the same commit', flat(warnings))
         # The whole sentence, whitespace collapsed. This used to assert the
         # word "means", which every step's prose contains.
-        flat = ' '.join(self.out.split())
         self.assertIn("Everything above that says 'nothing changed' means "
-                      "'nothing was compared'", flat)
+                      "'nothing was compared'", flat(self.out))
 
     def test_the_summary_counts_without_a_shell_error(self):
         """count_lines was `grep -c . FILE || echo 0`. grep -c prints "0" AND
@@ -211,6 +216,102 @@ class WrapperEmptyPair(unittest.TestCase):
 
 
 @needs_clone
+class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
+    """"The same-tag guard compared text, not commits."
+
+    `./audit.sh glibc-2.39 ef321e23...` -- the tag and the sha this run's own
+    provenance line prints for it -- is one commit compared with itself, and
+    the string comparison never fired: rc 0, no "nothing was compared", and a
+    summary reading "none -- no locale\'s LC_COLLATE changed". That is the
+    sixteenth entry\'s false negative reopened by spelling. Mutation: put the
+    text comparison back and this class fails.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-samesha-')
+        cls.rc, cls.out = run_wrapper(NEW, EXPECTED_SHA[NEW],
+                                      out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_it_says_nothing_was_compared(self):
+        self.assertEqual(self.rc, 0, self.out)
+        self.assertIn('are the same commit', flat(self.out))
+        summary = flat(self.out.split('AUDIT SUMMARY')[1])
+        self.assertIn("-- One commit, compared with itself", summary)
+        self.assertIn("Everything above that says 'nothing changed' means "
+                      "'nothing was compared'", summary)
+
+
+@needs_clone
+class WrapperDirectionUndetermined(unittest.TestCase):
+    """The fourth state of the pair: neither commit is an ancestor of the
+    other, and the newest glibc tag behind each one does not order them either
+    -- a master snapshot against a backport branch off the same release, say.
+    The wrapper cannot be pointed at a fabricated clone, so the order
+    subcommand is stood in for by a `python3` shim -- the pattern
+    WrapperStep5Unresolved uses for step 5 -- and every other invocation goes
+    to the real interpreter. Silence here would read as "the direction was
+    checked and is fine"."""
+
+    def setUp(self):
+        import sys
+        self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-undet-')
+        self.addCleanup(shutil.rmtree, self.out_dir, ignore_errors=True)
+        shim_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-undetshim-')
+        self.addCleanup(shutil.rmtree, shim_dir, ignore_errors=True)
+        shim = os.path.join(shim_dir, 'python3')
+        with open(shim, 'w', encoding='utf-8') as fh:
+            fh.write('#!/bin/sh\n'
+                     'case "$1" in\n'
+                     '  *glibc_locale_data.py)\n'
+                     '    if [ "$2" = order ]; then echo undetermined; exit 0; '
+                     'fi ;;\n'
+                     'esac\n'
+                     f'exec "{sys.executable}" "$@"\n')
+        os.chmod(shim, 0o755)
+        self.env = {'PATH': shim_dir + os.pathsep + os.environ.get('PATH', '')}
+
+    def test_the_summary_says_the_direction_was_not_established(self):
+        rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
+                              env_extra=self.env)
+        self.assertEqual(rc, 0, out)
+        summary = flat(out.split('AUDIT SUMMARY')[1])
+        self.assertIn('-- Direction of the pair: NOT ESTABLISHED', summary)
+        self.assertIn('nothing here checked that', summary)
+        # Not the other state: an undetermined pair is not one commit.
+        self.assertNotIn('One commit, compared with itself', summary)
+
+    def test_an_unrecognised_state_stops_the_run(self):
+        """The branch that keeps the four states honest: a word the wrapper
+        does not know means the check did not answer, and "the pair is in
+        order" is the assumption that runs the audit against the wrong tag."""
+        shim_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-badstate-')
+        self.addCleanup(shutil.rmtree, shim_dir, ignore_errors=True)
+        import sys
+        shim = os.path.join(shim_dir, 'python3')
+        with open(shim, 'w', encoding='utf-8') as fh:
+            fh.write('#!/bin/sh\n'
+                     'case "$1" in\n'
+                     '  *glibc_locale_data.py)\n'
+                     '    if [ "$2" = order ]; then echo perhaps; exit 0; '
+                     'fi ;;\n'
+                     'esac\n'
+                     f'exec "{sys.executable}" "$@"\n')
+        os.chmod(shim, 0o755)
+        rc, out = run_wrapper(
+            NEW, NEW, out_dir=self.out_dir,
+            env_extra={'PATH': shim_dir + os.pathsep
+                       + os.environ.get('PATH', '')})
+        self.assertNotEqual(rc, 0)
+        self.assertIn("answered 'perhaps'", out)
+        self.assertNotIn('AUDIT SUMMARY', out)
+
+
+@needs_clone
 class WrapperRefusesBadInput(unittest.TestCase):
     """The failure modes that would otherwise produce a clean-looking audit."""
 
@@ -228,6 +329,48 @@ class WrapperRefusesBadInput(unittest.TestCase):
         rc, out = run_wrapper(OLD, out_dir=self.out_dir)
         self.assertEqual(rc, 2)
         self.assertIn('usage:', out)
+
+    def test_a_reversed_pair_is_refused_before_any_summary(self):
+        """"Nothing stopped a reversed pair." Reversed, all five steps run to
+        the end and print a plausible clean result: step 4 scans the older
+        tag, so the locales added in the newer one -- ckb_IQ and mnw_MM, both
+        `copy "iso14651_t1"` -- leave the exposed set, and step 2 reports a
+        locale DELETED in the real upgrade as an addition it did not analyse.
+        Nothing in the output said which direction it had been given."""
+        rc, out = run_wrapper(MID, OLD, out_dir=self.out_dir)
+        self.assertEqual(rc, 2, out)
+        self.assertNotIn('AUDIT SUMMARY', out)
+        self.assertIn('This pair is REVERSED', flat(out))
+        self.assertIn('Swap the arguments', flat(out))
+
+    def test_the_wrapper_offers_no_way_to_run_a_reversed_pair(self):
+        """--allow-reverse exists on the individual steps, for the deliberate
+        backwards read the suite itself does on 2.39 -> 2.34. A reversed WHOLE
+        audit answers no question of the method, so the wrapper does not take
+        the flag -- and must refuse it as unknown rather than ignoring it."""
+        rc, out = run_wrapper(MID, OLD, '--allow-reverse',
+                              out_dir=self.out_dir)
+        self.assertEqual(rc, 2, out)
+        self.assertIn("unknown argument '--allow-reverse'", out)
+        self.assertNotIn('AUDIT SUMMARY', out)
+
+    def test_an_option_without_a_value_says_so(self):
+        """`--new-locales-dir` as the last word on the line died in `shift 2`
+        under `set -e`: exit 1, no message at all. An empty value is refused
+        for the same reason -- it leaves the variable unset, which is
+        indistinguishable from never having asked for the node checks."""
+        options = ('--old-locales-dir', '--old-build-id',
+                   '--new-locales-dir', '--new-build-id')
+        # Every branch of the case, not one of them: three of the four were
+        # asserted by nothing, and a mutation to any of those three left the
+        # suite green.
+        cases = [(opt,) for opt in options] + [(opt, '') for opt in options]
+        for tail in cases:
+            with self.subTest(args=tail):
+                rc, out = run_wrapper(OLD, MID, *tail, out_dir=self.out_dir)
+                self.assertEqual(rc, 2, out)
+                self.assertIn(f'error: {tail[0]} needs a value', out)
+                self.assertIn('usage:', out)
 
     def test_step_2_rewrites_the_list_so_a_seed_cannot_survive(self):
         """This is the real protection on the file that becomes step 3's argv.

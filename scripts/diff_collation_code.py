@@ -28,6 +28,7 @@ apart.
 
 Usage:
   python3 diff_collation_code.py <old_tag> <new_tag> [--repo <path>] [--all]
+                                 [--allow-reverse]
 
 Example:
   python3 diff_collation_code.py glibc-2.28 glibc-2.34
@@ -596,12 +597,20 @@ def main(argv):
     ap.add_argument('old_tag')
     ap.add_argument('new_tag')
     ap.add_argument('--repo', help="path to the glibc clone (autodetected)")
+    ap.add_argument('--allow-reverse', action='store_true',
+                    help="run a pair whose new tag is the OLDER commit. Refused by default: reversed, every step still prints a plausible clean result. Prints a `!!` block saying the direction is reversed.")
     ap.add_argument('--all', action='store_true',
                     help="show every hunk, including comment-only ones")
     opts = ap.parse_args(argv)
 
     repo = g.find_repo(opts.repo)
     g.check_refs(repo, opts.old_tag, opts.new_tag)
+
+    # Reversed, this step reads the same diff backwards and reaches the same
+    # hunk count, so nothing in its output would have said which direction it
+    # was given. It asks git instead of assuming.
+    g.require_pair_order(repo, opts.old_tag, opts.new_tag,
+                         allow_reverse=opts.allow_reverse)
     rng = f'{opts.old_tag}..{opts.new_tag}'
 
     print(f"Collation code changes between {opts.old_tag} and {opts.new_tag}")

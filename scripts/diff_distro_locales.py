@@ -36,7 +36,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import textwrap
 
 import glibc_locale_data as g
 
@@ -282,9 +281,11 @@ def same_tree(path_a, path_b):
     return os.path.realpath(path_a) == os.path.realpath(path_b)
 
 
-def warn(text):
-    print(textwrap.fill(text, width=78,
-                        initial_indent='!! ', subsequent_indent='   '))
+# The `!!` formatter lives in the shared module now. Kept under this name
+# because diff_node_locales.py calls it as `dd.warn`, and because two copies
+# of it would drift the day one of them changed the indent the wrapper's
+# warnings block matches on.
+warn = g.warn
 
 
 def main(argv):

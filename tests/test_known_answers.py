@@ -15,7 +15,7 @@ import tempfile
 import unittest
 
 from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
-                       needs_clone, needs_floor_pair, run_step)
+                       flat, needs_clone, needs_floor_pair, run_step)
 
 import glibc_locale_data as g
 
@@ -387,13 +387,30 @@ class Step5CollationCode(StepRun):
         continuation lines, because that is the shape audit.sh collects and
         repeats at the bottom; as plain prose it scrolled away 300 lines above
         a summary that said the opposite."""
-        out = self.step('diff_collation_code.py', NEW, MID)
+        out = self.step('diff_collation_code.py', NEW, MID, '--allow-reverse')
         self.assertIn('\n!! 1 tracked path(s) present at glibc-2.39 and GONE '
                       'at glibc-2.34.', out)
         self.assertIn(f'\n     locale/C-collate-seq.c: ABSENT at {MID}\n', out)
-        block = out.split('!! ')[1].split('\n\n')[0]
+        # This pair is deliberately backwards, which the step now says out
+        # loud in a `!!` block of its own -- so the block under test is
+        # selected by what it says, not by being the first one printed.
+        self.assertIn('!! REVERSED PAIR, allowed on request', out)
+        marker = '!! 1 tracked path(s)'
+        block = marker + out.split(marker)[1].split('\n\n')[0]
         for line in block.split('\n')[1:]:
             self.assertTrue(line.startswith('   '), repr(line))
+
+    def test_the_reversed_pair_needs_the_flag(self):
+        """The call site, not the helper: this class runs 2.39 -> 2.34 twice
+        on purpose, and both runs assert what the WARNING says. Hard-code
+        allow_reverse=True in step 5 and every one of them stays green, so the
+        refusal itself needs its own test -- without the flag, exit 2 and no
+        report at all."""
+        rc, out = run_step('diff_collation_code.py', NEW, MID,
+                           out_dir=self.out_dir)
+        self.assertEqual(rc, 2, out)
+        self.assertIn('This pair is REVERSED', flat(out))
+        self.assertNotIn('Collation code changes between', out)
 
     def test_the_clean_sentence_is_the_one_the_wrapper_keys_on(self):
         """audit.sh takes exactly this sentence as step 5's clean verdict and
@@ -407,7 +424,7 @@ class Step5CollationCode(StepRun):
         audit = open(os.path.join(_harness_scripts(), '..', 'audit.sh'),
                      encoding='utf-8').read()
         self.assertIn("'^No substantive collation code change\\.'", audit)
-        out = self.step('diff_collation_code.py', NEW, MID)
+        out = self.step('diff_collation_code.py', NEW, MID, '--allow-reverse')
         self.assertNotIn('No substantive collation code change', out)
 
 

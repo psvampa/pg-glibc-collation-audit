@@ -34,6 +34,7 @@ Usage:
                                --new-locales-dir DIR --new-build-id NVR \\
                                [--old-tag TAG --new-tag TAG] \\
                                [--expect-files N] [--min-files N] [--repo PATH]
+                               [--allow-reverse]
 
 Example:
   python3 diff_node_locales.py \\
@@ -306,6 +307,8 @@ def main(argv):
                                       "findings exist at neither tag -- the "
                                       "ones no tag diff could ever see.")
     ap.add_argument('--new-tag', help="the upstream tag for the new side")
+    ap.add_argument('--allow-reverse', action='store_true',
+                    help="run a pair whose new tag is the OLDER commit. Refused by default: reversed, every step still prints a plausible clean result. Prints a `!!` block saying the direction is reversed.")
     ap.add_argument('--expect-files', type=int,
                     help="abort unless exactly this many files are compared")
     ap.add_argument('--min-files', type=int, default=dd.DEFAULT_MIN_FILES,
@@ -353,6 +356,10 @@ def main(argv):
     if opts.old_tag:
         repo = g.find_repo(opts.repo)
         g.check_refs(repo, opts.old_tag, opts.new_tag)
+        # The two tags decide which side's SUPPORTED maps which node's names,
+        # so a reversed pair labels the older node as the new one.
+        g.require_pair_order(repo, opts.old_tag, opts.new_tag,
+                             allow_reverse=opts.allow_reverse)
         invisible = in_neither_tag(repo, opts.old_tag, opts.new_tag,
                                    sorted(old_set | new_set))
 
