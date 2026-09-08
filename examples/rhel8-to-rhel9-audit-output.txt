@@ -124,8 +124,9 @@ versions; if it did, test these empirically before trusting a
 $ python3 diff_collation_code.py glibc-2.28 glibc-2.34   # TIER 1/2 hunk bodies abridged; TIER 3 in full
 Collation code changes between glibc-2.28 and glibc-2.34
 
-Tracked files that exist at neither tag -- nothing to read, and nothing to
-miss, for this version range:
+Tracked files that exist at neither tag and have no history at glibc-2.28
+-- not yet written when this range begins, so nothing to read and nothing to
+miss:
   locale/C-collate-seq.c
 
 TIER 1 -- weight assignment and comparison
@@ -176,7 +177,7 @@ TIER 3 -- reachable from the collation entry points, not classified
         3f02b772a4 Regenerate charmap-kw.h, locfile-kw.h
         5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
         04277e02d7 Update copyright dates with scripts/update-copyrights.
-  locale/programs/localedef.c: 12 substantive hunk(s), 3 comment/licence hunk(s) filtered
+  locale/programs/localedef.c: 11 substantive hunk(s), 4 comment/licence hunk(s) filtered
       @@ -85,6 +85,9 @@ static bool replace_archive;
          +/* If true create hard links to other locales (default).  */
       >> +bool hard_links = true;
@@ -193,10 +194,6 @@ TIER 3 -- reachable from the collation entry points, not classified
       >> +static char *normalize_codeset (const char *codeset, size_t name_len);
       >> -  const char *output_path;
       >> +  char *output_path;
-      @@ -226,7 +232,8 @@ main (int argc, char *argv[])
-         -     If the described files cannot be written return a NULL pointer.  */
-      >> +     If the described files cannot be written return a NULL pointer.
-         +     We don't free output_path because we will exit.  */
       @@ -389,6 +396,10 @@ parse_opt (int key, char *arg, struct argp_state *state)
       >> +    case OPT_NO_HARD_LINKS:
          +      /* Do not hard link to other locales.  */
@@ -392,7 +389,7 @@ TIER 1/2. The walk cannot follow a macro-computed include (`#include WEIGHT_H`) 
 reach a translation unit with no header of its own -- locale/weight.h, weightwc.h,
 lc-collate.c and C-collate.c are in TIER 1 by hand for exactly that reason.
 
-25 substantive hunk(s) found. Locale data alone does not settle this pair.
+24 substantive hunk(s) found. Locale data alone does not settle this pair.
 Lines marked >> are the code changes; read them and decide whether they can
 move weights. If any can, every locale listed by
   python3 flag_algorithmic_ranges.py glibc-2.34
@@ -758,7 +755,7 @@ unexamined are three different answers:
      sv_SE.utf8
    (6 name(s); full list: /tmp/pg-glibc-collation-audit/step3_affected_locales.txt)
 
--- Needs an empirical test: step 5 found 25 substantive hunk(s),
+-- Needs an empirical test: step 5 found 24 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged
      483 name(s) to confirm: generated names, and
      source names for the locales SUPPORTED does not list
@@ -794,7 +791,7 @@ unexamined are three different answers:
      (see docs/limitations.md)
 
 -- Not decided for you
-     25 hunk(s) marked >> in step 5. Whether any of them moves a
+     24 hunk(s) marked >> in step 5. Whether any of them moves a
      weight is a judgement call that needs someone to read C.
      If nobody will, treat step 4's list as unresolved and confirm
      empirically instead: docs/confirming-on-a-real-system.md

@@ -164,8 +164,14 @@ def run_git(args, repo, allow_fail=False):
 
         fatal: could not fetch <oid> from promisor remote
     """
+    # GIT_DIFF_OPTS is applied AFTER the command line, so `-U3` on the argv
+    # does not win: measured, `GIT_DIFF_OPTS=-u0 git diff -U3` returns zero
+    # context lines, and step 5's comment tracking -- which is what reads those
+    # lines -- then hides a comment that closes on one. It is dropped rather
+    # than overridden because there is no flag that outranks it.
+    env = {k: v for k, v in os.environ.items() if k != 'GIT_DIFF_OPTS'}
     p = subprocess.run(['git', *GIT_CONFIG_OVERRIDES, *args], cwd=repo,
-                       capture_output=True)
+                       capture_output=True, env=env)
     if p.returncode != 0 and not allow_fail:
         die(f"`git {' '.join(args)}` failed in {repo}:\n"
             f"{p.stderr.decode('utf-8', 'replace').strip()}")

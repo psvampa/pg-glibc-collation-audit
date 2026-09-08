@@ -414,6 +414,59 @@ class NoiseFilter(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertTrue(d.is_noise_line(line), line)
 
+    def test_a_comment_closed_on_a_context_line_does_not_hide_the_code(self):
+        """"The noise filter read every third line of the comment it was
+        tracking." `git diff` gives three lines of context; the filter kept
+        only the +/- lines, so a comment that opened on a changed line and
+        closed on a CONTEXT line stayed open for the rest of the hunk and
+        every changed line after it was marked noise -- eight lines of
+        charmap_find_value() in linereader.c over 2.34..2.39, printed without
+        the `>>` the docs tell the reader to scan for. Discard the context
+        lines again and this fails."""
+        body = ['-  /* old', '+  /* new', '   rest */', '+  code();']
+        marked = d.classify_body(body)
+        self.assertEqual([ln for ln, _ in marked],
+                         ['-  /* old', '+  /* new', '+  code();'],
+                         'a context line was emitted as a changed line')
+        self.assertFalse(marked[2][1],
+                         'code after a comment that closed on a context line '
+                         'was filtered as prose')
+
+    def test_a_continuation_of_a_comment_opened_in_context_is_still_noise(self):
+        """The control for the test above: reading the context lines must not
+        turn into marking everything as code. Here the comment OPENS on a
+        context line, so the changed line inside it is prose, and a hunk of
+        only that is filtered."""
+        body = ['   /* open', '+   more prose about the table', '   close */']
+        marked = d.classify_body(body)
+        self.assertEqual([ln for ln, _ in marked],
+                         ['+   more prose about the table'])
+        self.assertTrue(marked[0][1],
+                        'a comment opened on a context line was marked code')
+
+    def test_a_comment_marker_inside_a_string_or_line_comment_opens_nothing(self):
+        """A state wrongly left OPEN marks the code after it as prose, which
+        is the direction that hides a hunk -- and with the context lines now
+        read there are three times as many lines that can do it. Replace the
+        scanner with `rfind` and both of these mark `code ();` as noise."""
+        for prefix in (' ', '+'):
+            # Both call sites: the context line and the changed line advance
+            # the state through different lines of classify_body, and a test
+            # that only feeds one leaves the other free to go back to `rfind`.
+            for opener in ('// see /* below', 'x = f ("/*");',
+                           "c = '/'; /* real */"):
+                with self.subTest(prefix=prefix, opener=opener):
+                    body = [f'{prefix}  {opener}', '+  code ();']
+                    marked = d.classify_body(body)
+                    self.assertFalse(marked[-1][1], body)
+
+    def test_a_real_comment_still_opens_after_a_string(self):
+        """Control: masking the string must not swallow the comment that
+        follows it."""
+        marked = d.classify_body(['   f ("x");  /* opens here',
+                                  '+  still prose'])
+        self.assertTrue(marked[0][1])
+
     def test_a_hunk_made_only_of_dereferences_is_kept(self):
         """The failure that mattered: a hunk is dropped only when EVERY line
         is noise, so a hunk whose changed lines are all `*p = x;` vanished
@@ -424,6 +477,16 @@ class NoiseFilter(unittest.TestCase):
         marked = d.classify_body(body)
         self.assertTrue(any(not noise for _, noise in marked),
                         'a hunk of pointer writes was filtered as comment')
+
+
+class TrackedLists(unittest.TestCase):
+    """The walk subtracts its entry points from what it reports, so an entry
+    point that is in no tier is checked for existence and never diffed. That
+    is false negative "two entry points of step 5 were diffed by nobody"; this
+    is the assertion that keeps a sixth entry point from repeating it."""
+
+    def test_every_entry_point_is_also_in_a_tier(self):
+        self.assertLessEqual(set(d.ENTRY_POINTS), set(d.TIER1) | set(d.TIER2))
 
 
 class DiffParsing(unittest.TestCase):
@@ -453,13 +516,85 @@ class DiffParsing(unittest.TestCase):
         got = f.parse_diff(self.DIFF)
         self.assertEqual(got['localedata/locales/or_IN'], [(50, 0)])
 
-    def test_split_hunks_keeps_only_added_and_removed_lines(self):
+    def test_split_hunks_keeps_content_lines_and_stops_at_the_next_file(self):
+        """Context lines are kept -- classify_body tracks the open-comment
+        state through them -- and the next file's `diff --git`/`---`/`+++`
+        header is not one of them."""
         hunks = d.split_hunks(self.DIFF)
         self.assertEqual(len(hunks), 3)
         for _, body in hunks:
             for line in body:
-                self.assertIn(line[:1], ('+', '-'))
-                self.assertFalse(line.startswith(('+++', '---')))
+                self.assertIn(line[:1], ('+', '-', ' '))
+        joined = [ln for _, body in hunks for ln in body]
+        for header in ('--- a/localedata/locales/or_IN',
+                       '+++ b/localedata/locales/or_IN'):
+            self.assertNotIn(header, joined,
+                             'a file header leaked into a hunk body')
+
+    def test_a_comment_closing_in_context_is_read_through_split_hunks(self):
+        """The call site, not the helper: classify_body can only see a context
+        line if split_hunks kept it. Tested separately because dropping them
+        again in split_hunks leaves every classify_body test green -- they
+        hand it a body of their own."""
+        diff = ('diff --git a/locale/x.c b/locale/x.c\n'
+                'index 111..222 100644\n'
+                '--- a/locale/x.c\n'
+                '+++ b/locale/x.c\n'
+                '@@ -10,6 +10,6 @@ static void f (void)\n'
+                '-  /* old comment\n'
+                '+  /* new comment\n'
+                '     still the comment  */\n'
+                '+  new_code ();\n'
+                '   return;\n')
+        [(_, body)] = d.split_hunks(diff)
+        self.assertIn('     still the comment  */', body,
+                      'the context line was dropped before the filter saw it')
+        marked = d.classify_body(body)
+        self.assertEqual([ln for ln, _ in marked],
+                         ['-  /* old comment', '+  /* new comment',
+                          '+  new_code ();'])
+        self.assertFalse(marked[2][1],
+                         'the hunk would be filtered as comment/licence')
+
+    def test_split_hunks_keeps_a_changed_line_that_starts_with_two_signs(self):
+        """The old filter was `not startswith(('+++', '---'))`, which also
+        discarded a changed line whose own content began with `++` or `--`.
+        A discarded line is one the noise filter never sees, and a hunk whose
+        remaining lines are all comment is dropped whole."""
+        diff = ('diff --git a/locale/x.c b/locale/x.c\n'
+                'index 111..222 100644\n'
+                '--- a/locale/x.c\n'
+                '+++ b/locale/x.c\n'
+                '@@ -1,3 +1,3 @@\n'
+                ' /* a comment */\n'
+                '---argc;\n'
+                '+++idx;\n')
+        [(_, body)] = d.split_hunks(diff)
+        self.assertIn('---argc;', body)
+        self.assertIn('+++idx;', body)
+        marked = d.classify_body(body)
+        self.assertTrue(any(not noise for _, noise in marked),
+                        'a hunk of real code was left with nothing to mark')
+
+    def test_a_body_line_that_is_neither_content_nor_a_new_file_is_an_error(self):
+        """Ending a body on anything unrecognised drops every line after it,
+        and a hunk with nothing left is filtered as comment. Measured with
+        `color.diff=always`: every body line began with an escape."""
+        diff = ('@@ -1,2 +1,2 @@\n'
+                '\x1b[32m+  code ();\x1b[m\n'
+                ' ctx\n')
+        with self.assertRaises(SystemExit):
+            d.split_hunks(diff)
+
+    def test_split_hunks_keeps_the_rest_of_a_hunk_after_a_no_newline_marker(self):
+        r"""`\ No newline at end of file` sits between the two sides of a
+        hunk. Stopping there would drop the `+` side."""
+        diff = ('@@ -1 +1 @@\n'
+                '-old\n'
+                '\\ No newline at end of file\n'
+                '+new\n')
+        [(_, body)] = d.split_hunks(diff)
+        self.assertEqual(body, ['-old', '+new'])
 
 
 class CommentChar(unittest.TestCase):

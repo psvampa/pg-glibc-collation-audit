@@ -4,6 +4,227 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-08 (twenty-fourth entry)
+
+Step 5's noise filter reads the diff's context lines, so a comment ends where
+it really ends; a tracked path that is absent from both tags is asked whether
+it ever existed; and a walk that reached nothing is no longer a clean result.
+**No verdict moves** -- both audited pairs still have code to read, and the
+same locales need the same tests. Two published hunk counts do move, by one
+each: **25 -> 24** on `2.28..2.34` and **53 -> 52** on `2.34..2.39`. The floor
+pair holds at 65.
+
+### What it used to get wrong
+
+**The filter that decides which hunks are code read every third line of the
+comment it was tracking.** `git diff` prints three lines of context around each
+change; `split_hunks` kept only the `+` and `-` lines, and `classify_body`
+carried its open-comment state across that gap. A comment that opened on a
+changed line and closed on a context line stayed open for the rest of the hunk,
+and every changed line after it was marked as prose -- eight lines of
+`charmap_find_value (charmap, &lrb.buf[startidx], ...)` in
+`locale/programs/linereader.c` over `2.34..2.39`, printed with no `>>` on a
+page that tells the reader to scan for exactly that marker. The reverse
+happened too: a comment that opened on a context line made its changed
+continuations print as code, and two hunks that are comment on both sides --
+`localedef.c @@ -226,7 +232,8 @@` and `strcoll_l.c @@ -104,7 +103,7 @@` --
+counted as substantive, which is where the two counts above come from.
+
+Neither published pair lost a whole hunk to this, but the shape that would is
+ordinary: `-/* old comment` / `+/* new comment` / ` still the comment */` /
+`+  new_code ();` filters as "comment/licence hunk(s) filtered", and a step 5
+with nothing left prints "No substantive collation code change" -- which
+`audit.sh` reads as its clean verdict and turns into "a clean data diff is
+sufficient even for the locales step 4 flagged". That is the false negative
+this repository exists for, with the mechanism the first one had.
+
+**A changed line whose own content began with `++` or `--` was thrown away.**
+`split_hunks` dropped anything starting with `+++`/`---` to skip the file
+headers -- and `+` plus `++idx;` spells `+++idx;`. The headers are not in a
+hunk body to begin with, so the filter is gone: a body now ends where the next
+file's `diff --git` line starts, which is structural, and `\ No newline at end
+of file` no longer truncates the rest of a hunk either. No line in the five
+pinned tags had this shape, so nothing published changes; a discarded line is
+one the filter never sees, and a hunk whose survivors are all comment is
+dropped whole.
+
+**A tracked file that was in neither tag was called harmless.** `check_paths`
+filed every such path under "nothing to read, and nothing to miss", which is
+true of `locale/C-collate-seq.c` below glibc 2.35 and false of a file renamed
+away before the older tag: for that one the audit reads nothing, `git diff`
+reports no error, and the step goes on to its clean sentence. The two are now
+separated by asking `git log` for the path's history -- none means it had not
+been written yet (a note), some means it was renamed away (a `!!` warning, and
+the clean sentence is refused). Which refs that question covers is itself two
+of the corrections below. Over the three audited pairs
+`locale/C-collate-seq.c` is the only path absent at both tags and it comes back
+not-yet-born, so no output moves; `locale/xlocale.h`, deleted before 2.28, is
+the other shape and is what the test uses.
+
+**A `/*` inside a string literal or a `//` comment opened a block comment.**
+The state was decided by the last `/*` or `*/` on the line, so `x = f ("/*");`
+and `// see /* below` left it open, and every changed line after them was
+marked as prose. A state wrongly OPEN is the direction that hides code, and
+reading the context lines triples the number of lines that can do it, so the
+line is scanned rather than searched: strings and `//` are skipped outside a
+comment, and inside one nothing else is special. No line in the three pairs
+has that shape, so no count moves.
+
+**A hijacked `git diff` was "no substantive change" for every file.** The diff
+is asked for with `--no-ext-diff --no-textconv --no-color -U3
+--inter-hunk-context=0 --diff-algorithm=myers` now, one flag per way a config
+this run does not control emptied it or moved the number it reports:
+
+- `GIT_EXTERNAL_DIFF` in the environment -- which beats any config this run
+  pins -- or `diff.external`. With `/usr/bin/true`, all 39 files step 5 diffs
+  on `2.28..2.34` read as unchanged and the step printed its clean sentence at
+  exit 0, with six hunks in `ld-collate.c` alone -- two of them substantive.
+- A `diff.<driver>.textconv` reached through the user's `core.attributesFile`.
+  `--no-ext-diff` does not disable textconv, and a textconv that empties both
+  sides leaves an EMPTY diff -- so the hunk-less guard below never sees it
+  either. Measured with `* diff=nul` and `textconv = /usr/bin/true`.
+- `color.diff`, which beats the `color.ui=false` this tool already pinned --
+  the more specific setting wins. With `color.diff.frag = normal` the hunk
+  headers stay plain, so they still match, and every body line begins with an
+  escape: each hunk came back EMPTY, empty is all-noise, and step 5 printed
+  its clean sentence over the pair that carries Bug 22668. `split_hunks` now
+  also refuses a body line that is neither diff content nor the next file's
+  `diff --git`, instead of ending the hunk there quietly.
+- `diff.interHunkContext`: at 50 two nearby changes merge into one hunk and
+  the count reads 31 over `2.34..2.39` instead of 52, with the same 733 `>>`
+  lines -- nothing hidden, the same drift. Pinned with
+  `--inter-hunk-context=0`.
+- `diff.algorithm`: `patience` and `histogram` pair the same changed lines
+  into different hunks. The count holds at 52, so the count alone would not
+  notice -- but the marked lines go 733 to 731. Pinned with
+  `--diff-algorithm=myers`, and the test asserts the marked lines, not the
+  count.
+- `diff.context`: 0, 1 and 2 give 106, 76 and 61 hunks over `2.34..2.39`
+  instead of 52. Not the reassuring direction -- but a published number must
+  not move with a reader's config, and at zero context the comment tracking
+  this entry is about is blind again. `GIT_DIFF_OPTS` is applied AFTER the
+  command line, so `-U3` on the argv does not win it; `run_git` drops that
+  variable for every step.
+
+Separately, output that is not empty but holds no hunk -- `Binary files ...
+differ`, or anything this parser does not understand -- is an error naming the
+file, because the file DID change and nothing read the change.
+
+**Step 1 took an external diff's word for whether a collation template
+changed.** `git diff --quiet` ignores a `diff.external` helper -- unless
+`diff.trustExitCode` or `GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE` is set, and then
+the helper's exit code IS the verdict. Measured on `localedata/locales/sv_SE`
+over `2.28..2.34`: exit 1 plain, exit 0 hijacked, which step 1 prints as
+`UNCHANGED` for `iso14651_t1` and the two templates beside it -- the files
+328 locales inherit from. The probe carries `--no-ext-diff` now. Both audited
+pairs have all three templates unchanged, so no published verdict moves.
+
+**"Not yet written" was decided by asking one tag, with history
+simplification on.** A path added and removed INSIDE the range has no history
+at the older tag, so it was filed as not-yet-born and passed over in silence --
+measured with `posix/spawnattr_tcgetpgrp.c` over `2.34..2.39`, added by
+`342cc934a3` and removed by `6289d28d3c`. And `git log -- <path>` with default
+simplification drops a path that lived and died on a side branch that was later
+merged (reproduced in a fabricated repository). Both tags are asked now, with
+`--full-history`; all three real answers are unchanged.
+
+**A misspelt path in the curated lists read as "not yet written, nothing to
+miss".** The lists that decide what step 5 reads are hand-written, and a name
+in them that matches nothing has no history at either tag -- so the split
+above filed it under the benign half and the run went on with a smaller
+corpus. Measured with `ld-collate.c` spelt `ld-colate.c` in `ENTRY_POINTS` and
+`TIER1`: `2.28..2.34` reported **6** substantive hunks instead of 24 and a
+coverage of 8 files instead of 27, the Bug 22668 hunks gone, no `!!`
+anywhere, exit 0. "Not yet written" is now asked once more against every ref
+in the clone: a path no ref has ever carried is a fourth reason the clean
+sentence is refused, and its own `!!` block.
+
+**A shallow clone answered "not yet written" for a file that was renamed
+away.** The absent-at-both split above asks `git log -1 <tag> -- <path>`,
+and on a `--depth` clone that exits 0 with empty output for every path whose
+last commit is beyond the boundary -- the half of the answer that means
+nothing to miss. Measured on a depth-1 clone of this repository's own clone:
+`locale/xlocale.h` came back not-yet-born and the step printed its clean
+sentence. A shallow clone is now refused by name, and so is an answer that is
+neither `true` nor `false`: `--is-shallow-repository` dates from git 2.15, and
+an older `rev-parse` echoes an option it does not know and exits 0 -- which is
+not `true`, so the guard would have been off with nothing said. The clone this
+tool makes is `--filter=blob:none` and never shallow; a `--repo` pointing
+elsewhere is the case.
+
+**A collapsed include walk printed the clean sentence.** With
+`ENTRY_POINTS` pointed at paths that do not exist -- what a rename before both
+tags of a future pair produces -- the step reported "Coverage: 0 file(s)
+reached by the include walk", "No substantive collation code change." and no
+`!!` at all, at exit 0. A walk that reached nothing is now one of four reasons
+the clean sentence is refused, printed as its own `!!` block and listed under
+"This is NOT a clean result:". The reasons are collected in one list rather
+than tested one at a time, so a fifth cannot leave the clean branch reachable
+by accident. `audit.sh`'s unresolved branch and `docs/method.md` name all four.
+
+### Smaller corrections
+
+- `docs/method.md` and `audit-locale-diff.sh`'s own progress line called the
+  clone "shallow". It is `--filter=blob:none --no-checkout`: partial, with the
+  full history — which is what the absent-at-both split needs, and what the
+  new refusal above insists on. The page described the clone its own step 5
+  would now reject.
+- `docs/requirements.md` said the suite pins "the three tags". It pins five;
+  the floor pair has been pinned since the seventeenth entry.
+- `docs/results.md` argued the RHEL9-to-RHEL10 `ko_KR` verdict from "the two
+  tier-3 hunks". TIER 3 prints four over that pair; two of them bear on the
+  verdict, which is what the example beside it already said.
+
+### What was verified
+
+- Step 5 before and after on the three pairs: the only differences are the two
+  hunks that stopped counting, the eleven lines whose `>>` moved -- eight
+  gained in `linereader.c`, three lost inside those two hunks -- and the
+  reworded absent-at-both note. `24`, `52` and `65`, each tied to a test.
+- Mutation-checked: twenty-five guards, twenty-five mutations, each failing
+  the test named for it -- the context lines discarded in `split_hunks`; read but not
+  advancing the state; the `+++`/`---` filter restored; `rfind` back in
+  `_comment_open_after`, and separately back at the CHANGED-line call site,
+  which the first version of that test did not cover; the renamed-away split
+  dropped; the never-carried split dropped; each of the four blockers dropped
+  in turn; `--no-ext-diff` and
+  `--no-textconv`, `--no-color`, `-U3`, `--inter-hunk-context=0` and
+  `--diff-algorithm=myers` dropped;
+  `GIT_DIFF_OPTS` left in the environment; step 1's template probe taking the
+  helper's word; `--full-history` dropped; the hunk-less `die` removed; the unexpected-body-line `die`
+  turned back into a `break`; `absent_at_both` asking only the older tag; the
+  shallow refusal removed; and its "neither true nor false" arm removed. Controls that must
+  NOT fire: a comment that opens on a context line stays prose, a real comment
+  after a string still opens, `locale/C-collate-seq.c` absent at both tags
+  still gives a clean result on `2.28..2.28`, and the full clone is not
+  refused as shallow.
+- `scripts/acceptance-diff.sh --base main`: DIFFERS on all three pairs, and
+  every difference is one of the three above. `2.28..2.34`: the count in three
+  places, `localedef.c` 12 -> 11 substantive and 3 -> 4 filtered, and the
+  comment-only hunk that no longer prints -- it carried a `>>` on a line of
+  prose. `2.34..2.39`: the count in three places, `strcoll_l.c` 2 -> 1
+  substantive, and the eight `charmap_find_value` lines that gain their `>>`.
+  `2.12..2.17`: the reworded absent-at-both note alone; its 65 hunks are
+  untouched.
+- Both worked examples regenerated, and their three copies of each count are
+  now tied to `docs/results.md` by a test.
+- Every entry point is asserted to be in a tier as well: the walk subtracts its
+  entry points from what it reports, which is how two of them went undiffed
+  once already.
+- `false-negative-reviewer` on the diff, six times, each pass reading the
+  corrections of the one before. First: the `/*`-in-a-string, external-diff,
+  shallow-clone and untested-vanished-blocker items above. Second: textconv,
+  the changed-line call site whose test would have stayed green, and the
+  shallow answer that is neither true nor false. Third: `color.diff`, the
+  one-tag history question, `GIT_DIFF_OPTS` over `-U3`, history
+  simplification, and an over-claim in `docs/method.md` about which way the
+  filter errs. Fourth: step 1's template probe, `diff.interHunkContext`, and
+  `--full-history` as a guard with no test. Fifth: the misspelt path above,
+  and two records that did not match the runs behind them. Sixth: no false
+  negative left in the class -- `diff.algorithm`, two negative assertions that
+  could no longer fail, and a stale docstring. Every finding
+  carries the measurement that produced it, and every one has a test.
+
 ## 2026-09-07 (twenty-third entry)
 
 The list every step writes is the set that step reported, the node scan

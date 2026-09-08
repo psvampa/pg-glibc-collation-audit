@@ -256,6 +256,44 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
                           f'docs/results.md does not say {build} was measured')
 
 
+class Step5HunkCountsAgreeEverywhere(unittest.TestCase):
+    """Step 5's two hunk counts are published in four places per pair: the
+    step's own total, the summary's "step 5 found N", the summary's "N hunk(s)
+    marked >>", and the sentence in docs/results.md. Nothing tied them
+    together. They moved on 2026-09-05 (a third tier) and again on 2026-09-07
+    (the filter learned to read context lines), and a page left behind is
+    exactly what the step-4 "2" was for six weeks.
+
+    The counts against the real clone are asserted in test_known_answers;
+    this layer only checks that every published copy says the same thing.
+    """
+
+    EXAMPLES = {'rhel8-to-rhel9': 24, 'rhel9-to-rhel10': 52}
+
+    def counts(self, name):
+        text = read(os.path.join(REPO_ROOT, 'examples',
+                                 f'{name}-audit-output.txt'))
+        return (
+            re.findall(r'(?m)^(\d+) substantive hunk\(s\) found', text)
+            + re.findall(r'step 5 found (\d+) substantive hunk', text)
+            + re.findall(r'(\d+) hunk\(s\) marked >> in step 5', text))
+
+    def test_each_example_states_one_count_in_three_places(self):
+        for name, expected in self.EXAMPLES.items():
+            with self.subTest(example=name):
+                got = self.counts(name)
+                self.assertEqual(len(got), 3,
+                                 f'{name}: found {got}, expected three copies')
+                self.assertEqual(set(got), {str(expected)}, got)
+
+    def test_the_results_page_states_the_same_two_counts(self):
+        results = docs()[os.path.join('docs', 'results.md')]
+        self.assertIn(f"counts from 8 and 48 to the "
+                      f"{self.EXAMPLES['rhel8-to-rhel9']} and "
+                      f"{self.EXAMPLES['rhel9-to-rhel10']} a run prints today",
+                      ' '.join(results.split()))
+
+
 class TheExamplesCarryTheNodeSteps(unittest.TestCase):
     """docs/limitations.md quotes the summary block steps 9 and 10 add, and
     until 2026-09-07 that block appeared in no examples/*.txt and no test tied
