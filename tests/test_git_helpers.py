@@ -638,6 +638,10 @@ def make_glibc_shaped_repo(root, n_files, rename=False, dates=None):
     env1 = at(dates[0] if dates else None)
     env2 = at(dates[1] if dates else None)
     git(root, 'init', '-q', env=env1)
+    # See make_release_line_repo: the identity belongs to the fixture, so that
+    # a test adding a commit to it does not depend on the machine's config.
+    git(root, 'config', 'user.name', 't', env=env1)
+    git(root, 'config', 'user.email', 't@t', env=env1)
     git(root, 'add', '.', env=env1)
     git(root, 'commit', '-q', '-m', 't1', env=env1)
     git(root, 'tag', 't1', env=env1)
@@ -716,6 +720,13 @@ def make_release_line_repo(root, dates=None):
         git(root, 'add', '.', env=at(when))
         git(root, 'commit', '-q', '-m', msg, env=at(when))
     git(root, 'init', '-q', env=at(dates[0]))
+    # Written into THIS repository's config, not taken from the machine's: the
+    # tests that add a commit to this fixture call git without an environment,
+    # and a runner with no global user.name -- CI -- then fails the commit with
+    # "unable to auto-detect email address", exit 128. Measured there, after a
+    # green run on a laptop that happened to have one.
+    git(root, 'config', 'user.name', 't', env=at(dates[0]))
+    git(root, 'config', 'user.email', 't@t', env=at(dates[0]))
     commit('base', dates[0])
     commit('two-twenty-eight', dates[0])
     git(root, 'tag', 'glibc-2.28', env=at(dates[0]))
