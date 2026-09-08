@@ -421,12 +421,20 @@ class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
     def test_a_path_not_yet_written_still_gives_a_clean_result(self):
         """The control: same shape, benign cause. C-collate-seq.c arrives in
         2.35, so over a 2.28 range there is genuinely nothing to read -- and a
-        guard that fires here would make every audited pair unresolved."""
+        guard that fires here would make every audited pair unresolved.
+
+        The four blocker notices are what must be absent, named one by one.
+        This used to assert that NO `!!` was printed at all, which stopped
+        being the right assertion when the step started saying that one commit
+        compared with itself compares nothing -- and this class passes the same
+        tag twice on purpose, to isolate the injected condition."""
         rc, out = self.run_injected(
             "d.TIER1 = ['locale/C-collate-seq.c']\nd.TIER2 = []", OLD, OLD)
         self.assertEqual(rc, 0, out)
         self.assertIn('No substantive collation code change', out)
-        self.assertNotIn('!!', out)
+        for blocker in ('vanished before', 'exist at no ref in this clone',
+                        'GONE at', 'include walk reached'):
+            self.assertNotIn(blocker, flat(out))
 
 
 @needs_clone
@@ -601,11 +609,14 @@ def git(repo, *args, env=None):
                    env=env)
 
 
-def make_glibc_shaped_repo(root, n_files, rename=False):
+def make_glibc_shaped_repo(root, n_files, rename=False, dates=None):
     """A git repository that passes _is_glibc_clone: localedata/locales/ with
     `n_files` locale sources and a SUPPORTED, committed and tagged `t1`. With
     `rename`, a second commit `t2` renames the block-less file `x` to `y` AND
     gives it an LC_COLLATE block -- the case no upstream pair has produced.
+
+    `dates` is (t1, t2) as git date strings, for the pair-order tests: no
+    pinned tag pair is reversed, so the reversed pair has to be fabricated.
     """
     loc = os.path.join(root, 'localedata', 'locales')
     os.makedirs(loc)
@@ -621,18 +632,27 @@ def make_glibc_shaped_repo(root, n_files, rename=False):
                  f'copy "i18n"\nEND LC_CTYPE\n')
     with open(os.path.join(root, 'localedata', 'SUPPORTED'), 'w') as fh:
         fh.write('x.UTF-8/UTF-8 \\\ny.UTF-8/UTF-8 \\\n')
-    git(root, 'init', '-q', env=env)
-    git(root, 'add', '.', env=env)
-    git(root, 'commit', '-q', '-m', 't1', env=env)
-    git(root, 'tag', 't1', env=env)
+    at = lambda when: (env if when is None
+                       else dict(env, GIT_AUTHOR_DATE=when,
+                                 GIT_COMMITTER_DATE=when))
+    env1 = at(dates[0] if dates else None)
+    env2 = at(dates[1] if dates else None)
+    git(root, 'init', '-q', env=env1)
+    # See make_release_line_repo: the identity belongs to the fixture, so that
+    # a test adding a commit to it does not depend on the machine's config.
+    git(root, 'config', 'user.name', 't', env=env1)
+    git(root, 'config', 'user.email', 't@t', env=env1)
+    git(root, 'add', '.', env=env1)
+    git(root, 'commit', '-q', '-m', 't1', env=env1)
+    git(root, 'tag', 't1', env=env1)
     if rename:
-        git(root, 'mv', os.path.join(loc, 'x'), os.path.join(loc, 'y'), env=env)
+        git(root, 'mv', os.path.join(loc, 'x'), os.path.join(loc, 'y'), env=env2)
         with open(os.path.join(loc, 'y'), 'a') as fh:
             fh.write('LC_COLLATE\norder_start forward\n<U0041>\norder_end\n'
                      'END LC_COLLATE\n')
-        git(root, 'add', '.', env=env)
-        git(root, 'commit', '-q', '-m', 't2', env=env)
-        git(root, 'tag', 't2', env=env)
+        git(root, 'add', '.', env=env2)
+        git(root, 'commit', '-q', '-m', 't2', env=env2)
+        git(root, 'tag', 't2', env=env2)
     return root
 
 
@@ -646,6 +666,491 @@ def run_script(script, *args, env_extra=None):
     p = subprocess.run(cmd + list(args), cwd=SCRIPTS_DIR, env=env,
                        capture_output=True)
     return p.returncode, (p.stdout + p.stderr).decode('utf-8', 'replace')
+
+
+def add_unrelated_commit(repo, when, name='unrelated'):
+    """An orphan root committed at `when`: a commit that is an ancestor of
+    nothing and a descendant of nothing, with no glibc tag reachable from it,
+    so neither question pair_order asks can order it. No pinned tag pair has
+    that shape.
+
+    `--orphan` keeps the index, so the commit still carries whatever corpus
+    the repository had; the marker file is only there to make it non-empty,
+    and it is a new path so that this works in either fixture."""
+    env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+               GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t',
+               GIT_AUTHOR_DATE=when, GIT_COMMITTER_DATE=when)
+    git(repo, 'checkout', '-q', '--orphan', name, env=env)
+    with open(os.path.join(repo, f'{name}-marker'), 'w') as fh:
+        fh.write('a commit with no history behind it\n')
+    git(repo, 'add', '.', env=env)
+    git(repo, 'commit', '-q', '-m', name, env=env)
+    git(repo, 'tag', name, env=env)
+    return name
+
+
+def make_release_line_repo(root, dates=None):
+    """A repository shaped like glibc's branches, which is what breaks the
+    obvious answers.
+
+        A --- B(glibc-2.28) --- S(glibc-2.28.9000) --- C(glibc-2.34)  <- master
+                     \\
+                      D(backport)                    <- release/2.28/master
+
+    S is the "open master for the next release" snapshot tag, one commit after
+    the release, which is what `describe` returns for every master commit
+    between two releases.
+
+    D is committed AFTER C by default: that is the real shape --
+    `origin/release/2.28/master` carries commits dated years after
+    `glibc-2.34` -- and it is why a commit date cannot decide the order. D is a
+    2.28 and C a 2.34, so only the release behind each one puts them in
+    order.
+    """
+    dates = dates or ('2018-08-01T00:00:00+0000', '2021-08-02T00:00:00+0000',
+                      '2025-12-18T00:00:00+0000')
+    def at(when):
+        return dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+                    GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t',
+                    GIT_AUTHOR_DATE=when, GIT_COMMITTER_DATE=when)
+    os.makedirs(root, exist_ok=True)
+    def commit(msg, when):
+        with open(os.path.join(root, 'f'), 'a') as fh:
+            fh.write(msg + '\n')
+        git(root, 'add', '.', env=at(when))
+        git(root, 'commit', '-q', '-m', msg, env=at(when))
+    git(root, 'init', '-q', env=at(dates[0]))
+    # Written into THIS repository's config, not taken from the machine's: the
+    # tests that add a commit to this fixture call git without an environment,
+    # and a runner with no global user.name -- CI -- then fails the commit with
+    # "unable to auto-detect email address", exit 128. Measured there, after a
+    # green run on a laptop that happened to have one.
+    git(root, 'config', 'user.name', 't', env=at(dates[0]))
+    git(root, 'config', 'user.email', 't@t', env=at(dates[0]))
+    commit('base', dates[0])
+    commit('two-twenty-eight', dates[0])
+    git(root, 'tag', 'glibc-2.28', env=at(dates[0]))
+    commit('open master for the next release', dates[0])
+    git(root, 'tag', 'glibc-2.28.9000', env=at(dates[0]))
+    commit('two-thirty-four', dates[1])
+    git(root, 'tag', 'glibc-2.34', env=at(dates[1]))
+    git(root, 'checkout', '-q', '-b', 'release/2.28/master', 'glibc-2.28',
+        env=at(dates[2]))
+    commit('a backport, four years later', dates[2])
+    git(root, 'tag', 'backport', env=at(dates[2]))
+    git(root, 'checkout', '-q', 'glibc-2.34', env=at(dates[2]))
+    return root
+
+
+class PairOrderIsMeasuredNotAssumed(unittest.TestCase):
+    """"Nothing stopped a reversed pair": `./audit.sh glibc-2.34 glibc-2.28`
+    ran to the end at exit 0 with a plausible summary -- step 2 reporting the
+    same two files that touch LC_COLLATE and step 5 a hunk count, no `!!`
+    anywhere -- while step 4 scanned the older tag and step 2 called a locale
+    deleted in the real upgrade a harmless addition.
+
+    Fabricated repositories, because the shapes that matter are not in the
+    pinned tags: no pair of them is reversed, none is a release branch whose
+    commits are dated after the next release, and a git probe that fails to
+    answer exists in no repository at all.
+
+    The first version of this guard compared commit DATES first. These tests
+    are written against the shapes that broke it.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-order-repo-')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def linear(self, dates=None):
+        """t1 then t2 on one line of history, tagged."""
+        return make_glibc_shaped_repo(self.tmp, n_files=3, rename=True,
+                                      dates=dates)
+
+    def test_ancestry_settles_the_ordinary_pair(self):
+        repo = self.linear()
+        self.assertEqual(g.pair_order(repo, 't1', 't2')[0], 'forward')
+        status, detail = g.pair_order(repo, 't2', 't1')
+        self.assertEqual(status, 'reversed', detail)
+        self.assertIn('is an ancestor of', detail)
+
+    def test_a_commit_date_does_not_decide_anything(self):
+        """The descendant committed with the EARLIER date. Ancestry says
+        forward and that is the answer: history, not the clock."""
+        repo = self.linear(dates=('2021-01-01T00:00:00+0000',
+                                  '2020-01-01T00:00:00+0000'))
+        self.assertEqual(g.pair_order(repo, 't1', 't2')[0], 'forward')
+        self.assertEqual(g.pair_order(repo, 't2', 't1')[0], 'reversed')
+
+    def test_one_commit_spelt_two_ways_is_the_same_pair(self):
+        """The 1.12 defect at its root: `[ "$OLD" = "$NEW" ]` compared TEXT,
+        so a tag and the sha it resolves to -- the sha the run's own
+        provenance line prints -- read as two different tags."""
+        repo = self.linear()
+        sha = subprocess.run(['git', '-C', repo, 'rev-parse', 't2^{commit}'],
+                             capture_output=True).stdout.decode().strip()
+        status, detail = g.pair_order(repo, 't2', sha)
+        self.assertEqual(status, 'same', detail)
+        self.assertEqual(g.pair_order(repo, sha, 't2')[0], 'same')
+
+    def test_a_release_branch_commit_is_ordered_by_what_it_descends_from(self):
+        """The defect the first version of this guard shipped with, on the
+        shape that produced it. `origin/release/2.28/master` is dated after
+        `glibc-2.34` and is an ancestor of nothing on master, so "the newer
+        commit date" and "is it an ancestor" BOTH answered "not reversed" --
+        and `audit.sh glibc-2.34 <a 2.28 backport>` ran the whole audit
+        backwards at exit 0. What orders them is the release behind each
+        one."""
+        repo = make_release_line_repo(os.path.join(self.tmp, 'rel'))
+        status, detail = g.pair_order(repo, 'glibc-2.34', 'backport')
+        self.assertEqual(status, 'reversed', detail)
+        self.assertIn('the newest glibc tag behind backport is glibc-2.28',
+                      detail)
+        # And the correct order is not refused: the first version called this
+        # reversed too, on the same evidence.
+        self.assertEqual(g.pair_order(repo, 'backport', 'glibc-2.34')[0],
+                         'forward')
+        # A tag against a later commit on its own release branch is forward,
+        # and ancestry alone settles that one.
+        self.assertEqual(g.pair_order(repo, 'glibc-2.28', 'backport')[0],
+                         'forward')
+
+    def test_release_lineages_are_compared_as_numbers(self):
+        """`glibc-2.4` is a much OLDER release than `glibc-2.34`, and every
+        string comparison gets that backwards -- `'glibc-2.4' > 'glibc-2.34'`
+        is true in Python, in sort(1) and in test(1)."""
+        repo = make_release_line_repo(os.path.join(self.tmp, 'nums'))
+        base = subprocess.run(['git', '-C', repo, 'rev-parse',
+                               'glibc-2.28~1'],
+                              capture_output=True).stdout.decode().strip()
+        git(repo, 'checkout', '-q', '-b', 'old-line', base)
+        with open(os.path.join(repo, 'h'), 'w') as fh:
+            fh.write('an ancient release line\n')
+        git(repo, 'add', '.')
+        git(repo, 'commit', '-q', '-m', 'two-four')
+        git(repo, 'tag', 'glibc-2.4')
+
+        self.assertGreater('glibc-2.4', 'glibc-2.34',
+                           'the string comparison this replaces')
+        self.assertEqual(g.nearest_glibc_tag(repo, 'glibc-2.4')[1], (2, 4))
+        status, detail = g.pair_order(repo, 'glibc-2.34', 'glibc-2.4')
+        self.assertEqual(status, 'reversed', detail)
+        self.assertIn('the newest glibc tag behind glibc-2.4 is glibc-2.4 '
+                      '(release 2.4)', detail)
+        self.assertEqual(g.pair_order(repo, 'glibc-2.4', 'glibc-2.34')[0],
+                         'forward')
+
+    def test_only_the_release_counts_not_what_follows_it(self):
+        """A tag's third component cannot order two lines off one release, and
+        both kinds of third component were measured getting it wrong.
+
+        A development snapshot: `glibc-2.28.9000` is the tag one commit after
+        `glibc-2.28` that opens master for 2.29, and `describe` returns it for
+        every master commit up to that release. Read as a version of its own it
+        ranked a master commit above a 2.28 backport branch, and
+        `origin/release/2.28/master -> glibc-2.28.9000` answered forward --
+        step 2 reading that branch's own commits backwards without a word.
+
+        A point release, the same shape from the other side: master after 2.12
+        describes as `glibc-2.12`, while `release/2.12/master`'s tip describes
+        as `glibc-2.12.2`, so the branch outranked master and
+        `glibc-2.13~20 -> origin/release/2.12/master` answered forward while
+        the reverse was refused. Both measured on the pinned clone.
+
+        The release is the first two components. What comes after says where
+        inside or after that release a commit sits, which ancestry has already
+        settled for any pair on one line."""
+        repo = make_release_line_repo(os.path.join(self.tmp, 'snap'))
+        git(repo, 'tag', 'glibc-2.28.2', 'backport')
+        for rev in ('glibc-2.28.9000', 'glibc-2.28.2', 'backport'):
+            with self.subTest(rev=rev):
+                self.assertEqual(g.nearest_glibc_tag(repo, rev)[1], (2, 28))
+        for old, new in (('backport', 'glibc-2.28.9000'),
+                         ('glibc-2.28.9000', 'backport')):
+            with self.subTest(pair=f'{old}..{new}'):
+                status, detail = g.pair_order(repo, old, new)
+                self.assertEqual(status, 'undetermined', detail)
+                self.assertIn('(release 2.28)', detail)
+        # Ancestry still ranks the snapshot against the releases around it,
+        # and it is asked before any of this.
+        self.assertEqual(g.pair_order(repo, 'glibc-2.28.9000',
+                                      'glibc-2.34')[0], 'forward')
+
+    def test_a_tag_name_it_cannot_read_is_not_read_as_a_release(self):
+        """`describe` answered, and the answer is a name this tool does not
+        parse. That is a different fact from "no glibc tag is reachable", and
+        the detail line has to say which: over a ref whose own name is a tag,
+        "nothing reachable" would be a false sentence."""
+        repo = make_release_line_repo(os.path.join(self.tmp, 'odd'))
+        git(repo, 'checkout', '-q', '-b', 'odd-line', 'glibc-2.28')
+        with open(os.path.join(repo, 'k'), 'w') as fh:
+            fh.write('an oddly named tag\n')
+        git(repo, 'add', '.')
+        git(repo, 'commit', '-q', '-m', 'oddly tagged')
+        git(repo, 'tag', 'glibc-2x-tps')
+        name, release = g.nearest_glibc_tag(repo, 'glibc-2x-tps')
+        self.assertEqual(name, 'glibc-2x-tps')
+        self.assertIsNone(release)
+        status, detail = g.pair_order(repo, 'backport', 'glibc-2x-tps')
+        self.assertEqual(status, 'undetermined', detail)
+        self.assertIn('does not read as a release', detail)
+        # The other state's sentence, which would be false here: a tag WAS
+        # found behind this ref -- it is the ref itself.
+        self.assertNotIn('found no glibc tag behind glibc-2x-tps', detail)
+
+    def test_two_branches_off_one_release_are_undetermined(self):
+        """Divergent, and behind the same release tag: nothing here can order
+        them, and "could not tell" is not "in order"."""
+        repo = make_release_line_repo(os.path.join(self.tmp, 'two'))
+        git(repo, 'checkout', '-q', '-b', 'other', 'glibc-2.28')
+        with open(os.path.join(repo, 'g'), 'w') as fh:
+            fh.write('another backport\n')
+        git(repo, 'add', '.')
+        git(repo, 'commit', '-q', '-m', 'another backport')
+        git(repo, 'tag', 'other-backport')
+        status, detail = g.pair_order(repo, 'backport', 'other-backport')
+        self.assertEqual(status, 'undetermined', detail)
+        self.assertIn('neither is an ancestor of the other', detail)
+        self.assertIn('behind other-backport is glibc-2.28', detail)
+
+    def test_a_commit_with_no_release_tag_behind_it_is_undetermined(self):
+        """An orphan root: an ancestor of nothing, a descendant of nothing,
+        and no glibc tag reachable from it. `describe` fails, and that failure
+        must not become "in order".
+
+        On a repository that HAS release tags, so that the side with none is
+        this commit and not the corpus -- in a repository where no tag matches
+        the glob at all, git answers the same way for every ref and the test
+        would pass without discriminating anything. The other side is named in
+        the detail, which is what shows it did."""
+        repo = make_release_line_repo(os.path.join(self.tmp, 'noname'))
+        add_unrelated_commit(repo, '2020-01-01T00:00:00+0000')
+        status, detail = g.pair_order(repo, 'glibc-2.34', 'unrelated')
+        self.assertEqual(status, 'undetermined', detail)
+        self.assertIn('git describe found no glibc tag behind unrelated',
+                      detail)
+        self.assertIn('behind glibc-2.34 is glibc-2.34 (release 2.34)',
+                      detail)
+
+    def test_a_failed_ancestry_probe_is_not_read_as_in_order(self):
+        """The reassuring half is "not reversed", and `--is-ancestor` exits 1
+        for "no" and 128 for "I could not answer". Injected, because no
+        repository makes git fail here: the probe is the one call in this
+        helper's two allow_fail calls whose failure ABORTS -- the other one,
+        in nearest_glibc_tag, leaves the pair undetermined instead -- and
+        allow_fail is what turns a failure into a clean verdict everywhere
+        else in this tool."""
+        repo = self.linear()
+        rc, out = in_subprocess(
+            "repo = %r\n"
+            "real = g.run_git\n"
+            "class R:\n"
+            "    returncode = 128\n"
+            "    stdout = b''\n"
+            "    stderr = b'fatal: bad object'\n"
+            "def fake(args, repo, allow_fail=False):\n"
+            "    if args[0] == 'merge-base':\n"
+            "        return R()\n"
+            "    return real(args, repo, allow_fail)\n"
+            "g.run_git = fake\n"
+            "print(g.pair_order(repo, 't1', 't2'))" % repo)
+        self.assertNotEqual(rc, 0, 'a failed ancestry probe was swallowed')
+        self.assertNotIn("'forward'", out)
+        self.assertIn('not an answer', out)
+
+    def test_a_failed_describe_leaves_the_pair_undetermined(self):
+        """The other probe. `describe` failing means "I could not find the
+        lineage", which is not "the pair is in order": injected on the
+        release-branch pair, whose whole answer comes from `describe`."""
+        repo = make_release_line_repo(os.path.join(self.tmp, 'nodesc'))
+        rc, out = in_subprocess(
+            "repo = %r\n"
+            "real = g.run_git\n"
+            "class R:\n"
+            "    returncode = 128\n"
+            "    stdout = b''\n"
+            "    stderr = b'fatal: No names found, cannot describe anything.'\n"
+            "def fake(args, repo, allow_fail=False):\n"
+            "    if args[0] == 'describe':\n"
+            "        return R()\n"
+            "    return real(args, repo, allow_fail)\n"
+            "g.run_git = fake\n"
+            "print(g.pair_order(repo, 'glibc-2.34', 'backport')[0])" % repo)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('undetermined', out)
+        self.assertNotIn('forward', out)
+
+
+@needs_clone
+class TheRealReleaseBranchIsOrderedCorrectly(unittest.TestCase):
+    """The fabricated shapes above, against the clone this tool actually
+    reads. `origin/release/2.28/master` is where a RHEL8 build's upstream
+    commits live, and a bare sha is an input this tool invites: the provenance
+    line prints one for every tag it reads."""
+
+    REF = 'origin/release/2.28/master'
+    SNAPSHOT = 'glibc-2.28.9000'
+    # The point-release side of the same shape, out of the audited range: this
+    # branch's tip describes as glibc-2.12.2 and master after 2.12 as
+    # glibc-2.12, which is what used to rank the branch above master.
+    POINT_REF = 'origin/release/2.12/master'
+    POINT_MASTER = 'glibc-2.13~20'
+
+    def setUp(self):
+        for ref in (self.REF, self.SNAPSHOT, self.POINT_REF,
+                    self.POINT_MASTER):
+            p = subprocess.run(['git', '-C', GLIBC_CLONE, 'rev-parse',
+                                '--verify', '--quiet', ref + '^{commit}'],
+                               capture_output=True)
+            if p.returncode != 0:
+                self.skipTest(f'{ref} is not in the clone; both come with a '
+                              f'plain `git clone` of the mirror and '
+                              f'`fetch --tags`, which is what '
+                              f'audit-locale-diff.sh and CI both do')
+
+    def test_a_backport_commit_is_older_than_the_next_release(self):
+        status, detail = g.pair_order(GLIBC_CLONE, MID, self.REF)
+        self.assertEqual(status, 'reversed', detail)
+        self.assertIn(f'the newest glibc tag behind {self.REF} is glibc-2.28',
+                      detail)
+
+    def test_and_the_correct_order_is_not_refused(self):
+        self.assertEqual(g.pair_order(GLIBC_CLONE, self.REF, MID)[0],
+                         'forward')
+
+    def test_a_master_line_and_a_backport_branch_are_not_ordered(self):
+        """The real pairs the fabricated release-identity test stands for: a
+        backport branch and a master commit off the same release are two lines,
+        and nothing here can say which is upstream of the other. Both the
+        snapshot spelling (2.28) and the point-release spelling (2.12) are
+        measured, because each of them ordered this pair once."""
+        for old, new in ((self.REF, self.SNAPSHOT), (self.SNAPSHOT, self.REF),
+                         (self.POINT_MASTER, self.POINT_REF),
+                         (self.POINT_REF, self.POINT_MASTER)):
+            with self.subTest(pair=f'{old}..{new}'):
+                status, detail = g.pair_order(GLIBC_CLONE, old, new)
+                self.assertEqual(status, 'undetermined', detail)
+
+    def test_the_audited_pairs_are_still_forward(self):
+        """The control that matters most: the two audited pairs must be
+        untouched by any of this. The floor pair is covered end to end by
+        test_known_answers, which now runs every step through this guard."""
+        for old, new in ((OLD, MID), (MID, NEW)):
+            with self.subTest(pair=f'{old}..{new}'):
+                self.assertEqual(g.pair_order(GLIBC_CLONE, old, new)[0],
+                                 'forward')
+
+
+class TheStepsRefuseAReversedPair(unittest.TestCase):
+    """The call site, not only the classifier: what each state DOES is a
+    different mistake from what each state IS. Step 2 on the fabricated
+    repository, at the corpus floor so that only the order guard can fire --
+    a refusal that came from the floor instead would pass this test while
+    guarding nothing."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-order-step-')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-order-out-')
+        self.addCleanup(shutil.rmtree, self.out_dir, ignore_errors=True)
+        self.repo = make_glibc_shaped_repo(
+            self.tmp, n_files=g.MIN_LOCALE_FILES, rename=True,
+            dates=('2020-01-01T00:00:00+0000', '2021-01-01T00:00:00+0000'))
+
+    def step2(self, *args):
+        return run_script('filter_lc_collate_changes.py', *args,
+                          '--repo', self.repo,
+                          env_extra={'PG_GLIBC_AUDIT_OUT': self.out_dir})
+
+    def test_step_2_refuses_the_reversed_pair_and_reports_nothing(self):
+        rc, out = self.step2('t2', 't1')
+        self.assertEqual(rc, 2, out)
+        self.assertIn('REVERSED', out)
+        self.assertIn('Swap the arguments', flat(out))
+        self.assertNotIn('below the floor', out)
+        self.assertNotIn('Files with changes inside LC_COLLATE', out)
+
+    def test_the_forward_control_still_runs(self):
+        rc, out = self.step2('t1', 't2')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('Files with changes inside LC_COLLATE: 1', out)
+
+    def test_the_same_commit_twice_says_nothing_was_compared(self):
+        """A hand-run step used to end in its clean sentence, rc 0 and no
+        `!!`, for a pair that is one commit compared with itself -- a clean
+        verdict over a comparison that never happened. The wrapper said so and
+        the steps did not; the notice lives in the shared helper now."""
+        rc, out = self.step2('t1', 't1')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('!! ', out)
+        self.assertIn('t1 and t1 are the same commit', flat(out))
+        self.assertIn("they can only report 'nothing changed'", flat(out))
+
+    def test_an_undetermined_direction_is_said_out_loud_and_runs(self):
+        """The fourth state at the call site. Not an error -- nothing below is
+        wrong on its account -- but silence here reads as "the direction was
+        checked", and this is the one branch where the tool cannot tell which
+        way round the pair is. The shim in test_wrapper stands in for the
+        wrapper's summary block and cannot reach this warning: it replaces the
+        very subcommand that prints it."""
+        add_unrelated_commit(self.repo, '2020-01-01T00:00:00+0000')
+        rc, out = self.step2('t1', 'unrelated')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('!! The DIRECTION of this pair could not be', out)
+        self.assertIn('neither is an ancestor of the other', flat(out))
+
+    def test_allow_reverse_runs_but_says_the_pair_is_reversed(self):
+        """A deliberate reversed run is what the suite itself does on
+        2.39 -> 2.34. It must not look like an audit of an upgrade."""
+        rc, out = self.step2('t2', 't1', '--allow-reverse')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('!! REVERSED PAIR', out)
+        self.assertIn('Not an audit of an upgrade', flat(out))
+
+
+@needs_clone
+class Step1RefusesAReversedPairBeforeReportingAnything(unittest.TestCase):
+    """Step 1 is the fourth entry point that takes a pair, and the first one
+    with a clone to ask: it does the cloning. Unguarded, a hand-run
+    `audit-locale-diff.sh glibc-2.34 glibc-2.28` printed a changed-file count,
+    three template verdicts and a fan-in computed at the tag that is actually
+    the older one -- all of it about the other direction, and none of it saying
+    so. Under audit.sh this is also what keeps a doomed run from printing
+    findings before the refusal."""
+
+    def setUp(self):
+        self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-step1-order-')
+        self.addCleanup(shutil.rmtree, self.out_dir, ignore_errors=True)
+        self.env = {'PG_GLIBC_AUDIT_OUT': self.out_dir}
+
+    def test_it_refuses_and_reports_nothing(self):
+        rc, out = run_script('audit-locale-diff.sh', MID, OLD,
+                             env_extra=self.env)
+        self.assertEqual(rc, 2, out)
+        self.assertIn('This pair is REVERSED', flat(out))
+        self.assertNotIn('Locale files added, modified or deleted', out)
+        self.assertNotIn('Collation templates', out)
+
+    def test_allow_reverse_reports_and_says_the_pair_is_reversed(self):
+        rc, out = run_script('audit-locale-diff.sh', MID, OLD,
+                             '--allow-reverse', env_extra=self.env)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('!! REVERSED PAIR', out)
+        self.assertIn('Locale files added, modified or deleted', out)
+
+    def test_the_forward_control_is_untouched(self):
+        """The guard refuses a direction, and says nothing otherwise: the
+        three audited pairs' output has to stay byte-identical."""
+        rc, out = run_script('audit-locale-diff.sh', OLD, MID,
+                             env_extra=self.env)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('!!', out)
+
+    def test_a_third_argument_that_is_not_the_flag_is_refused(self):
+        rc, out = run_script('audit-locale-diff.sh', OLD, MID, '--nonsense',
+                             env_extra=self.env)
+        self.assertEqual(rc, 2, out)
+        self.assertIn("unknown argument '--nonsense'", out)
 
 
 class TagModeCorpusFloor(unittest.TestCase):

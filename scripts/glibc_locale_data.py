@@ -14,11 +14,15 @@ Also runnable directly, for the shell script:
   python3 glibc_locale_data.py fanin <tag> [changed_files.txt]
   python3 glibc_locale_data.py provenance <tag> [<tag> ...]
   python3 glibc_locale_data.py corpus <tag> [<tag> ...]
+  python3 glibc_locale_data.py order [--allow-reverse] [--quiet] <old_tag> <new_tag>
 """
+import contextlib
+import io
 import os
 import re
 import subprocess
 import sys
+import textwrap
 
 LOCALES_DIR = 'localedata/locales'
 
@@ -197,6 +201,254 @@ def check_refs(repo, *refs):
                         repo, allow_fail=True).returncode != 0]
     if still:
         die(f"unknown git ref(s) after fetching tags: {', '.join(still)}")
+
+
+def warn(text):
+    """The `!!` block shape audit.sh collects and repeats at the bottom.
+
+    One copy, in the shared module, because two copies of a formatter drift and
+    this repository has already paid for that: the suite's `flat()` exists
+    because output wrapped at 78 columns made a negative assertion vacuous, and
+    the wrapper's warnings block matches `^!!` followed by three-space
+    continuation lines. `diff_distro_locales.warn` is an alias for this.
+    """
+    print(textwrap.fill(text, width=78,
+                        initial_indent='!! ', subsequent_indent='   '))
+
+
+def _is_ancestor(repo, maybe_ancestor, descendant):
+    """Does git say the first commit is an ancestor of the second?
+
+    `merge-base --is-ancestor` exits 0 for yes, 1 for no, and anything else is
+    git failing to answer -- which must not read as "no". That third case is
+    why this is not written as `== 0`: allow_fail is for existence probes, and
+    everywhere else in this tool a swallowed git failure has meant a clean
+    verdict produced by not having looked.
+    """
+    p = run_git(['merge-base', '--is-ancestor', maybe_ancestor, descendant],
+                repo, allow_fail=True)
+    if p.returncode not in (0, 1):
+        die(f"`git merge-base --is-ancestor {maybe_ancestor[:12]} "
+            f"{descendant[:12]}` exited {p.returncode} in {repo}:\n"
+            f"       {p.stderr.decode('utf-8', 'replace').strip()}\n"
+            f"       That is not an answer. Refusing to treat a failed probe "
+            f"as 'the pair is in order'.")
+    return p.returncode == 0
+
+
+_GLIBC_TAG_RE = re.compile(r'^glibc-(\d+)\.(\d+)')
+
+
+def nearest_glibc_tag(repo, rev):
+    """The newest glibc tag this commit descends from, and which RELEASE it is.
+
+    Returns three different things, because three different facts reach the
+    caller and only one of them can order a pair:
+
+      (tag, (major, minor))  -- the tag, and the release it belongs to
+      (tag, None)            -- a tag whose NAME this tool does not read as a
+                                release, `glibc-2x-tps` in shape. No tag in
+                                the mirror looks like that today: all 125 that
+                                the `describe` glob matches parse, the oddly
+                                spelt ones (`glibc-2.16-tps`,
+                                `glibc-2.16-ports-merge`, `glibc-2.0.5b`)
+                                included -- they read as 2.16 and 2.0, which
+                                is what they are. The state is kept because a
+                                name nobody parsed is not a release, and only
+                                a fabricated tag exercises it.
+      None                   -- `describe` answered no name
+
+    `git describe --tags --abbrev=0 --match 'glibc-[0-9]*'` asks it: the tag
+    itself for a release commit, `glibc-2.28` for anything on
+    `release/2.28/master`, `glibc-2.28.9000` for a master commit just after
+    2.28. That is what orders two commits on different branches, where
+    ancestry cannot.
+
+    **The release is the first two components, and nothing after them.** What
+    follows is either a point release (`glibc-2.12.2`) or a development
+    snapshot -- `glibc-2.28.9000`, the tag one commit after `glibc-2.28` that
+    opens master for 2.29, and `glibc-2.17.90` in the older style. Both say
+    where inside or after a release a commit sits, and neither can order two
+    commits on DIFFERENT lines off that release: master after 2.12 describes as
+    `glibc-2.12` while `release/2.12/master`'s tip describes as `glibc-2.12.2`,
+    and reading that third component as a version ranked the branch above
+    master -- an unearned `forward` one way and a false refusal the other,
+    measured on the pinned clone. Between two commits on ONE line ancestry has
+    already answered, before this is asked.
+
+    Compared as NUMBERS, never as text: `glibc-2.4` is a much older release
+    than `glibc-2.34`, and every string comparison gets that backwards.
+
+    A tag reached but not read, and no name at all, are kept apart because the
+    caller prints which one happened -- "no glibc tag behind it" over a ref
+    whose own name is a tag would be a false sentence. Neither ever reads as
+    "the pair is in order".
+
+    What the None branch does NOT claim is a cause. `git describe` exits 128
+    for several -- a commit no tag describes, a glob that matches nothing, a
+    rev this clone cannot read -- and what it prints for each is git's own
+    prose, which differs by cause and by git build. Measured on the pinned
+    clone with git 2.50.1: `No names found, cannot describe anything.` for the
+    glob that matches nothing, `<rev> is neither a commit nor blob` for a rev
+    the clone has no object for; and in a repository where NO tag matches the
+    glob, git checks the empty name set first and every cause collapses into
+    the first message. None of it is parsed: the phrase says what describe
+    answered. `rev-parse --verify` upstream removes the unreadable-rev cause
+    for `pair_order`'s own calls; a clone that never fetched tags can still
+    reach the glob case, and lands on undetermined with neither side named,
+    which is the conservative direction.
+    """
+    p = run_git(['describe', '--tags', '--abbrev=0', '--match',
+                 'glibc-[0-9]*', rev], repo, allow_fail=True)
+    if p.returncode != 0:
+        return None
+    name = p.stdout.decode('utf-8', 'replace').strip()
+    if not name:
+        return None
+    m = _GLIBC_TAG_RE.match(name)
+    if not m:
+        return name, None
+    return name, (int(m.group(1)), int(m.group(2)))
+
+
+def lineage_phrase(ref, found):
+    """How pair_order says what it learnt about one side's lineage."""
+    if not found:
+        return f'git describe found no glibc tag behind {ref}'
+    name, release = found
+    if release is None:
+        return (f'the newest glibc tag behind {ref} is {name}, whose name this '
+                f'tool does not read as a release')
+    return (f'the newest glibc tag behind {ref} is {name} '
+            f'(release {release[0]}.{release[1]})')
+
+
+def pair_order(repo, old, new):
+    """Which direction this pair runs in. Returns (status, detail).
+
+    status is one of:
+      'same'         -- both refs resolve to ONE commit, however each is spelt
+      'forward'      -- new is newer than old: what every step assumes
+      'reversed'     -- new is the OLDER of the two
+      'undetermined' -- two commits nothing here can order. Named rather than
+                        folded into 'forward', because "could not tell" and
+                        "in order" are different facts and only one of them is
+                        a clean result.
+
+    A status and not a bool because the four cases are treated differently and
+    two of them are not errors -- the same reason verify_tag() returns one.
+
+    The questions, in the order they are asked:
+
+    1. Do both refs resolve to one commit? `glibc-2.39` and
+       `ef321e23c20eebc6d6fb4044425c00e6df27b05f` are one commit spelt two
+       ways, and the string comparison this replaces let that pair through as
+       if it were two versions.
+    2. Is one an ancestor of the other? That is git's own answer about which
+       came first, and it needs no heuristic. It settles every pair of release
+       tags -- 2.12..2.17, 2.28..2.34, 2.34..2.39 -- and also a tag against a
+       later commit on its own release branch.
+    3. Divergent commits are ordered by the RELEASE each one descends from
+       (nearest_glibc_tag above): a commit on `release/2.28/master` is a 2.28,
+       whatever its date. Only the release counts, never a point-release or
+       snapshot suffix, so two lines off one release stay unordered instead of
+       being ranked by a `.2` or a `.9000`.
+    4. Anything left is undetermined, and says so.
+
+    Commit dates decide nothing, and are not read. They were this helper's
+    first signal, and glibc's release branches are the reason they are not:
+    `origin/release/2.28/master` carries commits dated years AFTER
+    `glibc-2.34`, so "the newer commit date wins" declared
+    `glibc-2.34 -> a 2.28 backport commit` a forward pair -- exactly the
+    reversed run this guard exists to refuse -- and refused the same pair given
+    in the correct order. Measured on the pinned clone before this shipped.
+
+    Why the question is asked at all: nothing here used to compare the order,
+    and a reversed pair runs to the end at exit 0 with a plausible summary --
+    step 2 reporting the same two files that touch LC_COLLATE, step 5 a
+    substantive hunk count, no `!!` anywhere. What it hides: step 4 scans the
+    tag it is handed, so reversed it scans the older one and the locales added
+    in the newer tag (ckb_IQ and mnw_MM, both `copy "iso14651_t1"` at
+    glibc-2.34, in no tag before it) drop out of the exposed set; step 2 swaps
+    the reassuring "Added ... not analysed" for the noisy "Deleted ... any
+    index using one of these will fail", so a locale DELETED in the real
+    upgrade reads as a harmless addition; and step 3 closes over the wrong
+    tag's copy graph.
+    """
+    shas = []
+    for ref in (old, new):
+        p = run_git(['rev-parse', '--verify', f'{ref}^{{commit}}'], repo)
+        shas.append(p.stdout.decode('utf-8', 'replace').strip())
+    if shas[0] == shas[1]:
+        return 'same', f'{old} and {new} are one commit, {shas[0][:12]}'
+
+    pair = f'the new tag {new} against the old tag {old}'
+    if _is_ancestor(repo, shas[0], shas[1]):
+        return 'forward', f'{pair}: {old} is an ancestor of {new}'
+    if _is_ancestor(repo, shas[1], shas[0]):
+        return 'reversed', f'{pair}: {new} is an ancestor of {old}'
+
+    v_old = nearest_glibc_tag(repo, shas[0])
+    v_new = nearest_glibc_tag(repo, shas[1])
+    described = (f'{lineage_phrase(old, v_old)}, and '
+                 f'{lineage_phrase(new, v_new)}')
+    r_old = v_old[1] if v_old else None
+    r_new = v_new[1] if v_new else None
+    if r_old and r_new and r_old != r_new:
+        detail = (f'{pair}: they are on different branches, and {described}')
+        return ('reversed' if r_new < r_old else 'forward'), detail
+    return 'undetermined', (
+        f'{pair}: neither is an ancestor of the other, and {described}')
+
+
+def require_pair_order(repo, old, new, allow_reverse=False):
+    """Refuse a reversed pair -- or say out loud that one was allowed.
+
+    Deciding what the pair IS (pair_order) and deciding what to do about it are
+    different mistakes, so they are different functions with a test on each.
+
+    Silent only on 'forward'. It used to be silent on 'same' as well, on the
+    grounds that audit.sh prints a block of its own for that case -- which
+    left a hand-run `diff_collation_code.py <tag> <tag>` ending in "No
+    substantive collation code change", rc 0, no `!!`: a clean verdict over a
+    comparison that never happened. The notice lives here now, in one copy for
+    all four entry points, so under the wrapper every step that takes the pair
+    prints it into its own log -- measured, steps 1, 2 and 5 -- and the
+    summary's warnings block repeats it once.
+    """
+    status, detail = pair_order(repo, old, new)
+    if status == 'same':
+        warn(f"{old} and {new} are the same commit. Steps 1-5 compare "
+             f"upstream source against itself, so they can only report "
+             f"'nothing changed' -- which for an intra-major upgrade "
+             f"(RHEL 8.1 -> 8.2, say) says nothing at all. The distro's own "
+             f"builds are where such a change lives: supply both "
+             f"--*-locales-dir to audit.sh, and run sql/c_utf8_probe.sql. "
+             f"C.UTF-8's order moved in glibc-2.28-93.el8 with the upstream "
+             f"tag unchanged. See docs/limitations.md.")
+    elif status == 'reversed':
+        if not allow_reverse:
+            die(f"{detail}.\n"
+                f"       This pair is REVERSED. Every step takes <old_tag> "
+                f"<new_tag>, and reversed\n"
+                f"       they all run to the end and print a plausible clean "
+                f"result: step 4 scans\n"
+                f"       the older tag, step 2 reports a deleted locale as a "
+                f"harmless addition, and\n"
+                f"       step 3 closes over the wrong copy graph. Swap the "
+                f"arguments, or pass\n"
+                f"       --allow-reverse if this is deliberate.")
+        warn(f"REVERSED PAIR, allowed on request: {detail}. Every finding "
+             f"below has old and new the other way round -- what reads as "
+             f"added was deleted in the real upgrade, and step 4 scanned the "
+             f"older tag. Not an audit of an upgrade.")
+    elif status == 'undetermined':
+        warn(f"The DIRECTION of this pair could not be established: {detail}. "
+             f"Nothing below is wrong on that account, but neither is it "
+             f"checked: if the two arguments are the wrong way round, every "
+             f"step still runs and still prints a plausible clean result. "
+             f"Confirm which build is the older one.")
+    return status
 
 
 def verify_tag(repo, tag):
@@ -716,6 +968,33 @@ def _main(argv):
         check_refs(repo, *argv[1:])
         for tag in argv[1:]:
             list_locale_files(repo, tag)
+        return 0
+    if argv and argv[0] == 'order':
+        # The direction of the pair, for the two shell entry points. The status
+        # WORD is the only thing on stdout, because audit.sh captures it in a
+        # variable; every human sentence goes to stderr. A forward pair
+        # therefore adds nothing at all to the run's output, which is what
+        # keeps the audited pairs byte-identical.
+        #
+        # --quiet suppresses the `!!` blocks, not the refusal: the steps are
+        # the callers that print them, into their own logs, where the summary's
+        # warnings block finds them. audit.sh asks only for the word, and one
+        # more copy of a warning the reader has already seen teaches them to
+        # skip the section.
+        allow = '--allow-reverse' in argv[1:]
+        quiet = '--quiet' in argv[1:]
+        tags = [a for a in argv[1:]
+                if a not in ('--allow-reverse', '--quiet')]
+        if len(tags) != 2:
+            die("usage: glibc_locale_data.py order [--allow-reverse] "
+                "[--quiet] <old_tag> <new_tag>")
+        repo = find_repo()
+        check_refs(repo, *tags)
+        sink = io.StringIO() if quiet else sys.stderr
+        with contextlib.redirect_stdout(sink):
+            status = require_pair_order(repo, tags[0], tags[1],
+                                        allow_reverse=allow)
+        print(status)
         return 0
     if len(argv) >= 2 and argv[0] == 'fanin':
         repo = find_repo()

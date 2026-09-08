@@ -55,7 +55,9 @@ The first run also clones glibc, which needs network and disk:
 
 Run `ldd --version` on the old and the new node. Those two numbers are the
 tags you pass, as `glibc-<version>` — glibc 2.28 and 2.34 become `glibc-2.28`
-and `glibc-2.34`.
+and `glibc-2.34`. **Old first, new second**: a reversed pair is refused rather
+than answered, because backwards every step still prints a plausible clean
+result ([docs/method.md](docs/method.md#the-five-steps-in-detail)).
 
 **The audited pairs are RHEL8 → RHEL9 and RHEL9 → RHEL10** — the two adjacent
 upgrades this project publishes results for ([docs/scope.md](docs/scope.md)).

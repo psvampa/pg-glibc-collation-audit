@@ -211,6 +211,21 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
         found = [name for name, text in docs().items() if printed[0] in text]
         self.assertTrue(found, 'no doc quotes the NOT RUN heading any more')
 
+    def test_the_direction_NOT_ESTABLISHED_block_is_quoted_verbatim(self):
+        """The third of these ties. The wrapper prints this heading when
+        neither tag is an ancestor of the other and the newest glibc tag
+        behind each one does not order them either -- "the direction was not
+        checked", which reads as "the direction is fine" if it is left
+        unsaid. A doc quotes the heading, and this asserts the wrapper still
+        prints exactly it."""
+        wrapper = read(os.path.join(REPO_ROOT, 'audit.sh'))
+        printed = [m.group(1) for m in
+                   re.finditer(r'^\s*echo "(-- Direction of the pair: NOT '
+                               r'ESTABLISHED)"', wrapper, re.M)]
+        self.assertEqual(len(printed), 1, 'audit.sh no longer prints it')
+        found = [name for name, text in docs().items() if printed[0] in text]
+        self.assertTrue(found, 'no doc quotes the heading any more')
+
     def test_the_below_floor_example_matches_the_asserted_numbers(self):
         """The example is a saved run, so it can go stale exactly the way the
         old step 4 figure did. Its table is tied to the same numbers

@@ -15,6 +15,13 @@
 #              [--old-locales-dir DIR --old-build-id NVR]
 #              [--new-locales-dir DIR --new-build-id NVR]
 #
+# The order of the two tags is not a formality: every step assumes the second
+# one is the newer. Given them the other way round the run used to go to the
+# end at exit 0 with a plausible summary -- step 4 scanning the older tag, and
+# step 2 calling a deleted locale a harmless addition. A reversed pair is
+# refused now. One commit spelt two ways -- a tag and its own sha -- is run,
+# and the run says that nothing was compared.
+#
 # The --*-locales-dir options are optional and read a node's own
 # /usr/share/i18n/locales/. Each side you supply adds the
 # distro-versus-upstream check for that side (step 6 for old, step 7 for new)
@@ -36,6 +43,8 @@ usage() {
   echo "         [--new-locales-dir DIR --new-build-id NVR]" >&2
   echo "       e.g. $0 glibc-2.28 glibc-2.34" >&2
   echo "       tags are glibc-<version>; run \`ldd --version\` on each node" >&2
+  echo "       OLD first, NEW second: a reversed pair is refused, not" >&2
+  echo "       answered. Every --* option takes a value." >&2
   echo >&2
   echo "       The --*-locales-dir options are OPTIONAL. Given a copy of a" >&2
   echo "       node's /usr/share/i18n/locales/, the run also checks whether" >&2
@@ -61,13 +70,22 @@ OLD=$1
 NEW=$2
 shift 2
 
+# Every option here takes a value, and `shift 2` with only one argument left
+# exits 1 under `set -e` printing NOTHING -- measured with
+# `--new-locales-dir` as the last word on the line. An empty value is refused
+# for the same reason it is not accepted from a file: `--old-locales-dir ""`
+# leaves OLD_LOCALES empty, which is indistinguishable from not having asked
+# for the node checks at all.
+needs_value() {
+  [ -n "${2:-}" ] || { echo "error: $1 needs a value" >&2; usage; }
+}
 OLD_LOCALES=""; OLD_BUILD=""; NEW_LOCALES=""; NEW_BUILD=""
 while [ $# -gt 0 ]; do
   case $1 in
-    --old-locales-dir) OLD_LOCALES=${2:-}; shift 2 ;;
-    --old-build-id)    OLD_BUILD=${2:-};   shift 2 ;;
-    --new-locales-dir) NEW_LOCALES=${2:-}; shift 2 ;;
-    --new-build-id)    NEW_BUILD=${2:-};   shift 2 ;;
+    --old-locales-dir) needs_value "$@"; OLD_LOCALES=$2; shift 2 ;;
+    --old-build-id)    needs_value "$@"; OLD_BUILD=$2;   shift 2 ;;
+    --new-locales-dir) needs_value "$@"; NEW_LOCALES=$2; shift 2 ;;
+    --new-build-id)    needs_value "$@"; NEW_BUILD=$2;   shift 2 ;;
     *) echo "error: unknown argument '$1'" >&2; usage ;;
   esac
 done
@@ -146,25 +164,57 @@ run_step() {
   "$@" 2>&1 | tee "$log"
 }
 
+banner "STEP 1  What changed, and how far it reaches"
+run_step 1 "$SCRIPTS/audit-locale-diff.sh" "$OLD" "$NEW"
+
+# Which pair this actually is, asked of git -- and asked HERE because step 1 is
+# what clones the repository and verifies both refs, so nothing before it can
+# ask git anything. Step 1 asks the same question first, and refuses there, so
+# that no finding is printed for a pair that is about to be rejected; steps 2
+# and 5 ask it again for themselves, and --quiet is what keeps this call from
+# adding one more copy of their `!!` block. Two questions in one answer:
+#
+#   reversed -- step 1 has already exited 2 and this script stopped with it.
+#               Reversed, all five steps run to the end and print a plausible
+#               clean result; the direction was never compared at all.
+#   same     -- one commit, however each side is spelt. This used to be
+#               `[ "$OLD" = "$NEW" ]`, a comparison of TEXT, so
+#               `./audit.sh glibc-2.39 ef321e23...` -- the sha this run's own
+#               provenance line prints -- skipped the notice entirely and
+#               summarised "no locale's LC_COLLATE changed".
+#
+# The status word is the only thing the subcommand puts on stdout, so a forward
+# pair adds nothing to the output.
+ORDER=$(python3 "$SCRIPTS/glibc_locale_data.py" order --quiet "$OLD" "$NEW")
+
 # A minor-version upgrade inside one RHEL major is two builds of the SAME
 # upstream release, so every step below has nothing to compare and reports a
 # clean everything. That is not a clean result, and C.UTF-8 is the proof: its
 # order changed between RHEL 8.1 and 8.2, both of them upstream glibc 2.28.
 SAME_TAG=0
-if [ "$OLD" = "$NEW" ]; then
-  SAME_TAG=1
-  echo
-  echo "!! $OLD and $NEW are the same tag. Steps 1-5 compare upstream source"
-  echo "   against itself, so they can only report 'nothing changed' -- which"
-  echo "   for an intra-major upgrade (RHEL 8.1 -> 8.2, say) says nothing at"
-  echo "   all. The distro's own builds are where such a change lives: supply"
-  echo "   both --*-locales-dir, and run sql/c_utf8_probe.sql. C.UTF-8's order"
-  echo "   moved in glibc-2.28-93.el8 with the upstream tag unchanged."
-  echo "   See docs/limitations.md."
-fi
-
-banner "STEP 1  What changed, and how far it reaches"
-run_step 1 "$SCRIPTS/audit-locale-diff.sh" "$OLD" "$NEW"
+case $ORDER in
+  # The `!!` block for this case comes from the order check that every step
+  # taking the pair runs -- measured, steps 1, 2 and 5 each print it -- so it
+  # lands in their logs, which is where the warnings block at the bottom finds
+  # it and repeats it once. It used to be echoed here, and then only the
+  # wrapper said it: a hand-run step printed its clean sentence over a
+  # comparison that had not happened.
+  same) SAME_TAG=1 ;;
+  forward) ;;
+  # The steps printed their own `!!` block; the summary repeats it, because a
+  # warning 400 lines up has not been delivered.
+  undetermined) ;;
+  # No state falls through to the quiet branch: an unrecognised word means the
+  # check did not answer, and "the pair is in order" is the assumption that
+  # runs the whole audit against the wrong tag.
+  *)
+    echo "error: the order check answered '$ORDER', which is none of the" >&2
+    echo "       states this script handles (same, forward, undetermined;" >&2
+    echo "       a reversed pair never gets here, it exits 2 in step 1)." >&2
+    echo "       Not continuing." >&2
+    exit 1
+    ;;
+esac
 
 banner "STEP 2  Which of those changes are inside LC_COLLATE"
 run_step 2 python3 "$SCRIPTS/filter_lc_collate_changes.py" "$OLD" "$NEW"
@@ -427,9 +477,21 @@ else
   echo "     diff, including the node-to-node one, can never clear."
 fi
 
+if [ "$ORDER" = "undetermined" ]; then
+  echo
+  echo "-- Direction of the pair: NOT ESTABLISHED"
+  echo "     Neither of $OLD and $NEW is an ancestor of the other, and the"
+  echo "     glibc release behind each one does not put them in order either"
+  echo "     -- so nothing here checked that $NEW is the newer of the two"
+  echo "     (step 1 prints which tag it found behind each). If they are"
+  echo "     the wrong way round, every list above is the wrong tag's: step 4"
+  echo "     scanned $NEW, and step 2 reports a locale deleted in the upgrade"
+  echo "     as a harmless addition. Confirm which build is older."
+fi
+
 if [ "$SAME_TAG" = "1" ]; then
   echo
-  echo "-- One tag, compared with itself"
+  echo "-- One commit, compared with itself"
   echo "     $OLD -> $NEW. Everything above that says 'nothing changed' means"
   echo "     'nothing was compared'. For an intra-major upgrade the evidence is"
   echo "     the node-to-node check and sql/c_utf8_probe.sql, nothing else."

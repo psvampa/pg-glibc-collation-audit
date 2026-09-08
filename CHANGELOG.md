@@ -4,6 +4,200 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-08 (twenty-fifth entry)
+
+Which pair you typed is now established before anything is compared: which of
+the two tags is the newer commit, and whether the two are one commit spelt two
+ways. **No verdict moves and no published number changes** -- `audit.sh`'s
+output on the three measured pairs is byte-identical to the commit before this
+one.
+
+### What it used to get wrong
+
+**A reversed pair produced a plausible clean audit.** `./audit.sh glibc-2.34
+glibc-2.28` ran to the end at exit 0. Nothing in the tool compared the order
+of the two tags: the wrapper tested `[ "$OLD" = "$NEW" ]` and
+`check_refs` tested only that both refs resolve. Measured on that pair, the
+output is the shape of the published `2.28..2.34` run -- step 2 reporting two
+files that touch `LC_COLLATE` (`or_IN`, `sv_SE`), step 5 a substantive hunk
+count, no `!!` anywhere. What is wrong with it does not appear in the output
+at all:
+
+- Step 4 scans the tag it is handed. Reversed it scans the older one, so a
+  locale that only exists in the newer tag is not asked the question step 4
+  exists to ask. `ckb_IQ` and `mnw_MM` are absent at `glibc-2.28` and both
+  `copy "iso14651_t1"` at `glibc-2.34` (read from the pinned clone), so
+  reversed they leave the exposed set in silence.
+- Step 2 swaps its reassuring bucket for its noisy one. A locale DELETED in the
+  real upgrade -- where any index using it fails outright -- is reported as
+  "Added ... not analysed".
+- Step 3 closes over the older tag's `copy` graph, and step 1's fan-in is
+  computed there too.
+
+**The same-tag notice compared text, not commits.** `./audit.sh glibc-2.39
+ef321e23c20eebc6d6fb4044425c00e6df27b05f` -- the tag and the commit sha the
+run's own provenance line prints for it -- is one commit compared with itself,
+and neither the `!!` block nor the summary's "nothing was compared" section
+fired: rc 0, and a summary reading "none -- no locale's `LC_COLLATE` changed".
+That is the sixteenth entry's false negative reopened by spelling. Same-tag
+runs matter because an intra-major upgrade (RHEL 8.1 to 8.2) is two builds of
+one upstream release, and `C.UTF-8`'s order moved across exactly such a bump.
+
+**An option without a value exited 1 without a message.** `./audit.sh
+glibc-2.28 glibc-2.34 --new-locales-dir` died in `shift 2` under `set -e`,
+printing nothing at all -- and the node checks that option exists to enable
+are the only ones that can see `C.UTF-8`.
+
+### What changed
+
+`glibc_locale_data.pair_order()` answers the question with a STATUS, not a
+bool, because the four cases are not two: `same` (both refs resolve to one
+commit, however each is spelt), `forward`, `reversed`, and `undetermined`.
+Folding that fourth state into `forward` would be a clean result produced by
+not having looked, which is this repository's whole subject.
+
+The direction is git's own answer, asked in this order: is one commit an
+ancestor of the other, and if they are on different branches, which glibc
+RELEASE does each one descend from (`git describe --tags --abbrev=0 --match
+'glibc-[0-9]*'`, read as major and minor), compared as numbers -- `glibc-2.4`
+is older than `glibc-2.34`, which no string comparison gets right. Only when
+neither question orders the pair is it `undetermined`.
+
+**The release is the first two components and nothing after them**, and both
+kinds of suffix were measured getting that wrong while this change was being
+reviewed. `glibc-2.28.9000` is the tag one commit after `glibc-2.28` that opens
+master for 2.29, and `describe` returns it for every master commit up to 2.29:
+read as a version of its own it ranked a master commit above a 2.28 backport
+branch, so `origin/release/2.28/master -> glibc-2.28.9000` answered `forward`.
+The point releases do it from the other side: master after 2.12 describes as
+`glibc-2.12` while `release/2.12/master`'s tip describes as `glibc-2.12.2`, so
+`glibc-2.13~20 -> origin/release/2.12/master` answered `forward` and the
+reverse was refused. Two lines off one release are now `undetermined`, which is
+the honest answer; between two commits on ONE line ancestry has already
+answered before any of this is asked.
+
+**Commit dates decide nothing, and the first version of this fix is why.** It
+compared `git log -1 --format=%ct` first and treated it as decisive. glibc's
+release branches invert that: `origin/release/2.28/master` carries commits
+dated years after `glibc-2.34`, and it is an ancestor of nothing on master, so
+both of that version's signals answered "not reversed". Measured on the pinned
+clone before this shipped: `order glibc-2.34 origin/release/2.28/master` said
+`forward`, which is `audit.sh` running the whole audit backwards at exit 0 over
+the closest upstream object to what a RHEL8 node actually runs -- and the same
+pair in the CORRECT order was refused. Both now answer right. A bare sha is an
+input this tool invites, since the provenance line prints one for every tag it
+reads.
+
+`git merge-base --is-ancestor` exits 1 for "no" and 128 for "I could not
+answer", and the second must not read as the first: anything but 0 or 1 aborts.
+That is one of the two `allow_fail` calls here; the other is `describe`, whose
+failure leaves the pair undetermined rather than aborting, because "I could not
+find the lineage" is not a reason to refuse a pair ancestry may yet order --
+but it is never read as ordered either. `nearest_glibc_tag` returns three
+things for the same reason: a tag with its release, a tag whose NAME it does
+not read as a release (`glibc-2x-tps` in shape -- no tag in the mirror looks
+like that today, the odd 2.16-era spellings included), and no name at all. The
+detail line says which happened, because "no glibc tag behind it" printed over
+a ref whose own name is a tag is a false sentence. It claims no cause for the
+third: `git describe` exits 128 for a commit no tag describes, a glob that
+matches nothing and a rev the clone cannot read, and what it prints for each is
+git's own prose -- three different sentences on the pinned clone with git
+2.50.1, and one sentence for all of them in a repository where no tag matches
+the glob at all. Parsing that would be a guess, so the sentence says what
+describe answered and nothing about why.
+
+`require_pair_order()` decides what to DO about the status, which is a
+different mistake and has its own tests at each call site: it refuses a
+reversed pair with exit 2 unless `--allow-reverse` is passed, in which case it
+prints a `!!` block saying every finding below has old and new the other way
+round. It also carries the same-commit notice, which used to live in
+`audit.sh` alone -- so a hand-run `diff_collation_code.py <tag> <tag>` ended in
+"No substantive collation code change", rc 0, no `!!`: a clean verdict over a
+comparison that never happened. Silent on `forward`, which is what keeps the
+audited pairs' output unchanged.
+
+Four entry points ask, because a guard routed around locally stays alive for
+the next caller: step 1 (`audit-locale-diff.sh`, which now takes
+`--allow-reverse` too and asks before it prints a single finding), step 2,
+step 5, and the node-to-node comparison, whose two tags decide which node's
+names each side's `SUPPORTED` maps. The wrapper does NOT take
+`--allow-reverse`: a reversed whole audit answers no question of the method, so
+it says to swap the arguments.
+
+`audit.sh` gets the status from the same helper (`glibc_locale_data.py order
+--quiet`), so `SAME_TAG` is now commit identity rather than string equality,
+and an `undetermined` pair gets its own summary block, `-- Direction of the
+pair: NOT ESTABLISHED`, next to the existing one-tag block. A word the wrapper
+does not recognise stops the run rather than falling through to the quiet
+branch. Every `--*` option now refuses a missing or empty value by name, with
+the usage text and exit 2.
+
+### What was verified
+
+- `scripts/acceptance-diff.sh --base main`: **IDENTICAL** on `2.28..2.34`,
+  `2.34..2.39` and `2.12..2.17` (544, 1291 and 1788 lines).
+- The full suite ran green, no skips.
+- Sixteen pairs measured on the pinned clone, each printing the answer this
+  entry claims: the three audited and floor pairs forward; the reversed tag
+  pair and `glibc-2.34 -> a release/2.28 commit` refused; `a release/2.28
+  commit -> glibc-2.34`, `glibc-2.28 -> the release/2.28 tip`,
+  `release/2.28 -> release/2.34` and `glibc-2.28.9000 -> glibc-2.34` forward;
+  `origin/release/2.28/master` against `glibc-2.28.9000` undetermined in both
+  directions, one direction of the same shape at 2.17, and the point-release
+  shape at 2.12 undetermined in both directions; `glibc-2.0.5b -> glibc-2.28`
+  forward, since a name the tool reads as release 2.0 orders like one;
+  `glibc-2.39` against its own sha `same`.
+- Mutation-checked, twenty-five mutants, each failing the test named for it:
+  the ancestry return in each direction; the "not an answer" abort on a probe
+  that exits 128; the release comparison dropped, and the same comparison made
+  on the tag NAME instead of its numbers; the release read as the whole dotted
+  version instead of its first two components; a tag whose name is not read as
+  a release collapsed into the no-name state, and that state's sentence
+  reworded into a claim about the lineage; the fall-through to
+  `undetermined` turned into `forward`; the refusal itself; the same-commit
+  notice; the `undetermined` warning; the wrapper's commit-identity
+  `SAME_TAG`, its `NOT ESTABLISHED` block and its unrecognised-status branch;
+  each of the four `needs_value` branches separately; step 1's call and step 1
+  passing the flag on; step 5's call and step 5 honouring the flag; step 8's
+  call; and, for a control this change had to reword, a path absent at both
+  tags filed as "no ref ever had it" instead of "not yet written". Control: an
+  edit to `pair_order`'s docstring alone leaves the suite green.
+- One guard is deliberately redundant and no mutation can show it:
+  `nearest_glibc_tag` checks `describe`'s exit status, and then that it printed
+  a name at all, and both end in `None` -- so removing the first changes no
+  answer. What is guarded is the outcome: such a pair is left `undetermined`,
+  which has its own mutant above. `tests/README.md` records it.
+- Three tests were found to be decoration -- green under a mutation that
+  removed exactly what they claimed to guard -- and fixed. The wrapper's
+  `undetermined` test drives a shim that replaces the very subcommand that
+  warns, so it could not see the warning disappear -- a step-level test does
+  now. Step 5's refusal and step 8's guard had no test at all: deleting either
+  call left the whole suite green. And the option-value test covered one branch
+  of four, so a mutation to any of the other three stayed green; it covers all
+  four now, with a missing value and an empty one each.
+- Read from the pinned clone with `GIT_NO_LAZY_FETCH=1`: `ckb_IQ` and `mnw_MM`
+  absent at `glibc-2.28`, present at `glibc-2.34`, both `copy "iso14651_t1"`
+  inside `LC_COLLATE`.
+- By hand: `./audit.sh glibc-2.34 glibc-2.28` exits 2 with no `AUDIT SUMMARY`,
+  and `./audit.sh glibc-2.39 ef321e23...` says "nothing was compared".
+- `false-negative-reviewer` on the diff five times, each pass reading the
+  corrections of the one before with a fresh context. First: the date-first
+  ordering described above, step 5's refusal and step 8's guard with no test at
+  all, and the silent `same` at the Python call sites. Second:
+  development-snapshot tags read as releases. Third: the point releases doing
+  the same thing from the other side, and a detail line that called a tag it
+  could not parse unreachable. Fourth and fifth: nothing in the defect class --
+  which is what "done" looks like -- and, each time, a sentence claiming more
+  than the code knows, including a measurement of mine taken on the wrong
+  corpus. Every finding carries the measurement that produced it, and every one
+  has a test.
+- `doc-sweep` four times -- among what it caught: a header comment claiming
+  that one commit spelt two ways is refused when it is run, an "either signal
+  is enough to refuse" that the rewrite above falsified, the count of measured
+  pairs in this very list, a summary heading that said "one tag" over a tag and
+  its own sha, and an `import time` left behind by the ordering this entry
+  abandoned.
+
 ## 2026-09-08 (twenty-fourth entry)
 
 Step 5's noise filter reads the diff's context lines, so a comment ends where

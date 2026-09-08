@@ -131,8 +131,9 @@ a control.**
 
 That is entirely outside the source method: both sides of such an upgrade are
 upstream glibc 2.28, so the tag pair is `glibc-2.28..glibc-2.28` and steps 1-5
-have nothing to compare. `audit.sh` now says so when both tags match, because
-otherwise every step reports a clean everything. The node-to-node comparison
+have nothing to compare. `audit.sh` now says so whenever the two tags resolve
+to the same commit — however each side is spelt — because otherwise every step
+reports a clean everything. The node-to-node comparison
 and the probe are the whole answer there.
 
 Run that changelog grep on both nodes — and know what it is worth. It found the

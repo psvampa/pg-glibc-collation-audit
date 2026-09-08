@@ -19,7 +19,7 @@ reported the single most dangerous locale as harmless.
 
 Usage:
   python3 filter_lc_collate_changes.py <old_tag> <new_tag> [--repo <path>]
-                                       [--diff-file <path>]
+                                       [--diff-file <path>] [--allow-reverse]
 
 Example:
   python3 filter_lc_collate_changes.py glibc-2.28 glibc-2.34
@@ -176,6 +176,8 @@ def main(argv):
     ap.add_argument('old_tag')
     ap.add_argument('new_tag')
     ap.add_argument('--repo', help="path to the glibc clone (autodetected)")
+    ap.add_argument('--allow-reverse', action='store_true',
+                    help="run a pair whose new tag is the OLDER commit. Refused by default: reversed, every step still prints a plausible clean result. Prints a `!!` block saying the direction is reversed.")
     ap.add_argument('--diff-file',
                     help="use this -U0 diff instead of generating one "
                          "(for offline reruns; must match the two tags)")
@@ -183,6 +185,12 @@ def main(argv):
 
     repo = g.find_repo(opts.repo)
     g.check_refs(repo, opts.old_tag, opts.new_tag)
+
+    # Which of the two is newer, asked of git rather than assumed. Reversed,
+    # this step swaps its reassuring bucket for its noisy one: a locale
+    # DELETED in the real upgrade is reported as "Added ... not analysed".
+    g.require_pair_order(repo, opts.old_tag, opts.new_tag,
+                         allow_reverse=opts.allow_reverse)
     rng = f'{opts.old_tag}..{opts.new_tag}'
     pathspec = g.LOCALES_DIR + '/'
 
