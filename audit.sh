@@ -322,7 +322,9 @@ case $STEP5 in
   *)
     echo "-- Needs an empirical test: step 5 did NOT reach a clean result, so"
     echo "   the locales step 4 flagged stay UNRESOLVED. Read step 5's output:"
-    echo "   a tracked file vanished between the tags, or the step did not"
+    echo "   a tracked file vanished between the tags or was renamed away"
+    echo "   before both of them, a tracked path exists at no ref in the"
+    echo "   clone, the include walk reached nothing, or the step did not"
     echo "   finish."
     echo "     $(count_lines "$STEP4_LIST") name(s) to confirm: generated names, and"
     echo "     source names for the locales SUPPORTED does not list"

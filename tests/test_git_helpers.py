@@ -14,7 +14,8 @@ import sys
 import tempfile
 import unittest
 
-from _harness import GLIBC_CLONE, MID, NEW, OLD, SCRIPTS_DIR, needs_clone
+from _harness import (GLIBC_CLONE, MID, NEW, OLD, SCRIPTS_DIR, flat,
+                      needs_clone)
 
 import glibc_locale_data as g
 import diff_collation_code as d
@@ -70,6 +71,362 @@ class GitFailureIsNotSilence(unittest.TestCase):
         n = d.report_file(GLIBC_CLONE, 'locale/coll-lookup.h',
                           f'{MID}..{NEW}', False, quiet_when_clean=True)
         self.assertEqual(n, 0)
+
+
+@needs_clone
+class AbsentAtBothIsTwoFacts(unittest.TestCase):
+    """"A tracked path absent from BOTH tags was called harmless."
+
+    check_paths files every such path under "nothing to read, and nothing to
+    miss". That is true of a file not yet written when the range begins, and
+    false of one renamed away before the older tag -- for which the audit reads
+    nothing, `git diff` reports no error, and the step goes on to print its
+    clean sentence. Both shapes are in the real clone: locale/C-collate-seq.c
+    arrives in glibc 2.35, and locale/xlocale.h was deleted before 2.28.
+    """
+
+    def test_a_path_deleted_before_the_old_tag_is_not_harmless(self):
+        renamed, unborn, never = d.absent_at_both(
+            GLIBC_CLONE, ['locale/xlocale.h', 'locale/C-collate-seq.c'],
+            OLD, MID)
+        self.assertEqual(renamed, ['locale/xlocale.h'])
+        self.assertEqual(unborn, ['locale/C-collate-seq.c'])
+        self.assertEqual(never, [])
+
+    def test_a_path_that_lived_and_died_inside_the_range_is_not_unborn(self):
+        """Asking only the OLDER tag files a path added and removed inside the
+        range under "not yet written, nothing to miss".
+        posix/spawnattr_tcgetpgrp.c is added by 342cc934a3 and removed by
+        6289d28d3c, both between 2.34 and 2.39."""
+        renamed, unborn, never = d.absent_at_both(
+            GLIBC_CLONE, ['posix/spawnattr_tcgetpgrp.c'], MID, NEW)
+        self.assertEqual((renamed, unborn, never),
+                         (['posix/spawnattr_tcgetpgrp.c'], [], []))
+
+    def test_a_path_that_lived_on_a_merged_side_branch_is_not_unborn(self):
+        """`git log -- <path>` with default history simplification does not
+        report a path that was added and deleted on a branch that was later
+        merged: the merge has the same tree as its first parent for that path,
+        so simplification prunes the side. --full-history keeps it. Fabricated,
+        because glibc has no path of this shape in the audited pairs."""
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-sidebranch-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+        with open(os.path.join(tmp, 'keep'), 'w') as fh:
+            fh.write('base\n')
+        git(tmp, 'init', '-q', env=env)
+        git(tmp, 'add', '.', env=env)
+        git(tmp, 'commit', '-q', '-m', 'base', env=env)
+        git(tmp, 'checkout', '-q', '-b', 'side', env=env)
+        with open(os.path.join(tmp, 'gone.c'), 'w') as fh:
+            fh.write('int f (void) { return 0; }\n')
+        git(tmp, 'add', '.', env=env)
+        git(tmp, 'commit', '-q', '-m', 'add gone.c', env=env)
+        git(tmp, 'rm', '-q', 'gone.c', env=env)
+        git(tmp, 'commit', '-q', '-m', 'remove gone.c', env=env)
+        git(tmp, 'checkout', '-q', '-', env=env)
+        git(tmp, 'merge', '-q', '--no-ff', '-m', 'merge side', 'side', env=env)
+        git(tmp, 'tag', 'old', env=env)
+        with open(os.path.join(tmp, 'keep'), 'a') as fh:
+            fh.write('later\n')
+        git(tmp, 'add', '.', env=env)
+        git(tmp, 'commit', '-q', '-m', 'later', env=env)
+        git(tmp, 'tag', 'new', env=env)
+
+        simplified = subprocess.run(
+            ['git', '-C', tmp, 'log', '-1', '--format=%H', 'old', '--',
+             'gone.c'], capture_output=True, env=env)
+        if simplified.stdout.strip():
+            self.skipTest('this git does not simplify the side branch away; '
+                          'the case this test guards is not reproducible here')
+        renamed, unborn, never = d.absent_at_both(tmp, ['gone.c'], 'old', 'new')
+        self.assertEqual((renamed, unborn, never), (['gone.c'], [], []),
+                         'a file that existed and was removed read as '
+                         '"not yet written"')
+
+    def test_a_path_no_ref_ever_carried_is_not_read_as_not_yet_written(self):
+        """A path NO ref in the clone has ever had is not a file waiting to
+        be written: it is a name in the curated lists that matches nothing,
+        and those lists are the ceiling of what step 5 reads. Measured with
+        `ld-collate.c` spelt `ld-colate.c`: the pair reported 6 substantive
+        hunks instead of 24, the Bug 22668 hunks gone, and the only mention
+        was a note saying there was nothing to miss."""
+        renamed, unborn, never = d.absent_at_both(
+            GLIBC_CLONE, ['locale/programs/ld-colate.c'], OLD, MID)
+        self.assertEqual((renamed, unborn, never),
+                         ([], [], ['locale/programs/ld-colate.c']))
+
+    def test_a_failed_git_log_is_not_read_as_never_existed(self):
+        """The reassuring half is "did not exist yet": an error must not land
+        there."""
+        rc, out = in_subprocess(
+            "print(d.absent_at_both(repo, ['locale/xlocale.h'], '%s', '%s'))"
+            % (BAD, BAD))
+        self.assertNotEqual(rc, 0, 'a failed git log was swallowed')
+        self.assertNotIn("(['locale/xlocale.h'], [], [])", out)
+
+
+@needs_clone
+class AShallowCloneCannotAnswerThis(unittest.TestCase):
+    """`git log` on a shallow clone exits 0 with empty output for any path
+    whose last commit is beyond the boundary -- and empty is the half of
+    absent_at_both's answer that means "nothing to miss". Found by the
+    false-negative reviewer on this PR: on a depth-1 clone, locale/xlocale.h
+    (deleted before 2.28) came back not-yet-born and step 5 printed its clean
+    sentence."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-shallow-')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.repo = os.path.join(self.tmp, 'glibc')
+        # file://, not a path: a LOCAL clone ignores --depth and hardlinks the
+        # whole object store, so a path-cloned "shallow" repository is not
+        # shallow at all and the test would pass against a repository that
+        # cannot reproduce the defect.
+        p = subprocess.run(['git', 'clone', '--quiet', '--depth', '1',
+                            '--branch', OLD, '--no-checkout',
+                            'file://' + os.path.abspath(GLIBC_CLONE),
+                            self.repo], capture_output=True)
+        if p.returncode != 0:
+            self.skipTest('could not make a shallow clone: '
+                          + p.stderr.decode('utf-8', 'replace')[:200])
+        shallow = subprocess.run(['git', '-C', self.repo, 'rev-parse',
+                                  '--is-shallow-repository'],
+                                 capture_output=True)
+        self.assertEqual(shallow.stdout.strip(), b'true',
+                         'the fixture clone is not shallow')
+
+    def test_absent_at_both_refuses_a_shallow_clone(self):
+        rc, out = in_subprocess(
+            "print(d.absent_at_both(%r, ['locale/xlocale.h'], '%s', '%s'))"
+            % (self.repo, OLD, OLD))
+        self.assertNotEqual(rc, 0, 'a shallow clone was read as history')
+        self.assertIn('shallow', out)
+        self.assertNotIn("([], ['locale/xlocale.h'], [])", out)
+
+    def test_an_answer_that_is_neither_true_nor_false_is_not_read_as_deep(self):
+        """`--is-shallow-repository` dates from git 2.15; an older `rev-parse`
+        echoes an option it does not know and exits 0. That is not `true`, so
+        a `== b'true'` guard would be off with nothing said."""
+        rc, out = in_subprocess(
+            "class R:\n"
+            "    stdout = b'--is-shallow-repository\\n'\n"
+            "real = g.run_git\n"
+            "g.run_git = lambda a, *rest, **k: (R() if a[:1] == ['rev-parse']\n"
+            "                                   else real(a, *rest, **k))\n"
+            "print(d.absent_at_both(repo, ['locale/xlocale.h'], '%s', '%s'))"
+            % (OLD, MID))
+        self.assertNotEqual(rc, 0, 'an unusable answer was read as "not shallow"')
+        self.assertIn('neither true nor false', out)
+
+    def test_the_full_clone_still_answers(self):
+        """Control: the refusal must not fire on the clone this tool uses."""
+        renamed, unborn, never = d.absent_at_both(
+            GLIBC_CLONE, ['locale/xlocale.h'], OLD, MID)
+        self.assertEqual((renamed, unborn, never),
+                         (['locale/xlocale.h'], [], []))
+
+
+@needs_clone
+class AHijackedDiffIsNotNoChange(unittest.TestCase):
+    """`diff.external` in a config this run does not control, or
+    GIT_EXTERNAL_DIFF in the environment, replaces the unified diff with
+    whatever that program prints. With /usr/bin/true, every tracked file read
+    as "no substantive change" and the step printed its clean sentence."""
+
+    def test_an_external_diff_driver_does_not_change_the_count(self):
+        env = dict(os.environ, GIT_EXTERNAL_DIFF='/usr/bin/true',
+                   GIT_NO_LAZY_FETCH='1')
+        p = subprocess.run([sys.executable, 'diff_collation_code.py', OLD, MID],
+                           cwd=SCRIPTS_DIR, env=env, capture_output=True)
+        out = (p.stdout + p.stderr).decode('utf-8', 'replace')
+        self.assertEqual(p.returncode, 0, out)
+        self.assertIn('24 substantive hunk(s) found', out)
+
+    def test_a_textconv_driver_does_not_change_the_count(self):
+        """--no-ext-diff does NOT disable `diff.<driver>.textconv`, and a
+        textconv that empties both sides leaves an EMPTY diff -- which the
+        hunk-less guard below never sees either, because there is no output
+        at all. Reached through the user's core.attributesFile, which no
+        override this run makes can pin."""
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-textconv-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        attrs = os.path.join(tmp, 'attributes')
+        with open(attrs, 'w', encoding='utf-8') as fh:
+            fh.write('* diff=nul\n')
+        cfg = os.path.join(tmp, 'gitconfig')
+        with open(cfg, 'w', encoding='utf-8') as fh:
+            fh.write('[core]\n\tattributesFile = %s\n'
+                     '[diff "nul"]\n\ttextconv = /usr/bin/true\n' % attrs)
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=cfg, GIT_NO_LAZY_FETCH='1')
+
+        # The fixture must bite, or this test guards nothing: without the
+        # flag, the same config has to empty the diff.
+        bare = subprocess.run(
+            ['git', '-C', GLIBC_CLONE, 'diff', '--no-ext-diff',
+             f'{OLD}..{MID}', '--', 'locale/programs/ld-collate.c'],
+            env=env, capture_output=True)
+        if bare.stdout.strip():
+            self.skipTest('textconv is not applied by this git; nothing to '
+                          'guard against here')
+
+        p = subprocess.run([sys.executable, 'diff_collation_code.py', OLD, MID],
+                           cwd=SCRIPTS_DIR, env=env, capture_output=True)
+        out = (p.stdout + p.stderr).decode('utf-8', 'replace')
+        self.assertEqual(p.returncode, 0, out)
+        self.assertIn('24 substantive hunk(s) found', out)
+
+    def hostile(self, body):
+        """A GIT_CONFIG_GLOBAL holding `body`, plus a check that it bites."""
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-hostile-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cfg = os.path.join(tmp, 'gitconfig')
+        with open(cfg, 'w', encoding='utf-8') as fh:
+            fh.write(body)
+        return dict(os.environ, GIT_CONFIG_GLOBAL=cfg, GIT_NO_LAZY_FETCH='1')
+
+    def step5(self, env, old, new):
+        p = subprocess.run([sys.executable, 'diff_collation_code.py', old, new],
+                           cwd=SCRIPTS_DIR, env=env, capture_output=True)
+        return p.returncode, (p.stdout + p.stderr).decode('utf-8', 'replace')
+
+    def test_a_coloured_diff_does_not_read_as_all_comment(self):
+        """`color.diff` beats the `color.ui=false` override (more specific
+        wins). With the hunk headers left plain they still match, every body
+        line begins with an escape, each hunk comes back empty and therefore
+        all-noise, and step 5 printed its clean sentence over the pair that
+        carries Bug 22668."""
+        env = self.hostile('[color]\n\tdiff = always\n'
+                           '[color "diff"]\n\tfrag = normal\n')
+        raw = subprocess.run(
+            ['git', '-C', GLIBC_CLONE, '-c', 'color.ui=false', 'diff',
+             f'{OLD}..{MID}', '--', 'locale/programs/ld-collate.c'],
+            env=env, capture_output=True)
+        if b'\x1b[' not in raw.stdout:
+            self.skipTest('this git does not colour a piped diff here')
+        rc, out = self.step5(env, OLD, MID)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('24 substantive hunk(s) found', out)
+
+    def test_the_context_count_is_not_the_readers_to_choose(self):
+        """The classifier reads the context lines, so the count of them is
+        part of the measurement. Both routes: `diff.context` in config, and
+        GIT_DIFF_OPTS, which git applies AFTER the command line -- so `-U3` on
+        the argv does not win and run_git drops the variable instead."""
+        for name, env in (
+                ('diff.context', self.hostile('[diff]\n\tcontext = 0\n')),
+                # interHunkContext=50 merges two nearby changes into one hunk:
+                # 31 instead of 52, with the same >> lines. Nothing hidden,
+                # the same drift in a published number.
+                ('diff.interHunkContext',
+                 self.hostile('[diff]\n\tinterHunkContext = 50\n')),
+                ('GIT_DIFF_OPTS', dict(os.environ, GIT_DIFF_OPTS='-u0',
+                                       GIT_NO_LAZY_FETCH='1'))):
+            with self.subTest(route=name):
+                rc, out = self.step5(env, MID, NEW)
+                self.assertEqual(rc, 0, out)
+                self.assertIn('52 substantive hunk(s) found', out)
+
+    def test_the_diff_algorithm_is_not_the_readers_to_choose(self):
+        """patience and histogram pair the same changed lines into different
+        hunks: the hunk count holds at 52 over 2.34..2.39 but the `>>` lines
+        go 733 -> 731, so the count alone would not notice. Nothing is
+        hidden -- every changed line still carries its marker -- but a
+        published number must not move with a reader's config."""
+        for algo in ('patience', 'histogram'):
+            with self.subTest(algorithm=algo):
+                env = self.hostile('[diff]\n\talgorithm = %s\n' % algo)
+                rc, out = self.step5(env, MID, NEW)
+                self.assertEqual(rc, 0, out)
+                self.assertIn('52 substantive hunk(s) found', out)
+                marked = [ln for ln in out.split('\n')
+                          if ln.startswith('      >> ')]
+                self.assertEqual(len(marked), 733)
+
+    def test_output_with_no_hunk_in_it_is_not_read_as_unchanged(self):
+        """"Binary files ... differ", or any diff this parser does not
+        understand: the file DID change and nothing read the change."""
+        rc, out = in_subprocess(
+            "class R:\n"
+            "    stdout = b'Binary files a/x and b/x differ\\n'\n"
+            "g.run_git = lambda *a, **k: R()\n"
+            "d.report_file(repo, 'locale/programs/ld-collate.c', 'a..b', False)")
+        self.assertNotEqual(rc, 0, 'a diff with no hunk was read as no change')
+        self.assertIn('no hunk', out)
+
+
+@needs_clone
+class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
+    """"Step 5 printed its clean sentence over a walk that read nothing."
+
+    Unreachable with any tag in use: it needs glibc to have moved ld-collate.c
+    or strcoll_l.c before BOTH tags of a pair, so the branches are driven by
+    injection, on the real clone.
+    """
+
+    def run_injected(self, assignments, *tags):
+        return in_subprocess(
+            "%s\nsys.argv = ['x']\nd.main(%r)\n" % (assignments, list(tags)))
+
+    def test_a_collapsed_include_walk_is_not_a_clean_result(self):
+        """Entry points that resolve to nothing: the walk reaches 0 files,
+        every tier is empty, and the step used to exit 0 saying there was no
+        substantive collation code change."""
+        rc, out = self.run_injected(
+            "d.ENTRY_POINTS = ['locale/programs/no-such-entry.c']\n"
+            "d.TIER1 = []\nd.TIER2 = []", OLD, MID)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('No substantive collation code change', out)
+        self.assertIn('!!', out)
+        self.assertIn('the include walk reached no file', flat(out))
+
+    def test_a_path_renamed_away_before_both_tags_is_not_a_clean_result(self):
+        """A same-tag range makes every diff empty, so the only thing left to
+        decide the verdict is the tracked path that is in neither tree."""
+        rc, out = self.run_injected(
+            "d.TIER1 = ['locale/xlocale.h']\nd.TIER2 = []", OLD, OLD)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('No substantive collation code change', out)
+        self.assertIn('locale/xlocale.h: ABSENT at glibc-2.28 and glibc-2.28',
+                      flat(out))
+        self.assertIn('are in NEITHER tree', flat(out))
+
+    def test_a_vanished_path_is_still_a_blocker(self):
+        """The oldest of the four reasons, and the one no test drove: the
+        reversed pair that exercises the `!!` block finds 52 hunks, so it
+        never reaches the verdict where `blockers` is read. Remove the
+        `vanished` entry from the list and this fails."""
+        rc, out = self.run_injected(
+            "d.check_paths = lambda *a: (['locale/xlocale.h'], [])",
+            OLD, OLD)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('No substantive collation code change', out)
+        self.assertIn('1 tracked path(s) vanished before glibc-2.28',
+                      flat(out))
+
+    def test_a_misspelt_tracked_path_is_not_a_clean_result(self):
+        """The whole of finding "a path that never existed is filed under
+        nothing to miss": with a name that matches nothing, the tier is read
+        as empty and the step used to say so in a note."""
+        rc, out = self.run_injected(
+            "d.TIER1 = ['locale/programs/ld-colate.c']\nd.TIER2 = []",
+            OLD, OLD)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('No substantive collation code change', out)
+        self.assertIn('exist at no ref in this clone', flat(out))
+        self.assertIn('ld-colate.c: no ref in this clone has ever had it',
+                      flat(out))
+
+    def test_a_path_not_yet_written_still_gives_a_clean_result(self):
+        """The control: same shape, benign cause. C-collate-seq.c arrives in
+        2.35, so over a 2.28 range there is genuinely nothing to read -- and a
+        guard that fires here would make every audited pair unresolved."""
+        rc, out = self.run_injected(
+            "d.TIER1 = ['locale/C-collate-seq.c']\nd.TIER2 = []", OLD, OLD)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('No substantive collation code change', out)
+        self.assertNotIn('!!', out)
 
 
 @needs_clone
@@ -409,6 +766,34 @@ class UserGitConfigCannotChangeTheAnswer(unittest.TestCase):
         self.assertEqual(plain[0], 0, plain[1])
         self.assertEqual(hostile, plain)
         self.assertIn('renamed: 1', hostile[1])
+
+    def test_the_template_verdict_does_not_trust_an_external_diff(self):
+        """`git diff --quiet` ignores an external helper -- unless the config
+        trusts its exit code, and then that exit code IS the verdict for the
+        three templates every other locale inherits from. No audited pair can
+        show it (all three are unchanged on both), so this asserts the two
+        halves separately: the flag defeats the hijack on a file that really
+        changed, and the script's probe carries the flag."""
+        hijack = dict(os.environ,
+                      GIT_EXTERNAL_DIFF='/usr/bin/true',
+                      GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE='true',
+                      GIT_NO_LAZY_FETCH='1')
+        sv_SE = 'localedata/locales/sv_SE'
+        hijacked = subprocess.run(
+            ['git', 'diff', '--quiet', f'{OLD}..{MID}', '--', sv_SE],
+            cwd=GLIBC_CLONE, capture_output=True, env=hijack)
+        if hijacked.returncode != 0:
+            self.skipTest('this git does not trust the helper exit code here')
+        guarded = subprocess.run(
+            ['git', 'diff', '--quiet', '--no-ext-diff', f'{OLD}..{MID}',
+             '--', sv_SE],
+            cwd=GLIBC_CLONE, capture_output=True, env=hijack)
+        self.assertNotEqual(guarded.returncode, 0,
+                            '--no-ext-diff did not defeat the hijack')
+        src = open(os.path.join(SCRIPTS_DIR, 'audit-locale-diff.sh'),
+                   encoding='utf-8').read()
+        self.assertIn('git diff --quiet --no-ext-diff', src,
+                      "step 1's template probe would take the helper's word")
 
     def test_step_1_is_identical_under_the_hostile_config(self):
         plain = run_script('audit-locale-diff.sh', MID, NEW,

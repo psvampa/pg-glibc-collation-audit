@@ -62,7 +62,8 @@ See
 
 ### Step 1 — `scripts/audit-locale-diff.sh <old_tag> <new_tag>`
 
-Clones glibc (shallow, blobs on demand) and, before diffing anything, prints
+Clones glibc (full history, blobs fetched on demand — step 5 needs the
+history) and, before diffing anything, prints
 where that content came from: the commit id behind each tag and the state of
 its GPG signature. The clone is a third-party mirror and a git tag is a
 mutable pointer, so "I audited glibc-2.39" is a weaker claim than it looks.
@@ -168,11 +169,20 @@ Comment and licence [hunks](glossary.md) are filtered out, with the filtered
 count always shown and `--all` to see everything. The filter only drops what
 it can prove is prose: a preprocessor directive, a label, a bare declarator
 or a line that writes through a pointer (`*wp = '\0';`) counts as code,
-because a hunk dropped here is a hunk nobody reads. It also reports any
+because a hunk dropped here is a hunk nobody reads. It reads the diff's
+context lines to know where a comment really ends, and marks prose as code
+rather than the reverse when a hunk begins inside one. It also reports any
 tracked path that is absent at either tag, since `git diff` over a missing
 file is empty rather than an error — and a path present at the old tag and
 gone at the new one is a `!!` warning, not a clean result: the summary then
-leaves step 4's list **unresolved** instead of clearing it.
+leaves step 4's list **unresolved** instead of clearing it. A path absent at
+*both* tags is asked further questions, because "absent at both" is three
+different facts: with history at either tag it was renamed away before the
+range or lived and died inside it (a `!!`, the same blind spot as a path that
+vanishes); with no history at either tag but history somewhere in the clone it
+had not been written yet (a note); and with no history at any ref it is a
+misspelt name in the lists that decide what step 5 reads, which is a `!!` of
+its own.
 
 What step 5 does **not** do is decide. It cannot tell a weight-changing
 commit from a harmless one — that judgement is yours, and it is the one part
@@ -217,6 +227,11 @@ Two markers carry the weight:
   once each, though: three node-reading steps close with the same caveat, and
   printing it three times teaches the reader to skip the section.
 - **`>>`** marks the actual code changes in step 5's [hunks](glossary.md).
+  The filter that decides reads the diff's context lines too, so a comment
+  that opens on a changed line and closes on an unchanged one stops where it
+  really stops. Where it cannot know — a hunk that begins inside a comment,
+  since the diff does not show where that comment opened — it assumes it does
+  not, which marks prose as code rather than the reverse.
 
 The summary also carries the node-to-node block, and this is the one place
 where **absent is not empty**: if it says `NOT RUN`, nothing in the whole run
@@ -244,9 +259,11 @@ This is what the five answers add up to.
   - If it reports one, every locale step 4 lists needs
     [an empirical test](confirming-on-a-real-system.md) regardless of its
     data diff.
-  - If it reports neither — a tracked file vanished between the tags, or the
-    step did not finish — step 4's list is unresolved, and the summary says
-    so rather than treating silence as clean.
+  - If it reports neither — a tracked file vanished between the tags or was
+    renamed away before both of them, a tracked path exists at no ref in the
+    clone at all, the include walk reached nothing, or the step did not
+    finish — step 4's list is unresolved, and the summary says so rather than
+    treating silence as clean.
 
 ---
 

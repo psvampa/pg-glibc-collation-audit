@@ -42,7 +42,7 @@ class Wrapper(unittest.TestCase):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
 
     def test_exits_zero_on_a_pair_with_findings(self):
-        """A finding is not an error. Step 5 reports 25 hunks and returns 0."""
+        """A finding is not an error. Step 5 reports 24 hunks and returns 0."""
         self.assertEqual(self.rc, 0, self.out)
 
     def test_answer_matches_the_published_result(self):
@@ -94,7 +94,7 @@ class Wrapper(unittest.TestCase):
         """Step 5 reports; it does not decide. The summary must say so."""
         summary = self.out[self.out.index('AUDIT SUMMARY'):]
         self.assertIn('Not decided for you', summary)
-        self.assertIn('25 hunk(s)', summary)
+        self.assertIn('24 hunk(s)', summary)
 
     def test_next_step_hints_are_suppressed(self):
         """The steps' "run this next" hints name commands already run."""
@@ -507,7 +507,7 @@ class WrapperStep5Unresolved(unittest.TestCase):
 
     No tag pair can drive this branch for real: going forward in time no
     tracked path has ever vanished, and reversed, 2.39 -> 2.34 loses
-    C-collate-seq.c but still finds 53 hunks. So step 5 is stood in for by a
+    C-collate-seq.c but still finds 52 hunks. So step 5 is stood in for by a
     `python3` shim on PATH that prints what the real script prints in that
     state -- the same text test_known_answers ties to the real script on the
     reversed pair -- and hands every other step to the real interpreter.
@@ -526,9 +526,9 @@ class WrapperStep5Unresolved(unittest.TestCase):
         " trusting\n"
         "   a no-change result.\n"
         "\n"
-        "No substantive change in the files this audit could read -- but 1"
-        " tracked\n"
-        "path(s) vanished before glibc-2.39, so this is NOT a clean result.\n"
+        "No substantive change in the files this audit could read.\n"
+        "This is NOT a clean result:\n"
+        "  - 1 tracked path(s) vanished before glibc-2.39\n"
         "Resolve the paths listed above, then re-run.\n")
 
     def setUp(self):

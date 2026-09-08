@@ -21,7 +21,10 @@ NEW=$2
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 if [ ! -d "$HERE/glibc" ]; then
-  echo "Cloning glibc (shallow, blobs on demand)..."
+  # Not --depth: step 5 asks `git log` whether a path absent at both tags was
+  # renamed away or had not been written yet, and a shallow clone answers the
+  # reassuring half of that for anything beyond its boundary.
+  echo "Cloning glibc (full history, blobs on demand)..."
   git clone --filter=blob:none --no-checkout \
     https://github.com/bminor/glibc.git "$HERE/glibc"
 fi
@@ -80,6 +83,13 @@ echo "---"
 # when there are differences, so a real error can no longer read as
 # "unchanged" the way empty `--stat` output did.
 #
+# --no-ext-diff, because `--quiet` normally ignores an external helper but
+# obeys `diff.trustExitCode` / GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE, and then the
+# helper's exit code IS the verdict. Measured on localedata/locales/sv_SE over
+# 2.28..2.34: plain, exit 1 (changed); with GIT_EXTERNAL_DIFF=/usr/bin/true and
+# that variable set, exit 0 -- printed as UNCHANGED for a template every locale
+# inherits from.
+#
 # Existence is asked with `ls-tree`, not `cat-file -e`: on a
 # `--filter=blob:none` clone the latter must fetch the blob to answer, and
 # calls a file that exists ABSENT whenever that fetch cannot happen.
@@ -87,7 +97,8 @@ echo "Collation templates -- did they change?"
 for tmpl in iso14651_t1 iso14651_t1_common iso14651_t1_pinyin; do
   if [ -z "$(git ls-tree --name-only "$NEW" -- "localedata/locales/$tmpl")" ]; then
     printf '  %-22s ABSENT at %s\n' "$tmpl" "$NEW"
-  elif git diff --quiet "$OLD..$NEW" -- "localedata/locales/$tmpl"; then
+  elif git diff --quiet --no-ext-diff "$OLD..$NEW" \
+       -- "localedata/locales/$tmpl"; then
     printf '  %-22s UNCHANGED\n' "$tmpl"
   else
     printf '  %-22s CHANGED  <== affects everything that inherits it\n' "$tmpl"

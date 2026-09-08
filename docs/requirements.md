@@ -24,7 +24,7 @@ matters, and what happens when `gpg` is unavailable, is in
 python3 -m unittest discover -s tests -t tests
 ```
 
-About a minute and a half. It pins the three tags to their commit ids, so a
+About a minute and a half. It pins the five tags to their commit ids, so a
 moved tag reports itself as a moved tag instead of as a change in the results.
 Six of its eight layers need the glibc clone and skip themselves, with a
 reason, if it is absent; `test_pure_functions.py` and

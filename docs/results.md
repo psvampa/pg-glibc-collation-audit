@@ -61,8 +61,14 @@ No verdict moved on 2026-09-05, but six ways of reaching one silently did, so
 a run from that day prints things an earlier one did not: a `C.UTF-8` warning
 on both pairs, the files with no `LC_COLLATE` block named rather than
 counted, and a third tier in step 5 that raises its [hunk](glossary.md)
-counts from 8 to 25 and from 48 to 53. A saved result whose locale lists
-match is still right; what it was missing is the caveats beside them.
+counts from 8 and 48 to the 24 and 52 a run prints today. A saved result whose
+locale lists match is still right; what it was missing is the caveats beside
+them.
+
+A run from that day in fact printed 25 and 53. The filter that decides which
+hunks are substantive could not see a diff's context lines until 2026-09-08,
+so two hunks whose comment opened on one counted as code. No verdict depends
+on either: both pairs had hunks to read before and after.
 
 ## Worked example: RHEL8 to RHEL9 (glibc 2.28 to 2.34)
 
@@ -270,9 +276,9 @@ This pair also shows step 5 working in the other direction. `ko_KR` is
 flagged by step 4 here too, but step 5 finds no change to ellipsis expansion
 between 2.34 and 2.39.
 
-That verdict rests on having **read** the two tier-3 hunks (`lr_getc` in
-`linereader.h`, `elem_hash` in `elem-hash.h`) and found that neither moves a
-weight. Earlier versions of the tool never printed those hunks at all, so the
+That verdict rests on having **read** the two tier-3 hunks that bear on it
+(`lr_getc` in `linereader.h`, `elem_hash` in `elem-hash.h`) and found that
+neither moves a weight. Earlier versions of the tool never printed those hunks at all, so the
 verdict used to rest on their absence; now it rests on their content. The
 tier-1 changes in that range are `%Z`-to-`%z` format fixes, integer type
 replacements, and a new opt-in `codepoint_collation` keyword that no

@@ -131,7 +131,7 @@ Collation code changes between glibc-2.34 and glibc-2.39
 TIER 1 -- weight assignment and comparison
   (a change here can reorder any locale, including ones whose data file is unchanged)
   locale/programs/ld-collate.c: 15 substantive hunk(s), 1 comment/licence hunk(s) filtered   [hunks abridged]
-  string/strcoll_l.c: 2 substantive hunk(s), 1 comment/licence hunk(s) filtered   [hunks abridged]
+  string/strcoll_l.c: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered   [hunks abridged]
   string/strxfrm_l.c: 3 substantive hunk(s), 1 comment/licence hunk(s) filtered   [hunks abridged]
   wcsmbs/wcscoll_l.c: no substantive change (1 comment/licence hunk(s) filtered)
   wcsmbs/wcsxfrm_l.c: no substantive change (1 comment/licence hunk(s) filtered)
@@ -205,7 +205,7 @@ TIER 1/2. The walk cannot follow a macro-computed include (`#include WEIGHT_H`) 
 reach a translation unit with no header of its own -- locale/weight.h, weightwc.h,
 lc-collate.c and C-collate.c are in TIER 1 by hand for exactly that reason.
 
-53 substantive hunk(s) found. Locale data alone does not settle this pair.
+52 substantive hunk(s) found. Locale data alone does not settle this pair.
 Lines marked >> are the code changes; read them and decide whether they can
 move weights. If any can, every locale listed by
   python3 flag_algorithmic_ranges.py glibc-2.39
@@ -544,7 +544,7 @@ unexamined are three different answers:
      th_TH.utf8
    (4 name(s); full list: /tmp/pg-glibc-collation-audit/step3_affected_locales.txt)
 
--- Needs an empirical test: step 5 found 53 substantive hunk(s),
+-- Needs an empirical test: step 5 found 52 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged
      494 name(s) to confirm: generated names, and
      source names for the locales SUPPORTED does not list
@@ -578,7 +578,7 @@ unexamined are three different answers:
      (see docs/limitations.md)
 
 -- Not decided for you
-     53 hunk(s) marked >> in step 5. Whether any of them moves a
+     52 hunk(s) marked >> in step 5. Whether any of them moves a
      weight is a judgement call that needs someone to read C.
      If nobody will, treat step 4's list as unresolved and confirm
      empirically instead: docs/confirming-on-a-real-system.md

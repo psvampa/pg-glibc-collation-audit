@@ -305,12 +305,29 @@ class Step4AlgorithmicRanges(StepRun):
 @needs_clone
 class Step5CollationCode(StepRun):
     def test_substantive_hunk_totals(self):
-        for (old, new), expected in (((OLD, MID), 25), ((MID, NEW), 53)):
+        """24 and 52 since the noise filter reads the context lines: two hunks
+        that are comment on both sides -- localedef.c @@ -226,7 +232,8 @@ and
+        strcoll_l.c @@ -104,7 +103,7 @@ -- opened their comment on a context
+        line and were counted as substantive."""
+        for (old, new), expected in (((OLD, MID), 24), ((MID, NEW), 52)):
             with self.subTest(pair=f'{old}..{new}'):
                 out = self.step('diff_collation_code.py', old, new)
                 self.assertEqual(
                     one_int(r'(\d+) substantive hunk\(s\) found', out,
                             'the total'), expected)
+
+    def test_code_after_a_comment_that_closes_in_context_is_marked(self):
+        """docs/method.md promises "`>>` marks the actual code changes". It
+        did not for eight lines in locale/programs/linereader.c over
+        2.34..2.39: the comment above them opens on a changed line and closes
+        two CONTEXT lines below, which the filter never read, so the rest of
+        the hunk stayed marked as prose."""
+        out = self.step('diff_collation_code.py', MID, NEW)
+        marked = [ln for ln in out.split('\n')
+                  if 'seq = charmap_find_value (charmap,' in ln]
+        self.assertTrue(marked, 'the line is no longer in the diff')
+        for ln in marked:
+            self.assertIn('>>', ln, ln)
 
     def test_the_bug_22668_commit_is_surfaced(self):
         """"ko_KR was reported unaffected between glibc 2.28 and 2.34. It
