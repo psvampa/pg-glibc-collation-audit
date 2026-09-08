@@ -219,14 +219,18 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
                             'below-the-floor-2.12-to-2.17.txt')
         text = read(path)
         for label, before, after in (
-                ('Step 3, affected locale source files', '11', '278'),
-                ('Step 4, needing empirical confirmation', '277', '279'),
-                ('Step 4, generated names per SUPPORTED', '404', '408')):
+                ('Step 3, affected locale source files', '11', '280'),
+                ('Step 4, needing empirical confirmation', '277', '281'),
+                ('Step 4, generated names per SUPPORTED', '404', '411')):
             self.assertRegex(
                 text, rf'{re.escape(label)}\s+{before}\s+{after}\b',
                 f'{label} no longer reads {before} -> {after}')
-        self.assertIn('Full affected set (278 locale source file(s))', text)
-        self.assertIn('279 locale source file(s), 408 generated', text)
+        self.assertIn('Full affected set (280 locale source file(s))', text)
+        self.assertIn('281 locale source file(s), 411 generated', text)
+        # The header counts generated names; the written list also carries the
+        # names SUPPORTED does not list. Putting one where the other belongs
+        # is how this example gained a line the tool never printed.
+        self.assertIn('pg_collation show (409):', text)
 
     def test_no_doc_states_a_test_count(self):
         """It went stale twice in one day, so it was removed rather than
@@ -301,6 +305,81 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
                 self.assertIsNotNone(step8, text[-2000:])
                 self.assertIsNotNone(summary)
                 self.assertEqual(step8.group(1), summary.group(1))
+
+
+    def test_every_C_status_the_docs_list_is_one_the_tool_can_print(self):
+        """docs/limitations.md enumerates the states the steps 9/10 summary
+        line can carry. A state renamed in the code and left standing in that
+        list is the seventeenth entry's defect in a new place: prose a reader
+        checks their own output against, describing output that no longer
+        exists.
+
+        The statuses are taken from the function that prints them, not grepped
+        out of the file -- a first version of this test searched the whole
+        source and passed on a renamed status, because the old wording still
+        sat in a comment three lines above. `report_backported` is pure, so
+        this needs no clone.
+        """
+        import contextlib
+        import io
+
+        import flag_algorithmic_ranges as far
+
+        def status(body):
+            with contextlib.redirect_stdout(io.StringIO()):
+                return far.report_backported({'C': body} if body else {})['C']
+
+        printed = [status(b) for b in (
+            _harness.backported_c(),
+            _harness.upstream_c(),
+            _harness.locale_file('order_start forward',
+                                 '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
+                                 'order_end'),
+            _harness.locale_file('copy "iso14651_t1"'),
+            'comment_char %\nescape_char /\n',
+            None)]
+        self.assertEqual(len(set(printed)), 6, printed)
+
+        limits = read(os.path.join(REPO_ROOT, 'docs', 'limitations.md'))
+        wrapper = read(os.path.join(REPO_ROOT, 'audit.sh'))
+        for full in printed:
+            # The scripts append "  <- why it matters"; the docs list the name.
+            name = full.split('  <-')[0]
+            with self.subTest(status=name):
+                self.assertIn(f'`{name}`'.replace('`ABSENT from this directory`',
+                                                  '`ABSENT from this locale '
+                                                  'directory`'),
+                              limits)
+        self.assertIn('C (C.UTF-8): NOT DECLARED', wrapper)
+        self.assertIn('`NOT DECLARED`', limits)
+
+    def test_the_published_list_length_is_the_set_that_was_reported(self):
+        """"full list (N name(s))" against the two numbers printed above it.
+        The written list used to hold only the names SUPPORTED maps, so it was
+        narrower than the set the same paragraph reported -- on a node, by
+        exactly the locale the audit exists for. The arithmetic is the check a
+        reader can repeat."""
+        blocks = 0
+        for name in ('rhel8-to-rhel9-audit-output.txt',
+                     'rhel9-to-rhel10-audit-output.txt',
+                     'below-the-floor-2.12-to-2.17.txt'):
+            text = read(os.path.join(REPO_ROOT, 'examples', name))
+            # Anchored line by line: a non-greedy `.*?` here would pair one
+            # block's count with the next block's list, which is how the first
+            # version of this test read 404 and 413 as the same paragraph.
+            for m in re.finditer(
+                    r'^Full set needing empirical confirmation: \d+ locale '
+                    r'source file\(s\), (\d+) generated locale name\(s\)'
+                    r'[^\n]*\n  e\.g\. [^\n]*\n'
+                    r'  not in [^\n]*?: ([^\n]+)\n'
+                    r'  full list \((\d+) name\(s\)\):',
+                    text, re.M):
+                blocks += 1
+                generated, unbuilt, listed = m.group(1), m.group(2), m.group(3)
+                with self.subTest(example=name, listed=listed):
+                    self.assertEqual(int(listed),
+                                     int(generated) + len(unbuilt.split(', ')))
+        self.assertEqual(blocks, 7, 'a step 4 block stopped being checked')
 
 
 def without_fences(text):

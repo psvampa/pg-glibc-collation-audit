@@ -115,6 +115,9 @@ This walks the full [`copy` graph](glossary.md) — every `copy` in a file, not
 just the first — and adds every locale that inherits from a directly-changed
 one. It also maps the result through `localedata/SUPPORTED` to the
 [generated names](glossary.md) `locale -a` and `pg_collation` actually show.
+A file `SUPPORTED` does not name keeps its source name rather than dropping
+out: the mapping is a translation, not a filter, and the written list is
+never narrower than the set the step reported.
 
 Note the spelling: `localedef` normalises the codeset when it builds the
 locale, so `SUPPORTED` says `sv_SE.UTF-8` while the installed locale,

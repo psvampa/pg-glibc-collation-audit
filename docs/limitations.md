@@ -206,8 +206,14 @@ python3 scripts/flag_algorithmic_ranges.py \
 
 `--supported-tag` is optional and maps source file names to the
 [generated names](glossary.md) `locale -a` shows; a node ships no `SUPPORTED`
-file of its own. Note that passing it is the one thing here that needs the
-glibc clone — without it the scan reads nothing but the directory, and `locale
+file of its own -- measured on Rocky 8, 9 and 10: none has
+`/usr/share/i18n/SUPPORTED`, and `glibc-locale-source` installs none. So the
+mapping is the *tag's*, and a tag does not know what a node built.
+`glibc-2.28`'s `SUPPORTED` does not list `C`; the RHEL8 fixture builds 867
+locales with `C.utf8` among them. A name the tag cannot map is therefore kept
+under its source name -- in the printed list and in the file the step writes,
+which is never narrower than what the step reported. Note that passing `--supported-tag` is the one thing here that needs
+the glibc clone — without it the scan reads nothing but the directory, and `locale
 -a` on the node is your mapping. `audit.sh` always passes it, since it has the
 clone anyway.
 
@@ -223,6 +229,21 @@ ellipsis-based `C` and whose new node has `codepoint_collation`:
      ellipsis-based locale(s): 4
      C (C.UTF-8): codepoint_collation  <- byte order by construction
 ```
+
+Those are two of six. The scan declares a status for `C` whatever it finds, and
+the summary prints the one it declared: `ellipsis-based`, `codepoint_collation`,
+`explicit weights`, `copy-only`, `present, but defines no LC_COLLATE block`, or
+`ABSENT from this locale directory`. A seventh line, `NOT DECLARED`, appears if
+the step wrote no status at all. None of the seven is silence: the summary used
+to print nothing about `C` unless it was one of the first two, and nothing is
+also what a run that never looked prints.
+
+The status carries the `copy` graph with it. A `C` that uses no ellipsis of its
+own but copies a template that does is declared `copy-only ... and it copies
+iso14651_t1, which this step flagged -- so this locale IS exposed`: its own
+style is a fact about the file, and the order is a fact about what the file
+reaches. `codepoint_collation` is the one exception, and outranks the copy --
+glibc discards all inherited collation information when it sees that keyword.
 
 Given neither directory it reads instead:
 
@@ -424,11 +445,13 @@ gaining a collation weight in `iso14651_t1_common`.
 
 | | Before the fix | After |
 |---|---|---|
-| Step 3, affected locale source files | **11** | **278** |
-| Step 4, needing empirical confirmation | 277 | **279** |
-| Step 4, generated names per `SUPPORTED` | 404 | **408** |
+| Step 3, affected locale source files | **11** | **280** |
+| Step 4, needing empirical confirmation | 277 | **281** |
+| Step 4, generated names per `SUPPORTED` | 404 | **411** |
 
-The 267 names step 3 used to drop include `en_US`, `de_DE`, `fr_FR`, `es_ES`,
+The 269 names step 3 used to drop -- 267 to this bug, and `ky_KG` and
+`uk_UA` to the symbolic `copy` spelling fixed in the twenty-third entry --
+include `en_US`, `de_DE`, `fr_FR`, `es_ES`,
 `it_IT`, `nl_NL`, `pt_BR`, `ru_RU`, `sv_SE`, `zh_CN` and `zh_TW`. Both runs, side
 by side, are in
 [`examples/below-the-floor-2.12-to-2.17.txt`](../examples/below-the-floor-2.12-to-2.17.txt),

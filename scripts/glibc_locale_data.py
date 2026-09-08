@@ -80,9 +80,23 @@ _COMMENT_CHAR_RE = re.compile(r'^\s*comment_char\s+(\S)', re.M)
 # (locale/programs/ld-collate.c). Present in upstream's C from 2.35 on, and the
 # thing that makes C.UTF-8 immovable from that release forward. Matched as a
 # whole token because the file that declares it also DISCUSSES it in a comment.
-_CODEPOINT_RE = re.compile(r'(?<![A-Za-z0-9_])codepoint_collation(?![A-Za-z0-9_])')
+# `<` and `>` are in the guards because glibc's lexer reads `<name>` as a
+# collating symbol and never as this keyword, while the bare word without them
+# reads as the keyword: `collating-symbol <codepoint_collation>` used to
+# classify a file as byte-order-by-construction, which is the one verdict here
+# that clears a locale outright.
+_CODEPOINT_RE = re.compile(
+    r'(?<![A-Za-z0-9_<])codepoint_collation(?![A-Za-z0-9_>])')
 
 _COPY_RE = re.compile(r'^\s*copy\s+"([^"]+)"', re.M)
+
+# glibc's symbolic notation for a character. localedef decodes it wherever a
+# string is read (locale/programs/linereader.c, get_string), so
+# `copy "<U0069><U0073><U006F>..."` names iso14651_t1 as surely as spelling it
+# out -- and ky_KG and uk_UA spell it exactly that way at glibc-2.12 and 2.17.
+# Left undecoded, those two dropped out of the iso14651_t1 closure and the
+# floor pair reported them as unaffected.
+_UCHAR_RE = re.compile(r'<U([0-9A-Fa-f]{4,8})>')
 
 
 def die(msg, code=2):
@@ -361,7 +375,7 @@ def collate_block(text):
     way. copy_graph_from_texts skips whatever this returns None for, so the
     graph lost its three roots and the inheritance closure collapsed under it.
     That was the whole of the glibc 2.24 version floor: on glibc-2.12..2.17
-    step 3 reported 11 affected locales where there are 278.
+    step 3 reported 11 affected locales where there are 280.
 
     collate_text worked around the same regex, and scan_ellipsis then worked
     around collate_block. Fixing the function means the next caller inherits
@@ -445,14 +459,29 @@ def comment_char(text):
     return m.group(1) if m else '%'
 
 
+def decode_symbolic(name):
+    """`<U0069><U0073><U006F>` -> `iso`, and anything else unchanged.
+
+    A locale name written in glibc's symbolic notation is the same name to
+    localedef, and was a different one here: the graph kept the escaped
+    spelling as a key nothing matched, so the locale looked like a leaf that
+    copies nothing reachable. Two files in the corpus do this.
+    """
+    return _UCHAR_RE.sub(lambda m: chr(int(m.group(1), 16)), name)
+
+
 def copy_targets(text):
     """Every `copy "..."` target inside LC_COLLATE, in order.
 
     All of them, not just the first: om_ET copies both am_ET and om_KE, and
-    taking only the first hides any change to the second.
+    taking only the first hides any change to the second. Symbolic spellings
+    are decoded, because localedef decodes them and the graph is a claim about
+    what localedef will build.
     """
     block = collate_block(text)
-    return _COPY_RE.findall(block) if block else []
+    if block is None:
+        return []
+    return [decode_symbolic(t) for t in _COPY_RE.findall(block)]
 
 
 def classify_collation_style(text):

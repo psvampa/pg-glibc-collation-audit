@@ -225,6 +225,23 @@ class Step3Closure(StepRun):
         self.assertNotIn('sv_SE.UTF-8', out)
 
 
+    def test_the_written_list_keeps_a_locale_SUPPORTED_does_not_name(self):
+        """Step 3's list is what audit.sh summarises and what a reader feeds to
+        the empirical test. Writing only the names SUPPORTED maps dropped every
+        affected locale it does not name -- the same line that dropped C from
+        step 4's list on a node that builds it. Both halves are asserted: the
+        mapped names must survive too, or the fix trades one omission for
+        another."""
+        out = self.step('resolve_copy_closure.py', MID, 'sv_SE',
+                        'cns11643_stroke')
+        self.assertIn('cns11643_stroke', out)
+        with open(os.path.join(self.out_dir, 'step3_affected_locales.txt'),
+                  encoding='utf-8') as fh:
+            written = [ln.strip() for ln in fh if ln.strip()]
+        self.assertIn('cns11643_stroke', written)
+        self.assertIn('sv_SE.utf8', written)
+
+
 @needs_clone
 class Step4AlgorithmicRanges(StepRun):
     def test_four_locales_use_ellipsis_ranges(self):
@@ -418,14 +435,35 @@ class BelowTheOldVersionFloor(StepRun):
                     'the step 2 count'),
             6)
 
-    def test_step_3_reaches_278_not_11(self):
-        """11 was what it reported with the three roots missing."""
+    def test_step_3_reaches_280_not_11(self):
+        """11 was what it reported with the three roots missing; 278 was the
+        figure after that fix and before `copy` targets written in glibc's
+        symbolic notation were decoded, which ky_KG and uk_UA are."""
         out = self.step('resolve_copy_closure.py', FLOOR_NEW,
                         'dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
                         'se_NO', 'ug_CN')
         self.assertEqual(
             one_int(r'Full affected set \((\d+) locale', out, 'the set'),
-            278)
+            280)
+
+    def test_step_3_maps_its_280_files_to_409_generated_names(self):
+        """The example quotes this header, and the first patch of the
+        twenty-third entry put the WRITTEN list's count there instead -- 414,
+        which also carries the five names SUPPORTED does not list. Two
+        different numbers one line apart, and only one of them was printed."""
+        out = self.step('resolve_copy_closure.py', FLOOR_NEW,
+                        'dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
+                        'se_NO', 'ug_CN')
+        self.assertEqual(
+            one_int(r'pg_collation show \((\d+)\)', out,
+                    'the generated names'),
+            409)
+        # And the written list, which is the other number: 409 mapped names
+        # plus the five SUPPORTED does not list. The step prints this one
+        # nowhere, so nothing but this line keeps it honest.
+        with open(os.path.join(self.out_dir, 'step3_affected_locales.txt'),
+                  encoding='utf-8') as fh:
+            self.assertEqual(len([ln for ln in fh if ln.strip()]), 414)
 
     def test_step_5_prints_65_hunks(self):
         """examples/below-the-floor-2.12-to-2.17.txt quotes this figure in
@@ -438,14 +476,24 @@ class BelowTheOldVersionFloor(StepRun):
             one_int(r'(\d+) substantive hunk\(s\) found', out, 'the total'),
             65)
 
-    def test_step_4_reaches_279_not_277(self):
-        """277 was the pre-fix figure. The 2 this page used to publish was
-        older still, and already wrong when it was quoted."""
+    def test_step_4_reaches_281_not_279(self):
+        """277 was the figure before the collate_block fix and 279 after it;
+        281 adds ky_KG and uk_UA, which copy iso14651_t1 spelled in symbolic
+        notation. The 2 this page used to publish was older still, and already
+        wrong when it was quoted."""
         out = self.step('flag_algorithmic_ranges.py', FLOOR_NEW)
         self.assertEqual(
             one_int(r'Full set needing empirical confirmation: (\d+) locale',
                     out, 'the exposed set'),
-            279)
+            281)
+        # Both halves of the sentence, and the file it names: docs and the
+        # worked example publish all three, and only the first was pinned.
+        self.assertEqual(
+            one_int(r'confirmation: \d+ locale source file\(s\), (\d+) '
+                    r'generated', out, 'the generated names'),
+            411)
+        self.assertEqual(
+            one_int(r'full list \((\d+) name\(s\)\)', out, 'the list'), 416)
 
     def test_the_locales_the_bug_used_to_drop_are_reported(self):
         """A count can be right for the wrong reason. These are named in

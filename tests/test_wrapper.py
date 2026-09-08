@@ -17,8 +17,8 @@ import shutil
 import tempfile
 import unittest
 
-from _harness import (MID, NEW, OLD, backported_c, needs_clone,
-                      run_wrapper, upstream_c)
+from _harness import (MID, NEW, OLD, backported_c, locale_file,
+                      needs_clone, run_wrapper, upstream_c)
 
 import diff_distro_locales as dd
 from _harness import GLIBC_CLONE
@@ -570,6 +570,80 @@ class WrapperStep5Unresolved(unittest.TestCase):
         warnings = out.split('-- Warnings the clean results above')[1]
         self.assertIn('locale/programs/ld-collate.c: ABSENT at glibc-2.39',
                       warnings)
+
+
+@needs_clone
+class WrapperNodeCIsNeitherEllipsisNorCodepoint(unittest.TestCase):
+    """The third state of C, which the summary used to pass over in silence,
+    on the shape where getting it wrong costs the most.
+
+    audit.sh decided C's line with two greps -- in the ellipsis list, else
+    named on the codepoint line -- so a C that is neither produced no line at
+    all. With a single --old-locales-dir the step-8 block that names a missing
+    backport does not run either, so nothing distinguished this node from one
+    whose C was never looked at. This C copies `iso14651_t1`: its own file has
+    no ellipsis, and every weight it sorts by is one localedef computed from
+    that template's ranges. The summary relays what step 9 declared, so the
+    copy is in the line; the first version of this fix printed "neither
+    ellipsis-based nor codepoint_collation" over exactly this input.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-cstate-')
+        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-ctree-')
+        root = dd.materialise_tag(GLIBC_CLONE, OLD, os.path.join(cls.nodes, 'a'))
+        with open(os.path.join(root, 'C'), 'w', encoding='utf-8') as fh:
+            fh.write(locale_file('copy "iso14651_t1"'))
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID, '--old-locales-dir', root, '--old-build-id', 'build-old',
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    def test_the_summary_says_what_the_copy_reaches_rather_than_nothing(self):
+        self.assertEqual(self.rc, 0, self.out)
+        flat = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
+        self.assertIn('C (C.UTF-8): copy-only', flat)
+        self.assertIn('it copies iso14651_t1, which this step flagged -- so '
+                      'this locale IS exposed', flat)
+
+    def test_it_is_not_reported_as_either_of_the_two_settled_states(self):
+        """The direction that matters: codepoint_collation is the reassuring
+        one, and a fall-through must never land there."""
+        flat = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
+        self.assertNotIn('C (C.UTF-8): codepoint_collation', flat)
+        self.assertNotIn('C (C.UTF-8): ellipsis-based', flat)
+
+
+@needs_clone
+class WrapperNodeWithoutC(unittest.TestCase):
+    """A locale directory with no C at all. Absent is not cleared, and with one
+    side only nothing else in the summary says so."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-noc-')
+        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-noctree-')
+        root = dd.materialise_tag(GLIBC_CLONE, OLD, os.path.join(cls.nodes, 'a'))
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID, '--old-locales-dir', root, '--old-build-id', 'build-old',
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    def test_the_summary_calls_an_absent_C_absent_and_not_cleared(self):
+        self.assertEqual(self.rc, 0, self.out)
+        flat = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
+        self.assertIn('C (C.UTF-8): ABSENT from this locale directory <- not '
+                      'examined, NOT cleared', flat)
+        self.assertNotIn('C (C.UTF-8): codepoint_collation', flat)
 
 
 if __name__ == '__main__':

@@ -65,6 +65,7 @@ import sys
 
 import diff_distro_locales as dd
 import glibc_locale_data as g
+from filter_lc_collate_changes import KNOWN_BACKPORTED
 
 TAG_OUT = 'step4_exposed_locales.txt'
 
@@ -137,11 +138,104 @@ def report_codepoint(texts):
     return immune
 
 
-def report(texts, supported, label, out_name, next_hint):
+def generated_names(names, supported):
+    """SUPPORTED's spellings for `names`, falling back to the source name.
+
+    `locale -a` and pg_collation show the generated spelling, so a list that
+    carries `sv_SE` where the database says `sv_SE.utf8` cannot be grepped for
+    the collation anyone actually uses -- and a name that cannot be found in
+    the list reads as a name that was cleared. The fallback is the source name
+    rather than nothing, for the same reason.
+    """
+    out = set()
+    for name in names:
+        out.update(supported.get(name) or [name])
+    return out
+
+
+def report_backported(texts, inherited=None, unresolved=None):
+    """Declare, one by one, what this scan found for each locale the distros
+    are known to BACKPORT. Returns {name: status}.
+
+    `inherited` is step 4's own closure, {name: roots it reaches}. A locale
+    whose file uses no ellipsis can still be exposed by copying one that does,
+    and its style alone is then true of the FILE and false of the ORDER. The
+    closure is already computed where this is called from; not passing it is
+    how the ninth entry's defect looked -- a verdict computed and thrown away.
+    `unresolved` is the other half of the same question: {name: copy targets
+    this corpus does not contain}. A copy the walk could not follow is a locale
+    whose order was never read, and saying only "copy-only, its order is
+    whatever it inherits" makes that indistinguishable from a copy resolved to
+    a file with nothing in it.
+
+    `codepoint_collation` is the exception to both and outranks the copy: glibc
+    discards all inherited collation information when it sees that keyword.
+
+    The wrapper used to infer C's state from two greps -- is it in the ellipsis
+    list, else does the codepoint line name it -- and a C that was neither
+    printed nothing at all. Nothing is also what a run that never looked
+    prints, so a locale present with explicit weights, a locale that only
+    copies another, and a locale absent from the directory all arrived at the
+    reader as silence. Absent, cleared and unexamined are three answers.
+
+    Directory mode only. A git tag holds no distro backport by construction,
+    and a heading here in tag mode would invite the reader to trust the tag
+    scan on the one question it structurally cannot answer.
+    """
+    styles = {
+        'ellipsis': 'ellipsis-based  <- localedef computes the weights, so '
+                    'identical data is not identical order',
+        'codepoint': 'codepoint_collation  <- byte order by construction',
+        'explicit': 'explicit weights  <- no ellipsis range for localedef to '
+                    'expand',
+        'copy-only': 'copy-only  <- its order is whatever it inherits; follow '
+                     'the copy chain',
+        'none': 'present, but defines no LC_COLLATE block',
+    }
+    inherited = inherited or {}
+    unresolved = unresolved or {}
+    found = {}
+    print("\nDistro-backported locales, declared one by one -- absent, "
+          "cleared and")
+    print("unexamined are three different answers:")
+    for name in sorted(KNOWN_BACKPORTED):
+        text = texts.get(name)
+        if text is None:
+            status = 'ABSENT from this directory  <- not examined here'
+        else:
+            style = g.classify_collation_style(text)
+            status = styles[style]
+            if name in inherited and style != 'codepoint':
+                status += (f"; and it copies "
+                           f"{', '.join(sorted(inherited[name]))}, which this "
+                           f"step flagged -- so this locale IS exposed")
+            if name in unresolved and style != 'codepoint':
+                status += (f"; and it copies "
+                           f"{', '.join(sorted(unresolved[name]))}, which is "
+                           f"NOT in this corpus -- what that carries was never "
+                           f"read, so this locale is NOT cleared")
+        found[name] = status
+        print(f"  {name} ({KNOWN_BACKPORTED[name]}): {status}")
+    return found
+
+
+def report(texts, supported, label, out_name, next_hint,
+           supported_tag=None, node_dir=False):
     flagged, with_collate = g.scan_ellipsis(texts)
 
     print(f"Files at {label}: {len(texts)}, of which {with_collate} define "
           f"LC_COLLATE")
+    # The file-count floor asks whether enough files were read; this asks
+    # whether any of them turned out to be a locale. Not one collation block
+    # out of a full corpus means the reader is wrong, not that the corpus has
+    # no collation -- and everything below would then print the cleanest
+    # result this step has. Measured at the five pinned tags: 274 of 286, 300
+    # of 312, 340 of 353, 342 of 355 and 352 of 366.
+    if not with_collate:
+        g.die(f"{len(texts)} file(s) were read at {label} and not one defines "
+              f"LC_COLLATE. That is a reader or a corpus problem, not a "
+              f"collation result: refusing to report 'no locale uses ellipsis "
+              f"ranges' over it.")
     print(f"Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: "
           f"{len(flagged)}")
     for name in sorted(flagged):
@@ -153,18 +247,61 @@ def report(texts, supported, label, out_name, next_hint):
 
     report_codepoint(texts)
 
+    # Built before anything can return, because a `copy` target this corpus
+    # does not contain is a locale whose order was NOT read, and
+    # `inherited_from` treats an unknown target as a leaf -- so "resolved, and
+    # what it copies is clear" and "could not resolve it at all" reach the
+    # reader as the same sentence. Measured 0 dangling targets at glibc-2.28,
+    # 2.34 and 2.39 and on the three RHEL fixtures (47/47/48 distinct targets),
+    # so this fires only on a directory that is not the closed source a node
+    # built from -- which is the input the ABSENT wording already contemplates.
+    graph = g.copy_graph_from_texts(texts)
+    dangling = {t for ts in graph.values() for t in ts} - set(graph)
+    unresolved = g.inherited_from(graph, dangling) if dangling else {}
+    if dangling:
+        print(f"\n!! {len(dangling)} `copy` target(s) are absent from this "
+              f"corpus, so what they carry was never read:")
+        print(f"     {', '.join(sorted(dangling))}")
+        # Named, not only counted: "N locale(s) reach one" is the ninth
+        # entry's shape, a verdict computed and never attached to a name.
+        reaching = sorted(unresolved)
+        # "in the list below" was written for a reader looking at this step.
+        # audit.sh relays `!!` blocks into the summary, where there is no
+        # below, so the block names the file the step writes instead.
+        print(f"   {len(reaching)} locale(s) reach one. They are NOT cleared, "
+              f"and they are in this step's full list, named at the end of it:")
+        print(f"     {', '.join(reaching[:12])}"
+              f"{', ...' if len(reaching) > 12 else ''}")
+
     if not flagged:
-        print("\nNo locale uses ellipsis ranges here; steps 1-3 are "
-              "sufficient.")
-        # Silent, and empty: same reason as step 3. audit.sh must be able to
-        # tell "nothing exposed" from "step 4 did not run".
-        g.write_list(out_name, [])
+        if unresolved:
+            print("\nNothing that could be READ here uses an ellipsis range, "
+                  "but the absent copy\ntargets above leave "
+                  f"{len(unresolved)} locale(s) unresolved: steps 1-3 are NOT "
+                  f"sufficient for those.")
+        else:
+            print("\nNo locale uses ellipsis ranges here; steps 1-3 are "
+                  "sufficient.")
+        # Written whether or not anything was found: same reason as step 3.
+        # audit.sh must be able to tell "nothing exposed" from "step 4 did not
+        # run". Announced too -- the `!!` block above promises a list, and this
+        # path used to write it and never say where, so the promise pointed at
+        # nothing and the twelve names it prints were all a reader could get.
+        listed = sorted(generated_names(unresolved, supported))
+        out_path = g.write_list(out_name, listed)
+        print(f"  full list ({len(listed)} name(s)): {out_path}")
+        # Declared on this path too. A directory where nothing uses an
+        # ellipsis is the most reassuring output this step has, and it is
+        # exactly where the summary must still be able to say what the node's
+        # C is -- returning here without a status made the wrapper print
+        # "NOT DECLARED" over a scan that had looked and found an answer.
+        if node_dir:
+            report_backported(texts, {}, unresolved)
         return 0
 
     # A flagged template is only actionable together with everything that
     # inherits it: iso14651_t1 carries the Han range and is copied, directly or
     # transitively, by most of the corpus.
-    graph = g.copy_graph_from_texts(texts)
     inherited = g.inherited_from(graph, set(flagged))
 
     print(f"\nAdditionally exposed via `copy` inheritance: {len(inherited)}")
@@ -190,8 +327,20 @@ def report(texts, supported, label, out_name, next_hint):
         if generated:
             print(f"  e.g. {', '.join(generated[:8])}, ...")
         if unbuilt:
-            print(f"  not in SUPPORTED (templates, not built by default): "
-                  f"{', '.join(unbuilt)}")
+            if node_dir:
+                # Measured on the three Rocky 8/9/10 fixtures, 2026-09-07:
+                # none ships /usr/share/i18n/SUPPORTED and glibc-locale-source
+                # installs none, so this mapping can only come from a tag --
+                # and the tag does not decide what the node built. The RHEL8
+                # fixture (glibc-2.28-251.el8_10.40) builds 867 locales, C.utf8
+                # among them, and audit.sh maps that node through glibc-2.28,
+                # whose SUPPORTED does not list C at all.
+                print(f"  not in {supported_tag}'s SUPPORTED -- the node's "
+                      f"`locale -a` is the authority on whether these are "
+                      f"built: {', '.join(unbuilt)}")
+            else:
+                print(f"  not in SUPPORTED (templates, not built by default): "
+                      f"{', '.join(unbuilt)}")
     else:
         # No SUPPORTED to map through: these are source file names, and the
         # node's own `locale -a` is the authority on which of them are built.
@@ -200,14 +349,27 @@ def report(texts, supported, label, out_name, next_hint):
               f"names pg_collation shows -- run `locale -a` on the node, or "
               f"pass --supported-tag to map them.")
         print(f"  e.g. {', '.join(exposed[:8])}, ...")
-    # Same rule as step 3: never write a list narrower than what was reported.
-    out_path = g.write_list(out_name, generated or exposed)
-    print(f"  full list: {out_path}")
+    # Same rule as step 3, and this is the line that broke it: `generated`
+    # alone drops every exposed locale the tag's SUPPORTED does not name, so
+    # the file the sentence above calls the full list was NARROWER than what
+    # was reported. On a node that omission is C -- the collation initdb picks
+    # -- and a name absent from the list reads as a name cleared.
+    listed = sorted(set(generated) | set(unbuilt)
+                    | generated_names(unresolved, supported))
+    out_path = g.write_list(out_name, listed)
+    print(f"  full list ({len(listed)} name(s)): {out_path}")
 
     print()
     print("These cannot be cleared by a source diff alone.")
     for line in next_hint:
         print(line)
+
+    # Last, not before the sentence above: "These" names the exposed set, and
+    # a declaration wedged in between put "C (C.UTF-8): codepoint_collation"
+    # directly above it, where a reader takes C for one of "these" and tests a
+    # locale glibc settled by construction. Noise is a cost like any other.
+    if node_dir:
+        report_backported(texts, inherited, unresolved)
     return 0
 
 
@@ -229,7 +391,11 @@ def main(argv):
     ap.add_argument('--supported-tag',
                     help="with --locales-dir: a tag whose localedata/SUPPORTED "
                          "maps source file names to the generated names "
-                         "`locale -a` shows. A node ships no SUPPORTED.")
+                         "`locale -a` shows. A node ships no SUPPORTED -- "
+                         "measured on Rocky 8/9/10, none has "
+                         "/usr/share/i18n/SUPPORTED and glibc-locale-source "
+                         "installs none -- so the mapping is the tag's, and "
+                         "the tag does not know what the node built.")
     ap.add_argument('--expect-files', type=int,
                     help="with --locales-dir: abort unless exactly this many "
                          "files are read")
@@ -270,7 +436,9 @@ def main(argv):
                 "and",
                 "`rpm -q --changelog glibc | grep -i collat` on each node."]
 
-    return report(texts, supported, label, out_name, hint)
+    return report(texts, supported, label, out_name, hint,
+                  supported_tag=opts.supported_tag or opts.tag,
+                  node_dir=bool(opts.locales_dir))
 
 
 if __name__ == '__main__':

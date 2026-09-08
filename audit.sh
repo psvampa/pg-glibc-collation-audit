@@ -312,7 +312,8 @@ case $STEP5 in
   hunks)
     echo "-- Needs an empirical test: step 5 found $HUNKS substantive hunk(s),"
     echo "   so a clean data diff CANNOT clear the locales step 4 flagged"
-    echo "     $(count_lines "$STEP4_LIST") generated name(s)"
+    echo "     $(count_lines "$STEP4_LIST") name(s) to confirm: generated names, and"
+    echo "     source names for the locales SUPPORTED does not list"
     echo "     full list: $STEP4_LIST" ;;
   clean)
     echo "-- Needs an empirical test: none on this evidence. Step 5 found no"
@@ -323,7 +324,8 @@ case $STEP5 in
     echo "   the locales step 4 flagged stay UNRESOLVED. Read step 5's output:"
     echo "   a tracked file vanished between the tags, or the step did not"
     echo "   finish."
-    echo "     $(count_lines "$STEP4_LIST") generated name(s)"
+    echo "     $(count_lines "$STEP4_LIST") name(s) to confirm: generated names, and"
+    echo "     source names for the locales SUPPORTED does not list"
     echo "     full list: $STEP4_LIST" ;;
 esac
 
@@ -379,13 +381,40 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
     echo "-- Node's own locale data, ellipsis scan ($build)"
     sed -n 's/^Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: /     ellipsis-based locale(s): /p' \
       "$log" 2>/dev/null
-    if sed -n '/^Locales whose LC_COLLATE uses ellipsis/,/^$/p' "$log" 2>/dev/null \
-         | grep -q '^  C$'; then
-      echo "     C (C.UTF-8): ellipsis-based  <- localedef computes its weights,"
-      echo "     so identical data does NOT mean identical order"
-    elif grep -q '^Declare codepoint_collation.*\bC\b' "$log" 2>/dev/null; then
-      echo "     C (C.UTF-8): codepoint_collation  <- byte order by construction"
-    fi
+    # Read the status step N DECLARED for C, rather than inferring one from
+    # two greps. The old form asked "is C in the ellipsis list?", then "does
+    # the codepoint line name it?", and printed NOTHING when both answers were
+    # no -- which is also what it printed when the step never looked. A C that
+    # is present with explicit weights, one that only copies another, and one
+    # absent from the directory all reached the reader as silence, and silence
+    # here reads as cleared. Five branches, and no state falls through.
+    CSTAT=$(sed -n 's/^  C (C\.UTF-8): //p' "$log" 2>/dev/null | tail -1)
+    case "$CSTAT" in
+      ellipsis-based*)
+        echo "     C (C.UTF-8): ellipsis-based  <- localedef computes its weights,"
+        echo "     so identical data does NOT mean identical order" ;;
+      codepoint_collation*)
+        echo "     C (C.UTF-8): codepoint_collation  <- byte order by construction" ;;
+      ABSENT*)
+        echo "     C (C.UTF-8): ABSENT from this locale directory  <- not examined,"
+        echo "     NOT cleared. If the node has C.UTF-8, the directory passed in"
+        echo "     is not the one that node built it from" ;;
+      '')
+        # Unreachable as the step stands -- it declares a status for every
+        # backported locale it knows of, on every run -- so no test drives
+        # this branch; tests/README.md lists it with the other three. It is
+        # here because the alternative to an unreachable branch is a reworded
+        # script silently taking the reassuring one.
+        echo "     C (C.UTF-8): NOT DECLARED  <- step $n printed no status line for"
+        echo "     it. Read step $n above; do not read this as cleared" ;;
+      *)
+        # Relay what the step declared, whole. This branch used to add
+        # "neither ellipsis-based nor codepoint_collation", which is true of
+        # the FILE and false of the ORDER when that file copies a template
+        # step 4 flagged: the step knows the difference and says so, and the
+        # summary must not overwrite it with a guess of its own.
+        echo "     C (C.UTF-8): $CSTAT" ;;
+    esac
   done
 else
   echo "-- Node's own ellipsis scan: NOT RUN"
