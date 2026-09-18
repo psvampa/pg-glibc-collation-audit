@@ -551,6 +551,14 @@ If a `lower()`-based index matters to you, confirm it the way this project
 confirms collation — empirically, on both nodes, naming the builds — because
 nothing here will do it for you.
 
+One such measurement is published here.
+[breakage/cases/04-lc-ctype.md](../breakage/cases/04-lc-ctype.md) sweeps all 1,114,111
+code points on `glibc-2.28-251.el8_10.40` and `glibc-2.34-275.el9_8`: 6,525 of them
+answer differently, 6,522 changing character class and 5,905 of those becoming letters.
+It is one pair of builds and it does not generalise, but it shows what a functional
+index and a character-class `CHECK` do when that happens, and that nothing in
+PostgreSQL records it.
+
 The remaining categories (`LC_NUMERIC`, `LC_TIME`, `LC_MONETARY`,
 `LC_MESSAGES`) are out of scope as well. They move `to_char()` output and
 message text rather than index order, so they are a correctness question rather
