@@ -154,6 +154,9 @@ and it needs PostgreSQL 15 or newer with langpacks installed in the right
 order ([docs/requirements.md](docs/requirements.md)). It also reports more
 than indexes — text partition keys among them, which no `REINDEX` fixes.
 
+What those objects look like once they are already wrong is measured in
+[breakage/](breakage/), on two real nodes, one case per object type.
+
 `C.UTF-8` has a second script of its own,
 [`sql/c_utf8_probe.sql`](sql/c_utf8_probe.sql), which takes no editing and
 must be run even when the audit flagged nothing — nothing in steps 1 to 5 can
@@ -253,6 +256,7 @@ short version:
 - [docs/requirements.md](docs/requirements.md) — dependencies, test suite, setup traps
 - [docs/glossary.md](docs/glossary.md) — `copy` graph, blast radius, hunk, tier, ellipsis range
 - [docs/comparison-ardentperf.md](docs/comparison-ardentperf.md) — how this relates to [ardentperf/glibc-unicode-sorting](https://github.com/ardentperf/glibc-unicode-sorting)
+- [breakage/](breakage/README.md) — what breaks inside PostgreSQL once a locale did change, measured on two nodes
 - [examples/](examples/) — real output from both pairs
 - [CHANGELOG.md](CHANGELOG.md) — what this tool used to get wrong
 

@@ -25,6 +25,7 @@
 | [requirements.md](requirements.md) | Dependencies, the test suite, and the three setup traps on the confirmation side |
 | [comparison-ardentperf.md](comparison-ardentperf.md) | How this relates to ardentperf/glibc-unicode-sorting, and how to read their tables |
 | [glossary.md](glossary.md) | `copy` graph, blast radius, hunk, tier, ellipsis range, role swap |
+| [../breakage/](../breakage/README.md) | What a collation change breaks inside PostgreSQL once it happened: thirteen cases measured on two nodes, each one the real `psql` session from both sides, side by side |
 | [../examples/](../examples/) | Real output from both pairs, a confirmation SQL script for each, the `C.UTF-8` probe output that is the only published evidence for that locale's order, and the below-the-floor pair that is not an audited result but shows what the old glibc 2.24 bug cost |
 | [../CHANGELOG.md](../CHANGELOG.md) | What this tool used to get wrong, and when |
 | [../tests/README.md](../tests/README.md) | What the test suite covers, and what it does not |
