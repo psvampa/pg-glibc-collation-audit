@@ -25,6 +25,9 @@ indexes at all.
 | [Extra A: a sequential scan](cases/A-sequential-scan.md) | the same range returns half the rows | nothing to repair |
 | [Extra B: the planner's statistics](cases/B-planner-statistics.md) | the row estimate collapses to 2 | ANALYZE |
 
+[The repair, in order](repair.md) is the run that turns the broken node back into a
+working one, including the two steps that fail on purpose.
+
 ## How to read these files
 
 Left column is Node0, glibc 2.28 on Rocky Linux 8.9. Right column is Node1, glibc 2.34
