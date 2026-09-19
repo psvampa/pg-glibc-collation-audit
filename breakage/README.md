@@ -28,6 +28,10 @@ indexes at all.
 [The repair, in order](repair.md) is the run that turns the broken node back into a
 working one, including the two steps that fail on purpose.
 
+[`scripts/find-affected-indexes.sql`](scripts/find-affected-indexes.sql) lists the indexes
+a collation change can break, including the partial indexes and expression indexes that
+the query on the PostgreSQL wiki does not reach.
+
 ## How to read these files
 
 Left column is Node0, glibc 2.28 on Rocky Linux 8.9. Right column is Node1, glibc 2.34
