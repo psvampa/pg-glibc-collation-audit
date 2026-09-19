@@ -28,9 +28,22 @@ indexes at all.
 [The repair, in order](repair.md) is the run that turns the broken node back into a
 working one, including the two steps that fail on purpose.
 
-[`scripts/find-affected-indexes.sql`](scripts/find-affected-indexes.sql) lists the indexes
-a collation change can break, including the partial indexes and expression indexes that
-the query on the PostgreSQL wiki does not reach.
+## Finding the affected objects in your own database
+
+Five scripts in [`scripts/`](scripts/), each one standalone, each one reporting the objects
+whose collation comes from libc. Run them in every database. Tested on PostgreSQL 14
+through 18.
+
+| Script | What it finds |
+|---|---|
+| [find-affected-indexes.sql](scripts/find-affected-indexes.sql) | indexes, including the partial and expression indexes the query on the PostgreSQL wiki does not reach |
+| [find-affected-check-constraints.sql](scripts/find-affected-check-constraints.sql) | CHECK constraints, which are never re-evaluated on their own |
+| [find-affected-range-partitions.sql](scripts/find-affected-range-partitions.sql) | tables partitioned by range on a text key |
+| [find-affected-generated-columns.sql](scripts/find-affected-generated-columns.sql) | stored generated columns, whose value was computed once and written down |
+| [find-affected-materialized-views.sql](scripts/find-affected-materialized-views.sql) | materialized views, which hold their own copy of the rows |
+
+Only the first one is repaired by a REINDEX. Each script says in its own header what breaks,
+why no REINDEX helps, and what it leaves out.
 
 ## How to read these files
 
