@@ -1,6 +1,6 @@
 # Case 6: an EXCLUDE constraint
 
-An EXCLUDE constraint is a GiST index underneath, so it fails the same way the unique index
+An EXCLUDE constraint is an index underneath, so it fails the same way the unique index
 does.
 
 ```text
