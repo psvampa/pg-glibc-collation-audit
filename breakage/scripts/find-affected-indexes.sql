@@ -6,8 +6,12 @@
 -- instead of against a name.
 
 WITH db AS (
-  SELECT datlocprovider AS prov, datcollate AS coll
-    FROM pg_database WHERE datname = current_database()
+  -- pg_database.datlocprovider exists from PostgreSQL 15 on, so the row is read
+  -- as json and a missing key comes back null.  On 14 a database collation is
+  -- always libc, which is what the fallback says.
+  SELECT coalesce(to_jsonb(d) ->> 'datlocprovider', 'c') AS prov,
+         d.datcollate AS coll
+    FROM pg_database d WHERE d.datname = current_database()
 ),
 refs AS (
   -- 1. The collations of the key columns.  This is what pg_index.indcollation
