@@ -10,6 +10,11 @@
 --
 -- Only stored columns are reported.  A virtual generated column is computed when
 -- it is read, so it always answers with the current rules.
+--
+-- It reports more than it has to, the same way the CHECK constraint script does.
+-- An expression such as length(w) resolves with a collation and never asks it
+-- anything, and it is listed.  Recomputing a column rewrites the table, so check
+-- the expression before running it.
 
 WITH db AS (
   -- pg_database.datlocprovider exists from PostgreSQL 15 on, so the row is read
@@ -23,7 +28,12 @@ affected AS (
   -- affected only when the database itself is on libc and not on C or POSIX.
   -- pg_collation names that row 'default', so a filter on the name cannot see it.
   SELECT c.oid, c.collname FROM pg_collation c CROSS JOIN db
-   WHERE (c.collprovider = 'c' AND c.collname NOT IN ('C','POSIX'))
+   -- collcollate, and not just the name, because a collation can sort by code
+   -- point under another name.  ucs_basic is declared LC_COLLATE = 'C' with the
+   -- libc provider up to PostgreSQL 16, and so is any collation someone creates
+   -- that way.  Neither one moves when glibc does.
+   WHERE (c.collprovider = 'c' AND c.collname NOT IN ('C','POSIX')
+                               AND coalesce(c.collcollate, '') NOT IN ('C','POSIX'))
       OR (c.collprovider = 'd' AND db.prov = 'c' AND db.coll NOT IN ('C','POSIX'))
 )
 SELECT att.attrelid::regclass::text AS relation,
@@ -37,5 +47,9 @@ SELECT att.attrelid::regclass::text AS relation,
   JOIN pg_attribute src ON src.attrelid = d.refobjid AND src.attnum = d.refobjsubid
   JOIN affected a ON a.oid = src.attcollation
  WHERE att.attgenerated = 's'
+   -- The parsed expression carries the collation each operator and function was
+   -- resolved with.  An expression where every one of them is zero never
+   -- consults a collation.
+   AND ad.adbin ~ 'inputcollid [1-9]'
  GROUP BY 1, 2, 4
  ORDER BY 1, 2;
