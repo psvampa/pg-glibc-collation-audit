@@ -552,9 +552,12 @@ confirms collation — empirically, on both nodes, naming the builds — because
 nothing here will do it for you.
 
 One such measurement is published here.
-[breakage/cases/04-lc-ctype.md](../breakage/cases/04-lc-ctype.md) sweeps all 1,114,111
-code points on `glibc-2.28-251.el8_10.40` and `glibc-2.34-275.el9_8`: 6,525 of them
-answer differently, 6,522 changing character class and 5,905 of those becoming letters.
+[breakage/scripts/03-ctype-sweep.sql](../breakage/scripts/03-ctype-sweep.sql) sweeps
+1,112,063 code points on `glibc-2.28-251.el8_10.40` and `glibc-2.34-275.el9_8` — every
+one but `U+0000` and the 2,048 surrogates — and
+[breakage/cases/04-lc-ctype.md](../breakage/cases/04-lc-ctype.md) publishes what it
+found: 6,525 of them answer differently, 6,522 changing character class and 5,905 of
+those becoming letters.
 It is one pair of builds and it does not generalise, but it shows what a functional
 index and a character-class `CHECK` do when that happens, and that nothing in
 PostgreSQL records it.
