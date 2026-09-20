@@ -262,6 +262,13 @@ REFRESH MATERIALIZED VIEW s9_mv;
 REFRESH MATERIALIZED VIEW
 ```
 
+**This step has to come after step 2, and that is not a matter of taste.** A refresh
+re-runs the view's own query, which is the one [case 9](cases/09-generated-column-matview.md)
+publishes: on the migrated node its plan is `Index Only Scan using s1_idx`, with or without
+a `LIMIT`. Run before that index is rebuilt, the refresh reads the order glibc 2.28 wrote
+and stores it again. It prints `REFRESH MATERIALIZED VIEW`, raises nothing, and leaves the
+view exactly as wrong as it was.
+
 ## Step 8: the CHECK that depends on LC_CTYPE, not LC_COLLATE
 
 The CHECK that depends on LC_CTYPE rather than LC_COLLATE. Nothing warned about this one,
