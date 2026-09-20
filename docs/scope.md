@@ -23,10 +23,18 @@ project audits and publishes results for. RHEL7 is out of scope — it is years
 past end of life, and documenting it bought nothing.
 
 The method itself works on any pair of upstream tags, so equivalents on other
-distros (Ubuntu 18.04+, Debian 9+, SLES 15+) behave the same. There used to be
-a floor at glibc 2.24 — below it the three collation templates were dropped from
-the `copy` graph and the answer collapsed silently — and that was a bug rather
-than a limit of the method. It is fixed, and one pair below the old floor
+distros (Ubuntu 18.04+, Debian 9+, SLES 15+) behave the same. The two pairs
+above are **consecutive RHEL majors, not consecutive glibc releases** —
+`2.28 -> 2.34` already skips five upstream releases and `2.34 -> 2.39` skips
+four, so every result this project publishes was produced by a pair that
+leaves versions out. Leaving more out is measured rather than assumed:
+`glibc-2.28` against `glibc-2.39`, with 2.34 in the middle, reports the union
+of what the two steps report, name for name, `C.UTF-8` included
+([method.md](method.md#how-far-apart-the-two-tags-may-be)).
+
+There used to be a floor at glibc 2.24 — below it the three collation
+templates were dropped from the `copy` graph and the answer collapsed silently
+— and that was a bug rather than a limit of the method. It is fixed, and one pair below the old floor
 (`glibc-2.12 -> glibc-2.17`) has been measured end to end; that is one pair, not
 a claim about every older glibc. See
 [limitations.md](limitations.md#below-glibc-224-the-method-rests-on-one-measured-pair).

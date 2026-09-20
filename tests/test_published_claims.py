@@ -18,7 +18,7 @@ import subprocess
 import unittest
 
 import _harness
-from _harness import REPO_ROOT
+from _harness import REPO_ROOT, flat
 
 import glibc_locale_data as g
 
@@ -246,6 +246,125 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
         # names SUPPORTED does not list. Putting one where the other belongs
         # is how this example gained a line the tool never printed.
         self.assertIn('pg_collation show (409):', text)
+
+    def test_the_skipped_release_example_matches_the_method_page(self):
+        """docs/method.md publishes a five-row table comparing the two steps
+        with the direct jump, and examples/ carries the run it came from. Two
+        copies of five numbers is exactly the shape the step-4 "2" rotted in.
+
+        Rows 1, 2 and 3 are asserted against the pinned clone in
+        test_known_answers (SkippingAReleaseReportsTheUnion). The two step 8
+        rows are NOT, and cannot be: they need both nodes'
+        /usr/share/i18n/locales/, which no test has. Those four numbers are
+        pinned here instead, to the tool's own lines inside the three example
+        bodies -- otherwise a hand-written table would be tied only to another
+        hand-written table, which is two copies of prose and no measurement.
+        """
+        example = read(os.path.join(REPO_ROOT, 'examples',
+                                    'skipping-a-release-2.28-to-2.39.txt'))
+        method = flat(docs()[os.path.join('docs', 'method.md')])
+        rows = (('Step 2, files changed inside `LC_COLLATE`', 2, 3, 5, 5),
+                ('Step 3, generated names to reindex', 6, 4, 10, 10),
+                ('Step 5, substantive hunks', 24, 52, 76, 75),
+                ('Step 8, locales differing on the two nodes', 3, 3, 6, 6),
+                ('Step 8, locales the upgrade removes', 1, 1, 2, 2))
+        for label, first, second, both, direct in rows:
+            with self.subTest(row=label):
+                self.assertIn(
+                    f'| {label} | {first} | {second} | {both} | **{direct}** |',
+                    method,
+                    f'docs/method.md no longer states {label} as '
+                    f'{first}/{second}/{both}/{direct}')
+                self.assertRegex(
+                    example,
+                    rf'{re.escape(label.replace("`", ""))}\s+{first}\s+'
+                    rf'{second}\s+{both}\s+{direct}\b',
+                    f'the example no longer states {label} the same way')
+
+        # The one row that is not a sum is the only one worth a sentence, and
+        # both copies have to carry the same explanation of why.
+        self.assertIn('75 hunks, not 76', method)
+        self.assertIn('75 substantive hunk(s) found', example)
+        self.assertIn('THE ONE FIGURE THAT IS NOT A SUM: 75, NOT 76', example)
+
+        # C.UTF-8 is the claim a reader is most likely to doubt, so the
+        # example has to carry the line the TOOL printed, not the header's
+        # quotation of it. Asserting the bare phrase passed on the prose
+        # alone: an example regenerated from a run that no longer reported
+        # C.UTF-8 as DIFFERS would have stayed green, which is two copies of
+        # prose tied to each other and no measurement.
+        summary = example.split('== AUDIT SUMMARY')[1]
+        self.assertIn('C (C.UTF-8): DIFFERS  <- in neither tag', summary)
+        self.assertIn('C (C.UTF-8): DIFFERS', method)
+
+    STEP_8 = {
+        'rhel8-to-rhel9-audit-output.txt':
+            (3, {'C', 'or_IN', 'sv_SE'}, 1, {'en_US@ampm'}),
+        'rhel9-to-rhel10-audit-output.txt':
+            (3, {'ber_DZ', 'kab_DZ', 'th_TH'}, 1, {'aa_ER@saaho'}),
+        'skipping-a-release-2.28-to-2.39.txt':
+            (6, {'C', 'ber_DZ', 'kab_DZ', 'or_IN', 'sv_SE', 'th_TH'},
+             2, {'aa_ER@saaho', 'en_US@ampm'}),
+    }
+
+    def _node_section(self, name):
+        """The differing and removed sets step 8 printed, from the example."""
+        text = read(os.path.join(REPO_ROOT, 'examples', name))
+        diff_n = int(re.search(r'(?m)^Differ INSIDE LC_COLLATE \((\d+)\)',
+                               text).group(1))
+        diff_block = text.split('Differ INSIDE LC_COLLATE (')[1]
+        diff_block = diff_block.split('\n', 1)[1].split('\n\n')[0]
+        differing = set(re.findall(r'(?m)^  (\S+)  \(', diff_block))
+        gone_n = int(re.search(r'(?m)^Only on the old node \((\d+)\)',
+                               text).group(1))
+        gone_block = text.split('Only on the old node (')[1]
+        gone_block = gone_block.split('\n', 1)[1].split('\n\n')[0]
+        gone = set(re.findall(r'(?m)^  (\S+): ', gone_block))
+        # The header count and the list under it are two different facts, and
+        # the whole point of this class is that one of them can go stale.
+        self.assertEqual(len(differing), diff_n,
+                         f'{name}: step 8 says {diff_n} differing and names '
+                         f'{len(differing)}')
+        self.assertEqual(len(gone), gone_n,
+                         f'{name}: step 8 says {gone_n} removed and names '
+                         f'{len(gone)}')
+        return differing, gone
+
+    def test_step_8_rows_come_from_the_examples(self):
+        """The two step 8 rows of the method.md table, against the
+        node-to-node section each of the three examples carries.
+
+        Collected by unittest in its own right. Written first as a helper
+        called from the test above, where deleting the single call line left
+        the layer green and the whole STEP_8 tie stopped running with nothing
+        saying so -- and it ran at all only if every assertion above that call
+        had passed first.
+        """
+        got = {}
+        for name, (dn, dset, gn, gset) in self.STEP_8.items():
+            differing, gone = self._node_section(name)
+            self.assertEqual(differing, dset, f'{name}: step 8 differing set')
+            self.assertEqual(gone, gset, f'{name}: step 8 removed set')
+            got[name] = (differing, gone)
+        first, second, direct = (got['rhel8-to-rhel9-audit-output.txt'],
+                                 got['rhel9-to-rhel10-audit-output.txt'],
+                                 got['skipping-a-release-2.28-to-2.39.txt'])
+        self.assertEqual(direct[0], first[0] | second[0],
+                         'step 8 on the direct pair is no longer the union')
+        self.assertEqual(direct[1], first[1] | second[1],
+                         'the removed locales are no longer the union')
+
+    def test_the_skipped_release_example_is_not_sold_as_an_audited_pair(self):
+        """docs/scope.md publishes two pairs and this is not a third. The
+        floor pair carries the same disclaimer for the same reason: a
+        measured-but-unpublished pair is one careless sentence away from
+        becoming a supported one, which is how RHEL7 kept coming back."""
+        example = read(os.path.join(REPO_ROOT, 'examples',
+                                    'skipping-a-release-2.28-to-2.39.txt'))
+        self.assertIn('NOT AN AUDITED PAIR', example)
+        scope = flat(docs()[os.path.join('docs', 'scope.md')])
+        self.assertIn('Two upgrade pairs: RHEL8 \u2192 RHEL9 and RHEL9 \u2192 RHEL10',
+                      scope)
 
     def test_no_doc_states_a_test_count(self):
         """It went stale twice in one day, so it was removed rather than

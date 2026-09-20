@@ -4,6 +4,106 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-20 (twenty-sixth entry)
+
+How far apart the two tags may be is now stated, and measured. **No line that
+produces a finding changed, no verdict moved and no published number changed** --
+`audit.sh`'s output on the two audited pairs and the floor pair
+(`2.28..2.34`, `2.34..2.39`, `2.12..2.17`) is byte-identical to the commit
+before this one; the `audit.sh` diff is its header comment and its usage text.
+What changed is a sentence readers were acting on.
+
+### What it used to get wrong
+
+**The README implied the two versions had to be consecutive releases.** It
+read *"The audited pairs are RHEL8 -> RHEL9 and RHEL9 -> RHEL10 -- the two
+adjacent upgrades this project publishes results for"*, one paragraph below a
+hard rule about the pair (*old first, new second; a reversed pair is refused*).
+A reader carries the rule frame into the next paragraph, and `adjacent` is
+doing no work there except describing -- so it reads as a second constraint.
+Reported by a reader who concluded an RHEL8 -> RHEL10 upgrade could not be
+audited in one run. It can: there is no adjacency check anywhere in the tool.
+`pair_order()` classifies direction and nothing else, and no code path
+enumerates or compares releases for distance.
+
+**And `docs/scope.md` claimed the opposite, with nothing behind it.** *"The
+method itself works on any pair of upstream tags"* had been published without
+a single release-skipping pair having been run -- in substance since the
+fourteenth entry (as "any pair where both sides are glibc 2.24 or newer"), in
+its current wording since the seventeenth. Two pages disagreeing, and the one
+that was right was the one that was unverified.
+
+### What changed
+
+`docs/method.md` gains **"How far apart the two tags may be"**, linked from
+the ordering rule that is the constraint people actually have to respect. It says
+why distance cannot matter -- steps 1, 2 and 5 are a `git diff` between the two
+endpoints, step 3 closes the `copy` graph over the new tag, step 4 scans the
+new tag alone, the node steps read the two nodes -- and then measures it rather
+than resting on the argument.
+
+Measured 2026-09-20 on `glibc-2.28-251.el8_10.40`, `glibc-2.34-275.el9_8` and
+`glibc-2.39-128.el10_2`, all ten steps, both nodes' locale sources supplied:
+
+| | `2.28->2.34` | `2.34->2.39` | both | direct `2.28->2.39` |
+|---|---|---|---|---|
+| Step 2, files changed inside `LC_COLLATE` | 2 | 3 | 5 | **5** |
+| Step 3, generated names to reindex | 6 | 4 | 10 | **10** |
+| Step 5, substantive hunks | 24 | 52 | 76 | **75** |
+| Step 8, locales differing on the two nodes | 3 | 3 | 6 | **6** |
+| Step 8, locales the upgrade removes | 1 | 1 | 2 | **2** |
+
+Every set is the exact union, name for name rather than merely the same size.
+`C.UTF-8` -- the locale this project warns loudest about, which changes between
+el8 and el9 and not between el9 and el10 -- is still reported as `DIFFERS` by
+the direct run.
+
+**75 and not 76 is the one figure that is not a sum, and it is the two-step
+reading that is wrong.** The copyright string in
+`locale/programs/localedef.c` goes `"2018"` -> `"2021"` -> `"2024"`; read end
+to end that is one hunk, and counted in steps it is two.
+
+**A change that is undone before the end is not reported, and that is not a
+hole.** Such a locale ends with its data identical at the two endpoints, so it
+stands exactly where a locale that never changed stands: cleared by the data
+diff, and still subject to steps 4 and 5 and to the node steps 6 to 8 like
+every other. Not "it sorts the same on both systems" -- identical data is not
+identical order, and step 5 finds 75 hunks over this pair. The node steps are
+the ones that matter for this case: an undone upstream change reaches a real
+system only if a distro backported the intermediate state, and steps 6 to 8
+are the ones that compare the nodes' own files. Measured rather than argued: of the 350 locale
+files that differ in at least one of the two steps, 349 also differ between
+the endpoints. The one that does not is `aa_ER@saaho`, renamed to `ssy_ER` at
+2.39, and the direct run reports it twice over -- as a rename in step 2 and as
+a removed locale in step 8. The second class the section names is a locale
+ADDED on the way and then changed, which the direct run reports as added
+rather than as changed; a test asserts that intersection is empty on this
+triple, so a future union failure names its cause.
+
+**The scope did not widen.** `docs/scope.md` still publishes results for two
+pairs. `examples/skipping-a-release-2.28-to-2.39.txt` opens with `NOT AN
+AUDITED PAIR`, the same disclaimer the floor pair carries, and a test asserts
+that it does: a measured-but-unpublished pair is one careless sentence away
+from becoming a supported one, which is how RHEL7 kept coming back (fourteenth
+entry).
+
+### Tied to tests
+
+`tests/test_known_answers.py`, `SkippingAReleaseReportsTheUnion`, asserts the
+SET equality against the pinned tags, not the counts -- five names of which one
+is wrong is still five. It also asserts 350 and 349 and names the single
+exception, since *"no locale changed and changed back"* is the sentence the
+whole section rests on. Mutation-checked: a direct pair that loses the first
+step's names fails it, so does either name parser reduced to matching nothing,
+and so does `filter_lc_collate_changes.py` made to drop `or_IN` on the wide
+pair alone -- the tool-side shape of the defect, which is the one that
+matters.
+
+`tests/test_published_claims.py` ties the five table rows in `docs/method.md`
+to the same five in the example file, and the `NOT AN AUDITED PAIR` disclaimer
+to `docs/scope.md`'s two-pair sentence. Five numbers published in two places
+is the shape the step 4 `2` rotted in.
+
 ## 2026-09-08 (twenty-fifth entry)
 
 Which pair you typed is now established before anything is compared: which of

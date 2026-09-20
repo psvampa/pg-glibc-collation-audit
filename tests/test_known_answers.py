@@ -540,5 +540,152 @@ class BelowTheOldVersionFloor(StepRun):
             self.assertIn(name, out, f'{name} is not in the affected set')
 
 
+
+@needs_clone
+class SkippingAReleaseReportsTheUnion(StepRun):
+    """glibc-2.28 -> glibc-2.39, the pair that leaves 2.34 out.
+
+    Not an audited pair and not a published verdict. It is the pair
+    docs/method.md, "How far apart the two tags may be", is measured on, and
+    examples/skipping-a-release-2.28-to-2.39.txt records.
+
+    The claim under test is a SET equality, not a count: a direct jump reports
+    exactly what the two steps between it report, name for name. A count would
+    pass on the right total reached the wrong way -- five names of which one is
+    wrong is still five. The README used to call the audited pairs "the two
+    adjacent upgrades", which reads as a restriction; there is no adjacency
+    check anywhere in the tool, and this class is what keeps that true.
+    """
+
+    def _step2_names(self, old, new):
+        """The bare locale names step 2 reports as changed inside LC_COLLATE.
+
+        Parsed from stdout rather than read from step2_changed_collate.*.txt:
+        run_step is memoised and a cached call does not rewrite its files, so a
+        second test reading that path could assert on a previous pair's list.
+        """
+        out = self.step('filter_lc_collate_changes.py', old, new)
+        count = one_int(r'Files with changes inside LC_COLLATE: (\d+)', out,
+                        f'the step 2 count for {old}..{new}')
+        # Only the block under that header. Step 2 prints bare
+        # localedata/locales/ paths under "Deleted at NEW" too, and a regex
+        # over the whole output would fold a deletion into the changed set --
+        # unreachable on these three ranges today (no locale file is deleted
+        # in any of them), which is exactly when a parser like that survives.
+        block = out.split('Files with changes inside LC_COLLATE:')[1]
+        block = block.split('\n\n')[0]
+        names = re.findall(r'(?m)^  localedata/locales/(\S+)$', block)
+        self.assertEqual(len(names), count,
+                         f'{old}..{new}: step 2 says {count} files and names '
+                         f'{len(names)}; the header and the list disagree')
+        return set(names)
+
+    def _step3_generated(self, new, names):
+        """The generated names step 3 maps an affected set to."""
+        out = self.step('resolve_copy_closure.py', new, *sorted(names))
+        count = one_int(r'pg_collation show \((\d+)\)', out,
+                        f'the generated names at {new}')
+        block = out.split('pg_collation show (')[1].split(':', 1)[1]
+        got = [ln.strip() for ln in block.split('\n\n')[0].split('\n')
+               if ln.strip()]
+        self.assertEqual(len(got), count,
+                         f'step 3 at {new} says {count} generated names and '
+                         f'prints {len(got)}')
+        return set(got)
+
+    def test_step_2_is_the_exact_union_of_the_two_steps(self):
+        first, second = self._step2_names(OLD, MID), self._step2_names(MID, NEW)
+        direct = self._step2_names(OLD, NEW)
+        self.assertEqual(first, {'or_IN', 'sv_SE'})
+        self.assertEqual(second, {'ber_DZ', 'kab_DZ', 'th_TH'})
+        self.assertEqual(
+            direct, first | second,
+            'the direct pair no longer reports the union of the two steps: '
+            f'missing {sorted(first | second - direct)}, '
+            f'extra {sorted(direct - (first | second))}')
+
+    def test_step_3_is_the_exact_union_of_the_two_steps(self):
+        """The reindex verdict, which is what a reader acts on. Each side is
+        closed over the copy graph of ITS OWN new tag, which is why this is
+        asserted on the generated names rather than on the source files: sv_FI
+        and sv_FI@euro reach sv_SE at both 2.34 and 2.39."""
+        first = self._step3_generated(MID, self._step2_names(OLD, MID))
+        second = self._step3_generated(NEW, self._step2_names(MID, NEW))
+        direct = self._step3_generated(NEW, self._step2_names(OLD, NEW))
+        self.assertEqual(len(first), 6)
+        self.assertEqual(len(second), 4)
+        self.assertEqual(
+            direct, first | second,
+            'the direct pair no longer reports the union: '
+            f'missing {sorted(first | second - direct)}, '
+            f'extra {sorted(direct - (first | second))}')
+        self.assertEqual(len(direct), 10)
+
+    def test_step_5_prints_75_hunks_and_not_the_sum(self):
+        """76 is what the two steps add up to, and it is the wrong number: the
+        copyright string in locale/programs/localedef.c changes "2018" ->
+        "2021" -> "2024", which is one hunk read end to end and two read in
+        steps. docs/method.md publishes 75 and explains the difference; if this
+        ever becomes 76, that page is wrong rather than this test."""
+        out = self.step('diff_collation_code.py', OLD, NEW)
+        self.assertEqual(
+            one_int(r'(\d+) substantive hunk\(s\) found', out, 'the total'),
+            75)
+
+    def test_only_a_rename_differs_in_the_two_steps_and_not_end_to_end(self):
+        """The one thing a two-endpoint diff structurally cannot see is a
+        change that is undone before the end. docs/method.md publishes 350 and
+        349 for this span; this asserts them, and names the single exception,
+        because "no locale changed and changed back" is the sentence the whole
+        section rests on."""
+        def changed(old, new):
+            p = g.run_git(['diff', '--name-only', '--find-renames',
+                           f'{old}..{new}', '--', 'localedata/locales/'],
+                          GLIBC_CLONE)
+            out = p.stdout.decode('utf-8', 'replace')
+            return {ln for ln in out.split('\n') if ln.strip()}
+
+        either = changed(OLD, MID) | changed(MID, NEW)
+        end_to_end = changed(OLD, NEW)
+        self.assertEqual(len(either), 350)
+        self.assertEqual(len(end_to_end), 349)
+        self.assertEqual(
+            sorted(either - end_to_end),
+            ['localedata/locales/aa_ER@saaho'],
+            'a locale file now changes in one step and is back to its old '
+            'content by the end; docs/method.md says none does')
+        self.assertEqual(
+            end_to_end - either, set(),
+            'the direct pair reports a file neither step does, which a '
+            'two-endpoint diff cannot do')
+
+    def test_no_locale_is_added_on_the_way_and_then_changed(self):
+        """The second class docs/method.md names, asserted so that a future
+        union failure names its own cause.
+
+        A file ADDED between 2.28 and 2.34 and then changed inside LC_COLLATE
+        between 2.34 and 2.39 is in the second step's reindex list, and in the
+        direct run it is reported under "Added at glibc-2.39, not analysed for
+        a change of order" instead -- named either way, never silent, but
+        under a different heading, so the union would break. Two files fit the
+        first half on this triple (ckb_IQ, mnw_MM) and neither changed inside
+        LC_COLLATE. Without this, that day's failure would read as a lost
+        locale.
+        """
+        p = g.run_git(['diff', '--name-only', '--diff-filter=A',
+                       f'{OLD}..{MID}', '--', 'localedata/locales/'],
+                      GLIBC_CLONE)
+        added = {ln.rsplit('/', 1)[1]
+                 for ln in p.stdout.decode('utf-8', 'replace').split('\n')
+                 if ln.strip()}
+        self.assertTrue(added, 'no file is added over 2.28..2.34, which '
+                               'contradicts step 2 reporting two additions')
+        self.assertEqual(
+            added & self._step2_names(MID, NEW), set(),
+            'a locale added on the way is now also changed inside LC_COLLATE '
+            'by the end; the union tests above will fail, and this is why')
+
+
+
 if __name__ == '__main__':
     unittest.main()
