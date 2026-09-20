@@ -549,7 +549,7 @@ project's table is a statement about sort order and nothing else.
 This section exists so a clean collation result is not read as a clean upgrade.
 If a `lower()`-based index matters to you, confirm it the way this project
 confirms collation — empirically, on both nodes, naming the builds — because
-nothing here will do it for you.
+no step of this tool will do it for you.
 
 One such measurement is published here.
 [breakage/scripts/03-ctype-sweep.sql](../breakage/scripts/03-ctype-sweep.sql) sweeps
