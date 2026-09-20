@@ -533,6 +533,61 @@ class EveryLinkResolves(unittest.TestCase):
                                 f'does not exist')
 
 
+class TheRepairDocumentQuotesWhatIsPublished(unittest.TestCase):
+    """breakage/repair.md used to print the whole repair script a second time,
+    under a heading, and breakage/scripts/04-repair.sql is that script as a
+    runnable file. Two copies of one text drift -- this repository has been
+    bitten by exactly that, a '~16s'/'~17s' disagreement about one runtime and
+    a 'four things' count against a five-item list. Those two copies drifted
+    three times in the session that published the file, so the document now
+    links the script instead of repeating it.
+
+    One quotation is left, the check_index helper in the header, because step 0
+    cannot be read without it. This pins that one.
+    """
+
+    def _quoted_helper(self):
+        md = docs()[os.path.join('breakage', 'repair.md')]
+        blocks = re.findall(r'```sql\n(.*?)```', md, re.S)
+        self.assertEqual(
+            1, len(blocks),
+            'breakage/repair.md is expected to quote exactly one sql block, the '
+            'check_index helper. A second one is a copy of something that is '
+            'published elsewhere, which is what this class exists to prevent')
+        return blocks[0].strip()
+
+    @staticmethod
+    def _script(name):
+        """Read with newline='' so a CRLF file does not compare equal to an LF
+        one. The default translates them and would make this test pass over a
+        real difference -- measured on a scratch copy."""
+        path = os.path.join(REPO_ROOT, 'breakage', 'scripts', name)
+        with open(path, encoding='utf-8', newline='') as fh:
+            return fh.read()
+
+    def test_the_helper_quoted_in_the_header_is_the_published_one(self):
+        """repair.md's header quotes check_index and says it is defined in
+        scripts/01b-helpers.sql. That is a second copy of a text, with the same
+        way of going wrong."""
+        quoted = self._quoted_helper()
+        published = re.search(
+            r'CREATE OR REPLACE FUNCTION check_index\(ix regclass\).*?'
+            r'END \$\$ LANGUAGE plpgsql;',
+            self._script('01b-helpers.sql'), re.S)
+        self.assertIsNotNone(
+            published,
+            'breakage/scripts/01b-helpers.sql no longer defines check_index')
+        # assertEqual, not assertIn: a substring test passes over a quote that
+        # simply stops early, and what a truncated quote drops first is the
+        # NOT ASKED arm -- the half that keeps an absence from reading as an
+        # answer. Measured on a scratch copy: cutting that arm out of the
+        # document passed the assertIn form.
+        self.assertEqual(
+            published.group(0), quoted,
+            "breakage/repair.md's quoted helper is not the one "
+            "breakage/scripts/01b-helpers.sql publishes")
+
+
 class ThePrivateRulesStayPrivate(unittest.TestCase):
     """The working rules Claude follows in this repository -- the skill, the
     hooks, the local settings -- live under .claude/ and name people, hosts
