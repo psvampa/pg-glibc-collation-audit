@@ -69,9 +69,10 @@ Each case file carries the exact script that produced its session, so a case can
 re-run on its own once the schema exists.
 
 `scripts/03-ctype-sweep.sql` and `scripts/03b-ctype-detail.sql` are what produced the
-6,525 figure in [case 4](cases/04-lc-ctype.md). They sweep all 1,114,111 code points on
+6,525 figure in [case 4](cases/04-lc-ctype.md). They sweep 1,112,063 code points on
 each node, first hashing by Unicode block and then listing the code points inside the
-blocks that differ.
+blocks that differ. That is every code point but `U+0000` and the 2,048 surrogates,
+which `chr()` rejects in UTF8.
 
 ---
 
