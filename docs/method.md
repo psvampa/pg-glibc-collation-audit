@@ -42,7 +42,9 @@ that take a pair accept `--allow-reverse` for a deliberate backwards read
 (each script's `--help`, or its usage line), and then print a `!!` block
 saying so; the wrapper has no
 such flag, because a reversed audit answers none of the questions on this
-page.
+page. Direction is the only property of the pair that is constrained;
+how far apart the two releases are is not, and [what a wider pair
+reports](#how-far-apart-the-two-tags-may-be) has been measured.
 
 The wrapper also runs three checks that are *not* among these five, all of them
 needing files off a node rather than the clone — which is why none of them is a
@@ -230,6 +232,107 @@ unit with no header of its own. The walk also does not report its own entry
 points, so the two wide-char wrappers (`wcscoll_l.c`, `wcsxfrm_l.c`) are
 listed in tier 1 by hand: until they were, they were checked for existence
 and never diffed.
+
+## How far apart the two tags may be
+
+Any distance. Nothing in any step looks at how many releases lie between the
+two tags: steps 1, 2 and 5 are a `git diff` between the two endpoints, step 3
+closes the `copy` graph over the **new** tag, step 4 scans the **new** tag
+alone, and the node steps read the two nodes. There is no list of known tags
+and no adjacency check — the only pair the audit refuses is a reversed one.
+
+This matters because an upgrade often skips a release. RHEL8 to RHEL10 is one
+pair of tags, `glibc-2.28` against `glibc-2.39`, not two audits to be run and
+added up.
+
+**The two audited pairs already skip releases**, which is easy to miss because
+they are named after RHEL majors. `2.28 -> 2.34` leaves out 2.29, 2.30, 2.31,
+2.32 and 2.33; `2.34 -> 2.39` leaves out 2.35, 2.36, 2.37 and 2.38. Every
+result this project publishes was produced by a pair that is consecutive as
+RHEL and five or four releases wide as glibc. The direct RHEL8 to RHEL10 pair
+leaves out ten. It is a wider case of what the method already does, not a
+different thing asked of it.
+
+### Measured, not argued
+
+The two audited pairs share a middle version, so the question could be settled
+by running all three and comparing. Done on 2026-09-20 on the three fixtures
+— `glibc-2.28-251.el8_10.40`, `glibc-2.34-275.el9_8` and
+`glibc-2.39-128.el10_2` — with both nodes' `/usr/share/i18n/locales/` supplied,
+so all ten steps ran:
+
+| | `2.28→2.34` | `2.34→2.39` | both | **direct `2.28→2.39`** |
+|---|---|---|---|---|
+| Step 2, files changed inside `LC_COLLATE` | 2 | 3 | 5 | **5** |
+| Step 3, generated names to reindex | 6 | 4 | 10 | **10** |
+| Step 5, substantive hunks | 24 | 52 | 76 | **75** |
+| Step 8, locales differing on the two nodes | 3 | 3 | 6 | **6** |
+| Step 8, locales the upgrade removes | 1 | 1 | 2 | **2** |
+
+Every set is the exact union, name for name and not merely the same size.
+`C.UTF-8` is worth naming on its own: it changes between el8 and el9 and not
+between el9 and el10, and the direct run still reports
+`C (C.UTF-8): DIFFERS`. The blind spot [the limitations
+page](limitations.md#cutf-8-is-invisible-to-a-tag-diff) warns loudest about is
+not made worse by skipping a release. The full run is
+[`examples/skipping-a-release-2.28-to-2.39.txt`](../examples/skipping-a-release-2.28-to-2.39.txt).
+
+### The one figure that is not a sum
+
+**75 hunks, not 76.** The two-step reading counts one hunk twice — the
+copyright string in `locale/programs/localedef.c`, `"2018"` to `"2021"` in the
+first step and `"2021"` to `"2024"` in the second. End to end that is one
+change, `"2018"` to `"2024"`. The direct figure is the right one; the sum
+over-counts. Nothing is missing from it.
+
+### What a direct pair reports differently
+
+**A change made and then undone between the two endpoints is not reported.**
+That is what a two-endpoint diff means. It is not a hole in the answer either:
+such a locale ends with its data identical at the two endpoints, so it stands
+exactly where a locale that never changed stands — cleared by the data diff,
+and still subject to steps 4 and 5 and to the node steps 6 to 8 like every
+other locale. **Not** "it sorts the same on both systems": identical data is
+not identical order, and step 5 finds 75 hunks over this pair, so nothing here
+is settled by the data alone. That is the fifth limitation, not a property of
+skipping a release. The node steps matter here in particular: the one way an
+undone upstream change reaches a real system is a distro backporting the
+intermediate state, and steps 6, 7 and 8 are the ones that compare the nodes' own files.
+
+Measured over this span rather than argued: of the 350 locale files that
+differ in at least one of the two steps, **349 also differ between the
+endpoints**. The one that does not is `aa_ER@saaho`, renamed to `ssy_ER` at
+2.39 — and the direct run reports it twice over, as a rename in step 2 and as
+a removed locale in step 8.
+
+**A locale added on the way and then changed is reported as added, not as
+changed.** Added between 2.28 and 2.34 and then changed inside `LC_COLLATE`
+between 2.34 and 2.39, it lands in the second step's reindex list and in the
+direct run's *"Added at `glibc-2.39`, not analysed for a change of order"*
+block — named either way, never silent, but under a different heading, and
+that block already tells you to check `locale -a` on the old node because a
+distro may have backported it. Two files fit the first half of that shape on
+this triple, `ckb_IQ` and `mnw_MM`, and neither changed inside `LC_COLLATE`,
+which is why the union holds here. A test asserts that intersection is empty,
+so if the union ever breaks, it names this as the cause instead of looking
+like a lost locale.
+
+### What is not claimed
+
+**One triple is not every triple.** This is glibc 2.28, 2.34 and 2.39. It is
+evidence about those three and about the shape of the method, not a claim
+about every pair of releases somebody might skip.
+
+**It is the answer for a direct upgrade.** If you will run production on the
+intermediate release for any length of time, audit each step. A locale that
+changes on the way in and changes back on the way out needs a reindex at each
+end, and a single run against the two outer versions is silent about it
+because there is nothing there to see.
+
+**The published results did not move.** This changes no step and no verdict:
+`./audit.sh` on the two audited pairs produces byte-identical output before
+and after. What moved is [the scope page](scope.md), which claimed the method
+works on any pair of upstream tags with nothing measured behind it.
 
 ## Reading the output
 

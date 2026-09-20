@@ -59,8 +59,17 @@ and `glibc-2.34`. **Old first, new second**: a reversed pair is refused rather
 than answered, because backwards every step still prints a plausible clean
 result ([docs/method.md](docs/method.md#the-five-steps-in-detail)).
 
-**The audited pairs are RHEL8 → RHEL9 and RHEL9 → RHEL10** — the two adjacent
-upgrades this project publishes results for ([docs/scope.md](docs/scope.md)).
+**The audited pairs are RHEL8 → RHEL9 and RHEL9 → RHEL10** — the two upgrades
+this project publishes measured results for ([docs/scope.md](docs/scope.md)).
+That is what has been measured, not a restriction on the pair you may pass:
+nothing in the tool looks at how far apart the two versions are, and the only
+pair it refuses is a reversed one. In fact the two audited pairs already skip
+releases — they are consecutive RHEL majors, not consecutive glibc releases,
+and `2.28 -> 2.34` leaves out five upstream versions. **Skipping more is
+fine**: `glibc-2.28` straight against `glibc-2.39` reports exactly what the
+two steps between them report, name for name. Measured on that one triple, and
+with the one case that needs two runs instead, in
+[docs/method.md](docs/method.md#how-far-apart-the-two-tags-may-be).
 Other distros work the same way. There used to be a hard floor at glibc 2.24,
 below which the method answered confidently and wrongly; that was a bug and it
 is fixed, though only one pair below it has been measured — see

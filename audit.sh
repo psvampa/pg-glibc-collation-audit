@@ -22,6 +22,14 @@
 # refused now. One commit spelt two ways -- a tag and its own sha -- is run,
 # and the run says that nothing was compared.
 #
+# Direction is the ONLY property of the pair that is constrained. How far apart
+# the two releases are is not checked anywhere: an upgrade that skips a release
+# is one pair of tags, not two runs added up. Measured on one triple --
+# glibc-2.28 against glibc-2.39 reports the exact union of what 2.28..2.34 and
+# 2.34..2.39 report, C.UTF-8 included -- docs/method.md, "How far apart the two
+# tags may be", and examples/skipping-a-release-2.28-to-2.39.txt. One triple is
+# not every triple; that section says what is and is not claimed.
+#
 # The --*-locales-dir options are optional and read a node's own
 # /usr/share/i18n/locales/. Each side you supply adds the
 # distro-versus-upstream check for that side (step 6 for old, step 7 for new)
@@ -44,7 +52,10 @@ usage() {
   echo "       e.g. $0 glibc-2.28 glibc-2.34" >&2
   echo "       tags are glibc-<version>; run \`ldd --version\` on each node" >&2
   echo "       OLD first, NEW second: a reversed pair is refused, not" >&2
-  echo "       answered. Every --* option takes a value." >&2
+  echo "       answered. Distance is NOT checked: RHEL8 to RHEL10 is one" >&2
+  echo "       pair, glibc-2.28 glibc-2.39, not two runs added up. What" >&2
+  echo "       that reports was measured on that one triple -- see" >&2
+  echo "       docs/method.md. Every --* option takes a value." >&2
   echo >&2
   echo "       The --*-locales-dir options are OPTIONAL. Given a copy of a" >&2
   echo "       node's /usr/share/i18n/locales/, the run also checks whether" >&2

@@ -17,7 +17,7 @@
 
 | Document | What's in it |
 |---|---|
-| [method.md](method.md) | The five steps in detail, how to read what a run prints, and the decision procedure they add up to |
+| [method.md](method.md) | The five steps in detail, how far apart the two tags may be, how to read what a run prints, and the decision procedure they add up to |
 | [results.md](results.md) | The evidence behind each verdict, both worked examples, and what was tested on which nodes |
 | [confirming-on-a-real-system.md](confirming-on-a-real-system.md) | Running the SQL template and the `C.UTF-8` probe on both nodes, comparing the nodes' locale files against upstream and against each other, and the four traps that make a comparison lie |
 | [scope.md](scope.md) | What this audits — `LC_COLLATE` and the `libc` provider — and the `builtin` provider as a way out |
@@ -26,7 +26,7 @@
 | [comparison-ardentperf.md](comparison-ardentperf.md) | How this relates to ardentperf/glibc-unicode-sorting, and how to read their tables |
 | [glossary.md](glossary.md) | `copy` graph, blast radius, hunk, tier, ellipsis range, role swap |
 | [../breakage/](../breakage/README.md) | What a collation change breaks inside PostgreSQL once it happened: thirteen cases measured on two nodes, each one the real `psql` session from both sides, side by side |
-| [../examples/](../examples/) | Real output from both pairs, a confirmation SQL script for each, the `C.UTF-8` probe output that is the only published evidence for that locale's order, and the below-the-floor pair that is not an audited result but shows what the old glibc 2.24 bug cost |
+| [../examples/](../examples/) | Real output from both pairs, a confirmation SQL script for each, the `C.UTF-8` probe output that is the only published evidence for that locale's order, the below-the-floor pair that is not an audited result but shows what the old glibc 2.24 bug cost, and the run that skips a release |
 | [../CHANGELOG.md](../CHANGELOG.md) | What this tool used to get wrong, and when |
 | [../tests/README.md](../tests/README.md) | What the test suite covers, and what it does not |
 
