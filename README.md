@@ -87,6 +87,9 @@ pair, as an example:
 It runs the five steps in order, hands each step's result to the next so you
 never retype a locale name, and ends with a consolidated summary.
 
+<details>
+<summary><strong>Giving it both nodes' locale sources, reading the output, and confirming on a real system</strong> — the two optional flags, what the run prints, and the empirical half of the method</summary>
+
 **Give it both nodes' locale sources and it does more.** Each side you supply
 adds a check that the node's own files match the tag the audit diffed — your
 distro's patching, which no tag diff can see. Supply **both** and it also
@@ -122,9 +125,6 @@ outputs. It takes no editing.
 Real output from both pairs, start to finish, is in
 [`examples/`](examples/) — read that before running anything if you want to
 know what you are getting.
-
-<details>
-<summary><strong>Reading the output, and confirming on a real system</strong> — what the run prints, and the empirical half of the method</summary>
 
 ### Read the output
 
