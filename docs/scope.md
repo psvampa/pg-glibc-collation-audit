@@ -9,9 +9,10 @@ matching — and nothing about `LC_NUMERIC`, `LC_TIME`, `LC_MONETARY` or
 
 `LC_CTYPE` is the exclusion that can still cost you an index: a functional index
 on `lower(email)` breaks on a glibc upgrade the same way a `COLLATE` index does,
-and PostgreSQL has no `collversion` equivalent for ctype to warn you. It is
-unmeasured here in **both** directions — see
-[limitations.md](limitations.md#lc_ctype-is-not-audited-at-all).
+and PostgreSQL has no `collversion` equivalent for ctype to warn you. No step
+audits it — see
+[limitations.md](limitations.md#lc_ctype-is-not-audited-at-all) for the one
+measurement this repository does publish.
 
 **The `libc` provider only.** It is about glibc, so in PostgreSQL terms that
 is the only provider it applies to. ICU collations version their CLDR data
