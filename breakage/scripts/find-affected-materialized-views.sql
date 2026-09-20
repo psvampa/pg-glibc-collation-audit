@@ -22,7 +22,12 @@ affected AS (
   -- affected only when the database itself is on libc and not on C or POSIX.
   -- pg_collation names that row 'default', so a filter on the name cannot see it.
   SELECT c.oid, c.collname FROM pg_collation c CROSS JOIN db
-   WHERE (c.collprovider = 'c' AND c.collname NOT IN ('C','POSIX'))
+   -- collcollate, and not just the name, because a collation can sort by code
+   -- point under another name.  ucs_basic is declared LC_COLLATE = 'C' with the
+   -- libc provider up to PostgreSQL 16, and so is any collation someone creates
+   -- that way.  Neither one moves when glibc does.
+   WHERE (c.collprovider = 'c' AND c.collname NOT IN ('C','POSIX')
+                               AND coalesce(c.collcollate, '') NOT IN ('C','POSIX'))
       OR (c.collprovider = 'd' AND db.prov = 'c' AND db.coll NOT IN ('C','POSIX'))
 )
 SELECT r.ev_class::regclass::text AS relation,
