@@ -1,23 +1,36 @@
 # The repair, in order
 
 The order matters more than the individual commands. This is the real run on the
-glibc 2.34 node, the one that turns state B into state C, captured with
-`psql -X -e -f 04-repair.sql > repair-transcript.txt 2>&1`, so the commands are echoed
-and stderr is merged. Two steps fail on purpose and those failures are the evidence.
+glibc 2.34 node, the one that turns [state B into state C](environment.md#the-three-states),
+captured with `psql -X -e -f scripts/04-repair.sql 2>&1`, so the commands are echoed and
+stderr is merged. Two steps fail on purpose and those failures are the evidence.
 
-One helper appears in step 0. `check_index(ix)` calls `bt_index_check(ix)` and returns
-the error text instead of aborting the transaction, so the answer lands on stdout where
-it can be diffed between states:
+One helper appears in step 0, defined in [`scripts/01b-helpers.sql`](scripts/01b-helpers.sql).
+`check_index(ix)` calls `bt_index_check(ix)` and returns the error text instead of
+aborting the transaction, so the answer lands on stdout where it can be diffed between
+states:
 
 ```sql
 CREATE OR REPLACE FUNCTION check_index(ix regclass) RETURNS text AS $$
 BEGIN
   PERFORM bt_index_check(ix);
   RETURN 'ok';
-EXCEPTION WHEN others THEN
-  RETURN 'CORRUPT: ' || SQLERRM;
+EXCEPTION
+  WHEN index_corrupted OR data_corrupted THEN
+    RETURN 'CORRUPT: ' || SQLERRM;
+  WHEN others THEN
+    -- not a B-tree, not an index, no amcheck: all of these used to read
+    -- CORRUPT, on both nodes alike. A name that does not resolve at all never
+    -- reaches here -- the regclass cast raises in the caller, which stops the
+    -- run under ON_ERROR_STOP.
+    RETURN 'NOT ASKED: ' || SQLERRM;
 END $$ LANGUAGE plpgsql;
 ```
+
+`CORRUPT` is an answer about the index. `NOT ASKED` is the other thing that can happen —
+the table is not there, amcheck is not installed — and it is a separate word on purpose:
+reported as `CORRUPT`, a missing extension would read the same on both nodes and the two
+sides would agree while proving nothing.
 
 ## Step 0: the wrong move, shown first because it is the common one
 
@@ -309,99 +322,11 @@ ANALYZE
 
 ## The script
 
-Exactly what was fed to `psql`:
-
-```sql
--- The repair, on the glibc 2.34 node, in the order a DBA would actually do it.
--- Run after 02-probe.sql has recorded state B.  Errors are expected and are
--- part of the evidence, so this transcript is captured with stderr merged.
-\pset pager off
-\set ON_ERROR_STOP off
-SET client_min_messages = warning;
-
-\echo '#### step 0: the wrong move, shown first because it is the common one ####'
-\echo '-- REFRESH VERSION silences the warning.  It repairs nothing.'
-ALTER COLLATION pg_catalog."sv_SE.utf8" REFRESH VERSION;
-SELECT collname, collversion, pg_collation_actual_version(oid) AS os_provides
-FROM pg_collation WHERE collname = 'sv_SE.utf8';
-SET enable_seqscan = off;
-SELECT count(*) AS still_not_found_via_index FROM s1_words WHERE w = 'waa000';
-RESET enable_seqscan;
-SELECT check_index('s1_idx') AS s1_idx_after_refresh_version;
-
-\echo '#### step 1: what production did in the meantime ####'
-\echo '-- one ordinary INSERT, accepted because the unique index cannot see the'
-\echo '-- row that is already there.  This is the damage that outlives REINDEX.'
-INSERT INTO s2_uniq VALUES ('waa000', 'inserted by the application after the migration');
-SET enable_seqscan = on; SET enable_indexscan = off; SET enable_bitmapscan = off; SET enable_indexonlyscan = off;
-SELECT count(*) AS copies_of_waa000_now FROM s2_uniq WHERE w = 'waa000';
-RESET enable_seqscan; RESET enable_indexscan; RESET enable_bitmapscan; RESET enable_indexonlyscan;
-
-\echo '#### step 2: REINDEX, and the index that refuses to be rebuilt ####'
-REINDEX INDEX s1_idx;
-REINDEX INDEX s3_parent_pkey;
-REINDEX INDEX s3_child_pw;
-REINDEX INDEX s4_lower_idx;
-REINDEX INDEX s4_expr_idx;
-REINDEX INDEX s5a_idx;
-REINDEX INDEX s5b_idx;
-REINDEX INDEX s5c_idx;
-REINDEX INDEX s6_excl_w_excl;
-REINDEX INDEX s9_mv_idx;
-REINDEX INDEX c0_idx;
-\echo '-- this one fails, and names the duplicate that step 1 let in'
-REINDEX INDEX s2_uniq_pkey;
-
-\echo '#### step 3: find and remove the duplicates REINDEX refuses to rebuild ####'
-SET enable_seqscan = on; SET enable_indexscan = off; SET enable_bitmapscan = off; SET enable_indexonlyscan = off;
-SELECT w, count(*) AS copies FROM s2_uniq GROUP BY w HAVING count(*) > 1 ORDER BY w;
-DELETE FROM s2_uniq a USING s2_uniq b
- WHERE a.w = b.w AND a.ctid > b.ctid;
-RESET enable_seqscan; RESET enable_indexscan; RESET enable_bitmapscan; RESET enable_indexonlyscan;
-REINDEX INDEX s2_uniq_pkey;
-
-\echo '#### step 4: the partitioned table, which no REINDEX can help ####'
-SELECT count(*) AS rows_in_the_wrong_partition FROM s7_part_lo WHERE w >= 'vz';
-WITH moved AS (
-  DELETE FROM s7_part_lo WHERE w >= 'vz' RETURNING w, note
-)
-INSERT INTO s7_part SELECT w, note FROM moved;
-SELECT tableoid::regclass AS partition, count(*) AS rows FROM s7_part GROUP BY 1 ORDER BY 1;
-SELECT count(*) AS rows_still_in_the_wrong_partition FROM s7_part_lo WHERE w >= 'vz';
-
-\echo '#### step 5: the CHECK constraint nobody revalidated ####'
-SELECT count(*) AS rows_violating_the_check FROM s8_check WHERE NOT (w < 'vz');
-\echo '-- dropping and re-adding it is how you find out, and it fails'
-ALTER TABLE s8_check DROP CONSTRAINT s8_check_w_check;
-ALTER TABLE s8_check ADD CONSTRAINT s8_check_w_check CHECK (w < 'vz') NOT VALID;
-ALTER TABLE s8_check VALIDATE CONSTRAINT s8_check_w_check;
-\echo '-- the rows have to go somewhere before the constraint can be trusted'
-CREATE TABLE IF NOT EXISTS s8_quarantine (w text COLLATE "sv_SE.utf8");
-WITH bad AS (DELETE FROM s8_check WHERE NOT (w < 'vz') RETURNING w)
-INSERT INTO s8_quarantine SELECT w FROM bad;
-SELECT count(*) AS quarantined FROM s8_quarantine;
-ALTER TABLE s8_check VALIDATE CONSTRAINT s8_check_w_check;
-
-\echo '#### step 6: the stored generated column, recomputed ####'
-SELECT count(*) AS stale_rows_before FROM s9_gen
- WHERE bucket IS DISTINCT FROM (CASE WHEN w < 'vz' THEN 'early' ELSE 'late' END);
-ALTER TABLE s9_gen ALTER COLUMN bucket
-  SET EXPRESSION AS (CASE WHEN w < 'vz' THEN 'early' ELSE 'late' END);
-SELECT count(*) AS stale_rows_after FROM s9_gen
- WHERE bucket IS DISTINCT FROM (CASE WHEN w < 'vz' THEN 'early' ELSE 'late' END);
-
-\echo '#### step 7: the materialized view, refreshed ####'
-REFRESH MATERIALIZED VIEW s9_mv;
-
-\echo '#### step 8: the CHECK that depends on LC_CTYPE, not LC_COLLATE ####'
-SELECT count(*) AS rows_violating_the_class_check FROM s4_class WHERE code ~ '[[:alpha:]]';
-CREATE TABLE IF NOT EXISTS s4_quarantine (code text COLLATE "sv_SE.utf8");
-WITH bad AS (DELETE FROM s4_class WHERE code ~ '[[:alpha:]]' RETURNING code)
-INSERT INTO s4_quarantine SELECT code FROM bad;
-SELECT count(*) AS quarantined FROM s4_quarantine;
-
-\echo '#### step 9: only now, record the new collation version ####'
-ALTER COLLATION pg_catalog."en_US.utf8" REFRESH VERSION;
-ALTER DATABASE postgres REFRESH COLLATION VERSION;
-ANALYZE;
-```
+[`scripts/04-repair.sql`](scripts/04-repair.sql), and the helper it loads,
+[`scripts/01b-helpers.sql`](scripts/01b-helpers.sql). The transcript above was captured
+before the file gained its guards: the object check that refuses to run on a database
+`01-build.sql` did not build or that a previous run already quarantined rows in, the
+helpers loaded rather than assumed, `ON_ERROR_STOP` left on except around the two steps
+that fail on purpose, and the database name read from the connection instead of being
+written as `postgres`. Not one repair statement changed, so the run above is what this
+script still does; a reader running it today also sees the guard.

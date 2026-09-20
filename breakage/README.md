@@ -60,13 +60,24 @@ omitted from the transcripts so the two columns line up, and it is shown on its 
 
 ## Reproducing it
 
-`scripts/01-build.sql` creates every object these cases use, on the old node, before
-the migration. The corpus is 20,000 generated words starting with `v`, `V`, `w` or `W`,
-plus seven readable Swedish ones, and every text column carries an explicit
-`COLLATE "sv_SE.utf8"`.
+Four scripts, run in order, in the [three states](environment.md#the-three-states):
+
+| Script | When | What it does |
+|---|---|---|
+| [01-build.sql](scripts/01-build.sql) | state A, once | creates every object these cases use, on the old node, before the migration |
+| [01b-helpers.sql](scripts/01b-helpers.sql) | before each probe | two functions that put "was this accepted?" and "is this index well ordered?" on stdout, where they can be diffed |
+| [02-probe.sql](scripts/02-probe.sql) | A, B and C, unchanged | asks every scene the same questions and modifies nothing: the inserts and deletes run inside transactions that are rolled back |
+| [04-repair.sql](scripts/04-repair.sql) | state B, once | the repair run, in order. It is [repair.md](repair.md) |
+
+The corpus is 20,000 generated words starting with `v`, `V`, `w` or `W`, plus seven
+readable Swedish ones. Every text column the cases sort or compare on carries an explicit
+`COLLATE "sv_SE.utf8"`, except the control table, which carries `en_US.utf8`. The `note`
+and `pad` columns carry no collation of their own and nothing sorts on them.
 
 Each case file carries the exact script that produced its session, so a case can be
-re-run on its own once the schema exists.
+re-run on its own once the schema exists. `02-probe.sql` is the consolidated form of
+those per-case scripts, written to be run whole; it is not the text any single case
+publishes.
 
 `scripts/03-ctype-sweep.sql` and `scripts/03b-ctype-detail.sql` are what produced the
 6,525 figure in [case 4](cases/04-lc-ctype.md). They sweep 1,112,063 code points on

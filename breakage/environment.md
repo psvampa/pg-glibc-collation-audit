@@ -14,8 +14,25 @@ then promoted, so it holds exactly the index files that glibc 2.28 wrote, read b
 2.34. That is what makes the comparison valid. A dump and restore would have rebuilt
 every index under the new rules and hidden all of it.
 
+## The three states
+
+`scripts/02-probe.sql` is one file, run unchanged in three states. Every case in this
+folder is state A beside state B.
+
+| State | Node | What it is |
+|---|---|---|
+| A | Node0 | glibc 2.28, the node the data was written on |
+| B | Node1 | glibc 2.34, the same data files, before any repair |
+| C | Node1 | glibc 2.34, after `scripts/04-repair.sql` has run |
+
+**The right-hand column of every case is state B**, a promoted replica on which nothing
+has been repaired yet. That is deliberate: it is the state a database is in on the
+morning after the migration, and it is the only state in which the damage can be seen.
+State C is [repair.md](repair.md).
+
 The locale under test is `sv_SE.utf8`, which changed between these two glibc versions.
-Every text column carries an explicit `COLLATE "sv_SE.utf8"`.
+Every text column the cases sort or compare on carries an explicit
+`COLLATE "sv_SE.utf8"`, except the control table below, which carries `en_US.utf8`.
 
 ## Controls
 
