@@ -22,7 +22,7 @@ the file is absent at `glibc-2.12`, `glibc-2.17`, `glibc-2.28` and
 `glibc-2.34`, and present at `glibc-2.35` and `glibc-2.39`, which is where it
 arrives upstream. So the sentence was true of `2.28..2.34` and of the floor
 pair `2.12..2.17`, and false of `2.34..2.39` and of any pair whose new tag is
-2.35 or later -- the `2.28..2.39` example among them. On those, the run denied
+2.35 or later -- the `2.28..2.39` pair among them. On those, the run denied
 the existence of a file that step 4 had scanned earlier in the same run,
 printing `Declare codepoint_collation, so no expansion change can move them:
 C` -- and that step 2 named again in the warnings block a few lines below, in
@@ -80,9 +80,10 @@ Three mutants are the helper's own, and it needed them. Appending `echo` and
 green: the helper stopped at the first line it could not read as a printed one
 and compared the prefix, so a short block and a block that could not be read
 whole reached the test as the same fact. It ends at the `fi` that closes the
-block now and raises on anything else, including a line that expands before it
-is printed -- `echo "$OLD -> $NEW"` would be tied to the two variable names,
-which is a tie to a text no reader ever sees. Found by
+block now and raises on anything else, so that mutant fails, and so does one
+appending an ordinary quoted line with the doc left alone. The third is a line
+that expands before it is printed: `echo "$OLD -> $NEW"` would be tied to the
+two variable names, which is a tie to a text no reader ever sees. Found by
 `false-negative-reviewer` on the fix itself, not by the author. Controls:
 prose added outside the fence, and an unrelated edit elsewhere in
 `docs/limitations.md`, fail nothing.

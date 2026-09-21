@@ -75,9 +75,9 @@ sixth step. They answer different questions:
   and a tag scan cannot know what your distro built its own `C.UTF-8` from,
   even where the two turn out to hold the same bytes. So whatever step 4 says
   about `C` is evidence about upstream's file, and this is the only way the
-  question is asked of a node you supply on its own; step 8 answers it too,
-  for both nodes at once, when you supply them both. It was a manual step
-  until the seventeenth CHANGELOG entry; a check that depends on somebody
+  question is asked of a node you supply on its own; step 8 answers it for
+  `C` too, on both nodes at once, when you supply them both. It was a manual
+  step until the seventeenth CHANGELOG entry; a check that depends on somebody
   remembering is not a check. Same rule as step 8 when the directories are
   absent: the summary says `NOT RUN`.
 

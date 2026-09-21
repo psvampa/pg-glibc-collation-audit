@@ -42,7 +42,7 @@ def echoed_block(wrapper, heading):
 
     Ends at the `fi` that closes the block, and RAISES on any other line it
     cannot read as a printed one. Stopping there quietly was this helper's own
-    false negative, measured by false-negative-reviewer on 2026-09-21: nine
+    false negative, measured by false-negative-reviewer on 2026-09-21: eight
     line shapes -- a bare `echo`, `echo "..." >&2`, single quotes, a guarded
     echo, a `\` continuation, a here-doc, `printf`, a comment -- all ended the
     walk, so appending `echo` and "Your node's C.UTF-8 is therefore cleared."

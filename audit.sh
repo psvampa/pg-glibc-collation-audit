@@ -500,7 +500,7 @@ else
   # The reason here used to be "no tag of this pair holds localedata/locales/C".
   # The file is upstream from 2.35, so that was true of 2.28..2.34 and of the
   # floor pair 2.12..2.17, and false of 2.34..2.39 and of any pair whose new tag
-  # is 2.35 or later, such as the 2.28..2.39 example. On those, step 4 scans it
+  # is 2.35 or later, such as the 2.28..2.39 pair. On those, step 4 scans it
   # and prints "Declare codepoint_collation ...: C" earlier in the same run, so
   # the block denied a file whose reassuring verdict was already on screen. The
   # reason that holds on every pair is provenance, not content: a tag is
