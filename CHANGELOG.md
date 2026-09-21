@@ -49,6 +49,89 @@ inside `clean` fails the `hunks` and `unresolved` tests and only those two.
 The `clean` assertion matches the sentence without its first word, so it holds
 both before and after the move -- the control that keeps the other two from
 being tests that fail on everything.
+## 2026-09-20 (twenty-seventh entry)
+
+The empirical half of the method could not be run from the documentation: the
+command that produces its input was never published in runnable form. **No
+line that produces a finding changed** -- this entry touches `README.md`,
+`docs/confirming-on-a-real-system.md` and this file, and no script, test or
+SQL file at all.
+
+### What it used to get wrong
+
+**Two flags, three scripts and every published invocation of them consumed
+two directories that no published command created.** `--old-locales-dir` and
+`--new-locales-dir` appear across the README, `docs/`, `audit.sh`'s own
+header, a script header and the example outputs. The step that fills those
+directories was shown three times and was runnable none of them:
+
+- `README.md` published `tar -cf - -C /usr/share/i18n/locales . | ...` -- a
+  pipeline ending in a literal ellipsis. No transport, no receiving end, no
+  `mkdir`; the two directory names existed only in a trailing comment.
+- `docs/confirming-on-a-real-system.md` had the most complete form in the
+  tree, and it was for **one** node, in `docker exec` shape only, writing into
+  `./node-locales` -- a name nothing else in the project used -- without
+  creating it first. `tar -xf - -C` fails on a directory that does not exist.
+- The only instruction anywhere to do it for **both** nodes was a comment
+  inside a code block: *"tar the sources off BOTH nodes, same caveat as
+  above"*, back-referencing the single-node, differently-named form above it.
+
+This bit hardest at the one locale the five steps structurally cannot see.
+The node-to-node comparison is the only check in the run that can say whether
+a locale the distro adds changed between the nodes -- `C.UTF-8`, which is
+usually the database collation in a container and which PostgreSQL will not
+warn about either -- and it is exactly the check that needs both directories.
+A reader could find the flag, the script, the limitation and the verdict, and
+not the command.
+
+**`## How to use` documented one of the four commands.** Install, pick the two
+tags, `./audit.sh <old> <new>`, presented as *"One command."* The two flags,
+reading the output and confirming on a real system were all inside one
+collapsed `<details>` block. The audit's own `!!` warning still told the
+reader at run time that `C.UTF-8` was not covered; the section they had just
+followed did not.
+
+### What changed
+
+`## How to use` is now **four command boxes**, in the order of what they cost:
+the audit on the two tags; the audit with both nodes' locale sources; the
+`C.UTF-8` probe; the confirmation template. Each box names what it measures
+and what it needs before the command, and each carries its own collapsible for
+the prose that is not a command.
+
+The copy step is published runnable, for both nodes, with the three gaps
+closed: `mkdir -p` before `tar -xf`, a transport (`ssh`, with one line saying
+`docker exec` replaces it in a container), and the build ids read **on the
+nodes themselves** with `rpm -q glibc`, the same form the three scripts'
+`--help` already names.
+
+A first draft of that line used `rpm -q --qf '%{nvr}\n' glibc`, to match the
+build ids this project's own examples publish, and it was wrong in a way worth
+recording: under `ssh` the local shell eats the quotes and the remote shell
+turns `\n` into `n`, so the node prints a build id with a stray letter on the
+end. Measured over `ssh` to an el9 host: `rpm -q --qf '%{nvr}\n' bash` printed
+`bash-5.1.8-9.el9n`. Nothing validates that string -- none of the three
+scripts inspects the value -- so it would have been bound into a published
+result. It was measured through `docker exec`, which
+passes its arguments straight through and does work. **The form that was
+measured and the form that was published were not the same form**, which is
+the oldest defect shape in this repository wearing new clothes.
+
+`docs/confirming-on-a-real-system.md` loses its own copy block and points at
+the README instead, so the command exists once rather than in two copies that
+drift. Its `diff_distro_locales.py` example moves from `./node-locales` to
+`./el9-locales`, the name the README now produces.
+
+### Measured
+
+Run end to end on the `collaudit8` and `collaudit9` fixtures,
+`glibc-2.28-251.el8_10.40` and `glibc-2.34-275.el9_8`. The published pipeline
+produced 355 and 356 files, matching `ls /usr/share/i18n/locales/ | wc -l` run
+on each node. `audit.sh` with the two directories ran all ten steps -- no
+section printed `NOT RUN` -- and the summary reported
+`C (C.UTF-8): DIFFERS  <- in neither tag; no other step sees it`, together
+with `ellipsis-based` on the el8 side and `codepoint_collation` on the el9
+side. No verdict moved.
 
 ## 2026-09-20 (twenty-sixth entry)
 

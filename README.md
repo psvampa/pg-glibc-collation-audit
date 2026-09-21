@@ -59,6 +59,9 @@ and `glibc-2.34`. **Old first, new second**: a reversed pair is refused rather
 than answered, because backwards every step still prints a plausible clean
 result ([docs/method.md](docs/method.md#the-five-steps-in-detail)).
 
+<details>
+<summary><strong>Which pairs you may pass</strong> — the two audited pairs, skipping releases, and the old glibc 2.24 floor</summary>
+
 **The audited pairs are RHEL8 → RHEL9 and RHEL9 → RHEL10** — the two upgrades
 this project publishes measured results for ([docs/scope.md](docs/scope.md)).
 That is what has been measured, not a restriction on the pair you may pass:
@@ -75,10 +78,16 @@ below which the method answered confidently and wrongly; that was a bug and it
 is fixed, though only one pair below it has been measured — see
 [docs/limitations.md](docs/limitations.md#below-glibc-224-the-method-rests-on-one-measured-pair).
 
-### Run the audit
+</details>
 
-One command. Substitute your own two tags — these are the RHEL8-to-RHEL9
-pair, as an example:
+### The four commands
+
+Four commands, in the order of what they cost you. The first needs nothing but
+this checkout; the last needs PostgreSQL on both nodes. Each one says what it
+measures and what it leaves to the next.
+
+**1 — What changed between the two glibc versions**
+*Needs this checkout. No node, no database.*
 
 ```sh
 ./audit.sh glibc-2.28 glibc-2.34
@@ -87,46 +96,19 @@ pair, as an example:
 It runs the five steps in order, hands each step's result to the next so you
 never retype a locale name, and ends with a consolidated summary.
 
+Three things sit outside those five steps:
+
+- **The weights `localedef` computes at build time.** Only a measurement on
+  the nodes settles those — commands 3 and 4.
+- **Your distro's own patches.** Command 2 reaches the ones that touch the
+  files under `/usr/share/i18n/locales/`; `charmaps/` is not compared, and
+  steps 6 to 8 say so. A backported change to the collation *code* is in
+  neither tag and in neither command.
+- **A locale your distro adds**, which is in no upstream tag at all.
+  Command 2 is what sees it.
+
 <details>
-<summary><strong>Giving it both nodes' locale sources, reading the output, and confirming on a real system</strong> — the two optional flags, what the run prints, and the empirical half of the method</summary>
-
-**Give it both nodes' locale sources and it does more.** Each side you supply
-adds a check that the node's own files match the tag the audit diffed — your
-distro's patching, which no tag diff can see. Supply **both** and it also
-compares the two nodes to each other, which is the only way to see a locale
-your distro *adds* — `C.UTF-8` above all, since its source file exists upstream
-only from glibc 2.35 and RHEL8 and RHEL9 predate that:
-
-```sh
-# on each node: dnf install -y glibc-locale-source, then tar the directory off
-#   (tar, not `docker cp`, whose target /tmp is a separate mount in a container)
-tar -cf - -C /usr/share/i18n/locales . | ...      # -> ./el8-locales, ./el9-locales
-
-./audit.sh glibc-2.28 glibc-2.34 \
-  --old-locales-dir ./el8-locales --old-build-id glibc-2.28-251.el8_10.40 \
-  --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
-```
-
-The build ids are required: a result is bound to the build it was taken on, and
-nothing in a directory of locale files carries a version. Without the
-directories the summary says so, in as many words, rather than leaving the
-section out — the node-to-node comparison
-([`scripts/diff_node_locales.py`](scripts/diff_node_locales.py)) and the
-ellipsis scan of each node's own data (steps 9 and 10) are the only things in
-the run that look at that file at all, and their silence must not read as a
-clean result.
-
-That settles whether the two nodes' collation *data* differs. What it cannot
-settle is the resulting *order*, because the weights are computed when the
-locale is built — for that, run
-[`sql/c_utf8_probe.sql`](sql/c_utf8_probe.sql) on both nodes and `diff` the
-outputs. It takes no editing.
-
-Real output from both pairs, start to finish, is in
-[`examples/`](examples/) — read that before running anything if you want to
-know what you are getting.
-
-### Read the output
+<summary><strong>Reading the output</strong> — the <code>!!</code> markers, and where the long lists are written</summary>
 
 The run ends with an `AUDIT SUMMARY` block. One thing to know before you read
 it: **`!!` marks a warning that the clean-looking result above it does not
@@ -137,23 +119,141 @@ The rest of the output format — the `>>` code markers, where long result
 lists are written, and why step 5 hands you C diffs instead of a verdict —
 is in [docs/method.md](docs/method.md#reading-the-output).
 
-### Confirm on a real system
+Real output from both pairs, start to finish, is in
+[`examples/`](examples/) — read that before running anything if you want to
+know what you are getting.
 
-A source diff is an argument, not a proof of what actually runs in production.
-It says nothing about the weights `localedef` computes at build time, and
-nothing about your distro's patches unless you hand the run those two locale
-directories above.
+</details>
+
+**2 — What your distro patched, and what it added**
+*Needs the locale sources off both nodes. No database.*
+
+```sh
+# on each node
+dnf install -y glibc-locale-source
+
+# copy the sources off both nodes -- tar, NOT `docker cp`, whose target /tmp is
+# a separate mount in a container, so the copy silently does nothing
+mkdir -p el8-locales el9-locales
+ssh el8 tar -cf - -C /usr/share/i18n/locales . | tar -xf - -C el8-locales
+ssh el9 tar -cf - -C /usr/share/i18n/locales . | tar -xf - -C el9-locales
+
+# the build ids, read on the nodes themselves
+ssh el8 rpm -q glibc
+ssh el9 rpm -q glibc
+
+./audit.sh glibc-2.28 glibc-2.34 \
+  --old-locales-dir ./el8-locales --old-build-id glibc-2.28-251.el8_10.40 \
+  --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
+```
+
+In a container, `docker exec el8` replaces `ssh el8`. `rpm -q glibc` prints
+the architecture as well (`...x86_64`); either form is a usable build id, and
+the build ids in this README drop it.
+
+Check each copy against the node it came from: `ls el8-locales | wc -l`
+against `ls /usr/share/i18n/locales/ | wc -l` run on the node. The run does
+not do this for you: a copy missing a large share of its files is still not
+refused, and at step 8 a file that never arrived reads as a locale the upgrade
+removed or added.
+
+**Give it both nodes' locale sources and it does more.** Each side you supply
+adds a check that the node's own files match the tag the audit diffed — your
+distro's patching, which no tag diff can see. Supply **both** and it also
+compares the two nodes to each other, which is the only way to see whether a
+locale your distro *adds* changed between them — `C.UTF-8` above all, since
+its source file exists upstream only from glibc 2.35 and RHEL8 and RHEL9
+predate that.
+
+That settles whether the two nodes' collation *data* differs. What it cannot
+settle is the resulting *order*, because the weights are computed when the
+locale is built. That is command 3.
+
+<details>
+<summary><strong>Checking the copy, and the build ids</strong> — the counts each step prints, and what the summary says without the directories</summary>
+
+Steps 9 and 10 print the copy's own count as `Files at <build id>` — that is
+the number to set against the node's — and step 8 prints each copy's count,
+byte total and fingerprint. The `Compared N file(s)` lines of steps 6 to 8 are
+intersections — with the tag for steps 6 and 7, with the other node for step 8
+— so they are never larger than `Files at`, and equality there does not mean
+the copy is complete. A `Compared` line adds back up to `Files at` only
+together with the `absent upstream` or `only on the ... node` line printed
+beside it.
+
+A copy that lands most of the files is not refused: the scripts refuse only a
+directory too small to be a real copy at all. The files that never arrived are
+mostly reported as ordinary findings — steps 6 and 7 list them under `Absent
+on the node`, and step 8 under `Only on the old node` or `Only on the new
+node`, where a failed transport reads as a locale the upgrade removed or
+added. Two cases do earn a `!!`: a backported locale such as `C` missing from
+one side (step 8), and a missing file that other locales `copy`, such as
+`iso14651_t1` (steps 9 and 10).
+
+The build ids are required: a result is bound to the build it was taken on, and
+nothing in a directory of locale files carries a version. With neither
+directory supplied the summary says so, in as many words, rather than leaving
+the section out — the node-to-node comparison
+([`scripts/diff_node_locales.py`](scripts/diff_node_locales.py)) and the
+ellipsis scan of each node's own data (steps 9 and 10) print `NOT RUN`, and
+`NOT RUN` must not read as a clean result.
+
+Installing `glibc-locale-source` also **upgrades glibc**, because the two
+packages are version-locked: read the build id after installing it, not
+before. That trap and the langpack ordering are both in
+[docs/requirements.md](docs/requirements.md); the traps that make two
+directories agree while proving nothing are in
+[docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md).
+
+</details>
+
+**3 — Whether `C.UTF-8`'s order changed**
+*Needs PostgreSQL 15 or newer on both nodes.*
+
+```sh
+psql -X -f sql/c_utf8_probe.sql > el8.out      # on each node, then diff
+diff el8.out el9.out
+```
+
+[`sql/c_utf8_probe.sql`](sql/c_utf8_probe.sql) takes no editing, and it is run
+**even when the audit flagged nothing** — nothing in steps 1 to 5 can ever
+flag this locale, whose source file is in neither tag of the RHEL8 → RHEL9
+pair. It is usually the database collation in a container, and PostgreSQL
+will not warn about it either.
+
+<details>
+<summary><strong>The positive control is inverted here</strong> — why agreeing with byte order is the fix, not the tell</summary>
+
+Everywhere else in this project, a locale agreeing with `LC_ALL=C` byte order
+means it was never generated and the comparison proves nothing. For `C.UTF-8`
+that agreement is the **corrected** state: it is what RHEL9's build of glibc
+2.34 produces from its backported file, and what `codepoint_collation`
+guarantees upstream from 2.35 on. It is also what a build
+whose above-BMP weights are all *tied* produces, because PostgreSQL breaks a
+`strcoll` tie with `strcmp` — query 6b is what tells those two apart. Two
+contradictory rules in one project get read in the wrong order.
+
+What was measured, why it changed, and why it also changed *within* RHEL8:
+[docs/limitations.md](docs/limitations.md#cutf-8-is-invisible-to-a-tag-diff).
+
+</details>
+
+**4 — Confirming the order on your own builds**
+*Needs PostgreSQL 15 or newer on both nodes, and editing the file first.*
 
 ```sh
 psql -f sql/collation_confirmation_template.sql   # edit placeholders first
 ```
 
-The template is
-[`sql/collation_confirmation_template.sql`](sql/collation_confirmation_template.sql).
+A source diff is an argument, not a proof of what actually runs in production.
+Run
+[`sql/collation_confirmation_template.sql`](sql/collation_confirmation_template.sql)
+on both the old and the new OS, for every locale steps 1 to 3 flagged and — if
+step 5 found a [substantive code change](docs/glossary.md) — for every locale
+step 4 flagged too.
 
-Run it on both the old and the new OS, for every locale steps 1 to 3 flagged
-and — if step 5 found a [substantive code change](docs/glossary.md) — for
-every locale step 4 flagged too.
+<details>
+<summary><strong>What it reports, and the four traps</strong> — including the ones that make a comparison agree with itself</summary>
 
 Two things about it fail in the reassuring direction: three traps on the SQL
 side and a fourth on the file comparisons make a comparison agree with itself
@@ -165,11 +265,6 @@ than indexes — text partition keys among them, which no `REINDEX` fixes.
 
 What those objects look like once they are already wrong is measured in
 [breakage/](breakage/), on two real nodes, one case per object type.
-
-`C.UTF-8` has a second script of its own,
-[`sql/c_utf8_probe.sql`](sql/c_utf8_probe.sql), which takes no editing and
-must be run even when the audit flagged nothing — nothing in steps 1 to 5 can
-ever flag it.
 
 </details>
 
@@ -187,9 +282,10 @@ affected locale identifiers.
 Beyond those five, three optional checks read a real node's locale sources.
 One compares a node against the upstream tag — the only way to see your
 distro's backports. Another compares the two **nodes to each other**, which
-is the only way to see a locale the distro adds that upstream does not have:
-`C.UTF-8` is that locale, and it is usually the database collation in a
-container. The third scans each node's own data for ellipsis ranges — the
+is the only way to see whether a locale the distro adds — one upstream does
+not have — changed between them: `C.UTF-8` is that locale, and it is usually
+the database collation in a container. The third scans each node's own data
+for ellipsis ranges — the
 only way that question is asked of the node's `C` itself, since step 4 scans
 the tag and no tag of the RHEL8 → RHEL9 pair holds that file.
 
