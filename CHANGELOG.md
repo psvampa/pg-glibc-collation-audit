@@ -4,6 +4,89 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-21 (thirtieth entry)
+
+The summary gave a false reason for one of its `NOT RUN` blocks, and on the
+pairs where the reason is false it contradicted two steps of the same run.
+**No verdict moves and no published number changes**, but the output is not
+byte-identical: the body of that block is rewritten on every pair. The four
+example outputs do not change -- three were produced with both node
+directories and the fourth stops before the summary -- so nothing this project
+publishes as a result is affected.
+
+### What it used to get wrong
+
+**Given neither node directory, the summary said "no tag of this pair holds
+`localedata/locales/C`" whatever the pair was.** Measured in the pinned clone:
+the file is absent at `glibc-2.12`, `glibc-2.17`, `glibc-2.28` and
+`glibc-2.34`, and present at `glibc-2.35` and `glibc-2.39`, which is where it
+arrives upstream. So the sentence was true of `2.28..2.34` and of the floor
+pair `2.12..2.17`, and false of `2.34..2.39` and of any pair whose new tag is
+2.35 or later -- the `2.28..2.39` example among them. On those, the run denied
+the existence of a file that step 4 had scanned earlier in the same run,
+printing `Declare codepoint_collation, so no expansion change can move them:
+C` -- and that step 2 named again in the warnings block a few lines below, in
+`!! localedata/locales/C is new UPSTREAM at glibc-2.39`.
+
+The direction is what makes it worth an entry rather than a typo. On exactly
+the pairs where the sentence is false, step 4 has published a *reassuring*
+verdict about a file called `C`, and the one job this block has is to stop the
+reader carrying that verdict over to the `C.UTF-8` their distro ships -- which
+is the file that may be built from ellipsis ranges, and the reason
+`flag_algorithmic_ranges.py` refuses to report backports in tag mode at all.
+The block gave a reason that was false and, where false, silent about the trap.
+
+The reason is now about provenance, not contents, and holds on every pair a
+run can be given: a tag holds at most upstream's `C`, the distros this audit
+targets ship their own `C.UTF-8`, so a verdict step 4 reached is evidence
+about upstream's file and none about either node's. The conclusion is
+unchanged, because it was never wrong. The same premise is removed from the
+`--help` text, from the comment above steps 9/10, and from the "step 4 over a
+node's own directory" bullet in `docs/method.md`, which also claimed that
+steps 9/10 are the only place the question is asked of the node's `C`: step 8
+answers it too when both directories are supplied. Two other sentences in
+`audit.sh` state the premise of a different block and are left for their own
+entries.
+
+### Acceptance
+
+`DIFFERS` on `2.28..2.34`, `2.34..2.39` and `2.12..2.17`, against `main` at
+f8aae9b, and that is the intended result: one hunk per pair, the body of this
+block and nothing else on any of the three.
+
+### Tied to tests
+
+The tie for this block asserted the heading only, so the false sentence sat
+inside a block a test called "quoted verbatim" -- the twenty-ninth entry says
+as much of its own new block: *"Rewording a sentence of the new block fails
+none of them."* `tests/test_published_claims.py` now compares the whole
+echoed body against the fenced quote in `docs/limitations.md`, line for line.
+
+`tests/test_wrapper.py` adds the guard that would have caught the sentence
+rather than its drift: on `glibc-2.39` against itself -- both tags hold the
+file, so step 2 is silent about it and step 4 names it -- the summary must not
+deny it. The premise is computed with `ls-tree` instead of assumed, so a
+corpus that stops holding the file fails the test rather than passing it
+vacuously.
+
+Mutation-checked, eight mutants and two controls. Restoring the old sentence
+in `audit.sh` alone fails both; restoring it in the doc as well fails the
+wrapper test only, which is why both exist. Changing one word inside the fence
+fails the tie; deleting the heading fails both; pointing the wrapper test's
+`ls-tree` at the old tag fails its own premise.
+
+Three mutants are the helper's own, and it needed them. Appending `echo` and
+*"Your node's C.UTF-8 is therefore cleared."* inside the block left the tie
+green: the helper stopped at the first line it could not read as a printed one
+and compared the prefix, so a short block and a block that could not be read
+whole reached the test as the same fact. It ends at the `fi` that closes the
+block now and raises on anything else, including a line that expands before it
+is printed -- `echo "$OLD -> $NEW"` would be tied to the two variable names,
+which is a tie to a text no reader ever sees. Found by
+`false-negative-reviewer` on the fix itself, not by the author. Controls:
+prose added outside the fence, and an unrelated edit elsewhere in
+`docs/limitations.md`, fail nothing.
+
 ## 2026-09-21 (twenty-ninth entry)
 
 A supported way of running this tool answered one of its questions by leaving

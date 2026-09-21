@@ -36,6 +36,46 @@ def read(path):
         return fh.read()
 
 
+def echoed_block(wrapper, heading):
+    """The heading's echo and the contiguous run of echoes under it, as
+    printed, so a doc that quotes the block can be compared line for line.
+
+    Ends at the `fi` that closes the block, and RAISES on any other line it
+    cannot read as a printed one. Stopping there quietly was this helper's own
+    false negative, measured by false-negative-reviewer on 2026-09-21: nine
+    line shapes -- a bare `echo`, `echo "..." >&2`, single quotes, a guarded
+    echo, a `\` continuation, a here-doc, `printf`, a comment -- all ended the
+    walk, so appending `echo` and "Your node's C.UTF-8 is therefore cleared."
+    to the block left the quote test green while the wrapper printed the extra
+    sentence. A short block and a block that could not be read whole are
+    different facts. Raises for the same reason when the heading is gone.
+    """
+    lines = wrapper.split('\n')
+    start = next((i for i, line in enumerate(lines)
+                  if re.match(r'^\s*echo "' + re.escape(heading) + r'"$',
+                              line)), None)
+    if start is None:
+        raise AssertionError(f'audit.sh echoes no {heading!r}')
+    out = []
+    for line in lines[start:]:
+        if re.match(r'^\s*fi\b', line):
+            return out
+        m = re.match(r'^\s*echo "(.*)"$', line)
+        if not m:
+            raise AssertionError(
+                f'unquotable line inside the {heading!r} block: {line!r}')
+        # The shell's source spelling is the printed text only while the line
+        # has no expansion in it. `echo "$OLD -> $NEW"` would be compared to a
+        # doc as the two variable NAMES and agree with a doc that quotes them,
+        # which is a tie to something no reader ever sees.
+        if re.search(r'[$`\\]', m.group(1)):
+            raise AssertionError(
+                f'line expands before it is printed, so its source is not '
+                f'what the reader sees: {line!r}')
+        out.append(m.group(1))
+    raise AssertionError(f'the {heading!r} block is not closed by fi')
+
+
 def docs(include_changelog=False):
     """{relative path: text} for every published .md, CHANGELOG excluded.
 
@@ -199,17 +239,25 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
         self.assertTrue(found, 'no doc quotes the NOT RUN heading any more')
 
     def test_the_ellipsis_scan_NOT_RUN_block_is_quoted_verbatim(self):
-        """Same tie as the block above. The directory-mode scan used to be a
-        manual step nobody ran; wiring it into audit.sh only helps if its
-        absent-is-not-empty notice is real, so the doc quotes the heading and
-        this asserts the wrapper still prints exactly it."""
+        """Same tie as the block above, and the whole body rather than the
+        heading alone -- which is what this test's name has always promised.
+        The heading-only form let the body drift and say something false:
+        backlog 1.17 was the sentence "no tag of this pair holds
+        localedata/locales/C" -- true of 2.28..2.34 and of the floor pair
+        2.12..2.17, false of 2.34..2.39 and of any pair whose new tag is 2.35
+        or later -- and rewording it failed nothing in this suite."""
         wrapper = read(os.path.join(REPO_ROOT, 'audit.sh'))
+        heading = "-- Node's own ellipsis scan: NOT RUN"
         printed = [m.group(1) for m in
-                   re.finditer(r'^\s*echo "(-- Node\'s own ellipsis scan: NOT '
-                               r'RUN)"', wrapper, re.M)]
+                   re.finditer(r'^\s*echo "(' + re.escape(heading) + r')"',
+                               wrapper, re.M)]
         self.assertEqual(len(printed), 1, 'audit.sh no longer prints it')
-        found = [name for name, text in docs().items() if printed[0] in text]
-        self.assertTrue(found, 'no doc quotes the NOT RUN heading any more')
+        limits = read(os.path.join(REPO_ROOT, 'docs', 'limitations.md'))
+        m = re.search(r'Given neither directory it reads instead:.*?```\n'
+                      r'(.*?)```', limits, re.S)
+        self.assertIsNotNone(m, 'the quoted block is gone from limitations.md')
+        self.assertEqual(echoed_block(wrapper, heading),
+                         m.group(1).rstrip('\n').split('\n'))
 
     def test_the_one_sided_ellipsis_scan_NOT_RUN_block_is_quoted_verbatim(self):
         """The fourth of these ties. Given one of the two directories, the
