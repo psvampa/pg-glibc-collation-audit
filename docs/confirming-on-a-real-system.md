@@ -156,17 +156,16 @@ audit reads at all? `scripts/diff_distro_locales.py` answers that, and unlike
 the template it needs no database:
 
 ```sh
-# on the node
-dnf install -y glibc-locale-source
-
-# copy the sources off it -- tar, NOT `docker cp`, whose target /tmp is a
-# separate mount in these containers, so the copy silently does nothing and the
-# comparison then reports a clean zero over an empty directory
-docker exec <container> tar -cf - -C /usr/share/i18n/locales . | tar -xf - -C ./node-locales
-
 python3 scripts/diff_distro_locales.py glibc-2.34 \
-    --locales-dir ./node-locales --build-id "$(rpm -q glibc)"
+    --locales-dir ./el9-locales --build-id glibc-2.34-275.el9_8
 ```
+
+It reads a copy of that node's `/usr/share/i18n/locales/`. Producing that
+directory, and its counterpart for the other node, is command 2 in
+[the README](../README.md#the-four-commands),
+which holds the only copy of that command — `glibc-locale-source` on each
+node, then `tar` off it. `tar`, not `docker cp`, whose target `/tmp` is a
+separate mount in a container, so the copy silently does nothing.
 
 `--build-id` is required: a result is bound to the build it was taken on, and
 nothing in the directory carries a version. The script refuses a directory too
@@ -192,10 +191,10 @@ half-used, because a result nobody can bind to a build cannot be cited.
 Everything above compares one node against an upstream tag, which cannot say
 anything about a file that is in **no** tag. `scripts/diff_node_locales.py`
 takes both sides from the nodes instead, so a backported locale is in both
-inputs:
+inputs. Both directories come from command 2 in
+[the README](../README.md#the-four-commands):
 
 ```sh
-# tar the sources off BOTH nodes, same caveat as above
 python3 scripts/diff_node_locales.py \
     --old-locales-dir ./el8-locales --old-build-id glibc-2.28-251.el8_10.40 \
     --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8 \
