@@ -439,7 +439,23 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
   for side in old new; do
     if [ "$side" = old ]; then dir=$OLD_LOCALES; build=$OLD_BUILD; n=9
     else dir=$NEW_LOCALES; build=$NEW_BUILD; n=10; fi
-    [ -n "$dir" ] || continue
+    if [ -z "$dir" ]; then
+      # Absent is not empty, one level below the node-to-node block above.
+      # This loop used to `continue` here, so a run given one directory
+      # printed that node's ellipsis verdict and nothing whatever about the
+      # other -- and a section that is not there reads exactly like a section
+      # with nothing to report. One side is a supported shape ("Each side you
+      # supply adds a check", README), not a misuse, so this is the reader's
+      # ordinary view. The heading is fixed text and the side is named in the
+      # body: a heading built from $side could not be tied to the docs by the
+      # test in tests/test_published_claims.py that greps this file for it.
+      echo "-- Node's own locale data, ellipsis scan: NOT RUN"
+      echo "     No --$side-locales-dir, so nothing above says whether the"
+      echo "     $side node's own C.UTF-8 is ellipsis-based. The other node's"
+      echo "     scan does not answer it: each node built its own locales."
+      echo "     Pass --$side-locales-dir with --$side-build-id."
+      continue
+    fi
     log="$OUT_DIR/step$n.$PAIR.log"
     echo "-- Node's own locale data, ellipsis scan ($build)"
     sed -n 's/^Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: /     ellipsis-based locale(s): /p' \

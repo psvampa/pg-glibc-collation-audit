@@ -196,7 +196,8 @@ directory supplied the summary says so, in as many words, rather than leaving
 the section out — the node-to-node comparison
 ([`scripts/diff_node_locales.py`](scripts/diff_node_locales.py)) and the
 ellipsis scan of each node's own data (steps 9 and 10) print `NOT RUN`, and
-`NOT RUN` must not read as a clean result.
+`NOT RUN` must not read as a clean result. Supply one of the two and the side
+you did not supply prints it as well, naming the flag that was left out.
 
 Installing `glibc-locale-source` also **upgrades glibc**, because the two
 packages are version-locked: read the build id after installing it, not

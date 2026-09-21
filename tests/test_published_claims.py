@@ -211,6 +211,22 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
         found = [name for name, text in docs().items() if printed[0] in text]
         self.assertTrue(found, 'no doc quotes the NOT RUN heading any more')
 
+    def test_the_one_sided_ellipsis_scan_NOT_RUN_block_is_quoted_verbatim(self):
+        """The fourth of these ties. Given one of the two directories, the
+        side that was NOT scanned prints this heading -- it used to print
+        nothing at all, and the scan of the other node says nothing about it
+        (backlog 1.16). A doc quotes the heading, and this asserts the
+        wrapper still prints exactly it. The heading is fixed text so that
+        this grep can find it; the side and its flag are named in the body.
+        """
+        wrapper = read(os.path.join(REPO_ROOT, 'audit.sh'))
+        printed = [m.group(1) for m in
+                   re.finditer(r'^\s*echo "(-- Node\'s own locale data, '
+                               r'ellipsis scan: NOT RUN)"', wrapper, re.M)]
+        self.assertEqual(len(printed), 1, 'audit.sh no longer prints it')
+        found = [name for name, text in docs().items() if printed[0] in text]
+        self.assertTrue(found, 'no doc quotes the NOT RUN heading any more')
+
     def test_the_direction_NOT_ESTABLISHED_block_is_quoted_verbatim(self):
         """The third of these ties. The wrapper prints this heading when
         neither tag is an ancestor of the other and the newest glibc tag
