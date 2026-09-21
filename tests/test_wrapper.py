@@ -96,6 +96,15 @@ class Wrapper(unittest.TestCase):
         self.assertIn('Not decided for you', summary)
         self.assertIn('24 hunk(s)', summary)
 
+    def test_the_backport_caveat_reaches_this_branch(self):
+        """An upstream diff cannot see a distro's patches, whatever step 5
+        found. The sentence lived in the `clean` branch alone, and all three
+        published runs take `hunks`, so no output this tool ever printed
+        carried it (backlog 1.14, measured 2026-09-20)."""
+        summary = flat(self.out[self.out.index('AUDIT SUMMARY'):])
+        self.assertIn("An upstream diff cannot see your distro's backports",
+                      summary)
+
     def test_next_step_hints_are_suppressed(self):
         """The steps' "run this next" hints name commands already run."""
         self.assertNotIn('Next: python3 filter_lc_collate_changes.py',
@@ -213,6 +222,12 @@ class WrapperEmptyPair(unittest.TestCase):
                       summary)
         self.assertIn('Nothing from step 5.', summary)
         self.assertNotIn('did NOT reach a clean result', summary)
+        # The branch that always carried the backport caveat keeps it. Matched
+        # without its first word, so this assertion holds both before and after
+        # the line moved out of the case: it is the control for the two tests
+        # that fail when it moves back in (backlog 1.14).
+        self.assertIn("upstream diff cannot see your distro's backports",
+                      summary)
 
 
 @needs_clone
@@ -705,6 +720,11 @@ class WrapperStep5Unresolved(unittest.TestCase):
         self.assertIn('step 5 did NOT reach a clean result, so the locales '
                       'step 4 flagged stay UNRESOLVED', flat)
         self.assertIn('Step 5 reached no clean result', flat)
+        # The caveat is true of this branch too: the run that could not read
+        # the upstream code still cannot see a distro patch. It printed in the
+        # `clean` branch only until backlog 1.14 was fixed.
+        self.assertIn("An upstream diff cannot see your distro's backports",
+                      flat)
 
     def test_the_vanished_path_is_repeated_in_the_warnings_block(self):
         rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,

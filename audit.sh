@@ -546,11 +546,14 @@ case $STEP5 in
     echo "     empirically instead: docs/confirming-on-a-real-system.md" ;;
   clean)
     echo "     Nothing from step 5. Still confirm on real nodes before acting:"
-    echo "     an upstream diff cannot see your distro's backports."
     echo "     docs/confirming-on-a-real-system.md" ;;
   *)
     echo "     Step 5 reached no clean result (see above). Until it does, step"
     echo "     4's list is unresolved: confirm empirically instead:"
     echo "     docs/confirming-on-a-real-system.md" ;;
 esac
+# Outside the case on purpose: true in all three branches, and printing it in
+# `clean` alone meant no published run ever carried it -- all three take the
+# `hunks` branch.
+echo "     An upstream diff cannot see your distro's backports."
 echo
