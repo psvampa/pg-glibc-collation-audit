@@ -21,6 +21,7 @@ from _harness import (EXPECTED_SHA, MID, NEW, OLD, backported_c, flat,
                       locale_file, needs_clone, run_wrapper, upstream_c)
 
 import diff_distro_locales as dd
+import glibc_locale_data as g
 from _harness import GLIBC_CLONE
 
 
@@ -195,6 +196,30 @@ class WrapperEmptyPair(unittest.TestCase):
         self.assertTrue(os.path.exists(path), self.out)
         with open(path, encoding='utf-8') as fh:
             self.assertEqual(fh.read().strip(), '')
+
+    def test_the_summary_does_not_deny_the_C_that_step_4_just_named(self):
+        """Backlog 1.17. Given neither node directory, the summary used to
+        justify its NOT RUN with "no tag of this pair holds
+        localedata/locales/C" -- true of 2.28..2.34 and false from 2.35 on.
+
+        This pair is glibc-2.39 against itself, where the file is at BOTH
+        tags: step 2 says nothing about it (present at the old tag, so it is
+        judged like any other file) and step 4 names it, so the old sentence
+        was false with nothing else in the summary to contradict it. The
+        premise is computed here rather than assumed, so a corpus that stops
+        holding the file fails this test instead of passing it vacuously.
+        """
+        at_new = g.run_git(['ls-tree', '--name-only', NEW, '--',
+                            f'{g.LOCALES_DIR}/C'], GLIBC_CLONE).stdout.strip()
+        self.assertTrue(at_new, f'{NEW} no longer holds the file this is about')
+        self.assertIn('can move them: C', self.out, 'step 4 did not name C')
+        summary = self.out.split('AUDIT SUMMARY')[1]
+        body = section_body(summary, "-- Node's own ellipsis scan: NOT RUN")
+        # The positive half is what keeps the negative one honest: assertNotIn
+        # on a phrase the block never contained would pass whatever the block
+        # said, which is how three tests in this suite came to guard nothing.
+        self.assertIn("a tag holds at most upstream's C", body)
+        self.assertNotIn('no tag of this pair holds', body)
 
     def test_one_tag_compared_with_itself_says_nothing_was_compared(self):
         """An intra-major upgrade -- RHEL 8.1 -> 8.10 -- is two builds of one

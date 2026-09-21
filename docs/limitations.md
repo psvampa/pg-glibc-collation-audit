@@ -251,10 +251,13 @@ Given neither directory it reads instead:
 ```
 -- Node's own ellipsis scan: NOT RUN
      Pass --old-locales-dir and --new-locales-dir with their build
-     ids. Step 4 above scanned the tag, and no tag of this pair holds
-     localedata/locales/C, so nothing above says whether either node's
-     own C.UTF-8 is ellipsis-based -- which is the one thing a data
-     diff, including the node-to-node one, can never clear.
+     ids. Step 4 above scanned the TAG, and a tag holds at most
+     upstream's C: the distros this audit targets ship their own
+     C.UTF-8, so if step 4 named C at all, that verdict is evidence
+     about upstream's file and none about either node's. Nothing above
+     says whether either node's own C.UTF-8 is ellipsis-based -- which
+     is the one thing a data diff, including the node-to-node one, can
+     never clear.
 ```
 
 Same rule as the node-to-node block further down, one level deeper: a summary

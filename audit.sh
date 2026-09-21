@@ -66,8 +66,9 @@ usage() {
   echo "       Either side on its own adds that check for that side (step 6" >&2
   echo "       for old, step 7 for new), and scans that node's own data for" >&2
   echo "       ellipsis ranges (step 9 for old, step 10 for new) -- which is" >&2
-  echo "       the only way the question is asked of C itself, since step 4" >&2
-  echo "       scans the new TAG and no tag holds that file." >&2
+  echo "       the only way that question is asked of a node supplied on its" >&2
+  echo "       own, since step 4 scans the new TAG, which holds at most" >&2
+  echo "       upstream's C and never speaks for what your node built." >&2
   echo >&2
   echo "       Supply BOTH and the run also compares the two nodes to each" >&2
   echo "       other (step 8). That is the only source-level evidence there is" >&2
@@ -309,11 +310,11 @@ if [ -n "$OLD_LOCALES" ] && [ -n "$NEW_LOCALES" ]; then
 fi
 
 # Step 4 again, over each NODE's own locale directory instead of the new tag.
-# Step 4 above scans the tag, which cannot hold a file no tag has -- C among
-# them -- and an ellipsis range is precisely what a data diff can never clear,
-# so the node-to-node comparison cannot settle it either. docs/limitations.md
-# used to say "run this by hand, once per node"; a check that depends on
-# somebody remembering is not a check.
+# Step 4 above scans the tag, which holds at most upstream's C and never the
+# C.UTF-8 a distro backports -- and an ellipsis range is precisely what a data
+# diff can never clear, so the node-to-node comparison cannot settle it either.
+# docs/limitations.md used to say "run this by hand, once per node"; a check
+# that depends on somebody remembering is not a check.
 if [ -n "$OLD_LOCALES" ]; then
   banner "NODE ELLIPSIS  does $OLD_BUILD's own locale data use ellipsis ranges?"
   run_step 9 python3 "$SCRIPTS/flag_algorithmic_ranges.py" \
@@ -496,12 +497,23 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
     esac
   done
 else
+  # The reason here used to be "no tag of this pair holds localedata/locales/C".
+  # The file is upstream from 2.35, so that was true of 2.28..2.34 and of the
+  # floor pair 2.12..2.17, and false of 2.34..2.39 and of any pair whose new tag
+  # is 2.35 or later, such as the 2.28..2.39 pair. On those, step 4 scans it
+  # and prints "Declare codepoint_collation ...: C" earlier in the same run, so
+  # the block denied a file whose reassuring verdict was already on screen. The
+  # reason that holds on every pair is provenance, not content: a tag is
+  # upstream by construction, and no tag scan speaks for what a node built.
   echo "-- Node's own ellipsis scan: NOT RUN"
   echo "     Pass --old-locales-dir and --new-locales-dir with their build"
-  echo "     ids. Step 4 above scanned the tag, and no tag of this pair holds"
-  echo "     localedata/locales/C, so nothing above says whether either node's"
-  echo "     own C.UTF-8 is ellipsis-based -- which is the one thing a data"
-  echo "     diff, including the node-to-node one, can never clear."
+  echo "     ids. Step 4 above scanned the TAG, and a tag holds at most"
+  echo "     upstream's C: the distros this audit targets ship their own"
+  echo "     C.UTF-8, so if step 4 named C at all, that verdict is evidence"
+  echo "     about upstream's file and none about either node's. Nothing above"
+  echo "     says whether either node's own C.UTF-8 is ellipsis-based -- which"
+  echo "     is the one thing a data diff, including the node-to-node one, can"
+  echo "     never clear."
 fi
 
 if [ "$ORDER" = "undetermined" ]; then
