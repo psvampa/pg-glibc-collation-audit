@@ -257,8 +257,22 @@ Given neither directory it reads instead:
      diff, including the node-to-node one, can never clear.
 ```
 
-Same rule as the block below it, one level deeper: a summary that prints
-nothing about the locale looks exactly like one that cleared it.
+Same rule as the node-to-node block further down, one level deeper: a summary
+that prints nothing about the locale looks exactly like one that cleared it.
+
+Given one of the two, the side that was not scanned gets its own block, naming
+the flag it was not given -- below, a run supplied `--old-locales-dir` alone.
+A one-sided run is a supported shape, since each directory you supply adds a
+check, and it used to print the verdict for the node it had and nothing
+whatever about the other:
+
+```
+-- Node's own locale data, ellipsis scan: NOT RUN
+     No --new-locales-dir, so nothing above says whether the
+     new node's own C.UTF-8 is ellipsis-based. The other node's
+     scan does not answer it: each node built its own locales.
+     Pass --new-locales-dir with --new-build-id.
+```
 
 `audit.sh` runs the node-to-node comparison as step 8 when given both nodes'
 directories, and when not given them **says so in the summary** rather than

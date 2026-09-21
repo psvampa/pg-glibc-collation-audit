@@ -357,10 +357,13 @@ Two markers carry the weight:
   since the diff does not show where that comment opened — it assumes it does
   not, which marks prose as code rather than the reverse.
 
-The summary also carries the node-to-node block, and this is the one place
+The summary also carries the node-to-node block, the widest of the places
 where **absent is not empty**: if it says `NOT RUN`, nothing in the whole run
-said anything about `C.UTF-8`. If both tags are the same commit — an
-intra-major upgrade, RHEL 8.1 to 8.10 — the summary says that too, because
+compared the two nodes' `C.UTF-8` against each other. The ellipsis scan says
+it the same way, for both sides at once when it was given neither directory
+and for one side alone when it was given the other's. If both tags are the
+same commit — an intra-major upgrade, RHEL 8.1 to 8.10 — the summary says that
+too, because
 steps 1 to 5 then compare upstream source with itself and can only report
 "nothing changed". *The same* is asked of git rather than of the two strings:
 `glibc-2.39` and the commit sha the run's own provenance line prints for it

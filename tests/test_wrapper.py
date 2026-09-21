@@ -28,6 +28,22 @@ def pair_slug(old, new):
     return f"{old}..{new}"
 
 
+def section_body(summary, heading):
+    """The indented body under a summary heading, whitespace collapsed.
+
+    Stops at the next heading as well as at a blank line: on a run given the
+    NEW directory alone, the scan of the side that ran follows the NOT RUN
+    block with no blank line between them, so splitting on a blank line alone
+    would swallow it and carry its text into the assertions.
+    """
+    body = []
+    for line in summary.split(heading, 1)[1].splitlines()[1:]:
+        if not line.strip() or line.startswith('--'):
+            break
+        body.append(line)
+    return flat('\n'.join(body))
+
+
 @needs_clone
 class Wrapper(unittest.TestCase):
     """A pair with real findings: the wrapper must not change the answer."""
@@ -568,6 +584,66 @@ class WrapperOneSideOnly(unittest.TestCase):
                       summary)
         self.assertIn('C (C.UTF-8): ellipsis-based', summary)
         self.assertNotIn('ellipsis scan (build-new)', summary)
+
+    def test_the_side_that_was_not_scanned_says_NOT_RUN(self):
+        """Absent is not empty, one level below the node-to-node block.
+
+        The summary printed the old node's ellipsis verdict and simply left
+        the new node out -- and a section that is not there reads exactly
+        like a section with nothing to report. A one-sided run is a
+        supported shape ("Each side you supply adds a check", README), so
+        this was the reader's ordinary view, not a misuse (backlog 1.16).
+        """
+        summary = self.out.split('AUDIT SUMMARY')[1]
+        heading = "-- Node's own locale data, ellipsis scan: NOT RUN"
+        self.assertIn(heading, summary)
+        # On this block alone. The node-to-node NOT RUN above it names both
+        # flags, so either assertion below would be vacuous on the whole
+        # summary -- the first always true, the second always false.
+        body = section_body(summary, heading)
+        self.assertIn('--new-locales-dir', body)
+        self.assertNotIn('--old-locales-dir', body)
+
+
+@needs_clone
+class WrapperNewSideOnly(unittest.TestCase):
+    """The mirror of WrapperOneSideOnly: only --new-locales-dir.
+
+    One class exercising one of the two sides leaves a block that names a
+    FIXED side passing: on a new-only run such a block prints "No
+    --new-locales-dir" directly above the scan of build-new, which tells the
+    reader the side just scanned is the one that was not. Measured by
+    false-negative-reviewer, 2026-09-21, as a mutant the first test survived.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-newside-')
+        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-newtree-')
+        root = dd.materialise_tag(GLIBC_CLONE, MID, os.path.join(cls.nodes, 'b'))
+        with open(os.path.join(root, 'C'), 'w', encoding='utf-8') as fh:
+            fh.write(backported_c())
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID, '--new-locales-dir', root, '--new-build-id', 'build-new',
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    def test_the_side_that_was_not_scanned_is_the_old_one(self):
+        self.assertEqual(self.rc, 0, self.out)
+        summary = self.out.split('AUDIT SUMMARY')[1]
+        heading = "-- Node's own locale data, ellipsis scan: NOT RUN"
+        self.assertIn(heading, summary)
+        body = section_body(summary, heading)
+        self.assertIn('--old-locales-dir', body)
+        self.assertNotIn('--new-locales-dir', body)
+        # And the side that DID run is still reported, under the heading that
+        # carries its build id -- the NOT RUN must not replace it.
+        self.assertIn("-- Node's own locale data, ellipsis scan (build-new)",
+                      summary)
 
 
 @needs_clone

@@ -4,6 +4,70 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-21 (twenty-ninth entry)
+
+A supported way of running this tool answered one of its questions by leaving
+the question out. **No verdict moves and no published number changes** --
+byte-identical output on the three measured pairs. Every full summary this
+project publishes comes from a run given both node directories, and the one
+example that publishes no summary (`below-the-floor`) was given neither, so
+none of them reaches the branch that changed.
+
+### What it used to get wrong
+
+**Given one node's locale directory, the summary said nothing whatever about
+the other node.** The steps 9/10 section of the summary loops over the two
+sides and skipped a side it had no directory for (`[ -n "$dir" ] || continue`).
+A run with `--old-locales-dir` alone printed `-- Node's own locale data,
+ellipsis scan (<the old build id>)` with that node's `C` verdict, and then
+went straight to the next section: no heading, no `NOT RUN`, no mention of the
+flag that was not passed.
+
+One side is a supported shape, not a misuse -- the README's *"Each side you
+supply adds a check"* -- so this was an ordinary reader's view. And the
+question it dropped is the one a data diff can never answer for you: whether
+the node's own `C.UTF-8` is built from ellipsis ranges, whose weights
+`localedef` computes at build time, so identical files do not mean identical
+order. A section that is absent and a section that found nothing look the same
+on a terminal. That is false negative #1 in a different costume, which is what
+`audit.sh` already says in its own comment about the node-to-node block
+directly above -- the rule was stated there and not applied one level down.
+
+The loop now prints a heading and a `NOT RUN` body for the side it was not
+given, naming the missing flag and saying that the other node's scan does not
+answer for this one. The heading is fixed text with the side named in the
+body, so the documentation tie can grep `audit.sh` for it.
+
+### Acceptance
+
+Byte-identical on `2.28..2.34`, `2.34..2.39` and `2.12..2.17` (545, 1292 and
+1789 lines), against `main` at 4c89479. The three example outputs that carry
+a summary are runs with both directories and the below-the-floor one was
+given neither, so none of the four changes; the branch this entry adds is
+reachable only with exactly one of the two.
+
+### Tied to tests
+
+`tests/test_wrapper.py`, in the class that already runs with
+`--old-locales-dir` alone: the summary carries the new heading, and the block
+under it names `--new-locales-dir` and not `--old-locales-dir` -- asserted on
+that block, because the node-to-node `NOT RUN` above it names both flags and
+would make either assertion vacuous on the whole summary. A second class runs
+the mirror shape, `--new-locales-dir` alone, because one side exercised is a
+block that names a FIXED side passing: on a new-only run such a block reads
+`No --new-locales-dir` directly above the scan of `build-new`, telling the
+reader that the side just scanned is the one that was missed.
+`tests/test_published_claims.py` adds the fourth quoted-block tie, the third
+of them a `NOT RUN` one: the heading appears exactly once in `audit.sh` and a
+doc quotes it verbatim.
+
+Mutation-checked, four mutants and one control: restoring the bare `continue`
+fails the wrapper test (it was written first and failed that way); renaming
+the heading fails the tie; naming the old side in both branches fails the
+old-only test; naming the new side in both branches fails the new-only test,
+and failed nothing at all until that class existed. Rewording a sentence of
+the new block fails none of them.
+
 ## 2026-09-21 (twenty-eighth entry)
 
 A caveat this tool prints was reaching no reader: every run it publishes takes
