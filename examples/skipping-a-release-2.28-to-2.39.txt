@@ -770,4 +770,5 @@ unexamined are three different answers:
      weight is a judgement call that needs someone to read C.
      If nobody will, treat step 4's list as unresolved and confirm
      empirically instead: docs/confirming-on-a-real-system.md
+     An upstream diff cannot see your distro's backports.
 

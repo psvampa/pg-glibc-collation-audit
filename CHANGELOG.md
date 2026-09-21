@@ -4,6 +4,52 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-21 (twenty-eighth entry)
+
+A caveat this tool prints was reaching no reader: every run it publishes takes
+the one branch of three that left it out. **No verdict moves and no published
+number changes** -- `audit.sh` prints one line more on every pair, and nothing
+else in its output changed.
+
+### What it used to get wrong
+
+**"An upstream diff cannot see your distro's backports" printed in one branch
+of three.** The last section of the summary, `-- Not decided for you`, has
+three wordings, chosen by what step 5 found: `hunks` when it counted changed
+collation code, `clean` when it found none, `unresolved` when it reached
+neither. That sentence lived in the `clean` branch alone.
+
+Every run this project publishes takes the `hunks` branch -- 24 hunks on
+`2.28..2.34`, 52 on `2.34..2.39`, 75 on the direct `2.28..2.39` -- so the
+sentence appeared in none of the three example outputs, and in no run a reader
+is likely to have seen. The gap it names is real and documented at length
+(`docs/limitations.md`, *"Upstream tags are not your distro's glibc"*): the
+five steps compare upstream tags, and a distro's own patches to glibc are in
+none of them. A reader who ran the tag audit and stopped at the summary never
+learnt that -- in the branch where stopping is easiest, because that is the
+branch where the summary has just handed them a judgement call about C.
+
+The line now prints after the `case`, so all three branches carry it and a
+fourth would inherit it rather than have to remember it.
+
+### Acceptance
+
+One added line on each of the three measured pairs (`2.28..2.34`,
+`2.34..2.39`, `2.12..2.17`) and no other difference from the previous commit.
+The three examples that carry a summary were updated with that line, checked
+against a live run; `examples/below-the-floor-2.12-to-2.17.txt` reproduces
+steps 2 to 4 only and never reaches the summary, so it is unchanged.
+
+### Tied to tests
+
+`tests/test_wrapper.py` asserts the sentence in each of the three branches:
+the published pair (`hunks`), the same-commit run (`clean`) and the
+vanished-path shim (`unresolved`). Mutation-checked: putting the line back
+inside `clean` fails the `hunks` and `unresolved` tests and only those two.
+The `clean` assertion matches the sentence without its first word, so it holds
+both before and after the move -- the control that keeps the other two from
+being tests that fail on everything.
+
 ## 2026-09-20 (twenty-sixth entry)
 
 How far apart the two tags may be is now stated, and measured. **No line that
