@@ -4,6 +4,148 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-21 (thirty-first entry)
+
+A copy of a node's locale sources that lost files in transit was reported on
+as if it were complete. **No verdict moves and no published number changes.**
+The output is not byte-identical. Every run given a node directory now
+carries a `Files read: N` line per side, and one given no expected file count
+carries a `!!` per side as well, saying the count was not asserted. The three
+example outputs gain exactly those: one line and one block per side in the
+step, the block again in the summary, and a short paragraph of this project's
+own prose above the first step saying they were run without the counts. They were re-run on the fixtures they
+came from, `glibc-2.28-251.el8_10.40`,
+`glibc-2.34-275.el9_8` and `glibc-2.39-128.el10_2`, whose directories still
+hold 355, 356 and 366 files, asserted at both ends of the transport.
+
+### What it used to get wrong
+
+**A partial copy reported "Nothing differs inside LC_COLLATE" and exit 0.**
+Measured on 300 of `glibc-2.34`'s 355 locale files: step 6 compared the 300
+that arrived, found them identical, printed the clean sentence, and listed the
+55 that did not arrive as `Absent on the node (55): ...`, an ordinary finding
+with no `!!`. Through `./audit.sh` it was worse: the summary repeats the `!!`
+blocks of every step's log and nothing else of steps 6 and 7, so with no `!!`
+to repeat the truncation reached the AUDIT SUMMARY in no form at all, and the
+run exited 0 with a summary that looked like a clean upgrade.
+
+**The only guard was "half of the tag".** Bisected against `glibc-2.34`: 177
+of 355 files passed and 176 were refused. Steps 8, 9 and 10 apply an absolute
+floor of 200 instead, so a 178-file directory was accepted by step 6 and
+refused by step 9 in the same run -- the weakest of the three modes was the
+one with a reference to compare against.
+
+**A locale the distro ADDS could go missing at steps 6 and 7 and nothing
+there could tell.** Those steps compare the directory against the tag, so they
+see only what the tag holds; `en_US@ampm` and the backported `C` are in no
+tag, and on the RHEL8 node they are two of 355 files. Measured by
+`false-negative-reviewer` on 2026-09-21 on a single-side run with two
+node-only files, one deleted: `absent on the node: 0`, exit 0, the clean
+sentence, no marker. Step 8 catches half of it -- it declares every known
+backported locale, `C` among them, present on one node only or not at all --
+and `en_US@ampm`, or any other node-only file, it does not. And since `absent
+on the node` is 0 on all three published runs, a reader got no marker about
+the file count at all, so "the directory was counted and matched" and "nobody
+counted it" looked exactly alike.
+
+**The one assertion that would have caught it could not be reached.**
+`--expect-files` existed on all three scripts and `audit.sh` forwarded it
+nowhere, so `docs/confirming-on-a-real-system.md` told the reader to compare
+the printed counts by hand. Worse, at steps 6 and 7 the option was checked
+against the intersection with the tag, not against the directory: the el8 node
+holds 355 files and shares 353 with `glibc-2.28`, so the only count a reader
+can produce -- `ls /usr/share/i18n/locales/ | wc -l`, which is 355 -- would
+have refused a correct run, and the number that would have passed was one
+nobody can know without running the tool first.
+
+### What changed
+
+- Steps 6 and 7 print a `!!` naming how many of the tag's files the directory
+  does not hold, and the clean sentence says how many were never compared.
+  Both fire only when something is absent. When nothing is absent and no
+  expectation was given they print a different `!!` instead, saying in as many
+  words that every locale the tag holds is present, that this is not the same
+  as the copy being complete, and that a locale the distro adds cannot be
+  missed here at all. With no count given one of the two always prints, so an
+  unasserted copy never passes in silence. With the count given and met, the
+  second one does not print -- there is nothing unasserted to report -- while
+  the first still can, because a node may genuinely lack a locale the tag
+  holds; in that case it says the count WAS asserted, so the missing files are
+  what the node does not ship rather than what the copy lost. The `!!` is what
+  carries any of this into the wrapper's summary, which repeats those blocks
+  and nothing else of steps 6 and 7.
+- Steps 6 and 7 also print `Files read: N`, saying in the same line
+  whether anything asserted N, and steps 9 and 10 say the same beside their
+  own `Files at N` when they are given a directory. The distinguishing signal
+  for an asserted run used to be the ABSENCE of a warning, which is also what
+  every older version printed, so a saved transcript could not tell the two
+  apart. In tag mode steps 9 and 10 say nothing there, because a tag has no
+  directory whose count a reader could have taken.
+- Steps 6 and 7 take `--min-files` and apply the same floor of 200 as the
+  other node-reading modes. The 178-to-199 window is closed.
+- `audit.sh` takes `--old-expect-files N` and `--new-expect-files N`, refuses
+  a value that is not a whole number and an expectation with no directory to
+  count, and forwards each to the two steps that read that side's directory --
+  6 and 9 for the old side, 7 and 10 for the new. Step 6 or 7 is the one that
+  refuses; 9 and 10 get the same number as redundancy, not as a second check,
+  since they read the same directory and count it the same way, and no test
+  can reach them with a wrong count. That is recorded in a comment above the
+  call rather than counted as coverage. Step 8 is not given it at all: its
+  count is the intersection of the two directories and neither side's
+  `wc -l`.
+- `--expect-files` now means the same thing at steps 6, 7, 9 and 10 -- the
+  number of files read from `--locales-dir` -- and the refusal names both
+  counts. At step 8 it still means the intersection, its `--help` says so, and
+  its refusal still says "compared", because telling the owner of two complete
+  directories that 353 files were "read" from them is the same confusion this
+  entry exists to remove.
+
+### Acceptance
+
+`IDENTICAL` on `2.28..2.34`, `2.34..2.39` and `2.12..2.17`, against `main` at
+3022e54 -- which says less than it looks, because those runs pass no node
+directory and steps 6 to 10 never execute in any of them. The acceptance that
+reaches this change is three things. A complete 355-file corpus extracted from
+`glibc-2.34`, run through steps 6, 8 and 9 at `main` and on the branch: steps
+8 and 9 byte-identical, step 8's refusal included, and step 6 differing by the
+one line it now prints. The same corpus truncated to 300 files, which differs
+further by the `!!` and the added clause. And the three examples, re-run end
+to end against `collaudit8`, `collaudit9` and `collaudit10`, then compared
+line by line with the published files: the only lines a real run now produces
+that the files did not already carry are the `Files read:` line and the `!!`,
+one of each per side in the step logs, and the `!!` again in each summary. The fourth example,
+`below-the-floor-2.12-to-2.17.txt`, passes no directory and does not move.
+
+### Tied to tests
+
+The guards were mutation-checked, by snapshot and reverted by writing the original
+text back, with every touched file's hash compared afterwards. Each of the two `!!` was made never to fire and made to fire always; so were
+the closing advice, the clause on the clean sentence, and the line saying
+whether the count was asserted. So were the floor, the floor against the
+number the docs publish, the directory count behind `--expect-files`, the noun
+in both refusals, each side of the wrapper's forwarding dropped and crossed
+with the other's, the expectation arguments quoted into one word, a value that
+is not a number, and an expectation with no directory. Each makes at least one
+named test fail; an unrelated prose edit in the same file
+survives, so the suite is not simply failing on everything.
+
+The harness itself had to be fixed first, and the defect was this
+repository's own: it read a non-zero exit from `unittest` as "the mutant was
+caught", so a target named after a test that had since been renamed reported a
+guard that was never exercised. It now runs every target on the clean tree
+before mutating anything and stops if one is not green. Two more controls: a complete corpus must
+earn no `!!` and must print the old sentence unchanged, and the
+below-the-floor test asserts its own fixture still sits above half the tag, so
+it cannot quietly stop testing the window it was written for.
+
+The old and new sides are two test classes, not one parameterised test. That
+is not a precaution: on the first pass `test_it_is_this_side_that_was_checked`
+asserted only which step's log existed and which banner was printed, both of
+which follow from `--<side>-locales-dir` alone, and it passed under the
+crossed-forwarding mutant its own docstring named. It now reads the refusal
+out of that side's log, which is the only assertion in it that depends on the
+forwarding. Found by `false-negative-reviewer`, not by the author.
+
 ## 2026-09-21 (thirtieth entry)
 
 The summary gave a false reason for one of its `NOT RUN` blocks, and on the

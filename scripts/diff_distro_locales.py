@@ -12,8 +12,12 @@ matters -- how many differ INSIDE the LC_COLLATE block.
 It takes a directory rather than reaching into a node, so the transport is the
 caller's problem and the comparison is testable without one. It does NOT take
 the directory on trust: a half-copied directory would report "12 compared, 0
-inside LC_COLLATE", which is indistinguishable from a clean result. See
---expect-files.
+inside LC_COLLATE", which is indistinguishable from a clean result. A
+directory under --min-files, or under half the tag's, is refused outright; a
+file of the tag that is missing from it earns a `!!` and is subtracted from
+the clean sentence; and --expect-files N refuses anything but N files READ
+from the directory. That last one is the only guard that can see a file the
+tag does not hold going missing.
 
 The node is the authoritative side. Upstream is only the reference the audit
 reads; the node is what the running system actually sorts with.
@@ -21,7 +25,7 @@ reads; the node is what the running system actually sorts with.
 Usage:
   python3 diff_distro_locales.py <tag> --locales-dir <path> --build-id <nvr>
                                  [--repo <path>] [--expect-files N]
-                                 [--node-label NAME]
+                                 [--min-files N] [--node-label NAME]
 
 Example:
   python3 diff_distro_locales.py glibc-2.28 \\
@@ -222,7 +226,7 @@ def collate_diff_lines(text_a, text_b, label_a, label_b, limit=24):
 
 
 def corpus_problem(compared, expect_files=None, reference=None, floor=None,
-                   what='--locales-dir'):
+                   what='--locales-dir', read_count=None):
     """Why this corpus must not be reported on, or None if it is usable.
 
     Pure -- counts in, a message or None out -- so the guard that decides
@@ -234,11 +238,29 @@ def corpus_problem(compared, expect_files=None, reference=None, floor=None,
     `floor` is an absolute minimum, for a comparison with no reference side at
     all: two equally truncated directories agree perfectly, and half of three
     is one.
+
+    `read_count` is how many files were READ from the directory, which is what
+    `expect_files` is checked against; it defaults to `compared`. The two are
+    the same number for a caller that compares everything it read, and they
+    are NOT the same for a node compared against a tag: the el8 node holds 355
+    files and shares 353 with glibc-2.28, so an expectation taken from
+    `ls | wc -l` -- the only count a reader can produce -- would refuse a
+    correct run if it were checked against the intersection.
     """
-    if expect_files is not None and compared != expect_files:
-        return (f"compared {compared} file(s), expected {expect_files}. "
-                f"Refusing to report: a partial copy of the node's locales "
-                f"yields a clean-looking zero.")
+    if expect_files is not None:
+        # The noun is the caller's, not this function's. A caller that passes
+        # no read_count is checking the count it COMPARED, and saying "read"
+        # of an intersection tells a reader their complete copy is short --
+        # measured on step 8 with two complete directories and the count the
+        # README teaches: 708 files read, "read 353", expected 355.
+        if read_count is None and compared != expect_files:
+            return (f"compared {compared} file(s), expected {expect_files}. "
+                    f"Refusing to report: a partial copy of the node's "
+                    f"locales yields a clean-looking zero.")
+        if read_count is not None and read_count != expect_files:
+            return (f"read {read_count} file(s) from {what}, expected "
+                    f"{expect_files}. Refusing to report: a partial copy of "
+                    f"the node's locales yields a clean-looking zero.")
     if reference is not None and compared < reference // 2:
         return (f"only {compared} of {reference} upstream file(s) are present "
                 f"in {what}. That is too few to be a real copy; a partial copy "
@@ -303,7 +325,15 @@ def main(argv):
     ap.add_argument('--node-label', default='node',
                     help="short name for the node, used in output filenames")
     ap.add_argument('--expect-files', type=int,
-                    help="abort unless exactly this many files are compared")
+                    help="abort unless exactly this many files are read from "
+                         "--locales-dir. This is the count `ls "
+                         "/usr/share/i18n/locales/ | wc -l` gives on the node, "
+                         "NOT the `Compared N file(s)` below, which is the "
+                         "intersection with the tag. If entries are skipped, "
+                         "pass the `Files read` count instead.")
+    ap.add_argument('--min-files', type=int, default=DEFAULT_MIN_FILES,
+                    help=f"abort if fewer than this many files are compared "
+                         f"(default {DEFAULT_MIN_FILES})")
     ap.add_argument('--repo', help="path to the glibc clone (autodetected)")
     opts = ap.parse_args(argv)
 
@@ -318,6 +348,11 @@ def main(argv):
     print(f"Node locale sources:   {opts.locales_dir}")
 
     names, skipped = node_entries(opts.locales_dir)
+    # "Counted and matched" and "nobody counted" must not both look like
+    # silence -- and a saved transcript has to carry which one it was.
+    asserted = ('asserted, --expect-files' if opts.expect_files is not None
+                else 'NOT asserted, no --expect-files')
+    print(f"Files read:            {len(names)} ({asserted})")
     if skipped:
         print(f"\nSkipped {len(skipped)} directory entr(ies), named so a "
               f"shrunken corpus cannot pass unnoticed:")
@@ -334,7 +369,9 @@ def main(argv):
 
         # A truncated copy is the failure mode that looks like success.
         problem = corpus_problem(len(both), expect_files=opts.expect_files,
-                                 reference=len(up_names))
+                                 read_count=len(names),
+                                 reference=len(up_names),
+                                 floor=opts.min_files)
         if problem:
             g.die(problem)
 
@@ -369,9 +406,17 @@ def main(argv):
             inherited = inherited_via_copy(node_texts, buckets['collate'])
             print_inheritance(inherited, opts.build_id)
         else:
+            # "every locale compared" reads as coverage. When something is
+            # absent from the node it is not coverage, and the sentence says
+            # so -- but only then, so a complete run stays byte-identical.
+            uncompared = ''
+            if absent_on_node:
+                uncompared = (f" That is the {len(both)} file(s) counted "
+                              f"above; the {len(absent_on_node)} absent from "
+                              f"the node were not compared at all.")
             print(f"\nNothing differs inside LC_COLLATE. For every locale "
                   f"compared, the tag diff is reading the same collation data "
-                  f"{opts.build_id} runs.")
+                  f"{opts.build_id} runs.{uncompared}")
 
         if absent_upstream:
             print(f"\nAbsent upstream ({len(absent_upstream)}) -- backported "
@@ -406,6 +451,43 @@ def main(argv):
         print(f"\nFull result written to {out}")
 
     print()
+    if absent_on_node:
+        warn(f"{len(absent_on_node)} of {opts.tag}'s {len(up_names)} locale "
+             f"file(s) are NOT in {opts.locales_dir}, so nothing above says "
+             f"anything about them. A copy that lost files in transit and a "
+             f"node that genuinely ships fewer locales are indistinguishable "
+             f"here, and the truncated one is the side that reports zero "
+             f"differences." + ('' if opts.expect_files is not None else
+             f" Count the directory against the node it came from -- ls "
+             f"/usr/share/i18n/locales/ | wc -l -- and pass --expect-files N, "
+             f"or --old-expect-files / --new-expect-files through audit.sh: "
+             f"that refuses a directory holding any other number of files, "
+             f"which is the only thing that catches a file the tag never "
+             f"had."))
+    # No arm of this says "so the missing files are not the copy's". A met
+    # --expect-files proves N equals what THIS DIRECTORY holds, not that N
+    # came from the node -- and the docs tell a reader whose copy has skipped
+    # entries to take N from this tool's own output, which closes the circle.
+    # Measured 2026-09-21 by false-negative-reviewer: 250 of glibc-2.34's 355
+    # files, one subdirectory added, --expect-files 250, exit 0 -- and the
+    # clause that used to be here called 105 files lost in transit "locales
+    # the node does not ship".
+    elif opts.expect_files is None:
+        # Absent is not empty, and "every file the tag has is here" is not
+        # "the copy is complete". A locale the distro ADDS is in no tag, so
+        # its loss moves no count this step can check -- measured by
+        # false-negative-reviewer on 2026-09-21 with two node-only files, one
+        # deleted: exit 0, no marker, nothing absent. Without this the reader
+        # cannot tell a counted directory from an uncounted one either, which
+        # on all three published runs is exactly what they got.
+        warn(f"The number of files in {opts.locales_dir} was NOT asserted: no "
+             f"--expect-files. Every locale {opts.tag} holds is present, and "
+             f"that is not the same as the copy being complete -- a locale "
+             f"your distro ADDS is in no tag, so nothing here can notice it "
+             f"going missing in transit. Count the directory on the node it "
+             f"came from -- ls /usr/share/i18n/locales/ | wc -l -- and pass "
+             f"--expect-files N, or --old-expect-files / --new-expect-files "
+             f"through audit.sh.")
     warn(f"This compares locale DATA. glibc's collation CODE is step 5's job "
          f"(diff_collation_code.py) -- that is where Bug 22668 lives, the "
          f"change that reorders ko_KR -- and step 5 reads it between the two "

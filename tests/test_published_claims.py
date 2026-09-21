@@ -794,5 +794,83 @@ class ThePrivateRulesStayPrivate(unittest.TestCase):
                          f'private working files are tracked: {tracked}')
 
 
+class ExpectFileCountsComeFromTheExamples(unittest.TestCase):
+    """The two numbers README.md and docs/confirming-on-a-real-system.md now
+    put in `--old-expect-files` / `--new-expect-files`.
+
+    They are directory counts, and the examples publish them only as a sum:
+    `Compared N file(s) against <tag>` is the intersection with the tag, so
+    the node held N + `absent upstream`, provided `absent on the node` is 0.
+    Nothing tied them the day they were published, which is how the step-4
+    "2" rotted (seventeenth entry)."""
+
+    EXAMPLE = os.path.join(REPO_ROOT, 'examples',
+                           'rhel8-to-rhel9-audit-output.txt')
+
+    def directory_counts(self):
+        text = read(self.EXAMPLE)
+        blocks = re.findall(
+            r'(?m)^Files read:\s+(\d+) \([^)]*\)\n'
+            r'(?:.*\n)*?^Compared (\d+) file\(s\) against \S+:\n'
+            r'(?:.*\n)*?  absent upstream:\s+(\d+)\n'
+            r'  absent on the node:\s+(\d+)\n', text)
+        self.assertEqual(len(blocks), 2, 'expected step 6 and step 7')
+        counts = []
+        for read_line, compared, upstream, on_node in blocks:
+            # The line the step prints and the arithmetic under it are two
+            # facts; an edited transcript used to move neither.
+            self.assertEqual(int(read_line), int(compared) + int(upstream),
+                             'the example\'s Files read line disagrees with '
+                             'the counts printed below it')
+            # compared + absent upstream IS the directory count by
+            # construction, whatever the tag holds. This asserts the fixture
+            # instead: a non-zero value would mean the example was re-run on
+            # an incomplete copy, and the numbers the docs quote came from it.
+            self.assertEqual(int(on_node), 0,
+                             'the example was produced from a directory '
+                             'missing a file of the tag')
+            counts.append(int(compared) + int(upstream))
+        return counts
+
+    def test_the_documented_numbers_are_the_examples_numbers(self):
+        old_side, new_side = self.directory_counts()
+        for name in ('README.md',
+                     os.path.join('docs', 'confirming-on-a-real-system.md')):
+            with self.subTest(doc=name):
+                body = flat(read(os.path.join(REPO_ROOT, name)))
+                self.assertIn(f'--old-expect-files {old_side}', body)
+                self.assertIn(f'--new-expect-files {new_side}', body)
+
+
+class TheFloorInProseIsTheFloorInCode(unittest.TestCase):
+    """Backlog 1.15 published the corpus floor as a number in two documents.
+    A figure in prose that nothing checks is the shape of the step-4 "2",
+    which survived long after it was false (seventeenth entry)."""
+
+    # The phrase, not the bare digits: `assertIn('200')` also matches the
+    # `0x20000` in confirming-on-a-real-system.md's strxfrm example, so it
+    # passed with the floor removed. Measured 2026-09-21 by
+    # false-negative-reviewer on this test's first version.
+    DOCS = {'README.md': 'under {n}, the floor',
+            os.path.join('docs', 'confirming-on-a-real-system.md'):
+                '`--min-files` ({n})'}
+
+    def test_the_documents_quote_the_constant(self):
+        import glibc_locale_data as g
+        for name, phrase in self.DOCS.items():
+            with self.subTest(doc=name):
+                body = flat(read(os.path.join(REPO_ROOT, name)))
+                self.assertIn(phrase.format(n=g.MIN_LOCALE_FILES), body)
+
+    def test_the_floor_the_scripts_apply_is_that_constant(self):
+        import diff_distro_locales as dd
+        import glibc_locale_data as g
+        self.assertIs(dd.DEFAULT_MIN_FILES, g.MIN_LOCALE_FILES)
+        self.assertIsNone(dd.corpus_problem(g.MIN_LOCALE_FILES,
+                                            floor=dd.DEFAULT_MIN_FILES))
+        self.assertIsNotNone(dd.corpus_problem(g.MIN_LOCALE_FILES - 1,
+                                               floor=dd.DEFAULT_MIN_FILES))
+
+
 if __name__ == '__main__':
     unittest.main()

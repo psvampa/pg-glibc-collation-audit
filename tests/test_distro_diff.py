@@ -19,8 +19,8 @@ import sys
 import tempfile
 import unittest
 
-from _harness import (GLIBC_CLONE, MID, NEW, OLD, SCRIPTS_DIR, needs_clone,
-                      run_step)
+from _harness import (GLIBC_CLONE, MID, NEW, OLD, SCRIPTS_DIR, flat,
+                      needs_clone, run_step)
 
 import diff_distro_locales as dd
 import glibc_locale_data as g
@@ -158,6 +158,168 @@ class RefusesToGuess(unittest.TestCase):
         self.assertIn('!!', out)
         self.assertIn('22668', out)
         self.assertIn('charmaps', out)
+
+
+@needs_clone
+class ATruncatedCopySaysSo(unittest.TestCase):
+    """Backlog 1.15: a copy that lost files in transit reported a clean zero.
+
+    Measured 2026-09-21 on 300 of glibc-2.34's 355 files: exit 0, "Nothing
+    differs inside LC_COLLATE", and the 55 missing ones printed as an ordinary
+    list with no `!!`. Bisected the same day: the only guard was
+    `compared < reference // 2`, so 177 of 355 passed and 176 did not, and
+    steps 9/10 refused a directory this step accepted.
+    """
+
+    ABSENT = 'locale file(s) are NOT in'
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-distro-trunc-')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.node = materialise(MID, self.tmp)
+        self.total = len(os.listdir(self.node))
+
+    def truncate_to(self, keep):
+        """Drop all but `keep` files; returns how many went missing."""
+        for name in sorted(os.listdir(self.node))[keep:]:
+            os.remove(os.path.join(self.node, name))
+        return self.total - keep
+
+    def run_node(self, *extra):
+        return run_script(MID, '--locales-dir', self.node,
+                          '--build-id', 'truncated', '--node-label', 'trunc',
+                          *extra)
+
+    def test_a_partial_copy_earns_the_warning_marker(self):
+        missing = self.truncate_to(250)
+        rc, out = self.run_node()
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"!! {missing} of {MID}'s {self.total} "
+                      f"locale file(s) are NOT in", flat(out))
+
+    def test_a_complete_copy_earns_no_absent_file_warning(self):
+        """The control. A guard that fires on every corpus guards nothing."""
+        rc, out = self.run_node('--expect-files', str(self.total))
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn(self.ABSENT, flat(out))
+        self.assertNotIn('were not compared at all', flat(out))
+
+    def test_an_unasserted_count_says_so_even_when_nothing_is_absent(self):
+        """Nothing absent means nothing the TAG holds is missing. A locale
+        the distro adds is in no tag, so its loss moves no count this step
+        can check: measured with two node-only files, one deleted -- exit 0,
+        `absent on the node: 0`, and before this, no marker at all."""
+        rc, out = self.run_node()
+        self.assertEqual(rc, 0, out)
+        self.assertIn('was NOT asserted: no --expect-files', flat(out))
+
+    def test_an_asserted_count_is_not_nagged_about(self):
+        """The mirror control: a reader who passed the count must not be told
+        to pass it."""
+        rc, out = self.run_node('--expect-files', str(self.total))
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('was NOT asserted', flat(out))
+
+    def test_the_clean_sentence_stops_reading_as_coverage(self):
+        """"For every locale compared" is true and reads as "for every
+        locale". When something was not compared, the sentence says so."""
+        missing = self.truncate_to(250)
+        rc, out = self.run_node()
+        self.assertEqual(rc, 0, out)
+        self.assertIn('Nothing differs inside LC_COLLATE', out)
+        self.assertIn(f'the {missing} absent from the node were not '
+                      f'compared at all', flat(out))
+
+    def test_the_sentence_is_untouched_when_nothing_is_absent(self):
+        """Byte-for-byte what main printed, so the published examples and
+        the acceptance runs do not move."""
+        rc, out = self.run_node()
+        self.assertEqual(rc, 0, out)
+        self.assertIn('Nothing differs inside LC_COLLATE. For every locale '
+                      'compared, the tag diff is reading the same collation '
+                      'data truncated runs.', flat(out))
+
+    def test_a_copy_below_the_floor_is_refused_though_above_half(self):
+        """The window this step used to accept and steps 9/10 did not: more
+        than half of the tag, fewer than the 200 every other node-reading
+        mode requires."""
+        keep = g.MIN_LOCALE_FILES - 10
+        self.assertGreater(keep, self.total // 2,
+                           "fixture no longer sits in the window it tests")
+        self.assertLess(keep, g.MIN_LOCALE_FILES)
+        self.truncate_to(keep)
+        rc, out = self.run_node()
+        self.assertEqual(rc, 2, out)
+        self.assertIn(f'below the floor of {g.MIN_LOCALE_FILES}', flat(out))
+
+    def test_the_read_count_says_whether_anyone_asserted_it(self):
+        """An asserted run and an unasserted one used to differ only by the
+        ABSENCE of a warning -- which is also what every older version of this
+        tool printed, so a saved transcript could not tell them apart."""
+        rc, out = self.run_node()
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f'Files read: {self.total} '
+                      f'(NOT asserted, no --expect-files)', flat(out))
+        rc, out = self.run_node('--expect-files', str(self.total))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f'Files read: {self.total} (asserted, --expect-files)',
+                      flat(out))
+
+    def test_a_reader_who_passed_the_count_is_not_told_to_pass_it(self):
+        """The absent-file `!!` still fires with an expectation given and met
+        -- a node may genuinely lack a locale the tag has -- but its closing
+        advice is to do the thing the reader already did."""
+        keep = 250
+        self.truncate_to(keep)
+        rc, out = self.run_node('--expect-files', str(keep))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(self.ABSENT, flat(out))
+        self.assertNotIn('and pass --expect-files N', flat(out))
+
+    def test_a_met_expectation_does_not_clear_the_missing_files(self):
+        """A met --expect-files proves N equals what THIS DIRECTORY holds --
+        not that N came from the node. The reader is told to take N from this
+        tool's own output when entries are skipped, which closes the circle.
+        Measured: 250 of 355 files with a subdirectory added and
+        `--expect-files 250` exits 0, and the clause this test removes called
+        those 105 lost files "locales the node does not ship"."""
+        self.truncate_to(250)
+        for extra in ((), ('--expect-files', '250')):
+            with self.subTest(args=extra):
+                rc, out = self.run_node(*extra)
+                self.assertEqual(rc, 0, out)
+                self.assertIn('are indistinguishable here, and the truncated '
+                              'one', flat(out))
+                self.assertNotIn('not files the copy lost', flat(out))
+                self.assertNotIn('the node does not ship', flat(out))
+
+    def test_without_an_expectation_the_advice_is_there(self):
+        """The mirror control: the advice must survive for the reader who
+        has not yet passed a count."""
+        self.truncate_to(250)
+        rc, out = self.run_node()
+        self.assertEqual(rc, 0, out)
+        self.assertIn('and pass --expect-files N', flat(out))
+
+    def test_expect_files_counts_the_directory_not_the_intersection(self):
+        """The count a reader can produce is `ls | wc -l`. On the el8 node
+        that is 355 while step 6 compares 353, so an expectation checked
+        against the intersection refuses a correct run and the number that
+        would pass cannot be known without running the tool first."""
+        with open(os.path.join(self.node, 'zz_MADEUP'), 'w',
+                  encoding='utf-8') as fh:
+            fh.write('comment_char %\nLC_COLLATE\ncopy "iso14651_t1"\n'
+                     'END LC_COLLATE\n')
+        directory, intersection = self.total + 1, self.total
+
+        rc, out = self.run_node('--expect-files', str(directory))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f'Compared {intersection} file(s)', out)
+
+        rc, out = self.run_node('--expect-files', str(intersection))
+        self.assertEqual(rc, 2, out)
+        self.assertIn(f'read {directory} file(s) from --locales-dir, '
+                      f'expected {intersection}', flat(out))
 
 
 if __name__ == '__main__':

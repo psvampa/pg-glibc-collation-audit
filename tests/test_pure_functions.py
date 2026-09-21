@@ -896,6 +896,35 @@ class CorpusGuard(unittest.TestCase):
                         dd.corpus_problem(3, floor=200)):
             self.assertIn('indistinguishable from a clean run', problem)
 
+    def test_the_expectation_is_checked_against_what_was_READ(self):
+        """Backlog 1.15. The el8 node holds 355 locale files and shares 353
+        with glibc-2.28; `ls | wc -l` -- the only count a reader can produce
+        -- is 355. Checked against the intersection, that correct number
+        refuses a correct run, and the number that would pass is one the
+        reader cannot know without running the tool first."""
+        self.assertIsNone(dd.corpus_problem(353, expect_files=355,
+                                            read_count=355))
+        self.assertIsNotNone(dd.corpus_problem(353, expect_files=353,
+                                               read_count=355))
+
+    def test_without_a_read_count_the_refusal_still_says_compared(self):
+        """Step 8 passes no read_count: its number IS the intersection of two
+        directories, and calling that "read" tells the owner of two complete
+        copies that theirs is short. Measured on 2026-09-21 with glibc-2.28
+        and glibc-2.34 materialised whole -- 708 files read, "read 353"."""
+        self.assertIsNone(dd.corpus_problem(353, expect_files=353))
+        problem = dd.corpus_problem(353, expect_files=355)
+        self.assertIn('compared 353 file(s), expected 355', problem)
+        self.assertNotIn('read 353', problem)
+
+    def test_the_expectation_message_names_both_counts(self):
+        """A refusal that gives only one of the two numbers cannot be acted
+        on: the reader cannot tell whether the copy or the expectation is
+        wrong."""
+        problem = dd.corpus_problem(300, expect_files=355, read_count=300)
+        self.assertIn('300', problem)
+        self.assertIn('355', problem)
+
 
 class SameTreeAndManifest(unittest.TestCase):
     """Comparing a directory with itself, or two copies of one tar, reports

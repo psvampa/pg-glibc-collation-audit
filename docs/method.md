@@ -51,8 +51,10 @@ needing files off a node rather than the clone — which is why none of them is 
 sixth step. They answer different questions:
 
 - **node against its tag** — `scripts/diff_distro_locales.py <tag>
-  --locales-dir <path> --build-id <nvr>`, run as step 6 and/or 7 for whichever
-  side you supply. Is the audit reading what that node runs? This is the only
+  --locales-dir <path> --build-id <nvr> [--expect-files N]`, run as step 6
+  and/or 7 for whichever side you supply. `N` is the directory's own file
+  count, and without it a copy that lost files in transit is reported on
+  rather than refused. Is the audit reading what that node runs? This is the only
   way to see your distro's own patching. A file that differs inside
   `LC_COLLATE` is reported with its reach through the node's `copy` graph.
 - **node against node** — `scripts/diff_node_locales.py --old-locales-dir
@@ -68,8 +70,8 @@ sixth step. They answer different questions:
   supply the directories, the summary says `NOT RUN` rather than omitting the
   section.
 - **step 4 over a node's own directory** — `scripts/flag_algorithmic_ranges.py
-  --locales-dir <path> --build-id <nvr> --supported-tag <tag>`, run as step 9
-  and/or 10 for whichever side you supply. Does that node's own locale data use
+  --locales-dir <path> --build-id <nvr> --supported-tag <tag>
+  [--expect-files N]`, run as step 9 and/or 10 for whichever side you supply. Does that node's own locale data use
   ellipsis ranges? Step 4 proper scans the **new tag**, which holds at most
   upstream's `C` — the file is upstream from glibc 2.35 and absent before it —
   and a tag scan cannot know what your distro built its own `C.UTF-8` from,

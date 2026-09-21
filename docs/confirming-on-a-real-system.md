@@ -93,11 +93,16 @@ So both file-reading scripts refuse rather than report: they check an absolute
 floor on the number of files compared, they resolve both paths and abort if
 they name the same directory, and they print a per-side fingerprint of file
 names and sizes so two equal fingerprints under two different build ids are
-visible. Assert the file count on both sides yourself as well: the scripts print each
-side's count, and when you run them directly `--expect-files N` turns your
-expectation into a refusal. `./audit.sh` does not take that option, so through
-the wrapper the printed counts are the assertion — compare them against
-`ls /usr/share/i18n/locales/ | wc -l` on each node.
+visible. Assert the file count on both sides as well, and let the run do it: read
+`ls /usr/share/i18n/locales/ | wc -l` on each node and pass it as
+`--old-expect-files N` / `--new-expect-files N` to `./audit.sh`, or as
+`--expect-files N` when you run a script directly. A directory holding another
+number is refused before anything is compared. If the run names entries it
+skipped — a subdirectory, a symlink, an odd name, none of which `ls` leaves
+out — pass the count it says it read instead. Without it the scripts still
+print each side's count and warn when the tag holds a file the directory does
+not, but nothing is asserted, the run says so with a `!!`, and the reader is the
+assertion.
 
 ## The `C.UTF-8` probe
 
@@ -169,8 +174,12 @@ separate mount in a container, so the copy silently does nothing.
 
 `--build-id` is required: a result is bound to the build it was taken on, and
 nothing in the directory carries a version. The script refuses a directory too
-small to be a real copy, because a partial copy reports "0 differ inside
-`LC_COLLATE`" and that is indistinguishable from a clean result.
+small to be a real copy — under `--min-files` (200), or under half the tag's
+count — because a partial copy reports "0 differ inside `LC_COLLATE`" and that
+is indistinguishable from a clean result. Above that it reports rather than
+refuses: a file of the tag the directory lacks earns a `!!` and is subtracted
+from the clean sentence, and `--expect-files N` is what turns your own count
+into a refusal.
 
 `./audit.sh` runs the same check on both sides of a pair in one command, given
 each node's sources and its build id:
@@ -178,7 +187,8 @@ each node's sources and its build id:
 ```sh
 ./audit.sh glibc-2.28 glibc-2.34 \
   --old-locales-dir ./el8-locales --old-build-id glibc-2.28-251.el8_10.40 \
-  --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
+  --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8 \
+  --old-expect-files 355 --new-expect-files 356
 ```
 
 It is optional there for the same reason it is a separate page here: steps 1

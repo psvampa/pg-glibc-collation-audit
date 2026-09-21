@@ -513,6 +513,10 @@ $ ./audit.sh glibc-2.28 glibc-2.34 \
 directories are shown as ./elN-locales and the output directory as
 /tmp/pg-glibc-collation-audit)
 
+Run without --old-expect-files / --new-expect-files, which is why steps 6 and
+7 report `Files read` as NOT asserted and carry a `!!` saying so.
+README.md teaches the command with them; this transcript is what you get without.
+
 ================================================================
 == DISTRO CHECK  do glibc-2.28-251.el8_10.40's patches touch LC_COLLATE?
 ================================================================
@@ -523,6 +527,7 @@ Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointe
 
 Node build under test: glibc-2.28-251.el8_10.40
 Node locale sources:   ./el8-locales
+Files read:            355 (NOT asserted, no --expect-files)
 
 Compared 353 file(s) against glibc-2.28:
   identical:                 280
@@ -541,6 +546,13 @@ Absent upstream (2) -- backported locales this comparison is structurally blind 
 
 Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.glibc-2.28..old.txt
 
+!! The number of files in ./el8-locales was NOT asserted: no --expect-files.
+   Every locale glibc-2.28 holds is present, and that is not the same as the
+   copy being complete -- a locale your distro ADDS is in no tag, so nothing
+   here can notice it going missing in transit. Count the directory on the
+   node it came from -- ls /usr/share/i18n/locales/ | wc -l -- and pass
+   --expect-files N, or --old-expect-files / --new-expect-files through
+   audit.sh.
 !! This compares locale DATA. glibc's collation CODE is step 5's job
    (diff_collation_code.py) -- that is where Bug 22668 lives, the change that
    reorders ko_KR -- and step 5 reads it between the two upstream tags. What
@@ -563,6 +575,7 @@ Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointe
 
 Node build under test: glibc-2.34-275.el9_8
 Node locale sources:   ./el9-locales
+Files read:            356 (NOT asserted, no --expect-files)
 
 Compared 355 file(s) against glibc-2.34:
   identical:                 353
@@ -580,6 +593,13 @@ Absent upstream (1) -- backported locales this comparison is structurally blind 
 
 Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.glibc-2.34..new.txt
 
+!! The number of files in ./el9-locales was NOT asserted: no --expect-files.
+   Every locale glibc-2.34 holds is present, and that is not the same as the
+   copy being complete -- a locale your distro ADDS is in no tag, so nothing
+   here can notice it going missing in transit. Count the directory on the
+   node it came from -- ls /usr/share/i18n/locales/ | wc -l -- and pass
+   --expect-files N, or --old-expect-files / --new-expect-files through
+   audit.sh.
 !! This compares locale DATA. glibc's collation CODE is step 5's job
    (diff_collation_code.py) -- that is where Bug 22668 lives, the change that
    reorders ko_KR -- and step 5 reads it between the two upstream tags. What
@@ -656,7 +676,7 @@ Full result written to /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.
 ================================================================
 == NODE ELLIPSIS  does glibc-2.28-251.el8_10.40's own locale data use ellipsis ranges?
 ================================================================
-Files at glibc-2.28-251.el8_10.40 (./el8-locales): 355, of which 342 define LC_COLLATE
+Files at glibc-2.28-251.el8_10.40 (./el8-locales): 355, of which 342 define LC_COLLATE  (count NOT asserted, no --expect-files)
 Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 5
   C
       ..
@@ -702,7 +722,7 @@ unexamined are three different answers:
 ================================================================
 == NODE ELLIPSIS  does glibc-2.34-275.el9_8's own locale data use ellipsis ranges?
 ================================================================
-Files at glibc-2.34-275.el9_8 (./el9-locales): 356, of which 343 define LC_COLLATE
+Files at glibc-2.34-275.el9_8 (./el9-locales): 356, of which 343 define LC_COLLATE  (count NOT asserted, no --expect-files)
 Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 4
   i18n
       collating-symbol <S0200>..<S1100> % 0x0200..0x1100
@@ -779,9 +799,13 @@ unexamined are three different answers:
 -- Warnings the clean results above do NOT cover
      !! localedata/locales/C exists at NEITHER glibc-2.28 nor glibc-2.34, but
       (diff body trimmed)
+     !! The number of files in ./el8-locales was NOT asserted: no --expect-files.
+      (diff body trimmed)
      !! This compares locale DATA. glibc's collation CODE is step 5's job
       (diff body trimmed)
      !! localedata/charmaps/ is NOT compared. glibc-locale-source ships it and it
+      (diff body trimmed)
+     !! The number of files in ./el9-locales was NOT asserted: no --expect-files.
       (diff body trimmed)
      !! This compares locale DATA. Identical data is NOT identical ORDER: the
       (diff body trimmed)

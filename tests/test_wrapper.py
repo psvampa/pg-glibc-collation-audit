@@ -416,7 +416,8 @@ class WrapperRefusesBadInput(unittest.TestCase):
         for the same reason -- it leaves the variable unset, which is
         indistinguishable from never having asked for the node checks."""
         options = ('--old-locales-dir', '--old-build-id',
-                   '--new-locales-dir', '--new-build-id')
+                   '--new-locales-dir', '--new-build-id',
+                   '--old-expect-files', '--new-expect-files')
         # Every branch of the case, not one of them: three of the four were
         # asserted by nothing, and a mutation to any of those three left the
         # suite green.
@@ -908,6 +909,114 @@ class WrapperNodeWithoutC(unittest.TestCase):
         self.assertIn('C (C.UTF-8): ABSENT from this locale directory <- not '
                       'examined, NOT cleared', flat)
         self.assertNotIn('C (C.UTF-8): codepoint_collation', flat)
+
+
+class ExpectFilesArgv(unittest.TestCase):
+    """Backlog 1.15: the two flags that turn a reader's file count into a
+    refusal. These cases are decided before any step runs, so they need no
+    clone and no directory."""
+
+    def test_a_count_that_is_not_a_count_is_refused(self):
+        """Unvalidated, `--old-expect-files -3` is read as the next option and
+        `--old-expect-files x` reaches argparse deep inside step 6, after the
+        first five steps have printed a full audit."""
+        for opt in ('--old-expect-files', '--new-expect-files'):
+            for value in ('abc', '-3', '3.5', '355 '):
+                with self.subTest(opt=opt, value=value):
+                    rc, out = run_wrapper(OLD, MID, opt, value)
+                    self.assertEqual(rc, 2, out)
+                    self.assertIn(f'error: {opt} needs a whole number of '
+                                  f'files', out)
+                    self.assertNotIn('AUDIT SUMMARY', out)
+
+    def test_an_expectation_with_no_directory_is_refused_not_ignored(self):
+        """A flag that silently does nothing is the reassuring direction: the
+        reader believes the count was asserted and it never was."""
+        for opt in ('--old-expect-files', '--new-expect-files'):
+            with self.subTest(opt=opt):
+                rc, out = run_wrapper(OLD, MID, opt, '355')
+                self.assertEqual(rc, 2, out)
+                self.assertIn('--*-expect-files requires the matching '
+                              '--*-locales-dir', flat(out))
+                self.assertNotIn('AUDIT SUMMARY', out)
+
+    def test_the_help_documents_which_count_to_pass(self):
+        """The number is `ls | wc -l`, not the `Compared N file(s)` the run
+        prints -- the two differ on every node that carries a backported
+        locale, and README.md sends the reader here."""
+        rc, out = run_wrapper()
+        self.assertEqual(rc, 2, out)
+        body = flat(out)
+        self.assertIn('--old-expect-files N / --new-expect-files N', body)
+        self.assertIn('ls /usr/share/i18n/locales/ | wc -l', body)
+
+
+class _ExpectFilesSide:
+    """One side's forwarding, end to end. Two subclasses, not one
+    parameterised test: a body that names a fixed side passes on both when
+    the wrapper hard-codes that side, which is how PR #48's one-sided NOT RUN
+    survived a mutation."""
+
+    SIDE = None          # 'old' or 'new'
+    RUNS = None          # the step that must have run
+    SKIPS = None         # the step that must not have
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix=f'pg-glibc-expect-{cls.SIDE}-')
+        cls.nodes = tempfile.mkdtemp(prefix=f'pg-glibc-expect-{cls.SIDE}-t')
+        tag = OLD if cls.SIDE == 'old' else MID
+        cls.root = dd.materialise_tag(GLIBC_CLONE, tag,
+                                      os.path.join(cls.nodes, 'a'))
+        cls.held = len(os.listdir(cls.root))
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID,
+            f'--{cls.SIDE}-locales-dir', cls.root,
+            f'--{cls.SIDE}-build-id', f'build-{cls.SIDE}',
+            f'--{cls.SIDE}-expect-files', str(cls.held + 1),
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    def test_a_wrong_count_stops_the_run(self):
+        self.assertNotEqual(self.rc, 0, self.out)
+        self.assertIn(f'read {self.held} file(s) from --locales-dir, '
+                      f'expected {self.held + 1}', flat(self.out))
+
+    def test_nothing_clean_is_printed_before_it_stops(self):
+        """The guard runs before the comparison, so the reader never sees a
+        result that was computed over a corpus the run went on to refuse."""
+        self.assertNotIn('AUDIT SUMMARY', self.out)
+        self.assertNotIn('Nothing differs inside LC_COLLATE', self.out)
+        self.assertNotIn('differ INSIDE LC_COLLATE:', self.out)
+
+    def test_it_is_this_side_that_was_checked(self):
+        """Forwarding `$OLD_EXPECT_ARG` to both sides, or `$NEW_EXPECT_ARG`
+        to both, passes the other class and fails this one."""
+        slug = pair_slug(OLD, MID)
+        ran = os.path.join(self.out_dir, f'step{self.RUNS}.{slug}.log')
+        skipped = os.path.join(self.out_dir, f'step{self.SKIPS}.{slug}.log')
+        self.assertTrue(os.path.exists(ran), os.listdir(self.out_dir))
+        self.assertFalse(os.path.exists(skipped), os.listdir(self.out_dir))
+        self.assertIn(f"do build-{self.SIDE}'s patches", self.out)
+        # Which log holds the refusal is the only thing here that depends on
+        # the forwarding: the two above follow from --SIDE-locales-dir alone,
+        # and both survived the cross-forwarding mutant on 2026-09-21.
+        with open(ran, encoding='utf-8') as fh:
+            self.assertIn(f'expected {self.held + 1}', fh.read())
+
+
+@needs_clone
+class ExpectFilesOldSide(_ExpectFilesSide, unittest.TestCase):
+    SIDE, RUNS, SKIPS = 'old', 6, 7
+
+
+@needs_clone
+class ExpectFilesNewSide(_ExpectFilesSide, unittest.TestCase):
+    SIDE, RUNS, SKIPS = 'new', 7, 6
 
 
 if __name__ == '__main__':

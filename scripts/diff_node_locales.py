@@ -310,7 +310,12 @@ def main(argv):
     ap.add_argument('--allow-reverse', action='store_true',
                     help="run a pair whose new tag is the OLDER commit. Refused by default: reversed, every step still prints a plausible clean result. Prints a `!!` block saying the direction is reversed.")
     ap.add_argument('--expect-files', type=int,
-                    help="abort unless exactly this many files are compared")
+                    help="abort unless exactly this many files are compared. "
+                         "That is the INTERSECTION of the two node "
+                         "directories, not either side's `ls | wc -l`; the "
+                         "per-side counts are asserted by steps 6/7 and "
+                         "9/10 when you pass them --expect-files, which there "
+                         "takes the directory count.")
     ap.add_argument('--min-files', type=int, default=dd.DEFAULT_MIN_FILES,
                     help=f"abort if fewer than this many files are compared "
                          f"(default {dd.DEFAULT_MIN_FILES})")

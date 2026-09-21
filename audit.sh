@@ -12,8 +12,12 @@
 #
 # Usage:
 #   ./audit.sh <old_tag> <new_tag>
-#              [--old-locales-dir DIR --old-build-id NVR]
-#              [--new-locales-dir DIR --new-build-id NVR]
+#              [--old-locales-dir DIR --old-build-id NVR [--old-expect-files N]]
+#              [--new-locales-dir DIR --new-build-id NVR [--new-expect-files N]]
+#
+#   The expected file counts are optional and are what `ls
+#   /usr/share/i18n/locales/ | wc -l` prints on each node. Without them a
+#   copy that lost files in transit is reported on rather than refused.
 #
 # The order of the two tags is not a formality: every step assumes the second
 # one is the newer. Given them the other way round the run used to go to the
@@ -47,8 +51,8 @@ set -euo pipefail
 
 usage() {
   echo "usage: $0 <old_tag> <new_tag>" >&2
-  echo "         [--old-locales-dir DIR --old-build-id NVR]" >&2
-  echo "         [--new-locales-dir DIR --new-build-id NVR]" >&2
+  echo "         [--old-locales-dir DIR --old-build-id NVR [--old-expect-files N]]" >&2
+  echo "         [--new-locales-dir DIR --new-build-id NVR [--new-expect-files N]]" >&2
   echo "       e.g. $0 glibc-2.28 glibc-2.34" >&2
   echo "       tags are glibc-<version>; run \`ldd --version\` on each node" >&2
   echo "       OLD first, NEW second: a reversed pair is refused, not" >&2
@@ -69,6 +73,27 @@ usage() {
   echo "       the only way that question is asked of a node supplied on its" >&2
   echo "       own, since step 4 scans the new TAG, which holds at most" >&2
   echo "       upstream's C and never speaks for what your node built." >&2
+  echo >&2
+  echo "       --old-expect-files N / --new-expect-files N assert how many" >&2
+  echo "       files that side's directory holds, and refuse the run when" >&2
+  echo "       it holds another number. N is what \`ls" >&2
+  echo "       /usr/share/i18n/locales/ | wc -l\` prints on that node. A" >&2
+  echo "       copy that lost files in transit reports zero differences" >&2
+  echo "       over the files that did arrive. Steps 6 and 7 name the ones" >&2
+  echo "       the tag holds and the directory does not, with a !!, and say" >&2
+  echo "       whether anyone asserted the count. These options refuse a" >&2
+  echo "       directory whose own file count is not the number you pass --" >&2
+  echo "       the only thing steps 6 and 7 have that catches a file the" >&2
+  echo "       tag never held. If the run names entries it" >&2
+  echo "       skipped -- a subdirectory, a symlink, an odd name, none of" >&2
+  echo "       which ls leaves out -- pass the count it says it read." >&2
+  echo "       Step 6 checks the old side and step 7 the new one, before" >&2
+  echo "       either compares anything. Steps 9 and 10 are given the same" >&2
+  echo "       number, which is redundancy and not a second check: they" >&2
+  echo "       read the same directory and count it the same way, so the" >&2
+  echo "       matching step always refuses first. Step 8 is not given it" >&2
+  echo "       at all, because its count is the intersection of the two" >&2
+  echo "       directories and neither side's wc -l." >&2
   echo >&2
   echo "       Supply BOTH and the run also compares the two nodes to each" >&2
   echo "       other (step 8). That is the only source-level evidence there is" >&2
@@ -91,13 +116,24 @@ shift 2
 needs_value() {
   [ -n "${2:-}" ] || { echo "error: $1 needs a value" >&2; usage; }
 }
+# A count that is not a count would reach the step as an argparse error at
+# best, and `--old-expect-files -3` would be read as the NEXT option at worst.
+needs_number() {
+  case ${2:-} in
+    ''|*[!0-9]*) echo "error: $1 needs a whole number of files, not '${2:-}'" >&2
+                 usage ;;
+  esac
+}
 OLD_LOCALES=""; OLD_BUILD=""; NEW_LOCALES=""; NEW_BUILD=""
+OLD_EXPECT=""; NEW_EXPECT=""
 while [ $# -gt 0 ]; do
   case $1 in
-    --old-locales-dir) needs_value "$@"; OLD_LOCALES=$2; shift 2 ;;
-    --old-build-id)    needs_value "$@"; OLD_BUILD=$2;   shift 2 ;;
-    --new-locales-dir) needs_value "$@"; NEW_LOCALES=$2; shift 2 ;;
-    --new-build-id)    needs_value "$@"; NEW_BUILD=$2;   shift 2 ;;
+    --old-locales-dir)  needs_value "$@"; OLD_LOCALES=$2; shift 2 ;;
+    --old-build-id)     needs_value "$@"; OLD_BUILD=$2;   shift 2 ;;
+    --new-locales-dir)  needs_value "$@"; NEW_LOCALES=$2; shift 2 ;;
+    --new-build-id)     needs_value "$@"; NEW_BUILD=$2;   shift 2 ;;
+    --old-expect-files) needs_value "$@"; needs_number "$@"; OLD_EXPECT=$2; shift 2 ;;
+    --new-expect-files) needs_value "$@"; needs_number "$@"; NEW_EXPECT=$2; shift 2 ;;
     *) echo "error: unknown argument '$1'" >&2; usage ;;
   esac
 done
@@ -109,6 +145,22 @@ if { [ -n "$OLD_LOCALES" ] && [ -z "$OLD_BUILD" ]; } ||
   echo "error: --*-locales-dir requires the matching --*-build-id" >&2
   exit 2
 fi
+
+# An expectation with no directory to count is never checked, and a flag that
+# silently does nothing is the reassuring direction: the reader believes the
+# count was asserted.
+if { [ -n "$OLD_EXPECT" ] && [ -z "$OLD_LOCALES" ]; } ||
+   { [ -n "$NEW_EXPECT" ] && [ -z "$NEW_LOCALES" ]; }; then
+  echo "error: --*-expect-files requires the matching --*-locales-dir; with" >&2
+  echo "       no directory to count, the expectation is never checked" >&2
+  exit 2
+fi
+
+# Numeric and validated above, so leaving these unquoted at the call sites is
+# a word split over one word or none. Bash 3.2 has no safe empty array.
+OLD_EXPECT_ARG=""; NEW_EXPECT_ARG=""
+[ -n "$OLD_EXPECT" ] && OLD_EXPECT_ARG="--expect-files $OLD_EXPECT"
+[ -n "$NEW_EXPECT" ] && NEW_EXPECT_ARG="--expect-files $NEW_EXPECT"
 HERE=$(cd "$(dirname "$0")" && pwd)
 SCRIPTS="$HERE/scripts"
 
@@ -291,12 +343,14 @@ run_step 5 python3 "$SCRIPTS/diff_collation_code.py" "$OLD" "$NEW"
 if [ -n "$OLD_LOCALES" ]; then
   banner "DISTRO CHECK  do $OLD_BUILD's patches touch LC_COLLATE?"
   run_step 6 python3 "$SCRIPTS/diff_distro_locales.py" "$OLD" \
-    --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --node-label old
+    --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --node-label old \
+    $OLD_EXPECT_ARG
 fi
 if [ -n "$NEW_LOCALES" ]; then
   banner "DISTRO CHECK  do $NEW_BUILD's patches touch LC_COLLATE?"
   run_step 7 python3 "$SCRIPTS/diff_distro_locales.py" "$NEW" \
-    --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --node-label new
+    --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --node-label new \
+    $NEW_EXPECT_ARG
 fi
 
 # The only comparison that can see a locale the distro BACKPORTS: it takes both
@@ -317,13 +371,19 @@ fi
 # that depends on somebody remembering is not a check.
 if [ -n "$OLD_LOCALES" ]; then
   banner "NODE ELLIPSIS  does $OLD_BUILD's own locale data use ellipsis ranges?"
+  # The expectation again, and step 6 above has already refused on it if it
+  # was wrong: same directory, same node_entries, same count. Redundancy, and
+  # no test can reach it -- recorded here rather than counted as coverage.
   run_step 9 python3 "$SCRIPTS/flag_algorithmic_ranges.py" \
-    --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --supported-tag "$OLD"
+    --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --supported-tag "$OLD" \
+    $OLD_EXPECT_ARG
 fi
 if [ -n "$NEW_LOCALES" ]; then
   banner "NODE ELLIPSIS  does $NEW_BUILD's own locale data use ellipsis ranges?"
+  # Redundant with step 7 for the new side, exactly as step 9 is with step 6.
   run_step 10 python3 "$SCRIPTS/flag_algorithmic_ranges.py" \
-    --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --supported-tag "$NEW"
+    --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --supported-tag "$NEW" \
+    $NEW_EXPECT_ARG
 fi
 
 # ---------------------------------------------------------------- summary ----

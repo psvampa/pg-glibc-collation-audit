@@ -144,18 +144,22 @@ ssh el9 rpm -q glibc
 
 ./audit.sh glibc-2.28 glibc-2.34 \
   --old-locales-dir ./el8-locales --old-build-id glibc-2.28-251.el8_10.40 \
-  --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
+  --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8 \
+  --old-expect-files 355 --new-expect-files 356
 ```
 
 In a container, `docker exec el8` replaces `ssh el8`. `rpm -q glibc` prints
 the architecture as well (`...x86_64`); either form is a usable build id, and
 the build ids in this README drop it.
 
-Check each copy against the node it came from: `ls el8-locales | wc -l`
-against `ls /usr/share/i18n/locales/ | wc -l` run on the node. The run does
-not do this for you: a copy missing a large share of its files is still not
-refused, and at step 8 a file that never arrived reads as a locale the upgrade
-removed or added.
+`--old-expect-files` and `--new-expect-files` are what the last two numbers
+are: run `ls /usr/share/i18n/locales/ | wc -l` on each node and pass what it
+prints. A copy that lost files in transit reports zero differences, which
+reads exactly like a clean upgrade, so the run refuses rather than reports
+when a directory holds another number. If the run names entries it skipped —
+a subdirectory, a symlink, an odd name, none of which `ls` leaves out — use
+the count it says it read instead. They are optional; without them a file the
+tag holds and the copy lacks still earns a `!!`, but nothing is asserted.
 
 **Give it both nodes' locale sources and it does more.** Each side you supply
 adds a check that the node's own files match the tag the audit diffed — your
@@ -172,23 +176,52 @@ locale is built. That is command 3.
 <details>
 <summary><strong>Checking the copy, and the build ids</strong> — the counts each step prints, and what the summary says without the directories</summary>
 
-Steps 9 and 10 print the copy's own count as `Files at <build id>` — that is
-the number to set against the node's — and step 8 prints each copy's count,
-byte total and fingerprint. The `Compared N file(s)` lines of steps 6 to 8 are
+Steps 6 and 7 print the copy's own count as `Files read`, and steps 9 and 10
+as `Files at <build id>` — that is the number to set against the node's, and
+both say beside it whether anything asserted it. Step 8 prints each copy's
+count, byte total and fingerprint. The `Compared N file(s)` lines of steps 6 to 8 are
 intersections — with the tag for steps 6 and 7, with the other node for step 8
 — so they are never larger than `Files at`, and equality there does not mean
 the copy is complete. A `Compared` line adds back up to `Files at` only
 together with the `absent upstream` or `only on the ... node` line printed
 beside it.
 
-A copy that lands most of the files is not refused: the scripts refuse only a
-directory too small to be a real copy at all. The files that never arrived are
-mostly reported as ordinary findings — steps 6 and 7 list them under `Absent
-on the node`, and step 8 under `Only on the old node` or `Only on the new
-node`, where a failed transport reads as a locale the upgrade removed or
-added. Two cases do earn a `!!`: a backported locale such as `C` missing from
-one side (step 8), and a missing file that other locales `copy`, such as
-`iso14651_t1` (steps 9 and 10).
+Without `--*-expect-files`, a copy that lands most of the files is not
+refused: the scripts refuse only a directory too small to be a real copy at
+all — under 200, the floor every node-reading step applies, counting compared
+files at steps 6 to 8 and read files at steps 9 and 10, and under half the
+tag's count at steps 6 and 7.
+
+What the files that never arrived earn is a `!!`, in three cases: any file of
+the tag missing from the directory (steps 6 and 7, which also say in the clean
+sentence how many were never compared), a backported locale such as `C`
+missing from one side (step 8, which declares every backported locale whether
+or not it differs), and a missing file that other locales `copy`, such as
+`iso14651_t1` (steps 9 and 10). The files that never arrived are *also* listed
+as ordinary findings — under `Absent on the node` at steps 6 and 7, and under
+`Only on the old node` or `Only on the new node` at step 8, where a failed
+transport still reads as a locale the upgrade removed or added. Step 8 has no
+reference count of its own, so *that* list carries no `!!`; what can cover it is the
+per-side count, if you pass one: step 8 reads the same two directories steps
+6/7 and 9/10 do.
+
+Steps 6 and 7 print one of two `!!` whenever you pass no count. The second
+fires when nothing of the tag is missing, because that is the case they cannot
+speak for: a locale your distro **adds** is in no tag, so they have nothing to
+compare it against and its loss moves no number they print. Only step 8 can
+see such a file go missing, and only if the other node still has it. Pass the
+count and that second one stops — there is nothing unasserted left to say —
+while the first still can, since a node may genuinely lack a locale the tag
+has; it then says the count was asserted, so those files are what the node
+does not ship rather than what the copy lost. Either way steps 6 and 7 print
+`Files read: N (asserted, --expect-files)` or `(NOT asserted, no
+--expect-files)`, so a transcript you saved says which it was.
+
+`--*-expect-files` takes the directory's own count, the one `ls | wc -l`
+gives — not the `Compared N file(s)` line, which is an intersection. Passed
+to the scripts by hand, `--expect-files` means the directory count at steps
+6, 7, 9 and 10, and the two-node intersection at step 8, which is why the
+wrapper does not forward it there.
 
 The build ids are required: a result is bound to the build it was taken on, and
 nothing in a directory of locale files carries a version. With neither

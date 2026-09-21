@@ -184,10 +184,19 @@ something the clone does not have:
 | `flag_algorithmic_ranges.py --locales-dir` — step 4 over a node's own directory | that the node's `C` is ellipsis-based (RHEL8) or byte-order-by-construction (RHEL9, RHEL10). With step 5's Bug 22668 hunk this *derives* the measured inversion instead of only observing it | anything about a build whose `localedef` differs from both tags' |
 | [`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql) — run unedited on both nodes, then `diff` | the order, on the builds actually installed, with the inverted control made mechanical and the tie case ruled out | nothing else: it is one locale, on two nodes |
 
-Both node-reading checks refuse to report rather than report a clean zero
-instead: each has an absolute floor on how many files it will accept as a real
+Every check that reads a directory refuses to report rather than report a
+clean zero instead: each has an absolute floor on how many files it will accept as a real
 copy, because a truncated directory reports nothing wrong. The tag-reading
-steps apply the same floor to each tag's tree. Both also close a differing
+steps apply the same floor to each tag's tree. Above that floor the refusal is
+the reader's to ask for: steps 6, 7, 9 and 10 take an expected file count
+(`--old-expect-files` / `--new-expect-files` through the wrapper), and step 8
+does not, because its count is the intersection of the two directories and
+neither side's own. The `!!` naming the files of the tag a directory does not
+hold comes from steps 6 and 7, which are the only ones with a tag to compare
+the directory against, and when nothing is missing and no count was given
+they say so.
+
+`diff_node_locales.py` and `flag_algorithmic_ranges.py` also close a differing
 file over the node's `copy` graph, so a backport to `iso14651_t1` is reported
 as the 328 to 338 locales that inherit it, not as one file. The node-to-node one
 additionally refuses two directories that resolve to the same path, since

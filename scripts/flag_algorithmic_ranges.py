@@ -102,7 +102,7 @@ def load_from_dir(opts, repo):
             print(f"  {entry}  ({why})")
         print()
     problem = dd.corpus_problem(len(names), expect_files=opts.expect_files,
-                                floor=opts.min_files)
+                                read_count=len(names), floor=opts.min_files)
     if problem:
         g.die(problem)
     texts = {}
@@ -220,11 +220,15 @@ def report_backported(texts, inherited=None, unresolved=None):
 
 
 def report(texts, supported, label, out_name, next_hint,
-           supported_tag=None, node_dir=False):
+           supported_tag=None, node_dir=False, counted=''):
     flagged, with_collate = g.scan_ellipsis(texts)
 
+    # `counted` is empty in tag mode, where there is nothing to assert. In
+    # directory mode an asserted run and an unasserted one used to differ only
+    # by the ABSENCE of a refusal, which is what every older version printed
+    # too, so a saved transcript could not tell them apart (backlog 1.19).
     print(f"Files at {label}: {len(texts)}, of which {with_collate} define "
-          f"LC_COLLATE")
+          f"LC_COLLATE{counted}")
     # The file-count floor asks whether enough files were read; this asks
     # whether any of them turned out to be a locale. Not one collation block
     # out of a full corpus means the reader is wrong, not that the corpus has
@@ -398,7 +402,9 @@ def main(argv):
                          "the tag does not know what the node built.")
     ap.add_argument('--expect-files', type=int,
                     help="with --locales-dir: abort unless exactly this many "
-                         "files are read")
+                         "files are read. This is the count `ls "
+                         "/usr/share/i18n/locales/ | wc -l` gives on the node, "
+                         "less any entry this script reports as skipped.")
     ap.add_argument('--min-files', type=int, default=dd.DEFAULT_MIN_FILES,
                     help=f"with --locales-dir: abort below this many files "
                          f"(default {dd.DEFAULT_MIN_FILES})")
@@ -436,9 +442,14 @@ def main(argv):
                 "and",
                 "`rpm -q --changelog glibc | grep -i collat` on each node."]
 
+    counted = ''
+    if opts.locales_dir:
+        counted = ('  (count asserted, --expect-files)'
+                   if opts.expect_files is not None
+                   else '  (count NOT asserted, no --expect-files)')
     return report(texts, supported, label, out_name, hint,
                   supported_tag=opts.supported_tag or opts.tag,
-                  node_dir=bool(opts.locales_dir))
+                  node_dir=bool(opts.locales_dir), counted=counted)
 
 
 if __name__ == '__main__':

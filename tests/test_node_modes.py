@@ -482,6 +482,47 @@ class DirectoryModeStepFour(NodeCase):
         self.assertEqual(rc, 2, text)
         self.assertNotIn('No locale uses ellipsis ranges', text)
 
+    def test_the_file_count_says_whether_anyone_asserted_it(self):
+        """Backlog 1.19. An asserted run and an unasserted one differed only
+        by the ABSENCE of a refusal, which is what every older version of this
+        tool printed too, so a saved transcript could not tell them apart.
+        Through audit.sh steps 6/7 declare it for the same directory; this is
+        the standalone path docs/limitations.md publishes."""
+        node = self.node(MID, 'declare')
+        held = len(os.listdir(node))
+        for extra, want in ((), '(count NOT asserted, no --expect-files)'), \
+                           ((('--expect-files', str(held)), '(count asserted, --expect-files)')):
+            with self.subTest(args=extra):
+                rc, text = run('flag_algorithmic_ranges.py', '--locales-dir',
+                               node, '--build-id', 'x', *extra,
+                               out_dir=self.out)
+                self.assertEqual(rc, 0, text)
+                self.assertIn(want, flat(text))
+
+    def test_the_tag_mode_declares_nothing_because_there_is_nothing_to_assert(self):
+        """The control: a tag has no directory whose count a reader could
+        have taken, so the marker must not appear there at all."""
+        rc, text = run('flag_algorithmic_ranges.py', MID, out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertIn(f'Files at {MID}:', text)
+        self.assertNotIn('count asserted', flat(text))
+        self.assertNotIn('count NOT asserted', flat(text))
+
+    def test_the_expectation_refusal_says_what_this_mode_counts(self):
+        """Steps 9 and 10 READ a directory; step 8 COMPARES an intersection,
+        and one shared message serves both. `audit.sh` forwards the same
+        number to steps 6/9 and 7/10, so a reader who reaches this refusal by
+        running the script directly must not be told a different noun from
+        the one its own --help promised. Backlog 1.15."""
+        node = self.node(MID, 'countnoun')
+        held = len(os.listdir(node))
+        rc, text = run('flag_algorithmic_ranges.py', '--locales-dir', node,
+                       '--build-id', 'x', '--expect-files', str(held - 1),
+                       out_dir=self.out)
+        self.assertEqual(rc, 2, text)
+        self.assertIn(f'read {held} file(s) from --locales-dir, '
+                      f'expected {held - 1}', flat(text))
+
     def test_the_directory_run_does_not_clobber_the_tag_list(self):
         tag_list = os.path.join(self.out, 'step4_exposed_locales.txt')
         rc, text = run('flag_algorithmic_ranges.py', MID, out_dir=self.out)

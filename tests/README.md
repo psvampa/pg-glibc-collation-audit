@@ -17,7 +17,7 @@ somebody deletes during a refactor.
 | file | needs the glibc clone | what it covers |
 |---|---|---|
 | `test_provenance.py` | yes | **that the tags resolve to the pinned commits.** If these fail, every number in `test_known_answers.py` is suspect and a mismatch there must not be read as a code regression |
-| `test_distro_diff.py` | yes | **the distro-versus-upstream comparison.** Checked against step 2's answer on both pairs, reached by a different algorithm; the node-side transport stays un-exercised, like the SQL template |
+| `test_distro_diff.py` | yes | **the distro-versus-upstream comparison.** Checked against step 2's answer on both pairs, reached by a different algorithm; the node-side transport stays un-exercised, like the SQL template. `ATruncatedCopySaysSo` truncates a materialised tag to drive the guards a partial copy used to slip past — the `!!`, the floor, and the count `--expect-files` is checked against |
 | `test_wrapper.py` | yes | **audit.sh end to end.** The wrapper removes a manual handoff, and automating a handoff is how the stale-result bug comes back; most of these tests are its failure modes, not its happy path |
 | `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, generated locale names, hunk/block overlap, the comment filter |
 | `test_git_helpers.py` | mostly | the silent-failure class — code that cannot tell "nothing here" from "could not look". Four classes fabricate a tiny glibc-shaped repository instead and run without the clone: the corpus floor, a renamed file gaining an `LC_COLLATE` block, and the two about the pair itself — which of the two tags is the newer commit (including a pair that no signal can order, and two probes made to fail) and what step 2 does about it |
