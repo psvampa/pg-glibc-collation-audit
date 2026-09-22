@@ -87,7 +87,7 @@ finish, is in [examples/](examples/) — worth reading before you run anything.
 > instead — it adds five checks the tags alone cannot make.
 
 <details>
-<summary><strong>Alternatively — the same run, with each machine's own locale files</strong> — five more checks, what they need, and how to tell a good copy from a short one</summary>
+<summary><strong>Alternatively — the same run, with each machine's own locale files</strong></summary>
 
 *Needs the locale sources off both nodes. No database.*
 
@@ -189,27 +189,17 @@ diff el8.out el9.out
 ```
 
 [`sql/c_utf8_probe.sql`](sql/c_utf8_probe.sql) takes no editing, and it is run
-**even when the audit flagged nothing** — nothing in steps 1 to 5 can ever
-flag this locale, whose source file is in neither tag of the RHEL8 → RHEL9
-pair. It is usually the database collation in a container, and PostgreSQL
-will not warn about it either.
+**even when the audit flagged nothing**. Where this locale's source file is in
+neither tag, no step of the audit can reach it at all; it is usually the
+database collation in a container, and PostgreSQL will not warn about it
+either.
 
-<details>
-<summary><strong>The positive control is inverted here</strong> — why agreeing with byte order is the fix, not the tell</summary>
-
-Everywhere else in this project, a locale agreeing with `LC_ALL=C` byte order
-means it was never generated and the comparison proves nothing. For `C.UTF-8`
-that agreement is the **corrected** state: it is what RHEL9's build of glibc
-2.34 produces from its backported file, and what `codepoint_collation`
-guarantees upstream from 2.35 on. It is also what a build
-whose above-BMP weights are all *tied* produces, because PostgreSQL breaks a
-`strcoll` tie with `strcmp` — query 6b is what tells those two apart. Two
-contradictory rules in one project get read in the wrong order.
-
-What was measured, why it changed, and why it also changed *within* RHEL8:
+Reading its output takes one warning, because the usual tell is inverted for
+this locale — agreeing with byte order is the *fix* here, not the sign that
+nothing was generated. That, and what was measured, are in
+[docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md#the-cutf-8-probe)
+and
 [docs/limitations.md](docs/limitations.md#cutf-8-is-invisible-to-a-tag-diff).
-
-</details>
 
 **3 — Confirming the order on your own builds**
 *Needs PostgreSQL 15 or newer on both nodes, and editing the file first.*
@@ -218,28 +208,16 @@ What was measured, why it changed, and why it also changed *within* RHEL8:
 psql -f sql/collation_confirmation_template.sql   # edit placeholders first
 ```
 
-A source diff is an argument, not a proof of what actually runs in production.
-Run
-[`sql/collation_confirmation_template.sql`](sql/collation_confirmation_template.sql)
-on both the old and the new OS, for every locale steps 1 to 3 flagged and — if
-step 5 found a [substantive code change](docs/glossary.md) — for every locale
-step 4 flagged too.
+A source diff is an argument, not a proof of what actually runs in
+production. Run it on both the old and the new OS, for every locale the audit
+flagged.
 
-<details>
-<summary><strong>What it reports, and the four traps</strong> — including the ones that make a comparison agree with itself</summary>
-
-Two things about it fail in the reassuring direction: three traps on the SQL
-side and a fourth on the file comparisons make a comparison agree with itself
-while proving nothing
-([docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md)),
-and it needs PostgreSQL 15 or newer with langpacks installed in the right
-order ([docs/requirements.md](docs/requirements.md)). It also reports more
-than indexes — text partition keys among them, which no `REINDEX` fixes.
-
-What those objects look like once they are already wrong is measured in
-[breakage/](breakage/), on two real nodes, one case per object type.
-
-</details>
+Which locales exactly, the four traps that make a comparison agree with itself
+while proving nothing, and what it reports beyond indexes — text partition
+keys among them, which no `REINDEX` fixes — are in
+[docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md).
+What those objects look like once they are already wrong is measured on two
+real nodes in [breakage/](breakage/).
 
 ## How it works
 
