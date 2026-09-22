@@ -15,68 +15,51 @@ real sort rules
 ([background](https://wiki.postgresql.org/wiki/Locale_data_changes)).
 
 This tool answers the real question from glibc's own source, deterministically
-and across every locale in the tree — 355 at glibc 2.34, 366 at 2.39: if the
-rules that define a locale's sort order did not change, the order cannot have
-changed.
+and across every locale in the tree. If the rules that define a locale's sort
+order did not change, the order cannot have changed.
 
-**It is not a single, infallible answer, and does not try to be.** The five
-steps read upstream source, so three things sit outside them: the weights
-`localedef` computes at build time, your distro's own patches to the locale
-data, and a locale your distro adds, which is in no upstream tag at all. Three
-optional checks read a real node's own files: two cover the second and third,
-and the third says whether the node's own `C.UTF-8` is a locale the first
-applies to. Nothing settles the first except measuring on the nodes.
+**This project does not set out to give a single, infallible answer.** It
+gives you a few simple ways to compare the source of two glibc versions —
+upstream, or the patched files a distro installs — to measure the resulting
+order on your own nodes, and to try to identify which of your objects may be
+affected.
 
-Use it as one input among several, cross-checked against an empirical method
-such as
+Use it as a complement to what already exists, depending on what you need. One
+example is an empirical method such as
 [ardentperf/glibc-unicode-sorting](https://github.com/ardentperf/glibc-unicode-sorting),
-which sorts ~25 million real strings on real nodes. Where the two overlap,
-check both; where they disagree, the measurement wins. Confirm on your own
-nodes before you act:
-[docs/comparison-ardentperf.md](docs/comparison-ardentperf.md),
-[docs/limitations.md](docs/limitations.md).
+which sorts real strings on real nodes, and there are others. Check the known
+limitations in [docs/limitations.md](docs/limitations.md) before you act.
 
 ## How to use
 
-### Install
+### Prerequisites and Install
 
-Needs `git`, `python3` (stdlib only) and `bash` — no PostgreSQL for the audit
-itself, and no other dependency.
+The prerequisites are in [docs/requirements.md](docs/requirements.md).
 
 ```sh
 git clone https://github.com/psvampa/pg-glibc-collation-audit.git
 cd pg-glibc-collation-audit
 ```
 
-The first run also clones glibc, which needs network and disk:
-[docs/requirements.md](docs/requirements.md).
-
 ### Pick the two glibc versions
 
 Run `ldd --version` on the old and the new node. Those two numbers are the
-tags you pass, as `glibc-<version>` — glibc 2.28 and 2.34 become `glibc-2.28`
-and `glibc-2.34`. **Old first, new second**: a reversed pair is refused rather
-than answered, because backwards every step still prints a plausible clean
-result ([docs/method.md](docs/method.md#the-five-steps-in-detail)).
+tags you pass, written as `glibc-<version>`. **Old first, new second** — a
+reversed pair is refused rather than answered, because backwards every step
+still prints a plausible clean result.
+
+Any two versions are allowed, however far apart, and nothing in the tool looks
+at the distance between them.
 
 <details>
-<summary><strong>Which pairs you may pass</strong> — the two audited pairs, skipping releases, and the old glibc 2.24 floor</summary>
+<summary><strong>Worth reading before you trust a result</strong> — which pairs are measured, what a wider pair reports, and the old glibc 2.24 floor</summary>
 
-**The audited pairs are RHEL8 → RHEL9 and RHEL9 → RHEL10** — the two upgrades
-this project publishes measured results for ([docs/scope.md](docs/scope.md)).
-That is what has been measured, not a restriction on the pair you may pass:
-nothing in the tool looks at how far apart the two versions are, and the only
-pair it refuses is a reversed one. In fact the two audited pairs already skip
-releases — they are consecutive RHEL majors, not consecutive glibc releases,
-and `2.28 -> 2.34` leaves out five upstream versions. **Skipping more is
-fine**: `glibc-2.28` straight against `glibc-2.39` reports exactly what the
-two steps between them report, name for name. Measured on that one triple, and
-with the one case that needs two runs instead, in
-[docs/method.md](docs/method.md#how-far-apart-the-two-tags-may-be).
-Other distros work the same way. There used to be a hard floor at glibc 2.24,
-below which the method answered confidently and wrongly; that was a bug and it
-is fixed, though only one pair below it has been measured — see
-[docs/limitations.md](docs/limitations.md#below-glibc-224-the-method-rests-on-one-measured-pair).
+- which pairs this project publishes measured results for —
+  [docs/scope.md](docs/scope.md)
+- what a wider pair reports, and the one case that needs two runs instead —
+  [docs/method.md](docs/method.md#how-far-apart-the-two-tags-may-be)
+- why a pair below glibc 2.24 rests on a single measured pair —
+  [docs/limitations.md](docs/limitations.md#below-glibc-224-the-method-rests-on-one-measured-pair)
 
 </details>
 
@@ -362,7 +345,6 @@ short version:
 - [docs/scope.md](docs/scope.md) — what it audits, and the `builtin` provider as a way out
 - [docs/requirements.md](docs/requirements.md) — dependencies, test suite, setup traps
 - [docs/glossary.md](docs/glossary.md) — `copy` graph, blast radius, hunk, tier, ellipsis range
-- [docs/comparison-ardentperf.md](docs/comparison-ardentperf.md) — how this relates to [ardentperf/glibc-unicode-sorting](https://github.com/ardentperf/glibc-unicode-sorting)
 - [breakage/](breakage/README.md) — what breaks inside PostgreSQL once a locale did change, measured on two nodes
 - [examples/](examples/) — real output from both pairs
 - [CHANGELOG.md](CHANGELOG.md) — what this tool used to get wrong

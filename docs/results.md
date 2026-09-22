@@ -155,6 +155,15 @@ is where this particular bug lives, not a broad CJK corpus, and
 evidence is a mechanism argument plus a targeted test, not a broad empirical
 sweep. They are 🟢 on weaker evidence than the other 🟢 rows.
 
+**Reading their tables:** ardentperf reports a `glibc` engine and an `icu`
+engine, and only the first bears on a `libc` collation. Between RHEL8 and
+RHEL9 every locale changes under ICU — a full CLDR jump — while of the locales
+they test, only `ko` and `C.UTF-8` change under glibc. A `zh` change read off
+those tables is an ICU result and carries no `REINDEX` implication here. Their
+set is a fixed list and holds no `sv` or `or_IN`, so it says nothing either way
+about two of the locales this tool finds for that pair. Where a measurement and
+a source diff disagree, the measurement wins.
+
 ### `C.UTF-8` — from the nodes' own files, because no tag has them
 
 Every other 🔴 row on this page was reached by steps 1-5. This one cannot be:
