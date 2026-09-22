@@ -415,8 +415,8 @@ these tags. It is not a general result that distro backports never touch
 collation, and a different build of the same distro release is a different
 measurement. Say which build a result was taken on.
 
-**Automated, and self-checking without a node.** The script is exercised on
-every push by comparing two upstream tags against each other and asserting it
+**Automated, and self-checking without a node.** The script is exercised in
+CI by comparing two upstream tags against each other and asserting it
 reaches the same answer as step 2, which gets there by a completely different
 route — diff hunks overlapped against the old side's line numbers, versus
 whole-block equality. Only the transport off a real node stays un-exercised in

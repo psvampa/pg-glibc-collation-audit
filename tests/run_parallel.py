@@ -44,8 +44,11 @@ greps for exactly those and treats `skipped=` as a red (eighth CHANGELOG
 entry: a skip is never a pass). Which classes skipped is printed above them,
 so a skip is never just a number either.
 
-`.github/workflows/tests.yml` keeps running the serial command on purpose: this
-runner is never the only thing that has run the suite.
+`.github/workflows/tests.yml` runs the serial command on every pull request
+and every push to `main`, on purpose: this runner is not the last word on a
+change that gets merged. (It said "never the only thing that has run the
+suite" until the CI triggers stopped firing on a branch with no pull request
+open -- thirty-third entry.)
 
 Usage:
 

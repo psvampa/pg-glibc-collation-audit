@@ -26,8 +26,9 @@ without saying what it ran is FAILED; the verdict is read only from the stream
 `unittest` writes it to, so a test printing summary-shaped lines cannot supply
 its own; a run of nothing, a class named on the command line that matches
 nothing and a module that does not import are all FAILED; and a hung shard is
-killed and named. CI keeps running the serial command, so this runner is never
-the only thing that has run the suite.
+killed and named. CI runs the serial command on every pull request and every
+push to `main`, so this runner is not the last word on a change that gets
+merged.
 
 Every test freezes a failure this tool shipped, or a way of losing one before
 it ships, and its docstring says which; most of them quote the CHANGELOG entry

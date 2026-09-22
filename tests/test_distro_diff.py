@@ -7,7 +7,7 @@ already trusts: step 2's, which reaches the same verdict by a completely
 different route (diff hunks overlapped against the old side's line numbers).
 
 Materialising an upstream tag as a stand-in for a node makes the whole script
-exercisable on every push. Only the transport off a real node stays
+exercisable in CI, with no node at all. Only the transport off a real node stays
 un-exercised, which is the same position sql/collation_confirmation_template.sql
 is in and is recorded as such in tests/README.md.
 """
