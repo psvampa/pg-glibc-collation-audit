@@ -370,9 +370,11 @@ short version:
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t tests   # about a minute and a half
+python3 tests/run_parallel.py                    # one process per class
+python3 -m unittest discover -s tests -t tests   # the same tests, one process
 ```
 
-Every test freezes a failure this tool actually shipped, and CI runs the
-suite on a fresh glibc clone. [`tests/README.md`](tests/README.md) says what
-it covers and, more usefully, what it does not.
+Every test freezes a failure this tool shipped, or a way of losing one, and
+CI runs the serial command on a fresh glibc clone.
+[`tests/README.md`](tests/README.md) says what it covers and, more usefully,
+what it does not.

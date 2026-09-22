@@ -4,6 +4,81 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-21 (thirty-first entry)
+
+Nothing the audit prints changes: **no verdict moves, no published number
+changes**, and the output is byte-identical on the three measured pairs. What
+changes is how long it takes to check that, and one sentence the documentation
+had been publishing about itself.
+
+### What it used to get wrong
+
+**Three files told the reader the test suite takes "about a minute and a
+half". Measured on 2026-09-21, on the machine that wrote the sentence, it
+takes 208 seconds** -- more than twice what was published, and the figure had
+drifted quietly as the suite grew to nine layers. It is the same rot as the
+test count that was removed from these documents on 2026-09-06 after going
+stale twice in one day, and as the `~16s`/`~17s` disagreement between two
+files before that. A runtime is a fact about someone else's machine, so no
+number replaces it: `README.md`, `tests/README.md` and `docs/requirements.md`
+now say how to run the suite and leave the timing to the reader, and
+`test_published_claims.py` fails on any duration written beside the command.
+
+### What is new
+
+`tests/run_parallel.py` runs the same tests out of the same files, one process
+per `TestCase` class instead of one process for all of them: 208 s becomes
+47 s on a 14-core machine. Stdlib only, like everything else here. Measured
+rather than assumed: per class over 8 workers, 47 s; per test method, 68 s,
+because every extra process pays the interpreter start again and loses the
+`run_step` memo the tests of one class share; over 14 workers, 46 s with every
+shard slowing down.
+
+Splitting a suite across processes adds ways to lose tests silently, which is
+this repository's defect class in a new place -- a runner that drops a shard
+prints a green summary over tests nobody ran. So it refuses instead:
+discovery's count is kept **per class** and every shard is held to its own
+number, because a sum hides a loss in one class behind a gain in another; the
+total is checked as well; a shard that exits without saying how many tests it
+ran is `FAILED`, not zero tests; a non-zero exit is `FAILED` even under an
+`OK` line; the verdict is read only from the stream `unittest` writes it to,
+so what the tests themselves print cannot supply it, and of several summaries
+the last one wins; a run with nothing in it is `FAILED` where the verdict is
+printed and not only where the list is built; a module that did not import, a
+start directory that does not import, an empty discovery and a named class
+that matches nothing are all `FAILED`; a hung shard is killed at 600 s and
+named. Skips are counted, named by class, and printed on the status line of
+both a green and a red run, because the gate and CI read `skipped=` there and
+a skip is never a pass.
+
+Every guard was reverted on its own and had to turn the test that claims it
+red: twenty-one mutations against the runner, nine against the documentation
+test, five against a new tie between the documented layer counts and the files
+themselves. Two control mutations left the suite green, because a test that
+fails on everything guards nothing either. The battery is a script, not a
+transcript, so the numbers above can be re-derived rather than believed.
+
+Seven of those guards exist because `false-negative-reviewer` measured them
+missing on versions that had already passed their own tests and the full
+suite: the per-class counts, the verdict read from one stream, the refusal to
+report a green run of nothing, the `skipped=` a red run used to drop, a class
+no shard reported on, a class two shards reported on — and, on the last pass,
+the stream separation itself, which the runner's docstring advertised while no
+mutation of it reddened anything. It also found four escape routes out of the
+documentation test (a `#` comment line after the last command, a figure in
+backticks, a `### How long` sub-heading under the block, a duration spelled
+"two and a half minutes") and the hand-written layer counts that nothing
+checked: this entry moves one of them from eight to nine, adds a table row and
+a filename list to a CI comment that had been stale since the second
+clone-free layer arrived, and now a test derives all four from the files.
+`.github/workflows/tests.yml` keeps running the serial command, so the
+parallel runner is never the only thing that has run the suite.
+
+### Acceptance
+
+Byte-identical on `2.28..2.34`, `2.34..2.39` and `2.12..2.17` against `main`
+at 3022e54: no file the audit reads or writes is touched by this entry.
+
 ## 2026-09-21 (thirtieth entry)
 
 The summary gave a false reason for one of its `NOT RUN` blocks, and on the
