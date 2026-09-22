@@ -82,7 +82,9 @@ step asks, what sits outside all five, and how to read what it prints is in
 [docs/method.md](docs/method.md). Real output from both pairs, start to
 finish, is in [examples/](examples/) — worth reading before you run anything.
 
-**Optional — the same run, with each machine's own locale files**
+<details>
+<summary><strong>Alternatively — the same run, with each machine's own locale files</strong> — five more checks, what they need, and how to tell a good copy from a short one</summary>
+
 *Needs the locale sources off both nodes. No database.*
 
 The five steps run either way. Supplying the files adds five checks the tags
@@ -137,9 +139,7 @@ This settles whether the two machines' collation *data* differs. What it
 cannot settle is the resulting *order*, because the weights are computed when
 the locale is built. That is command 2.
 
-<details>
-<summary><strong>Checking the copy, and the build ids</strong> — the counts each step prints, and what the summary says without the directories</summary>
-
+**Checking the copy, and the build ids.**
 Steps 9 and 10 print the copy's own count as `Files at <build id>` — that is
 the number to set against the node's — and step 8 prints each copy's count,
 byte total and fingerprint. The `Compared N file(s)` lines of steps 6 to 8 are
