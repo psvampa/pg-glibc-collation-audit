@@ -4,6 +4,111 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-22 (thirty-fourth entry)
+
+Tests, and the two pages that describe them. Nothing the tool prints changes,
+no verdict moves and no published number changes; what changes is how many of
+them a test would notice going wrong.
+
+### What it used to get wrong
+
+**Four published figures were tied to nothing the tool produced.**
+`docs/method.md` states that the four ellipsis files are inherited by 331
+further locales and that step 4 closes over the copy graph to reach 335 of the
+342 files defining `LC_COLLATE`, and three pages restate the 283 that differ
+between glibc
+2.28 and 2.34. Each was hand-written next to a run that produced it, and each
+could be edited to any number at all without a test objecting -- including 335
+and 342, whose figures `test_known_answers` and `test_node_modes` do assert
+against a live run. Those read the tool's OUTPUT; nothing compared the page
+with it, so the page was free to say anything while the run stayed right. That
+is the distinction this entry is about, and it is why "no test asserts it" has
+to be read as "as published". They are now rows of
+`AFigureStatedTwiceIsStatedOnce`, asserted against the sentence the tool
+prints in `examples/rhel8-to-rhel9-audit-output.txt`. Of the 117 figures
+counted for the thirty-second entry, ten are now rows of that table: six tied
+that morning, these four later the same day. That entry calls them "117
+figures that no test asserts"; it should be read as "no test asserts as
+published", and this is the correction, in the entry that found it rather than
+in the one that wrote it.
+
+**A table was tied to the example instead of to the page.**
+`test_the_below_floor_example_matches_the_asserted_numbers` asserted the three
+before-and-after rows of the below-the-floor run against
+`examples/below-the-floor-2.12-to-2.17.txt` only, so the same table in
+`docs/limitations.md` -- the page a reader opens -- could drift from the run
+it summarises with nothing failing. The numbers are written once and asserted
+against both, and `docs/limitations.md` now says which test holds its table
+rather than naming only the one that never did.
+
+**And the question a tie has to answer is now asked by the suite rather than
+by a transcript.** Whether a row would notice its own figure moving was proved
+with batteries of file mutations run by hand, which makes a count of red cases
+a sentence in an entry and not a mechanism -- the exact shape of claim this
+layer exists to refuse. `EveryTieWouldNoticeItsFigureMoving` asks that
+question on every run: for each occurrence of a figure in each
+file a row names, it rebuilds that file in memory with THAT occurrence moved
+and nothing else, and requires at least one such move to stop the row
+agreeing. A row where no single move breaks the tie cannot tell its figure
+from another statement of the same number in the same file.
+
+The class also names the four rows tied to no run at all, so a row that
+quietly loses its evidence -- or a new one that never had any -- is a decision
+written down rather than something a reader has to go and count. Two of those
+four could be tied and are not: the tool prints 328 and 355. What the class
+does not do is stand in for the refusals: a shared sentence and a too-weak
+shape are still caught where the tie is checked.
+
+### Mutations
+
+Forty-four, each red, in seven batteries:
+
+* **Nine** on the three figures only `docs/method.md` states: each bumped in
+  the prose, each bumped in the transcript, the page's sentence reworded so no
+  pattern reaches it, the transcript's sentence reworded around a correct
+  number, and the tag's line rewritten as the node's.
+* **Seven** on 283: each of the three pages that state it drifted alone, then
+  all three together, the transcript bumped, its sentence reworded, and one
+  page dropping the claim rather than restating it.
+* **Seven** on the `docs/limitations.md` table: each of its six cells, and a
+  row removed.
+* **Seven** on the section anchor, per LINE rather than per file: each of the
+  three figures bumped on its own line inside the tag's section, the anchor
+  deleted, the anchor doubled, the anchored sentence doubled inside that
+  section, and a shape stripped of its `{n}`.
+* **Three** on the refusals: the banners deleted so nothing closes the
+  section, a bare number given a section, and the `docs/limitations.md` row
+  stated twice.
+* **Five** on the shapes a refusal has to cover: a second copy of the
+  limitations table with its cells drifted and again with them identical, and
+  three spellings of a bare shape handed a section -- ` {n}`, `: {n}` and
+  `{n} `.
+* **Six** on the class that asks whether a tie would notice: each of the four
+  rows with a named sentence reverted to the whole-file form, a row stripped
+  of its evidence without being declared, and a shape reworded so it matches
+  nothing.
+
+Two kinds of case have to stay GREEN, and they are not the same kind.
+
+Six are controls, one per battery except the fifth: an unrelated prose edit,
+or, for the last, the table exactly as it stands, so that a battery reddening
+on everything is caught being useless.
+
+Three assert the other direction: bumping the el9 node's copies of 331, 335
+and 343, at lines 724, 730 and 705, which no row reads -- the rows claim the
+first two as the TAG's figures, at lines 107 and 113. That is what says the
+section anchor narrows rather than merely matching.
+
+The batteries live outside the repository, so the counts above are
+re-derivable only by rebuilding them. The one question that does not depend on
+them is the one the new class now asks on every run.
+
+### Acceptance
+
+Byte-identical on `2.28..2.34`, `2.34..2.39` and `2.12..2.17` against `main`
+at 7c33511: this entry adds tests and prose and changes no file the audit
+reads or writes.
+
 ## 2026-09-22 (thirty-third entry)
 
 Housekeeping, and neither half changes what the audit prints: **no verdict
