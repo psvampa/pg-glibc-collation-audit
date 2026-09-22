@@ -46,6 +46,22 @@ page. Direction is the only property of the pair that is constrained;
 how far apart the two releases are is not, and [what a wider pair
 reports](#how-far-apart-the-two-tags-may-be) has been measured.
 
+Three things sit outside all five, because the five read upstream source and
+none of the three is in it:
+
+- the weights `localedef` computes when the locale is built — nothing settles
+  these but a measurement on the nodes, which is what `sql/c_utf8_probe.sql`
+  and the confirmation template are for
+- your distro's own patches to the locale data — the node-against-tag check
+  below reaches these
+- a locale your distro adds, which is in no upstream tag at all — the
+  node-against-node check below is what sees it
+
+Those checks read the files under `/usr/share/i18n/locales/`. `charmaps/` is
+not compared, and steps 6 to 8 print a `!!` saying so;
+[limitations.md](limitations.md#character-repertoire-changes-are-not-audited)
+has what that gap covers.
+
 The wrapper also runs three checks that are *not* among these five, all of them
 needing files off a node rather than the clone — which is why none of them is a
 sixth step. They answer different questions:

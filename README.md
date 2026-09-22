@@ -69,44 +69,18 @@ Four commands, in the order of what they cost you. The first needs nothing but
 this checkout; the last needs PostgreSQL on both nodes. Each one says what it
 measures and what it leaves to the next.
 
-**1 — What changed between the two glibc versions**
+**1 — Verifying what changed between two glibc versions**
 *Needs this checkout. No node, no database.*
 
 ```sh
 ./audit.sh glibc-2.28 glibc-2.34
 ```
 
-It runs the five steps in order, hands each step's result to the next so you
-never retype a locale name, and ends with a consolidated summary.
-
-Three things sit outside those five steps:
-
-- **The weights `localedef` computes at build time.** Only a measurement on
-  the nodes settles those — commands 3 and 4.
-- **Your distro's own patches.** Command 2 reaches the ones that touch the
-  files under `/usr/share/i18n/locales/`; `charmaps/` is not compared, and
-  steps 6 to 8 say so. A backported change to the collation *code* is in
-  neither tag and in neither command.
-- **A locale your distro adds**, which is in no upstream tag at all.
-  Command 2 is what sees it.
-
-<details>
-<summary><strong>Reading the output</strong> — the <code>!!</code> markers, and where the long lists are written</summary>
-
-The run ends with an `AUDIT SUMMARY` block. One thing to know before you read
-it: **`!!` marks a warning that the clean-looking result above it does not
-cover something**, and the summary repeats every one of them, because a
-warning that scrolled past 400 lines ago has not been delivered.
-
-The rest of the output format — the `>>` code markers, where long result
-lists are written, and why step 5 hands you C diffs instead of a verdict —
-is in [docs/method.md](docs/method.md#reading-the-output).
-
-Real output from both pairs, start to finish, is in
-[`examples/`](examples/) — read that before running anything if you want to
-know what you are getting.
-
-</details>
+It runs the five steps in order, passes the locales step 2 found on to step 3
+so you never retype a name, and ends with a consolidated summary. What each
+step asks, what sits outside all five, and how to read what it prints is in
+[docs/method.md](docs/method.md). Real output from both pairs, start to
+finish, is in [examples/](examples/) — worth reading before you run anything.
 
 **2 — What your distro patched, and what it added**
 *Needs the locale sources off both nodes. No database.*
