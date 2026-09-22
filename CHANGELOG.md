@@ -4,6 +4,69 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-22 (thirty-second entry)
+
+Nothing the audit prints changes: **no verdict moves, no published number
+changes**, and no figure was found wrong. What changes is that six figures the
+documentation restates across pages can no longer drift apart in silence.
+
+### What it used to get wrong
+
+**A measurement restated on six pages was kept in agreement by re-reading it,
+and nothing else.** Counted across the published Markdown on 2026-09-22: 117
+figures that no test asserts. Most are query output pasted as evidence, or a
+measurement taken once on a node that cannot be re-derived here — but the ones
+restated across files are the ones that rot, because changing the page in
+front of you and leaving the others is free and silent, and every page stays
+internally consistent afterwards. This is the defect the documentation layer
+exists for, in the one shape it did not cover. Counting files, not mentions:
+`9,616` is stated in six, the CJK inheritance count in five, `6,525` in four,
+the PostgreSQL floor in three (five times), and the count of locale files in
+the tree at 2.34 in two — `355` appears in three more, but there it is the
+count of files on a NODE, which is a different fact that happens to share the
+number, and no row of this table claims it.
+
+### What changed
+
+`tests/test_published_claims.py` gains a table of canonical figures: each row
+is a label, the sentence shape that carries the number, how many FILES must
+state it, and — where the number really appears in query output — the file
+whose transcript has to carry it. Every page whose sentence matches a row's
+shape must state the same number, and a figure that stops being stated in as
+many files as the row names is a red, not a pass: without that, deleting the
+mentions would leave the test asserting agreement among nothing.
+
+The scope is what the shapes reach, which is less than every page that names
+a number: `9,616` also sits in two case files as the complement of the same
+count, equal to it only on this fixture, and those are excluded on purpose.
+Each exclusion carries the reason in the code, because a hand-written list is
+the ceiling of what gets read. `breakage/cases/04-lc-ctype.md` is excluded the
+same way: it carries `6,525` in prose and in no query output, so naming it as
+evidence would have found the prose the check was meant to be independent of
+and passed whatever the measurement said.
+
+Eighteen mutations, each moving one figure on one page or taking a page out of
+the set, each red in the test that claims it; three controls green, among them
+two sentences the patterns must NOT fire on — a different figure of this
+project written as "342 at glibc 2.34", and "since PostgreSQL 10 or newer",
+which a reword of an existing sentence would produce. They are in the same
+battery as the thirty-first entry's, so the counts can be re-derived rather
+than believed.
+
+Three of those twenty exist because `false-negative-reviewer` measured the
+first version of the table allowing what it forbade: a pattern that captured
+the last three digits of a longer number, so two pages could publish different
+figures under a green test; a floor counted in mentions rather than files, so
+the page whose job is stating the requirement could drop out of the set while
+another page's extra mention kept the total; and a pattern that fired on a
+legitimately different number, which is how a test gets switched off.
+
+### Acceptance
+
+Byte-identical on `2.28..2.34`, `2.34..2.39` and `2.12..2.17` against `main`
+at ec42360: this entry adds a test and changes no file the audit reads or
+writes.
+
 ## 2026-09-21 (thirty-first entry)
 
 Nothing the audit prints changes: **no verdict moves, no published number

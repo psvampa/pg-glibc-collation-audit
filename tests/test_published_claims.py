@@ -624,6 +624,148 @@ class Step5HunkCountsAgreeEverywhere(unittest.TestCase):
                       ' '.join(results.split()))
 
 
+class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
+    r"""A number restated across pages, tied to the pages that state it.
+
+    The rot this catches is the cheapest kind to cause: change a measurement
+    on the page you are editing and leave the other five saying the old one.
+    Nothing announces it, because each page is internally consistent. Measured
+    2026-09-22 across the published Markdown: 117 figures nothing asserts, of
+    which the ones that appear in more than one file are the ones that can
+    drift -- a measurement quoted once is right or wrong, never inconsistent.
+
+    Adding a figure is one row: the label, a pattern with one group, how many
+    FILES must state it, and any file whose transcript has to carry the same
+    number. The patterns run over `flat()` text, because one of these
+    sentences wraps between the number and the noun that gives it meaning
+    (`inherited by` / `328 locales`, in docs/results.md).
+
+    **Files, not mentions.** The floor counted occurrences until
+    false-negative-reviewer measured what that allows: rewrite
+    docs/requirements.md -- the page whose job is stating the requirement --
+    to a DIFFERENT floor in a wording no pattern reaches, add one more correct
+    mention to README.md, and the total still agrees with itself. Three of
+    these six rows have most of their mentions inside one file, so a total is
+    exactly the wrong denominator.
+
+    **A pattern is anchored to the phrase, not just to the digits.** The same
+    pass measured `(\d{3}) at glibc 2.34` capturing the last three digits of
+    `1355`, so two pages published different numbers and this test reported
+    agreement -- and firing on `342 at glibc 2.34`, a real figure of this
+    project in a sentence somebody may legitimately write. Every row now
+    carries enough of its sentence to mean one thing, and `\d+` rather than a
+    fixed width, so a longer number fails loudly instead of matching in part.
+
+    An evidence file is named only where the number really appears in query
+    output, and only where it is the SAME fact:
+
+      * `breakage/cases/04-lc-ctype.md` carries 6,525 in prose and nowhere
+        else, so it is not listed: comma-stripped, the check would find the
+        prose it was meant to be independent of and pass whatever the
+        measurement said -- the vacuous assertion of the sixteenth entry.
+      * `breakage/cases/05-partial-brin-gist.md` and
+        `cases/B-planner-statistics.md` do carry a bare 9616, but theirs is
+        `count(*) WHERE w < 'vz'`, the complement of case 8's violating count,
+        equal to it only on this fixture. Tying them would tie two facts that
+        agree by arithmetic accident.
+
+    What the evidence tie asks is whether the transcript still carries the
+    number, so it catches a page re-measured away from the prose and does NOT
+    catch one cell of three edited by hand while the others keep the old
+    value. That is the honest limit of an existence check, written down here
+    rather than left for a reader to discover: the mutation that proves the
+    tie changes every occurrence, because that is the case it can see.
+
+    `least` is not decoration. Without it, deleting every mention leaves this
+    test green over a claim that no longer exists, which is "absent is not
+    empty" (tenth entry) one level up: it would then assert agreement among
+    nothing. If a figure is deliberately dropped from the docs, its row comes
+    out of this table in the same commit.
+    """
+
+    #     label, pattern with ONE group, FILES expected, evidence files
+    FIGURES = (
+        ('the rows that break in breakage/ cases 8 and 9',
+         r'(\d[\d,]*) (?:stored rows violate|stored values no longer match'
+         r'|offending rows)',
+         2,
+         ('breakage/cases/08-check-constraint.md',
+          'breakage/cases/09-generated-column-matview.md')),
+        ('the PostgreSQL floor the tool requires',
+         r'(?:needs |Needs |\*\*)(?:PostgreSQL|version) (\d+) or newer',
+         3,
+         ()),
+        ('the characters that answer differently between the two builds',
+         r'(\d[\d,]*) (?:figure in \[case 4\]|characters of case 4'
+         r'|characters that answer differently|of them answer differently)',
+         4,
+         ()),
+        ('the locales that inherit iso14651_t1 at glibc 2.34',
+         r'inherited by (\d+) locales|template that (\d+) locales'
+         r'|the (\d+) to \d+ locales that inherit it',
+         5,
+         ()),
+        ('the rows that land in the wrong partition in case 7',
+         r'(\d[\d,]*) rows sit in the wrong partition',
+         1,
+         ('breakage/cases/07-range-partition.md',
+          'breakage/repair.md')),
+        ('the locale files in the tree at glibc 2.34',
+         r'in the tree[^0-9]{0,4}(\d+) at glibc 2\.34',
+         2,
+         ()),
+    )
+
+    @staticmethod
+    def _value(found):
+        return next(group for group in found.groups() if group)
+
+    def test_every_page_that_states_it_states_the_same_one(self):
+        for label, pattern, least, evidence in self.FIGURES:
+            with self.subTest(figure=label):
+                seen = {}
+                for name, text in sorted(docs().items()):
+                    for found in re.finditer(pattern, flat(text)):
+                        seen.setdefault(self._value(found), []).append(name)
+                files = {name for names in seen.values() for name in names}
+                self.assertGreaterEqual(
+                    len(files), least,
+                    f'{label}: stated in {len(files)} published file(s) '
+                    f'({", ".join(sorted(files)) or "none"}), {least} '
+                    f'expected. A page that stopped stating it -- or that now '
+                    f'states it in a wording this row does not reach -- has '
+                    f'left the set this test compares, which is not the same '
+                    f'as agreeing with it. Restore the sentence, widen the '
+                    f'pattern, or delete this row if the claim went on '
+                    f'purpose')
+                self.assertEqual(
+                    len(seen), 1,
+                    f'{label} is published as more than one number: '
+                    + '; '.join(f'{value} in {", ".join(sorted(set(files)))}'
+                                for value, files in sorted(seen.items())))
+
+    def test_the_evidence_under_it_carries_the_same_number(self):
+        """The prose figure against the query output it summarises, which is
+        where this project's numbers come from. Prose says 9,616; the psql
+        transcript in the case file says 9616."""
+        for label, pattern, _, evidence in self.FIGURES:
+            if not evidence:
+                continue
+            values = {self._value(found) for text in docs().values()
+                      for found in re.finditer(pattern, flat(text))}
+            self.assertEqual(len(values), 1, f'{label}: {values}')
+            bare = values.pop().replace(',', '')
+            for relative in evidence:
+                path = os.path.join(REPO_ROOT, *relative.split('/'))
+                # Digit boundaries: `9616` is otherwise satisfied by a 19616
+                # or a 96160 sitting anywhere in the file.
+                self.assertRegex(
+                    read(path), rf'(?<!\d){bare}(?!\d)',
+                    f'{label} is published as {bare} but {relative} -- the '
+                    f'measurement it summarises -- does not contain that '
+                    f'number anywhere')
+
+
 class TheExamplesCarryTheNodeSteps(unittest.TestCase):
     """docs/limitations.md quotes the summary block steps 9 and 10 add, and
     until 2026-09-07 that block appeared in no examples/*.txt and no test tied
