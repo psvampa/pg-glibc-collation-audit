@@ -244,7 +244,7 @@ Any distance. Nothing in any step looks at how many releases lie between the
 two tags: steps 1, 2 and 5 are a `git diff` between the two endpoints, step 3
 closes the `copy` graph over the **new** tag, step 4 scans the **new** tag
 alone, and the node steps read the two nodes. There is no list of known tags
-and no adjacency check — the only pair the audit refuses is a reversed one.
+and no adjacency check.
 
 This matters because an upgrade often skips a release. RHEL8 to RHEL10 is one
 pair of tags, `glibc-2.28` against `glibc-2.39`, not two audits to be run and

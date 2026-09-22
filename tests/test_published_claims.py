@@ -769,8 +769,9 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     on the page you are editing and leave the other five saying the old one.
     Nothing announces it, because each page is internally consistent. Measured
     2026-09-22 across the published Markdown: 117 figures no test asserts AS
-    PUBLISHED. Ten of them are rows of this table, six tied that morning and
-    four more later the same day. "As published" is the whole of it: two of
+    PUBLISHED. Ten of them became rows of this table, six tied that morning and
+    four more later the same day; one has since come out with the only page
+    that still stated it, leaving nine. "As published" is the whole of it: two of
     those four, 335 and 342, were already asserted against a live run by
     `test_known_answers` and `test_node_modes`, which read the tool's OUTPUT.
     Neither compared the page with the run, so the page was free to say
@@ -792,7 +793,7 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     docs/requirements.md -- the page whose job is stating the requirement --
     to a DIFFERENT floor in a wording no pattern reaches, add one more correct
     mention to README.md, and the total still agrees with itself. Six of
-    these ten rows have most of their mentions inside one file, so a total is
+    those rows have most of their mentions inside one file, so a total is
     exactly the wrong denominator.
 
     **A pattern is anchored to the phrase, not just to the digits.** The same
@@ -891,10 +892,6 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
          1,
          ('breakage/cases/07-range-partition.md',
           'breakage/repair.md')),
-        ('the locale files in the tree at glibc 2.34',
-         r'in the tree[^0-9]{0,4}(\d+) at glibc 2\.34',
-         2,
-         ()),
         ('the locales the four ellipsis files expose through copy at 2.34',
          r'inherited by (\d+) further locales',
          1,
@@ -1065,25 +1062,24 @@ class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
     region it is narrowed to, are refused where the tie is checked rather than
     here; what this adds is the question no assertion was asking at all.
 
-    What it CANNOT see is a figure with no run behind it. Four rows have none,
+    What it CANNOT see is a figure with no run behind it. Three rows have none,
     and for those a drift is invisible as long as every page drifts together
     -- they are tied to each other and to nothing else. That is a real limit
     of the table, so the rows it applies to are named below rather than left
-    to be discovered: adding a fifth means writing it in, which is a decision,
+    to be discovered: adding a fourth means writing it in, which is a decision,
     not an omission.
     """
 
     #: Rows tied only to the other pages that state them. Untied, not
-    #: untieable: the tool prints 328 and 355 (lines 18 and 90 of the
-    #: rhel8-to-rhel9 transcript), and the PostgreSQL floor is a requirement
-    #: rather than a measurement. Only 6,525 could not be tied -- it appears
+    #: untieable: the tool prints 328 (line 18 of the rhel8-to-rhel9
+    #: transcript), and the PostgreSQL floor is a requirement rather than a
+    #: measurement. Only 6,525 could not be tied -- it appears
     #: in prose and in no query output, so a tie would find the prose it was
     #: meant to be independent of, which the class docstring calls vacuous.
     NO_RUN_BEHIND_THEM = (
         'the PostgreSQL floor the tool requires',
         'the characters that answer differently between the two builds',
         'the locales that inherit iso14651_t1 at glibc 2.34',
-        'the locale files in the tree at glibc 2.34',
     )
 
     def rows(self):
@@ -1453,6 +1449,57 @@ class TheRepairDocumentQuotesWhatIsPublished(unittest.TestCase):
             published.group(0), quoted,
             "breakage/repair.md's quoted helper is not the one "
             "breakage/scripts/01b-helpers.sql publishes")
+
+
+class TheCountsTheTestPageStatesComeFromTheTable(unittest.TestCase):
+    """`tests/README.md` describes the table above in numbers -- how many rows
+    it holds, how many of them are also held to a saved run, how many ties that
+    comes to. Those are prose about a structure in this same file, and nothing
+    read them.
+
+    On 2026-09-22 a row came out of `FIGURES` together with the last page that
+    stated its figure, and the sentence went on saying "six of the ten rows"
+    with the suite green. Deleting a whole row is invisible to every other
+    assertion here -- measured on that change by reverting one -- so this is
+    what notices. It compares the spelled-out numbers the page publishes
+    against the table itself, which is the only reason they cannot drift
+    apart again.
+    """
+
+    #: Index is the value, so WORDS[9] is how the page spells nine.
+    WORDS = ('zero one two three four five six seven eight nine ten eleven '
+             'twelve').split()
+
+    def page(self):
+        return flat(read(os.path.join(REPO_ROOT, 'tests', 'README.md')))
+
+    def spell(self, n):
+        self.assertLess(
+            n, len(self.WORDS),
+            f'{n} is past the spelled-out numbers this test knows; add the '
+            f'word rather than letting the assertion below go looking for a '
+            f'sentence that cannot exist')
+        return self.WORDS[n]
+
+    def test_the_row_counts_come_from_the_table(self):
+        rows = AFigureStatedTwiceIsStatedOnce.FIGURES
+        tied = [row for row in rows if row[3]]
+        said = (f'{self.spell(len(tied)).capitalize()} of the '
+                f'{self.spell(len(rows))} rows are also held')
+        self.assertIn(
+            said, self.page(),
+            f'tests/README.md does not say {said!r}. The table holds '
+            f'{len(rows)} row(s), {len(tied)} of them tied to a run. A row '
+            f'added to or removed from FIGURES changes that sentence, and no '
+            f'other test reads it')
+
+    def test_the_tie_count_comes_from_the_table(self):
+        ties = sum(len(row[3]) for row in AFigureStatedTwiceIsStatedOnce.FIGURES)
+        said = f'through {self.spell(ties)} ties in all'
+        self.assertIn(
+            said, self.page(),
+            f'tests/README.md does not say {said!r}. The table holds {ties} '
+            f'evidence entr(ies) across all its rows')
 
 
 class ThePrivateRulesStayPrivate(unittest.TestCase):

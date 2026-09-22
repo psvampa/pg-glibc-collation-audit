@@ -4,6 +4,70 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-22 (thirty-fifth entry)
+
+The README's summary and the first half of "How to use", and one documentation
+page removed. Nothing the tool prints changes and no verdict moves. What
+changes is how many figures the documentation publishes at all.
+
+### What it used to get wrong
+
+**The prose that defines the tool published figures belonging to two specific
+glibc versions.** The summary said the audit reads "every locale in the tree
+-- 355 at glibc 2.34, 366 at 2.39". This tool answers a question about two
+glibc versions, whichever two, so naming one version's file count there
+published a snapshot as if it were the subject. It ages on its own with every
+glibc release, and it is not true even within a version, because two nodes on
+the same glibc major.minor can carry different distro builds with different
+file counts -- the thing the node checks exist to detect. The figures are gone
+from the summary, and with them the last published statement of the 355, so
+its row in `AFigureStatedTwiceIsStatedOnce` is gone too and the rows tied to
+no run are three rather than four. The thirty-fourth entry's "the tool prints
+328 and 355" describes that table as it stood that morning.
+
+**"The only pair it refuses is a reversed one" was not true.** A tag whose GPG
+signature does not verify aborts the run as well, in step 1, which the same
+`docs/method.md` says 150 lines above the claim. It was published in two
+places, and deleting it from the README left `docs/method.md:247` standing --
+found by all three reviewers, and the reason a claim is now grepped across the
+tree rather than fixed where it was noticed. Both copies are gone, not
+corrected: what a reader needs at that point is that the order of the two tags
+matters, not a list of the ways a run can stop.
+
+**A page existed to explain another project.**
+`docs/comparison-ardentperf.md` compared this tool with
+ardentperf/glibc-unicode-sorting over 89 lines, and what it said about each
+method's coverage and about the `C.UTF-8` row for RHEL9 to RHEL10 was already
+in `docs/results.md`. It is deleted, and what was written
+nowhere else moved to `docs/results.md`, beside the rows it protects -- that
+ardentperf reports a `glibc` engine and an `icu` engine and that a `zh` change
+read off the ICU column carries no `REINDEX` implication for a libc collation,
+that their set holds no `sv` or `or_IN`, and that where a measurement and a
+source diff disagree the measurement wins.
+
+The first of those three was rescued alone, and alone it was false in the
+reassuring direction. On the deleted page "only `ko` and `C.UTF-8` change under
+glibc" was safe because two sections later the page said their set does not
+hold `sv` or `or_IN`; moved onto a page whose subject is this tool's own
+verdicts, the same sentence contradicted `docs/results.md` 85 lines above it,
+where `or_IN`, `sv_SE`, `sv_FI`, `sv_FI@euro` and `ko_KR` all change. A reader
+on `sv_SE` would have read their locale as clear. A passage moved without the
+qualifier that made it true is a new claim, not the same one.
+
+**And four counts describing the figures table were prose nothing read.**
+`tests/README.md` said "six of the ten rows" where the table now holds nine,
+and three sentences inside `tests/test_published_claims.py` said ten rows and
+four rows tied to no run where it is nine and three. Removing a whole row of
+`FIGURES` is invisible to every other assertion in that file, measured by
+reverting one, so the published pair of counts is now derived from the table
+itself by `TheCountsTheTestPageStatesComeFromTheTable` rather than re-read.
+
+**The prerequisites were written twice.** "Install" opened by listing `git`,
+`python3` and `bash`, which is the first line of `docs/requirements.md`. The
+README now points at that page and keeps the clone, and the section is named
+for both halves. The per-command lines that say what each command needs are
+unchanged.
+
 ## 2026-09-22 (thirty-fourth entry)
 
 Tests, and the two pages that describe them. Nothing the tool prints changes,
