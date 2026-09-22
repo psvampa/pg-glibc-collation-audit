@@ -1,16 +1,38 @@
 # Tests
 
 ```sh
-python3 -m unittest discover -s tests -t tests          # about a minute and a half
+python3 tests/run_parallel.py                           # one process per class
+python3 -m unittest discover -s tests -t tests          # the same tests, one process
 python3 -m unittest discover -s tests -t tests -q -k pure_functions   # no clone needed
 ```
 
 Stdlib `unittest`, no dependencies — [docs/requirements.md](../docs/requirements.md) promises `python3` (stdlib only),
-and breaking that would itself be a regression.
+and breaking that would itself be a regression. [`run_parallel.py`](run_parallel.py)
+is stdlib too, and is the faster of the first two on a machine with cores to
+spare: it runs each `TestCase` class in its own `python3 -m unittest` process.
 
-Every test freezes a failure this tool actually shipped; the CHANGELOG entry it
-guards is quoted in its docstring. A test whose purpose is forgotten is a test
-somebody deletes during a refactor.
+No runtime is written down here on purpose, and
+[`test_published_claims.py`](test_published_claims.py) forbids one in any file
+that publishes the command. A test count written down here went stale twice in
+one day and was removed for the same reason; before that, two files disagreed
+about how long one command took. Time it on your machine rather than trusting
+a figure from someone else's.
+
+What the parallel runner adds over the serial command is ways of losing tests
+quietly, so it refuses instead: it holds every shard to the number of tests
+discovery counted **in that class** — a sum would let a loss in one class hide
+behind a gain in another — and checks the total too; a shard that exits
+without saying what it ran is FAILED; the verdict is read only from the stream
+`unittest` writes it to, so a test printing summary-shaped lines cannot supply
+its own; a run of nothing, a class named on the command line that matches
+nothing and a module that does not import are all FAILED; and a hung shard is
+killed and named. CI keeps running the serial command, so this runner is never
+the only thing that has run the suite.
+
+Every test freezes a failure this tool shipped, or -- in the newest layer, the
+one guarding the runner above -- a way of losing one before it ships; the
+CHANGELOG entry it guards is quoted in its docstring. A test whose purpose is
+forgotten is a test somebody deletes during a refactor.
 
 ## Layers
 
@@ -24,9 +46,11 @@ somebody deletes during a refactor.
 | `test_known_answers.py` | yes | the five steps end to end on both pairs, against the results [docs/results.md](../docs/results.md) publishes — plus `glibc-2.12 -> glibc-2.17`, which is not an audited pair but is the one [docs/limitations.md](../docs/limitations.md) quotes figures from, and those figures had no test until they had already gone stale once. Plus `glibc-2.28 -> glibc-2.39`, the release-skipping pair [docs/method.md](../docs/method.md) measures — asserted as set equality against the two audited pairs rather than as counts, because five names of which one is wrong is still five |
 | `test_published_claims.py` | no | **the numbers and quotes the documentation publishes.** Two correction passes in one day found the same class of defect — a count, a position or a quoted line that no longer matched the tool or the measurement. This is that, mechanised: it cannot check prose and does not try. Also that every internal link and anchor in the published Markdown resolves, and that every `docs/*.md` path `audit.sh`, `sql/` or `examples/` names exists -- a retitled heading used to break links in silence. And that nothing under `.claude/` is tracked, so the private working rules stay unpublished |
 | `test_node_modes.py` | yes | **the two modes that read a node's own files.** A tag stands in for a node and the backported `C` is written out, because that file exists at no tag — which is the whole point. Includes the test that says the `C.UTF-8` limitation is closed on the data half |
+| `test_parallel_runner.py` | no | **the parallel runner's own guards**, because a runner that loses a shard prints a green summary over tests nobody ran. Every guard in this list was reverted in a mutation and turned this layer red, and a control mutation left it green: discovery's count held per class and not as a sum, the total as well, an unreadable shard read as zero tests, a shard whose exit status contradicts its own `OK`, a verdict read from what the tests printed rather than from the stream `unittest` writes it to, the first summary taken instead of the last, a skip missing from the status line the gate greps on a green run and on a red one, a green report over a run of nothing, a module that did not import, a start directory that does not import, an empty discovery, a selection that matches nothing, a class nobody counted, a class no shard reported on at all, a class two shards reported on, a hung shard reported as a success, and a failed shard whose output never reaches the report |
 
 Without a clone at `scripts/glibc`, every layer marked "yes" **skips with a
-reason**; `test_pure_functions.py`, `test_published_claims.py` and the
+reason**; `test_pure_functions.py`, `test_published_claims.py`,
+`test_parallel_runner.py` and the
 fabricated-repository classes of `test_git_helpers.py` still run. A skip is
 never a pass: read what it says. CI clones fresh and fails on any skip, so a layer that skips
 there is a red build, not a quiet gap.

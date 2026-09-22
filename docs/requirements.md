@@ -21,15 +21,24 @@ matters, and what happens when `gpg` is unavailable, is in
 ## The test suite
 
 ```sh
-python3 -m unittest discover -s tests -t tests
+python3 -m unittest discover -s tests -t tests   # one process
+python3 tests/run_parallel.py                    # one process per class
 ```
 
-About a minute and a half. It pins the five tags to their commit ids, so a
-moved tag reports itself as a moved tag instead of as a change in the results.
-Six of its eight layers need the glibc clone and skip themselves, with a
-reason, if it is absent; `test_pure_functions.py` and
-`test_published_claims.py` run without one. CI runs the whole
-suite on a fresh clone and fails on any skip.
+The suite pins the five tags to their commit ids, so a moved tag reports
+itself as a moved tag instead of as a change in the results. Six of the
+suite's nine layers need the glibc clone and skip themselves, with a reason,
+if it is absent; `test_pure_functions.py`, `test_published_claims.py` and
+`test_parallel_runner.py` run without one. CI runs the whole suite, serially,
+on a fresh clone and fails on any skip.
+
+`tests/run_parallel.py` runs the same tests out of the same files, one process
+per `TestCase` class, and is stdlib-only like everything else here. It is the
+faster of the two on a machine with cores to spare; how much faster depends on
+the machine, so neither this page nor the READMEs publish a figure. The
+runner's own header records the measurements it was tuned on, each with the
+date and the machine — which is what a measurement has to carry to be worth
+anything here.
 
 [`tests/README.md`](../tests/README.md) says what it covers and, more
 usefully, what it does not.

@@ -439,6 +439,138 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
                 f'{name} states a test count; tests/README.md deliberately '
                 f'does not, because it went stale twice on 2026-09-06')
 
+    def test_no_doc_times_the_suite(self):
+        """The same rot, one column over, and it had already happened twice:
+        a `~16s`/`~17s` disagreement between two files (quoted in
+        TheRepairDocumentQuotesWhatIsPublished below), and "about a minute and
+        a half" in three files while the suite took 208 s on the machine that
+        measured it on 2026-09-21 (thirty-first entry). A runtime is a fact
+        about someone else's machine, so it is the reader's to measure.
+
+        The unit is the WHOLE FILE that publishes the command, after two
+        narrower scopes were measured full of holes by
+        false-negative-reviewer. Three lines around the command missed a
+        runtime eight lines under the block. The Markdown section then missed
+        a `#` comment line after the last command (split off as a heading), a
+        figure in backticks, and a `### How long` sub-heading right under the
+        block -- the heading somebody actually writes. Each fix was the form
+        the author had seen rather than the family (ninth, twenty-third), so
+        the scope is now the file: the three files that publish this command
+        publish no duration at all, measured, and the fourth escape route was
+        closed by deleting the exemption rather than by widening it again.
+
+        The cost is that a duration about something else in one of those
+        three files fires too. That is deliberate and the message says what
+        to do about it: those pages are short, and the runner's own header is
+        where a measurement belongs, with its date and its machine.
+        """
+        # Spelled-out durations, and the "and a half" tail, are in here
+        # because the pattern was written without them and measured: "about
+        # two minutes" passed, and so did "two and a half minutes" while
+        # "an hour and a half" was caught. The figure that started all this
+        # was spelled out too.
+        # A digit may sit against its unit (`47s`); a number in words needs
+        # whitespace and a spelled-out unit, or `a s` is found inside "as".
+        digits = r'\d+(?:\.\d+)?'
+        words = (r'an?|one|two|three|four|five|six|seven|eight|nine|ten|'
+                 r'a few|a couple of|several|half a')
+        half = r'(?:\s+and\s+a\s+half)?'
+        duration = re.compile(
+            r'(?i)\b(?:%s)%s\s*(?:s|secs?|seconds?|m|mins?|minutes?|h|hours?)\b'
+            r'|\b(?:%s)%s\s+(?:secs?|seconds?|mins?|minutes?|hours?)\b'
+            r'|\b(?:%s)\s+and\s+a\s+half\b'
+            % (digits, half, words, half, words))
+        command = re.compile(r'unittest discover -s tests|run_parallel\.py')
+        for name, text in docs().items():
+            if not command.search(text):
+                continue
+            for number_of, line in enumerate(text.split('\n'), start=1):
+                found = duration.search(line)
+                if found is not None:
+                    self.fail(
+                        f'{name}:{number_of} states a duration '
+                        f'({found.group(0)!r} in {line.strip()!r}) in a file '
+                        f'that publishes the test-suite command, so a reader '
+                        f'will take it for the suite\'s. Drop the figure, or '
+                        f'move the sentence to a page that does not publish '
+                        f'the command; a measurement belongs in '
+                        f'tests/run_parallel.py\'s header, with its date and '
+                        f'its machine')
+
+    def test_the_layer_counts_come_from_the_files(self):
+        """"Six of the suite's nine layers need the glibc clone", the three
+        modules named as needing none, the Layers table's rows and the CI
+        comment's list are four hand-written statements of one fact that the
+        filesystem already holds.
+
+        Written the day the eighth layer became the ninth, which moved the
+        number in one file, added a row in a second and a filename list in a
+        third -- by hand, with nothing to catch the fourth place. The CI
+        comment was the one that had already gone stale: it named the
+        pure-function layer alone, from back when that was the only clone-free
+        one, in the file whose whole purpose is that a green build means the
+        layers ran. Seventeenth entry: every number a doc publishes gets a
+        test the same day.
+
+        A layer needs the clone exactly when its source asks for one of the
+        two skip decorators, which is the same fact the table's yes/no column
+        states.
+        """
+        spelled = {n: i for i, n in enumerate(
+            'zero one two three four five six seven eight nine ten eleven '
+            'twelve thirteen fourteen fifteen sixteen seventeen eighteen '
+            'nineteen twenty'.split())}
+        tests_dir = os.path.join(REPO_ROOT, 'tests')
+        modules = sorted(name for name in os.listdir(tests_dir)
+                         if name.startswith('test_') and name.endswith('.py'))
+        self.assertGreater(len(modules), 1, 'no test modules found at all')
+        # Spelled in two pieces on purpose. A pattern written whole appears
+        # in this file's own source, so the first two versions of this test
+        # counted test_published_claims.py among the layers that need a
+        # clone -- a probe that matches itself, in the layer whose job is to
+        # notice exactly that.
+        applied = '@' + 'needs_'
+        gated = [name for name in modules
+                 if applied in read(os.path.join(tests_dir, name))]
+        free = [name for name in modules if name not in gated]
+
+        requirements = flat(docs()[os.path.join('docs', 'requirements.md')])
+        stated = re.search(r"(\w+) of the suite's (\w+) layers need the "
+                           r"glibc clone", requirements, re.I)
+        self.assertIsNotNone(
+            stated, 'docs/requirements.md no longer states the layer counts '
+                    'in the shape this test reads; it is the sentence that '
+                    'goes stale, so it cannot be left unasserted')
+        said_gated, said_total = (stated.group(1).lower(),
+                                  stated.group(2).lower())
+        self.assertEqual(spelled[said_total], len(modules),
+                         'docs/requirements.md says %r layers; tests/ holds '
+                         '%d' % (stated.group(2), len(modules)))
+        self.assertEqual(spelled[said_gated], len(gated),
+                         'docs/requirements.md says %r layers need the clone; '
+                         '%d ask for a skip decorator: %s'
+                         % (stated.group(1), len(gated), ', '.join(gated)))
+
+        # The ROWS, not the file: asserting that each filename appears
+        # somewhere in tests/README.md passed with the row deleted, because
+        # the paragraph under the table names three of the modules too.
+        # Measured with a mutant that renamed a row.
+        table = docs()[os.path.join('tests', 'README.md')]
+        rows = set(re.findall(r'(?m)^\| `(test_\w+\.py)` \|', table))
+        self.assertEqual(rows, set(modules),
+                         'the Layers table in tests/README.md and tests/ do '
+                         'not hold the same modules')
+        workflow = read(os.path.join(REPO_ROOT, '.github', 'workflows',
+                                     'tests.yml'))
+        for name in free:
+            self.assertIn(name, requirements,
+                          f'docs/requirements.md does not name {name} among '
+                          f'the layers that run without a clone')
+            self.assertIn(name[:-3], workflow,
+                          f'the CI comment does not name {name} among the '
+                          f'clone-free layers a broken clone step would '
+                          f'leave running alone')
+
     def test_every_measured_build_is_cited_on_the_results_page(self):
         """A measurement is bound to the build it ran on, so a result whose
         build is not stated where the results are stated cannot be cited.

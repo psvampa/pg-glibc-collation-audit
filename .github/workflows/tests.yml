@@ -48,7 +48,9 @@ jobs:
         # layer: without a usable glibc clone the git-backed tests skip BY
         # DESIGN, which is right on a contributor's laptop and wrong here -- a
         # broken clone step would otherwise leave this job green with only the
-        # pure-function layer having actually run.
+        # three clone-free layers (test_pure_functions, test_published_claims,
+        # test_parallel_runner) and the fabricated-repository classes of
+        # test_git_helpers having actually run.
         run: |
           set -o pipefail
           python3 -m unittest discover -s tests -t tests -v 2>&1 | tee /tmp/out.txt
