@@ -10,7 +10,18 @@
 name: tests
 
 on:
+  # `push` unfiltered plus `pull_request` ran this job TWICE for every pull
+  # request -- two identical four-minute runs of the same commit, measured on
+  # #51 and #52. A branch that is not main reaches GitHub as a PR, and the
+  # pull_request event tests the merge result, which is the thing being
+  # merged; the push event only added a second opinion about the branch head.
+  #
+  # What this gives up, stated rather than discovered: a branch pushed with no
+  # PR open gets no CI. Nothing reaches GitHub untested even so -- the local
+  # gate (.claude/, private) runs the full suite before every push -- and the
+  # moment such a branch becomes a PR, this job runs on it.
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 

@@ -37,7 +37,7 @@ def read(path):
 
 
 def echoed_block(wrapper, heading):
-    """The heading's echo and the contiguous run of echoes under it, as
+    r"""The heading's echo and the contiguous run of echoes under it, as
     printed, so a doc that quotes the block can be compared line for line.
 
     Ends at the `fi` that closes the block, and RAISES on any other line it
@@ -570,6 +570,40 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
                           f'the CI comment does not name {name} among the '
                           f'clone-free layers a broken clone step would '
                           f'leave running alone')
+
+    def test_every_tracked_module_compiles_without_warning(self):
+        """Compiling every tracked .py with warnings as errors.
+
+        A `SyntaxWarning` printed above the suite is noise, and noise is what
+        this project refuses to emit anywhere else: the reader stops reading
+        the line that matters. One lived in `echoed_block`'s docstring (a
+        backslash that is not a valid escape) and printed on every CI run and
+        on every run after the file was touched -- not on every run, because
+        CPython warns at compile time and a warm `__pycache__` skips it, which
+        is what made it survive so long.
+
+        Compiled rather than imported: importing runs module-level code and
+        would make this a slow, side-effecting test of something that is a
+        property of the source text (thirty-third entry).
+        """
+        import warnings
+        tracked = subprocess.run(['git', 'ls-files', '*.py'], cwd=REPO_ROOT,
+                                 capture_output=True, text=True)
+        self.assertEqual(tracked.returncode, 0, tracked.stderr)
+        names = [n for n in tracked.stdout.split('\n') if n]
+        self.assertGreater(len(names), 5,
+                           'git ls-files returned almost nothing; this test '
+                           'would then pass by looking at no file at all')
+        for name in names:
+            with self.subTest(module=name):
+                with warnings.catch_warnings():
+                    warnings.simplefilter('error', SyntaxWarning)
+                    try:
+                        compile(read(os.path.join(REPO_ROOT, name)), name,
+                                'exec')
+                    except SyntaxWarning as warned:
+                        self.fail(f'{name} compiles with a warning printed '
+                                  f'above every CI run: {warned}')
 
     def test_every_measured_build_is_cited_on_the_results_page(self):
         """A measurement is bound to the build it ran on, so a result whose

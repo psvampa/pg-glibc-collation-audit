@@ -4,6 +4,50 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-22 (thirty-third entry)
+
+Housekeeping, and neither half changes what the audit prints: **no verdict
+moves, no published number changes**, byte-identical output on the three
+pairs.
+
+### What it used to get wrong
+
+**Every pull request ran the test job twice.** `.github/workflows/tests.yml`
+listened for `push` with no branch filter as well as `pull_request`, so each
+PR produced two identical runs of the same commit — measured on this
+repository's last two, at about four minutes each. `push` is now limited to
+`main`. The `pull_request` event tests the merge result, which is the thing
+being merged; the second run only offered an opinion about the branch head.
+
+What that gives up is written into the workflow rather than left to be
+discovered: a branch pushed with no pull request open now gets no CI. Nothing
+reaches GitHub untested even so — the local gate runs the full suite before
+every push — and the moment such a branch becomes a PR, the job runs on it.
+
+**One docstring printed a warning above the suite.** A backslash in
+`echoed_block`'s docstring (`tests/test_published_claims.py`) is not a valid
+escape, so Python printed a `SyntaxWarning` whenever that file was compiled:
+every CI run, and every run after the file was touched, serial or parallel.
+Not every run — CPython warns at compile time, and a warm `__pycache__` skips
+it, which is measured and is why the first wording of this entry was wrong. A
+warning that comes and goes is worse than one that is always there: the
+docstring is now raw, and `test_every_tracked_module_compiles_without_warning`
+holds the whole tree to it rather than leaving the claim for a reader. Two
+mutations: the escape put back, and one introduced in another module; both
+red, and an unrelated prose edit green.
+
+The thirty-first entry's "the parallel runner is never the only thing that has
+run the suite" narrows with this change and is reworded where it is live, in
+`tests/README.md` and the runner's own header: a branch pushed with no pull
+request open now runs no CI at all, so until that PR exists the local gate's
+parallel run is the only one there has been.
+
+### Acceptance
+
+Byte-identical on `2.28..2.34`, `2.34..2.39` and `2.12..2.17` against `main`
+at 41c0b0e: one CI trigger and one docstring, no file the audit reads or
+writes.
+
 ## 2026-09-22 (thirty-second entry)
 
 Nothing the audit prints changes: **no verdict moves, no published number
