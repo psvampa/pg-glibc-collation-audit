@@ -473,9 +473,12 @@ include `en_US`, `de_DE`, `fr_FR`, `es_ES`,
 `it_IT`, `nl_NL`, `pt_BR`, `ru_RU`, `sv_SE`, `zh_CN` and `zh_TW`. Both runs, side
 by side, are in
 [`examples/below-the-floor-2.12-to-2.17.txt`](../examples/below-the-floor-2.12-to-2.17.txt),
-and the figures are asserted in `tests/test_known_answers.py`
+and the **after** figures are asserted in `tests/test_known_answers.py`
 (`BelowTheOldVersionFloor`) against the two tags pinned in
-`tests/_harness.py` — which is what the step 4 figure below lacked.
+`tests/_harness.py` — which is what the step 4 figure below lacked. The table
+above is held to that saved run, cell by cell, by
+`tests/test_published_claims.py`: until 2026-09-22 only the example was, so
+this page could drift from the run it summarises with nothing failing.
 
 **This page used to say step 4 reported 2, not 277.** That figure was already
 stale when it was quoted: migrating `scan_ellipsis` to `collate_text` had

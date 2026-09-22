@@ -4,6 +4,134 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-22 (thirty-fourth entry)
+
+Tests, and the two pages that describe them. Nothing the tool prints changes,
+no verdict moves and no published number changes; what changes is how many of
+them a test would notice going wrong.
+
+### What it used to get wrong
+
+**Four published figures were tied to no page.** `docs/method.md` states that
+the four ellipsis files are inherited by 331 further locales and that step 4
+closes over the copy graph to reach 335 of the 342 files defining
+`LC_COLLATE`, and three pages restate the 283 files that differ between glibc
+2.28 and 2.34. Each was hand-written next to a run that produced it, and each
+could be edited to any number at all without a test objecting -- including 335
+and 342, whose figures `test_known_answers` and `test_node_modes` do assert
+against a live run. Those read the tool's OUTPUT; nothing compared the page
+with it, so the page was free to say anything while the run stayed right. That
+is the distinction this entry is about, and it is why "no test asserts it" has
+to be read as "as published". They are now rows of
+`AFigureStatedTwiceIsStatedOnce`, asserted against the sentence the tool
+prints in `examples/rhel8-to-rhel9-audit-output.txt`. Of the 117 figures
+counted for the thirty-second entry, ten are now rows of that table: six tied
+that morning, these four later the same day.
+
+**The check under those rows searched for a bare number, and a three-digit
+number finds its neighbour.** Mutating 342 to 343 in the prose left the new
+row GREEN, because the same transcript carries 343 six hundred lines away --
+the el9 node reports `356, of which 343 define LC_COLLATE`, against the glibc
+2.34 tag's `355, of which 342`. Upstream and the machine are different facts
+and a bare digit search cannot tell them apart, so a row may now name the
+sentence its number appears in. The rule it applies -- anchor to the phrase,
+not to the digits -- was already written in that file for the documentation
+side, where it was paid for by a pattern that captured the last three digits
+of 1355; the evidence side had never been held to it.
+
+**Naming the sentence was not enough either, and that took a second pass to
+see.** It closed the 342 row and left 331 and 335 exactly as decorative as
+before: the el9 node is built from the glibc 2.34 tag, so the node scan
+reprints step 4's copy-closure figures in byte-identical sentences -- lines
+107 and 113 of that transcript against 724 and 730. Re-measuring step 4 away
+from the page would have changed one pair and satisfied the check with the
+other. A sentence that two facts share is not an anchor, so a row may also
+name the section of the transcript that produced it, the search is cut at the
+next banner, and an anchor that is missing or doubled refuses instead of
+quietly widening back to the whole file. Found by `false-negative-reviewer` on
+the fix, not by the author, and not by the first battery: mutating "the
+transcript" changed every copy at once, which is the limit that file already
+writes down for the documentation side. Two rows stay on the bare form, carrying 9,616 and 9,619; what
+makes them safe is not that their counts are longer but a measurement --
+bumping each by one reddens it, because neither file it names carries the
+bumped value. `breakage/repair.md` states both counts, so a drift from one to
+the other is caught there rather than by that file, and the row reddens on
+`breakage/cases/07-range-partition.md`, which carries only its own.
+
+**Naming the section was not enough on its own either, which a second review
+round found.** The region was cut from the anchor to the next `====` banner,
+and `str.split` on a separator that is not there returns the whole remainder:
+"the section ends here" and "I never found where it ends" were the same value,
+and the wider one can only make more things match. Measured by deleting the
+banner lines from that transcript and drifting only the tag's figures -- the
+row went GREEN again, satisfied by the node's copies, which is the false
+negative the section was added to close, restored with no signal. It is not
+reachable through the file as it stands, which needs twelve banners deleted;
+it is reachable by the next row, because two of the transcripts in `examples/`
+carry no banner at all. The check now refuses a section nothing closes. In the
+same pass: the region reaches to the end of step 5, not to the end of step 4,
+so narrowing a BARE number to it is neither check -- measured GREEN over a
+page drifted from 331 to 327, satisfied by `via iso14651_t1: 327 locale(s)`
+two lines below the sentence that should have been read. That combination is
+refused, and the docstring says what the cut really is instead of what would
+have been convenient.
+
+**A shape that lost its placeholder would have checked the sentence and never
+the number.** The substitution joined the number pattern between the literal
+parts of the sentence, so a shape written without `{n}` joined nothing into
+nothing and degraded to "does this sentence appear", with the failure message
+printing the sentence without its number. The table is the thing an author
+edits, so one missing placeholder turned a guard into decoration with nothing
+saying so; it now refuses. Also found on the fix.
+
+**A table was tied to the example instead of to the page.**
+`test_the_below_floor_example_matches_the_asserted_numbers` asserted the three
+before-and-after rows of the below-the-floor run against
+`examples/below-the-floor-2.12-to-2.17.txt` only, so the same table in
+`docs/limitations.md` -- the page a reader opens -- could drift from the run
+it summarises with nothing failing. The numbers are written once and asserted
+against both, and `docs/limitations.md` now says which test holds its table
+rather than naming only the one that never did.
+
+### Mutations
+
+Thirty-three, each red, in five batteries:
+
+* **Nine** on the three figures only `docs/method.md` states: each bumped in
+  the prose, each bumped in the transcript, the page's sentence reworded so no
+  pattern reaches it, the transcript's sentence reworded around a correct
+  number, and the tag's line rewritten as the node's.
+* **Seven** on 283: each of the three pages that state it drifted alone, then
+  all three together, the transcript bumped, its sentence reworded, and one
+  page dropping the claim rather than restating it.
+* **Seven** on the `docs/limitations.md` table: each of its six cells, and a
+  row removed.
+* **Seven** on the section anchor, per LINE rather than per file: each of the
+  three figures bumped on its own line inside the tag's section, the anchor
+  deleted, the anchor doubled, the anchored sentence doubled inside that
+  section, and a shape stripped of its `{n}`.
+* **Three** on the refusals the second review round asked for: the banners
+  deleted so nothing closes the section, a bare number given a section, and
+  the `docs/limitations.md` row stated twice.
+
+Two kinds of case have to stay GREEN, and they are not the same kind. Four
+are controls -- an unrelated prose edit, one in each of the first four
+batteries, so that a battery reddening on everything is caught being useless.
+Three assert the other direction: bumping the el9 node's own 331, 335 and 343,
+none of which any row claims, which is what says the section anchor narrows
+rather than merely matching.
+
+The batteries are in this session's scratch directory rather than the
+repository, so the counts above are re-derivable only by rebuilding them --
+the reason the per-line half exists at all is that the first battery mutated
+whole files and could not see what it was missing.
+
+### Acceptance
+
+Byte-identical on `2.28..2.34`, `2.34..2.39` and `2.12..2.17` against `main`
+at 7c33511: this entry adds tests and prose and changes no file the audit
+reads or writes.
+
 ## 2026-09-22 (thirty-third entry)
 
 Housekeeping, and neither half changes what the audit prints: **no verdict
