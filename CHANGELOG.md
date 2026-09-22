@@ -42,11 +42,18 @@ run the suite" narrows with this change and is reworded where it is live, in
 request open now runs no CI at all, so until that PR exists the local gate's
 parallel run is the only one there has been.
 
+**And one number from yesterday's entry, found by the instrument.** The
+thirty-second entry said "three of those twenty" where the paragraph above it
+says eighteen mutations and three controls: a figure changed during review
+without the sentence that depended on it. It was caught by the control case of
+`agent-calibration.sh` -- a sweep of untouched `main`, whose whole purpose is
+to show the agent does not invent findings, reporting a real one instead.
+
 ### Acceptance
 
 Byte-identical on `2.28..2.34`, `2.34..2.39` and `2.12..2.17` against `main`
-at 41c0b0e: one CI trigger and one docstring, no file the audit reads or
-writes.
+at 41c0b0e: one CI trigger, one docstring, one corrected count, no file the
+audit reads or writes.
 
 ## 2026-09-22 (thirty-second entry)
 
@@ -97,7 +104,7 @@ which a reword of an existing sentence would produce. They are in the same
 battery as the thirty-first entry's, so the counts can be re-derived rather
 than believed.
 
-Three of those twenty exist because `false-negative-reviewer` measured the
+Three of those eighteen exist because `false-negative-reviewer` measured the
 first version of the table allowing what it forbade: a pattern that captured
 the last three digits of a longer number, so two pages could publish different
 figures under a green test; a floor counted in mentions rather than files, so
