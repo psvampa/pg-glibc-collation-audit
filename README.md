@@ -63,11 +63,11 @@ at the distance between them.
 
 </details>
 
-### The four commands
+### The commands
 
-Four commands, in the order of what they cost you. The first needs nothing but
-this checkout; the last needs PostgreSQL on both nodes. Each one says what it
-measures and what it leaves to the next.
+In the order of what they cost you. The first needs nothing but this checkout;
+the last needs PostgreSQL on both nodes. Each one says what it measures and
+what it leaves to the next.
 
 **1 — Verifying what changed between two glibc versions**
 *Needs this checkout. No node, no database.*
@@ -82,8 +82,22 @@ step asks, what sits outside all five, and how to read what it prints is in
 [docs/method.md](docs/method.md). Real output from both pairs, start to
 finish, is in [examples/](examples/) — worth reading before you run anything.
 
-**2 — What your distro patched, and what it added**
+**Optional — the same run, with each machine's own locale files**
 *Needs the locale sources off both nodes. No database.*
+
+The five steps run either way. Supplying the files adds five checks the tags
+alone cannot make:
+
+- whether each distro patched the collation data it ships
+- whether the two machines' data differs from each other — the only way to see
+  a locale your distro **adds**, one that is in no upstream tag at all.
+  `C.UTF-8` is that locale, and it is usually the database collation in a
+  container
+- whether either machine's own files use the ranges a file comparison can
+  never clear
+
+Leave the files out and those five say `NOT RUN` rather than dropping out of
+the summary.
 
 ```sh
 # on each node
@@ -114,17 +128,14 @@ not do this for you: a copy missing a large share of its files is still not
 refused, and at step 8 a file that never arrived reads as a locale the upgrade
 removed or added.
 
-**Give it both nodes' locale sources and it does more.** Each side you supply
-adds a check that the node's own files match the tag the audit diffed — your
-distro's patching, which no tag diff can see. Supply **both** and it also
-compares the two nodes to each other, which is the only way to see whether a
-locale your distro *adds* changed between them — `C.UTF-8` above all, since
-its source file exists upstream only from glibc 2.35 and RHEL8 and RHEL9
-predate that.
+Supply only one side and you get that side's check against its tag; the other
+side says which flag was left out. `C.UTF-8` needs both, since its source file
+exists upstream only from glibc 2.35 and RHEL8 and RHEL9 predate that, so
+neither tag holds it and only the two machines can be compared to each other.
 
-That settles whether the two nodes' collation *data* differs. What it cannot
-settle is the resulting *order*, because the weights are computed when the
-locale is built. That is command 3.
+This settles whether the two machines' collation *data* differs. What it
+cannot settle is the resulting *order*, because the weights are computed when
+the locale is built. That is command 2.
 
 <details>
 <summary><strong>Checking the copy, and the build ids</strong> — the counts each step prints, and what the summary says without the directories</summary>
@@ -165,7 +176,7 @@ directories agree while proving nothing are in
 
 </details>
 
-**3 — Whether `C.UTF-8`'s order changed**
+**2 — Verifying whether `C.UTF-8`'s order changed**
 *Needs PostgreSQL 15 or newer on both nodes.*
 
 ```sh
@@ -196,7 +207,7 @@ What was measured, why it changed, and why it also changed *within* RHEL8:
 
 </details>
 
-**4 — Confirming the order on your own builds**
+**3 — Confirming the order on your own builds**
 *Needs PostgreSQL 15 or newer on both nodes, and editing the file first.*
 
 ```sh

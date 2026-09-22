@@ -161,8 +161,8 @@ python3 scripts/diff_distro_locales.py glibc-2.34 \
 ```
 
 It reads a copy of that node's `/usr/share/i18n/locales/`. Producing that
-directory, and its counterpart for the other node, is command 2 in
-[the README](../README.md#the-four-commands),
+directory, and its counterpart for the other node, is the optional half of
+command 1 in [the README](../README.md#the-commands),
 which holds the only copy of that command — `glibc-locale-source` on each
 node, then `tar` off it. `tar`, not `docker cp`, whose target `/tmp` is a
 separate mount in a container, so the copy silently does nothing.
@@ -191,8 +191,8 @@ half-used, because a result nobody can bind to a build cannot be cited.
 Everything above compares one node against an upstream tag, which cannot say
 anything about a file that is in **no** tag. `scripts/diff_node_locales.py`
 takes both sides from the nodes instead, so a backported locale is in both
-inputs. Both directories come from command 2 in
-[the README](../README.md#the-four-commands):
+inputs. Both directories come from the optional half of command 1 in
+[the README](../README.md#the-commands):
 
 ```sh
 python3 scripts/diff_node_locales.py \
