@@ -49,7 +49,10 @@ reversed pair is refused rather than answered, because backwards every step
 still prints a plausible clean result.
 
 Any two versions are allowed, however far apart, and nothing in the tool looks
-at the distance between them. Worth reading before you trust a result:
+at the distance between them.
+
+<details>
+<summary><strong>Worth reading before you trust a result</strong> — which pairs are measured, what a wider pair reports, and the old glibc 2.24 floor</summary>
 
 - which pairs this project publishes measured results for —
   [docs/scope.md](docs/scope.md)
@@ -57,6 +60,8 @@ at the distance between them. Worth reading before you trust a result:
   [docs/method.md](docs/method.md#how-far-apart-the-two-tags-may-be)
 - why a pair below glibc 2.24 rests on a single measured pair —
   [docs/limitations.md](docs/limitations.md#below-glibc-224-the-method-rests-on-one-measured-pair)
+
+</details>
 
 ### The four commands
 
