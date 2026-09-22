@@ -82,6 +82,10 @@ step asks, what sits outside all five, and how to read what it prints is in
 [docs/method.md](docs/method.md). Real output from both pairs, start to
 finish, is in [examples/](examples/) — worth reading before you run anything.
 
+> [!TIP]
+> If you can get the locale files off both machines, run the longer form below
+> instead — it adds five checks the tags alone cannot make.
+
 <details>
 <summary><strong>Alternatively — the same run, with each machine's own locale files</strong> — five more checks, what they need, and how to tell a good copy from a short one</summary>
 
