@@ -12,10 +12,11 @@ them a test would notice going wrong.
 
 ### What it used to get wrong
 
-**Four published figures were tied to no page.** `docs/method.md` states that
-the four ellipsis files are inherited by 331 further locales and that step 4
-closes over the copy graph to reach 335 of the 342 files defining
-`LC_COLLATE`, and three pages restate the 283 files that differ between glibc
+**Four published figures were tied to nothing the tool produced.**
+`docs/method.md` states that the four ellipsis files are inherited by 331
+further locales and that step 4 closes over the copy graph to reach 335 of the
+342 files defining `LC_COLLATE`, and three pages restate the 283 that differ
+between glibc
 2.28 and 2.34. Each was hand-written next to a run that produced it, and each
 could be edited to any number at all without a test objecting -- including 335
 and 342, whose figures `test_known_answers` and `test_node_modes` do assert
@@ -26,63 +27,10 @@ to be read as "as published". They are now rows of
 `AFigureStatedTwiceIsStatedOnce`, asserted against the sentence the tool
 prints in `examples/rhel8-to-rhel9-audit-output.txt`. Of the 117 figures
 counted for the thirty-second entry, ten are now rows of that table: six tied
-that morning, these four later the same day.
-
-**The check under those rows searched for a bare number, and a three-digit
-number finds its neighbour.** Mutating 342 to 343 in the prose left the new
-row GREEN, because the same transcript carries 343 six hundred lines away --
-the el9 node reports `356, of which 343 define LC_COLLATE`, against the glibc
-2.34 tag's `355, of which 342`. Upstream and the machine are different facts
-and a bare digit search cannot tell them apart, so a row may now name the
-sentence its number appears in. The rule it applies -- anchor to the phrase,
-not to the digits -- was already written in that file for the documentation
-side, where it was paid for by a pattern that captured the last three digits
-of 1355; the evidence side had never been held to it.
-
-**Naming the sentence was not enough either, and that took a second pass to
-see.** It closed the 342 row and left 331 and 335 exactly as decorative as
-before: the el9 node is built from the glibc 2.34 tag, so the node scan
-reprints step 4's copy-closure figures in byte-identical sentences -- lines
-107 and 113 of that transcript against 724 and 730. Re-measuring step 4 away
-from the page would have changed one pair and satisfied the check with the
-other. A sentence that two facts share is not an anchor, so a row may also
-name the section of the transcript that produced it, the search is cut at the
-next banner, and an anchor that is missing or doubled refuses instead of
-quietly widening back to the whole file. Found by `false-negative-reviewer` on
-the fix, not by the author, and not by the first battery: mutating "the
-transcript" changed every copy at once, which is the limit that file already
-writes down for the documentation side. Two rows stay on the bare form, carrying 9,616 and 9,619; what
-makes them safe is not that their counts are longer but a measurement --
-bumping each by one reddens it, because neither file it names carries the
-bumped value. `breakage/repair.md` states both counts, so a drift from one to
-the other is caught there rather than by that file, and the row reddens on
-`breakage/cases/07-range-partition.md`, which carries only its own.
-
-**Naming the section was not enough on its own either, which a second review
-round found.** The region was cut from the anchor to the next `====` banner,
-and `str.split` on a separator that is not there returns the whole remainder:
-"the section ends here" and "I never found where it ends" were the same value,
-and the wider one can only make more things match. Measured by deleting the
-banner lines from that transcript and drifting only the tag's figures -- the
-row went GREEN again, satisfied by the node's copies, which is the false
-negative the section was added to close, restored with no signal. It is not
-reachable through the file as it stands, which needs twelve banners deleted;
-it is reachable by the next row, because two of the transcripts in `examples/`
-carry no banner at all. The check now refuses a section nothing closes. In the
-same pass: the region reaches to the end of step 5, not to the end of step 4,
-so narrowing a BARE number to it is neither check -- measured GREEN over a
-page drifted from 331 to 327, satisfied by `via iso14651_t1: 327 locale(s)`
-two lines below the sentence that should have been read. That combination is
-refused, and the docstring says what the cut really is instead of what would
-have been convenient.
-
-**A shape that lost its placeholder would have checked the sentence and never
-the number.** The substitution joined the number pattern between the literal
-parts of the sentence, so a shape written without `{n}` joined nothing into
-nothing and degraded to "does this sentence appear", with the failure message
-printing the sentence without its number. The table is the thing an author
-edits, so one missing placeholder turned a guard into decoration with nothing
-saying so; it now refuses. Also found on the fix.
+that morning, these four later the same day. That entry calls them "117
+figures that no test asserts"; it should be read as "no test asserts as
+published", and this is the correction, in the entry that found it rather than
+in the one that wrote it.
 
 **A table was tied to the example instead of to the page.**
 `test_the_below_floor_example_matches_the_asserted_numbers` asserted the three
@@ -93,9 +41,27 @@ it summarises with nothing failing. The numbers are written once and asserted
 against both, and `docs/limitations.md` now says which test holds its table
 rather than naming only the one that never did.
 
+**And the question a tie has to answer is now asked by the suite rather than
+by a transcript.** Whether a row would notice its own figure moving was proved
+with batteries of file mutations run by hand, which makes a count of red cases
+a sentence in an entry and not a mechanism -- the exact shape of claim this
+layer exists to refuse. `EveryTieWouldNoticeItsFigureMoving` asks that
+question on every run: for each occurrence of a figure in each
+file a row names, it rebuilds that file in memory with THAT occurrence moved
+and nothing else, and requires at least one such move to stop the row
+agreeing. A row where no single move breaks the tie cannot tell its figure
+from another statement of the same number in the same file.
+
+The class also names the four rows tied to no run at all, so a row that
+quietly loses its evidence -- or a new one that never had any -- is a decision
+written down rather than something a reader has to go and count. Two of those
+four could be tied and are not: the tool prints 328 and 355. What the class
+does not do is stand in for the refusals: a shared sentence and a too-weak
+shape are still caught where the tie is checked.
+
 ### Mutations
 
-Thirty-three, each red, in five batteries:
+Forty-four, each red, in seven batteries:
 
 * **Nine** on the three figures only `docs/method.md` states: each bumped in
   the prose, each bumped in the transcript, the page's sentence reworded so no
@@ -110,21 +76,32 @@ Thirty-three, each red, in five batteries:
   three figures bumped on its own line inside the tag's section, the anchor
   deleted, the anchor doubled, the anchored sentence doubled inside that
   section, and a shape stripped of its `{n}`.
-* **Three** on the refusals the second review round asked for: the banners
-  deleted so nothing closes the section, a bare number given a section, and
-  the `docs/limitations.md` row stated twice.
+* **Three** on the refusals: the banners deleted so nothing closes the
+  section, a bare number given a section, and the `docs/limitations.md` row
+  stated twice.
+* **Five** on the shapes a refusal has to cover: a second copy of the
+  limitations table with its cells drifted and again with them identical, and
+  three spellings of a bare shape handed a section -- ` {n}`, `: {n}` and
+  `{n} `.
+* **Six** on the class that asks whether a tie would notice: each of the four
+  rows with a named sentence reverted to the whole-file form, a row stripped
+  of its evidence without being declared, and a shape reworded so it matches
+  nothing.
 
-Two kinds of case have to stay GREEN, and they are not the same kind. Four
-are controls -- an unrelated prose edit, one in each of the first four
-batteries, so that a battery reddening on everything is caught being useless.
-Three assert the other direction: bumping the el9 node's own 331, 335 and 343,
-none of which any row claims, which is what says the section anchor narrows
-rather than merely matching.
+Two kinds of case have to stay GREEN, and they are not the same kind.
 
-The batteries are in this session's scratch directory rather than the
-repository, so the counts above are re-derivable only by rebuilding them --
-the reason the per-line half exists at all is that the first battery mutated
-whole files and could not see what it was missing.
+Six are controls, one per battery except the fifth: an unrelated prose edit,
+or, for the last, the table exactly as it stands, so that a battery reddening
+on everything is caught being useless.
+
+Three assert the other direction: bumping the el9 node's copies of 331, 335
+and 343, at lines 724, 730 and 705, which no row reads -- the rows claim the
+first two as the TAG's figures, at lines 107 and 113. That is what says the
+section anchor narrows rather than merely matching.
+
+The batteries live outside the repository, so the counts above are
+re-derivable only by rebuilding them. The one question that does not depend on
+them is the one the new class now asks on every run.
 
 ### Acceptance
 
