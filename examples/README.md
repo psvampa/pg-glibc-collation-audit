@@ -19,20 +19,17 @@ what it did not cover rather than leaving the section out.
 
 Raw output, start to finish, with nothing trimmed or annotated.
 
-### Command 1 extended, and the evidence behind the verdicts
+### Command 1 extended
 
-Older and richer files, and not a transcript of one command. Each opens with
-the five steps run one script at a time, carries the measurements taken on
-real nodes for that pair, and closes with `./audit.sh` given both machines'
-locale files — steps 6 to 10 and the full summary.
+The same command with each machine's own locale files added, so the five node
+steps run instead of saying `NOT RUN`.
 
 | File | |
 |---|---|
 | [`rhel8-to-rhel9-audit-output.txt`](rhel8-to-rhel9-audit-output.txt) | glibc 2.28 to 2.34 |
 | [`rhel9-to-rhel10-audit-output.txt`](rhel9-to-rhel10-audit-output.txt) | glibc 2.34 to 2.39 |
 
-Read these for what was measured and why a verdict stands. Read the two above
-for what the command prints.
+Raw output as well, taken on the builds the results page cites.
 
 ## Command 2 — the `C.UTF-8` probe
 

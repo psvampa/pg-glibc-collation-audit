@@ -96,7 +96,7 @@ reading before you run anything.
 What the five extra checks answer, how to take the copy and how to tell a good
 one from a short one are in [docs/commands.md](docs/commands.md). What this
 form prints is in
-[examples/README.md, under Command 1 extended](examples/README.md#command-1-extended-and-the-evidence-behind-the-verdicts).
+[examples/README.md, under Command 1 extended](examples/README.md#command-1-extended).
 
 ```sh
 # on each node
@@ -195,9 +195,9 @@ different position, because RHEL8 builds the locale from ellipsis ranges that
 leave planes 3–13 undefined and RHEL9 backported upstream's
 `codepoint_collation`; RHEL9 → RHEL10 **cannot** change, because both nodes'
 copies of the file are byte-identical and byte order by construction. Both
-measured 2026-09-06 on `glibc-2.28-251.el8_10.40`, `glibc-2.34-275.el9_8` and
-`glibc-2.39-128.el10_2`, replacing ardentperf's checksum as the basis for the
-second column. See
+measured 2026-09-06 and re-measured 2026-09-23 on `glibc-2.28-251.el8_10.40`,
+`glibc-2.34-275.el9_8` and `glibc-2.39-128.el10_2`, unchanged, replacing
+ardentperf's checksum as the basis for the second column. See
 [docs/limitations.md](docs/limitations.md#cutf-8-is-invisible-to-a-tag-diff).
 
 **A table keyed on two major upgrades cannot say this, so it goes here:**
