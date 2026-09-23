@@ -181,7 +181,8 @@ directories agree while proving nothing are in
 </details>
 
 **2 — Verifying whether `C.UTF-8`'s order changed**
-*Needs PostgreSQL 15 or newer on both nodes.*
+*Only if a database uses `C.UTF-8` — in a container it usually does. Needs
+PostgreSQL 15 or newer on both nodes.*
 
 ```sh
 psql -X -f sql/c_utf8_probe.sql > el8.out      # on each node, then diff
@@ -190,9 +191,8 @@ diff el8.out el9.out
 
 [`sql/c_utf8_probe.sql`](sql/c_utf8_probe.sql) takes no editing, and it is run
 **even when the audit flagged nothing**. Where this locale's source file is in
-neither tag, no step of the audit can reach it at all; it is usually the
-database collation in a container, and PostgreSQL will not warn about it
-either.
+neither tag, no step of the audit can reach it at all, and PostgreSQL will not
+warn about it either.
 
 Reading its output takes one warning, because the usual tell is inverted for
 this locale — agreeing with byte order is the *fix* here, not the sign that
