@@ -79,8 +79,11 @@ what it leaves to the next.
 It runs the five steps in order, passes the locales step 2 found on to step 3
 so you never retype a name, and ends with a consolidated summary. What each
 step asks, and what the run leaves unsettled, is in
-[docs/commands.md](docs/commands.md). Real output from both pairs, start to
-finish, is in [examples/](examples/) — worth reading before you run anything.
+[docs/commands.md](docs/commands.md). Real output, start to finish, is in
+[`examples/rhel8-to-rhel9-audit-output.txt`](examples/rhel8-to-rhel9-audit-output.txt)
+and
+[`examples/rhel9-to-rhel10-audit-output.txt`](examples/rhel9-to-rhel10-audit-output.txt)
+— worth reading before you run anything.
 
 > [!TIP]
 > If you can get the locale files off both machines, run the longer form below
