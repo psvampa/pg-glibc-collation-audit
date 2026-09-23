@@ -56,6 +56,45 @@ because a section that vanishes reads like a section that found nothing.
 locale is built on the machine, so two machines can hold byte-identical files
 and still sort differently. That is what steps 2 and 3 are for.
 
+#### Taking the copy, and checking it
+
+The commands that produce the two directories are in
+[the README](../README.md#the-commands), which holds the only copy of them.
+In a container `docker exec` replaces `ssh` in those commands, and `rpm -q
+glibc` prints the architecture as well (`...x86_64`) — either form is a usable
+build id.
+
+Installing `glibc-locale-source` **upgrades glibc**, because the two packages
+are version-locked. Read the build id after installing it, not before.
+
+The build ids are required, because a result is bound to the build it was
+taken on and nothing in a directory of locale files carries a version.
+
+**Check each copy against the machine it came from** — `ls el8-locales | wc -l`
+against `ls /usr/share/i18n/locales/` run there. The run does not do this for
+you, and a copy that lands most of its files is not refused: the floor is
+absolute, and only a directory too small to be a real copy at all is rejected.
+
+What never arrived then comes back as an ordinary finding. The run's steps 6
+and 7 list it under `Absent on the node`, step 8 under `Only on the old node`
+or `Only on the new node`, where a failed transport reads exactly like a
+locale the upgrade removed or added. Two cases do earn a `!!`: a backported
+locale such as `C` missing from one side (step 8), and a missing file that
+other locales copy, such as `iso14651_t1` (steps 9 and 10).
+
+**Which printed count to check against matters.** Steps 9 and 10 print the
+copy's own count as `Files at <build id>`, and that is the number to set
+against the machine's. The `Compared N file(s)` lines of steps 6 to 8 are
+intersections — with the published version for steps 6 and 7, with the other
+machine for step 8 — so they are never larger than `Files at`, and equality
+there does not mean the copy is complete. A `Compared` line adds back up to
+`Files at` only together with the `absent upstream` or `only on the ... node`
+line printed beside it.
+
+Supply one side only and that side is still checked against its published
+version; the side you left out prints `NOT RUN` and names the flag that was
+missing.
+
 ## Step 2 — whether `C.UTF-8`'s order changed
 
 `sql/c_utf8_probe.sql`, run on each machine, the two outputs compared. It
