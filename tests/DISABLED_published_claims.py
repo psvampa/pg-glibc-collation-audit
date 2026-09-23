@@ -1,17 +1,42 @@
-"""Layer 7: the numbers and quotes the documentation publishes.
+"""DISABLED 2026-09-23, on Pablo's instruction, for the documentation refactor.
 
-Two documentation-correction passes in one day, on 2026-09-06, found the same
-class of defect each time: a count, a position or a quoted output line that no
-longer matched what the tool or the measurement actually produced. Re-reading
-caught them; re-reading is not a control.
+THIS FILE IS NOT RUN. Its name does not match unittest's `test*.py` discovery
+pattern, so neither `unittest discover` nor `tests/run_parallel.py` collects
+it. That is the whole mechanism -- there is no flag and no environment
+variable, and nothing here is `skip`ped, because CI fails on any skip and a
+skipped layer that reports itself as passing is the defect this repository
+exists to catch.
 
-This is the checkable half of that, turned into a test. It reads the published
-files and asserts they agree with each other and with the scripts. It cannot
-check prose, and it deliberately does not try: what it covers is exactly the
-part where a human re-read is wasted effort.
+WHY. The branch `four-commands-say-what-they-do` is rewriting the
+documentation, and this layer holds the prose to figures and quotes that the
+rewrite is deliberately moving. Pablo's call, 2026-09-23: the failures it
+raises during the refactor cost more than they catch until the pages settle.
 
-No glibc clone needed -- everything here is in the repository.
+TO TURN IT BACK ON: `git mv tests/DISABLED_published_claims.py
+tests/test_published_claims.py`, delete this docstring, and run the suite. It
+was green at 39 tests when it was switched off.
+
+WHAT IS UNGUARDED WHILE IT IS OFF. Everything in here, which is the numbers
+and quotes the documentation publishes -- the canonical-figures table that
+requires a figure restated across pages to be the same figure everywhere, the
+verbatim ties between the docs and what the tool prints, the check that every
+internal link and anchor resolves, the check that every `docs/*.md` path named
+by `audit.sh` exists, and the check that nothing under `.claude/` is tracked.
+Backlog 12.1 tracks turning it back on.
+
+KNOWN HOLES IN IT, measured by false-negative-reviewer on 2026-09-23 with
+mutations, to fix when it is re-enabled rather than rediscovered: the
+`docs/method.md` table of the release-skipping triple is tied by nothing since
+the example it read was deleted (changing "75 hunks" to "76" is green here and
+red on main); `test_every_C_status_the_docs_list_is_one_the_tool_can_print`
+passes when `codepoint_collation` is deleted from the enumeration, because the
+word appears three other times in that file; the steps 9/10 quote tie passes
+over a truncated quote; and `test_every_doc_a_script_or_example_names_exists`
+matches only `docs/` and `tests/` `.md` paths, so the dangling
+`examples/skipping-a-release-2.28-to-2.39.txt` in `audit.sh` is invisible to
+it. Backlog 12.2.
 """
+
 import collections
 import os
 import re
