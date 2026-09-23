@@ -168,30 +168,6 @@ What this box leaves out is in
 What it prints, filled in for each pair, is in
 [examples/README.md, under Command 3](examples/README.md#command-3-the-confirmation-template-filled-in).
 
-## How it works
-
-If neither the locale's rules nor the code that compiles them changed, its
-sort order cannot have changed. That is a proof, not a sample.
-
-Five steps, all run by `./audit.sh`: what changed (1), which of those changes
-fall inside `LC_COLLATE` (2), which locales inherit them through `copy` (3),
-which locales a data diff can never clear (4), and whether the code that
-computes weights changed (5). Steps 3 and 5 together give the complete set of
-affected locale identifiers.
-
-Beyond those five, three optional checks read a real node's locale sources.
-One compares a node against the upstream tag — the only way to see your
-distro's backports. Another compares the two **nodes to each other**, which
-is the only way to see whether a locale the distro adds — one upstream does
-not have — changed between them: `C.UTF-8` is that locale, and it is usually
-the database collation in a container. The third scans each node's own data
-for ellipsis ranges — the
-only way that question is asked of the node's `C` itself, since step 4 scans
-the tag and no tag of the RHEL8 → RHEL9 pair holds that file.
-
-The five steps in detail, the decision procedure they add up to, and how to
-read what the run prints: [docs/method.md](docs/method.md).
-
 ## Results for the two RHEL pairs
 
 | Locale | RHEL8 → RHEL9<br>glibc 2.28 → 2.34 | RHEL9 → RHEL10<br>glibc 2.34 → 2.39 | Caught by |
