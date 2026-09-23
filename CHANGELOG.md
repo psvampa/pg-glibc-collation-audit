@@ -4,6 +4,70 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-23 (thirty-eighth entry)
+
+The README's command section, a new page under it, and `examples/`. Nothing
+the tool prints changes and no verdict moves. This entry covers the work the
+thirty-sixth and thirty-seventh describe the end of.
+
+### What it used to get wrong
+
+**"Step" meant two things.** The README called them "the four commands" and a
+run of the first one does its own work in ten numbered steps. A reader hitting
+"step 2" had to work out which of the two was meant. Commands are now numbered
+1 to 3 and are what you type; steps are numbered 1 to 10 and are what a run
+prints, and the pages say which they mean.
+
+**There were four commands and there are three.** The second, "What your
+distro patched, and what it added", was not a separate thing to run. It is
+`./audit.sh` with each machine's locale files added, so it is now the longer
+form of command 1 rather than a command of its own. What it buys is five
+further checks, which is what the collapsible under command 1 says.
+
+**The README carried the method.** It explained how the steps work, which is
+what `docs/method.md` is for, and it had a "How it works" section saying what
+two other pages already said. There are now three levels. The README says what
+to run and what it costs, the new `docs/commands.md` says what each command
+does and what it leaves to the next, and `docs/method.md` says how each step of
+a run works.
+
+**`examples/` mixed three different things.** Raw output, annotated copies of
+that output with commentary added, and two runs that are not audited results
+(`skipping-a-release-2.28-to-2.39.txt` and `below-the-floor-2.12-to-2.17.txt`,
+evidence about the method rather than examples of using it). Every file there
+is now the unedited output of the command it is named for, recaptured on the
+`collaudit8`, `collaudit9` and `collaudit10` fixtures whose builds
+`docs/results.md` cites, with each node's locale directory counted against its
+own `ls | wc -l` before use. Two files are new, the tags-only form of each
+audited pair, which is what a reader gets from a checkout alone.
+
+**The repository referenced `breakage/`.** That directory is evidence gathered
+for an article, not part of the tool, and the tool's own documentation and
+tests pointed into it. Nothing outside it references it now.
+
+### The rule this branch was written to
+
+**No figure belonging to a particular glibc version in the prose that defines
+the tool.** Such a figure ages by itself with every glibc release, and it is
+not even true within a version, because two machines on the same major.minor
+can carry different distro builds -- which is the thing this tool exists to
+detect. Those figures belong on the results page, which says which builds it
+measured. There is none left in `README.md`.
+
+### Files
+
+- **`README.md`** -- "The four commands" is "The commands", three of them; the
+  "How it works" section is gone.
+- **`docs/commands.md`** -- new, the middle of the three levels.
+- **`docs/README.md`**, **`docs/method.md`**, **`docs/results.md`** -- the
+  index gains the new page, and the links that named a section now name the
+  one they land on.
+- **`examples/`** -- recaptured, with a README that groups the files by the
+  command each one shows.
+- **`tests/test_published_claims.py`**, **`tests/test_known_answers.py`**,
+  **`tests/README.md`** -- the ties that read the deleted examples, and the
+  walk that used to include `breakage/`.
+
 ## 2026-09-23 (thirty-seventh entry)
 
 `docs/confirming-on-a-real-system.md` cut from 274 lines to 133. Nothing the
