@@ -96,7 +96,7 @@ reading before you run anything.
 What the five extra checks answer, how to take the copy and how to tell a good
 one from a short one are in [docs/commands.md](docs/commands.md). What this
 form prints is in
-[examples/README.md](examples/README.md#command-1-extended-and-the-evidence-behind-the-verdicts).
+[examples/README.md, under Command 1 extended](examples/README.md#command-1-extended-and-the-evidence-behind-the-verdicts).
 
 ```sh
 # on each node
