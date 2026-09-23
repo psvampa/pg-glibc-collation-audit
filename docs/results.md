@@ -131,8 +131,9 @@ glibc 2.34:  가 힢 힣 伽 佳      <- U+D7A3 back in place
 That is the whole difference: `힣` (U+D7A3) versus any Hanja. It is also why
 a hand-picked sample of everyday Korean text shows nothing — U+D7A3 is the
 last syllable of the Hangul block, and text essentially never reaches it.
-Derive test strings from the rule that changed; for a `localedef` change that
-means the boundaries of the affected range.
+How to turn a rule like this one into the three values the template tests
+with is in
+[confirming-on-a-real-system.md](confirming-on-a-real-system.md#choosing-the-three-values).
 
 ### The CJK range — flagged by step 4, cleared by measurement
 

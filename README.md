@@ -212,10 +212,17 @@ A source diff is an argument, not a proof of what actually runs in
 production. Run it on both the old and the new OS, for every locale the audit
 flagged.
 
-Which locales exactly, the four traps that make a comparison agree with itself
-while proving nothing, and what it reports beyond indexes — text partition
-keys among them, which no `REINDEX` fixes — are in
-[docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md).
+What this box leaves out is in
+[docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md):
+
+- which locales exactly to run it for
+- which values to test with, the step that decides whether the run proves
+  anything at all
+- the four traps that make a comparison agree with itself while proving
+  nothing
+- what it reports beyond indexes, text partition keys among them, which no
+  `REINDEX` fixes
+
 What those objects look like once they are already wrong is measured on two
 real nodes in [breakage/](breakage/).
 

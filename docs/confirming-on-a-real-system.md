@@ -29,6 +29,27 @@ Every locale steps 1 to 3 flagged, and — if step 5 found a
 [substantive code change](glossary.md) — every locale step 4 flagged too,
 regardless of whether it showed up in steps 1 to 3.
 
+## Choosing the three values
+
+The template compares three strings you supply, and choosing them is what
+decides whether the run proves anything. They are not words in the language.
+They are the characters the rule that changed moves.
+
+**Derive them from that rule.** For a `localedef` change it means the
+boundaries of the affected range: step 2's diff names the file and the lines
+that changed, and step 4 names the range.
+
+The worked example is `ko_KR` between glibc 2.28 and 2.34, where the whole
+difference is the last syllable of the Hangul block against any Hanja.
+Everyday Korean text never reaches that syllable, so three plausible words
+return a clean result on a locale whose order did change — the exact failure
+this step exists to avoid. The characters, the one-line check and what it
+prints on each build are in
+[results.md](results.md#the-ko_kr-mechanism-and-its-minimal-test-case).
+
+A locale flagged by step 4 rather than by step 2 has no diff to read. There
+the range itself is the guide, and its boundaries are the values to test.
+
 ## Four traps
 
 Each of these makes a comparison agree with itself while proving nothing.
