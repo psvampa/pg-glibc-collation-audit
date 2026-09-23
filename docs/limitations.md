@@ -17,7 +17,7 @@ backport it. The file is therefore on both your machines and in neither tag,
 so the five steps that read upstream source cannot see it. No choice of tags
 fixes that.
 
-It is worth knowing about because it is usually the default: almost anywhere
+It is worth knowing about because it is usually the default. Almost anywhere
 `initdb` runs in a container the database collation is `C.UTF-8`, so every
 text column without an explicit `COLLATE` sits on it. Its order did change
 between RHEL8 and RHEL9.
@@ -26,8 +26,8 @@ PostgreSQL does not cover the gap either. It records no collation version for
 any name beginning with `C.`, so no version mismatch can fire for this locale
 and no warning will reach you.
 
-Two things do reach it, and both need your machines rather than the clone:
-give `audit.sh` both locale directories and it compares the two files
+Two things do reach it, and both need your machines rather than the clone.
+Give `audit.sh` both locale directories and it compares the two files
 directly, and [`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql) measures the
 order on the builds you actually run. What those two found is in
 [results.md](results.md).
@@ -88,7 +88,7 @@ is a whole category nothing here looks at.
 `libc` provider PostgreSQL takes it from glibc too. A functional index on
 `lower(email)`, a unique index on `lower(username)` or a `CHECK` constraint
 calling `upper()` breaks on a glibc upgrade for the same reason a `COLLATE`
-index does: the function's output moves under an index built from the old
+index does. The function's output moves under an index built from the old
 output.
 
 PostgreSQL warns less here than it does for collation, not more. There is no
