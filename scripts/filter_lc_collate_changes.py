@@ -34,6 +34,9 @@ import glibc_locale_data as g
 
 _FILE_HDR_RE = re.compile(r'^diff --git a/(\S+) b/(\S+)$', re.M)
 _HUNK_RE = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@', re.M)
+# The same header, read one line at a time and keeping the new side's start
+# too, so each changed line can be placed on its own side of the diff.
+_HUNK_LINE_RE = re.compile(r'^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@')
 
 # Locale source files that arrive upstream at some tag but are ALREADY SHIPPED,
 # backported, by the distros this audit targets. For these, "added upstream"
@@ -170,6 +173,94 @@ def parse_diff(diff_text):
     return files
 
 
+def diff_sections(diff_text):
+    """{old_path: [section, ...]}: the text under each file's diff header.
+
+    A list, because a --diff-file can carry the same path twice, and then
+    neither section alone is that file's change.
+    """
+    sections = {}
+    matches = list(_FILE_HDR_RE.finditer(diff_text))
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(diff_text)
+        sections.setdefault(m.group(1), []).append(diff_text[m.end():end])
+    return sections
+
+
+def changed_characters(sections, old_text, new_text):
+    """The characters named on the changed lines inside LC_COLLATE, in order.
+
+    A removed line is placed by its old line number against the old block and
+    an added line by its new line number against the new block, so a hunk that
+    crosses the block's edge contributes only the lines inside it, and a file
+    that gained its block is read from the new one. Each line's comment is cut
+    before the `<U....>` escapes are read: a comment names characters too, and
+    a changed comment is not a changed rule.
+
+    Returns [] when the lines name no character and also when this cannot
+    tell -- the new text could not be read, the path does not have exactly one
+    section in the diff, a hunk header does not parse. The caller prints the
+    same thing for all of them: the locale stays flagged, and the reader is
+    told the characters are unknown, never that there are none.
+    """
+    if new_text is None or len(sections) != 1:
+        return []
+    bounds = {'-': g.collate_bounds(old_text), '+': g.collate_bounds(new_text)}
+    # Once per side, not once per line: comment_char searches the whole file,
+    # and called per line it took 17 minutes on cns11643_stroke.
+    cchar = {'-': g.comment_char(old_text), '+': g.comment_char(new_text)}
+    line_no = None
+    seen, found = set(), []
+    for line in sections[0].split('\n'):
+        if line.startswith('@@'):
+            m = _HUNK_LINE_RE.match(line)
+            if not m:
+                return []
+            line_no = {'-': int(m.group(1)), '+': int(m.group(2))}
+            continue
+        # Before the first hunk header come the ---/+++ file names; after it,
+        # a line opening with --- is a removed line whose text opens with --.
+        if line_no is None:
+            continue
+        side = line[:1]
+        if side == ' ':               # context, only in a --diff-file with -U>0
+            line_no['-'] += 1
+            line_no['+'] += 1
+            continue
+        if side not in ('-', '+'):
+            continue
+        n = line_no[side]
+        line_no[side] += 1
+        block = bounds[side]
+        if block is None or not block[0] <= n <= block[1]:
+            continue
+        for hexcp in g._UCHAR_RE.findall(line[1:].split(cchar[side])[0]):
+            code = int(hexcp, 16)
+            if code > 0x10FFFF or chr(code) in seen:
+                continue
+            seen.add(chr(code))
+            found.append(chr(code))
+    return found
+
+
+def print_characters(chars, indent='      ', width=78):
+    """`W (U+0057)  w (U+0077)`, wrapped, never splitting one character's
+    entry. A character a terminal would not show -- a control character, a
+    space -- is printed as its code point alone."""
+    entries = [f'{c} (U+{ord(c):04X})' if c.isprintable() and not c.isspace()
+               else f'U+{ord(c):04X}' for c in chars]
+    line = f'{indent}characters in the changed rules ({len(chars)}):'
+    sep = ' '
+    for entry in entries:
+        if len(line) + len(sep) + len(entry) > width:
+            print(line)
+            line = indent + entry
+        else:
+            line += sep + entry
+        sep = '  '
+    print(line)
+
+
 def main(argv):
     ap = argparse.ArgumentParser(
         description="Filter changed locale files down to real LC_COLLATE changes.")
@@ -291,9 +382,28 @@ def main(argv):
         for path in sorted(gained_collate):
             print(f"     {path}")
 
+    # Under each file, the characters its changed rules name: they are what
+    # the confirmation template needs as test values. Indented six spaces and
+    # with no blank line, so the list keeps parsing as one path per line. A
+    # file whose new version cannot be read gets None below, and with it the
+    # "could not identify" line rather than an abort: the other locales are
+    # still reported.
+    sections = diff_sections(diff_text)
+    new_texts, _ = g.read_blobs(repo, opts.new_tag,
+                                sorted({renamed_to.get(p, p)
+                                        for p in changed_collate}))
     print(f"\nFiles with changes inside LC_COLLATE: {len(changed_collate)}")
     for path in sorted(changed_collate):
         print(f"  {path}")
+        chars = changed_characters(sections.get(path, []), old_contents[path],
+                                   new_texts.get(renamed_to.get(path, path)))
+        if chars:
+            print_characters(chars)
+        else:
+            print(textwrap.fill(
+                "could not identify which characters changed, but this "
+                "locale must be considered suspicious",
+                width=78, initial_indent='      ', subsequent_indent='      '))
 
     # Step 3 walks the copy graph at the NEW tag, so it can only be given
     # names that exist there. A renamed file is judged against its OLD path

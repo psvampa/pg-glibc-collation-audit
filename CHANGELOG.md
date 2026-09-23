@@ -4,6 +4,45 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-23 (thirty-ninth entry)
+
+Step 2 now prints, under each locale it flags, the characters its changed
+rules name. No verdict moves, and no locale enters or leaves any list.
+
+### What it used to get wrong
+
+**Step 2 named the file and stopped.** The confirmation template compares
+three values the reader supplies, and choosing them decides whether that run
+proves anything. The docs said to derive them from the rule that changed, and
+no output showed that rule. Reaching the characters meant running `git diff`
+by hand against the clone the tool had already downloaded, and reading past
+comments and unrelated sections to find the lines that mattered. For `sv_SE`
+over 2.28..2.34 those are two deleted lines naming `W` and `w`.
+
+Now the characters are printed. When they cannot be identified, because the
+changed lines name none or the new version of the file could not be read,
+step 2 says so, says the locale must be considered suspicious, and goes on to
+the next one. `hu_HU` over 2.12..2.17 is a real case of a change that names no
+character.
+
+### Files
+
+- **`scripts/filter_lc_collate_changes.py`** -- the character list under each
+  flagged file.
+- **`examples/`** -- the four `rhel*` transcripts regenerated on the
+  `collaudit8`, `collaudit9` and `collaudit10` fixtures, on the same builds as
+  before. The only lines that changed are the new ones under step 2, and none
+  was removed.
+- **`docs/confirming-on-a-real-system.md`** -- said step 2 names the lines that
+  changed, which it never printed. It now says where the three values come
+  from, and that three characters from the list sorting the same on both
+  machines do not clear the locale.
+- **`docs/method.md`**, **`docs/commands.md`** -- what step 2 now prints.
+- **`tests/test_pure_functions.py`**, **`tests/test_known_answers.py`**,
+  **`tests/test_git_helpers.py`** -- what step 2 now prints, and what it prints
+  when it cannot tell. Each test was checked by breaking the code on purpose,
+  eighteen ways, and a harmless edit leaves them green.
+
 ## 2026-09-23 (thirty-eighth entry)
 
 The README's command section, a new page under it, and `examples/`. Nothing

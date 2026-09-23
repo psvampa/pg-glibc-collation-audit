@@ -135,6 +135,13 @@ configuration cannot change a count or hide a rename.
 Narrows that list to files whose change falls **inside** the
 `LC_COLLATE...END LC_COLLATE` block, the only part that can move sort order.
 
+Under each file it flags, it prints the characters named on the changed lines
+inside the block, which is where the confirmation template's three values come
+from. A removed line is judged against the old block and an added line against
+the new one, and each line's comment is cut first, because comments name
+characters too. When it cannot tell, it says it could not identify them and
+that the locale must be considered suspicious, and moves on to the next file.
+
 Files added, deleted or renamed between the two tags are reported separately
 rather than dropped, and so are the ones with no `LC_COLLATE` block on either
 side — named, not just counted, so a transliteration table cannot be confused

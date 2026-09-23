@@ -1226,6 +1226,47 @@ class RenamedFileGainsABlock(unittest.TestCase):
             self.assertEqual(fh.read().split(), ['y'],
                              'step 3 must get the name that exists at t2')
 
+    def test_the_gained_block_is_read_under_its_new_name(self):
+        """Thirty-ninth entry: the characters of a file that gained its block
+        come from its new version, which lives under the new name. Looked up
+        under the old one, nothing is found and the file gets the warning."""
+        rc, out = run_script('filter_lc_collate_changes.py', 't1', 't2',
+                             '--repo', self.repo,
+                             env_extra={'PG_GLIBC_AUDIT_OUT': self.out_dir})
+        self.assertEqual(rc, 0, out)
+        self.assertIn('localedata/locales/x characters in the changed rules '
+                      '(1): A (U+0041)', flat(out))
+
+
+class AGainedBlockThatNamesNoCharacter(unittest.TestCase):
+    """Thirty-ninth entry, the case the attempt before it got wrong: a file
+    that gains a block naming no character -- a bare `copy` -- was reported as
+    "no character is named", which loses that it gained a sort order. It gets
+    the warning. Fabricated, because no file gains a block in a pinned pair."""
+
+    def setUp(self):
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-gained-copy-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-gained-copy-out-')
+        self.addCleanup(shutil.rmtree, self.out_dir, ignore_errors=True)
+        self.repo = make_glibc_shaped_repo(tmp, n_files=g.MIN_LOCALE_FILES)
+        with open(os.path.join(self.repo, 'localedata', 'locales', 'x'),
+                  'a') as fh:
+            fh.write('LC_COLLATE\ncopy "loc_000"\nEND LC_COLLATE\n')
+        git(self.repo, 'commit', '-q', '-am', 't2')
+        git(self.repo, 'tag', 't2')
+
+    def test_it_gets_the_warning_not_an_empty_list(self):
+        rc, out = run_script('filter_lc_collate_changes.py', 't1', 't2',
+                             '--repo', self.repo,
+                             env_extra={'PG_GLIBC_AUDIT_OUT': self.out_dir})
+        self.assertEqual(rc, 0, out)
+        self.assertIn('GAINED an LC_COLLATE block', out)
+        self.assertIn('localedata/locales/x could not identify which characters '
+                      'changed, but this locale must be considered suspicious',
+                      flat(out))
+        self.assertNotIn('characters in the changed rules', flat(out))
+
 
 @needs_clone
 class UserGitConfigCannotChangeTheAnswer(unittest.TestCase):
