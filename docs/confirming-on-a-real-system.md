@@ -120,6 +120,26 @@ expectation into a refusal. `./audit.sh` does not take that option, so through
 the wrapper the printed counts are the assertion — compare them against
 `ls /usr/share/i18n/locales/ | wc -l` on each node.
 
+**Which printed count matters, though.** Steps 9 and 10 print the copy's own
+count as `Files at <build id>`, and that is the number to set against the
+node's. The `Compared N file(s)` lines of steps 6 to 8 are intersections —
+with the tag for steps 6 and 7, with the other node for step 8 — so they are
+never larger than `Files at`, and equality there does not mean the copy is
+complete. A `Compared` line adds back up to `Files at` only together with the
+`absent upstream` or `only on the ... node` line printed beside it.
+
+**A copy that lands most of its files is not refused.** The floor is absolute:
+only a directory too small to be a real copy at all is rejected. What never
+arrived is then reported as an ordinary finding — steps 6 and 7 list it under
+`Absent on the node`, step 8 under `Only on the old node` or `Only on the new
+node`, where a failed transport reads exactly like a locale the upgrade
+removed or added. Two cases do earn a `!!`: a backported locale such as `C`
+missing from one side (step 8), and a missing file that other locales `copy`,
+such as `iso14651_t1` (steps 9 and 10).
+
+Supply one side only and that side is still checked against its tag; the side
+you left out prints `NOT RUN` and names the flag that was missing.
+
 ## The `C.UTF-8` probe
 
 `sql/c_utf8_probe.sql` is a separate file from the template, and separate on
@@ -186,7 +206,10 @@ directory, and its counterpart for the other node, is the optional half of
 command 1 in [the README](../README.md#the-commands),
 which holds the only copy of that command — `glibc-locale-source` on each
 node, then `tar` off it. `tar`, not `docker cp`, whose target `/tmp` is a
-separate mount in a container, so the copy silently does nothing.
+separate mount in a container, so the copy silently does nothing. In a
+container `docker exec` replaces `ssh` in those commands, and `rpm -q glibc`
+prints the architecture as well (`...x86_64`) — either form is a usable build
+id.
 
 `--build-id` is required: a result is bound to the build it was taken on, and
 nothing in the directory carries a version. The script refuses a directory too

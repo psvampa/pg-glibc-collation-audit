@@ -124,59 +124,18 @@ ssh el9 rpm -q glibc
   --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
 ```
 
-In a container, `docker exec el8` replaces `ssh el8`. `rpm -q glibc` prints
-the architecture as well (`...x86_64`); either form is a usable build id, and
-the build ids in this README drop it.
+The build ids are required, because a result is bound to the build it was
+taken on and nothing in a directory of locale files carries a version. Read
+them **after** installing `glibc-locale-source`, which upgrades glibc on its
+way in.
 
-Check each copy against the node it came from: `ls el8-locales | wc -l`
-against `ls /usr/share/i18n/locales/ | wc -l` run on the node. The run does
-not do this for you: a copy missing a large share of its files is still not
-refused, and at step 8 a file that never arrived reads as a locale the upgrade
-removed or added.
-
-Supply only one side and you get that side's check against its tag; the other
-side says which flag was left out. `C.UTF-8` needs both, since its source file
-exists upstream only from glibc 2.35 and RHEL8 and RHEL9 predate that, so
-neither tag holds it and only the two machines can be compared to each other.
-
-This settles whether the two machines' collation *data* differs. What it
-cannot settle is the resulting *order*, because the weights are computed when
-the locale is built. That is command 2.
-
-**Checking the copy, and the build ids.**
-Steps 9 and 10 print the copy's own count as `Files at <build id>` — that is
-the number to set against the node's — and step 8 prints each copy's count,
-byte total and fingerprint. The `Compared N file(s)` lines of steps 6 to 8 are
-intersections — with the tag for steps 6 and 7, with the other node for step 8
-— so they are never larger than `Files at`, and equality there does not mean
-the copy is complete. A `Compared` line adds back up to `Files at` only
-together with the `absent upstream` or `only on the ... node` line printed
-beside it.
-
-A copy that lands most of the files is not refused: the scripts refuse only a
-directory too small to be a real copy at all. The files that never arrived are
-mostly reported as ordinary findings — steps 6 and 7 list them under `Absent
-on the node`, and step 8 under `Only on the old node` or `Only on the new
-node`, where a failed transport reads as a locale the upgrade removed or
-added. Two cases do earn a `!!`: a backported locale such as `C` missing from
-one side (step 8), and a missing file that other locales `copy`, such as
-`iso14651_t1` (steps 9 and 10).
-
-The build ids are required: a result is bound to the build it was taken on, and
-nothing in a directory of locale files carries a version. With neither
-directory supplied the summary says so, in as many words, rather than leaving
-the section out — the node-to-node comparison
-([`scripts/diff_node_locales.py`](scripts/diff_node_locales.py)) and the
-ellipsis scan of each node's own data (steps 9 and 10) print `NOT RUN`, and
-`NOT RUN` must not read as a clean result. Supply one of the two and the side
-you did not supply prints it as well, naming the flag that was left out.
-
-Installing `glibc-locale-source` also **upgrades glibc**, because the two
-packages are version-locked: read the build id after installing it, not
-before. That trap and the langpack ordering are both in
-[docs/requirements.md](docs/requirements.md); the traps that make two
-directories agree while proving nothing are in
-[docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md).
+Taking the copy is where this goes wrong quietly: a partial copy is not
+refused, and two short copies agree with each other perfectly. How to check
+what you took, what the counts in the output mean, and what a single supplied
+side does are in
+[docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md#two-truncated-copies-agree-perfectly).
+The langpack ordering trap is in
+[docs/requirements.md](docs/requirements.md).
 
 </details>
 
