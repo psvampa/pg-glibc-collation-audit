@@ -4,6 +4,189 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-23 (thirty-eighth entry)
+
+The README's command section, a new page under it, and `examples/`. Nothing
+the tool prints changes and no verdict moves. This entry covers the work the
+thirty-sixth and thirty-seventh describe the end of.
+
+### What it used to get wrong
+
+**"Step" meant two things.** The README called them "the four commands" and a
+run of the first one does its own work in ten numbered steps. A reader hitting
+"step 2" had to work out which of the two was meant. Commands are now numbered
+1 to 3 and are what you type; steps are numbered 1 to 10 and are what a run
+prints, and the pages say which they mean.
+
+**There were four commands and there are three.** The second, "What your
+distro patched, and what it added", was not a separate thing to run. It is
+`./audit.sh` with each machine's locale files added, so it is now the longer
+form of command 1 rather than a command of its own. What it buys is five
+further checks, which is what the collapsible under command 1 says.
+
+**The README carried the method.** It explained how the steps work, which is
+what `docs/method.md` is for, and it had a "How it works" section saying what
+two other pages already said. There are now three levels. The README says what
+to run and what it costs, the new `docs/commands.md` says what each command
+does and what it leaves to the next, and `docs/method.md` says how each step of
+a run works.
+
+**`examples/` mixed three different things.** Raw output, annotated copies of
+that output with commentary added, and two runs that are not audited results
+(`skipping-a-release-2.28-to-2.39.txt` and `below-the-floor-2.12-to-2.17.txt`,
+evidence about the method rather than examples of using it). Every file there
+is now the unedited output of the command it is named for, recaptured on the
+`collaudit8`, `collaudit9` and `collaudit10` fixtures whose builds
+`docs/results.md` cites, with each node's locale directory counted against its
+own `ls | wc -l` before use. Two files are new, the tags-only form of each
+audited pair, which is what a reader gets from a checkout alone.
+
+**The published documentation referenced `breakage/`.** That directory is
+evidence gathered for an article, not part of the tool, and the tool's own
+pages pointed into it. No published page does now. The directory itself is
+still tracked, 27 files, and the published-claims layer still names it to
+exclude it from the walk -- so nothing validates the links inside it.
+Backlog 12.2e.
+
+### The rule this branch was written to
+
+**No figure belonging to a particular glibc version in the prose that defines
+the tool.** Such a figure ages by itself with every glibc release, and it is
+not even true within a version, because two machines on the same major.minor
+can carry different distro builds -- which is the thing this tool exists to
+detect. Those figures belong on the results page, which says which builds it
+measured. There is none left in `README.md`.
+
+### Files
+
+- **`README.md`** -- "The four commands" is "The commands", three of them; the
+  "How it works" section is gone.
+- **`docs/commands.md`** -- new, the middle of the three levels.
+- **`docs/README.md`**, **`docs/method.md`**, **`docs/results.md`** -- the
+  index gains the new page, and the links that named a section now name the
+  one they land on.
+- **`examples/`** -- recaptured, with a README that groups the files by the
+  command each one shows.
+- **`tests/test_published_claims.py`**, **`tests/test_known_answers.py`**,
+  **`tests/README.md`** -- the ties that read the deleted examples, and the
+  walk that used to include `breakage/`.
+
+## 2026-09-23 (thirty-seventh entry)
+
+`docs/confirming-on-a-real-system.md` cut from 274 lines to 133. Nothing the
+tool prints changes and no verdict moves.
+
+### What it used to get wrong
+
+**A quarter of the page was not about confirming on a real system.** Two
+sections, "Checking the distro's own patches" and "And comparing the two nodes
+to each other", were about comparing locale FILES -- the optional half of
+command 1, which `docs/commands.md` already explains. The page's title
+promises measurement on a running system, and 75 of its lines were file
+comparison. They are gone, and the one link into them, from
+`docs/method.md`, now points at the section of `commands.md` that covers
+taking the copy.
+
+**The rest carried the reasons behind its own advice.** "PostgreSQL is not
+exposed to this" was followed by three bullets of PostgreSQL internals naming
+`varstr_cmp`, abbreviated keys and nondeterministic collations; the
+`strxfrm` tie check was published as a command to run by hand with its
+measured output, although the probe has run it itself as query 6b since the
+twenty-sixth entry; and the probe's 41-value corpus was described by how it
+was derived. A reader needs the conclusion and the action. The derivations are
+in `docs/results.md` and in earlier entries of this file.
+
+What stays is what nothing else says. Which locales to run the template for,
+how to choose the three values it compares, the traps that make a comparison
+agree with itself, how to read the `C.UTF-8` probe, and the partition keys no
+`REINDEX` fixes.
+
+### The one measurement this deletes
+
+The `strcoll` tie rates, measured on RHEL8 and RHEL9 over random string pairs.
+**About 0.1% of pairs compare equal under `sv_SE`, `en_US` and `de_DE`, and
+about 10% under `ko_KR`.** They lived in that page and nowhere else, so they
+are recorded here. What they were there to show is that the tie is common
+enough to matter, which is why `sort(1)` must be given byte-identical input on
+both sides. That instruction is what the page now carries.
+
+### Files
+
+- **`docs/confirming-on-a-real-system.md`** -- rewritten. The two anchors other
+  files link to, `#choosing-the-three-values` and `#the-cutf-8-probe`, are
+  unchanged. `#checking-the-distros-own-patches` is gone with its section.
+- **`docs/method.md`** -- the link that pointed at that section.
+- **`README.md`**, **`docs/README.md`** -- the trap count, now three, and the
+  index line that still described the file comparisons.
+
+## 2026-09-23 (thirty-sixth entry)
+
+`docs/limitations.md` cut from 589 lines to 112, and the CJK row of the
+README's results table reworded. Nothing the tool prints changes and no
+verdict moves.
+
+### What it used to get wrong
+
+**The page that names the blind spots was the longest page in the
+repository.** 589 lines, 4,772 words, 284 figures -- a quarter of all the
+documentation, and two of its six sections were 70% of it. A reader who wants
+to know what this tool cannot see had to scroll through three node
+measurements, a before-and-after table of a bug that is fixed, and the source
+explanation of why `C.UTF-8` changed. The page's job is to make six blind
+spots understood, and its length worked against that in both directions: too
+long to read, and long enough to make the tool look more limited than it is.
+
+**Almost all of that evidence was a third copy.** The `C.UTF-8` probe
+measurement is in `docs/results.md`; the distro-backport tables, the glibc
+2.24 floor bug with its before-and-after figures, and the charmaps code-point
+counts are each in an earlier entry of this file. Removing them from
+`limitations.md` loses none of them, and it removes what a documentation
+review had to re-read every round -- the cost this branch was opened to
+measure.
+
+**The README's CJK row said "inherited by almost every locale in the tree".**
+"Almost" is the blurred form of a figure `docs/results.md` already publishes
+exactly, and the exact figure belongs to one glibc version: 328 of 342 locale
+files at 2.34, 338 of 352 at 2.39. The row now names the mechanism instead --
+a locale inherits `iso14651_t1` unless it defines its own order -- which does
+not age. Measured on the pinned clone: the files that do not reach it at 2.34
+are `ko_KR`, `ja_JP`, `zh_CN`, `cmn_TW`, `th_TH`, `km_KH`, `lo_LA`, `ar_SA`,
+`sl_SI`, `cns11643_stroke`, `POSIX` and the two `iso14651_t1` templates, plus
+`C` at 2.39.
+
+### What moved rather than went
+
+The three verbatim `NOT RUN` blocks and the seven `C` statuses were the only
+material on the page with no copy elsewhere, and three tests read them. They
+are now under `docs/method.md`, "Reading the output", which is the page that
+explains what a run prints; the three tests read them there.
+
+### The one measurement this deletes
+
+`LC_CTYPE`'s sweep, taken on `glibc-2.28-251.el8_10.40` and
+`glibc-2.34-275.el9_8` over every code point but `U+0000` and the surrogates:
+**6,525 answer differently, 6,522 of them changing character class, and 5,905
+of those becoming letters.** It lived in `limitations.md` prose and nowhere
+else, so it is recorded here. It is one pair of builds and does not
+generalise; what it showed is that a functional index and a character-class
+`CHECK` move under a glibc upgrade with nothing in PostgreSQL recording it.
+That statement, without the figures, is what the page now carries.
+
+### Files
+
+- **`docs/limitations.md`** -- rewritten. The six `##` headings are unchanged,
+  because thirteen links from other files depend on their anchors.
+- **`docs/method.md`** -- two new subsections under "Reading the output".
+- **`README.md`**, **`docs/README.md`** -- the CJK row, and the two index
+  sentences that said the first limitation is "covered three other ways",
+  which counted internal checks rather than saying what the page is about.
+- **`tests/test_published_claims.py`** -- the three quoted-block ties read
+  `method.md`; the canonical-figures table loses the 6,525 row, which no
+  published file states any more, and the `iso14651_t1` inheritance row now
+  expects three files rather than five.
+- **`tests/README.md`** -- the row count, and the sentence that said
+  `limitations.md` quotes the floor pair's figures.
+
 ## 2026-09-22 (thirty-fifth entry)
 
 The README's summary and the first half of "How to use", and one documentation

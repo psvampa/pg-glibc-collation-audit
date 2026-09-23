@@ -2,30 +2,33 @@
 
 ## Reading order
 
-1. **[method.md](method.md)** — how the answer is produced, and why a clean
+1. **[commands.md](commands.md)** — what each of the three commands does,
+   and what it leaves to the next. Read this first if you are about to run
+   one.
+2. **[method.md](method.md)** — how the answer is produced, and why a clean
    diff counts as proof. Read this if you need to decide whether to trust it.
-2. **[results.md](results.md)** — the evidence behind every row of the
+3. **[results.md](results.md)** — the evidence behind every row of the
    verdict table, and both worked examples. The table itself is in
    [the README](../README.md#results-for-the-two-rhel-pairs).
-3. **[confirming-on-a-real-system.md](confirming-on-a-real-system.md)** — how
+4. **[confirming-on-a-real-system.md](confirming-on-a-real-system.md)** — how
    to verify it on your own nodes, which is the only evidence that covers
    distro backports.
-4. **[limitations.md](limitations.md)** — the six things to know before you
+5. **[limitations.md](limitations.md)** — the six things to know before you
    act on a clean result, `LC_CTYPE` among them.
 
 ## Every document
 
 | Document | What's in it |
 |---|---|
+| [commands.md](commands.md) | What each of the three commands does, what the longer form of command 1 adds, and how to take the locale copy off a machine and check it |
 | [method.md](method.md) | The five steps in detail, how far apart the two tags may be, how to read what a run prints, and the decision procedure they add up to |
 | [results.md](results.md) | The evidence behind each verdict, both worked examples, and what was tested on which nodes |
-| [confirming-on-a-real-system.md](confirming-on-a-real-system.md) | Running the SQL template and the `C.UTF-8` probe on both nodes, comparing the nodes' locale files against upstream and against each other, and the four traps that make a comparison lie |
+| [confirming-on-a-real-system.md](confirming-on-a-real-system.md) | Running the SQL template and the `C.UTF-8` probe on both nodes, choosing values that prove something, and the three traps that make a comparison lie |
 | [scope.md](scope.md) | What this audits — `LC_COLLATE` and the `libc` provider — and the `builtin` provider as a way out |
-| [limitations.md](limitations.md) | The six things to know before acting on a clean result — `C.UTF-8` among them, and now covered three other ways; `LC_CTYPE`, which no step audits |
+| [limitations.md](limitations.md) | The six things to know before acting on a clean result — `C.UTF-8` among them, and `LC_CTYPE`, which no step audits |
 | [requirements.md](requirements.md) | Dependencies, the test suite, and the three setup traps on the confirmation side |
 | [glossary.md](glossary.md) | `copy` graph, blast radius, hunk, tier, ellipsis range, role swap |
-| [../breakage/](../breakage/README.md) | What a collation change breaks inside PostgreSQL once it happened: thirteen cases measured on two nodes, each one the real `psql` session from both sides, side by side |
-| [../examples/](../examples/) | Real output from both pairs, a confirmation SQL script for each, the `C.UTF-8` probe output that is the only published evidence for that locale's order, the below-the-floor pair that is not an audited result but shows what the old glibc 2.24 bug cost, and the run that skips a release |
+| [../examples/](../examples/README.md) | Real output of every command on both audited pairs, a confirmation SQL script for each, and the `C.UTF-8` probe output that is the only published evidence for that locale's order |
 | [../CHANGELOG.md](../CHANGELOG.md) | What this tool used to get wrong, and when |
 | [../tests/README.md](../tests/README.md) | What the test suite covers, and what it does not |
 

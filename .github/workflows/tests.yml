@@ -54,14 +54,25 @@ jobs:
           python3 scripts/glibc_locale_data.py provenance \
             glibc-2.28 glibc-2.34 glibc-2.39 glibc-2.12 glibc-2.17
 
+      - name: Say so if the documentation layer is switched off
+        # Renaming that file out of `test*.py` removes 39 tests from the run
+        # without producing a single skip, so the step below stays green and
+        # says nothing. A disabled layer must be visible in the log it is
+        # missing from.
+        run: |
+          if [ -e tests/DISABLED_published_claims.py ]; then
+            echo "::warning::the published-claims layer is DISABLED; nothing in this run checked the numbers and quotes the documentation publishes"
+          fi
+
       - name: Run the suite
         # Run once, then check the summary. A skipped layer is not a passing
         # layer: without a usable glibc clone the git-backed tests skip BY
         # DESIGN, which is right on a contributor's laptop and wrong here -- a
         # broken clone step would otherwise leave this job green with only the
-        # three clone-free layers (test_pure_functions, test_published_claims,
-        # test_parallel_runner) and the fabricated-repository classes of
-        # test_git_helpers having actually run.
+        # clone-free layers (test_pure_functions, test_parallel_runner, and
+        # test_published_claims when it is enabled) and the
+        # fabricated-repository classes of test_git_helpers having actually
+        # run.
         run: |
           set -o pipefail
           python3 -m unittest discover -s tests -t tests -v 2>&1 | tee /tmp/out.txt

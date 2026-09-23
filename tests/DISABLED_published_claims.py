@@ -1,17 +1,42 @@
-"""Layer 7: the numbers and quotes the documentation publishes.
+"""DISABLED 2026-09-23, on Pablo's instruction, for the documentation refactor.
 
-Two documentation-correction passes in one day, on 2026-09-06, found the same
-class of defect each time: a count, a position or a quoted output line that no
-longer matched what the tool or the measurement actually produced. Re-reading
-caught them; re-reading is not a control.
+THIS FILE IS NOT RUN. Its name does not match unittest's `test*.py` discovery
+pattern, so neither `unittest discover` nor `tests/run_parallel.py` collects
+it. That is the whole mechanism -- there is no flag and no environment
+variable, and nothing here is `skip`ped, because CI fails on any skip and a
+skipped layer that reports itself as passing is the defect this repository
+exists to catch.
 
-This is the checkable half of that, turned into a test. It reads the published
-files and asserts they agree with each other and with the scripts. It cannot
-check prose, and it deliberately does not try: what it covers is exactly the
-part where a human re-read is wasted effort.
+WHY. The branch `four-commands-say-what-they-do` is rewriting the
+documentation, and this layer holds the prose to figures and quotes that the
+rewrite is deliberately moving. Pablo's call, 2026-09-23: the failures it
+raises during the refactor cost more than they catch until the pages settle.
 
-No glibc clone needed -- everything here is in the repository.
+TO TURN IT BACK ON: `git mv tests/DISABLED_published_claims.py
+tests/test_published_claims.py`, delete this docstring, and run the suite. It
+was green at 39 tests when it was switched off.
+
+WHAT IS UNGUARDED WHILE IT IS OFF. Everything in here, which is the numbers
+and quotes the documentation publishes -- the canonical-figures table that
+requires a figure restated across pages to be the same figure everywhere, the
+verbatim ties between the docs and what the tool prints, the check that every
+internal link and anchor resolves, the check that every `docs/*.md` path named
+by `audit.sh` exists, and the check that nothing under `.claude/` is tracked.
+Backlog 12.1 tracks turning it back on.
+
+KNOWN HOLES IN IT, measured by false-negative-reviewer on 2026-09-23 with
+mutations, to fix when it is re-enabled rather than rediscovered: the
+`docs/method.md` table of the release-skipping triple is tied by nothing since
+the example it read was deleted (changing "75 hunks" to "76" is green here and
+red on main); `test_every_C_status_the_docs_list_is_one_the_tool_can_print`
+passes when `codepoint_collation` is deleted from the enumeration, because the
+word appears three other times in that file; the steps 9/10 quote tie passes
+over a truncated quote; and `test_every_doc_a_script_or_example_names_exists`
+matches only `docs/` and `tests/` `.md` paths, so the dangling
+`examples/skipping-a-release-2.28-to-2.39.txt` in `audit.sh` is invisible to
+it. Backlog 12.2.
 """
+
 import collections
 import os
 import re
@@ -160,7 +185,11 @@ def docs(include_changelog=False):
         # .claude/ is gitignored whole (PR #18): the private working rules
         # under it are not published documentation, and asserting them as
         # such made every commit fail on files the repository does not carry.
-        dirs[:] = [d for d in dirs if d not in ('.git', 'glibc', '.claude')]
+        #
+        # breakage/ is evidence gathered for an article rather than part of
+        # this tool, and nothing else in the repository may reference it.
+        dirs[:] = [d for d in dirs
+                   if d not in ('.git', 'glibc', '.claude', 'breakage')]
         for name in files:
             if not name.endswith('.md'):
                 continue
@@ -173,7 +202,11 @@ def docs(include_changelog=False):
 
 def ordering_rows(text):
     """[(position, code point, label)] from a probe output's query 1 table."""
-    block = text.split('(query 1)')[1].split('(41 rows)')[0]
+    # The probe's own section header. It was '(query 1)' until the two
+    # probe examples were recaptured as plain output: that string was in
+    # an editorial heading written above the run, not in anything psql
+    # prints.
+    block = text.split('=== 1. the order')[1].split('(41 rows)')[0]
     return [(int(m.group(1)), m.group(2), m.group(3).strip())
             for m in re.finditer(r'^\s*(\d+) \| (U\+[0-9A-F]+)\s*\| (.+)$',
                                  block, re.M)]
@@ -282,12 +315,22 @@ class ThePublishedOutputsMatchTheirProse(unittest.TestCase):
                                  f'{name} states the wrong count')
 
     def test_the_rhel9_output_really_is_code_point_order(self):
-        """The RHEL9-vs-RHEL10 file claims "This is code point order, exactly".
-        Nothing else checks that claim."""
-        rows = ordering_rows(read(EXAMPLE_9_10))
+        """The order the probe printed, read as numbers and sorted.
+
+        It used to check a sentence as well -- the file claimed "This is code
+        point order, exactly" -- which went when the examples were recaptured
+        as plain output. The probe answers the same question itself, in query
+        2, and that answer is machine-readable rather than prose: this now
+        asserts both halves of it."""
+        text = read(EXAMPLE_9_10)
+        rows = ordering_rows(text)
         cps = [int(cp[2:], 16) for _, cp, _ in rows]
         self.assertEqual(cps, sorted(cps))
-        self.assertIn('code point order, exactly', read(EXAMPLE_9_10))
+        query_2 = text.split('=== 2. does C.utf8 equal byte order?')[1]
+        verdict = query_2.split('(1 row)')[0].strip().split('\n')[-1]
+        self.assertRegex(verdict, r'^\s*t\s*\|\s*0\s*$',
+                         'query 2 no longer says the order equals byte order '
+                         'with nothing out of position')
 
     def test_the_examples_name_the_builds_they_were_measured_on(self):
         for path, expected in ((EXAMPLE_8_9, BUILDS[:2]),
@@ -324,10 +367,10 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
                    re.finditer(r'^\s*echo "(' + re.escape(heading) + r')"',
                                wrapper, re.M)]
         self.assertEqual(len(printed), 1, 'audit.sh no longer prints it')
-        limits = read(os.path.join(REPO_ROOT, 'docs', 'limitations.md'))
+        method = read(os.path.join(REPO_ROOT, 'docs', 'method.md'))
         m = re.search(r'Given neither directory it reads instead:.*?```\n'
-                      r'(.*?)```', limits, re.S)
-        self.assertIsNotNone(m, 'the quoted block is gone from limitations.md')
+                      r'(.*?)```', method, re.S)
+        self.assertIsNotNone(m, 'the quoted block is gone from method.md')
         self.assertEqual(echoed_block(wrapper, heading),
                          m.group(1).rstrip('\n').split('\n'))
 
@@ -362,116 +405,11 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
         found = [name for name, text in docs().items() if printed[0] in text]
         self.assertTrue(found, 'no doc quotes the heading any more')
 
-    def test_the_below_floor_example_matches_the_asserted_numbers(self):
-        """The example is a saved run, so it can go stale exactly the way the
-        old step 4 figure did. Its table is tied to the same numbers
-        test_known_answers asserts against the pinned tags.
-
-        And so is the table in docs/limitations.md, which publishes the same
-        three rows. This test read the EXAMPLE only until 2026-09-22, so the
-        page a reader actually opens could drift from the run it summarises
-        and nothing failed -- backlog 3.11, which named this table as tied to
-        the wrong source. The numbers are written once here and asserted
-        against both, because two copies of three numbers is the shape the
-        step-4 figure rotted in."""
-        path = os.path.join(REPO_ROOT, 'examples',
-                            'below-the-floor-2.12-to-2.17.txt')
-        text = read(path)
-        page = flat(read(os.path.join(REPO_ROOT, 'docs', 'limitations.md')))
-        for label, before, after in (
-                ('Step 3, affected locale source files', '11', '280'),
-                ('Step 4, needing empirical confirmation', '277', '281'),
-                ('Step 4, generated names per SUPPORTED', '404', '411')):
-            self.assertRegex(
-                text, rf'{re.escape(label)}\s+{before}\s+{after}\b',
-                f'{label} no longer reads {before} -> {after}')
-            # The page writes SUPPORTED as code and bolds the figure it wants
-            # read, neither of which is part of the claim.
-            cell = re.escape(label).replace('SUPPORTED', '`?SUPPORTED`?')
-            # Matched on the LABEL, with the numbers captured rather than
-            # spelled into the pattern. Counting rows that already carry the
-            # right numbers is blind to the only duplicate that can happen by
-            # drift -- a second table whose cells have moved -- and that is
-            # the case the message below names. Measured GREEN before this
-            # was fixed, with a second table one below on every cell.
-            rows = re.findall(
-                rf'\| {cell} \| \**(\d+)\** \| \**(\d+)\** \|', page)
-            self.assertEqual(
-                len(rows), 1,
-                f'docs/limitations.md carries {len(rows)} rows for '
-                f'"{label}", one expected. None means the page dropped or '
-                f'reworded it while the example still states it; two means a '
-                f'drifting copy can be satisfied by a stale one')
-            self.assertEqual(
-                rows[0], (before, after),
-                f'docs/limitations.md states {label} as '
-                f'{rows[0][0]} -> {rows[0][1]}, and the run it summarises '
-                f'says {before} -> {after}')
-        self.assertIn('Full affected set (280 locale source file(s))', text)
-        self.assertIn('281 locale source file(s), 411 generated', text)
-        # The header counts generated names; the written list also carries the
-        # names SUPPORTED does not list. Putting one where the other belongs
-        # is how this example gained a line the tool never printed.
-        self.assertIn('pg_collation show (409):', text)
-
-    def test_the_skipped_release_example_matches_the_method_page(self):
-        """docs/method.md publishes a five-row table comparing the two steps
-        with the direct jump, and examples/ carries the run it came from. Two
-        copies of five numbers is exactly the shape the step-4 "2" rotted in.
-
-        Rows 1, 2 and 3 are asserted against the pinned clone in
-        test_known_answers (SkippingAReleaseReportsTheUnion). The two step 8
-        rows are NOT, and cannot be: they need both nodes'
-        /usr/share/i18n/locales/, which no test has. Those four numbers are
-        pinned here instead, to the tool's own lines inside the three example
-        bodies -- otherwise a hand-written table would be tied only to another
-        hand-written table, which is two copies of prose and no measurement.
-        """
-        example = read(os.path.join(REPO_ROOT, 'examples',
-                                    'skipping-a-release-2.28-to-2.39.txt'))
-        method = flat(docs()[os.path.join('docs', 'method.md')])
-        rows = (('Step 2, files changed inside `LC_COLLATE`', 2, 3, 5, 5),
-                ('Step 3, generated names to reindex', 6, 4, 10, 10),
-                ('Step 5, substantive hunks', 24, 52, 76, 75),
-                ('Step 8, locales differing on the two nodes', 3, 3, 6, 6),
-                ('Step 8, locales the upgrade removes', 1, 1, 2, 2))
-        for label, first, second, both, direct in rows:
-            with self.subTest(row=label):
-                self.assertIn(
-                    f'| {label} | {first} | {second} | {both} | **{direct}** |',
-                    method,
-                    f'docs/method.md no longer states {label} as '
-                    f'{first}/{second}/{both}/{direct}')
-                self.assertRegex(
-                    example,
-                    rf'{re.escape(label.replace("`", ""))}\s+{first}\s+'
-                    rf'{second}\s+{both}\s+{direct}\b',
-                    f'the example no longer states {label} the same way')
-
-        # The one row that is not a sum is the only one worth a sentence, and
-        # both copies have to carry the same explanation of why.
-        self.assertIn('75 hunks, not 76', method)
-        self.assertIn('75 substantive hunk(s) found', example)
-        self.assertIn('THE ONE FIGURE THAT IS NOT A SUM: 75, NOT 76', example)
-
-        # C.UTF-8 is the claim a reader is most likely to doubt, so the
-        # example has to carry the line the TOOL printed, not the header's
-        # quotation of it. Asserting the bare phrase passed on the prose
-        # alone: an example regenerated from a run that no longer reported
-        # C.UTF-8 as DIFFERS would have stayed green, which is two copies of
-        # prose tied to each other and no measurement.
-        summary = example.split('== AUDIT SUMMARY')[1]
-        self.assertIn('C (C.UTF-8): DIFFERS  <- in neither tag', summary)
-        self.assertIn('C (C.UTF-8): DIFFERS', method)
-
     STEP_8 = {
         'rhel8-to-rhel9-audit-output.txt':
             (3, {'C', 'or_IN', 'sv_SE'}, 1, {'en_US@ampm'}),
         'rhel9-to-rhel10-audit-output.txt':
             (3, {'ber_DZ', 'kab_DZ', 'th_TH'}, 1, {'aa_ER@saaho'}),
-        'skipping-a-release-2.28-to-2.39.txt':
-            (6, {'C', 'ber_DZ', 'kab_DZ', 'or_IN', 'sv_SE', 'th_TH'},
-             2, {'aa_ER@saaho', 'en_US@ampm'}),
     }
 
     def _node_section(self, name):
@@ -507,31 +445,10 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
         saying so -- and it ran at all only if every assertion above that call
         had passed first.
         """
-        got = {}
         for name, (dn, dset, gn, gset) in self.STEP_8.items():
             differing, gone = self._node_section(name)
             self.assertEqual(differing, dset, f'{name}: step 8 differing set')
             self.assertEqual(gone, gset, f'{name}: step 8 removed set')
-            got[name] = (differing, gone)
-        first, second, direct = (got['rhel8-to-rhel9-audit-output.txt'],
-                                 got['rhel9-to-rhel10-audit-output.txt'],
-                                 got['skipping-a-release-2.28-to-2.39.txt'])
-        self.assertEqual(direct[0], first[0] | second[0],
-                         'step 8 on the direct pair is no longer the union')
-        self.assertEqual(direct[1], first[1] | second[1],
-                         'the removed locales are no longer the union')
-
-    def test_the_skipped_release_example_is_not_sold_as_an_audited_pair(self):
-        """docs/scope.md publishes two pairs and this is not a third. The
-        floor pair carries the same disclaimer for the same reason: a
-        measured-but-unpublished pair is one careless sentence away from
-        becoming a supported one, which is how RHEL7 kept coming back."""
-        example = read(os.path.join(REPO_ROOT, 'examples',
-                                    'skipping-a-release-2.28-to-2.39.txt'))
-        self.assertIn('NOT AN AUDITED PAIR', example)
-        scope = flat(docs()[os.path.join('docs', 'scope.md')])
-        self.assertIn('Two upgrade pairs: RHEL8 \u2192 RHEL9 and RHEL9 \u2192 RHEL10',
-                      scope)
 
     def test_no_doc_states_a_test_count(self):
         """It went stale twice in one day, so it was removed rather than
@@ -807,15 +724,13 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     An evidence file is named only where the number really appears in query
     output, and only where it is the SAME fact:
 
-      * `breakage/cases/04-lc-ctype.md` carries 6,525 in prose and nowhere
-        else, so it is not listed: comma-stripped, the check would find the
-        prose it was meant to be independent of and pass whatever the
-        measurement said -- the vacuous assertion of the sixteenth entry.
-      * `breakage/cases/05-partial-brin-gist.md` and
-        `cases/B-planner-statistics.md` do carry a bare 9616, but theirs is
-        `count(*) WHERE w < 'vz'`, the complement of case 8's violating count,
-        equal to it only on this fixture. Tying them would tie two facts that
-        agree by arithmetic accident.
+      * a file carrying the figure in prose and nowhere else is not listed:
+        comma-stripped, the check would find the prose it was meant to be
+        independent of and pass whatever the measurement said -- the vacuous
+        assertion of the sixteenth entry.
+      * neither is a file whose bare number is a DIFFERENT fact that happens
+        to agree, such as the complement of a count on one fixture. Tying it
+        would tie two facts that agree by arithmetic accident.
 
     What the BARE form asks is whether the transcript still carries the
     number, so it catches a page re-measured away from the prose and does NOT
@@ -826,11 +741,10 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     rows keep it, carrying 9,616 and 9,619. What makes them safe is not that
     the counts are longer but a measurement: bumping each by one reddens it,
     because neither named file carries the bumped value. That is narrower than
-    it sounds, and deliberately stated so. `breakage/repair.md` states BOTH of
-    those counts, so it is exactly the file that CANNOT tell a drift from one
-    to the other; what reddens that row is
-    `breakage/cases/07-range-partition.md`, which carries only its own. An
-    evidence tie is only as good as the narrowest file under it.
+    it sounds, and deliberately stated so: a file that states BOTH counts
+    cannot tell a drift from one to the other, and what reddens such a row is
+    the file carrying only its own. An evidence tie is only as good as the
+    narrowest file under it.
 
     **A row may instead name the sentence its number appears in, and the part
     of the transcript that produced it.** Both halves were paid for on
@@ -848,7 +762,7 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     must appear exactly ONCE in what is left: two copies mean a drifting one
     is satisfied by a stale one, which is this test's own defect class turned
     on itself. The bare form keeps "at least once", because a transcript may
-    state a number twice for good reason and `breakage/cases/09` does.
+    state a number twice for good reason.
 
     `least` is not decoration. Without it, deleting every mention leaves this
     test green over a claim that no longer exists, which is "absent is not
@@ -857,41 +771,40 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     out of this table in the same commit.
     """
 
-    # The command line that opens step 4's run against the TAG. The el9
-    # node is built from glibc 2.34, so the node scan lower down the same
-    # transcript repeats step 4's figures in byte-identical sentences:
-    # anchoring to the sentence alone ties those rows to whichever of the
-    # two happens to match. Measured 2026-09-22, lines 107/113 against
-    # 724/730.
-    STEP_4_AT_THE_TAG = '$ python3 flag_algorithmic_ranges.py glibc-2.34'
+    # The banner that opens step 4's run against the TAG. The el8 and el9
+    # nodes are scanned lower down the same transcript and reprint step 4's
+    # figures in byte-identical sentences, with DIFFERENT numbers on the el8
+    # side: anchoring to the sentence alone ties these rows to whichever of
+    # the three happens to match first. Measured 2026-09-23 on the recaptured
+    # run: line 112 says 331 where line 731, the el8 node's own scan, says
+    # 329.
+    #
+    # It was the hand-run `$ python3 flag_algorithmic_ranges.py glibc-2.34`
+    # until the examples were recaptured as plain `audit.sh` output, which
+    # prints banners instead. The banner is the better anchor: the region
+    # ends at the next `====` rule, which is now a real boundary rather than
+    # four hundred lines of whatever followed.
+    #
+    # It carries the rule that CLOSES the banner, because the region ends at
+    # the next `====` and that would otherwise be the banner's own closing
+    # line, one below: an empty region, and a row that proves nothing while
+    # reporting that it found no figure to move.
+    STEP_4_AT_THE_TAG = ('== STEP 4  Which locales a data diff can never '
+                         'clear\n'
+                         '================================================'
+                         '================\n')
 
     #     label, pattern with ONE group, FILES expected, evidence entries
     FIGURES = (
-        ('the rows that break in breakage/ cases 8 and 9',
-         r'(\d[\d,]*) (?:stored rows violate|stored values no longer match'
-         r'|offending rows)',
-         2,
-         ('breakage/cases/08-check-constraint.md',
-          'breakage/cases/09-generated-column-matview.md')),
         ('the PostgreSQL floor the tool requires',
          r'(?:needs |Needs |\*\*)(?:PostgreSQL|version) (\d+) or newer',
          3,
          ()),
-        ('the characters that answer differently between the two builds',
-         r'(\d[\d,]*) (?:figure in \[case 4\]|characters of case 4'
-         r'|characters that answer differently|of them answer differently)',
-         4,
-         ()),
         ('the locales that inherit iso14651_t1 at glibc 2.34',
          r'inherited by (\d+) locales|template that (\d+) locales'
          r'|the (\d+) to \d+ locales that inherit it',
-         5,
+         3,
          ()),
-        ('the rows that land in the wrong partition in case 7',
-         r'(\d[\d,]*) rows sit in the wrong partition',
-         1,
-         ('breakage/cases/07-range-partition.md',
-          'breakage/repair.md')),
         ('the locales the four ellipsis files expose through copy at 2.34',
          r'inherited by (\d+) further locales',
          1,
@@ -1018,7 +931,7 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
                     # The bare form asks only that the figure be in the file,
                     # which is what it has always asked: a transcript may
                     # legitimately print the same number more than once, and
-                    # breakage/cases/09 does.
+                    # a transcript may state one twice for good reason.
                     self.assertTrue(
                         agrees,
                         f'{label} is published as {bare} but {ev.path} -- '
@@ -1073,12 +986,13 @@ class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
     #: Rows tied only to the other pages that state them. Untied, not
     #: untieable: the tool prints 328 (line 18 of the rhel8-to-rhel9
     #: transcript), and the PostgreSQL floor is a requirement rather than a
-    #: measurement. Only 6,525 could not be tied -- it appears
-    #: in prose and in no query output, so a tie would find the prose it was
-    #: meant to be independent of, which the class docstring calls vacuous.
+    #: measurement. The 6,525 row was here until docs/limitations.md stopped
+    #: publishing evidence; it was the one figure that could not be tied --
+    #: prose and no query output -- and with no page stating it there is
+    #: nothing left for this class to compare. The measurement is in the
+    #: CHANGELOG entry that removed it.
     NO_RUN_BEHIND_THEM = (
         'the PostgreSQL floor the tool requires',
-        'the characters that answer differently between the two builds',
         'the locales that inherit iso14651_t1 at glibc 2.34',
     )
 
@@ -1173,7 +1087,7 @@ class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
 
 
 class TheExamplesCarryTheNodeSteps(unittest.TestCase):
-    """docs/limitations.md quotes the summary block steps 9 and 10 add, and
+    """docs/method.md quotes the summary block steps 9 and 10 add, and
     until 2026-09-07 that block appeared in no examples/*.txt and no test tied
     it -- the one published place a reader could check it against was
     missing. Both worked examples now carry steps 6 to 10 and the full summary
@@ -1202,11 +1116,11 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
 
     def test_the_quoted_steps_9_10_block_is_verbatim_from_the_example(self):
         """The fenced block under "What steps 9 and 10 add to the summary" in
-        docs/limitations.md, line for line in the RHEL8->RHEL9 example."""
-        limits = read(os.path.join(REPO_ROOT, 'docs', 'limitations.md'))
+        docs/method.md, line for line in the RHEL8->RHEL9 example."""
+        method = read(os.path.join(REPO_ROOT, 'docs', 'method.md'))
         m = re.search(r'What steps 9 and 10 add to the summary.*?```\n(.*?)```',
-                      limits, re.S)
-        self.assertIsNotNone(m, 'the quoted block is gone from limitations.md')
+                      method, re.S)
+        self.assertIsNotNone(m, 'the quoted block is gone from method.md')
         self.assertIn(m.group(1), self.example('rhel8-to-rhel9'))
 
     def test_the_summary_blast_radius_line_matches_step_8(self):
@@ -1224,7 +1138,7 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
 
 
     def test_every_C_status_the_docs_list_is_one_the_tool_can_print(self):
-        """docs/limitations.md enumerates the states the steps 9/10 summary
+        """docs/method.md enumerates the states the steps 9/10 summary
         line can carry. A state renamed in the code and left standing in that
         list is the seventeenth entry's defect in a new place: prose a reader
         checks their own output against, describing output that no longer
@@ -1256,7 +1170,7 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
             None)]
         self.assertEqual(len(set(printed)), 6, printed)
 
-        limits = read(os.path.join(REPO_ROOT, 'docs', 'limitations.md'))
+        method = read(os.path.join(REPO_ROOT, 'docs', 'method.md'))
         wrapper = read(os.path.join(REPO_ROOT, 'audit.sh'))
         for full in printed:
             # The scripts append "  <- why it matters"; the docs list the name.
@@ -1265,9 +1179,9 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
                 self.assertIn(f'`{name}`'.replace('`ABSENT from this directory`',
                                                   '`ABSENT from this locale '
                                                   'directory`'),
-                              limits)
+                              method)
         self.assertIn('C (C.UTF-8): NOT DECLARED', wrapper)
-        self.assertIn('`NOT DECLARED`', limits)
+        self.assertIn('`NOT DECLARED`', method)
 
     def test_the_published_list_length_is_the_set_that_was_reported(self):
         """"full list (N name(s))" against the two numbers printed above it.
@@ -1277,8 +1191,7 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
         reader can repeat."""
         blocks = 0
         for name in ('rhel8-to-rhel9-audit-output.txt',
-                     'rhel9-to-rhel10-audit-output.txt',
-                     'below-the-floor-2.12-to-2.17.txt'):
+                     'rhel9-to-rhel10-audit-output.txt'):
             text = read(os.path.join(REPO_ROOT, 'examples', name))
             # Anchored line by line: a non-greedy `.*?` here would pair one
             # block's count with the next block's list, which is how the first
@@ -1295,7 +1208,7 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
                 with self.subTest(example=name, listed=listed):
                     self.assertEqual(int(listed),
                                      int(generated) + len(unbuilt.split(', ')))
-        self.assertEqual(blocks, 7, 'a step 4 block stopped being checked')
+        self.assertEqual(blocks, 6, 'a step 4 block stopped being checked')
 
 
 def without_fences(text):
@@ -1394,61 +1307,6 @@ class EveryLinkResolves(unittest.TestCase):
                 self.assertTrue(os.path.isfile(os.path.join(REPO_ROOT, rel)),
                                 f'{rel} is named by {sorted(sources)} and '
                                 f'does not exist')
-
-
-class TheRepairDocumentQuotesWhatIsPublished(unittest.TestCase):
-    """breakage/repair.md used to print the whole repair script a second time,
-    under a heading, and breakage/scripts/04-repair.sql is that script as a
-    runnable file. Two copies of one text drift -- this repository has been
-    bitten by exactly that, a '~16s'/'~17s' disagreement about one runtime and
-    a 'four things' count against a five-item list. Those two copies drifted
-    three times in the session that published the file, so the document now
-    links the script instead of repeating it.
-
-    One quotation is left, the check_index helper in the header, because step 0
-    cannot be read without it. This pins that one.
-    """
-
-    def _quoted_helper(self):
-        md = docs()[os.path.join('breakage', 'repair.md')]
-        blocks = re.findall(r'```sql\n(.*?)```', md, re.S)
-        self.assertEqual(
-            1, len(blocks),
-            'breakage/repair.md is expected to quote exactly one sql block, the '
-            'check_index helper. A second one is a copy of something that is '
-            'published elsewhere, which is what this class exists to prevent')
-        return blocks[0].strip()
-
-    @staticmethod
-    def _script(name):
-        """Read with newline='' so a CRLF file does not compare equal to an LF
-        one. The default translates them and would make this test pass over a
-        real difference -- measured on a scratch copy."""
-        path = os.path.join(REPO_ROOT, 'breakage', 'scripts', name)
-        with open(path, encoding='utf-8', newline='') as fh:
-            return fh.read()
-
-    def test_the_helper_quoted_in_the_header_is_the_published_one(self):
-        """repair.md's header quotes check_index and says it is defined in
-        scripts/01b-helpers.sql. That is a second copy of a text, with the same
-        way of going wrong."""
-        quoted = self._quoted_helper()
-        published = re.search(
-            r'CREATE OR REPLACE FUNCTION check_index\(ix regclass\).*?'
-            r'END \$\$ LANGUAGE plpgsql;',
-            self._script('01b-helpers.sql'), re.S)
-        self.assertIsNotNone(
-            published,
-            'breakage/scripts/01b-helpers.sql no longer defines check_index')
-        # assertEqual, not assertIn: a substring test passes over a quote that
-        # simply stops early, and what a truncated quote drops first is the
-        # NOT ASKED arm -- the half that keeps an absence from reading as an
-        # answer. Measured on a scratch copy: cutting that arm out of the
-        # document passed the assertIn form.
-        self.assertEqual(
-            published.group(0), quoted,
-            "breakage/repair.md's quoted helper is not the one "
-            "breakage/scripts/01b-helpers.sql publishes")
 
 
 class TheCountsTheTestPageStatesComeFromTheTable(unittest.TestCase):

@@ -1,163 +1,355 @@
-C.UTF-8 probe output: RHEL8 -> RHEL9
+$ psql -X -f sql/c_utf8_probe.sql        # on the RHEL8 node
+SET
+=== 0. node identity: a result is bound to the build it ran on ===
+glibc-2.28-251.el8_10.40.x86_64
+ldd (GNU libc) 2.28
+C.utf8
+=== 0b. guards: without these, both nodes can agree for the wrong reason ===
+ server_encoding 
+-----------------
+ UTF8
+(1 row)
 
-Produced by running ../sql/c_utf8_probe.sql, unedited, on both nodes and
-diffing the two outputs. This is the locale the source audit is blind to:
-localedata/locales/C exists upstream only from glibc 2.35, so for this pair it
-is in NEITHER tag -- see ../docs/limitations.md.
+ standard_conforming_strings 
+-----------------------------
+ on
+(1 row)
 
-Measured 2026-09-06 on:
-  RHEL8 side: Rocky Linux 8.9,  glibc-2.28-251.el8_10.40, PostgreSQL 18.6
-  RHEL9 side: Rocky Linux 9.3,  glibc-2.34-275.el9_8,     PostgreSQL 18.6
+DO
+DO
+=== 0c. the C-ish collations on this node, and their versions ===
+ collname  | collprovider | collversion | actual 
+-----------+--------------+-------------+--------
+ C         | c            |             | 
+ C.utf8    | c            |             | 
+ POSIX     | c            |             | 
+ pg_c_utf8 | b            | 1           | 1
+(4 rows)
 
-VERDICT: CHANGED. C.UTF-8 is not code point order on RHEL8 and is on RHEL9.
-40 of the 41 probed code points sit in a different position.
+DROP TABLE
+CREATE TABLE
+INSERT 0 41
+DO
+=== 1. the order C.utf8 produces on this node (diff this) ===
+ pos |    cp    |           kind            
+-----+----------+---------------------------
+   1 | U+0001   | UTF-8 1-byte
+   2 | U+FFFF   | plane 0 last (declared)
+   3 | U+1FFFF  | plane 1 last (declared)
+   4 | U+2FFFF  | plane 2 last (declared)
+   5 | U+30000  | plane 3 first (NO range)
+   6 | U+3FFFF  | plane 3 last (NO range)
+   7 | U+40000  | plane 4 first (NO range)
+   8 | U+4FFFF  | plane 4 last (NO range)
+   9 | U+50000  | plane 5 first (NO range)
+  10 | U+5FFFF  | plane 5 last (NO range)
+  11 | U+60000  | plane 6 first (NO range)
+  12 | U+6FFFF  | plane 6 last (NO range)
+  13 | U+70000  | plane 7 first (NO range)
+  14 | U+7FFFF  | plane 7 last (NO range)
+  15 | U+80000  | plane 8 first (NO range)
+  16 | U+8FFFF  | plane 8 last (NO range)
+  17 | U+90000  | plane 9 first (NO range)
+  18 | U+9FFFF  | plane 9 last (NO range)
+  19 | U+A0000  | plane 10 first (NO range)
+  20 | U+AFFFF  | plane 10 last (NO range)
+  21 | U+B0000  | plane 11 first (NO range)
+  22 | U+BFFFF  | plane 11 last (NO range)
+  23 | U+C0000  | plane 12 first (NO range)
+  24 | U+CFFFF  | plane 12 last (NO range)
+  25 | U+D0000  | plane 13 first (NO range)
+  26 | U+DFFFF  | plane 13 last (NO range)
+  27 | U+E0000  | plane 14 first (declared)
+  28 | U+EFFFF  | plane 14 last (declared)
+  29 | U+FFFFF  | plane 15 last (declared)
+  30 | U+10FFFF | plane 16 last (declared)
+  31 | U+0041   | ASCII anchor A
+  32 | U+005A   | ASCII anchor Z
+  33 | U+0061   | ASCII anchor a
+  34 | U+007F   | UTF-8 1-byte last
+  35 | U+0080   | UTF-8 2-byte first
+  36 | U+07FF   | UTF-8 2-byte last
+  37 | U+0800   | UTF-8 3-byte first
+  38 | U+10000  | plane 1 first (declared)
+  39 | U+20000  | plane 2 first (declared)
+  40 | U+F0000  | plane 15 first (declared)
+  41 | U+100000 | plane 16 first (declared)
+(41 rows)
 
-Both databases were created with datcollate = C.UTF-8 under the libc provider
-and a NULL datcollversion, which is the configuration the limitation is about:
-every text column without an explicit COLLATE depends on this order, and no
-version mismatch can ever warn about it.
+=== 2. does C.utf8 equal byte order? READ THE THREE CASES ===
+ c_utf8_equals_byte_order | positions_differing 
+--------------------------+---------------------
+ f                        |                  40
+(1 row)
 
-The corpus is derived from the RHEL8 file itself, which declares SIX ellipsis
-ranges -- planes 0, 1, 2, 14, 15, 16 -- and no range at all for planes 3
-through 13. The labels below say which is which, because that distinction is
-the finding: the values in undeclared planes fall to UNDEFINED.
+=== 3. the named pairs, so a diff says which side is which ===
+        pair        | holds 
+--------------------+-------
+ U+007F  < U+FFFF   | f
+ U+07FF  < U+FFFF   | f
+ U+FFFF  < U+10FFFF | t
+ U+10000 < U+20000  | t
+ U+FFFFF < U+100000 | t
+(5 rows)
 
-$ psql -X -f c_utf8_probe.sql        # on each node, then diff
+=== 4. collversion asserted as expected-NULL (PostgreSQL 15+) ===
+ collname | collversion | actual | both_null_as_expected 
+----------+-------------+--------+-----------------------
+ C.utf8   |             |        | t
+(1 row)
 
---- the inverted positive control (query 2) -------------------------------
-Read "equals byte order = true" as the CORRECT answer here, not as the usual
-sign that a locale was never generated.
+  datname  | datcollate | datcollversion | actual | both_null_as_expected 
+-----------+------------+----------------+--------+-----------------------
+ postgres  | C.UTF-8    |                |        | t
+ template1 | C.UTF-8    |                |        | t
+ template0 | C.UTF-8    |                |        | t
+(3 rows)
 
-RHEL8:
-   c_utf8_equals_byte_order | positions_differing 
-  --------------------------+---------------------
-   f                        |                  40
-  (1 row)
-RHEL9:
-   c_utf8_equals_byte_order | positions_differing 
-  --------------------------+---------------------
-   t                        |                   0
-  (1 row)
+=== 5. is THIS database exposed through its default collation? ===
+ datname  | datlocprovider | datcollate |                        verdict                        
+----------+----------------+------------+-------------------------------------------------------
+ postgres | c              | C.UTF-8    | EXPOSED via C.UTF-8, and no collversion can ever warn
+(1 row)
 
---- the named pairs (query 3) ---------------------------------------------
-U+007F < U+FFFF is the inversion docs/limitations.md records. U+10000 <
-U+20000 covers the intra-RHEL8 change, where those code points had no weights
-at all before glibc-2.28-93.el8.
+=== 6. the same order, read through a real btree index ===
+CREATE INDEX
+SET
+ pos |    cp    
+-----+----------
+   1 | U+0001
+   2 | U+FFFF
+   3 | U+1FFFF
+   4 | U+2FFFF
+   5 | U+30000
+   6 | U+3FFFF
+   7 | U+40000
+   8 | U+4FFFF
+   9 | U+50000
+  10 | U+5FFFF
+  11 | U+60000
+  12 | U+6FFFF
+  13 | U+70000
+  14 | U+7FFFF
+  15 | U+80000
+  16 | U+8FFFF
+  17 | U+90000
+  18 | U+9FFFF
+  19 | U+A0000
+  20 | U+AFFFF
+  21 | U+B0000
+  22 | U+BFFFF
+  23 | U+C0000
+  24 | U+CFFFF
+  25 | U+D0000
+  26 | U+DFFFF
+  27 | U+E0000
+  28 | U+EFFFF
+  29 | U+FFFFF
+  30 | U+10FFFF
+  31 | U+0041
+  32 | U+005A
+  33 | U+0061
+  34 | U+007F
+  35 | U+0080
+  36 | U+07FF
+  37 | U+0800
+  38 | U+10000
+  39 | U+20000
+  40 | U+F0000
+  41 | U+100000
+(41 rows)
 
-RHEL8:
-          pair        | holds 
-  --------------------+-------
-   U+007F  < U+FFFF   | f
-   U+07FF  < U+FFFF   | f
-   U+FFFF  < U+10FFFF | t
-   U+10000 < U+20000  | t
-   U+FFFFF < U+100000 | t
-  (5 rows)
-RHEL9:
-          pair        | holds 
-  --------------------+-------
-   U+007F  < U+FFFF   | t
-   U+07FF  < U+FFFF   | t
-   U+FFFF  < U+10FFFF | t
-   U+10000 < U+20000  | t
-   U+FFFFF < U+100000 | t
-  (5 rows)
+RESET
+=== 6b. tie detector: needs no PostgreSQL, and PostgreSQL cannot do it ===
+U+10000 key: ef85b5
+U+20000 key: f0948b95
+distinct weights
+=== done. diff this output against the other node. ===
 
---- the tie detector (query 6b) -------------------------------------------
-PostgreSQL breaks a strcoll tie with strcmp, so tied weights are
-indistinguishable through SQL from correct byte order. These are strxfrm sort
-keys, which cannot hide a tie. RHEL9's keys ARE the UTF-8 bytes, because
-codepoint_collation makes strxfrm the identity; RHEL8's are computed weights
-and bear no relation to the code point.
-
-RHEL8:
-  U+10000 key: ef85b5
-  U+20000 key: f0948b95
-  distinct weights
-RHEL9:
-  U+10000 key: f0908080
-  U+20000 key: f0a08080
-  distinct weights
-
---- the whole order, RHEL8 (query 1) --------------------------------------
-Code point order would be U+0001, U+0041, U+005A, U+0061, U+007F, U+0080,
-U+07FF, U+0800, U+FFFF, U+10000, ... U+10FFFF -- which is exactly what RHEL9
-produces. RHEL8 produces this instead, and the labels make the mechanism
-readable:
-
-  * positions 2-4 and 28-30 are the LAST code point of a declared range, all
-    six of them -- Bug 22668 is "Fix last character ellipsis handling";
-  * positions 5-26 are every code point of a plane the file declares no range
-    for, all 22 of them: they have no weight at all;
-  * ASCII lands at position 31, behind all of that;
-  * positions 38-41 are the FIRST code point of a declared range -- four of
-    the five that are in the corpus. The fifth, U+E0000, sorts at 27 instead,
-    among the weightless ones. This output records that; it does not explain
-    it, and neither does this project.
-
-   pos |    cp    |           kind            
-  -----+----------+---------------------------
-     1 | U+0001   | UTF-8 1-byte
-     2 | U+FFFF   | plane 0 last (declared)
-     3 | U+1FFFF  | plane 1 last (declared)
-     4 | U+2FFFF  | plane 2 last (declared)
-     5 | U+30000  | plane 3 first (NO range)
-     6 | U+3FFFF  | plane 3 last (NO range)
-     7 | U+40000  | plane 4 first (NO range)
-     8 | U+4FFFF  | plane 4 last (NO range)
-     9 | U+50000  | plane 5 first (NO range)
-    10 | U+5FFFF  | plane 5 last (NO range)
-    11 | U+60000  | plane 6 first (NO range)
-    12 | U+6FFFF  | plane 6 last (NO range)
-    13 | U+70000  | plane 7 first (NO range)
-    14 | U+7FFFF  | plane 7 last (NO range)
-    15 | U+80000  | plane 8 first (NO range)
-    16 | U+8FFFF  | plane 8 last (NO range)
-    17 | U+90000  | plane 9 first (NO range)
-    18 | U+9FFFF  | plane 9 last (NO range)
-    19 | U+A0000  | plane 10 first (NO range)
-    20 | U+AFFFF  | plane 10 last (NO range)
-    21 | U+B0000  | plane 11 first (NO range)
-    22 | U+BFFFF  | plane 11 last (NO range)
-    23 | U+C0000  | plane 12 first (NO range)
-    24 | U+CFFFF  | plane 12 last (NO range)
-    25 | U+D0000  | plane 13 first (NO range)
-    26 | U+DFFFF  | plane 13 last (NO range)
-    27 | U+E0000  | plane 14 first (declared)
-    28 | U+EFFFF  | plane 14 last (declared)
-    29 | U+FFFFF  | plane 15 last (declared)
-    30 | U+10FFFF | plane 16 last (declared)
-    31 | U+0041   | ASCII anchor A
-    32 | U+005A   | ASCII anchor Z
-    33 | U+0061   | ASCII anchor a
-    34 | U+007F   | UTF-8 1-byte last
-    35 | U+0080   | UTF-8 2-byte first
-    36 | U+07FF   | UTF-8 2-byte last
-    37 | U+0800   | UTF-8 3-byte first
-    38 | U+10000  | plane 1 first (declared)
-    39 | U+20000  | plane 2 first (declared)
-    40 | U+F0000  | plane 15 first (declared)
-    41 | U+100000 | plane 16 first (declared)
-  (41 rows)
-
---- what the database default was on both nodes (query 5) -----------------
-   datname  | datlocprovider | datcollate |                        verdict                        
-  ----------+----------------+------------+-------------------------------------------------------
-   postgres | c              | C.UTF-8    | EXPOSED via C.UTF-8, and no collversion can ever warn
-  (1 row)
-
---- collversion, asserted as expected-NULL (query 4) ----------------------
-Not a mismatch check: a mismatch check can never fire for a C.* name. This
-asserts the blind spot instead, and it held on both nodes.
-
-   collname | collversion | actual | both_null_as_expected 
-  ----------+-------------+--------+-----------------------
-   C.utf8   |             |        | t
-  (1 row)
-  
-    datname  | datcollate | datcollversion | actual | both_null_as_expected 
-  -----------+------------+----------------+--------+-----------------------
-   postgres  | C.UTF-8    |                |        | t
-   template1 | C.UTF-8    |                |        | t
-   template0 | C.UTF-8    |                |        | t
-  (3 rows)
+$ diff el8.out el9.out
+3,4c3,4
+< glibc-2.28-251.el8_10.40.x86_64
+< ldd (GNU libc) 2.28
+---
+> glibc-2.34-275.el9_8.x86_64
+> ldd (GNU libc) 2.34
+36,75c36,75
+<    2 | U+FFFF   | plane 0 last (declared)
+<    3 | U+1FFFF  | plane 1 last (declared)
+<    4 | U+2FFFF  | plane 2 last (declared)
+<    5 | U+30000  | plane 3 first (NO range)
+<    6 | U+3FFFF  | plane 3 last (NO range)
+<    7 | U+40000  | plane 4 first (NO range)
+<    8 | U+4FFFF  | plane 4 last (NO range)
+<    9 | U+50000  | plane 5 first (NO range)
+<   10 | U+5FFFF  | plane 5 last (NO range)
+<   11 | U+60000  | plane 6 first (NO range)
+<   12 | U+6FFFF  | plane 6 last (NO range)
+<   13 | U+70000  | plane 7 first (NO range)
+<   14 | U+7FFFF  | plane 7 last (NO range)
+<   15 | U+80000  | plane 8 first (NO range)
+<   16 | U+8FFFF  | plane 8 last (NO range)
+<   17 | U+90000  | plane 9 first (NO range)
+<   18 | U+9FFFF  | plane 9 last (NO range)
+<   19 | U+A0000  | plane 10 first (NO range)
+<   20 | U+AFFFF  | plane 10 last (NO range)
+<   21 | U+B0000  | plane 11 first (NO range)
+<   22 | U+BFFFF  | plane 11 last (NO range)
+<   23 | U+C0000  | plane 12 first (NO range)
+<   24 | U+CFFFF  | plane 12 last (NO range)
+<   25 | U+D0000  | plane 13 first (NO range)
+<   26 | U+DFFFF  | plane 13 last (NO range)
+<   27 | U+E0000  | plane 14 first (declared)
+<   28 | U+EFFFF  | plane 14 last (declared)
+<   29 | U+FFFFF  | plane 15 last (declared)
+<   30 | U+10FFFF | plane 16 last (declared)
+<   31 | U+0041   | ASCII anchor A
+<   32 | U+005A   | ASCII anchor Z
+<   33 | U+0061   | ASCII anchor a
+<   34 | U+007F   | UTF-8 1-byte last
+<   35 | U+0080   | UTF-8 2-byte first
+<   36 | U+07FF   | UTF-8 2-byte last
+<   37 | U+0800   | UTF-8 3-byte first
+<   38 | U+10000  | plane 1 first (declared)
+<   39 | U+20000  | plane 2 first (declared)
+<   40 | U+F0000  | plane 15 first (declared)
+<   41 | U+100000 | plane 16 first (declared)
+---
+>    2 | U+0041   | ASCII anchor A
+>    3 | U+005A   | ASCII anchor Z
+>    4 | U+0061   | ASCII anchor a
+>    5 | U+007F   | UTF-8 1-byte last
+>    6 | U+0080   | UTF-8 2-byte first
+>    7 | U+07FF   | UTF-8 2-byte last
+>    8 | U+0800   | UTF-8 3-byte first
+>    9 | U+FFFF   | plane 0 last (declared)
+>   10 | U+10000  | plane 1 first (declared)
+>   11 | U+1FFFF  | plane 1 last (declared)
+>   12 | U+20000  | plane 2 first (declared)
+>   13 | U+2FFFF  | plane 2 last (declared)
+>   14 | U+30000  | plane 3 first (NO range)
+>   15 | U+3FFFF  | plane 3 last (NO range)
+>   16 | U+40000  | plane 4 first (NO range)
+>   17 | U+4FFFF  | plane 4 last (NO range)
+>   18 | U+50000  | plane 5 first (NO range)
+>   19 | U+5FFFF  | plane 5 last (NO range)
+>   20 | U+60000  | plane 6 first (NO range)
+>   21 | U+6FFFF  | plane 6 last (NO range)
+>   22 | U+70000  | plane 7 first (NO range)
+>   23 | U+7FFFF  | plane 7 last (NO range)
+>   24 | U+80000  | plane 8 first (NO range)
+>   25 | U+8FFFF  | plane 8 last (NO range)
+>   26 | U+90000  | plane 9 first (NO range)
+>   27 | U+9FFFF  | plane 9 last (NO range)
+>   28 | U+A0000  | plane 10 first (NO range)
+>   29 | U+AFFFF  | plane 10 last (NO range)
+>   30 | U+B0000  | plane 11 first (NO range)
+>   31 | U+BFFFF  | plane 11 last (NO range)
+>   32 | U+C0000  | plane 12 first (NO range)
+>   33 | U+CFFFF  | plane 12 last (NO range)
+>   34 | U+D0000  | plane 13 first (NO range)
+>   35 | U+DFFFF  | plane 13 last (NO range)
+>   36 | U+E0000  | plane 14 first (declared)
+>   37 | U+EFFFF  | plane 14 last (declared)
+>   38 | U+F0000  | plane 15 first (declared)
+>   39 | U+FFFFF  | plane 15 last (declared)
+>   40 | U+100000 | plane 16 first (declared)
+>   41 | U+10FFFF | plane 16 last (declared)
+81c81
+<  f                        |                  40
+---
+>  t                        |                   0
+87,88c87,88
+<  U+007F  < U+FFFF   | f
+<  U+07FF  < U+FFFF   | f
+---
+>  U+007F  < U+FFFF   | t
+>  U+07FF  < U+FFFF   | t
+119,158c119,158
+<    2 | U+FFFF
+<    3 | U+1FFFF
+<    4 | U+2FFFF
+<    5 | U+30000
+<    6 | U+3FFFF
+<    7 | U+40000
+<    8 | U+4FFFF
+<    9 | U+50000
+<   10 | U+5FFFF
+<   11 | U+60000
+<   12 | U+6FFFF
+<   13 | U+70000
+<   14 | U+7FFFF
+<   15 | U+80000
+<   16 | U+8FFFF
+<   17 | U+90000
+<   18 | U+9FFFF
+<   19 | U+A0000
+<   20 | U+AFFFF
+<   21 | U+B0000
+<   22 | U+BFFFF
+<   23 | U+C0000
+<   24 | U+CFFFF
+<   25 | U+D0000
+<   26 | U+DFFFF
+<   27 | U+E0000
+<   28 | U+EFFFF
+<   29 | U+FFFFF
+<   30 | U+10FFFF
+<   31 | U+0041
+<   32 | U+005A
+<   33 | U+0061
+<   34 | U+007F
+<   35 | U+0080
+<   36 | U+07FF
+<   37 | U+0800
+<   38 | U+10000
+<   39 | U+20000
+<   40 | U+F0000
+<   41 | U+100000
+---
+>    2 | U+0041
+>    3 | U+005A
+>    4 | U+0061
+>    5 | U+007F
+>    6 | U+0080
+>    7 | U+07FF
+>    8 | U+0800
+>    9 | U+FFFF
+>   10 | U+10000
+>   11 | U+1FFFF
+>   12 | U+20000
+>   13 | U+2FFFF
+>   14 | U+30000
+>   15 | U+3FFFF
+>   16 | U+40000
+>   17 | U+4FFFF
+>   18 | U+50000
+>   19 | U+5FFFF
+>   20 | U+60000
+>   21 | U+6FFFF
+>   22 | U+70000
+>   23 | U+7FFFF
+>   24 | U+80000
+>   25 | U+8FFFF
+>   26 | U+90000
+>   27 | U+9FFFF
+>   28 | U+A0000
+>   29 | U+AFFFF
+>   30 | U+B0000
+>   31 | U+BFFFF
+>   32 | U+C0000
+>   33 | U+CFFFF
+>   34 | U+D0000
+>   35 | U+DFFFF
+>   36 | U+E0000
+>   37 | U+EFFFF
+>   38 | U+F0000
+>   39 | U+FFFFF
+>   40 | U+100000
+>   41 | U+10FFFF
+163,164c163,164
+< U+10000 key: ef85b5
+< U+20000 key: f0948b95
+---
+> U+10000 key: f0908080
+> U+20000 key: f0a08080
