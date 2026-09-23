@@ -78,8 +78,8 @@ what it leaves to the next.
 
 It runs the five steps in order, passes the locales step 2 found on to step 3
 so you never retype a name, and ends with a consolidated summary. What each
-step asks, what sits outside all five, and how to read what it prints is in
-[docs/method.md](docs/method.md). Real output from both pairs, start to
+step asks, and what the run leaves unsettled, is in
+[docs/commands.md](docs/commands.md). Real output from both pairs, start to
 finish, is in [examples/](examples/) — worth reading before you run anything.
 
 > [!TIP]
