@@ -202,7 +202,8 @@ and
 [docs/limitations.md](docs/limitations.md#cutf-8-is-invisible-to-a-tag-diff).
 
 **3 — Confirming the order on your own builds**
-*Needs PostgreSQL 15 or newer on both nodes, and editing the file first.*
+*Optional, and what turns a source argument into a measurement. Needs
+PostgreSQL 15 or newer on both nodes, and editing the file first.*
 
 ```sh
 psql -f sql/collation_confirmation_template.sql   # edit placeholders first
