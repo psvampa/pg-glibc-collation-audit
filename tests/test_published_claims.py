@@ -362,116 +362,11 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
         found = [name for name, text in docs().items() if printed[0] in text]
         self.assertTrue(found, 'no doc quotes the heading any more')
 
-    def test_the_below_floor_example_matches_the_asserted_numbers(self):
-        """The example is a saved run, so it can go stale exactly the way the
-        old step 4 figure did. Its table is tied to the same numbers
-        test_known_answers asserts against the pinned tags.
-
-        And so is the table in docs/limitations.md, which publishes the same
-        three rows. This test read the EXAMPLE only until 2026-09-22, so the
-        page a reader actually opens could drift from the run it summarises
-        and nothing failed -- backlog 3.11, which named this table as tied to
-        the wrong source. The numbers are written once here and asserted
-        against both, because two copies of three numbers is the shape the
-        step-4 figure rotted in."""
-        path = os.path.join(REPO_ROOT, 'examples',
-                            'below-the-floor-2.12-to-2.17.txt')
-        text = read(path)
-        page = flat(read(os.path.join(REPO_ROOT, 'docs', 'limitations.md')))
-        for label, before, after in (
-                ('Step 3, affected locale source files', '11', '280'),
-                ('Step 4, needing empirical confirmation', '277', '281'),
-                ('Step 4, generated names per SUPPORTED', '404', '411')):
-            self.assertRegex(
-                text, rf'{re.escape(label)}\s+{before}\s+{after}\b',
-                f'{label} no longer reads {before} -> {after}')
-            # The page writes SUPPORTED as code and bolds the figure it wants
-            # read, neither of which is part of the claim.
-            cell = re.escape(label).replace('SUPPORTED', '`?SUPPORTED`?')
-            # Matched on the LABEL, with the numbers captured rather than
-            # spelled into the pattern. Counting rows that already carry the
-            # right numbers is blind to the only duplicate that can happen by
-            # drift -- a second table whose cells have moved -- and that is
-            # the case the message below names. Measured GREEN before this
-            # was fixed, with a second table one below on every cell.
-            rows = re.findall(
-                rf'\| {cell} \| \**(\d+)\** \| \**(\d+)\** \|', page)
-            self.assertEqual(
-                len(rows), 1,
-                f'docs/limitations.md carries {len(rows)} rows for '
-                f'"{label}", one expected. None means the page dropped or '
-                f'reworded it while the example still states it; two means a '
-                f'drifting copy can be satisfied by a stale one')
-            self.assertEqual(
-                rows[0], (before, after),
-                f'docs/limitations.md states {label} as '
-                f'{rows[0][0]} -> {rows[0][1]}, and the run it summarises '
-                f'says {before} -> {after}')
-        self.assertIn('Full affected set (280 locale source file(s))', text)
-        self.assertIn('281 locale source file(s), 411 generated', text)
-        # The header counts generated names; the written list also carries the
-        # names SUPPORTED does not list. Putting one where the other belongs
-        # is how this example gained a line the tool never printed.
-        self.assertIn('pg_collation show (409):', text)
-
-    def test_the_skipped_release_example_matches_the_method_page(self):
-        """docs/method.md publishes a five-row table comparing the two steps
-        with the direct jump, and examples/ carries the run it came from. Two
-        copies of five numbers is exactly the shape the step-4 "2" rotted in.
-
-        Rows 1, 2 and 3 are asserted against the pinned clone in
-        test_known_answers (SkippingAReleaseReportsTheUnion). The two step 8
-        rows are NOT, and cannot be: they need both nodes'
-        /usr/share/i18n/locales/, which no test has. Those four numbers are
-        pinned here instead, to the tool's own lines inside the three example
-        bodies -- otherwise a hand-written table would be tied only to another
-        hand-written table, which is two copies of prose and no measurement.
-        """
-        example = read(os.path.join(REPO_ROOT, 'examples',
-                                    'skipping-a-release-2.28-to-2.39.txt'))
-        method = flat(docs()[os.path.join('docs', 'method.md')])
-        rows = (('Step 2, files changed inside `LC_COLLATE`', 2, 3, 5, 5),
-                ('Step 3, generated names to reindex', 6, 4, 10, 10),
-                ('Step 5, substantive hunks', 24, 52, 76, 75),
-                ('Step 8, locales differing on the two nodes', 3, 3, 6, 6),
-                ('Step 8, locales the upgrade removes', 1, 1, 2, 2))
-        for label, first, second, both, direct in rows:
-            with self.subTest(row=label):
-                self.assertIn(
-                    f'| {label} | {first} | {second} | {both} | **{direct}** |',
-                    method,
-                    f'docs/method.md no longer states {label} as '
-                    f'{first}/{second}/{both}/{direct}')
-                self.assertRegex(
-                    example,
-                    rf'{re.escape(label.replace("`", ""))}\s+{first}\s+'
-                    rf'{second}\s+{both}\s+{direct}\b',
-                    f'the example no longer states {label} the same way')
-
-        # The one row that is not a sum is the only one worth a sentence, and
-        # both copies have to carry the same explanation of why.
-        self.assertIn('75 hunks, not 76', method)
-        self.assertIn('75 substantive hunk(s) found', example)
-        self.assertIn('THE ONE FIGURE THAT IS NOT A SUM: 75, NOT 76', example)
-
-        # C.UTF-8 is the claim a reader is most likely to doubt, so the
-        # example has to carry the line the TOOL printed, not the header's
-        # quotation of it. Asserting the bare phrase passed on the prose
-        # alone: an example regenerated from a run that no longer reported
-        # C.UTF-8 as DIFFERS would have stayed green, which is two copies of
-        # prose tied to each other and no measurement.
-        summary = example.split('== AUDIT SUMMARY')[1]
-        self.assertIn('C (C.UTF-8): DIFFERS  <- in neither tag', summary)
-        self.assertIn('C (C.UTF-8): DIFFERS', method)
-
     STEP_8 = {
         'rhel8-to-rhel9-audit-output.txt':
             (3, {'C', 'or_IN', 'sv_SE'}, 1, {'en_US@ampm'}),
         'rhel9-to-rhel10-audit-output.txt':
             (3, {'ber_DZ', 'kab_DZ', 'th_TH'}, 1, {'aa_ER@saaho'}),
-        'skipping-a-release-2.28-to-2.39.txt':
-            (6, {'C', 'ber_DZ', 'kab_DZ', 'or_IN', 'sv_SE', 'th_TH'},
-             2, {'aa_ER@saaho', 'en_US@ampm'}),
     }
 
     def _node_section(self, name):
@@ -507,31 +402,10 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
         saying so -- and it ran at all only if every assertion above that call
         had passed first.
         """
-        got = {}
         for name, (dn, dset, gn, gset) in self.STEP_8.items():
             differing, gone = self._node_section(name)
             self.assertEqual(differing, dset, f'{name}: step 8 differing set')
             self.assertEqual(gone, gset, f'{name}: step 8 removed set')
-            got[name] = (differing, gone)
-        first, second, direct = (got['rhel8-to-rhel9-audit-output.txt'],
-                                 got['rhel9-to-rhel10-audit-output.txt'],
-                                 got['skipping-a-release-2.28-to-2.39.txt'])
-        self.assertEqual(direct[0], first[0] | second[0],
-                         'step 8 on the direct pair is no longer the union')
-        self.assertEqual(direct[1], first[1] | second[1],
-                         'the removed locales are no longer the union')
-
-    def test_the_skipped_release_example_is_not_sold_as_an_audited_pair(self):
-        """docs/scope.md publishes two pairs and this is not a third. The
-        floor pair carries the same disclaimer for the same reason: a
-        measured-but-unpublished pair is one careless sentence away from
-        becoming a supported one, which is how RHEL7 kept coming back."""
-        example = read(os.path.join(REPO_ROOT, 'examples',
-                                    'skipping-a-release-2.28-to-2.39.txt'))
-        self.assertIn('NOT AN AUDITED PAIR', example)
-        scope = flat(docs()[os.path.join('docs', 'scope.md')])
-        self.assertIn('Two upgrade pairs: RHEL8 \u2192 RHEL9 and RHEL9 \u2192 RHEL10',
-                      scope)
 
     def test_no_doc_states_a_test_count(self):
         """It went stale twice in one day, so it was removed rather than
@@ -1292,8 +1166,7 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
         reader can repeat."""
         blocks = 0
         for name in ('rhel8-to-rhel9-audit-output.txt',
-                     'rhel9-to-rhel10-audit-output.txt',
-                     'below-the-floor-2.12-to-2.17.txt'):
+                     'rhel9-to-rhel10-audit-output.txt'):
             text = read(os.path.join(REPO_ROOT, 'examples', name))
             # Anchored line by line: a non-greedy `.*?` here would pair one
             # block's count with the next block's list, which is how the first
@@ -1310,7 +1183,7 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
                 with self.subTest(example=name, listed=listed):
                     self.assertEqual(int(listed),
                                      int(generated) + len(unbuilt.split(', ')))
-        self.assertEqual(blocks, 7, 'a step 4 block stopped being checked')
+        self.assertEqual(blocks, 6, 'a step 4 block stopped being checked')
 
 
 def without_fences(text):

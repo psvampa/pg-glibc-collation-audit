@@ -34,16 +34,6 @@ locale files — steps 6 to 10 and the full summary.
 Read these for what was measured and why a verdict stands. Read the two above
 for what the command prints.
 
-## Two pairs that are not audited results
-
-Kept as evidence about the method, not as verdicts. Each says so in its first
-lines.
-
-| File | Why it is here |
-|---|---|
-| [`skipping-a-release-2.28-to-2.39.txt`](skipping-a-release-2.28-to-2.39.txt) | the direct jump over a version this project has audited on its own, so the two readings can be compared |
-| [`below-the-floor-2.12-to-2.17.txt`](below-the-floor-2.12-to-2.17.txt) | a pair below the old glibc 2.24 floor, which is what showed that floor was a bug |
-
 ## Command 2 — the `C.UTF-8` probe
 
 The probe run unedited on both machines, the two outputs diffed. This is the

@@ -295,8 +295,7 @@ Every set is the exact union, name for name and not merely the same size.
 between el9 and el10, and the direct run still reports
 `C (C.UTF-8): DIFFERS`. The blind spot [the limitations
 page](limitations.md#cutf-8-is-invisible-to-a-tag-diff) warns loudest about is
-not made worse by skipping a release. The full run is
-[`examples/skipping-a-release-2.28-to-2.39.txt`](../examples/skipping-a-release-2.28-to-2.39.txt).
+not made worse by skipping a release.
 
 ### The one figure that is not a sum
 

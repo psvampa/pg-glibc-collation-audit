@@ -470,10 +470,8 @@ gaining a collation weight in `iso14651_t1_common`.
 The 269 names step 3 used to drop -- 267 to this bug, and `ky_KG` and
 `uk_UA` to the symbolic `copy` spelling fixed in the twenty-third entry --
 include `en_US`, `de_DE`, `fr_FR`, `es_ES`,
-`it_IT`, `nl_NL`, `pt_BR`, `ru_RU`, `sv_SE`, `zh_CN` and `zh_TW`. Both runs, side
-by side, are in
-[`examples/below-the-floor-2.12-to-2.17.txt`](../examples/below-the-floor-2.12-to-2.17.txt),
-and the **after** figures are asserted in `tests/test_known_answers.py`
+`it_IT`, `nl_NL`, `pt_BR`, `ru_RU`, `sv_SE`, `zh_CN` and `zh_TW`. The
+**after** figures are asserted in `tests/test_known_answers.py`
 (`BelowTheOldVersionFloor`) against the two tags pinned in
 `tests/_harness.py` — which is what the step 4 figure below lacked. The table
 above is held to that saved run, cell by cell, by

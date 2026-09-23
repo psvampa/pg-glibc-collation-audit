@@ -500,8 +500,7 @@ class BelowTheOldVersionFloor(StepRun):
             self.assertEqual(len([ln for ln in fh if ln.strip()]), 414)
 
     def test_step_5_prints_65_hunks(self):
-        """examples/below-the-floor-2.12-to-2.17.txt quotes this figure in
-        prose. It was 63 until the two wide-char wrappers joined TIER 1: each
+        """It was 63 until the two wide-char wrappers joined TIER 1: each
         contributes one hunk, the 2012 FSF postal-address change, which the
         filter keeps because it cannot prove a bare licence continuation is
         prose. Conservative, and counted."""
@@ -546,8 +545,7 @@ class SkippingAReleaseReportsTheUnion(StepRun):
     """glibc-2.28 -> glibc-2.39, the pair that leaves 2.34 out.
 
     Not an audited pair and not a published verdict. It is the pair
-    docs/method.md, "How far apart the two tags may be", is measured on, and
-    examples/skipping-a-release-2.28-to-2.39.txt records.
+    docs/method.md, "How far apart the two tags may be", is measured on.
 
     The claim under test is a SET equality, not a count: a direct jump reports
     exactly what the two steps between it report, name for name. A count would
