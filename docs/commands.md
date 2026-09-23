@@ -1,11 +1,14 @@
-# What each step does
+# What each command does
 
-Three steps. The first reads source and proves what cannot have changed; the
-second and third measure what a source read cannot settle. The run prints its
-own work numbered 1 to 10, and those numbers are not these three — where this
-page needs them it says "the run's step 4".
+Three commands. The first reads source and proves what cannot have changed;
+the second and third measure what a source read cannot settle.
 
-## Step 1 — which locales the upgrade can affect
+**Commands are numbered here; steps are what a run prints.** A run of command
+1 does its own work in ten numbered steps, and those numbers are not these
+three. Where this page needs them it says "the run's step 4", and
+[method.md](method.md) is where each of them is explained.
+
+## Command 1 — which locales the upgrade can affect
 
 `./audit.sh <old tag> <new tag>` compares the two glibc versions as their
 maintainers published them, and needs nothing but this checkout. It runs five
@@ -19,7 +22,8 @@ checks in order and ends with one summary.
 | 4 | which locales a comparison of files can never clear, because they define their order with abbreviated ranges whose real weights are computed later |
 | 5 | whether the code that computes those weights changed |
 
-Steps 3 and 5 together give the complete set of affected locale names.
+The run's steps 3 and 5 together give the complete set of affected locale
+names.
 
 What you get is a list to worry about and a proof about everything else: if
 neither a locale's rules nor the code that compiles them changed, its order
@@ -28,7 +32,7 @@ the list really moved. A flagged locale can turn out unaffected — `ber_DZ` and
 `kab_DZ` were flagged and the change was a role swap that leaves the order
 alone.
 
-### Step 1 extended — the same run against your two machines
+### Command 1 extended — the same run against your two machines
 
 The same command, with each machine's own locale files and build ids added.
 The five checks above run either way; supplying the files adds five more,
@@ -54,7 +58,7 @@ because a section that vanishes reads like a section that found nothing.
 
 **This still settles data, not order.** The weights are computed when the
 locale is built on the machine, so two machines can hold byte-identical files
-and still sort differently. That is what steps 2 and 3 are for.
+and still sort differently. That is what commands 2 and 3 are for.
 
 #### Taking the copy, and checking it
 
@@ -95,34 +99,34 @@ Supply one side only and that side is still checked against its published
 version; the side you left out prints `NOT RUN` and names the flag that was
 missing.
 
-## Step 2 — whether `C.UTF-8`'s order changed
+## Command 2 — whether `C.UTF-8`'s order changed
 
 `sql/c_utf8_probe.sql`, run on each machine, the two outputs compared. It
 needs PostgreSQL 15 or newer and no editing.
 
-This is the one locale step 1 cannot reach when its file is in neither
+This is the one locale command 1 cannot reach when its file is in neither
 version, and PostgreSQL will not warn about it either. It is needed when a
 database uses `C.UTF-8` — which in a container it usually does, without anyone
 having chosen it.
 
-Unlike step 1, this **measures the order**. It sorts on the machine as it
+Unlike command 1, this **measures the order**. It sorts on the machine as it
 actually runs and compares the two results.
 
 One warning about reading it: for this locale the usual tell is inverted.
 Agreeing with byte order is the corrected state here, not the sign that the
 locale was never generated.
 
-## Step 3 — confirming the order on your own builds
+## Command 3 — confirming the order on your own builds
 
 `sql/collation_confirmation_template.sql`, edited first, run on both machines.
-Optional: step 1's result stands on its own, and this is what turns that
+Optional: command 1's result stands on its own, and this is what turns that
 argument into a measurement.
 
 It does two separate jobs.
 
 **It measures the order** of three strings you supply, under a locale you
-name, on both machines. Choosing those three strings is the step that decides
-whether the run proves anything: they have to be the characters the changed
+name, on both machines. Choosing those three strings is what decides whether
+the run proves anything: they have to be the characters the changed
 rule moves, not words in the language.
 
 **It inventories your database** — which indexes, partitioned tables, columns
@@ -131,6 +135,6 @@ and no confirmation; it answers which objects of yours are at stake.
 
 ## What none of the three does
 
-None of them changes anything, and none of them decides for you. Step 1 hands
-you a list and a proof, steps 2 and 3 hand you measurements. The decision to
-reindex is yours.
+None of them changes anything, and none of them decides for you. Command 1
+hands you a list and a proof, commands 2 and 3 hand you measurements. The
+decision to reindex is yours.
