@@ -783,7 +783,7 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
         ('the locales that inherit iso14651_t1 at glibc 2.34',
          r'inherited by (\d+) locales|template that (\d+) locales'
          r'|the (\d+) to \d+ locales that inherit it',
-         5,
+         4,
          ()),
         ('the locales the four ellipsis files expose through copy at 2.34',
          r'inherited by (\d+) further locales',

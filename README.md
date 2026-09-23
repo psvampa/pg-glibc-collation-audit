@@ -178,7 +178,7 @@ What it prints, filled in for each pair, is in
 | `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | **step 2 warns** and cannot settle it <sup>†</sup> — the node-to-node check settles the data, `sql/c_utf8_probe.sql` the order |
 | `th_TH` | ⚪ Unaffected | 🔴 **Changed** | steps 1–3 |
 | `ber_DZ`, `kab_DZ` | ⚪ Unaffected | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap |
-| CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>inherited by 328 locales at 2.34, 338 at 2.39 | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
+| CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>inherited by almost every locale in the tree | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
 | `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | step 4 flagged them via `iso14651_t1_common`; cleared by measurement |
 | everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | ⚪ Unaffected | ⚪ Unaffected | `LC_COLLATE` and code both unchanged |
 
@@ -229,6 +229,7 @@ result — `C.UTF-8` among them, and now covered three other ways:
 **[docs/](docs/README.md)** is the index, with a suggested reading order. The
 short version:
 
+- [docs/commands.md](docs/commands.md) — what each command does, and what it leaves to the next
 - [docs/method.md](docs/method.md) — the five steps in detail, and the decision procedure
 - [docs/results.md](docs/results.md) — the evidence behind each verdict, both worked examples, tested-on
 - [docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md) — the empirical check
