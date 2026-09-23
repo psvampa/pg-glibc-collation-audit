@@ -1,0 +1,548 @@
+
+================================================================
+== STEP 1  What changed, and how far it reaches
+================================================================
+Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
+  UNCHECKED glibc-2.28 = 3c03baca37fd  gpg is not installed; the signature was NOT checked
+  UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was NOT checked
+  NOTE: signatures were not checked. The commit ids above are what was actually read;
+        compare them against a source you trust (sourceware.org/git/glibc.git) if it matters.
+---
+Locale files added, modified or deleted: 283
+Full list in /tmp/pg-glibc-collation-audit/changed_locales.txt
+---
+Collation templates -- did they change?
+  iso14651_t1            UNCHANGED
+  iso14651_t1_common     UNCHANGED
+  iso14651_t1_pinyin     UNCHANGED
+---
+Collation templates by blast radius at glibc-2.34 (locales inheriting via `copy`):
+   333 locales inherit from iso14651_t1_common
+   328 locales inherit from iso14651_t1
+    32 locales inherit from es_ES  <== has some change in this version pair
+    15 locales inherit from am_ET  <== has some change in this version pair
+     9 locales inherit from hi_IN  <== has some change in this version pair
+     7 locales inherit from ti_ER  <== has some change in this version pair
+     6 locales inherit from ca_ES  <== has some change in this version pair
+     5 locales inherit from en_DK  <== has some change in this version pair
+     4 locales inherit from hr_HR
+     2 locales inherit from da_DK
+
+Changed files that others inherit from (33) -- reach if the change turns out to be in LC_COLLATE.
+NOT a collation verdict: most of these changed LC_TIME or LC_MONETARY. Step 2 filters.
+  es_ES: 32 dependent locale(s)
+  am_ET: 15 dependent locale(s)
+  hi_IN: 9 dependent locale(s)
+  ti_ER: 7 dependent locale(s)
+  ca_ES: 6 dependent locale(s)
+  en_DK: 5 dependent locale(s)
+  sv_SE: 2 dependent locale(s)
+  so_SO: 2 dependent locale(s)
+  ... and 25 more with 1-2 dependents: nl_NL, ne_NP, fr_BE, en_ZA, en_CA, dz_BT, wa_BE, tr_TR, ta_IN, sq_AL, ru_RU, ks_IN, fr_FR, fil_PH, en_US, de_DE, de_CH, cs_CZ, crh_UA, br_FR, bo_CN, bn_IN, bho_IN, ber_DZ, aa_ER
+---
+
+================================================================
+== STEP 2  Which of those changes are inside LC_COLLATE
+================================================================
+Locale files changed between glibc-2.28 and glibc-2.34: 283
+  modified: 281   added: 2   deleted: 0   renamed: 0
+Of the 281 content-changed file(s): 2 touch LC_COLLATE, 271 do not, 8 have no LC_COLLATE block
+  (no LC_COLLATE on either side, so no sort order to change: i18n_ctype, translit_circle, translit_cjk_compat, translit_combining, translit_compat, translit_font, translit_fraction, translit_neutral)
+
+Files with changes inside LC_COLLATE: 2
+  localedata/locales/or_IN
+  localedata/locales/sv_SE
+
+!! localedata/locales/C exists at NEITHER glibc-2.28 nor glibc-2.34, but
+   C.UTF-8 is BACKPORTED by the distros this audit targets -- so it very
+   likely DOES exist on your old system, with an order of its own, and that
+   order can change. There is no source file to diff on the old side, so this
+   audit is blind to it: a clean result above says nothing about C.UTF-8.
+   PostgreSQL will not cover the gap either -- collversion is NULL for every
+   collation whose name starts with 'C.', so no version mismatch can ever
+   fire. Compare C.UTF-8 empirically on both nodes. See docs/limitations.md.
+
+Added at glibc-2.34 (2), not analysed for a change of order. An added file
+cannot affect an existing index ONLY IF the locale did not exist on the old system.
+An upstream source diff cannot establish that -- distros backport. Confirm with
+`locale -a` on the OLD node before treating these as out of scope:
+  localedata/locales/ckb_IQ -> ckb_IQ
+  localedata/locales/mnw_MM -> mnw_MM
+
+================================================================
+== STEP 3  Which locales inherit those changes
+================================================================
+Directly changed (own LC_COLLATE diff): or_IN, sv_SE
+Additionally affected via copy-chain inheritance: 2
+  sv_FI: copy "sv_SE" -> reaches sv_SE
+  sv_FI@euro: copy "sv_SE" -> reaches sv_SE
+
+Full affected set (4 locale source file(s)): or_IN, sv_FI, sv_FI@euro, sv_SE
+
+Generated locales per localedata/SUPPORTED -- these are the names `locale -a` and pg_collation show (6):
+  or_IN
+  sv_FI
+  sv_FI.utf8
+  sv_FI@euro
+  sv_SE
+  sv_SE.utf8
+
+Full list also written to /tmp/pg-glibc-collation-audit/step3_affected_locales.txt
+
+================================================================
+== STEP 4  Which locales a data diff can never clear
+================================================================
+Files at glibc-2.34: 355, of which 342 define LC_COLLATE
+Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 4
+  i18n
+      collating-symbol <S0200>..<S1100> % 0x0200..0x1100
+      collating-symbol <S4E00>..<S9FA5> % Symbols for Han
+      collating-symbol <SAC00>..<SD7A3> % Symbols for Hangul
+      ... and 1 more
+  iso14651_t1
+      .. ..;IGNORE;IGNORE;IGNORE
+  iso14651_t1_common
+      collating-symbol <S0009>..<S327F> % Alphabetics, syllabics, general symbols
+      collating-symbol <S4DC0>..<S4DFF> % Yijing hexagram symbols
+      collating-symbol <SA000>..<SABFF> % Alphabetics, syllabics, general symbols
+      ... and 20 more
+  ko_KR
+      ..
+
+Additionally exposed via `copy` inheritance: 331
+  via iso14651_t1: 327 locale(s)
+      aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, agr_PE, ak_GH, am_ET, an_ES, anp_IN, ar_AE, ar_BH, ...
+  via iso14651_t1_common: 4 locale(s)
+      cmn_TW, cns11643_stroke, iso14651_t1_pinyin, zh_CN
+
+Full set needing empirical confirmation: 335 locale source file(s), 478 generated locale name(s) per localedata/SUPPORTED
+  e.g. aa_DJ, aa_DJ.utf8, aa_ER, aa_ER@saaho, aa_ET, af_ZA, af_ZA.utf8, agr_PE, ...
+  not in SUPPORTED (templates, not built by default): cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
+  full list (483 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
+
+These cannot be cleared by a source diff alone.
+Step 5 below decides whether that matters for this pair.
+
+================================================================
+== STEP 5  Did the code that computes weights change
+================================================================
+Collation code changes between glibc-2.28 and glibc-2.34
+
+Tracked files that exist at neither tag and have no history at glibc-2.28
+-- not yet written when this range begins, so nothing to read and nothing to
+miss:
+  locale/C-collate-seq.c
+
+TIER 1 -- weight assignment and comparison
+  (a change here can reorder any locale, including ones whose data file is unchanged)
+  locale/programs/ld-collate.c: 2 substantive hunk(s), 4 comment/licence hunk(s) filtered
+      @@ -1483,6 +1483,9 @@ order for `%.*s' already defined at %s:%Zu"),
+         +  /* Move the cursor to the last entry in the ellipsis.
+         +     Subsequent operations need to start from the last entry.  */
+      >> +  collate->cursor = endp;
+      @@ -2401,8 +2404,8 @@ collate_output (struct localedef_t *locale, const struct charmap_t *charmap,
+         -  /* Add 40% and find the next prime number.  */
+      >> -  elem_size = next_prime (elem_size * 1.4);
+         +  /* Add 50% and find the next prime number.  */
+      >> +  elem_size = next_prime (elem_size + (elem_size >> 1));
+      commits:
+        82292c99b2 LC_COLLATE: Fix last character ellipsis handling (Bug 22668)
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        14ef9c185b treewide: fix incorrect spelling of indices in comments
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        5abcddd794 Fix parentheses error in iconvconfig.c and ld-collate.c [BZ #24372]
+        ac64195ccd iconv, localedef: avoid floating point rounding differences [BZ #24372]
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
+  string/strcoll_l.c: no substantive change (2 comment/licence hunk(s) filtered)
+  string/strxfrm_l.c: no substantive change (3 comment/licence hunk(s) filtered)
+  wcsmbs/wcscoll_l.c: no substantive change (2 comment/licence hunk(s) filtered)
+  wcsmbs/wcsxfrm_l.c: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/weight.h: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/weightwc.h: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/coll-lookup.h: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/coll-lookup.c: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/lc-collate.c: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/C-collate.c: no substantive change (2 comment/licence hunk(s) filtered)
+
+TIER 2 -- parsing and serialisation
+  (a change here can alter the compiled tables without touching the weight logic)
+  locale/programs/linereader.c: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/programs/locfile.c: 2 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -702,7 +702,7 @@ write_locale_data (const char *output_path, int catidx, const char *category,
+      >> -  const char **other_paths;
+      >> +  const char **other_paths = NULL;
+      @@ -827,9 +827,22 @@ failure while writing data for category `%s'"), category);
+         -  /* Compare the file with the locale data files for the same category in
+         -     other locales, and see if we can reuse it, to save disk space.  */
+      >> -  other_paths = siblings (output_path);
+         +  /* Compare the file with the locale data files for the same category
+         +     in other locales, and see if we can reuse it, to save disk space.
+         +     If the user specified --no-hard-links to localedef then hard_links
+         +     is false, other_paths remains NULL and we skip the optimization
+         +     below.  The use of --no-hard-links is distribution specific since
+         +     some distros have post-processing hard-link steps and so doing this
+         +     here is a waste of time.  Worse than a waste of time in rpm-based
+         +     distributions it can result in build determinism issues from
+         +     build-to-build since some files may get a hard link in one pass but
+         +     not in another (if the files happened to be created in parallel).  */
+      >> +  if (hard_links)
+      >> +    other_paths = siblings (output_path);
+         +
+         +  /* If there are other paths, then walk the sibling paths looking for
+         +     files with the same content so we can hard link and reduce disk
+         +     space usage.  */
+      commits:
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
+        8cebd4ffe6 Add --no-hard-links option to localedef (bug 23923)
+  locale/programs/locfile.h: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/programs/3level.h: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/loadlocale.c: 3 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -167,7 +167,7 @@ _nl_load_locale (struct loaded_l10nfile *file, int category)
+      >> -  struct stat64 st;
+      >> +  struct __stat64_t64 st;
+      @@ -180,7 +180,7 @@ _nl_load_locale (struct loaded_l10nfile *file, int category)
+      >> -  if (__builtin_expect (__fxstat64 (_STAT_VER, fd, &st), 0) < 0)
+      >> +  if (__glibc_unlikely (__fstat64_time64 (fd, &st) < 0))
+      @@ -199,15 +199,14 @@ _nl_load_locale (struct loaded_l10nfile *file, int category)
+      >> -			    "/SYS_", 5),
+      >> -		 _nl_category_names.str + _nl_category_name_idxs[category],
+      >> +			    "/SYS_", 5), _nl_category_names_get (category),
+      >> -      if (__builtin_expect (__fxstat64 (_STAT_VER, fd, &st), 0) < 0)
+      >> +      if (__glibc_unlikely (__fstat64_time64 (fd, &st) < 0))
+      commits:
+        52a5fe70a2 Use 64 bit time_t stat internally
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        04986243d1 Remove internal usage of extensible stat functions
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        de18a7061c locale: Avoid zero-length array in _nl_category_names [BZ #24962]
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
+  locale/localeinfo.h: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -183,23 +183,29 @@ enum
+         -/* Category name handling variables.  */
+         +/* Category name handling variables.  Concatenate all the strings in a
+         +   single object to minimize relocations.  Individual strings can be
+         +   accessed using _nl_category_names.  */
+      >> -extern const union catnamestr_t
+      >> +extern const struct catnamestr_t
+      >> -  struct
+      >> -  {
+      >> -    char CATNAMEMF (__LINE__)[sizeof (category_name)];
+      >> +  char CATNAMEMF (__LINE__)[sizeof (category_name)];
+      >> -  };
+      >> -  char str[0];
+         +/* Return the name of the category INDEX, which must be nonnegative
+         +   and less than _LC_LAST.  */
+      >> +static inline const char *
+      >> +_nl_category_names_get (int index)
+      >> +{
+      >> +  return (const char *) &_nl_category_names + _nl_category_name_idxs[index];
+      >> +}
+         +
+      commits:
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        de18a7061c locale: Avoid zero-length array in _nl_category_names [BZ #24962]
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
+  locale/programs/locfile-kw.gperf: no substantive change (2 comment/licence hunk(s) filtered)
+
+TIER 3 -- reachable from the collation entry points, not classified
+  (derived by walking #include from ld-collate.c, strcoll_l.c, strxfrm_l.c and the
+   wide-char variants, bounded to locale/, plus the sibling .c of every header
+   reached -- so this list grows on its own as glibc changes)
+  locale/programs/charmap.h: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -60,7 +60,7 @@ struct charseq
+      >> -  unsigned char bytes[0];
+      >> +  unsigned char bytes[];
+      commits:
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        1471fa556a localedef: Use initializer for flexible array member [BZ #24950]
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
+  locale/programs/linereader.h: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -29,7 +29,7 @@
+      >> -typedef const struct keyword_t *(*kw_hash_fct_t) (const char *, unsigned int);
+      >> +typedef const struct keyword_t *(*kw_hash_fct_t) (const char *, size_t);
+      commits:
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        3f02b772a4 Regenerate charmap-kw.h, locfile-kw.h
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
+  locale/programs/localedef.c: 11 substantive hunk(s), 4 comment/licence hunk(s) filtered
+      @@ -85,6 +85,9 @@ static bool replace_archive;
+         +/* If true create hard links to other locales (default).  */
+      >> +bool hard_links = true;
+         +
+      @@ -105,6 +108,7 @@ void (*argp_program_version_hook) (FILE *, struct argp_state *) = print_version;
+      >> +#define OPT_NO_HARD_LINKS 404
+      @@ -120,6 +124,8 @@ static const struct argp_option options[] =
+      >> +  { "no-hard-links", OPT_NO_HARD_LINKS, NULL, 0,
+      >> +    N_("Do not create hard links between installed locales") },
+      @@ -174,14 +180,14 @@ static struct argp argp =
+      >> -static const char *construct_output_path (char *path);
+      >> -static const char *normalize_codeset (const char *codeset, size_t name_len);
+      >> +static char *construct_output_path (char *path);
+      >> +static char *normalize_codeset (const char *codeset, size_t name_len);
+      >> -  const char *output_path;
+      >> +  char *output_path;
+      @@ -389,6 +396,10 @@ parse_opt (int key, char *arg, struct argp_state *state)
+      >> +    case OPT_NO_HARD_LINKS:
+         +      /* Do not hard link to other locales.  */
+      >> +      hard_links = false;
+      >> +      break;
+      @@ -424,20 +435,16 @@ more_help (int key, const char *text, void *input)
+      >> -      if (asprintf (&tp, gettext ("\
+      >> +      tp = xasprintf (gettext ("\
+      >> -%s.\n"), REPORT_BUGS_TO) < 0)
+      >> -	return NULL;
+      >> -      if (asprintf (&cp, gettext ("\
+      >> +%s.\n"), REPORT_BUGS_TO);
+      >> +      cp = xasprintf (gettext ("\
+      >> -		    CHARMAP_PATH, REPERTOIREMAP_PATH, LOCALE_PATH, tp) < 0)
+      >> -	{
+      >> -	  free (tp);
+      >> -	  return NULL;
+      >> -	}
+      >> +		    CHARMAP_PATH, REPERTOIREMAP_PATH, LOCALE_PATH, tp);
+      >> +      free (tp);
+      @@ -454,7 +461,7 @@ print_version (FILE *stream, struct argp_state *state)
+      >> -"), "2018");
+      >> +"), "2021");
+      @@ -467,15 +474,13 @@ error_print (void)
+         -/* The parameter to localedef describes the output path.  If it does
+         -   contain a '/' character it is a relative path.  Otherwise it names the
+         -   locale this definition is for.  */
+      >> -static const char *
+         +/* The parameter to localedef describes the output path.  If it does contain a
+         +   '/' character it is a relative path.  Otherwise it names the locale this
+         +   definition is for.   The returned path must be freed by the caller. */
+      >> +static char *
+      >> -  const char *normal = NULL;
+      >> -  char *endp;
+      @@ -483,50 +488,44 @@ construct_output_path (char *path)
+      >> +      char *endp = NULL;
+      >> +      char *normal = NULL;
+         -      /* We must be prepared for finding a CEN name or a location of
+         -	 the introducing `.' where it is not possible anymore.  */
+         +      /* Either we have a '@' which starts a CEN name or '.' which starts the
+         +	 codeset specification.  The CEN name starts with '@' and may also have
+         +	 a codeset specification, but we do not normalize the string after '@'.
+         +	 If we only find the codeset specification then we normalize only the codeset
+         +	 specification (but not anything after a subsequent '@').  */
+         +
+         +	  /* Stop at the first '@', and don't normalize anything past that.  */
+      >> -      else
+         -	/* This is to keep gcc quiet.  */
+      >> -	endp = NULL;
+         -      /* We put an additional '\0' at the end of the string because at
+         -	 the end of the function we need another byte for the trailing
+         -	 '/'.  */
+      >> -      ssize_t n;
+      >> -	n = asprintf (&result, "%s%s/%s%c", output_prefix ?: "",
+      >> -		      COMPLOCALEDIR, path, '\0');
+      >> +	result = xasprintf ("%s%s/%s/", output_prefix ?: "",
+      >> +			    COMPLOCALEDIR, path);
+      >> -	n = asprintf (&result, "%s%s/%.*s%s%s%c",
+      >> -		      output_prefix ?: "", COMPLOCALEDIR,
+      >> -		      (int) (startp - path), path, normal, endp, '\0');
+         -
+      >> -      if (n < 0)
+      >> -	return NULL;
+         -
+      >> -      endp = result + n - 1;
+      >> +	result = xasprintf ("%s%s/%.*s%s%s/",
+      >> +			    output_prefix ?: "", COMPLOCALEDIR,
+      >> +			    (int) (startp - path), path, normal, endp ?: "");
+         +      /* Free the allocated normalized codeset name.  */
+      >> +      free (normal);
+         -      /* This is a user path.  Please note the additional byte in the
+         -	 memory allocation.  */
+      >> -      size_t len = strlen (path) + 1;
+      >> -      result = xmalloc (len + 1);
+      >> -      endp = mempcpy (result, path, len) - 1;
+         +      /* This is a user path.  */
+      >> +      result = xasprintf ("%s/", path);
+      @@ -536,25 +535,41 @@ construct_output_path (char *path)
+         -    /* Perhaps the directory does not exist now.  Try to create it.  */
+      >> -    if (errno == ENOENT)
+      >> -      {
+      >> -	errno = 0;
+      >> -	if (mkdir (result, 0777) < 0)
+      >> -	  return NULL;
+      >> -      }
+         -
+      >> -  *endp++ = '/';
+      >> -  *endp = '\0';
+      >> +    {
+         +      /* Perhaps the directory does not exist now.  Try to create it.  */
+      >> +      if (errno == ENOENT)
+      >> +	{
+      >> +	  errno = 0;
+      >> +	  if (mkdir (result, 0777) < 0)
+      >> +	    {
+      >> +	      record_verbose (stderr,
+      >> +			      _("cannot create output path \'%s\': %s"),
+      >> +			      result, strerror (errno));
+      >> +	      free (result);
+      >> +	      return NULL;
+      >> +	    }
+      >> +	}
+      >> +      else
+      >> +	record_verbose (stderr,
+      >> +			_("no write permission to output path \'%s\': %s"),
+      >> +			result, strerror (errno));
+      >> +    }
+         -/* Normalize codeset name.  There is no standard for the codeset
+         -   names.  Normalization allows the user to use any of the common
+         -   names.  */
+      >> -static const char *
+         +/* Normalize codeset name.  There is no standard for the codeset names.
+         +   Normalization allows the user to use any of the common names e.g. UTF-8,
+         +   utf-8, utf8, UTF8 etc.
+         +
+         +   We normalize using the following rules:
+         +   - Remove all non-alpha-numeric characters
+         +   - Lowercase all characters.
+         +   - If there are only digits assume it's an ISO standard and prefix with 'iso'
+         +
+         +   We return the normalized string which needs to be freed by free.  */
+      >> +static char *
+      @@ -572,25 +588,24 @@ normalize_codeset (const char *codeset, size_t name_len)
+      >> -  retval = (char *) malloc ((only_digit ? 3 : 0) + len + 1);
+         +  /* If there were only digits we assume it's an ISO standard and we will
+         +     prefix with 'iso' so include space for that.  We fill in the required
+         +     space from codeset up to the converted length.  */
+      >> +  wp = retval = xasprintf ("%s%.*s", only_digit ? "iso" : "", len, codeset);
+      >> -  if (retval != NULL)
+      >> -    {
+      >> -      if (only_digit)
+      >> -	wp = stpcpy (retval, "iso");
+      >> -      else
+      >> -	wp = retval;
+         -
+      >> -      for (cnt = 0; cnt < name_len; ++cnt)
+      >> -	if (isalpha (codeset[cnt]))
+      >> -	  *wp++ = tolower (codeset[cnt]);
+      >> -	else if (isdigit (codeset[cnt]))
+      >> -	  *wp++ = codeset[cnt];
+         +  /* Skip "iso".  */
+      >> +  if (only_digit)
+      >> +    wp += 3;
+      >> -      *wp = '\0';
+      >> -    }
+         +  /* Lowercase all characters. */
+      >> +  for (cnt = 0; cnt < name_len; ++cnt)
+      >> +    if (isalpha (codeset[cnt]))
+      >> +      *wp++ = tolower (codeset[cnt]);
+      >> +    else if (isdigit (codeset[cnt]))
+      >> +      *wp++ = codeset[cnt];
+      >> -  return (const char *) retval;
+         +  /* Return allocated and converted name for caller to free.  */
+      >> +  return retval;
+      commits:
+        9fcdec7386 Update copyright dates not handled by scripts/update-copyrights.
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        92954ffa5a localedef: Add verbose messages for failure paths.
+        5f72f9800b Update copyright dates not handled by scripts/update-copyrights.
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        c9123888d8 Update copyright dates not handled by scripts/update-copyrights.
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
+        8cebd4ffe6 Add --no-hard-links option to localedef (bug 23923)
+  locale/programs/localedef.h: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -118,10 +118,12 @@ extern const char *repertoire_global;
+      >> +extern bool hard_links;
+      >> +#include <programs/xasprintf.h>
+      commits:
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        92954ffa5a localedef: Add verbose messages for failure paths.
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
+        8cebd4ffe6 Add --no-hard-links option to localedef (bug 23923)
+  locale/programs/repertoire.c: 2 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -37,7 +37,7 @@
+      >> -						   unsigned int len);
+      >> +						   size_t len);
+      @@ -358,7 +358,7 @@ repertoire_compare (const void *p1, const void *p2)
+      >> -repertoiremap_hash (const char *str, unsigned int len)
+      >> +repertoiremap_hash (const char *str, size_t len)
+      commits:
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        3f02b772a4 Regenerate charmap-kw.h, locfile-kw.h
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
+  (15 further file(s) reached and read, with no substantive change)
+
+Coverage: 27 file(s) reached by the include walk, 20 of them beyond
+TIER 1/2. The walk cannot follow a macro-computed include (`#include WEIGHT_H`) or
+reach a translation unit with no header of its own -- locale/weight.h, weightwc.h,
+lc-collate.c and C-collate.c are in TIER 1 by hand for exactly that reason.
+
+24 substantive hunk(s) found. Locale data alone does not settle this pair.
+Lines marked >> are the code changes; read them and decide whether they can
+move weights. If any can, every locale step 4 listed above needs an
+empirical sort-order test, however clean its data diff is.
+
+================================================================
+== AUDIT SUMMARY  glibc-2.28 -> glibc-2.34
+================================================================
+
+-- Reindex: sort order changes, confirm then REINDEX
+     or_IN
+     sv_FI
+     sv_FI.utf8
+     sv_FI@euro
+     sv_SE
+     sv_SE.utf8
+   (6 name(s); full list: /tmp/pg-glibc-collation-audit/step3_affected_locales.txt)
+
+-- Needs an empirical test: step 5 found 24 substantive hunk(s),
+   so a clean data diff CANNOT clear the locales step 4 flagged
+     483 name(s) to confirm: generated names, and
+     source names for the locales SUPPORTED does not list
+     full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
+
+-- Node-to-node locale data: NOT RUN
+     Pass --old-locales-dir and --new-locales-dir with their build
+     ids. Without it nothing above says anything about C.UTF-8: its
+     source file is in neither tag, and PostgreSQL reports collversion
+     as NULL for every C.* collation, so no mismatch can ever fire.
+     Then run sql/c_utf8_probe.sql on both nodes.
+
+-- Node's own ellipsis scan: NOT RUN
+     Pass --old-locales-dir and --new-locales-dir with their build
+     ids. Step 4 above scanned the TAG, and a tag holds at most
+     upstream's C: the distros this audit targets ship their own
+     C.UTF-8, so if step 4 named C at all, that verdict is evidence
+     about upstream's file and none about either node's. Nothing above
+     says whether either node's own C.UTF-8 is ellipsis-based -- which
+     is the one thing a data diff, including the node-to-node one, can
+     never clear.
+
+-- Warnings the clean results above do NOT cover
+     !! localedata/locales/C exists at NEITHER glibc-2.28 nor glibc-2.34, but
+        C.UTF-8 is BACKPORTED by the distros this audit targets -- so it very
+        likely DOES exist on your old system, with an order of its own, and that
+        order can change. There is no source file to diff on the old side, so this
+        audit is blind to it: a clean result above says nothing about C.UTF-8.
+        PostgreSQL will not cover the gap either -- collversion is NULL for every
+        collation whose name starts with 'C.', so no version mismatch can ever
+        fire. Compare C.UTF-8 empirically on both nodes. See docs/limitations.md.
+     (see docs/limitations.md)
+
+-- Not decided for you
+     24 hunk(s) marked >> in step 5. Whether any of them moves a
+     weight is a judgement call that needs someone to read C.
+     If nobody will, treat step 4's list as unresolved and confirm
+     empirically instead: docs/confirming-on-a-real-system.md
+     An upstream diff cannot see your distro's backports.
+

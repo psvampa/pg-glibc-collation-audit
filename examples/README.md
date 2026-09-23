@@ -1,20 +1,38 @@
 # Example output
 
-Real output, kept so you can see what a run prints before you run one. Each
-file's own header says which builds it was taken on.
+Real output, kept so you can see what a run prints before you run one.
 
 ## The two audited pairs
 
-Command 1, start to finish, on the two upgrades this project publishes results
-for.
+The two upgrades this project publishes results for, in two shapes.
+
+### Command 1, as the README gives it
+
+`./audit.sh <old> <new>` and nothing else. This is what you get from a
+checkout alone, and it is where the two `NOT RUN` blocks appear, each saying
+what it did not cover rather than leaving the section out.
+
+| File | |
+|---|---|
+| [`rhel8-to-rhel9-tags-only.txt`](rhel8-to-rhel9-tags-only.txt) | glibc 2.28 to 2.34 |
+| [`rhel9-to-rhel10-tags-only.txt`](rhel9-to-rhel10-tags-only.txt) | glibc 2.34 to 2.39 |
+
+Raw output, start to finish, with nothing trimmed or annotated.
+
+### The extended run, and the evidence behind the verdicts
+
+Older and richer files, and not a transcript of one command. Each opens with
+the five steps run one script at a time, carries the measurements taken on
+real nodes for that pair, and closes with `./audit.sh` given both machines'
+locale files — steps 6 to 10 and the full summary.
 
 | File | |
 |---|---|
 | [`rhel8-to-rhel9-audit-output.txt`](rhel8-to-rhel9-audit-output.txt) | glibc 2.28 to 2.34 |
 | [`rhel9-to-rhel10-audit-output.txt`](rhel9-to-rhel10-audit-output.txt) | glibc 2.34 to 2.39 |
 
-Both were run with each node's own locale files supplied, so they carry the
-extended form as well — the five node steps rather than `NOT RUN`.
+Read these for what was measured and why a verdict stands. Read the two above
+for what the command prints.
 
 ## Two pairs that are not audited results
 

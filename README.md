@@ -79,8 +79,9 @@ what it leaves to the next.
 It runs the five steps in order, passes the locales step 2 found on to step 3
 so you never retype a name, and ends with a consolidated summary. What each
 step asks, and what the run leaves unsettled, is in
-[docs/commands.md](docs/commands.md). Real output, start to finish, is in
-[the two audited runs](examples/README.md#the-two-audited-pairs) — worth
+[docs/commands.md](docs/commands.md). What this exact command prints, on
+both audited pairs, is in
+[examples/](examples/README.md#command-1-as-the-readme-gives-it) — worth
 reading before you run anything.
 
 > [!TIP]
@@ -93,7 +94,9 @@ reading before you run anything.
 *Needs the locale sources off both nodes. No database.*
 
 What the five extra checks answer, how to take the copy and how to tell a good
-one from a short one are in [docs/commands.md](docs/commands.md).
+one from a short one are in [docs/commands.md](docs/commands.md). What this
+form prints is in
+[examples/](examples/README.md#the-extended-run-and-the-evidence-behind-the-verdicts).
 
 ```sh
 # on each node
@@ -257,7 +260,7 @@ short version:
 - [docs/requirements.md](docs/requirements.md) — dependencies, test suite, setup traps
 - [docs/glossary.md](docs/glossary.md) — `copy` graph, blast radius, hunk, tier, ellipsis range
 - [breakage/](breakage/README.md) — what breaks inside PostgreSQL once a locale did change, measured on two nodes
-- [examples/](examples/) — real output from both pairs
+- [examples/](examples/README.md) — real output of every command, and which file is which
 - [CHANGELOG.md](CHANGELOG.md) — what this tool used to get wrong
 
 ## Tests
