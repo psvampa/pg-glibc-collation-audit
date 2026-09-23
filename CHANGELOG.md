@@ -4,6 +4,54 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-23 (thirty-seventh entry)
+
+`docs/confirming-on-a-real-system.md` cut from 274 lines to 133. Nothing the
+tool prints changes and no verdict moves.
+
+### What it used to get wrong
+
+**A quarter of the page was not about confirming on a real system.** Two
+sections, "Checking the distro's own patches" and "And comparing the two nodes
+to each other", were about comparing locale FILES -- the optional half of
+command 1, which `docs/commands.md` already explains. The page's title
+promises measurement on a running system, and 75 of its lines were file
+comparison. They are gone, and the one link into them, from
+`docs/method.md`, now points at the section of `commands.md` that covers
+taking the copy.
+
+**The rest carried the reasons behind its own advice.** "PostgreSQL is not
+exposed to this" was followed by three bullets of PostgreSQL internals naming
+`varstr_cmp`, abbreviated keys and nondeterministic collations; the
+`strxfrm` tie check was published as a command to run by hand with its
+measured output, although the probe has run it itself as query 6b since the
+twenty-sixth entry; and the probe's 41-value corpus was described by how it
+was derived. A reader needs the conclusion and the action. The derivations are
+in `docs/results.md` and in earlier entries of this file.
+
+What stays is what nothing else says. Which locales to run the template for,
+how to choose the three values it compares, the traps that make a comparison
+agree with itself, how to read the `C.UTF-8` probe, and the partition keys no
+`REINDEX` fixes.
+
+### The one measurement this deletes
+
+The `strcoll` tie rates, measured on RHEL8 and RHEL9 over random string pairs.
+**About 0.1% of pairs compare equal under `sv_SE`, `en_US` and `de_DE`, and
+about 10% under `ko_KR`.** They lived in that page and nowhere else, so they
+are recorded here. What they were there to show is that the tie is common
+enough to matter, which is why `sort(1)` must be given byte-identical input on
+both sides. That instruction is what the page now carries.
+
+### Files
+
+- **`docs/confirming-on-a-real-system.md`** -- rewritten. The two anchors other
+  files link to, `#choosing-the-three-values` and `#the-cutf-8-probe`, are
+  unchanged. `#checking-the-distros-own-patches` is gone with its section.
+- **`docs/method.md`** -- the link that pointed at that section.
+- **`README.md`**, **`docs/README.md`** -- the trap count, now three, and the
+  index line that still described the file comparisons.
+
 ## 2026-09-23 (thirty-sixth entry)
 
 `docs/limitations.md` cut from 589 lines to 112, and the CJK row of the

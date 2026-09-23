@@ -160,7 +160,7 @@ What this box leaves out is in
 - which locales exactly to run it for
 - which values to test with, the step that decides whether the run proves
   anything at all
-- the four traps that make a comparison agree with itself while proving
+- the three traps that make a comparison agree with itself while proving
   nothing
 - what it reports beyond indexes, text partition keys among them, which no
   `REINDEX` fixes

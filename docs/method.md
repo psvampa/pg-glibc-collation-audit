@@ -101,8 +101,8 @@ None of the three settles the resulting *order*: the weights for an ellipsis
 range are computed when the locale is built. `sql/c_utf8_probe.sql` is what
 does, for the one locale where nothing else can.
 
-See
-[confirming-on-a-real-system.md](confirming-on-a-real-system.md#checking-the-distros-own-patches).
+How to take the copy, and how to tell a good one from a short one, is in
+[commands.md](commands.md#taking-the-copy-and-checking-it).
 
 ### Step 1 — `scripts/audit-locale-diff.sh <old_tag> <new_tag>`
 

@@ -19,7 +19,7 @@
 |---|---|
 | [method.md](method.md) | The five steps in detail, how far apart the two tags may be, how to read what a run prints, and the decision procedure they add up to |
 | [results.md](results.md) | The evidence behind each verdict, both worked examples, and what was tested on which nodes |
-| [confirming-on-a-real-system.md](confirming-on-a-real-system.md) | Running the SQL template and the `C.UTF-8` probe on both nodes, comparing the nodes' locale files against upstream and against each other, and the four traps that make a comparison lie |
+| [confirming-on-a-real-system.md](confirming-on-a-real-system.md) | Running the SQL template and the `C.UTF-8` probe on both nodes, choosing values that prove something, and the three traps that make a comparison lie |
 | [scope.md](scope.md) | What this audits — `LC_COLLATE` and the `libc` provider — and the `builtin` provider as a way out |
 | [limitations.md](limitations.md) | The six things to know before acting on a clean result — `C.UTF-8` among them, and `LC_CTYPE`, which no step audits |
 | [requirements.md](requirements.md) | Dependencies, the test suite, and the three setup traps on the confirmation side |
