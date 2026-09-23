@@ -69,7 +69,7 @@ In the order of what they cost you. The first needs nothing but this checkout;
 the last needs PostgreSQL on both nodes. Each one says what it measures and
 what it leaves to the next.
 
-**1 — Verifying what changed between two glibc versions**
+**1 — Verifying which locales the upgrade can affect**
 *Needs this checkout. No node, no database.*
 
 ```sh
