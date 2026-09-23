@@ -173,7 +173,11 @@ def docs(include_changelog=False):
 
 def ordering_rows(text):
     """[(position, code point, label)] from a probe output's query 1 table."""
-    block = text.split('(query 1)')[1].split('(41 rows)')[0]
+    # The probe's own section header. It was '(query 1)' until the two
+    # probe examples were recaptured as plain output: that string was in
+    # an editorial heading written above the run, not in anything psql
+    # prints.
+    block = text.split('=== 1. the order')[1].split('(41 rows)')[0]
     return [(int(m.group(1)), m.group(2), m.group(3).strip())
             for m in re.finditer(r'^\s*(\d+) \| (U\+[0-9A-F]+)\s*\| (.+)$',
                                  block, re.M)]
@@ -282,12 +286,22 @@ class ThePublishedOutputsMatchTheirProse(unittest.TestCase):
                                  f'{name} states the wrong count')
 
     def test_the_rhel9_output_really_is_code_point_order(self):
-        """The RHEL9-vs-RHEL10 file claims "This is code point order, exactly".
-        Nothing else checks that claim."""
-        rows = ordering_rows(read(EXAMPLE_9_10))
+        """The order the probe printed, read as numbers and sorted.
+
+        It used to check a sentence as well -- the file claimed "This is code
+        point order, exactly" -- which went when the examples were recaptured
+        as plain output. The probe answers the same question itself, in query
+        2, and that answer is machine-readable rather than prose: this now
+        asserts both halves of it."""
+        text = read(EXAMPLE_9_10)
+        rows = ordering_rows(text)
         cps = [int(cp[2:], 16) for _, cp, _ in rows]
         self.assertEqual(cps, sorted(cps))
-        self.assertIn('code point order, exactly', read(EXAMPLE_9_10))
+        query_2 = text.split('=== 2. does C.utf8 equal byte order?')[1]
+        verdict = query_2.split('(1 row)')[0].strip().split('\n')[-1]
+        self.assertRegex(verdict, r'^\s*t\s*\|\s*0\s*$',
+                         'query 2 no longer says the order equals byte order '
+                         'with nothing out of position')
 
     def test_the_examples_name_the_builds_they_were_measured_on(self):
         for path, expected in ((EXAMPLE_8_9, BUILDS[:2]),

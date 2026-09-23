@@ -36,8 +36,15 @@ for what the command prints.
 
 ## Command 2 — the `C.UTF-8` probe
 
-The probe run unedited on both machines, the two outputs diffed. This is the
-locale command 1 cannot reach when its file is in neither version.
+The probe run unedited on both machines. Each file carries one node's output
+in full and then the `diff` against the other, so you can see what the probe
+prints as well as where the two builds part. This is the locale command 1
+cannot reach when its file is in neither version.
+
+The RHEL9-against-RHEL10 diff is four lines, and all four are the node's own
+glibc version. Everything the probe measured is byte-identical, which is the
+published verdict for that pair rather than a measurement that came out
+clean.
 
 | File | |
 |---|---|
