@@ -4,10 +4,14 @@ Every case here freezes a failure this tool actually shipped. The CHANGELOG
 entry each one guards is quoted in its docstring, because a test whose purpose
 is forgotten is a test somebody deletes during a refactor.
 """
+import contextlib
+import io
 import os
+import re
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 import _harness  # also puts scripts/ on sys.path
 
@@ -335,6 +339,156 @@ class HunkOverlap(unittest.TestCase):
 
     def test_pure_insertion_just_before_the_block_does_not_count(self):
         self.assertFalse(f.hunk_touches_block(9, 0, *self.LC))
+
+
+class ChangedCharacters(unittest.TestCase):
+    """"Step 2 named the file and stopped" (thirty-ninth entry): the characters
+    the confirmation template needs as test values were in the diff step 2
+    had already read, and reaching them meant a `git diff` by hand. These pin
+    how the changed lines are read, by injection, because the corpus never
+    produces most of these shapes.
+
+    The new block sits three lines lower than the old one, so a line placed
+    against the wrong side's block lands outside it.
+    """
+
+    # LC_COLLATE is old lines 6..9 and new lines 9..12.
+    OLD = ('comment_char %\nescape_char /\nLC_CTYPE\n<U0043>\nEND LC_CTYPE\n'
+           'LC_COLLATE\n<U0041> <a>\n<U0042> <b>\nEND LC_COLLATE\n')
+    NEW = ('comment_char %\nescape_char /\nLC_CTYPE\n<U0043>\n<U0045>\n'
+           '<U0046>\n<U0047>\nEND LC_CTYPE\n'
+           'LC_COLLATE\n<U0041> <a>\n<U0044> <b>\nEND LC_COLLATE\n')
+
+    def chars(self, section, old=OLD, new=NEW):
+        return f.changed_characters([section], old, new)
+
+    def test_a_removed_rule_is_read_against_the_old_block(self):
+        """Old line 8 is inside the old block and outside the new one."""
+        self.assertEqual(self.chars('\n@@ -8 +10,0 @@\n-<U0042> <b>\n'), ['B'])
+
+    def test_an_added_rule_is_read_against_the_new_block(self):
+        """New line 11 is inside the new block and outside the old one."""
+        self.assertEqual(self.chars('\n@@ -8,0 +11 @@\n+<U0044> <b>\n'), ['D'])
+
+    def test_lines_outside_the_block_name_nothing(self):
+        self.assertEqual(self.chars('\n@@ -4 +4,4 @@\n-<U0043>\n+<U0043>\n'
+                                    '+<U0045>\n+<U0046>\n+<U0047>\n'), [])
+
+    def test_a_hunk_crossing_the_block_edge_counts_only_its_lines_inside(self):
+        """ber_DZ over 2.34..2.39: one hunk deletes from before LC_COLLATE to
+        past its end. The character named before the block is not a rule."""
+        section = ('\n@@ -4,5 +4,0 @@\n-<U0043>\n-END LC_CTYPE\n-LC_COLLATE\n'
+                   '-<U0041> <a>\n-<U0042> <b>\n')
+        self.assertEqual(self.chars(section), ['A', 'B'])
+
+    def test_context_lines_move_both_sides(self):
+        """A --diff-file can carry context. Unless those lines are counted,
+        both changed lines below are numbered as if they sat before the
+        block, and nothing is found."""
+        section = ('\n@@ -5,3 +8,3 @@\n END LC_CTYPE\n LC_COLLATE\n'
+                   '-<U0041> <a>\n+<U0048> <a>\n')
+        self.assertEqual(self.chars(section), ['A', 'H'])
+
+    def test_a_removed_line_opening_with_two_dashes_is_a_rule(self):
+        """After the first hunk header, `---` is a removed line whose text
+        opens with `--`, not a file name."""
+        section = '\n--- a/x\n+++ b/x\n@@ -8 +11 @@\n---<U0046>\n+<U0044> <b>\n'
+        self.assertEqual(self.chars(section), ['F', 'D'])
+
+    def test_a_comment_names_no_rule(self):
+        """A comment names characters too, and a changed comment is not a
+        changed rule."""
+        section = '\n@@ -7 +10 @@\n-<U0041> <a>\n+<U0041> <a> % <U005A>\n'
+        self.assertEqual(self.chars(section), ['A'])
+
+    def test_the_file_s_own_comment_char_is_used(self):
+        old = 'comment_char #\nLC_COLLATE\n<U0041> <a>\nEND LC_COLLATE\n'
+        new = 'comment_char #\nLC_COLLATE\n<U0041> <a> # <U005A>\nEND LC_COLLATE\n'
+        section = '\n@@ -3 +3 @@\n-<U0041> <a>\n+<U0041> <a> # <U005A>\n'
+        self.assertEqual(self.chars(section, old, new), ['A'])
+
+    def test_the_comment_char_is_looked_up_once_per_side(self):
+        """Called once per changed line, the lookup scans the whole file each
+        time: measured 17 minutes on cns11643_stroke when the last attempt at
+        this did it that way."""
+        section = '\n@@ -8 +11 @@\n' + '-<U0042> <b>\n' * 10 + '+<U0044> <b>\n'
+        with mock.patch.object(g, 'comment_char',
+                               wraps=g.comment_char) as looked_up:
+            self.chars(section)
+        self.assertEqual(looked_up.call_count, 2)
+
+    def test_a_gained_block_is_read_from_the_new_side(self):
+        old = 'comment_char %\nLC_CTYPE\nEND LC_CTYPE\n'
+        new = old + 'LC_COLLATE\n<U0041> <a>\nEND LC_COLLATE\n'
+        section = '\n@@ -3,0 +4,3 @@\n+LC_COLLATE\n+<U0041> <a>\n+END LC_COLLATE\n'
+        self.assertEqual(self.chars(section, old, new), ['A'])
+
+    def test_a_gained_block_that_names_no_character_is_empty(self):
+        """The caller turns this into the warning, so a character named on a
+        changed line outside the new block must not fill the list and
+        suppress it. Not reachable in any audited pair: no file has gained a
+        block there at all."""
+        old = 'comment_char %\nLC_CTYPE\n<U0043>\nEND LC_CTYPE\n'
+        new = ('comment_char %\nLC_CTYPE\n<U0044>\nEND LC_CTYPE\n'
+               'LC_COLLATE\ncopy "iso14651_t1"\nEND LC_COLLATE\n')
+        section = ('\n@@ -3 +3 @@\n-<U0043>\n+<U0044>\n'
+                   '@@ -4,0 +5,3 @@\n+LC_COLLATE\n+copy "iso14651_t1"\n'
+                   '+END LC_COLLATE\n')
+        self.assertEqual(self.chars(section, old, new), [])
+
+
+class ChangedCharactersCannotTell(unittest.TestCase):
+    """What it cannot tell comes back empty, never partial: the caller prints
+    the warning for an empty answer, and a partial one would print as if it
+    were the whole list (thirty-ninth entry)."""
+
+    OLD, NEW = ChangedCharacters.OLD, ChangedCharacters.NEW
+    SECTION = '\n@@ -8 +11 @@\n-<U0042> <b>\n+<U0044> <b>\n'
+
+    def test_the_control_names_both(self):
+        self.assertEqual(
+            f.changed_characters([self.SECTION], self.OLD, self.NEW), ['B', 'D'])
+
+    def test_an_unreadable_new_version(self):
+        self.assertEqual(f.changed_characters([self.SECTION], self.OLD, None), [])
+
+    def test_a_path_the_diff_carries_twice(self):
+        self.assertEqual(f.changed_characters([self.SECTION, self.SECTION],
+                                              self.OLD, self.NEW), [])
+
+    def test_a_path_the_diff_does_not_carry(self):
+        self.assertEqual(f.changed_characters([], self.OLD, self.NEW), [])
+
+    def test_an_unparsable_hunk_header_after_a_good_one(self):
+        section = self.SECTION + '@@ not a header @@\n-<U0041> <a>\n'
+        self.assertEqual(f.changed_characters([section], self.OLD, self.NEW), [])
+
+
+class PrintCharacters(unittest.TestCase):
+    """How the list reads on a terminal (thirty-ninth entry)."""
+
+    def printed(self, chars):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            f.print_characters(chars)
+        return buf.getvalue()
+
+    def test_a_character_a_terminal_would_not_show_is_its_code_point(self):
+        """or_IN's change over 2.28..2.34 names U+0008, U+000F and U+001E."""
+        out = self.printed(['W', '\x0f', ' '])
+        self.assertIn('W (U+0057)', out)
+        self.assertIn('U+000F', out)
+        self.assertIn('U+0020', out)
+        self.assertNotIn('\x0f', out)
+
+    def test_a_long_list_is_wrapped_without_losing_or_splitting_an_entry(self):
+        chars = [chr(0x0100 + i) for i in range(60)]   # Latin Extended-A
+        out = self.printed(chars)
+        self.assertIn('characters in the changed rules (60):', out)
+        self.assertEqual(
+            re.findall(r'(\S) \(U\+([0-9A-F]{4,6})\)', out),
+            [(c, f'{ord(c):04X}') for c in chars])
+        self.assertLessEqual(max(len(line) for line in out.splitlines()), 78)
 
 
 class NoiseFilter(unittest.TestCase):

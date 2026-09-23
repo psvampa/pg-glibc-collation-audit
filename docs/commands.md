@@ -127,7 +127,8 @@ It does two separate jobs.
 **It measures the order** of three strings you supply, under a locale you
 name, on both machines. Choosing those three strings is what decides whether
 the run proves anything: they have to be the characters the changed
-rule moves, not words in the language.
+rule moves, not words in the language. The run's step 2 lists, under each
+locale it flags, the characters its changed rules name.
 
 **It inventories your database** — which indexes, partitioned tables, columns
 and constraints use a collation that is exposed. That half needs no editing

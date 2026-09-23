@@ -27,6 +27,54 @@ def one_int(pattern, text, what):
     return int(m.group(1))
 
 
+WARNING = ('could not identify which characters changed, but this locale '
+           'must be considered suspicious')
+
+
+def step2_characters(out):
+    """{locale: [code point, ...]} from step 2's LC_COLLATE list, or None for
+    a locale that got the could-not-identify warning (thirty-ninth entry).
+
+    Refuses rather than guesses: the files it finds must number what the
+    header says, every line under a file must be part of one of the two forms,
+    and a list must print as many entries as it says it has.
+    """
+    count = one_int(r'Files with changes inside LC_COLLATE: (\d+)', out,
+                    'the step 2 count')
+    block = out.split('Files with changes inside LC_COLLATE:')[1]
+    chunks, name = {}, None
+    for line in block.split('\n\n')[0].split('\n')[1:]:
+        m = re.match(r'^  localedata/locales/(\S+)$', line)
+        if m:
+            name = m.group(1)
+            chunks[name] = []
+        elif name is not None and line.startswith('      '):
+            chunks[name].append(line)
+        else:
+            raise AssertionError(f'unexpected line in step 2 list: {line!r}')
+    if len(chunks) != count:
+        raise AssertionError(f'step 2 says {count} files and lists '
+                             f'{len(chunks)}')
+    found = {}
+    for name, lines in chunks.items():
+        text = flat('\n'.join(lines))
+        if text == WARNING:
+            found[name] = None
+            continue
+        m = re.fullmatch(r'characters in the changed rules \((\d+)\): (.+)',
+                         text)
+        if not m:
+            raise AssertionError(f'{name}: neither a character list nor the '
+                                 f'warning: {text!r}')
+        points = [int(h, 16)
+                  for h in re.findall(r'U\+([0-9A-F]{4,6})', m.group(2))]
+        if len(points) != int(m.group(1)):
+            raise AssertionError(f'{name}: says {m.group(1)} characters and '
+                                 f'prints {len(points)}')
+        found[name] = points
+    return found
+
+
 class StepRun(unittest.TestCase):
     """Base: a scratch output dir, so the suite never writes to the shared
     /tmp/pg-glibc-collation-audit that a real run uses."""
@@ -183,6 +231,39 @@ class Step2Filter(StepRun):
         about the name C. At 2.39..2.41 the file is in both tags."""
         out = self.step('filter_lc_collate_changes.py', NEW, 'glibc-2.41')
         self.assertNotIn('!! localedata/locales/C ', out)
+
+
+@needs_clone
+class Step2NamesTheCharacters(StepRun):
+    """"Step 2 named the file and stopped" (thirty-ninth entry). The
+    confirmation template needs three test values, and reaching them meant a
+    `git diff` by hand; these pin what step 2 now prints instead."""
+
+    def test_sv_SE_names_W_and_w(self):
+        """Two deleted weight lines over 2.28..2.34: `w` stops sorting as a
+        variant of `v`. Measured on the fixtures, `va wa vb` on 2.28 and
+        `va vb wa` on 2.34."""
+        chars = step2_characters(
+            self.step('filter_lc_collate_changes.py', OLD, MID))
+        self.assertEqual(chars['sv_SE'], [0x57, 0x77])
+
+    def test_th_TH_names_the_five_leading_vowels(self):
+        """Over 2.34..2.39 the deleted `collating-element` lines pair each of
+        the five Thai leading vowels, U+0E40..U+0E44, with a consonant: that
+        is the rule that changed."""
+        chars = step2_characters(
+            self.step('filter_lc_collate_changes.py', MID, NEW))
+        self.assertLessEqual(set(range(0x0E40, 0x0E45)), set(chars['th_TH']))
+
+    def test_every_locale_flagged_on_the_audited_pairs_gets_characters(self):
+        """Measured: all five name at least one, so on these two pairs the
+        warning is a regression rather than a finding."""
+        for old, new in ((OLD, MID), (MID, NEW)):
+            with self.subTest(pair=f'{old}..{new}'):
+                chars = step2_characters(
+                    self.step('filter_lc_collate_changes.py', old, new))
+                for name, points in chars.items():
+                    self.assertTrue(points, f'{name} got the warning')
 
 
 @needs_clone
@@ -468,6 +549,16 @@ class BelowTheOldVersionFloor(StepRun):
             one_int(r'Files with changes inside LC_COLLATE: (\d+)', out,
                     'the step 2 count'),
             6)
+
+    def test_hu_HU_gets_the_warning_and_the_other_five_their_characters(self):
+        """The real case of a change whose lines name no character (thirty-
+        ninth entry). It must read as "could not identify", never as an empty
+        list, which would look like nothing to test."""
+        chars = step2_characters(
+            self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW))
+        self.assertIsNone(chars['hu_HU'])
+        for name in set(chars) - {'hu_HU'}:
+            self.assertTrue(chars[name], f'{name} got the warning')
 
     def test_step_3_reaches_280_not_11(self):
         """11 was what it reported with the three roots missing; 278 was the

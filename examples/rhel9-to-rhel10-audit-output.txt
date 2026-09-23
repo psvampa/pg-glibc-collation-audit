@@ -51,8 +51,47 @@ Of the 307 content-changed file(s): 3 touch LC_COLLATE, 296 do not, 8 have no LC
 
 Files with changes inside LC_COLLATE: 3
   localedata/locales/ber_DZ
+      characters in the changed rules (20): ɛ (U+025B)  Ɛ (U+0190)  č (U+010D)
+      Č (U+010C)  ḍ (U+1E0D)  Ḍ (U+1E0C)  ğ (U+011F)  Ğ (U+011E)  ḥ (U+1E25)
+      Ḥ (U+1E24)  ɣ (U+0263)  Ɣ (U+0194)  ṛ (U+1E5B)  Ṛ (U+1E5A)  ṣ (U+1E63)
+      Ṣ (U+1E62)  ṭ (U+1E6D)  Ṭ (U+1E6C)  ẓ (U+1E93)  Ẓ (U+1E92)
   localedata/locales/kab_DZ
+      characters in the changed rules (20): ɛ (U+025B)  Ɛ (U+0190)  č (U+010D)
+      Č (U+010C)  ḍ (U+1E0D)  Ḍ (U+1E0C)  ğ (U+011F)  Ğ (U+011E)  ḥ (U+1E25)
+      Ḥ (U+1E24)  ɣ (U+0263)  Ɣ (U+0194)  ṛ (U+1E5B)  Ṛ (U+1E5A)  ṣ (U+1E63)
+      Ṣ (U+1E62)  ṭ (U+1E6D)  Ṭ (U+1E6C)  ẓ (U+1E93)  Ẓ (U+1E92)
   localedata/locales/th_TH
+      characters in the changed rules (182): เ (U+0E40)  ก (U+0E01)
+      แ (U+0E41)  โ (U+0E42)  ใ (U+0E43)  ไ (U+0E44)  ข (U+0E02)  ฃ (U+0E03)
+      ค (U+0E04)  ฅ (U+0E05)  ฆ (U+0E06)  ง (U+0E07)  จ (U+0E08)  ฉ (U+0E09)
+      ช (U+0E0A)  ซ (U+0E0B)  ฌ (U+0E0C)  ญ (U+0E0D)  ฎ (U+0E0E)  ฏ (U+0E0F)
+      ฐ (U+0E10)  ฑ (U+0E11)  ฒ (U+0E12)  ณ (U+0E13)  ด (U+0E14)  ต (U+0E15)
+      ถ (U+0E16)  ท (U+0E17)  ธ (U+0E18)  น (U+0E19)  บ (U+0E1A)  ป (U+0E1B)
+      ผ (U+0E1C)  ฝ (U+0E1D)  พ (U+0E1E)  ฟ (U+0E1F)  ภ (U+0E20)  ม (U+0E21)
+      ย (U+0E22)  ร (U+0E23)  ล (U+0E25)  ว (U+0E27)  ศ (U+0E28)  ษ (U+0E29)
+      ส (U+0E2A)  ห (U+0E2B)  ฬ (U+0E2C)  อ (U+0E2D)  ฮ (U+0E2E)  U+0020
+      _ (U+005F)  - (U+002D)  , (U+002C)  ; (U+003B)  : (U+003A)  ! (U+0021)
+      ? (U+003F)  / (U+002F)  . (U+002E)  ฯ (U+0E2F)  ๆ (U+0E46)  ` (U+0060)
+      ^ (U+005E)  ~ (U+007E)  ' (U+0027)  " (U+0022)  ( (U+0028)  [ (U+005B)
+      { (U+007B)  } (U+007D)  ] (U+005D)  ) (U+0029)  @ (U+0040)  ฿ (U+0E3F)
+      $ (U+0024)  ๏ (U+0E4F)  ๚ (U+0E5A)  ๛ (U+0E5B)  * (U+002A)  \ (U+005C)
+      & (U+0026)  # (U+0023)  % (U+0025)  + (U+002B)  < (U+003C)  = (U+003D)
+      > (U+003E)  | (U+007C)  ๎ (U+0E4E)  ฺ (U+0E3A)  ์ (U+0E4C)  ็ (U+0E47)
+      ่ (U+0E48)  ้ (U+0E49)  ๊ (U+0E4A)  ๋ (U+0E4B)  0 (U+0030)  ๐ (U+0E50)
+      1 (U+0031)  ๑ (U+0E51)  2 (U+0032)  ๒ (U+0E52)  3 (U+0033)  ๓ (U+0E53)
+      4 (U+0034)  ๔ (U+0E54)  5 (U+0035)  ๕ (U+0E55)  6 (U+0036)  ๖ (U+0E56)
+      7 (U+0037)  ๗ (U+0E57)  8 (U+0038)  ๘ (U+0E58)  9 (U+0039)  ๙ (U+0E59)
+      A (U+0041)  a (U+0061)  B (U+0042)  b (U+0062)  C (U+0043)  c (U+0063)
+      D (U+0044)  d (U+0064)  E (U+0045)  e (U+0065)  F (U+0046)  f (U+0066)
+      G (U+0047)  g (U+0067)  H (U+0048)  h (U+0068)  I (U+0049)  i (U+0069)
+      J (U+004A)  j (U+006A)  K (U+004B)  k (U+006B)  L (U+004C)  l (U+006C)
+      M (U+004D)  m (U+006D)  N (U+004E)  n (U+006E)  O (U+004F)  o (U+006F)
+      P (U+0050)  p (U+0070)  Q (U+0051)  q (U+0071)  R (U+0052)  r (U+0072)
+      S (U+0053)  s (U+0073)  T (U+0054)  t (U+0074)  U (U+0055)  u (U+0075)
+      V (U+0056)  v (U+0076)  W (U+0057)  w (U+0077)  X (U+0058)  x (U+0078)
+      Y (U+0059)  y (U+0079)  Z (U+005A)  z (U+007A)  ฤ (U+0E24)  ฦ (U+0E26)
+      ํ (U+0E4D)  ะ (U+0E30)  ั (U+0E31)  า (U+0E32)  ๅ (U+0E45)  ำ (U+0E33)
+      ิ (U+0E34)  ี (U+0E35)  ึ (U+0E36)  ื (U+0E37)  ุ (U+0E38)  ู (U+0E39)
 
 !! localedata/locales/C is new UPSTREAM at glibc-2.39, but C.UTF-8 is
    BACKPORTED by the distros this audit targets -- so it very likely DOES

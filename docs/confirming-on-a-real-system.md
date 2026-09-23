@@ -33,8 +33,14 @@ decides whether the run proves anything. They are not words in the language.
 They are the characters the rule that changed moves.
 
 Derive them from that rule. For a `localedef` change that means the boundaries
-of the affected range. Step 2's diff names the file and the lines that
-changed, and step 4 names the range.
+of the affected range. Under each locale it flags, step 2 lists the characters
+its changed rules name, or says it could not identify them and that the locale
+must be considered suspicious. Step 4 names the range.
+
+That list is where to start, not proof that every character on it moved. A
+rule that was rewritten names everything it touches, weights included, so
+three characters from the list that sort the same on both machines do not
+clear the locale.
 
 The worked example is `ko_KR` between glibc 2.28 and 2.34, where the whole
 difference is the last syllable of the Hangul block against any Hanja.
@@ -44,7 +50,7 @@ failure this step exists to avoid. The characters, and what they print on each
 build, are in
 [results.md](results.md#the-ko_kr-mechanism-and-its-minimal-test-case).
 
-A locale flagged by step 4 rather than by step 2 has no diff to read. There
+A locale flagged by step 4 rather than by step 2 gets no character list. There
 the range itself is the guide, and its boundaries are the values to test.
 
 ## Three traps

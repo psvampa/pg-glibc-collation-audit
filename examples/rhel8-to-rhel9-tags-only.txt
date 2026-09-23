@@ -51,7 +51,42 @@ Of the 281 content-changed file(s): 2 touch LC_COLLATE, 271 do not, 8 have no LC
 
 Files with changes inside LC_COLLATE: 2
   localedata/locales/or_IN
+      characters in the changed rules (207): କ (U+0B15)  ୍ (U+0B4D)
+      ଷ (U+0B37)  ଡ (U+0B21)  ଼ (U+0B3C)  ଢ (U+0B22)  ଁ (U+0B01)  ଂ (U+0B02)
+      ଃ (U+0B03)  U+000F  U+001E  U+0008  U+0017  U+001F  U+0010  U+0007
+      U+0016  U+0015  U+0006  U+0001  U+001D  U+000E  U+0018  U+0004  U+0013
+      U+001A  U+007F  U+0012  U+0003  U+001B  U+0011  U+0002  U+001C  U+0014
+      U+0019  U+0005  U+0000  U+0009  U+000A  U+000B  U+000C  U+000D  U+0020
+      ` (U+0060)  ^ (U+005E)  _ (U+005F)  - (U+002D)  , (U+002C)  ; (U+003B)
+      : (U+003A)  ! (U+0021)  ? (U+003F)  . (U+002E)  ' (U+0027)  " (U+0022)
+      ( (U+0028)  ) (U+0029)  [ (U+005B)  ] (U+005D)  { (U+007B)  } (U+007D)
+      @ (U+0040)  * (U+002A)  / (U+002F)  \ (U+005C)  & (U+0026)  # (U+0023)
+      % (U+0025)  ୰ (U+0B70)  + (U+002B)  < (U+003C)  = (U+003D)  > (U+003E)
+      | (U+007C)  ~ (U+007E)  $ (U+0024)  0 (U+0030)  ୦ (U+0B66)  1 (U+0031)
+      ୧ (U+0B67)  2 (U+0032)  ୨ (U+0B68)  3 (U+0033)  ୩ (U+0B69)  4 (U+0034)
+      ୪ (U+0B6A)  5 (U+0035)  ୫ (U+0B6B)  6 (U+0036)  ୬ (U+0B6C)  7 (U+0037)
+      ୭ (U+0B6D)  8 (U+0038)  ୮ (U+0B6E)  9 (U+0039)  ୯ (U+0B6F)  a (U+0061)
+      A (U+0041)  b (U+0062)  B (U+0042)  c (U+0063)  C (U+0043)  d (U+0064)
+      D (U+0044)  e (U+0065)  E (U+0045)  f (U+0066)  F (U+0046)  g (U+0067)
+      G (U+0047)  h (U+0068)  H (U+0048)  i (U+0069)  I (U+0049)  j (U+006A)
+      J (U+004A)  k (U+006B)  K (U+004B)  l (U+006C)  L (U+004C)  m (U+006D)
+      M (U+004D)  n (U+006E)  N (U+004E)  o (U+006F)  O (U+004F)  p (U+0070)
+      P (U+0050)  q (U+0071)  Q (U+0051)  r (U+0072)  R (U+0052)  s (U+0073)
+      S (U+0053)  t (U+0074)  T (U+0054)  u (U+0075)  U (U+0055)  v (U+0076)
+      V (U+0056)  w (U+0077)  W (U+0057)  x (U+0078)  X (U+0058)  y (U+0079)
+      Y (U+0059)  z (U+007A)  Z (U+005A)  ଅ (U+0B05)  ଆ (U+0B06)  ଇ (U+0B07)
+      ଈ (U+0B08)  ଉ (U+0B09)  ଊ (U+0B0A)  ଋ (U+0B0B)  ୠ (U+0B60)  ଌ (U+0B0C)
+      ୡ (U+0B61)  ଏ (U+0B0F)  ଐ (U+0B10)  ଓ (U+0B13)  ଔ (U+0B14)  ଖ (U+0B16)
+      ଗ (U+0B17)  ଘ (U+0B18)  ଙ (U+0B19)  ଚ (U+0B1A)  ଛ (U+0B1B)  ଜ (U+0B1C)
+      ଝ (U+0B1D)  ଞ (U+0B1E)  ଟ (U+0B1F)  ଠ (U+0B20)  ଣ (U+0B23)  ତ (U+0B24)
+      ଥ (U+0B25)  ଦ (U+0B26)  ଧ (U+0B27)  ନ (U+0B28)  ପ (U+0B2A)  ଫ (U+0B2B)
+      ବ (U+0B2C)  ଭ (U+0B2D)  ମ (U+0B2E)  ଯ (U+0B2F)  ର (U+0B30)  ଲ (U+0B32)
+      ଳ (U+0B33)  ଶ (U+0B36)  ସ (U+0B38)  ହ (U+0B39)  ଡ଼ (U+0B5C)  ଢ଼ (U+0B5D)
+      ୟ (U+0B5F)  ଽ (U+0B3D)  ା (U+0B3E)  ି (U+0B3F)  ୀ (U+0B40)  ୁ (U+0B41)
+      ୂ (U+0B42)  ୃ (U+0B43)  େ (U+0B47)  ୈ (U+0B48)  ୋ (U+0B4B)  ୌ (U+0B4C)
+      ୖ (U+0B56)  ୗ (U+0B57)
   localedata/locales/sv_SE
+      characters in the changed rules (2): W (U+0057)  w (U+0077)
 
 !! localedata/locales/C exists at NEITHER glibc-2.28 nor glibc-2.34, but
    C.UTF-8 is BACKPORTED by the distros this audit targets -- so it very
