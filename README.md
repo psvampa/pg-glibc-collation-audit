@@ -92,7 +92,7 @@ finish, is in [examples/](examples/) — worth reading before you run anything.
 *Needs the locale sources off both nodes. No database.*
 
 What the five extra checks answer, how to take the copy and how to tell a good
-one from a short one are in [docs/method_new.md](docs/method_new.md).
+one from a short one are in [docs/commands.md](docs/commands.md).
 
 ```sh
 # on each node
