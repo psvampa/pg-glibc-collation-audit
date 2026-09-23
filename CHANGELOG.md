@@ -4,6 +4,74 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-23 (thirty-sixth entry)
+
+`docs/limitations.md` cut from 589 lines to 112, and the CJK row of the
+README's results table reworded. Nothing the tool prints changes and no
+verdict moves.
+
+### What it used to get wrong
+
+**The page that names the blind spots was the longest page in the
+repository.** 589 lines, 4,772 words, 284 figures -- a quarter of all the
+documentation, and two of its six sections were 70% of it. A reader who wants
+to know what this tool cannot see had to scroll through three node
+measurements, a before-and-after table of a bug that is fixed, and the source
+explanation of why `C.UTF-8` changed. The page's job is to make six blind
+spots understood, and its length worked against that in both directions: too
+long to read, and long enough to make the tool look more limited than it is.
+
+**Almost all of that evidence was a third copy.** The `C.UTF-8` probe
+measurement is in `docs/results.md`; the distro-backport tables, the glibc
+2.24 floor bug with its before-and-after figures, and the charmaps code-point
+counts are each in an earlier entry of this file. Removing them from
+`limitations.md` loses none of them, and it removes what a documentation
+review had to re-read every round -- the cost this branch was opened to
+measure.
+
+**The README's CJK row said "inherited by almost every locale in the tree".**
+"Almost" is the blurred form of a figure `docs/results.md` already publishes
+exactly, and the exact figure belongs to one glibc version: 328 of 342 locale
+files at 2.34, 338 of 352 at 2.39. The row now names the mechanism instead --
+a locale inherits `iso14651_t1` unless it defines its own order -- which does
+not age. Measured on the pinned clone: the files that do not reach it at 2.34
+are `ko_KR`, `ja_JP`, `zh_CN`, `cmn_TW`, `th_TH`, `km_KH`, `lo_LA`, `ar_SA`,
+`sl_SI`, `cns11643_stroke`, `POSIX` and the two `iso14651_t1` templates, plus
+`C` at 2.39.
+
+### What moved rather than went
+
+The three verbatim `NOT RUN` blocks and the seven `C` statuses were the only
+material on the page with no copy elsewhere, and three tests read them. They
+are now under `docs/method.md`, "Reading the output", which is the page that
+explains what a run prints; the three tests read them there.
+
+### The one measurement this deletes
+
+`LC_CTYPE`'s sweep, taken on `glibc-2.28-251.el8_10.40` and
+`glibc-2.34-275.el9_8` over every code point but `U+0000` and the surrogates:
+**6,525 answer differently, 6,522 of them changing character class, and 5,905
+of those becoming letters.** It lived in `limitations.md` prose and nowhere
+else, so it is recorded here. It is one pair of builds and does not
+generalise; what it showed is that a functional index and a character-class
+`CHECK` move under a glibc upgrade with nothing in PostgreSQL recording it.
+That statement, without the figures, is what the page now carries.
+
+### Files
+
+- **`docs/limitations.md`** -- rewritten. The six `##` headings are unchanged,
+  because fifteen links from other files depend on their anchors.
+- **`docs/method.md`** -- two new subsections under "Reading the output".
+- **`README.md`**, **`docs/README.md`** -- the CJK row, and the two index
+  sentences that said the first limitation is "covered three other ways",
+  which counted internal checks rather than saying what the page is about.
+- **`tests/test_published_claims.py`** -- the three quoted-block ties read
+  `method.md`; the canonical-figures table loses the 6,525 row, which no
+  published file states any more, and the `iso14651_t1` inheritance row now
+  expects three files rather than four.
+- **`tests/README.md`** -- the row count, and the sentence that said
+  `limitations.md` quotes the floor pair's figures.
+
 ## 2026-09-22 (thirty-fifth entry)
 
 The README's summary and the first half of "How to use", and one documentation

@@ -342,10 +342,10 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
                    re.finditer(r'^\s*echo "(' + re.escape(heading) + r')"',
                                wrapper, re.M)]
         self.assertEqual(len(printed), 1, 'audit.sh no longer prints it')
-        limits = read(os.path.join(REPO_ROOT, 'docs', 'limitations.md'))
+        method = read(os.path.join(REPO_ROOT, 'docs', 'method.md'))
         m = re.search(r'Given neither directory it reads instead:.*?```\n'
-                      r'(.*?)```', limits, re.S)
-        self.assertIsNotNone(m, 'the quoted block is gone from limitations.md')
+                      r'(.*?)```', method, re.S)
+        self.assertIsNotNone(m, 'the quoted block is gone from method.md')
         self.assertEqual(echoed_block(wrapper, heading),
                          m.group(1).rstrip('\n').split('\n'))
 
@@ -775,15 +775,10 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
          r'(?:needs |Needs |\*\*)(?:PostgreSQL|version) (\d+) or newer',
          3,
          ()),
-        ('the characters that answer differently between the two builds',
-         r'(\d[\d,]*) (?:figure in \[case 4\]|characters of case 4'
-         r'|characters that answer differently|of them answer differently)',
-         1,
-         ()),
         ('the locales that inherit iso14651_t1 at glibc 2.34',
          r'inherited by (\d+) locales|template that (\d+) locales'
          r'|the (\d+) to \d+ locales that inherit it',
-         4,
+         3,
          ()),
         ('the locales the four ellipsis files expose through copy at 2.34',
          r'inherited by (\d+) further locales',
@@ -966,12 +961,13 @@ class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
     #: Rows tied only to the other pages that state them. Untied, not
     #: untieable: the tool prints 328 (line 18 of the rhel8-to-rhel9
     #: transcript), and the PostgreSQL floor is a requirement rather than a
-    #: measurement. Only 6,525 could not be tied -- it appears
-    #: in prose and in no query output, so a tie would find the prose it was
-    #: meant to be independent of, which the class docstring calls vacuous.
+    #: measurement. The 6,525 row was here until docs/limitations.md stopped
+    #: publishing evidence; it was the one figure that could not be tied --
+    #: prose and no query output -- and with no page stating it there is
+    #: nothing left for this class to compare. The measurement is in the
+    #: CHANGELOG entry that removed it.
     NO_RUN_BEHIND_THEM = (
         'the PostgreSQL floor the tool requires',
-        'the characters that answer differently between the two builds',
         'the locales that inherit iso14651_t1 at glibc 2.34',
     )
 
@@ -1066,7 +1062,7 @@ class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
 
 
 class TheExamplesCarryTheNodeSteps(unittest.TestCase):
-    """docs/limitations.md quotes the summary block steps 9 and 10 add, and
+    """docs/method.md quotes the summary block steps 9 and 10 add, and
     until 2026-09-07 that block appeared in no examples/*.txt and no test tied
     it -- the one published place a reader could check it against was
     missing. Both worked examples now carry steps 6 to 10 and the full summary
@@ -1095,11 +1091,11 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
 
     def test_the_quoted_steps_9_10_block_is_verbatim_from_the_example(self):
         """The fenced block under "What steps 9 and 10 add to the summary" in
-        docs/limitations.md, line for line in the RHEL8->RHEL9 example."""
-        limits = read(os.path.join(REPO_ROOT, 'docs', 'limitations.md'))
+        docs/method.md, line for line in the RHEL8->RHEL9 example."""
+        method = read(os.path.join(REPO_ROOT, 'docs', 'method.md'))
         m = re.search(r'What steps 9 and 10 add to the summary.*?```\n(.*?)```',
-                      limits, re.S)
-        self.assertIsNotNone(m, 'the quoted block is gone from limitations.md')
+                      method, re.S)
+        self.assertIsNotNone(m, 'the quoted block is gone from method.md')
         self.assertIn(m.group(1), self.example('rhel8-to-rhel9'))
 
     def test_the_summary_blast_radius_line_matches_step_8(self):
@@ -1117,7 +1113,7 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
 
 
     def test_every_C_status_the_docs_list_is_one_the_tool_can_print(self):
-        """docs/limitations.md enumerates the states the steps 9/10 summary
+        """docs/method.md enumerates the states the steps 9/10 summary
         line can carry. A state renamed in the code and left standing in that
         list is the seventeenth entry's defect in a new place: prose a reader
         checks their own output against, describing output that no longer
@@ -1149,7 +1145,7 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
             None)]
         self.assertEqual(len(set(printed)), 6, printed)
 
-        limits = read(os.path.join(REPO_ROOT, 'docs', 'limitations.md'))
+        method = read(os.path.join(REPO_ROOT, 'docs', 'method.md'))
         wrapper = read(os.path.join(REPO_ROOT, 'audit.sh'))
         for full in printed:
             # The scripts append "  <- why it matters"; the docs list the name.
@@ -1158,9 +1154,9 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
                 self.assertIn(f'`{name}`'.replace('`ABSENT from this directory`',
                                                   '`ABSENT from this locale '
                                                   'directory`'),
-                              limits)
+                              method)
         self.assertIn('C (C.UTF-8): NOT DECLARED', wrapper)
-        self.assertIn('`NOT DECLARED`', limits)
+        self.assertIn('`NOT DECLARED`', method)
 
     def test_the_published_list_length_is_the_set_that_was_reported(self):
         """"full list (N name(s))" against the two numbers printed above it.

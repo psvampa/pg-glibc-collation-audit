@@ -221,7 +221,7 @@ it.
 
 Full scope, including the `builtin` provider as a mitigation:
 [docs/scope.md](docs/scope.md). The six things to know before acting on a clean
-result — `C.UTF-8` among them, and now covered three other ways:
+result — `C.UTF-8` among them:
 [docs/limitations.md](docs/limitations.md).
 
 ## Documentation

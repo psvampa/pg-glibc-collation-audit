@@ -390,6 +390,78 @@ steps 1 to 5 then compare upstream source with itself and can only report
 are one commit spelt two ways, and comparing the text let that pair through as
 if it were two versions.
 
+### When a check did not run, and what it prints instead
+
+The node steps say so in the summary rather than leaving the section out, and
+each of the three blocks names the flag it was not given. A summary that
+prints nothing about a locale and one that has cleared it look identical on a
+terminal, and that is how `C.UTF-8` gets missed.
+
+Given neither directory it reads instead:
+
+```
+-- Node's own ellipsis scan: NOT RUN
+     Pass --old-locales-dir and --new-locales-dir with their build
+     ids. Step 4 above scanned the TAG, and a tag holds at most
+     upstream's C: the distros this audit targets ship their own
+     C.UTF-8, so if step 4 named C at all, that verdict is evidence
+     about upstream's file and none about either node's. Nothing above
+     says whether either node's own C.UTF-8 is ellipsis-based -- which
+     is the one thing a data diff, including the node-to-node one, can
+     never clear.
+```
+
+Given one of the two, the side that was not scanned gets its own block --
+below, a run supplied `--old-locales-dir` alone. A one-sided run is a
+supported shape, since each directory you supply adds a check:
+
+```
+-- Node's own locale data, ellipsis scan: NOT RUN
+     No --new-locales-dir, so nothing above says whether the
+     new node's own C.UTF-8 is ellipsis-based. The other node's
+     scan does not answer it: each node built its own locales.
+     Pass --new-locales-dir with --new-build-id.
+```
+
+The node-to-node comparison, step 8, needs both directories and says the same
+thing when it does not have them:
+
+```
+-- Node-to-node locale data: NOT RUN
+     Pass --old-locales-dir and --new-locales-dir with their build ids.
+     Without it nothing above says anything about C.UTF-8 ...
+```
+
+### What steps 9 and 10 add to the summary
+
+On a pair whose old node backports the ellipsis-based `C` and whose new node
+has `codepoint_collation`:
+
+```
+-- Node's own locale data, ellipsis scan (glibc-2.28-251.el8_10.40)
+     ellipsis-based locale(s): 5
+     C (C.UTF-8): ellipsis-based  <- localedef computes its weights,
+     so identical data does NOT mean identical order
+-- Node's own locale data, ellipsis scan (glibc-2.34-275.el9_8)
+     ellipsis-based locale(s): 4
+     C (C.UTF-8): codepoint_collation  <- byte order by construction
+```
+
+Those are two of six. The scan declares a status for `C` whatever it finds,
+and the summary prints the one it declared: `ellipsis-based`,
+`codepoint_collation`, `explicit weights`, `copy-only`,
+`present, but defines no LC_COLLATE block`, or
+`ABSENT from this locale directory`. A seventh line, `NOT DECLARED`, appears
+if the step wrote no status at all. None of the seven is silence.
+
+The status carries the `copy` graph with it. A `C` that uses no ellipsis of
+its own but copies a template that does is declared `copy-only ... and it
+copies iso14651_t1, which this step flagged -- so this locale IS exposed`: its
+own style is a fact about the file, and the order is a fact about what the
+file reaches. `codepoint_collation` is the one exception, and outranks the
+copy -- glibc discards all inherited collation information when it sees that
+keyword.
+
 One case is left over: two commits on different branches off the same release
 — a master commit against a backport branch — or with no glibc tag behind them
 the clone can name. Nothing there settles the direction, and saying nothing
