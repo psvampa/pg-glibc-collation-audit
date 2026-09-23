@@ -167,8 +167,6 @@ What this box leaves out is in
 
 What it prints, filled in for each pair, is in
 [examples/README.md, under Command 3](examples/README.md#command-3-the-confirmation-template-filled-in).
-What those objects look like once they are already wrong is measured on two
-real nodes in [breakage/](breakage/).
 
 ## How it works
 
@@ -242,9 +240,8 @@ but the basis of its RHEL9→RHEL10 🟢 did.
 Sort order (`LC_COLLATE`) only, and in PostgreSQL terms the **`libc` provider**
 only. Nothing about `LC_CTYPE` (`upper()`, `lower()`, pattern matching), ICU,
 or the `builtin` provider — and the two pairs named above. `LC_CTYPE` is the
-exclusion that can still cost you an index. No step of this tool reads it; one
-measurement of what it does, on one pair of builds, is in
-[breakage/cases/04-lc-ctype.md](breakage/cases/04-lc-ctype.md).
+exclusion that can still cost you an index, and no step of this tool reads
+it.
 
 Full scope, including the `builtin` provider as a mitigation:
 [docs/scope.md](docs/scope.md). The six things to know before acting on a clean
@@ -263,7 +260,6 @@ short version:
 - [docs/scope.md](docs/scope.md) — what it audits, and the `builtin` provider as a way out
 - [docs/requirements.md](docs/requirements.md) — dependencies, test suite, setup traps
 - [docs/glossary.md](docs/glossary.md) — `copy` graph, blast radius, hunk, tier, ellipsis range
-- [breakage/](breakage/README.md) — what breaks inside PostgreSQL once a locale did change, measured on two nodes
 - [examples/](examples/README.md) — real output of every command, and which file is which
 - [CHANGELOG.md](CHANGELOG.md) — what this tool used to get wrong
 

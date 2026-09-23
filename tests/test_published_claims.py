@@ -160,7 +160,11 @@ def docs(include_changelog=False):
         # .claude/ is gitignored whole (PR #18): the private working rules
         # under it are not published documentation, and asserting them as
         # such made every commit fail on files the repository does not carry.
-        dirs[:] = [d for d in dirs if d not in ('.git', 'glibc', '.claude')]
+        #
+        # breakage/ is evidence gathered for an article rather than part of
+        # this tool, and nothing else in the repository may reference it.
+        dirs[:] = [d for d in dirs
+                   if d not in ('.git', 'glibc', '.claude', 'breakage')]
         for name in files:
             if not name.endswith('.md'):
                 continue
@@ -695,15 +699,13 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     An evidence file is named only where the number really appears in query
     output, and only where it is the SAME fact:
 
-      * `breakage/cases/04-lc-ctype.md` carries 6,525 in prose and nowhere
-        else, so it is not listed: comma-stripped, the check would find the
-        prose it was meant to be independent of and pass whatever the
-        measurement said -- the vacuous assertion of the sixteenth entry.
-      * `breakage/cases/05-partial-brin-gist.md` and
-        `cases/B-planner-statistics.md` do carry a bare 9616, but theirs is
-        `count(*) WHERE w < 'vz'`, the complement of case 8's violating count,
-        equal to it only on this fixture. Tying them would tie two facts that
-        agree by arithmetic accident.
+      * a file carrying the figure in prose and nowhere else is not listed:
+        comma-stripped, the check would find the prose it was meant to be
+        independent of and pass whatever the measurement said -- the vacuous
+        assertion of the sixteenth entry.
+      * neither is a file whose bare number is a DIFFERENT fact that happens
+        to agree, such as the complement of a count on one fixture. Tying it
+        would tie two facts that agree by arithmetic accident.
 
     What the BARE form asks is whether the transcript still carries the
     number, so it catches a page re-measured away from the prose and does NOT
@@ -714,11 +716,10 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     rows keep it, carrying 9,616 and 9,619. What makes them safe is not that
     the counts are longer but a measurement: bumping each by one reddens it,
     because neither named file carries the bumped value. That is narrower than
-    it sounds, and deliberately stated so. `breakage/repair.md` states BOTH of
-    those counts, so it is exactly the file that CANNOT tell a drift from one
-    to the other; what reddens that row is
-    `breakage/cases/07-range-partition.md`, which carries only its own. An
-    evidence tie is only as good as the narrowest file under it.
+    it sounds, and deliberately stated so: a file that states BOTH counts
+    cannot tell a drift from one to the other, and what reddens such a row is
+    the file carrying only its own. An evidence tie is only as good as the
+    narrowest file under it.
 
     **A row may instead name the sentence its number appears in, and the part
     of the transcript that produced it.** Both halves were paid for on
@@ -736,7 +737,7 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     must appear exactly ONCE in what is left: two copies mean a drifting one
     is satisfied by a stale one, which is this test's own defect class turned
     on itself. The bare form keeps "at least once", because a transcript may
-    state a number twice for good reason and `breakage/cases/09` does.
+    state a number twice for good reason.
 
     `least` is not decoration. Without it, deleting every mention leaves this
     test green over a claim that no longer exists, which is "absent is not
@@ -770,12 +771,6 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
 
     #     label, pattern with ONE group, FILES expected, evidence entries
     FIGURES = (
-        ('the rows that break in breakage/ cases 8 and 9',
-         r'(\d[\d,]*) (?:stored rows violate|stored values no longer match'
-         r'|offending rows)',
-         2,
-         ('breakage/cases/08-check-constraint.md',
-          'breakage/cases/09-generated-column-matview.md')),
         ('the PostgreSQL floor the tool requires',
          r'(?:needs |Needs |\*\*)(?:PostgreSQL|version) (\d+) or newer',
          3,
@@ -783,18 +778,13 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
         ('the characters that answer differently between the two builds',
          r'(\d[\d,]*) (?:figure in \[case 4\]|characters of case 4'
          r'|characters that answer differently|of them answer differently)',
-         4,
+         1,
          ()),
         ('the locales that inherit iso14651_t1 at glibc 2.34',
          r'inherited by (\d+) locales|template that (\d+) locales'
          r'|the (\d+) to \d+ locales that inherit it',
          5,
          ()),
-        ('the rows that land in the wrong partition in case 7',
-         r'(\d[\d,]*) rows sit in the wrong partition',
-         1,
-         ('breakage/cases/07-range-partition.md',
-          'breakage/repair.md')),
         ('the locales the four ellipsis files expose through copy at 2.34',
          r'inherited by (\d+) further locales',
          1,
@@ -921,7 +911,7 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
                     # The bare form asks only that the figure be in the file,
                     # which is what it has always asked: a transcript may
                     # legitimately print the same number more than once, and
-                    # breakage/cases/09 does.
+                    # a transcript may state one twice for good reason.
                     self.assertTrue(
                         agrees,
                         f'{label} is published as {bare} but {ev.path} -- '
@@ -1296,61 +1286,6 @@ class EveryLinkResolves(unittest.TestCase):
                 self.assertTrue(os.path.isfile(os.path.join(REPO_ROOT, rel)),
                                 f'{rel} is named by {sorted(sources)} and '
                                 f'does not exist')
-
-
-class TheRepairDocumentQuotesWhatIsPublished(unittest.TestCase):
-    """breakage/repair.md used to print the whole repair script a second time,
-    under a heading, and breakage/scripts/04-repair.sql is that script as a
-    runnable file. Two copies of one text drift -- this repository has been
-    bitten by exactly that, a '~16s'/'~17s' disagreement about one runtime and
-    a 'four things' count against a five-item list. Those two copies drifted
-    three times in the session that published the file, so the document now
-    links the script instead of repeating it.
-
-    One quotation is left, the check_index helper in the header, because step 0
-    cannot be read without it. This pins that one.
-    """
-
-    def _quoted_helper(self):
-        md = docs()[os.path.join('breakage', 'repair.md')]
-        blocks = re.findall(r'```sql\n(.*?)```', md, re.S)
-        self.assertEqual(
-            1, len(blocks),
-            'breakage/repair.md is expected to quote exactly one sql block, the '
-            'check_index helper. A second one is a copy of something that is '
-            'published elsewhere, which is what this class exists to prevent')
-        return blocks[0].strip()
-
-    @staticmethod
-    def _script(name):
-        """Read with newline='' so a CRLF file does not compare equal to an LF
-        one. The default translates them and would make this test pass over a
-        real difference -- measured on a scratch copy."""
-        path = os.path.join(REPO_ROOT, 'breakage', 'scripts', name)
-        with open(path, encoding='utf-8', newline='') as fh:
-            return fh.read()
-
-    def test_the_helper_quoted_in_the_header_is_the_published_one(self):
-        """repair.md's header quotes check_index and says it is defined in
-        scripts/01b-helpers.sql. That is a second copy of a text, with the same
-        way of going wrong."""
-        quoted = self._quoted_helper()
-        published = re.search(
-            r'CREATE OR REPLACE FUNCTION check_index\(ix regclass\).*?'
-            r'END \$\$ LANGUAGE plpgsql;',
-            self._script('01b-helpers.sql'), re.S)
-        self.assertIsNotNone(
-            published,
-            'breakage/scripts/01b-helpers.sql no longer defines check_index')
-        # assertEqual, not assertIn: a substring test passes over a quote that
-        # simply stops early, and what a truncated quote drops first is the
-        # NOT ASKED arm -- the half that keeps an absence from reading as an
-        # answer. Measured on a scratch copy: cutting that arm out of the
-        # document passed the assertIn form.
-        self.assertEqual(
-            published.group(0), quoted,
-            "breakage/repair.md's quoted helper is not the one "
-            "breakage/scripts/01b-helpers.sql publishes")
 
 
 class TheCountsTheTestPageStatesComeFromTheTable(unittest.TestCase):
