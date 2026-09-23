@@ -6,7 +6,7 @@ Real output, kept so you can see what a run prints before you run one.
 
 The two upgrades this project publishes results for, in two shapes.
 
-### Command 1, as the README gives it
+### Command 1
 
 `./audit.sh <old> <new>` and nothing else. This is what you get from a
 checkout alone, and it is where the two `NOT RUN` blocks appear, each saying
@@ -19,7 +19,7 @@ what it did not cover rather than leaving the section out.
 
 Raw output, start to finish, with nothing trimmed or annotated.
 
-### The extended run, and the evidence behind the verdicts
+### Command 1 extended, and the evidence behind the verdicts
 
 Older and richer files, and not a transcript of one command. Each opens with
 the five steps run one script at a time, carries the measurements taken on
