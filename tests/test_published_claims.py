@@ -857,13 +857,28 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     out of this table in the same commit.
     """
 
-    # The command line that opens step 4's run against the TAG. The el9
-    # node is built from glibc 2.34, so the node scan lower down the same
-    # transcript repeats step 4's figures in byte-identical sentences:
-    # anchoring to the sentence alone ties those rows to whichever of the
-    # two happens to match. Measured 2026-09-22, lines 107/113 against
-    # 724/730.
-    STEP_4_AT_THE_TAG = '$ python3 flag_algorithmic_ranges.py glibc-2.34'
+    # The banner that opens step 4's run against the TAG. The el8 and el9
+    # nodes are scanned lower down the same transcript and reprint step 4's
+    # figures in byte-identical sentences, with DIFFERENT numbers on the el8
+    # side: anchoring to the sentence alone ties these rows to whichever of
+    # the three happens to match first. Measured 2026-09-23 on the recaptured
+    # run: line 112 says 331 where line 731, the el8 node's own scan, says
+    # 329.
+    #
+    # It was the hand-run `$ python3 flag_algorithmic_ranges.py glibc-2.34`
+    # until the examples were recaptured as plain `audit.sh` output, which
+    # prints banners instead. The banner is the better anchor: the region
+    # ends at the next `====` rule, which is now a real boundary rather than
+    # four hundred lines of whatever followed.
+    #
+    # It carries the rule that CLOSES the banner, because the region ends at
+    # the next `====` and that would otherwise be the banner's own closing
+    # line, one below: an empty region, and a row that proves nothing while
+    # reporting that it found no figure to move.
+    STEP_4_AT_THE_TAG = ('== STEP 4  Which locales a data diff can never '
+                         'clear\n'
+                         '================================================'
+                         '================\n')
 
     #     label, pattern with ONE group, FILES expected, evidence entries
     FIGURES = (

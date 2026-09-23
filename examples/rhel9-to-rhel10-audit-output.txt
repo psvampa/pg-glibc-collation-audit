@@ -1,8 +1,13 @@
-Worked example output: glibc-2.34 (RHEL9) -> glibc-2.39 (RHEL10)
-Reproduced by running the five scripts in order, which is what
-../audit.sh now does in one command (see ../docs/method.md).
 
-$ ./audit-locale-diff.sh glibc-2.34 glibc-2.39
+================================================================
+== STEP 1  What changed, and how far it reaches
+================================================================
+Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
+  UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was NOT checked
+  UNCHECKED glibc-2.39 = ef321e23c20e  gpg is not installed; the signature was NOT checked
+  NOTE: signatures were not checked. The commit ids above are what was actually read;
+        compare them against a source you trust (sourceware.org/git/glibc.git) if it matters.
+---
 Locale files added, modified or deleted: 318
 Full list in /tmp/pg-glibc-collation-audit/changed_locales.txt
 ---
@@ -35,9 +40,10 @@ NOT a collation verdict: most of these changed LC_TIME or LC_MONETARY. Step 2 fi
   sv_SE: 2 dependent locale(s)
   ... and 37 more with 1-2 dependents: sr_RS, so_SO, nl_NL, ne_NP, fr_BE, en_ZA, en_GB, en_CA, dz_BT, da_DK, wa_BE, uz_UZ, tr_TR, ta_IN, sq_AL, ru_RU, om_KE, nb_NO, ks_IN, kab_DZ, ka_GE, gez_ER@abegede, fr_FR, fil_PH, fi_FI, fa_IR, en_US, de_DE, de_CH, cs_CZ, crh_UA, cns11643_stroke, br_FR, bo_CN, bn_IN, bho_IN, aa_ER
 ---
-Next: python3 filter_lc_collate_changes.py glibc-2.34 glibc-2.39
 
-$ python3 filter_lc_collate_changes.py glibc-2.34 glibc-2.39
+================================================================
+== STEP 2  Which of those changes are inside LC_COLLATE
+================================================================
 Locale files changed between glibc-2.34 and glibc-2.39: 318
   modified: 306   added: 11   deleted: 0   renamed: 1
 Of the 307 content-changed file(s): 3 touch LC_COLLATE, 296 do not, 8 have no LC_COLLATE block
@@ -47,9 +53,6 @@ Files with changes inside LC_COLLATE: 3
   localedata/locales/ber_DZ
   localedata/locales/kab_DZ
   localedata/locales/th_TH
-
-Locale names for step 3:
-  python3 resolve_copy_closure.py glibc-2.39 ber_DZ kab_DZ th_TH
 
 !! localedata/locales/C is new UPSTREAM at glibc-2.39, but C.UTF-8 is
    BACKPORTED by the distros this audit targets -- so it very likely DOES
@@ -78,7 +81,9 @@ An upstream source diff cannot establish that -- distros backport. Confirm with
 Renamed (1) -- judged against the old path's LC_COLLATE:
   localedata/locales/aa_ER@saaho -> localedata/locales/ssy_ER
 
-$ python3 resolve_copy_closure.py glibc-2.39 ber_DZ kab_DZ th_TH
+================================================================
+== STEP 3  Which locales inherit those changes
+================================================================
 Directly changed (own LC_COLLATE diff): ber_DZ, kab_DZ, th_TH
 Additionally affected via copy-chain inheritance: 0
 
@@ -90,7 +95,9 @@ Generated locales per localedata/SUPPORTED -- these are the names `locale -a` an
   th_TH
   th_TH.utf8
 
-$ python3 flag_algorithmic_ranges.py glibc-2.39
+================================================================
+== STEP 4  Which locales a data diff can never clear
+================================================================
 Files at glibc-2.39: 366, of which 352 define LC_COLLATE
 Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 4
   i18n
@@ -108,6 +115,8 @@ Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 4
   ko_KR
       ..
 
+Declare codepoint_collation, so no expansion change can move them: C
+
 Additionally exposed via `copy` inheritance: 341
   via iso14651_t1: 337 locale(s)
       aa_DJ, aa_ER, aa_ET, ab_GE, af_ZA, agr_PE, ak_GH, am_ET, an_ES, anp_IN, ar_AE, ar_BH, ...
@@ -119,39 +128,1061 @@ Full set needing empirical confirmation: 345 locale source file(s), 488 generate
   not in SUPPORTED (templates, not built by default): ab_GE, cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
   full list (494 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
 
-These cannot be cleared by a source diff alone. Run
-  python3 diff_collation_code.py <old_tag> glibc-2.39
-to see whether localedef's expansion logic changed between your two
-versions; if it did, test these empirically before trusting a
-'not flagged' result from steps 1-3.
+These cannot be cleared by a source diff alone.
+Step 5 below decides whether that matters for this pair.
 
-$ python3 diff_collation_code.py glibc-2.34 glibc-2.39   # TIER 1/2 hunk bodies abridged; TIER 3 in full
+================================================================
+== STEP 5  Did the code that computes weights change
+================================================================
 Collation code changes between glibc-2.34 and glibc-2.39
 
 TIER 1 -- weight assignment and comparison
   (a change here can reorder any locale, including ones whose data file is unchanged)
-  locale/programs/ld-collate.c: 15 substantive hunk(s), 1 comment/licence hunk(s) filtered   [hunks abridged]
-  string/strcoll_l.c: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered   [hunks abridged]
-  string/strxfrm_l.c: 3 substantive hunk(s), 1 comment/licence hunk(s) filtered   [hunks abridged]
+  locale/programs/ld-collate.c: 15 substantive hunk(s), 1 comment/licence hunk(s) filtered
+      @@ -24,6 +23,7 @@
+      >> +#include <array_length.h>
+      @@ -195,6 +195,9 @@ struct name_list
+         +  /* Does the locale use code points to compare the encoding?  */
+      >> +  bool codepoint_collation;
+         +
+      @@ -1056,7 +1059,7 @@ insert_value (struct linereader *ldfile, const char *symstr, size_t symlen,
+      >> -      lr_error (ldfile, _("order for `%.*s' already defined at %s:%Zu"),
+      >> +      lr_error (ldfile, _("order for `%.*s' already defined at %s:%zu"),
+      @@ -1232,7 +1235,7 @@ range is not lower than that of the last character"), "LC_COLLATE");
+      >> -order for `%.*s' already defined at %s:%Zu"),
+      >> +order for `%.*s' already defined at %s:%zu"),
+      @@ -1375,7 +1378,7 @@ order for `%.*s' already defined at %s:%Zu"),
+      >> -%s: order for `%.*s' already defined at %s:%Zu"),
+      >> +%s: order for `%.*s' already defined at %s:%zu"),
+      @@ -1510,6 +1513,7 @@ collate_startup (struct linereader *ldfile, struct localedef_t *locale,
+      >> +	  collate->codepoint_collation = false;
+      @@ -1558,7 +1562,6 @@ collate_finish (struct localedef_t *locale, const struct charmap_t *charmap)
+      >> -  int nr_wide_elems = 0;
+      @@ -1568,6 +1571,10 @@ collate_finish (struct localedef_t *locale, const struct charmap_t *charmap)
+         +  /* No data required.  */
+      >> +  if (collate->codepoint_collation)
+      >> +    return;
+         +
+      @@ -1708,13 +1715,7 @@ symbol `%s' has the same encoding as"), (*eptr)->name);
+      >> -	{
+      >> -	  runp->wcorder = wcact++;
+         -
+         -	  /* We take the opportunity to count the elements which have
+         -	     wide characters.  */
+      >> -	  ++nr_wide_elems;
+      >> -	}
+      >> +	runp->wcorder = wcact++;
+      @@ -2092,6 +2093,10 @@ add_to_tablewc (uint32_t ch, struct element_t *runp)
+         +/* Include the C locale identity tables for _NL_COLLATE_COLLSEQMB and
+         +   _NL_COLLATE_COLLSEQWC.  */
+      >> +#include "C-collate-seq.c"
+         +
+      @@ -2115,7 +2120,7 @@ collate_output (struct localedef_t *locale, const struct charmap_t *charmap,
+      >> -  if (collate == NULL)
+      >> +  if (collate == NULL || collate->codepoint_collation)
+      @@ -2123,6 +2128,17 @@ collate_output (struct localedef_t *locale, const struct charmap_t *charmap,
+      >> +	  else if (idx == _NL_ITEM_INDEX (_NL_COLLATE_CODESET)
+      >> +		   && collate != NULL)
+         +	    /* A valid LC_COLLATE must have a code set name.  */
+      >> +	    add_locale_string (&file, charmap->code_set_name);
+      >> +	  else if (idx == _NL_ITEM_INDEX (_NL_COLLATE_COLLSEQMB)
+      >> +		   && collate != NULL)
+      >> +	    add_locale_raw_data (&file, collseqmb, sizeof (collseqmb));
+      >> +	  else if (idx == _NL_ITEM_INDEX (_NL_COLLATE_COLLSEQWC)
+      >> +		   && collate != NULL)
+      >> +	    add_locale_uint32_array (&file, collseqwc,
+      >> +				     array_length (collseqwc));
+      @@ -2672,6 +2688,10 @@ collate_read (struct linereader *ldfile, struct localedef_t *result,
+      >> +	case tok_codepoint_collation:
+      >> +	  collate->codepoint_collation = true;
+      >> +	  break;
+         +
+      @@ -3708,7 +3728,7 @@ error while adding equivalent collating symbol"));
+      >> -			_("%s: order for `%.*s' already defined at %s:%Zu"),
+      >> +			_("%s: order for `%.*s' already defined at %s:%zu"),
+      @@ -3742,9 +3762,11 @@ error while adding equivalent collating symbol"));
+      >> -	      if (state == 0 && copy_locale == NULL)
+      >> +	      if (state == 0
+      >> +		  && copy_locale == NULL
+      >> +		  && !collate->codepoint_collation)
+         -		   ordering values.  */
+         +		   ordering values, or codepoint_collation.  */
+      commits:
+        dff8da6b3e Update copyright dates with scripts/update-copyrights
+        6d7e8eda9b Update copyright dates with scripts/update-copyrights
+        de477abcaa Use '%z' instead of '%Z' on printf functions
+        c5c65de1b2 locale: Remove set but unused variable on ld-collate.c
+        581c785bf3 Update copyright dates with scripts/update-copyrights
+        f5117c6504 Add 'codepoint_collation' support for LC_COLLATE.
+        30891f35fa Remove "Contributed by" lines
+  string/strcoll_l.c: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -258,7 +257,7 @@ int
+      >> -  uint_fast32_t nrules = current->values[_NL_ITEM_INDEX (_NL_COLLATE_NRULES)].word;
+      >> +  uint32_t nrules = current->values[_NL_ITEM_INDEX (_NL_COLLATE_NRULES)].word;
+      commits:
+        dff8da6b3e Update copyright dates with scripts/update-copyrights
+        7f0d9e61f4 Fix all the remaining misspellings -- BZ 25337
+        6d7e8eda9b Update copyright dates with scripts/update-copyrights
+        535e935a28 Replace {u}int_fast{16|32} with {u}int32_t
+        581c785bf3 Update copyright dates with scripts/update-copyrights
+        30891f35fa Remove "Contributed by" lines
+  string/strxfrm_l.c: 3 substantive hunk(s), 1 comment/licence hunk(s) filtered
+      @@ -50,7 +49,7 @@
+      >> -  uint_fast32_t nrules;
+      >> +  uint32_t nrules;
+      @@ -136,7 +135,7 @@ do_xfrm (const USTRING_TYPE *usrc, STRING_TYPE *dest, size_t n,
+      >> -  uint_fast32_t pass;
+      >> +  uint32_t pass;
+      @@ -405,10 +404,10 @@ static size_t
+      >> -  uint_fast32_t nrules = l_data->nrules;
+      >> +  uint32_t nrules = l_data->nrules;
+      >> -  uint_fast32_t pass;
+      >> +  uint32_t pass;
+      commits:
+        dff8da6b3e Update copyright dates with scripts/update-copyrights
+        6d7e8eda9b Update copyright dates with scripts/update-copyrights
+        535e935a28 Replace {u}int_fast{16|32} with {u}int32_t
+        581c785bf3 Update copyright dates with scripts/update-copyrights
+        30891f35fa Remove "Contributed by" lines
   wcsmbs/wcscoll_l.c: no substantive change (1 comment/licence hunk(s) filtered)
   wcsmbs/wcsxfrm_l.c: no substantive change (1 comment/licence hunk(s) filtered)
-  locale/weight.h: 1 substantive hunk(s), 1 comment/licence hunk(s) filtered   [hunks abridged]
+  locale/weight.h: 1 substantive hunk(s), 1 comment/licence hunk(s) filtered
+      @@ -28,7 +27,14 @@ findidx (const int32_t *table,
+      >> -  int_fast32_t i = table[*(*cpp)++];
+         +  /* With GCC 8 when compiling with -Os the compiler warns that
+         +     seq1.back_us and seq2.back_us might be used uninitialized.
+         +     This uninitialized use is impossible for the same reason
+         +     as described in comments in locale/weightwc.h.  */
+      >> +  DIAG_PUSH_NEEDS_COMMENT;
+      >> +  DIAG_IGNORE_Os_NEEDS_COMMENT (8, "-Wmaybe-uninitialized");
+      >> +  int32_t i = table[*(*cpp)++];
+      >> +  DIAG_POP_NEEDS_COMMENT;
+      commits:
+        dff8da6b3e Update copyright dates with scripts/update-copyrights
+        6d7e8eda9b Update copyright dates with scripts/update-copyrights
+        c651f9da53 locale: prevent maybe-uninitialized errors with -Os [BZ #19444]
+        535e935a28 Replace {u}int_fast{16|32} with {u}int32_t
+        581c785bf3 Update copyright dates with scripts/update-copyrights
+        30891f35fa Remove "Contributed by" lines
   locale/weightwc.h: no substantive change (1 comment/licence hunk(s) filtered)
   locale/coll-lookup.h: no substantive change (1 comment/licence hunk(s) filtered)
   locale/coll-lookup.c: no substantive change (1 comment/licence hunk(s) filtered)
   locale/lc-collate.c: no substantive change (1 comment/licence hunk(s) filtered)
-  locale/C-collate.c: 1 substantive hunk(s), 1 comment/licence hunk(s) filtered   [hunks abridged]
-  locale/C-collate-seq.c: 1 substantive hunk(s)   [hunks abridged]
+  locale/C-collate.c: 1 substantive hunk(s), 1 comment/licence hunk(s) filtered
+      @@ -20,89 +19,13 @@
+      >> -static const char collseqmb[] =
+      >> -{
+      >> -  '\x00', '\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x07',
+      >> -  '\x08', '\x09', '\x0a', '\x0b', '\x0c', '\x0d', '\x0e', '\x0f',
+      >> -  '\x10', '\x11', '\x12', '\x13', '\x14', '\x15', '\x16', '\x17',
+      >> -  '\x18', '\x19', '\x1a', '\x1b', '\x1c', '\x1d', '\x1e', '\x1f',
+      >> -  '\x20', '\x21', '\x22', '\x23', '\x24', '\x25', '\x26', '\x27',
+      >> -  '\x28', '\x29', '\x2a', '\x2b', '\x2c', '\x2d', '\x2e', '\x2f',
+      >> -  '\x30', '\x31', '\x32', '\x33', '\x34', '\x35', '\x36', '\x37',
+      >> -  '\x38', '\x39', '\x3a', '\x3b', '\x3c', '\x3d', '\x3e', '\x3f',
+      >> -  '\x40', '\x41', '\x42', '\x43', '\x44', '\x45', '\x46', '\x47',
+      >> -  '\x48', '\x49', '\x4a', '\x4b', '\x4c', '\x4d', '\x4e', '\x4f',
+      >> -  '\x50', '\x51', '\x52', '\x53', '\x54', '\x55', '\x56', '\x57',
+      >> -  '\x58', '\x59', '\x5a', '\x5b', '\x5c', '\x5d', '\x5e', '\x5f',
+      >> -  '\x60', '\x61', '\x62', '\x63', '\x64', '\x65', '\x66', '\x67',
+      >> -  '\x68', '\x69', '\x6a', '\x6b', '\x6c', '\x6d', '\x6e', '\x6f',
+      >> -  '\x70', '\x71', '\x72', '\x73', '\x74', '\x75', '\x76', '\x77',
+      >> -  '\x78', '\x79', '\x7a', '\x7b', '\x7c', '\x7d', '\x7e', '\x7f',
+      >> -  '\x80', '\x81', '\x82', '\x83', '\x84', '\x85', '\x86', '\x87',
+      >> -  '\x88', '\x89', '\x8a', '\x8b', '\x8c', '\x8d', '\x8e', '\x8f',
+      >> -  '\x90', '\x91', '\x92', '\x93', '\x94', '\x95', '\x96', '\x97',
+      >> -  '\x98', '\x99', '\x9a', '\x9b', '\x9c', '\x9d', '\x9e', '\x9f',
+      >> -  '\xa0', '\xa1', '\xa2', '\xa3', '\xa4', '\xa5', '\xa6', '\xa7',
+      >> -  '\xa8', '\xa9', '\xaa', '\xab', '\xac', '\xad', '\xae', '\xaf',
+      >> -  '\xb0', '\xb1', '\xb2', '\xb3', '\xb4', '\xb5', '\xb6', '\xb7',
+      >> -  '\xb8', '\xb9', '\xba', '\xbb', '\xbc', '\xbd', '\xbe', '\xbf',
+      >> -  '\xc0', '\xc1', '\xc2', '\xc3', '\xc4', '\xc5', '\xc6', '\xc7',
+      >> -  '\xc8', '\xc9', '\xca', '\xcb', '\xcc', '\xcd', '\xce', '\xcf',
+      >> -  '\xd0', '\xd1', '\xd2', '\xd3', '\xd4', '\xd5', '\xd6', '\xd7',
+      >> -  '\xd8', '\xd9', '\xda', '\xdb', '\xdc', '\xdd', '\xde', '\xdf',
+      >> -  '\xe0', '\xe1', '\xe2', '\xe3', '\xe4', '\xe5', '\xe6', '\xe7',
+      >> -  '\xe8', '\xe9', '\xea', '\xeb', '\xec', '\xed', '\xee', '\xef',
+      >> -  '\xf0', '\xf1', '\xf2', '\xf3', '\xf4', '\xf5', '\xf6', '\xf7',
+      >> -  '\xf8', '\xf9', '\xfa', '\xfb', '\xfc', '\xfd', '\xfe', '\xff'
+      >> -};
+         -
+      >> -static const uint32_t collseqwc[] =
+      >> -{
+      >> -  8, 1, 8, 0x0, 0xff,
+         -  /* 1st-level table */
+      >> -  6 * sizeof (uint32_t),
+         -  /* 2nd-level table */
+      >> -  7 * sizeof (uint32_t),
+         -  /* 3rd-level table */
+      >> -  L'\x00', L'\x01', L'\x02', L'\x03', L'\x04', L'\x05', L'\x06', L'\x07',
+      >> -  L'\x08', L'\x09', L'\x0a', L'\x0b', L'\x0c', L'\x0d', L'\x0e', L'\x0f',
+      >> -  L'\x10', L'\x11', L'\x12', L'\x13', L'\x14', L'\x15', L'\x16', L'\x17',
+      >> -  L'\x18', L'\x19', L'\x1a', L'\x1b', L'\x1c', L'\x1d', L'\x1e', L'\x1f',
+      >> -  L'\x20', L'\x21', L'\x22', L'\x23', L'\x24', L'\x25', L'\x26', L'\x27',
+      >> -  L'\x28', L'\x29', L'\x2a', L'\x2b', L'\x2c', L'\x2d', L'\x2e', L'\x2f',
+      >> -  L'\x30', L'\x31', L'\x32', L'\x33', L'\x34', L'\x35', L'\x36', L'\x37',
+      >> -  L'\x38', L'\x39', L'\x3a', L'\x3b', L'\x3c', L'\x3d', L'\x3e', L'\x3f',
+      >> -  L'\x40', L'\x41', L'\x42', L'\x43', L'\x44', L'\x45', L'\x46', L'\x47',
+      >> -  L'\x48', L'\x49', L'\x4a', L'\x4b', L'\x4c', L'\x4d', L'\x4e', L'\x4f',
+      >> -  L'\x50', L'\x51', L'\x52', L'\x53', L'\x54', L'\x55', L'\x56', L'\x57',
+      >> -  L'\x58', L'\x59', L'\x5a', L'\x5b', L'\x5c', L'\x5d', L'\x5e', L'\x5f',
+      >> -  L'\x60', L'\x61', L'\x62', L'\x63', L'\x64', L'\x65', L'\x66', L'\x67',
+      >> -  L'\x68', L'\x69', L'\x6a', L'\x6b', L'\x6c', L'\x6d', L'\x6e', L'\x6f',
+      >> -  L'\x70', L'\x71', L'\x72', L'\x73', L'\x74', L'\x75', L'\x76', L'\x77',
+      >> -  L'\x78', L'\x79', L'\x7a', L'\x7b', L'\x7c', L'\x7d', L'\x7e', L'\x7f',
+      >> -  L'\x80', L'\x81', L'\x82', L'\x83', L'\x84', L'\x85', L'\x86', L'\x87',
+      >> -  L'\x88', L'\x89', L'\x8a', L'\x8b', L'\x8c', L'\x8d', L'\x8e', L'\x8f',
+      >> -  L'\x90', L'\x91', L'\x92', L'\x93', L'\x94', L'\x95', L'\x96', L'\x97',
+      >> -  L'\x98', L'\x99', L'\x9a', L'\x9b', L'\x9c', L'\x9d', L'\x9e', L'\x9f',
+      >> -  L'\xa0', L'\xa1', L'\xa2', L'\xa3', L'\xa4', L'\xa5', L'\xa6', L'\xa7',
+      >> -  L'\xa8', L'\xa9', L'\xaa', L'\xab', L'\xac', L'\xad', L'\xae', L'\xaf',
+      >> -  L'\xb0', L'\xb1', L'\xb2', L'\xb3', L'\xb4', L'\xb5', L'\xb6', L'\xb7',
+      >> -  L'\xb8', L'\xb9', L'\xba', L'\xbb', L'\xbc', L'\xbd', L'\xbe', L'\xbf',
+      >> -  L'\xc0', L'\xc1', L'\xc2', L'\xc3', L'\xc4', L'\xc5', L'\xc6', L'\xc7',
+      >> -  L'\xc8', L'\xc9', L'\xca', L'\xcb', L'\xcc', L'\xcd', L'\xce', L'\xcf',
+      >> -  L'\xd0', L'\xd1', L'\xd2', L'\xd3', L'\xd4', L'\xd5', L'\xd6', L'\xd7',
+      >> -  L'\xd8', L'\xd9', L'\xda', L'\xdb', L'\xdc', L'\xdd', L'\xde', L'\xdf',
+      >> -  L'\xe0', L'\xe1', L'\xe2', L'\xe3', L'\xe4', L'\xe5', L'\xe6', L'\xe7',
+      >> -  L'\xe8', L'\xe9', L'\xea', L'\xeb', L'\xec', L'\xed', L'\xee', L'\xef',
+      >> -  L'\xf0', L'\xf1', L'\xf2', L'\xf3', L'\xf4', L'\xf5', L'\xf6', L'\xf7',
+      >> -  L'\xf8', L'\xf9', L'\xfa', L'\xfb', L'\xfc', L'\xfd', L'\xfe', L'\xff'
+      >> -};
+      >> +#include "C-collate-seq.c"
+      >> -  { NULL, },			/* no cached data */
+      >> +  NULL,				/* No cached data.  */
+      commits:
+        dff8da6b3e Update copyright dates with scripts/update-copyrights
+        6d7e8eda9b Update copyright dates with scripts/update-copyrights
+        7ee41feba6 locale: Remove private union from struct __locale_data
+        581c785bf3 Update copyright dates with scripts/update-copyrights
+        f5117c6504 Add 'codepoint_collation' support for LC_COLLATE.
+        30891f35fa Remove "Contributed by" lines
+  locale/C-collate-seq.c: 1 substantive hunk(s)
+      @@ -0,0 +1,100 @@
+         +/* Copyright (C) 1995-2024 Free Software Foundation, Inc.
+         +   This file is part of the GNU C Library.
+         +
+         +   The GNU C Library is free software; you can redistribute it and/or
+         +   modify it under the terms of the GNU Lesser General Public
+         +   License as published by the Free Software Foundation; either
+         +   version 2.1 of the License, or (at your option) any later version.
+         +
+         +   The GNU C Library is distributed in the hope that it will be useful,
+         +   but WITHOUT ANY WARRANTY; without even the implied warranty of
+         +   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+         +   Lesser General Public License for more details.
+         +
+         +   You should have received a copy of the GNU Lesser General Public
+         +   License along with the GNU C Library; if not, see
+         +   <https://www.gnu.org/licenses/>.  */
+         +
+      >> +#include <stdint.h>
+         +
+      >> +static const char collseqmb[] =
+      >> +{
+      >> +  '\x00', '\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x07',
+      >> +  '\x08', '\x09', '\x0a', '\x0b', '\x0c', '\x0d', '\x0e', '\x0f',
+      >> +  '\x10', '\x11', '\x12', '\x13', '\x14', '\x15', '\x16', '\x17',
+      >> +  '\x18', '\x19', '\x1a', '\x1b', '\x1c', '\x1d', '\x1e', '\x1f',
+      >> +  '\x20', '\x21', '\x22', '\x23', '\x24', '\x25', '\x26', '\x27',
+      >> +  '\x28', '\x29', '\x2a', '\x2b', '\x2c', '\x2d', '\x2e', '\x2f',
+      >> +  '\x30', '\x31', '\x32', '\x33', '\x34', '\x35', '\x36', '\x37',
+      >> +  '\x38', '\x39', '\x3a', '\x3b', '\x3c', '\x3d', '\x3e', '\x3f',
+      >> +  '\x40', '\x41', '\x42', '\x43', '\x44', '\x45', '\x46', '\x47',
+      >> +  '\x48', '\x49', '\x4a', '\x4b', '\x4c', '\x4d', '\x4e', '\x4f',
+      >> +  '\x50', '\x51', '\x52', '\x53', '\x54', '\x55', '\x56', '\x57',
+      >> +  '\x58', '\x59', '\x5a', '\x5b', '\x5c', '\x5d', '\x5e', '\x5f',
+      >> +  '\x60', '\x61', '\x62', '\x63', '\x64', '\x65', '\x66', '\x67',
+      >> +  '\x68', '\x69', '\x6a', '\x6b', '\x6c', '\x6d', '\x6e', '\x6f',
+      >> +  '\x70', '\x71', '\x72', '\x73', '\x74', '\x75', '\x76', '\x77',
+      >> +  '\x78', '\x79', '\x7a', '\x7b', '\x7c', '\x7d', '\x7e', '\x7f',
+      >> +  '\x80', '\x81', '\x82', '\x83', '\x84', '\x85', '\x86', '\x87',
+      >> +  '\x88', '\x89', '\x8a', '\x8b', '\x8c', '\x8d', '\x8e', '\x8f',
+      >> +  '\x90', '\x91', '\x92', '\x93', '\x94', '\x95', '\x96', '\x97',
+      >> +  '\x98', '\x99', '\x9a', '\x9b', '\x9c', '\x9d', '\x9e', '\x9f',
+      >> +  '\xa0', '\xa1', '\xa2', '\xa3', '\xa4', '\xa5', '\xa6', '\xa7',
+      >> +  '\xa8', '\xa9', '\xaa', '\xab', '\xac', '\xad', '\xae', '\xaf',
+      >> +  '\xb0', '\xb1', '\xb2', '\xb3', '\xb4', '\xb5', '\xb6', '\xb7',
+      >> +  '\xb8', '\xb9', '\xba', '\xbb', '\xbc', '\xbd', '\xbe', '\xbf',
+      >> +  '\xc0', '\xc1', '\xc2', '\xc3', '\xc4', '\xc5', '\xc6', '\xc7',
+      >> +  '\xc8', '\xc9', '\xca', '\xcb', '\xcc', '\xcd', '\xce', '\xcf',
+      >> +  '\xd0', '\xd1', '\xd2', '\xd3', '\xd4', '\xd5', '\xd6', '\xd7',
+      >> +  '\xd8', '\xd9', '\xda', '\xdb', '\xdc', '\xdd', '\xde', '\xdf',
+      >> +  '\xe0', '\xe1', '\xe2', '\xe3', '\xe4', '\xe5', '\xe6', '\xe7',
+      >> +  '\xe8', '\xe9', '\xea', '\xeb', '\xec', '\xed', '\xee', '\xef',
+      >> +  '\xf0', '\xf1', '\xf2', '\xf3', '\xf4', '\xf5', '\xf6', '\xf7',
+      >> +  '\xf8', '\xf9', '\xfa', '\xfb', '\xfc', '\xfd', '\xfe', '\xff'
+      >> +};
+         +
+         +/* This table must be 256 bytes in size. We index bytes into the
+         +   table to find the collation sequence.  */
+      >> +_Static_assert (sizeof (collseqmb) == 256, "sizeof (collseqmb)");
+         +
+      >> +static const uint32_t collseqwc[] =
+      >> +{
+      >> +  8, 1, 8, 0x0, 0xff,
+         +  /* 1st-level table */
+      >> +  6 * sizeof (uint32_t),
+         +  /* 2nd-level table */
+      >> +  7 * sizeof (uint32_t),
+         +  /* 3rd-level table */
+      >> +  L'\x00', L'\x01', L'\x02', L'\x03', L'\x04', L'\x05', L'\x06', L'\x07',
+      >> +  L'\x08', L'\x09', L'\x0a', L'\x0b', L'\x0c', L'\x0d', L'\x0e', L'\x0f',
+      >> +  L'\x10', L'\x11', L'\x12', L'\x13', L'\x14', L'\x15', L'\x16', L'\x17',
+      >> +  L'\x18', L'\x19', L'\x1a', L'\x1b', L'\x1c', L'\x1d', L'\x1e', L'\x1f',
+      >> +  L'\x20', L'\x21', L'\x22', L'\x23', L'\x24', L'\x25', L'\x26', L'\x27',
+      >> +  L'\x28', L'\x29', L'\x2a', L'\x2b', L'\x2c', L'\x2d', L'\x2e', L'\x2f',
+      >> +  L'\x30', L'\x31', L'\x32', L'\x33', L'\x34', L'\x35', L'\x36', L'\x37',
+      >> +  L'\x38', L'\x39', L'\x3a', L'\x3b', L'\x3c', L'\x3d', L'\x3e', L'\x3f',
+      >> +  L'\x40', L'\x41', L'\x42', L'\x43', L'\x44', L'\x45', L'\x46', L'\x47',
+      >> +  L'\x48', L'\x49', L'\x4a', L'\x4b', L'\x4c', L'\x4d', L'\x4e', L'\x4f',
+      >> +  L'\x50', L'\x51', L'\x52', L'\x53', L'\x54', L'\x55', L'\x56', L'\x57',
+      >> +  L'\x58', L'\x59', L'\x5a', L'\x5b', L'\x5c', L'\x5d', L'\x5e', L'\x5f',
+      >> +  L'\x60', L'\x61', L'\x62', L'\x63', L'\x64', L'\x65', L'\x66', L'\x67',
+      >> +  L'\x68', L'\x69', L'\x6a', L'\x6b', L'\x6c', L'\x6d', L'\x6e', L'\x6f',
+      >> +  L'\x70', L'\x71', L'\x72', L'\x73', L'\x74', L'\x75', L'\x76', L'\x77',
+      >> +  L'\x78', L'\x79', L'\x7a', L'\x7b', L'\x7c', L'\x7d', L'\x7e', L'\x7f',
+      >> +  L'\x80', L'\x81', L'\x82', L'\x83', L'\x84', L'\x85', L'\x86', L'\x87',
+      >> +  L'\x88', L'\x89', L'\x8a', L'\x8b', L'\x8c', L'\x8d', L'\x8e', L'\x8f',
+      >> +  L'\x90', L'\x91', L'\x92', L'\x93', L'\x94', L'\x95', L'\x96', L'\x97',
+      >> +  L'\x98', L'\x99', L'\x9a', L'\x9b', L'\x9c', L'\x9d', L'\x9e', L'\x9f',
+      >> +  L'\xa0', L'\xa1', L'\xa2', L'\xa3', L'\xa4', L'\xa5', L'\xa6', L'\xa7',
+      >> +  L'\xa8', L'\xa9', L'\xaa', L'\xab', L'\xac', L'\xad', L'\xae', L'\xaf',
+      >> +  L'\xb0', L'\xb1', L'\xb2', L'\xb3', L'\xb4', L'\xb5', L'\xb6', L'\xb7',
+      >> +  L'\xb8', L'\xb9', L'\xba', L'\xbb', L'\xbc', L'\xbd', L'\xbe', L'\xbf',
+      >> +  L'\xc0', L'\xc1', L'\xc2', L'\xc3', L'\xc4', L'\xc5', L'\xc6', L'\xc7',
+      >> +  L'\xc8', L'\xc9', L'\xca', L'\xcb', L'\xcc', L'\xcd', L'\xce', L'\xcf',
+      >> +  L'\xd0', L'\xd1', L'\xd2', L'\xd3', L'\xd4', L'\xd5', L'\xd6', L'\xd7',
+      >> +  L'\xd8', L'\xd9', L'\xda', L'\xdb', L'\xdc', L'\xdd', L'\xde', L'\xdf',
+      >> +  L'\xe0', L'\xe1', L'\xe2', L'\xe3', L'\xe4', L'\xe5', L'\xe6', L'\xe7',
+      >> +  L'\xe8', L'\xe9', L'\xea', L'\xeb', L'\xec', L'\xed', L'\xee', L'\xef',
+      >> +  L'\xf0', L'\xf1', L'\xf2', L'\xf3', L'\xf4', L'\xf5', L'\xf6', L'\xf7',
+      >> +  L'\xf8', L'\xf9', L'\xfa', L'\xfb', L'\xfc', L'\xfd', L'\xfe', L'\xff'
+      >> +};
+      commits:
+        dff8da6b3e Update copyright dates with scripts/update-copyrights
+        6d7e8eda9b Update copyright dates with scripts/update-copyrights
+        581c785bf3 Update copyright dates with scripts/update-copyrights
+        b8c6166b1b locale: Add missing second argument to _Static_assert in C-collate-seq.c
+        f5117c6504 Add 'codepoint_collation' support for LC_COLLATE.
 
 TIER 2 -- parsing and serialisation
   (a change here can alter the compiled tables without touching the weight logic)
-  locale/programs/linereader.c: 16 substantive hunk(s), 1 comment/licence hunk(s) filtered   [hunks abridged]
-  locale/programs/locfile.c: 1 substantive hunk(s), 1 comment/licence hunk(s) filtered   [hunks abridged]
+  locale/programs/linereader.c: 16 substantive hunk(s), 1 comment/licence hunk(s) filtered
+      @@ -43,6 +42,7 @@ static struct token *get_string (struct linereader *lr,
+      >> +static bool utf8_decode (struct linereader *lr, uint8_t ch1, uint32_t *wch);
+      @@ -328,6 +328,19 @@ lr_token (struct linereader *lr, const struct charmap_t *charmap,
+         +
+      >> +    case 0x80 ... 0xff:		/* UTF-8 sequence.  */
+      >> +      {
+      >> +	uint32_t wch;
+      >> +	if (!utf8_decode (lr, ch, &wch))
+      >> +	  {
+      >> +	    lr->token.tok = tok_error;
+      >> +	    return &lr->token;
+      >> +	  }
+      >> +	lr->token.tok = tok_ucs4;
+      >> +	lr->token.val.ucs4 = wch;
+      >> +	return &lr->token;
+      >> +      }
+      @@ -417,36 +430,60 @@ get_toplvl_escape (struct linereader *lr)
+         +/* Multibyte string buffer.  */
+      >> +struct lr_buffer
+      >> +{
+      >> +  size_t act;
+      >> +  size_t max;
+      >> +  char *buf;
+      >> +};
+      >> -#define ADDC(ch) \
+      >> -  do									      \
+      >> -    {									      \
+      >> -      if (bufact == bufmax)						      \
+      >> -	{								      \
+      >> -	  bufmax *= 2;							      \
+      >> -	  buf = xrealloc (buf, bufmax);					      \
+      >> -	}								      \
+      >> -      buf[bufact++] = (ch);						      \
+      >> -    }									      \
+      >> -  while (0)
+         +/* Initialize *LRB with a default-sized buffer.  */
+      >> +static void
+      >> +lr_buffer_init (struct lr_buffer *lrb)
+      >> +{
+      >> + lrb->act = 0;
+      >> + lrb->max = 56;
+      >> + lrb->buf = xmalloc (lrb->max);
+      >> +}
+         +/* Transfers the buffer string from *LRB to LR->token.mbstr.  */
+      >> +static void
+      >> +lr_buffer_to_token (struct lr_buffer *lrb, struct linereader *lr)
+      >> +{
+      >> +  lr->token.val.str.startmb = xrealloc (lrb->buf, lrb->act + 1);
+      >> +  lr->token.val.str.startmb[lrb->act] = '\0';
+      >> +  lr->token.val.str.lenmb = lrb->act;
+      >> +}
+      >> -#define ADDS(s, l) \
+      >> -  do									      \
+      >> -    {									      \
+      >> -      size_t _l = (l);							      \
+      >> -      if (bufact + _l > bufmax)						      \
+      >> -	{								      \
+      >> -	  if (bufact < _l)						      \
+      >> -	    bufact = _l;						      \
+      >> -	  bufmax *= 2;							      \
+      >> -	  buf = xrealloc (buf, bufmax);					      \
+      >> -	}								      \
+      >> -      memcpy (&buf[bufact], s, _l);					      \
+      >> -      bufact += _l;							      \
+      >> -    }									      \
+      >> -  while (0)
+         +/* Adds CH to *LRB.  */
+      >> +static void
+      >> +addc (struct lr_buffer *lrb, char ch)
+      >> +{
+      >> +  if (lrb->act == lrb->max)
+      >> +    {
+      >> +      lrb->max *= 2;
+      >> +      lrb->buf = xrealloc (lrb->buf, lrb->max);
+      >> +    }
+      >> +  lrb->buf[lrb->act++] = ch;
+      >> +}
+         +/* Adds L bytes at S to *LRB.  */
+      >> +static void
+      >> +adds (struct lr_buffer *lrb, const unsigned char *s, size_t l)
+      >> +{
+      >> +  if (lrb->max - lrb->act < l)
+      >> +    {
+      >> +      size_t required_size = lrb->act + l;
+      >> +      size_t new_max = 2 * lrb->max;
+      >> +      if (new_max < required_size)
+      >> +	new_max = required_size;
+      >> +      lrb->buf = xrealloc (lrb->buf, new_max);
+      >> +      lrb->max = new_max;
+      >> +    }
+      >> +  memcpy (lrb->buf + lrb->act, s, l);
+      >> +  lrb->act += l;
+      >> +}
+      @@ -468,13 +505,11 @@ get_symname (struct linereader *lr)
+      >> -  char *buf;
+      >> -  size_t bufact = 0;
+      >> -  size_t bufmax = 56;
+      >> +  struct lr_buffer lrb;
+      >> -  buf = (char *) xmalloc (bufmax);
+      >> +  lr_buffer_init (&lrb);
+      @@ -482,13 +517,13 @@ get_symname (struct linereader *lr)
+      >> -	  ADDC (c2);
+      >> +	  addc (&lrb, c2);
+      >> -	ADDC (ch);
+      >> +	addc (&lrb, ch);
+      @@ -496,39 +531,35 @@ get_symname (struct linereader *lr)
+      >> -  if (buf[0] == 'U' && (bufact == 6 || bufact == 10))
+      >> +  if (lrb.buf[0] == 'U' && (lrb.act == 6 || lrb.act == 10))
+      >> -      char *cp = buf + 1;
+      >> -      while (cp < &buf[bufact - 1] && isxdigit (*cp))
+      >> +      char *cp = lrb.buf + 1;
+      >> +      while (cp < &lrb.buf[lrb.act - 1] && isxdigit (*cp))
+      >> -      if (cp == &buf[bufact - 1])
+      >> +      if (cp == &lrb.buf[lrb.act - 1])
+      >> -	  lr->token.val.ucs4 = strtoul (buf + 1, NULL, 16);
+      >> +	  lr->token.val.ucs4 = strtoul (lrb.buf + 1, NULL, 16);
+      >> -  kw = lr->hash_fct (buf, bufact - 1);
+      >> +  kw = lr->hash_fct (lrb.buf, lrb.act - 1);
+      >> -      free (buf);
+      >> +      free (lrb.buf);
+         -
+      >> -      buf = xrealloc (buf, bufact + 1);
+      >> -      buf[bufact] = '\0';
+         -
+      >> -      lr->token.val.str.startmb = buf;
+      >> -      lr->token.val.str.lenmb = bufact - 1;
+      >> +      lr_buffer_to_token (&lrb, lr);
+      >> +      --lr->token.val.str.lenmb;  /* Hide the training '>'.  */
+      @@ -538,16 +569,13 @@ get_symname (struct linereader *lr)
+      >> -  char *buf;
+      >> -  size_t bufact;
+      >> -  size_t bufmax = 56;
+      >> +  struct lr_buffer lrb;
+      >> -  buf = xmalloc (bufmax);
+      >> -  bufact = 0;
+      >> +  lr_buffer_init (&lrb);
+      >> -  ADDC (lr->buf[lr->idx - 1]);
+      >> +  addc (&lrb, lr->buf[lr->idx - 1]);
+      @@ -561,32 +589,185 @@ get_ident (struct linereader *lr)
+      >> -      ADDC (ch);
+      >> +      addc (&lrb, ch);
+      >> -  kw = lr->hash_fct (buf, bufact);
+      >> +  kw = lr->hash_fct (lrb.buf, lrb.act);
+      >> -      free (buf);
+      >> +      free (lrb.buf);
+      >> +      lr_buffer_to_token (&lrb, lr);
+      >> +    }
+         +
+      >> +  return &lr->token;
+      >> +}
+         +
+         +/* Process a decoded Unicode codepoint WCH in a string, placing the
+         +   multibyte sequence into LRB.  Return false if the character is not
+         +   found in CHARMAP/REPERTOIRE.  */
+      >> +static bool
+      >> +translate_unicode_codepoint (struct localedef_t *locale,
+      >> +			     const struct charmap_t *charmap,
+      >> +			     const struct repertoire_t *repertoire,
+      >> +			     uint32_t wch, struct lr_buffer *lrb)
+      >> +{
+         +  /* See whether the charmap contains the Uxxxxxxxx names.  */
+      >> +  char utmp[10];
+      >> +  snprintf (utmp, sizeof (utmp), "U%08X", wch);
+      >> +  struct charseq *seq = charmap_find_value (charmap, utmp, 9);
+      >> -      buf = xrealloc (buf, bufact + 1);
+      >> -      buf[bufact] = '\0';
+      >> +  if (seq == NULL)
+      >> +    {
+         +      /* No, this isn't the case.  Now determine from
+         +	 the repertoire the name of the character and
+         +	 find it in the charmap.  */
+      >> +      if (repertoire != NULL)
+      >> +	{
+      >> +	  const char *symbol = repertoire_find_symbol (repertoire, wch);
+      >> +	  if (symbol != NULL)
+      >> +	    seq = charmap_find_value (charmap, symbol, strlen (symbol));
+      >> +	}
+      >> -      lr->token.val.str.startmb = buf;
+      >> -      lr->token.val.str.lenmb = bufact;
+      >> +      if (seq == NULL)
+      >> +	{
+      >> +#ifndef NO_TRANSLITERATION
+         +	  /* Transliterate if possible.  */
+      >> +	  if (locale != NULL)
+      >> +	    {
+      >> +	      if ((locale->avail & CTYPE_LOCALE) == 0)
+      >> +		{
+         +		  /* Load the CTYPE data now.  */
+      >> +		  int old_needed = locale->needed;
+         +
+      >> +		  locale->needed = 0;
+      >> +		  locale = load_locale (LC_CTYPE, locale->name,
+      >> +					locale->repertoire_name,
+      >> +					charmap, locale);
+      >> +		  locale->needed = old_needed;
+      >> +		}
+         +
+      >> +	      uint32_t *translit;
+      >> +	      if ((locale->avail & CTYPE_LOCALE) != 0
+      >> +		  && ((translit = find_translit (locale, charmap, wch))
+      >> +		      != NULL))
+         +		/* The CTYPE data contains a matching
+         +		   transliteration.  */
+      >> +		{
+      >> +		  for (int i = 0; translit[i] != 0; ++i)
+      >> +		    {
+      >> +		      snprintf (utmp, sizeof (utmp), "U%08X", translit[i]);
+      >> +		      seq = charmap_find_value (charmap, utmp, 9);
+      >> +		      assert (seq != NULL);
+      >> +		      adds (lrb, seq->bytes, seq->nbytes);
+      >> +		    }
+      >> +		  return true;
+      >> +		}
+      >> +	    }
+      >> +#endif	/* NO_TRANSLITERATION */
+         +
+         +	  /* Not a known name.  */
+      >> +	  return false;
+      >> +	}
+      >> -  return &lr->token;
+      >> +  if (seq != NULL)
+      >> +    {
+      >> +      adds (lrb, seq->bytes, seq->nbytes);
+      >> +      return true;
+      >> +    }
+      >> +  else
+      >> +    return false;
+      >> +}
+         +
+         +/* Returns true if ch is not EOF (that is, non-negative) and a valid
+         +   UTF-8 trailing byte.  */
+      >> +static bool
+      >> +utf8_valid_trailing (int ch)
+      >> +{
+      >> +  return ch >= 0 && (ch & 0xc0) == 0x80;
+      >> +}
+         +
+         +/* Reports an error for a broken UTF-8 sequence.  CH2 to CH4 may be
+         +   EOF.  Always returns false.  */
+      >> +static bool
+      >> +utf8_sequence_error (struct linereader *lr, uint8_t ch1, int ch2, int ch3,
+      >> +		     int ch4)
+      >> +{
+      >> +  char buf[38];
+         +
+      >> +  if (ch2 < 0)
+      >> +    snprintf (buf, sizeof (buf), "0x%02x", ch1);
+      >> +  else if (ch3 < 0)
+      >> +    snprintf (buf, sizeof (buf), "0x%02x 0x%02x", ch1, ch2);
+      >> +  else if (ch4 < 0)
+      >> +    snprintf (buf, sizeof (buf), "0x%02x 0x%02x 0x%02x", ch1, ch2, ch3);
+      >> +  else
+      >> +    snprintf (buf, sizeof (buf), "0x%02x 0x%02x 0x%02x 0x%02x",
+      >> +	      ch1, ch2, ch3, ch4);
+         +
+      >> +  lr_error (lr, _("invalid UTF-8 sequence %s"), buf);
+      >> +  return false;
+         +/* Reads a UTF-8 sequence from LR, with the leading byte CH1, and
+         +   stores the decoded codepoint in *WCH.  Returns false on failure and
+         +   reports an error.  */
+      >> +static bool
+      >> +utf8_decode (struct linereader *lr, uint8_t ch1, uint32_t *wch)
+      >> +{
+         +  /* See RFC 3629 section 4 and __gconv_transform_utf8_internal.  */
+      >> +  if (ch1 < 0xc2)
+      >> +    return utf8_sequence_error (lr, ch1, -1, -1, -1);
+         +
+      >> +  int ch2 = lr_getc (lr);
+      >> +  if (!utf8_valid_trailing (ch2))
+      >> +    return utf8_sequence_error (lr, ch1, ch2, -1, -1);
+         +
+      >> +  if (ch1 <= 0xdf)
+      >> +    {
+      >> +      uint32_t result = ((ch1 & 0x1f)  << 6) | (ch2 & 0x3f);
+      >> +      if (result < 0x80)
+      >> +	return utf8_sequence_error (lr, ch1, ch2, -1, -1);
+      >> +      *wch = result;
+      >> +      return true;
+      >> +    }
+         +
+      >> +  int ch3 = lr_getc (lr);
+      >> +  if (!utf8_valid_trailing (ch3) || ch1 < 0xe0)
+      >> +    return utf8_sequence_error (lr, ch1, ch2, ch3, -1);
+         +
+      >> +  if (ch1 <= 0xef)
+      >> +    {
+      >> +      uint32_t result = (((ch1 & 0x0f)  << 12)
+      >> +			 | ((ch2 & 0x3f) << 6)
+      >> +			 | (ch3 & 0x3f));
+      >> +      if (result < 0x800)
+      >> +	return utf8_sequence_error (lr, ch1, ch2, ch3, -1);
+      >> +      *wch = result;
+      >> +      return true;
+      >> +    }
+         +
+      >> +  int ch4 = lr_getc (lr);
+      >> +  if (!utf8_valid_trailing (ch4) || ch1 < 0xf0 || ch1 > 0xf4)
+      >> +    return utf8_sequence_error (lr, ch1, ch2, ch3, ch4);
+         +
+      >> +  uint32_t result = (((ch1 & 0x07)  << 18)
+      >> +		     | ((ch2 & 0x3f) << 12)
+      >> +		     | ((ch3 & 0x3f) << 6)
+      >> +		     | (ch4 & 0x3f));
+      >> +  if (result < 0x10000)
+      >> +    return utf8_sequence_error (lr, ch1, ch2, ch3, ch4);
+      >> +  *wch = result;
+      >> +  return true;
+      >> +}
+      @@ -594,14 +775,10 @@ get_string (struct linereader *lr, const struct charmap_t *charmap,
+      >> -  char *buf;
+      >> +  struct lr_buffer lrb;
+      >> -  size_t bufact;
+      >> -  size_t bufmax = 56;
+         -  /* We must return two different strings.  */
+      >> -  buf = xmalloc (bufmax);
+      >> -  bufact = 0;
+      >> +  lr_buffer_init (&lrb);
+      @@ -614,23 +791,27 @@ get_string (struct linereader *lr, const struct charmap_t *charmap,
+      >> -	ADDC (ch);
+      >> +	{
+      >> +	  if (ch >= 0x80)
+      >> +	    lr_error (lr, _("illegal 8-bit character in untranslated string"));
+      >> +	  addc (&lrb, ch);
+      >> +	}
+      >> -      if (bufact > 0 && buf[bufact - 1] == lr->escape_char
+      >> -	  && (bufact == 1 || buf[bufact - 2] != lr->escape_char))
+      >> +      if (lrb.act > 0 && lrb.buf[lrb.act - 1] == lr->escape_char
+      >> +	  && (lrb.act == 1 || lrb.buf[lrb.act - 2] != lr->escape_char))
+      >> -	  --bufact;
+      >> +	  --lrb.act;
+      >> -      ADDC ('\0');
+      >> +      addc (&lrb, '\0');
+      >> -      int illegal_string = 0;
+      >> +      bool illegal_string = false;
+      @@ -648,31 +829,56 @@ get_string (struct linereader *lr, const struct charmap_t *charmap,
+         -	      /* The standards leave it up to the implementation to decide
+         -		 what to do with character which stand for themself.  We
+         -		 could jump through hoops to find out the value relative to
+         -		 the charmap and the repertoire map, but instead we leave
+         -		 it up to the locale definition author to write a better
+         -		 definition.  We assume here that every character which
+         -		 stands for itself is encoded using ISO 8859-1.  Using the
+         -		 escape character is allowed.  */
+         +	      /* The standards leave it up to the implementation to
+         +		 decide what to do with characters which stand for
+         +		 themselves.  This implementation treats the input
+         +		 file as encoded in UTF-8.  */
+      >> +		  if (ch >= 0x80)
+      >> +		    {
+      >> +		      lr_error (lr, _("illegal 8-bit escape sequence"));
+      >> +		      illegal_string = true;
+      >> +		      break;
+      >> +		    }
+      >> +		  addc (&lrb, ch);
+      >> +		  wch = ch;
+      >> +		}
+      >> +	      else if (ch < 0x80)
+      >> +		{
+      >> +		  wch = ch;
+      >> +		  addc (&lrb, ch);
+      >> +		}
+      >> +	      else 		/* UTF-8 sequence.  */
+      >> +		{
+      >> +		  if (!utf8_decode (lr, ch, &wch))
+      >> +		    {
+      >> +		      illegal_string = true;
+      >> +		      break;
+      >> +		    }
+      >> +		  if (!translate_unicode_codepoint (locale, charmap,
+      >> +						    repertoire, wch, &lrb))
+      >> +		    {
+         +		      /* Ignore the rest of the string.  Callers may
+         +			 skip this string because it cannot be encoded
+         +			 in the output character set.  */
+      >> +		      illegal_string = true;
+      >> +		      continue;
+      >> +		    }
+      >> -	      ADDC (ch);
+      >> -		ADDWC ((uint32_t) ch);
+      >> +		ADDWC (wch);
+      >> -	  startidx = bufact;
+      >> +	  startidx = lrb.act;
+      @@ -681,133 +887,59 @@ get_string (struct linereader *lr, const struct charmap_t *charmap,
+      >> -	      ADDC (ch);
+      >> +	      addc (&lrb, ch);
+      >> -	  if (bufact == startidx)
+      >> +	  if (lrb.act == startidx)
+      >> -	      illegal_string = 1;
+      >> +	      illegal_string = true;
+      >> -	  if (buf[startidx] == 'U'
+      >> -	      && (bufact - startidx == 5 || bufact - startidx == 9))
+      >> +	  if (lrb.buf[startidx] == 'U'
+      >> +	      && (lrb.act - startidx == 5 || lrb.act - startidx == 9))
+      >> -	      char *cp = buf + startidx + 1;
+      >> -	      while (cp < &buf[bufact] && isxdigit (*cp))
+      >> +	      char *cp = lrb.buf + startidx + 1;
+      >> +	      while (cp < &lrb.buf[lrb.act] && isxdigit (*cp))
+      >> -	      if (cp == &buf[bufact])
+      >> +	      if (cp == &lrb.buf[lrb.act])
+      >> -		  char utmp[10];
+         -
+      >> -		  ADDC ('\0');
+      >> -		  wch = strtoul (buf + startidx + 1, NULL, 16);
+      >> +		  addc (&lrb, '\0');
+      >> +		  wch = strtoul (lrb.buf + startidx + 1, NULL, 16);
+      >> -		  bufact = startidx;
+      >> +		  lrb.act = startidx;
+         -		  /* See whether the charmap contains the Uxxxxxxxx names.  */
+      >> -		  snprintf (utmp, sizeof (utmp), "U%08X", wch);
+      >> -		  seq = charmap_find_value (charmap, utmp, 9);
+         -
+      >> -		  if (seq == NULL)
+      >> -		    {
+         -		     /* No, this isn't the case.  Now determine from
+         -			the repertoire the name of the character and
+         -			find it in the charmap.  */
+      >> -		      if (repertoire != NULL)
+      >> -			{
+      >> -			  const char *symbol;
+         -
+      >> -			  symbol = repertoire_find_symbol (repertoire, wch);
+         -
+      >> -			  if (symbol != NULL)
+      >> -			    seq = charmap_find_value (charmap, symbol,
+      >> -						      strlen (symbol));
+      >> -			}
+         -
+      >> -		      if (seq == NULL)
+      >> -			{
+      >> -#ifndef NO_TRANSLITERATION
+         -			  /* Transliterate if possible.  */
+      >> -			  if (locale != NULL)
+      >> -			    {
+      >> -			      uint32_t *translit;
+         -
+      >> -			      if ((locale->avail & CTYPE_LOCALE) == 0)
+      >> -				{
+         -				  /* Load the CTYPE data now.  */
+      >> -				  int old_needed = locale->needed;
+         -
+      >> -				  locale->needed = 0;
+      >> -				  locale = load_locale (LC_CTYPE,
+      >> -							locale->name,
+      >> -							locale->repertoire_name,
+      >> -							charmap, locale);
+      >> -				  locale->needed = old_needed;
+      >> -				}
+         -
+      >> -			      if ((locale->avail & CTYPE_LOCALE) != 0
+      >> -				  && ((translit = find_translit (locale,
+      >> -								 charmap, wch))
+      >> -				      != NULL))
+         -				/* The CTYPE data contains a matching
+         -				   transliteration.  */
+      >> -				{
+      >> -				  int i;
+         -
+      >> -				  for (i = 0; translit[i] != 0; ++i)
+      >> -				    {
+      >> -				      char utmp[10];
+         -
+      >> -				      snprintf (utmp, sizeof (utmp), "U%08X",
+      >> -						translit[i]);
+      >> -				      seq = charmap_find_value (charmap, utmp,
+      >> -								9);
+      >> -				      assert (seq != NULL);
+      >> -				      ADDS (seq->bytes, seq->nbytes);
+      >> -				    }
+         -
+      >> -				  continue;
+      >> -				}
+      >> -			    }
+      >> -#endif	/* NO_TRANSLITERATION */
+         -
+         -			  /* Not a known name.  */
+      >> -			  illegal_string = 1;
+      >> -			}
+      >> -		    }
+         -
+      >> -		  if (seq != NULL)
+      >> -		    ADDS (seq->bytes, seq->nbytes);
+         -
+      >> +		  if (!translate_unicode_codepoint (locale, charmap,
+      >> +						    repertoire, wch, &lrb))
+      >> +		    illegal_string = true;
+         -	  /* We now have the symbolic name in buf[startidx] to
+         -	     buf[bufact-1].  Now find out the value for this character
+         +	  /* We now have the symbolic name in lrb.buf[startidx] to
+         +	     lrb.buf[lrb.act-1].  Now find out the value for this character
+      >> -	  seq = charmap_find_value (charmap, &buf[startidx],
+      >> -				    bufact - startidx);
+      >> +	  seq = charmap_find_value (charmap, &lrb.buf[startidx],
+      >> +				    lrb.act - startidx);
+      >> -			(int) (bufact - startidx), &buf[startidx]);
+      >> -	      illegal_string = 1;
+      >> +			(int) (lrb.act - startidx), &lrb.buf[startidx]);
+      >> +	      illegal_string = true;
+      @@ -817,8 +949,8 @@ get_string (struct linereader *lr, const struct charmap_t *charmap,
+      >> -		  wch = repertoire_find_value (repertoire, &buf[startidx],
+      >> -					       bufact - startidx);
+      >> +		  wch = repertoire_find_value (repertoire, &lrb.buf[startidx],
+      >> +					       lrb.act - startidx);
+      @@ -827,30 +959,30 @@ get_string (struct linereader *lr, const struct charmap_t *charmap,
+      >> -			    (int) (bufact - startidx), &buf[startidx]);
+      >> -		  illegal_string = 1;
+      >> +			    (int) (lrb.act - startidx), &lrb.buf[startidx]);
+      >> +		  illegal_string = true;
+      >> -	  bufact = startidx;
+      >> +	  lrb.act = startidx;
+      >> -	    ADDS (seq->bytes, seq->nbytes);
+      >> +	    adds (&lrb, seq->bytes, seq->nbytes);
+      >> -	  illegal_string = 1;
+      >> +	  illegal_string = true;
+      >> -	  free (buf);
+      >> +	  free (lrb.buf);
+      @@ -860,7 +992,7 @@ get_string (struct linereader *lr, const struct charmap_t *charmap,
+      >> -      ADDC ('\0');
+      >> +      addc (&lrb, '\0');
+      @@ -871,8 +1003,7 @@ get_string (struct linereader *lr, const struct charmap_t *charmap,
+      >> -  lr->token.val.str.startmb = xrealloc (buf, bufact);
+      >> -  lr->token.val.str.lenmb = bufact;
+      >> +  lr_buffer_to_token (&lrb, lr);
+      commits:
+        dff8da6b3e Update copyright dates with scripts/update-copyrights
+        0b3503e2e1 locale: Use correct buffer size for utf8_sequence_error [BZ #19444]
+        6d7e8eda9b Update copyright dates with scripts/update-copyrights
+        9d77023bf3 localedef: Support building for older C standards
+        b15538d77c locale: localdef input files are now encoded in UTF-8
+        7dcaabb94c locale: Introduce translate_unicode_codepoint into linereader.c
+        5dcbff5879 locale: Turn ADDC and ADDS into functions in linereader.c
+        581c785bf3 Update copyright dates with scripts/update-copyrights
+        30891f35fa Remove "Contributed by" lines
+  locale/programs/locfile.c: 1 substantive hunk(s), 1 comment/licence hunk(s) filtered
+      @@ -31,13 +30,13 @@
+      >> -#include "../../crypt/md5.h"
+      >> +#include "md5.h"
+      commits:
+        dff8da6b3e Update copyright dates with scripts/update-copyrights
+        e6e3c66688 crypt: Remove libcrypt support
+        6d7e8eda9b Update copyright dates with scripts/update-copyrights
+        581c785bf3 Update copyright dates with scripts/update-copyrights
+        30891f35fa Remove "Contributed by" lines
   locale/programs/locfile.h: no substantive change (1 comment/licence hunk(s) filtered)
   locale/programs/3level.h: no substantive change (1 comment/licence hunk(s) filtered)
-  locale/loadlocale.c: 4 substantive hunk(s), 1 comment/licence hunk(s) filtered   [hunks abridged]
-  locale/localeinfo.h: 4 substantive hunk(s), 2 comment/licence hunk(s) filtered   [hunks abridged]
-  locale/programs/locfile-kw.gperf: 1 substantive hunk(s), 1 comment/licence hunk(s) filtered   [hunks abridged]
+  locale/loadlocale.c: 4 substantive hunk(s), 1 comment/licence hunk(s) filtered
+      @@ -63,6 +62,61 @@ static const enum value_type *const _nl_value_types[] =
+         +/* Fill in LOCDATA->private for the LC_CTYPE category.  */
+      >> +static void
+      >> +_nl_intern_locale_data_fill_cache_ctype (struct __locale_data *locdata)
+      >> +{
+      >> +  struct lc_ctype_data *data = locdata->private;
+         +
+         +  /* Default to no translation.  Assumes zero initialization of *data.  */
+      >> +  memset (data->outdigit_bytes, 1, sizeof (data->outdigit_bytes));
+         +
+      >> +  for (int i = 0; i <= 9; ++i)
+      >> +    {
+      >> +      const char *digit
+      >> +	= locdata->values[_NL_ITEM_INDEX (_NL_CTYPE_OUTDIGIT0_MB + i)].string;
+      >> +      unsigned char len;
+      >> +      if (digit[0] != '0' + i || digit[1] != '\0')
+      >> +	 {
+      >> +	   data->outdigit_translation_needed = true;
+      >> +	   len = strlen (locdata->values[_NL_ITEM_INDEX
+      >> +					 (_NL_CTYPE_OUTDIGIT0_MB + i)].string);
+      >> +	 }
+      >> +      else
+      >> +	len = 1;
+      >> +      data->outdigit_bytes[i] = len;
+      >> +      if (i == 0)
+      >> +	data->outdigit_bytes_all_equal = len;
+      >> +      else if (data->outdigit_bytes_all_equal != len)
+      >> +	data->outdigit_bytes_all_equal = 0;
+      >> +    }
+      >> +}
+         +
+         +/* Updates data in LOCDATA->private for CATEGORY.  */
+      >> +static void
+      >> +_nl_intern_locale_data_fill_cache (int category, struct __locale_data *locdata)
+      >> +{
+      >> +  switch (category)
+      >> +    {
+      >> +    case LC_CTYPE:
+      >> +      _nl_intern_locale_data_fill_cache_ctype (locdata);
+      >> +      break;
+      >> +    }
+      >> +}
+         +
+         +/* Returns the number of bytes allocated of struct __locale_data for
+         +   CATEGORY.  */
+      >> +static size_t
+      >> +_nl_intern_locale_data_extra_size (int category)
+      >> +{
+      >> +  switch (category)
+      >> +    {
+      >> +    case LC_CTYPE:
+      >> +      return sizeof (struct lc_ctype_data);
+      >> +    default:
+      >> +      return 0;
+      >> +    }
+      >> +}
+      @@ -95,15 +149,23 @@ _nl_intern_locale_data (int category, const void *data, size_t datasize)
+      >> -  newdata = malloc (sizeof *newdata
+      >> -		    + filedata->nstrings * sizeof (union locale_data_value));
+      >> +  size_t base_size = (sizeof *newdata
+      >> +		      + filedata->nstrings * sizeof (union locale_data_value));
+      >> +  size_t extra_size = _nl_intern_locale_data_extra_size (category);
+         +
+      >> +  newdata = malloc (base_size + extra_size);
+      >> -  newdata->private.data = NULL;
+      >> -  newdata->private.cleanup = NULL;
+      >> +  if (extra_size == 0)
+      >> +    newdata->private = NULL;
+      >> +  else
+      >> +    {
+      >> +      newdata->private = (char *) newdata + base_size;
+      >> +      memset (newdata->private, 0, extra_size);
+      >> +    }
+      @@ -159,6 +221,9 @@ _nl_intern_locale_data (int category, const void *data, size_t datasize)
+      >> +  if (extra_size > 0)
+      >> +    _nl_intern_locale_data_fill_cache (category, newdata);
+         +
+      @@ -283,10 +348,18 @@ _nl_load_locale (struct loaded_l10nfile *file, int category)
+      >> -_nl_unload_locale (struct __locale_data *locale)
+      >> +_nl_unload_locale (int category, struct __locale_data *locale)
+      >> -  if (locale->private.cleanup)
+      >> -    (*locale->private.cleanup) (locale);
+         +  /* Deallocate locale->private.  */
+      >> +  switch (category)
+      >> +    {
+      >> +    case LC_CTYPE:
+      >> +      _nl_cleanup_ctype (locale);
+      >> +      break;
+      >> +    case LC_TIME:
+      >> +      _nl_cleanup_time (locale);
+      >> +      break;
+      >> +    }
+      commits:
+        dff8da6b3e Update copyright dates with scripts/update-copyrights
+        6d7e8eda9b Update copyright dates with scripts/update-copyrights
+        93ec1cf0fe locale: Add more cached data to LC_CTYPE
+        bbebe83a28 locale: Remove cleanup function pointer from struct __localedata
+        581c785bf3 Update copyright dates with scripts/update-copyrights
+        30891f35fa Remove "Contributed by" lines
+  locale/localeinfo.h: 4 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -58,19 +58,14 @@ struct __locale_data
+         -  /* This provides a slot for category-specific code to cache data computed
+         -     about this locale.  That code can set a cleanup function to deallocate
+         -     the data.  */
+      >> -  struct
+      >> -  {
+      >> -    void (*cleanup) (struct __locale_data *);
+      >> -    union
+      >> -    {
+      >> -      void *data;
+      >> -      struct lc_time_data *time;
+      >> -      const struct gconv_fcts *ctype;
+      >> -    };
+      >> -  } private;
+         +  /* This provides a slot for category-specific code to cache data
+         +     computed about this locale.  Type of the data pointed to:
+         +
+         +     LC_CTYPE   struct lc_ctype_data (_nl_intern_locale_data)
+         +     LC_TIME    struct lc_time_data (_nl_init_alt_digit, _nl_init_era_entries)
+         +
+         +     This data deallocated at the start of _nl_unload_locale.  */
+      >> +  void *private;
+      @@ -166,6 +161,27 @@ struct lc_time_data
+         +/* Ancillary data for LC_CTYPE.  Co-allocated after struct
+         +   __locale_data by _nl_intern_locale_data.  */
+      >> +struct lc_ctype_data
+      >> +{
+         +  /* See get_gconv_fcts and __wcsmbs_load_conv.  */
+      >> +  const struct gconv_fcts *fcts;
+         +
+         +  /* If false, outdigit just maps to the ASCII digits.  */
+      >> +  bool outdigit_translation_needed;
+         +
+         +  /* Cached multi-byte string lengths.  This could be added to the
+         +     locale data itself if the format is changed (which impacts
+         +     existing statically linked binaries).  */
+         +
+         +  /* For the outdigit decimal digits (copied from LC_CTYPE).  */
+      >> +  unsigned char outdigit_bytes[10];
+         +
+         +  /* If all outdigit_bytes elements are equal, this is that value,
+         +     otherwise it is 0.  */
+      >> +  unsigned char outdigit_bytes_all_equal;
+      >> +};
+      @@ -349,7 +365,8 @@ extern void _nl_load_locale (struct loaded_l10nfile *file, int category)
+      >> -extern void _nl_unload_locale (struct __locale_data *locale) attribute_hidden;
+      >> +extern void _nl_unload_locale (int category, struct __locale_data *locale)
+      >> +  attribute_hidden;
+      @@ -409,7 +426,8 @@ extern int _nl_parse_alt_digit (const char **strp,
+         -/* Functions used for the `private.cleanup' hook.  */
+         +/* Deallocate category-specific data.  Used in _nl_unload_locale.  */
+      >> +extern void _nl_cleanup_ctype (struct __locale_data *) attribute_hidden;
+      commits:
+        dff8da6b3e Update copyright dates with scripts/update-copyrights
+        88677348b4 Move libc_freeres_ptrs and libc_subfreeres to hidden/weak functions
+        6d7e8eda9b Update copyright dates with scripts/update-copyrights
+        93ec1cf0fe locale: Add more cached data to LC_CTYPE
+        7ee41feba6 locale: Remove private union from struct __locale_data
+        bbebe83a28 locale: Remove cleanup function pointer from struct __localedata
+        581c785bf3 Update copyright dates with scripts/update-copyrights
+  locale/programs/locfile-kw.gperf: 1 substantive hunk(s), 1 comment/licence hunk(s) filtered
+      @@ -54,6 +53,7 @@ translit_end,           tok_translit_end,           0
+      >> +codepoint_collation,    tok_codepoint_collation,    0
+      commits:
+        dff8da6b3e Update copyright dates with scripts/update-copyrights
+        6d7e8eda9b Update copyright dates with scripts/update-copyrights
+        581c785bf3 Update copyright dates with scripts/update-copyrights
+        f5117c6504 Add 'codepoint_collation' support for LC_COLLATE.
+        30891f35fa Remove "Contributed by" lines
 
 TIER 3 -- reachable from the collation entry points, not classified
   (derived by walking #include from ld-collate.c, strcoll_l.c, strxfrm_l.c and the
@@ -207,102 +1238,8 @@ lc-collate.c and C-collate.c are in TIER 1 by hand for exactly that reason.
 
 52 substantive hunk(s) found. Locale data alone does not settle this pair.
 Lines marked >> are the code changes; read them and decide whether they can
-move weights. If any can, every locale listed by
-  python3 flag_algorithmic_ranges.py glibc-2.39
-needs an empirical sort-order test, however clean its data diff is.
-
---- What ber_DZ / kab_DZ actually changed: not a rule, a role swap ---
-
-At glibc 2.34, ber_DZ held the full explicit Amazigh/Berber collation rules
-and kab_DZ did `copy "ber_DZ"`. At glibc 2.39, kab_DZ holds the same rules
-verbatim and ber_DZ does `copy "kab_DZ"`. Both files are correctly flagged
-as changed (their content differs byte-for-byte), but the ruleset itself is
-identical, just relocated to the other file.
-
---- What step 5 adds for this pair ---
-
-Tier 1 has real changes, but none that move weights: %Z-to-%z printf format
-fixes, {u}int_fast -> {u}int32_t replacements, a misspelling sweep, an -Os
-maybe-uninitialized fix, and one new feature -- `codepoint_collation`
-(commit f5117c6504), an opt-in LC_COLLATE keyword that no pre-existing
-locale uses. Tier 2's linereader.c rework (ADDC/ADDS turned into functions,
-UTF-8 input encoding) is a refactor of the tokeniser, not of the weights.
-
-Tier 3 -- the files the include walk reaches that nobody put in a list --
-adds two hunks that bear directly on the ko_KR verdict, and both were
-invisible before the walk existed:
-
-  locale/programs/linereader.h, in lr_getc, the tokeniser's character reader:
-      -  return lr->buf[lr->idx] == '\32' ? EOF : lr->buf[lr->idx++];
-      +  return lr->buf[lr->idx++] & 0xff;
-  Commit 19d4944459, "locale: Fix signed char bug in lr_getc". It drops a
-  '\32' sentinel that truncated input and fixes the sign of the returned
-  byte. It changes WHICH BYTES are read out of a locale source file, not how
-  a range is expanded, and no glibc locale file contains a \32.
-
-  locale/elem-hash.h, in elem_hash, the collating-element hash:
-      -elem_hash (const char *str, int_fast32_t n)
-      +elem_hash (const char *str, int32_t n)
-  Commit 535e935a28, a tree-wide {u}int_fast -> {u}int32_t sweep. `n` is a
-  symbol-name length; the hash value it computes is unchanged.
-
-Neither moves a weight. Nothing changed ellipsis expansion. That is what
-lets this pair CLEAR ko_KR rather than only flag it: step 4 still lists
-ko_KR (its LC_COLLATE still uses `..`), but with the expansion logic
-unchanged, its unchanged LC_COLLATE is now sufficient proof.
-
-The verdict is the same as before Tier 3 existed. What changed is its
-standing: it used to rest on not having looked at these two files, and now
-rests on having read them. Note that ko_KR's FILE does change in this pair --
-lines 6109+, in LC_MONETARY and LC_TIME -- which is exactly why step 2
-compares against the LC_COLLATE block rather than the whole file. Steps 1-4 alone could never reach that
-conclusion. ardentperf's checksums agree: all ten of their locales,
-ko included, are identical between RHEL9 and RHEL10.
-
---- Confirmed empirically on real RHEL9/RHEL10 nodes running PostgreSQL 18 ---
-
-ber_DZ, kab_DZ: identical sort order on both nodes (consistent with the
-role-swap theory above -- no observable difference).
-
-th_TH: CHANGES. Re-measured 2026-09-06 and the earlier "no observable
-difference" was wrong -- the sample was too narrow to reach the strings that
-move. The rewrite deletes 220 `collating-element` definitions: the five Thai
-leading vowels (U+0E40..U+0E44) against 44 consonants. U+0E24 and U+0E26 never
-had one, and that is where the order moves:
-  glibc 2.34:  ก เก ไก ไก่ ฤ ฦ ฮ เฤ เฦ
-  glibc 2.39:  ก เก ไก ไก่ ฤ เฤ ฦ เฦ ฮ
-Confirmed by direct strcoll, not only ORDER BY: เฤ > ฮ at 2.34, เฤ < ฮ at 2.39.
-Reproduce with ../examples/rhel9-to-rhel10.sql.
-
-ko_KR: identical sort order on both nodes for this pair, now backed by the
-step 5 reasoning above rather than by absence of evidence.
-
-en_US (negative control): identical, as expected.
-
-Note: the ber_DZ, kab_DZ, ko_KR and en_US lines above were run before the
-step 5 script existed and are carried over unchanged; only the source-level
-analysis is new. The th_TH line was re-measured on 2026-09-06 on freshly
-deployed Rocky Linux 9.3 (glibc-2.34-83.el9.7) and Rocky Linux 10.1
-(glibc-2.39-58.el10_1.2) nodes, both PostgreSQL 18.6, with the other four
-locales identical on both as controls. Re-confirmed on the newer builds
-glibc-2.34-275.el9_8 and glibc-2.39-128.el10_2: unchanged.
-
-The RHEL8-to-RHEL9 example was re-measured end to end on fresh nodes, and
-again on 2026-09-06 on PostgreSQL 18.6, so both pairs on this repository now
-rest on the same PostgreSQL.
-
-================================================================
-Added 2026-09-06: step 8, node to node. Steps 6, 7, 9 and 10 and the
-full summary added 2026-09-07.
-================================================================
-
-$ ./audit.sh glibc-2.34 glibc-2.39 \
-    --old-locales-dir ./el9-locales --old-build-id glibc-2.34-275.el9_8 \
-    --new-locales-dir ./el10-locales --new-build-id glibc-2.39-128.el10_2
-
-(per-file diff bodies in the node-to-node section trimmed; the node
-directories are shown as ./elN-locales and the output directory as
-/tmp/pg-glibc-collation-audit)
+move weights. If any can, every locale step 4 listed above needs an
+empirical sort-order test, however clean its data diff is.
 
 ================================================================
 == DISTRO CHECK  do glibc-2.34-275.el9_8's patches touch LC_COLLATE?
@@ -310,7 +1247,7 @@ directories are shown as ./elN-locales and the output directory as
 Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
   UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was NOT checked
   NOTE: signatures were not checked. The commit ids above are what was actually read;
-      (diff body trimmed)
+        compare them against a source you trust (sourceware.org/git/glibc.git) if it matters.
 
 Node build under test: glibc-2.34-275.el9_8
 Node locale sources:   ./el9-locales
@@ -349,7 +1286,7 @@ Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.gl
 Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
   UNCHECKED glibc-2.39 = ef321e23c20e  gpg is not installed; the signature was NOT checked
   NOTE: signatures were not checked. The commit ids above are what was actually read;
-      (diff body trimmed)
+        compare them against a source you trust (sourceware.org/git/glibc.git) if it matters.
 
 Node build under test: glibc-2.39-128.el10_2
 Node locale sources:   ./el10-locales
@@ -384,9 +1321,11 @@ Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.gl
 ================================================================
 Node-to-node comparison of locale SOURCES. Both sides are authoritative:
   old: glibc-2.34-275.el9_8
-      (diff body trimmed)
+       ./el9-locales
+       356 file(s), 12762912 byte(s), fingerprint c23d60746558
   new: glibc-2.39-128.el10_2
-      (diff body trimmed)
+       ./el10-locales
+       366 file(s), 12617788 byte(s), fingerprint b3bb1c5a5115
 
 Compared 355 file(s) present on both nodes:
   identical:                  49
@@ -398,11 +1337,80 @@ Compared 355 file(s) present on both nodes:
 
 Differ INSIDE LC_COLLATE (3) -- these two nodes do not carry the same collation rules:
   ber_DZ  (both, differing, explicit -> copy-only)
-      (diff body trimmed)
+      --- glibc-2.34-275.el9_8
+      +++ glibc-2.39-128.el10_2
+      @@ -1,82 +1,3 @@
+       LC_COLLATE
+      -% The latin amazigh alphabet is:
+      -%
+      -% a ɛ b b* c č d ḍ e f g g* ğ h ḥ i j k k* l m n q q* gam gam* r ṛ s ṣ t ṭ u w x x* y z ẓ
+      -%
+      -% (What are the letters followed by a *???)
+      -%
+      -% CLDR does not yet have collation rules for this language.
+      -%
+      -
+      -% Looking at the above alphabet and the previously existing collation
+      -% rules in glibc for this language, I implement this in the following way:
+      -%
+      -% &A<ɛ<<<Ɛ
+      -% &C<č<<<Č
+      -% &D<ḍ<<<Ḍ
+      -% &G<ğ<<<Ğ
+      -% &H<ḥ<<<Ḥ
+      -% &Q<ɣ<<<Ɣ
+      -% &R<ṛ<<<Ṛ
+      -% &S<ṣ<<<Ṣ
   kab_DZ  (both, differing, copy-only -> explicit)
-      (diff body trimmed)
+      --- glibc-2.34-275.el9_8
+      +++ glibc-2.39-128.el10_2
+      @@ -1,3 +1,82 @@
+       LC_COLLATE
+      -copy "ber_DZ"
+      +% The latin amazigh alphabet is:
+      +%
+      +% a ɛ b b* c č d ḍ e f g g* ğ h ḥ i j k k* l m n q q* gam gam* r ṛ s ṣ t ṭ u w x x* y z ẓ
+      +%
+      +% (What are the letters followed by a *???)
+      +%
+      +% CLDR does not yet have collation rules for this language.
+      +%
+      +
+      +% Looking at the above alphabet and the previously existing collation
+      +% rules in glibc for this language, I implement this in the following way:
+      +%
+      +% &A<ɛ<<<Ɛ
+      +% &C<č<<<Č
+      +% &D<ḍ<<<Ḍ
+      +% &G<ğ<<<Ğ
+      +% &H<ḥ<<<Ḥ
+      +% &Q<ɣ<<<Ɣ
+      +% &R<ṛ<<<Ṛ
   th_TH  (both, differing, explicit on both)
-      (diff body trimmed)
+      --- glibc-2.34-275.el9_8
+      +++ glibc-2.39-128.el10_2
+      @@ -2,746 +2,92 @@
+       
+      -collating-element <ko-kai-e> from "<U0E40><U0E01>"
+      -collating-element <ko-kai-ae> from "<U0E41><U0E01>"
+      -collating-element <ko-kai-o> from "<U0E42><U0E01>"
+      -collating-element <ko-kai-ai-maimuan> from "<U0E43><U0E01>"
+      -collating-element <ko-kai-ai-maimalai> from "<U0E44><U0E01>"
+      +% Copy the template from ISO/IEC 14651
+      +copy "iso14651_t1"
+       
+      -collating-element <kho-khai-e> from "<U0E40><U0E02>"
+      -collating-element <kho-khai-ae> from "<U0E41><U0E02>"
+      -collating-element <kho-khai-o> from "<U0E42><U0E02>"
+      -collating-element <kho-khai-ai-maimuan> from "<U0E43><U0E02>"
+      -collating-element <kho-khai-ai-maimalai> from "<U0E44><U0E02>"
+      +% CLDR collation rules for Thai:
+      +% (see: https://github.com/unicode-org/cldr/blob/main/common/collation/th.xml)
+      +%
+      +%[normalization on]
+      +%[alternate shifted]
+      +%[reorder Thai]
+      +% #
 
   All of those exist at one of the two tags, so the tag diff could see them.
 
@@ -565,15 +1573,34 @@ unexamined are three different answers:
 
 -- Warnings the clean results above do NOT cover
      !! localedata/locales/C is new UPSTREAM at glibc-2.39, but C.UTF-8 is
-      (diff body trimmed)
+        BACKPORTED by the distros this audit targets -- so it very likely DOES
+        exist on your old system, with an order of its own, and that order can
+        change. There is no source file to diff on the old side, so this audit is
+        blind to it: a clean result above says nothing about C.UTF-8. PostgreSQL
+        will not cover the gap either -- collversion is NULL for every collation
+        whose name starts with 'C.', so no version mismatch can ever fire. Compare
+        C.UTF-8 empirically on both nodes. See docs/limitations.md.
      !! This compares locale DATA. glibc's collation CODE is step 5's job
-      (diff body trimmed)
+        (diff_collation_code.py) -- that is where Bug 22668 lives, the change that
+        reorders ko_KR -- and step 5 reads it between the two upstream tags. What
+        neither step covers is a distro backporting a CODE change that is in
+        neither tag. That gap is closed by the empirical check on real nodes, which
+        measures the glibc actually installed, patches and all: docs/confirming-on-
+        a-real-system.md. Cheap complement: rpm -q --changelog glibc | grep -i
+        collat
      !! localedata/charmaps/ is NOT compared. glibc-locale-source ships it and it
-      (diff body trimmed)
+        is an input to localedef, so a repertoire change is outside this result as
+        well as outside the audit. See docs/limitations.md.
      !! This compares locale DATA. Identical data is NOT identical ORDER: the
-      (diff body trimmed)
+        weights for an ellipsis range are computed by localedef when the locale is
+        built, and that code differs between two glibc builds. Bug 22668 (commit
+        82292c99b2) changed exactly that and reordered ko_KR from a byte-identical
+        file. So a clean result here clears the data half and nothing else.
      !! No backported locale here is ellipsis-based, so for those the data
-      (diff body trimmed)
+        comparison is the whole story. Run sql/c_utf8_probe.sql anyway if C.UTF-8
+        is your database collation: it is the only check that measures the order
+        these builds actually produce, and PostgreSQL reports collversion as NULL
+        for every C.* name.
      !! Cheap complement, on each node: rpm -q --changelog glibc | grep -i collat
      (see docs/limitations.md)
 
@@ -584,12 +1611,3 @@ unexamined are three different answers:
      empirically instead: docs/confirming-on-a-real-system.md
      An upstream diff cannot see your distro's backports.
 
-ber_DZ, kab_DZ and th_TH are exactly what step 2 reports for this tag pair.
-C is byte-identical between these two nodes and declares codepoint_collation
-on both, so C.UTF-8 cannot change across this pair -- a structural statement,
-not a measurement that came out clean. Note that the summary block therefore
-does NOT carry the "C (C.UTF-8): DIFFERS" line the other pair's does.
-
-aa_ER@saaho is a locale REMOVED by this upgrade, which no step reports.
-
-Probe output for this pair: c-utf8-probe-rhel9-vs-rhel10.txt.
