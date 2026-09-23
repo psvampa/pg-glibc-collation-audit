@@ -27,7 +27,7 @@
 # is one pair of tags, not two runs added up. Measured on one triple --
 # glibc-2.28 against glibc-2.39 reports the exact union of what 2.28..2.34 and
 # 2.34..2.39 report, C.UTF-8 included -- docs/method.md, "How far apart the two
-# tags may be", and examples/skipping-a-release-2.28-to-2.39.txt. One triple is
+# tags may be". One triple is
 # not every triple; that section says what is and is not claimed.
 #
 # The --*-locales-dir options are optional and read a node's own

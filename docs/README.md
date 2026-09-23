@@ -2,21 +2,25 @@
 
 ## Reading order
 
-1. **[method.md](method.md)** — how the answer is produced, and why a clean
+1. **[commands.md](commands.md)** — what each of the three commands does,
+   and what it leaves to the next. Read this first if you are about to run
+   one.
+2. **[method.md](method.md)** — how the answer is produced, and why a clean
    diff counts as proof. Read this if you need to decide whether to trust it.
-2. **[results.md](results.md)** — the evidence behind every row of the
+3. **[results.md](results.md)** — the evidence behind every row of the
    verdict table, and both worked examples. The table itself is in
    [the README](../README.md#results-for-the-two-rhel-pairs).
-3. **[confirming-on-a-real-system.md](confirming-on-a-real-system.md)** — how
+4. **[confirming-on-a-real-system.md](confirming-on-a-real-system.md)** — how
    to verify it on your own nodes, which is the only evidence that covers
    distro backports.
-4. **[limitations.md](limitations.md)** — the six things to know before you
+5. **[limitations.md](limitations.md)** — the six things to know before you
    act on a clean result, `LC_CTYPE` among them.
 
 ## Every document
 
 | Document | What's in it |
 |---|---|
+| [commands.md](commands.md) | What each of the three commands does, what the longer form of command 1 adds, and how to take the locale copy off a machine and check it |
 | [method.md](method.md) | The five steps in detail, how far apart the two tags may be, how to read what a run prints, and the decision procedure they add up to |
 | [results.md](results.md) | The evidence behind each verdict, both worked examples, and what was tested on which nodes |
 | [confirming-on-a-real-system.md](confirming-on-a-real-system.md) | Running the SQL template and the `C.UTF-8` probe on both nodes, choosing values that prove something, and the three traps that make a comparison lie |

@@ -41,9 +41,12 @@ is now the unedited output of the command it is named for, recaptured on the
 own `ls | wc -l` before use. Two files are new, the tags-only form of each
 audited pair, which is what a reader gets from a checkout alone.
 
-**The repository referenced `breakage/`.** That directory is evidence gathered
-for an article, not part of the tool, and the tool's own documentation and
-tests pointed into it. Nothing outside it references it now.
+**The published documentation referenced `breakage/`.** That directory is
+evidence gathered for an article, not part of the tool, and the tool's own
+pages pointed into it. No published page does now. The directory itself is
+still tracked, 27 files, and the published-claims layer still names it to
+exclude it from the walk -- so nothing validates the links inside it.
+Backlog 12.2e.
 
 ### The rule this branch was written to
 
@@ -172,7 +175,7 @@ That statement, without the figures, is what the page now carries.
 ### Files
 
 - **`docs/limitations.md`** -- rewritten. The six `##` headings are unchanged,
-  because fifteen links from other files depend on their anchors.
+  because thirteen links from other files depend on their anchors.
 - **`docs/method.md`** -- two new subsections under "Reading the output".
 - **`README.md`**, **`docs/README.md`** -- the CJK row, and the two index
   sentences that said the first limitation is "covered three other ways",
@@ -180,7 +183,7 @@ That statement, without the figures, is what the page now carries.
 - **`tests/test_published_claims.py`** -- the three quoted-block ties read
   `method.md`; the canonical-figures table loses the 6,525 row, which no
   published file states any more, and the `iso14651_t1` inheritance row now
-  expects three files rather than four.
+  expects three files rather than five.
 - **`tests/README.md`** -- the row count, and the sentence that said
   `limitations.md` quotes the floor pair's figures.
 
