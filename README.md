@@ -81,8 +81,8 @@ so you never retype a name, and ends with a consolidated summary. What each
 step asks, and what the run leaves unsettled, is in
 [docs/commands.md](docs/commands.md). What this exact command prints, on
 both audited pairs, is in
-[examples/README.md](examples/README.md#command-1) — worth reading before you
-run anything.
+[examples/README.md, under Command 1](examples/README.md#command-1) — worth
+reading before you run anything.
 
 > [!TIP]
 > If you can get the locale files off both machines, run the longer form below
