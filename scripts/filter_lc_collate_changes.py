@@ -161,23 +161,50 @@ def judge(content_changed, old_contents, new_contents, hunks, renamed_to):
 
 
 def parse_diff(diff_text):
-    """{old_path: [(old_start, old_length), ...]} from a -U0 diff."""
+    """{old_path: [(old_start, old_length), ...]} from a -U0 diff.
+
+    Refuses what it cannot read instead of returning fewer ranges. A file with
+    no range is judged 'other' -- has a block, nothing changed inside it -- so
+    every range lost here is a change reported as outside LC_COLLATE, at exit
+    0. Two shapes did that: "Binary files a/x and b/x differ", which git writes
+    for every locale under one `-diff` in the reader's attributes (git_diff
+    passes --text, so only a --diff-file can still carry it), and a `@@` line
+    the header pattern does not read, which findall skipped in silence.
+    """
     files = {}
     matches = list(_FILE_HDR_RE.finditer(diff_text))
     for i, m in enumerate(matches):
         body_end = matches[i + 1].start() if i + 1 < len(matches) else len(diff_text)
         body = diff_text[m.end():body_end]
-        ranges = [(int(s), int(ln) if ln else 1)
-                  for s, ln in _HUNK_RE.findall(body)]
-        files[m.group(1)] = ranges
+        ranges = []
+        # A changed line starts with '-' or '+' and a context line with ' ',
+        # so a line starting with '@@' is always a hunk header.
+        for line in body.split('\n'):
+            if line.startswith('Binary files '):
+                g.die(f"{m.group(1)}: the diff shows it as binary, with no "
+                      f"hunk, so the change was not read. Drop --diff-file "
+                      f"and let this script generate it.")
+            if line.startswith('@@'):
+                h = _HUNK_RE.match(line)
+                if not h:
+                    g.die(f"{m.group(1)}: unreadable hunk header {line!r}, so "
+                          f"the change under it was not read.")
+                start, length = h.groups()
+                ranges.append((int(start), int(length) if length else 1))
+        # extend, not assign: a path can have two sections -- a file replaced
+        # by a symlink is a deletion plus a creation, and a --diff-file can
+        # repeat a path -- and keeping only the last one kept the creation's
+        # `@@ -0,0` and lost every range the deletion had inside the block.
+        files.setdefault(m.group(1), []).extend(ranges)
     return files
 
 
 def diff_sections(diff_text):
     """{old_path: [section, ...]}: the text under each file's diff header.
 
-    A list, because a --diff-file can carry the same path twice, and then
-    neither section alone is that file's change.
+    A list, because git can show one path in two sections -- a file replaced
+    by a symlink is a deletion and a creation -- and then neither section
+    alone is that file's change.
     """
     sections = {}
     matches = list(_FILE_HDR_RE.finditer(diff_text))
@@ -223,7 +250,7 @@ def changed_characters(sections, old_text, new_text):
         if line_no is None:
             continue
         side = line[:1]
-        if side == ' ':               # context, only in a --diff-file with -U>0
+        if side == ' ':               # context: the -U0 diff read here has none
             line_no['-'] += 1
             line_no['+'] += 1
             continue
@@ -270,8 +297,10 @@ def main(argv):
     ap.add_argument('--allow-reverse', action='store_true',
                     help="run a pair whose new tag is the OLDER commit. Refused by default: reversed, every step still prints a plausible clean result. Prints a `!!` block saying the direction is reversed.")
     ap.add_argument('--diff-file',
-                    help="use this -U0 diff instead of generating one "
-                         "(for offline reruns; must match the two tags)")
+                    help="a -U0 diff to check against the one git gives for "
+                         "the two tags: refused unless it places every change "
+                         "where git's does. The run still needs the clone, and "
+                         "reads git's diff")
     opts = ap.parse_args(argv)
 
     repo = g.find_repo(opts.repo)
@@ -294,8 +323,8 @@ def main(argv):
 
     # Classify every change first, so added/deleted/renamed files are reported
     # as such instead of vanishing into a `continue`.
-    status = g.run_git(['diff', '--name-status', '--find-renames', rng,
-                        '--', pathspec], repo).stdout.decode('utf-8', 'replace')
+    status = g.git_diff(repo, ['--name-status', '--find-renames', rng,
+                               '--', pathspec])
     modified, added, deleted, renamed = [], [], [], []
     for line in status.splitlines():
         if not line.strip():
@@ -312,19 +341,40 @@ def main(argv):
             modified.append(parts[1])
     renamed_to = {old_path: new_path for old_path, new_path in renamed}
 
+    generated = g.git_diff(repo, ['-U0', '--find-renames', rng,
+                                  '--', pathspec])
     if opts.diff_file:
         with open(opts.diff_file, encoding='utf-8', errors='replace') as fh:
             diff_text = fh.read()
     else:
-        diff_text = g.run_git(['diff', '-U0', '--find-renames', rng,
-                               '--', pathspec],
-                              repo).stdout.decode('utf-8', 'replace')
+        diff_text = generated
     hunks = parse_diff(diff_text)
 
-    # The diff must actually cover the files git says changed. Without this, a
-    # --diff-file from a different version pair yields "nothing touches
-    # LC_COLLATE" with a zero exit -- the same silent false negative that
-    # generating the diff internally was meant to remove.
+    # A --diff-file is read only if it places every change where git does.
+    # The checks below catch a file with a path missing or with no hunk; a
+    # file with FEWER hunks for a path, or hunks numbered on other text,
+    # passed them all: one taken under a textconv that prepends lines, and
+    # one with sv_SE's hunks inside LC_COLLATE cut, both lost sv_SE at exit 0.
+    if opts.diff_file:
+        expected = parse_diff(generated)
+        differ = sorted(path for path in set(hunks) | set(expected)
+                        if hunks.get(path) != expected.get(path))
+        if differ:
+            g.die(f"--diff-file places the changes of {len(differ)} file(s) "
+                  f"differently from the diff git gives for {rng}, e.g. "
+                  f"{', '.join(differ[:3])}.\n"
+                  f"       It does not match these tags. Drop --diff-file and "
+                  f"let this script generate it.")
+        # The ranges are all the verdict reads, and they now match; the lines
+        # under them are what the characters are read from, and a file with
+        # git's headers and other lines printed another locale's characters
+        # at exit 0. From here on, git's diff is the one read.
+        diff_text = generated
+
+    # The diff must actually cover the files git says changed. A --diff-file
+    # that does not was refused above; what is left is git's own diff and
+    # git's own list of changed files disagreeing, which a config this run
+    # does not pin could do -- diff.srcPrefix did, before it was pinned.
     content_changed = modified + [old for old, _ in renamed]
     stale = [path for path in content_changed if path not in hunks]
     if stale:
@@ -332,16 +382,39 @@ def main(argv):
               f"{len(modified) + len(renamed)} file(s) git reports as changed "
               f"between {opts.old_tag} and {opts.new_tag}, e.g. "
               f"{', '.join(sorted(stale)[:3])}.\n"
-              f"       It does not match these tags. Drop --diff-file and let "
-              f"this script generate it.")
+              f"       git's diff and its list of changed files disagree, so "
+              f"the diff was not read the way this script expects.")
 
     # Content-changed files are judged against their OLD LC_COLLATE bounds.
-    old_contents, old_missing = g.read_blobs(repo, opts.old_tag, content_changed)
-    if old_missing:
-        g.die(f"{len(old_missing)} file(s) reported as modified do not exist at "
-              f"{opts.old_tag}: {', '.join(sorted(old_missing)[:5])}. The diff "
-              f"and the tags disagree -- if you passed --diff-file, it does not "
-              f"match these tags.")
+    # These paths come from git's own list of what changed, so every one of
+    # them exists at the old tag, and a blob that comes back missing is a read
+    # that failed -- a partial clone that cannot fetch. The message used to
+    # blame a --diff-file that did not match the tags, which it cannot be.
+    old_contents = g.read_blobs_strict(
+        repo, opts.old_tag, content_changed,
+        'the LC_COLLATE bounds of the files that changed')
+
+    # The general form of "Binary files": git reports a file as changed and
+    # the diff holds no hunk for it. That is an answer only when both versions
+    # are the same bytes -- a pure rename, a mode change -- and git says which
+    # blob each tag holds without reading either. Anything else is a change
+    # nothing read, and it would be judged 'other'.
+    no_hunk = [path for path in content_changed if not hunks[path]]
+    if no_hunk:
+        specs = [spec for path in no_hunk
+                 for spec in (f'{opts.old_tag}:{path}',
+                              f'{opts.new_tag}:{renamed_to.get(path, path)}')]
+        oids = g.run_git(['rev-parse', *specs], repo).stdout.decode().split()
+        if len(oids) != len(specs):
+            g.die(f"`git rev-parse` answered {len(oids)} of {len(specs)} "
+                  f"blob ids for the files with no hunk in the diff.")
+        unread = [path for path, before, after
+                  in zip(no_hunk, oids[0::2], oids[1::2]) if before != after]
+        if unread:
+            g.die(f"{len(unread)} file(s) git reports as changed have no hunk "
+                  f"in the diff, so the change was not read: "
+                  f"{', '.join(sorted(unread)[:5])}"
+                  f"{', ...' if len(unread) > 5 else ''}.")
 
     # The new side is needed only for the files with no block in the old one:
     # those are the only ones that could have gained a block. Reading just
