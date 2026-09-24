@@ -4,6 +4,96 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-24 (forty-first entry)
+
+The steps that read a diff now get the same text from git on every machine,
+whatever the reader's own git configuration says. No verdict moves, and on a
+machine with no git configuration `audit.sh` prints exactly what it printed
+before.
+
+### What it used to get wrong
+
+**One line of the reader's git configuration could empty the result.** Step
+2, which decides which locales changed their sort order, asked git for a diff
+and read what came back, and git writes that diff following the reader's own
+settings. Step 5 had carried most of the options that stop that since the
+twenty-fourth entry -- all but `--text` and `--indent-heuristic`, so under
+`-diff` it stopped rather than answered; step 2 carried none. Measured with git 2.54 on
+`glibc-2.28..glibc-2.34`, where the right answer is `or_IN` and `sv_SE`:
+
+- `localedata/locales/* -diff` in the reader's attributes file makes git show
+  every locale as "Binary files ... differ", with no detail. Step 2 counted
+  each one as changed outside LC_COLLATE, and the full audit printed
+  "Reindex: none" at exit 0. With `* -diff` step 2 did the same, and the full
+  audit stopped in step 5 instead.
+- A `textconv` that adds lines at the top of each file makes git number the
+  changes on the converted text, while step 2 placed them on the original
+  file. With 300 lines added, `sv_SE` was lost at exit 0, and `sv_FI` and
+  `sv_FI@euro` with it.
+- `diff.interHunkContext`, `diff.algorithm` with `diff.indentHeuristic`, and
+  `color.diff` changed published numbers, or made step 2 say it could not
+  tell which characters changed. None of them hid a change.
+
+Every step that reads a diff now asks for it with the same fixed options,
+none of which changes anything on a machine with no configuration. Under each
+setting above, the full audit now prints what it prints with no
+configuration.
+
+**Step 2 accepted a diff it could not read.** A "Binary files" line, a hunk
+header it could not parse, or a file git reports as changed with no change
+shown for it were each counted as a change outside LC_COLLATE, at exit 0. A
+path that appears twice in a diff kept only its second part. Step 2 now stops
+on the first three and names the file, and a path that appears twice keeps
+the changes of both parts; a pure rename, which has no change to show, still
+passes.
+
+**A diff given with `--diff-file` was trusted.** Step 2 checked only that it
+named every changed file. Measured: the real diff with some of `sv_SE`'s
+changes cut out, and a diff taken under the `textconv` above, both lost
+`sv_SE` at exit 0. One with git's headers and other lines under them chose
+the characters step 2 printed for `sv_SE`. Step 2 now accepts a `--diff-file`
+only if it places every change where the diff git gives for the same two
+versions does, and then reads git's diff.
+
+**A read that failed was blamed on `--diff-file`.** On a partial clone that
+could not fetch a file, step 2 said the diff did not match the tags. It now
+says the read failed.
+
+**A string continued with `\` could hide code in step 5.** A `/*` inside the
+continued part opened a comment that never closed, and the code after it was
+marked as prose; a continued line that began with `*` was taken for a comment
+itself. No count moves in the three pairs.
+
+**`diff.srcPrefix` and `diff.dstPrefix` made step 2 give the wrong advice.**
+They replace the `a/` and `b/` step 2 reads, as `diff.noprefix` does. Step 2
+stopped, which is safe, but told the reader to drop a `--diff-file` that had
+never been passed. Both are pinned now, and the message no longer says it.
+
+### Files
+
+- **`scripts/glibc_locale_data.py`** -- the fixed options, one list shared
+  by every step that reads a diff, each with what it cost when it was
+  missing; four more settings pinned on every git call.
+- **`scripts/filter_lc_collate_changes.py`** (step 2) -- uses them; stops on
+  a diff it cannot read; the message for a failed read.
+- **`scripts/diff_collation_code.py`** (step 5) -- uses the shared list,
+  which gives it `--text` and `--indent-heuristic`, so under `-diff` it now
+  answers where it used to stop; a continued string is carried to the next
+  line.
+- **`scripts/audit-locale-diff.sh`** (step 1) -- `diff.algorithm` and
+  `diff.indentHeuristic`, pinned there too.
+- **`tests/test_git_helpers.py`**, **`tests/test_pure_functions.py`** -- step
+  2 under each setting above, each with a check that the setting really
+  changes what a bare `git diff` prints; the diffs it cannot read; a
+  `--diff-file` that places changes elsewhere; the failed read; a pure rename
+  that still passes; the continued string, and a quote left open without a
+  `\`, which must not be carried, with a control that a real comment still
+  opens. The code was broken on purpose twenty-three ways, and each break
+  fails at least one of these tests, and the four tests that must keep
+  passing on the unbroken code do. The indent
+  heuristic is pinned twice, as an option and as a setting, and removing only
+  the option fails no test, because the setting holds it.
+
 ## 2026-09-23 (fortieth entry)
 
 A copy of a machine's locale files that lost some of them on the way now gets

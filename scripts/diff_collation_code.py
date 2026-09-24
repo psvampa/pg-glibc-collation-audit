@@ -187,8 +187,14 @@ def is_noise_line(line):
     return bool(_ATTRIBUTION_RE.match(body))
 
 
-def _comment_open_after(was_open, text):
+def _comment_open_after(was_open, text, quote=None):
     """Is a block comment open after this line, given that it was `was_open`?
+
+    Returns (open, quote). `quote` is the string delimiter still open when the
+    line ends in a `\\` inside a string -- the string goes on on the next
+    line -- and is passed back in for that line. Every line used to start
+    outside any string, so a `/*` in the continuation opened a comment that
+    never closed and marked the code after it as prose.
 
     Called for changed and context lines alike, which is the point: a comment
     that opens on a changed line often closes on a context one.
@@ -205,7 +211,8 @@ def _comment_open_after(was_open, text):
     rest of the LINE only, and can then miss a `/*`: the state stays closed
     and the next lines are marked as code, which is the safe direction.
     """
-    open_now, quote, i, n = was_open, None, 0, len(text)
+    open_now, i, n = was_open, 0, len(text)
+    continued = False
     while i < n:
         two = text[i:i + 2]
         if open_now:
@@ -215,6 +222,7 @@ def _comment_open_after(was_open, text):
             i += 1
         elif quote:
             if text[i] == '\\':
+                continued = i == n - 1
                 i += 2
                 continue
             if text[i] == quote:
@@ -228,7 +236,7 @@ def _comment_open_after(was_open, text):
             quote, i = text[i], i + 1
         else:
             i += 1
-    return open_now
+    return open_now, (quote if continued else None)
 
 
 def classify_body(body):
@@ -263,18 +271,24 @@ def classify_body(body):
     "outside a comment": that direction marks prose as code, never code as
     prose.
     """
-    state = {'+': False, '-': False}
+    # Per side: (block comment open, string delimiter carried to next line).
+    state = {'+': (False, None), '-': (False, None)}
     out = []
     for line in body:
         side, text = line[:1], line[1:].strip()
         if side == ' ':
             # One line, both versions: it moves the + and the - side alike.
-            state['+'] = _comment_open_after(state['+'], text)
-            state['-'] = _comment_open_after(state['-'], text)
+            for both in ('+', '-'):
+                was_open, quote = state[both]
+                state[both] = _comment_open_after(was_open, text, quote)
             continue
-        noise = (state.get(side, False) and not text.startswith('#')) \
-            or is_noise_line(line)
-        state[side] = _comment_open_after(state.get(side, False), text)
+        was_open, quote = state.get(side, (False, None))
+        # A line that starts inside a string continued from the one before
+        # is code, whatever it looks like: `* new option\n", stdout);` opens
+        # with the `*` of a comment continuation.
+        noise = not quote and ((was_open and not text.startswith('#'))
+                               or is_noise_line(line))
+        state[side] = _comment_open_after(was_open, text, quote)
         out.append((line, noise))
     return out
 
@@ -511,47 +525,12 @@ def report_file(repo, path, rng, show_all, quiet_when_clean=False):
     # are differences, so a non-zero exit is always a real error. With it
     # suppressed, a failed diff gave empty stdout and returned 0 here -- the
     # file was reported as having no substantive change, without a word.
-    # Six flags, six ways a config this run does not control turns every
-    # diff into "no substantive change", or moves the number it reports:
-    #
-    #   --no-ext-diff  `diff.external`, or GIT_EXTERNAL_DIFF in the environment
-    #                  (which beats config, so pinning config alone is not
-    #                  enough). Measured: GIT_EXTERNAL_DIFF=/usr/bin/true made
-    #                  all 39 files this step diffs over 2.28..2.34 read as
-    #                  unchanged, with 6 hunks in ld-collate.c alone.
-    #   --no-textconv  a `diff.<driver>.textconv` reached through the user's
-    #                  core.attributesFile. --no-ext-diff does NOT disable it,
-    #                  and a textconv that empties both sides leaves an EMPTY
-    #                  diff -- so the guard below never sees it either.
-    #   --no-color     `color.diff` beats the `color.ui=false` in
-    #                  GIT_CONFIG_OVERRIDES (more specific wins). Measured with
-    #                  `color.diff=always` and `color.diff.frag=normal`: the
-    #                  hunk headers stay plain so they still match, every body
-    #                  line starts with an escape, each hunk comes back empty
-    #                  and therefore all-noise, and step 5 printed its clean
-    #                  sentence over the pair that carries Bug 22668.
-    #   -U3            how many context lines the classifier gets to read.
-    #                  diff.context=0/1/2 gives 106/76/61 hunks over 2.34..2.39
-    #                  instead of 52: not the reassuring direction, but a
-    #                  published number must not move with a user's config, and
-    #                  at zero context the comment tracking is blind again.
-    #                  GIT_DIFF_OPTS would beat this flag, so run_git drops it.
-    #   --inter-hunk-context=0
-    #                  how far apart two changes must be to stay two hunks.
-    #                  diff.interHunkContext=50 merges them: 31 hunks over
-    #                  2.34..2.39 instead of 52, with the same 733 `>>` lines.
-    #                  Nothing hidden, but the same published-number drift.
-    #   --diff-algorithm=myers
-    #                  patience and histogram pair the same changed lines into
-    #                  different hunks: 52 hunks either way over 2.34..2.39,
-    #                  but 731 `>>` lines instead of 733. Every changed line
-    #                  still carries its marker, so again nothing is hidden --
-    #                  and again a published number must not move with a
-    #                  reader's config.
-    diff_text = g.run_git(['diff', '--no-ext-diff', '--no-textconv',
-                           '--no-color', '-U3', '--inter-hunk-context=0',
-                           '--diff-algorithm=myers', rng, '--', path],
-                          repo).stdout.decode('utf-8', 'replace')
+    # The flags that keep a reader's git config from shaping this text are
+    # glibc_locale_data.DIFF_FLAGS, each with what it cost when missing.
+    # -U3 is this step's own: how many context lines the classifier reads.
+    # diff.context=0/1/2 gives 106/76/61 hunks over 2.34..2.39 instead of 52,
+    # and at zero context the comment tracking is blind again.
+    diff_text = g.git_diff(repo, ['-U3', rng, '--', path])
     if not diff_text.strip():
         return 0
     hunks = split_hunks(diff_text)

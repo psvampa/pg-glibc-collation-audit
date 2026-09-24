@@ -86,8 +86,11 @@ CHANGED="$OUT_DIR/changed_locales.txt"
 # diff.renameLimit the one rename over 2.34..2.39 is listed as two paths and
 # the published 318 reads 319. --find-renames alone does not override the
 # limit -- measured: renameLimit=1 skipped detection with only a warning.
-# The Python steps apply the same overrides through glibc_locale_data.run_git.
+# diff.algorithm and diff.indentHeuristic are pinned too, as in the Python
+# steps' GIT_CONFIG_OVERRIDES. A list of names does not depend on them today;
+# pinned, it cannot start to.
 git -c color.ui=false -c diff.renames=true -c diff.renameLimit=0 \
+  -c diff.algorithm=myers -c diff.indentHeuristic=true \
   diff --find-renames --name-only "$OLD..$NEW" -- localedata/locales/ \
   | sort > "$CHANGED"
 # --name-only lists additions and deletions too, so this is not a count of

@@ -621,6 +621,51 @@ class NoiseFilter(unittest.TestCase):
                                   '+  still prose'])
         self.assertTrue(marked[0][1])
 
+    def test_a_string_continued_with_a_backslash_opens_nothing(self):
+        """A string whose line ends in `\\` goes on on the next line, and the
+        scanner started every line outside any string. A `/*` in the
+        continuation then opened a comment that never closed, and every
+        changed line after it was marked as prose -- code included. No line
+        in the five pinned tags has that shape; this is the shape."""
+        for prefix in (' ', '+'):
+            # Both call sites, as above: the state is carried through a
+            # context line and through a changed line by different code.
+            with self.subTest(prefix=prefix):
+                body = [f'{prefix}  msg = "one \\',
+                        f'{prefix}  two /* three";',
+                        '+  code ();']
+                marked = d.classify_body(body)
+                self.assertFalse(marked[-1][1], body)
+
+    def test_a_line_that_starts_inside_a_continued_string_is_code(self):
+        """Carrying the string was not enough: the verdict for the line it is
+        carried INTO still came from is_noise_line, and `* new option\\n",
+        stdout);` opens with the `*` of a comment continuation."""
+        body = [' fputs ("Usage: \\',
+                '-* old option\\n", stdout);',
+                '+* new option\\n", stdout);']
+        marked = d.classify_body(body)
+        self.assertEqual([noise for _, noise in marked], [False, False])
+
+    def test_a_quote_left_open_without_a_backslash_is_not_carried(self):
+        """Only a `\\` at the end of the line continues a string. A quote left
+        open for any other reason -- here the apostrophe in a comment that
+        began before the hunk, which the scanner cannot know -- must end with
+        its line, or the code after it is marked as prose."""
+        body = [" do not reorder: this is the user's choice",
+                '+  x = \'"\'; y = "/*";',
+                '+  weight = next ();']
+        marked = d.classify_body(body)
+        self.assertFalse(marked[-1][1], body)
+
+    def test_a_backslash_outside_a_string_carries_nothing(self):
+        """Control: a macro continuation is not a string, so a real `/*` on
+        the line after it still opens a comment."""
+        marked = d.classify_body(['+#define X 1 \\',
+                                  '+  /* opens here',
+                                  '+  still prose'])
+        self.assertTrue(marked[-1][1])
+
     def test_a_hunk_made_only_of_dereferences_is_kept(self):
         """The failure that mattered: a hunk is dropped only when EVERY line
         is noise, so a hunk whose changed lines are all `*p = x;` vanished
@@ -669,6 +714,58 @@ class DiffParsing(unittest.TestCase):
     def test_a_pure_insertion_keeps_its_zero_length(self):
         got = f.parse_diff(self.DIFF)
         self.assertEqual(got['localedata/locales/or_IN'], [(50, 0)])
+
+    def test_a_binary_section_is_refused(self):
+        """"Binary files ... differ" carries no hunk, so the file came back
+        with no range at all and classify_change called it 'other': a change
+        nothing read, reported as a change outside LC_COLLATE. The stale
+        check does not see it, because the path IS in the result. Git writes
+        it for every locale under one `-diff` in the reader's attributes."""
+        diff = ('diff --git a/localedata/locales/sv_SE '
+                'b/localedata/locales/sv_SE\n'
+                'index 111..222 100644\n'
+                'Binary files a/localedata/locales/sv_SE and '
+                'b/localedata/locales/sv_SE differ\n')
+        with self.assertRaises(SystemExit), \
+                contextlib.redirect_stderr(io.StringIO()):
+            f.parse_diff(diff)
+
+    def test_an_unreadable_hunk_header_is_refused(self):
+        """A `@@` line the header pattern does not read produced no range and
+        said nothing. If it was the only hunk inside LC_COLLATE the file was
+        not flagged, at exit 0. Measured by injection on f7fa3f9."""
+        diff = self.DIFF.replace('@@ -200 +201 @@', '@@ -200 +201 garbled @@')
+        with self.assertRaises(SystemExit), \
+                contextlib.redirect_stderr(io.StringIO()):
+            f.parse_diff(diff)
+
+    def test_a_path_with_two_sections_keeps_the_ranges_of_both(self):
+        """A locale replaced by a symlink is a deletion plus a creation, two
+        sections under one path. Keeping only the last one kept `@@ -0,0` and
+        lost the deletion's range over the whole file -- the block included --
+        so the file was judged 'other'. No typechange in the corpus's
+        history; a --diff-file that repeats a path has the same shape."""
+        diff = ('diff --git a/localedata/locales/sv_SE '
+                'b/localedata/locales/sv_SE\n'
+                'deleted file mode 100644\n'
+                '@@ -1,8 +0,0 @@\n-a\n'
+                'diff --git a/localedata/locales/sv_SE '
+                'b/localedata/locales/sv_SE\n'
+                'new file mode 120000\n'
+                '@@ -0,0 +1 @@\n+sv_FI\n')
+        self.assertEqual(f.parse_diff(diff),
+                         {'localedata/locales/sv_SE': [(1, 8), (0, 0)]})
+
+    def test_a_pure_rename_still_parses_to_no_range(self):
+        """Control: a rename with no content change has no hunk, and that is
+        an answer, not a failure."""
+        diff = ('diff --git a/localedata/locales/aa_ER@saaho '
+                'b/localedata/locales/ssy_ER\n'
+                'similarity index 100%\n'
+                'rename from localedata/locales/aa_ER@saaho\n'
+                'rename to localedata/locales/ssy_ER\n')
+        self.assertEqual(f.parse_diff(diff),
+                         {'localedata/locales/aa_ER@saaho': []})
 
     def test_split_hunks_keeps_content_lines_and_stops_at_the_next_file(self):
         """Context lines are kept -- classify_body tracks the open-comment

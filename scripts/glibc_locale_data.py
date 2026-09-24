@@ -36,7 +36,8 @@ LOCALES_DIR = 'localedata/locales'
 MIN_LOCALE_FILES = 200
 
 # Prepended to every git invocation. `git diff` obeys the user's config, and
-# four settings change the text this tool parses. Measured with git 2.50 on the
+# these four settings were the first measured to change the text this tool
+# parses. Measured with git 2.50 on the
 # 2.34..2.39 pair: diff.noprefix=true drops the a/ b/ that the file-header
 # regex in filter_lc_collate_changes.py expects (the step then dies, correctly,
 # with "the diff does not cover"); diff.renameLimit=1 turns the one rename into
@@ -44,11 +45,70 @@ MIN_LOCALE_FILES = 200
 # analysed" -- silently; diff.renames=false does the same to step 1, whose
 # published count goes from 318 to 319; color.ui=always writes escape codes
 # into the pipe. -c on the command line outranks every configuration source.
+# diff.srcPrefix/dstPrefix replace the a/ b/ as noprefix does (git 2.54):
+# step 2 then died saying "Drop --diff-file" when none was passed. The two
+# settings below them move where a hunk starts and ends. For the diffs a step
+# reads, git_diff's flags already hold them -- and only the flag beats a
+# per-driver `diff.<driver>.algorithm` from the reader's attributes file --
+# so here they are for any other git call, not the guarantee.
 GIT_CONFIG_OVERRIDES = ['-c', 'color.ui=false',
                         '-c', 'diff.noprefix=false',
                         '-c', 'diff.mnemonicPrefix=false',
+                        '-c', 'diff.srcPrefix=a/',
+                        '-c', 'diff.dstPrefix=b/',
                         '-c', 'diff.renames=true',
-                        '-c', 'diff.renameLimit=0']
+                        '-c', 'diff.renameLimit=0',
+                        '-c', 'diff.algorithm=myers',
+                        '-c', 'diff.indentHeuristic=true']
+
+# Every `git diff` whose TEXT a step reads goes through git_diff() and carries
+# these. On a machine with no configuration none of them changes the text --
+# the locale sources are text, so even --text is what git would do anyway.
+# Each one is here because a setting this run does not control changed that
+# text and a step read the result as an answer. Measured with git 2.50 for
+# step 5 (the twenty-fourth CHANGELOG entry) and git 2.54 for step 2:
+#
+#   --text         `-diff` or `binary` in the reader's core.attributesFile makes
+#                  git print "Binary files a/x and b/x differ" -- no hunk. With
+#                  `localedata/locales/* -diff`, step 2 put every locale in
+#                  'other', and the full audit of 2.28..2.34 printed "Reindex:
+#                  none" at exit 0 over or_IN and sv_SE.
+#   --no-textconv  a `diff.<driver>.textconv` reached the same way. Git numbers
+#                  the hunks on the converted text, and step 2 places them on
+#                  the raw file: a textconv that prepends 300 lines lost sv_SE
+#                  at exit 0. One that empties both sides left step 5 an EMPTY
+#                  diff, which its hunk-less guard never sees.
+#   --no-ext-diff  `diff.external`, or GIT_EXTERNAL_DIFF in the environment
+#                  (which beats config, so pinning config alone is not
+#                  enough). GIT_EXTERNAL_DIFF=/usr/bin/true made all 39 files
+#                  step 5 diffs over 2.28..2.34 read as unchanged, with 6 hunks
+#                  in ld-collate.c alone.
+#   --no-color     `color.diff` beats the `color.ui=false` above (more specific
+#                  wins). With `color.diff.frag=normal` the hunk headers stay
+#                  plain so they still match, every body line starts with an
+#                  escape, each hunk comes back empty and therefore all-noise,
+#                  and step 5 printed its clean sentence over the pair that
+#                  carries Bug 22668.
+#   --inter-hunk-context=0
+#                  how far apart two changes must be to stay two hunks.
+#                  diff.interHunkContext=50 merges them: step 5 counts 31 hunks
+#                  over 2.34..2.39 instead of 52, and step 2 flags 5 files over
+#                  2.28..2.34 instead of 2. Noise, not a hidden change, but a
+#                  published number must not move with a reader's config.
+#   --diff-algorithm=myers, --indent-heuristic
+#                  patience and histogram pair the same changed lines into
+#                  different hunks: 731 `>>` lines in step 5 instead of 733, and
+#                  a different list of changed characters in step 2. Nothing
+#                  hidden -- again a number that moved. The flag, not the
+#                  `-c diff.algorithm` above, is what holds: `* diff=alg` with
+#                  `diff.alg.algorithm=patience` beats the setting.
+#
+# The context count is not here, because the two readers need different ones:
+# step 2 reads -U0 and step 5 -U3. GIT_DIFF_OPTS would beat either, so run_git
+# drops it from the environment.
+DIFF_FLAGS = ['--text', '--no-textconv', '--no-ext-diff', '--no-color',
+              '--inter-hunk-context=0', '--diff-algorithm=myers',
+              '--indent-heuristic']
 
 # Does a line use an ellipsis range? A range like `<UAC00>`/`..`/`<UD7A3>` is
 # expanded algorithmically by localedef at build time, so the weights are NOT in
@@ -167,6 +227,9 @@ def run_git(args, repo, allow_fail=False):
     whose fetches really do fail:
 
         fatal: could not fetch <oid> from promisor remote
+
+    `cat-file --batch` does NOT fail that way: it exits 0 and prints the
+    unfetchable blob as `missing` (read_blobs).
     """
     # GIT_DIFF_OPTS is applied AFTER the command line, so `-U3` on the argv
     # does not win: measured, `GIT_DIFF_OPTS=-u0 git diff -U3` returns zero
@@ -180,6 +243,17 @@ def run_git(args, repo, allow_fail=False):
         die(f"`git {' '.join(args)}` failed in {repo}:\n"
             f"{p.stderr.decode('utf-8', 'replace').strip()}")
     return p
+
+
+def git_diff(repo, args):
+    """`git diff` with DIFF_FLAGS, decoded: the one way a step reads a diff.
+
+    The flags lived in step 5's single call until step 2 was found reading a
+    diff shaped by the reader's attributes file (DIFF_FLAGS, above). A step
+    that asks git for a diff through here cannot forget one of them.
+    """
+    return run_git(['diff', *DIFF_FLAGS, *args],
+                   repo).stdout.decode('utf-8', 'replace')
 
 
 def check_refs(repo, *refs):
@@ -600,9 +674,16 @@ def read_blobs(repo, tag, paths):
     """Read many blobs at `tag` in one pass.
 
     Returns (contents, missing): a {path: text} map and the set of paths that
-    do not exist at that tag. Distinguishing "missing" from "failed" is what
+    came back without a body. Distinguishing "missing" from "failed" is what
     lets callers report a locale added in the new tag instead of silently
     skipping it.
+
+    "Missing" is not only "not at that tag". On a --filter=blob:none clone a
+    blob that cannot be fetched -- GIT_NO_LAZY_FETCH=1, or a promisor that
+    answers "I do not have it" -- is printed by `cat-file --batch` as
+    `<request> missing` at exit 0 (measured, git 2.50), the same line as a path
+    that does not exist. A caller whose paths came from that tag's own tree
+    uses read_blobs_strict, which says the read failed.
     """
     paths = list(paths)
     if not paths:

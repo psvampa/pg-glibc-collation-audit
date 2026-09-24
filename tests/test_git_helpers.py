@@ -1238,6 +1238,30 @@ class RenamedFileGainsABlock(unittest.TestCase):
                       '(1): A (U+0041)', flat(out))
 
 
+class APureRenamePassesTheNoHunkCheck(unittest.TestCase):
+    """A file git reports as renamed with no change has no hunk, and step 2
+    now refuses a changed file with no hunk unless both tags hold the same
+    blob. The rename is read under its NEW name there; no audited pair has a
+    pure rename (the one rename, over 2.34..2.39, has hunks), so this is the
+    only run that reaches that branch."""
+
+    def test_a_pure_rename_is_not_refused(self):
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-pure-rename-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-pure-rename-out-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        repo = make_glibc_shaped_repo(tmp, n_files=g.MIN_LOCALE_FILES)
+        loc = os.path.join(repo, 'localedata', 'locales')
+        git(repo, 'mv', os.path.join(loc, 'x'), os.path.join(loc, 'y'))
+        git(repo, 'commit', '-q', '-m', 't2')
+        git(repo, 'tag', 't2')
+        rc, out = run_script('filter_lc_collate_changes.py', 't1', 't2',
+                             '--repo', repo,
+                             env_extra={'PG_GLIBC_AUDIT_OUT': out_dir})
+        self.assertEqual(rc, 0, out)
+        self.assertIn('renamed: 1', out)
+
+
 class AGainedBlockThatNamesNoCharacter(unittest.TestCase):
     """Thirty-ninth entry, the case the attempt before it got wrong: a file
     that gains a block naming no character -- a bare `copy` -- was reported as
@@ -1350,6 +1374,199 @@ class UserGitConfigCannotChangeTheAnswer(unittest.TestCase):
         self.assertEqual(plain[0], 0, plain[1])
         self.assertIn('Locale files added, modified or deleted: 318', plain[1])
         self.assertEqual(hostile[1].replace(self.out_b, self.out_a), plain[1])
+
+
+@needs_clone
+class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
+    """Step 5 pinned six diff flags in PR #30; step 2, which decides which
+    locales changed their order, carried none of them. Measured on 56abe94,
+    git 2.54, 2.28..2.34, whose right answer is or_IN and sv_SE:
+
+      `localedata/locales/* -diff` in core.attributesFile
+          every locale diffed as "Binary files ... differ", no hunk, verdict
+          'other': 0 files inside LC_COLLATE, exit 0, and the full audit
+          printed "Reindex: none" at exit 0.
+      a textconv that prepends 300 lines
+          git numbers the hunks on the converted text and step 2 places them
+          on the raw file: sv_SE lost, exit 0.
+      diff.interHunkContext=50, diff.algorithm=patience with
+      indentHeuristic=false, color.diff=always
+          2 -> 5 files flagged; a different list of changed characters;
+          "could not identify which characters changed".
+
+    Each case asserts that step 2 prints exactly what it prints under no
+    config, and carries its own control: the same config must change what a
+    bare `git diff` prints, or the case guards nothing."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-step2cfg-')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def env_with(self, config, attributes=None):
+        cfg = os.path.join(self.tmp, f'gitconfig{len(os.listdir(self.tmp))}')
+        if attributes is not None:
+            attrs = cfg + '.attributes'
+            with open(attrs, 'w', encoding='utf-8') as fh:
+                fh.write(attributes)
+            config = '[core]\n\tattributesFile = %s\n' % attrs + config
+        with open(cfg, 'w', encoding='utf-8') as fh:
+            fh.write(config)
+        return {'GIT_CONFIG_GLOBAL': cfg, 'GIT_NO_LAZY_FETCH': '1'}
+
+    def bare_diff(self, env_extra):
+        """Step 2's `git diff` with nothing pinned: no -c, no flag. Not
+        GIT_CONFIG_OVERRIDES either, which now pins two of these settings
+        itself and would make the control for them pass vacuously."""
+        p = subprocess.run(['git', 'diff', '-U0',
+                            '--find-renames', f'{OLD}..{MID}', '--',
+                            'localedata/locales/'],
+                           cwd=GLIBC_CLONE, capture_output=True,
+                           env=dict(os.environ, **env_extra))
+        return p.stdout
+
+    def step2(self, env_extra, *extra):
+        out = tempfile.mkdtemp(dir=self.tmp)
+        rc, text = run_script('filter_lc_collate_changes.py', OLD, MID, *extra,
+                              env_extra=dict(env_extra,
+                                             PG_GLIBC_AUDIT_OUT=out))
+        return rc, text.replace(out, '<out>')
+
+    def test_step_2_is_identical_under_each_config(self):
+        pad = os.path.join(self.tmp, 'pad.sh')
+        with open(pad, 'w', encoding='utf-8') as fh:
+            fh.write('#!/bin/sh\nyes "" | head -n 300\ncat "$1"\n')
+        os.chmod(pad, 0o755)
+        cases = {
+            'binary': self.env_with('', 'localedata/locales/* -diff\n'),
+            'textconv': self.env_with('[diff "pad"]\n\ttextconv = %s\n' % pad,
+                                      '* diff=pad\n'),
+            'external': self.env_with('[diff]\n\texternal = /usr/bin/true\n'),
+            'interHunkContext': self.env_with(
+                '[diff]\n\tinterHunkContext = 50\n'),
+            'algorithm': self.env_with('[diff]\n\talgorithm = patience\n'
+                                       '\tindentHeuristic = false\n'),
+            # Per driver, through the attributes file: this beats the
+            # `-c diff.algorithm=myers` override, and only the flag holds it.
+            'driverAlgorithm': self.env_with(
+                '[diff "alg"]\n\talgorithm = patience\n', '* diff=alg\n'),
+            # Replaces a/ b/ as noprefix does, and step 2 died
+            # telling the reader to drop a --diff-file never passed.
+            'prefix': self.env_with('[diff]\n\tsrcPrefix = x/\n'
+                                    '\tdstPrefix = y/\n'),
+            'color': self.env_with('[color]\n\tdiff = always\n'
+                                   '[color "diff"]\n\tmeta = normal\n'
+                                   '\tfrag = normal\n'),
+        }
+        clean = {'GIT_NO_LAZY_FETCH': '1'}
+        plain = self.step2(clean)
+        self.assertEqual(plain[0], 0, plain[1])
+        self.assertIn('Files with changes inside LC_COLLATE: 2', plain[1])
+        reference = self.bare_diff(clean)
+        for name, env_extra in cases.items():
+            with self.subTest(config=name):
+                self.assertTrue(self.bare_diff(env_extra) != reference,
+                                f'{name} no longer changes a bare diff; '
+                                f'this case guards nothing')
+                self.assertEqual(self.step2(env_extra), plain)
+
+    def test_a_file_git_says_changed_with_no_change_in_the_diff_is_refused(self):
+        """The general form of "Binary files": git reports the file as
+        modified and the diff shows nothing for it. That is an answer only
+        when the two versions are the same bytes -- a pure rename, a mode
+        change. The diff git gives is replaced, by injection, with the real
+        one minus sv_SE's hunks, header kept: a shape parse_diff has no
+        specific rule for, reaching the guard without --diff-file, whose own
+        comparison would stop it first."""
+        clean = {'GIT_NO_LAZY_FETCH': '1'}
+        text = self.bare_diff(clean).decode('utf-8')
+        start = text.index('diff --git a/localedata/locales/sv_SE ')
+        first_hunk = text.index('\n@@', start) + 1
+        end = text.index('\ndiff --git', first_hunk) + 1
+        cut = os.path.join(self.tmp, 'cut.diff')
+        with open(cut, 'w', encoding='utf-8') as fh:
+            fh.write(text[:first_hunk] + text[end:])
+        out_dir = tempfile.mkdtemp(dir=self.tmp)
+        rc, out = in_subprocess(
+            "import filter_lc_collate_changes as f\n"
+            "g.OUT_DIR = %r\n"
+            "real = g.git_diff\n"
+            "cut = open(%r, encoding='utf-8').read()\n"
+            "g.git_diff = lambda r, a: cut if '-U0' in a else real(r, a)\n"
+            "f.main([%r, %r, '--repo', repo])" % (out_dir, cut, OLD, MID))
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('have no hunk in the diff', flat(out))
+        self.assertIn('localedata/locales/sv_SE', out)
+
+    def test_a_diff_file_that_places_changes_elsewhere_is_refused(self):
+        """A --diff-file passed every check above when it had FEWER hunks for
+        a path, or hunks numbered on other text: measured, one taken under the
+        textconv that prepends lines and one with sv_SE's hunks inside
+        LC_COLLATE cut both lost sv_SE at exit 0. It is now read only if it
+        places every change where the diff git gives does."""
+        clean = {'GIT_NO_LAZY_FETCH': '1'}
+        text = self.bare_diff(clean).decode('utf-8')
+        start = text.index('diff --git a/localedata/locales/sv_SE ')
+        end = text.index('\ndiff --git', start) + 1
+        section = text[start:end]
+        first = section.index('\n@@') + 1
+        last = section.rindex('\n@@') + 1
+        self.assertLess(first, last, 'sv_SE has one hunk; nothing to cut')
+        cut = os.path.join(self.tmp, 'fewer.diff')
+        with open(cut, 'w', encoding='utf-8') as fh:
+            fh.write(text[:start] + section[:first] + section[last:]
+                     + text[end:])
+        rc, out = self.step2(clean, '--diff-file', cut)
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('localedata/locales/sv_SE', out)
+
+        pad = os.path.join(self.tmp, 'pad.sh')
+        with open(pad, 'w', encoding='utf-8') as fh:
+            fh.write('#!/bin/sh\nyes "" | head -n 300\ncat "$1"\n')
+        os.chmod(pad, 0o755)
+        padded = os.path.join(self.tmp, 'padded.diff')
+        with open(padded, 'wb') as fh:
+            fh.write(self.bare_diff(self.env_with(
+                '[diff "pad"]\n\ttextconv = %s\n' % pad, '* diff=pad\n')))
+        rc, out = self.step2(clean, '--diff-file', padded)
+        self.assertNotEqual(rc, 0, out)
+
+    def test_a_diff_file_with_git_s_headers_does_not_choose_the_characters(self):
+        """The comparison checks where each change is, which is all the
+        verdict reads. The lines under the headers are where the characters
+        come from, and a file with git's headers and sv_SE's `<U0057>` and
+        `<U0077>` swapped for `<U00E5>` and `<U00C5>` printed U+00E5 and U+00C5
+        under sv_SE at exit 0 -- the list the confirmation guide tells the
+        reader to take test strings from."""
+        clean = {'GIT_NO_LAZY_FETCH': '1'}
+        text = self.bare_diff(clean).decode('utf-8')
+        start = text.index('diff --git a/localedata/locales/sv_SE ')
+        end = text.index('\ndiff --git', start) + 1
+        section = text[start:end]
+        self.assertIn('<U0057>', section)
+        swapped = os.path.join(self.tmp, 'swapped.diff')
+        with open(swapped, 'w', encoding='utf-8') as fh:
+            fh.write(text[:start]
+                     + section.replace('<U0057>', '<U00E5>')
+                              .replace('<U0077>', '<U00C5>')
+                     + text[end:])
+        self.assertEqual(self.step2(clean, '--diff-file', swapped),
+                         self.step2(clean))
+
+    def test_an_unreadable_old_blob_is_not_blamed_on_the_diff_file(self):
+        """The files step 2 reads at the old tag come from git's own list of
+        what changed there, so they exist; a blob that comes back `missing`
+        is a read that failed -- a partial clone with no promisor, or
+        GIT_NO_LAZY_FETCH. The message said "the diff and the tags disagree
+        -- if you passed --diff-file, it does not match these tags"."""
+        rc, out = in_subprocess(
+            "import filter_lc_collate_changes as f\n"
+            "real = g.read_blobs\n"
+            "g.read_blobs = lambda r, tag, paths: (\n"
+            "    ({}, set(paths)) if tag == %r else real(r, tag, paths))\n"
+            "f.main([%r, %r, '--repo', repo])" % (OLD, OLD, MID))
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('could not be read', flat(out))
+        self.assertNotIn('does not match these tags', flat(out))
 
 
 if __name__ == '__main__':
