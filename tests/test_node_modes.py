@@ -482,6 +482,72 @@ class DirectoryModeStepFour(NodeCase):
         self.assertEqual(rc, 2, text)
         self.assertNotIn('No locale uses ellipsis ranges', text)
 
+    def lost_in_transit(self, tag, keep_count):
+        """A copy of `tag` down to `keep_count` files, deleting only files no
+        remaining locale copies -- so no dangling `copy` target gives the loss
+        away and the file count is the only thing that could."""
+        root = self.node(tag, 'lost')
+        while len(os.listdir(root)) > keep_count:
+            texts = {}
+            for n in os.listdir(root):
+                with open(os.path.join(root, n), 'rb') as fh:
+                    texts[n] = fh.read().decode('utf-8', 'surrogateescape')
+            copied = {t for text in texts.values()
+                      for t in g.copy_targets(text)}
+            loose = sorted(n for n in texts if n not in copied)
+            for n in loose[:len(texts) - keep_count]:
+                os.remove(os.path.join(root, n))
+        return root
+
+    def test_a_copy_that_lost_files_says_so_against_the_tag(self):
+        """Backlog 1.19, measured: 250 of glibc-2.34's 355 files, losing only
+        files nothing copies, passed the floor of 200 at exit 0 with the full
+        ellipsis verdict and no `!!` (fortieth entry)."""
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir', self.lost_in_transit(MID, 250),
+                       '--build-id', 'lost', '--supported-tag', MID,
+                       out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        warning = re.search(r'^!! (\d+) file\(s\) that glibc-2\.34 has '
+                            r'under localedata/locales/ are missing from',
+                            text, re.M)
+        self.assertIsNotNone(warning, text)
+        self.assertEqual(int(warning.group(1)), 105)
+
+    def test_a_tag_file_held_as_a_symlink_is_named_as_not_read(self):
+        """The mirror of step 6's case: skipped, so not read, and not
+        missing either (false-negative-reviewer on this fix)."""
+        root = self.node(MID, 'n')
+        path = os.path.join(root, 'th_TH')
+        os.rename(path, os.path.join(self.tmp, 'th_TH.real'))
+        os.symlink(os.path.join(self.tmp, 'th_TH.real'), path)
+        rc, text = run('flag_algorithmic_ranges.py', '--locales-dir', root,
+                       '--build-id', 'link', '--supported-tag', MID,
+                       out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertIn('but were not read: th_TH (symlink).', flat(text))
+        self.assertNotIn('are missing from', flat(text))
+
+    def test_a_complete_copy_prints_no_such_warning(self):
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir', self.node(MID, 'n'),
+                       '--build-id', 'full', '--supported-tag', MID,
+                       out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertNotIn('are missing from', flat(text))
+        self.assertNotIn('not checked against any tag', flat(text))
+
+    def test_without_a_tag_it_says_the_copy_was_not_checked(self):
+        """Absent is not empty: with nothing to compare against, the scan
+        says so rather than reading like one that looked."""
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir', self.lost_in_transit(MID, 250),
+                       '--build-id', 'lost', out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertIn('were not checked against any tag\'s list, so a copy '
+                      'that lost files is not detected here', flat(text))
+        self.assertRegex(text, r'(?m)^!! The files in\s')
+
     def test_the_directory_run_does_not_clobber_the_tag_list(self):
         tag_list = os.path.join(self.out, 'step4_exposed_locales.txt')
         rc, text = run('flag_algorithmic_ranges.py', MID, out_dir=self.out)

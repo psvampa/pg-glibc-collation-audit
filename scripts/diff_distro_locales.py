@@ -12,8 +12,9 @@ matters -- how many differ INSIDE the LC_COLLATE block.
 It takes a directory rather than reaching into a node, so the transport is the
 caller's problem and the comparison is testable without one. It does NOT take
 the directory on trust: a half-copied directory would report "12 compared, 0
-inside LC_COLLATE", which is indistinguishable from a clean result. See
---expect-files.
+inside LC_COLLATE", which is indistinguishable from a clean result. Below half
+the tag's files it refuses, and so does a count other than --expect-files;
+above that, every file of the tag the directory lacks is named under a `!!`.
 
 The node is the authoritative side. Upstream is only the reference the audit
 reads; the node is what the running system actually sorts with.
@@ -396,8 +397,9 @@ def main(argv):
                 print(f"  {n}: {verdict}")
 
         if absent_on_node:
-            print(f"\nAbsent on the node ({len(absent_on_node)}): "
-                  f"{', '.join(absent_on_node)}")
+            print()
+            g.report_missing_from_copy(names, up_names, opts.tag,
+                                       opts.locales_dir, skipped)
 
         out = g.write_list(
             f"backports_inside_collate."

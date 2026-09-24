@@ -19,8 +19,8 @@ import sys
 import tempfile
 import unittest
 
-from _harness import (GLIBC_CLONE, MID, NEW, OLD, SCRIPTS_DIR, needs_clone,
-                      run_step)
+from _harness import (GLIBC_CLONE, MID, NEW, OLD, SCRIPTS_DIR, flat,
+                      needs_clone, run_step)
 
 import diff_distro_locales as dd
 import glibc_locale_data as g
@@ -116,6 +116,50 @@ class RefusesToGuess(unittest.TestCase):
                              '--build-id', 'truncated', '--node-label', 'trunc')
         self.assertNotEqual(rc, 0, out)
         self.assertNotIn('differ INSIDE LC_COLLATE:  0', out)
+
+    def test_a_copy_that_lost_files_says_so(self):
+        """Above half the tag's files nothing refused, and the lost ones were
+        an ordinary list under "Nothing differs inside LC_COLLATE", with no
+        `!!` for the wrapper to repeat. Measured at 300 of 355: exit 0, and
+        th_TH -- whose collation changes between 2.34 and 2.39 -- among the 55
+        (fortieth entry, backlog 1.15)."""
+        lost = sorted(os.listdir(self.node))[300:]
+        for name in lost:
+            os.remove(os.path.join(self.node, name))
+        rc, out = run_script(MID, '--locales-dir', self.node,
+                             '--build-id', 'truncated', '--node-label', 'trunc')
+        self.assertEqual(rc, 0, out)
+        warning = re.search(r'^!! (\d+) file\(s\) that glibc-2\.34 has '
+                            r'under localedata/locales/ are missing from',
+                            out, re.M)
+        self.assertIsNotNone(warning, out)
+        block = flat(out[warning.start():].split('\n\n')[0])
+        names = re.search(r'are missing from \S+: (.*?)\. ',
+                          block).group(1).split(', ')
+        self.assertEqual(names, lost)
+        self.assertEqual(int(warning.group(1)), len(names))
+        self.assertIn('th_TH', names)
+
+    def test_a_tag_file_held_as_a_symlink_is_named_as_not_read(self):
+        """Counted as missing, the `ls | wc -l` a reader would run matched the
+        tag's 355 and cleared a th_TH nobody read (false-negative-reviewer on
+        this fix)."""
+        path = os.path.join(self.node, 'th_TH')
+        os.rename(path, os.path.join(self.tmp, 'th_TH.real'))
+        os.symlink(os.path.join(self.tmp, 'th_TH.real'), path)
+        rc, out = run_script(MID, '--locales-dir', self.node,
+                             '--build-id', 'link', '--node-label', 'link')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('!! 1 file(s) that glibc-2.34 has under '
+                      'localedata/locales/ are in', out)
+        self.assertIn('but were not read: th_TH (symlink).', flat(out))
+        self.assertNotIn('are missing from', flat(out))
+
+    def test_a_complete_copy_prints_no_such_warning(self):
+        rc, out = run_script(MID, '--locales-dir', self.node,
+                             '--build-id', 'complete', '--node-label', 'full')
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('are missing from', flat(out))
 
     def test_expect_files_is_enforced(self):
         rc, out = run_script(MID, '--locales-dir', self.node,
