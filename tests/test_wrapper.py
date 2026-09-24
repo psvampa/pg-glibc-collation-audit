@@ -45,6 +45,38 @@ def section_body(summary, heading):
     return flat('\n'.join(body))
 
 
+REMOVED = '-- Removed: locale files the old side has and the new side does not'
+NOT_CHECKED = ('The tags cannot show what your distro adds or drops: '
+               'NOT CHECKED.')
+# The whole section over 2.28..2.34 when step 8 did not run and nothing is
+# missing: no copy, or one complete copy.
+NOTHING_GONE_OVER_OLD_MID = [
+    NOT_CHECKED,
+    'Pass --old-locales-dir and --new-locales-dir with their build',
+    'ids; step 8 is the only check that sees those.',
+    f'Between the tags: none -- no locale file at {OLD} is gone at {MID}',
+]
+
+
+def removed_lines(out):
+    """The body of the summary's Removed section, one stripped line each.
+
+    Refuses rather than widening: the heading must be in the summary exactly
+    once, and the body must end at a blank line or the next heading -- a cut
+    that never finds its end would run on into the sections below it.
+    """
+    summary = out.split('AUDIT SUMMARY', 1)[-1]
+    if summary.count(REMOVED) != 1:
+        raise AssertionError(f'the Removed heading appears '
+                             f'{summary.count(REMOVED)} time(s):\n{summary}')
+    body = []
+    for line in summary.split(REMOVED, 1)[1].splitlines()[1:]:
+        if not line.strip() or line.startswith('--'):
+            return body
+        body.append(line.strip())
+    raise AssertionError(f'the Removed section never ends:\n{summary}')
+
+
 @needs_clone
 class Wrapper(unittest.TestCase):
     """A pair with real findings: the wrapper must not change the answer."""
@@ -143,6 +175,21 @@ class Wrapper(unittest.TestCase):
         # C.UTF-8 on every pair, so the unsplit assertion could not fail.
         self.assertIn('C.UTF-8', summary)
 
+    def test_what_the_tags_cannot_see_is_said_before_their_none(self):
+        """Forty-second entry. Over 2.28..2.34 the tags remove nothing, and the
+        upgrade removes en_US@ampm, a file only RHEL8 ships. A "none" as the
+        section's first line is that false negative, so the line saying what
+        the tags cannot check comes first."""
+        self.assertEqual(removed_lines(self.out), NOTHING_GONE_OVER_OLD_MID)
+
+    def test_the_removed_section_is_on_the_first_screen(self):
+        """Directly under Reindex, above the long lists and the warnings: the
+        defect was a finding nobody reading the summary would reach."""
+        summary = self.out.split('AUDIT SUMMARY')[1]
+        self.assertLess(summary.index('-- Reindex:'), summary.index(REMOVED))
+        self.assertLess(summary.index(REMOVED),
+                        summary.index('-- Needs an empirical test'))
+
 
 @needs_clone
 class WrapperEmptyPair(unittest.TestCase):
@@ -239,6 +286,18 @@ class WrapperEmptyPair(unittest.TestCase):
         # word "means", which every step's prose contains.
         self.assertIn("Everything above that says 'nothing changed' means "
                       "'nothing was compared'", flat(self.out))
+
+    def test_the_removed_none_sits_above_the_one_commit_notice(self):
+        """The tags' "none" is printed on one commit compared with itself
+        too, and it is the notice below it, not the section, that says
+        nothing was compared -- the same arrangement as Reindex. This pins
+        the arrangement: the notice must come after the section."""
+        lines = removed_lines(self.out)
+        self.assertEqual(lines[-1], f'Between the tags: none -- no locale '
+                                    f'file at {NEW} is gone at {NEW}')
+        summary = self.out.split('AUDIT SUMMARY')[1]
+        self.assertGreater(summary.index('-- One commit, compared with itself'),
+                           summary.index(REMOVED))
 
     def test_the_summary_counts_without_a_shell_error(self):
         """count_lines was `grep -c . FILE || echo 0`. grep -c prints "0" AND
@@ -569,6 +628,198 @@ class WrapperNodeToNode(unittest.TestCase):
         summary = self.out.split('-- Warnings the clean results above')[-1]
         self.assertEqual(summary.count(block), 1, summary)
 
+    def test_nothing_removed_is_said_of_the_two_directories(self):
+        """With both copies the nodes are the answer, so the section is one
+        line and the tags' caveat is not in it. It names the directories, not
+        the builds: it is a fact about what the two copies hold."""
+        self.assertEqual(removed_lines(self.out),
+                         [f'none -- every file in {self.old_root} is also in '
+                          f'{self.new_root}'])
+
+
+@needs_clone
+class WrapperTagsRemoveALocale(unittest.TestCase):
+    """Tags only, over the one published pair whose tags remove a locale
+    file: aa_ER@saaho, renamed to ssy_ER at 2.39. Step 2 printed the rename
+    in its own output and the summary never named it (forty-second entry)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-tagsgone-')
+        cls.rc, cls.out = run_wrapper(MID, NEW, out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_the_rename_away_is_named_with_where_it_went(self):
+        self.assertEqual(self.rc, 0, self.out)
+        lines = removed_lines(self.out)
+        self.assertEqual(lines[0], NOT_CHECKED)
+        at = lines.index(f'Between the tags, gone at {NEW}:')
+        self.assertEqual(lines[at + 1], 'aa_ER@saaho (renamed to ssy_ER)')
+        m = re.fullmatch(r'\((\d+) name\(s\); full list: (\S+)\)',
+                         lines[at + 2])
+        self.assertIsNotNone(m, lines)
+        self.assertEqual(int(m.group(1)), 1)
+        self.assertEqual(m.group(2), os.path.join(
+            self.out_dir, f'step2_removed_locales.{pair_slug(MID, NEW)}.txt'))
+        self.assertNotIn('none', ' '.join(lines))
+
+
+@needs_clone
+class WrapperNodesRemoveALocale(unittest.TestCase):
+    """The en_US@ampm shape, driven through the wrapper: a file on the old
+    node and in no tag. The tags remove nothing over 2.28..2.34, so only step
+    8 can name it -- and the summary must."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-nodesgone-')
+        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-gonetrees-')
+        cls.old_root = dd.materialise_tag(GLIBC_CLONE, OLD,
+                                          os.path.join(cls.nodes, 'a'))
+        cls.new_root = dd.materialise_tag(GLIBC_CLONE, MID,
+                                          os.path.join(cls.nodes, 'b'))
+        with open(os.path.join(cls.old_root, 'zz_GONE'), 'w',
+                  encoding='utf-8') as fh:
+            fh.write(locale_file('copy "iso14651_t1"'))
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID,
+            '--old-locales-dir', cls.old_root, '--old-build-id', 'build-old',
+            '--new-locales-dir', cls.new_root, '--new-build-id', 'build-new',
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    def test_the_removal_only_the_nodes_see_is_named(self):
+        self.assertEqual(self.rc, 0, self.out)
+        lines = removed_lines(self.out)
+        self.assertEqual(lines[0], 'zz_GONE')
+        tail = ' '.join(lines[1:])
+        m = re.match(r'\((\d+) name\(s\) on build-old and not on build-new;',
+                     tail)
+        self.assertIsNotNone(m, lines)
+        path = os.path.join(self.out_dir,
+                            'node_removed_locales.build-old..build-new.txt')
+        with open(path, encoding='utf-8') as fh:
+            names = [ln.strip() for ln in fh
+                     if ln.strip() and not ln.startswith('#')]
+        self.assertEqual(int(m.group(1)), len(names))
+        self.assertEqual(names, ['zz_GONE'])
+        self.assertIn('the collation is gone', tail)
+        self.assertIn(f'Full list: {path})', tail)
+
+    def test_the_tags_none_is_not_printed_over_it(self):
+        """The tags say nothing is removed over this pair. That answer must
+        not reach this section at all when both copies were given."""
+        joined = ' '.join(removed_lines(self.out))
+        self.assertNotIn('none', joined)
+        self.assertNotIn('Between the tags', joined)
+        self.assertNotIn(NOT_CHECKED, joined)
+
+
+@needs_clone
+class WrapperNodesRemoveAndCannotDecide(unittest.TestCase):
+    """Both at once: a file only the old copy has, and a backported C only
+    the old copy has. The removal comes first under its own count and the
+    undetermined after it under its own heading; no test drove this state,
+    and a mutant that hid the removal whenever something was undetermined
+    passed the whole suite (false-negative-reviewer on this change)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-both-')
+        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-bothtrees-')
+        cls.old_root = dd.materialise_tag(GLIBC_CLONE, OLD,
+                                          os.path.join(cls.nodes, 'a'))
+        cls.new_root = dd.materialise_tag(GLIBC_CLONE, MID,
+                                          os.path.join(cls.nodes, 'b'))
+        with open(os.path.join(cls.old_root, 'zz_GONE'), 'w',
+                  encoding='utf-8') as fh:
+            fh.write(locale_file('copy "iso14651_t1"'))
+        with open(os.path.join(cls.old_root, 'C'), 'w', encoding='utf-8') as fh:
+            fh.write(backported_c())
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID,
+            '--old-locales-dir', cls.old_root, '--old-build-id', 'build-old',
+            '--new-locales-dir', cls.new_root, '--new-build-id', 'build-new',
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    def test_the_removal_and_the_undetermined_are_both_printed_apart(self):
+        self.assertEqual(self.rc, 0, self.out)
+        path = os.path.join(self.out_dir,
+                            'node_removed_locales.build-old..build-new.txt')
+        self.assertEqual(removed_lines(self.out), [
+            'zz_GONE',
+            '(1 name(s) on build-old and not on build-new;',
+            'an index on one does not just sort differently; the collation '
+            'is gone.',
+            f'Full list: {path})',
+            'UNDETERMINED -- step 8 cannot say whether the upgrade removes '
+            'these:',
+            'C: backported (C.UTF-8), on the old node only: not examined',
+        ])
+
+
+@needs_clone
+class WrapperNodeCopiesDisagreeWithTheTags(unittest.TestCase):
+    """Both copies over 2.34..2.39, arranged so the tags and the nodes give
+    different answers. The new copy keeps aa_ER@saaho, which the tags rename
+    away, so the nodes remove nothing the tags do. And the new copy lacks C,
+    which the old one has: step 8's verdict on that is "not examined", so the
+    section is UNDETERMINED and may not print "none"."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-disagree-')
+        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-disagreetrees-')
+        cls.old_root = dd.materialise_tag(GLIBC_CLONE, MID,
+                                          os.path.join(cls.nodes, 'a'))
+        cls.new_root = dd.materialise_tag(GLIBC_CLONE, NEW,
+                                          os.path.join(cls.nodes, 'b'))
+        with open(os.path.join(cls.old_root, 'C'), 'w', encoding='utf-8') as fh:
+            fh.write(backported_c())
+        os.remove(os.path.join(cls.new_root, 'C'))
+        shutil.copy(os.path.join(cls.old_root, 'aa_ER@saaho'), cls.new_root)
+        cls.rc, cls.out = run_wrapper(
+            MID, NEW,
+            '--old-locales-dir', cls.old_root, '--old-build-id', 'build-old',
+            '--new-locales-dir', cls.new_root, '--new-build-id', 'build-new',
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    def test_the_undetermined_comes_first_and_there_is_no_none(self):
+        self.assertEqual(self.rc, 0, self.out)
+        self.assertEqual(removed_lines(self.out), [
+            'UNDETERMINED -- step 8 cannot say whether the upgrade removes '
+            'these:',
+            'C: backported (C.UTF-8), on the old node only: not examined',
+            f'every other file in {self.old_root} is also in {self.new_root}',
+        ])
+
+    def test_the_tags_rename_is_not_relayed_when_the_new_copy_keeps_it(self):
+        """The control first: step 2 did list aa_ER@saaho for this pair, so
+        its absence from the section is the choice of source, not a list that
+        came out empty."""
+        with open(os.path.join(self.out_dir, f'step2_removed_locales.'
+                                             f'{pair_slug(MID, NEW)}.txt'),
+                  encoding='utf-8') as fh:
+            self.assertIn('aa_ER@saaho (renamed to ssy_ER)', fh.read())
+        self.assertNotIn('aa_ER@saaho', ' '.join(removed_lines(self.out)))
+
 
 @needs_clone
 class WrapperOneSideOnly(unittest.TestCase):
@@ -629,6 +880,13 @@ class WrapperOneSideOnly(unittest.TestCase):
         self.assertIn('--new-locales-dir', body)
         self.assertNotIn('--old-locales-dir', body)
 
+    def test_one_copy_is_not_enough_for_the_nodes_answer_on_removals(self):
+        """Step 8 needs both copies, so the section takes the tags and says
+        first what that leaves unchecked. The whole section, not its ends:
+        a complete copy has nothing undetermined, and a line printed for an
+        empty list would sit between them unseen."""
+        self.assertEqual(removed_lines(self.out), NOTHING_GONE_OVER_OLD_MID)
+
     def test_a_complete_copy_raises_no_missing_files_warning(self):
         """The control for WrapperOldSideLostFiles."""
         self.assertNotIn('are missing from', flat(self.out))
@@ -673,6 +931,10 @@ class WrapperNewSideOnly(unittest.TestCase):
         # carries its build id -- the NOT RUN must not replace it.
         self.assertIn("-- Node's own locale data, ellipsis scan (build-new)",
                       summary)
+
+    def test_one_copy_is_not_enough_for_the_nodes_answer_on_removals(self):
+        """The mirror of WrapperOneSideOnly's test of the same name."""
+        self.assertEqual(removed_lines(self.out), NOTHING_GONE_OVER_OLD_MID)
 
     def test_a_complete_copy_raises_no_missing_files_warning(self):
         """The control for WrapperNewSideLostFiles."""
@@ -737,6 +999,33 @@ class WrapperSideLostFiles:
         names = re.search(r'are missing from \S+: (.*?)\. ',
                           flat(warnings)).group(1).split(', ')
         self.assertEqual(names, self.lost)
+
+    def test_the_removed_section_on_a_copy_that_lost_files(self):
+        """Forty-second entry. The new copy alone: what it lacks may be what
+        the new machine does not ship, so the section says it cannot decide
+        those rather than ending on the tags' "none" -- measured printing
+        "none" above step 7's `!!` for exactly this fixture. The old copy
+        alone: what it lacks is not a removal, and nothing is added."""
+        lines = removed_lines(self.out)
+        if self.SIDE == 'old':
+            self.assertEqual(lines, NOTHING_GONE_OVER_OLD_MID)
+            return
+        self.assertEqual(lines[0], NOT_CHECKED)
+        self.assertEqual(lines[-1], f'Between the tags: none -- no locale '
+                                    f'file at {OLD} is gone at {MID}')
+        heads = [i for i, ln in enumerate(lines)
+                 if ln.startswith('UNDETERMINED')]
+        self.assertEqual(len(heads), 1, lines)
+        at = heads[0]
+        self.assertEqual(lines[at], f'UNDETERMINED -- files of {MID} the new '
+                                    f'copy does not hold. If')
+        self.assertEqual(lines[at + 2], 'machine had:')
+        end = next(i for i in range(at + 3, len(lines))
+                   if lines[i].startswith('('))
+        self.assertEqual(lines[at + 3:end], self.lost)
+        m = re.fullmatch(r'\((\d+) name\(s\); full list: (\S+)\)', lines[end])
+        self.assertIsNotNone(m, lines[end])
+        self.assertEqual(int(m.group(1)), len(self.lost))
 
 
 @needs_clone

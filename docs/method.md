@@ -363,11 +363,11 @@ works on any pair of upstream tags with nothing measured behind it.
 
 ## Reading the output
 
-The run ends with an `AUDIT SUMMARY` block: what to reindex, what still needs
-an empirical test, every warning repeated in full, and what the tool did
-*not* decide for you. Long result lists are written to files under
-`$PG_GLIBC_AUDIT_OUT` (default `/tmp/pg-glibc-collation-audit/`) and
-referenced rather than inlined, so the summary stays readable.
+The run ends with an `AUDIT SUMMARY` block: what to reindex, what the upgrade
+removes, what still needs an empirical test, every warning repeated in full,
+and what the tool did *not* decide for you. Long result lists are written to
+files under `$PG_GLIBC_AUDIT_OUT` (default `/tmp/pg-glibc-collation-audit/`)
+and referenced rather than inlined, so the summary stays readable.
 
 Two markers carry the weight:
 

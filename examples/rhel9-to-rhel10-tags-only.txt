@@ -1291,6 +1291,14 @@ empirical sort-order test, however clean its data diff is.
      th_TH.utf8
    (4 name(s); full list: /tmp/pg-glibc-collation-audit/step3_affected_locales.txt)
 
+-- Removed: locale files the old side has and the new side does not
+     The tags cannot show what your distro adds or drops: NOT CHECKED.
+     Pass --old-locales-dir and --new-locales-dir with their build
+     ids; step 8 is the only check that sees those.
+     Between the tags, gone at glibc-2.39:
+       aa_ER@saaho (renamed to ssy_ER)
+   (1 name(s); full list: /tmp/pg-glibc-collation-audit/step2_removed_locales.glibc-2.34..glibc-2.39.txt)
+
 -- Needs an empirical test: step 5 found 52 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged
      494 name(s) to confirm: generated names, and

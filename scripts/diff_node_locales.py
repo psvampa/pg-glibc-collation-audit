@@ -127,18 +127,113 @@ def style_transition(old_text, new_text):
         g.classify_collation_style(new_text)
 
 
-def in_neither_tag(repo, old_tag, new_tag, names):
-    """Which of `names` exist at neither tag -- the structurally invisible set.
+def tag_basenames(repo, tag):
+    """The file names under localedata/locales/ at `tag`.
 
     ls-tree, not cat-file -e: on a --filter=blob:none clone the latter must
     fetch the blob to answer, and reports a file that exists as absent whenever
     that fetch cannot happen. filter_lc_collate_changes.py records the same
     reason.
     """
-    present = set()
-    for tag in (old_tag, new_tag):
-        present |= {os.path.basename(p) for p in g.list_locale_files(repo, tag)}
+    return {os.path.basename(p) for p in g.list_locale_files(repo, tag)}
+
+
+def in_neither_tag(repo, old_tag, new_tag, names):
+    """Which of `names` exist at neither tag -- the structurally invisible set."""
+    present = tag_basenames(repo, old_tag) | tag_basenames(repo, new_tag)
     return sorted(n for n in names if n not in present)
+
+
+def removal_verdicts(old, new, only_old, old_tag, old_tag_names):
+    """(removed, undetermined): what the upgrade removes, and what this
+    comparison cannot say either way.
+
+    `removed` is every name only the old copy holds that the new copy does
+    not hold in any form, less the KNOWN_BACKPORTED ones. report_backported
+    gives those a verdict of their own -- present on the old node only, not
+    examined -- and a locale that verdict leaves unexamined must not be
+    relayed as gone.
+
+    `undetermined` is (name, why) for everything that could be a removal and
+    that this comparison can neither report as one nor rule out. "Held" means
+    held as a file this step READ: an entry it skipped is neither present nor
+    absent, and counting a new-side symlink as present printed "none" over a
+    file step 7's `!!` named as not read (false-negative-reviewer, round 2).
+
+      - a file of the old tag that neither copy holds. The distro may not ship
+        it, or the old copy may have lost it, and a removal lost with the copy
+        would leave the summary saying "none" above step 6's `!!` naming that
+        very file. Checked against the tag, not against a list of what distros
+        ship, so nothing here goes stale. Not checked without --old-tag, and
+        the written list says so in its header.
+      - a KNOWN_BACKPORTED locale on the old copy only (see above).
+      - an entry the old copy holds and this step did not read -- a symlink, a
+        directory -- that the new copy does not hold as a file it read. A
+        dotfile is left out: no locale's name starts with a dot, and Finder
+        writes a .DS_Store into any directory it opens, so one in the old copy
+        alone turned "none" into an undetermined line that meant nothing.
+      - a file only the old copy read, that the new copy holds in a form this
+        step did not read: gone if the symlink dangles, not if it resolves.
+
+    Every name goes through shown(): a name node_entries skips as unsafe is
+    written quoted, because one that began with `#` read as the list's header
+    and vanished from the summary, and one with a newline in it would have
+    been two entries.
+
+    `undetermined` is empty on the three measured copies. None of them lacks
+    a file of its tag, and none holds an entry node_entries skips.
+    """
+    old_skipped = dict(old.skipped)
+    new_skipped = dict(new.skipped)
+    old_held = set(old.names) | set(old_skipped)
+    new_read = set(new.names)
+
+    def new_side(name):
+        if name in new_skipped:
+            return f"on the new side but not read ({new_skipped[name]})"
+        return "not on the new side"
+
+    removed = [shown(n) for n in only_old
+               if n not in KNOWN_BACKPORTED and n not in new_skipped]
+    undetermined = []
+    if old_tag_names is not None:
+        for name in sorted(old_tag_names - old_held - new_read):
+            where = ("and in neither copy" if name not in new_skipped
+                     else f"not in the old copy, and {new_side(name)}")
+            undetermined.append((name, f"in {old_tag}, {where}"))
+    for name in sorted(KNOWN_BACKPORTED):
+        if name in old.names and name not in new.names:
+            undetermined.append((name, f"backported ({KNOWN_BACKPORTED[name]}), "
+                                       f"on the old node only: not examined"))
+    for name in sorted(set(old_skipped) - new_read):
+        if old_skipped[name] == 'dotfile':
+            continue
+        undetermined.append((shown(name), f"on the old side and not read "
+                                          f"({old_skipped[name]}), and "
+                                          f"{new_side(name)}"))
+    for name in only_old:
+        if name in new_skipped and name not in KNOWN_BACKPORTED:
+            undetermined.append((shown(name), f"read on the old side, and "
+                                              f"{new_side(name)}"))
+    return removed, undetermined
+
+
+def shown(name):
+    """`name` as a list line can carry it: bare when it is a plain file name,
+    quoted otherwise. fullmatch, not SAFE_NAME.match: `$` also matches before
+    a final newline, so "zz\\n" passed the check and was written as two lines
+    (false-negative-reviewer, round 2)."""
+    return name if dd.SAFE_NAME.fullmatch(name) else repr(name)
+
+
+def report_undetermined(undetermined):
+    """Printed only when there is something in it, so a complete pair of
+    copies prints what it printed before."""
+    if undetermined:
+        print(f"\nUndetermined ({len(undetermined)}) -- this comparison cannot "
+              f"say whether the upgrade removes these:")
+        for name, why in undetermined:
+            print(f"  {name}: {why}")
 
 
 def report_sides(old, new):
@@ -305,7 +400,10 @@ def main(argv):
     ap.add_argument('--old-tag', help="the upstream tag the audit used for the "
                                       "old side. With --new-tag, reports which "
                                       "findings exist at neither tag -- the "
-                                      "ones no tag diff could ever see.")
+                                      "ones no tag diff could ever see -- and "
+                                      "lets the list of what cannot be decided "
+                                      "include a file of the old tag that "
+                                      "neither copy holds.")
     ap.add_argument('--new-tag', help="the upstream tag for the new side")
     ap.add_argument('--allow-reverse', action='store_true',
                     help="run a pair whose new tag is the OLDER commit. Refused by default: reversed, every step still prints a plausible clean result. Prints a `!!` block saying the direction is reversed.")
@@ -353,6 +451,7 @@ def main(argv):
                 f"compares a build with itself.")
 
     invisible = None
+    old_tag_names = None
     if opts.old_tag:
         repo = g.find_repo(opts.repo)
         g.check_refs(repo, opts.old_tag, opts.new_tag)
@@ -362,6 +461,7 @@ def main(argv):
                              allow_reverse=opts.allow_reverse)
         invisible = in_neither_tag(repo, opts.old_tag, opts.new_tag,
                                    sorted(old_set | new_set))
+        old_tag_names = tag_basenames(repo, opts.old_tag)
 
     buckets, side, texts = dd.compare_trees(old.root, new.root, both,
                                             label_a=old.build_id,
@@ -370,6 +470,9 @@ def main(argv):
                                       buckets['collate'])
     report_buckets(old, new, buckets, side, texts, both, only_old, only_new,
                    invisible, inherited)
+    removed, undetermined = removal_verdicts(old, new, only_old, opts.old_tag,
+                                             old_tag_names)
+    report_undetermined(undetermined)
     computed, unexamined = report_backported(old, new, buckets, invisible)
 
     slug = g.pair_slug(old.build_id, new.build_id)
@@ -384,6 +487,20 @@ def main(argv):
                  [f"# locales inheriting LC_COLLATE, via copy at "
                   f"{new.build_id}, from: {', '.join(buckets['collate'])}"]
                  + sorted(inherited))
+    # What the summary relays as removed, and what stops it saying "none".
+    # Both written whether or not they are empty: the summary reads them, and
+    # an absent list means this step never got here, not that nothing is
+    # removed.
+    g.write_list(f"node_removed_locales.{slug}.txt",
+                 [f"# on {old.build_id} ({old.root}) and not on "
+                  f"{new.build_id} ({new.root})"] + removed)
+    checked = (f"checked against {opts.old_tag}" if opts.old_tag
+               else "NOT checked against a tag (no --old-tag), so a file the "
+                    "old copy lost is not in this list")
+    g.write_list(f"node_removed_undetermined.{slug}.txt",
+                 [f"# whether {old.build_id} -> {new.build_id} removes these "
+                  f"is undetermined; old copy {checked}"]
+                 + [f"{name}: {why}" for name, why in undetermined])
 
     print()
     dd.warn(f"This compares locale DATA. Identical data is NOT identical "

@@ -840,6 +840,12 @@ unexamined are three different answers:
      sv_SE.utf8
    (6 name(s); full list: /tmp/pg-glibc-collation-audit/step3_affected_locales.txt)
 
+-- Removed: locale files the old side has and the new side does not
+     en_US@ampm
+   (1 name(s) on glibc-2.28-251.el8_10.40 and not on glibc-2.34-275.el9_8;
+   an index on one does not just sort differently; the collation is gone.
+   Full list: /tmp/pg-glibc-collation-audit/node_removed_locales.glibc-2.28-251.el8_10.40..glibc-2.34-275.el9_8.txt)
+
 -- Needs an empirical test: step 5 found 24 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged
      483 name(s) to confirm: generated names, and

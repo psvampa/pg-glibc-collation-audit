@@ -204,5 +204,48 @@ class RefusesToGuess(unittest.TestCase):
         self.assertIn('charmaps', out)
 
 
+@needs_clone
+class WritesWhatTheCopyLacks(unittest.TestCase):
+    """Forty-second entry. With the new machine's copy alone, a file of its
+    tag that the copy does not hold may be one the machine does not ship --
+    a locale the upgrade removes, which no tag can see -- and the summary
+    printed the tags' "none" above step 7's `!!` naming it. Step 7 now writes
+    the list the summary reads."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-distro-lacks-')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.out = os.path.join(self.tmp, 'out')
+        self.node = materialise(MID, os.path.join(self.tmp, 'tree'))
+
+    def listed(self):
+        env = dict(os.environ, PG_GLIBC_AUDIT_OUT=self.out)
+        p = subprocess.run([sys.executable,
+                            os.path.join(SCRIPTS_DIR, 'diff_distro_locales.py'),
+                            MID, '--locales-dir', self.node,
+                            '--build-id', 'build-X', '--node-label', 'new'],
+                           cwd=SCRIPTS_DIR, env=env, capture_output=True)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        path = os.path.join(self.out, f'copy_missing.{MID}..new.txt')
+        with open(path, encoding='utf-8') as fh:
+            lines = [ln.rstrip('\n') for ln in fh if ln.strip()]
+        self.assertTrue(lines and lines[0].startswith('# '), lines[:2])
+        self.assertIn('build-X', lines[0])
+        return lines[1:]
+
+    def test_a_missing_file_and_one_not_read_are_both_listed(self):
+        """de_DE is gone from the copy and th_TH is a symlink in it: neither
+        was read, so for the summary neither is known to be on the machine."""
+        os.remove(os.path.join(self.node, 'de_DE'))
+        path = os.path.join(self.node, 'th_TH')
+        os.rename(path, os.path.join(self.tmp, 'th_TH.real'))
+        os.symlink(os.path.join(self.tmp, 'th_TH.real'), path)
+        self.assertEqual(self.listed(), ['de_DE', 'th_TH'])
+
+    def test_a_complete_copy_writes_the_header_alone(self):
+        """Absent is not empty: the list exists when nothing is missing."""
+        self.assertEqual(self.listed(), [])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -4,6 +4,98 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-24 (forty-second entry)
+
+The summary now names the locales the upgrade removes, in a section of its
+own under "Reindex". No verdict moves. The published transcripts gain that
+section and change nowhere else.
+
+### What it used to get wrong
+
+**A locale the upgrade removes never reached the summary.** A locale that is
+gone is worse than one that sorts differently. A column or an index on it has
+no collation at all on the new machine, and REINDEX cannot bring one back.
+Two steps knew, and each said so only in its own output, more than a hundred
+lines above the summary:
+
+- RHEL8 to RHEL9, given both machines' locale files. Step 8 printed
+  `en_US@ampm` under "Only on the old node ... the collation is gone". Red
+  Hat added that locale to RHEL8 alone, in `glibc-2.28-173.el8` (Red Hat bug
+  2000374, in the package's own changelog on `glibc-2.28-251.el8_10.40`). It
+  is in no glibc version, so step 8 is the only step that sees it.
+- RHEL9 to RHEL10. glibc renamed `aa_ER@saaho` to `ssy_ER` in 2.39 (glibc bug
+  19956, commit `8393f4f72b`, listed in the 2.39 NEWS). Step 2 printed the
+  rename, and step 8 the removal.
+
+A reader of the summary alone concluded that the upgrade removes nothing.
+
+Now the section names what step 8 found when both machines' files are given.
+Without them it names what step 2 found between the two versions, deleted or
+renamed away, after a first line saying that what the distro adds or drops is
+not checked. That line comes first because over RHEL8 to RHEL9 the versions
+remove nothing and the upgrade removes `en_US@ampm`. The names are the file
+names step 8 prints; on RHEL8 `pg_collation` also lists `en_US.utf8@ampm`.
+
+### Where it does not say "none"
+
+Measured on a copy of glibc 2.34 that had lost `aa_ER@saaho`, the section
+read "none" while the warnings below it named that file as missing from the
+copy. Step 8 now sets apart, as undetermined, what it cannot decide from the
+files it read: a file of the old version that neither copy holds as a file it
+read, a backported locale such as `C` that only the old copy has, and a name
+one copy holds in a form step 8 does not read, such as a symlink. Step 8's own
+verdict on such a `C` is "not examined", not "gone". A dotfile is left out,
+because no locale is named with a leading dot and Finder writes `.DS_Store`
+into any directory it opens. When anything is set apart, the section lists it
+under its own heading, after any removal, and prints no "none". Nothing is
+set apart on the three measured machines' copies.
+
+The same held with the new machine's copy alone. A copy of 2.34 without
+`de_DE` got the versions' "none" above step 7's `!!` naming that file, which
+may be one the new machine does not ship. Step 7 now writes the files of its
+version that the copy does not hold, and with no old copy the section lists
+them as undetermined, before the versions' answer.
+
+A file only the distro ships that the copy lost is still not seen. The zero
+line names the two directories, not the builds, because it can speak only
+for what the copies hold. A copy of el8 that lost `en_US@ampm` still gets
+"none", the limit the fortieth entry records.
+
+### Files
+
+- **`scripts/diff_node_locales.py`** (step 8) -- writes the locales the
+  upgrade removes and the files it cannot decide, both lists on every run,
+  empty or not, and prints the second only when there is something in it.
+- **`scripts/filter_lc_collate_changes.py`** (step 2) -- writes the files of
+  the old version that are not in the new one, deleted or renamed away, and
+  where a renamed one went.
+- **`scripts/diff_distro_locales.py`** (steps 6 and 7) -- writes the files of
+  its version that the copy does not hold.
+- **`audit.sh`** -- the section. Its source is chosen by which directories
+  were given, never by which list exists.
+- **`tests/test_node_modes.py`**, **`tests/test_git_helpers.py`**,
+  **`tests/test_distro_diff.py`**, **`tests/test_wrapper.py`** -- thirty-one
+  tests: each kind of file step 8 cannot decide, with controls; a deleted and
+  a renamed file on a repository built for the test, because none of the
+  pairs the suite pins deletes one (glibc does delete locale files, as 2.23
+  to 2.24 removes `iw_IL` and `pap_AN`, measured with step 2); the real
+  rename over 2.34..2.39; and the section with each source, with one copy on
+  either side, with a copy that lost files on either side, with a new copy
+  that keeps what the versions remove, with a removal and an undetermined
+  file together, and in its place in the summary. The code was broken on
+  purpose thirty-six ways. Thirty-one of the breaks fail at least one of
+  these tests, and every one of the new tests fails under at least one
+  break. The other five are three branches no run can reach, the up-front
+  removal of the lists, and a change that would only print a line twice.
+- **`tests/README.md`** -- the unreachable guards, eight now, the three added
+  here and one that was already there and never listed.
+- **`docs/method.md`** -- the summary's sections.
+- **`docs/commands.md`** -- what the summary says without the machines'
+  files. It said steps 6 to 10 print `NOT RUN`, and steps 6 and 7 print
+  nothing, which was already so before this entry.
+- **`examples/`** -- the four transcripts, regenerated on the same builds.
+  Each gains the section and changes nowhere else.
+
 ## 2026-09-24 (forty-first entry)
 
 The steps that read a diff now get the same text from git on every machine,

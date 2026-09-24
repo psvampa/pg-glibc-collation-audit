@@ -1591,6 +1591,12 @@ unexamined are three different answers:
      th_TH.utf8
    (4 name(s); full list: /tmp/pg-glibc-collation-audit/step3_affected_locales.txt)
 
+-- Removed: locale files the old side has and the new side does not
+     aa_ER@saaho
+   (1 name(s) on glibc-2.34-275.el9_8 and not on glibc-2.39-128.el10_2;
+   an index on one does not just sort differently; the collation is gone.
+   Full list: /tmp/pg-glibc-collation-audit/node_removed_locales.glibc-2.34-275.el9_8..glibc-2.39-128.el10_2.txt)
+
 -- Needs an empirical test: step 5 found 52 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged
      494 name(s) to confirm: generated names, and

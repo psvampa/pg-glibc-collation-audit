@@ -506,6 +506,19 @@ def main(argv):
     g.write_list(f"step2_changed_collate.{g.pair_slug(opts.old_tag, opts.new_tag)}.txt",
                  names)
 
+    # Every file of the old tag that is not at the new one, which is what the
+    # summary relays as removed when no node was read: deleted, or renamed
+    # away. A renamed file's ruleset moved, but the NAME a database refers to
+    # is gone, so it is listed under the old name with where it went. Written
+    # whether or not it is empty, for the same reason as the list above.
+    removed = sorted(
+        [(os.path.basename(p), 'deleted') for p in deleted]
+        + [(os.path.basename(old), f'renamed to {os.path.basename(new)}')
+           for old, new in renamed])
+    g.write_list(f"step2_removed_locales.{g.pair_slug(opts.old_tag, opts.new_tag)}.txt",
+                 [f"# locale files at {opts.old_tag} and not at {opts.new_tag}"]
+                 + [f"{name} ({how})" for name, how in removed])
+
     if names and not g.wrapped():
         print(f"\nLocale names for step 3:")
         print(f"  python3 resolve_copy_closure.py {opts.new_tag} {' '.join(names)}")
