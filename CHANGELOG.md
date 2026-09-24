@@ -4,6 +4,56 @@ Findings live in [docs/results.md](docs/results.md). This file records what this
 used to get wrong, so a reader can tell whether a result they saved earlier
 is still trustworthy.
 
+## 2026-09-23 (fortieth entry)
+
+A copy of a machine's locale files that lost some of them on the way now gets
+a `!!` naming every file of its glibc version that it lacks, and the summary
+repeats it. No verdict moves, and nothing changes in what `audit.sh` prints
+for a complete copy.
+
+### What it used to get wrong
+
+**A copy that lost files was reported as clean.** Steps 6 and 7 refused a
+copy only when it held less than half of its published version's files.
+Above that, they compared what was there, printed "Nothing differs inside
+LC_COLLATE", and listed the missing files as an ordinary line. The summary
+repeats only `!!` blocks, so the loss never reached it. Measured at 300 of
+glibc-2.34's 355 files: exit 0, and among the 55 missing was `th_TH`, the one
+locale whose sort order changes between 2.34 and 2.39. Steps 9 and 10 had the
+same gap: 250 of 355 files passed with a full verdict and no `!!`.
+
+Now every file of the published version that the copy lacks is named under a
+`!!`, by steps 6 and 7 and by steps 9 and 10, and the summary prints it once.
+A file the copy holds in a form the steps do not read, such as a symlink, is
+named apart as not read, because counting the copy's entries would have
+counted it. The run cannot tell whether the machine does not ship a file or
+the copy lost it, and it says so rather than guessing. On the three measured
+machines no such file is missing, so their transcripts do not change.
+
+A file only the distro ships, not in its glibc version, is still not named
+when it is lost. A copy of el8 that loses `en_US@ampm` also loses step 8's
+finding that the upgrade removes it. `C` is the exception, declared as absent
+in the summary.
+
+### Files
+
+- **`scripts/glibc_locale_data.py`** -- the warning, one copy shared by the
+  steps that read a copy.
+- **`scripts/diff_distro_locales.py`** (steps 6 and 7),
+  **`scripts/flag_algorithmic_ranges.py`** (steps 9 and 10) -- print it.
+  Steps 9 and 10 check against the version given with `--supported-tag`,
+  which the run always passes, and say so when it is not given.
+- **`docs/commands.md`** -- said a missing file comes back as an ordinary
+  finding.
+- **`tests/test_pure_functions.py`**, **`tests/test_distro_diff.py`**,
+  **`tests/test_node_modes.py`**, **`tests/test_wrapper.py`** -- the warning
+  on a copy that lost files, its absence on a complete one, and the summary
+  printing it once, for each side. The code was broken on purpose seventeen
+  ways, and each break fails at least one of these tests; a harmless edit
+  fails none. One test is failed by no single break: that a complete copy
+  gets no warning from steps 6 and 7, because step 6 does not reach the
+  warning at all when nothing is missing.
+
 ## 2026-09-23 (thirty-ninth entry)
 
 Step 2 now prints, under each locale it flags, the characters its changed

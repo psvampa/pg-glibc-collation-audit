@@ -116,6 +116,22 @@ def load_from_dir(opts, repo):
     if opts.supported_tag:
         g.check_refs(repo, opts.supported_tag)
         supported = g.supported_map(repo, opts.supported_tag)
+        # The floor above lets a copy that lost a third of its files through
+        # with a clean scan (backlog 1.19: 250 of glibc-2.34's 355, exit 0, no
+        # `!!`). The tag is the only reference this mode has.
+        tag_names = [os.path.basename(p)
+                     for p in g.list_locale_files(repo, opts.supported_tag)]
+        if g.report_missing_from_copy(names, tag_names, opts.supported_tag,
+                                      root, skipped):
+            print()
+    else:
+        # Absent is not empty: without a tag nothing here can notice a copy
+        # that lost files, and a scan that did not look must not read like
+        # one that looked and found everything.
+        g.warn(f"The files in {root} were not checked against any tag's "
+               f"list, so a copy that lost files is not detected here. Pass "
+               f"--supported-tag to check it.", split_words=False)
+        print()
     slug = g.pair_slug(opts.build_id, opts.build_id).split('..')[0]
     return (texts, supported, f'{opts.build_id} ({root})',
             f'step4_exposed_locales.{slug}.txt')
@@ -395,7 +411,9 @@ def main(argv):
                          "measured on Rocky 8/9/10, none has "
                          "/usr/share/i18n/SUPPORTED and glibc-locale-source "
                          "installs none -- so the mapping is the tag's, and "
-                         "the tag does not know what the node built.")
+                         "the tag does not know what the node built. Also "
+                         "the list the directory is checked against: every "
+                         "file of the tag it lacks is named under a `!!`.")
     ap.add_argument('--expect-files', type=int,
                     help="with --locales-dir: abort unless exactly this many "
                          "files are read")

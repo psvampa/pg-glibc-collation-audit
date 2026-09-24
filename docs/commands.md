@@ -74,15 +74,19 @@ are version-locked. Read the build id after installing it, not before.
 The build ids are required, because a result is bound to the build it was
 taken on and nothing in a directory of locale files carries a version.
 
-**Check each copy against the machine it came from** — `ls el8-locales | wc -l`
-against `ls /usr/share/i18n/locales/` run there. The run does not do this for
-you, and a copy that lands most of its files is not refused: the floor is
-absolute, and only a directory too small to be a real copy at all is rejected.
+**Check each copy against the machine it came from** — compare the names,
+`ls el8-locales` against `ls /usr/share/i18n/locales/` run there, not only the
+counts. The run does not compare against the machine. It refuses a copy only
+when it is too small to be one, below half the files of the published version
+for steps 6 and 7 and below 200 for steps 8 to 10.
 
-What never arrived then comes back as an ordinary finding. The run's steps 6
-and 7 list it under `Absent on the node`, step 8 under `Only on the old node`
-or `Only on the new node`, where a failed transport reads exactly like a
-locale the upgrade removed or added. Two cases do earn a `!!`: a backported
+What never arrived is named, not refused. When a copy lacks a file its
+published version has, steps 6 and 7 and steps 9 and 10 print a `!!` naming
+each one, and the summary repeats it. The run cannot tell a file the machine
+does not ship from one the copy lost, and the check above is what tells them
+apart. Step 8 lists what one copy lacks under `Only on the old node` or `Only
+on the new node`, where a failed transport reads exactly like a locale the
+upgrade removed or added. Two more cases earn their own `!!`: a backported
 locale such as `C` missing from one side (step 8), and a missing file that
 other locales copy, such as `iso14651_t1` (steps 9 and 10).
 

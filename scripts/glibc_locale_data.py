@@ -203,7 +203,7 @@ def check_refs(repo, *refs):
         die(f"unknown git ref(s) after fetching tags: {', '.join(still)}")
 
 
-def warn(text):
+def warn(text, split_words=True):
     """The `!!` block shape audit.sh collects and repeats at the bottom.
 
     One copy, in the shared module, because two copies of a formatter drift and
@@ -211,9 +211,69 @@ def warn(text):
     because output wrapped at 78 columns made a negative assertion vacuous, and
     the wrapper's warnings block matches `^!!` followed by three-space
     continuation lines. `diff_distro_locales.warn` is an alias for this.
+
+    `split_words=False` keeps a path whole: textwrap breaks at hyphens by
+    default, and a temp directory's name printed as `pg-glibc-` / `distro-...`
+    cannot be pasted back into a shell. Splitting stays on by default, so
+    every other block wraps exactly as the published transcripts show it.
     """
     print(textwrap.fill(text, width=78,
-                        initial_indent='!! ', subsequent_indent='   '))
+                        initial_indent='!! ', subsequent_indent='   ',
+                        break_on_hyphens=split_words,
+                        break_long_words=split_words))
+
+
+def report_missing_from_copy(copy_names, tag_names, tag, where, skipped=()):
+    """`!!` over the files `tag` has that a copy of a node's locales lacks.
+
+    `skipped` is node_entries' (entry, why) list. A tag file the copy holds
+    as a symlink or a directory is in the directory and was not read, which
+    is neither missing nor examined, so it is named apart: counting entries
+    would clear it (measured, th_TH as a symlink: 355 entries against the
+    tag's 355).
+
+    Returns every name it reported, sorted; prints nothing when there is none.
+    A copy that lost files in transit reported 0 differences inside
+    LC_COLLATE over what was left, and listed the rest as an ordinary finding
+    with no `!!`, so it reached the AUDIT SUMMARY in no form at all (backlog
+    1.15). Measured at 300 of glibc-2.34's 355 files: exit 0, "Nothing
+    differs", th_TH among the 55 lost. The measured nodes lack none of their
+    tag's files (el8 against 2.28, el9 against 2.34, el10 against 2.39), so on
+    a complete copy this prints nothing.
+
+    It concludes nothing about WHY a file is missing. A count the reader
+    asserts only proves the directory holds that many files, not that they
+    came from the node -- the conclusion a first attempt at this fix drew,
+    and a false negative of its own. It advises comparing names on the
+    machine rather than counts for the same reason. One text for steps 6/7
+    and 9/10, so the wrapper's summary, which deduplicates identical blocks,
+    prints it once.
+    """
+    why = dict(skipped)
+    unread = sorted((set(tag_names) & set(why)) - set(copy_names))
+    missing = sorted(set(tag_names) - set(copy_names) - set(unread))
+    said = []
+    if missing:
+        said.append(f"{len(missing)} file(s) that {tag} has under "
+                    f"{LOCALES_DIR}/ are missing from {where}: "
+                    f"{', '.join(missing)}.")
+    if unread:
+        said.append(f"{len(unread)} file(s) that {tag} has under "
+                    f"{LOCALES_DIR}/ are in {where} but were not read: "
+                    f"{', '.join(f'{n} ({why[n]})' for n in unread)}.")
+    if said:
+        said.append("The checks that read this directory skipped them, so "
+                    "they say nothing about those locales on this machine, "
+                    "nor about any locale that copies one of them.")
+    if missing:
+        said.append("This run cannot tell whether the machine does not ship "
+                    "them or the copy lost them. Check on the machine "
+                    "whether /usr/share/i18n/locales/ has them.")
+    if unread:
+        said.append("Copy those again as regular files.")
+    if said:
+        warn(' '.join(said), split_words=False)
+    return sorted(missing + unread)
 
 
 def _is_ancestor(repo, maybe_ancestor, descendant):

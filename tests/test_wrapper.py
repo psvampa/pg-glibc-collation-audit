@@ -629,6 +629,10 @@ class WrapperOneSideOnly(unittest.TestCase):
         self.assertIn('--new-locales-dir', body)
         self.assertNotIn('--old-locales-dir', body)
 
+    def test_a_complete_copy_raises_no_missing_files_warning(self):
+        """The control for WrapperOldSideLostFiles."""
+        self.assertNotIn('are missing from', flat(self.out))
+
 
 @needs_clone
 class WrapperNewSideOnly(unittest.TestCase):
@@ -669,6 +673,80 @@ class WrapperNewSideOnly(unittest.TestCase):
         # carries its build id -- the NOT RUN must not replace it.
         self.assertIn("-- Node's own locale data, ellipsis scan (build-new)",
                       summary)
+
+    def test_a_complete_copy_raises_no_missing_files_warning(self):
+        """The control for WrapperNewSideLostFiles."""
+        self.assertNotIn('are missing from', flat(self.out))
+
+
+class WrapperSideLostFiles:
+    """A copy that lost files reached the AUDIT SUMMARY in no form at all.
+
+    Steps 6/7 listed the lost files with no `!!`, and the summary repeats
+    only `!!` blocks (fortieth entry, backlog 1.15). Now steps 6/7 and 9/10
+    each print the same block, and the summary, which drops identical
+    blocks, prints it once. One class per side, because a block naming a
+    fixed side would pass a test that drives only one of them.
+    """
+
+    SIDE = TAG = STEPS = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-lost-')
+        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-losttree-')
+        root = dd.materialise_tag(GLIBC_CLONE, cls.TAG,
+                                  os.path.join(cls.nodes, 'n'))
+        cls.lost = sorted(os.listdir(root))[300:]
+        for name in cls.lost:
+            os.remove(os.path.join(root, name))
+        with open(os.path.join(root, 'C'), 'w', encoding='utf-8') as fh:
+            fh.write(backported_c())
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID, f'--{cls.SIDE}-locales-dir', root,
+            f'--{cls.SIDE}-build-id', f'build-{cls.SIDE}',
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    HEAD = re.compile(r'^!! (\d+) file\(s\) that (\S+) has under '
+                      r'localedata/locales/ are missing from', re.M)
+
+    def test_both_steps_that_read_the_copy_say_so(self):
+        self.assertEqual(self.rc, 0, self.out)
+        for n in self.STEPS:
+            with open(os.path.join(self.out_dir,
+                                   f'step{n}.{pair_slug(OLD, MID)}.log'),
+                      encoding='utf-8') as fh:
+                found = self.HEAD.findall(fh.read())
+            self.assertEqual(found, [(str(len(self.lost)), self.TAG)], n)
+
+    def test_the_summary_repeats_it_once_under_the_warnings(self):
+        summary = self.out.split('AUDIT SUMMARY')[1]
+        warnings = summary.split(
+            '-- Warnings the clean results above do NOT cover')[1]
+        warnings = warnings.split('\n--')[0]
+        heads = re.findall(r'!! (\d+) file\(s\) that (\S+) has under',
+                           warnings)
+        self.assertEqual(heads, [(str(len(self.lost)), self.TAG)], warnings)
+        # The whole list, not each name: a name that prefixes another
+        # (tt_RU, tt_RU@iqtelif) passed a per-name check with itself dropped.
+        names = re.search(r'are missing from \S+: (.*?)\. ',
+                          flat(warnings)).group(1).split(', ')
+        self.assertEqual(names, self.lost)
+
+
+@needs_clone
+class WrapperOldSideLostFiles(WrapperSideLostFiles, unittest.TestCase):
+    SIDE, TAG, STEPS = 'old', OLD, (6, 9)
+
+
+@needs_clone
+class WrapperNewSideLostFiles(WrapperSideLostFiles, unittest.TestCase):
+    SIDE, TAG, STEPS = 'new', MID, (7, 10)
 
 
 @needs_clone

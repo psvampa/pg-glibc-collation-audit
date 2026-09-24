@@ -1051,6 +1051,83 @@ class CorpusGuard(unittest.TestCase):
             self.assertIn('indistinguishable from a clean run', problem)
 
 
+class MissingFromCopy(unittest.TestCase):
+    """A copy that lost files above the half-of-the-tag refusal reported
+    "Nothing differs" and listed the rest with no `!!` (fortieth entry,
+    backlog 1.15). The helper the node-reading steps share, driven with names
+    instead of a directory."""
+
+    def report(self, copy, tag, skipped=()):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            missing = g.report_missing_from_copy(copy, tag, 'glibc-2.34',
+                                                 './el9-locales', skipped)
+        return missing, buf.getvalue()
+
+    def test_every_missing_file_is_named_under_a_warning(self):
+        missing, out = self.report(['a', 'b'], ['a', 'b', 'th_TH', 'c'])
+        self.assertEqual(missing, ['c', 'th_TH'])
+        self.assertTrue(out.startswith('!! 2 file(s) that glibc-2.34 has'),
+                        out)
+        self.assertIn('are missing from ./el9-locales: c, th_TH.', _harness.flat(out))
+        # Every line is part of the block the wrapper repeats: `!!` first,
+        # three-space continuation after, or the tail never reaches it.
+        for line in out.splitlines()[1:]:
+            self.assertTrue(line.startswith('   '), line)
+
+    def test_it_concludes_nothing_about_why(self):
+        """The first attempt at this fix told the reader the missing files
+        were locales the node does not ship -- measured false at 250 of 355
+        with a count the reader had asserted."""
+        _, out = self.report([], ['a'])
+        self.assertIn('cannot tell whether the machine does not ship them or '
+                      'the copy lost them', _harness.flat(out))
+
+    def test_a_file_held_but_not_read_is_named_apart(self):
+        """A tag file the copy holds as a symlink is not missing, and was not
+        read. Reported as missing, the count the reader was told to compare
+        matched (355 entries against 355) and cleared a th_TH never read.
+        Found by false-negative-reviewer on this fix."""
+        missing, out = self.report(['a'], ['a', 'th_TH'],
+                                   [('th_TH', 'symlink'), ('.x', 'dotfile')])
+        self.assertEqual(missing, ['th_TH'])
+        text = _harness.flat(out)
+        self.assertIn('are in ./el9-locales but were not read: '
+                      'th_TH (symlink).', text)
+        self.assertNotIn('are missing from', text)
+        self.assertNotIn('.x', text)
+        self.assertIn('Copy those again as regular files.', text)
+
+    def test_missing_and_not_read_together_are_both_named(self):
+        """The case no other test combines: a copy that lost files AND holds
+        a tag file as a symlink. Saying only the missing ones left th_TH in
+        step 6's plain "Skipped" list, which the summary does not collect
+        (false-negative-reviewer, second round)."""
+        missing, out = self.report(['a'], ['a', 'b', 'th_TH'],
+                                   [('th_TH', 'symlink')])
+        self.assertEqual(missing, ['b', 'th_TH'])
+        text = _harness.flat(out)
+        self.assertIn('are missing from ./el9-locales: b.', text)
+        self.assertIn('but were not read: th_TH (symlink).', text)
+        self.assertIn('Check on the machine whether', text)
+        self.assertIn('Copy those again as regular files.', text)
+
+    def test_it_advises_names_not_a_count(self):
+        """`ls | wc -l` counts what the steps skip, so it can match while a
+        file went unread; the advice names the files instead."""
+        _, out = self.report([], ['a'])
+        self.assertNotIn('wc -l', _harness.flat(out))
+        self.assertIn('Check on the machine whether /usr/share/i18n/locales/ '
+                      'has them.', _harness.flat(out))
+
+    def test_a_complete_copy_prints_nothing(self):
+        self.assertEqual(self.report(['a', 'b'], ['a', 'b']), ([], ''))
+
+    def test_files_the_tag_lacks_are_not_missing(self):
+        """The distro's own C is in the copy and in no 2.34 tag."""
+        self.assertEqual(self.report(['a', 'C'], ['a']), ([], ''))
+
+
 class SameTreeAndManifest(unittest.TestCase):
     """Comparing a directory with itself, or two copies of one tar, reports
     100% identical -- the most reassuring output the tool can print."""
