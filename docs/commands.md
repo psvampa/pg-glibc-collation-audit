@@ -53,7 +53,8 @@ Two of those answer questions the upstream comparison cannot reach at all:
   needs both machines. `C.UTF-8` is that locale, and in a container it is
   usually the database collation.
 
-Leave the files out and steps 6 to 10 print `NOT RUN`. They are not omitted,
+Leave the files out and the summary says `NOT RUN` for steps 8 to 10, and
+`NOT CHECKED` for what the distro adds or drops. They are not omitted,
 because a section that vanishes reads like a section that found nothing.
 
 **This still settles data, not order.** The weights are computed when the

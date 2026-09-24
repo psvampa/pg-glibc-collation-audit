@@ -1262,6 +1262,75 @@ class APureRenamePassesTheNoHunkCheck(unittest.TestCase):
         self.assertIn('renamed: 1', out)
 
 
+def read_list(path):
+    """Every non-blank line of a list a step wrote, its `#` header included."""
+    with open(path, encoding='utf-8') as fh:
+        return [ln.rstrip('\n') for ln in fh if ln.strip()]
+
+
+class Step2ListsWhatTheTagsRemove(unittest.TestCase):
+    """Forty-second entry: with no node read, step 2 is the only step that knows a
+    locale file is gone at the new tag, and it said so only in its own output.
+    It now writes the list the summary relays. Fabricated, because none of
+    the pairs this suite pins deletes a locale file. The clone's real
+    deletions are older -- glibc-2.23..glibc-2.24 deletes iw_IL and pap_AN --
+    on tags the suite does not pin; the rename is tested on the real
+    2.34..2.39 below."""
+
+    def test_a_deleted_and_a_renamed_file_are_listed_under_the_old_name(self):
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-removed-repo-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-removed-out-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        repo = make_glibc_shaped_repo(tmp, n_files=g.MIN_LOCALE_FILES)
+        loc = os.path.join(repo, 'localedata', 'locales')
+        # Every file the fixture writes has the same body, and git pairs a
+        # rename with whichever identical deleted file it meets first -- here
+        # loc_000, measured. One line tells x apart.
+        with open(os.path.join(loc, 'x'), 'a') as fh:
+            fh.write('% x\n')
+        git(repo, 'commit', '-q', '-am', 't1b')
+        git(repo, 'tag', 't1b')
+        git(repo, 'rm', '-q', os.path.join(loc, 'loc_000'))
+        git(repo, 'mv', os.path.join(loc, 'x'), os.path.join(loc, 'y'))
+        git(repo, 'commit', '-q', '-m', 't2')
+        git(repo, 'tag', 't2')
+        rc, out = run_script('filter_lc_collate_changes.py', 't1b', 't2',
+                             '--repo', repo,
+                             env_extra={'PG_GLIBC_AUDIT_OUT': out_dir})
+        self.assertEqual(rc, 0, out)
+        # The control: git reported both, so the list below is step 2's.
+        self.assertIn('deleted: 1   renamed: 1', out)
+        self.assertEqual(
+            read_list(os.path.join(out_dir, 'step2_removed_locales.t1b..t2.txt')),
+            ['# locale files at t1b and not at t2', 'loc_000 (deleted)',
+             'x (renamed to y)'])
+
+
+@needs_clone
+class Step2RemovalListOnThePublishedPairs(unittest.TestCase):
+    """The same list on the tags the published results are stated against."""
+
+    def removal_list(self, old, new):
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-removed-pair-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        rc, out = run_script('filter_lc_collate_changes.py', old, new,
+                             env_extra={'PG_GLIBC_AUDIT_OUT': out_dir})
+        self.assertEqual(rc, 0, out)
+        return read_list(os.path.join(out_dir,
+                                      f'step2_removed_locales.{old}..{new}.txt'))
+
+    def test_the_rename_over_2_34_to_2_39_is_listed(self):
+        self.assertEqual(self.removal_list(MID, NEW),
+                         [f'# locale files at {MID} and not at {NEW}',
+                          'aa_ER@saaho (renamed to ssy_ER)'])
+
+    def test_a_pair_that_removes_nothing_writes_the_header_alone(self):
+        """Absent is not empty: 2.28 to 2.34 removes no file."""
+        self.assertEqual(self.removal_list(OLD, MID),
+                         [f'# locale files at {OLD} and not at {MID}'])
+
+
 class AGainedBlockThatNamesNoCharacter(unittest.TestCase):
     """Thirty-ninth entry, the case the attempt before it got wrong: a file
     that gains a block naming no character -- a bare `copy` -- was reported as

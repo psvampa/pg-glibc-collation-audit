@@ -129,16 +129,22 @@ export PG_GLIBC_AUDIT_WRAPPED=1
 
 PAIR="${OLD//[^A-Za-z0-9_.@+-]/_}..${NEW//[^A-Za-z0-9_.@+-]/_}"
 STEP2_LIST="$OUT_DIR/step2_changed_collate.$PAIR.txt"
+STEP2_REMOVED="$OUT_DIR/step2_removed_locales.$PAIR.txt"
 STEP3_LIST="$OUT_DIR/step3_affected_locales.txt"
 STEP4_LIST="$OUT_DIR/step4_exposed_locales.txt"
+# What step 7 found missing from the new copy, named after the new tag and the
+# label step 7 is given below, exactly as pair_slug spells it.
+NEW_COPY_MISSING="$OUT_DIR/copy_missing.${NEW//[^A-Za-z0-9_.@+-]/_}..new.txt"
 
 # Named after both builds, so a node-to-node result cannot be read as another
 # pair's. Empty unless both sides were supplied, which is what gates step 8.
-NODE_LIST=""; NODE_INHERITED=""
+NODE_LIST=""; NODE_INHERITED=""; NODE_REMOVED=""; NODE_UNDETERMINED=""
 if [ -n "$OLD_BUILD" ] && [ -n "$NEW_BUILD" ]; then
   BUILDPAIR="${OLD_BUILD//[^A-Za-z0-9_.@+-]/_}..${NEW_BUILD//[^A-Za-z0-9_.@+-]/_}"
   NODE_LIST="$OUT_DIR/node_collate_diffs.$BUILDPAIR.txt"
   NODE_INHERITED="$OUT_DIR/node_collate_inherited.$BUILDPAIR.txt"
+  NODE_REMOVED="$OUT_DIR/node_removed_locales.$BUILDPAIR.txt"
+  NODE_UNDETERMINED="$OUT_DIR/node_removed_undetermined.$BUILDPAIR.txt"
 fi
 
 mkdir -p "$OUT_DIR"
@@ -157,8 +163,10 @@ mkdir -p "$OUT_DIR"
 # one of these nodes" when it read no node. The direction is conservative, which
 # is why it went unnoticed, but the statement is false and this file's rule is
 # that every file it reads was written by this run.
-rm -f "$STEP2_LIST" "$STEP3_LIST" "$STEP4_LIST" ${NODE_LIST:+"$NODE_LIST"} \
-      ${NODE_INHERITED:+"$NODE_INHERITED"}
+rm -f "$STEP2_LIST" "$STEP2_REMOVED" "$STEP3_LIST" "$STEP4_LIST" \
+      "$NEW_COPY_MISSING" \
+      ${NODE_LIST:+"$NODE_LIST"} ${NODE_INHERITED:+"$NODE_INHERITED"} \
+      ${NODE_REMOVED:+"$NODE_REMOVED"} ${NODE_UNDETERMINED:+"$NODE_UNDETERMINED"}
 rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
 
 banner() {
@@ -369,6 +377,100 @@ else
   echo "     none -- no locale's LC_COLLATE changed between these two tags"
 fi
 
+# What the upgrade removes. A locale that is gone is worse than one that sorts
+# differently. Whatever is built on it has no collation at all on the new
+# system. Steps 2 and 8 each said so in their own output, more than a hundred
+# lines up, and nothing here repeated it -- a reader of the summary alone
+# concluded that the upgrade removes nothing (forty-second entry).
+#
+# The source is chosen by what was SUPPLIED, never by which list exists. Given
+# both nodes' directories, the nodes are the answer and the tags are not
+# asked. en_US@ampm is on RHEL8, gone on RHEL9 and in no tag, so the tags'
+# "none" for that pair is precisely the answer this block exists to replace.
+# A missing node list is therefore NOT REPORTED, never a fallback to the tags.
+echo
+echo "-- Removed: locale files the old side has and the new side does not"
+if [ -n "$OLD_LOCALES" ] && [ -n "$NEW_LOCALES" ]; then
+  if [ ! -f "$NODE_REMOVED" ] || [ ! -f "$NODE_UNDETERMINED" ]; then
+    # Unreachable as the step stands: step 8 writes both lists on every run,
+    # and a step 8 that failed has already ended this script under set -e.
+    echo "     NOT REPORTED -- step 8 wrote no removal list. Read its output"
+    echo "     above; do not read this as nothing removed"
+  else
+    UNDETERMINED=$(count_names "$NODE_UNDETERMINED")
+    REMOVED=$(count_names "$NODE_REMOVED")
+    # What is gone first, under its own count, and what step 8 cannot decide
+    # after it, under its own heading: printed the other way round, a definite
+    # removal read as one more line of the undetermined list. Either of them
+    # suppresses the zero line -- a copy that lost a file the old tag has would
+    # otherwise print "none" here, above step 6's `!!` naming that same file.
+    if [ "$REMOVED" -gt 0 ]; then
+      awk '!/^#/ && NF' "$NODE_REMOVED" | sed 's/^/     /'
+      echo "   ($REMOVED name(s) on $OLD_BUILD and not on $NEW_BUILD;"
+      echo "   an index on one does not just sort differently; the collation is gone."
+      echo "   Full list: $NODE_REMOVED)"
+    fi
+    if [ "$UNDETERMINED" -gt 0 ]; then
+      echo "     UNDETERMINED -- step 8 cannot say whether the upgrade removes these:"
+      awk '!/^#/ && NF' "$NODE_UNDETERMINED" | sed 's/^/       /'
+      if [ "$REMOVED" -eq 0 ]; then
+        echo "     every other file in $OLD_LOCALES is also in $NEW_LOCALES"
+      fi
+    elif [ "$REMOVED" -eq 0 ]; then
+      # Names the directories, not the builds: this is what the two copies
+      # hold, and a copy that lost a file only the distro ships cannot be told
+      # from one that never had it (fortieth entry).
+      echo "     none -- every file in $OLD_LOCALES is also in $NEW_LOCALES"
+    fi
+  fi
+else
+  # First, so it is never read as a footnote to a "none" below it. On RHEL8 ->
+  # RHEL9 the tags remove nothing and the upgrade removes en_US@ampm, a file
+  # only RHEL8 ships. A file the new distro drops is as invisible to the tags.
+  echo "     The tags cannot show what your distro adds or drops: NOT CHECKED."
+  echo "     Pass --old-locales-dir and --new-locales-dir with their build"
+  echo "     ids; step 8 is the only check that sees those."
+  # With the new copy alone, a file of the new tag it does not hold may be one
+  # the new machine does not ship -- a locale the upgrade removes, and one no
+  # tag can see. Step 7 names those files under a `!!` that cannot tell a lost
+  # file from one never shipped, and a "none" from the tags must not be the
+  # section's last word over them.
+  # Each count is assigned before it is tested, as in the node branch above. A
+  # failing count inside `[ ]` escapes set -e, and the test then falls through
+  # to the branch that prints "none".
+  if [ -n "$NEW_LOCALES" ]; then
+    if [ ! -f "$NEW_COPY_MISSING" ]; then
+      # Unreachable as the step stands: step 7 writes this list on every run,
+      # and a step 7 that failed has already ended this script under set -e.
+      echo "     The new copy: NOT REPORTED -- step 7 wrote no list of the files"
+      echo "     it lacks. Read its output above; do not read this as nothing removed"
+    else
+      LACKING=$(count_names "$NEW_COPY_MISSING")
+      if [ "$LACKING" -gt 0 ]; then
+        echo "     UNDETERMINED -- files of $NEW the new copy does not hold. If"
+        echo "     $NEW_BUILD does not ship them, the upgrade removes any the old"
+        echo "     machine had:"
+        awk '!/^#/ && NF' "$NEW_COPY_MISSING" | sed 's/^/       /'
+        echo "   ($LACKING name(s); full list: $NEW_COPY_MISSING)"
+      fi
+    fi
+  fi
+  if [ -f "$STEP2_REMOVED" ]; then
+    GONE=$(count_names "$STEP2_REMOVED")
+  fi
+  if [ ! -f "$STEP2_REMOVED" ]; then
+    # Unreachable for the same reason as step 8's branch above.
+    echo "     Between the tags: NOT REPORTED -- step 2 wrote no removal list."
+    echo "     Read its output above; do not read this as nothing removed"
+  elif [ "$GONE" -gt 0 ]; then
+    echo "     Between the tags, gone at $NEW:"
+    awk '!/^#/ && NF' "$STEP2_REMOVED" | sed 's/^/       /'
+    echo "   ($GONE name(s); full list: $STEP2_REMOVED)"
+  else
+    echo "     Between the tags: none -- no locale file at $OLD is gone at $NEW"
+  fi
+fi
+
 echo
 case $STEP5 in
   hunks)
@@ -407,6 +509,8 @@ if [ -n "$NODE_LIST" ] && [ -f "$NODE_LIST" ]; then
       echo "     plus $(count_names "$NODE_INHERITED") locale(s) that inherit one of those files'"
       echo "     LC_COLLATE via copy on $NEW_BUILD; full list: $NODE_INHERITED"
     else
+      # Unreachable as the step stands: step 8 writes this list on every run,
+      # and a step 8 that failed has already ended this script under set -e.
       echo "     blast radius via copy: NOT REPORTED -- step 8 wrote no"
       echo "     inheritance list; read its output above"
     fi

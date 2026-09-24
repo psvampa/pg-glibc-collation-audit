@@ -192,6 +192,207 @@ class NodeToNodeSeesWhatNoTagCan(NodeCase):
         self.assertIn('the collation is gone', text)
 
 
+@needs_clone
+class NodeToNodeWritesWhatTheUpgradeRemoves(NodeCase):
+    """Forty-second entry: the summary never named a locale the upgrade removes,
+    because the only place step 8 said it was its own output. It now writes
+    two lists the summary reads -- what is removed, and what it cannot say
+    either way -- and these tests are the step's half of that."""
+
+    def listed(self, stem):
+        """(header, entries) of the one `stem`.*.txt this run wrote."""
+        paths = glob.glob(os.path.join(self.out, f'{stem}.*.txt'))
+        self.assertEqual(len(paths), 1, f'expected one {stem} list: {paths}')
+        with open(paths[0], encoding='utf-8') as fh:
+            lines = [ln.rstrip('\n') for ln in fh if ln.strip()]
+        self.assertTrue(lines and lines[0].startswith('# '),
+                        f'{stem}: no provenance header: {lines[:2]}')
+        return lines[0], lines[1:]
+
+    def without(self, tag, name, drop):
+        """A stand-in node for `tag` that lacks `drop` -- a copy that lost it."""
+        return self.node(tag, name, keep=set(os.listdir(_tree(tag))) - {drop})
+
+    def test_both_lists_are_written_when_nothing_is_removed(self):
+        """Absent is not empty: 2.28 to 2.34 removes no file, and both lists
+        must still exist, or the summary could not tell "none" from "step 8
+        never got here"."""
+        rc, text = self.node_to_node(self.node(OLD, 'a'), self.node(MID, 'b'),
+                                     'build-A', 'build-B',
+                                     '--old-tag', OLD, '--new-tag', MID)
+        self.assertEqual(rc, 0, text)
+        header, removed = self.listed('node_removed_locales')
+        self.assertEqual(removed, [])
+        self.assertIn('build-A', header)
+        self.assertIn('build-B', header)
+        _, undetermined = self.listed('node_removed_undetermined')
+        self.assertEqual(undetermined, [])
+        self.assertNotIn('Undetermined (', text)
+
+    def test_a_file_only_on_the_old_copy_is_listed_as_removed(self):
+        """The en_US@ampm shape: on the old node, in no tag."""
+        rc, text = self.node_to_node(
+            self.node(OLD, 'a', extra={'zz_GONE': backported_c()}),
+            self.node(MID, 'b'), 'build-A', 'build-B',
+            '--old-tag', OLD, '--new-tag', MID)
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(self.listed('node_removed_locales')[1], ['zz_GONE'])
+        self.assertEqual(self.listed('node_removed_undetermined')[1], [])
+
+    def test_the_real_removal_between_the_published_tags_is_listed(self):
+        """The control for the next test: complete copies of 2.34 and 2.39
+        remove aa_ER@saaho, and nothing is undetermined."""
+        rc, text = self.node_to_node(self.node(MID, 'a'), self.node(NEW, 'b'),
+                                     'build-A', 'build-B',
+                                     '--old-tag', MID, '--new-tag', NEW)
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(self.listed('node_removed_locales')[1],
+                         ['aa_ER@saaho'])
+        self.assertEqual(self.listed('node_removed_undetermined')[1], [])
+
+    def test_a_file_of_the_old_tag_that_neither_copy_holds_is_undetermined(self):
+        """A copy of 2.34 that lost aa_ER@saaho removes nothing on paper, and
+        that "nothing" would be printed above step 6's `!!` naming the file.
+        Checked against the old tag, so it needs no list of what distros ship.
+        """
+        rc, text = self.node_to_node(self.without(MID, 'a', 'aa_ER@saaho'),
+                                     self.node(NEW, 'b'), 'build-A', 'build-B',
+                                     '--old-tag', MID, '--new-tag', NEW)
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(self.listed('node_removed_locales')[1], [])
+        header, undetermined = self.listed('node_removed_undetermined')
+        self.assertEqual(undetermined,
+                         [f'aa_ER@saaho: in {MID}, and in neither copy'])
+        self.assertIn(f'checked against {MID}', header)
+        self.assertIn('Undetermined (1) -- this comparison cannot say whether '
+                      'the upgrade removes these:', text)
+
+    def test_without_the_tags_the_list_says_what_it_did_not_check(self):
+        """No tag, no way to know what the old copy should hold. The list
+        says so rather than reading as a checked empty one."""
+        rc, text = self.node_to_node(self.without(MID, 'a', 'aa_ER@saaho'),
+                                     self.node(NEW, 'b'), 'build-A', 'build-B')
+        self.assertEqual(rc, 0, text)
+        header, undetermined = self.listed('node_removed_undetermined')
+        self.assertEqual(undetermined, [])
+        self.assertIn('NOT checked against a tag', header)
+
+    def test_a_backported_locale_on_the_old_copy_only_is_not_called_removed(self):
+        """Step 8's own verdict on C there is "present on the old node ONLY
+        ... test it empirically" -- not examined. The summary must not relay
+        it as a collation that is gone."""
+        rc, text = self.node_to_node(
+            self.node(OLD, 'a', extra={'C': backported_c()}),
+            self.node(MID, 'b'), 'build-A', 'build-B',
+            '--old-tag', OLD, '--new-tag', MID)
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(self.listed('node_removed_locales')[1], [])
+        self.assertEqual(self.listed('node_removed_undetermined')[1],
+                         ['C: backported (C.UTF-8), on the old node only: '
+                          'not examined'])
+
+    def test_an_entry_the_old_copy_holds_and_did_not_read_is_undetermined(self):
+        """A symlink on the old side is skipped, so it is in neither side's
+        names and could never appear as removed."""
+        old_root = self.node(OLD, 'a')
+        os.symlink('en_US', os.path.join(old_root, 'zz_LINK'))
+        rc, text = self.node_to_node(old_root, self.node(MID, 'b'),
+                                     'build-A', 'build-B',
+                                     '--old-tag', OLD, '--new-tag', MID)
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(self.listed('node_removed_undetermined')[1],
+                         ['zz_LINK: on the old side and not read (symlink), '
+                          'and not on the new side'])
+
+    def test_an_entry_neither_side_read_is_undetermined_and_says_so(self):
+        """The same symlink on both sides: this step read neither, so it can
+        say nothing about either. This test used to assert the opposite --
+        a new-side entry counted as present -- and that is what printed
+        "none" over a file step 7 named as not read (false-negative-reviewer,
+        round 2)."""
+        old_root, new_root = self.node(OLD, 'a'), self.node(MID, 'b')
+        for root in (old_root, new_root):
+            os.symlink('en_US', os.path.join(root, 'zz_LINK'))
+        rc, text = self.node_to_node(old_root, new_root, 'build-A', 'build-B',
+                                     '--old-tag', OLD, '--new-tag', MID)
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(self.listed('node_removed_undetermined')[1],
+                         ['zz_LINK: on the old side and not read (symlink), '
+                          'and on the new side but not read (symlink)'])
+
+    def dangling(self, root, name):
+        """Replace `name` in a stand-in node by a symlink to nothing."""
+        os.remove(os.path.join(root, name))
+        os.symlink('nowhere', os.path.join(root, name))
+        return root
+
+    def test_a_tag_file_only_the_new_side_holds_unread_is_undetermined(self):
+        """th_TH gone from the old copy and a dangling symlink in the new: in
+        neither copy as a file this step read, so not "none"."""
+        rc, text = self.node_to_node(
+            self.without(OLD, 'a', 'th_TH'),
+            self.dangling(self.node(MID, 'b'), 'th_TH'), 'build-A', 'build-B',
+            '--old-tag', OLD, '--new-tag', MID)
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(self.listed('node_removed_undetermined')[1],
+                         [f'th_TH: in {OLD}, not in the old copy, and on the '
+                          f'new side but not read (symlink)'])
+
+    def test_a_file_the_new_side_holds_unread_is_not_called_gone(self):
+        """Read on the old side, a symlink on the new: gone if it dangles, not
+        if it resolves on the machine, and this step cannot tell which."""
+        rc, text = self.node_to_node(
+            self.node(OLD, 'a'),
+            self.dangling(self.node(MID, 'b'), 'th_TH'), 'build-A', 'build-B',
+            '--old-tag', OLD, '--new-tag', MID)
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(self.listed('node_removed_locales')[1], [])
+        self.assertEqual(self.listed('node_removed_undetermined')[1],
+                         ['th_TH: read on the old side, and on the new side '
+                          'but not read (symlink)'])
+
+    def test_a_name_ending_in_a_newline_stays_one_line(self):
+        """SAFE_NAME's `$` also matches before a final newline, so "x\\n"
+        is read as a locale and "zz\\n" passed the quoting check: each was
+        written as two lines of its list."""
+        old_root = self.node(OLD, 'a', extra={'x\n': 'a file'})
+        os.symlink('en_US', os.path.join(old_root, 'zz\n'))
+        rc, text = self.node_to_node(old_root, self.node(MID, 'b'),
+                                     'build-A', 'build-B',
+                                     '--old-tag', OLD, '--new-tag', MID)
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(self.listed('node_removed_locales')[1],
+                         [repr('x\n')])
+        self.assertEqual(self.listed('node_removed_undetermined')[1],
+                         [f"{repr('zz' + chr(10))}: on the old side and not "
+                          f"read (symlink), and not on the new side"])
+
+    def test_a_dotfile_in_the_old_copy_is_not_undetermined(self):
+        """Finder writes .DS_Store into any directory it opens, and no locale
+        is named with a leading dot: one in the old copy alone must not turn
+        the summary's "none" into an undetermined line."""
+        rc, text = self.node_to_node(
+            self.node(OLD, 'a', extra={'.DS_Store': 'finder'}),
+            self.node(MID, 'b'), 'build-A', 'build-B',
+            '--old-tag', OLD, '--new-tag', MID)
+        self.assertEqual(rc, 0, text)
+        self.assertIn('.DS_Store  (dotfile)', text)
+        self.assertEqual(self.listed('node_removed_undetermined')[1], [])
+
+    def test_an_unsafe_name_is_quoted_so_it_cannot_read_as_the_header(self):
+        """An editor's #en_US# is skipped as unsafe. Written bare, its line
+        began with `#`, the summary took it for the list's header, and the
+        undetermined entry vanished under a "none"."""
+        rc, text = self.node_to_node(
+            self.node(OLD, 'a', extra={'#en_US#': 'autosave'}),
+            self.node(MID, 'b'), 'build-A', 'build-B',
+            '--old-tag', OLD, '--new-tag', MID)
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(self.listed('node_removed_undetermined')[1],
+                         ["'#en_US#': on the old side and not read (unsafe "
+                          "name), and not on the new side"])
+
+
 def with_edited_template(root, name='iso14651_t1'):
     """Edit one line inside `name`'s LC_COLLATE block in a stand-in node --
     the shape of a distro backport to a template."""

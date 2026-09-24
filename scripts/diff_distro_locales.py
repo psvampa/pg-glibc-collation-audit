@@ -401,6 +401,17 @@ def main(argv):
             g.report_missing_from_copy(names, up_names, opts.tag,
                                        opts.locales_dir, skipped)
 
+        # Every file of the tag this copy does not hold as a file it read,
+        # written whether or not there is one. The summary reads it for the
+        # new side when the old one was not supplied: a file the new machine
+        # does not ship is a locale the upgrade removes, and with no old copy
+        # to compare against, this is the only place that can say so.
+        g.write_list(
+            f"copy_missing.{g.pair_slug(opts.tag, opts.node_label)}.txt",
+            [f"# files of {opts.tag} that {opts.locales_dir} "
+             f"({opts.build_id}) does not hold as a file it read"]
+            + absent_on_node)
+
         out = g.write_list(
             f"backports_inside_collate."
             f"{g.pair_slug(opts.tag, opts.node_label)}.txt",
