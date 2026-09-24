@@ -31,14 +31,23 @@ working one, including the two steps that fail on purpose.
 ## Finding the affected objects in your own database
 
 Five scripts in [`scripts/`](scripts/), each one standalone, each one reporting the objects
-whose collation comes from libc. Run them in every database. Tested on PostgreSQL 14
-through 18.
+a change in glibc's sort order or character rules can break, including those that text
+search, pg_trgm or citext tie to the database's LC_CTYPE. Run them in every database. Each
+one opens with a
+warning that it decides from the collations of the columns an object reads, not from its
+expressions, so an object built on text taken from a column that has no collation, such as
+`doc->>'name'` on a jsonb column, can be missing from its list.
+
+Tested on PostgreSQL 14 through 18 with
+[`tests/find-affected-selftest.sql`](tests/find-affected-selftest.sql), which builds a set of
+objects in throwaway databases and checks what each script reports about them. It creates
+and drops databases, so run it on a test server, never in production.
 
 | Script | What it finds |
 |---|---|
-| [find-affected-indexes.sql](scripts/find-affected-indexes.sql) | indexes, including the partial and expression indexes the query on the PostgreSQL wiki does not reach |
+| [find-affected-indexes.sql](scripts/find-affected-indexes.sql) | indexes, including the partial and expression indexes the query on the PostgreSQL wiki does not reach, the trigram and text search indexes that follow the database's LC_CTYPE, and btree indexes on jsonb |
 | [find-affected-check-constraints.sql](scripts/find-affected-check-constraints.sql) | CHECK constraints, which are never re-evaluated on their own |
-| [find-affected-range-partitions.sql](scripts/find-affected-range-partitions.sql) | tables partitioned by range on a text key |
+| [find-affected-range-partitions.sql](scripts/find-affected-range-partitions.sql) | partitioned tables, by range on a text or jsonb column, and by any strategy on a citext column or on an expression over a text column |
 | [find-affected-generated-columns.sql](scripts/find-affected-generated-columns.sql) | stored generated columns, whose value was computed once and written down |
 | [find-affected-materialized-views.sql](scripts/find-affected-materialized-views.sql) | materialized views, which hold their own copy of the rows |
 
