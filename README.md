@@ -140,7 +140,7 @@ nothing was generated. That, and what was measured, are in
 and
 [docs/limitations.md](docs/limitations.md#cutf-8-is-invisible-to-a-tag-diff).
 What it prints on both pairs is in
-[examples/README.md, under Command 2](examples/README.md#command-2-the-cutf-8-probe).
+[examples/README.md, under Command 2](examples/README.md#command-2--the-cutf-8-probe).
 
 **3 — Confirming the order on your own builds**
 *Optional, and what turns a source argument into a measurement. Needs
@@ -166,7 +166,7 @@ What this box leaves out is in
   `REINDEX` fixes
 
 What it prints, filled in for each pair, is in
-[examples/README.md, under Command 3](examples/README.md#command-3-the-confirmation-template-filled-in).
+[examples/README.md, under Command 3](examples/README.md#command-3--the-confirmation-template-filled-in).
 
 ## Results for the two RHEL pairs
 
