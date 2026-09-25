@@ -10,9 +10,8 @@ Two version pairs were run end to end. `ko_KR` is the row a data-only audit
 gets wrong, and `C.UTF-8` the row no *tag* diff can reach — its source file is
 in neither tag for the first pair, so steps 1-5 are blind to it and step 2
 names it rather than settling it. It is settled by reading the file where it
-does exist, on the nodes themselves: both its verdicts were measured directly
-on 2026-09-06, replacing ardentperf's checksum as the basis for the
-RHEL9→RHEL10 column. See
+does exist, on the nodes themselves: both its verdicts were measured directly,
+replacing ardentperf's checksum as the basis for the RHEL9→RHEL10 column. See
 [limitations.md](limitations.md#cutf-8-is-invisible-to-a-tag-diff) and the
 worked-example section below.
 
@@ -174,8 +173,8 @@ Every other 🔴 row on this page was reached by steps 1-5. This one cannot be:
 backport, so it is on both **nodes** — and comparing the nodes to each other is
 what settles it.
 
-Measured 2026-09-06 on `glibc-2.28-251.el8_10.40` and `glibc-2.34-275.el9_8`,
-both PostgreSQL 18.6:
+Measured, and re-measured unchanged, on `glibc-2.28-251.el8_10.40` and
+`glibc-2.34-275.el9_8`, both PostgreSQL 18.6:
 
 | | RHEL8 | RHEL9 |
 |---|---|---|
@@ -316,7 +315,7 @@ page rests on a different PostgreSQL from any other.
   The distro-versus-upstream backport check under
   [limitations.md](limitations.md#upstream-tags-are-not-your-distros-glibc)
   was measured on these same two builds, and so were the node-to-node
-  comparison and the `C.UTF-8` probe added on 2026-09-06. Those two are
+  comparison and the `C.UTF-8` probe. Those two are
   separate measurements from the ones above even though the builds match:
   they read files (`/usr/share/i18n/locales/`) that the earlier runs never
   looked at.
@@ -333,8 +332,8 @@ page rests on a different PostgreSQL from any other.
   5 and are marked as such; the `th_TH` line was re-measured on 2026-09-06,
   after step 5 existed, and is what moved that verdict. The node-to-node
   comparison and the `C.UTF-8` probe were measured on `glibc-2.34-275.el9_8`
-  and `glibc-2.39-128.el10_2`, Rocky Linux 9.3 and 10.1, PostgreSQL 18.6, on
-  2026-09-06.
+  and `glibc-2.39-128.el10_2`, Rocky Linux 9.3 and 10.1, PostgreSQL 18.6, and
+  re-measured unchanged.
 
 ---
 
