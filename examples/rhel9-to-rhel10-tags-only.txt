@@ -96,11 +96,12 @@ Files with changes inside LC_COLLATE: 3
 !! localedata/locales/C is new UPSTREAM at glibc-2.39, but C.UTF-8 is
    BACKPORTED by the distros this audit targets -- so it very likely DOES
    exist on your old system, with an order of its own, and that order can
-   change. There is no source file to diff on the old side, so this audit is
-   blind to it: a clean result above says nothing about C.UTF-8. PostgreSQL
-   will not cover the gap either -- collversion is NULL for every collation
-   whose name starts with 'C.', so no version mismatch can ever fire. Compare
-   C.UTF-8 empirically on both nodes. See docs/limitations.md.
+   change. The old tag has no source file for it, so a comparison of the two
+   tags cannot see what your old system runs, and a clean result from steps 1
+   to 5 says nothing about the C.UTF-8 it runs. PostgreSQL will not cover the
+   gap either -- collversion is NULL for every collation whose name starts
+   with 'C.', so no version mismatch can ever fire. Compare C.UTF-8
+   empirically on both nodes. See docs/limitations.md.
 
 Added at glibc-2.39 (10), not analysed for a change of order. An added file
 cannot affect an existing index ONLY IF the locale did not exist on the old system.
@@ -1293,8 +1294,7 @@ empirical sort-order test, however clean its data diff is.
 
 -- Removed: locale files the old side has and the new side does not
      The tags cannot show what your distro adds or drops: NOT CHECKED.
-     Pass --old-locales-dir and --new-locales-dir with their build
-     ids; step 8 is the only check that sees those.
+     Pass --old-locales-dir and --new-locales-dir with their build ids.
      Between the tags, gone at glibc-2.39:
        aa_ER@saaho (renamed to ssy_ER)
    (1 name(s); full list: /tmp/pg-glibc-collation-audit/step2_removed_locales.glibc-2.34..glibc-2.39.txt)
@@ -1307,9 +1307,9 @@ empirical sort-order test, however clean its data diff is.
 
 -- Node-to-node locale data: NOT RUN
      Pass --old-locales-dir and --new-locales-dir with their build
-     ids. Without it nothing above says anything about C.UTF-8: its
-     source file is in neither tag, and PostgreSQL reports collversion
-     as NULL for every C.* collation, so no mismatch can ever fire.
+     ids. Without both, nothing above compared the two nodes' C.UTF-8
+     against each other, and PostgreSQL reports collversion as NULL for
+     every C.* collation, so no mismatch can ever fire.
      Then run sql/c_utf8_probe.sql on both nodes.
 
 -- Node's own ellipsis scan: NOT RUN
@@ -1326,11 +1326,12 @@ empirical sort-order test, however clean its data diff is.
      !! localedata/locales/C is new UPSTREAM at glibc-2.39, but C.UTF-8 is
         BACKPORTED by the distros this audit targets -- so it very likely DOES
         exist on your old system, with an order of its own, and that order can
-        change. There is no source file to diff on the old side, so this audit is
-        blind to it: a clean result above says nothing about C.UTF-8. PostgreSQL
-        will not cover the gap either -- collversion is NULL for every collation
-        whose name starts with 'C.', so no version mismatch can ever fire. Compare
-        C.UTF-8 empirically on both nodes. See docs/limitations.md.
+        change. The old tag has no source file for it, so a comparison of the two
+        tags cannot see what your old system runs, and a clean result from steps 1
+        to 5 says nothing about the C.UTF-8 it runs. PostgreSQL will not cover the
+        gap either -- collversion is NULL for every collation whose name starts
+        with 'C.', so no version mismatch can ever fire. Compare C.UTF-8
+        empirically on both nodes. See docs/limitations.md.
      (see docs/limitations.md)
 
 -- Not decided for you

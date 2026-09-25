@@ -40,15 +40,15 @@ whenever it cannot show that the suite ran:
 
 The last two lines are the ones `unittest` prints -- `Ran N tests in Ts`, then
 `OK`, `OK (skipped=N)` or `FAILED (...)` -- because `.claude/hooks/git-gate.sh`
-greps for exactly those and treats `skipped=` as a red (eighth CHANGELOG
-entry: a skip is never a pass). Which classes skipped is printed above them,
+greps for exactly those and treats `skipped=` as a red, because a skip is
+never a pass. Which classes skipped is printed above them,
 so a skip is never just a number either.
 
 `.github/workflows/tests.yml` runs the serial command on every pull request
 and every push to `main`, on purpose: this runner is not the last word on a
 change that gets merged. (It said "never the only thing that has run the
 suite" until the CI triggers stopped firing on a branch with no pull request
-open -- thirty-third entry.)
+open.)
 
 Usage:
 
@@ -79,8 +79,8 @@ SHARD_TIMEOUT = 600
 # adjacent. Both halves of that matter, and both were measured on a runner
 # that had neither: a test that prints `Ran 99 tests in 0.1s` and `OK` on
 # stdout was read as its own shard's verdict, and a shard whose real tail said
-# `OK (skipped=1)` reported a clean OK with the skip gone -- the eighth entry
-# ("a skip is never a pass") defeated by one line of test output. So the count
+# `OK (skipped=1)` reported a clean OK with the skip gone -- "a skip is never a
+# pass" defeated by one line of test output. So the count
 # and the status are matched as one pattern, in the stream unittest owns, and
 # the LAST one wins: the summary of the run is the one that ends it.
 _SUMMARY = re.compile(
@@ -234,7 +234,7 @@ def aggregate(shards, expected, seconds, workers, tail=80):
     different number of tests than the class holds, a class discovery never
     counted, and a run of nothing at all -- which reaches here as an empty
     list and used to return OK, leaving the refusal to two guards upstream
-    that nothing re-checked where the verdict is printed (ninth entry).
+    that nothing re-checked where the verdict is printed.
     """
     lines, problems = [], []
     totals = collections.Counter()

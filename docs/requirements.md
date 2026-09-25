@@ -14,9 +14,9 @@ network the first time. The clone is `--filter=blob:none --no-checkout` and
 still comes to roughly **370 MB** on disk. Later runs reuse it.
 
 Step 1 also prints the commit id and GPG signature state behind each tag
-before diffing anything, and an invalid signature aborts the run. Why that
-matters, and what happens when `gpg` is unavailable, is in
-[method.md](method.md) under step 1.
+before diffing anything, and an invalid signature aborts the run. Without
+`gpg`, or without the signer's key, the signature is reported as not checked
+and the run continues.
 
 ## The test suite
 
@@ -28,9 +28,11 @@ python3 tests/run_parallel.py                    # one process per class
 The suite pins the five tags to their commit ids, so a moved tag reports
 itself as a moved tag instead of as a change in the results. Six of the
 suite's nine layers need the glibc clone and skip themselves, with a reason,
-if it is absent; `test_pure_functions.py`, `test_published_claims.py` and
-`test_parallel_runner.py` run without one. CI runs the whole suite, serially,
-on a fresh clone and fails on any skip.
+if it is absent; `test_pure_functions.py` and `test_parallel_runner.py` run
+without one. The ninth, which checks the figures and quotes the documentation
+publishes, is switched off for now ([tests/README.md](../tests/README.md)). CI
+runs every layer that is switched on, serially, on a fresh clone and fails on
+any skip.
 
 `tests/run_parallel.py` runs the same tests out of the same files, one process
 per `TestCase` class, and is stdlib-only like everything else here. It is the
@@ -131,5 +133,4 @@ collation is missing.
 ---
 
 [Documentation index](README.md) ·
-[Confirming on a real system](confirming-on-a-real-system.md) ·
-[Method](method.md)
+[Confirming on a real system](confirming-on-a-real-system.md)

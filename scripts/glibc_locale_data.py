@@ -66,7 +66,7 @@ GIT_CONFIG_OVERRIDES = ['-c', 'color.ui=false',
 # the locale sources are text, so even --text is what git would do anyway.
 # Each one is here because a setting this run does not control changed that
 # text and a step read the result as an answer. Measured with git 2.50 for
-# step 5 (the twenty-fourth CHANGELOG entry) and git 2.54 for step 2:
+# step 5 and git 2.54 for step 2:
 #
 #   --text         `-diff` or `binary` in the reader's core.attributesFile makes
 #                  git print "Binary files a/x and b/x differ" -- no hunk. With

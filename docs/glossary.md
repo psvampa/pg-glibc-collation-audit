@@ -19,7 +19,7 @@ that inherits it.
 directives. A locale with no tailoring of its own just copies another's
 rules, so its real sort order changes whenever the copied locale's does —
 with no change to its own file, and so no appearance in a file diff. Step 3
-walks this graph. See [method.md](method.md).
+walks this graph.
 
 **blast radius** — how many locales inherit a given file through the `copy`
 graph. Step 1 prints it, so a one-line change to a template that 328 locales
@@ -46,7 +46,10 @@ generated names — use those.
 
 **hunk** — one contiguous changed block in a `git diff`. Step 5 reports how
 many it found and prints them. "Read the hunks" means reading those blocks
-of C.
+of C. Step 5 marks each changed line it counts as code with `>>`.
+
+**`!!`** — a warning printed where a clean-looking result does not cover
+something. The summary repeats each one in full.
 
 **tier** (step 5 only) — one of the three groups of glibc source paths step 5
 diffs. Tiers 1 and 2 are curated lists. Tier 3 is *derived*, by walking
@@ -77,9 +80,7 @@ upstream, and RHEL8 ships the older ellipsis-based copy. It is the whole reason
 each other, with no upstream tag in the middle
 (`scripts/diff_node_locales.py`, step 8 of `audit.sh`). Distinct from the
 node-versus-tag check, which asks "is the audit reading what this node runs?";
-this asks "did what the two nodes run actually change?" It is the only check
-that can see a locale the distro **adds**, because such a file is in no tag and
-therefore in neither side of any tag diff.
+this asks "did what the two nodes run actually change?"
 
 **inverted positive control** — the one place the rule below runs backwards.
 For `C.UTF-8`, agreeing with `LC_ALL=C` byte order is the *corrected*

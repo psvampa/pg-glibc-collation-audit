@@ -91,11 +91,12 @@ Files with changes inside LC_COLLATE: 2
 !! localedata/locales/C exists at NEITHER glibc-2.28 nor glibc-2.34, but
    C.UTF-8 is BACKPORTED by the distros this audit targets -- so it very
    likely DOES exist on your old system, with an order of its own, and that
-   order can change. There is no source file to diff on the old side, so this
-   audit is blind to it: a clean result above says nothing about C.UTF-8.
-   PostgreSQL will not cover the gap either -- collversion is NULL for every
-   collation whose name starts with 'C.', so no version mismatch can ever
-   fire. Compare C.UTF-8 empirically on both nodes. See docs/limitations.md.
+   order can change. The old tag has no source file for it, so a comparison of
+   the two tags cannot see what your old system runs, and a clean result from
+   steps 1 to 5 says nothing about the C.UTF-8 it runs. PostgreSQL will not
+   cover the gap either -- collversion is NULL for every collation whose name
+   starts with 'C.', so no version mismatch can ever fire. Compare C.UTF-8
+   empirically on both nodes. See docs/limitations.md.
 
 Added at glibc-2.34 (2), not analysed for a change of order. An added file
 cannot affect an existing index ONLY IF the locale did not exist on the old system.
@@ -857,7 +858,7 @@ unexamined are three different answers:
      nodes' OWN sources; full list: /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.28-251.el8_10.40..glibc-2.34-275.el9_8.txt
      plus 2 locale(s) that inherit one of those files'
      LC_COLLATE via copy on glibc-2.34-275.el9_8; full list: /tmp/pg-glibc-collation-audit/node_collate_inherited.glibc-2.28-251.el8_10.40..glibc-2.34-275.el9_8.txt
-     C (C.UTF-8): DIFFERS  <- in neither tag; no other step sees it
+     C (C.UTF-8): DIFFERS  <- LC_COLLATE is not the same on the two nodes
 
 -- Node's own locale data, ellipsis scan (glibc-2.28-251.el8_10.40)
      ellipsis-based locale(s): 5
@@ -871,11 +872,12 @@ unexamined are three different answers:
      !! localedata/locales/C exists at NEITHER glibc-2.28 nor glibc-2.34, but
         C.UTF-8 is BACKPORTED by the distros this audit targets -- so it very
         likely DOES exist on your old system, with an order of its own, and that
-        order can change. There is no source file to diff on the old side, so this
-        audit is blind to it: a clean result above says nothing about C.UTF-8.
-        PostgreSQL will not cover the gap either -- collversion is NULL for every
-        collation whose name starts with 'C.', so no version mismatch can ever
-        fire. Compare C.UTF-8 empirically on both nodes. See docs/limitations.md.
+        order can change. The old tag has no source file for it, so a comparison of
+        the two tags cannot see what your old system runs, and a clean result from
+        steps 1 to 5 says nothing about the C.UTF-8 it runs. PostgreSQL will not
+        cover the gap either -- collversion is NULL for every collation whose name
+        starts with 'C.', so no version mismatch can ever fire. Compare C.UTF-8
+        empirically on both nodes. See docs/limitations.md.
      !! This compares locale DATA. glibc's collation CODE is step 5's job
         (diff_collation_code.py) -- that is where Bug 22668 lives, the change that
         reorders ko_KR -- and step 5 reads it between the two upstream tags. What

@@ -1,8 +1,8 @@
 """Layer 1: the algorithmic core, with no git and no glibc clone.
 
-Every case here freezes a failure this tool actually shipped. The CHANGELOG
-entry each one guards is quoted in its docstring, because a test whose purpose
-is forgotten is a test somebody deletes during a refactor.
+Every case here freezes a failure this tool actually shipped, and its docstring
+says which, because a test whose purpose is forgotten is a test somebody
+deletes during a refactor.
 """
 import contextlib
 import io
@@ -342,7 +342,7 @@ class HunkOverlap(unittest.TestCase):
 
 
 class ChangedCharacters(unittest.TestCase):
-    """"Step 2 named the file and stopped" (thirty-ninth entry): the characters
+    """"Step 2 named the file and stopped": the characters
     the confirmation template needs as test values were in the diff step 2
     had already read, and reaching them meant a `git diff` by hand. These pin
     how the changed lines are read, by injection, because the corpus never
@@ -440,7 +440,7 @@ class ChangedCharacters(unittest.TestCase):
 class ChangedCharactersCannotTell(unittest.TestCase):
     """What it cannot tell comes back empty, never partial: the caller prints
     the warning for an empty answer, and a partial one would print as if it
-    were the whole list (thirty-ninth entry)."""
+    were the whole list."""
 
     OLD, NEW = ChangedCharacters.OLD, ChangedCharacters.NEW
     SECTION = '\n@@ -8 +11 @@\n-<U0042> <b>\n+<U0044> <b>\n'
@@ -465,7 +465,7 @@ class ChangedCharactersCannotTell(unittest.TestCase):
 
 
 class PrintCharacters(unittest.TestCase):
-    """How the list reads on a terminal (thirty-ninth entry)."""
+    """How the list reads on a terminal."""
 
     def printed(self, chars):
         buf = io.StringIO()
@@ -496,7 +496,7 @@ class NoiseFilter(unittest.TestCase):
 
     The rule used to be: noise unless the line carries one of ;{}=(). That
     swallowed whole hunks under the heading "no substantive change". These are
-    the three the CHANGELOG names.
+    three of them.
     """
 
     def test_preprocessor_include_is_code(self):
@@ -1150,8 +1150,8 @@ class CorpusGuard(unittest.TestCase):
 
 class MissingFromCopy(unittest.TestCase):
     """A copy that lost files above the half-of-the-tag refusal reported
-    "Nothing differs" and listed the rest with no `!!` (fortieth entry,
-    backlog 1.15). The helper the node-reading steps share, driven with names
+    "Nothing differs" and listed the rest with no `!!` (backlog 1.15). The
+    helper the node-reading steps share, driven with names
     instead of a directory."""
 
     def report(self, copy, tag, skipped=()):

@@ -13,9 +13,10 @@ something it cannot see has changed.
 ## `C.UTF-8` is invisible to a tag diff
 
 Its source file exists upstream only from glibc 2.35, and RHEL8 and RHEL9
-backport it. The file is therefore on both your machines and in neither tag,
-so the five steps that read upstream source cannot see it. No choice of tags
-fixes that.
+backport it. Over RHEL8 to RHEL9 the file is therefore on both your machines
+and in neither tag. Over RHEL9 to RHEL10 the new tag holds upstream's copy and
+the old tag still has none. Either way the five steps that read upstream
+source cannot see what your old machine runs.
 
 It is worth knowing about because it is usually the default. Almost anywhere
 `initdb` runs in a container the database collation is `C.UTF-8`, so every
@@ -26,10 +27,10 @@ PostgreSQL does not cover the gap either. It records no collation version for
 any name beginning with `C.`, so no version mismatch can fire for this locale
 and no warning will reach you.
 
-Two things do reach it, and both need your machines rather than the clone.
-Give `audit.sh` both locale directories and it compares the two files
-directly, and [`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql) measures the
-order on the builds you actually run. What those two found is in
+What reaches it needs your machines rather than the clone. Give `audit.sh` a
+machine's locale directory and it reads that machine's file, give it both and
+it compares the two, and [`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql)
+measures the order on the builds you actually run. What those found is in
 [results.md](results.md).
 
 ## Upstream tags are not your distro's glibc
@@ -38,7 +39,7 @@ Your machines do not run upstream glibc. RHEL8 ships `glibc-2.28` carrying
 hundreds of backported patches, and a collation change among them is invisible
 to a comparison of the two upstream tags.
 
-Give `audit.sh` both machines' locale files and each side is also checked
+Give `audit.sh` a machine's locale files and that side is also checked
 against the version its distro started from, which reaches patches to the
 locale data. What no file comparison reaches is a backported change to glibc's
 *code*, because the code is read between the two tags and nowhere else.

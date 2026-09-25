@@ -9,14 +9,13 @@ upstream is only the reference. This answers a different question: "did what
 the two nodes run actually change?" Both sides are authoritative and the
 verdict is about the delta between them.
 
-Why that is worth a separate comparison: a locale the DISTRO backports exists
-in neither tag, so no tag-to-tag diff can see it however the tags are chosen.
+Why that is worth a separate comparison: a locale the DISTRO backports may be
+in neither tag of the pair, and then no tag-to-tag diff can see it.
 `localedata/locales/C` is the case that matters -- upstream has it only from
 glibc 2.35, RHEL8 and RHEL9 predate that and backport it, and C.UTF-8's order
-demonstrably differs between them. That file is on both nodes and in neither
-tag, so comparing the nodes to each other is the only source-level evidence
-about it that exists. (RHEL10 is glibc 2.39 and has upstream's copy, which is
-why the RHEL9 -> RHEL10 pair is not blind in the same way.)
+demonstrably differs between them. (RHEL10 is glibc 2.39 and has upstream's
+copy, so on RHEL9 -> RHEL10 the new side is in the tag and RHEL9's own copy
+still is not.)
 
 What this does NOT prove: that the ORDER is unchanged. Wherever a locale defines
 its collation with ellipsis ranges -- as RHEL8's C does, with six of them --
@@ -400,7 +399,8 @@ def main(argv):
     ap.add_argument('--old-tag', help="the upstream tag the audit used for the "
                                       "old side. With --new-tag, reports which "
                                       "findings exist at neither tag -- the "
-                                      "ones no tag diff could ever see -- and "
+                                      "ones a diff of these two tags cannot "
+                                      "see -- and "
                                       "lets the list of what cannot be decided "
                                       "include a file of the old tag that "
                                       "neither copy holds.")

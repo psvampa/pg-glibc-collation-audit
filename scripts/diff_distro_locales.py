@@ -75,7 +75,7 @@ def classify_distro_diff(node_bytes, upstream_bytes):
 
     A block present on one side and absent on the other is a block difference,
     so it returns 'collate' -- the caller reports which side, because "the node
-    has rules upstream lacks" is the case the audit is blind to.
+    has rules upstream lacks" is the case a tag diff is blind to.
 
     Compares BYTES. read_blobs decodes with errors='replace', and hundreds of
     these files carry non-ASCII: one non-UTF-8 file would collapse to U+FFFD on

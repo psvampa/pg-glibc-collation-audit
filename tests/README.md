@@ -11,9 +11,9 @@ and breaking that would itself be a regression. [`run_parallel.py`](run_parallel
 is stdlib too, and is the faster of the first two on a machine with cores to
 spare: it runs each `TestCase` class in its own `python3 -m unittest` process.
 
-No runtime is written down here on purpose, and
-[`test_published_claims.py`](test_published_claims.py) forbids one in any file
-that publishes the command. A test count written down here went stale twice in
+No runtime is written down here on purpose, and the documentation layer,
+[`DISABLED_published_claims.py`](DISABLED_published_claims.py), forbids one in
+any file that publishes the command once it is switched back on. A test count written down here went stale twice in
 one day and was removed for the same reason; before that, two files disagreed
 about how long one command took. Time it on your machine rather than trusting
 a figure from someone else's.
@@ -31,9 +31,8 @@ push to `main`, so this runner is not the last word on a change that gets
 merged.
 
 Every test freezes a failure this tool shipped, or a way of losing one before
-it ships, and its docstring says which; most of them quote the CHANGELOG entry
-they guard. A test whose purpose is forgotten is a test somebody deletes
-during a refactor.
+it ships, and its docstring says which. A test whose purpose is forgotten is a
+test somebody deletes during a refactor.
 
 ## Layers
 
@@ -44,14 +43,13 @@ during a refactor.
 | `test_wrapper.py` | yes | **audit.sh end to end.** The wrapper removes a manual handoff, and automating a handoff is how the stale-result bug comes back; most of these tests are its failure modes, not its happy path |
 | `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, generated locale names, hunk/block overlap, the comment filter |
 | `test_git_helpers.py` | mostly | the silent-failure class — code that cannot tell "nothing here" from "could not look". Seven classes fabricate a tiny glibc-shaped repository instead and run without the clone: the corpus floor, a renamed file gaining an `LC_COLLATE` block, a pure rename that must still pass, a file gaining one that names no character, a deleted and a renamed file that step 2 must list as removed, and the two about the pair itself — which of the two tags is the newer commit (including a pair that no signal can order, and two probes made to fail) and what step 2 does about it |
-| `test_known_answers.py` | yes | the five steps end to end on both pairs, against the results [docs/results.md](../docs/results.md) publishes — plus `glibc-2.12 -> glibc-2.17`, which is not an audited pair but is the one below the old glibc 2.24 floor, whose figures had no test until they had already gone stale once. Plus `glibc-2.28 -> glibc-2.39`, the release-skipping pair [docs/method.md](../docs/method.md) measures — asserted as set equality against the two audited pairs rather than as counts, because five names of which one is wrong is still five |
+| `test_known_answers.py` | yes | the five steps end to end on both pairs, against the results [docs/results.md](../docs/results.md) publishes — plus `glibc-2.12 -> glibc-2.17`, which is not an audited pair but is the one below the old glibc 2.24 floor, whose figures had no test until they had already gone stale once. Plus `glibc-2.28 -> glibc-2.39`, the release-skipping pair — asserted as set equality against the two audited pairs rather than as counts, because five names of which one is wrong is still five |
 | `DISABLED_published_claims.py` | not run | **SWITCHED OFF 2026-09-23 for the documentation refactor**, by a rename that takes it out of unittest's `test*.py` discovery; the file's own docstring says why, what is unguarded meanwhile, and how to turn it back on. While it is off, nothing below this sentence is running. **The numbers and quotes the documentation publishes.** Two correction passes in one day found the same class of defect — a count, a position or a quoted line that no longer matched the tool or the measurement. This is that, mechanised: it cannot check prose and does not try. Also a table of canonical figures — a number restated across pages must be the same number on every page that states it in the shape the table names, and must still be stated in as many files as the row expects; the widest-spread of them is written in six files and was kept in agreement by re-reading and nothing else. Four of the six rows are also held to the saved run the figure came from, through four ties in all: three name the sentence the run prints it in and the section to read that sentence in -- a node built from a tag reprints the tag's figures word for word, lower down the same file, so there neither the number nor the sentence is an anchor on its own -- and one names a sentence that appears only once in its file and needs no section. Each of those four rows is then asked, every run, whether moving a single statement of its figure would make at least one file under it stop agreeing: a row where no single move breaks the tie cannot tell its figure from another statement of the same number in the same file, which is how the first of these shipped and what it cost two review rounds to find. Also that every internal link and anchor in the published Markdown resolves, and that every `docs/*.md` path `audit.sh`, `sql/` or `examples/` names exists -- a retitled heading used to break links in silence. And that nothing under `.claude/` is tracked, so the private working rules stay unpublished |
 | `test_node_modes.py` | yes | **the two modes that read a node's own files.** A tag stands in for a node and the backported `C` is written out, because that file exists at no tag — which is the whole point. Includes the test that says the `C.UTF-8` limitation is closed on the data half |
 | `test_parallel_runner.py` | no | **the parallel runner's own guards**, because a runner that loses a shard prints a green summary over tests nobody ran. Every guard in this list was reverted in a mutation and turned this layer red, and a control mutation left it green: discovery's count held per class and not as a sum, the total as well, an unreadable shard read as zero tests, a shard whose exit status contradicts its own `OK`, a verdict read from what the tests printed rather than from the stream `unittest` writes it to, the first summary taken instead of the last, a skip missing from the status line the gate greps on a green run and on a red one, a green report over a run of nothing, a module that did not import, a start directory that does not import, an empty discovery, a selection that matches nothing, a class nobody counted, a class no shard reported on at all, a class two shards reported on, a hung shard reported as a success, and a failed shard whose output never reaches the report |
 
 Without a clone at `scripts/glibc`, every layer marked "yes" **skips with a
-reason**; `test_pure_functions.py`, `test_published_claims.py`,
-`test_parallel_runner.py` and the
+reason**; `test_pure_functions.py`, `test_parallel_runner.py` and the
 fabricated-repository classes of `test_git_helpers.py` still run. A skip is
 never a pass: read what it says. CI clones fresh and fails on any skip, so a layer that skips
 there is a red build, not a quiet gap.
