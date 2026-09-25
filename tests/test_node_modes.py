@@ -1,7 +1,7 @@
 """Layer 6: the two modes that read a NODE's own locale sources.
 
-Both exist for one reason. A locale the distro BACKPORTS is in no upstream tag,
-so no tag-to-tag diff can compare it however the tags are chosen --
+Both exist for one reason. A locale the distro BACKPORTS may be in neither tag
+of the pair, and then no tag-to-tag diff can compare it --
 localedata/locales/C above all, which is C.UTF-8, which is the database
 collation almost everywhere initdb runs in a container. The node has that file;
 the clone does not.
@@ -194,7 +194,7 @@ class NodeToNodeSeesWhatNoTagCan(NodeCase):
 
 @needs_clone
 class NodeToNodeWritesWhatTheUpgradeRemoves(NodeCase):
-    """Forty-second entry: the summary never named a locale the upgrade removes,
+    """The summary never named a locale the upgrade removes,
     because the only place step 8 said it was its own output. It now writes
     two lists the summary reads -- what is removed, and what it cannot say
     either way -- and these tests are the step's half of that."""
@@ -642,6 +642,34 @@ class DirectoryModeStepFour(NodeCase):
         self.assertIn('335 locale source file(s), 478 generated', tag_text)
         self.assertIn('335 locale source file(s), 478 generated', dir_text)
 
+    def test_the_help_does_not_call_this_the_only_way_to_see_C(self):
+        """--locales-dir was described as "the only way to
+        see a locale the distro backports"; steps 6/7 and 8 read that file
+        too, and the tag holds localedata/locales/C from glibc 2.35."""
+        rc, text = run('flag_algorithmic_ranges.py', '--help', out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        # The whole entry, compared as one string, so the claim cannot come
+        # back in a wording nobody thought to forbid.
+        entry = text.split('\n  --locales-dir', 1)[1].split('\n  --', 1)[0]
+        self.assertEqual(flat(entry), (
+            "LOCALES_DIR scan a copy of a node's /usr/share/i18n/locales/ "
+            "instead of a tag, which reaches a locale the distro backports, "
+            "such as C (C.UTF-8)."))
+
+    def test_the_old_tag_help_is_scoped_to_the_two_tags(self):
+        """--old-tag's help said the findings at neither tag are "the ones no
+        tag diff could ever see". A later tag can hold them: the file `C` is
+        upstream from glibc 2.35."""
+        rc, text = run('diff_node_locales.py', '--help', out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        entry = text.split('\n  --old-tag', 1)[1].split('\n  --', 1)[0]
+        self.assertEqual(flat(entry), (
+            "OLD_TAG the upstream tag the audit used for the old side. With "
+            "--new-tag, reports which findings exist at neither tag -- the "
+            "ones a diff of these two tags cannot see -- and lets the list "
+            "of what cannot be decided include a file of the old tag that "
+            "neither copy holds."))
+
     def test_a_backported_C_in_the_directory_is_flagged(self):
         rc, text = run('flag_algorithmic_ranges.py',
                        '--locales-dir', self.node(MID, 'n',
@@ -703,7 +731,7 @@ class DirectoryModeStepFour(NodeCase):
     def test_a_copy_that_lost_files_says_so_against_the_tag(self):
         """Backlog 1.19, measured: 250 of glibc-2.34's 355 files, losing only
         files nothing copies, passed the floor of 200 at exit 0 with the full
-        ellipsis verdict and no `!!` (fortieth entry)."""
+        ellipsis verdict and no `!!`."""
         rc, text = run('flag_algorithmic_ranges.py',
                        '--locales-dir', self.lost_in_transit(MID, 250),
                        '--build-id', 'lost', '--supported-tag', MID,

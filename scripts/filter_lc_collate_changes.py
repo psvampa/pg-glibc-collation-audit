@@ -523,9 +523,9 @@ def main(argv):
         print(f"\nLocale names for step 3:")
         print(f"  python3 resolve_copy_closure.py {opts.new_tag} {' '.join(names)}")
 
-    # KNOWN_BACKPORTED locales the audit is structurally blind to on the OLD
-    # side: no source file at the old tag means nothing to diff against,
-    # whether or not the file shows up at the new one.
+    # KNOWN_BACKPORTED locales a tag-to-tag diff is structurally blind to on
+    # the OLD side: no source file at the old tag means nothing to diff
+    # against, whether or not the file shows up at the new one.
     #
     # Reported whenever the old side is missing, NOT only when the file happens
     # to be ADDED in this range. The silent case is the one that matters: over
@@ -557,9 +557,10 @@ def main(argv):
             f"{path} {where}, but {locale_name} is BACKPORTED by the distros "
             f"this audit targets -- so it very likely DOES exist on your old "
             f"system, with an order of its own, and that order can change. "
-            f"There is no source file to diff on the old side, so this audit "
-            f"is blind to it: a clean result above says nothing about "
-            f"{locale_name}. PostgreSQL will not cover the gap either -- "
+            f"The old tag has no source file for it, so a comparison of the "
+            f"two tags cannot see what your old system runs, and a clean "
+            f"result from steps 1 to 5 says nothing about the {locale_name} "
+            f"it runs. PostgreSQL will not cover the gap either -- "
             f"collversion is NULL for every collation whose name starts with "
             f"'C.', so no version mismatch can ever fire. Compare "
             f"{locale_name} empirically on both nodes. See "

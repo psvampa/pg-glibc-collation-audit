@@ -40,14 +40,15 @@ here needs an empirical sort-order test regardless of what the source diff
 says.
 
 It also scans a DIRECTORY of locale sources -- a copy of a node's
-/usr/share/i18n/locales/ -- instead of a tag. That is the only way it can see a
-locale the distro BACKPORTS, and `C` is the case that matters: it exists at no
+/usr/share/i18n/locales/ -- instead of a tag, which reaches a locale the distro
+BACKPORTS, and `C` is the case that matters: it exists at no
 upstream tag before 2.35, and RHEL8 builds it from six ellipsis ranges, so
 C.UTF-8's order there depends on how localedef expands them. Measured on
 glibc-2.28-251.el8_10.40, this mode flags it; on glibc-2.34-275.el9_8 and
 glibc-2.39-128.el10_2 the same file declares codepoint_collation and this mode
-reports it as byte order by construction. Either way it is this mode saying so,
-which is what the tag scan structurally cannot. See docs/limitations.md.
+reports it as byte order by construction. Either way it is this mode saying so
+about the node's own file, which the tag scan structurally cannot. See
+docs/limitations.md.
 
 Usage:
   python3 flag_algorithmic_ranges.py <tag> [--repo <path>]
@@ -177,7 +178,7 @@ def report_backported(texts, inherited=None, unresolved=None):
     whose file uses no ellipsis can still be exposed by copying one that does,
     and its style alone is then true of the FILE and false of the ORDER. The
     closure is already computed where this is called from; not passing it is
-    how the ninth entry's defect looked -- a verdict computed and thrown away.
+    a verdict computed and thrown away.
     `unresolved` is the other half of the same question: {name: copy targets
     this corpus does not contain}. A copy the walk could not follow is a locale
     whose order was never read, and saying only "copy-only, its order is
@@ -278,8 +279,8 @@ def report(texts, supported, label, out_name, next_hint,
         print(f"\n!! {len(dangling)} `copy` target(s) are absent from this "
               f"corpus, so what they carry was never read:")
         print(f"     {', '.join(sorted(dangling))}")
-        # Named, not only counted: "N locale(s) reach one" is the ninth
-        # entry's shape, a verdict computed and never attached to a name.
+        # Named, not only counted: "N locale(s) reach one" is a verdict
+        # computed and never attached to a name.
         reaching = sorted(unresolved)
         # "in the list below" was written for a reader looking at this step.
         # audit.sh relays `!!` blocks into the summary, where there is no
@@ -397,8 +398,8 @@ def main(argv):
                     help="glibc tag to scan, e.g. glibc-2.34")
     ap.add_argument('--locales-dir',
                     help="scan a copy of a node's /usr/share/i18n/locales/ "
-                         "instead of a tag. The only way to see a locale the "
-                         "distro backports, such as C (C.UTF-8).")
+                         "instead of a tag, which reaches a locale the distro "
+                         "backports, such as C (C.UTF-8).")
     ap.add_argument('--build-id',
                     help="with --locales-dir: the node's glibc build, from "
                          "`rpm -q glibc`. Required, because a result is bound "

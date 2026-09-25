@@ -31,12 +31,13 @@ worked-example section below.
 
 ## If you saved an earlier result
 
-If you saved a result from this tool on or before 2026-09-06, check
-[CHANGELOG.md](../CHANGELOG.md) first. Three verdicts have moved, the last of
-them in the eleventh entry, dated 2026-09-06:
+If you saved a result from an earlier version of this tool, run the current
+version again rather than reuse it. Earlier versions printed clean results over
+checks they had not made. Three published verdicts have moved, the last of them
+on 2026-09-06:
 
 - **`th_TH` for the RHEL9-to-RHEL10 pair** was reported 🟡 Unresolved until
-  that entry and it **changes** — indexes on it need a `REINDEX` across that
+  that date and it **changes** — indexes on it need a `REINDEX` across that
   upgrade. This is the most recent move, and the one most likely to affect a
   result you are still holding.
 - **`ko_KR` for the RHEL8-to-RHEL9 pair** was once reported unaffected and it
@@ -337,6 +338,6 @@ page rests on a different PostgreSQL from any other.
 
 ---
 
-[Documentation index](README.md) · [The method](method.md) ·
+[Documentation index](README.md) ·
 [Confirming on a real system](confirming-on-a-real-system.md) ·
 [Known limitations](limitations.md) · [Glossary](glossary.md)

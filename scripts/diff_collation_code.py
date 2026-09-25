@@ -262,10 +262,10 @@ def classify_body(body):
     open for the rest of the hunk, and every changed line after it -- code
     included -- was marked noise. Measured over 2.34..2.39: eight lines of
     `charmap_find_value (charmap, ...)` in locale/programs/linereader.c
-    printed without the `>>` marker docs/method.md tells the reader to scan
-    for. The reverse also happened: a `/*` on a context line made its changed
-    continuations print as code, and two hunks made only of comment counted as
-    substantive (25 -> 24 and 53 -> 52).
+    printed without the `>>` marker a reader is told to scan for. The reverse
+    also happened: a `/*` on a context line made its changed continuations
+    print as code, and two hunks made only of comment counted as substantive
+    (25 -> 24 and 53 -> 52).
 
     The state at the START of a hunk is still unknown, and is still assumed
     "outside a comment": that direction marks prose as code, never code as

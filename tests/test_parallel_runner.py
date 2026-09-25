@@ -7,8 +7,7 @@ its class holds, a module that does not import, a name that selects nothing, a
 shard that hangs, a run of nothing at all -- and, the one that is easiest to
 miss, a test whose own output is read as its shard's verdict. Each of those
 ends as a green summary over tests nobody ran unless something refuses, which
-is this repository's defect class in a new place (thirty-first entry, "What it
-used to get wrong").
+is this repository's defect class in a new place.
 
 So each test below reverts one guard in shape and asserts the red. Three
 classes assert a green instead -- a skip that must be reported, an end-to-end
@@ -133,7 +132,7 @@ class AShardCannotWriteItsOwnVerdict(unittest.TestCase):
     test supply its shard's result -- measured on the first version of this
     runner: a class printing `Ran 99 tests` and `OK` reported 99 tests, and a
     shard whose real tail was `OK (skipped=1)` reported a clean OK with the
-    skip gone. The eighth entry says a skip is never a pass; nothing else
+    skip gone. A skip is never a pass; nothing else
     reads this runner's output, so the printed `skipped=` is the only guard
     there is."""
 
@@ -261,9 +260,8 @@ class AShardThatSaidNothingIsNotZeroTests(unittest.TestCase):
 class ARunOfNothingIsNotAPass(unittest.TestCase):
     """`discover_units` and `select_units` both refuse an empty selection, and
     the reporter used to trust them: `aggregate([], 0, ...)` returned OK. A
-    verdict computed upstream and not re-checked where it is printed is the
-    ninth entry's shape, and it means the refusal lives only as long as both
-    of those guards do."""
+    verdict computed upstream and not re-checked where it is printed means the
+    refusal lives only as long as both of those guards do."""
 
     def test_no_shards_at_all_is_red(self):
         code, text = report([], {})
@@ -327,8 +325,8 @@ class AFailedShardCarriesItsOutput(unittest.TestCase):
 
 
 class ASkipReachesTheStatusLine(unittest.TestCase):
-    """CI and the gate both fail on `skipped=` (eighth entry: a skip is never
-    a pass). They read it off the status line, so a runner that counts skips
+    """CI and the gate both fail on `skipped=`, because a skip is never a
+    pass. They read it off the status line, so a runner that counts skips
     and does not print them there turns every skipped layer into a pass."""
 
     def test_the_status_line_carries_the_skip_count(self):
@@ -451,11 +449,9 @@ class TheRunnerRunsWhatItSaysItRan(unittest.TestCase):
 class AGreenRunIsStillGreen(unittest.TestCase):
     """The control. Every class above except the skip report and the two
     end-to-end runs asserts a red, so a runner that reported red on
-    everything would pass almost all of them and be useless (sixteenth entry,
-    "The checkable half is now a test": the seven corruptions were validated
-    by one edit that must NOT fail). Counted as a description rather than as a
-    number, because a number here goes stale on the next class added -- which
-    it already did, at "eight"."""
+    everything would pass almost all of them and be useless. Counted as a
+    description rather than as a number, because a number here goes stale on
+    the next class added -- which it already did, at "eight"."""
 
     def test_shards_that_all_passed_report_ok_and_nothing_else(self):
         code, text = report([shard('a', ran=4), shard('b', ran=6)],

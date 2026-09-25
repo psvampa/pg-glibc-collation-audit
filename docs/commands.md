@@ -5,8 +5,7 @@ the second and third measure what a source read cannot settle.
 
 **Commands are numbered here; steps are what a run prints.** A run of command
 1 does its own work in ten numbered steps, and those numbers are not these
-three. Where this page needs them it says "the run's step 4", and
-[method.md](method.md) is where each of them is explained.
+three. Where this page needs them it says "the run's step 4".
 
 ## Command 1 — which locales the upgrade can affect
 
@@ -48,10 +47,10 @@ Two of those answer questions the upstream comparison cannot reach at all:
 
 - **What your distro changed on its own.** Steps 6 and 7 compare a machine
   against the version its distro started from.
-- **A locale your distro adds**, which is in no upstream version, so no choice
-  of versions can reach it. Step 8 is the only thing that sees it, and it
-  needs both machines. `C.UTF-8` is that locale, and in a container it is
-  usually the database collation.
+- **A locale your distro adds**, which the upstream version it started from
+  does not have. Step 8 compares one machine's copy of it with the other's,
+  and it needs both machines. `C.UTF-8` is that locale on RHEL8 and RHEL9, and
+  in a container it is usually the database collation.
 
 Leave the files out and the summary says `NOT RUN` for steps 8 to 10, and
 `NOT CHECKED` for what the distro adds or drops. They are not omitted,

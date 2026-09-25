@@ -184,8 +184,8 @@ def flat(text):
     across lines. Asserting on the raw text makes a POSITIVE assertion brittle
     and -- far worse -- makes a NEGATIVE one vacuous: `assertNotIn` on a phrase
     that is always broken up passes whether the warning is printed or not.
-    Caught by exactly that, on 2026-09-06 (sixteenth entry, "A fourth test that
-    guarded nothing"). Every layer that asserts on wrapped output goes through
+    Caught by exactly that, on 2026-09-06. Every layer that asserts on
+    wrapped output goes through
     this one copy; a second copy is how two helpers drift.
     """
     return ' '.join(text.split())

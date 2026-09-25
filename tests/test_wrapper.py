@@ -52,10 +52,72 @@ NOT_CHECKED = ('The tags cannot show what your distro adds or drops: '
 # missing: no copy, or one complete copy.
 NOTHING_GONE_OVER_OLD_MID = [
     NOT_CHECKED,
-    'Pass --old-locales-dir and --new-locales-dir with their build',
-    'ids; step 8 is the only check that sees those.',
+    'Pass --old-locales-dir and --new-locales-dir with their build ids.',
     f'Between the tags: none -- no locale file at {OLD} is gone at {MID}',
 ]
+
+
+# audit.sh's usage text, whole, with the script's own path as "audit.sh".
+USAGE = [
+    'usage: audit.sh <old_tag> <new_tag>',
+    '         [--old-locales-dir DIR --old-build-id NVR]',
+    '         [--new-locales-dir DIR --new-build-id NVR]',
+    '       e.g. audit.sh glibc-2.28 glibc-2.34',
+    '       tags are glibc-<version>; run `ldd --version` on each node',
+    '       OLD first, NEW second: a reversed pair is refused, not',
+    '       answered. Distance is NOT checked: RHEL8 to RHEL10 is one',
+    '       pair, glibc-2.28 glibc-2.39, not two runs added up. What',
+    '       that reports was measured with glibc-2.34 in the middle',
+    '       (docs/scope.md). Every --* option takes a value.',
+    '',
+    '       The --*-locales-dir options are OPTIONAL. Given a copy of a',
+    "       node's /usr/share/i18n/locales/, the run also checks whether",
+    "       the distro's patches touch LC_COLLATE -- a thing an upstream",
+    "       tag diff structurally cannot see. Needs the node's",
+    '       build id too: a result is bound to the build it ran on.',
+    '',
+    '       Either side on its own adds that check for that side (step 6',
+    "       for old, step 7 for new), and scans that node's own data for",
+    '       ellipsis ranges (step 9 for old, step 10 for new) -- which is',
+    '       the only way that question is asked of a node supplied on its',
+    '       own, since step 4 scans the new TAG, which holds at most',
+    "       upstream's C and never speaks for what your node built.",
+    '',
+    '       Supply BOTH and the run also compares the two nodes to each',
+    '       other (step 8).',
+]
+
+NODE_TO_NODE_NOT_RUN = '-- Node-to-node locale data: NOT RUN'
+# The whole block, compared line for line. A check for one phrase would let
+# the same false claim come back in other words.
+NODE_TO_NODE_NOT_RUN_BODY = [
+    'Pass --old-locales-dir and --new-locales-dir with their build',
+    "ids. Without both, nothing above compared the two nodes' C.UTF-8",
+    'against each other, and PostgreSQL reports collversion as NULL for',
+    'every C.* collation, so no mismatch can ever fire.',
+    'Then run sql/c_utf8_probe.sql on both nodes.',
+]
+
+
+def summary_block(out, heading):
+    """The body under a summary heading, one stripped line each.
+
+    It refuses the same things removed_lines below does. The heading must be
+    a whole line of the summary, exactly once, so text appended to it is
+    caught, and the body must end at a blank line or the next heading.
+    """
+    summary = out.split('AUDIT SUMMARY', 1)[-1]
+    lines = summary.splitlines()
+    at = [i for i, line in enumerate(lines) if line == heading]
+    if len(at) != 1:
+        raise AssertionError(f'{heading!r} is a whole line {len(at)} '
+                             f'time(s):\n{summary}')
+    body = []
+    for line in lines[at[0] + 1:]:
+        if not line.strip() or line.startswith('--'):
+            return body
+        body.append(line.strip())
+    raise AssertionError(f'{heading!r} never ends:\n{summary}')
 
 
 def removed_lines(out):
@@ -164,10 +226,10 @@ class Wrapper(unittest.TestCase):
     def test_summary_says_node_to_node_was_NOT_RUN(self):
         """Absent is not empty, at the summary level.
 
-        Without node directories nothing in the whole audit says anything
-        about C.UTF-8 -- its source file is in neither tag and its collversion
-        is always NULL. A summary that simply omits the section reads exactly
-        like one that cleared it, which is false negative #1 in a new costume.
+        Without both node directories nothing compared the two nodes' C.UTF-8
+        against each other, and its collversion is always NULL. A summary that
+        simply omits the section reads exactly like one that cleared it, which
+        is false negative #1 in a new costume.
         """
         summary = self.out.split('AUDIT SUMMARY')[1]
         self.assertIn('-- Node-to-node locale data: NOT RUN', summary)
@@ -175,8 +237,16 @@ class Wrapper(unittest.TestCase):
         # C.UTF-8 on every pair, so the unsplit assertion could not fail.
         self.assertIn('C.UTF-8', summary)
 
+    def test_the_NOT_RUN_block_gives_no_reason_a_tag_can_falsify(self):
+        """The block used to say C.UTF-8's "source file is
+        in neither tag", which glibc-2.39 falsifies (the file is upstream from
+        2.35), and that "nothing above says anything about C.UTF-8", which a
+        run given one node's directory falsifies three lines below it."""
+        self.assertEqual(summary_block(self.out, NODE_TO_NODE_NOT_RUN),
+                         NODE_TO_NODE_NOT_RUN_BODY)
+
     def test_what_the_tags_cannot_see_is_said_before_their_none(self):
-        """Forty-second entry. Over 2.28..2.34 the tags remove nothing, and the
+        """Over 2.28..2.34 the tags remove nothing, and the
         upgrade removes en_US@ampm, a file only RHEL8 ships. A "none" as the
         section's first line is that false negative, so the line saying what
         the tags cannot check comes first."""
@@ -287,6 +357,23 @@ class WrapperEmptyPair(unittest.TestCase):
         self.assertIn("Everything above that says 'nothing changed' means "
                       "'nothing was compared'", flat(self.out))
 
+    def test_the_one_commit_notice_names_every_step_that_still_has_evidence(self):
+        """The notice said the evidence was "the node-to-node check and
+        sql/c_utf8_probe.sql, nothing else". Steps 6, 7, 9 and 10 read the
+        machines' files on this pair too, and a code change a distro
+        backports inside one major shows only on real nodes. Compared whole,
+        so an "only" cannot come back in other words."""
+        self.assertEqual(summary_block(self.out,
+                                       '-- One commit, compared with itself'), [
+            f"{NEW} -> {NEW}. Everything above that says 'nothing changed' "
+            f"means",
+            "'nothing was compared'. For an intra-major upgrade, what can "
+            "still",
+            "show a change is the machines' own files (steps 6 to 10),",
+            "sql/c_utf8_probe.sql and the confirmation on real nodes",
+            "(docs/confirming-on-a-real-system.md).",
+        ])
+
     def test_the_removed_none_sits_above_the_one_commit_notice(self):
         """The tags' "none" is printed on one commit compared with itself
         too, and it is the notice below it, not the section, that says
@@ -338,7 +425,7 @@ class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
     provenance line prints for it -- is one commit compared with itself, and
     the string comparison never fired: rc 0, no "nothing was compared", and a
     summary reading "none -- no locale\'s LC_COLLATE changed". That is the
-    sixteenth entry\'s false negative reopened by spelling. Mutation: put the
+    same-tag false negative reopened by spelling. Mutation: put the
     text comparison back and this class fails.
     """
 
@@ -444,6 +531,17 @@ class WrapperRefusesBadInput(unittest.TestCase):
         rc, out = run_wrapper(OLD, out_dir=self.out_dir)
         self.assertEqual(rc, 2)
         self.assertIn('usage:', out)
+
+    def test_the_usage_claims_no_single_step_for_C_UTF_8(self):
+        """The usage text called step 8 "the only
+        source-level evidence there is about C.UTF-8"; steps 6/7 read that
+        file and steps 9/10 declare its status with one node alone."""
+        rc, out = run_wrapper(OLD, out_dir=self.out_dir)
+        self.assertEqual(rc, 2)
+        script = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), 'audit.sh')
+        self.assertEqual(out.replace(script, 'audit.sh').rstrip('\n')
+                         .split('\n'), USAGE)
 
     def test_a_reversed_pair_is_refused_before_any_summary(self):
         """"Nothing stopped a reversed pair." Reversed, all five steps run to
@@ -570,9 +668,24 @@ class WrapperNodeToNode(unittest.TestCase):
             self.out_dir, f'step8.{pair_slug(OLD, MID)}.log')), self.out)
 
     def test_the_summary_names_C_UTF_8_as_differing(self):
-        """The payoff line: a verdict on the one locale no other step sees."""
-        self.assertIn('C (C.UTF-8): DIFFERS', self.out)
-        self.assertIn('no other step sees it', self.out)
+        """The payoff line: the two nodes' C.UTF-8 data differ.
+
+        It used to add "in neither tag; no other step sees
+        it". Steps 9 and 10 declare C's status in this same summary, steps 6
+        and 7 read its file, and over 2.34..2.39 the new tag holds it."""
+        block = summary_block(
+            self.out.replace(self.out_dir, '<out>'),
+            '-- Node-to-node locale data (build-old -> build-new)')
+        self.assertEqual(block, [
+            '3 locale(s) differ inside LC_COLLATE between the two',
+            "nodes' OWN sources; full list: "
+            '<out>/node_collate_diffs.build-old..build-new.txt',
+            "plus 2 locale(s) that inherit one of those files'",
+            'LC_COLLATE via copy on build-new; full list: '
+            '<out>/node_collate_inherited.build-old..build-new.txt',
+            'C (C.UTF-8): DIFFERS  <- LC_COLLATE is not the same on the two '
+            'nodes',
+        ])
 
     def test_the_ellipsis_scan_lines_for_each_node_are_printed(self):
         """audit.sh's steps 9/10 block prints "C (C.UTF-8): ellipsis-based"
@@ -641,7 +754,7 @@ class WrapperNodeToNode(unittest.TestCase):
 class WrapperTagsRemoveALocale(unittest.TestCase):
     """Tags only, over the one published pair whose tags remove a locale
     file: aa_ER@saaho, renamed to ssy_ER at 2.39. Step 2 printed the rename
-    in its own output and the summary never named it (forty-second entry)."""
+    in its own output and the summary never named it."""
 
     @classmethod
     def setUpClass(cls):
@@ -861,13 +974,20 @@ class WrapperOneSideOnly(unittest.TestCase):
         self.assertIn('C (C.UTF-8): ellipsis-based', summary)
         self.assertNotIn('ellipsis scan (build-new)', summary)
 
+    def test_the_NOT_RUN_block_does_not_deny_the_scan_below_it(self):
+        """Backlog 1.18. With one directory the block said
+        "nothing above says anything about C.UTF-8" over a summary that
+        declares the old node's C status a few lines further down."""
+        self.assertEqual(summary_block(self.out, NODE_TO_NODE_NOT_RUN),
+                         NODE_TO_NODE_NOT_RUN_BODY)
+
     def test_the_side_that_was_not_scanned_says_NOT_RUN(self):
         """Absent is not empty, one level below the node-to-node block.
 
         The summary printed the old node's ellipsis verdict and simply left
         the new node out -- and a section that is not there reads exactly
         like a section with nothing to report. A one-sided run is a
-        supported shape ("Each side you supply adds a check", README), so
+        supported shape (docs/commands.md), so
         this was the reader's ordinary view, not a misuse (backlog 1.16).
         """
         summary = self.out.split('AUDIT SUMMARY')[1]
@@ -936,6 +1056,11 @@ class WrapperNewSideOnly(unittest.TestCase):
         """The mirror of WrapperOneSideOnly's test of the same name."""
         self.assertEqual(removed_lines(self.out), NOTHING_GONE_OVER_OLD_MID)
 
+    def test_the_NOT_RUN_block_does_not_deny_the_scan_below_it(self):
+        """The mirror of WrapperOneSideOnly's test of the same name."""
+        self.assertEqual(summary_block(self.out, NODE_TO_NODE_NOT_RUN),
+                         NODE_TO_NODE_NOT_RUN_BODY)
+
     def test_a_complete_copy_raises_no_missing_files_warning(self):
         """The control for WrapperNewSideLostFiles."""
         self.assertNotIn('are missing from', flat(self.out))
@@ -945,7 +1070,7 @@ class WrapperSideLostFiles:
     """A copy that lost files reached the AUDIT SUMMARY in no form at all.
 
     Steps 6/7 listed the lost files with no `!!`, and the summary repeats
-    only `!!` blocks (fortieth entry, backlog 1.15). Now steps 6/7 and 9/10
+    only `!!` blocks (backlog 1.15). Now steps 6/7 and 9/10
     each print the same block, and the summary, which drops identical
     blocks, prints it once. One class per side, because a block naming a
     fixed side would pass a test that drives only one of them.
@@ -1001,7 +1126,7 @@ class WrapperSideLostFiles:
         self.assertEqual(names, self.lost)
 
     def test_the_removed_section_on_a_copy_that_lost_files(self):
-        """Forty-second entry. The new copy alone: what it lacks may be what
+        """The new copy alone: what it lacks may be what
         the new machine does not ship, so the section says it cannot decide
         those rather than ending on the tags' "none" -- measured printing
         "none" above step 7's `!!` for exactly this fixture. The old copy

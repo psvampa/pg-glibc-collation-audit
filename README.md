@@ -49,15 +49,16 @@ reversed pair is refused rather than answered, because backwards every step
 still prints a plausible clean result.
 
 Any two versions are allowed, however far apart, and nothing in the tool looks
-at the distance between them.
+at the distance between them. That is the answer for a direct upgrade. If you
+will run production on the version in between for any length of time, audit
+each step, because a change made on the way and undone before the end is in
+neither end's files.
 
 <details>
-<summary><strong>Worth reading before you trust a result</strong> — which pairs are measured, what a wider pair reports, and the old glibc 2.24 floor</summary>
+<summary><strong>Worth reading before you trust a result</strong> — which pairs are measured, and the old glibc 2.24 floor</summary>
 
 - which pairs this project publishes measured results for —
   [docs/scope.md](docs/scope.md)
-- what a wider pair reports, and the one case that needs two runs instead —
-  [docs/method.md](docs/method.md#how-far-apart-the-two-tags-may-be)
 - why a pair below glibc 2.24 rests on a single measured pair —
   [docs/limitations.md](docs/limitations.md#below-glibc-224-the-method-rests-on-one-measured-pair)
 
@@ -129,9 +130,8 @@ diff el8.out el9.out
 ```
 
 [`sql/c_utf8_probe.sql`](sql/c_utf8_probe.sql) takes no editing, and it is run
-**even when the audit flagged nothing**. Where this locale's source file is in
-neither tag, no step of the audit can reach it at all, and PostgreSQL will not
-warn about it either.
+**even when the audit flagged nothing**. No step of the audit measures this
+locale's order, and PostgreSQL will not warn about it either.
 
 Reading its output takes one warning, because the usual tell is inverted for
 this locale — agreeing with byte order is the *fix* here, not the sign that
@@ -206,9 +206,11 @@ ardentperf's checksum as the basis for the second column. See
 
 The evidence behind each row, both worked examples and the nodes each claim
 was measured on: [docs/results.md](docs/results.md). If you saved a result
-from this tool on or before 2026-09-06, check [CHANGELOG.md](CHANGELOG.md) first —
-three verdicts have moved, `th_TH` most recently, in the eleventh entry (dated
-2026-09-06). Later that day `C.UTF-8` was measured directly: no verdict moved,
+from an earlier version of this tool, run the current version again rather
+than reuse it. Earlier versions printed clean results over checks they had not
+made. [Three published verdicts have
+moved](docs/results.md#if-you-saved-an-earlier-result), `th_TH` most recently,
+on 2026-09-06. Later that day `C.UTF-8` was measured directly: no verdict moved,
 but the basis of its RHEL9→RHEL10 🟢 did.
 
 ## Scope
@@ -230,7 +232,6 @@ result — `C.UTF-8` among them:
 short version:
 
 - [docs/commands.md](docs/commands.md) — what each command does, and what it leaves to the next
-- [docs/method.md](docs/method.md) — the five steps in detail, and the decision procedure
 - [docs/results.md](docs/results.md) — the evidence behind each verdict, both worked examples, tested-on
 - [docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md) — the empirical check
 - [docs/limitations.md](docs/limitations.md) — the six things to know before acting on a clean result
@@ -238,7 +239,6 @@ short version:
 - [docs/requirements.md](docs/requirements.md) — dependencies, test suite, setup traps
 - [docs/glossary.md](docs/glossary.md) — `copy` graph, blast radius, hunk, tier, ellipsis range
 - [examples/](examples/README.md) — real output of every command, and which file is which
-- [CHANGELOG.md](CHANGELOG.md) — what this tool used to get wrong
 
 ## Tests
 

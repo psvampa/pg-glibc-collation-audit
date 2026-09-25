@@ -7,8 +7,8 @@
 # hands step 2's result to step 3 so nobody has to retype locale names, and
 # ends with a consolidated summary.
 #
-# The individual scripts keep working on their own -- see docs/method.md. Use
-# them to re-run one step against a hand-picked locale list.
+# The individual scripts keep working on their own. Use them to re-run one step
+# against a hand-picked locale list.
 #
 # Usage:
 #   ./audit.sh <old_tag> <new_tag>
@@ -26,17 +26,15 @@
 # the two releases are is not checked anywhere: an upgrade that skips a release
 # is one pair of tags, not two runs added up. Measured on one triple --
 # glibc-2.28 against glibc-2.39 reports the exact union of what 2.28..2.34 and
-# 2.34..2.39 report, C.UTF-8 included -- docs/method.md, "How far apart the two
-# tags may be". One triple is
-# not every triple; that section says what is and is not claimed.
+# 2.34..2.39 report, C.UTF-8 included. One triple is not every triple.
 #
 # The --*-locales-dir options are optional and read a node's own
 # /usr/share/i18n/locales/. Each side you supply adds the
 # distro-versus-upstream check for that side (step 6 for old, step 7 for new)
 # and the ellipsis scan of that node's own data (step 9 for old, 10 for new);
-# supplying BOTH additionally runs the node-to-node comparison (step 8), the
-# only thing here that can see a locale the distro backports -- C.UTF-8 above
-# all. See usage() below and docs/method.md.
+# supplying BOTH additionally runs the node-to-node comparison (step 8), which
+# holds each node's copy of a locale the distro backports -- C.UTF-8 above
+# all -- against the other's. See usage() below.
 #
 # Example (the tags are examples -- run `ldd --version` on each node):
 #   ./audit.sh glibc-2.28 glibc-2.34
@@ -54,13 +52,13 @@ usage() {
   echo "       OLD first, NEW second: a reversed pair is refused, not" >&2
   echo "       answered. Distance is NOT checked: RHEL8 to RHEL10 is one" >&2
   echo "       pair, glibc-2.28 glibc-2.39, not two runs added up. What" >&2
-  echo "       that reports was measured on that one triple -- see" >&2
-  echo "       docs/method.md. Every --* option takes a value." >&2
+  echo "       that reports was measured with glibc-2.34 in the middle" >&2
+  echo "       (docs/scope.md). Every --* option takes a value." >&2
   echo >&2
   echo "       The --*-locales-dir options are OPTIONAL. Given a copy of a" >&2
   echo "       node's /usr/share/i18n/locales/, the run also checks whether" >&2
-  echo "       the distro's patches touch LC_COLLATE -- the one thing an" >&2
-  echo "       upstream tag diff structurally cannot see. Needs the node's" >&2
+  echo "       the distro's patches touch LC_COLLATE -- a thing an upstream" >&2
+  echo "       tag diff structurally cannot see. Needs the node's" >&2
   echo "       build id too: a result is bound to the build it ran on." >&2
   echo >&2
   echo "       Either side on its own adds that check for that side (step 6" >&2
@@ -71,9 +69,7 @@ usage() {
   echo "       upstream's C and never speaks for what your node built." >&2
   echo >&2
   echo "       Supply BOTH and the run also compares the two nodes to each" >&2
-  echo "       other (step 8). That is the only source-level evidence there is" >&2
-  echo "       about C.UTF-8, whose file is in neither tag of the RHEL8->RHEL9" >&2
-  echo "       pair." >&2
+  echo "       other (step 8)." >&2
   exit 2
 }
 
@@ -307,8 +303,8 @@ if [ -n "$NEW_LOCALES" ]; then
     --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --node-label new
 fi
 
-# The only comparison that can see a locale the distro BACKPORTS: it takes both
-# sides from the nodes, so a file in neither tag is still in both inputs.
+# Both sides come from the nodes, so a locale the distro backports is in both
+# inputs even when it is in neither tag.
 if [ -n "$OLD_LOCALES" ] && [ -n "$NEW_LOCALES" ]; then
   banner "NODE TO NODE  does $OLD_BUILD's collation data differ from $NEW_BUILD's?"
   run_step 8 python3 "$SCRIPTS/diff_node_locales.py" \
@@ -381,7 +377,7 @@ fi
 # differently. Whatever is built on it has no collation at all on the new
 # system. Steps 2 and 8 each said so in their own output, more than a hundred
 # lines up, and nothing here repeated it -- a reader of the summary alone
-# concluded that the upgrade removes nothing (forty-second entry).
+# concluded that the upgrade removes nothing.
 #
 # The source is chosen by what was SUPPLIED, never by which list exists. Given
 # both nodes' directories, the nodes are the answer and the tags are not
@@ -419,7 +415,7 @@ if [ -n "$OLD_LOCALES" ] && [ -n "$NEW_LOCALES" ]; then
     elif [ "$REMOVED" -eq 0 ]; then
       # Names the directories, not the builds: this is what the two copies
       # hold, and a copy that lost a file only the distro ships cannot be told
-      # from one that never had it (fortieth entry).
+      # from one that never had it.
       echo "     none -- every file in $OLD_LOCALES is also in $NEW_LOCALES"
     fi
   fi
@@ -428,8 +424,7 @@ else
   # RHEL9 the tags remove nothing and the upgrade removes en_US@ampm, a file
   # only RHEL8 ships. A file the new distro drops is as invisible to the tags.
   echo "     The tags cannot show what your distro adds or drops: NOT CHECKED."
-  echo "     Pass --old-locales-dir and --new-locales-dir with their build"
-  echo "     ids; step 8 is the only check that sees those."
+  echo "     Pass --old-locales-dir and --new-locales-dir with their build ids."
   # With the new copy alone, a file of the new tag it does not hold may be one
   # the new machine does not ship -- a locale the upgrade removes, and one no
   # tag can see. Step 7 names those files under a `!!` that cannot tell a lost
@@ -521,7 +516,7 @@ if [ -n "$NODE_LIST" ] && [ -f "$NODE_LIST" ]; then
   fi
   if grep -q '^  C (C\.UTF-8): present on both nodes, LC_COLLATE DIFFERS' \
        "$OUT_DIR/step8.$PAIR.log" 2>/dev/null; then
-    echo "     C (C.UTF-8): DIFFERS  <- in neither tag; no other step sees it"
+    echo "     C (C.UTF-8): DIFFERS  <- LC_COLLATE is not the same on the two nodes"
   fi
 else
   # Absent is not empty. A summary that simply says nothing about C.UTF-8
@@ -529,9 +524,9 @@ else
   # missed -- it is false negative #1 in a different costume.
   echo "-- Node-to-node locale data: NOT RUN"
   echo "     Pass --old-locales-dir and --new-locales-dir with their build"
-  echo "     ids. Without it nothing above says anything about C.UTF-8: its"
-  echo "     source file is in neither tag, and PostgreSQL reports collversion"
-  echo "     as NULL for every C.* collation, so no mismatch can ever fire."
+  echo "     ids. Without both, nothing above compared the two nodes' C.UTF-8"
+  echo "     against each other, and PostgreSQL reports collversion as NULL for"
+  echo "     every C.* collation, so no mismatch can ever fire."
   echo "     Then run sql/c_utf8_probe.sql on both nodes."
 fi
 
@@ -549,11 +544,11 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
       # This loop used to `continue` here, so a run given one directory
       # printed that node's ellipsis verdict and nothing whatever about the
       # other -- and a section that is not there reads exactly like a section
-      # with nothing to report. One side is a supported shape ("Each side you
-      # supply adds a check", README), not a misuse, so this is the reader's
-      # ordinary view. The heading is fixed text and the side is named in the
-      # body: a heading built from $side could not be tied to the docs by the
-      # test in tests/test_published_claims.py that greps this file for it.
+      # with nothing to report. One side is a supported shape
+      # (docs/commands.md), not a misuse, so this is the reader's ordinary
+      # view. The heading is fixed text and the side is named in the body: a
+      # heading built from $side could not be tied to the docs by the test in
+      # tests/DISABLED_published_claims.py that greps this file for it.
       echo "-- Node's own locale data, ellipsis scan: NOT RUN"
       echo "     No --$side-locales-dir, so nothing above says whether the"
       echo "     $side node's own C.UTF-8 is ellipsis-based. The other node's"
@@ -636,8 +631,10 @@ if [ "$SAME_TAG" = "1" ]; then
   echo
   echo "-- One commit, compared with itself"
   echo "     $OLD -> $NEW. Everything above that says 'nothing changed' means"
-  echo "     'nothing was compared'. For an intra-major upgrade the evidence is"
-  echo "     the node-to-node check and sql/c_utf8_probe.sql, nothing else."
+  echo "     'nothing was compared'. For an intra-major upgrade, what can still"
+  echo "     show a change is the machines' own files (steps 6 to 10),"
+  echo "     sql/c_utf8_probe.sql and the confirmation on real nodes"
+  echo "     (docs/confirming-on-a-real-system.md)."
 fi
 
 # Repeated verbatim. A warning that scrolled past 400 lines ago has not been

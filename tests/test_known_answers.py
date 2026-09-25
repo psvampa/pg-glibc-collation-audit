@@ -2,8 +2,8 @@
 
 This is what stops a refactor from moving a verdict quietly. The numbers below
 are the ones the README states and the examples/ files record; if a change moves
-one, that is either a discovery worth a CHANGELOG entry or a regression, and
-either way somebody has to look.
+one, that is either a discovery or a regression, and either way somebody has
+to look.
 
 Run as subprocesses: the contract these tools offer is their printed output and
 their exit status.
@@ -33,7 +33,7 @@ WARNING = ('could not identify which characters changed, but this locale '
 
 def step2_characters(out):
     """{locale: [code point, ...]} from step 2's LC_COLLATE list, or None for
-    a locale that got the could-not-identify warning (thirty-ninth entry).
+    a locale that got the could-not-identify warning.
 
     Refuses rather than guesses: the files it finds must number what the
     header says, every line under a file must be part of one of the two forms,
@@ -190,6 +190,42 @@ class Step2Filter(StepRun):
                 self.assertRegex(
                     out, re.compile(r'^!! localedata/locales/C\b', re.M))
 
+    def test_the_c_utf8_warning_is_about_the_tags_only(self):
+        """The warning said "this audit is blind to it: a
+        clean result above says nothing about C.UTF-8", and the summary repeats
+        it under a run that read both machines' copies of C. It is compared
+        whole, so a claim added back in any wording fails."""
+        for (old, new), where in (
+                ((OLD, MID), f'exists at NEITHER {OLD} nor {MID}'),
+                ((MID, NEW), f'is new UPSTREAM at {NEW}')):
+            with self.subTest(pair=f'{old}..{new}'):
+                out = self.step('filter_lc_collate_changes.py', old, new)
+                # Every `!!` block that names C.UTF-8, not only the first:
+                # a second block making the old claim would otherwise pass.
+                blocks, cur = [], None
+                for line in out.splitlines():
+                    if line.startswith('!!'):
+                        cur = [line]
+                        blocks.append(cur)
+                    elif cur is not None and line.startswith('   '):
+                        cur.append(line)
+                    else:
+                        cur = None
+                named = [flat('\n'.join(b)) for b in blocks
+                         if 'C.UTF-8' in flat('\n'.join(b))]
+                self.assertEqual(named, [(
+                    f"!! localedata/locales/C {where}, but C.UTF-8 is "
+                    f"BACKPORTED by the distros this audit targets -- so it "
+                    f"very likely DOES exist on your old system, with an order "
+                    f"of its own, and that order can change. The old tag has "
+                    f"no source file for it, so a comparison of the two tags "
+                    f"cannot see what your old system runs, and a clean result "
+                    f"from steps 1 to 5 says nothing about the C.UTF-8 it runs. "
+                    f"PostgreSQL will not cover the gap either -- collversion "
+                    f"is NULL for every collation whose name starts with 'C.', "
+                    f"so no version mismatch can ever fire. Compare C.UTF-8 "
+                    f"empirically on both nodes. See docs/limitations.md.")])
+
     def test_the_false_blanket_claim_is_gone(self):
         """Added files used to be reported as unable to affect an existing
         index, flat. They can, if the locale existed on the old system --
@@ -235,7 +271,7 @@ class Step2Filter(StepRun):
 
 @needs_clone
 class Step2NamesTheCharacters(StepRun):
-    """"Step 2 named the file and stopped" (thirty-ninth entry). The
+    """"Step 2 named the file and stopped". The
     confirmation template needs three test values, and reaching them meant a
     `git diff` by hand; these pin what step 2 now prints instead."""
 
@@ -398,7 +434,7 @@ class Step5CollationCode(StepRun):
                             'the total'), expected)
 
     def test_code_after_a_comment_that_closes_in_context_is_marked(self):
-        """docs/method.md promises "`>>` marks the actual code changes". It
+        """`>>` is meant to mark the actual code changes. It
         did not for eight lines in locale/programs/linereader.c over
         2.34..2.39: the comment above them opens on a changed line and closes
         two CONTEXT lines below, which the filter never read, so the rest of
@@ -551,9 +587,9 @@ class BelowTheOldVersionFloor(StepRun):
             6)
 
     def test_hu_HU_gets_the_warning_and_the_other_five_their_characters(self):
-        """The real case of a change whose lines name no character (thirty-
-        ninth entry). It must read as "could not identify", never as an empty
-        list, which would look like nothing to test."""
+        """The real case of a change whose lines name no character. It must
+        read as "could not identify", never as an empty list, which would look
+        like nothing to test."""
         chars = step2_characters(
             self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW))
         self.assertIsNone(chars['hu_HU'])
@@ -572,8 +608,8 @@ class BelowTheOldVersionFloor(StepRun):
             280)
 
     def test_step_3_maps_its_280_files_to_409_generated_names(self):
-        """The example quotes this header, and the first patch of the
-        twenty-third entry put the WRITTEN list's count there instead -- 414,
+        """The example quotes this header, and a first patch put the WRITTEN
+        list's count there instead -- 414,
         which also carries the five names SUPPORTED does not list. Two
         different numbers one line apart, and only one of them was printed."""
         out = self.step('resolve_copy_closure.py', FLOOR_NEW,
@@ -635,8 +671,8 @@ class BelowTheOldVersionFloor(StepRun):
 class SkippingAReleaseReportsTheUnion(StepRun):
     """glibc-2.28 -> glibc-2.39, the pair that leaves 2.34 out.
 
-    Not an audited pair and not a published verdict. It is the pair
-    docs/method.md, "How far apart the two tags may be", is measured on.
+    Not an audited pair and not a published verdict. It is the pair the claim
+    that an upgrade skipping a release is one audit is measured on.
 
     The claim under test is a SET equality, not a count: a direct jump reports
     exactly what the two steps between it report, name for name. A count would
@@ -714,8 +750,8 @@ class SkippingAReleaseReportsTheUnion(StepRun):
         """76 is what the two steps add up to, and it is the wrong number: the
         copyright string in locale/programs/localedef.c changes "2018" ->
         "2021" -> "2024", which is one hunk read end to end and two read in
-        steps. docs/method.md publishes 75 and explains the difference; if this
-        ever becomes 76, that page is wrong rather than this test."""
+        steps. The direct figure is the right one; if this ever becomes 76,
+        the sum is being reported rather than the diff."""
         out = self.step('diff_collation_code.py', OLD, NEW)
         self.assertEqual(
             one_int(r'(\d+) substantive hunk\(s\) found', out, 'the total'),
@@ -723,8 +759,8 @@ class SkippingAReleaseReportsTheUnion(StepRun):
 
     def test_only_a_rename_differs_in_the_two_steps_and_not_end_to_end(self):
         """The one thing a two-endpoint diff structurally cannot see is a
-        change that is undone before the end. docs/method.md publishes 350 and
-        349 for this span; this asserts them, and names the single exception,
+        change that is undone before the end. This asserts 350 and 349 for this
+        span, and names the single exception,
         because "no locale changed and changed back" is the sentence the whole
         section rests on."""
         def changed(old, new):
@@ -742,14 +778,15 @@ class SkippingAReleaseReportsTheUnion(StepRun):
             sorted(either - end_to_end),
             ['localedata/locales/aa_ER@saaho'],
             'a locale file now changes in one step and is back to its old '
-            'content by the end; docs/method.md says none does')
+            'content by the end')
         self.assertEqual(
             end_to_end - either, set(),
             'the direct pair reports a file neither step does, which a '
             'two-endpoint diff cannot do')
 
     def test_no_locale_is_added_on_the_way_and_then_changed(self):
-        """The second class docs/method.md names, asserted so that a future
+        """The second class a direct pair reports differently, asserted so that
+        a future
         union failure names its own cause.
 
         A file ADDED between 2.28 and 2.34 and then changed inside LC_COLLATE

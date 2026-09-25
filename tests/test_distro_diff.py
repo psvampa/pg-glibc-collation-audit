@@ -122,7 +122,7 @@ class RefusesToGuess(unittest.TestCase):
         an ordinary list under "Nothing differs inside LC_COLLATE", with no
         `!!` for the wrapper to repeat. Measured at 300 of 355: exit 0, and
         th_TH -- whose collation changes between 2.34 and 2.39 -- among the 55
-        (fortieth entry, backlog 1.15)."""
+        (backlog 1.15)."""
         lost = sorted(os.listdir(self.node))[300:]
         for name in lost:
             os.remove(os.path.join(self.node, name))
@@ -206,7 +206,7 @@ class RefusesToGuess(unittest.TestCase):
 
 @needs_clone
 class WritesWhatTheCopyLacks(unittest.TestCase):
-    """Forty-second entry. With the new machine's copy alone, a file of its
+    """With the new machine's copy alone, a file of its
     tag that the copy does not hold may be one the machine does not ship --
     a locale the upgrade removes, which no tag can see -- and the summary
     printed the tags' "none" above step 7's `!!` naming it. Step 7 now writes

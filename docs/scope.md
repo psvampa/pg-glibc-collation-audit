@@ -29,8 +29,7 @@ above are **consecutive RHEL majors, not consecutive glibc releases** —
 four, so every result this project publishes was produced by a pair that
 leaves versions out. Leaving more out is measured rather than assumed:
 `glibc-2.28` against `glibc-2.39`, with 2.34 in the middle, reports the union
-of what the two steps report, name for name, `C.UTF-8` included
-([method.md](method.md#how-far-apart-the-two-tags-may-be)).
+of what the two steps report, name for name, `C.UTF-8` included.
 
 There used to be a floor at glibc 2.24 — below it the three collation
 templates were dropped from the `copy` graph and the answer collapsed silently
@@ -58,5 +57,4 @@ to ask for `builtin`.
 
 ---
 
-[Documentation index](README.md) · [Known limitations](limitations.md) ·
-[The method](method.md)
+[Documentation index](README.md) · [Known limitations](limitations.md)
