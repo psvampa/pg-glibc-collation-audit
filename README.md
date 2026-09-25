@@ -189,29 +189,25 @@ move · ⚪ neither the locale's `LC_COLLATE` nor the collation code changed.
 *tag* diff can reach.
 
 <sup>†</sup> `C.UTF-8`'s source file is in neither tag for the first pair, so
-steps 1–5 are blind to it and step 2 warns rather than settling it. It is
-settled elsewhere: RHEL8 → RHEL9 **changed**, 40 of 41 probed code points in a
-different position, because RHEL8 builds the locale from ellipsis ranges that
-leave planes 3–13 undefined and RHEL9 backported upstream's
-`codepoint_collation`; RHEL9 → RHEL10 **cannot** change, because both nodes'
-copies of the file are byte-identical and byte order by construction. Both
-measured 2026-09-06 and re-measured 2026-09-23 on `glibc-2.28-251.el8_10.40`,
-`glibc-2.34-275.el9_8` and `glibc-2.39-128.el10_2`, unchanged, replacing
-ardentperf's checksum as the basis for the second column. See
-[docs/limitations.md](docs/limitations.md#cutf-8-is-invisible-to-a-tag-diff).
+steps 1–5 cannot settle it. Both verdicts come from the nodes themselves. Why
+each came out as it did, and the builds it was measured on, are in
+docs/results.md, for
+[RHEL8 → RHEL9](docs/results.md#cutf-8--from-the-nodes-own-files-because-no-tag-has-them)
+and for
+[RHEL9 → RHEL10](docs/results.md#worked-example-rhel9-to-rhel10-glibc-234-to-239).
 
 **A table keyed on two major upgrades cannot say this, so it goes here:**
 `C.UTF-8`'s order also changed *within* RHEL8, in `glibc-2.28-93.el8`
-(RHEL 8.2). Staying on one RHEL major is not a control for this locale.
+(RHEL 8.2). Staying on one RHEL major is not a control for this locale. The
+evidence is in
+[docs/results.md](docs/results.md#cutf-8--from-the-nodes-own-files-because-no-tag-has-them).
 
 The evidence behind each row, both worked examples and the nodes each claim
 was measured on: [docs/results.md](docs/results.md). If you saved a result
 from an earlier version of this tool, run the current version again rather
 than reuse it. Earlier versions printed clean results over checks they had not
 made. [Three published verdicts have
-moved](docs/results.md#if-you-saved-an-earlier-result), `th_TH` most recently,
-on 2026-09-06. Later that day `C.UTF-8` was measured directly: no verdict moved,
-but the basis of its RHEL9→RHEL10 🟢 did.
+moved](docs/results.md#if-you-saved-an-earlier-result), `th_TH` most recently.
 
 ## Scope
 
