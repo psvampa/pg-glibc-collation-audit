@@ -191,7 +191,7 @@ move · ⚪ neither the locale's `LC_COLLATE` nor the collation code changed.
 <sup>†</sup> `C.UTF-8`'s source file is in neither tag for the first pair, so
 steps 1–5 cannot settle it. Both verdicts come from the nodes themselves. Why
 each came out as it did, and the builds it was measured on, are in
-docs/results.md, for
+[docs/results.md](docs/results.md), for
 [RHEL8 → RHEL9](docs/results.md#cutf-8--from-the-nodes-own-files-because-no-tag-has-them)
 and for
 [RHEL9 → RHEL10](docs/results.md#worked-example-rhel9-to-rhel10-glibc-234-to-239).
