@@ -27,10 +27,11 @@ python3 tests/run_parallel.py                    # one process per class
 
 The suite pins the five tags to their commit ids, so a moved tag reports
 itself as a moved tag instead of as a change in the results. Six of the
-suite's nine layers need the glibc clone and skip themselves, with a reason,
-if it is absent; `test_pure_functions.py` and `test_parallel_runner.py` run
-without one. The ninth, which checks the figures and quotes the documentation
-publishes, is switched off for now ([tests/README.md](../tests/README.md)). CI
+suite's ten layers need the glibc clone and skip themselves, with a reason,
+if it is absent; `test_pure_functions.py`, `test_parallel_runner.py` and
+`test_locale_order.py` run without one. The tenth, which checks the figures
+and quotes the documentation publishes, is switched off for now
+([tests/README.md](../tests/README.md)). CI
 runs every layer that is switched on, serially, on a fresh clone and fails on
 any skip.
 

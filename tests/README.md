@@ -47,10 +47,12 @@ test somebody deletes during a refactor.
 | `DISABLED_published_claims.py` | not run | **SWITCHED OFF 2026-09-23 for the documentation refactor**, by a rename that takes it out of unittest's `test*.py` discovery; the file's own docstring says why, what is unguarded meanwhile, and how to turn it back on. While it is off, nothing below this sentence is running. **The numbers and quotes the documentation publishes.** Two correction passes in one day found the same class of defect — a count, a position or a quoted line that no longer matched the tool or the measurement. This is that, mechanised: it cannot check prose and does not try. Also a table of canonical figures — a number restated across pages must be the same number on every page that states it in the shape the table names, and must still be stated in as many files as the row expects; the widest-spread of them is written in six files and was kept in agreement by re-reading and nothing else. Four of the six rows are also held to the saved run the figure came from, through four ties in all: three name the sentence the run prints it in and the section to read that sentence in -- a node built from a tag reprints the tag's figures word for word, lower down the same file, so there neither the number nor the sentence is an anchor on its own -- and one names a sentence that appears only once in its file and needs no section. Each of those four rows is then asked, every run, whether moving a single statement of its figure would make at least one file under it stop agreeing: a row where no single move breaks the tie cannot tell its figure from another statement of the same number in the same file, which is how the first of these shipped and what it cost two review rounds to find. Also that every internal link and anchor in the published Markdown resolves, and that every `docs/*.md` path `audit.sh`, `sql/` or `examples/` names exists -- a retitled heading used to break links in silence. And that nothing under `.claude/` is tracked, so the private working rules stay unpublished |
 | `test_node_modes.py` | yes | **the two modes that read a node's own files.** A tag stands in for a node and the backported `C` is written out, because that file exists at no tag — which is the whole point. Includes the test that says the `C.UTF-8` limitation is closed on the data half |
 | `test_parallel_runner.py` | no | **the parallel runner's own guards**, because a runner that loses a shard prints a green summary over tests nobody ran. Every guard in this list was reverted in a mutation and turned this layer red, and a control mutation left it green: discovery's count held per class and not as a sum, the total as well, an unreadable shard read as zero tests, a shard whose exit status contradicts its own `OK`, a verdict read from what the tests printed rather than from the stream `unittest` writes it to, the first summary taken instead of the last, a skip missing from the status line the gate greps on a green run and on a red one, a green report over a run of nothing, a module that did not import, a start directory that does not import, an empty discovery, a selection that matches nothing, a class nobody counted, a class no shard reported on at all, a class two shards reported on, a hung shard reported as a success, and a failed shard whose output never reaches the report |
+| `test_locale_order.py` | no | **`locale_order.py --compare` on what three real machines measured**, kept whole in [`locale_order/`](locale_order/): the exact locales that changed on both pairs and what moved in each, each way the script refuses a measurement that is not whole, the report's own warnings, the names PostgreSQL gives each locale against the three machines' catalogs, and rpm's order of builds against rpm itself. Each refusal and warning of the comparison was removed in a mutation and turned this layer red, except two refusals whose input the next check refuses anyway. The measuring half does not run here; see "What this suite does NOT cover" |
 
 Without a clone at `scripts/glibc`, every layer marked "yes" **skips with a
-reason**; `test_pure_functions.py`, `test_parallel_runner.py` and the
-fabricated-repository classes of `test_git_helpers.py` still run. A skip is
+reason**; `test_pure_functions.py`, `test_parallel_runner.py`,
+`test_locale_order.py` and the fabricated-repository classes of
+`test_git_helpers.py` still run. A skip is
 never a pass: read what it says. CI clones fresh and fails on any skip, so a layer that skips
 there is a red build, not a quiet gap.
 
@@ -92,19 +94,20 @@ prevent.
   bug that made the method collapse there is fixed and tested on `2.12 -> 2.17`.
   Nothing here says an older pair behaves the same, and steps 2 and 5 have been
   run below the floor exactly once.
-- **Eight of audit.sh's guards are unreachable, so nothing tests them.** The
+- **Nine of audit.sh's guards are unreachable, so nothing tests them.** The
   argv name validation, the up-front `rm -f` of the files the summary reads,
   the "step 2 wrote no file" check, the `NOT DECLARED` branch of the
-  steps 9/10 block, and the four `NOT REPORTED` branches -- the reach of the
-  node-to-node block, the two sources of the Removed block, and the new
-  copy's list -- are all defence against a future refactor: as the wrapper
-  stands, step 2 always rewrites its lists for the pair being audited, steps
-  7 and 8 always write their lists, steps 9 and 10 always declare a status
-  for every backported locale they know of, and `set -e` already ends the
-  run if a step fails, so no test can drive them. Seven carry that label in
-  `audit.sh`; the up-front `rm -f` carries the run it exists to stop reading
-  instead. Reverting any of the eight leaves the suite green — which is the
-  honest statement, not a claim of coverage.
+  steps 9/10 block, and the five `NOT REPORTED` branches -- the reach of the
+  node-to-node block, the two sources of the Removed block, the new copy's
+  list, and the measured order's summary -- are all defence against a future
+  refactor: as the wrapper stands, step 2 always rewrites its lists for the
+  pair being audited, steps 7 and 8 always write their lists, steps 9 and 10
+  always declare a status for every backported locale they know of, step 11
+  writes its summary before its report or stops the run, and `set -e`
+  already ends the run if a step fails, so no test can drive them. Eight
+  carry that label in `audit.sh`; the up-front `rm -f` carries the run it
+  exists to stop reading instead. Reverting any of the nine leaves the suite
+  green — which is the honest statement, not a claim of coverage.
 - **`C.UTF-8` is asserted to be *warned about* and to reach a DATA verdict —
   not to be correct.** `test_node_modes.py` checks that a backported file in
   neither tag gets a verdict, that its `ellipsis`/`codepoint_collation` shape
@@ -118,6 +121,12 @@ prevent.
   managers' public keys, which a stock machine does not have. Pinned commit ids
   are the guarantee this suite does offer; a signature is the stronger one, and
   `scripts/audit-locale-diff.sh` prints its state on every run.
+- **`locale_order.py`'s measuring half is untested here.** It asks the
+  machine's own glibc how every locale sorts, so it runs on the machines being
+  compared, with their language packs installed, and not in this suite.
+  `test_locale_order.py` covers what the comparison does with a measurement,
+  on three real ones; the measuring itself was checked by hand on the three
+  machines that wrote them.
 
 ## Adding a test
 

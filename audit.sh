@@ -14,6 +14,7 @@
 #   ./audit.sh <old_tag> <new_tag>
 #              [--old-locales-dir DIR --old-build-id NVR]
 #              [--new-locales-dir DIR --new-build-id NVR]
+#              [--old-order FILE --new-order FILE]
 #
 # The order of the two tags is not a formality: every step assumes the second
 # one is the newer. Given them the other way round the run used to go to the
@@ -36,17 +37,24 @@
 # holds each node's copy of a locale the distro backports -- C.UTF-8 above
 # all -- against the other's. See usage() below.
 #
+# The --*-order options are optional too, and go together. Each is what
+# scripts/locale_order.py wrote on that machine: how its own glibc sorts every
+# locale. Step 11 compares the two, so it answers from each machine's glibc
+# rather than from locale sources, and names the characters that moved.
+#
 # Example (the tags are examples -- run `ldd --version` on each node):
 #   ./audit.sh glibc-2.28 glibc-2.34
 #   ./audit.sh glibc-2.28 glibc-2.34 \
 #     --old-locales-dir ./el8-locales --old-build-id glibc-2.28-251.el8_10.40 \
 #     --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
+#   ./audit.sh glibc-2.28 glibc-2.34 --old-order rhel8.out --new-order rhel9.out
 set -euo pipefail
 
 usage() {
   echo "usage: $0 <old_tag> <new_tag>" >&2
   echo "         [--old-locales-dir DIR --old-build-id NVR]" >&2
   echo "         [--new-locales-dir DIR --new-build-id NVR]" >&2
+  echo "         [--old-order FILE --new-order FILE]" >&2
   echo "       e.g. $0 glibc-2.28 glibc-2.34" >&2
   echo "       tags are glibc-<version>; run \`ldd --version\` on each node" >&2
   echo "       OLD first, NEW second: a reversed pair is refused, not" >&2
@@ -70,6 +78,12 @@ usage() {
   echo >&2
   echo "       Supply BOTH and the run also compares the two nodes to each" >&2
   echo "       other (step 8)." >&2
+  echo >&2
+  echo "       The --*-order options are OPTIONAL and go together: each is the" >&2
+  echo "       output of scripts/locale_order.py run on that machine, which" >&2
+  echo "       asks the machine's own glibc how every locale sorts (step 11)." >&2
+  echo "       It sees what a comparison of files cannot: a locale whose files" >&2
+  echo "       did not change can still sort differently." >&2
   exit 2
 }
 
@@ -88,12 +102,15 @@ needs_value() {
   [ -n "${2:-}" ] || { echo "error: $1 needs a value" >&2; usage; }
 }
 OLD_LOCALES=""; OLD_BUILD=""; NEW_LOCALES=""; NEW_BUILD=""
+OLD_ORDER=""; NEW_ORDER=""
 while [ $# -gt 0 ]; do
   case $1 in
     --old-locales-dir) needs_value "$@"; OLD_LOCALES=$2; shift 2 ;;
     --old-build-id)    needs_value "$@"; OLD_BUILD=$2;   shift 2 ;;
     --new-locales-dir) needs_value "$@"; NEW_LOCALES=$2; shift 2 ;;
     --new-build-id)    needs_value "$@"; NEW_BUILD=$2;   shift 2 ;;
+    --old-order)       needs_value "$@"; OLD_ORDER=$2;   shift 2 ;;
+    --new-order)       needs_value "$@"; NEW_ORDER=$2;   shift 2 ;;
     *) echo "error: unknown argument '$1'" >&2; usage ;;
   esac
 done
@@ -103,6 +120,14 @@ done
 if { [ -n "$OLD_LOCALES" ] && [ -z "$OLD_BUILD" ]; } ||
    { [ -n "$NEW_LOCALES" ] && [ -z "$NEW_BUILD" ]; }; then
   echo "error: --*-locales-dir requires the matching --*-build-id" >&2
+  exit 2
+fi
+# One machine's measurement compares nothing, and a run that dropped the other
+# half in silence would end with a summary that reads as if it had.
+if { [ -n "$OLD_ORDER" ] && [ -z "$NEW_ORDER" ]; } ||
+   { [ -z "$OLD_ORDER" ] && [ -n "$NEW_ORDER" ]; }; then
+  echo "error: --old-order and --new-order go together: one machine's" >&2
+  echo "       measurement alone compares nothing" >&2
   exit 2
 fi
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -164,6 +189,27 @@ rm -f "$STEP2_LIST" "$STEP2_REMOVED" "$STEP3_LIST" "$STEP4_LIST" \
       ${NODE_LIST:+"$NODE_LIST"} ${NODE_INHERITED:+"$NODE_INHERITED"} \
       ${NODE_REMOVED:+"$NODE_REMOVED"} ${NODE_UNDETERMINED:+"$NODE_UNDETERMINED"}
 rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
+
+# Step 11 is worked out before step 1, so that a measurement the comparison
+# refuses -- cut short, damaged, or taken on another glibc than its tag --
+# stops the run here instead of after the five steps. Its report is printed
+# where step 11 stands, below, and its summary at the end.
+#
+# Its log is not named step11.*.log on purpose: the warnings block at the end
+# globs those to repeat their `!!` notices, and would repeat step 11's with
+# the lists under them cut off. Its summary block carries each of them, names
+# included.
+ORDER_LOG="$OUT_DIR/measured_order.$PAIR.log"
+ORDER_SUMMARY="$OUT_DIR/measured_order_summary.$PAIR.txt"
+rm -f "$ORDER_LOG" "$ORDER_SUMMARY"
+if [ -n "$OLD_ORDER" ]; then
+  if ! python3 "$SCRIPTS/locale_order.py" --compare "$OLD_ORDER" "$NEW_ORDER" \
+       --tags "$OLD" "$NEW" --summary-to "$ORDER_SUMMARY" > "$ORDER_LOG" 2>&1; then
+    cat "$ORDER_LOG" >&2
+    echo "error: step 11 could not compare the two measurements (above). Not continuing." >&2
+    exit 2
+  fi
+fi
 
 banner() {
   echo
@@ -330,6 +376,11 @@ if [ -n "$NEW_LOCALES" ]; then
     --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --supported-tag "$NEW"
 fi
 
+if [ -n "$OLD_ORDER" ]; then
+  banner "MEASURED ORDER  how each machine's own glibc sorts every locale"
+  cat "$ORDER_LOG"
+fi
+
 # ---------------------------------------------------------------- summary ----
 
 # awk, not `grep -c ... || echo 0`: grep -c prints "0" AND exits 1 when
@@ -371,6 +422,13 @@ if [ "$(count_lines "$STEP3_LIST")" -gt 0 ]; then
   echo "   ($(count_lines "$STEP3_LIST") name(s); full list: $STEP3_LIST)"
 else
   echo "     none -- no locale's LC_COLLATE changed between these two tags"
+fi
+# With the two measurements the summary holds a second answer to the same
+# question, and this one comes first: it says where the other is, so that the
+# tags' list -- or their "none" -- is not read as the whole answer.
+if [ -n "$OLD_ORDER" ]; then
+  echo "     This list is from the tags. What each machine's own glibc says"
+  echo "     is under '-- Measured order', below."
 fi
 
 # What the upgrade removes. A locale that is gone is worse than one that sorts
@@ -466,6 +524,32 @@ else
   fi
 fi
 
+# What each machine's own glibc says, beside what the tags say. Below Removed,
+# not above it: that section sits directly under Reindex on purpose, and this
+# block runs to some forty lines. Step 11 reads no locale source: over RHEL8 ->
+# RHEL9 it names ko_KR.utf8, whose file is byte-identical in both tags, and
+# eight Swedish locales in which no character moves. Absent is not empty:
+# without the two files this says NOT RUN.
+echo
+if [ -n "$OLD_ORDER" ]; then
+  echo "-- Measured order: each machine's own glibc"
+  if [ -s "$ORDER_SUMMARY" ]; then
+    cat "$ORDER_SUMMARY"
+    echo "     Full report: step 11 above."
+  else
+    # Unreachable as the step stands: step 11 writes its summary before its
+    # report, and a step 11 that failed has already ended this script.
+    echo "     NOT REPORTED -- step 11 wrote no summary. Read its output above;"
+    echo "     do not read this as nothing changed"
+  fi
+else
+  echo "-- Measured order: NOT RUN"
+  echo "     Pass --old-order and --new-order, each the output of"
+  echo "     scripts/locale_order.py on that machine. Without them nothing"
+  echo "     above asked either machine's glibc how it sorts, and a locale"
+  echo "     whose files did not change can still sort differently."
+fi
+
 echo
 case $STEP5 in
   hunks)
@@ -524,9 +608,19 @@ else
   # missed -- it is false negative #1 in a different costume.
   echo "-- Node-to-node locale data: NOT RUN"
   echo "     Pass --old-locales-dir and --new-locales-dir with their build"
-  echo "     ids. Without both, nothing above compared the two nodes' C.UTF-8"
-  echo "     against each other, and PostgreSQL reports collversion as NULL for"
-  echo "     every C.* collation, so no mismatch can ever fire."
+  if [ -n "$OLD_ORDER" ]; then
+    # Step 11 ran, and measured C.UTF-8 if both machines could, so "nothing
+    # compared it" may be false. This says where to read what it found, not
+    # what that was: it can be listed there as not measured.
+    echo "     ids. Without both, nothing above compared the two nodes' C.UTF-8"
+    echo "     files against each other; what step 11 measured of it is under"
+    echo "     '-- Measured order'. PostgreSQL reports collversion as NULL for"
+    echo "     every C.* collation, so no mismatch can ever fire."
+  else
+    echo "     ids. Without both, nothing above compared the two nodes' C.UTF-8"
+    echo "     against each other, and PostgreSQL reports collversion as NULL for"
+    echo "     every C.* collation, so no mismatch can ever fire."
+  fi
   echo "     Then run sql/c_utf8_probe.sql on both nodes."
 fi
 
@@ -630,9 +724,10 @@ fi
 if [ "$SAME_TAG" = "1" ]; then
   echo
   echo "-- One commit, compared with itself"
-  echo "     $OLD -> $NEW. Everything above that says 'nothing changed' means"
-  echo "     'nothing was compared'. For an intra-major upgrade, what can still"
-  echo "     show a change is the machines' own files (steps 6 to 10),"
+  echo "     $OLD -> $NEW. Everything above that compares the two tags"
+  echo "     and says 'nothing changed' means 'nothing was compared'. For an"
+  echo "     intra-major upgrade, what can still show a change is the machines'"
+  echo "     own files (steps 6 to 10), the measured order (step 11),"
   echo "     sql/c_utf8_probe.sql and the confirmation on real nodes"
   echo "     (docs/confirming-on-a-real-system.md)."
 fi

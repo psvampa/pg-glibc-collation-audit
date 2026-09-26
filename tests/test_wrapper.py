@@ -23,6 +23,8 @@ from _harness import (EXPECTED_SHA, MID, NEW, OLD, backported_c, flat,
 import diff_distro_locales as dd
 import glibc_locale_data as g
 from _harness import GLIBC_CLONE
+from test_locale_order import (CHANGED_8_TO_9, RHEL8, RHEL9, RHEL10,
+                               parse_summary)
 
 
 def pair_slug(old, new):
@@ -62,6 +64,7 @@ USAGE = [
     'usage: audit.sh <old_tag> <new_tag>',
     '         [--old-locales-dir DIR --old-build-id NVR]',
     '         [--new-locales-dir DIR --new-build-id NVR]',
+    '         [--old-order FILE --new-order FILE]',
     '       e.g. audit.sh glibc-2.28 glibc-2.34',
     '       tags are glibc-<version>; run `ldd --version` on each node',
     '       OLD first, NEW second: a reversed pair is refused, not',
@@ -85,7 +88,31 @@ USAGE = [
     '',
     '       Supply BOTH and the run also compares the two nodes to each',
     '       other (step 8).',
+    '',
+    '       The --*-order options are OPTIONAL and go together: each is the',
+    '       output of scripts/locale_order.py run on that machine, which',
+    "       asks the machine's own glibc how every locale sorts (step 11).",
+    '       It sees what a comparison of files cannot: a locale whose files',
+    '       did not change can still sort differently.',
 ]
+
+REINDEX = '-- Reindex: sort order changes, confirm then REINDEX'
+REINDEX_POINTER = [
+    "This list is from the tags. What each machine's own glibc says",
+    "is under '-- Measured order', below.",
+]
+MEASURED = "-- Measured order: each machine's own glibc"
+MEASURED_NOT_RUN = '-- Measured order: NOT RUN'
+MEASURED_NOT_RUN_BODY = [
+    'Pass --old-order and --new-order, each the output of',
+    'scripts/locale_order.py on that machine. Without them nothing',
+    "above asked either machine's glibc how it sorts, and a locale",
+    'whose files did not change can still sort differently.',
+]
+MEASURED_FOOTER = '     Full report: step 11 above.'
+# audit.sh's last word when step 11 exits non-zero: a refusal or a crash.
+COULD_NOT_COMPARE = ('error: step 11 could not compare the two measurements '
+                     '(above). Not continuing.')
 
 NODE_TO_NODE_NOT_RUN = '-- Node-to-node locale data: NOT RUN'
 # The whole block, compared line for line. A check for one phrase would let
@@ -118,6 +145,27 @@ def summary_block(out, heading):
             return body
         body.append(line.strip())
     raise AssertionError(f'{heading!r} never ends:\n{summary}')
+
+
+def measured_block(out):
+    """The Measured order block of the summary as written, indentation kept,
+    without its heading and its footer. Refuses a block that appears other
+    than once or does not end at its footer."""
+    summary = out.split('AUDIT SUMMARY', 1)[-1]
+    lines = summary.splitlines()
+    at = [i for i, line in enumerate(lines) if line == MEASURED]
+    if len(at) != 1:
+        raise AssertionError(f'{MEASURED!r} is a whole line {len(at)} '
+                             f'time(s):\n{summary}')
+    body = []
+    for line in lines[at[0] + 1:]:
+        if line == MEASURED_FOOTER:
+            return '\n'.join(body) + '\n'
+        if not line.strip() or line.startswith('--'):
+            break
+        body.append(line)
+    raise AssertionError(f'the Measured order block does not end at its '
+                         f'footer:\n{summary}')
 
 
 def removed_lines(out):
@@ -237,6 +285,16 @@ class Wrapper(unittest.TestCase):
         # C.UTF-8 on every pair, so the unsplit assertion could not fail.
         self.assertIn('C.UTF-8', summary)
 
+    def test_reindex_points_nowhere_else_without_the_measurements(self):
+        self.assertNotIn(REINDEX_POINTER[0],
+                         summary_block(self.out, REINDEX))
+
+    def test_the_summary_says_the_measured_order_was_NOT_RUN(self):
+        """Absent is not empty: without the two machines' measurements the
+        summary says what went unasked, not nothing."""
+        self.assertEqual(summary_block(self.out, MEASURED_NOT_RUN),
+                         MEASURED_NOT_RUN_BODY)
+
     def test_the_NOT_RUN_block_gives_no_reason_a_tag_can_falsify(self):
         """The block used to say C.UTF-8's "source file is
         in neither tag", which glibc-2.39 falsifies (the file is upstream from
@@ -354,8 +412,8 @@ class WrapperEmptyPair(unittest.TestCase):
         self.assertIn('are the same commit', flat(warnings))
         # The whole sentence, whitespace collapsed. This used to assert the
         # word "means", which every step's prose contains.
-        self.assertIn("Everything above that says 'nothing changed' means "
-                      "'nothing was compared'", flat(self.out))
+        self.assertIn("Everything above that compares the two tags and says "
+                      "'nothing changed' means 'nothing was compared'", flat(self.out))
 
     def test_the_one_commit_notice_names_every_step_that_still_has_evidence(self):
         """The notice said the evidence was "the node-to-node check and
@@ -365,11 +423,11 @@ class WrapperEmptyPair(unittest.TestCase):
         so an "only" cannot come back in other words."""
         self.assertEqual(summary_block(self.out,
                                        '-- One commit, compared with itself'), [
-            f"{NEW} -> {NEW}. Everything above that says 'nothing changed' "
-            f"means",
-            "'nothing was compared'. For an intra-major upgrade, what can "
-            "still",
-            "show a change is the machines' own files (steps 6 to 10),",
+            f"{NEW} -> {NEW}. Everything above that compares the two tags",
+            "and says 'nothing changed' means 'nothing was compared'. For an",
+            "intra-major upgrade, what can still show a change is the "
+            "machines'",
+            "own files (steps 6 to 10), the measured order (step 11),",
             "sql/c_utf8_probe.sql and the confirmation on real nodes",
             "(docs/confirming-on-a-real-system.md).",
         ])
@@ -444,8 +502,8 @@ class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
         self.assertIn('are the same commit', flat(self.out))
         summary = flat(self.out.split('AUDIT SUMMARY')[1])
         self.assertIn("-- One commit, compared with itself", summary)
-        self.assertIn("Everything above that says 'nothing changed' means "
-                      "'nothing was compared'", summary)
+        self.assertIn("Everything above that compares the two tags and says "
+                      "'nothing changed' means 'nothing was compared'", summary)
 
 
 @needs_clone
@@ -1400,6 +1458,155 @@ class WrapperNodeWithoutC(unittest.TestCase):
         self.assertIn('C (C.UTF-8): ABSENT from this locale directory <- not '
                       'examined, NOT cleared', flat)
         self.assertNotIn('C (C.UTF-8): codepoint_collation', flat)
+
+
+
+@needs_clone
+class WrapperMeasuredOrder(unittest.TestCase):
+    """--old-order and --new-order on RHEL8 -> RHEL9: step 11 runs, and the
+    summary names what each machine's own glibc says changed.
+
+    Freezes the summary a reader acts on: the fourteen locales, and a
+    warnings block that does not repeat step 11's lists with the names cut
+    off from under them.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-order-')
+        cls.rc, cls.out = run_wrapper(OLD, MID, '--old-order', RHEL8,
+                                      '--new-order', RHEL9,
+                                      out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_step_11_runs(self):
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        self.assertEqual(self.out.count('\n== MEASURED ORDER  '), 1)
+        self.assertIn('Sort order CHANGED in 14 locale(s):',
+                      self.out.split('AUDIT SUMMARY')[0])
+
+    def test_the_summary_names_the_fourteen_locales(self):
+        summary = parse_summary(measured_block(self.out))
+        self.assertEqual(set(summary['changes']), CHANGED_8_TO_9)
+        self.assertEqual(summary['not_on_new'],
+                         ['en_US.utf8@ampm', 'en_US@ampm'])
+
+    def test_the_block_sits_under_removed(self):
+        """Removed stays directly under Reindex, where it was put so that a
+        locale the upgrade deletes is on the first screen: this block is some
+        forty lines long, and above Removed it pushed that section down."""
+        summary = self.out.split('AUDIT SUMMARY')[1]
+        self.assertLess(summary.index('-- Reindex:'), summary.index(REMOVED))
+        self.assertLess(summary.index(REMOVED), summary.index(MEASURED))
+        self.assertLess(summary.index(MEASURED),
+                        summary.index('-- Needs an empirical test'))
+        self.assertNotIn(MEASURED_NOT_RUN, summary)
+
+    def test_reindex_says_where_the_measured_answer_is(self):
+        """Reindex lists six names from the tags and comes first; the block
+        that lists fourteen from the machines is further down. Without a
+        pointer the six read as the whole answer."""
+        body = summary_block(self.out, REINDEX)
+        self.assertEqual(body[-2:], REINDEX_POINTER)
+        self.assertEqual(len(body), 6 + 1 + 2)
+
+    def test_node_to_node_NOT_RUN_does_not_deny_what_step_11_compared(self):
+        """The plain NOT RUN block says nothing compared the two nodes'
+        C.UTF-8; after step 11 that may be false, and it says where step 11's
+        answer is instead of what it was, since C.UTF-8 can be listed there
+        as not measured. Whole, line for line, like the plain one."""
+        self.assertEqual(summary_block(self.out, NODE_TO_NODE_NOT_RUN), [
+            'Pass --old-locales-dir and --new-locales-dir with their build',
+            "ids. Without both, nothing above compared the two nodes' C.UTF-8",
+            'files against each other; what step 11 measured of it is under',
+            "'-- Measured order'. PostgreSQL reports collversion as NULL for",
+            'every C.* collation, so no mismatch can ever fire.',
+            'Then run sql/c_utf8_probe.sql on both nodes.',
+        ])
+
+    def test_the_warnings_block_does_not_repeat_step_11(self):
+        """Its `!!` headers there would stand over lists the block does not
+        carry: "4 locale(s):" and nothing under it."""
+        warnings = flat(self.out.split('-- Warnings the clean results above '
+                                       'do NOT cover')[1])
+        for header in ('!! Could not be measured', '!! Not on the new machine',
+                       '!! Unchanged only as far as measured'):
+            with self.subTest(header=header):
+                self.assertNotIn(header, warnings)
+
+
+@needs_clone
+class WrapperMeasuredOrderRefused(unittest.TestCase):
+    """What step 11 is given is checked before step 1, and a refusal ends the
+    run there: no step, no summary.
+
+    Freezes three ways a summary could read as if the order had been
+    measured when it was not: one machine's file alone, two files of another
+    upgrade, and a file cut short.
+    """
+
+    def setUp(self):
+        self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-order-bad-')
+        self.addCleanup(shutil.rmtree, self.out_dir, ignore_errors=True)
+
+    def assertRefusedBeforeStep1(self, *args):
+        rc, out = run_wrapper(OLD, MID, *args, out_dir=self.out_dir)
+        self.assertEqual(rc, 2, out[-2000:])
+        self.assertNotIn('== STEP 1', out)
+        self.assertNotIn('AUDIT SUMMARY', out)
+        return out
+
+    def test_the_old_file_alone(self):
+        out = self.assertRefusedBeforeStep1('--old-order', RHEL8)
+        self.assertIn('go together', out)
+
+    def test_the_new_file_alone(self):
+        out = self.assertRefusedBeforeStep1('--new-order', RHEL9)
+        self.assertIn('go together', out)
+
+    def test_the_files_of_another_upgrade(self):
+        out = self.assertRefusedBeforeStep1('--old-order', RHEL9,
+                                            '--new-order', RHEL10)
+        self.assertIn('locale_order.py: ', out)
+        self.assertIn(COULD_NOT_COMPARE, out)
+
+    def test_a_file_cut_short(self):
+        cut = os.path.join(self.out_dir, 'cut.out')
+        with open(RHEL9, encoding='utf-8') as f, \
+                open(cut, 'w', encoding='utf-8') as g_:
+            g_.write(f.read()[:1000000])
+        out = self.assertRefusedBeforeStep1('--old-order', RHEL8,
+                                            '--new-order', cut)
+        self.assertIn('locale_order.py: ', out)
+        self.assertIn(COULD_NOT_COMPARE, out)
+
+
+@needs_clone
+class WrapperMeasuredOrderUncheckedTag(unittest.TestCase):
+    """The old tag given as a commit id: nothing can say which glibc it is,
+    so the summary says the file was not checked against it, rather than
+    passing it as a match."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-order-sha-')
+        cls.rc, cls.out = run_wrapper(EXPECTED_SHA[OLD], MID,
+                                      '--old-order', RHEL8,
+                                      '--new-order', RHEL9,
+                                      out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_the_summary_says_the_old_file_was_not_checked(self):
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        summary = parse_summary(measured_block(self.out))
+        self.assertEqual(summary['warnings'], ['OLD tag unchecked'])
+        self.assertEqual(set(summary['changes']), CHANGED_8_TO_9)
 
 
 if __name__ == '__main__':
