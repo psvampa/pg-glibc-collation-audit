@@ -30,6 +30,12 @@ the binary locale the system loads. It is what expands ellipsis ranges and
 what normalises codeset spelling, so it is one of the two inputs to sort
 order; the locale data is the other.
 
+**build id** — the exact glibc package a machine runs, as `rpm -q glibc`
+prints it, such as `glibc-2.28-251.el8_10.40`, with or without the
+architecture. Two builds of one glibc version can sort differently, because a
+distro backport can sit between them, as one did inside RHEL8 at
+`glibc-2.28-93.el8`. Every result here is bound to the build it was taken on.
+
 **ellipsis range** (also *algorithmic range*, *range expansion*) —
 range-expansion syntax, `<UAC00>` / `..` / `<UD7A3>`, used instead of an
 explicit weight per character. `localedef` expands it at build time, so those
@@ -49,7 +55,7 @@ many it found and prints them. "Read the hunks" means reading those blocks
 of C. Step 5 marks each changed line it counts as code with `>>`.
 
 **`!!`** — a warning printed where a clean-looking result does not cover
-something. The summary repeats each one in full.
+something. The summary repeats each one.
 
 **tier** (step 5 only) — one of the three groups of glibc source paths step 5
 diffs. Tiers 1 and 2 are curated lists. Tier 3 is *derived*, by walking
@@ -81,6 +87,30 @@ each other, with no upstream tag in the middle
 (`scripts/diff_node_locales.py`, step 8 of `audit.sh`). Distinct from the
 node-versus-tag check, which asks "is the audit reading what this node runs?";
 this asks "did what the two nodes run actually change?"
+
+**the file from each machine** (a *node file*) — the one file
+`scripts/locale_order.py --extract` writes on a machine, and `audit.sh` reads
+with `--old-node` and `--new-node`. What it holds is in
+[commands.md](commands.md#the-file-from-each-machine).
+
+**measured order** (step 11) — how a machine's own glibc sorts, asked of the
+machine rather than read from source. For every locale `locale -a` lists, it
+records where each character the locale can hold sorts, and how each two
+neighbours in that order are told apart. It uses the call PostgreSQL makes
+under a `libc` collation, so it sees what a source comparison cannot, such as
+`ko_KR` between glibc 2.28 and 2.34.
+
+**level** — in most locales glibc compares two strings in stages, the levels
+of ISO 14651: first by letter, then by accent, then by case. Step 11 records
+at which of them each two neighbours are told apart: as different letters,
+like an accent, by case, by something smaller than case, or not at all, when
+only the bytes decide. A character glibc ignores at some level counts for
+nothing there.
+
+**contraction** — a rule that sorts a combination of letters as one, such as
+`ch` sorted as a single letter after `h` in Czech. It belongs to the
+combination, not to any one character, so step 11, which measures characters,
+cannot see it change.
 
 **inverted positive control** — the one place the rule below runs backwards.
 For `C.UTF-8`, agreeing with `LC_ALL=C` byte order is the *corrected*

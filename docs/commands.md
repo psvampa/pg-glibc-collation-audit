@@ -1,13 +1,21 @@
 # What each command does
 
-Three commands. The first reads source and proves what cannot have changed;
-the second and third measure what a source read cannot settle.
+Three commands. The first reads source and proves what cannot have changed,
+and in its extended form also measures how each of your machines sorts. The
+second and third measure, inside PostgreSQL, what the first leaves open.
 
 **Commands are numbered here; steps are what a run prints.** A run of command
-1 does its own work in ten numbered steps, and those numbers are not these
-three. Where this page needs them it says "the run's step 4".
+1 does its own work in up to eleven steps, five with the tags alone and six
+more with a file from each machine, and those numbers are not these three.
+Where this page needs them it says "the run's step 4".
 
 ## Command 1 — which locales the upgrade can affect
+
+It runs in two ways, as in [the README](../README.md#the-commands). 1.a needs
+the tags alone; 1.b adds one file from each of your machines, and with it six
+more checks.
+
+### 1.a — quick verification
 
 `./audit.sh <old tag> <new tag>` compares the two glibc versions as their
 maintainers published them, and needs nothing but this checkout. It runs five
@@ -31,19 +39,21 @@ the list really moved. A flagged locale can turn out unaffected — `ber_DZ` and
 `kab_DZ` were flagged and the change was a role swap that leaves the order
 alone.
 
-### Command 1 extended — the same run against your two machines
+### 1.b — extended verification, against your two machines
 
-The same command, with each machine's own locale files and build ids added.
-The five checks above run either way; supplying the files adds five more,
-numbered 6 to 10 in the output.
+The same command, given one file from each machine with `--old-node` and
+`--new-node`. Each is the file `scripts/locale_order.py --extract` wrote on
+that machine. The five checks above run either way; the two files add six
+more.
 
 | The run's step | The question it answers |
 |---|---|
 | 6 and 7 | do the distro's patches on that machine touch sort order? One step per side |
 | 8 | does one machine's collation data differ from the other's? |
 | 9 and 10 | does that machine's own data use the abbreviated ranges a file comparison can never clear? One step per side |
+| 11 | how does each machine's own glibc sort the locales installed on it, and which characters moved between the two? |
 
-Two of those answer questions the upstream comparison cannot reach at all:
+Three of those answer questions the upstream comparison cannot reach at all:
 
 - **What your distro changed on its own.** Steps 6 and 7 compare a machine
   against the version its distro started from.
@@ -51,25 +61,75 @@ Two of those answer questions the upstream comparison cannot reach at all:
   does not have. Step 8 compares one machine's copy of it with the other's,
   and it needs both machines. `C.UTF-8` is that locale on RHEL8 and RHEL9, and
   in a container it is usually the database collation.
+- **How each machine really sorts.** Step 11 reads no source. It asks each
+  machine's glibc to order every character the locale can hold, with the call
+  PostgreSQL makes under a `libc` collation, and compares the two machines.
+  That is how it sees `ko_KR`, whose file is identical at 2.28 and 2.34 while
+  its order changed. What it does not measure, it prints beside its result.
 
-Leave the files out and the summary says `NOT RUN` for steps 8 to 10, and
-`NOT CHECKED` for what the distro adds or drops. They are not omitted,
-because a section that vanishes reads like a section that found nothing.
+Leave the files out and the summary says `NOT RUN` for steps 6 and 7, step
+8, steps 9 and 10 and step 11, and `NOT CHECKED` for what the distro adds or
+drops. They are not omitted, because a section that vanishes reads like a
+section that found nothing.
 
-**This still settles data, not order.** The weights are computed when the
+A file without the locale sources still holds the measurement and the build,
+because the extraction notes why the sources are missing and goes on. Step 11
+runs. Every summary block that needed those sources says `NOT RUN`, or `NOT
+CHECKED`, with the file's reason, such as `/usr/share/i18n/locales is empty`.
+
+**Steps 6 to 10 settle data, not order.** The weights are computed when the
 locale is built on the machine, so two machines can hold byte-identical files
-and still sort differently. That is what commands 2 and 3 are for.
+and still sort differently. That is what step 11 measures, one character at a
+time, and commands 2 and 3 measure inside PostgreSQL.
 
-#### Taking the copy, and checking it
+#### The file from each machine
 
-The commands that produce the two directories are in
+The commands that write the two files are in
 [the README](../README.md#the-commands), which holds the only copy of them.
-In a container `docker exec` replaces `ssh` in those commands, and `rpm -q
-glibc` prints the architecture as well (`...x86_64`) — either form is a usable
-build id.
 
-Installing `glibc-locale-source` **upgrades glibc**, because the two packages
-are version-locked. Read the build id after installing it, not before.
+Each file holds the measurement of step 11, a copy of the machine's
+`/usr/share/i18n/locales`, and, written last, a list of both: the glibc build,
+as `rpm -q glibc` prints it on that machine, and a checksum of every file. The
+copy is the whole folder or none of it, and when it is none the list says why.
+
+The README's install line names the exact glibc build the machine runs, so
+`dnf` installs the sources of that build and nothing else. A plain `dnf
+install glibc-locale-source` installs the newest sources instead, and on a
+machine that is behind it upgrades glibc itself to match. Measured on RHEL
+8.10, where it planned to take glibc from `2.28-251.el8_10.34` to
+`2.28-251.el8_10.40`, which changes the system you set out to audit.
+
+`audit.sh` checks each file whole before it reads any of it, and stops, with
+the reason, on a file that:
+
+- is not whole: a run cut short, text the machine printed ahead of it such as
+  a login message, or a second file appended to the first;
+- was written by another version of `--extract`;
+- holds an entry other than the one its list describes, such as an edited file
+  or a name that would land outside the copy;
+- names no glibc build, because `rpm -q glibc` printed none on that machine.
+
+For the first three, extract again with this checkout's
+`scripts/locale_order.py`. Once the copy is laid out, what was written is read
+back against the list, so a disk that renames or drops a file stops the run as
+well.
+
+The two files go together, since one machine's file compares nothing, and
+they do not mix with the options of the next section.
+
+#### The same checks from separate pieces
+
+`audit.sh` also takes the pieces of a node file one by one, for when you have
+them already, such as a copy of the locale folder taken from an image:
+`--old-locales-dir` and `--new-locales-dir`, each with its `--old-build-id` or
+`--new-build-id`, and `--old-order` and `--new-order`, each the output of a
+plain `python3 scripts/locale_order.py > old.out` on that machine. Take a
+folder with `tar` over `ssh`, never `docker cp`, whose target `/tmp` in a
+container is a separate mount, so the copy silently does nothing. `rpm -q
+glibc` gives the build id, with or without the architecture (`...x86_64`).
+
+A copy taken this way carries no checksum, so the checks below are yours to
+make.
 
 The build ids are required, because a result is bound to the build it was
 taken on and nothing in a directory of locale files carries a version.
@@ -108,38 +168,42 @@ missing.
 `sql/c_utf8_probe.sql`, run on each machine, the two outputs compared. It
 needs PostgreSQL 15 or newer and no editing.
 
-This is the one locale command 1 cannot reach when its file is in neither
-version, and PostgreSQL will not warn about it either. It is needed when a
-database uses `C.UTF-8` — which in a container it usually does, without anyone
-having chosen it.
+This is the one locale 1.a cannot reach when its file is in neither version;
+1.b reaches it, in steps 8 and 11. PostgreSQL will not warn about it either.
+It is needed when a database uses `C.UTF-8` — which in a container it usually
+does, without anyone having chosen it.
 
-Unlike command 1, this **measures the order**. It sorts on the machine as it
-actually runs and compares the two results.
+Like step 11, this **measures the order**, but inside PostgreSQL. It sorts on
+the machine as it actually runs and compares the two results.
 
-One warning about reading it: for this locale the usual tell is inverted.
-Agreeing with byte order is the corrected state here, not the sign that the
-locale was never generated.
+Reading its output takes one warning, because for this locale the usual tell
+is inverted. That, and how the probe differs from the template, are in
+[confirming-on-a-real-system.md](confirming-on-a-real-system.md#the-cutf-8-probe).
 
 ## Command 3 — confirming the order on your own builds
 
 `sql/collation_confirmation_template.sql`, edited first, run on both machines.
-Optional: command 1's result stands on its own, and this is what turns that
-argument into a measurement.
+Optional. Command 1's result stands on its own; this sorts strings you choose
+inside PostgreSQL, which also reaches a rule for a combination of letters that
+step 11 cannot see.
 
 It does two separate jobs.
 
 **It measures the order** of three strings you supply, under a locale you
-name, on both machines. Choosing those three strings is what decides whether
-the run proves anything: they have to be the characters the changed
-rule moves, not words in the language. The run's step 2 lists, under each
-locale it flags, the characters its changed rules name.
+name, on both machines. Choosing them decides whether the run proves
+anything; how to choose them is in
+[confirming-on-a-real-system.md](confirming-on-a-real-system.md#choosing-the-three-values).
 
-**It inventories your database** — which indexes, partitioned tables, columns
-and constraints use a collation that is exposed. That half needs no editing
-and no confirmation; it answers which objects of yours are at stake.
+**It inventories your database**, which answers which objects of yours are
+at stake. That half needs no editing and no confirmation; what it lists is in
+[confirming-on-a-real-system.md](confirming-on-a-real-system.md#what-else-the-template-reports).
 
 ## What none of the three does
 
-None of them changes anything, and none of them decides for you. Command 1
-hands you a list and a proof, commands 2 and 3 hand you measurements. The
+None of them touches your data or your indexes, and none of them decides for
+you. What they do change is small and named: 1.b installs one package on each
+machine, the locale sources of the build it already runs; commands 2 and 3
+each create a test table of their own, and command 3 first imports the
+system's collations into PostgreSQL's catalog. Command 1 hands you a list and
+a proof, and in 1.b a measurement; commands 2 and 3 hand you measurements. The
 decision to reindex is yours.

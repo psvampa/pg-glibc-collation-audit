@@ -11,8 +11,7 @@ matching — and nothing about `LC_NUMERIC`, `LC_TIME`, `LC_MONETARY` or
 on `lower(email)` breaks on a glibc upgrade the same way a `COLLATE` index does,
 and PostgreSQL has no `collversion` equivalent for ctype to warn you. No step
 audits it — see
-[limitations.md](limitations.md#lc_ctype-is-not-audited-at-all) for the one
-measurement this repository does publish.
+[limitations.md](limitations.md#lc_ctype-is-not-audited-at-all).
 
 **The `libc` provider only.** It is about glibc, so in PostgreSQL terms that
 is the only provider it applies to. ICU collations version their CLDR data
@@ -23,7 +22,10 @@ project audits and publishes results for. RHEL7 is out of scope — it is years
 past end of life, and documenting it bought nothing.
 
 The method itself works on any pair of upstream tags, so equivalents on other
-distros (Ubuntu 18.04+, Debian 9+, SLES 15+) behave the same. The two pairs
+distros (Ubuntu 18.04+, Debian 9+, SLES 15+) behave the same. The extended
+run, 1.b, has been measured on RHEL only, and it reads the glibc build with
+`rpm -q glibc`. On a machine without RPM, such as Debian or Ubuntu, `audit.sh`
+refuses that machine's file and says why. The two pairs
 above are **consecutive RHEL majors, not consecutive glibc releases** —
 `2.28 -> 2.34` already skips five upstream releases and `2.34 -> 2.39` skips
 four, so every result this project publishes was produced by a pair that

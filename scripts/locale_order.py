@@ -794,14 +794,23 @@ def measure(jobs):
         os.nice(10)   # below the database, if one runs here
     except OSError:
         pass
+    # Flushed, and so is each line of progress: before 3.9, Python holds
+    # stderr back when it is not a terminal. Measured on RHEL8 over ssh, a
+    # line written at the start arrived with the last one, minutes later.
     sys.stderr.write(f'Measuring {len(names)} locale(s) on {build or version} '
                      f'with {jobs} process(es)...\n')
+    sys.stderr.flush()
     start = time.time()
     UTF8_BYTES = [chr(c).encode('utf-8') for c in CODEPOINTS]
     results, order_data, pair_data = {}, {}, {}
     try:
         with fork_pool(jobs) as pool:
-            for name, result, data in pool.map(measure_one, names):
+            measured = pool.map(measure_one, names)
+            for done, (name, result, data) in enumerate(measured, 1):
+                line = progress(done, len(names), time.time() - start)
+                if line:
+                    sys.stderr.write(line)
+                    sys.stderr.flush()
                 results[name] = result
                 if data:
                     order_data.setdefault(result['order'], data['order'])
@@ -825,6 +834,21 @@ def measure(jobs):
     out['content'] = content_digest(out)
     text = json.dumps(out, sort_keys=True) + '\n'
     return text, out, time.time() - start
+
+
+def progress(done, total, seconds):
+    """The line that says how far a measurement has got, or None when this
+    locale starts no new tenth.
+
+    One line a tenth, not one a locale: a machine with every language pack
+    lists some 870. None for the last locale as well, whose line finished()
+    writes with more in it. "Done", not "measured": a locale that could not
+    be measured is done too, and only finished() says how many were.
+    """
+    if done >= total or done * 10 // total == (done - 1) * 10 // total:
+        return None
+    return (f'  {done} of {total} locale(s) done '
+            f'({done * 100 // total}%), {seconds:.0f} s so far\n')
 
 
 def finished(out, seconds, size):

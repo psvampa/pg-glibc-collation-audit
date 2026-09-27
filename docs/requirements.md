@@ -1,9 +1,7 @@
 # Requirements and setup
 
-The source audit needs almost nothing. The confirmation step on real nodes
-has three traps — two that silently give you a wrong answer, and one that
-silently changes which glibc build your answer is about. They are the reason
-this page exists.
+What each run needs, and three setup traps that give a wrong answer without
+saying so.
 
 ## For the source audit (steps 1 to 5)
 
@@ -18,37 +16,58 @@ before diffing anything, and an invalid signature aborts the run. Without
 `gpg`, or without the signer's key, the signature is reported as not checked
 and the run continues.
 
+## For the extended run (1.b)
+
+### On each machine
+
+- **Python 3.6 or newer.** On RHEL8 `python3` comes in a package of its own
+  and may be missing; `/usr/libexec/platform-python`, which `dnf` itself runs
+  on, is always there and is Python 3.6. Measured on RHEL 8.10 on EC2, where
+  `python3` was not installed.
+- **`rpm`.** The extraction reads the glibc build with `rpm -q glibc`, and
+  `audit.sh` refuses a file that names none, so the machine has to be one
+  that installs glibc from RPM.
+- **`glibc-locale-source` at the exact build the machine runs**, for steps 6
+  to 10 (trap 3, below). Without it the machine still gives a file, with the
+  measurement and the build, and the summary says which checks did not run
+  and why.
+- **The language packs of the locales you care about.** The measurement
+  covers every locale `locale -a` lists and nothing else. A locale a database
+  uses is installed already. On a stock RHEL image on EC2 that was English
+  alone, 40 locales on RHEL 8.10 and 38 on RHEL 9.8.
+- **No PostgreSQL and no root.** Measured as an ordinary user. Only the
+  package install needs `sudo`.
+
+`sudo` over `ssh` needs a terminal to ask for the password, which is what
+`ssh -t` gives it. Without `-t` it stops at once with `sudo: a terminal is
+required to read the password`, and nothing is installed.
+
+### Memory and time
+
+Each measuring process takes about 0.3 GB. The script starts one per CPU,
+fewer when half the free memory does not hold them, and never more than the
+machine's cgroup allows, so a database on the same machine keeps the other
+half. It also runs at low priority.
+
+How long it takes depends on how many locales there are and how many are
+measured at once. On the smallest EC2 machine, with memory for one process,
+each locale took about ten seconds. The script prints how far it has got
+every tenth of the way.
+
+`dnf` needs memory too. On a machine with 0.7 GB, the kernel killed it at
+516 MB and the package was not installed; free some memory, or add swap, for
+the install.
+
+### The machine that compares
+
+What the source audit needs, above. It reads the two files and needs no
+access to the machines. Comparing on a RHEL8 machine itself is not tested:
+`python3` may be missing there, and it is 3.6 when present.
+
 ## The test suite
 
-```sh
-python3 -m unittest discover -s tests -t tests   # one process
-python3 tests/run_parallel.py                    # one process per class
-```
-
-The suite pins the five tags to their commit ids, so a moved tag reports
-itself as a moved tag instead of as a change in the results. Six of the
-suite's ten layers need the glibc clone and skip themselves, with a reason,
-if it is absent; `test_pure_functions.py`, `test_parallel_runner.py` and
-`test_locale_order.py` run without one. The tenth, which checks the figures
-and quotes the documentation publishes, is switched off for now
-([tests/README.md](../tests/README.md)). CI
-runs every layer that is switched on, serially, on a fresh clone and fails on
-any skip.
-
-`tests/run_parallel.py` runs the same tests out of the same files, one process
-per `TestCase` class, and is stdlib-only like everything else here. It is the
-faster of the two on a machine with cores to spare; how much faster depends on
-the machine, so neither this page nor the READMEs publish a figure. The
-runner's own header records the measurements it was tuned on, each with the
-date and the machine — which is what a measurement has to carry to be worth
-anything here.
-
-[`tests/README.md`](../tests/README.md) says what it covers and, more
-usefully, what it does not.
-
-There is deliberately no CI badge: "tests passing" would be read as "the
-audit is correct", and the SQL template and the empirical node confirmation
-have no automated coverage at all.
+Running it needs the same as the source audit. What it covers, and what it
+does not, is in [tests/README.md](../tests/README.md).
 
 ## For the confirmation step
 
@@ -106,21 +125,34 @@ This one sits ahead of trap 1. Minimal images ship
 English — `locale -a` stayed at 59 entries. **Remove that file and
 reinstall.**
 
-### Trap 3: installing langpacks can move your glibc build
+### Trap 3: installing packages can move your glibc build
 
 `glibc-all-langpacks` and `glibc-locale-source` are version-locked to `glibc`
-itself, so `dnf` pulls the newest build of all of them. On the node above that
-upgraded glibc from `2.28-236.el8_9.7` to `2.28-251.el8_10.40` as a side
-effect of installing langpacks. Re-check `rpm -q glibc` afterwards: a
-measurement is bound to the build it ran on, and this is a way to change that
-build without meaning to.
+itself, so a plain `dnf install` pulls the newest build of all of them. On the
+node above that upgraded glibc from `2.28-236.el8_9.7` to
+`2.28-251.el8_10.40` as a side effect of installing langpacks, and on RHEL
+8.10 on EC2 installing `glibc-locale-source` planned to take glibc from
+`2.28-251.el8_10.34` to `2.28-251.el8_10.40`.
+
+For the sources, name the exact build, as the README does:
+`glibc-locale-source-$(rpm -q --qf "%{VERSION}-%{RELEASE}" glibc)`. `dnf` then
+installs that build's sources and nothing else, and if the repository no
+longer has them it says `No match for argument` and changes nothing. Measured
+on RHEL 8.10 and 9.8 on EC2.
+
+For language packs, re-check `rpm -q glibc` afterwards: a measurement is bound
+to the build it ran on, and this is a way to change that build without meaning
+to.
 
 ## Which nodes need `glibc-locale-source`
 
-**Both of them**, if you want the file comparisons. `diff_distro_locales.py`
-needs one node's `/usr/share/i18n/locales/`; `diff_node_locales.py` — the only
-check that compares a backported locale such as `C` *between* the two builds —
-needs both. Confirmed
+**Both of them**, for steps 6 to 10. Steps 6 and 7 hold a machine's locale
+sources against the upstream version its distro started from, and steps 9 and
+10 scan them; step 8 holds the two machines' against each other, and it is the
+only check that compares a backported locale such as `C` *between* the two
+builds. A machine without the package still gives a file, and those checks
+then say `NOT RUN` with the reason. Step 11 needs the package on neither
+machine. Confirmed
 present on all three fixtures: 355, 356 and 366 files on
 `glibc-2.28-251.el8_10.40`, `glibc-2.34-275.el9_8` and
 `glibc-2.39-128.el10_2`, `localedata/locales/C` among them.

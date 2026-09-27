@@ -2,8 +2,8 @@
 #
 # Run the whole glibc collation audit for one version pair.
 #
-# The five steps exist because the method has five distinct questions, not
-# because a user should have to type five commands. This runs them in order,
+# The steps exist because the method asks distinct questions, not because a
+# user should have to type one command per step. This runs them in order,
 # hands step 2's result to step 3 so nobody has to retype locale names, and
 # ends with a consolidated summary.
 #
@@ -186,6 +186,10 @@ STEP4_LIST="$OUT_DIR/step4_exposed_locales.txt"
 # What step 7 found missing from the new copy, named after the new tag and the
 # label step 7 is given below, exactly as pair_slug spells it.
 NEW_COPY_MISSING="$OUT_DIR/copy_missing.${NEW//[^A-Za-z0-9_.@+-]/_}..new.txt"
+# What steps 6 and 7 found inside LC_COLLATE, one list per side, named the same
+# way. The summary reads them for its steps 6 and 7 block.
+OLD_DISTRO_LIST="$OUT_DIR/backports_inside_collate.${OLD//[^A-Za-z0-9_.@+-]/_}..old.txt"
+NEW_DISTRO_LIST="$OUT_DIR/backports_inside_collate.${NEW//[^A-Za-z0-9_.@+-]/_}..new.txt"
 
 # The node files are laid out before anything reads them. locale_order.py
 # --unpack checks each one whole, and it then stands for the options above:
@@ -254,7 +258,7 @@ mkdir -p "$OUT_DIR"
 # is why it went unnoticed, but the statement is false and this file's rule is
 # that every file it reads was written by this run.
 rm -f "$STEP2_LIST" "$STEP2_REMOVED" "$STEP3_LIST" "$STEP4_LIST" \
-      "$NEW_COPY_MISSING" \
+      "$NEW_COPY_MISSING" "$OLD_DISTRO_LIST" "$NEW_DISTRO_LIST" \
       ${NODE_LIST:+"$NODE_LIST"} ${NODE_INHERITED:+"$NODE_INHERITED"} \
       ${NODE_REMOVED:+"$NODE_REMOVED"} ${NODE_UNDETERMINED:+"$NODE_UNDETERMINED"}
 rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
@@ -412,15 +416,16 @@ run_step 4 python3 "$SCRIPTS/flag_algorithmic_ranges.py" "$NEW"
 banner "STEP 5  Did the code that computes weights change"
 run_step 5 python3 "$SCRIPTS/diff_collation_code.py" "$OLD" "$NEW"
 
-# Optional, and not a sixth step of the method: steps 1-5 read only the clone,
-# while this needs a node's files. It runs only when you supply them.
+# Optional, and not part of the five-step method: steps 1-5 read only the
+# clone, while steps 6 to 11 need a node's files. They run only when you
+# supply them, and keep their numbers when a side is left out.
 if [ -n "$OLD_LOCALES" ]; then
-  banner "DISTRO CHECK  do $OLD_BUILD's patches touch LC_COLLATE?"
+  banner "STEP 6  DISTRO CHECK  do $OLD_BUILD's patches touch LC_COLLATE?"
   run_step 6 python3 "$SCRIPTS/diff_distro_locales.py" "$OLD" \
     --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --node-label old
 fi
 if [ -n "$NEW_LOCALES" ]; then
-  banner "DISTRO CHECK  do $NEW_BUILD's patches touch LC_COLLATE?"
+  banner "STEP 7  DISTRO CHECK  do $NEW_BUILD's patches touch LC_COLLATE?"
   run_step 7 python3 "$SCRIPTS/diff_distro_locales.py" "$NEW" \
     --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --node-label new
 fi
@@ -428,7 +433,7 @@ fi
 # Both sides come from the nodes, so a locale the distro backports is in both
 # inputs even when it is in neither tag.
 if [ -n "$OLD_LOCALES" ] && [ -n "$NEW_LOCALES" ]; then
-  banner "NODE TO NODE  does $OLD_BUILD's collation data differ from $NEW_BUILD's?"
+  banner "STEP 8  NODE TO NODE  does $OLD_BUILD's collation data differ from $NEW_BUILD's?"
   run_step 8 python3 "$SCRIPTS/diff_node_locales.py" \
     --old-locales-dir "$OLD_LOCALES" --old-build-id "$OLD_BUILD" \
     --new-locales-dir "$NEW_LOCALES" --new-build-id "$NEW_BUILD" \
@@ -442,18 +447,18 @@ fi
 # docs/limitations.md used to say "run this by hand, once per node"; a check
 # that depends on somebody remembering is not a check.
 if [ -n "$OLD_LOCALES" ]; then
-  banner "NODE ELLIPSIS  does $OLD_BUILD's own locale data use ellipsis ranges?"
+  banner "STEP 9  NODE ELLIPSIS  does $OLD_BUILD's own locale data use ellipsis ranges?"
   run_step 9 python3 "$SCRIPTS/flag_algorithmic_ranges.py" \
     --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --supported-tag "$OLD"
 fi
 if [ -n "$NEW_LOCALES" ]; then
-  banner "NODE ELLIPSIS  does $NEW_BUILD's own locale data use ellipsis ranges?"
+  banner "STEP 10  NODE ELLIPSIS  does $NEW_BUILD's own locale data use ellipsis ranges?"
   run_step 10 python3 "$SCRIPTS/flag_algorithmic_ranges.py" \
     --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --supported-tag "$NEW"
 fi
 
 if [ -n "$OLD_ORDER" ]; then
-  banner "MEASURED ORDER  how each machine's own glibc sorts every locale"
+  banner "STEP 11  MEASURED ORDER  how each machine's own glibc sorts every locale"
   cat "$ORDER_LOG"
 fi
 
@@ -667,6 +672,79 @@ case $STEP5 in
     echo "     full list: $STEP4_LIST" ;;
 esac
 
+# Steps 6 and 7. Until 2026-09-27 they had no block here: a difference they
+# found reached the summary only as a `!!` in the warnings below, and a clean
+# result or a step that never ran printed nothing, so "ran and found nothing"
+# and "did not run" read the same -- the omission this file refuses for every
+# other section. One block per side, in step order, and the verdict is the one
+# the step wrote down, read from its list.
+echo
+if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
+  for side in old new; do
+    if [ "$side" = old ]; then
+      dir=$OLD_LOCALES; build=$OLD_BUILD; tag=$OLD; n=6; list=$OLD_DISTRO_LIST
+    else
+      dir=$NEW_LOCALES; build=$NEW_BUILD; tag=$NEW; n=7; list=$NEW_DISTRO_LIST
+    fi
+    if [ -z "$dir" ]; then
+      echo "-- Distro patches, step $n: NOT RUN"
+      if [ -n "$OLD_NODE" ]; then
+        no_sources "$side"
+      else
+        echo "     No --$side-locales-dir. Pass --$side-locales-dir with"
+        echo "     --$side-build-id."
+      fi
+      echo "     So nothing above says whether the $side machine's own patches"
+      echo "     touch LC_COLLATE, which the tags cannot show."
+      continue
+    fi
+    echo "-- Distro patches, step $n ($build against $tag)"
+    if [ ! -f "$list" ]; then
+      # Unreachable as the step stands: steps 6 and 7 write this list on every
+      # run, and a step that failed has already ended this script under set -e.
+      echo "     NOT REPORTED -- step $n wrote no list of the locales whose"
+      echo "     LC_COLLATE differs from $tag. Read step $n above; do not read"
+      echo "     this as nothing found."
+      continue
+    fi
+    inside=$(count_names "$list")
+    if [ "$inside" -eq 0 ]; then
+      # Only what the step compared: a file the tag lacks is not in the list,
+      # and saying "the tag diff reads what this machine runs" read it as clean.
+      echo "     No locale compared with $tag differs inside LC_COLLATE."
+    else
+      echo "     $inside locale(s) differ inside LC_COLLATE -- for these the tag"
+      echo "     diff is NOT reading what this machine runs:"
+      names=$(awk '!/^#/ && NF' "$list" | tr '\n' ' ')
+      printf '%s\n' "$names" | fold -s -w 64 | sed 's/ *$//; s/^/       /'
+      echo "     full list: $list"
+      echo "     Locales that copy these, and so sort differently too, are"
+      echo "     listed in step $n above."
+    fi
+    # What the step could not compare and said so, relayed with its names:
+    # a locale the tag lacks, with sort rules of its own, is read by no tag
+    # diff, and the lines above cover only what was compared.
+    unread=$(sed -n 's/^  \([^ ]*\): HAS ITS OWN TAILORING.*/\1/p' \
+      "$OUT_DIR/step$n.$PAIR.log" 2>/dev/null | tr '\n' ' ')
+    if [ -n "$unread" ]; then
+      echo "     Not compared, because $tag lacks them, and with sort rules of"
+      echo "     their own, so no tag diff reads them (step $n above):"
+      printf '%s\n' "$unread" | fold -s -w 64 | sed 's/ *$//; s/^/       /'
+    fi
+  done
+else
+  echo "-- Distro patches, steps 6 and 7: NOT RUN"
+  if [ -n "$OLD_NODE" ]; then
+    no_sources old
+    no_sources new
+  else
+    echo "     No machine files. Pass --old-node and --new-node, each the"
+    echo "     file scripts/locale_order.py --extract wrote on that machine."
+  fi
+  echo "     So nothing above says whether either machine's own patches touch"
+  echo "     LC_COLLATE, which the tags cannot show."
+fi
+
 echo
 if [ -n "$NODE_LIST" ] && [ -f "$NODE_LIST" ]; then
   echo "-- Node-to-node locale data ($OLD_BUILD -> $NEW_BUILD)"
@@ -742,9 +820,8 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
       # other -- and a section that is not there reads exactly like a section
       # with nothing to report. One side is a supported shape
       # (docs/commands.md), not a misuse, so this is the reader's ordinary
-      # view. The heading is fixed text and the side is named in the body: a
-      # heading built from $side could not be tied to the docs by the test in
-      # tests/DISABLED_published_claims.py that greps this file for it.
+      # view. The heading is fixed text and the side is named in the body, so
+      # the heading reads the same whichever side is missing.
       echo "-- Node's own locale data, ellipsis scan: NOT RUN"
       if [ -n "$OLD_NODE" ]; then
         no_sources "$side"

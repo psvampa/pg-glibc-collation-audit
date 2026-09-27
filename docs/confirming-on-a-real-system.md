@@ -1,8 +1,10 @@
 # Confirming on a real system
 
 A source diff is an argument, not a proof of what runs in production. This
-page is how you measure the order on your own machines, and what it takes for
-that measurement to mean something.
+page is how you measure the order inside PostgreSQL on your own machines, and
+what it takes for that measurement to mean something. Step 11 of command 1.b
+measures it too, through each machine's glibc and outside PostgreSQL
+([commands.md](commands.md)).
 
 It covers commands 2 and 3 of [the README](../README.md#the-commands). Before
 you run either, check the setup traps in [requirements.md](requirements.md).
@@ -24,7 +26,9 @@ psql -f sql/collation_confirmation_template.sql   # edit placeholders first
 
 Every locale steps 1 to 3 flagged, and — if step 5 found a
 [substantive code change](glossary.md) — every locale step 4 flagged too,
-whether or not it showed up in steps 1 to 3.
+whether or not it showed up in steps 1 to 3. With command 1.b, add every
+locale step 11 reports as changed, and every one it reports as not known to be
+unchanged.
 
 ## Choosing the three values
 
@@ -35,7 +39,8 @@ They are the characters the rule that changed moves.
 Derive them from that rule. For a `localedef` change that means the boundaries
 of the affected range. Under each locale it flags, step 2 lists the characters
 its changed rules name, or says it could not identify them and that the locale
-must be considered suspicious. Step 4 names the range.
+must be considered suspicious. Step 4 names the range. Step 11, in command
+1.b, names the characters that moved, when there are few enough to list.
 
 That list is where to start, not proof that every character on it moved. A
 rule that was rewritten names everything it touches, weights included, so
@@ -63,6 +68,11 @@ Check `locale -a` first. If a locale is not generated, `sort` and PostgreSQL
 silently fall back to `C`, and two machines both missing it agree with each
 other perfectly. Use the [generated names](glossary.md) step 3 prints
 (`sv_SE.utf8`), not the source file names.
+
+Step 11, in command 1.b, catches half of this. It names every locale the old
+machine has and the new one does not, as not known to be unchanged. A locale
+missing on both it cannot see, because it measures only what `locale -a`
+lists.
 
 ### Feed both sides byte-identical input
 
@@ -112,8 +122,9 @@ Three things make it unlike the template.
 - **It is run even when the audit flagged nothing**, because nothing in steps
   1 to 5 can reach that locale at all.
 
-It is also the one empirical check the langpack trap cannot fake, since
-`C.utf8` exists on every machine whether or not any langpack is installed. It
+Of the checks inside PostgreSQL, it is also the one the langpack trap cannot
+fake, since `C.utf8` exists on every machine whether or not any langpack is
+installed. It
 still needs `pg_import_system_collations()` after a postmaster restart to
 appear in `pg_collation`, and it refuses to run rather than fall back if it is
 not there.

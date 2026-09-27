@@ -28,48 +28,6 @@ worked-example section below.
   only `LC_TIME` or `LC_MONETARY`. This is the deterministic verdict the
   method exists to produce.
 
-## If you saved an earlier result
-
-If you saved a result from an earlier version of this tool, run the current
-version again rather than reuse it. Earlier versions printed clean results over
-checks they had not made. Three published verdicts have moved, the last of them
-on 2026-09-06:
-
-- **`th_TH` for the RHEL9-to-RHEL10 pair** was reported 🟡 Unresolved until
-  that date and it **changes** — indexes on it need a `REINDEX` across that
-  upgrade. This is the most recent move, and the one most likely to affect a
-  result you are still holding.
-- **`ko_KR` for the RHEL8-to-RHEL9 pair** was once reported unaffected and it
-  changes.
-- **`zh_CN` and three siblings** used to be cleared by step 4, which should
-  have flagged them.
-
-No verdict moved on 2026-09-06 when `C.UTF-8` was measured directly for the
-first time, but two things did.
-
-**A conclusion this page never contradicted turns out to be wrong:** *"we are
-staying on RHEL8, so `C.UTF-8` is fine"*. Its order also changed *within* RHEL8,
-in `glibc-2.28-93.el8` (RHEL 8.2) — see the `C.UTF-8` section of the
-RHEL8-to-RHEL9 worked example below. If you decided not to reindex because you
-were not crossing a major, that decision was made on incomplete information.
-
-And the *basis* of its RHEL9→RHEL10 🟢 moved: it was ardentperf's checksum and
-is now a byte comparison of both nodes' own locale sources plus a 41-code-point
-probe on each.
-
-No verdict moved on 2026-09-05, but six ways of reaching one silently did, so
-a run from that day prints things an earlier one did not: a `C.UTF-8` warning
-on both pairs, the files with no `LC_COLLATE` block named rather than
-counted, and a third tier in step 5 that raises its [hunk](glossary.md)
-counts from 8 and 48 to the 24 and 52 a run prints today. A saved result whose
-locale lists match is still right; what it was missing is the caveats beside
-them.
-
-A run from that day in fact printed 25 and 53. The filter that decides which
-hunks are substantive could not see a diff's context lines until 2026-09-08,
-so two hunks whose comment opened on one counted as code. No verdict depends
-on either: both pairs had hunks to read before and after.
-
 ## Worked example: RHEL8 to RHEL9 (glibc 2.28 to 2.34)
 
 `or_IN`, `sv_SE`, `sv_FI`, `sv_FI@euro` and `ko_KR` change. Everything else
@@ -152,9 +110,12 @@ identical across RHEL8 and RHEL9.
 
 **The caveat that remains:** my own test covers the range *boundary*, which
 is where this particular bug lives, not a broad CJK corpus, and
-`zh_TW`/`zh_HK`/`zh_SG` are absent from ardentperf's set. For those three the
-evidence is a mechanism argument plus a targeted test, not a broad empirical
-sweep. They are 🟢 on weaker evidence than the other 🟢 rows.
+`zh_TW`/`zh_HK`/`zh_SG` are absent from ardentperf's set. Step 11 has since
+swept every character of `zh_TW.utf8`, `zh_HK.utf8` and `zh_SG.utf8` on the
+three test machines and found no change in either pair. What it cannot see
+is a rule for a combination of characters, and `zh_TW.euctw`, whose encoding
+it cannot measure. They stay 🟢, now on a mechanism argument, a targeted test
+and that sweep.
 
 **Reading their tables:** ardentperf reports a `glibc` engine and an `icu`
 engine, and only the first bears on a `libc` collation. Between RHEL8 and
@@ -191,7 +152,9 @@ top of it, planes 3 through 13 have no range at all in the RHEL8 file (Red Hat
 bug 1361965), so those code points fall to `UNDEFINED`; that is why the RHEL8
 order is scrambled rather than merely shifted, with ASCII landing at position
 31. RHEL9 backported upstream's `codepoint_collation`, which discards all
-collation information in favour of `strcmp`.
+collation information in favour of `strcmp`. Step 11, which asks each node's
+glibc rather than reading the file, measured the change too
+([below](#what-step-11-measured)).
 
 Two things make this row worth reading twice. The `datcollversion` was NULL on
 both nodes — as it always is for a `C.*` name — so **nothing warned**, and the
@@ -300,6 +263,40 @@ locales, `ko` included, are identical between RHEL9 and RHEL10. Being able to
 clear a step-4 locale, rather than only ever flagging it, is the point of
 step 5.
 
+## What step 11 measured
+
+Step 11 asks each machine's own glibc how it sorts every locale, rather than
+reading source. Measured on 2026-09-26 on the three test machines named under
+[Tested on](#tested-on), with every language pack installed. The measurements
+are kept whole in [`tests/locale_order/`](../tests/locale_order/), and the
+suite checks against them which locales change and several of the figures
+below.
+
+**RHEL8 to RHEL9.** Of 867 locales on the old machine, 14 sort differently,
+and they are the 🔴 rows of the table:
+
+| Locales | What moved |
+|---|---|
+| `C.utf8` | 135,360 characters |
+| `ko_KR.utf8` | one character, 힣 (U+D7A3), the last Hangul syllable — [the mechanism above](#the-ko_kr-mechanism-and-its-minimal-test-case) |
+| `or_IN`, `or_IN.utf8` | 50,554 characters |
+| `sv_SE.utf8`, `sv_FI.utf8` | `W` and `w` |
+| `sv_SE`, `sv_FI` and the six other Swedish locales in legacy encodings | no character, but `V` and `w` are now told apart as different letters rather than like an accent |
+
+847 are unchanged, `ber_DZ`, `kab_DZ`, `zh_CN.utf8` and `en_US.utf8` among
+them, 5 of those only as far as measured. Four could not be measured, and two
+are not on the new machine.
+
+**RHEL9 to RHEL10.** Of 869 locales, 4 sort differently, all `th_TH`: 88
+characters in TIS-620 (`th_TH`, `th_TH.tis620`, `thai`) and 50,584 in
+`th_TH.utf8`. 859 are unchanged, `ber_DZ`, `kab_DZ` and `C.utf8` among them,
+and `ko_KR.utf8` as far as it could be measured: in three pairs of neighbours
+no probe could tell whether they differ by an accent or by case. Four could
+not be measured, and two are not on the new machine.
+
+No published verdict moved. What step 11 does not see is in
+[limitations.md](limitations.md#step-11-measures-one-character-at-a-time).
+
 ## Tested on
 
 Both pairs are now confirmed on **PostgreSQL 18.6**, so no verdict on this
@@ -334,6 +331,10 @@ page rests on a different PostgreSQL from any other.
   comparison and the `C.UTF-8` probe were measured on `glibc-2.34-275.el9_8`
   and `glibc-2.39-128.el10_2`, Rocky Linux 9.3 and 10.1, PostgreSQL 18.6, and
   re-measured unchanged.
+- **Step 11**, the measured order: Rocky Linux 8.9, 9.3 and 10.1, on
+  `glibc-2.28-251.el8_10.40`, `glibc-2.34-275.el9_8` and
+  `glibc-2.39-128.el10_2`, the same builds as above, with every language pack
+  installed: 867, 869 and 885 locales, measured 2026-09-26.
 
 ---
 

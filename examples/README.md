@@ -9,7 +9,7 @@ The two upgrades this project publishes results for, in two shapes.
 ### Command 1
 
 `./audit.sh <old> <new>` and nothing else. This is what you get from a
-checkout alone, and it is where the two `NOT RUN` blocks appear, each saying
+checkout alone, and it is where the `NOT RUN` blocks appear, each saying
 what it did not cover rather than leaving the section out.
 
 | File | |
@@ -21,8 +21,9 @@ Raw output, start to finish, with nothing trimmed or annotated.
 
 ### Command 1 extended
 
-The same command with each machine's own locale files added, so the five node
-steps run instead of saying `NOT RUN`.
+The same command given one file from each machine, the one
+`scripts/locale_order.py --extract` wrote there, so the six node steps run
+instead of saying `NOT RUN`.
 
 | File | |
 |---|---|
@@ -35,8 +36,9 @@ Raw output as well, taken on the builds the results page cites.
 
 The probe run unedited on both machines. Each file carries one node's output
 in full and then the `diff` against the other, so you can see what the probe
-prints as well as where the two builds part. This is the locale whose order no
-step of command 1 measures.
+prints as well as where the two builds part. Command 1.a never measures this
+locale's order; 1.b does, in step 11, and its result is in the extended
+outputs above.
 
 The RHEL9-against-RHEL10 diff is four lines, and all four are the node's own
 glibc version. Everything the probe measured is byte-identical, which is the

@@ -195,6 +195,17 @@ def removed_lines(out):
     raise AssertionError(f'the Removed section never ends:\n{summary}')
 
 
+def distro_clean(tag, step, unread=('C',)):
+    """The steps 6/7 block of a side whose compared files do not differ, with
+    the locales the step could not compare named after it."""
+    body = [f'No locale compared with {tag} differs inside LC_COLLATE.']
+    if unread:
+        body += [f'Not compared, because {tag} lacks them, and with sort rules of',
+                 f'their own, so no tag diff reads them (step {step} above):',
+                 ' '.join(unread)]
+    return body
+
+
 @needs_clone
 class Wrapper(unittest.TestCase):
     """A pair with real findings: the wrapper must not change the answer."""
@@ -224,6 +235,15 @@ class Wrapper(unittest.TestCase):
             names = sorted(n.strip() for n in fh if n.strip())
         self.assertEqual(names, ['or_IN', 'sv_FI', 'sv_FI.utf8', 'sv_FI@euro',
                                  'sv_SE', 'sv_SE.utf8'])
+
+    def test_the_distro_patch_block_says_it_did_not_run(self):
+        """Steps 6 and 7 need the machines' files. Until 2026-09-27 the
+        summary said nothing about them when they did not run, which read the
+        same as a check that ran and found nothing."""
+        body = ' '.join(summary_block(
+            self.out, '-- Distro patches, steps 6 and 7: NOT RUN'))
+        self.assertIn('Pass --old-node and --new-node', body)
+        self.assertIn('the tags cannot show', body)
 
     def test_sv_FI_proves_the_new_tag_reached_step_3(self):
         """sv_FI is reachable only through the NEW tag's copy graph.
@@ -733,6 +753,13 @@ class WrapperNodeToNode(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(
             self.out_dir, f'step8.{pair_slug(OLD, MID)}.log')), self.out)
 
+    def test_the_distro_patch_block_reads_each_side_clean(self):
+        for n, build, tag in ((6, 'build-old', OLD), (7, 'build-new', MID)):
+            with self.subTest(step=n):
+                self.assertEqual(summary_block(
+                    self.out, f'-- Distro patches, step {n} ({build} '
+                              f'against {tag})'), distro_clean(tag, n))
+
     def test_the_summary_names_C_UTF_8_as_differing(self):
         """The payoff line: the two nodes' C.UTF-8 data differ.
 
@@ -1022,6 +1049,15 @@ class WrapperOneSideOnly(unittest.TestCase):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
         shutil.rmtree(cls.nodes, ignore_errors=True)
 
+    def test_the_distro_patch_block_names_the_side_left_out(self):
+        self.assertEqual(summary_block(
+            self.out, f'-- Distro patches, step 6 (build-old against {OLD})'),
+            distro_clean(OLD, 6))
+        body = ' '.join(summary_block(self.out,
+                                      '-- Distro patches, step 7: NOT RUN'))
+        self.assertIn('Pass --new-locales-dir with --new-build-id.', body)
+        self.assertIn("the new machine's own patches", body)
+
     def test_steps_6_and_9_run_and_7_8_10_do_not(self):
         self.assertEqual(self.rc, 0, self.out)
         self.assertIn("DISTRO CHECK  do build-old's patches", self.out)
@@ -1255,11 +1291,15 @@ class WrapperNodesIdentical(unittest.TestCase):
     def test_the_no_difference_branch_is_printed_without_a_shell_error(self):
         self.assertEqual(self.rc, 0, self.out)
         self.assertNotIn('integer expression expected', self.out)
-        flat = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
+        # The node-to-node block only: the steps 6/7 block of the same summary
+        # compares each node with its tag, and here the old node holds 2.34's
+        # files against the 2.28 tag, so it rightly reports differences.
+        block = ' '.join(summary_block(
+            self.out, '-- Node-to-node locale data (build-x -> build-y)'))
         self.assertIn("no locale differs inside LC_COLLATE between the two "
-                      "nodes' own sources", flat)
-        self.assertNotIn('locale(s) differ inside LC_COLLATE', flat)
-        self.assertNotIn('plus ', flat)
+                      "nodes' own sources", block)
+        self.assertNotIn('locale(s) differ inside LC_COLLATE', block)
+        self.assertNotIn('plus ', block)
 
     def test_the_identical_fingerprint_warning_reaches_the_summary(self):
         summary = self.out.split('AUDIT SUMMARY')[1]
@@ -1492,7 +1532,7 @@ class WrapperMeasuredOrder(unittest.TestCase):
 
     def test_step_11_runs(self):
         self.assertEqual(self.rc, 0, self.out[-2000:])
-        self.assertEqual(self.out.count('\n== MEASURED ORDER  '), 1)
+        self.assertEqual(self.out.count('\n== STEP 11  MEASURED ORDER  '), 1)
         self.assertIn('Sort order CHANGED in 14 locale(s):',
                       self.out.split('AUDIT SUMMARY')[0])
 
@@ -1668,11 +1708,69 @@ def no_sources_text(path):
     return f'{path} holds no locale sources. {NO_SOURCES_REASON}'
 
 
+OPTIONAL_SECTIONS = ('DISTRO CHECK', 'NODE TO NODE', 'NODE ELLIPSIS',
+                     'MEASURED ORDER')
+
+
+def numbered(out):
+    """Each optional section's banner as (its step number, its name), in the
+    order printed. Only a banner that carries its number counts: the docs
+    name these sections by number, and a banner without one is a section the
+    reader cannot find."""
+    names = '|'.join(OPTIONAL_SECTIONS)
+    return [(int(n), name) for n, name in
+            re.findall(rf'^== STEP (\d+)  ({names})  ', out, re.M)]
+
+
 def banners(out):
     """How many times each optional section's banner was printed."""
-    return {name: len(re.findall(rf'^== {name} ', out, re.M))
-            for name in ('DISTRO CHECK', 'NODE TO NODE', 'NODE ELLIPSIS',
-                         'MEASURED ORDER')}
+    found = [name for _, name in numbered(out)]
+    return {name: found.count(name) for name in OPTIONAL_SECTIONS}
+
+
+@needs_clone
+class WrapperNodePatchedInsideCollate(unittest.TestCase):
+    """A machine whose de_DE and sv_SE differ from its tag inside LC_COLLATE,
+    as a distro patch would: the steps 6 and 7 block names it, instead of saying
+    nothing as the summary did until 2026-09-27."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-patched-')
+        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-patchedtree-')
+        root = dd.materialise_tag(GLIBC_CLONE, OLD, os.path.join(cls.nodes, 'a'))
+        # Two, so that a block printing fewer names than the list holds shows.
+        for name in ('de_DE', 'sv_SE'):
+            path = os.path.join(root, name)
+            with open(path, encoding='utf-8', errors='surrogateescape') as fh:
+                text = fh.read()
+            opening = re.search(r'(?m)^LC_COLLATE\n', text)
+            assert opening, f'{name} at the tag has no LC_COLLATE block'
+            with open(path, 'w', encoding='utf-8',
+                      errors='surrogateescape') as fh:
+                fh.write(text[:opening.end()] + 'reorder-after <U0076>\n'
+                         '<U0077> <U0076>;<BASE>;<MIN>;IGNORE\n'
+                         + text[opening.end():])
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID, '--old-locales-dir', root, '--old-build-id', 'build-patched',
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    def test_the_block_names_the_patched_locale(self):
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        body = summary_block(
+            self.out, f'-- Distro patches, step 6 (build-patched against {OLD})')
+        self.assertEqual(body[:3], [
+            '2 locale(s) differ inside LC_COLLATE -- for these the tag',
+            'diff is NOT reading what this machine runs:', 'de_DE sv_SE'])
+        self.assertTrue(body[3].startswith('full list: '), body)
+        self.assertEqual(body[4:], [
+            'Locales that copy these, and so sort differently too, are',
+            'listed in step 6 above.'])
 
 
 @needs_clone
@@ -1714,8 +1812,17 @@ class WrapperNodeFiles(unittest.TestCase):
         self.assertEqual(banners(self.out), {
             'DISTRO CHECK': 2, 'NODE TO NODE': 1, 'NODE ELLIPSIS': 2,
             'MEASURED ORDER': 1})
-        self.assertIn(f"== NODE TO NODE  does {build_of(RHEL8)}'s collation "
-                      f"data differ from {build_of(RHEL9)}'s?", self.out)
+        self.assertIn(f"== STEP 8  NODE TO NODE  does {build_of(RHEL8)}'s "
+                      f"collation data differ from {build_of(RHEL9)}'s?",
+                      self.out)
+
+    def test_steps_6_to_11_carry_their_numbers(self):
+        """The numbers the docs use: 6 and 7 one side each, 8 both, 9 and
+        10 one side each, 11 the measured order."""
+        self.assertEqual(numbered(self.out), [
+            (6, 'DISTRO CHECK'), (7, 'DISTRO CHECK'), (8, 'NODE TO NODE'),
+            (9, 'NODE ELLIPSIS'), (10, 'NODE ELLIPSIS'),
+            (11, 'MEASURED ORDER')])
 
     def test_the_summary_names_the_fourteen_locales(self):
         summary = parse_summary(measured_block(self.out))
@@ -1757,8 +1864,31 @@ class NodeFileWithoutSources:
         self.assertEqual(banners(self.out), {
             'DISTRO CHECK': 1, 'NODE TO NODE': 0, 'NODE ELLIPSIS': 1,
             'MEASURED ORDER': 1})
-        self.assertIn(f"== DISTRO CHECK  do {builds[have]}'s", self.out)
-        self.assertIn(f"== NODE ELLIPSIS  does {builds[have]}'s", self.out)
+        self.assertIn(f"  DISTRO CHECK  do {builds[have]}'s", self.out)
+        self.assertIn(f"  NODE ELLIPSIS  does {builds[have]}'s", self.out)
+
+    def test_the_steps_left_keep_their_numbers(self):
+        """A side left out takes its numbers with it: the new side alone is
+        still 7 and 10, never renumbered to 6 and 9."""
+        distro, ellipsis = (6, 9) if self.BARE == 'new' else (7, 10)
+        self.assertEqual(numbered(self.out), [
+            (distro, 'DISTRO CHECK'), (ellipsis, 'NODE ELLIPSIS'),
+            (11, 'MEASURED ORDER')])
+
+    def test_the_distro_patch_block_says_which_file_and_why(self):
+        builds = {'old': (build_of(RHEL8), OLD), 'new': (build_of(RHEL9), MID)}
+        bare, have = (6, 7) if self.BARE == 'old' else (7, 6)
+        side = 'new' if self.BARE == 'old' else 'old'
+        self.assertEqual(
+            ' '.join(summary_block(self.out,
+                                   f'-- Distro patches, step {bare}: NOT RUN')),
+            f"{no_sources_text(self.bare)} So nothing above says whether the "
+            f"{self.BARE} machine's own patches touch LC_COLLATE, which the "
+            f"tags cannot show.")
+        build, tag = builds[side]
+        self.assertEqual(summary_block(
+            self.out, f'-- Distro patches, step {have} ({build} against '
+                      f'{tag})'), distro_clean(tag, have, unread=()))
 
     def test_removed_says_which_file_and_why(self):
         self.assertEqual(
@@ -1824,6 +1954,13 @@ class WrapperNodeFilesWithoutSources(unittest.TestCase):
         self.assertEqual(banners(self.out), {
             'DISTRO CHECK': 0, 'NODE TO NODE': 0, 'NODE ELLIPSIS': 0,
             'MEASURED ORDER': 1})
+
+    def test_the_distro_patch_block_names_both_files(self):
+        self.assertEqual(
+            ' '.join(summary_block(
+                self.out, '-- Distro patches, steps 6 and 7: NOT RUN')),
+            f"{self.both} So nothing above says whether either machine's own "
+            f"patches touch LC_COLLATE, which the tags cannot show.")
 
     def test_every_block_names_both_files(self):
         self.assertEqual(

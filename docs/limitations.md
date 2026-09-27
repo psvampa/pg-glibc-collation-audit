@@ -1,6 +1,6 @@
 # Known limitations
 
-Six blind spots. Each one is a way this tool can report a clean result while
+Seven blind spots. Each one is a way this tool can report a clean result while
 something it cannot see has changed.
 
 1. [`C.UTF-8` is invisible to a tag diff](#cutf-8-is-invisible-to-a-tag-diff)
@@ -8,7 +8,8 @@ something it cannot see has changed.
 3. [Below glibc 2.24 the method rests on one measured pair](#below-glibc-224-the-method-rests-on-one-measured-pair)
 4. [Character repertoire changes are not audited](#character-repertoire-changes-are-not-audited)
 5. [Step 5 reports, it does not decide](#step-5-reports-it-does-not-decide)
-6. [`LC_CTYPE` is not audited at all](#lc_ctype-is-not-audited-at-all)
+6. [Step 11 measures one character at a time](#step-11-measures-one-character-at-a-time)
+7. [`LC_CTYPE` is not audited at all](#lc_ctype-is-not-audited-at-all)
 
 ## `C.UTF-8` is invisible to a tag diff
 
@@ -27,11 +28,12 @@ PostgreSQL does not cover the gap either. It records no collation version for
 any name beginning with `C.`, so no version mismatch can fire for this locale
 and no warning will reach you.
 
-What reaches it needs your machines rather than the clone. Give `audit.sh` a
-machine's locale directory and it reads that machine's file, give it both and
-it compares the two, and [`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql)
-measures the order on the builds you actually run. What those found is in
-[results.md](results.md).
+What reaches it needs your machines rather than the clone. Give `audit.sh`
+one file from each machine, as in command 1.b, and it compares the two
+machines' `C.UTF-8` files (step 8) and measures how each machine sorts it
+(step 11). [`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql) measures the
+order inside PostgreSQL, on the builds you actually run. What the file
+comparison and the probe found is in [results.md](results.md).
 
 ## Upstream tags are not your distro's glibc
 
@@ -39,14 +41,16 @@ Your machines do not run upstream glibc. RHEL8 ships `glibc-2.28` carrying
 hundreds of backported patches, and a collation change among them is invisible
 to a comparison of the two upstream tags.
 
-Give `audit.sh` a machine's locale files and that side is also checked
-against the version its distro started from, which reaches patches to the
-locale data. What no file comparison reaches is a backported change to glibc's
+Give `audit.sh` one file from each machine and each side is also checked
+against the version its distro started from, when its file holds the locale
+sources, which reaches patches to the locale data. What no file comparison reaches is a backported change to glibc's
 *code*, because the code is read between the two tags and nowhere else.
 
-That is the main reason not to skip
-[confirming on the real machines](confirming-on-a-real-system.md), which
-measures the glibc actually installed, patches and all.
+Step 11 reaches it, because it measures the glibc actually installed, patches
+and all. For
+[what step 11 does not see](#step-11-measures-one-character-at-a-time), and
+for the order inside PostgreSQL, do not skip
+[confirming on the real machines](confirming-on-a-real-system.md).
 
 ## Below glibc 2.24 the method rests on one measured pair
 
@@ -76,12 +80,40 @@ somebody has to read them. This is the one part of the method that is not
 mechanical.
 
 If nobody on hand will read C, treat every locale step 4 flagged as unresolved
-and [confirm it on the machines](confirming-on-a-real-system.md) instead. That
-path needs no source reading and is the stronger evidence anyway.
+and measure it instead. Step 11, in command 1.b, measures every locale it can
+on both machines, and
+[confirming on the machines](confirming-on-a-real-system.md) measures inside
+PostgreSQL. Either path needs no source reading and is the stronger evidence
+anyway.
+
+## Step 11 measures one character at a time
+
+Step 11 asks each machine's glibc where every character a locale can hold
+sorts, and how each two neighbours in that order are told apart. It does not
+see:
+
+- a rule for a particular combination of letters, such as a contraction (`ch`
+  sorted as one letter). Two machines that agree on every character can still
+  sort some longer strings apart;
+- a change in how a character is told apart from its neighbour where glibc
+  ignores that character at some level, which it reads less reliably;
+- a locale whose encoding Python cannot convert, since the bytes PostgreSQL
+  would compare cannot be built. On the three test machines that was four
+  locales each, `hy_AM.armscii8`, `ka_GE`, `ka_GE.georgianps` and
+  `zh_TW.euctw`, and the run names them as not known to be unchanged;
+- a locale that is not installed, because it measures what `locale -a` lists
+  and nothing else.
+
+The run prints the first two beside its result every time. Command 3 sorts
+strings you choose inside PostgreSQL, and reaches a rule for a combination of
+letters when the strings contain it.
+
+Not tried yet, so a failure there would be new: Python 3.14 on a real
+machine, where only a simulation was run, a machine on cgroup v1, and ARM.
 
 ## `LC_CTYPE` is not audited at all
 
-The other five sections are ways a sort-order change can be missed. This one
+The other six sections are ways a sort-order change can be missed. This one
 is a whole category nothing here looks at.
 
 `LC_COLLATE` decides sort order. `LC_CTYPE` decides `upper()`, `lower()`,

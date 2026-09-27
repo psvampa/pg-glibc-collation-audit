@@ -44,6 +44,7 @@ import textwrap
 import unittest
 import unittest.mock
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 
 import _harness  # also puts scripts/ on sys.path
 from _harness import flat
@@ -1683,6 +1684,106 @@ class WorkersOfAScriptOnStdin(unittest.TestCase):
                            capture_output=True, timeout=120)
         self.assertEqual((p.returncode, p.stdout.decode().strip()), (0, '285'),
                          p.stderr.decode()[-2000:])
+
+
+class Screen(io.StringIO):
+    """stderr as the person running the script sees it: only what was
+    flushed, as over ssh from Python before 3.9.
+
+    Each write also notes whether something written before it was still
+    unflushed. Checking only at the end cannot tell a line shown as it was
+    written from every line shown together at the end, which is the very
+    screen that looked hung on RHEL8."""
+
+    def __init__(self):
+        super().__init__()
+        self.shown = ''
+        self.held = []
+
+    def write(self, text):
+        self.held.append(self.getvalue() != self.shown)
+        return super().write(text)
+
+    def flush(self):
+        self.shown = self.getvalue()
+
+
+class ProgressOnTheScreen(unittest.TestCase):
+    """What a measurement shows while it runs. On the smallest EC2 machine
+    it measured one locale at a time, about ten seconds each, and on RHEL8
+    over ssh every line arrived at the end: minutes of a screen that looked
+    hung.
+
+    Freezes a line held back until the end, and a line that says more was
+    measured than was.
+    """
+
+    def test_one_line_a_tenth_and_never_ahead(self):
+        for total in (1, 3, 9, 10, 40, 867):
+            shown = [(done, m.progress(done, total, 5.4))
+                     for done in range(1, total + 1)]
+            shown = [(done, line) for done, line in shown if line]
+            self.assertEqual(len(shown), min(total - 1, 9), total)
+            for done, line in shown:
+                self.assertEqual(
+                    line, f'  {done} of {total} locale(s) done '
+                          f'({done * 100 // total}%), 5 s so far\n')
+            tenths = [done * 10 // total for done, _ in shown]
+            self.assertEqual(tenths, sorted(set(tenths)), total)
+
+    def measured_on(self, one, names):
+        """What the screen got while measure() ran over names with one as
+        the measuring function."""
+        screen = Screen()
+        with unittest.mock.patch.multiple(
+                m, libc_version=lambda: 'glibc 2.34',
+                list_locales=lambda: names,
+                glibc_build=lambda: 'glibc-2.34-1.el9.x86_64',
+                measure_one=one, UTF8_BYTES=None,
+                fork_pool=lambda jobs: ThreadPoolExecutor(1)), \
+                unittest.mock.patch.object(m.os, 'nice'), \
+                unittest.mock.patch.object(m.sys, 'stderr', screen):
+            m.measure(1)
+        return screen
+
+    def test_no_line_calls_a_failed_locale_measured(self):
+        """Every locale fails here, as one in an encoding Python cannot
+        convert does. The progress lines count what is done, and only the
+        last line says how many were measured."""
+        screen = self.measured_on(
+            lambda name: (name, {'error': 'cannot be measured'}, None),
+            [f'l{i}' for i in range(20)])
+        lines = [l for l in screen.getvalue().splitlines() if '%)' in l]
+        self.assertEqual(len(lines), 9, screen.getvalue())
+        for line in lines:
+            self.assertNotIn('measured', line)
+
+    def test_every_line_reaches_the_screen_when_written(self):
+        screen, seen = Screen(), []
+
+        def one(name):
+            seen.append(screen.shown)
+            return name, {'order': 'o', 'pairs': 'p'}, None
+
+        names = [f'l{i}' for i in range(20)]
+        with unittest.mock.patch.multiple(
+                m, libc_version=lambda: 'glibc 2.34',
+                list_locales=lambda: names,
+                glibc_build=lambda: 'glibc-2.34-1.el9.x86_64',
+                measure_one=one, UTF8_BYTES=None,
+                fork_pool=lambda jobs: ThreadPoolExecutor(1)), \
+                unittest.mock.patch.object(m.os, 'nice'), \
+                unittest.mock.patch.object(m.sys, 'stderr', screen):
+            m.measure(1)
+        self.assertEqual(len(seen), 20)
+        self.assertIn('Measuring 20 locale(s)', seen[0])
+        self.assertEqual(
+            len(re.findall(r'locale\(s\) done \(', screen.getvalue())), 9)
+        # The Measuring line and nine of progress, none written while an
+        # earlier one was still held; the last is checked just below.
+        self.assertEqual(len(screen.held), 10)
+        self.assertEqual(screen.held, [False] * 10, 'a line was held back')
+        self.assertEqual(screen.shown, screen.getvalue(), 'held back')
 
 
 class UnpackRefusesWhatItCannotTrust(unittest.TestCase):

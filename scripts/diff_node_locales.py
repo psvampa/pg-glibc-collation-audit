@@ -531,17 +531,21 @@ def main(argv):
     if computed:
         dd.warn(f"{', '.join(computed)}: built from ellipsis ranges on at "
                 f"least one of these nodes, so the order is whatever localedef "
-                f"computed and is NOT settled above. PostgreSQL also reports "
-                f"collversion as NULL for every C.* name, so nothing warns "
-                f"either. sql/c_utf8_probe.sql is the only thing that answers "
-                f"the order.")
+                f"computed and is NOT settled by comparing the data. "
+                f"PostgreSQL also reports collversion as NULL for every C.* "
+                f"name, so nothing warns either. Step 11 measures each "
+                f"character's order through each machine's glibc when the "
+                f"run has both machines' measurements, and "
+                f"sql/c_utf8_probe.sql measures it inside PostgreSQL.")
     elif not unexamined:
         dd.warn(f"No backported locale here is ellipsis-based, so for those "
                 f"the data comparison is the whole story. Run "
                 f"sql/c_utf8_probe.sql anyway if C.UTF-8 is your database "
-                f"collation: it is the only check that measures the order "
-                f"these builds actually produce, and PostgreSQL reports "
-                f"collversion as NULL for every C.* name.")
+                f"collation: it measures the order these builds actually "
+                f"produce inside PostgreSQL, as step 11 does one character at "
+                f"a time through glibc when the run has both machines' "
+                f"measurements, and PostgreSQL reports collversion as NULL "
+                f"for every C.* name.")
     dd.warn(f"Cheap complement, on each node: "
             f"rpm -q --changelog glibc | grep -i collat")
     dd.warn(f"localedata/charmaps/ is NOT compared. glibc-locale-source ships "

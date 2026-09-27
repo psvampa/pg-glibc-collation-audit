@@ -15,8 +15,10 @@ real sort rules
 ([background](https://wiki.postgresql.org/wiki/Locale_data_changes)).
 
 This tool answers the real question from glibc's own source, deterministically
-and across every locale in the tree. If the rules that define a locale's sort
-order did not change, the order cannot have changed.
+and across every locale in the tree: if neither a locale's rules nor the code
+that compiles them changed, its order cannot have changed. Given one file from
+each of your machines, it also measures how each machine's own glibc sorts the
+locales installed on it, and names the characters that moved.
 
 **This project does not set out to give a single, infallible answer.** It
 gives you a few simple ways to compare the source of two glibc versions —
@@ -27,14 +29,36 @@ affected.
 Use it as a complement to what already exists, depending on what you need. One
 example is an empirical method such as
 [ardentperf/glibc-unicode-sorting](https://github.com/ardentperf/glibc-unicode-sorting),
-which sorts real strings on real nodes, and there are others. Check the known
-limitations in [docs/limitations.md](docs/limitations.md) before you act.
+which sorts real strings on real nodes, and there are others.
 
 ## How to use
 
-### Prerequisites and Install
+### Prerequisites
 
-The prerequisites are in [docs/requirements.md](docs/requirements.md).
+**On the machine that runs `audit.sh`** — yours, or any other:
+
+- `git`, `python3` (standard library only) and `bash`
+- network the first time, to clone glibc (about 370 MB)
+- `gpg`, optional, to check the signature of each glibc tag
+
+**On each server, for the extended run of command 1:**
+
+- `ssh` access, and `sudo` for one package install
+- Python 3.6 or newer (on RHEL8, `/usr/libexec/platform-python`)
+- `glibc-locale-source`, of the exact glibc build the server runs
+- the language packs of the locales your databases use
+- no PostgreSQL, and no root for the measurement
+
+**For commands 2 and 3:**
+
+- PostgreSQL 15 or newer on both servers
+- for command 3, the language packs of the locales to test, installed before
+  `initdb`
+
+Why each one is needed, and the setup traps that give a wrong answer without
+saying so, are in [docs/requirements.md](docs/requirements.md).
+
+### Install
 
 ```sh
 git clone https://github.com/psvampa/pg-glibc-collation-audit.git
@@ -70,8 +94,17 @@ In the order of what they cost you. The first needs nothing but this checkout;
 the last needs PostgreSQL on both nodes. Each one says what it measures and
 what it leaves to the next.
 
-**1 — Verifying which locales the upgrade can affect**
-*Needs this checkout. No node, no database.*
+**1 — Which locales the upgrade can affect**
+
+`audit.sh` compares the two glibc versions and lists the locales whose sort
+order can change. It runs in two ways. 1.a needs only this checkout and reads
+glibc's published source. 1.b adds one file from each of your machines, and
+with it checks what your distro changed on its own and measures how each
+machine's glibc actually sorts. Whenever you can run a command on both
+machines, 1.b is the stronger answer.
+
+**1.a — Quick verification.**
+*Needs this checkout. No machine, no database.*
 
 ```sh
 ./audit.sh glibc-2.28 glibc-2.34
@@ -85,42 +118,46 @@ both audited pairs, is in
 [examples/README.md, under Command 1](examples/README.md#command-1) — worth
 reading before you run anything.
 
-> [!TIP]
-> If you can get the locale files off both machines, run the longer form below
-> instead — it adds five checks the tags alone cannot make.
+**1.b — Extended verification (recommended).**
+*Needs a shell on both machines, and Python 3.6 or newer there. No database.
+The script measures every locale installed on the machine and shows how far
+it has got as it goes.*
 
-<details>
-<summary><strong>Alternatively — the same run, with each machine's own locale files</strong></summary>
-
-*Needs the locale sources off both nodes. No database.*
-
-What the five extra checks answer, how to take the copy and how to tell a good
-one from a short one are in [docs/commands.md](docs/commands.md). What this
-form prints is in
+What the six extra checks answer, what goes into each machine's file and what
+the run says when it refuses one are in [docs/commands.md](docs/commands.md).
+What this form prints is in
 [examples/README.md, under Command 1 extended](examples/README.md#command-1-extended).
 
 ```sh
-# on each node
-dnf install -y glibc-locale-source
+# 1. the locale sources of the exact glibc build each machine runs, an
+#    official Red Hat package. Without the version, dnf installs the newest
+#    sources and upgrades glibc itself when the machine is behind.
+#    -t lets sudo ask for the password
+ssh -t el8 'sudo dnf install -y glibc-locale-source-$(rpm -q --qf "%{VERSION}-%{RELEASE}" glibc)'
+ssh -t el9 'sudo dnf install -y glibc-locale-source-$(rpm -q --qf "%{VERSION}-%{RELEASE}" glibc)'
 
-# copy the sources off both nodes -- tar, NOT `docker cp`, whose target /tmp is
-# a separate mount in a container, so the copy silently does nothing
-mkdir -p el8-locales el9-locales
-ssh el8 tar -cf - -C /usr/share/i18n/locales . | tar -xf - -C el8-locales
-ssh el9 tar -cf - -C /usr/share/i18n/locales . | tar -xf - -C el9-locales
+# 2. measure each machine and pack the result into one file: the script
+#    travels over the connection and the file comes back the same way.
+#    On RHEL8 python3 may be missing; platform-python is always there
+ssh el8 /usr/libexec/platform-python - --extract < scripts/locale_order.py > old.tar
+ssh el9 python3 - --extract < scripts/locale_order.py > new.tar
 
-# the build ids, read on the nodes themselves
-ssh el8 rpm -q glibc
-ssh el9 rpm -q glibc
-
-./audit.sh glibc-2.28 glibc-2.34 \
-  --old-locales-dir ./el8-locales --old-build-id glibc-2.28-251.el8_10.40 \
-  --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
+# 3. compare, wherever this checkout is
+./audit.sh glibc-2.28 glibc-2.34 --old-node old.tar --new-node new.tar
 ```
 
-</details>
+- `el8` and `el9` are placeholders for your two machines, the old one and the
+  new one. Replace them, in every line above, with the names you reach those
+  machines by over ssh, such as `user@host` or a name from `~/.ssh/config`.
+- You can also copy `scripts/locale_order.py` to the machine, run
+  `python3 locale_order.py --extract > old.tar` there and bring the file back.
+- If the repository no longer has the sources of that exact build, dnf says
+  "No match for argument" and changes nothing. A machine without the sources
+  still gives a file, and the summary says which checks did not run and why.
+- The files are named for their role, old and new, not for their version, so
+  two builds of the same release cannot overwrite each other.
 
-**2 — Verifying whether `C.UTF-8`'s order changed**
+**2 — Verifying whether `C.UTF-8`'s order changed.**
 *Only if a database uses `C.UTF-8` — in a container it usually does. Needs
 PostgreSQL 15 or newer on both nodes.*
 
@@ -130,8 +167,9 @@ diff el8.out el9.out
 ```
 
 [`sql/c_utf8_probe.sql`](sql/c_utf8_probe.sql) takes no editing, and it is run
-**even when the audit flagged nothing**. No step of the audit measures this
-locale's order, and PostgreSQL will not warn about it either.
+**even when the audit flagged nothing**. The run with the tags alone never
+measures this locale's order; the extended run does, in step 11, on each
+machine's own glibc. PostgreSQL will not warn about it either.
 
 Reading its output takes one warning, because the usual tell is inverted for
 this locale — agreeing with byte order is the *fix* here, not the sign that
@@ -142,16 +180,19 @@ and
 What it prints on both pairs is in
 [examples/README.md, under Command 2](examples/README.md#command-2--the-cutf-8-probe).
 
-**3 — Confirming the order on your own builds**
-*Optional, and what turns a source argument into a measurement. Needs
-PostgreSQL 15 or newer on both nodes, and editing the file first.*
+**3 — Confirming the order on your own builds.**
+*Optional. It sorts strings you choose inside PostgreSQL, and lists which of
+your objects are at stake. Needs PostgreSQL 15 or newer on both nodes, and
+editing the file first.*
 
 ```sh
 psql -f sql/collation_confirmation_template.sql   # edit placeholders first
 ```
 
 A source diff is an argument, not a proof of what actually runs in
-production. Run it on both the old and the new OS, for every locale the audit
+production. Step 11 measures, but one character at a time: a rule for a
+combination of letters, such as a contraction, shows only in strings that
+contain it. Run it on both the old and the new OS, for every locale the audit
 flagged.
 
 What this box leaves out is in
@@ -175,7 +216,7 @@ What it prints, filled in for each pair, is in
 | `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | ⚪ Unaffected | steps 1–3 — `sv_FI` only via `copy` |
 | `or_IN` | 🔴 **Changed** | ⚪ Unaffected | steps 1–3 |
 | `ko_KR` | 🔴 **Changed** | 🟢 No difference | **step 5** — its `LC_COLLATE` is unchanged in *both* pairs |
-| `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | **step 2 warns** and cannot settle it <sup>†</sup> — the node-to-node check settles the data, `sql/c_utf8_probe.sql` the order |
+| `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | **step 2 warns** and cannot settle it <sup>†</sup> — the node-to-node check settles the data, step 11 or `sql/c_utf8_probe.sql` the order |
 | `th_TH` | ⚪ Unaffected | 🔴 **Changed** | steps 1–3 |
 | `ber_DZ`, `kab_DZ` | ⚪ Unaffected | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap |
 | CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>the base table a locale inherits unless it<br>defines its own order | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
@@ -188,26 +229,19 @@ move · ⚪ neither the locale's `LC_COLLATE` nor the collation code changed.
 `ko_KR` is the row a data-only audit gets wrong, and `C.UTF-8` the row no
 *tag* diff can reach.
 
-<sup>†</sup> `C.UTF-8`'s source file is in neither tag for the first pair, so
-steps 1–5 cannot settle it. Both verdicts come from the nodes themselves. Why
-each came out as it did, and the builds it was measured on, are in
-[docs/results.md](docs/results.md), for
-[RHEL8 → RHEL9](docs/results.md#cutf-8--from-the-nodes-own-files-because-no-tag-has-them)
-and for
-[RHEL9 → RHEL10](docs/results.md#worked-example-rhel9-to-rhel10-glibc-234-to-239).
+Step 11 measured the same on three test machines (Rocky Linux 8.9, 9.3 and
+10.1): the locales marked 🔴 are the ones that sort differently, and every
+other locale it could measure came out unchanged, one character at a time
+([what that leaves out](docs/limitations.md#step-11-measures-one-character-at-a-time)).
 
-**A table keyed on two major upgrades cannot say this, so it goes here:**
+<sup>†</sup> `C.UTF-8`'s source file is in neither tag for the first pair, so
+both verdicts come from the machines themselves
+([docs/results.md](docs/results.md#cutf-8--from-the-nodes-own-files-because-no-tag-has-them)).
+
 `C.UTF-8`'s order also changed *within* RHEL8, in `glibc-2.28-93.el8`
 (RHEL 8.2). Staying on one RHEL major is not a control for this locale. The
 evidence is in
 [docs/results.md](docs/results.md#cutf-8--from-the-nodes-own-files-because-no-tag-has-them).
-
-The evidence behind each row, both worked examples and the nodes each claim
-was measured on: [docs/results.md](docs/results.md). If you saved a result
-from an earlier version of this tool, run the current version again rather
-than reuse it. Earlier versions printed clean results over checks they had not
-made. [Three published verdicts have
-moved](docs/results.md#if-you-saved-an-earlier-result), `th_TH` most recently.
 
 ## Scope
 
@@ -218,8 +252,8 @@ exclusion that can still cost you an index, and no step of this tool reads
 it.
 
 Full scope, including the `builtin` provider as a mitigation:
-[docs/scope.md](docs/scope.md). The six things to know before acting on a clean
-result — `C.UTF-8` among them:
+[docs/scope.md](docs/scope.md). The seven things to know before acting on a
+clean result — `C.UTF-8` among them:
 [docs/limitations.md](docs/limitations.md).
 
 ## Documentation
@@ -230,10 +264,10 @@ short version:
 - [docs/commands.md](docs/commands.md) — what each command does, and what it leaves to the next
 - [docs/results.md](docs/results.md) — the evidence behind each verdict, both worked examples, tested-on
 - [docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md) — the empirical check
-- [docs/limitations.md](docs/limitations.md) — the six things to know before acting on a clean result
+- [docs/limitations.md](docs/limitations.md) — the seven things to know before acting on a clean result
 - [docs/scope.md](docs/scope.md) — what it audits, and the `builtin` provider as a way out
-- [docs/requirements.md](docs/requirements.md) — dependencies, test suite, setup traps
-- [docs/glossary.md](docs/glossary.md) — `copy` graph, blast radius, hunk, tier, ellipsis range
+- [docs/requirements.md](docs/requirements.md) — what each run needs, on your machine and on each server, and the three setup traps
+- [docs/glossary.md](docs/glossary.md) — `copy` graph, blast radius, hunk, tier, ellipsis range, role swap, build id, measured order, level, contraction
 - [examples/](examples/README.md) — real output of every command, and which file is which
 
 ## Tests
