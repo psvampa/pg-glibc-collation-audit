@@ -59,15 +59,20 @@ import codecs
 import collections
 import ctypes
 import ctypes.util
+import gzip
 import hashlib
+import io
 import json
 import locale
+import multiprocessing
 import os
 import platform
 import re
+import stat
 import string
 import subprocess
 import sys
+import tarfile
 import textwrap
 import time
 import unicodedata
@@ -76,6 +81,12 @@ from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
 FORMAT = 'locale_order/1'
+
+# The file --extract writes holds the measurement, the machine's locale sources
+# and its glibc build. The sources are what glibc-locale-source installs on
+# RHEL, and they are copied as found or not at all, with the reason.
+EXTRACT_FORMAT = 'locale_order_extract/1'
+LOCALE_SOURCES = '/usr/share/i18n/locales'
 
 # What one more measuring process adds to the peak memory of the whole run:
 # 255 to 280 MiB on glibc 2.34 (the cgroup's memory.peak was 396, 2356 and
@@ -749,7 +760,30 @@ def default_jobs():
     return max(1, min(cpus, available // 2 // PROCESS_BYTES))
 
 
+def fork_pool(jobs):
+    """A pool of measuring processes, each one a copy of this process.
+
+    Python 3.14 changed the default on Linux to start each one fresh
+    (forkserver), and a fresh process reads the script again from its file.
+    Run as `python3 -`, the script arrives on stdin and there is no file.
+    Measured with forkserver on Python 3.12, every process died and the pool
+    reported them killed. Copies also inherit UTF8_BYTES. Python 3.6 has no
+    mp_context, and forks already, the default on Linux until 3.14.
+    """
+    if sys.version_info >= (3, 7):
+        return ProcessPoolExecutor(
+            jobs, mp_context=multiprocessing.get_context('fork'))
+    return ProcessPoolExecutor(jobs)
+
+
 def measure(jobs):
+    """This machine's measurement as (the text of its file, what that holds,
+    seconds taken).
+
+    Nothing goes to stdout here, so that --extract has packed everything
+    before the first byte leaves. A run that dies while measuring or packing
+    leaves an empty file.
+    """
     global UTF8_BYTES
     version = libc_version()
     if version is None:
@@ -766,7 +800,7 @@ def measure(jobs):
     UTF8_BYTES = [chr(c).encode('utf-8') for c in CODEPOINTS]
     results, order_data, pair_data = {}, {}, {}
     try:
-        with ProcessPoolExecutor(jobs) as pool:
+        with fork_pool(jobs) as pool:
             for name, result, data in pool.map(measure_one, names):
                 results[name] = result
                 if data:
@@ -790,15 +824,326 @@ def measure(jobs):
     }
     out['content'] = content_digest(out)
     text = json.dumps(out, sort_keys=True) + '\n'
-    sys.stdout.write(text)
+    return text, out, time.time() - start
+
+
+def finished(out, seconds, size):
+    """Report a measurement on stderr, once written; the exit status, 1 when
+    some locale could not be measured."""
+    results = out['locales']
     failed = sorted(n for n, r in results.items() if 'error' in r)
-    sys.stderr.write(f'Done in {time.time() - start:.0f} s: '
-                     f'{len(names) - len(failed)} locale(s) measured, '
+    sys.stderr.write(f'Done in {seconds:.0f} s: '
+                     f'{out["locales_listed"] - len(failed)} locale(s) measured, '
                      f'{len(failed)} could not be; '
-                     f'{len(text) / 1e6:.1f} MB written.\n')
+                     f'{size / 1e6:.1f} MB written.\n')
     for n in failed:
         sys.stderr.write(f'  {shown(n)}: {results[n]["error"]}\n')
     return 1 if failed else 0
+
+
+def source_entries(directory):
+    """Every entry under directory as (path relative to it, full path),
+    parents first and each level sorted.
+
+    A link is an entry and is not followed, as tar keeps it; the node checks
+    that read the copy report links and folders rather than compare them.
+    Raises OSError on a folder it cannot list. A folder skipped here would be
+    missing from the copy, and read on the other side as one the distro does
+    not ship.
+    """
+    entries = []
+
+    def walk(rel):
+        for name in sorted(os.listdir(os.path.join(directory, rel))):
+            path = os.path.join(rel, name)
+            full = os.path.join(directory, path)
+            entries.append((path, full))
+            if os.path.isdir(full) and not os.path.islink(full):
+                walk(path)
+
+    walk('')
+    return entries
+
+
+def on_disk(directory):
+    """What a folder holds, read from the disk, in the words of a manifest:
+    {path relative to it: 'file sha256:...', 'link to ...', 'folder' or
+    'other'}. Walked as source_entries walks it."""
+    out = {}
+    for rel, full in source_entries(directory):
+        mode = os.lstat(full).st_mode
+        if stat.S_ISLNK(mode):
+            out[rel] = 'link to ' + os.readlink(full)
+        elif stat.S_ISDIR(mode):
+            out[rel] = 'folder'
+        elif stat.S_ISREG(mode):
+            with open(full, 'rb') as f:
+                out[rel] = 'file sha256:' + hashlib.sha256(f.read()).hexdigest()
+        else:
+            out[rel] = 'other'
+    return out
+
+
+def pack_sources(tar, directory):
+    """Add the locale sources under 'locales/' in tar, and return their
+    manifest entry.
+
+    All of them or none. When none, the entry says why, so that a copy is
+    never handed on with a file missing. Owners and times are dropped, so
+    that two runs over the same files write the same bytes.
+    """
+    if not os.path.isdir(directory):
+        return {'directory': directory, 'not_included':
+                f'{directory} does not exist; it comes with the package '
+                'glibc-locale-source'}
+    members, listed = [], {}
+    try:
+        for rel, full in source_entries(directory):
+            ti = tar.gettarinfo(full, 'locales/' + rel)
+            if ti is None:
+                raise OSError(f'{full} is a socket, which tar cannot hold')
+            ti.mtime, ti.uid, ti.gid, ti.uname, ti.gname = 0, 0, 0, '', ''
+            if ti.islnk():
+                # A second name of a file packed above. Kept as a file of its
+                # own, so that every name carries its content.
+                ti.type, ti.linkname = tarfile.REGTYPE, ''
+                ti.size = os.lstat(full).st_size
+            data = None
+            if ti.isfile():
+                with open(full, 'rb') as f:
+                    data = f.read()
+                if len(data) != ti.size:
+                    raise OSError(f'{full} changed while it was read')
+                listed[rel] = 'file sha256:' + hashlib.sha256(data).hexdigest()
+            elif ti.issym():
+                listed[rel] = 'link to ' + ti.linkname
+            elif ti.isdir():
+                listed[rel] = 'folder'
+            else:
+                listed[rel] = 'other'
+            members.append((ti, data))
+    except OSError as e:
+        return {'directory': directory,
+                'not_included': f'{directory} could not be read whole: {e}'}
+    if not listed:
+        return {'directory': directory,
+                'not_included': f'{directory} is empty'}
+    for ti, data in members:
+        tar.addfile(ti, io.BytesIO(data) if data is not None else None)
+    return {'directory': directory, 'entries': listed}
+
+
+def generated_member(name, data):
+    ti = tarfile.TarInfo(name)
+    ti.size, ti.mode, ti.mtime = len(data), 0o644, 0
+    return ti, io.BytesIO(data)
+
+
+def archive(text, out, directory=LOCALE_SOURCES):
+    """The file of --extract as (its bytes, the manifest written last in it).
+
+    The measurement first, exactly the file a plain run writes; then the
+    locale sources; then extract.json, which describes both and is written
+    last, so a file cut short lacks it. gzip without a name or a time, so
+    that two runs on one machine write the same bytes.
+    """
+    buf = io.BytesIO()
+    with gzip.GzipFile(filename='', mode='wb', fileobj=buf, mtime=0) as gz:
+        with tarfile.open(fileobj=gz, mode='w',
+                          format=tarfile.PAX_FORMAT) as tar:
+            measurement = text.encode('ascii')
+            tar.addfile(*generated_member('locale_order.out', measurement))
+            manifest = {
+                'format': EXTRACT_FORMAT,
+                'glibc_version': out['glibc_version'],
+                'glibc_build': out['glibc_build'],
+                'measurement': {
+                    'member': 'locale_order.out',
+                    'sha256': hashlib.sha256(measurement).hexdigest()},
+                'locale_sources': pack_sources(tar, directory),
+            }
+            tar.addfile(*generated_member(
+                'extract.json',
+                (json.dumps(manifest, sort_keys=True, indent=1) + '\n')
+                .encode('ascii')))
+    return buf.getvalue(), manifest
+
+
+def extract(jobs):
+    """Measure, pack, and write the one file of --extract to stdout."""
+    if sys.stdout.isatty():
+        die('--extract writes a compressed file, not text; send it to a file '
+            '(python3 locale_order.py --extract > old.tar)')
+    text, out, seconds = measure(jobs)
+    data, manifest = archive(text, out)
+    sys.stdout.buffer.write(data)
+    sys.stdout.buffer.flush()
+    status = finished(out, seconds, len(data))
+    sources = manifest['locale_sources']
+    if 'entries' in sources:
+        files = sum(1 for v in sources['entries'].values()
+                    if v.startswith('file '))
+        others = len(sources['entries']) - files
+        sys.stderr.write(f'Locale sources: {files} file(s) from '
+                         f'{sources["directory"]}'
+                         + (f', and {others} link(s) or folder(s)'
+                            if others else '') + '.\n')
+    else:
+        sys.stderr.write(f'!! Locale sources NOT included: '
+                         f'{sources["not_included"]}. The file holds the '
+                         'measurement and the glibc build only.\n')
+    return status
+
+
+def unpack(path, dest):
+    """--unpack: check a file --extract wrote, and lay it out in dest.
+
+    dest must not exist. What audit.sh reads there: locale_order.out, the
+    measurement; build-id, the glibc build; and either locales/, the sources,
+    or sources-not-included, the reason they are missing. Every entry must be
+    the one the manifest describes, so a file cut short, edited, or with text
+    in front of it stops here with the reason, and nothing is laid out. What
+    is written is then read back and held to the manifest too.
+    """
+    incomplete = (f'{path} is not a whole file written by --extract. A run '
+                  'that was cut short leaves such a file, and so does text '
+                  'the machine printed before it, such as a login message; '
+                  'extract again')
+    try:
+        with open(path, 'rb') as f:
+            raw = f.read()
+    except OSError as e:
+        die(f'cannot read {path}: {e}')
+    try:
+        # One gzip member and nothing after it. gzip.decompress would join a
+        # second file written after the first (`>>` over an old one), and tar
+        # would then read the first and never say the second was there.
+        gz = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        data = gz.decompress(raw) + gz.flush()
+        if not gz.eof or gz.unused_data:
+            die(incomplete)
+        with tarfile.open(fileobj=io.BytesIO(data), mode='r:') as tar:
+            listed = tar.getmembers()
+            # tar stops at its end marker, and at a block it cannot read,
+            # without a word: past that point there must be nothing but the
+            # zeros that pad the end.
+            if data[tar.offset:].strip(b'\0'):
+                die(incomplete)
+            members = [(m, tar.extractfile(m).read() if m.isfile() else None)
+                       for m in listed]
+    except (OSError, EOFError, zlib.error, tarfile.TarError):
+        die(incomplete)
+    names = [m.name for m, _ in members]
+    if (len(names) < 2 or names[0] != 'locale_order.out'
+            or names[-1] != 'extract.json' or not members[0][0].isfile()
+            or not members[-1][0].isfile()):
+        die(incomplete)
+    try:
+        manifest = json.loads(members[-1][1].decode('ascii'))
+    except ValueError:
+        die(incomplete)
+    if not isinstance(manifest, dict) or manifest.get('format') != EXTRACT_FORMAT:
+        die(f'{path} was not written by this version of --extract; extract '
+            'again with this checkout\'s scripts/locale_order.py')
+
+    def refuse(what):
+        die(f'{path} does not match its own manifest: {what}; extract again')
+
+    measurement = members[0][1]
+    described = manifest.get('measurement')
+    if not isinstance(described, dict) or hashlib.sha256(
+            measurement).hexdigest() != described.get('sha256'):
+        refuse('the measurement is not the one it describes')
+    build = manifest.get('glibc_build')
+    if not isinstance(build, str) or not build.strip():
+        die(f'{path} names no glibc build: rpm -q glibc printed none on that '
+            'machine, and a result has to name the build it ran on')
+    try:
+        measured_on = json.loads(measurement.decode('ascii'))
+    except ValueError:
+        refuse('the measurement does not read')
+    if not isinstance(measured_on, dict) or (
+            measured_on.get('glibc_build'), measured_on.get('glibc_version')) != (
+            build, manifest.get('glibc_version')):
+        refuse('its build is not the one the measurement names')
+    sources = manifest.get('locale_sources')
+    entries = sources.get('entries') if isinstance(sources, dict) else None
+    missing = sources.get('not_included') if isinstance(sources, dict) else None
+    packed = members[1:-1]
+    if not ((isinstance(entries, dict) and entries and missing is None)
+            or (isinstance(missing, str) and missing and entries is None)):
+        refuse('it says neither which locale sources it holds nor why it '
+               'holds none')
+    # Each name once, even to a disk that does not tell case apart (macOS,
+    # Windows): there two names that differ only in case are one file, and
+    # the second would land on the first, or go through it if it is a link.
+    found, folded = {}, {}
+    for m, content in packed:
+        rel = m.name[len('locales/'):] if m.name.startswith('locales/') else ''
+        parts = rel.split('/')
+        if not rel or any(p in ('', '.', '..') for p in parts):
+            refuse(f'an entry, {m.name!r}, is outside locales/')
+        if rel in found:
+            refuse(f'{m.name} appears twice')
+        if rel.casefold() in folded:
+            refuse(f'locales/{folded[rel.casefold()]} and {m.name} differ '
+                   'only in case')
+        folded[rel.casefold()] = rel
+        parent = '/'.join(parts[:-1])
+        if parent and found.get(parent, '').startswith('link '):
+            refuse(f'{m.name} lies under a link')
+        if parent and found.get(parent) != 'folder':
+            refuse(f'{m.name} comes before, or without, the folder that '
+                   'holds it')
+        if m.isfile():
+            found[rel] = 'file sha256:' + hashlib.sha256(content).hexdigest()
+        elif m.issym():
+            found[rel] = 'link to ' + m.linkname
+        elif m.isdir():
+            found[rel] = 'folder'
+        else:
+            refuse(f'{m.name} is not a file, a folder or a link')
+    if found != (entries or {}):
+        refuse('its locale sources are not the ones it lists')
+
+    try:
+        os.makedirs(dest)
+    except OSError as e:
+        die(f'cannot lay the file out in {dest}: {e}')
+    with open(os.path.join(dest, 'locale_order.out'), 'wb') as f:
+        f.write(measurement)
+    with open(os.path.join(dest, 'build-id'), 'w') as f:
+        f.write(build.strip() + '\n')
+    if missing is not None:
+        with open(os.path.join(dest, 'sources-not-included'), 'w') as f:
+            f.write(missing + '\n')
+        return 0
+    root = os.path.join(dest, 'locales')
+    try:
+        os.mkdir(root)
+        for m, content in packed:
+            target = os.path.join(root, m.name[len('locales/'):])
+            # Every folder above an entry is one made here, before it
+            # (checked above). Each entry is made new: nothing that exists
+            # is reused, and no link is followed, so none lands outside dest.
+            if m.isdir():
+                os.mkdir(target)
+            elif m.issym():
+                os.symlink(m.linkname, target)
+            else:
+                fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                             | os.O_NOFOLLOW, 0o644)
+                with os.fdopen(fd, 'wb') as f:
+                    f.write(content)
+        # Read back from the disk and held to the manifest: a write that went
+        # wrong would otherwise reach steps 6 to 10 as the machine's files.
+        written = on_disk(root)
+    except OSError as e:
+        die(f'cannot lay the file out in {dest}: {e}')
+    if written != entries:
+        die(f'what was written to {root} is not what {path} lists, so it '
+            'cannot stand for that machine\'s files')
+    return 0
 
 
 def shown(name):
@@ -1433,15 +1778,32 @@ def main():
                     help='processes to measure with (default: one per CPU, '
                          'fewer when half the free memory does not hold them '
                          'at about 0.3 GB each)')
+    ap.add_argument('--extract', action='store_true',
+                    help='measure, and write one compressed file with the '
+                         'measurement, this machine\'s locale sources and its '
+                         'glibc build (> old.tar)')
+    ap.add_argument('--unpack', nargs=2, metavar=('FILE', 'DIR'),
+                    help='check a file --extract wrote and lay it out in DIR, '
+                         'which must not exist, for audit.sh')
     args = ap.parse_args()
     if (args.tags or args.summary_to) and not args.compare:
         die('--tags and --summary-to go with --compare')
+    if sum(map(bool, (args.extract, args.compare, args.unpack))) > 1:
+        die('--extract, --compare and --unpack are three different runs; '
+            'give one')
+    if args.unpack:
+        return unpack(*args.unpack)
     if args.compare:
         return compare(*args.compare, tags=args.tags,
                        summary_to=args.summary_to)
     if args.jobs is not None and args.jobs < 1:
         die('--jobs must be at least 1')
-    return measure(args.jobs or default_jobs())
+    jobs = args.jobs or default_jobs()
+    if args.extract:
+        return extract(jobs)
+    text, out, seconds = measure(jobs)
+    sys.stdout.write(text)
+    return finished(out, seconds, len(text))
 
 
 if __name__ == '__main__':

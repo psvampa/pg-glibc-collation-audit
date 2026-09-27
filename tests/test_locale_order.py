@@ -26,7 +26,11 @@ Every class freezes a way the comparison can print a clean result it has no
 right to, and its docstring says which.
 """
 import base64
+import contextlib
+import copy
+import gzip
 import hashlib
+import io
 import json
 import os
 import random
@@ -34,8 +38,11 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
+import textwrap
 import unittest
+import unittest.mock
 import zlib
 
 import _harness  # also puts scripts/ on sys.path
@@ -1435,6 +1442,566 @@ class Pieces(unittest.TestCase):
         self.assertEqual(names['C.utf8'], (None, 'C.UTF-8'))
         self.assertEqual(names['sv_SE.iso885915'], ('sv_SE', 'sv_SE.ISO-8859-15'))
         self.assertEqual(names['ko_KR'], (None, None))
+
+
+# --- one file per machine: --extract and --unpack -----------------------------
+
+BUILD9 = 'glibc-2.34-275.el9_8.x86_64'
+
+
+def small_measurement(build=BUILD9, version='glibc 2.34'):
+    """The text of a measurement, cut to what --extract and --unpack read of
+    it, the build and the version. Neither of them reads the rest."""
+    return json.dumps({'format': m.FORMAT, 'glibc_build': build,
+                       'glibc_version': version}, sort_keys=True) + '\n'
+
+
+def members_of(data):
+    """[(TarInfo, its bytes or None)] of a file --extract wrote."""
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as t:
+        return [(i, t.extractfile(i).read() if i.isfile() else None)
+                for i in t.getmembers()]
+
+
+def repacked(members):
+    """Members written back the way --extract writes them: a file changed on
+    purpose, still whole to gzip and tar."""
+    buf = io.BytesIO()
+    with gzip.GzipFile(filename='', mode='wb', fileobj=buf, mtime=0) as gz:
+        with tarfile.open(fileobj=gz, mode='w',
+                          format=tarfile.PAX_FORMAT) as t:
+            for info, data in members:
+                info = copy.copy(info)
+                if data is not None:
+                    info.size = len(data)
+                t.addfile(info, io.BytesIO(data) if data is not None else None)
+    return buf.getvalue()
+
+
+def a_member(name, data):
+    info = tarfile.TarInfo(name)
+    info.size = len(data)
+    return info, data
+
+
+def with_manifest(members, **changes):
+    """members with extract.json replaced by the same manifest, changed."""
+    manifest = json.loads(members[-1][1])
+    manifest.update(changes)
+    return members[:-1] + [a_member('extract.json',
+                                    json.dumps(manifest).encode())]
+
+
+class ExtractPacksTheSources(unittest.TestCase):
+    """The file --extract writes: the measurement, the machine's locale
+    sources as found, and a manifest last.
+
+    Freezes the ways the copy could reach the comparison smaller than the
+    machine's folder while reading as whole. A copy with a file missing
+    reads, on the other side, as a distro that does not ship that file.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-extract-')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.src = os.path.join(self.tmp, 'locales')
+        os.makedirs(os.path.join(self.src, 'sub'))
+        for name, body in (
+                ('C', b'LC_COLLATE\ncodepoint_collation\nEND LC_COLLATE\n'),
+                ('en_US', b'LC_COLLATE\ncopy "iso14651_t1"\nEND LC_COLLATE\n'),
+                ('iso14651_t1', b'% a template\n' * 400),
+                (os.path.join('sub', 'inner'), b'inner\n')):
+            with open(os.path.join(self.src, name), 'wb') as f:
+                f.write(body)
+        os.symlink('en_US', os.path.join(self.src, 'en_US_link'))
+        os.symlink('sub', os.path.join(self.src, 'sub_link'))
+        os.link(os.path.join(self.src, 'en_US'),
+                os.path.join(self.src, 'en_US_hard'))
+        self.text = small_measurement()
+
+    def packed(self, directory=None):
+        return m.archive(self.text, json.loads(self.text),
+                         directory or self.src)
+
+    def test_two_runs_write_the_same_bytes(self):
+        """Owners, file times and gzip's own time are dropped, so that two
+        extractions of one machine can be compared byte for byte."""
+        first, _ = self.packed()
+        os.utime(os.path.join(self.src, 'C'), (1, 1))   # a new time, same bytes
+        second, _ = self.packed()
+        self.assertEqual(first, second)
+        self.assertEqual(first[4:8], b'\0\0\0\0', "gzip's time is set")
+
+    def test_the_measurement_first_and_the_manifest_last(self):
+        data, manifest = self.packed()
+        members = members_of(data)
+        self.assertEqual(members[0][0].name, 'locale_order.out')
+        self.assertEqual(members[0][1], self.text.encode())
+        self.assertEqual(members[-1][0].name, 'extract.json')
+        self.assertEqual(json.loads(members[-1][1]), manifest)
+
+    def test_the_sources_are_copied_as_found(self):
+        """A link stays a link, as tar keeps it and the node checks report
+        it, and a link to a folder is not walked; a second name of one file
+        carries the content; a folder is walked."""
+        members = {i.name: (i, d) for i, d in members_of(self.packed()[0])}
+        self.assertEqual(
+            sorted(n for n in members if n.startswith('locales/')),
+            ['locales/C', 'locales/en_US', 'locales/en_US_hard',
+             'locales/en_US_link', 'locales/iso14651_t1', 'locales/sub',
+             'locales/sub/inner', 'locales/sub_link'])
+        for name, target in (('en_US_link', 'en_US'), ('sub_link', 'sub')):
+            link = members['locales/' + name][0]
+            self.assertTrue(link.issym(), name)
+            self.assertEqual(link.linkname, target)
+        hard, content = members['locales/en_US_hard']
+        self.assertTrue(hard.isfile())
+        self.assertEqual(content, members['locales/en_US'][1])
+        self.assertTrue(members['locales/sub'][0].isdir())
+
+    def test_the_manifest_describes_every_entry(self):
+        data, manifest = self.packed()
+        entries = manifest['locale_sources']['entries']
+        files = {i.name[len('locales/'):]:
+                 'file sha256:' + hashlib.sha256(d).hexdigest()
+                 for i, d in members_of(data)[1:-1] if i.isfile()}
+        self.assertEqual(
+            entries, dict(files, en_US_link='link to en_US', sub='folder',
+                          sub_link='link to sub'))
+        self.assertEqual(manifest['glibc_build'], BUILD9)
+        self.assertEqual(manifest['glibc_version'], 'glibc 2.34')
+        self.assertEqual(manifest['measurement']['sha256'],
+                         hashlib.sha256(self.text.encode()).hexdigest())
+
+    def assertNothingPacked(self, packed, reason):
+        data, manifest = packed
+        self.assertEqual([i.name for i, _ in members_of(data)],
+                         ['locale_order.out', 'extract.json'])
+        sources = manifest['locale_sources']
+        self.assertNotIn('entries', sources)
+        self.assertIn(reason, sources['not_included'])
+
+    def test_a_missing_folder_is_named_not_packed(self):
+        packed = self.packed(os.path.join(self.tmp, 'no-such-folder'))
+        self.assertNothingPacked(packed, 'does not exist')
+        self.assertIn('glibc-locale-source',
+                      packed[1]['locale_sources']['not_included'])
+
+    def test_an_empty_folder_is_named(self):
+        empty = os.path.join(self.tmp, 'empty')
+        os.mkdir(empty)
+        self.assertNothingPacked(self.packed(empty), 'is empty')
+
+    def test_a_file_that_cannot_be_read_packs_none_of_them(self):
+        target = os.path.join(self.src, 'iso14651_t1')
+
+        def refusing(path, *args, **kwargs):
+            if path == target:
+                raise PermissionError(13, 'Permission denied', path)
+            return open(path, *args, **kwargs)
+        with unittest.mock.patch.object(m, 'open', refusing, create=True):
+            packed = self.packed()
+        self.assertNothingPacked(packed, 'could not be read whole')
+        self.assertIn('iso14651_t1', packed[1]['locale_sources']['not_included'])
+
+    def test_a_folder_that_cannot_be_listed_packs_none_of_them(self):
+        listdir, sub = os.listdir, os.path.join(self.src, 'sub')
+
+        def refusing(path):
+            if os.path.normpath(path) == sub:
+                raise PermissionError(13, 'Permission denied', path)
+            return listdir(path)
+        with unittest.mock.patch.object(m.os, 'listdir', refusing):
+            packed = self.packed()
+        self.assertNothingPacked(packed, 'could not be read whole')
+
+    def test_a_file_that_changes_while_read_packs_none_of_them(self):
+        target = os.path.join(self.src, 'iso14651_t1')
+
+        def shorter(path, *args, **kwargs):
+            if path == target:
+                return io.BytesIO(b'% cut')
+            return open(path, *args, **kwargs)
+        with unittest.mock.patch.object(m, 'open', shorter, create=True):
+            packed = self.packed()
+        self.assertNothingPacked(packed, 'changed while it was read')
+
+
+class ExtractOnTheCommandLine(unittest.TestCase):
+
+    def test_a_terminal_is_refused_before_measuring(self):
+        """Without `> old.tar` the file would go to the screen after minutes
+        of measuring. Refused at once, on any machine; on one with glibc a
+        missing check would start measuring, and the timeout ends that."""
+        import pty
+        master, slave = pty.openpty()
+        self.addCleanup(os.close, master)
+        try:
+            p = subprocess.run([sys.executable, SCRIPT, '--extract'],
+                               stdout=slave, stderr=subprocess.PIPE,
+                               timeout=60)
+        finally:
+            os.close(slave)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn('writes a compressed file, not text', p.stderr.decode())
+
+    def test_the_three_runs_do_not_mix(self):
+        for args in (('--extract', '--compare', RHEL8, RHEL9),
+                     ('--extract', '--unpack', 'x', 'y'),
+                     ('--compare', RHEL8, RHEL9, '--unpack', 'x', 'y')):
+            with self.subTest(args=args):
+                rc, out, err = run_script(*args)
+                self.assertEqual(rc, 2)
+                self.assertIn('three different runs', err)
+                self.assertEqual(out, '')
+
+
+class WorkersOfAScriptOnStdin(unittest.TestCase):
+    """`ssh node python3 - --extract < locale_order.py`: on the machine the
+    script has no file. Python 3.14 starts each worker fresh by default on
+    Linux (forkserver), and a fresh worker reads the script from its file:
+    measured with forkserver on 3.12, every worker died and the pool
+    reported them killed. fork_pool asks for copies instead.
+
+    Here the default is set to one that starts workers fresh, and a function
+    the script on stdin defines must still run in them.
+    """
+
+    def test_the_workers_run_a_function_of_the_script(self):
+        driver = textwrap.dedent(f'''\
+            import multiprocessing, sys
+            sys.path.insert(0, {_harness.SCRIPTS_DIR!r})
+            import locale_order
+            multiprocessing.set_start_method('spawn')
+            def square(x):
+                return x * x
+            if __name__ == '__main__':
+                with locale_order.fork_pool(2) as pool:
+                    print(sum(pool.map(square, range(10))))
+            ''')
+        p = subprocess.run([sys.executable, '-'], input=driver.encode(),
+                           capture_output=True, timeout=120)
+        self.assertEqual((p.returncode, p.stdout.decode().strip()), (0, '285'),
+                         p.stderr.decode()[-2000:])
+
+
+class UnpackRefusesWhatItCannotTrust(unittest.TestCase):
+    """--unpack, the way audit.sh reads a node file. A whole file is laid out;
+    anything else stops with the reason and lays out nothing, because a file
+    read in part would reach steps 6 to 11 as a machine that has less."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-unpack-')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        src = os.path.join(self.tmp, 'locales')
+        os.makedirs(os.path.join(src, 'sub'))
+        # One file larger than a write of 4 KiB, as over half the files of a
+        # real tag are: a copy cut at that size must not pass for whole.
+        self.big = b''.join(b'<U%04X> %% a weight line\n' % i
+                            for i in range(600))
+        for name, body in (('C', b'c\n'), ('en_US', b'en\n'),
+                           ('iso14651_t1', self.big),
+                           (os.path.join('sub', 'inner'), b'in\n')):
+            with open(os.path.join(src, name), 'wb') as f:
+                f.write(body)
+        os.symlink('en_US', os.path.join(src, 'en_US_link'))
+        self.text = small_measurement()
+        self.data, _ = m.archive(self.text, json.loads(self.text), src)
+        self.members = members_of(self.data)
+        self.dest = os.path.join(self.tmp, 'laid-out')
+
+    def unpack(self, data):
+        path = os.path.join(self.tmp, 'node.tar')
+        with open(path, 'wb') as f:
+            f.write(data)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            try:
+                rc = m.unpack(path, self.dest)
+            except SystemExit as e:
+                rc = e.code
+        return rc, err.getvalue()
+
+    def assertRefused(self, data, reason):
+        rc, err = self.unpack(data)
+        self.assertEqual(rc, 2, err)
+        self.assertIn(reason, flat(err))
+        self.assertFalse(os.path.exists(self.dest), 'something was laid out')
+
+    def read(self, *path):
+        with open(os.path.join(self.dest, *path), 'rb') as f:
+            return f.read()
+
+    def test_a_whole_file_is_laid_out(self):
+        self.assertEqual(self.unpack(self.data), (0, ''))
+        self.assertEqual(self.read('locale_order.out'), self.text.encode())
+        self.assertEqual(self.read('build-id'), (BUILD9 + '\n').encode())
+        self.assertEqual(sorted(os.listdir(os.path.join(self.dest, 'locales'))),
+                         ['C', 'en_US', 'en_US_link', 'iso14651_t1', 'sub'])
+        self.assertGreater(len(self.big), 4096)
+        self.assertEqual(self.read('locales', 'iso14651_t1'), self.big)
+        self.assertEqual(self.read('locales', 'sub', 'inner'), b'in\n')
+        self.assertEqual(
+            os.readlink(os.path.join(self.dest, 'locales', 'en_US_link')),
+            'en_US')
+        self.assertFalse(os.path.exists(
+            os.path.join(self.dest, 'sources-not-included')))
+
+    def test_a_file_without_sources_lays_out_the_reason(self):
+        data, manifest = m.archive(self.text, json.loads(self.text),
+                                   os.path.join(self.tmp, 'none'))
+        self.assertEqual(self.unpack(data), (0, ''))
+        self.assertEqual(self.read('sources-not-included').decode(),
+                         manifest['locale_sources']['not_included'] + '\n')
+        self.assertEqual(self.read('build-id'), (BUILD9 + '\n').encode())
+        self.assertFalse(os.path.exists(os.path.join(self.dest, 'locales')))
+
+    def test_an_empty_file(self):
+        self.assertRefused(b'', 'is not a whole file written by --extract')
+
+    def test_a_file_cut_short(self):
+        self.assertRefused(self.data[:len(self.data) // 2],
+                           'is not a whole file written by --extract')
+
+    def test_text_printed_before_it(self):
+        """A login message the server's shell prints on stdout lands in front
+        of the file when it comes back through ssh."""
+        self.assertRefused(b'Welcome to el9\n' + self.data,
+                           'such as a login message')
+
+    def test_two_files_joined(self):
+        """`>> old.tar` over an older extraction of the same name leaves the
+        old file first and the new one after it. Read as the first alone, the
+        old build and sources would be audited as the machine's."""
+        other = self.members[:1] + [(i, d + b'# newer\n') if d is not None
+                                    and i.name == 'locales/C' else (i, d)
+                                    for i, d in self.members[1:]]
+        for name, second in (('the same file', self.data),
+                             ('another file', repacked(other))):
+            with self.subTest(second=name):
+                self.assertRefused(self.data + second, 'is not a whole file')
+
+    def test_anything_after_it(self):
+        for tail in (b'garbage', b'\0' * 64):
+            with self.subTest(tail=tail[:8]):
+                self.assertRefused(self.data + tail, 'is not a whole file')
+
+    def test_something_after_the_end_of_the_tar(self):
+        """Inside one gzip member, tar stops at its end marker and never
+        reads what follows it."""
+        whole = gzip.decompress(self.data)
+        extra = gzip.decompress(repacked([a_member('locales/extra', b'x\n')]))
+        self.assertRefused(gzip.compress(whole + extra), 'is not a whole file')
+
+    def test_no_manifest_at_the_end(self):
+        self.assertRefused(repacked(self.members[:-1]), 'is not a whole file')
+
+    def test_a_manifest_that_does_not_read(self):
+        self.assertRefused(
+            repacked(self.members[:-1] + [a_member('extract.json', b'{cut')]),
+            'is not a whole file')
+
+    def test_the_manifest_not_last(self):
+        self.assertRefused(
+            repacked([self.members[0], self.members[-1]] + self.members[1:-1]),
+            'is not a whole file')
+
+    def test_an_entry_after_the_manifest(self):
+        """Whatever follows the manifest is not described by it. Read as the
+        manifest, an entry that happens to be JSON would be refused for the
+        wrong reason, and one that happened to match would be believed."""
+        self.assertRefused(
+            repacked(self.members + [a_member('locales/extra', b'{}')]),
+            'is not a whole file')
+
+    def test_the_measurement_not_first(self):
+        self.assertRefused(
+            repacked(self.members[1:-1] + [self.members[0], self.members[-1]]),
+            'is not a whole file')
+
+    def test_another_format(self):
+        self.assertRefused(
+            repacked(with_manifest(self.members,
+                                   format='locale_order_extract/0')),
+            'not written by this version of --extract')
+
+    def test_the_measurement_edited(self):
+        info, text = self.members[0]
+        edited = [(info, text.replace(b'2.34', b'2.35'))] + self.members[1:]
+        self.assertRefused(repacked(edited),
+                           'the measurement is not the one it describes')
+
+    def test_no_build(self):
+        self.assertRefused(
+            repacked(with_manifest(self.members, glibc_build=None)),
+            'names no glibc build')
+
+    def test_a_build_the_measurement_does_not_name(self):
+        self.assertRefused(
+            repacked(with_manifest(self.members,
+                                   glibc_build='glibc-2.34-100.el9.x86_64')),
+            'its build is not the one the measurement names')
+
+    def test_neither_sources_nor_a_reason(self):
+        for sources in (None, {'directory': 'x'},
+                        {'directory': 'x', 'entries': {}},
+                        {'directory': 'x', 'entries': {'C': 'folder'},
+                         'not_included': 'y'}):
+            with self.subTest(sources=sources):
+                self.assertRefused(
+                    repacked(with_manifest(self.members,
+                                           locale_sources=sources)),
+                    'neither which locale sources it holds nor why')
+
+    def test_a_source_edited(self):
+        edited = [(i, d + b'# edited\n' if i.name == 'locales/C' else d)
+                  for i, d in self.members]
+        self.assertRefused(repacked(edited),
+                           'its locale sources are not the ones it lists')
+
+    def test_a_source_left_out(self):
+        self.assertRefused(
+            repacked([x for x in self.members if x[0].name != 'locales/C']),
+            'its locale sources are not the ones it lists')
+
+    def test_a_source_it_does_not_list(self):
+        self.assertRefused(
+            repacked(self.members[:-1] + [a_member('locales/extra', b'x\n'),
+                                          self.members[-1]]),
+            'its locale sources are not the ones it lists')
+
+    def test_an_entry_outside_locales(self):
+        for name in ('locales/../evil', 'evil', 'locales/./evil'):
+            with self.subTest(name=name):
+                self.assertRefused(
+                    repacked(self.members[:-1] + [a_member(name, b'x\n'),
+                                                  self.members[-1]]),
+                    'is outside locales/')
+
+    def test_an_entry_under_a_link(self):
+        """A link to another folder, then a file under the link, would write
+        outside dest. Refused before anything is written."""
+        outside = os.path.join(self.tmp, 'outside')
+        os.mkdir(outside)
+        link = tarfile.TarInfo('locales/x')
+        link.type, link.linkname = tarfile.SYMTYPE, outside
+        entries = {'x': 'link to ' + outside,
+                   'x/y': 'file sha256:' + hashlib.sha256(b'y\n').hexdigest()}
+        bad = with_manifest([self.members[0], (link, None),
+                             a_member('locales/x/y', b'y\n'), self.members[-1]],
+                            locale_sources={'directory': 'x',
+                                            'entries': entries})
+        self.assertRefused(repacked(bad), 'lies under a link')
+        self.assertEqual(os.listdir(outside), [])
+
+    def outside_and_link(self, name):
+        """A folder beside dest, and a link in the file that points into it."""
+        outside = os.path.join(self.tmp, 'outside')
+        os.makedirs(outside, exist_ok=True)
+        link = tarfile.TarInfo(name)
+        link.type, link.linkname = tarfile.SYMTYPE, outside
+        return outside, link
+
+    def with_entries(self, members, entries):
+        """The measurement, members, and a manifest listing entries: a file
+        that agrees with itself, so only the check under test can refuse
+        it."""
+        return repacked(with_manifest(
+            [self.members[0]] + members + [self.members[-1]],
+            locale_sources={'directory': 'x', 'entries': entries}))
+
+    def test_a_name_twice(self):
+        """A link, then a file of the same name: the file would be written
+        through the link, outside dest, with the manifest satisfied by the
+        second entry alone."""
+        outside, link = self.outside_and_link('locales/x')
+        sha = 'file sha256:' + hashlib.sha256(b'y\n').hexdigest()
+        self.assertRefused(
+            self.with_entries([(link, None), a_member('locales/x', b'y\n')],
+                              {'x': sha}),
+            'locales/x appears twice')
+        self.assertEqual(os.listdir(outside), [])
+
+    def test_a_link_then_a_folder_of_the_same_name(self):
+        outside, link = self.outside_and_link('locales/d')
+        folder = tarfile.TarInfo('locales/d')
+        folder.type = tarfile.DIRTYPE
+        sha = 'file sha256:' + hashlib.sha256(b'y\n').hexdigest()
+        self.assertRefused(
+            self.with_entries([(link, None), (folder, None),
+                               a_member('locales/d/y', b'y\n')],
+                              {'d': 'folder', 'd/y': sha}),
+            'locales/d appears twice')
+        self.assertEqual(os.listdir(outside), [])
+
+    def test_names_that_differ_only_in_case(self):
+        """On a disk that does not tell case apart the two are one file: the
+        copy would hold one where the machine has two, and read as whole."""
+        sha = {b: 'file sha256:' + hashlib.sha256(b).hexdigest()
+               for b in (b'upper\n', b'lower\n')}
+        self.assertRefused(
+            self.with_entries([a_member('locales/C', b'upper\n'),
+                               a_member('locales/c', b'lower\n')],
+                              {'C': sha[b'upper\n'], 'c': sha[b'lower\n']}),
+            'locales/C and locales/c differ only in case')
+
+    def test_an_entry_under_a_link_spelt_in_another_case(self):
+        outside, link = self.outside_and_link('locales/D')
+        sha = 'file sha256:' + hashlib.sha256(b'y\n').hexdigest()
+        self.assertRefused(
+            self.with_entries([(link, None), a_member('locales/d/y', b'y\n')],
+                              {'D': 'link to ' + outside, 'd/y': sha}),
+            'locales/d/y comes before, or without, the folder that holds it')
+        self.assertEqual(os.listdir(outside), [])
+
+    def test_an_entry_before_its_folder(self):
+        folder = tarfile.TarInfo('locales/sub')
+        folder.type = tarfile.DIRTYPE
+        sha = 'file sha256:' + hashlib.sha256(b'in\n').hexdigest()
+        self.assertRefused(
+            self.with_entries([a_member('locales/sub/inner', b'in\n'),
+                               (folder, None)],
+                              {'sub': 'folder', 'sub/inner': sha}),
+            'comes before, or without, the folder that holds it')
+
+    def test_an_entry_that_is_not_a_file_a_folder_or_a_link(self):
+        hard = tarfile.TarInfo('locales/C2')
+        hard.type, hard.linkname = tarfile.LNKTYPE, 'locales/C'
+        self.assertRefused(
+            repacked(self.members[:-1] + [(hard, None), self.members[-1]]),
+            'is not a file, a folder or a link')
+
+    def test_a_write_that_goes_wrong_is_refused(self):
+        """What reaches the disk is read back and held to the manifest's
+        hashes: a copy that lost part of a file is refused instead of reaching
+        steps 6 to 10 as the machine's files."""
+        fdopen = os.fdopen
+
+        class Halving:
+            def __init__(self, f):
+                self.f = f
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self.f.close()
+
+            def write(self, data):
+                return self.f.write(data[:len(data) // 2])
+        with unittest.mock.patch.object(
+                m.os, 'fdopen', lambda fd, mode: Halving(fdopen(fd, mode))):
+            rc, err = self.unpack(self.data)
+        self.assertEqual(rc, 2, err)
+        self.assertIn('is not what', err)
+        self.assertIn('lists, so it cannot stand for', flat(err))
+
+    def test_a_destination_that_exists(self):
+        os.mkdir(self.dest)
+        rc, err = self.unpack(self.data)
+        self.assertEqual(rc, 2, err)
+        self.assertIn('cannot lay the file out in', err)
+        self.assertEqual(os.listdir(self.dest), [])
 
 
 if __name__ == '__main__':

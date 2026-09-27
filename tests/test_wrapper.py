@@ -11,6 +11,7 @@ path. Every one of them fails if a specific guard is deleted; that is the
 point. A wrapper that returns a plausible clean audit when a step crashed is
 worse than five commands.
 """
+import json
 import os
 import re
 import shutil
@@ -22,6 +23,7 @@ from _harness import (EXPECTED_SHA, MID, NEW, OLD, backported_c, flat,
 
 import diff_distro_locales as dd
 import glibc_locale_data as g
+import locale_order as lom
 from _harness import GLIBC_CLONE
 from test_locale_order import (CHANGED_8_TO_9, RHEL8, RHEL9, RHEL10,
                                parse_summary)
@@ -65,6 +67,7 @@ USAGE = [
     '         [--old-locales-dir DIR --old-build-id NVR]',
     '         [--new-locales-dir DIR --new-build-id NVR]',
     '         [--old-order FILE --new-order FILE]',
+    '         [--old-node FILE --new-node FILE]',
     '       e.g. audit.sh glibc-2.28 glibc-2.34',
     '       tags are glibc-<version>; run `ldd --version` on each node',
     '       OLD first, NEW second: a reversed pair is refused, not',
@@ -94,6 +97,11 @@ USAGE = [
     "       asks the machine's own glibc how every locale sorts (step 11).",
     '       It sees what a comparison of files cannot: a locale whose files',
     '       did not change can still sort differently.',
+    '',
+    '       The --*-node options are OPTIONAL and go together. Each is the',
+    '       one file scripts/locale_order.py --extract wrote on that',
+    '       machine, with its measurement, its locale sources and its',
+    '       build, and stands for all the options above.',
 ]
 
 REINDEX = '-- Reindex: sort order changes, confirm then REINDEX'
@@ -1607,6 +1615,330 @@ class WrapperMeasuredOrderUncheckedTag(unittest.TestCase):
         summary = parse_summary(measured_block(self.out))
         self.assertEqual(summary['warnings'], ['OLD tag unchecked'])
         self.assertEqual(set(summary['changes']), CHANGED_8_TO_9)
+
+
+# --- --old-node and --new-node -------------------------------------------------
+
+# Where a node file says its sources were not found. Short, so that the reason
+# wraps between words in the summary, and absent from every machine.
+NO_SOURCES_DIR = '/nonexistent-pg-glibc-audit/locales'
+NO_SOURCES_REASON = (f'{NO_SOURCES_DIR} does not exist; it comes with the '
+                     'package glibc-locale-source.')
+_NODE_FILES = {}
+
+
+def node_file(name, measurement, tag, sources=True):
+    """A node file as --extract writes it, with the writer itself: the real
+    measurement of that machine, and a tag's locale sources standing in for
+    the node's (CI has no node; tests/test_node_modes.py does the same).
+    Without sources it names NO_SOURCES_DIR. Built once per module."""
+    key = (name, measurement, tag, sources)
+    if key not in _NODE_FILES:
+        base = tempfile.mkdtemp(prefix='pg-glibc-node-file-')
+        directory = (dd.materialise_tag(GLIBC_CLONE, tag, base) if sources
+                     else NO_SOURCES_DIR)
+        with open(measurement, encoding='ascii') as f:
+            text = f.read()
+        data, _ = lom.archive(text, json.loads(text), directory)
+        path = os.path.join(base, name)
+        with open(path, 'wb') as f:
+            f.write(data)
+        _NODE_FILES[key] = path
+    return _NODE_FILES[key]
+
+
+def tearDownModule():
+    for path in _NODE_FILES.values():
+        shutil.rmtree(os.path.dirname(path), ignore_errors=True)
+
+
+def build_of(measurement):
+    with open(measurement, encoding='ascii') as f:
+        return json.load(f)['glibc_build']
+
+
+ELLIPSIS_SIDE_NOT_RUN = "-- Node's own locale data, ellipsis scan: NOT RUN"
+ELLIPSIS_BOTH_NOT_RUN = "-- Node's own ellipsis scan: NOT RUN"
+COULD_NOT_COMPARE_NODES = 'error: step 11 could not compare the measurements in'
+
+
+def no_sources_text(path):
+    """What the summary says of a node file without sources, whitespace
+    collapsed."""
+    return f'{path} holds no locale sources. {NO_SOURCES_REASON}'
+
+
+def banners(out):
+    """How many times each optional section's banner was printed."""
+    return {name: len(re.findall(rf'^== {name} ', out, re.M))
+            for name in ('DISTRO CHECK', 'NODE TO NODE', 'NODE ELLIPSIS',
+                         'MEASURED ORDER')}
+
+
+@needs_clone
+class WrapperNodeFiles(unittest.TestCase):
+    """--old-node and --new-node on RHEL8 -> RHEL9 stand for the six options:
+    the same files given as --*-locales-dir, --*-build-id and --*-order give
+    the same run, line for line. Freezes what each node file is laid out as,
+    side by side."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-node-')
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID, '--old-node', node_file('old.tar', RHEL8, OLD),
+            '--new-node', node_file('new.tar', RHEL9, MID),
+            out_dir=cls.out_dir)
+        laid = {side: os.path.join(cls.out_dir,
+                                   f'node_file.{pair_slug(OLD, MID)}.{side}')
+                for side in ('old', 'new')}
+        cls.classic_rc, cls.classic = run_wrapper(
+            OLD, MID,
+            '--old-locales-dir', os.path.join(laid['old'], 'locales'),
+            '--old-build-id', build_of(RHEL8),
+            '--new-locales-dir', os.path.join(laid['new'], 'locales'),
+            '--new-build-id', build_of(RHEL9),
+            '--old-order', os.path.join(laid['old'], 'locale_order.out'),
+            '--new-order', os.path.join(laid['new'], 'locale_order.out'),
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_it_is_the_run_the_six_options_give(self):
+        self.assertEqual((self.rc, self.classic_rc), (0, 0), self.out[-2000:])
+        self.assertEqual(self.out.splitlines(), self.classic.splitlines())
+
+    def test_every_section_ran(self):
+        self.assertEqual(banners(self.out), {
+            'DISTRO CHECK': 2, 'NODE TO NODE': 1, 'NODE ELLIPSIS': 2,
+            'MEASURED ORDER': 1})
+        self.assertIn(f"== NODE TO NODE  does {build_of(RHEL8)}'s collation "
+                      f"data differ from {build_of(RHEL9)}'s?", self.out)
+
+    def test_the_summary_names_the_fourteen_locales(self):
+        summary = parse_summary(measured_block(self.out))
+        self.assertEqual(set(summary['changes']), CHANGED_8_TO_9)
+        self.assertNotIn('NOT RUN', self.out.split('AUDIT SUMMARY')[1])
+
+
+class NodeFileWithoutSources:
+    """One side's file holds no locale sources. That side's steps do not run,
+    and each summary block that would have carried them names the file and
+    why, instead of telling the reader to pass options the files replace.
+
+    Two classes, one per side: a block that named a FIXED side would pass a
+    test of one side alone (detection-code-invariants, B).
+    """
+    BARE = None   # 'old' or 'new'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-node-bare-')
+        cls.old = node_file('old.tar', RHEL8, OLD, sources=cls.BARE != 'old')
+        cls.new = node_file('new.tar', RHEL9, MID, sources=cls.BARE != 'new')
+        cls.bare = cls.old if cls.BARE == 'old' else cls.new
+        cls.rc, cls.out = run_wrapper(OLD, MID, '--old-node', cls.old,
+                                      '--new-node', cls.new,
+                                      out_dir=cls.out_dir)
+        cls.summary = cls.out.split('AUDIT SUMMARY', 1)[-1]
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_the_run_ends_cleanly(self):
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+
+    def test_only_the_side_with_sources_was_checked(self):
+        builds = {'old': build_of(RHEL8), 'new': build_of(RHEL9)}
+        have = 'new' if self.BARE == 'old' else 'old'
+        self.assertEqual(banners(self.out), {
+            'DISTRO CHECK': 1, 'NODE TO NODE': 0, 'NODE ELLIPSIS': 1,
+            'MEASURED ORDER': 1})
+        self.assertIn(f"== DISTRO CHECK  do {builds[have]}'s", self.out)
+        self.assertIn(f"== NODE ELLIPSIS  does {builds[have]}'s", self.out)
+
+    def test_removed_says_which_file_and_why(self):
+        self.assertEqual(
+            section_body(self.summary, REMOVED),
+            f'{NOT_CHECKED} {no_sources_text(self.bare)} Between the tags: '
+            f'none -- no locale file at {OLD} is gone at {MID}')
+
+    def test_node_to_node_says_which_file_and_why(self):
+        self.assertEqual(
+            section_body(self.summary, NODE_TO_NODE_NOT_RUN),
+            f"{no_sources_text(self.bare)} So nothing above compared the two "
+            "nodes' C.UTF-8 files against each other; what step 11 measured "
+            "of it is under '-- Measured order'. PostgreSQL reports "
+            "collversion as NULL for every C.* collation, so no mismatch can "
+            "ever fire. Then run sql/c_utf8_probe.sql on both nodes.")
+
+    def test_the_ellipsis_scan_says_which_file_and_why(self):
+        self.assertEqual(
+            section_body(self.summary, ELLIPSIS_SIDE_NOT_RUN),
+            f"{no_sources_text(self.bare)} So nothing above says whether the "
+            f"{self.BARE} node's own C.UTF-8 is ellipsis-based. The other "
+            "node's scan does not answer it, because each node built its own "
+            "locales.")
+
+    def test_no_block_asks_for_the_options_the_files_replace(self):
+        self.assertNotIn('Pass --', flat(self.summary))
+
+
+@needs_clone
+class WrapperNodeFileOldWithoutSources(NodeFileWithoutSources,
+                                       unittest.TestCase):
+    BARE = 'old'
+
+
+@needs_clone
+class WrapperNodeFileNewWithoutSources(NodeFileWithoutSources,
+                                       unittest.TestCase):
+    BARE = 'new'
+
+
+@needs_clone
+class WrapperNodeFilesWithoutSources(unittest.TestCase):
+    """Neither file holds sources: no step reads a node's files, and every
+    block names both files, the old one first."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-node-bare2-')
+        cls.old = node_file('old.tar', RHEL8, OLD, sources=False)
+        cls.new = node_file('new.tar', RHEL9, MID, sources=False)
+        cls.rc, cls.out = run_wrapper(OLD, MID, '--old-node', cls.old,
+                                      '--new-node', cls.new,
+                                      out_dir=cls.out_dir)
+        cls.summary = cls.out.split('AUDIT SUMMARY', 1)[-1]
+        cls.both = f'{no_sources_text(cls.old)} {no_sources_text(cls.new)}'
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_only_the_measured_order_ran(self):
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        self.assertEqual(banners(self.out), {
+            'DISTRO CHECK': 0, 'NODE TO NODE': 0, 'NODE ELLIPSIS': 0,
+            'MEASURED ORDER': 1})
+
+    def test_every_block_names_both_files(self):
+        self.assertEqual(
+            section_body(self.summary, REMOVED),
+            f'{NOT_CHECKED} {self.both} Between the tags: none -- no locale '
+            f'file at {OLD} is gone at {MID}')
+        self.assertTrue(section_body(self.summary, NODE_TO_NODE_NOT_RUN)
+                        .startswith(self.both + ' So nothing above compared'))
+        self.assertEqual(
+            section_body(self.summary, ELLIPSIS_BOTH_NOT_RUN),
+            f"{self.both} Step 4 above scanned the TAG, and a tag holds at "
+            "most upstream's C. The distros this audit targets ship their own "
+            "C.UTF-8, so if step 4 named C at all, that verdict is evidence "
+            "about upstream's file and none about either node's. Nothing "
+            "above says whether either node's own C.UTF-8 is ellipsis-based, "
+            "which is the one thing a data diff, including the node-to-node "
+            "one, can never clear.")
+        self.assertNotIn('Pass --', flat(self.summary))
+
+
+@needs_clone
+class WrapperNodeFileRefused(unittest.TestCase):
+    """A node file that cannot be trusted, or node files given the wrong way,
+    stop the run before step 1: no step, no summary, and the message names
+    the reason."""
+
+    def setUp(self):
+        self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-node-bad-')
+        self.addCleanup(shutil.rmtree, self.out_dir, ignore_errors=True)
+        self.old = node_file('old.tar', RHEL8, OLD, sources=False)
+        self.new = node_file('new.tar', RHEL9, MID, sources=False)
+
+    def assertRefusedBeforeStep1(self, *args, tags=(OLD, MID)):
+        rc, out = run_wrapper(*tags, *args, out_dir=self.out_dir)
+        self.assertEqual(rc, 2, out[-2000:])
+        self.assertNotIn('== STEP 1', out)
+        self.assertNotIn('AUDIT SUMMARY', out)
+        return flat(out)
+
+    def copy_of(self, path, prefix=b'', cut=None):
+        with open(path, 'rb') as f:
+            data = f.read()
+        dest = os.path.join(self.out_dir, 'changed.tar')
+        with open(dest, 'wb') as f:
+            f.write(prefix + data[:cut])
+        return dest
+
+    def test_one_file_alone(self):
+        for args in (('--old-node', self.old), ('--new-node', self.new)):
+            with self.subTest(args=args):
+                self.assertIn('--old-node and --new-node go together',
+                              self.assertRefusedBeforeStep1(*args))
+
+    def test_with_the_options_they_stand_for(self):
+        for extra in (('--old-order', RHEL8), ('--new-order', RHEL9),
+                      ('--old-locales-dir', self.out_dir),
+                      ('--new-build-id', build_of(RHEL9))):
+            for nodes in (('--old-node', self.old, '--new-node', self.new),
+                          ('--new-node', self.new)):
+                with self.subTest(extra=extra, nodes=nodes):
+                    self.assertIn('give them without those options',
+                                  self.assertRefusedBeforeStep1(*nodes, *extra))
+
+    def test_an_old_file_cut_short(self):
+        cut = self.copy_of(self.old, cut=100000)
+        out = self.assertRefusedBeforeStep1('--old-node', cut,
+                                            '--new-node', self.new)
+        self.assertIn(f'{cut} is not a whole file written by --extract', out)
+        self.assertIn("the old node's file could not be used", out)
+
+    def test_text_printed_before_the_new_file(self):
+        banner = self.copy_of(self.new, prefix=b'Welcome to el9\n')
+        out = self.assertRefusedBeforeStep1('--old-node', self.old,
+                                            '--new-node', banner)
+        self.assertIn('such as a login message', out)
+        self.assertIn("the new node's file could not be used", out)
+
+    def test_the_same_file_twice(self):
+        out = self.assertRefusedBeforeStep1('--old-node', self.old,
+                                            '--new-node', self.old,
+                                            tags=(OLD, OLD))
+        self.assertIn('the two files hold the same measurement', out)
+        self.assertIn(f'{COULD_NOT_COMPARE_NODES} {self.old} and {self.old}',
+                      out)
+
+    def test_the_files_the_wrong_way_round(self):
+        out = self.assertRefusedBeforeStep1('--old-node', self.new,
+                                            '--new-node', self.old)
+        self.assertIn('pass the machine you upgrade FROM first', out)
+        self.assertIn(f'{COULD_NOT_COMPARE_NODES} {self.new} and {self.old}',
+                      out)
+
+    def test_a_second_run_lays_the_files_out_again(self):
+        """The folders a run lays the files out in are its own: a second run
+        in the same output folder removes them first, like every other file
+        this run reads, instead of reading the first run's.
+
+        The two runs are given different files on both sides, so a second run
+        that read the first one's folders would print the first one's answer.
+        """
+        first = self.assertRefusedBeforeStep1('--old-node', self.new,
+                                              '--new-node', self.old)
+        self.assertIn('pass the machine you upgrade FROM first', first)
+        rhel10 = node_file('rhel10.tar', RHEL10, NEW, sources=False)
+        second = self.assertRefusedBeforeStep1('--old-node', self.old,
+                                               '--new-node', rhel10)
+        self.assertIn('and the NEW tag is glibc-2.34', second)
+        self.assertNotIn('pass the machine you upgrade FROM first', second)
+
+    def test_the_files_of_another_upgrade(self):
+        rhel10 = node_file('rhel10.tar', RHEL10, NEW, sources=False)
+        out = self.assertRefusedBeforeStep1('--old-node', self.new,
+                                            '--new-node', rhel10)
+        self.assertIn('and the OLD tag is glibc-2.28', out)
+        self.assertIn(COULD_NOT_COMPARE_NODES, out)
 
 
 if __name__ == '__main__':
