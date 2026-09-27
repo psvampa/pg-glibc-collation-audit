@@ -1,40 +1,24 @@
-"""DISABLED 2026-09-23, on Pablo's instruction, for the documentation refactor.
+"""The numbers and quotes the documentation publishes.
 
-THIS FILE IS NOT RUN. Its name does not match unittest's `test*.py` discovery
-pattern, so neither `unittest discover` nor `tests/run_parallel.py` collects
-it. That is the whole mechanism -- there is no flag and no environment
-variable, and nothing here is `skip`ped, because CI fails on any skip and a
-skipped layer that reports itself as passing is the defect this repository
-exists to catch.
+Two documentation-correction passes in one day, on 2026-09-06, found the same
+class of defect each time: a count, a position or a quoted output line that no
+longer matched what the tool or the measurement actually produced. Re-reading
+caught them; re-reading is not a control.
 
-WHY. The branch `four-commands-say-what-they-do` is rewriting the
-documentation, and this layer holds the prose to figures and quotes that the
-rewrite is deliberately moving. Pablo's call, 2026-09-23: the failures it
-raises during the refactor cost more than they catch until the pages settle.
+This is the checkable half of that, turned into a test. It reads the published
+files and asserts they agree with each other and with the scripts. It cannot
+check prose, and it deliberately does not try: what it covers is exactly the
+part where a human re-read is wasted effort.
 
-TO TURN IT BACK ON: `git mv tests/DISABLED_published_claims.py
-tests/test_published_claims.py`, delete this docstring, and run the suite. It
-was green at 39 tests when it was switched off.
+No glibc clone needed -- everything here is in the repository. It was
+switched off from 2026-09-23 to 2026-09-27 while the documentation was
+rewritten (backlog 12.1).
 
-WHAT IS UNGUARDED WHILE IT IS OFF. Everything in here, which is the numbers
-and quotes the documentation publishes -- the canonical-figures table that
-requires a figure restated across pages to be the same figure everywhere, the
-verbatim ties between the docs and what the tool prints, the check that every
-internal link and anchor resolves, the check that every `docs/*.md` path named
-by `audit.sh` exists, and the check that nothing under `.claude/` is tracked.
-Backlog 12.1 tracks turning it back on.
-
-KNOWN HOLES IN IT, measured by false-negative-reviewer on 2026-09-23 with
-mutations, to fix when it is re-enabled rather than rediscovered: the
-`docs/method.md` table of the release-skipping triple is tied by nothing since
-the example it read was deleted (changing "75 hunks" to "76" is green here and
-red on main); `test_every_C_status_the_docs_list_is_one_the_tool_can_print`
-passes when `codepoint_collation` is deleted from the enumeration, because the
-word appears three other times in that file; the steps 9/10 quote tie passes
-over a truncated quote; and `test_every_doc_a_script_or_example_names_exists`
-matches only `docs/` and `tests/` `.md` paths, so the dangling
-`examples/skipping-a-release-2.28-to-2.39.txt` in `audit.sh` is invisible to
-it. Backlog 12.2.
+The holes false-negative-reviewer measured in it on 2026-09-23 are closed
+(backlog 12.2). The path test now also reads paths to examples/, sql/ and
+scripts/, since 2026-09-27. The rest were in tests removed that day, together
+with the page or the quote each one read. breakage/ stays outside every check
+by Pablo's decision.
 """
 
 import collections
@@ -344,112 +328,6 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
     """A quoted output block goes stale silently: the tool changes and the
     quote keeps reading as current."""
 
-    def test_the_NOT_RUN_block_is_quoted_verbatim(self):
-        wrapper = read(os.path.join(REPO_ROOT, 'audit.sh'))
-        printed = [m.group(1) for m in
-                   re.finditer(r'^\s*echo "(-- Node-to-node locale data: NOT '
-                               r'RUN)"', wrapper, re.M)]
-        self.assertEqual(len(printed), 1, 'audit.sh no longer prints it')
-        found = [name for name, text in docs().items() if printed[0] in text]
-        self.assertTrue(found, 'no doc quotes the NOT RUN heading any more')
-
-    def test_the_ellipsis_scan_NOT_RUN_block_is_quoted_verbatim(self):
-        """Same tie as the block above, and the whole body rather than the
-        heading alone -- which is what this test's name has always promised.
-        The heading-only form let the body drift and say something false:
-        backlog 1.17 was the sentence "no tag of this pair holds
-        localedata/locales/C" -- true of 2.28..2.34 and of the floor pair
-        2.12..2.17, false of 2.34..2.39 and of any pair whose new tag is 2.35
-        or later -- and rewording it failed nothing in this suite."""
-        wrapper = read(os.path.join(REPO_ROOT, 'audit.sh'))
-        heading = "-- Node's own ellipsis scan: NOT RUN"
-        printed = [m.group(1) for m in
-                   re.finditer(r'^\s*echo "(' + re.escape(heading) + r')"',
-                               wrapper, re.M)]
-        self.assertEqual(len(printed), 1, 'audit.sh no longer prints it')
-        method = read(os.path.join(REPO_ROOT, 'docs', 'method.md'))
-        m = re.search(r'Given neither directory it reads instead:.*?```\n'
-                      r'(.*?)```', method, re.S)
-        self.assertIsNotNone(m, 'the quoted block is gone from method.md')
-        self.assertEqual(echoed_block(wrapper, heading),
-                         m.group(1).rstrip('\n').split('\n'))
-
-    def test_the_one_sided_ellipsis_scan_NOT_RUN_block_is_quoted_verbatim(self):
-        """The fourth of these ties. Given one of the two directories, the
-        side that was NOT scanned prints this heading -- it used to print
-        nothing at all, and the scan of the other node says nothing about it
-        (backlog 1.16). A doc quotes the heading, and this asserts the
-        wrapper still prints exactly it. The heading is fixed text so that
-        this grep can find it; the side and its flag are named in the body.
-        """
-        wrapper = read(os.path.join(REPO_ROOT, 'audit.sh'))
-        printed = [m.group(1) for m in
-                   re.finditer(r'^\s*echo "(-- Node\'s own locale data, '
-                               r'ellipsis scan: NOT RUN)"', wrapper, re.M)]
-        self.assertEqual(len(printed), 1, 'audit.sh no longer prints it')
-        found = [name for name, text in docs().items() if printed[0] in text]
-        self.assertTrue(found, 'no doc quotes the NOT RUN heading any more')
-
-    def test_the_direction_NOT_ESTABLISHED_block_is_quoted_verbatim(self):
-        """The third of these ties. The wrapper prints this heading when
-        neither tag is an ancestor of the other and the newest glibc tag
-        behind each one does not order them either -- "the direction was not
-        checked", which reads as "the direction is fine" if it is left
-        unsaid. A doc quotes the heading, and this asserts the wrapper still
-        prints exactly it."""
-        wrapper = read(os.path.join(REPO_ROOT, 'audit.sh'))
-        printed = [m.group(1) for m in
-                   re.finditer(r'^\s*echo "(-- Direction of the pair: NOT '
-                               r'ESTABLISHED)"', wrapper, re.M)]
-        self.assertEqual(len(printed), 1, 'audit.sh no longer prints it')
-        found = [name for name, text in docs().items() if printed[0] in text]
-        self.assertTrue(found, 'no doc quotes the heading any more')
-
-    STEP_8 = {
-        'rhel8-to-rhel9-audit-output.txt':
-            (3, {'C', 'or_IN', 'sv_SE'}, 1, {'en_US@ampm'}),
-        'rhel9-to-rhel10-audit-output.txt':
-            (3, {'ber_DZ', 'kab_DZ', 'th_TH'}, 1, {'aa_ER@saaho'}),
-    }
-
-    def _node_section(self, name):
-        """The differing and removed sets step 8 printed, from the example."""
-        text = read(os.path.join(REPO_ROOT, 'examples', name))
-        diff_n = int(re.search(r'(?m)^Differ INSIDE LC_COLLATE \((\d+)\)',
-                               text).group(1))
-        diff_block = text.split('Differ INSIDE LC_COLLATE (')[1]
-        diff_block = diff_block.split('\n', 1)[1].split('\n\n')[0]
-        differing = set(re.findall(r'(?m)^  (\S+)  \(', diff_block))
-        gone_n = int(re.search(r'(?m)^Only on the old node \((\d+)\)',
-                               text).group(1))
-        gone_block = text.split('Only on the old node (')[1]
-        gone_block = gone_block.split('\n', 1)[1].split('\n\n')[0]
-        gone = set(re.findall(r'(?m)^  (\S+): ', gone_block))
-        # The header count and the list under it are two different facts, and
-        # the whole point of this class is that one of them can go stale.
-        self.assertEqual(len(differing), diff_n,
-                         f'{name}: step 8 says {diff_n} differing and names '
-                         f'{len(differing)}')
-        self.assertEqual(len(gone), gone_n,
-                         f'{name}: step 8 says {gone_n} removed and names '
-                         f'{len(gone)}')
-        return differing, gone
-
-    def test_step_8_rows_come_from_the_examples(self):
-        """The two step 8 rows of the method.md table, against the
-        node-to-node section each of the three examples carries.
-
-        Collected by unittest in its own right. Written first as a helper
-        called from the test above, where deleting the single call line left
-        the layer green and the whole STEP_8 tie stopped running with nothing
-        saying so -- and it ran at all only if every assertion above that call
-        had passed first.
-        """
-        for name, (dn, dset, gn, gset) in self.STEP_8.items():
-            differing, gone = self._node_section(name)
-            self.assertEqual(differing, dset, f'{name}: step 8 differing set')
-            self.assertEqual(gone, gset, f'{name}: step 8 removed set')
-
     def test_no_doc_states_a_test_count(self):
         """It went stale twice in one day, so it was removed rather than
         corrected. A number that is not written down cannot rot."""
@@ -518,28 +396,22 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
                         f'its machine')
 
     def test_the_layer_counts_come_from_the_files(self):
-        """"Six of the suite's nine layers need the glibc clone", the three
-        modules named as needing none, the Layers table's rows and the CI
-        comment's list are four hand-written statements of one fact that the
+        """Which layers need the glibc clone is stated twice in tests/README.md
+        -- the Layers table's yes/no column, and the paragraph under it that
+        names the layers that still run without one -- and once more in the CI
+        comment. All three are hand-written statements of a fact the
         filesystem already holds.
 
-        Written the day the eighth layer became the ninth, which moved the
-        number in one file, added a row in a second and a filename list in a
-        third -- by hand, with nothing to catch the fourth place. The CI
-        comment was the one that had already gone stale: it named the
-        pure-function layer alone, from back when that was the only clone-free
-        one, in the file whose whole purpose is that a green build means the
-        layers ran. Seventeenth entry: every number a doc publishes gets a
-        test the same day.
+        Written the day the eighth layer became the ninth, which moved a count
+        in one file, added a row in a second and a filename list in a third --
+        by hand, with nothing to catch the fourth place. The CI comment was the
+        one that had already gone stale. Until 2026-09-27 the count was read
+        from docs/requirements.md, which then stopped stating it; tests/README.md
+        is the page that describes the layers.
 
         A layer needs the clone exactly when its source asks for one of the
-        two skip decorators, which is the same fact the table's yes/no column
-        states.
+        two skip decorators.
         """
-        spelled = {n: i for i, n in enumerate(
-            'zero one two three four five six seven eight nine ten eleven '
-            'twelve thirteen fourteen fifteen sixteen seventeen eighteen '
-            'nineteen twenty'.split())}
         tests_dir = os.path.join(REPO_ROOT, 'tests')
         modules = sorted(name for name in os.listdir(tests_dir)
                          if name.startswith('test_') and name.endswith('.py'))
@@ -554,38 +426,46 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
                  if applied in read(os.path.join(tests_dir, name))]
         free = [name for name in modules if name not in gated]
 
-        requirements = flat(docs()[os.path.join('docs', 'requirements.md')])
-        stated = re.search(r"(\w+) of the suite's (\w+) layers need the "
-                           r"glibc clone", requirements, re.I)
-        self.assertIsNotNone(
-            stated, 'docs/requirements.md no longer states the layer counts '
-                    'in the shape this test reads; it is the sentence that '
-                    'goes stale, so it cannot be left unasserted')
-        said_gated, said_total = (stated.group(1).lower(),
-                                  stated.group(2).lower())
-        self.assertEqual(spelled[said_total], len(modules),
-                         'docs/requirements.md says %r layers; tests/ holds '
-                         '%d' % (stated.group(2), len(modules)))
-        self.assertEqual(spelled[said_gated], len(gated),
-                         'docs/requirements.md says %r layers need the clone; '
-                         '%d ask for a skip decorator: %s'
-                         % (stated.group(1), len(gated), ', '.join(gated)))
-
         # The ROWS, not the file: asserting that each filename appears
         # somewhere in tests/README.md passed with the row deleted, because
         # the paragraph under the table names three of the modules too.
         # Measured with a mutant that renamed a row.
         table = docs()[os.path.join('tests', 'README.md')]
-        rows = set(re.findall(r'(?m)^\| `(test_\w+\.py)` \|', table))
-        self.assertEqual(rows, set(modules),
+        rows = dict(re.findall(r'(?m)^\| `(test_\w+\.py)` \| (\w+) \|', table))
+        self.assertEqual(set(rows), set(modules),
                          'the Layers table in tests/README.md and tests/ do '
                          'not hold the same modules')
+        for name in modules:
+            with self.subTest(layer=name):
+                said = rows[name]
+                self.assertIn(said, ('yes', 'mostly', 'no'),
+                              f'{name}: the table says {said!r}')
+                self.assertEqual(said != 'no', name in gated,
+                                 f'{name}: the table says {said!r} about the '
+                                 f'clone, and the module '
+                                 f'{"asks" if name in gated else "does not ask"}'
+                                 f' for a skip decorator')
+
+        paragraph = re.search(r'Without a clone at `scripts/glibc`.*?(?=\n## )',
+                              table, re.S)
+        self.assertIsNotNone(
+            paragraph, 'tests/README.md no longer says which layers run '
+                       'without a clone in the shape this test reads; it is '
+                       'the sentence that goes stale, so it cannot be left '
+                       'unasserted')
+        # Both directions: a layer left out, and a layer named that needs the
+        # clone and so skips. Checking only the first let the paragraph tell
+        # the reader test_wrapper.py runs without one (false-negative-reviewer,
+        # 2026-09-27). The modules marked "mostly" are named too, for the
+        # classes of theirs that fabricate a repository.
+        named = set(re.findall(r'`(test_\w+\.py)`', paragraph.group(0)))
+        partly = {name for name in modules if rows[name] == 'mostly'}
+        self.assertEqual(named, set(free) | partly,
+                         'the layers tests/README.md says still run without a '
+                         'clone are not the ones that do')
         workflow = read(os.path.join(REPO_ROOT, '.github', 'workflows',
                                      'tests.yml'))
         for name in free:
-            self.assertIn(name, requirements,
-                          f'docs/requirements.md does not name {name} among '
-                          f'the layers that run without a clone')
             self.assertIn(name[:-3], workflow,
                           f'the CI comment does not name {name} among the '
                           f'clone-free layers a broken clone step would '
@@ -641,10 +521,9 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
 
 
 class Step5HunkCountsAgreeEverywhere(unittest.TestCase):
-    """Step 5's two hunk counts are published in four places per pair: the
-    step's own total, the summary's "step 5 found N", the summary's "N hunk(s)
-    marked >>", and the sentence in docs/results.md. Nothing tied them
-    together. They moved on 2026-09-05 (a third tier) and again on 2026-09-07
+    """Step 5's two hunk counts are published in three places per pair: the
+    step's own total, the summary's "step 5 found N" and the summary's "N
+    hunk(s) marked >>". Nothing tied them together. They moved on 2026-09-05 (a third tier) and again on 2026-09-07
     (the filter learned to read context lines), and a page left behind is
     exactly what the step-4 "2" was for six weeks.
 
@@ -669,13 +548,6 @@ class Step5HunkCountsAgreeEverywhere(unittest.TestCase):
                 self.assertEqual(len(got), 3,
                                  f'{name}: found {got}, expected three copies')
                 self.assertEqual(set(got), {str(expected)}, got)
-
-    def test_the_results_page_states_the_same_two_counts(self):
-        results = docs()[os.path.join('docs', 'results.md')]
-        self.assertIn(f"counts from 8 and 48 to the "
-                      f"{self.EXAMPLES['rhel8-to-rhel9']} and "
-                      f"{self.EXAMPLES['rhel9-to-rhel10']} a run prints today",
-                      ' '.join(results.split()))
 
 
 class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
@@ -738,9 +610,12 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     value. That is the honest limit of an existence check, written down here
     rather than left for a reader to discover: the mutation that proves such a
     tie changes every occurrence, because that is the case it can see. Two
-    rows keep it, carrying 9,616 and 9,619. What makes them safe is not that
-    the counts are longer but a measurement: bumping each by one reddens it,
-    because neither named file carries the bumped value. That is narrower than
+    rows kept it, carrying 9,616 and 9,619, until PR #56 removed them with the
+    pages that stated those counts; today the row of the locale files that
+    differ between 2.28 and 2.34 is the one that uses it. What made those two
+    safe was not that the counts were longer but a measurement: bumping each by
+    one reddened it, because neither named file carried the bumped value. That
+    is narrower than
     it sounds, and deliberately stated so: a file that states BOTH counts
     cannot tell a drift from one to the other, and what reddens such a row is
     the file carrying only its own. An evidence tie is only as good as the
@@ -756,8 +631,10 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     then measured on the fix: the el9 node is built from the 2.34 tag, so the
     node scan repeats step 4's copy-closure figures in BYTE-IDENTICAL
     sentences, lines 107 and 113 against 724 and 730. A sentence two facts
-    share is not an anchor. All three rows now name `STEP_4_AT_THE_TAG`,
-    the search is cut at the next banner, and an anchor that is missing or
+    share is not an anchor. Those three rows named the banner of step 4 at
+    the tag; they came out on 2026-09-27, with the page that stated their
+    figures, and the mechanism stays for the next row that needs it: the
+    search is cut at the next banner, and an anchor that is missing or
     doubled refuses instead of widening to the whole file. A named sentence
     must appear exactly ONCE in what is left: two copies mean a drifting one
     is satisfied by a stale one, which is this test's own defect class turned
@@ -771,64 +648,24 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     out of this table in the same commit.
     """
 
-    # The banner that opens step 4's run against the TAG. The el8 and el9
-    # nodes are scanned lower down the same transcript and reprint step 4's
-    # figures in byte-identical sentences, with DIFFERENT numbers on the el8
-    # side: anchoring to the sentence alone ties these rows to whichever of
-    # the three happens to match first. Measured 2026-09-23 on the recaptured
-    # run: line 112 says 331 where line 731, the el8 node's own scan, says
-    # 329.
-    #
-    # It was the hand-run `$ python3 flag_algorithmic_ranges.py glibc-2.34`
-    # until the examples were recaptured as plain `audit.sh` output, which
-    # prints banners instead. The banner is the better anchor: the region
-    # ends at the next `====` rule, which is now a real boundary rather than
-    # four hundred lines of whatever followed.
-    #
-    # It carries the rule that CLOSES the banner, because the region ends at
-    # the next `====` and that would otherwise be the banner's own closing
-    # line, one below: an empty region, and a row that proves nothing while
-    # reporting that it found no figure to move.
-    STEP_4_AT_THE_TAG = ('== STEP 4  Which locales a data diff can never '
-                         'clear\n'
-                         '================================================'
-                         '================\n')
-
-    #     label, pattern with ONE group, FILES expected, evidence entries
     FIGURES = (
+        # "need", and a list item, since 2026-09-27: README's Prerequisites
+        # and confirming-on-a-real-system.md state it in those two shapes, and
+        # drifting either to 14 stayed green (false-negative-reviewer).
         ('the PostgreSQL floor the tool requires',
-         r'(?:needs |Needs |\*\*)(?:PostgreSQL|version) (\d+) or newer',
-         3,
+         r'(?:needs? |Needs? |\*\*|(?<!\S)- )(?:PostgreSQL|version) (\d+) '
+         r'or newer',
+         4,
          ()),
         ('the locales that inherit iso14651_t1 at glibc 2.34',
          r'inherited by (\d+) locales|template that (\d+) locales'
          r'|the (\d+) to \d+ locales that inherit it',
-         3,
+         2,
          ()),
-        ('the locales the four ellipsis files expose through copy at 2.34',
-         r'inherited by (\d+) further locales',
-         1,
-         (Evidence('examples/rhel8-to-rhel9-audit-output.txt',
-                   shape='Additionally exposed via `copy` inheritance: {n}',
-                   section=STEP_4_AT_THE_TAG),)),
-        ('the locale files step 4 closes over at glibc 2.34',
-         r'reaching (\d+) of the \d+ locales',
-         1,
-         (Evidence('examples/rhel8-to-rhel9-audit-output.txt',
-                   shape='Full set needing empirical confirmation: {n} '
-                         'locale source file(s)',
-                   section=STEP_4_AT_THE_TAG),)),
-        ('the files that define LC_COLLATE at glibc 2.34',
-         r'reaching \d+ of the (\d+) locales',
-         1,
-         (Evidence('examples/rhel8-to-rhel9-audit-output.txt',
-                   shape='Files at glibc-2.34: 355, of which {n} define '
-                         'LC_COLLATE',
-                   section=STEP_4_AT_THE_TAG),)),
         ('the locale files that differ between glibc 2.28 and 2.34',
          r'(\d+) files that differ between (?:glibc )?2\.28 and 2\.34'
          r'|one line out of (\d+)',
-         3,
+         2,
          (Evidence('examples/rhel8-to-rhel9-audit-output.txt',
                    shape='Locale files changed between glibc-2.28 and '
                          'glibc-2.34: {n}'),)),
@@ -864,8 +701,9 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
 
     def test_the_evidence_under_it_carries_the_same_number(self):
         """The prose figure against the query output it summarises, which is
-        where this project's numbers come from. Prose says 9,616; the psql
-        transcript in the case file says 9616."""
+        where this project's numbers come from. Prose said 9,616 and the psql
+        transcript in the case file said 9616, while a row still tied the
+        two."""
         for label, pattern, _, evidence in self.FIGURES:
             if not evidence:
                 continue
@@ -1087,15 +925,18 @@ class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
 
 
 class TheExamplesCarryTheNodeSteps(unittest.TestCase):
-    """docs/method.md quotes the summary block steps 9 and 10 add, and
-    until 2026-09-07 that block appeared in no examples/*.txt and no test tied
-    it -- the one published place a reader could check it against was
-    missing. Both worked examples now carry steps 6 to 10 and the full summary
-    of a run given both nodes' directories."""
+    """Both worked examples carry the node steps and the full summary of a
+    run given both machines' files, so what the docs say about those steps can
+    be checked against real output. Until 2026-09-07 no example carried
+    them."""
 
+    # The builds as each machine's file names them: `rpm -q glibc`, the
+    # architecture included.
     EXAMPLES = {
-        'rhel8-to-rhel9': ('glibc-2.28-251.el8_10.40', 'glibc-2.34-275.el9_8'),
-        'rhel9-to-rhel10': ('glibc-2.34-275.el9_8', 'glibc-2.39-128.el10_2'),
+        'rhel8-to-rhel9': ('glibc-2.28-251.el8_10.40.x86_64',
+                           'glibc-2.34-275.el9_8.x86_64'),
+        'rhel9-to-rhel10': ('glibc-2.34-275.el9_8.x86_64',
+                            'glibc-2.39-128.el10_2.x86_64'),
     }
 
     def example(self, name):
@@ -1105,23 +946,22 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
     def test_every_node_step_banner_is_in_both_examples(self):
         for name, (old, new) in self.EXAMPLES.items():
             text = self.example(name)
-            for banner in (f"== DISTRO CHECK  do {old}'s patches touch LC_COLLATE?",
-                           f"== DISTRO CHECK  do {new}'s patches touch LC_COLLATE?",
-                           f"== NODE TO NODE  does {old}'s collation data differ from {new}'s?",
-                           f"== NODE ELLIPSIS  does {old}'s own locale data use ellipsis ranges?",
-                           f"== NODE ELLIPSIS  does {new}'s own locale data use ellipsis ranges?",
-                           '== AUDIT SUMMARY'):
-                with self.subTest(example=name, banner=banner[:30]):
+            for banner in (
+                    f"== STEP 6  DISTRO CHECK  do {old}'s patches touch "
+                    "LC_COLLATE?",
+                    f"== STEP 7  DISTRO CHECK  do {new}'s patches touch "
+                    "LC_COLLATE?",
+                    f"== STEP 8  NODE TO NODE  does {old}'s collation data "
+                    f"differ from {new}'s?",
+                    f"== STEP 9  NODE ELLIPSIS  does {old}'s own locale data "
+                    "use ellipsis ranges?",
+                    f"== STEP 10  NODE ELLIPSIS  does {new}'s own locale data "
+                    "use ellipsis ranges?",
+                    "== STEP 11  MEASURED ORDER  how each machine's own glibc "
+                    "sorts every locale",
+                    '== AUDIT SUMMARY'):
+                with self.subTest(example=name, banner=banner[:40]):
                     self.assertIn(banner, text)
-
-    def test_the_quoted_steps_9_10_block_is_verbatim_from_the_example(self):
-        """The fenced block under "What steps 9 and 10 add to the summary" in
-        docs/method.md, line for line in the RHEL8->RHEL9 example."""
-        method = read(os.path.join(REPO_ROOT, 'docs', 'method.md'))
-        m = re.search(r'What steps 9 and 10 add to the summary.*?```\n(.*?)```',
-                      method, re.S)
-        self.assertIsNotNone(m, 'the quoted block is gone from method.md')
-        self.assertIn(m.group(1), self.example('rhel8-to-rhel9'))
 
     def test_the_summary_blast_radius_line_matches_step_8(self):
         """The summary's "plus N locale(s) that inherit" is read from the list
@@ -1136,52 +976,6 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
                 self.assertIsNotNone(summary)
                 self.assertEqual(step8.group(1), summary.group(1))
 
-
-    def test_every_C_status_the_docs_list_is_one_the_tool_can_print(self):
-        """docs/method.md enumerates the states the steps 9/10 summary
-        line can carry. A state renamed in the code and left standing in that
-        list is the seventeenth entry's defect in a new place: prose a reader
-        checks their own output against, describing output that no longer
-        exists.
-
-        The statuses are taken from the function that prints them, not grepped
-        out of the file -- a first version of this test searched the whole
-        source and passed on a renamed status, because the old wording still
-        sat in a comment three lines above. `report_backported` is pure, so
-        this needs no clone.
-        """
-        import contextlib
-        import io
-
-        import flag_algorithmic_ranges as far
-
-        def status(body):
-            with contextlib.redirect_stdout(io.StringIO()):
-                return far.report_backported({'C': body} if body else {})['C']
-
-        printed = [status(b) for b in (
-            _harness.backported_c(),
-            _harness.upstream_c(),
-            _harness.locale_file('order_start forward',
-                                 '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
-                                 'order_end'),
-            _harness.locale_file('copy "iso14651_t1"'),
-            'comment_char %\nescape_char /\n',
-            None)]
-        self.assertEqual(len(set(printed)), 6, printed)
-
-        method = read(os.path.join(REPO_ROOT, 'docs', 'method.md'))
-        wrapper = read(os.path.join(REPO_ROOT, 'audit.sh'))
-        for full in printed:
-            # The scripts append "  <- why it matters"; the docs list the name.
-            name = full.split('  <-')[0]
-            with self.subTest(status=name):
-                self.assertIn(f'`{name}`'.replace('`ABSENT from this directory`',
-                                                  '`ABSENT from this locale '
-                                                  'directory`'),
-                              method)
-        self.assertIn('C (C.UTF-8): NOT DECLARED', wrapper)
-        self.assertIn('`NOT DECLARED`', method)
 
     def test_the_published_list_length_is_the_set_that_was_reported(self):
         """"full list (N name(s))" against the two numbers printed above it.
@@ -1226,10 +1020,13 @@ def links_in(text):
 
 def slug(heading):
     """The anchor GitHub derives from a heading: lower-cased, backticks
-    dropped, punctuation removed, runs of whitespace to one hyphen."""
+    dropped, punctuation removed, and each space turned into a hyphen. Each,
+    not each run: "Command 2 — the probe" loses its dash and keeps both
+    spaces, so its anchor is `command-2--the-probe`. Collapsing the run, as
+    this did until 2026-09-27, reported the README's correct links broken."""
     s = heading.lower().replace('`', '')
     s = re.sub(r'[^\w\s-]', '', s)
-    return re.sub(r'\s+', '-', s.strip())
+    return re.sub(r'\s', '-', s.strip())
 
 
 class EveryLinkResolves(unittest.TestCase):
@@ -1288,8 +1085,12 @@ class EveryLinkResolves(unittest.TestCase):
         self.assertGreater(seen, 0, 'no relative links found: pattern stale')
 
     def test_every_doc_a_script_or_example_names_exists(self):
-        """audit.sh, sql/ and examples/ send the reader to docs/*.md by path
-        in plain text, outside any Markdown link."""
+        """audit.sh, sql/, examples/ and scripts/ send the reader to other
+        files of the repository by path in plain text, outside any Markdown
+        link: a page under docs/ or tests/, and since 2026-09-27 also an
+        example, a SQL file or a script. Until then only the .md half was read,
+        so a path to a deleted example sat in audit.sh with this test green
+        (backlog 12.2 d)."""
         named = {}
         candidates = [os.path.join(REPO_ROOT, 'audit.sh')]
         for sub in ('sql', 'examples', 'scripts'):
@@ -1297,67 +1098,23 @@ class EveryLinkResolves(unittest.TestCase):
             candidates += [os.path.join(folder, f) for f in os.listdir(folder)
                            if os.path.isfile(os.path.join(folder, f))]
         for cand in candidates:
-            for rel in re.findall(r'\b((?:docs|tests)/[\w./-]+\.md)\b',
-                                  read(cand)):
+            for rel in re.findall(
+                    r'\b((?:docs|tests|examples|sql|scripts)/[\w./-]+'
+                    r'\.(?:md|txt|sql|py|sh|out|json))\b', read(cand)):
                 named.setdefault(rel, set()).add(
                     os.path.relpath(cand, REPO_ROOT))
-        self.assertTrue(named, 'nothing names a doc any more: pattern stale')
+        self.assertTrue(named, 'nothing names a file any more: pattern stale')
+        # Each half that names something today; examples/ is read too, but
+        # nothing names a file there as of 2026-09-27.
+        for kind in ('docs/', 'sql/', 'scripts/'):
+            self.assertTrue(any(rel.startswith(kind) for rel in named),
+                            f'nothing names a file under {kind} any more: '
+                            f'the pattern is stale, or that half went quiet')
         for rel, sources in sorted(named.items()):
             with self.subTest(doc=rel):
                 self.assertTrue(os.path.isfile(os.path.join(REPO_ROOT, rel)),
                                 f'{rel} is named by {sorted(sources)} and '
                                 f'does not exist')
-
-
-class TheCountsTheTestPageStatesComeFromTheTable(unittest.TestCase):
-    """`tests/README.md` describes the table above in numbers -- how many rows
-    it holds, how many of them are also held to a saved run, how many ties that
-    comes to. Those are prose about a structure in this same file, and nothing
-    read them.
-
-    On 2026-09-22 a row came out of `FIGURES` together with the last page that
-    stated its figure, and the sentence went on saying "six of the ten rows"
-    with the suite green. Deleting a whole row is invisible to every other
-    assertion here -- measured on that change by reverting one -- so this is
-    what notices. It compares the spelled-out numbers the page publishes
-    against the table itself, which is the only reason they cannot drift
-    apart again.
-    """
-
-    #: Index is the value, so WORDS[9] is how the page spells nine.
-    WORDS = ('zero one two three four five six seven eight nine ten eleven '
-             'twelve').split()
-
-    def page(self):
-        return flat(read(os.path.join(REPO_ROOT, 'tests', 'README.md')))
-
-    def spell(self, n):
-        self.assertLess(
-            n, len(self.WORDS),
-            f'{n} is past the spelled-out numbers this test knows; add the '
-            f'word rather than letting the assertion below go looking for a '
-            f'sentence that cannot exist')
-        return self.WORDS[n]
-
-    def test_the_row_counts_come_from_the_table(self):
-        rows = AFigureStatedTwiceIsStatedOnce.FIGURES
-        tied = [row for row in rows if row[3]]
-        said = (f'{self.spell(len(tied)).capitalize()} of the '
-                f'{self.spell(len(rows))} rows are also held')
-        self.assertIn(
-            said, self.page(),
-            f'tests/README.md does not say {said!r}. The table holds '
-            f'{len(rows)} row(s), {len(tied)} of them tied to a run. A row '
-            f'added to or removed from FIGURES changes that sentence, and no '
-            f'other test reads it')
-
-    def test_the_tie_count_comes_from_the_table(self):
-        ties = sum(len(row[3]) for row in AFigureStatedTwiceIsStatedOnce.FIGURES)
-        said = f'through {self.spell(ties)} ties in all'
-        self.assertIn(
-            said, self.page(),
-            f'tests/README.md does not say {said!r}. The table holds {ties} '
-            f'evidence entr(ies) across all its rows')
 
 
 class ThePrivateRulesStayPrivate(unittest.TestCase):

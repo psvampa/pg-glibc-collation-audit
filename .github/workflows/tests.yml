@@ -55,7 +55,7 @@ jobs:
             glibc-2.28 glibc-2.34 glibc-2.39 glibc-2.12 glibc-2.17
 
       - name: Say so if the documentation layer is switched off
-        # Renaming that file out of `test*.py` removes 39 tests from the run
+        # Renaming that file out of `test*.py` removes its tests from the run
         # without producing a single skip, so the step below stays green and
         # says nothing. A disabled layer must be visible in the log it is
         # missing from.
@@ -69,10 +69,10 @@ jobs:
         # layer: without a usable glibc clone the git-backed tests skip BY
         # DESIGN, which is right on a contributor's laptop and wrong here -- a
         # broken clone step would otherwise leave this job green with only the
-        # clone-free layers (test_pure_functions, test_parallel_runner, and
-        # test_published_claims when it is enabled) and the
-        # fabricated-repository classes of test_git_helpers having actually
-        # run.
+        # clone-free layers (test_pure_functions, test_parallel_runner,
+        # test_locale_order, and test_published_claims when it is enabled) and
+        # the fabricated-repository classes of test_git_helpers having
+        # actually run.
         run: |
           set -o pipefail
           python3 -m unittest discover -s tests -t tests -v 2>&1 | tee /tmp/out.txt

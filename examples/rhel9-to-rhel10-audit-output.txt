@@ -1282,15 +1282,15 @@ move weights. If any can, every locale step 4 listed above needs an
 empirical sort-order test, however clean its data diff is.
 
 ================================================================
-== DISTRO CHECK  do glibc-2.34-275.el9_8's patches touch LC_COLLATE?
+== STEP 6  DISTRO CHECK  do glibc-2.34-275.el9_8.x86_64's patches touch LC_COLLATE?
 ================================================================
 Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
   UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was NOT checked
   NOTE: signatures were not checked. The commit ids above are what was actually read;
         compare them against a source you trust (sourceware.org/git/glibc.git) if it matters.
 
-Node build under test: glibc-2.34-275.el9_8
-Node locale sources:   ./el9-locales
+Node build under test: glibc-2.34-275.el9_8.x86_64
+Node locale sources:   /tmp/pg-glibc-collation-audit/node_file.glibc-2.34..glibc-2.39.old/locales
 
 Compared 355 file(s) against glibc-2.34:
   identical:                 353
@@ -1301,7 +1301,7 @@ Compared 355 file(s) against glibc-2.34:
   absent on the node:        0
   (2 of 355 differ in some way)
 
-Nothing differs inside LC_COLLATE. For every locale compared, the tag diff is reading the same collation data glibc-2.34-275.el9_8 runs.
+Nothing differs inside LC_COLLATE. For every locale compared, the tag diff is reading the same collation data glibc-2.34-275.el9_8.x86_64 runs.
 
 Absent upstream (1) -- backported locales this comparison is structurally blind to:
   C: HAS ITS OWN TAILORING -- unauditable here
@@ -1321,15 +1321,15 @@ Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.gl
    well as outside the audit. See docs/limitations.md.
 
 ================================================================
-== DISTRO CHECK  do glibc-2.39-128.el10_2's patches touch LC_COLLATE?
+== STEP 7  DISTRO CHECK  do glibc-2.39-128.el10_2.x86_64's patches touch LC_COLLATE?
 ================================================================
 Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
   UNCHECKED glibc-2.39 = ef321e23c20e  gpg is not installed; the signature was NOT checked
   NOTE: signatures were not checked. The commit ids above are what was actually read;
         compare them against a source you trust (sourceware.org/git/glibc.git) if it matters.
 
-Node build under test: glibc-2.39-128.el10_2
-Node locale sources:   ./el10-locales
+Node build under test: glibc-2.39-128.el10_2.x86_64
+Node locale sources:   /tmp/pg-glibc-collation-audit/node_file.glibc-2.34..glibc-2.39.new/locales
 
 Compared 366 file(s) against glibc-2.39:
   identical:                 363
@@ -1340,7 +1340,7 @@ Compared 366 file(s) against glibc-2.39:
   absent on the node:        0
   (3 of 366 differ in some way)
 
-Nothing differs inside LC_COLLATE. For every locale compared, the tag diff is reading the same collation data glibc-2.39-128.el10_2 runs.
+Nothing differs inside LC_COLLATE. For every locale compared, the tag diff is reading the same collation data glibc-2.39-128.el10_2.x86_64 runs.
 
 Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.glibc-2.39..new.txt
 
@@ -1357,14 +1357,14 @@ Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.gl
    well as outside the audit. See docs/limitations.md.
 
 ================================================================
-== NODE TO NODE  does glibc-2.34-275.el9_8's collation data differ from glibc-2.39-128.el10_2's?
+== STEP 8  NODE TO NODE  does glibc-2.34-275.el9_8.x86_64's collation data differ from glibc-2.39-128.el10_2.x86_64's?
 ================================================================
 Node-to-node comparison of locale SOURCES. Both sides are authoritative:
-  old: glibc-2.34-275.el9_8
-       ./el9-locales
+  old: glibc-2.34-275.el9_8.x86_64
+       /tmp/pg-glibc-collation-audit/node_file.glibc-2.34..glibc-2.39.old/locales
        356 file(s), 12762912 byte(s), fingerprint c23d60746558
-  new: glibc-2.39-128.el10_2
-       ./el10-locales
+  new: glibc-2.39-128.el10_2.x86_64
+       /tmp/pg-glibc-collation-audit/node_file.glibc-2.34..glibc-2.39.new/locales
        366 file(s), 12617788 byte(s), fingerprint b3bb1c5a5115
 
 Compared 355 file(s) present on both nodes:
@@ -1377,8 +1377,8 @@ Compared 355 file(s) present on both nodes:
 
 Differ INSIDE LC_COLLATE (3) -- these two nodes do not carry the same collation rules:
   ber_DZ  (both, differing, explicit -> copy-only)
-      --- glibc-2.34-275.el9_8
-      +++ glibc-2.39-128.el10_2
+      --- glibc-2.34-275.el9_8.x86_64
+      +++ glibc-2.39-128.el10_2.x86_64
       @@ -1,82 +1,3 @@
        LC_COLLATE
       -% The latin amazigh alphabet is:
@@ -1402,8 +1402,8 @@ Differ INSIDE LC_COLLATE (3) -- these two nodes do not carry the same collation 
       -% &R<ṛ<<<Ṛ
       -% &S<ṣ<<<Ṣ
   kab_DZ  (both, differing, copy-only -> explicit)
-      --- glibc-2.34-275.el9_8
-      +++ glibc-2.39-128.el10_2
+      --- glibc-2.34-275.el9_8.x86_64
+      +++ glibc-2.39-128.el10_2.x86_64
       @@ -1,3 +1,82 @@
        LC_COLLATE
       -copy "ber_DZ"
@@ -1427,8 +1427,8 @@ Differ INSIDE LC_COLLATE (3) -- these two nodes do not carry the same collation 
       +% &Q<ɣ<<<Ɣ
       +% &R<ṛ<<<Ṛ
   th_TH  (both, differing, explicit on both)
-      --- glibc-2.34-275.el9_8
-      +++ glibc-2.39-128.el10_2
+      --- glibc-2.34-275.el9_8.x86_64
+      +++ glibc-2.39-128.el10_2.x86_64
       @@ -2,746 +2,92 @@
        
       -collating-element <ko-kai-e> from "<U0E40><U0E01>"
@@ -1454,7 +1454,7 @@ Differ INSIDE LC_COLLATE (3) -- these two nodes do not carry the same collation 
 
   All of those exist at one of the two tags, so the tag diff could see them.
 
-Additionally affected via `copy` inheritance at glibc-2.39-128.el10_2: 0 locale(s)
+Additionally affected via `copy` inheritance at glibc-2.39-128.el10_2.x86_64: 0 locale(s)
   (no other locale copies any of those files)
 
 Only on the new node (11) -- locales this upgrade adds:
@@ -1475,10 +1475,10 @@ Only on the old node (1) -- locales this upgrade REMOVES. An index built on one 
 
 Backported locales, reported whether or not they differ (these are why this comparison exists):
   C (C.UTF-8): present on both nodes, byte-identical
-      glibc-2.34-275.el9_8: codepoint_collation -- byte order by construction
-      glibc-2.39-128.el10_2: codepoint_collation -- byte order by construction
+      glibc-2.34-275.el9_8.x86_64: codepoint_collation -- byte order by construction
+      glibc-2.39-128.el10_2.x86_64: codepoint_collation -- byte order by construction
 
-Full result written to /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.34-275.el9_8..glibc-2.39-128.el10_2.txt
+Full result written to /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.34-275.el9_8.x86_64..glibc-2.39-128.el10_2.x86_64.txt
 
 !! This compares locale DATA. Identical data is NOT identical ORDER: the
    weights for an ellipsis range are computed by localedef when the locale is
@@ -1487,18 +1487,19 @@ Full result written to /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.
    file. So a clean result here clears the data half and nothing else.
 !! No backported locale here is ellipsis-based, so for those the data
    comparison is the whole story. Run sql/c_utf8_probe.sql anyway if C.UTF-8
-   is your database collation: it is the only check that measures the order
-   these builds actually produce, and PostgreSQL reports collversion as NULL
-   for every C.* name.
+   is your database collation: it measures the order these builds actually
+   produce inside PostgreSQL, as step 11 does one character at a time through
+   glibc when the run has both machines' measurements, and PostgreSQL reports
+   collversion as NULL for every C.* name.
 !! Cheap complement, on each node: rpm -q --changelog glibc | grep -i collat
 !! localedata/charmaps/ is NOT compared. glibc-locale-source ships it and it
    is an input to localedef, so a repertoire change is outside this result as
    well as outside the audit. See docs/limitations.md.
 
 ================================================================
-== NODE ELLIPSIS  does glibc-2.34-275.el9_8's own locale data use ellipsis ranges?
+== STEP 9  NODE ELLIPSIS  does glibc-2.34-275.el9_8.x86_64's own locale data use ellipsis ranges?
 ================================================================
-Files at glibc-2.34-275.el9_8 (./el9-locales): 356, of which 343 define LC_COLLATE
+Files at glibc-2.34-275.el9_8.x86_64 (/tmp/pg-glibc-collation-audit/node_file.glibc-2.34..glibc-2.39.old/locales): 356, of which 343 define LC_COLLATE
 Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 4
   i18n
       collating-symbol <S0200>..<S1100> % 0x0200..0x1100
@@ -1526,7 +1527,7 @@ Additionally exposed via `copy` inheritance: 331
 Full set needing empirical confirmation: 335 locale source file(s), 478 generated locale name(s) per localedata/SUPPORTED
   e.g. aa_DJ, aa_DJ.utf8, aa_ER, aa_ER@saaho, aa_ET, af_ZA, af_ZA.utf8, agr_PE, ...
   not in glibc-2.34's SUPPORTED -- the node's `locale -a` is the authority on whether these are built: cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
-  full list (483 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.34-275.el9_8.txt
+  full list (483 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.34-275.el9_8.x86_64.txt
 
 These cannot be cleared by a source diff alone.
 This is one node's own data. Whether the WEIGHTS those ranges expand to
@@ -1539,9 +1540,9 @@ unexamined are three different answers:
   C (C.UTF-8): codepoint_collation  <- byte order by construction
 
 ================================================================
-== NODE ELLIPSIS  does glibc-2.39-128.el10_2's own locale data use ellipsis ranges?
+== STEP 10  NODE ELLIPSIS  does glibc-2.39-128.el10_2.x86_64's own locale data use ellipsis ranges?
 ================================================================
-Files at glibc-2.39-128.el10_2 (./el10-locales): 366, of which 352 define LC_COLLATE
+Files at glibc-2.39-128.el10_2.x86_64 (/tmp/pg-glibc-collation-audit/node_file.glibc-2.34..glibc-2.39.new/locales): 366, of which 352 define LC_COLLATE
 Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 4
   i18n
       collating-symbol <S0200>..<S1100> % 0x0200..0x1100
@@ -1569,7 +1570,7 @@ Additionally exposed via `copy` inheritance: 341
 Full set needing empirical confirmation: 345 locale source file(s), 488 generated locale name(s) per localedata/SUPPORTED
   e.g. aa_DJ, aa_DJ.utf8, aa_ER, aa_ET, af_ZA, af_ZA.utf8, agr_PE, ak_GH, ...
   not in glibc-2.39's SUPPORTED -- the node's `locale -a` is the authority on whether these are built: ab_GE, cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
-  full list (494 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.39-128.el10_2.txt
+  full list (494 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.39-128.el10_2.x86_64.txt
 
 These cannot be cleared by a source diff alone.
 This is one node's own data. Whether the WEIGHTS those ranges expand to
@@ -1582,6 +1583,81 @@ unexamined are three different answers:
   C (C.UTF-8): codepoint_collation  <- byte order by construction
 
 ================================================================
+== STEP 11  MEASURED ORDER  how each machine's own glibc sorts every locale
+================================================================
+Old machine: glibc-2.34-275.el9_8.x86_64, 869 locale(s)
+New machine: glibc-2.39-128.el10_2.x86_64, 885 locale(s)
+
+Sort order CHANGED in 4 locale(s):
+
+  th_TH, th_TH.tis620, thai (TIS-620)
+    also, in PostgreSQL: database locale th_TH.TIS-620
+    88 characters moved, too many to list here
+    the pairs that tell letters, accents and case apart here are told apart differently themselves:
+      before: letters a/b, accent U+009F/_, case A/a
+      now:    letters a/b, accent ๏/U+0E4E from the end, case a/A
+
+  th_TH.utf8 (UTF-8)
+    also, in PostgreSQL: collation "th_TH" where the database encoding is
+      UTF-8; database locale th_TH.UTF-8
+    50,584 characters moved, too many to list here
+    the pairs that tell letters, accents and case apart here are told apart differently themselves:
+      before: letters a/b, accent á/a from the end, case A/a
+      now:    letters a/b, accent a/á, case a/A
+
+Unchanged: 859 locale(s).
+!! Unchanged only as far as measured: 6 of them. In each, the pairs of
+   neighbouring characters counted in brackets differ by less than a letter,
+   and no pair could be found there to tell whether by an accent or by case; a
+   change from one to the other would not show:
+  ja_JP.utf8 (3), ko_KR (1), ko_KR.euckr (1), ko_KR.utf8 (3), korean (1),
+  korean.euc (1)
+!! Could not be measured, so NOT known to be unchanged: 4 locale(s):
+  hy_AM.armscii8 (both machines): cannot be measured: Python has no converter for ARMSCII-8, the encoding of this locale, so the bytes PostgreSQL would compare cannot be built
+    also, in PostgreSQL: collation "hy_AM" where the database encoding is
+      ARMSCII-8; database locale hy_AM.ARMSCII-8
+  ka_GE (both machines): cannot be measured: Python has no converter for GEORGIAN-PS, the encoding of this locale, so the bytes PostgreSQL would compare cannot be built
+  ka_GE.georgianps (both machines): cannot be measured: Python has no converter for GEORGIAN-PS, the encoding of this locale, so the bytes PostgreSQL would compare cannot be built
+    also, in PostgreSQL: database locale ka_GE.GEORGIAN-PS
+  zh_TW.euctw (both machines): cannot be measured: Python has no converter for EUC-TW, the encoding of this locale, so the bytes PostgreSQL would compare cannot be built
+    also, in PostgreSQL: collation "zh_TW" where the database encoding is
+      EUC-TW; database locale zh_TW.EUC-TW
+!! Not on the new machine, so NOT known to be unchanged: 2 locale(s). Either
+   the upgrade removes them or their language pack is not installed there; a
+   database or collation that uses one cannot use it on the new machine. If a
+   language pack is missing, install it and measure the new machine again.
+  aa_ER.utf8@saaho
+  aa_ER@saaho
+Only on the new machine: 18 locale(s).
+  crh_RU
+  crh_RU.utf8
+  gbm_IN
+  gbm_IN.utf8
+  kv_RU
+  kv_RU.utf8
+  rif_MA
+  rif_MA.utf8
+  ssy_ER
+  ssy_ER.utf8
+  su_ID
+  su_ID.utf8
+  syr
+  syr.utf8
+  tok
+  tok.utf8
+  zgh_MA
+  zgh_MA.utf8
+
+Of the 869 locale(s) on the old machine: 4 changed, 859 unchanged (6 of them only as far as measured), 4 not measured, 2 not on the new machine.
+!! Not measured: a rule that applies only to a particular combination of
+   letters, such as a contraction ("ch" sorted as one letter), so two machines
+   that agree here can still sort some longer strings apart. Where a character
+   counts for nothing at some level (glibc ignores it there), how it is told
+   apart from its neighbour is read less reliably, so a change there may go
+   unseen. Only sort order is measured: upper(), lower() and the other
+   character rules of LC_CTYPE are not.
+
+================================================================
 == AUDIT SUMMARY  glibc-2.34 -> glibc-2.39
 ================================================================
 
@@ -1591,12 +1667,49 @@ unexamined are three different answers:
      th_TH
      th_TH.utf8
    (4 name(s); full list: /tmp/pg-glibc-collation-audit/step3_affected_locales.txt)
+     This list is from the tags. What each machine's own glibc says
+     is under '-- Measured order', below.
 
 -- Removed: locale files the old side has and the new side does not
      aa_ER@saaho
-   (1 name(s) on glibc-2.34-275.el9_8 and not on glibc-2.39-128.el10_2;
+   (1 name(s) on glibc-2.34-275.el9_8.x86_64 and not on glibc-2.39-128.el10_2.x86_64;
    an index on one does not just sort differently; the collation is gone.
-   Full list: /tmp/pg-glibc-collation-audit/node_removed_locales.glibc-2.34-275.el9_8..glibc-2.39-128.el10_2.txt)
+   Full list: /tmp/pg-glibc-collation-audit/node_removed_locales.glibc-2.34-275.el9_8.x86_64..glibc-2.39-128.el10_2.x86_64.txt)
+
+-- Measured order: each machine's own glibc
+   (glibc-2.34-275.el9_8.x86_64 -> glibc-2.39-128.el10_2.x86_64)
+     4 locale(s) sort differently -- reindex what uses them:
+       th_TH, th_TH.tis620, thai (TIS-620)
+         88 characters moved; the pairs that tell letters, accents and case
+           apart are told apart differently themselves
+         also, in PostgreSQL: database locale th_TH.TIS-620
+       th_TH.utf8 (UTF-8)
+         50,584 characters moved; the pairs that tell letters, accents and
+           case apart are told apart differently themselves
+         also, in PostgreSQL: collation "th_TH" where the database encoding is
+           UTF-8; database locale th_TH.UTF-8
+     NOT known to be unchanged: 6 locale(s)
+       could not be measured: hy_AM.armscii8, ka_GE, ka_GE.georgianps,
+         zh_TW.euctw
+         also, in PostgreSQL: collation "hy_AM" where the database encoding is
+           ARMSCII-8; collation "zh_TW" where the database encoding is EUC-TW;
+           database locales hy_AM.ARMSCII-8, ka_GE.GEORGIAN-PS, zh_TW.EUC-TW
+       not on the new machine, so a database or collation that uses one cannot
+         use it there: aa_ER.utf8@saaho, aa_ER@saaho
+     !! Unchanged only as far as measured, because a change between an accent
+        and case would not show in them: ja_JP.utf8, ko_KR, ko_KR.euckr,
+        ko_KR.utf8, korean, korean.euc
+     Of the 869 locale(s) on the old machine: 4 changed, 859 unchanged (6 of
+       them only as far as measured), 4 not measured, 2 not on the new
+       machine.
+     !! Not measured: a rule that applies only to a particular combination of
+        letters, such as a contraction ("ch" sorted as one letter), so two
+        machines that agree here can still sort some longer strings apart.
+        Where a character counts for nothing at some level (glibc ignores it
+        there), how it is told apart from its neighbour is read less reliably,
+        so a change there may go unseen. Only sort order is measured: upper(),
+        lower() and the other character rules of LC_CTYPE are not.
+     Full report: step 11 above.
 
 -- Needs an empirical test: step 5 found 52 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged
@@ -1604,16 +1717,24 @@ unexamined are three different answers:
      source names for the locales SUPPORTED does not list
      full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
 
--- Node-to-node locale data (glibc-2.34-275.el9_8 -> glibc-2.39-128.el10_2)
-     3 locale(s) differ inside LC_COLLATE between the two
-     nodes' OWN sources; full list: /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.34-275.el9_8..glibc-2.39-128.el10_2.txt
-     plus 0 locale(s) that inherit one of those files'
-     LC_COLLATE via copy on glibc-2.39-128.el10_2; full list: /tmp/pg-glibc-collation-audit/node_collate_inherited.glibc-2.34-275.el9_8..glibc-2.39-128.el10_2.txt
+-- Distro patches, step 6 (glibc-2.34-275.el9_8.x86_64 against glibc-2.34)
+     No locale compared with glibc-2.34 differs inside LC_COLLATE.
+     Not compared, because glibc-2.34 lacks them, and with sort rules of
+     their own, so no tag diff reads them (step 6 above):
+       C
+-- Distro patches, step 7 (glibc-2.39-128.el10_2.x86_64 against glibc-2.39)
+     No locale compared with glibc-2.39 differs inside LC_COLLATE.
 
--- Node's own locale data, ellipsis scan (glibc-2.34-275.el9_8)
+-- Node-to-node locale data (glibc-2.34-275.el9_8.x86_64 -> glibc-2.39-128.el10_2.x86_64)
+     3 locale(s) differ inside LC_COLLATE between the two
+     nodes' OWN sources; full list: /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.34-275.el9_8.x86_64..glibc-2.39-128.el10_2.x86_64.txt
+     plus 0 locale(s) that inherit one of those files'
+     LC_COLLATE via copy on glibc-2.39-128.el10_2.x86_64; full list: /tmp/pg-glibc-collation-audit/node_collate_inherited.glibc-2.34-275.el9_8.x86_64..glibc-2.39-128.el10_2.x86_64.txt
+
+-- Node's own locale data, ellipsis scan (glibc-2.34-275.el9_8.x86_64)
      ellipsis-based locale(s): 4
      C (C.UTF-8): codepoint_collation  <- byte order by construction
--- Node's own locale data, ellipsis scan (glibc-2.39-128.el10_2)
+-- Node's own locale data, ellipsis scan (glibc-2.39-128.el10_2.x86_64)
      ellipsis-based locale(s): 4
      C (C.UTF-8): codepoint_collation  <- byte order by construction
 
@@ -1645,9 +1766,10 @@ unexamined are three different answers:
         file. So a clean result here clears the data half and nothing else.
      !! No backported locale here is ellipsis-based, so for those the data
         comparison is the whole story. Run sql/c_utf8_probe.sql anyway if C.UTF-8
-        is your database collation: it is the only check that measures the order
-        these builds actually produce, and PostgreSQL reports collversion as NULL
-        for every C.* name.
+        is your database collation: it measures the order these builds actually
+        produce inside PostgreSQL, as step 11 does one character at a time through
+        glibc when the run has both machines' measurements, and PostgreSQL reports
+        collversion as NULL for every C.* name.
      !! Cheap complement, on each node: rpm -q --changelog glibc | grep -i collat
      (see docs/limitations.md)
 

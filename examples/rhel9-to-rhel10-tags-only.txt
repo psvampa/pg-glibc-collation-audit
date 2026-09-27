@@ -1299,11 +1299,23 @@ empirical sort-order test, however clean its data diff is.
        aa_ER@saaho (renamed to ssy_ER)
    (1 name(s); full list: /tmp/pg-glibc-collation-audit/step2_removed_locales.glibc-2.34..glibc-2.39.txt)
 
+-- Measured order: NOT RUN
+     Pass --old-order and --new-order, each the output of
+     scripts/locale_order.py on that machine. Without them nothing
+     above asked either machine's glibc how it sorts, and a locale
+     whose files did not change can still sort differently.
+
 -- Needs an empirical test: step 5 found 52 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged
      494 name(s) to confirm: generated names, and
      source names for the locales SUPPORTED does not list
      full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
+
+-- Distro patches, steps 6 and 7: NOT RUN
+     No machine files. Pass --old-node and --new-node, each the
+     file scripts/locale_order.py --extract wrote on that machine.
+     So nothing above says whether either machine's own patches touch
+     LC_COLLATE, which the tags cannot show.
 
 -- Node-to-node locale data: NOT RUN
      Pass --old-locales-dir and --new-locales-dir with their build

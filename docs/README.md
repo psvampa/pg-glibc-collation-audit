@@ -9,23 +9,23 @@
    verdict table, and both worked examples. The table itself is in
    [the README](../README.md#results-for-the-two-rhel-pairs).
 3. **[confirming-on-a-real-system.md](confirming-on-a-real-system.md)** — how
-   to verify it on your own nodes, which is the only evidence that covers a
-   distro's backported code.
-4. **[limitations.md](limitations.md)** — the six things to know before you
+   to confirm the order inside PostgreSQL on your own nodes. With step 11 of
+   command 1.b, it is the evidence that covers a distro's backported code.
+4. **[limitations.md](limitations.md)** — the seven things to know before you
    act on a clean result, `LC_CTYPE` among them.
 
 ## Every document
 
 | Document | What's in it |
 |---|---|
-| [commands.md](commands.md) | What each of the three commands does, what the longer form of command 1 adds, and how to take the locale copy off a machine and check it |
+| [commands.md](commands.md) | What each of the three commands does, what command 1.b adds, the file it takes from each machine and when it refuses one, and the same checks from separate pieces |
 | [results.md](results.md) | The evidence behind each verdict, both worked examples, and what was tested on which nodes |
 | [confirming-on-a-real-system.md](confirming-on-a-real-system.md) | Running the SQL template and the `C.UTF-8` probe on both nodes, choosing values that prove something, and the three traps that make a comparison lie |
 | [scope.md](scope.md) | What this audits — `LC_COLLATE` and the `libc` provider — and the `builtin` provider as a way out |
-| [limitations.md](limitations.md) | The six things to know before acting on a clean result — `C.UTF-8` among them, and `LC_CTYPE`, which no step audits |
-| [requirements.md](requirements.md) | Dependencies, the test suite, and the three setup traps on the confirmation side |
-| [glossary.md](glossary.md) | `copy` graph, blast radius, hunk, tier, ellipsis range, role swap |
-| [../examples/](../examples/README.md) | Real output of every command on both audited pairs, a confirmation SQL script for each, and the `C.UTF-8` probe output that is the only published evidence for that locale's order |
+| [limitations.md](limitations.md) | The seven things to know before acting on a clean result — `C.UTF-8` among them, what step 11 does not see, and `LC_CTYPE`, which no step audits |
+| [requirements.md](requirements.md) | What each run needs, on your machine and on each server, and the three setup traps |
+| [glossary.md](glossary.md) | `copy` graph, blast radius, hunk, tier, ellipsis range, role swap, build id, measured order, level, contraction |
+| [../examples/](../examples/README.md) | Real output of every command on both audited pairs, a confirmation SQL script for each, and the `C.UTF-8` probe output |
 | [../tests/README.md](../tests/README.md) | What the test suite covers, and what it does not |
 
 ---
