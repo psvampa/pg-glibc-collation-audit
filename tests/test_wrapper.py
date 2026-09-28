@@ -11,6 +11,8 @@ path. Every one of them fails if a specific guard is deleted; that is the
 point. A wrapper that returns a plausible clean audit when a step crashed is
 worse than five commands.
 """
+import ast
+import glob
 import json
 import os
 import re
@@ -18,8 +20,8 @@ import shutil
 import tempfile
 import unittest
 
-from _harness import (EXPECTED_SHA, MID, NEW, OLD, backported_c, flat,
-                      locale_file, needs_clone, run_wrapper, upstream_c)
+from _harness import (EXPECTED_SHA, MID, NEW, OLD, REPO_ROOT, backported_c,
+                      flat, locale_file, needs_clone, run_wrapper, upstream_c)
 
 import diff_distro_locales as dd
 import glibc_locale_data as g
@@ -1828,6 +1830,57 @@ class WrapperNodeFiles(unittest.TestCase):
         summary = parse_summary(measured_block(self.out))
         self.assertEqual(set(summary['changes']), CHANGED_8_TO_9)
         self.assertNotIn('NOT RUN', self.out.split('AUDIT SUMMARY')[1])
+
+    def test_no_step_sends_the_reader_to_the_package_changelog(self):
+        """Steps 6 to 10 used to suggest `rpm -q --changelog glibc | grep -i
+        collat` on each node, and that search cannot decide whether the order
+        changed. RHEL9 and RHEL10 trim the changelog when the package is
+        built, and a search for a word finds only the entries that use it. An
+        empty result reads as "nothing changed" over what the search cannot
+        see, so the output does not send the reader to the changelog.
+
+        This run reaches only some branches of the steps, so the tool's code
+        is searched too. Both searches take "change log", rpm's --changes and
+        %{CHANGELOGTEXT} as well as the word that was removed, and the code
+        search also looks across the quotes and line breaks where the source
+        splits a message."""
+        # The absence below proves nothing about a run that stopped early.
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        # [\s_-]* rather than [\s_-]?, because g.warn breaks "change-log"
+        # after its hyphen and flat() rejoins it as "change- log". Nothing
+        # after "log", so %{CHANGELOGTEXT} and its siblings match too.
+        advice = re.compile(r'(?i)\bchange[\s_-]*log|--changes\b')
+        self.assertEqual(advice.findall(flat(self.out)), [])
+        # The same words with the quotes, `f` prefixes and `echo` of a split
+        # message between them. A message split across two calls is caught
+        # by joining a .py file's strings in the order they appear.
+        across = re.compile(r'(?i)\bchange'
+                            r'(?:[^a-z$]|\b(?:[bfru]{1,2}|echo)\b)*?log'
+                            r'|--changes\b')
+        code = sorted(glob.glob(os.path.join(REPO_ROOT, 'scripts', '*.py'))
+                      + glob.glob(os.path.join(REPO_ROOT, 'scripts', '*.sh'))
+                      + glob.glob(os.path.join(REPO_ROOT, 'sql', '*.sql'))
+                      + [os.path.join(REPO_ROOT, 'audit.sh')])
+        # An empty search over the wrong directory would pass, so the files
+        # that printed the advice must be among those read.
+        self.assertTrue({'audit.sh', 'diff_distro_locales.py',
+                         'diff_node_locales.py', 'flag_algorithmic_ranges.py'}
+                        <= {os.path.basename(path) for path in code})
+        hits = []
+        for path in code:
+            with open(path, encoding='utf-8', errors='surrogateescape') as f:
+                text = f.read()
+            found = across.findall(text)
+            if path.endswith('.py'):
+                strings = sorted(
+                    (node for node in ast.walk(ast.parse(text))
+                     if isinstance(node, ast.Constant)
+                     and isinstance(node.value, str)),
+                    key=lambda node: (node.lineno, node.col_offset))
+                found += advice.findall(
+                    flat(' '.join(node.value for node in strings)))
+            hits += [(os.path.relpath(path, REPO_ROOT), m) for m in found]
+        self.assertEqual(hits, [])
 
 
 class NodeFileWithoutSources:
