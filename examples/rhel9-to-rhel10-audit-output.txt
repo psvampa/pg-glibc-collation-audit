@@ -1314,8 +1314,7 @@ Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.gl
    neither step covers is a distro backporting a CODE change that is in
    neither tag. That gap is closed by the empirical check on real nodes, which
    measures the glibc actually installed, patches and all: docs/confirming-on-
-   a-real-system.md. Cheap complement: rpm -q --changelog glibc | grep -i
-   collat
+   a-real-system.md.
 !! localedata/charmaps/ is NOT compared. glibc-locale-source ships it and it
    is an input to localedef, so a repertoire change is outside this result as
    well as outside the audit. See docs/limitations.md.
@@ -1350,8 +1349,7 @@ Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.gl
    neither step covers is a distro backporting a CODE change that is in
    neither tag. That gap is closed by the empirical check on real nodes, which
    measures the glibc actually installed, patches and all: docs/confirming-on-
-   a-real-system.md. Cheap complement: rpm -q --changelog glibc | grep -i
-   collat
+   a-real-system.md.
 !! localedata/charmaps/ is NOT compared. glibc-locale-source ships it and it
    is an input to localedef, so a repertoire change is outside this result as
    well as outside the audit. See docs/limitations.md.
@@ -1491,7 +1489,6 @@ Full result written to /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.
    produce inside PostgreSQL, as step 11 does one character at a time through
    glibc when the run has both machines' measurements, and PostgreSQL reports
    collversion as NULL for every C.* name.
-!! Cheap complement, on each node: rpm -q --changelog glibc | grep -i collat
 !! localedata/charmaps/ is NOT compared. glibc-locale-source ships it and it
    is an input to localedef, so a repertoire change is outside this result as
    well as outside the audit. See docs/limitations.md.
@@ -1533,7 +1530,7 @@ These cannot be cleared by a source diff alone.
 This is one node's own data. Whether the WEIGHTS those ranges expand to
 differ between two nodes is a question about localedef, not about this
 directory: diff_collation_code.py for the two upstream tags, and
-`rpm -q --changelog glibc | grep -i collat` on each node.
+docs/confirming-on-a-real-system.md for the glibc each node actually runs.
 
 Distro-backported locales, declared one by one -- absent, cleared and
 unexamined are three different answers:
@@ -1576,7 +1573,7 @@ These cannot be cleared by a source diff alone.
 This is one node's own data. Whether the WEIGHTS those ranges expand to
 differ between two nodes is a question about localedef, not about this
 directory: diff_collation_code.py for the two upstream tags, and
-`rpm -q --changelog glibc | grep -i collat` on each node.
+docs/confirming-on-a-real-system.md for the glibc each node actually runs.
 
 Distro-backported locales, declared one by one -- absent, cleared and
 unexamined are three different answers:
@@ -1754,8 +1751,7 @@ Of the 869 locale(s) on the old machine: 4 changed, 859 unchanged (6 of them onl
         neither step covers is a distro backporting a CODE change that is in
         neither tag. That gap is closed by the empirical check on real nodes, which
         measures the glibc actually installed, patches and all: docs/confirming-on-
-        a-real-system.md. Cheap complement: rpm -q --changelog glibc | grep -i
-        collat
+        a-real-system.md.
      !! localedata/charmaps/ is NOT compared. glibc-locale-source ships it and it
         is an input to localedef, so a repertoire change is outside this result as
         well as outside the audit. See docs/limitations.md.
@@ -1770,7 +1766,6 @@ Of the 869 locale(s) on the old machine: 4 changed, 859 unchanged (6 of them onl
         produce inside PostgreSQL, as step 11 does one character at a time through
         glibc when the run has both machines' measurements, and PostgreSQL reports
         collversion as NULL for every C.* name.
-     !! Cheap complement, on each node: rpm -q --changelog glibc | grep -i collat
      (see docs/limitations.md)
 
 -- Not decided for you

@@ -453,7 +453,8 @@ def main(argv):
                 "about this",
                 "directory: diff_collation_code.py for the two upstream tags, "
                 "and",
-                "`rpm -q --changelog glibc | grep -i collat` on each node."]
+                "docs/confirming-on-a-real-system.md for the glibc each node "
+                "actually runs."]
 
     return report(texts, supported, label, out_name, hint,
                   supported_tag=opts.supported_tag or opts.tag,

@@ -546,8 +546,6 @@ def main(argv):
                 f"a time through glibc when the run has both machines' "
                 f"measurements, and PostgreSQL reports collversion as NULL "
                 f"for every C.* name.")
-    dd.warn(f"Cheap complement, on each node: "
-            f"rpm -q --changelog glibc | grep -i collat")
     dd.warn(f"localedata/charmaps/ is NOT compared. glibc-locale-source ships "
             f"it and it is an input to localedef, so a repertoire change is "
             f"outside this result as well as outside the audit. See "
