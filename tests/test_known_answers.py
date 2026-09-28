@@ -1,9 +1,9 @@
 """Layer 3: the real scripts, end to end, against the published results.
 
 This is what stops a refactor from moving a verdict quietly. The numbers below
-are the ones the README states and the examples/ files record; if a change moves
-one, that is either a discovery or a regression, and either way somebody has
-to look.
+are the ones docs/results.md publishes and the examples/ files record; if a
+change moves one, that is either a discovery or a regression, and either way
+somebody has to look.
 
 Run as subprocesses: the contract these tools offer is their printed output and
 their exit status.
@@ -110,11 +110,11 @@ class Step1Templates(StepRun):
         out = self.step('audit-locale-diff.sh', MID, NEW)
         self.assertRegex(out, r'\d+ locales inherit from iso14651_t1\b')
 
-    def test_the_blast_radius_the_readme_states_for_both_tags(self):
-        """The README's CJK row says iso14651_t1 is inherited by 328 locales at
-        2.34 and 338 at 2.39. The 328 sat in five files and the 338 in one
-        example, and nothing asserted either against the clone -- which is how
-        the step-4 "2" rotted. Step 1 computes the radius at the NEW tag."""
+    def test_the_blast_radius_the_docs_state_for_both_tags(self):
+        """The docs say iso14651_t1 is inherited by 328 locales at 2.34, and
+        the examples print 338 at 2.39. Nothing asserted either against the
+        clone -- which is how the step-4 "2" rotted. Step 1 computes the radius
+        at the NEW tag."""
         for old, new, radius in ((OLD, MID, 328), (MID, NEW, 338)):
             with self.subTest(tag=new):
                 out = self.step('audit-locale-diff.sh', old, new)
@@ -385,7 +385,7 @@ class Step4AlgorithmicRanges(StepRun):
             self.assertIn(name, out)
 
     def test_the_exposed_total_is_unchanged(self):
-        """335 at MID, from the README. Pinned here because scan_ellipsis
+        """335 at MID, as the examples print it. Pinned here because scan_ellipsis
         switched from collate_block to collate_text, which changes which files
         count as defining LC_COLLATE for files that open with it."""
         out = self.step('flag_algorithmic_ranges.py', MID)
