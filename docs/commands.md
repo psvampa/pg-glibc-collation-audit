@@ -7,7 +7,6 @@ second and third measure, inside PostgreSQL, what the first leaves open.
 **Commands are numbered here; steps are what a run prints.** A run of command
 1 does its own work in up to eleven steps, five with the tags alone and six
 more with a file from each machine, and those numbers are not these three.
-Where this page needs them it says "the run's step 4".
 
 ## Command 1 — which locales the upgrade can affect
 
@@ -28,9 +27,6 @@ checks in order and ends with one summary.
 | 3 | which other locales inherit a change, because they copy from the file that changed |
 | 4 | which locales a comparison of files can never clear, because they define their order with abbreviated ranges whose real weights are computed later |
 | 5 | whether the code that computes those weights changed |
-
-The run's steps 3 and 5 together give the complete set of affected locale
-names.
 
 What you get is a list to worry about and a proof about everything else: if
 neither a locale's rules nor the code that compiles them changed, its order
