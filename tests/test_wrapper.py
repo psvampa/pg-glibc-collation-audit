@@ -226,9 +226,9 @@ class Wrapper(unittest.TestCase):
     def test_answer_matches_the_published_result(self):
         """The published set for 2.28..2.34, as generated locale names.
 
-        docs/results.md states these. A wrapper that changes an answer is a
-        bug, not a feature -- so this is the assertion that would catch the
-        wrapper passing the wrong tag to the wrong step.
+        examples/rhel8-to-rhel9-tags-only.txt prints these. A wrapper that
+        changes an answer is a bug, not a feature -- so this is the assertion
+        that would catch the wrapper passing the wrong tag to the wrong step.
         """
         listed = os.path.join(self.out_dir, 'step3_affected_locales.txt')
         with open(listed, encoding='utf-8') as fh:

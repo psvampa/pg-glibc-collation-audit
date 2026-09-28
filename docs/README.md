@@ -5,9 +5,8 @@
 1. **[commands.md](commands.md)** — what each of the three commands does,
    and what it leaves to the next. Read this first if you are about to run
    one.
-2. **[results.md](results.md)** — the evidence behind every row of the
-   verdict table, and both worked examples. The table itself is in
-   [the README](../README.md#results-for-the-two-rhel-pairs).
+2. **[results.md](results.md)** — the verdict table, the evidence behind
+   every row, and both worked examples.
 3. **[confirming-on-a-real-system.md](confirming-on-a-real-system.md)** — how
    to confirm the order inside PostgreSQL on your own nodes. With step 11 of
    command 1.b, it is the evidence that covers a distro's backported code.

@@ -924,6 +924,201 @@ class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
                     f'and the section to read that sentence in')
 
 
+class TheVerdictTableIsTheSameInBothPlaces(unittest.TestCase):
+    """The verdict table is published twice: in the README, and at the top of
+    docs/results.md. Until 2026-09-27 it lived in the README alone, so that
+    there was one copy to keep current; that day Pablo decided the page named
+    Results has to show the results, and the README has to keep them too.
+    Two copies drift the day a verdict moves and only one page is edited, and
+    each page still reads as consistent with itself, so no re-read notices.
+
+    Each copy is found by its section and its header row, never by its cells,
+    and read the way GitHub delimits a table: the row above a delimiter row,
+    and every line below it down to the first blank line, a blank line being
+    one of spaces or tabs only. The first version read the lines that start
+    with `|`, and false-negative-reviewer measured what that let through on
+    GitHub the same day: a row written without its leading pipe, or the note
+    under the table with the blank line above it deleted, showed as one more
+    row of one copy while the comparison stayed green.
+
+    So that the rows compared are the rows a reader sees, it refuses: a
+    missing or doubled heading; a section nothing closes; no table, or a
+    second one, under the heading; a table with no header row, or glued to
+    the line above it; a line of the table that does not start with `|`; any
+    other line of the section with a `|` in it; a table that is not the
+    verdict table, or has no rows; and, anywhere else in the file, a line
+    with a `|` that carries a verdict (one of the four marks, or Changed,
+    Unaffected, No difference), or an HTML `<table>`.
+
+    It does not try to see a copy hidden whole (an HTML comment, a `<pre>` or
+    a code fence left open above the heading, a `<details>` around the
+    table), nor a table written without a single `|` outside the section.
+    Telling every such case apart would mean rebuilding GitHub's parser, and
+    Pablo chose not to on 2026-09-27.
+    """
+
+    PLACES = (('README.md', '## Results for the two RHEL pairs'),
+              (os.path.join('docs', 'results.md'), '## The answer'))
+
+    # A delimiter row, read a little more loosely than GitHub does: cells of
+    # dashes with optional colons, the outer pipes optional. Taking a line
+    # for a delimiter that GitHub would not can only make this refuse.
+    DELIMITER = re.compile(r' {0,3}\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*')
+    # What makes a row a verdict row, whatever its header says: the marks the
+    # table uses, or the words beside them.
+    VERDICT = re.compile('[\U0001F534\U0001F7E1\U0001F7E2⚪]'
+                         '|Changed|Unaffected|No difference')
+
+    @classmethod
+    def table(cls, text, heading):
+        """The lines of the one verdict table under `heading`, or a refusal."""
+        lines = text.split('\n')
+        starts = [i for i, line in enumerate(lines) if line == heading]
+        if len(starts) != 1:
+            raise AssertionError(
+                f'{heading!r} appears {len(starts)} time(s), once expected')
+        rest = lines[starts[0] + 1:]
+        ends = [i for i, line in enumerate(rest) if line.startswith('## ')]
+        if not ends:
+            raise AssertionError(
+                f'nothing closes the section under {heading!r}, so reading it '
+                f'would run to the end of the file')
+        section = rest[:ends[0]]
+        delimiters = [i for i, line in enumerate(section)
+                      if ('|' in line or ':' in line)
+                      and cls.DELIMITER.fullmatch(line)]
+        if len(delimiters) != 1:
+            raise AssertionError(
+                f'{len(delimiters)} table(s) under {heading!r}, one expected')
+        top = delimiters[0] - 1
+        if top < 0 or not section[top].strip(' \t'):
+            raise AssertionError(
+                f'the table under {heading!r} has no header row')
+        if top > 0 and section[top - 1].strip(' \t'):
+            raise AssertionError(
+                f'the table under {heading!r} is glued to the line above it, '
+                f'{section[top - 1]!r}')
+        bottom = next((i for i in range(delimiters[0], len(section))
+                       if not section[i].strip(' \t')), len(section))
+        rows = section[top:bottom]
+        odd = [row for row in rows if not row.startswith('|')]
+        if odd:
+            raise AssertionError(
+                f'GitHub shows {odd[0]!r} as part of the table under '
+                f'{heading!r}, and it does not start with "|"')
+        stray = [line for line in section[:top] + section[bottom:]
+                 if '|' in line]
+        if stray:
+            raise AssertionError(
+                f'{stray[0]!r} sits outside the table under {heading!r} and '
+                f'has a "|" in it, so a reader can take it for a row')
+        if not rows[0].startswith('| Locale |'):
+            raise AssertionError(
+                f'the table under {heading!r} is not the verdict table: '
+                f'{rows[0]!r}')
+        if len(rows) < 3:
+            raise AssertionError(
+                f'the verdict table under {heading!r} has no rows')
+        # Last, so that each case above keeps its own message. The table's
+        # own lines are left out by position, not by content, so an exact
+        # second copy elsewhere is still seen.
+        first = starts[0] + 1 + top
+        own = range(first, first + len(rows))
+        elsewhere = [line for i, line in enumerate(lines)
+                     if i not in own and '|' in line
+                     and cls.VERDICT.search(line)]
+        if elsewhere:
+            raise AssertionError(
+                f'{elsewhere[0]!r} carries a verdict outside the table under '
+                f'{heading!r}: a second copy, or a row a reader can take for '
+                f'one')
+        if any('<table' in line.lower() for line in lines):
+            raise AssertionError(
+                'an HTML table in this file can carry another copy')
+        return rows
+
+    def test_both_pages_publish_the_same_table(self):
+        (first, a), (second, b) = (
+            (name, self.table(read(os.path.join(REPO_ROOT, name)), heading))
+            for name, heading in self.PLACES)
+        self.assertEqual(
+            a, b, f'the verdict table in {first} and in {second} differ; a '
+                  f'verdict that moves has to move in both copies')
+
+    def test_what_it_cannot_read_whole_is_refused(self):
+        head = '## The answer'
+        table = ('| Locale | old | new |\n|---|---|---|\n'
+                 '| `x` | \U0001F534 **Changed** | ⚪ Unaffected |')
+        other = '| Name | x |\n|---|---|\n| a | b |'
+        empty = '| Locale | old | new |\n|---|---|---|'
+        bare = 'Locale | old | new\n---|---|---\n`y` | a | b'
+        pipeless = 'Verdict\n:---\n`y` — Unaffected'
+        quoted = '\n'.join('> ' + line for line in table.split('\n'))
+        listed = '\n'.join('    ' + line for line in table.split('\n'))
+        cornered = table.replace('| Locale |', '|  |')
+        elsewhere = 'carries a verdict outside the table'
+        cases = (
+            ('no heading', f'## Other\n\n{table}\n\n## Next', 'appears 0'),
+            ('doubled heading',
+             f'{head}\n\n{table}\n\n{head}\n\n{table}\n\n## Next',
+             'appears 2'),
+            ('nothing closes it', f'{head}\n\n{table}\n', 'nothing closes'),
+            ('two tables', f'{head}\n\n{table}\n\nx\n\n{table}\n\n## Next',
+             '2 table'),
+            ('a second table without outer pipes',
+             f'{head}\n\n{table}\n\n{bare}\n\n## Next', '2 table'),
+            ('a second table with no pipe at all',
+             f'{head}\n\n{table}\n\n{pipeless}\n\n## Next', '2 table'),
+            ('no table', f'{head}\n\nx\n\n## Next', '0 table'),
+            ('no header row',
+             f'{head}\n\n|---|---|---|\n| `x` | a | b |\n\n## Next',
+             'no header row'),
+            ('glued to the line above',
+             f'{head}\n\n<summary>x</summary>\n{table}\n\n## Next',
+             'glued to the line above'),
+            ('a row with no leading pipe',
+             f'{head}\n\n{table}\n`y` | c | d\n\n## Next',
+             'does not start with'),
+            ('an indented row',
+             f'{head}\n\n{table}\n   | `y` | c | d |\n\n## Next',
+             'does not start with'),
+            ('the note glued to the table',
+             f'{head}\n\n{table}\n<sup>†</sup> note\n\n## Next',
+             'does not start with'),
+            ('a blank line made of a no-break space',
+             f'{head}\n\n{table}\n \n<sup>†</sup> note\n\n## Next',
+             'does not start with'),
+            ('a row after a blank line',
+             f'{head}\n\n{table}\n\n| `y` | c | d |\n\n## Next',
+             'outside the table'),
+            ('a quoted row under the heading',
+             f'{head}\n\n{table}\n\n> | `y` | c | d |\n\n## Next',
+             'outside the table'),
+            ('another table', f'{head}\n\n{other}\n\n## Next',
+             'not the verdict table'),
+            ('no rows', f'{head}\n\n{empty}\n\n## Next', 'has no rows'),
+            ('a second copy elsewhere in the file',
+             f'{head}\n\n{table}\n\n## Next\n\n{table}\n', elsewhere),
+            ('a copy in a quote elsewhere',
+             f'{head}\n\n{table}\n\n## Next\n\n{quoted}\n', elsewhere),
+            ('a copy in a list elsewhere',
+             f'{head}\n\n{table}\n\n## Next\n\n- item\n\n{listed}\n',
+             elsewhere),
+            ('a copy with another header elsewhere',
+             f'{head}\n\n{table}\n\n## Next\n\n{cornered}\n', elsewhere),
+            ('an HTML table in the file',
+             f'{head}\n\n{table}\n\n## Next\n\n'
+             f'<table><tr><th>Name</th></tr></table>\n', 'an HTML table'),
+        )
+        for label, text, message in cases:
+            with self.subTest(case=label):
+                with self.assertRaisesRegex(AssertionError, message):
+                    self.table(text, head)
+        # The control: the same table, whole and closed, is read.
+        self.assertEqual(self.table(f'{head}\n\n{table}\n\n## Next', head),
+                         table.split('\n'))
+
+
 class TheExamplesCarryTheNodeSteps(unittest.TestCase):
     """Both worked examples carry the node steps and the full summary of a
     run given both machines' files, so what the docs say about those steps can
