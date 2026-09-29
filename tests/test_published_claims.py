@@ -157,13 +157,8 @@ def region_after(text, section):
     return parts[1].split('\n====')[0]
 
 
-def docs(include_changelog=False):
-    """{relative path: text} for every published .md, CHANGELOG excluded.
-
-    The CHANGELOG records what the docs used to say, so a phrase this suite
-    forbids elsewhere is correct there. Its LINKS still have to resolve, which
-    is what include_changelog is for.
-    """
+def docs():
+    """{relative path: text} for every published .md."""
     out = {}
     for root, dirs, files in os.walk(REPO_ROOT):
         # .claude/ is gitignored whole (PR #18): the private working rules
@@ -176,8 +171,6 @@ def docs(include_changelog=False):
                    if d not in ('.git', 'glibc', '.claude', 'breakage')]
         for name in files:
             if not name.endswith('.md'):
-                continue
-            if name == 'CHANGELOG.md' and not include_changelog:
                 continue
             path = os.path.join(root, name)
             out[os.path.relpath(path, REPO_ROOT)] = read(path)
@@ -342,7 +335,7 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
         a `~16s`/`~17s` disagreement between two files (quoted in
         TheRepairDocumentQuotesWhatIsPublished below), and "about a minute and
         a half" in three files while the suite took 208 s on the machine that
-        measured it on 2026-09-21 (thirty-first entry). A runtime is a fact
+        measured it on 2026-09-21. A runtime is a fact
         about someone else's machine, so it is the reader's to measure.
 
         The unit is the WHOLE FILE that publishes the command, after two
@@ -352,7 +345,7 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
         a `#` comment line after the last command (split off as a heading), a
         figure in backticks, and a `### How long` sub-heading right under the
         block -- the heading somebody actually writes. Each fix was the form
-        the author had seen rather than the family (ninth, twenty-third), so
+        the author had seen rather than the family, so
         the scope is now the file: the three files that publish this command
         publish no duration at all, measured, and the fourth escape route was
         closed by deleting the exemption rather than by widening it again.
@@ -484,7 +477,7 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
 
         Compiled rather than imported: importing runs module-level code and
         would make this a slow, side-effecting test of something that is a
-        property of the source text (thirty-third entry).
+        property of the source text.
         """
         import warnings
         tracked = subprocess.run(['git', 'ls-files', '*.py'], cwd=REPO_ROOT,
@@ -598,8 +591,8 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
 
       * a file carrying the figure in prose and nowhere else is not listed:
         comma-stripped, the check would find the prose it was meant to be
-        independent of and pass whatever the measurement said -- the vacuous
-        assertion of the sixteenth entry.
+        independent of and pass whatever the measurement said -- a vacuous
+        assertion.
       * neither is a file whose bare number is a DIFFERENT fact that happens
         to agree, such as the complement of a count on one fixture. Tying it
         would tie two facts that agree by arithmetic accident.
@@ -643,7 +636,7 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
 
     `least` is not decoration. Without it, deleting every mention leaves this
     test green over a claim that no longer exists, which is "absent is not
-    empty" (tenth entry) one level up: it would then assert agreement among
+    empty" one level up: it would then assert agreement among
     nothing. If a figure is deliberately dropped from the docs, its row comes
     out of this table in the same commit.
     """
@@ -798,8 +791,8 @@ class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
     node's own count, so the tie agreed with the page and would have agreed
     with a page saying 343. Finding that cost a review round, and the proof
     was a battery of file mutations run once, by hand, in a scratch directory
-    nobody else can see -- so "thirty-eight red" was a sentence in a CHANGELOG
-    entry and not a mechanism, which is the shape of defect this whole layer
+    nobody else can see -- so "thirty-eight red" was a sentence and not a
+    mechanism, which is the shape of defect this whole layer
     exists to refuse.
 
     This asks that battery's question without touching a file: if the page
@@ -822,13 +815,12 @@ class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
     """
 
     #: Rows tied only to the other pages that state them. Untied, not
-    #: untieable: the tool prints 328 (line 18 of the rhel8-to-rhel9
+    #: untieable: the tool prints 328 (step 1 of the rhel8-to-rhel9
     #: transcript), and the PostgreSQL floor is a requirement rather than a
     #: measurement. The 6,525 row was here until docs/limitations.md stopped
     #: publishing evidence; it was the one figure that could not be tied --
     #: prose and no query output -- and with no page stating it there is
-    #: nothing left for this class to compare. The measurement is in the
-    #: CHANGELOG entry that removed it.
+    #: nothing left for this class to compare.
     NO_RUN_BEHIND_THEM = (
         'the PostgreSQL floor the tool requires',
         'the locales that inherit iso14651_t1 at glibc 2.34',
@@ -1226,16 +1218,16 @@ def slug(heading):
 
 class EveryLinkResolves(unittest.TestCase):
     """Retitling a heading breaks every `#the-old-title` link to it and
-    nothing errors. The seventeenth entry records two such links, one created
-    by retitling the very section being documented; the eleventh records
-    examples/rhel8-to-rhel9.sql pointing at a README section that had moved.
+    nothing errors. Two such links shipped, one created by retitling the
+    very section being documented; another left examples/rhel8-to-rhel9.sql
+    pointing at a README section that had moved.
     The check used to be a snippet run by hand before a commit, when somebody
     remembered. A check that depends on somebody remembering is not a check.
     """
 
     def setUp(self):
         self.pages = {path: without_fences(text)
-                      for path, text in docs(include_changelog=True).items()}
+                      for path, text in docs().items()}
         self.anchors = {
             path: {slug(h) for h in re.findall(r'^#{1,6} (.+)$', text, re.M)}
             for path, text in self.pages.items()}
