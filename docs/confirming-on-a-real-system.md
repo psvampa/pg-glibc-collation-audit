@@ -24,11 +24,15 @@ psql -f sql/collation_confirmation_template.sql   # edit placeholders first
 
 ## Which locales to run it for
 
-Every locale steps 1 to 3 flagged, and — if step 5 found a
-[substantive code change](glossary.md) — every locale step 4 flagged too,
-whether or not it showed up in steps 1 to 3. With command 1.b, add every
-locale step 11 reports as changed, and every one it reports as not known to be
-unchanged.
+Every locale steps 1 to 3 flagged, and every locale step 4 flagged that step 5
+does not [clear](limitations.md#step-5-reports-it-does-not-decide), whether or
+not it showed up in steps 1 to 3. With command 1.b, add every locale step 11
+reports as changed, and every one it reports as not known to be unchanged.
+
+Steps 9 and 10, in command 1.b, run step 4 again on each machine's own files,
+so the same rule holds for every locale they flag. They list `C.UTF-8` by its
+source name, `C`, and step 11 lists it as `C.utf8`. Whichever step names it,
+[the probe](#the-cutf-8-probe) measures it instead of the template.
 
 ## Choosing the three values
 
@@ -39,10 +43,10 @@ They are the characters the rule that changed moves.
 Derive them from that rule. For a `localedef` change that means the boundaries
 of the affected range. Under each locale it flags, step 2 lists the characters
 its changed rules name, or says it could not identify them and that the locale
-must be considered suspicious. Step 4 names the range. Step 11, in command
-1.b, names the characters that moved, when there are few enough to list.
+must be considered suspicious. Step 11, in command 1.b, names the characters
+that moved, when there are few enough to list.
 
-That list is where to start, not proof that every character on it moved. A
+Step 2's list is where to start, not proof that every character on it moved. A
 rule that was rewritten names everything it touches, weights included, so
 three characters from the list that sort the same on both machines do not
 clear the locale.
@@ -55,8 +59,10 @@ failure this step exists to avoid. The characters, and what they print on each
 build, are in
 [results.md](results.md#the-ko_kr-mechanism-and-its-minimal-test-case).
 
-A locale flagged by step 4 rather than by step 2 gets no character list. There
-the range itself is the guide, and its boundaries are the values to test.
+For a locale step 3 adds, the characters are the ones step 2 lists under the
+file step 3 says it reaches. For a locale that only steps 4, 9 or 10 flagged,
+where step 11 names no characters, the [ellipsis ranges](glossary.md) in its
+source, and in the files it copies, are the guide.
 
 ## Three traps
 
