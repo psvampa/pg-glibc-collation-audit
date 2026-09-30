@@ -875,6 +875,48 @@ class WrapperNodeToNode(unittest.TestCase):
 
 
 @needs_clone
+class WrapperNonAsciiBuildId(unittest.TestCase):
+    """A build id with a letter outside ASCII. audit.sh named step 8's lists
+    with bash's own replacement, which under LC_ALL=C replaces each byte of
+    such a letter, while step 8 writes them under glibc_locale_data.pair_slug,
+    which replaces the letter once. The summary then printed NOT REPORTED over
+    what step 8 had found (false-negative-reviewer, 2026-09-30). Run under
+    LC_ALL=C, where the two spellings differed on both platforms measured:
+    macOS with bash 3.2, and RHEL 9 with bash 5.1."""
+
+    OLD_BUILD, NEW_BUILD = 'build-öld', 'build-new'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-nonascii-')
+        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-trees-')
+        cls.old_root = dd.materialise_tag(GLIBC_CLONE, OLD,
+                                          os.path.join(cls.nodes, 'a'))
+        cls.new_root = dd.materialise_tag(GLIBC_CLONE, MID,
+                                          os.path.join(cls.nodes, 'b'))
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID,
+            '--old-locales-dir', cls.old_root, '--old-build-id', cls.OLD_BUILD,
+            '--new-locales-dir', cls.new_root, '--new-build-id', cls.NEW_BUILD,
+            out_dir=cls.out_dir, env_extra={'LC_ALL': 'C'})
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    def test_the_summary_reads_the_lists_step_8_wrote(self):
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        self.assertNotIn('NOT REPORTED', ' '.join(removed_lines(self.out)))
+        block = ' '.join(summary_block(
+            self.out, f'-- Node-to-node locale data ({self.OLD_BUILD} -> '
+                      f'{self.NEW_BUILD})'))
+        self.assertIn('differ inside LC_COLLATE', block)
+        slug = g.pair_slug(self.OLD_BUILD, self.NEW_BUILD)
+        self.assertIn(f'node_collate_diffs.{slug}.txt', block)
+
+
+@needs_clone
 class WrapperTagsRemoveALocale(unittest.TestCase):
     """Tags only, over the one published pair whose tags remove a locale
     file: aa_ER@saaho, renamed to ssy_ER at 2.39. Step 2 printed the rename

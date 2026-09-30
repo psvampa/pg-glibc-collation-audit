@@ -15,6 +15,7 @@ Also runnable directly, for the shell script:
   python3 glibc_locale_data.py provenance <tag> [<tag> ...]
   python3 glibc_locale_data.py corpus <tag> [<tag> ...]
   python3 glibc_locale_data.py order [--allow-reverse] [--quiet] <old_tag> <new_tag>
+  python3 glibc_locale_data.py pair-slug <old> <new>
 """
 import contextlib
 import io
@@ -1101,6 +1102,14 @@ def write_list(name, items):
 
 
 def _main(argv):
+    if len(argv) == 3 and argv[0] == 'pair-slug':
+        # audit.sh names every file a Python step also writes with this rather
+        # than with bash's own replacement, which under LC_ALL=C replaces each
+        # byte of a character outside ASCII where this replaces the character
+        # once. The summary then looked for a file the step, which uses this
+        # function, had written under another name.
+        print(pair_slug(argv[1], argv[2]))
+        return 0
     if len(argv) >= 2 and argv[0] == 'provenance':
         repo = find_repo()
         check_refs(repo, *argv[1:])
