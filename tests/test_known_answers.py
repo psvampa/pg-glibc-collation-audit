@@ -1,7 +1,8 @@
-"""Layer 3: the real scripts, end to end, against the published results.
+"""Layer 3: the real scripts, end to end, on the pinned pairs.
 
 This is what stops a refactor from moving a verdict quietly. The numbers below
-are the ones docs/results.md publishes and the examples/ files record; if a
+for the two audited pairs are ones docs/results.md publishes or the
+examples/ files record, and the other pairs' are pinned here alone; if a
 change moves one, that is either a discovery or a regression, and either way
 somebody has to look.
 
@@ -15,7 +16,8 @@ import tempfile
 import unittest
 
 from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
-                       flat, needs_clone, needs_floor_pair, run_step)
+                       REPO_ROOT, flat, needs_clone, needs_floor_pair,
+                       run_step)
 
 import glibc_locale_data as g
 
@@ -110,22 +112,63 @@ class Step1Templates(StepRun):
         out = self.step('audit-locale-diff.sh', MID, NEW)
         self.assertRegex(out, r'\d+ locales inherit from iso14651_t1\b')
 
-    def test_the_blast_radius_the_docs_state_for_both_tags(self):
+    def test_the_blast_radius_published_for_both_tags(self):
         """The docs say iso14651_t1 is inherited by 328 locales at 2.34, and
         the examples print 338 at 2.39. Nothing asserted either against the
         clone -- which is how the step-4 "2" rotted. Step 1 computes the radius
-        at the NEW tag."""
-        for old, new, radius in ((OLD, MID, 328), (MID, NEW, 338)):
+        at the NEW tag. Both transcripts of each pair are read as well, so a
+        figure changed here without regenerating them goes red, and
+        test_published_claims holds the pages that state 328 to those
+        transcripts."""
+        for old, new, radius, pair in ((OLD, MID, 328, 'rhel8-to-rhel9'),
+                                       (MID, NEW, 338, 'rhel9-to-rhel10')):
             with self.subTest(tag=new):
+                line = f'\n   {radius} locales inherit from iso14651_t1\n'
                 out = self.step('audit-locale-diff.sh', old, new)
-                self.assertIn(f'\n   {radius} locales inherit from iso14651_t1\n',
-                              out)
+                self.assertIn(line, out)
+                for kind in ('audit-output', 'tags-only'):
+                    name = f'examples/{pair}-{kind}.txt'
+                    with self.subTest(transcript=kind):
+                        with open(os.path.join(REPO_ROOT, *name.split('/')),
+                                  encoding='utf-8') as f:
+                            # The tool may append its "<== has some
+                            # change" mark to the line; a copy carrying it
+                            # still counts.
+                            said = re.findall(
+                                r'(?m)^ +(\d+) locales inherit from '
+                                r'iso14651_t1(?:  <==[^\n]*)?$', f.read())
+                        self.assertEqual(
+                            said, [str(radius)],
+                            f'{name} prints {said} as the locales that '
+                            f'inherit iso14651_t1, not [{radius}]; '
+                            f'regenerate it')
 
 
 @needs_clone
 class Step2Filter(StepRun):
     EXPECTED = {(OLD, MID): (2, ['or_IN', 'sv_SE']),
                 (MID, NEW): (3, ['ber_DZ', 'kab_DZ', 'th_TH'])}
+
+    def test_the_changed_file_count_published_for_the_pair(self):
+        """283 is published for glibc 2.28 -> 2.34, and test_published_claims
+        holds the pages that state it to the two rhel8-to-rhel9 transcripts.
+        This holds the transcripts, and the figure, to the run: a count that
+        moved without regenerating them goes red, as the blast radius does."""
+        label = (r'(?m)^Locale files changed between glibc-2\.28 and '
+                 r'glibc-2\.34: (\d+)$')
+        out = self.step('filter_lc_collate_changes.py', OLD, MID)
+        self.assertEqual(re.findall(label, out), ['283'])
+        for kind in ('audit-output', 'tags-only'):
+            name = f'examples/rhel8-to-rhel9-{kind}.txt'
+            with self.subTest(transcript=kind):
+                with open(os.path.join(REPO_ROOT, *name.split('/')),
+                          encoding='utf-8') as f:
+                    said = re.findall(label, f.read())
+                self.assertEqual(
+                    said, ['283'],
+                    f'{name} prints {said} as the locale files changed '
+                    f'between glibc-2.28 and glibc-2.34, not [283]; '
+                    f'regenerate it')
 
     def test_the_step_3_list_is_written_for_each_pair(self):
         """audit.sh reads this file instead of the user retyping the names.
@@ -552,12 +595,12 @@ def _harness_scripts():
 
 @needs_floor_pair
 class BelowTheOldVersionFloor(StepRun):
-    """glibc-2.12 -> glibc-2.17, the pair docs/limitations.md quotes.
+    """glibc-2.12 -> glibc-2.17, the pair docs/scope.md names.
 
     Not an audited pair and not a published verdict: it is the pair that
     demonstrated the pre-2.24 failure, and after that failure was fixed it is
     what shows the fix reaches. These numbers are asserted because the last set
-    this page carried for this pair went stale silently -- it said step 4
+    published for this pair went stale silently -- it said step 4
     reported 2 exposed locales long after a partial fix had moved that to 277,
     and nothing caught it. That is the whole reason for this class.
 
@@ -608,10 +651,10 @@ class BelowTheOldVersionFloor(StepRun):
             280)
 
     def test_step_3_maps_its_280_files_to_409_generated_names(self):
-        """The example quotes this header, and a first patch put the WRITTEN
-        list's count there instead -- 414,
-        which also carries the five names SUPPORTED does not list. Two
-        different numbers one line apart, and only one of them was printed."""
+        """A first patch put the WRITTEN list's count in step 3's `pg_collation
+        show` header instead -- 414, which also carries the five names
+        SUPPORTED does not list. Two different numbers, and only one of them
+        was printed."""
         out = self.step('resolve_copy_closure.py', FLOOR_NEW,
                         'dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
                         'se_NO', 'ug_CN')
@@ -639,15 +682,15 @@ class BelowTheOldVersionFloor(StepRun):
     def test_step_4_reaches_281_not_279(self):
         """277 was the figure before the collate_block fix and 279 after it;
         281 adds ky_KG and uk_UA, which copy iso14651_t1 spelled in symbolic
-        notation. The 2 this page used to publish was older still, and already
-        wrong when it was quoted."""
+        notation. The 2 docs/limitations.md used to publish was older still,
+        and already wrong when it was quoted."""
         out = self.step('flag_algorithmic_ranges.py', FLOOR_NEW)
         self.assertEqual(
             one_int(r'Full set needing empirical confirmation: (\d+) locale',
                     out, 'the exposed set'),
             281)
-        # Both halves of the sentence, and the file it names: docs and the
-        # worked example publish all three, and only the first was pinned.
+        # Both halves of the sentence, and the file it names. Only the first
+        # used to be pinned.
         self.assertEqual(
             one_int(r'confirmation: \d+ locale source file\(s\), (\d+) '
                     r'generated', out, 'the generated names'),
@@ -656,8 +699,8 @@ class BelowTheOldVersionFloor(StepRun):
             one_int(r'full list \((\d+) name\(s\)\)', out, 'the list'), 416)
 
     def test_the_locales_the_bug_used_to_drop_are_reported(self):
-        """A count can be right for the wrong reason. These are named in
-        docs/limitations.md as examples of what was silently dropped."""
+        """A count can be right for the wrong reason. These are examples of
+        what was silently dropped."""
         out = self.step('resolve_copy_closure.py', FLOOR_NEW,
                         'dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
                         'se_NO', 'ug_CN')

@@ -35,8 +35,8 @@ class TagsResolveToPinnedCommits(unittest.TestCase):
 
     def test_the_pinned_tags_are_the_ones_the_suite_uses(self):
         """Guards against pinning one tag and testing another. The two floor
-        tags carry no published verdict, but docs/limitations.md quotes numbers
-        derived from them, so they are pinned on the same terms."""
+        tags carry no published verdict, but test_known_answers asserts
+        numbers derived from them, so they are pinned on the same terms."""
         self.assertEqual(sorted(EXPECTED_SHA),
                          sorted([OLD, MID, NEW, FLOOR_OLD, FLOOR_NEW]))
 

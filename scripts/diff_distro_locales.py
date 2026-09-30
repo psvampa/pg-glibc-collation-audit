@@ -45,10 +45,9 @@ import glibc_locale_data as g
 # this decision for the same reason.
 SAFE_NAME = re.compile(r'^[A-Za-z0-9_@.+-]+$')
 
-# Several hundred files ship in glibc-locale-source; the three measured RHEL
-# nodes carry 355, 356 and 366 files (docs/requirements.md). A floor well below
-# all of them still catches a `docker cp` that landed three files, or a node
-# without the package at all. Used where there is no upstream side to take
+# Several hundred files ship in glibc-locale-source. A floor well below that
+# still catches a `docker cp` that landed three files, or a node without the
+# package at all. Used where there is no upstream side to take
 # half of -- see corpus_problem. One constant for nodes and tags alike, kept in
 # glibc_locale_data where the tag modes apply it, so the two cannot drift.
 DEFAULT_MIN_FILES = g.MIN_LOCALE_FILES
@@ -180,12 +179,13 @@ def inherited_via_copy(texts, roots):
     LC_COLLATE reaches one of them through `copy`.
 
     Pure: the same closure step 3 and step 4 take, applied to a node's own
-    files. A backport that edits iso14651_t1 changes the order of the 328 to
-    338 locales that copy it, and until this existed the node-reading checks
-    reported "1 locale(s) differ inside LC_COLLATE" for exactly that case --
-    the one check that can see a backport at all lost its blast radius on the
-    way to the summary. Roots are excluded from the result so a file that
-    both differs and copies another differing file is not counted twice.
+    files. A backport that edits iso14651_t1 changes the order of the
+    hundreds of locales that copy it, and until this existed the
+    node-reading checks reported "1 locale(s) differ inside LC_COLLATE" for
+    exactly that case -- the one check that can see a backport at all lost
+    its blast radius on the way to the summary. Roots are excluded from the
+    result so a file that both differs and copies another differing file is
+    not counted twice.
     """
     roots = set(roots)
     graph = g.copy_graph_from_texts(texts)

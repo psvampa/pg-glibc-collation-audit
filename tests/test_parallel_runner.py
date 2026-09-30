@@ -234,10 +234,10 @@ class AShardCannotWriteItsOwnVerdict(unittest.TestCase):
 
 
 class AShardThatSaidNothingIsNotZeroTests(unittest.TestCase):
-    """"Could not read this shard" and "this shard ran no tests" are
-    different facts (detection-code invariants, section A). Parsing that
-    returns 0 for an unreadable shard turns a crash into a count, and a count
-    is something the rest of the report is willing to reason about."""
+    """"Could not read this shard" and "this shard ran no tests" are different
+    facts. Parsing that returns 0 for an unreadable shard turns a crash into a
+    count, and a count is something the rest of the report is willing to reason
+    about."""
 
     def test_an_empty_shard_output_is_red_for_the_right_reason(self):
         code, text = report([rp.Shard('a', 0, 0.1, '', '')], {'a': 3})

@@ -96,18 +96,14 @@ no other fact in the file is spelled the same way.
 
 `section` is text that opens the region to search, and the region ends at the
 next `====` banner. How much that narrows is a property of the transcript, not
-a promise: in the half these rows read -- the five scripts run by hand, which
-carries none of the `STEP n` banners `audit.sh` prints -- the first `====`
-after step 4 is an editorial note, so the region is lines 90 to 496, 407 of
-them, most belonging to step 5. Measured 2026-09-22. What the narrowing buys
-is the thing it was added for: keeping a tag's figures apart from the figures
-a node built from that tag reprints word for word, lower down, under a later
-banner.
+a promise. What the narrowing buys is the thing it was added for: keeping a
+tag's figures apart from the figures a node built from that tag reprints word
+for word, lower down, under a later banner.
 
 A `section` is only ever a narrowing of a NAMED sentence, never of a bare
 number, and the combination is refused. A bare number takes whatever digits
 the region holds, and it does not need a wide region to go wrong: the
-measurement that bought this rule drifted `docs/method.md` from 331 to 327 and
+measurement that bought this rule drifted a page from 331 to 327 and
 stayed GREEN on `via iso14651_t1: 327 locale(s)`, the line directly below the
 sentence that should have been read -- inside step 4's own output, so cutting
 at the end of step 4 would not have saved it. Both fields are strings, so the
@@ -127,6 +123,16 @@ def evidence_pattern(shape, bare):
     return number.join(re.escape(part) for part in shape.split('{n}'))
 
 
+def evidence_counts(shape, bare, text):
+    """(statements of this figure, statements with any number) of `shape`.
+
+    Both the verdict and the failure message read these, so a message never
+    prints a count the verdict did not use.
+    """
+    return (len(re.findall(evidence_pattern(shape, bare), text)),
+            len(re.findall(evidence_pattern(shape, r'\d+'), text)))
+
+
 def evidence_agrees(shape, bare, text):
     """Does `text` state this figure the way a row with this shape requires?
 
@@ -140,20 +146,18 @@ def evidence_agrees(shape, bare, text):
     only to be there, since a transcript may state a figure twice for good
     reason.
     """
-    found = re.findall(evidence_pattern(shape, bare), text)
+    found, sentences = evidence_counts(shape, bare, text)
     if shape == '{n}':
-        return bool(found)
-    sentences = re.findall(evidence_pattern(shape, r'\d+'), text)
-    return len(sentences) == 1 and len(found) == 1
+        return found > 0
+    return sentences == 1 and found == 1
 
 
 def region_after(text, section):
     """`text` from `section` to the next banner, or a loud failure.
 
-    It refuses here rather than trusting a caller to have checked: one of its
-    two callers checks first and the other does not, and an anchor appearing
-    twice would otherwise return the span BETWEEN the copies -- narrower, and
-    green for the wrong reason.
+    It refuses here rather than trusting a caller to have checked: not every
+    caller checks first, and an anchor appearing twice would otherwise return
+    the span BETWEEN the copies -- narrower, and green for the wrong reason.
     """
     parts = text.split(section)
     if len(parts) != 2:
@@ -340,8 +344,7 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
 
     def test_no_doc_times_the_suite(self):
         """The same rot, one column over, and it had already happened twice:
-        a `~16s`/`~17s` disagreement between two files (quoted in
-        TheRepairDocumentQuotesWhatIsPublished below), and "about a minute and
+        a `~16s`/`~17s` disagreement between two files, and "about a minute and
         a half" in three files while the suite took 208 s on the machine that
         measured it on 2026-09-21. A runtime is a fact
         about someone else's machine, so it is the reader's to measure.
@@ -354,14 +357,14 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
         figure in backticks, and a `### How long` sub-heading right under the
         block -- the heading somebody actually writes. Each fix was the form
         the author had seen rather than the family, so
-        the scope is now the file: the three files that publish this command
+        the scope is now the file: the files that publish this command
         publish no duration at all, measured, and the fourth escape route was
         closed by deleting the exemption rather than by widening it again.
 
         The cost is that a duration about something else in one of those
-        three files fires too. That is deliberate and the message says what
-        to do about it: those pages are short, and the runner's own header is
-        where a measurement belongs, with its date and its machine.
+        files fires too. That is deliberate and the message says what
+        to do about it: the runner's own header is where a measurement
+        belongs, with its date and its machine.
         """
         # Spelled-out durations, and the "and a half" tail, are in here
         # because the pattern was written without them and measured: "about
@@ -398,9 +401,9 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
 
     def test_the_layer_counts_come_from_the_files(self):
         """Which layers need the glibc clone is stated twice in tests/README.md
-        -- the Layers table's yes/no column, and the paragraph under it that
-        names the layers that still run without one -- and once more in the CI
-        comment. All three are hand-written statements of a fact the
+        -- the Layers table's yes/mostly/no column, and the paragraph under it
+        that names the layers that still run without one -- and once more in
+        the CI comment. All three are hand-written statements of a fact the
         filesystem already holds.
 
         Written the day the eighth layer became the ninth, which moved a count
@@ -522,21 +525,23 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
 
 
 class Step5HunkCountsAgreeEverywhere(unittest.TestCase):
-    """Step 5's two hunk counts are published in three places per pair: the
-    step's own total, the summary's "step 5 found N" and the summary's "N
-    hunk(s) marked >>". Nothing tied them together. They moved on 2026-09-05 (a third tier) and again on 2026-09-07
-    (the filter learned to read context lines), and a page left behind is
-    exactly what the step-4 "2" was for six weeks.
+    """Step 5's hunk count is published in three places in each transcript
+    of a pair: the step's own total, the summary's "step 5 found N" and the
+    summary's "N hunk(s) marked >>". Nothing tied them together. They moved
+    on 2026-09-05 (a third tier) and again on 2026-09-07 (the filter learned
+    to read context lines), and a page left behind is exactly what the
+    step-4 "2" was.
 
-    The counts against the real clone are asserted in test_known_answers;
-    this layer only checks that every published copy says the same thing.
+    Both transcripts of each pair are read, the audit output and the tags-only
+    run, because they are regenerated apart. The counts against the real
+    clone are asserted in test_known_answers; this layer only checks that
+    every published copy says the same thing.
     """
 
     EXAMPLES = {'rhel8-to-rhel9': 24, 'rhel9-to-rhel10': 52}
 
-    def counts(self, name):
-        text = read(os.path.join(REPO_ROOT, 'examples',
-                                 f'{name}-audit-output.txt'))
+    def counts(self, filename):
+        text = read(os.path.join(REPO_ROOT, 'examples', filename))
         return (
             re.findall(r'(?m)^(\d+) substantive hunk\(s\) found', text)
             + re.findall(r'step 5 found (\d+) substantive hunk', text)
@@ -544,47 +549,50 @@ class Step5HunkCountsAgreeEverywhere(unittest.TestCase):
 
     def test_each_example_states_one_count_in_three_places(self):
         for name, expected in self.EXAMPLES.items():
-            with self.subTest(example=name):
-                got = self.counts(name)
-                self.assertEqual(len(got), 3,
-                                 f'{name}: found {got}, expected three copies')
-                self.assertEqual(set(got), {str(expected)}, got)
+            for kind in ('audit-output', 'tags-only'):
+                filename = f'{name}-{kind}.txt'
+                with self.subTest(example=filename):
+                    got = self.counts(filename)
+                    self.assertEqual(
+                        len(got), 3,
+                        f'{filename}: found {got}, expected three copies')
+                    self.assertEqual(set(got), {str(expected)}, got)
 
 
 class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
-    r"""A number the docs publish, tied to every page that states it and
-    to the run it came from.
+    r"""A number the docs publish, tied to every page that states it and,
+    where there is one, to the run it came from.
 
-    The rot this catches is the cheapest kind to cause: change a measurement
-    on the page you are editing and leave the other five saying the old one.
-    Nothing announces it, because each page is internally consistent. Measured
+    The rot this catches is the cheapest kind to cause: change a measurement on
+    the page you are editing and leave the others saying the old one. Nothing
+    announces it, because each page is internally consistent. Measured
     2026-09-22 across the published Markdown: 117 figures no test asserts AS
     PUBLISHED. Ten of them became rows of this table, six tied that morning and
-    four more later the same day; one has since come out with the only page
-    that still stated it, leaving nine. "As published" is the whole of it: two of
-    those four, 335 and 342, were already asserted against a live run by
-    `test_known_answers` and `test_node_modes`, which read the tool's OUTPUT.
-    Neither compared the page with the run, so the page was free to say
-    anything. The ones that appear in more than one file are the ones that can
-    drift -- a measurement quoted once is right or wrong, never inconsistent,
-    which is why a row stated in a single file earns its place through the
-    transcript under it rather than through agreement with another page.
+    four more later the same day; most have since come out. "As published" is
+    the whole of it: two of those four, 335 and 342, were already asserted
+    against a live run by `test_known_answers` and `test_node_modes`, which
+    read the tool's OUTPUT. Neither compared the page with the run, so the page
+    was free to say anything. The ones that appear in more than one file are
+    the ones that can drift -- a measurement quoted once is right or wrong,
+    never inconsistent, which is why a row stated in a single file earns its
+    place through the transcript under it rather than through agreement with
+    another page.
 
     Adding a figure is one row: the label, a pattern whose branches have one
     group each, how many FILES must state it, and an `Evidence` per file whose
     transcript has to carry the same number -- a path alone for the bare
     check, or the sentence and, where a transcript repeats itself, the section
     to read it in. The patterns run over `flat()` text, because one of these
-    sentences wraps between the number and the noun that gives it meaning
-    (`inherited by` / `328 locales`, in docs/results.md).
+    sentences wraps inside its phrase, between `inherited by` and
+    `328 locales`, in docs/results.md.
 
     **Files, not mentions.** The floor counted occurrences until
     false-negative-reviewer measured what that allows: rewrite
     docs/requirements.md -- the page whose job is stating the requirement --
     to a DIFFERENT floor in a wording no pattern reaches, add one more correct
-    mention to README.md, and the total still agrees with itself. Six of
-    those rows have most of their mentions inside one file, so a total is
-    exactly the wrong denominator.
+    mention to README.md, and the total still agrees with itself. Several of
+    the rows the table held on 2026-09-22 had most of their mentions inside
+    one file, so a total is exactly the wrong denominator.
 
     **A pattern is anchored to the phrase, not just to the digits.** The same
     pass measured `(\d{3}) at glibc 2.34` capturing the last three digits of
@@ -594,8 +602,8 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     carries enough of its sentence to mean one thing, and `\d+` rather than a
     fixed width, so a longer number fails loudly instead of matching in part.
 
-    An evidence file is named only where the number really appears in query
-    output, and only where it is the SAME fact:
+    An evidence file is named only where the number really appears in the
+    output of a run, and only where it is the SAME fact:
 
       * a file carrying the figure in prose and nowhere else is not listed:
         comma-stripped, the check would find the prose it was meant to be
@@ -605,42 +613,38 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
         to agree, such as the complement of a count on one fixture. Tying it
         would tie two facts that agree by arithmetic accident.
 
-    What the BARE form asks is whether the transcript still carries the
-    number, so it catches a page re-measured away from the prose and does NOT
-    catch one cell of three edited by hand while the others keep the old
-    value. That is the honest limit of an existence check, written down here
-    rather than left for a reader to discover: the mutation that proves such a
-    tie changes every occurrence, because that is the case it can see. Two
-    rows kept it, carrying 9,616 and 9,619, until PR #56 removed them with the
-    pages that stated those counts; today the row of the locale files that
-    differ between 2.28 and 2.34 is the one that uses it. What made those two
-    safe was not that the counts were longer but a measurement: bumping each by
-    one reddened it, because neither named file carried the bumped value. That
-    is narrower than
-    it sounds, and deliberately stated so: a file that states BOTH counts
-    cannot tell a drift from one to the other, and what reddens such a row is
-    the file carrying only its own. An evidence tie is only as good as the
-    narrowest file under it.
+    What the BARE form asks is whether the transcript still carries the number,
+    so it catches a page re-measured away from the prose and does NOT catch one
+    cell of three edited by hand while the others keep the old value. That is
+    the honest limit of an existence check, written down here rather than left
+    for a reader to discover: the mutation that proves such a tie changes every
+    occurrence, because that is the case it can see. Two rows kept it, carrying
+    9,616 and 9,619, until PR #56 removed them. What made those two safe was
+    not that the counts were longer but a measurement: bumping each by one
+    reddened it, because neither named file carried the bumped value. That is
+    narrower than it sounds, and deliberately stated so: a file that states
+    BOTH counts cannot tell a drift from one to the other, and what reddens
+    such a row is the file carrying only its own. An evidence tie is only as
+    good as the narrowest file under it.
 
     **A row may instead name the sentence its number appears in, and the part
     of the transcript that produced it.** Both halves were paid for on
     2026-09-22, in that order. The bare check first: bumping 342 in the prose
     to 343 stayed GREEN, because the same transcript states 343 six hundred
-    lines down -- the el9 NODE's `356, of which 343 define LC_COLLATE`
-    against the 2.34 TAG's `355, of which 342`. Naming the sentence closed
-    that row and did NOT close 331 and 335, which false-negative-reviewer
-    then measured on the fix: the el9 node is built from the 2.34 tag, so the
-    node scan repeats step 4's copy-closure figures in BYTE-IDENTICAL
-    sentences, lines 107 and 113 against 724 and 730. A sentence two facts
-    share is not an anchor. Those three rows named the banner of step 4 at
-    the tag; they came out on 2026-09-27, with the page that stated their
-    figures, and the mechanism stays for the next row that needs it: the
-    search is cut at the next banner, and an anchor that is missing or
+    lines down -- the el9 NODE's `356, of which 343 define LC_COLLATE` against
+    the 2.34 TAG's `355, of which 342`. Naming the sentence closed that row and
+    did NOT close 331 and 335, which false-negative-reviewer then measured on
+    the fix: the el9 node is built from the 2.34 tag, so the node scan repeats
+    step 4's copy-closure figures in BYTE-IDENTICAL sentences. A sentence two
+    facts share is not an anchor. Those three rows named the banner of step 4
+    at the tag; they came out on 2026-09-27, after the page that stated their
+    figures was deleted, and the mechanism stays for the next row that needs
+    it: the search is cut at the next banner, and an anchor that is missing or
     doubled refuses instead of widening to the whole file. A named sentence
-    must appear exactly ONCE in what is left: two copies mean a drifting one
-    is satisfied by a stale one, which is this test's own defect class turned
-    on itself. The bare form keeps "at least once", because a transcript may
-    state a number twice for good reason.
+    must appear exactly ONCE in what is left: two copies mean a drifting one is
+    satisfied by a stale one, which is this test's own defect class turned on
+    itself. The bare form keeps "at least once", because a transcript may state
+    a number twice for good reason.
 
     `least` is not decoration. Without it, deleting every mention leaves this
     test green over a claim that no longer exists, which is "absent is not
@@ -664,8 +668,7 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
         # the row refuses. Both transcripts of this pair print the line, and
         # they have been regenerated apart.
         ('the locales that inherit iso14651_t1 at glibc 2.34',
-         r'inherited by (\d+) locales|template that (\d+) locales'
-         r'|the (\d+) to \d+ locales that inherit it',
+         r'inherited by (\d+) locales|template that (\d+) locales',
          2,
          (Evidence('examples/rhel8-to-rhel9-audit-output.txt',
                    shape='{n} locales inherit from iso14651_t1\n'),
@@ -677,7 +680,10 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
          2,
          (Evidence('examples/rhel8-to-rhel9-audit-output.txt',
                    shape='Locale files changed between glibc-2.28 and '
-                         'glibc-2.34: {n}'),)),
+                         'glibc-2.34: {n}'),
+          Evidence('examples/rhel8-to-rhel9-tags-only.txt',
+                   shape='Locale files changed between glibc-2.28 and '
+                         'glibc-2.34: {n}'))),
     )
 
     @staticmethod
@@ -709,92 +715,100 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
                                 for value, files in sorted(seen.items())))
 
     def test_the_evidence_under_it_carries_the_same_number(self):
-        """The prose figure against the query output it summarises, which is
-        where this project's numbers come from. Prose said 9,616 and the psql
+        """The prose figure against the output it summarises, which is where
+        this project's numbers come from. Prose said 9,616 and the psql
         transcript in the case file said 9616, while a row still tied the
-        two."""
+        two.
+
+        Each row, and each file under it, is its own subtest. Otherwise a
+        first failure would hide every row and file after it, and a mutation
+        battery reading the result could not tell which tie failed."""
         for label, pattern, _, evidence in self.FIGURES:
             if not evidence:
                 continue
-            values = {self._value(found) for text in docs().values()
-                      for found in re.finditer(pattern, flat(text))}
-            self.assertEqual(len(values), 1, f'{label}: {values}')
-            bare = values.pop().replace(',', '')
-            for entry in evidence:
-                ev = entry if isinstance(entry, Evidence) else Evidence(entry)
-                # A shape that lost its placeholder would join nothing into
-                # nothing and quietly become "does this sentence appear",
-                # never looking at the number -- and the failure message
-                # would print the sentence without it. Found by
-                # false-negative-reviewer on this change.
-                self.assertIn(
-                    '{n}', ev.shape,
-                    f'{label}: an evidence shape with no {{n}} checks the '
-                    f'sentence and never the number')
-                # Not `shape == '{n}'`: one space walked past the first
-                # version of this guard -- measured GREEN on a page drifted
-                # from 335 to 327. A shape with no letters outside the
-                # placeholder names no sentence, however it is spelled.
-                self.assertFalse(
-                    ev.section is not None
-                    and not re.search(r'[A-Za-z]',
-                                      ev.shape.replace('{n}', '')),
-                    f'{label}: a bare number narrowed to a section is neither '
-                    f'check. Name the sentence instead')
-                path = os.path.join(REPO_ROOT, *ev.path.split('/'))
-                text = read(path)
-                if ev.section is not None:
-                    parts = text.split(ev.section)
-                    self.assertEqual(
-                        len(parts), 2,
-                        f'{label}: the section anchor {ev.section!r} appears '
-                        f'{len(parts) - 1} time(s) in {ev.path}, once '
-                        f'expected. "I could not find the section" and "the '
-                        f'number is not in it" are different answers, so this '
-                        f'refuses rather than searching the whole file')
-                    self.assertIn(
-                        '\n====', parts[1],
-                        f'{label}: nothing closes the section under '
-                        f'{ev.section!r} in {ev.path}, so cutting it would '
-                        f'read to the end of the file -- the whole-file '
-                        f'search this anchor exists to avoid. "The section '
-                        f'ends here" and "I never found where it ends" are '
-                        f'different answers. Two files in examples/ carry no '
-                        f'banner at all, so this is reachable by the next row '
-                        f'rather than by this one')
-                    text = region_after(text, ev.section)
-                # Digit boundaries: `9616` is otherwise satisfied by a 19616
-                # or a 96160 sitting anywhere in the file. The escape makes a
-                # shape's `(s)` and `.` literal.
-                found = re.findall(evidence_pattern(ev.shape, bare), text)
-                agrees = evidence_agrees(ev.shape, bare, text)
-                where = ('' if ev.section is None
-                         else f' in the section under "{ev.section}"')
-                said = f'"{ev.shape.replace("{n}", bare)}"'
-                if ev.shape == '{n}':
-                    # The bare form asks only that the figure be in the file,
-                    # which is what it has always asked: a transcript may
-                    # legitimately print the same number more than once, and
-                    # a transcript may state one twice for good reason.
-                    self.assertTrue(
-                        agrees,
-                        f'{label} is published as {bare} but {ev.path} -- '
-                        f'the measurement it summarises -- does not contain '
-                        f'that number anywhere')
-                else:
-                    # A named sentence is a claim about one measurement, so
-                    # two of them is not reassurance: a drifting copy is
-                    # satisfied by a stale one, and nothing says which was
-                    # read.
-                    sentences = re.findall(
-                        evidence_pattern(ev.shape, r'\d+'), text)
-                    self.assertTrue(
-                        agrees,
-                        f'{label} is published as {bare}, and '
-                        f'{ev.path}{where} states it as {said} '
-                        f'{len(found)} time(s); the same sentence with any '
-                        f'number appears {len(sentences)} time(s). Both '
-                        f'counts must be 1')
+            with self.subTest(figure=label):
+                values = {self._value(found) for text in docs().values()
+                          for found in re.finditer(pattern, flat(text))}
+                self.assertEqual(len(values), 1, f'{label}: {values}')
+                bare = values.pop().replace(',', '')
+                for entry in evidence:
+                    ev = (entry if isinstance(entry, Evidence)
+                          else Evidence(entry))
+                    with self.subTest(path=ev.path):
+                        self.check_evidence(label, bare, ev)
+
+    def check_evidence(self, label, bare, ev):
+        """One file under one row. Does it state `bare` the way `ev` says?"""
+        # A shape that lost its placeholder would join nothing into
+        # nothing and quietly become "does this sentence appear",
+        # never looking at the number -- and the failure message
+        # would print the sentence without it. Found by
+        # false-negative-reviewer.
+        self.assertIn(
+            '{n}', ev.shape,
+            f'{label}: an evidence shape with no {{n}} checks the '
+            f'sentence and never the number')
+        # Not `shape == '{n}'`: one space walked past the first
+        # version of this guard -- measured GREEN on a page drifted
+        # from 335 to 327. A shape with no letters outside the
+        # placeholder names no sentence, however it is spelled.
+        self.assertFalse(
+            ev.section is not None
+            and not re.search(r'[A-Za-z]',
+                              ev.shape.replace('{n}', '')),
+            f'{label}: a bare number narrowed to a section is neither '
+            f'check. Name the sentence instead')
+        path = os.path.join(REPO_ROOT, *ev.path.split('/'))
+        text = read(path)
+        if ev.section is not None:
+            parts = text.split(ev.section)
+            self.assertEqual(
+                len(parts), 2,
+                f'{label}: the section anchor {ev.section!r} appears '
+                f'{len(parts) - 1} time(s) in {ev.path}, once '
+                f'expected. "I could not find the section" and "the '
+                f'number is not in it" are different answers, so this '
+                f'refuses rather than searching the whole file')
+            self.assertIn(
+                '\n====', parts[1],
+                f'{label}: nothing closes the section under '
+                f'{ev.section!r} in {ev.path}, so cutting it would '
+                f'read to the end of the file -- the whole-file '
+                f'search this anchor exists to avoid. "The section '
+                f'ends here" and "I never found where it ends" are '
+                f'different answers. Some files in examples/ carry no '
+                f'banner at all')
+            text = region_after(text, ev.section)
+        # Digit boundaries: `9616` is otherwise satisfied by a 19616
+        # or a 96160 sitting anywhere in the file. The escape makes a
+        # shape's `(s)` and `.` literal.
+        found, sentences = evidence_counts(ev.shape, bare, text)
+        agrees = evidence_agrees(ev.shape, bare, text)
+        where = ('' if ev.section is None
+                 else f' in the section under "{ev.section}"')
+        said = repr(ev.shape.replace('{n}', bare))
+        if ev.shape == '{n}':
+            # The bare form asks only that the figure be in the file,
+            # which is what it has always asked: a transcript may
+            # legitimately print the same number more than once, and
+            # a transcript may state one twice for good reason.
+            self.assertTrue(
+                agrees,
+                f'{label} is published as {bare} but {ev.path} -- '
+                f'the measurement it summarises -- does not contain '
+                f'that number anywhere')
+        else:
+            # A named sentence is a claim about one measurement, so
+            # two of them is not reassurance: a drifting copy is
+            # satisfied by a stale one, and nothing says which was
+            # read.
+            self.assertTrue(
+                agrees,
+                f'{label} is published as {bare}, and '
+                f'{ev.path}{where} states it as {said} '
+                f'{found} time(s); the same sentence with any '
+                f'number appears {sentences} time(s). Both '
+                f'counts must be 1')
 
 
 
@@ -816,12 +830,12 @@ class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
     said one more than it says, would every file under it still confirm? A row
     that answers yes cannot tell its figure from its neighbour, and is
     decoration. Measured 2026-09-22 by putting the 342 row back the way it
-    first shipped -- bare, against the whole transcript -- which this reddens.
+    first shipped -- bare, against the whole transcript -- which reddened this.
 
     It is one guard of several and does not stand in for the others. A
     sentence that two facts in one file share, and a shape too weak for the
     region it is narrowed to, are refused where the tie is checked rather than
-    here; what this adds is the question no assertion was asking at all.
+    here.
 
     What it CANNOT see is a figure with no run behind it. For such a row a
     drift is invisible as long as every page drifts together -- it is tied to
@@ -835,8 +849,8 @@ class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
     #: floor is a requirement rather than a measurement. The 6,525 row was
     #: here until docs/limitations.md stopped publishing evidence; it was the
     #: one measured figure that could not be tied -- prose and no query
-    #: output -- and with no page stating it there is nothing left for this
-    #: class to compare.
+    #: output -- and with no page this layer reads stating it, there is
+    #: nothing left for this class to compare.
     NO_RUN_BEHIND_THEM = (
         'the PostgreSQL floor the tool requires',
     )
@@ -871,8 +885,8 @@ class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
 
         Moving the figure in the abstract -- asking whether `n + 1` appears
         anywhere under the row -- is arithmetically the same as bumping every
-        copy at once, and that is the battery the invariants file says cannot
-        see this defect: it was the per-LINE version that found a sentence
+        copy at once, and that is the battery that cannot see this defect: it
+        was the per-LINE version that found a sentence
         satisfied by the node's identical copy of it. The first version of
         this class made exactly that mistake and was measured on the one row
         where it happened to work, which is how a proof of three rows was
@@ -885,50 +899,175 @@ class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
         figure from another statement of the same number in the same file,
         which is decoration.
 
-        Measured 2026-09-22: on the table as it stands every row with evidence
-        has such a move, and reverting any of the three sectioned rows to the
-        whole-file form it first shipped in reddens this -- where the earlier
-        version reddened for one of the three.
+        Measured 2026-09-22, on the table as it stood then: every row with
+        evidence had such a move, and reverting any of the three sectioned
+        rows to the whole-file form it first shipped in reddened this -- where
+        the earlier version reddened for one of the three.
         """
         for label, pattern, _, evidence in self.rows():
             if not evidence:
                 continue
             with self.subTest(figure=label):
-                bare = self.published(pattern)
-                moved = str(int(bare) + 1)
-                statements, noticed = 0, []
-                for entry in evidence:
-                    ev = (entry if isinstance(entry, Evidence)
-                          else Evidence(entry))
-                    text = read(os.path.join(REPO_ROOT, *ev.path.split('/')))
-                    if ev.section is not None:
-                        text = region_after(text, ev.section)
-                    for said in re.finditer(
-                            evidence_pattern(ev.shape, bare), text):
-                        digits = re.search(rf'(?<!\d){bare}(?!\d)',
-                                           said.group(0))
-                        at = said.start() + digits.start()
-                        statements += 1
-                        lifted = text[:at] + moved + text[at + len(bare):]
-                        if not evidence_agrees(ev.shape, bare, lifted):
-                            noticed.append(ev.path)
-                # Nothing to move is not proof of anything: it is the row
-                # failing to find its own figure, which the check above
-                # reports and this must not read as success.
-                self.assertTrue(
-                    statements,
-                    f'{label}: no file under this row states {bare} in the '
-                    f'shape the row names, so there was nothing to move and '
-                    f'nothing was proved')
-                self.assertTrue(
-                    noticed,
-                    f'{label}: {statements} statement(s) of {bare} under this '
-                    f'row, and moving any one of them on its own leaves the '
-                    f'tie agreeing. The row cannot tell its figure from '
-                    f'another statement of the same number in the same file, '
-                    f'so it would not notice the page being re-measured away '
-                    f'from the run. Name the sentence the run states it in, '
-                    f'and the section to read that sentence in')
+                self.check_moves(label, self.published(pattern), evidence)
+
+    def check_moves(self, label, bare, evidence):
+        """One row. Does moving one statement of `bare`, on its own, break
+        the tie?"""
+        moved = str(int(bare) + 1)
+        statements, noticed = 0, []
+        for entry in evidence:
+            ev = (entry if isinstance(entry, Evidence)
+                  else Evidence(entry))
+            text = read(os.path.join(REPO_ROOT, *ev.path.split('/')))
+            if ev.section is not None:
+                text = region_after(text, ev.section)
+            for said in re.finditer(
+                    evidence_pattern(ev.shape, bare), text):
+                digits = re.search(rf'(?<!\d){bare}(?!\d)',
+                                   said.group(0))
+                at = said.start() + digits.start()
+                statements += 1
+                lifted = text[:at] + moved + text[at + len(bare):]
+                if not evidence_agrees(ev.shape, bare, lifted):
+                    noticed.append(ev.path)
+        # Nothing to move is not proof of anything: it is the row
+        # failing to find its own figure, which the check above
+        # reports and this must not read as success.
+        self.assertTrue(
+            statements,
+            f'{label}: no file under this row states {bare} in the '
+            f'shape the row names, so there was nothing to move and '
+            f'nothing was proved')
+        self.assertTrue(
+            noticed,
+            f'{label}: {statements} statement(s) of {bare} under this '
+            f'row, and moving any one of them on its own leaves the '
+            f'tie agreeing. The row cannot tell its figure from '
+            f'another statement of the same number in the same file, '
+            f'so it would not notice the page being re-measured away '
+            f'from the run. Name the sentence the run states it in, '
+            f'and the section to read that sentence in')
+
+
+class ASectionNeverWidensInSilence(unittest.TestCase):
+    """The refusals that keep an evidence section from reading more than it
+    names, driven directly.
+
+    A row reaches them only when it names a section, so they are exercised
+    here rather than left to the next row that needs one. A guard nothing
+    reaches is a guard nobody would see break (false-negative-reviewer,
+    2026-09-30). Each mechanism has a control that shows it still agrees
+    where it should, and the cut has one on a sentence the transcript states
+    more than once, which is the case a section exists for.
+    """
+
+    AUDIT = 'examples/rhel8-to-rhel9-audit-output.txt'
+    SHAPE = 'Locale files changed between glibc-2.28 and glibc-2.34: {n}'
+    STEP_2 = ('== STEP 2  Which of those changes are inside LC_COLLATE\n'
+              + '=' * 64)
+    STEP_4 = ('== STEP 4  Which locales a data diff can never clear\n'
+              + '=' * 64)
+    # Step 4 prints it for the 2.34 tag, and the node scan of the el9 node,
+    # built from that tag, prints it again word for word.
+    REPEATED = 'Additionally exposed via `copy` inheritance: {n}'
+    PROBE = 'examples/c-utf8-probe-rhel8-vs-rhel9.txt'
+
+    def check(self, ev, bare='283'):
+        row = AFigureStatedTwiceIsStatedOnce(
+            'test_the_evidence_under_it_carries_the_same_number')
+        row.check_evidence('a row written for this test', bare, ev)
+
+    def test_a_named_sentence_inside_its_section_agrees(self):
+        self.check(Evidence(self.AUDIT, shape=self.SHAPE, section=self.STEP_2))
+
+    def test_the_cut_is_what_keeps_a_repeated_sentence_apart(self):
+        with self.assertRaisesRegex(AssertionError, 'Both counts must be 1'):
+            self.check(Evidence(self.AUDIT, shape=self.REPEATED), '331')
+        self.check(Evidence(self.AUDIT, shape=self.REPEATED,
+                            section=self.STEP_4), '331')
+
+    def test_a_missing_anchor_refuses(self):
+        with self.assertRaisesRegex(AssertionError,
+                                    r'section anchor .* appears 0 time\(s\)'):
+            self.check(Evidence(self.AUDIT, shape=self.SHAPE,
+                                section='an anchor no transcript prints'))
+
+    def test_a_doubled_anchor_refuses(self):
+        with self.assertRaisesRegex(
+                AssertionError,
+                r'section anchor .* appears ([2-9]|\d{2,}) time\(s\)'):
+            self.check(Evidence(self.AUDIT, shape=self.SHAPE,
+                                section='locales inherit from'))
+
+    def test_a_section_nothing_closes_refuses(self):
+        # The probe transcripts print no `====` banner at all.
+        with self.assertRaisesRegex(AssertionError,
+                                    'nothing closes the section'):
+            self.check(Evidence(self.PROBE, shape='rows {n}',
+                                section='=== 1. the order'))
+
+    def test_a_bare_number_narrowed_to_a_section_refuses(self):
+        # The spaced spelling, because it is the one that walked past the
+        # first version of this guard.
+        with self.assertRaisesRegex(AssertionError, 'neither check'):
+            self.check(Evidence(self.AUDIT, shape=' {n}',
+                                section=self.STEP_2))
+
+    def test_region_after_refuses_a_missing_or_doubled_anchor(self):
+        for text in ('no anchor here', 'A\nA\n'):
+            with self.subTest(text=text), \
+                    self.assertRaisesRegex(ValueError, 'once expected'):
+                region_after(text, 'A')
+
+    def test_region_after_refuses_a_region_nothing_closes(self):
+        with self.assertRaisesRegex(ValueError, 'nothing closes'):
+            region_after('A\nbody\n', 'A')
+
+    def test_region_after_cuts_at_the_next_banner(self):
+        self.assertEqual(region_after('A\nbody\n==== next\nmore', 'A'),
+                         '\nbody')
+
+
+class TheBareFormAndTheMoveStillBite(unittest.TestCase):
+    """The bare-figure check and the one-move check, driven directly.
+
+    Every row of the figures table names its sentence, so no row reaches the
+    bare form, and for a named sentence the one-move check is implied by the
+    evidence check. Neither would be seen to break (false-negative-reviewer,
+    2026-09-30), so each is driven here on the real transcript, next to a
+    control that shows it still agrees where it should. The transcript states
+    328 once and 331 twice.
+    """
+
+    AUDIT = 'examples/rhel8-to-rhel9-audit-output.txt'
+    LABEL = 'a row written for this test'
+
+    def evidence_row(self):
+        return AFigureStatedTwiceIsStatedOnce(
+            'test_the_evidence_under_it_carries_the_same_number')
+
+    def move_row(self):
+        return EveryTieWouldNoticeItsFigureMoving(
+            'test_moving_one_statement_of_a_figure_breaks_the_tie')
+
+    def test_a_bare_figure_the_transcript_carries_agrees(self):
+        self.evidence_row().check_evidence(self.LABEL, '328',
+                                           Evidence(self.AUDIT))
+
+    def test_a_bare_figure_the_transcript_lacks_refuses(self):
+        with self.assertRaisesRegex(AssertionError,
+                                    'does not contain that number anywhere'):
+            self.evidence_row().check_evidence(self.LABEL, '99999',
+                                               Evidence(self.AUDIT))
+
+    def test_a_figure_stated_once_breaks_when_it_moves(self):
+        self.move_row().check_moves(self.LABEL, '328', (Evidence(self.AUDIT),))
+
+    def test_a_bare_figure_stated_twice_refuses_the_move(self):
+        with self.assertRaisesRegex(AssertionError,
+                                    'leaves the tie agreeing'):
+            self.move_row().check_moves(self.LABEL, '331',
+                                        (Evidence(self.AUDIT),))
 
 
 class TheVerdictTableIsTheSameInBothPlaces(unittest.TestCase):

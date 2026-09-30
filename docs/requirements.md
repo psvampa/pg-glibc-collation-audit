@@ -152,10 +152,7 @@ sources against the upstream version its distro started from, and steps 9 and
 only check that compares a backported locale such as `C` *between* the two
 builds. A machine without the package still gives a file, and those checks
 then say `NOT RUN` with the reason. Step 11 needs the package on neither
-machine. Confirmed
-present on all three fixtures: 355, 356 and 366 files on
-`glibc-2.28-251.el8_10.40`, `glibc-2.34-275.el9_8` and
-`glibc-2.39-128.el10_2`, `localedata/locales/C` among them.
+machine.
 
 `sql/c_utf8_probe.sql` needs neither langpacks nor that package — `C.utf8`
 exists on every node regardless — but it does need

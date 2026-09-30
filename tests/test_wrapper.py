@@ -58,7 +58,8 @@ NOT_CHECKED = ('The tags cannot show what your distro adds or drops: '
 # missing: no copy, or one complete copy.
 NOTHING_GONE_OVER_OLD_MID = [
     NOT_CHECKED,
-    'Pass --old-locales-dir and --new-locales-dir with their build ids.',
+    'Pass --old-node and --new-node instead of every other --old-*/--new-*',
+    'option, or --old-locales-dir and --new-locales-dir with their build ids.',
     f'Between the tags: none -- no locale file at {OLD} is gone at {MID}',
 ]
 
@@ -102,8 +103,9 @@ USAGE = [
     '',
     '       The --*-node options are OPTIONAL and go together. Each is the',
     '       one file scripts/locale_order.py --extract wrote on that',
-    '       machine, with its measurement, its locale sources and its',
-    '       build, and stands for all the options above.',
+    '       machine, with its measurement, its build and its locale sources',
+    '       (a file without the sources says why), and stands for all the',
+    '       options above.',
 ]
 
 REINDEX = '-- Reindex: sort order changes, confirm then REINDEX'
@@ -114,10 +116,11 @@ REINDEX_POINTER = [
 MEASURED = "-- Measured order: each machine's own glibc"
 MEASURED_NOT_RUN = '-- Measured order: NOT RUN'
 MEASURED_NOT_RUN_BODY = [
-    'Pass --old-order and --new-order, each the output of',
-    'scripts/locale_order.py on that machine. Without them nothing',
-    "above asked either machine's glibc how it sorts, and a locale",
-    'whose files did not change can still sort differently.',
+    'Pass --old-node and --new-node instead of every other --old-*/--new-*',
+    'option, or --old-order and --new-order, each written by',
+    'scripts/locale_order.py on that machine. Without them nothing above',
+    "asked either machine's glibc how it sorts, and a locale whose files",
+    'did not change can still sort differently.',
 ]
 MEASURED_FOOTER = '     Full report: step 11 above.'
 # audit.sh's last word when step 11 exits non-zero: a refusal or a crash.
@@ -128,11 +131,32 @@ NODE_TO_NODE_NOT_RUN = '-- Node-to-node locale data: NOT RUN'
 # The whole block, compared line for line. A check for one phrase would let
 # the same false claim come back in other words.
 NODE_TO_NODE_NOT_RUN_BODY = [
-    'Pass --old-locales-dir and --new-locales-dir with their build',
-    "ids. Without both, nothing above compared the two nodes' C.UTF-8",
+    'Pass --old-node and --new-node instead of every other --old-*/--new-*',
+    'option, or --old-locales-dir and --new-locales-dir with their build ids.',
+    "Without both, nothing above compared the two nodes' C.UTF-8",
     'against each other, and PostgreSQL reports collversion as NULL for',
     'every C.* collation, so no mismatch can ever fire.',
     'Then run sql/c_utf8_probe.sql on both nodes.',
+]
+# The node's-own ellipsis scan block when no machine was given, whole. One
+# phrase of it was all a test read, and its closing sentence could go with
+# every test green (false-negative-reviewer, 2026-09-30).
+ELLIPSIS_NOT_RUN_BODY = [
+    'Pass --old-node and --new-node instead of every other --old-*/--new-*',
+    'option, or --old-locales-dir and --new-locales-dir with their build ids.',
+    "Step 4 above scanned the TAG, and a tag holds at most upstream's C:",
+    'the distros this audit targets ship their own C.UTF-8, so if step 4',
+    "named C at all, that verdict is evidence about upstream's file and",
+    "none about either node's. Nothing above says whether either node's",
+    'own C.UTF-8 is ellipsis-based -- which is the one thing a data',
+    'diff, including the node-to-node one, can never clear.',
+]
+# The steps 6 and 7 block when no machine was given, whole, like the others.
+DISTRO_NOT_RUN_BODY = [
+    'Pass --old-node and --new-node instead of every other --old-*/--new-*',
+    'option, or --old-locales-dir and --new-locales-dir with their build ids.',
+    "So nothing above says whether either machine's own patches touch",
+    'LC_COLLATE, which the tags cannot show.',
 ]
 
 
@@ -242,10 +266,9 @@ class Wrapper(unittest.TestCase):
         """Steps 6 and 7 need the machines' files. Until 2026-09-27 the
         summary said nothing about them when they did not run, which read the
         same as a check that ran and found nothing."""
-        body = ' '.join(summary_block(
-            self.out, '-- Distro patches, steps 6 and 7: NOT RUN'))
-        self.assertIn('Pass --old-node and --new-node', body)
-        self.assertIn('the tags cannot show', body)
+        self.assertEqual(summary_block(
+            self.out, '-- Distro patches, steps 6 and 7: NOT RUN'),
+            DISTRO_NOT_RUN_BODY)
 
     def test_sv_FI_proves_the_new_tag_reached_step_3(self):
         """sv_FI is reachable only through the NEW tag's copy graph.
@@ -332,6 +355,12 @@ class Wrapper(unittest.TestCase):
         run given one node's directory falsifies three lines below it."""
         self.assertEqual(summary_block(self.out, NODE_TO_NODE_NOT_RUN),
                          NODE_TO_NODE_NOT_RUN_BODY)
+
+    def test_the_ellipsis_NOT_RUN_block_says_what_it_leaves_open(self):
+        """Absent is not empty: without either machine's files the block says
+        what a scan of the tag cannot clear, compared line for line."""
+        self.assertEqual(summary_block(self.out, ELLIPSIS_BOTH_NOT_RUN),
+                         ELLIPSIS_NOT_RUN_BODY)
 
     def test_what_the_tags_cannot_see_is_said_before_their_none(self):
         """Over 2.28..2.34 the tags remove nothing, and the
@@ -1569,9 +1598,11 @@ class WrapperMeasuredOrder(unittest.TestCase):
         answer is instead of what it was, since C.UTF-8 can be listed there
         as not measured. Whole, line for line, like the plain one."""
         self.assertEqual(summary_block(self.out, NODE_TO_NODE_NOT_RUN), [
-            'Pass --old-locales-dir and --new-locales-dir with their build',
-            "ids. Without both, nothing above compared the two nodes' C.UTF-8",
-            'files against each other; what step 11 measured of it is under',
+            'Pass --old-node and --new-node instead of every other --old-*/--new-*',
+            'option, or --old-locales-dir and --new-locales-dir with their build ids.',
+            "Without both, nothing above compared the two nodes' C.UTF-8 "
+            'files',
+            'against each other; what step 11 measured of it is under',
             "'-- Measured order'. PostgreSQL reports collversion as NULL for",
             'every C.* collation, so no mismatch can ever fire.',
             'Then run sql/c_utf8_probe.sql on both nodes.',
@@ -1889,7 +1920,7 @@ class NodeFileWithoutSources:
     why, instead of telling the reader to pass options the files replace.
 
     Two classes, one per side: a block that named a FIXED side would pass a
-    test of one side alone (detection-code-invariants, B).
+    test of one side alone.
     """
     BARE = None   # 'old' or 'new'
 

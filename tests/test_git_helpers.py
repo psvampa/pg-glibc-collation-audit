@@ -1140,7 +1140,7 @@ class Step1RefusesAReversedPairBeforeReportingAnything(unittest.TestCase):
 
     def test_the_forward_control_is_untouched(self):
         """The guard refuses a direction, and says nothing otherwise: the
-        three audited pairs' output has to stay byte-identical."""
+        pinned pairs' output has to stay byte-identical."""
         rc, out = run_script('audit-locale-diff.sh', OLD, MID,
                              env_extra=self.env)
         self.assertEqual(rc, 0, out)

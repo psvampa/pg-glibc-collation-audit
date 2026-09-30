@@ -28,11 +28,11 @@ LOCALES_DIR = 'localedata/locales'
 
 # Fewer files than this under localedata/locales/ is not a glibc locale corpus.
 # The five pinned tags carry 286 (2.12), 312 (2.17), 353 (2.28), 355 (2.34) and
-# 366 (2.39); the three measured RHEL nodes 355, 356 and 366. The node-reading
-# modes have refused a directory below this floor since they were written; the
-# tag modes did not check at all, so a tag whose tree lacks localedata/locales/
-# -- a restructured checkout, a tag from before the directory existed -- produced
-# "0 files changed", "No locale uses ellipsis ranges here" and exit 0.
+# 366 (2.39). The node-reading modes have refused a directory below this floor
+# since they were written; the tag modes did not check at all, so a tag whose
+# tree lacks localedata/locales/ -- a restructured checkout, a tag from before
+# the directory existed -- produced "0 files changed", "No locale uses ellipsis
+# ranges here" and exit 0.
 MIN_LOCALE_FILES = 200
 
 # Prepended to every git invocation. `git diff` obeys the user's config, and
@@ -286,10 +286,11 @@ def warn(text, split_words=True):
     the wrapper's warnings block matches `^!!` followed by three-space
     continuation lines. `diff_distro_locales.warn` is an alias for this.
 
-    `split_words=False` keeps a path whole: textwrap breaks at hyphens by
-    default, and a temp directory's name printed as `pg-glibc-` / `distro-...`
-    cannot be pasted back into a shell. Splitting stays on by default, so
-    every other block wraps exactly as the published transcripts show it.
+    `split_words=False` keeps a path or an option name whole: textwrap breaks
+    at hyphens by default, and a temp directory's name printed as `pg-glibc-` /
+    `distro-...` cannot be pasted back into a shell. Splitting stays on by
+    default, so every other block wraps exactly as the published transcripts
+    show it.
     """
     print(textwrap.fill(text, width=78,
                         initial_indent='!! ', subsequent_indent='   ',
@@ -556,10 +557,13 @@ def require_pair_order(repo, old, new, allow_reverse=False):
              f"upstream source against itself, so they can only report "
              f"'nothing changed' -- which for an intra-major upgrade "
              f"(RHEL 8.1 -> 8.2, say) says nothing at all. The distro's own "
-             f"builds are where such a change lives: supply both "
-             f"--*-locales-dir to audit.sh, and run sql/c_utf8_probe.sql. "
-             f"C.UTF-8's order moved in glibc-2.28-93.el8 with the upstream "
-             f"tag unchanged. See docs/limitations.md.")
+             f"builds are where such a change lives. With each machine's file "
+             f"(--old-node and --new-node), step 11 measures how each machine "
+             f"sorts, and steps 6 to 10 read its locale sources when the file "
+             f"holds them; sql/c_utf8_probe.sql checks C.UTF-8 on each "
+             f"machine. C.UTF-8's order moved in glibc-2.28-93.el8 with the "
+             f"upstream tag unchanged. See docs/results.md.",
+             split_words=False)
     elif status == 'reversed':
         if not allow_reverse:
             die(f"{detail}.\n"

@@ -169,7 +169,7 @@ class RefusesToGuess(unittest.TestCase):
 
     def test_build_id_is_required(self):
         """A result that does not say which build it was taken on cannot move
-        the table in docs/limitations.md."""
+        a verdict in docs/results.md."""
         rc, out = run_script(MID, '--locales-dir', self.node)
         self.assertEqual(rc, 2, out)
 

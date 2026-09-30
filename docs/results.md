@@ -127,7 +127,7 @@ Measured, and re-measured unchanged, on `glibc-2.28-251.el8_10.40` and
 | | RHEL8 | RHEL9 |
 |---|---|---|
 | its `LC_COLLATE` | six **ellipsis ranges** — planes 0, 1, 2, 14, 15, 16, then `UNDEFINED` | the single keyword **`codepoint_collation`** |
-| step 4 over the node's directory | flagged | byte order by construction |
+| steps 9 and 10, over the node's directory | flagged | byte order by construction |
 | `C.utf8` equals byte order? | **no**, 40 of 41 probed code points in a different position | yes, 0 |
 | `strxfrm` key for U+10000 | `ef85b5` — a computed weight | `f0908080` — the UTF-8 bytes themselves |
 | database `datcollate` / `datcollversion` | `C.UTF-8` / NULL | `C.UTF-8` / NULL |
