@@ -181,6 +181,25 @@ def summary_block(out, heading):
     raise AssertionError(f'{heading!r} never ends:\n{summary}')
 
 
+def step_text(out, n):
+    """What step `n` printed, from its banner to the next step's.
+
+    Its banner must be a line exactly once, and a later banner must end it,
+    so a missing step or a cut that would run to the end of the output fails
+    rather than reading more than the step printed.
+    """
+    lines = out.splitlines()
+    at = [i for i, line in enumerate(lines)
+          if line.startswith(f'== STEP {n} ')]
+    if len(at) != 1:
+        raise AssertionError(f'the step {n} banner is a line {len(at)} '
+                             f'time(s):\n{out}')
+    for j in range(at[0] + 1, len(lines)):
+        if lines[j].startswith('== STEP '):
+            return '\n'.join(lines[at[0]:j])
+    raise AssertionError(f'no banner ends step {n}:\n{out}')
+
+
 def measured_block(out):
     """The Measured order block of the summary as written, indentation kept,
     without its heading and its footer. Refuses a block that appears other
@@ -410,6 +429,16 @@ class WrapperEmptyPair(unittest.TestCase):
         self.assertNotIn('the following arguments are required', self.out)
         self.assertIn('STEP 3  Skipped', self.out)
 
+    def test_step_3_says_nothing_was_compared(self):
+        """Skipped over an empty step 2, step 3 called that "a real result,
+        not a failure" over one commit compared with itself, where nothing
+        was compared (doc-sweep, 2026-09-30). The other branch is held by
+        WrapperDirectionUndetermined."""
+        step3 = flat(step_text(self.out, 3))
+        self.assertIn('The two tags are one commit, so nothing was compared',
+                      step3)
+        self.assertNotIn('a real result', step3)
+
     def test_steps_4_and_5_still_ran(self):
         """An empty step 2 is not the end of the audit.
 
@@ -457,8 +486,9 @@ class WrapperEmptyPair(unittest.TestCase):
 
     def test_one_tag_compared_with_itself_says_nothing_was_compared(self):
         """An intra-major upgrade -- RHEL 8.1 -> 8.10 -- is two builds of one
-        upstream release, so the tag pair is 2.28..2.28 and steps 1-5 are
-        structurally empty. C.UTF-8's order moved across exactly such a bump
+        upstream release, so the tag pair is 2.28..2.28 and the steps that
+        compare the two tags have nothing to compare. C.UTF-8's order moved
+        across exactly such a bump
         (glibc-2.28-93.el8), so "nothing changed" here must not read as a
         clean result."""
         # Through flat(): the notice is one `warn()` block now, wrapped at
@@ -609,6 +639,18 @@ class WrapperDirectionUndetermined(unittest.TestCase):
         self.assertIn('nothing here checked that', summary)
         # Not the other state: an undetermined pair is not one commit.
         self.assertNotIn('One commit, compared with itself', summary)
+
+    def test_step_3_keeps_its_sentence_when_the_pair_is_two_commits(self):
+        """The other branch of step 3's skip notice. With the order check
+        stood in for, the wrapper takes this pair for two commits, step 2
+        still finds nothing, and the notice must not say that nothing was
+        compared."""
+        rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
+                              env_extra=self.env)
+        self.assertEqual(rc, 0, out)
+        step3 = flat(step_text(out, 3))
+        self.assertIn('This is a real result, not a failure', step3)
+        self.assertNotIn('nothing was compared', step3)
 
     def test_an_unrecognised_state_stops_the_run(self):
         """The branch that keeps the four states honest: a word the wrapper

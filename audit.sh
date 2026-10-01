@@ -414,8 +414,13 @@ if [ ${#STEP3_ARGS[@]} -gt 0 ]; then
 else
   banner "STEP 3  Skipped: no locale changed inside LC_COLLATE"
   echo "Nothing to close over the copy graph for this pair."
-  echo "This is a real result, not a failure -- steps 4 and 5 still matter,"
-  echo "because they cover what a data diff cannot settle."
+  if [ "$SAME_TAG" = "1" ]; then
+    echo "The two tags are one commit, so nothing was compared and this is"
+    echo "NOT a clean result. Step 4's list still needs confirming."
+  else
+    echo "This is a real result, not a failure -- steps 4 and 5 still matter,"
+    echo "because they cover what a data diff cannot settle."
+  fi
   : > "$STEP3_LIST"
 fi
 
