@@ -132,11 +132,19 @@ def evidence_agrees(shape, bare, text):
 
     The rule in one place, because the class that proves a tie discriminates
     has to apply the SAME rule as the check that relies on it. A named
-    sentence must appear exactly once; the bare number needs only to be there,
-    since a transcript may state a figure twice for good reason.
+    sentence must appear exactly once whatever number it carries, and that
+    one must carry this figure. Counting only the copies that already carried
+    the figure could not see a second copy carrying another number, and let a
+    line that merely starts the same way stand in for the real one unless the
+    shape shut it out by hand (measured 2026-09-29). The bare number needs
+    only to be there, since a transcript may state a figure twice for good
+    reason.
     """
     found = re.findall(evidence_pattern(shape, bare), text)
-    return bool(found) if shape == '{n}' else len(found) == 1
+    if shape == '{n}':
+        return bool(found)
+    sentences = re.findall(evidence_pattern(shape, r'\d+'), text)
+    return len(sentences) == 1 and len(found) == 1
 
 
 def region_after(text, section):
@@ -650,11 +658,19 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
          r'or newer',
          4,
          ()),
+        # The shape ends at the newline because, in each transcript, the
+        # line above the one it matches names iso14651_t1_common and starts
+        # the same way. Without the newline the sentence is found twice and
+        # the row refuses. Both transcripts of this pair print the line, and
+        # they have been regenerated apart.
         ('the locales that inherit iso14651_t1 at glibc 2.34',
          r'inherited by (\d+) locales|template that (\d+) locales'
          r'|the (\d+) to \d+ locales that inherit it',
          2,
-         ()),
+         (Evidence('examples/rhel8-to-rhel9-audit-output.txt',
+                   shape='{n} locales inherit from iso14651_t1\n'),
+          Evidence('examples/rhel8-to-rhel9-tags-only.txt',
+                   shape='{n} locales inherit from iso14651_t1\n'))),
         ('the locale files that differ between glibc 2.28 and 2.34',
          r'(\d+) files that differ between (?:glibc )?2\.28 and 2\.34'
          r'|one line out of (\d+)',
@@ -715,19 +731,16 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
                     '{n}', ev.shape,
                     f'{label}: an evidence shape with no {{n}} checks the '
                     f'sentence and never the number')
-                # Not `shape == '{n}'`: ` {n}`, `{n} ` and `: {n}` are the
-                # same weak check, and one space walked past the first
+                # Not `shape == '{n}'`: one space walked past the first
                 # version of this guard -- measured GREEN on a page drifted
                 # from 335 to 327. A shape with no letters outside the
-                # placeholder is a bare number however it is spelled.
+                # placeholder names no sentence, however it is spelled.
                 self.assertFalse(
                     ev.section is not None
                     and not re.search(r'[A-Za-z]',
                                       ev.shape.replace('{n}', '')),
                     f'{label}: a bare number narrowed to a section is neither '
-                    f'check -- any stray digit in the region satisfies it, '
-                    f'starting with the one on the line below the sentence. '
-                    f'Name the sentence instead')
+                    f'check. Name the sentence instead')
                 path = os.path.join(REPO_ROOT, *ev.path.split('/'))
                 text = read(path)
                 if ev.section is not None:
@@ -773,11 +786,15 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
                     # two of them is not reassurance: a drifting copy is
                     # satisfied by a stale one, and nothing says which was
                     # read.
+                    sentences = re.findall(
+                        evidence_pattern(ev.shape, r'\d+'), text)
                     self.assertTrue(
                         agrees,
                         f'{label} is published as {bare}, and '
                         f'{ev.path}{where} states it as {said} '
-                        f'{len(found)} time(s), once expected')
+                        f'{len(found)} time(s); the same sentence with any '
+                        f'number appears {len(sentences)} time(s). Both '
+                        f'counts must be 1')
 
 
 
@@ -806,24 +823,22 @@ class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
     region it is narrowed to, are refused where the tie is checked rather than
     here; what this adds is the question no assertion was asking at all.
 
-    What it CANNOT see is a figure with no run behind it. Three rows have none,
-    and for those a drift is invisible as long as every page drifts together
-    -- they are tied to each other and to nothing else. That is a real limit
-    of the table, so the rows it applies to are named below rather than left
-    to be discovered: adding a fourth means writing it in, which is a decision,
-    not an omission.
+    What it CANNOT see is a figure with no run behind it. For such a row a
+    drift is invisible as long as every page drifts together -- it is tied to
+    the other pages and to nothing else. That is a real limit of the table,
+    so the rows it applies to are named below rather than left to be
+    discovered: adding one means writing it in, which is a decision, not an
+    omission.
     """
 
-    #: Rows tied only to the other pages that state them. Untied, not
-    #: untieable: the tool prints 328 (step 1 of the rhel8-to-rhel9
-    #: transcript), and the PostgreSQL floor is a requirement rather than a
-    #: measurement. The 6,525 row was here until docs/limitations.md stopped
-    #: publishing evidence; it was the one figure that could not be tied --
-    #: prose and no query output -- and with no page stating it there is
-    #: nothing left for this class to compare.
+    #: Rows tied only to the other pages that state them. The PostgreSQL
+    #: floor is a requirement rather than a measurement. The 6,525 row was
+    #: here until docs/limitations.md stopped publishing evidence; it was the
+    #: one measured figure that could not be tied -- prose and no query
+    #: output -- and with no page stating it there is nothing left for this
+    #: class to compare.
     NO_RUN_BEHIND_THEM = (
         'the PostgreSQL floor the tool requires',
-        'the locales that inherit iso14651_t1 at glibc 2.34',
     )
 
     def rows(self):
