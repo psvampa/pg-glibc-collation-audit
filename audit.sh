@@ -338,8 +338,9 @@ run_step 1 "$SCRIPTS/audit-locale-diff.sh" "$OLD" "$NEW"
 ORDER=$(python3 "$SCRIPTS/glibc_locale_data.py" order --quiet "$OLD" "$NEW")
 
 # A minor-version upgrade inside one RHEL major is two builds of the SAME
-# upstream release, so every step below has nothing to compare and reports a
-# clean everything. That is not a clean result, and C.UTF-8 is the proof: its
+# upstream release, so the steps that compare the two tags have nothing to
+# compare. Steps 1 to 3 report that nothing changed, and step 5 that nothing
+# was compared. That is not a clean result, and C.UTF-8 is the proof: its
 # order changed between RHEL 8.1 and 8.2, both of them upstream glibc 2.28.
 SAME_TAG=0
 case $ORDER in
@@ -413,8 +414,13 @@ if [ ${#STEP3_ARGS[@]} -gt 0 ]; then
 else
   banner "STEP 3  Skipped: no locale changed inside LC_COLLATE"
   echo "Nothing to close over the copy graph for this pair."
-  echo "This is a real result, not a failure -- steps 4 and 5 still matter,"
-  echo "because they cover what a data diff cannot settle."
+  if [ "$SAME_TAG" = "1" ]; then
+    echo "The two tags are one commit, so nothing was compared and this is"
+    echo "NOT a clean result. Step 4's list still needs confirming."
+  else
+    echo "This is a real result, not a failure -- steps 4 and 5 still matter,"
+    echo "because they cover what a data diff cannot settle."
+  fi
   : > "$STEP3_LIST"
 fi
 
@@ -497,8 +503,9 @@ no_sources() {
 
 # Step 5 has three outcomes, not two. `hunks`: it printed a count. `clean`: it
 # printed its clean sentence. `unresolved`: neither -- which is what it prints
-# when a tracked path is present at the old tag and gone at the new one, and
-# is also what a reworded script or a truncated log would look like. This used
+# when a tracked path is present at the old tag and gone at the new one, or
+# when the two tags are one commit, and is also what a reworded script or a
+# truncated log would look like. This used
 # to be `HUNKS=${HUNKS:-0}`: anything that was not a count became zero, and
 # zero is the reassuring branch. A vanished ld-collate.c would have been
 # summarised as "a clean data diff is sufficient".
@@ -675,8 +682,8 @@ case $STEP5 in
     echo "   the locales step 4 flagged stay UNRESOLVED. Read step 5's output:"
     echo "   a tracked file vanished between the tags or was renamed away"
     echo "   before both of them, a tracked path exists at no ref in the"
-    echo "   clone, the include walk reached nothing, or the step did not"
-    echo "   finish."
+    echo "   clone, the include walk reached nothing, the two tags are one"
+    echo "   commit, or the step did not finish."
     echo "     $(count_lines "$STEP4_LIST") name(s) to confirm: generated names, and"
     echo "     source names for the locales SUPPORTED does not list"
     echo "     full list: $STEP4_LIST" ;;
@@ -988,8 +995,8 @@ case $STEP5 in
     echo "     Nothing from step 5. Still confirm on real nodes before acting:"
     echo "     docs/confirming-on-a-real-system.md" ;;
   *)
-    echo "     Step 5 reached no clean result (see above). Until it does, step"
-    echo "     4's list is unresolved: confirm empirically instead:"
+    echo "     Step 5 reached no clean result (see above), so step 4's list is"
+    echo "     unresolved: confirm empirically instead:"
     echo "     docs/confirming-on-a-real-system.md" ;;
 esac
 # Outside the case on purpose: true in all three branches, and printing it in

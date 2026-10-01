@@ -365,9 +365,28 @@ class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
     injection, on the real clone.
     """
 
+    SAME = "the two tags are one commit, so nothing was compared"
+
     def run_injected(self, assignments, *tags):
         return in_subprocess(
             "%s\nsys.argv = ['x']\nd.main(%r)\n" % (assignments, list(tags)))
+
+    def refusals(self, out):
+        """The reasons listed under "This is NOT a clean result:", which must
+        be printed exactly once. Most tests here pass one tag twice, and one
+        commit compared with itself is a reason of its own, so the verdict
+        alone no longer proves a guard: only the reason that guard adds to
+        this list does."""
+        lines = out.splitlines()
+        heads = [i for i, line in enumerate(lines)
+                 if line == 'This is NOT a clean result:']
+        self.assertEqual(len(heads), 1, out)
+        reasons = []
+        for line in lines[heads[0] + 1:]:
+            if not line.startswith('  - '):
+                break
+            reasons.append(line[len('  - '):])
+        return reasons
 
     def test_a_collapsed_include_walk_is_not_a_clean_result(self):
         """Entry points that resolve to nothing: the walk reaches 0 files,
@@ -382,18 +401,22 @@ class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
         self.assertIn('the include walk reached no file', flat(out))
 
     def test_a_path_renamed_away_before_both_tags_is_not_a_clean_result(self):
-        """A same-tag range makes every diff empty, so the only thing left to
-        decide the verdict is the tracked path that is in neither tree."""
+        """A same-tag range makes every diff empty, and that alone refuses
+        the clean verdict, so what proves this guard is the reason the tracked
+        path in neither tree adds to the list."""
         rc, out = self.run_injected(
             "d.TIER1 = ['locale/xlocale.h']\nd.TIER2 = []", OLD, OLD)
         self.assertEqual(rc, 0, out)
         self.assertNotIn('No substantive collation code change', out)
+        self.assertEqual(self.refusals(out), [
+            '1 path(s) this audit must read are absent from both tags',
+            self.SAME])
         self.assertIn('locale/xlocale.h: ABSENT at glibc-2.28 and glibc-2.28',
                       flat(out))
         self.assertIn('are in NEITHER tree', flat(out))
 
     def test_a_vanished_path_is_still_a_blocker(self):
-        """The oldest of the four reasons, and the one no test drove: the
+        """The oldest of the reasons, and the one no test drove: the
         reversed pair that exercises the `!!` block finds 52 hunks, so it
         never reaches the verdict where `blockers` is read. Remove the
         `vanished` entry from the list and this fails."""
@@ -402,8 +425,8 @@ class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
             OLD, OLD)
         self.assertEqual(rc, 0, out)
         self.assertNotIn('No substantive collation code change', out)
-        self.assertIn('1 tracked path(s) vanished before glibc-2.28',
-                      flat(out))
+        self.assertEqual(self.refusals(out), [
+            '1 tracked path(s) vanished before glibc-2.28', self.SAME])
 
     def test_a_misspelt_tracked_path_is_not_a_clean_result(self):
         """The whole of finding "a path that never existed is filed under
@@ -414,27 +437,45 @@ class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
             OLD, OLD)
         self.assertEqual(rc, 0, out)
         self.assertNotIn('No substantive collation code change', out)
-        self.assertIn('exist at no ref in this clone', flat(out))
+        self.assertEqual(self.refusals(out), [
+            '1 tracked path(s) exist at no ref in this clone', self.SAME])
         self.assertIn('ld-colate.c: no ref in this clone has ever had it',
                       flat(out))
 
-    def test_a_path_not_yet_written_still_gives_a_clean_result(self):
+    def test_a_path_not_yet_written_adds_no_reason(self):
         """The control: same shape, benign cause. C-collate-seq.c arrives in
         2.35, so over a 2.28 range there is genuinely nothing to read -- and a
         guard that fires here would make every audited pair unresolved.
 
-        The four blocker notices are what must be absent, named one by one.
-        This used to assert that NO `!!` was printed at all, which stopped
-        being the right assertion when the step started saying that one commit
-        compared with itself compares nothing -- and this class passes the same
-        tag twice on purpose, to isolate the injected condition."""
+        This class passes the same tag twice on purpose, to isolate the
+        injected condition, and one commit compared with itself is now a
+        reason of its own not to call the result clean. So the clean sentence
+        cannot print here any more, and what is asserted instead is that the
+        same-commit reason is the ONLY one: the path added none. The path
+        blockers' notices must be absent too, named one by one."""
         rc, out = self.run_injected(
             "d.TIER1 = ['locale/C-collate-seq.c']\nd.TIER2 = []", OLD, OLD)
         self.assertEqual(rc, 0, out)
-        self.assertIn('No substantive collation code change', out)
+        self.assertEqual(self.refusals(out), [self.SAME])
+        self.assertNotIn('Resolve the paths listed above', out)
         for blocker in ('vanished before', 'exist at no ref in this clone',
                         'GONE at', 'include walk reached'):
             self.assertNotIn(blocker, flat(out))
+
+    def test_a_path_not_yet_written_leaves_the_clean_sentence_reachable(self):
+        """The real clean branch, which no other test reaches: no pinned pair
+        of two different tags has zero substantive hunks, and one tag twice is
+        refused now. So the pair order is injected as two commits, over the
+        same tag, and with nothing else to refuse the step must print its
+        clean sentence."""
+        rc, out = self.run_injected(
+            "d.TIER1 = ['locale/C-collate-seq.c']\nd.TIER2 = []\n"
+            "d.g.require_pair_order = lambda *a, **k: 'forward'", OLD, OLD)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('are the same commit', flat(out),
+                         'the injected pair order did not take')
+        self.assertIn('No substantive collation code change', out)
+        self.assertNotIn('This is NOT a clean result:', out)
 
 
 @needs_clone
@@ -1084,7 +1125,15 @@ class TheStepsRefuseAReversedPair(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertIn('!! ', out)
         self.assertIn('t1 and t1 are the same commit', flat(out))
-        self.assertIn("they can only report 'nothing changed'", flat(out))
+        self.assertIn("Steps 1 to 3 can only report 'nothing changed'",
+                      flat(out))
+        self.assertIn('step 5 reports that nothing was compared', flat(out))
+        # Step 4 reads only the new tag. Counted among the steps that compare,
+        # it invited the reader to dismiss the list the summary asks them to
+        # confirm (false-negative-reviewer, 2026-09-30).
+        self.assertIn('Step 4 reads only the new tag, so its list still '
+                      'needs confirming', flat(out))
+        self.assertNotIn('Steps 1-5 compare', flat(out))
 
     def test_an_undetermined_direction_is_said_out_loud_and_runs(self):
         """The fourth state at the call site. Not an error -- nothing below is
