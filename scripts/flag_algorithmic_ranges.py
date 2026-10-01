@@ -29,7 +29,7 @@ despite localedata/locales/ko_KR being byte-identical between the two.
 
 The inline form is the one that matters most and the one this script used to
 miss: it lives in iso14651_t1_common, which carries the constructed Hangul and
-Han weights and is reached by 333 of the 342 locales that define LC_COLLATE.
+Han weights and is reached by most of the locales that define LC_COLLATE.
 Matching only a line-leading ellipsis cleared zh_CN, cmn_TW,
 iso14651_t1_pinyin and cns11643_stroke -- a false "unaffected" for the exact
 class of locale this script exists to catch.
@@ -48,7 +48,7 @@ glibc-2.28-251.el8_10.40, this mode flags it; on glibc-2.34-275.el9_8 and
 glibc-2.39-128.el10_2 the same file declares codepoint_collation and this mode
 reports it as byte order by construction. Either way it is this mode saying so
 about the node's own file, which the tag scan structurally cannot. See
-docs/limitations.md.
+docs/results.md.
 
 Usage:
   python3 flag_algorithmic_ranges.py <tag> [--repo <path>]

@@ -13,9 +13,8 @@ the knee, so that is the default.
 
 The counts are the whole point. A parallel runner that loses a shard prints a
 green summary over tests nobody ran, which is this repository's defect class
-exactly (`references/detection-code-invariants.md`, section A: a clean result
-where "could not look" and "nothing there" are different facts). So it is red
-whenever it cannot show that the suite ran:
+exactly, a clean result where "could not look" and "nothing there" are
+different facts. So it is red whenever it cannot show that the suite ran:
 
   * discovery counts every class separately and each shard is held to ITS
     number, not to the total: a class that ran fewer tests than it holds is

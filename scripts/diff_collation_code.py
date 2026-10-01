@@ -451,9 +451,10 @@ def absent_at_both(repo, paths, old_tag, new_tag):
     its clean sentence over a walk that read nothing.
 
     `git log -1 <tag> -- <path>` answers it without a blob: empty output means
-    no commit in that tag's history ever touched the path. Measured over the
-    three audited pairs: locale/C-collate-seq.c is the only path absent at both
-    tags, and it comes back not-yet-born on 2.28..2.34 and 2.12..2.17.
+    no commit in that tag's history ever touched the path. Measured over
+    2.28..2.34, 2.34..2.39 and 2.12..2.17: locale/C-collate-seq.c is the only
+    path absent at both tags, and it comes back not-yet-born on 2.28..2.34 and
+    2.12..2.17.
 
     "Not yet born" is itself two facts, so it is asked once more against every
     ref in the clone: a path NO ref ever carried is not a file waiting to be

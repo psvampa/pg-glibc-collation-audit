@@ -25,9 +25,9 @@ PAIRS = ((OLD, MID), (MID, NEW))
 
 # The pair below the OLD version floor. Not audited and not published as a
 # result -- it is the pair that demonstrates what the pre-2.24 failure looked
-# like, and docs/limitations.md now quotes numbers from it. Those numbers need
-# the same pinning as any other: the last figure that page carried for this
-# pair went stale without anyone noticing, which is exactly what a test is for.
+# like, and test_known_answers asserts numbers from it. Those numbers need the
+# same pinning as any other: the last figure published for this pair went
+# stale without anyone noticing, which is exactly what a test is for.
 FLOOR_OLD, FLOOR_NEW = 'glibc-2.12', 'glibc-2.17'
 
 # The commit each of those tags MUST resolve to.

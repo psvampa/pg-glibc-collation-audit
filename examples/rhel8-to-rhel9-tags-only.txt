@@ -543,14 +543,16 @@ empirical sort-order test, however clean its data diff is.
 
 -- Removed: locale files the old side has and the new side does not
      The tags cannot show what your distro adds or drops: NOT CHECKED.
-     Pass --old-locales-dir and --new-locales-dir with their build ids.
+     Pass --old-node and --new-node instead of every other --old-*/--new-*
+     option, or --old-locales-dir and --new-locales-dir with their build ids.
      Between the tags: none -- no locale file at glibc-2.28 is gone at glibc-2.34
 
 -- Measured order: NOT RUN
-     Pass --old-order and --new-order, each the output of
-     scripts/locale_order.py on that machine. Without them nothing
-     above asked either machine's glibc how it sorts, and a locale
-     whose files did not change can still sort differently.
+     Pass --old-node and --new-node instead of every other --old-*/--new-*
+     option, or --old-order and --new-order, each written by
+     scripts/locale_order.py on that machine. Without them nothing above
+     asked either machine's glibc how it sorts, and a locale whose files
+     did not change can still sort differently.
 
 -- Needs an empirical test: step 5 found 24 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged
@@ -559,27 +561,28 @@ empirical sort-order test, however clean its data diff is.
      full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
 
 -- Distro patches, steps 6 and 7: NOT RUN
-     No machine files. Pass --old-node and --new-node, each the
-     file scripts/locale_order.py --extract wrote on that machine.
+     Pass --old-node and --new-node instead of every other --old-*/--new-*
+     option, or --old-locales-dir and --new-locales-dir with their build ids.
      So nothing above says whether either machine's own patches touch
      LC_COLLATE, which the tags cannot show.
 
 -- Node-to-node locale data: NOT RUN
-     Pass --old-locales-dir and --new-locales-dir with their build
-     ids. Without both, nothing above compared the two nodes' C.UTF-8
+     Pass --old-node and --new-node instead of every other --old-*/--new-*
+     option, or --old-locales-dir and --new-locales-dir with their build ids.
+     Without both, nothing above compared the two nodes' C.UTF-8
      against each other, and PostgreSQL reports collversion as NULL for
      every C.* collation, so no mismatch can ever fire.
      Then run sql/c_utf8_probe.sql on both nodes.
 
 -- Node's own ellipsis scan: NOT RUN
-     Pass --old-locales-dir and --new-locales-dir with their build
-     ids. Step 4 above scanned the TAG, and a tag holds at most
-     upstream's C: the distros this audit targets ship their own
-     C.UTF-8, so if step 4 named C at all, that verdict is evidence
-     about upstream's file and none about either node's. Nothing above
-     says whether either node's own C.UTF-8 is ellipsis-based -- which
-     is the one thing a data diff, including the node-to-node one, can
-     never clear.
+     Pass --old-node and --new-node instead of every other --old-*/--new-*
+     option, or --old-locales-dir and --new-locales-dir with their build ids.
+     Step 4 above scanned the TAG, and a tag holds at most upstream's C:
+     the distros this audit targets ship their own C.UTF-8, so if step 4
+     named C at all, that verdict is evidence about upstream's file and
+     none about either node's. Nothing above says whether either node's
+     own C.UTF-8 is ellipsis-based -- which is the one thing a data
+     diff, including the node-to-node one, can never clear.
 
 -- Warnings the clean results above do NOT cover
      !! localedata/locales/C exists at NEITHER glibc-2.28 nor glibc-2.34, but

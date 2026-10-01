@@ -51,7 +51,7 @@ _HUNK_LINE_RE = re.compile(r'^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@')
 #
 # Keep this minimal: every entry asserts something about what a distro ships,
 # and only C.UTF-8 is measured (RHEL8 and RHEL9 nodes, see
-# docs/limitations.md). Do not add a locale here on the strength of a guess.
+# docs/results.md). Do not add a locale here on the strength of a guess.
 KNOWN_BACKPORTED = {
     'C': 'C.UTF-8',
 }

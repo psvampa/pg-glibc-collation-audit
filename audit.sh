@@ -95,8 +95,9 @@ usage() {
   echo >&2
   echo "       The --*-node options are OPTIONAL and go together. Each is the" >&2
   echo "       one file scripts/locale_order.py --extract wrote on that" >&2
-  echo "       machine, with its measurement, its locale sources and its" >&2
-  echo "       build, and stands for all the options above." >&2
+  echo "       machine, with its measurement, its build and its locale sources" >&2
+  echo "       (a file without the sources says why), and stands for all the" >&2
+  echo "       options above." >&2
   exit 2
 }
 
@@ -193,8 +194,8 @@ NEW_DISTRO_LIST="$OUT_DIR/backports_inside_collate.${NEW//[^A-Za-z0-9_.@+-]/_}..
 
 # The node files are laid out before anything reads them. locale_order.py
 # --unpack checks each one whole, and it then stands for the options above:
-# the measurement always; the sources and the build when the file holds
-# sources. A file without them says why, and the summary prints that reason
+# the measurement and the build always; the sources when the file holds them.
+# A file without the sources says why, and the summary prints that reason
 # where their checks would have answered. Each is laid out afresh, under a name
 # for the pair, like every other file this run reads.
 OLD_NO_SOURCES=""; NEW_NO_SOURCES=""
@@ -579,7 +580,8 @@ else
     no_sources old
     no_sources new
   else
-    echo "     Pass --old-locales-dir and --new-locales-dir with their build ids."
+    echo "     Pass --old-node and --new-node instead of every other --old-*/--new-*"
+    echo "     option, or --old-locales-dir and --new-locales-dir with their build ids."
   fi
   # With the new copy alone, a file of the new tag it does not hold may be one
   # the new machine does not ship -- a locale the upgrade removes, and one no
@@ -642,10 +644,11 @@ if [ -n "$OLD_ORDER" ]; then
   fi
 else
   echo "-- Measured order: NOT RUN"
-  echo "     Pass --old-order and --new-order, each the output of"
-  echo "     scripts/locale_order.py on that machine. Without them nothing"
-  echo "     above asked either machine's glibc how it sorts, and a locale"
-  echo "     whose files did not change can still sort differently."
+  echo "     Pass --old-node and --new-node instead of every other --old-*/--new-*"
+  echo "     option, or --old-order and --new-order, each written by"
+  echo "     scripts/locale_order.py on that machine. Without them nothing above"
+  echo "     asked either machine's glibc how it sorts, and a locale whose files"
+  echo "     did not change can still sort differently."
 fi
 
 echo
@@ -738,8 +741,8 @@ else
     no_sources old
     no_sources new
   else
-    echo "     No machine files. Pass --old-node and --new-node, each the"
-    echo "     file scripts/locale_order.py --extract wrote on that machine."
+    echo "     Pass --old-node and --new-node instead of every other --old-*/--new-*"
+    echo "     option, or --old-locales-dir and --new-locales-dir with their build ids."
   fi
   echo "     So nothing above says whether either machine's own patches touch"
   echo "     LC_COLLATE, which the tags cannot show."
@@ -773,6 +776,14 @@ if [ -n "$NODE_LIST" ] && [ -f "$NODE_LIST" ]; then
        "$OUT_DIR/step8.$PAIR.log" 2>/dev/null; then
     echo "     C (C.UTF-8): DIFFERS  <- LC_COLLATE is not the same on the two nodes"
   fi
+elif [ -n "$OLD_LOCALES" ] && [ -n "$NEW_LOCALES" ]; then
+  # Unreachable as the step stands: this is step 8's own gate, so step 8 ran,
+  # and it writes its list on every run or has already ended this script.
+  # Without this branch the block below would tell the reader to pass the
+  # options that were passed.
+  echo "-- Node-to-node locale data: NOT REPORTED"
+  echo "     Step 8 wrote no list. Read its output above; do not read this as"
+  echo "     nothing differs"
 else
   # Absent is not empty. A summary that simply says nothing about C.UTF-8
   # reads exactly like one that cleared it, and that is how this locale gets
@@ -786,17 +797,18 @@ else
     echo "     order'. PostgreSQL reports collversion as NULL for every C.*"
     echo "     collation, so no mismatch can ever fire."
   else
-    echo "     Pass --old-locales-dir and --new-locales-dir with their build"
+    echo "     Pass --old-node and --new-node instead of every other --old-*/--new-*"
+    echo "     option, or --old-locales-dir and --new-locales-dir with their build ids."
     if [ -n "$OLD_ORDER" ]; then
       # Step 11 ran, and measured C.UTF-8 if both machines could, so "nothing
       # compared it" may be false. This says where to read what it found, not
       # what that was: it can be listed there as not measured.
-      echo "     ids. Without both, nothing above compared the two nodes' C.UTF-8"
-      echo "     files against each other; what step 11 measured of it is under"
+      echo "     Without both, nothing above compared the two nodes' C.UTF-8 files"
+      echo "     against each other; what step 11 measured of it is under"
       echo "     '-- Measured order'. PostgreSQL reports collversion as NULL for"
       echo "     every C.* collation, so no mismatch can ever fire."
     else
-      echo "     ids. Without both, nothing above compared the two nodes' C.UTF-8"
+      echo "     Without both, nothing above compared the two nodes' C.UTF-8"
       echo "     against each other, and PostgreSQL reports collversion as NULL for"
       echo "     every C.* collation, so no mismatch can ever fire."
     fi
@@ -861,9 +873,8 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
       '')
         # Unreachable as the step stands -- it declares a status for every
         # backported locale it knows of, on every run -- so no test drives
-        # this branch; tests/README.md lists it with the other three. It is
-        # here because the alternative to an unreachable branch is a reworded
-        # script silently taking the reassuring one.
+        # this branch. It is here because the alternative to an unreachable
+        # branch is a reworded script silently taking the reassuring one.
         echo "     C (C.UTF-8): NOT DECLARED  <- step $n printed no status line for"
         echo "     it. Read step $n above; do not read this as cleared" ;;
       *)
@@ -896,14 +907,14 @@ else
     echo "     thing a data diff, including the node-to-node one, can never"
     echo "     clear."
   else
-    echo "     Pass --old-locales-dir and --new-locales-dir with their build"
-    echo "     ids. Step 4 above scanned the TAG, and a tag holds at most"
-    echo "     upstream's C: the distros this audit targets ship their own"
-    echo "     C.UTF-8, so if step 4 named C at all, that verdict is evidence"
-    echo "     about upstream's file and none about either node's. Nothing above"
-    echo "     says whether either node's own C.UTF-8 is ellipsis-based -- which"
-    echo "     is the one thing a data diff, including the node-to-node one, can"
-    echo "     never clear."
+    echo "     Pass --old-node and --new-node instead of every other --old-*/--new-*"
+    echo "     option, or --old-locales-dir and --new-locales-dir with their build ids."
+    echo "     Step 4 above scanned the TAG, and a tag holds at most upstream's C:"
+    echo "     the distros this audit targets ship their own C.UTF-8, so if step 4"
+    echo "     named C at all, that verdict is evidence about upstream's file and"
+    echo "     none about either node's. Nothing above says whether either node's"
+    echo "     own C.UTF-8 is ellipsis-based -- which is the one thing a data"
+    echo "     diff, including the node-to-node one, can never clear."
   fi
 fi
 

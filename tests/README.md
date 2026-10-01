@@ -13,7 +13,7 @@ this tool shipped, or a way of losing one, and its docstring says which.
 | file | needs the glibc clone | what it covers |
 |---|---|---|
 | `test_provenance.py` | yes | the tags resolve to the pinned commits; if this fails, every number in `test_known_answers.py` is suspect |
-| `test_known_answers.py` | yes | steps 1 to 5 end to end on the pinned pairs, against what docs/results.md publishes |
+| `test_known_answers.py` | yes | steps 1 to 5 end to end on the pinned pairs |
 | `test_wrapper.py` | yes | `audit.sh` end to end, mostly its failure modes: node files, missing sources, refused files |
 | `test_node_modes.py` | yes | the steps that read a machine's own locale files |
 | `test_distro_diff.py` | yes | the comparison of a machine's locale files against its upstream tag (steps 6 and 7) |
