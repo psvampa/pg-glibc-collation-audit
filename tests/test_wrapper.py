@@ -514,22 +514,21 @@ class WrapperEmptyPair(unittest.TestCase):
         self.assertIn("none -- no locale's LC_COLLATE changed between these "
                       "two tags", self.out)
 
-    def test_the_clean_step_5_branch_is_the_one_printed(self):
-        """HUNKS == 0 used to be executed by this class and asserted by
-        nobody. The same tag against itself is the one real input that reaches
-        it: step 5 prints its clean sentence and the summary must say
-        "sufficient" -- and NOT the unresolved wording, which is what an absent
-        clean sentence produces."""
+    def test_one_commit_leaves_step_4_unresolved(self):
+        """One tag against itself compares nothing, and step 5 used to print
+        its clean sentence over it, which the summary turned into "a clean
+        data diff is sufficient even for the locales step 4 flagged"
+        (false-negative-reviewer, 2026-09-30). It is not a clean result now,
+        and the summary says why. The clean branch is driven by
+        WrapperStep5Clean."""
         summary = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
-        self.assertIn('Step 5 found no substantive change, so a clean data '
-                      'diff is sufficient even for the locales step 4 flagged',
-                      summary)
-        self.assertIn('Nothing from step 5.', summary)
-        self.assertNotIn('did NOT reach a clean result', summary)
-        # The branch that always carried the backport caveat keeps it. Matched
-        # without its first word, so this assertion holds both before and after
-        # the line moved out of the case: it is the control for the two tests
-        # that fail when it moves back in (backlog 1.14).
+        self.assertNotIn('a clean data diff is sufficient', summary)
+        self.assertIn('step 5 did NOT reach a clean result, so the locales '
+                      'step 4 flagged stay UNRESOLVED', summary)
+        self.assertIn('the two tags are one commit', summary)
+        # The caveat is true of this branch too: a run that compared nothing
+        # still cannot see a distro patch. It printed in the `clean` branch
+        # only until backlog 1.14 was fixed.
         self.assertIn("upstream diff cannot see your distro's backports",
                       summary)
 
@@ -543,7 +542,9 @@ class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
     the string comparison never fired: rc 0, no "nothing was compared", and a
     summary reading "none -- no locale\'s LC_COLLATE changed". That is the
     same-tag false negative reopened by spelling. Mutation: put the
-    text comparison back and this class fails.
+    text comparison back and this class fails. Step 5 asks git the same
+    question for its own verdict, and this is the class that fails if it
+    compares the two names as text instead.
     """
 
     @classmethod
@@ -563,6 +564,11 @@ class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
         self.assertIn("-- One commit, compared with itself", summary)
         self.assertIn("Everything above that compares the two tags and says "
                       "'nothing changed' means 'nothing was compared'", summary)
+        # Compared as text, the tag and its sha are two commits, and step 5
+        # printed its clean sentence over this pair (false-negative-reviewer,
+        # 2026-09-30, measured with that mutant).
+        self.assertIn('step 5 did NOT reach a clean result', summary)
+        self.assertNotIn('a clean data diff is sufficient', summary)
 
 
 @needs_clone
@@ -1435,12 +1441,13 @@ class WrapperStep5Unresolved(unittest.TestCase):
     the locales step 4 flagged". Step 5 said one thing; the summary said the
     opposite, 300 lines lower.
 
-    No tag pair can drive this branch for real: going forward in time no
-    tracked path has ever vanished, and reversed, 2.39 -> 2.34 loses
-    C-collate-seq.c but still finds 52 hunks. So step 5 is stood in for by a
-    `python3` shim on PATH that prints what the real script prints in that
-    state -- the same text test_known_answers ties to the real script on the
-    reversed pair -- and hands every other step to the real interpreter.
+    No tag pair has a vanished path and nothing else to report: going
+    forward in time no tracked path has ever vanished, and reversed, 2.39 ->
+    2.34 loses C-collate-seq.c but still finds 52 hunks. So step 5 is stood in
+    for by a `python3` shim on PATH that prints the lines the real script
+    prints for a vanished path -- its `!!` block is the text test_known_answers
+    ties to the real script on the reversed pair -- and hands every other step
+    to the real interpreter.
     """
 
     CANNED = (
@@ -1484,7 +1491,10 @@ class WrapperStep5Unresolved(unittest.TestCase):
         rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
                               env_extra=self.env)
         self.assertEqual(rc, 0, out)
-        self.assertIn('NOT a clean result', out, 'the shim did not run')
+        # Text only the canned output carries: the real step 5 also says "NOT
+        # a clean result" on one commit compared with itself.
+        self.assertIn('1 tracked path(s) vanished before glibc-2.39', out,
+                      'the shim did not run')
         summary = out.split('AUDIT SUMMARY')[1]
         flat = ' '.join(summary.split())
         self.assertNotIn('a clean data diff is sufficient', flat)
@@ -1505,6 +1515,73 @@ class WrapperStep5Unresolved(unittest.TestCase):
         warnings = out.split('-- Warnings the clean results above')[1]
         self.assertIn('locale/programs/ld-collate.c: ABSENT at glibc-2.39',
                       warnings)
+
+
+@needs_clone
+class WrapperStep5Clean(unittest.TestCase):
+    """The summary's clean step 5 branch, "a clean data diff is sufficient".
+
+    One tag against itself was the one real input that reached it, and that
+    is not a clean result any more: it compares nothing. No pinned pair of
+    two different tags has zero substantive hunks, so step 5 is stood in for
+    by a `python3` shim that prints the real script's clean sentence over
+    glibc-2.28..glibc-2.34, as WrapperStep5Unresolved does for its branch.
+    """
+
+    CANNED = (
+        "Collation code changes between glibc-2.28 and glibc-2.34\n"
+        "\n"
+        "No substantive collation code change. Every locale whose data file "
+        "is unchanged\n"
+        "is genuinely unaffected, including the algorithmic-range locales "
+        "that\n"
+        "flag_algorithmic_ranges.py lists -- steps 1-3 are sufficient for "
+        "this pair.\n")
+
+    @classmethod
+    def setUpClass(cls):
+        import sys
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-clean5-')
+        cls.shim_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-shim-')
+        canned = os.path.join(cls.shim_dir, 'step5.txt')
+        with open(canned, 'w', encoding='utf-8') as fh:
+            fh.write(cls.CANNED)
+        shim = os.path.join(cls.shim_dir, 'python3')
+        with open(shim, 'w', encoding='utf-8') as fh:
+            fh.write('#!/bin/sh\n'
+                     'case "$1" in\n'
+                     f'  *diff_collation_code.py) cat "{canned}"; exit 0 ;;\n'
+                     'esac\n'
+                     f'exec "{sys.executable}" "$@"\n')
+        os.chmod(shim, 0o755)
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID, out_dir=cls.out_dir,
+            env_extra={'PATH': cls.shim_dir + os.pathsep
+                       + os.environ.get('PATH', '')})
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.shim_dir, ignore_errors=True)
+
+    def test_the_clean_step_5_branch_is_the_one_printed(self):
+        """The summary must say "sufficient", and NOT the unresolved wording,
+        which is what an absent clean sentence produces."""
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        summary = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
+        # The real step 5 finds 24 hunks on this pair, so this line is only
+        # printed when the shim ran.
+        self.assertIn('Step 5 found no substantive change, so a clean data '
+                      'diff is sufficient even for the locales step 4 flagged',
+                      summary)
+        self.assertIn('Nothing from step 5.', summary)
+        self.assertNotIn('did NOT reach a clean result', summary)
+        # The branch that always carried the backport caveat keeps it. Matched
+        # without its first word, so this assertion holds both before and after
+        # the line moved out of the case: it is the control for the tests that
+        # fail when it moves back in (backlog 1.14).
+        self.assertIn("upstream diff cannot see your distro's backports",
+                      summary)
 
 
 @needs_clone

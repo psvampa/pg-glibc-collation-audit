@@ -554,10 +554,12 @@ def require_pair_order(repo, old, new, allow_reverse=False):
     """
     status, detail = pair_order(repo, old, new)
     if status == 'same':
-        warn(f"{old} and {new} are the same commit. Steps 1-5 compare "
-             f"upstream source against itself, so they can only report "
-             f"'nothing changed' -- which for an intra-major upgrade "
-             f"(RHEL 8.1 -> 8.2, say) says nothing at all. The distro's own "
+        warn(f"{old} and {new} are the same commit. Steps 1, 2 and 5 compare "
+             f"upstream source against itself. Steps 1 to 3 can only report "
+             f"'nothing changed', which for an intra-major upgrade "
+             f"(RHEL 8.1 -> 8.2, say) says nothing at all, and step 5 reports "
+             f"that nothing was compared. Step 4 reads only the new tag, so "
+             f"its list still needs confirming. The distro's own "
              f"builds are where such a change lives. With each machine's file "
              f"(--old-node and --new-node), step 11 measures how each machine "
              f"sorts, and steps 6 to 10 read its locale sources when the file "

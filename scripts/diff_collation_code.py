@@ -589,8 +589,8 @@ def main(argv):
     # Reversed, this step reads the same diff backwards and reaches the same
     # hunk count, so nothing in its output would have said which direction it
     # was given. It asks git instead of assuming.
-    g.require_pair_order(repo, opts.old_tag, opts.new_tag,
-                         allow_reverse=opts.allow_reverse)
+    order = g.require_pair_order(repo, opts.old_tag, opts.new_tag,
+                                 allow_reverse=opts.allow_reverse)
     rng = f'{opts.old_tag}..{opts.new_tag}'
 
     print(f"Collation code changes between {opts.old_tag} and {opts.new_tag}")
@@ -724,9 +724,9 @@ def main(argv):
     print(f"lc-collate.c and C-collate.c are in TIER 1 by hand for exactly "
           f"that reason.")
 
-    # Four reasons the clean sentence is refused, each printed as its own `!!`
+    # The reasons the clean sentence is refused, each printed as its own `!!`
     # block above. They are collected rather than tested one at a time so that
-    # adding a fifth cannot leave the clean branch reachable by accident.
+    # adding one cannot leave the clean branch reachable by accident.
     blockers = []
     if vanished:
         blockers.append(f"{len(vanished)} tracked path(s) vanished before "
@@ -739,6 +739,12 @@ def main(argv):
                         f"this clone")
     if not derived:
         blockers.append("the include walk reached no file")
+    paths_blocked = bool(blockers)
+    # One commit compared with itself: every diff above is empty because
+    # nothing was compared, and its zero read as the clean verdict, which the
+    # summary turned into "a clean data diff is sufficient".
+    if order == 'same':
+        blockers.append("the two tags are one commit, so nothing was compared")
 
     print()
     if total == 0 and blockers:
@@ -749,7 +755,8 @@ def main(argv):
         print("This is NOT a clean result:")
         for reason in blockers:
             print(f"  - {reason}")
-        print("Resolve the paths listed above, then re-run.")
+        if paths_blocked:
+            print("Resolve the paths listed above, then re-run.")
     elif total == 0:
         print("No substantive collation code change. Every locale whose data "
               "file is unchanged")
