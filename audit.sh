@@ -179,18 +179,24 @@ export PYTHONUNBUFFERED=1
 # this script has already run. Findings, counts and warnings are unaffected.
 export PG_GLIBC_AUDIT_WRAPPED=1
 
-PAIR="${OLD//[^A-Za-z0-9_.@+-]/_}..${NEW//[^A-Za-z0-9_.@+-]/_}"
+# Every name below that a Python step also writes is spelled by the function
+# that step uses, never by a second spelling here. bash's own
+# ${x//[^A-Za-z0-9_.@+-]/_} replaces each byte of a character outside ASCII
+# under LC_ALL=C, where pair_slug replaces the character once, and the summary
+# then looked for a file the step had written under another name.
+slug() { python3 "$SCRIPTS/glibc_locale_data.py" pair-slug "$1" "$2"; }
+PAIR=$(slug "$OLD" "$NEW")
 STEP2_LIST="$OUT_DIR/step2_changed_collate.$PAIR.txt"
 STEP2_REMOVED="$OUT_DIR/step2_removed_locales.$PAIR.txt"
 STEP3_LIST="$OUT_DIR/step3_affected_locales.txt"
 STEP4_LIST="$OUT_DIR/step4_exposed_locales.txt"
 # What step 7 found missing from the new copy, named after the new tag and the
-# label step 7 is given below, exactly as pair_slug spells it.
-NEW_COPY_MISSING="$OUT_DIR/copy_missing.${NEW//[^A-Za-z0-9_.@+-]/_}..new.txt"
+# label step 7 is given below.
+NEW_COPY_MISSING="$OUT_DIR/copy_missing.$(slug "$NEW" new).txt"
 # What steps 6 and 7 found inside LC_COLLATE, one list per side, named the same
 # way. The summary reads them for its steps 6 and 7 block.
-OLD_DISTRO_LIST="$OUT_DIR/backports_inside_collate.${OLD//[^A-Za-z0-9_.@+-]/_}..old.txt"
-NEW_DISTRO_LIST="$OUT_DIR/backports_inside_collate.${NEW//[^A-Za-z0-9_.@+-]/_}..new.txt"
+OLD_DISTRO_LIST="$OUT_DIR/backports_inside_collate.$(slug "$OLD" old).txt"
+NEW_DISTRO_LIST="$OUT_DIR/backports_inside_collate.$(slug "$NEW" new).txt"
 
 # The node files are laid out before anything reads them. locale_order.py
 # --unpack checks each one whole, and it then stands for the options above:
@@ -235,7 +241,8 @@ fi
 # pair's. Empty unless both sides were supplied, which is what gates step 8.
 NODE_LIST=""; NODE_INHERITED=""; NODE_REMOVED=""; NODE_UNDETERMINED=""
 if [ -n "$OLD_BUILD" ] && [ -n "$NEW_BUILD" ]; then
-  BUILDPAIR="${OLD_BUILD//[^A-Za-z0-9_.@+-]/_}..${NEW_BUILD//[^A-Za-z0-9_.@+-]/_}"
+  # Spelled by slug(), like step 8's own names for these files.
+  BUILDPAIR=$(slug "$OLD_BUILD" "$NEW_BUILD")
   NODE_LIST="$OUT_DIR/node_collate_diffs.$BUILDPAIR.txt"
   NODE_INHERITED="$OUT_DIR/node_collate_inherited.$BUILDPAIR.txt"
   NODE_REMOVED="$OUT_DIR/node_removed_locales.$BUILDPAIR.txt"
