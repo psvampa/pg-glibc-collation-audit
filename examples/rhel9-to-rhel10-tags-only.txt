@@ -163,10 +163,15 @@ Additionally exposed via `copy` inheritance: 341
   via iso14651_t1_common: 4 locale(s)
       cmn_TW, cns11643_stroke, iso14651_t1_pinyin, zh_CN
 
-Full set needing empirical confirmation: 345 locale source file(s), 488 generated locale name(s) per localedata/SUPPORTED
+Additionally exposed through localedef's default weight: 6
+      POSIX, ar_SA, ja_JP, km_KH, lo_LA, sl_SI
+  No ellipsis range reaches these, but every character a locale does not list
+  gets the weight localedef assigns to UNDEFINED, in code, not from the file.
+
+Full set needing empirical confirmation: 351 locale source file(s), 496 generated locale name(s) per localedata/SUPPORTED
   e.g. aa_DJ, aa_DJ.utf8, aa_ER, aa_ET, af_ZA, af_ZA.utf8, agr_PE, ak_GH, ...
-  not in SUPPORTED (templates, not built by default): ab_GE, cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
-  full list (494 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
+  not in SUPPORTED (not built by default): POSIX, ab_GE, cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
+  full list (503 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
 
 These cannot be cleared by a source diff alone.
 Step 5 below decides whether that matters for this pair.
@@ -1309,7 +1314,7 @@ empirical sort-order test, however clean its data diff is.
 
 -- Needs an empirical test: step 5 found 52 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged
-     494 name(s) to confirm: generated names, and
+     503 name(s) to confirm: generated names, and
      source names for the locales SUPPORTED does not list
      full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
 
@@ -1333,9 +1338,10 @@ empirical sort-order test, however clean its data diff is.
      Step 4 above scanned the TAG, and a tag holds at most upstream's C:
      the distros this audit targets ship their own C.UTF-8, so if step 4
      named C at all, that verdict is evidence about upstream's file and
-     none about either node's. Nothing above says whether either node's
-     own C.UTF-8 is ellipsis-based -- which is the one thing a data
-     diff, including the node-to-node one, can never clear.
+     none about either node's. Nothing above says how either node's own
+     C.UTF-8 defines its order, and unless both nodes' copies declare
+     codepoint_collation, a data diff, including the node-to-node one,
+     cannot clear it.
 
 -- Warnings the clean results above do NOT cover
      !! localedata/locales/C is new UPSTREAM at glibc-2.39, but C.UTF-8 is

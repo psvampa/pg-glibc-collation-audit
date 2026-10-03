@@ -12,11 +12,12 @@
 --     BACKPORT the file, so for the RHEL8->RHEL9 pair it is in neither tag and
 --     no tag-to-tag diff can compare it. (RHEL10 is glibc 2.39 and has
 --     upstream's copy.) scripts/diff_node_locales.py compares the two nodes'
---     own copies and settles the DATA; it cannot settle the ORDER wherever
---     that file defines its collation with ellipsis ranges, because localedef
---     computes those weights when the locale is built. RHEL8 is such a node;
---     RHEL9 and RHEL10 declare codepoint_collation instead, which is byte
---     order by construction.
+--     own copies and settles the DATA; it settles the ORDER only where both
+--     copies declare codepoint_collation, which is byte order by
+--     construction, as RHEL9's and RHEL10's do. Anywhere else localedef
+--     computes part of the order when the locale is built: the weights of
+--     ellipsis ranges, as in RHEL8's copy, and the default weight of every
+--     character a file does not list.
 --
 --   * PostgreSQL cannot warn either. Under the libc provider,
 --     get_collation_actual_version() returns NULL for "C", for "POSIX" and for

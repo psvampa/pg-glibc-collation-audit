@@ -22,7 +22,8 @@ import tempfile
 import unittest
 
 from _harness import (GLIBC_CLONE, MID, NEW, OLD, SCRIPTS_DIR, backported_c,
-                      flat, locale_file, needs_clone, upstream_c)
+                      default_weight_section, flat, locale_file, needs_clone,
+                      upstream_c)
 
 import diff_distro_locales as dd
 import glibc_locale_data as g
@@ -580,8 +581,46 @@ class NodeToNodeRefusesToGuess(NodeCase):
                                      self.node(MID, 'b', extra={'C': same}),
                                      'build-A', 'build-B')
         self.assertEqual(rc, 0, text)
-        self.assertIn('the data comparison is the whole story', flat(text))
+        # The reason as well as the verdict: "no backported locale here is
+        # ellipsis-based" was the reason, and backlog 1.6 made it false.
+        self.assertIn('Every backported locale here declares '
+                      'codepoint_collation on both nodes, so for those the '
+                      'data comparison is the whole story', flat(text))
         self.assertNotIn('NOT compared by this run', flat(text))
+        self.assertNotIn('no ellipsis range on either node', flat(text))
+
+    def test_no_ellipsis_is_not_the_whole_story_without_codepoint(self):
+        """A C with explicit weights, or one that only copies, uses no
+        ellipsis range and still takes localedef's default weight for every
+        character it does not list (backlog 1.6). "The data comparison is the
+        whole story" was printed for both, which the default weight makes
+        false. A C with no LC_COLLATE block at all gets
+        neither line: nothing measured says what localedef builds for it."""
+        explicit = locale_file('order_start forward',
+                               '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
+                               'order_end')
+        no_block = ('comment_char %\nescape_char /\n\nLC_CTYPE\n'
+                    'copy "i18n"\nEND LC_CTYPE\n')
+        copy_only = locale_file('copy "iso14651_t1"')
+        # The last case: codepoint_collation on one node only is not settled.
+        cases = (('explicit', explicit, explicit, True),
+                 ('copy-only', copy_only, copy_only, True),
+                 ('none', no_block, no_block, False),
+                 ('codepoint-none', upstream_c(), no_block, False))
+        for name, old_body, new_body, warned in cases:
+            with self.subTest(case=name):
+                rc, text = self.node_to_node(
+                    self.node(OLD, f'{name}-a', extra={'C': old_body}),
+                    self.node(MID, f'{name}-b', extra={'C': new_body}),
+                    'build-A', 'build-B')
+                self.assertEqual(rc, 0, text)
+                self.assertNotIn('the data comparison is the whole story',
+                                 flat(text))
+                self.assertEqual('C.UTF-8: no ellipsis range on either node, '
+                                 "but every character the file does not list "
+                                 "takes localedef's default weight, so the "
+                                 'order is NOT settled by comparing the data '
+                                 'either.' in flat(text), warned)
 
     def test_the_caveat_does_not_assert_a_shape_it_did_not_see(self):
         """It used to say "C.UTF-8, whose backported source IS built from
@@ -639,8 +678,10 @@ class DirectoryModeStepFour(NodeCase):
                      'ellipsis (algorithmic) ranges: 4'):
             self.assertIn(line, tag_text)
             self.assertIn(line, dir_text)
-        self.assertIn('335 locale source file(s), 478 generated', tag_text)
-        self.assertIn('335 locale source file(s), 478 generated', dir_text)
+        self.assertIn('342 locale source file(s), 488 generated', tag_text)
+        self.assertIn('342 locale source file(s), 488 generated', dir_text)
+        self.assertEqual(default_weight_section(dir_text),
+                         default_weight_section(tag_text))
 
     def test_the_help_does_not_call_this_the_only_way_to_see_C(self):
         """--locales-dir was described as "the only way to
@@ -852,7 +893,9 @@ class DirectoryModeStepFour(NodeCase):
                        '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 0, text)
         self.assertIn("the node's `locale -a` is the authority", flat(text))
-        self.assertNotIn('templates, not built by default', flat(text))
+        # The tag-mode label, which test_known_answers asserts is printed
+        # there, so this cannot pass by the label being renamed away.
+        self.assertNotIn('not in SUPPORTED (not built by default)', flat(text))
 
     def test_each_backported_locale_gets_a_declared_status(self):
         """Absent, cleared and unexamined are three answers; the wrapper could
@@ -882,6 +925,42 @@ class DirectoryModeStepFour(NodeCase):
                                '--build-id', 'fake', out_dir=self.out)
                 self.assertEqual(rc, 0, text)
                 self.assertIn(expected, text)
+
+    def test_an_explicit_C_is_declared_exposed_by_the_default_weight(self):
+        """Step 4 lists a C with explicit weights for localedef's default
+        weight (backlog 1.6), so its declaration says so too; "no ellipsis
+        range for localedef to expand" alone read as cleared. Both places that
+        declare are driven: the scan with the templates' ranges intact, and
+        the one where nothing uses an ellipsis. The control is a C declaring
+        codepoint_collation, which no default weight reaches."""
+        explicit = locale_file('order_start forward',
+                               '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
+                               'order_end')
+        no_ranges = {name: explicit for name in
+                     ('i18n', 'iso14651_t1', 'iso14651_t1_common', 'ko_KR')}
+        clause = ("takes localedef's default weight -- so this locale IS "
+                  "exposed")
+        cases = (('ranges', {'C': explicit}, True),
+                 ('noranges', {**no_ranges, 'C': explicit}, True),
+                 ('control', {'C': upstream_c()}, False))
+        for name, extra, exposed in cases:
+            with self.subTest(case=name):
+                rc, text = run('flag_algorithmic_ranges.py',
+                               '--locales-dir',
+                               self.node(MID, f'explicit-{name}', extra=extra),
+                               '--build-id', 'fake', out_dir=self.out)
+                self.assertEqual(rc, 0, text)
+                line = re.search(r'^  C \(C\.UTF-8\): (.*)$', text, re.M)
+                self.assertIsNotNone(line, text)
+                if exposed:
+                    self.assertTrue(line.group(1).startswith('explicit weights'),
+                                    line.group(1))
+                    self.assertIn(clause, line.group(1))
+                else:
+                    self.assertTrue(
+                        line.group(1).startswith('codepoint_collation'),
+                        line.group(1))
+                    self.assertNotIn('default weight', line.group(1))
 
     def test_a_copy_only_C_is_not_declared_clear_of_an_ellipsis_it_inherits(self):
         """A `C` that copies `iso14651_t1` uses no ellipsis of its own and is
@@ -962,8 +1041,20 @@ class DirectoryModeStepFour(NodeCase):
                        out_dir=self.out)
         self.assertEqual(rc, 0, text)
         self.assertNotIn('steps 1-3 are sufficient', flat(text))
-        self.assertIn('steps 1-3 are NOT sufficient for those', flat(text))
         self.assertIn('so this locale is NOT cleared', flat(text))
+        # Every other locale here takes the default weight (backlog 1.6), so
+        # the sentence counts those and the unresolved ones together. Each
+        # locale once: one reaching the absent target is in the `!!` block and
+        # not in the default-weight section as well.
+        defined = int(re.search(r'of which (\d+) define LC_COLLATE',
+                                text).group(1))
+        unresolved = int(re.search(r'(\d+) locale\(s\) reach one',
+                                   text).group(1))
+        default = default_weight_section(text)[0]
+        self.assertEqual(default + unresolved, defined)
+        self.assertIn(f'No locale uses ellipsis ranges here, but the '
+                      f'{defined} locale(s) above are NOT cleared by steps '
+                      f'1-3.', flat(text))
         # Opened at the path the output NAMES, not at one this test knows:
         # announcing a file nobody wrote sends the reader to "No such file",
         # and a test that looks elsewhere cannot tell.
@@ -974,7 +1065,35 @@ class DirectoryModeStepFour(NodeCase):
         self.assertIn('C', written)
         # This path maps through SUPPORTED too, and had no test saying so.
         self.assertIn('sv_SE.utf8', written)
+        # And it carries the default-weight locales, not only the unresolved.
+        self.assertIn('ja_JP.utf8', written)
         self.assertEqual(int(named.group(1)), len(written))
+
+    def test_a_corpus_left_only_unresolved_says_so(self):
+        """The branch the test above no longer reaches: nothing uses an
+        ellipsis and nothing is left for the default weight, because every
+        locale copies a target the corpus does not contain. It must say those
+        are unresolved, never "sufficient", and print no default-weight
+        section over nothing."""
+        tree = _tree(MID)
+        extra = {}
+        for fname in os.listdir(tree):
+            if not os.path.isfile(os.path.join(tree, fname)):
+                continue
+            with open(os.path.join(tree, fname), 'rb') as fh:
+                text = fh.read().decode('utf-8', 'surrogateescape')
+            if g.collate_block(text) is not None:
+                extra[fname] = locale_file('copy "no_such_locale"')
+        self.assertEqual(len(extra), 342)
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir', self.node(MID, 'alldangle', extra=extra),
+                       '--build-id', 'fake', '--supported-tag', MID,
+                       out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertNotIn('steps 1-3 are sufficient', flat(text))
+        self.assertIn('leave 342 locale(s) unresolved: steps 1-3 are NOT '
+                      'sufficient for those', flat(text))
+        self.assertNotIn('default weight', text)
 
     def test_a_codepoint_C_is_not_called_unresolved_by_a_copy_it_discards(self):
         """The control the exposure note has and this one lacked:
@@ -1008,10 +1127,15 @@ class DirectoryModeStepFour(NodeCase):
         self.assertIn('not one defines LC_COLLATE', flat(text))
 
     def test_a_directory_without_any_ellipsis_still_declares_C(self):
-        """The most reassuring output this step has -- "No locale uses ellipsis
+        """The most reassuring output this step had -- "No locale uses ellipsis
         ranges here; steps 1-3 are sufficient" -- returned before the
         declaration, so the wrapper printed NOT DECLARED over a scan that had
-        looked and found an answer. Every path declares."""
+        looked and found an answer. Every path declares.
+
+        Since backlog 1.6 this input takes the default-weight path: with no
+        ellipsis anywhere and no copy target missing, which is the shape a real
+        corpus has, every locale but C is still exposed, and the sentence the
+        two paths share must not end in "sufficient" here."""
         flat_body = locale_file('order_start forward',
                                 '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
                                 'order_end')
@@ -1022,7 +1146,44 @@ class DirectoryModeStepFour(NodeCase):
                        '--locales-dir', self.node(MID, 'flat', extra=extra),
                        '--build-id', 'fake', out_dir=self.out)
         self.assertEqual(rc, 0, text)
-        self.assertIn('No locale uses ellipsis ranges here', text)
+        self.assertNotIn('steps 1-3 are sufficient', flat(text))
+        default = default_weight_section(text)[0]
+        self.assertEqual(default, int(re.search(
+            r'of which (\d+) define LC_COLLATE', text).group(1)) - 1)
+        self.assertIn(f'No locale uses ellipsis ranges here, but the {default} '
+                      f'locale(s) above are NOT cleared by steps 1-3.',
+                      flat(text))
+        self.assertIn('C (C.UTF-8): codepoint_collation', text)
+
+    def test_an_all_codepoint_directory_is_the_one_clean_result(self):
+        """The only input left that earns "steps 1-3 are sufficient": every
+        locale declares codepoint_collation, so localedef has no range to
+        expand and no default weight to give. No real corpus has this shape,
+        so it is injected; without it the branch had no test once the input
+        above moved to the default-weight path. The list is still written and
+        C still declared on it."""
+        tree = _tree(MID)
+        extra = {'C': upstream_c()}
+        for fname in os.listdir(tree):
+            if not os.path.isfile(os.path.join(tree, fname)):
+                continue
+            with open(os.path.join(tree, fname), 'rb') as fh:
+                text = fh.read().decode('utf-8', 'surrogateescape')
+            if g.collate_block(text) is not None:
+                extra[fname] = upstream_c()
+        self.assertEqual(len(extra), 343)
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir', self.node(MID, 'allcp', extra=extra),
+                       '--build-id', 'fake', out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertIn('No locale uses ellipsis ranges here; steps 1-3 are '
+                      'sufficient.', text)
+        self.assertNotIn('default weight', text)
+        named = re.search(r'full list \((\d+) name\(s\)\): (\S+)', text)
+        self.assertIsNotNone(named, text)
+        with open(named.group(2), encoding='utf-8') as fh:
+            written = [ln.strip() for ln in fh if ln.strip()]
+        self.assertEqual((int(named.group(1)), written), (0, []))
         self.assertIn('C (C.UTF-8): codepoint_collation', text)
 
     def test_the_tag_scan_declares_no_backported_status(self):

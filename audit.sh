@@ -456,8 +456,9 @@ fi
 
 # Step 4 again, over each NODE's own locale directory instead of the new tag.
 # Step 4 above scans the tag, which holds at most upstream's C and never the
-# C.UTF-8 a distro backports -- and an ellipsis range is precisely what a data
-# diff can never clear, so the node-to-node comparison cannot settle it either.
+# C.UTF-8 a distro backports -- and an ellipsis range, like the default weight
+# of every character a locale does not list, is what a data diff can never
+# clear, so the node-to-node comparison cannot settle it either.
 # docs/limitations.md used to say "run this by hand, once per node"; a check
 # that depends on somebody remembering is not a check.
 if [ -n "$OLD_LOCALES" ]; then
@@ -784,7 +785,8 @@ if [ -n "$NODE_LIST" ] && [ -f "$NODE_LIST" ]; then
   else
     echo "     no locale differs inside LC_COLLATE between the two nodes'"
     echo "     own sources. Data only -- the weights an ellipsis range expands"
-    echo "     to are computed by localedef, not stored in these files."
+    echo "     to, and the default weight of every character a locale does not"
+    echo "     list, are computed by localedef, not stored in these files."
   fi
   if grep -q '^  C (C\.UTF-8): present on both nodes, LC_COLLATE DIFFERS' \
        "$OUT_DIR/step8.$PAIR.log" 2>/dev/null; then
@@ -831,9 +833,10 @@ else
 fi
 
 # Same rule one level down: the node-to-node comparison answers whether the two
-# nodes carry the same collation DATA, and this answers whether that data is
-# the kind localedef expands at build time. Identical data is not identical
-# order when an ellipsis range computes the weights.
+# nodes carry the same collation DATA, and this answers which of it depends on
+# weights localedef computes at build time. Identical data is not identical
+# order when an ellipsis range, or the default weight of a character the file
+# does not list, computes the weights.
 echo
 if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
   for side in old new; do
@@ -916,19 +919,20 @@ else
     echo "     Step 4 above scanned the TAG, and a tag holds at most upstream's"
     echo "     C. The distros this audit targets ship their own C.UTF-8, so if"
     echo "     step 4 named C at all, that verdict is evidence about upstream's"
-    echo "     file and none about either node's. Nothing above says whether"
-    echo "     either node's own C.UTF-8 is ellipsis-based, which is the one"
-    echo "     thing a data diff, including the node-to-node one, can never"
-    echo "     clear."
+    echo "     file and none about either node's. Nothing above says how either"
+    echo "     node's own C.UTF-8 defines its order, and unless both nodes' copies"
+    echo "     declare codepoint_collation, a data diff, including the node-to-node"
+    echo "     one, cannot clear it."
   else
     echo "     Pass --old-node and --new-node instead of every other --old-*/--new-*"
     echo "     option, or --old-locales-dir and --new-locales-dir with their build ids."
     echo "     Step 4 above scanned the TAG, and a tag holds at most upstream's C:"
     echo "     the distros this audit targets ship their own C.UTF-8, so if step 4"
     echo "     named C at all, that verdict is evidence about upstream's file and"
-    echo "     none about either node's. Nothing above says whether either node's"
-    echo "     own C.UTF-8 is ellipsis-based -- which is the one thing a data"
-    echo "     diff, including the node-to-node one, can never clear."
+    echo "     none about either node's. Nothing above says how either node's own"
+    echo "     C.UTF-8 defines its order, and unless both nodes' copies declare"
+    echo "     codepoint_collation, a data diff, including the node-to-node one,"
+    echo "     cannot clear it."
   fi
 fi
 

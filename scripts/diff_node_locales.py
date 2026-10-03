@@ -319,7 +319,7 @@ def report_backported(old, new, buckets, invisible):
     cleared it look identical on a terminal, and that is how this locale gets
     missed -- it is the false negative this whole script was written for.
 
-    Returns (computed, unexamined):
+    Returns (computed, unexamined, fallback, settled):
 
       computed    backported locales that are ellipsis-based on at least one
                   side. That -- not the fact of being backported -- is what
@@ -335,10 +335,21 @@ def report_backported(old, new, buckets, invisible):
                   that wrong is how "this comparison says nothing about
                   C.UTF-8" ends up printed directly above "the data comparison
                   is the whole story".
+      fallback    backported locales compared on both nodes with explicit
+                  weights or a copy, and no ellipsis range on either side.
+                  Every character such a file does not list takes localedef's
+                  default weight (backlog 1.6), so identical data does not
+                  settle their order either. Until that was named, an explicit
+                  C read "the data comparison is the whole story" here, which
+                  the default weight makes false.
+      settled     True when every backported locale compared declares
+                  codepoint_collation on both nodes: the one case the closing
+                  "whole story" is true of. A C with no LC_COLLATE block at all
+                  is neither, and gets no reassurance.
     """
     print(f"\nBackported locales, reported whether or not they differ "
           f"(these are why this comparison exists):")
-    computed, unexamined = [], []
+    computed, unexamined, fallback, compared, byte_order = [], [], [], [], []
     for name in sorted(KNOWN_BACKPORTED):
         locale_name = KNOWN_BACKPORTED[name]
         on_old = name in old.names
@@ -376,11 +387,17 @@ def report_backported(old, new, buckets, invisible):
                   f"this file at all")
         styles = (g.classify_collation_style(old_text),
                   g.classify_collation_style(new_text))
+        compared.append(locale_name)
         if 'ellipsis' in styles:
             computed.append(locale_name)
             print(f"      an ellipsis range means localedef computes the "
                   f"weights, so identical data does NOT clear the order")
-    return computed, unexamined
+        elif {'explicit', 'copy-only'} & set(styles):
+            fallback.append(locale_name)
+        elif styles == ('codepoint', 'codepoint'):
+            byte_order.append(locale_name)
+    settled = bool(compared) and compared == byte_order
+    return computed, unexamined, fallback, settled
 
 
 def main(argv):
@@ -473,7 +490,8 @@ def main(argv):
     removed, undetermined = removal_verdicts(old, new, only_old, opts.old_tag,
                                              old_tag_names)
     report_undetermined(undetermined)
-    computed, unexamined = report_backported(old, new, buckets, invisible)
+    computed, unexamined, fallback, settled = report_backported(
+        old, new, buckets, invisible)
 
     slug = g.pair_slug(old.build_id, new.build_id)
     out = g.write_list(
@@ -537,9 +555,23 @@ def main(argv):
                 f"character's order through each machine's glibc when the "
                 f"run has both machines' measurements, and "
                 f"sql/c_utf8_probe.sql measures it inside PostgreSQL.")
-    elif not unexamined:
-        dd.warn(f"No backported locale here is ellipsis-based, so for those "
-                f"the data comparison is the whole story. Run "
+    # No ellipsis is not the same as settled: a file with explicit weights or
+    # a copy still takes localedef's default weight for every character it
+    # does not list (backlog 1.6). Only codepoint_collation on both nodes
+    # earns the reassuring line below.
+    if fallback:
+        dd.warn(f"{', '.join(fallback)}: no ellipsis range on either node, but "
+                f"every character the file does not list takes localedef's "
+                f"default weight, so the order is NOT settled by comparing the "
+                f"data either. PostgreSQL also reports collversion as NULL for "
+                f"every C.* name, so nothing warns either. Step 11 measures "
+                f"each character's order through each machine's glibc when the "
+                f"run has both machines' measurements, and "
+                f"sql/c_utf8_probe.sql measures it inside PostgreSQL.")
+    if settled and not unexamined:
+        dd.warn(f"Every backported locale here declares codepoint_collation "
+                f"on both nodes, so for those the data comparison is the whole "
+                f"story. Run "
                 f"sql/c_utf8_probe.sql anyway if C.UTF-8 is your database "
                 f"collation: it measures the order these builds actually "
                 f"produce inside PostgreSQL, as step 11 does one character at "

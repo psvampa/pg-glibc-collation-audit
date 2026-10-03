@@ -760,8 +760,7 @@ def main(argv):
     elif total == 0:
         print("No substantive collation code change. Every locale whose data "
               "file is unchanged")
-        print("is genuinely unaffected, including the algorithmic-range "
-              "locales that")
+        print("is genuinely unaffected, including every locale that")
         print("flag_algorithmic_ranges.py lists -- steps 1-3 are sufficient "
               "for this pair.")
     else:
