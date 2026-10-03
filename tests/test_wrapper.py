@@ -147,9 +147,10 @@ ELLIPSIS_NOT_RUN_BODY = [
     "Step 4 above scanned the TAG, and a tag holds at most upstream's C:",
     'the distros this audit targets ship their own C.UTF-8, so if step 4',
     "named C at all, that verdict is evidence about upstream's file and",
-    "none about either node's. Nothing above says whether either node's",
-    'own C.UTF-8 is ellipsis-based -- which is the one thing a data',
-    'diff, including the node-to-node one, can never clear.',
+    "none about either node's. Nothing above says how either node's own",
+    "C.UTF-8 defines its order, and unless both nodes' copies declare",
+    'codepoint_collation, a data diff, including the node-to-node one,',
+    'cannot clear it.',
 ]
 # The steps 6 and 7 block when no machine was given, whole, like the others.
 DISTRO_NOT_RUN_BODY = [
@@ -1422,6 +1423,18 @@ class WrapperNodesIdentical(unittest.TestCase):
         self.assertNotIn('locale(s) differ inside LC_COLLATE', block)
         self.assertNotIn('plus ', block)
 
+    def test_the_data_only_caveat_names_both_things_localedef_computes(self):
+        """The one caveat on a clean data result. It named only the weights
+        an ellipsis range expands to, which gave a reader of ja_JP or ar_SA no
+        reason to doubt it; the default weight is the other (backlog 1.6)."""
+        block = ' '.join(' '.join(summary_block(
+            self.out, '-- Node-to-node locale data (build-x -> build-y)'))
+            .split())
+        self.assertIn('Data only -- the weights an ellipsis range expands to, '
+                      'and the default weight of every character a locale '
+                      'does not list, are computed by localedef, not stored '
+                      'in these files.', block)
+
     def test_the_identical_fingerprint_warning_reaches_the_summary(self):
         summary = self.out.split('AUDIT SUMMARY')[1]
         self.assertIn('same fingerprint', summary)
@@ -1575,8 +1588,7 @@ class WrapperStep5Clean(unittest.TestCase):
         "\n"
         "No substantive collation code change. Every locale whose data file "
         "is unchanged\n"
-        "is genuinely unaffected, including the algorithmic-range locales "
-        "that\n"
+        "is genuinely unaffected, including every locale that\n"
         "flag_algorithmic_ranges.py lists -- steps 1-3 are sufficient for "
         "this pair.\n")
 
@@ -1671,6 +1683,41 @@ class WrapperNodeCIsNeitherEllipsisNorCodepoint(unittest.TestCase):
         flat = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
         self.assertNotIn('C (C.UTF-8): codepoint_collation', flat)
         self.assertNotIn('C (C.UTF-8): ellipsis-based', flat)
+
+
+@needs_clone
+class WrapperNodeCWithExplicitWeights(unittest.TestCase):
+    """A C whose weights are written one by one: no range for localedef to
+    expand, and every character it does not list still takes localedef's
+    default weight (backlog 1.6). Step 9 lists it, so the line the summary
+    relays has to say it is exposed rather than stop at "no ellipsis range".
+    No RHEL build ships this shape; it is injected."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-cexpl-')
+        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-cexpltree-')
+        root = dd.materialise_tag(GLIBC_CLONE, OLD, os.path.join(cls.nodes, 'a'))
+        with open(os.path.join(root, 'C'), 'w', encoding='utf-8') as fh:
+            fh.write(locale_file('order_start forward',
+                                 '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
+                                 'order_end'))
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID, '--old-locales-dir', root, '--old-build-id', 'build-old',
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    def test_the_summary_says_the_default_weight_exposes_it(self):
+        self.assertEqual(self.rc, 0, self.out)
+        flat = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
+        self.assertIn("C (C.UTF-8): explicit weights <- no ellipsis range for "
+                      "localedef to expand; and every character it does not "
+                      "list takes localedef's default weight -- so this "
+                      "locale IS exposed", flat)
 
 
 @needs_clone
@@ -2220,9 +2267,9 @@ class WrapperNodeFilesWithoutSources(unittest.TestCase):
             "most upstream's C. The distros this audit targets ship their own "
             "C.UTF-8, so if step 4 named C at all, that verdict is evidence "
             "about upstream's file and none about either node's. Nothing "
-            "above says whether either node's own C.UTF-8 is ellipsis-based, "
-            "which is the one thing a data diff, including the node-to-node "
-            "one, can never clear.")
+            "above says how either node's own C.UTF-8 defines its order, and "
+            "unless both nodes' copies declare codepoint_collation, a data "
+            "diff, including the node-to-node one, cannot clear it.")
         self.assertNotIn('Pass --', flat(self.summary))
 
 

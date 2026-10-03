@@ -41,8 +41,11 @@ range-expansion syntax, `<UAC00>` / `..` / `<UD7A3>`, used instead of an
 explicit weight per character. `localedef` expands it at build time, so those
 weights are **not** in the locale file. If the expansion logic changes, every
 character in the range can get a different weight with zero change to the
-locale's own source. This is what step 4 looks for and why steps 1 to 3
-cannot clear those locales on data alone.
+locale's own source. Step 4 lists the locales that use these, and every
+other locale as well except one that declares `codepoint_collation`, because
+`localedef`'s code, not the file, gives every character a locale does not
+list the `UNDEFINED` weight. Steps 1 to 3 cannot clear any of them on data
+alone.
 
 **generated locale name** — the name `locale -a` and `pg_collation` actually
 show, which is not the source file name. `localedata/SUPPORTED` says

@@ -25,7 +25,7 @@ checks in order and ends with one summary.
 | 1 | which locale files changed between the two versions, and how far the change reaches |
 | 2 | which of those changes fall inside the part that defines sort order |
 | 3 | which other locales inherit a change, because they copy from the file that changed |
-| 4 | which locales a comparison of files can never clear, because they define their order with abbreviated ranges whose real weights are computed later |
+| 4 | which locales a comparison of files can never clear, because part of their order is computed later: the weights of abbreviated ranges, and the default weight of each character they do not list |
 | 5 | whether the code that computes those weights changed |
 
 What you get is a list to worry about and a proof about everything else: if
@@ -46,7 +46,7 @@ more.
 |---|---|
 | 6 and 7 | do the distro's patches on that machine touch sort order? One step per side |
 | 8 | does one machine's collation data differ from the other's? |
-| 9 and 10 | does that machine's own data use the abbreviated ranges a file comparison can never clear? One step per side |
+| 9 and 10 | the question of step 4, asked of that machine's own data. One step per side |
 | 11 | how does each machine's own glibc sort the locales installed on it, and which characters moved between the two? |
 
 Three of those answer questions the upstream comparison cannot reach at all:

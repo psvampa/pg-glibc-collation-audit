@@ -5,6 +5,7 @@ glibc clone SKIPS with a reason instead of failing, and so that running the
 suite never writes into the shared /tmp output directory the scripts default to.
 """
 import os
+import re
 import subprocess
 import sys
 import unittest
@@ -189,6 +190,24 @@ def flat(text):
     this one copy; a second copy is how two helpers drift.
     """
     return ' '.join(text.split())
+
+
+def default_weight_section(out):
+    """(count, [names]) from step 4's default-weight section.
+
+    Raises when the section is missing, because "no locale depends only on the
+    default weight" and "the section was never printed" are different facts.
+    The names line carries the first twelve; a count above that comes back
+    with the names it printed, and the caller decides what it can compare.
+    """
+    m = re.search(r"^Additionally exposed through localedef's default weight: "
+                  r"(\d+)\n {6}(.+)$", out, re.M)
+    if not m:
+        raise ValueError(f"no default-weight section in output:\n{out[:800]}")
+    names = m.group(2).split(', ')
+    if names[-1] == '...':
+        names = names[:-1]
+    return int(m.group(1)), names
 
 
 def locale_file(*body, comment='%'):

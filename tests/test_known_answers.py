@@ -16,8 +16,8 @@ import tempfile
 import unittest
 
 from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
-                       REPO_ROOT, flat, needs_clone, needs_floor_pair,
-                       run_step)
+                       REPO_ROOT, default_weight_section, flat, needs_clone,
+                       needs_floor_pair, run_step)
 
 import glibc_locale_data as g
 
@@ -428,12 +428,71 @@ class Step4AlgorithmicRanges(StepRun):
             self.assertIn(name, out)
 
     def test_the_exposed_total_is_unchanged(self):
-        """335 at MID, as the examples print it. Pinned here because scan_ellipsis
+        """342 at MID, as the examples print it. Pinned here because scan_ellipsis
         switched from collate_block to collate_text, which changes which files
         count as defining LC_COLLATE for files that open with it."""
         out = self.step('flag_algorithmic_ranges.py', MID)
-        self.assertIn('335 locale source file(s), 478 generated', out)
+        self.assertIn('342 locale source file(s), 488 generated', out)
         self.assertIn('of which 342 define LC_COLLATE', out)
+
+    def test_each_way_in_is_counted_apart(self):
+        """The total now takes in every locale but one declaring
+        codepoint_collation, so it no longer moves when a detection fails: a
+        locale the ellipsis scan or the copy walk stops reaching lands in the
+        default-weight section and the total stays put. Each part is pinned on
+        its own so that a failure moves a number something reads."""
+        expected = {
+            MID: (331, ['POSIX', 'ar_SA', 'ja_JP', 'km_KH', 'lo_LA', 'sl_SI',
+                        'th_TH']),
+            NEW: (341, ['POSIX', 'ar_SA', 'ja_JP', 'km_KH', 'lo_LA', 'sl_SI']),
+        }
+        for tag, (inherited, default) in expected.items():
+            with self.subTest(tag=tag):
+                out = self.step('flag_algorithmic_ranges.py', tag)
+                ellipsis = one_int(r'ellipsis \(algorithmic\) ranges: (\d+)',
+                                   out, 'the ellipsis count')
+                self.assertEqual(
+                    one_int(r'exposed via `copy` inheritance: (\d+)', out,
+                            'the copy count'), inherited)
+                self.assertEqual(default_weight_section(out),
+                                 (len(default), default))
+                self.assertEqual(
+                    one_int(r'Full set needing empirical confirmation: (\d+) '
+                            r'locale', out, 'the total'),
+                    ellipsis + inherited + len(default))
+
+    def test_a_locale_no_range_reaches_is_in_the_written_list(self):
+        """Backlog 1.6. ja_JP and ar_SA use no ellipsis range and copy nothing
+        that does, and every character they do not list takes localedef's
+        UNDEFINED weight. ar_SA is the case for the fallback over the keyword:
+        its LC_COLLATE never writes UNDEFINED. The control is C, which declares
+        codepoint_collation at this tag and so stays out."""
+        contents, missing = g.read_blobs(GLIBC_CLONE, NEW,
+                                         [f'{g.LOCALES_DIR}/ar_SA'])
+        self.assertEqual(missing, set())
+        block = g.collate_text(contents[f'{g.LOCALES_DIR}/ar_SA'])
+        self.assertIsNotNone(block)
+        self.assertNotIn('UNDEFINED', block)
+        # Its own directory: MID and NEW write the same file name, and the
+        # memoised steps of this class would leave whichever ran last.
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-audit-test-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        rc, out = run_step('flag_algorithmic_ranges.py', NEW, out_dir=out_dir)
+        self.assertEqual(rc, 0, out)
+        named = re.search(r'full list \((\d+) name\(s\)\): (\S+)', out)
+        self.assertIsNotNone(named, out)
+        with open(named.group(2), encoding='utf-8') as fh:
+            written = [ln.strip() for ln in fh if ln.strip()]
+        self.assertEqual(int(named.group(1)), len(written))
+        for name in ('ja_JP.utf8', 'ar_SA.utf8'):
+            self.assertIn(name, written)
+        for name in ('C', 'C.utf8'):
+            self.assertNotIn(name, written)
+        # POSIX is listed by its source name, among the files SUPPORTED does
+        # not build. Not "templates": nothing copies POSIX.
+        self.assertIn('  not in SUPPORTED (not built by default): POSIX, ',
+                      out)
+        self.assertIn('POSIX', written)
 
     def test_the_upstream_C_is_byte_order_from_2_35(self):
         """localedata/locales/C exists upstream from glibc 2.35 and declares
@@ -683,20 +742,32 @@ class BelowTheOldVersionFloor(StepRun):
         """277 was the figure before the collate_block fix and 279 after it;
         281 adds ky_KG and uk_UA, which copy iso14651_t1 spelled in symbolic
         notation. The 2 docs/limitations.md used to publish was older still,
-        and already wrong when it was quoted."""
+        and already wrong when it was quoted.
+
+        281 is the ellipsis scan plus the copy walk. Since backlog 1.6 the
+        total adds the 19 locales only the default weight exposes, and it does
+        not move when the walk loses a locale to that section, so the 281 is
+        read from its two parts."""
         out = self.step('flag_algorithmic_ranges.py', FLOOR_NEW)
+        self.assertEqual(
+            one_int(r'ellipsis \(algorithmic\) ranges: (\d+)', out,
+                    'the ellipsis count')
+            + one_int(r'exposed via `copy` inheritance: (\d+)', out,
+                      'the copy count'),
+            281)
+        self.assertEqual(default_weight_section(out)[0], 19)
         self.assertEqual(
             one_int(r'Full set needing empirical confirmation: (\d+) locale',
                     out, 'the exposed set'),
-            281)
+            300)
         # Both halves of the sentence, and the file it names. Only the first
         # used to be pinned.
         self.assertEqual(
             one_int(r'confirmation: \d+ locale source file\(s\), (\d+) '
                     r'generated', out, 'the generated names'),
-            411)
+            445)
         self.assertEqual(
-            one_int(r'full list \((\d+) name\(s\)\)', out, 'the list'), 416)
+            one_int(r'full list \((\d+) name\(s\)\)', out, 'the list'), 451)
 
     def test_the_locales_the_bug_used_to_drop_are_reported(self):
         """A count can be right for the wrong reason. These are examples of

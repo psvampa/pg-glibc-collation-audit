@@ -2,7 +2,8 @@
 """
 Find locales whose LC_COLLATE relies on range-expansion (ellipsis) syntax
 instead of listing every character's collation weight explicitly, then close
-that set over the `copy` graph.
+that set over the `copy` graph. Every other locale is added too, except one
+declaring codepoint_collation, for the default weight described below.
 
 Why this matters: a source diff (audit-locale-diff.sh +
 filter_lc_collate_changes.py) proves that a locale's sort order didn't change
@@ -34,10 +35,15 @@ Matching only a line-leading ellipsis cleared zh_CN, cmn_TW,
 iso14651_t1_pinyin and cns11643_stroke -- a false "unaffected" for the exact
 class of locale this script exists to catch.
 
-Use diff_collation_code.py to check whether the expansion logic actually
+Use diff_collation_code.py to check whether the collation code actually
 changed for the version pair you care about. If it did, every locale printed
 here needs an empirical sort-order test regardless of what the source diff
 says.
+
+Every other locale is printed too, except one that declares
+codepoint_collation. A character a locale does not list takes the UNDEFINED
+weight, which localedef's code assigns and the file does not hold, so even a
+locale with no range depends on localedef (backlog 1.6).
 
 It also scans a DIRECTORY of locale sources -- a copy of a node's
 /usr/share/i18n/locales/ -- instead of a tag, which reaches a locale the distro
@@ -141,7 +147,8 @@ def load_from_dir(opts, repo):
 def report_codepoint(texts):
     """Name the locales that cannot be moved by an expansion change at all.
 
-    Reported rather than left in the unflagged majority. `codepoint_collation`
+    Reported rather than left unnamed: since backlog 1.6 these are the only
+    locales this step does not list. `codepoint_collation`
     is a positive statement -- byte order by construction -- and it is the
     difference between upstream's C from glibc 2.35 on and the ellipsis-based
     copy RHEL backports. A reader who cannot see which one is in front of them
@@ -170,7 +177,8 @@ def generated_names(names, supported):
     return out
 
 
-def report_backported(texts, inherited=None, unresolved=None):
+def report_backported(texts, inherited=None, unresolved=None,
+                      default_only=()):
     """Declare, one by one, what this scan found for each locale the distros
     are known to BACKPORT. Returns {name: status}.
 
@@ -184,6 +192,10 @@ def report_backported(texts, inherited=None, unresolved=None):
     whose order was never read, and saying only "copy-only, its order is
     whatever it inherits" makes that indistinguishable from a copy resolved to
     a file with nothing in it.
+    `default_only` is the third: the locales no range reaches, which this step
+    lists for localedef's default weight (backlog 1.6). Without it an explicit
+    C read "no ellipsis range for localedef to expand" in the summary while the
+    step's own list named it.
 
     `codepoint_collation` is the exception to both and outranks the copy: glibc
     discards all inherited collation information when it sees that keyword.
@@ -226,6 +238,10 @@ def report_backported(texts, inherited=None, unresolved=None):
                 status += (f"; and it copies "
                            f"{', '.join(sorted(inherited[name]))}, which this "
                            f"step flagged -- so this locale IS exposed")
+            if name in default_only:
+                status += ("; and every character it does not list takes "
+                           "localedef's default weight -- so this locale IS "
+                           "exposed")
             if name in unresolved and style != 'codepoint':
                 status += (f"; and it copies "
                            f"{', '.join(sorted(unresolved[name]))}, which is "
@@ -234,6 +250,27 @@ def report_backported(texts, inherited=None, unresolved=None):
         found[name] = status
         print(f"  {name} ({KNOWN_BACKPORTED[name]}): {status}")
     return found
+
+
+def report_default_weight(names):
+    """Name the locales that only localedef's default weight exposes.
+
+    Every character a locale does not list takes the weight of UNDEFINED, and
+    a file that declares no UNDEFINED gets one appended after everything else
+    (glibc-2.39:locale/programs/ld-collate.c, collate_finish: "simply append
+    UNDEFINED at the end"). That weight comes from the code, not the file, so
+    a locale no ellipsis range reaches still depends on localedef -- the same
+    dependency this step exists to name. It is the fallback that exposes a
+    locale, not the keyword: ar_SA never writes UNDEFINED. Backlog 1.6.
+    """
+    if names:
+        print(f"\nAdditionally exposed through localedef's default weight: "
+              f"{len(names)}")
+        print(f"      {', '.join(names[:12])}"
+              f"{', ...' if len(names) > 12 else ''}")
+        print("  No ellipsis range reaches these, but every character a locale "
+              "does not list\n  gets the weight localedef assigns to UNDEFINED, "
+              "in code, not from the file.")
 
 
 def report(texts, supported, label, out_name, next_hint,
@@ -262,7 +299,7 @@ def report(texts, supported, label, out_name, next_hint,
         if len(flagged[name]) > 3:
             print(f"      ... and {len(flagged[name]) - 3} more")
 
-    report_codepoint(texts)
+    immune = report_codepoint(texts)
 
     # Built before anything can return, because a `copy` target this corpus
     # does not contain is a locale whose order was NOT read, and
@@ -290,8 +327,24 @@ def report(texts, supported, label, out_name, next_hint,
         print(f"     {', '.join(reaching[:12])}"
               f"{', ...' if len(reaching) > 12 else ''}")
 
+    # A flagged template is only actionable together with everything that
+    # inherits it: iso14651_t1 carries the Han range and is copied, directly or
+    # transitively, by most of the corpus.
+    inherited = g.inherited_from(graph, set(flagged)) if flagged else {}
+    # What neither an ellipsis nor a copy of one reaches still sorts every
+    # character it does not list by localedef's default weight, so it is
+    # exposed too. Only codepoint_collation is free of it, and a locale whose
+    # copy target is absent is already named in the `!!` block above.
+    default_only = sorted(set(graph) - set(flagged) - set(inherited)
+                          - set(immune) - set(unresolved))
+
     if not flagged:
-        if unresolved:
+        report_default_weight(default_only)
+        if default_only:
+            print("\nNo locale uses ellipsis ranges here, but the "
+                  f"{len(default_only) + len(unresolved)} locale(s) above are "
+                  "NOT cleared by steps 1-3.")
+        elif unresolved:
             print("\nNothing that could be READ here uses an ellipsis range, "
                   "but the absent copy\ntargets above leave "
                   f"{len(unresolved)} locale(s) unresolved: steps 1-3 are NOT "
@@ -304,22 +357,18 @@ def report(texts, supported, label, out_name, next_hint,
         # run". Announced too -- the `!!` block above promises a list, and this
         # path used to write it and never say where, so the promise pointed at
         # nothing and the twelve names it prints were all a reader could get.
-        listed = sorted(generated_names(unresolved, supported))
+        listed = sorted(generated_names(set(unresolved) | set(default_only),
+                                        supported))
         out_path = g.write_list(out_name, listed)
         print(f"  full list ({len(listed)} name(s)): {out_path}")
         # Declared on this path too. A directory where nothing uses an
-        # ellipsis is the most reassuring output this step has, and it is
+        # ellipsis is where this step comes closest to reassuring, and it is
         # exactly where the summary must still be able to say what the node's
         # C is -- returning here without a status made the wrapper print
         # "NOT DECLARED" over a scan that had looked and found an answer.
         if node_dir:
-            report_backported(texts, {}, unresolved)
+            report_backported(texts, {}, unresolved, default_only)
         return 0
-
-    # A flagged template is only actionable together with everything that
-    # inherits it: iso14651_t1 carries the Han range and is copied, directly or
-    # transitively, by most of the corpus.
-    inherited = g.inherited_from(graph, set(flagged))
 
     print(f"\nAdditionally exposed via `copy` inheritance: {len(inherited)}")
     # A locale can reach more than one flagged template, so it can appear under
@@ -334,7 +383,9 @@ def report(texts, supported, label, out_name, next_hint,
         print(f"      {', '.join(locs[:12])}"
               f"{', ...' if len(locs) > 12 else ''}")
 
-    exposed = sorted(set(flagged) | set(inherited))
+    report_default_weight(default_only)
+
+    exposed = sorted(set(flagged) | set(inherited) | set(default_only))
     generated = sorted({n for loc in exposed for n in supported.get(loc, [])})
     unbuilt = [loc for loc in exposed if not supported.get(loc)]
     if supported:
@@ -356,7 +407,7 @@ def report(texts, supported, label, out_name, next_hint,
                       f"`locale -a` is the authority on whether these are "
                       f"built: {', '.join(unbuilt)}")
             else:
-                print(f"  not in SUPPORTED (templates, not built by default): "
+                print(f"  not in SUPPORTED (not built by default): "
                       f"{', '.join(unbuilt)}")
     else:
         # No SUPPORTED to map through: these are source file names, and the
@@ -386,14 +437,17 @@ def report(texts, supported, label, out_name, next_hint,
     # directly above it, where a reader takes C for one of "these" and tests a
     # locale glibc settled by construction. Noise is a cost like any other.
     if node_dir:
-        report_backported(texts, inherited, unresolved)
+        report_backported(texts, inherited, unresolved, default_only)
     return 0
 
 
 def main(argv):
     ap = argparse.ArgumentParser(
         description="Flag locales whose LC_COLLATE uses algorithmic ellipsis "
-                    "ranges, plus everything inheriting them.")
+                    "ranges, plus everything inheriting them. Every other "
+                    "locale is flagged too, except one declaring "
+                    "codepoint_collation, because a character a locale does "
+                    "not list takes localedef's default weight.")
     ap.add_argument('tag', nargs='?',
                     help="glibc tag to scan, e.g. glibc-2.34")
     ap.add_argument('--locales-dir',
@@ -439,7 +493,7 @@ def main(argv):
         else:
             hint = [f"Run",
                     f"  python3 diff_collation_code.py <old_tag> {opts.tag}",
-                    f"to see whether localedef's expansion logic changed "
+                    f"to see whether localedef's collation code changed "
                     f"between your two",
                     f"versions; if it did, test these empirically before "
                     f"trusting a",
@@ -447,8 +501,8 @@ def main(argv):
     else:
         repo = g.find_repo(opts.repo) if opts.supported_tag else None
         texts, supported, label, out_name = load_from_dir(opts, repo)
-        hint = ["This is one node's own data. Whether the WEIGHTS those ranges "
-                "expand to",
+        hint = ["This is one node's own data. Whether the WEIGHTS localedef "
+                "computes for these",
                 "differ between two nodes is a question about localedef, not "
                 "about this",
                 "directory: diff_collation_code.py for the two upstream tags, "
