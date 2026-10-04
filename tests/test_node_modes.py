@@ -471,7 +471,7 @@ class NodeToNodeRefusesToGuess(NodeCase):
         new_root = self.node(MID, 'b', keep=keep)
         rc, text = self.node_to_node(old_root, new_root)
         self.assertEqual(rc, 2, text)
-        self.assertNotIn('differ INSIDE LC_COLLATE:   0', text)
+        self.assertIn('below the floor', flat(text))
 
     def test_comparing_a_directory_with_itself_is_refused(self):
         root = self.node(OLD, 'a')

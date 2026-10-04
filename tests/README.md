@@ -12,7 +12,7 @@ this tool shipped, or a way of losing one, and its docstring says which.
 
 | file | needs the glibc clone | what it covers |
 |---|---|---|
-| `test_provenance.py` | yes | the tags resolve to the pinned commits; if this fails, every number in `test_known_answers.py` is suspect |
+| `test_provenance.py` | mostly | the tags resolve to the pinned commits; if this fails, every number in `test_known_answers.py` is suspect |
 | `test_known_answers.py` | yes | steps 1 to 5 end to end on the pinned pairs |
 | `test_wrapper.py` | yes | `audit.sh` end to end, mostly its failure modes: node files, missing sources, refused files |
 | `test_node_modes.py` | yes | the steps that read a machine's own locale files |
@@ -20,14 +20,15 @@ this tool shipped, or a way of losing one, and its docstring says which.
 | `test_git_helpers.py` | mostly | code that cannot tell "nothing here" from "could not look"; some of its classes build a small repository of their own |
 | `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, generated names, the comment filter |
 | `test_locale_order.py` | no | step 11: the comparison on three real machines' measurements, the file each machine writes, and the progress lines |
-| `test_parallel_runner.py` | no | the parallel runner's own guards against losing tests quietly |
+| `test_parallel_runner.py` | no | guards against losing tests quietly, in the parallel runner and in a test file run on its own |
 | `test_published_claims.py` | no | the figures, links and paths the documentation publishes |
 
 Without a clone at `scripts/glibc`, every layer marked "yes" skips with a
 reason; `test_pure_functions.py`, `test_parallel_runner.py`,
 `test_locale_order.py`, `test_published_claims.py` and the classes of
-`test_git_helpers.py` that build their own repository still run. A skip is
-never a pass, and CI, which clones glibc fresh, fails on any skip.
+`test_git_helpers.py` and `test_provenance.py` that do not need it still
+run. A skip is never a pass, and CI, which clones glibc fresh, fails on any
+skip.
 
 ## What this suite does NOT cover
 

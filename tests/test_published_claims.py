@@ -22,9 +22,11 @@ by Pablo's decision.
 """
 
 import collections
+import json
 import os
 import re
 import subprocess
+import sys
 import unittest
 
 import _harness
@@ -187,6 +189,49 @@ def docs():
             path = os.path.join(root, name)
             out[os.path.relpath(path, REPO_ROOT)] = read(path)
     return out
+
+
+# Run in a fresh interpreter: the skip decorators decide when a module is
+# imported, and this process may already have imported them with the clone
+# it has.
+_WITHOUT_A_CLONE = """
+import json, sys, unittest
+tests = sys.argv[1]
+sys.path.insert(0, tests)
+import _harness
+_harness.have_clone = lambda: False
+suite = unittest.defaultTestLoader.discover(tests, top_level_dir=tests)
+counts, broken, stack = {}, [], [suite]
+while stack:
+    item = stack.pop()
+    if isinstance(item, unittest.TestSuite):
+        stack.extend(item)
+        continue
+    cls = type(item)
+    if cls.__name__ == '_FailedTest':
+        broken.append(item.id())
+        continue
+    why = (getattr(cls, '__unittest_skip_why__', None) or
+           getattr(getattr(cls, item._testMethodName, None),
+                   '__unittest_skip_why__', None))
+    counts.setdefault(cls.__module__ + '.py', [0, 0])[
+        why == _harness._SKIP_NO_CLONE] += 1
+if broken:
+    sys.exit('did not import: ' + ', '.join(broken))
+print(json.dumps(counts))
+"""
+
+
+def tests_without_a_clone(tests_dir):
+    """{module file: (tests that run, tests that skip)} with the glibc clone
+    made to look absent. Only the clone's own skip counts as a skip: the
+    question is what the clone gates, not what this machine lacks."""
+    p = subprocess.run([sys.executable, '-c', _WITHOUT_A_CLONE, tests_dir],
+                       capture_output=True, text=True)
+    if p.returncode != 0:
+        raise AssertionError('could not load the suite without a clone: '
+                             + p.stderr.strip())
+    return {name: tuple(pair) for name, pair in json.loads(p.stdout).items()}
 
 
 def ordering_rows(text):
@@ -413,43 +458,65 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
         from docs/requirements.md, which then stopped stating it; tests/README.md
         is the page that describes the layers.
 
-        A layer needs the clone exactly when its source asks for one of the
-        two skip decorators.
+        Which layers need the clone is measured, not read: the suite is
+        loaded in a fresh interpreter with the clone made to look absent, and
+        each module's tests that a skip decorator marks for it, on the class
+        or on the method, are counted. Reading the source for the decorators
+        told "needs it" from "does not" and could not tell "yes" from
+        "mostly": test_provenance.py kept its "yes" after one of its classes
+        stopped needing the clone, with this test green. A skip decided any
+        other way is not counted; the check below refuses only the two names
+        of _harness such a skip would most likely use.
         """
         tests_dir = os.path.join(REPO_ROOT, 'tests')
         modules = sorted(name for name in os.listdir(tests_dir)
                          if name.startswith('test_') and name.endswith('.py'))
         self.assertGreater(len(modules), 1, 'no test modules found at all')
-        # Spelled in two pieces on purpose. A pattern written whole appears
-        # in this file's own source, so the first two versions of this test
-        # counted test_published_claims.py among the layers that need a
-        # clone -- a probe that matches itself, in the layer whose job is to
-        # notice exactly that.
-        applied = '@' + 'needs_'
-        gated = [name for name in modules
-                 if applied in read(os.path.join(tests_dir, name))]
-        free = [name for name in modules if name not in gated]
+        counts = tests_without_a_clone(tests_dir)
+        self.assertEqual(set(counts), set(modules),
+                         'the suite loaded without a clone and tests/ do not '
+                         'hold the same modules')
+        needs = {name: 'no' if skipped == 0 else 'yes' if ran == 0
+                 else 'mostly' for name, (ran, skipped) in counts.items()}
+        free = {name for name in modules if needs[name] == 'no'}
+        partly = {name for name in modules if needs[name] == 'mostly'}
+        # Built in two pieces so that the probe above, which needs both
+        # names, is the one place that spells them.
+        asks = ('have_' + 'clone', '_SKIP_' + 'NO_CLONE')
+        for name in modules:
+            if name == 'test_published_claims.py':
+                continue
+            text = read(os.path.join(tests_dir, name))
+            self.assertEqual([w for w in asks if w in text], [],
+                             f'{name} asks for the clone outside the skip '
+                             f'decorators, where the count cannot see it')
 
         # The ROWS, not the file: asserting that each filename appears
         # somewhere in tests/README.md passed with the row deleted, because
-        # the paragraph under the table names three of the modules too.
+        # the paragraph under the table names some of the modules too.
         # Measured with a mutant that renamed a row.
         table = docs()[os.path.join('tests', 'README.md')]
-        rows = dict(re.findall(r'(?m)^\| `(test_\w+\.py)` \| (\w+) \|', table))
+        found = re.findall(r'(?m)^\| `(test_\w+\.py)` \| (\w+) \|', table)
+        twice = sorted(name for name, n in
+                       collections.Counter(name for name, _ in found).items()
+                       if n > 1)
+        self.assertEqual(twice, [], f'the Layers table has more than one row '
+                                    f'for {twice}; the test would read one')
+        rows = dict(found)
         self.assertEqual(set(rows), set(modules),
                          'the Layers table in tests/README.md and tests/ do '
                          'not hold the same modules')
         for name in modules:
             with self.subTest(layer=name):
-                said = rows[name]
-                self.assertIn(said, ('yes', 'mostly', 'no'),
-                              f'{name}: the table says {said!r}')
-                self.assertEqual(said != 'no', name in gated,
-                                 f'{name}: the table says {said!r} about the '
-                                 f'clone, and the module '
-                                 f'{"asks" if name in gated else "does not ask"}'
-                                 f' for a skip decorator')
+                ran, skipped = counts[name]
+                self.assertEqual(rows[name], needs[name],
+                                 f'{name}: the table says {rows[name]!r} '
+                                 f'about the clone, and without one {ran} of '
+                                 f'its tests run and {skipped} skip')
 
+        self.assertEqual(table.count('Without a clone at `scripts/glibc`'), 1,
+                         'tests/README.md does not say once which layers run '
+                         'without a clone')
         paragraph = re.search(r'Without a clone at `scripts/glibc`.*?(?=\n## )',
                               table, re.S)
         self.assertIsNotNone(
@@ -460,20 +527,32 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
         # Both directions: a layer left out, and a layer named that needs the
         # clone and so skips. Checking only the first let the paragraph tell
         # the reader test_wrapper.py runs without one (false-negative-reviewer,
-        # 2026-09-27). The modules marked "mostly" are named too, for the
-        # classes of theirs that fabricate a repository.
-        named = set(re.findall(r'`(test_\w+\.py)`', paragraph.group(0)))
-        partly = {name for name in modules if rows[name] == 'mostly'}
-        self.assertEqual(named, set(free) | partly,
+        # 2026-09-27). The modules that run in part are named after "the
+        # classes of", and a module named before it is one that runs whole.
+        halves = paragraph.group(0).split('the classes of')
+        self.assertEqual(len(halves), 2, 'the paragraph under the Layers '
+                         'table does not say "the classes of" once')
+        whole, part = (set(re.findall(r'`(test_\w+\.py)`', h))
+                       for h in halves)
+        self.assertEqual((whole, part), (free, partly),
                          'the layers tests/README.md says still run without a '
                          'clone are not the ones that do')
+        # The CI comment the same way, both directions, cut at both ends.
         workflow = read(os.path.join(REPO_ROOT, '.github', 'workflows',
                                      'tests.yml'))
-        for name in free:
-            self.assertIn(name[:-3], workflow,
-                          f'the CI comment does not name {name} among the '
-                          f'clone-free layers a broken clone step would '
-                          f'leave running alone')
+        self.assertEqual(workflow.count('# Run once'), 1,
+                         'the CI comment on running the suite is not there '
+                         'once')
+        rest = workflow.split('# Run once')[1]
+        self.assertIn('run: |', rest, 'the CI comment has no step under it')
+        halves = rest.split('run: |')[0].split('the classes of')
+        self.assertEqual(len(halves), 2, 'the CI comment does not say "the '
+                         'classes of" once')
+        whole, part = ({n + '.py' for n in re.findall(r'\btest_\w+', h)}
+                       for h in halves)
+        self.assertEqual((whole, part), (free, partly),
+                         'the CI comment does not name what a broken clone '
+                         'step would leave running alone')
 
     def test_every_tracked_module_compiles_without_warning(self):
         """Compiling every tracked .py with warnings as errors.

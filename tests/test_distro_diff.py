@@ -114,8 +114,8 @@ class RefusesToGuess(unittest.TestCase):
                 os.remove(os.path.join(self.node, name))
         rc, out = run_script(MID, '--locales-dir', self.node,
                              '--build-id', 'truncated', '--node-label', 'trunc')
-        self.assertNotEqual(rc, 0, out)
-        self.assertNotIn('differ INSIDE LC_COLLATE:  0', out)
+        self.assertEqual(rc, 2, out)
+        self.assertIn('too few to be a real copy', flat(out))
 
     def test_a_copy_that_lost_files_says_so(self):
         """Above half the tag's files nothing refused, and the lost ones were

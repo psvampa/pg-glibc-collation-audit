@@ -1,4 +1,4 @@
-"""Layer 8: the parallel runner's own guards.
+"""Layer 8: guards against losing tests quietly.
 
 `tests/run_parallel.py` spreads the suite over one process per TestCase class.
 Everything it adds over `unittest discover` is a way of losing tests quietly:
@@ -9,7 +9,7 @@ miss, a test whose own output is read as its shard's verdict. Each of those
 ends as a green summary over tests nobody ran unless something refuses, which
 is this repository's defect class in a new place.
 
-So each test below reverts one guard in shape and asserts the red. Three
+So most tests below revert one guard in shape and assert the red. Some
 classes assert a green instead -- a skip that must be reported, an end-to-end
 run that must pass, and the control at the bottom -- because a runner that
 failed on everything would satisfy all the others and guard nothing.
@@ -28,6 +28,7 @@ No glibc clone needed: the shard results are fabricated, and the cases that
 run a real process use a module written into a temporary directory or the
 fastest module in the suite.
 """
+import ast
 import os
 import re
 import subprocess
@@ -377,6 +378,36 @@ class DiscoveryIsTheNumberEverythingElseIsComparedTo(unittest.TestCase):
             rp.discover_units(tests_dir='/no/such/directory/4c1f')
         self.assertIn('could not discover', str(caught.exception))
 
+    def test_a_module_run_on_its_own_runs_all_of_it(self):
+        """`python3 tests/test_x.py` defines only what sits above its
+        `unittest.main()`, runs that, and ends in OK. With the call halfway
+        down, the classes below it were skipped in silence. So every module
+        ends with exactly that block, and has no other."""
+        # From the directory, not from discover_units(): under `-k` the loader
+        # it shares is filtered, and this would read only the modules the
+        # pattern selects.
+        modules = sorted(name[:-3] for name in os.listdir(TESTS_DIR)
+                         if name.startswith('test_') and name.endswith('.py'))
+        self.assertGreater(len(modules), 1, 'no test modules found at all')
+        block = ast.dump(ast.parse(
+            "if __name__ == '__main__':\n    unittest.main()\n").body[0])
+        for module in modules:
+            with self.subTest(module=module):
+                with open(os.path.join(TESTS_DIR, module + '.py'),
+                          encoding='utf-8') as fh:
+                    body = ast.parse(fh.read()).body
+                mains = [i for i, node in enumerate(body)
+                         if isinstance(node, ast.If) and
+                         any(isinstance(n, ast.Name) and n.id == '__name__'
+                             for n in ast.walk(node.test))]
+                self.assertEqual(mains, [len(body) - 1],
+                                 f'{module}.py does not end with its main '
+                                 f'block, so a run of that file alone skips '
+                                 f'what comes after it')
+                self.assertEqual(ast.dump(body[-1]), block,
+                                 f'{module}.py ends with a main block that '
+                                 f'does not run the whole module')
+
 
 class ASelectionThatMatchesNothingIsNotAPass(unittest.TestCase):
     """`run_parallel.py test_wrappre` is a typo, and the honest answer to it
@@ -447,11 +478,10 @@ class TheRunnerRunsWhatItSaysItRan(unittest.TestCase):
 
 
 class AGreenRunIsStillGreen(unittest.TestCase):
-    """The control. Every class above except the skip report and the two
-    end-to-end runs asserts a red, so a runner that reported red on
-    everything would pass almost all of them and be useless. Counted as a
-    description rather than as a number, because a number here goes stale on
-    the next class added -- which it already did, at "eight"."""
+    """The control. Most tests above assert a red, so a runner that reported
+    red on everything would pass almost all of them and be useless. Counted
+    as a description rather than as a number, because a number here goes
+    stale on the next class added -- which it already did, at "eight"."""
 
     def test_shards_that_all_passed_report_ok_and_nothing_else(self):
         code, text = report([shard('a', ran=4), shard('b', ran=6)],

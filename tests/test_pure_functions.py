@@ -856,10 +856,6 @@ class CommentChar(unittest.TestCase):
         self.assertEqual(g.comment_char('comment_char #\nLC_COLLATE\n'), '#')
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class DistroDiff(unittest.TestCase):
     """diff_distro_locales.py: the distro-versus-upstream classifier.
 
@@ -1260,3 +1256,7 @@ class SameTreeAndManifest(unittest.TestCase):
         b = self._dir('b', (('C', _harness.upstream_c()),))
         self.assertNotEqual(dd.tree_manifest(a, ['C'])[2],
                             dd.tree_manifest(b, ['C'])[2])
+
+
+if __name__ == '__main__':
+    unittest.main()
