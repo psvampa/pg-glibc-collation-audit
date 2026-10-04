@@ -71,8 +71,8 @@ jobs:
         # broken clone step would otherwise leave this job green with only the
         # clone-free layers (test_pure_functions, test_parallel_runner,
         # test_locale_order, and test_published_claims when it is enabled) and
-        # the fabricated-repository classes of test_git_helpers having
-        # actually run.
+        # the classes of test_git_helpers and test_provenance that need no
+        # clone having actually run.
         run: |
           set -o pipefail
           python3 -m unittest discover -s tests -t tests -v 2>&1 | tee /tmp/out.txt

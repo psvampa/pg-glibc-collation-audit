@@ -305,11 +305,14 @@ class Step2Filter(StepRun):
                 out = self.step('filter_lc_collate_changes.py', old, new)
                 self.assertNotIn('GAINED an LC_COLLATE block', out)
 
-    def test_a_pair_where_c_exists_at_both_tags_does_not_warn(self):
+    def test_a_pair_where_c_exists_at_the_old_tag_does_not_warn(self):
         """Control: the warning must be about the old side being missing, not
-        about the name C. At 2.39..2.41 the file is in both tags."""
-        out = self.step('filter_lc_collate_changes.py', NEW, 'glibc-2.41')
-        self.assertNotIn('!! localedata/locales/C ', out)
+        about the name C. Pinned tags only: 2.39 against itself has the file
+        on both sides, and 2.39 -> 2.34, reversed, on the old side alone."""
+        for args in ((NEW, NEW), (NEW, MID, '--allow-reverse')):
+            with self.subTest(args=args):
+                out = self.step('filter_lc_collate_changes.py', *args)
+                self.assertNotIn('!! localedata/locales/C ', out)
 
 
 @needs_clone

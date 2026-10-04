@@ -115,15 +115,11 @@ class TagSignatures(unittest.TestCase):
             self.assertIn(EXPECTED_SHA[tag][:12], out)
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
-@needs_clone
 class VerifyTagClassification(unittest.TestCase):
     """verify_tag's whole job is telling apart the three things `git verify-tag`
     reports identically (it exits 1 for all of them). Driven with faked git
     output, because a machine cannot produce a forged glibc tag on demand.
+    No clone needed: every git call is faked, and one that is not fails.
 
     Mutation testing added this class: making verify_tag return 'good' whenever
     gpg was missing left every other test passing.
@@ -141,17 +137,18 @@ class VerifyTagClassification(unittest.TestCase):
                 + (b'-----BEGIN PGP SIGNATURE-----\n' if signed else b''))
 
         def fake(args, repo, allow_fail=False):
-            if args[:2] == ['cat-file', '-t']:
+            if args == ['cat-file', '-t', NEW]:
                 return Fake(out=b'tag\n')
-            if args[:2] == ['cat-file', 'tag']:
+            if args == ['cat-file', 'tag', NEW]:
                 return Fake(out=body)
-            if args[0] == 'verify-tag':
+            if args == ['verify-tag', '--raw', NEW]:
                 return Fake(rc=verify_rc, err=verify_stderr)
-            return real(args, repo, allow_fail=allow_fail)
+            raise AssertionError(f'verify_tag ran a git command this test '
+                                 f'does not fake: {args}')
 
         g.run_git = fake
         try:
-            return g.verify_tag(GLIBC_CLONE, NEW)
+            return g.verify_tag('/no/glibc/clone/here', NEW)
         finally:
             g.run_git = real
 
@@ -178,3 +175,7 @@ class VerifyTagClassification(unittest.TestCase):
     def test_an_unsigned_tag_is_reported_as_unsigned(self):
         status, _ = self.drive(0, b'', signed=False)
         self.assertEqual(status, 'unsigned')
+
+
+if __name__ == '__main__':
+    unittest.main()
