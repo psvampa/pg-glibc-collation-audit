@@ -20,7 +20,7 @@
 -- Locales under test were chosen from the audit output for this exact pair
 -- (see ../docs/results.md, "Worked example: RHEL8 to RHEL9"):
 --   affected:     sv_SE, sv_FI, sv_FI@euro, or_IN
---   not affected: en_US, de_DE, fr_FR (negative controls)
+--   control:      en_US
 -- sv_FI@euro gets no table below: it is an ISO-8859-15 locale, and a UTF8
 -- database cannot use a single-byte-encoding collation. It changes exactly as
 -- sv_FI does (same `copy` of sv_SE), so sv_FI's result covers it.
@@ -51,7 +51,7 @@ INSERT INTO or_test VALUES (E'ହ'),(E'କ୍ଷ'),(E'ଔ'),(E'ଁ'),(E'ଂ'),(E
 SELECT w FROM or_test ORDER BY w;
 CREATE INDEX ON or_test (w);
 
--- Negative controls: locales the audit says are NOT affected by this jump.
+-- Control.
 DROP TABLE IF EXISTS en_test;
 CREATE TABLE en_test (w text COLLATE "en_US");
 INSERT INTO en_test VALUES ('1-1'),('11');

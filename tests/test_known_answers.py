@@ -789,11 +789,12 @@ class SkippingAReleaseReportsTheUnion(StepRun):
     that an upgrade skipping a release is one audit is measured on.
 
     The claim under test is a SET equality, not a count: a direct jump reports
-    exactly what the two steps between it report, name for name. A count would
-    pass on the right total reached the wrong way -- five names of which one is
-    wrong is still five. The README used to call the audited pairs "the two
-    adjacent upgrades", which reads as a restriction; there is no adjacency
-    check anywhere in the tool, and this class is what keeps that true.
+    what the two steps between it report, name for name, except where a test
+    below names the difference. A count would pass on the right total reached
+    the wrong way -- five names of which one is wrong is still five. The README
+    used to call the audited pairs "the two adjacent upgrades", which reads as
+    a restriction; there is no adjacency check anywhere in the tool, and this
+    class is what keeps that true.
     """
 
     def _step2_names(self, old, new):
@@ -859,6 +860,53 @@ class SkippingAReleaseReportsTheUnion(StepRun):
             f'missing {sorted(first | second - direct)}, '
             f'extra {sorted(direct - (first | second))}')
         self.assertEqual(len(direct), 10)
+
+    def _step4_written(self, tag):
+        """The names step 4 writes at `tag`, read whole from its list file.
+
+        Not from stdout, which prints a few names of each section and "...".
+        Its own directory per call: MID and NEW write the same file name, and
+        a memoised run does not write it again.
+        """
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-audit-test-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        rc, out = run_step('flag_algorithmic_ranges.py', tag, out_dir=out_dir)
+        self.assertEqual(rc, 0, out)
+        named = re.search(r'full list \((\d+) name\(s\)\): (\S+)', out)
+        self.assertIsNotNone(named, f'step 4 at {tag} names no list file')
+        with open(named.group(2), encoding='utf-8') as fh:
+            written = [ln.strip() for ln in fh if ln.strip()]
+        self.assertEqual(int(named.group(1)), len(written),
+                         f'step 4 at {tag} says {named.group(1)} names and '
+                         f'writes {len(written)}')
+        return set(written)
+
+    def test_step_4_is_the_union_but_for_the_locale_renamed_on_the_way(self):
+        """Step 4 reads the new tag alone (audit.sh passes it "$NEW"), so the
+        direct pair's list is the second step's, and it differs from the
+        union only by what step 4 flags at 2.34 and no longer flags at 2.39.
+        Measured: one name, aa_ER@saaho, renamed to ssy_ER at 2.39. The
+        direct run does not lose it: step 2 lists the old name as removed,
+        and step 4 flags the new one. Any other name in that difference is a
+        locale step 4 stopped flagging at the newer tag, which is the
+        reassuring direction."""
+        at_mid, at_new = self._step4_written(MID), self._step4_written(NEW)
+        self.assertEqual(
+            sorted(at_mid - at_new), ['aa_ER@saaho'],
+            'step 4 flags at 2.34 a locale it no longer flags at 2.39, other '
+            'than the one renamed on the way')
+        self.assertIn('ssy_ER', at_new)
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-audit-test-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        rc, out = run_step('filter_lc_collate_changes.py', OLD, NEW,
+                           out_dir=out_dir)
+        self.assertEqual(rc, 0, out)
+        path = os.path.join(
+            out_dir, f'step2_removed_locales.{g.pair_slug(OLD, NEW)}.txt')
+        with open(path, encoding='utf-8') as fh:
+            removed = [ln.strip() for ln in fh
+                       if ln.strip() and not ln.startswith('#')]
+        self.assertEqual(removed, ['aa_ER@saaho (renamed to ssy_ER)'])
 
     def test_step_5_prints_75_hunks_and_not_the_sum(self):
         """76 is what the two steps add up to, and it is the wrong number: the

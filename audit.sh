@@ -27,8 +27,9 @@
 # Direction is the ONLY property of the pair that is constrained. How far apart
 # the two releases are is not checked anywhere: an upgrade that skips a release
 # is one pair of tags, not two runs added up. Measured on one triple --
-# glibc-2.28 against glibc-2.39 reports the exact union of what 2.28..2.34 and
-# 2.34..2.39 report, C.UTF-8 included. One triple is not every triple.
+# glibc-2.28 against glibc-2.39 reports the union of what 2.28..2.34 and
+# 2.34..2.39 report, C.UTF-8 included, except that a locale renamed on the way
+# (aa_ER@saaho) is listed only as removed. One triple is not every triple.
 #
 # The --*-locales-dir options are optional and read a node's own
 # /usr/share/i18n/locales/. Each side you supply adds the

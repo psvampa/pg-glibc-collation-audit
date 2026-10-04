@@ -31,7 +31,8 @@ above are **consecutive RHEL majors, not consecutive glibc releases** —
 four, so every result this project publishes was produced by a pair that
 leaves versions out. Leaving more out is measured rather than assumed:
 `glibc-2.28` against `glibc-2.39`, with 2.34 in the middle, reports the union
-of what the two steps report, name for name, `C.UTF-8` included.
+of what the two steps report, name for name, `C.UTF-8` included, except that
+a locale renamed on the way is listed only as removed.
 
 There used to be a floor at glibc 2.24 — below it the three collation
 templates were dropped from the `copy` graph and the answer collapsed silently

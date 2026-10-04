@@ -31,7 +31,7 @@ checks in order and ends with one summary.
 What you get is a list to worry about and a proof about everything else: if
 neither a locale's rules nor the code that compiles them changed, its order
 cannot have changed. What you do **not** get is confirmation that a locale on
-the list really moved. A flagged locale can turn out unaffected — `ber_DZ` and
+the list really moved. A flagged locale can turn out not to move — `ber_DZ` and
 `kab_DZ` were flagged and the change was a role swap that leaves the order
 alone.
 

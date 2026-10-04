@@ -21,9 +21,10 @@
 -- Locales under test, from this pair's findings (see ../docs/results.md):
 --   affected:     th_TH            -- real LC_COLLATE rewrite; CHANGED, and
 --                                    -- running this file is what proved it
---                 ber_DZ, kab_DZ   -- flagged; believed a role swap
---   step 4 only:  ko_KR            -- flagged by step 4, cleared by step 5
---   not affected: en_US, de_DE, fr_FR (negative controls)
+--   flagged:      ber_DZ, kab_DZ   -- a role swap; no observable difference
+--   step 4 only:  ko_KR            -- flagged by step 4, cleared by reading
+--                                    -- step 5
+--   controls:     en_US, de_DE, fr_FR
 
 SELECT pg_import_system_collations('pg_catalog');
 
@@ -61,7 +62,7 @@ INSERT INTO th_test VALUES
   (E'ไก่', 'U+0E44 U+0E01 U+0E48  a real word (chicken), with tone mark'),
   (E'เฤ',  'U+0E40 U+0E24  leading vowel + consonant that had NO element'),
   (E'เฦ',  'U+0E40 U+0E26  same');
-\echo '--- th_TH ORDER BY (the open verdict for this pair) ---'
+\echo '--- th_TH ORDER BY (changed on this pair) ---'
 SELECT w, note FROM th_test ORDER BY w;
 CREATE INDEX ON th_test (w);
 
@@ -97,10 +98,10 @@ CREATE INDEX ON kab_test (w);
 
 -- ---------------------------------------------------------------- ko_KR ----
 -- Step 4 flags ko_KR on this pair too, because its LC_COLLATE relies on
--- ellipsis ranges that localedef expands at build time. Step 5 found no change
--- to that expansion between 2.34 and 2.39, so this is a control: it should be
--- identical. The strings are the Hangul block boundary, which is where the
--- 2.28->2.34 bug lived -- see ../docs/results.md.
+-- ellipsis ranges that localedef expands at build time. Reading step 5's
+-- hunks found no change to that expansion between 2.34 and 2.39, so this is a
+-- control: it should be identical. The strings are the Hangul block boundary,
+-- which is where the 2.28->2.34 bug lived -- see ../docs/results.md.
 DROP TABLE IF EXISTS ko_test;
 CREATE TABLE ko_test (w text COLLATE "ko_KR.utf8");
 INSERT INTO ko_test VALUES
@@ -109,9 +110,8 @@ INSERT INTO ko_test VALUES
 SELECT w FROM ko_test ORDER BY w;
 CREATE INDEX ON ko_test (w);
 
--- ----------------------------------------------------- negative controls ----
--- These must be identical on both nodes. If one of them differs, the setup is
--- wrong and nothing else on this page can be trusted.
+-- -------------------------------------------------------------- controls ----
+-- These came out identical on both nodes.
 DROP TABLE IF EXISTS en_test;
 CREATE TABLE en_test (w text COLLATE "en_US.utf8");
 INSERT INTO en_test VALUES ('1-1'),('11'),('a'),('A'),('b');
