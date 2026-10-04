@@ -560,8 +560,7 @@ class Step5CollationCode(StepRun):
 
     def test_tier3_shows_the_hunks_the_hand_lists_missed(self):
         """#2: both of these are real changes over 2.34..2.39 that no tier
-        listed, and the RHEL9-to-RHEL10 ko_KR verdict is argued from the hunks
-        step 5 prints."""
+        listed."""
         out = self.step('diff_collation_code.py', MID, NEW)
         tier3 = out.split('TIER 3 --')[1]
         self.assertIn('lr_getc', tier3)

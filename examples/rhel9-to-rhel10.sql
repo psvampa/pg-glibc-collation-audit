@@ -22,8 +22,8 @@
 --   affected:     th_TH            -- real LC_COLLATE rewrite; CHANGED, and
 --                                    -- running this file is what proved it
 --   flagged:      ber_DZ, kab_DZ   -- a role swap; no observable difference
---   step 4 only:  ko_KR            -- flagged by step 4, cleared by reading
---                                    -- step 5
+--   step 4 only:  ko_KR            -- flagged by step 4, cleared by
+--                                    -- measurement
 --   controls:     en_US, de_DE, fr_FR
 
 SELECT pg_import_system_collations('pg_catalog');
@@ -98,10 +98,11 @@ CREATE INDEX ON kab_test (w);
 
 -- ---------------------------------------------------------------- ko_KR ----
 -- Step 4 flags ko_KR on this pair too, because its LC_COLLATE relies on
--- ellipsis ranges that localedef expands at build time. Reading step 5's
--- hunks found no change to that expansion between 2.34 and 2.39, so this is a
--- control: it should be identical. The strings are the Hangul block boundary,
--- which is where the 2.28->2.34 bug lived -- see ../docs/results.md.
+-- ellipsis ranges that localedef expands at build time. Step 11 found its
+-- order unchanged on the RHEL9 and RHEL10 test machines, as far as it could
+-- measure it, so this is a control: it should be identical. The strings are
+-- the Hangul block boundary, which is where the 2.28->2.34 bug lived -- see
+-- ../docs/results.md.
 DROP TABLE IF EXISTS ko_test;
 CREATE TABLE ko_test (w text COLLATE "ko_KR.utf8");
 INSERT INTO ko_test VALUES

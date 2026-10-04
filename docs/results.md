@@ -4,15 +4,15 @@
 
 | Locale | RHEL8 → RHEL9<br>glibc 2.28 → 2.34 | RHEL9 → RHEL10<br>glibc 2.34 → 2.39 | Caught by |
 |---|---|---|---|
-| `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | 🟢 No difference | steps 1–3 — `sv_FI` only via `copy`; the second pair is cleared by reading step 5, as for `ko_KR` |
-| `or_IN` | 🔴 **Changed** | 🟢 No difference | steps 1–3; the second pair is cleared by reading step 5, as for `ko_KR` |
-| `ko_KR` | 🔴 **Changed** | 🟢 No difference | **step 5** — its `LC_COLLATE` is unchanged in *both* pairs |
+| `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | 🟢 No difference | steps 1–3 — `sv_FI` only via `copy`; the second pair is cleared by step 11's measurement |
+| `or_IN` | 🔴 **Changed** | 🟢 No difference | steps 1–3; the second pair is cleared by step 11's measurement |
+| `ko_KR` | 🔴 **Changed** | 🟢 No difference | **step 5** — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement |
 | `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | **step 2 warns** and cannot settle it <sup>†</sup> — the node-to-node check settles the data, step 11 or `sql/c_utf8_probe.sql` the order |
 | `th_TH` | 🟢 No difference | 🔴 **Changed** | steps 1–3; the first pair is cleared by step 11's measurement |
 | `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap; the first pair is cleared by step 11's measurement |
 | CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>the base table a locale inherits unless it<br>defines its own order | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
 | `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | step 4 flagged them via `iso14651_t1_common`; cleared by measurement |
-| everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | 🟢 No difference | 🟢 No difference | step 4 flags them and step 5 finds code changes in both pairs: step 11's measurement clears the first, as far as it can measure, and reading step 5 the second, as for `ko_KR` |
+| everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | 🟢 No difference | 🟢 No difference | step 4 flags them and step 5 finds code changes in both pairs: step 11's measurement clears both, as far as it can measure |
 
 <sup>†</sup> `C.UTF-8`'s source file is in neither tag for the first pair, so
 both verdicts come from the machines themselves
@@ -215,23 +215,13 @@ With `ber_DZ`, `kab_DZ`, `ko_KR`, `en_US`, `de_DE` and `fr_FR` identical on
 both nodes as controls. Reproduce with
 [`examples/rhel9-to-rhel10.sql`](../examples/rhel9-to-rhel10.sql).
 
-### `ko_KR` — how step 5 clears a step-4 locale
+### `ko_KR` — flagged by step 4, cleared by measurement
 
-This pair also shows step 5 working in the other direction. `ko_KR` is
-flagged by step 4 here too. What clears it is a reading of the hunks step 5
-prints between 2.34 and 2.39, and a measurement.
-
-The reading is of the two tier-3 hunks that bear on it (`lr_getc` in
-`linereader.h`, `elem_hash` in `elem-hash.h`), and it found that neither
-moves a weight. The tier-1 changes in that range are `%Z`-to-`%z`
-format fixes, integer type replacements, and a new opt-in
-`codepoint_collation` keyword that no pre-existing locale uses.
-
-So `ko_KR`'s order does not move across RHEL9 to RHEL10, which steps 1 to 4
-alone could never conclude. The measurement agrees: `ko_KR` is identical on
-both nodes above, and so is ardentperf's checksum for `ko` between RHEL9 and
-RHEL10. Being able to clear a step-4 locale, rather than
-only ever flagging it, is the point of step 5.
+`ko_KR` is flagged by step 4 here too, and step 5 finds code changes between
+2.34 and 2.39 that it leaves to a reader of C. What clears it is measurement.
+`ko_KR` is identical on both nodes above, step 11 finds it unchanged as far as
+it could measure it, and ardentperf's glibc checksum for `ko` is the same on
+RHEL9 and RHEL10.
 
 ## What step 11 measured
 
