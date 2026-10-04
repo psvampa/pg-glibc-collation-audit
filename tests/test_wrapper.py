@@ -269,6 +269,15 @@ class Wrapper(unittest.TestCase):
         """A finding is not an error. Step 5 reports 24 hunks and returns 0."""
         self.assertEqual(self.rc, 0, self.out)
 
+    def test_step_4_scanned_the_new_tag(self):
+        """The same check as WrapperTagsRemoveALocale's, on the pair whose new
+        tag is not glibc-2.39: there the right tag and a hard-coded one are
+        the same string, so only this pair can tell them apart."""
+        self.assertEqual(self.rc, 0, self.out)
+        step4 = step_text(self.out, 4)
+        self.assertIn(f'\nFiles at {MID}: ', step4)
+        self.assertNotIn(f'Files at {OLD}', flat(step4))
+
     def test_answer_matches_the_published_result(self):
         """The published set for 2.28..2.34, as generated locale names.
 
@@ -993,6 +1002,17 @@ class WrapperTagsRemoveALocale(unittest.TestCase):
         self.assertEqual(m.group(2), os.path.join(
             self.out_dir, f'step2_removed_locales.{pair_slug(MID, NEW)}.txt'))
         self.assertNotIn('none', ' '.join(lines))
+
+    def test_step_4_scanned_the_new_tag(self):
+        """The premise of SkippingAReleaseReportsTheUnion's step 4 test, which
+        runs the step on its own and so cannot see what audit.sh passes it:
+        step 4 reads the NEW tag. Given the old one, the run still ends at
+        exit 0 with a plausible summary (the header of audit.sh records that
+        it once did), and the direct pair loses what was added on the way."""
+        self.assertEqual(self.rc, 0, self.out)
+        step4 = step_text(self.out, 4)
+        self.assertIn(f'\nFiles at {NEW}: ', step4)
+        self.assertNotIn(f'Files at {MID}', flat(step4))
 
 
 @needs_clone

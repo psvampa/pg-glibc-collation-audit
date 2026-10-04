@@ -225,7 +225,7 @@ What it prints, filled in for each pair, is in
 
 🔴 reindex · 🟡 flagged and *not* cleared, treat as changed until tested ·
 🟢 flagged, but a targeted test or mechanism argument shows the order does not
-move · ⚪ neither the locale's `LC_COLLATE` nor the collation code changed.
+move.
 `ko_KR` is the row a data-only audit gets wrong, and `C.UTF-8` the row no
 *tag* diff can reach.
 

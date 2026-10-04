@@ -163,7 +163,8 @@ Full output:
 
 ### Everything else
 
-Every other locale (`en_US`, `de_DE`, `fr_FR`, ...) sorts the same on both.
+Every other locale step 11 measured (`en_US`, `de_DE`, `fr_FR`, ...) sorts the
+same on both, a few only as far as they could be measured.
 Step 4 flags them too, and step 5 finds code changes in this pair, so the
 clean data diff does not clear them: real `sort`/PostgreSQL tests on RHEL8 and
 RHEL9 nodes and step 11's measurement do.
@@ -217,18 +218,19 @@ both nodes as controls. Reproduce with
 ### `ko_KR` — how step 5 clears a step-4 locale
 
 This pair also shows step 5 working in the other direction. `ko_KR` is
-flagged by step 4 here too, but step 5 finds no change to ellipsis expansion
-between 2.34 and 2.39.
+flagged by step 4 here too. What clears it is a reading of the hunks step 5
+prints between 2.34 and 2.39, and a measurement.
 
-That verdict rests on having **read** the two tier-3 hunks that bear on it
-(`lr_getc` in `linereader.h`, `elem_hash` in `elem-hash.h`) and found that
-neither moves a weight. The tier-1 changes in that range are `%Z`-to-`%z`
+The reading is of the two tier-3 hunks that bear on it (`lr_getc` in
+`linereader.h`, `elem_hash` in `elem-hash.h`), and it found that neither
+moves a weight. The tier-1 changes in that range are `%Z`-to-`%z`
 format fixes, integer type replacements, and a new opt-in
 `codepoint_collation` keyword that no pre-existing locale uses.
 
-So `ko_KR` is genuinely unaffected across RHEL9 to RHEL10, which steps 1 to 4
-alone could never conclude. ardentperf's checksum for `ko` agrees, identical
-between RHEL9 and RHEL10. Being able to clear a step-4 locale, rather than
+So `ko_KR`'s order does not move across RHEL9 to RHEL10, which steps 1 to 4
+alone could never conclude. The measurement agrees: `ko_KR` is identical on
+both nodes above, and so is ardentperf's checksum for `ko` between RHEL9 and
+RHEL10. Being able to clear a step-4 locale, rather than
 only ever flagging it, is the point of step 5.
 
 ## What step 11 measured
