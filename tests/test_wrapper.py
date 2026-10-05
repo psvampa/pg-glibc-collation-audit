@@ -278,12 +278,24 @@ class Wrapper(unittest.TestCase):
         self.assertIn(f'\nFiles at {MID}: ', step4)
         self.assertNotIn(f'Files at {OLD}', flat(step4))
 
+    def test_step_3_read_the_new_tag(self):
+        """The premise of SkippingAReleaseReportsTheUnion's step 3 test, which
+        runs the step on its own and so cannot see what audit.sh passes it:
+        step 3 closes over the NEW tag's copy graph. Given the old one, both
+        published pairs still print the same list (sv_FI copies sv_SE at 2.28
+        as at 2.34), so only the tag the step names tells the two apart."""
+        self.assertEqual(self.rc, 0, self.out)
+        step3 = step_text(self.out, 3)
+        self.assertIn(f'\nCopy chains read at {MID}\n', step3)
+        self.assertNotIn(f'Copy chains read at {OLD}', flat(step3))
+
     def test_answer_matches_the_published_result(self):
         """The published set for 2.28..2.34, as generated locale names.
 
         examples/rhel8-to-rhel9-tags-only.txt prints these. A wrapper that
-        changes an answer is a bug, not a feature -- so this is the assertion
-        that would catch the wrapper passing the wrong tag to the wrong step.
+        changes an answer is a bug, not a feature. This does not catch step 3
+        handed the old tag, whose set is the same at 2.28;
+        test_step_3_read_the_new_tag does.
         """
         listed = os.path.join(self.out_dir, 'step3_affected_locales.txt')
         with open(listed, encoding='utf-8') as fh:
@@ -299,14 +311,14 @@ class Wrapper(unittest.TestCase):
             self.out, '-- Distro patches, steps 6 and 7: NOT RUN'),
             DISTRO_NOT_RUN_BODY)
 
-    def test_sv_FI_proves_the_new_tag_reached_step_3(self):
-        """sv_FI is reachable only through the NEW tag's copy graph.
-
-        It never appears in a plain file diff. If the wrapper swapped old and
-        new when calling step 3, it would produce a fully plausible reversed
-        audit at exit 0, and only this catches it.
+    def test_sv_FI_reached_through_its_copy_of_sv_SE(self):
+        """Between 2.28 and 2.34 sv_FI's own file does not change; it is in
+        the output because step 3 followed its `copy "sv_SE"`. It cannot
+        tell which tag step 3 read, since sv_FI copies sv_SE at 2.28 too;
+        test_step_3_read_the_new_tag does.
         """
-        self.assertIn('sv_FI', self.out)
+        self.assertIn('\n  sv_FI: copy "sv_SE" -> reaches sv_SE\n',
+                      step_text(self.out, 3))
 
     def test_step_2_list_is_written_and_feeds_step_3(self):
         """The handoff file exists, is named for the pair, and holds the names.
@@ -1013,6 +1025,15 @@ class WrapperTagsRemoveALocale(unittest.TestCase):
         step4 = step_text(self.out, 4)
         self.assertIn(f'\nFiles at {NEW}: ', step4)
         self.assertNotIn(f'Files at {MID}', flat(step4))
+
+    def test_step_3_read_the_new_tag(self):
+        """The same check as Wrapper's, on the pair whose new tag is not
+        glibc-2.34: there the right tag and a hard-coded one are the same
+        string, so only this pair can tell them apart."""
+        self.assertEqual(self.rc, 0, self.out)
+        step3 = step_text(self.out, 3)
+        self.assertIn(f'\nCopy chains read at {NEW}\n', step3)
+        self.assertNotIn(f'Copy chains read at {MID}', flat(step3))
 
 
 @needs_clone

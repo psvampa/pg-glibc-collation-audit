@@ -124,6 +124,7 @@ Renamed (1) -- judged against the old path's LC_COLLATE:
 ================================================================
 == STEP 3  Which locales inherit those changes
 ================================================================
+Copy chains read at glibc-2.39
 Directly changed (own LC_COLLATE diff): ber_DZ, kab_DZ, th_TH
 Additionally affected via copy-chain inheritance: 0
 

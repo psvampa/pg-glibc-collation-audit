@@ -108,6 +108,7 @@ An upstream source diff cannot establish that -- distros backport. Confirm with
 ================================================================
 == STEP 3  Which locales inherit those changes
 ================================================================
+Copy chains read at glibc-2.34
 Directly changed (own LC_COLLATE diff): or_IN, sv_SE
 Additionally affected via copy-chain inheritance: 2
   sv_FI: copy "sv_SE" -> reaches sv_SE

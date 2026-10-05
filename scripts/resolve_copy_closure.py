@@ -65,6 +65,10 @@ def main(argv):
     inherited = g.inherited_from(graph, changed)
     supported = g.supported_map(repo, opts.tag)
 
+    # Which tag's copy graph this is. audit.sh must pass the NEW tag: the old
+    # one may lack an inheritance the upgrade adds, and the list below would
+    # read just as complete without it. Printed so a test can see the tag.
+    print(f"Copy chains read at {opts.tag}")
     print(f"Directly changed (own LC_COLLATE diff): "
           f"{', '.join(sorted(changed))}")
     print(f"Additionally affected via copy-chain inheritance: {len(inherited)}")
