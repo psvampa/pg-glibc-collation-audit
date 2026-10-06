@@ -63,7 +63,7 @@ class GitFailureIsNotSilence(unittest.TestCase):
             "print(d.check_paths(repo, ['locale/programs/ld-collate.c'],"
             " '%s1', '%s2'))" % (BAD, BAD))
         self.assertNotEqual(rc, 0, 'a failed ls-tree was swallowed')
-        self.assertNotIn("outside=['locale/programs/ld-collate.c']", out)
+        self.assertIn('error: `git ls-tree ', out)
 
     def test_a_diff_that_really_is_empty_still_reports_no_change(self):
         """The other direction: aborting must not turn 'unchanged' into an
@@ -71,6 +71,183 @@ class GitFailureIsNotSilence(unittest.TestCase):
         n = d.report_file(GLIBC_CLONE, 'locale/coll-lookup.h',
                           f'{MID}..{NEW}', False, quiet_when_clean=True)
         self.assertEqual(n, 0)
+
+
+class AnUnreadableTreeOnOneSideIsNotHarmless(unittest.TestCase):
+    """check_paths and the include walk, on a tag whose tree cannot be read.
+
+    The test above passes two bad tags, so whichever side still aborts hides
+    the other. Silencing the probe on one side only stayed green there, and
+    returned ([], ['locale/C-collate-seq.c']) at exit 0 for glibc-2.34 against
+    a bad tag. A bad tag also fails every git command that names it, so that
+    test cannot tell the probe from any other ls-tree of the tag run before it.
+
+    In step 5 neither input gets this far today. check_refs refuses a bad tag,
+    and the include walk lists both trees in full (`ls-tree -r`) before
+    check_paths runs, and dies on the same unreadable tree. The last test
+    guards that walk. The two before it guard check_paths, one per side, as
+    the backstop for when the walk does not abort first. The fixture is a
+    valid tag t2 where rev-parse and a bare `git ls-tree t2` succeed, while
+    the per-path read and `ls-tree -r` fail, next to t1 and t3, which read
+    cleanly and do not have the file.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-unreadable-')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        t = self.tmp
+        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+        with open(os.path.join(t, 'keep'), 'w') as fh:
+            fh.write('base\n')
+        git(t, 'init', '-q', env=env)
+        git(t, 'add', '.', env=env)
+        git(t, 'commit', '-q', '-m', 'without locale/', env=env)
+        git(t, 'tag', 't1', env=env)
+        os.makedirs(os.path.join(t, 'locale', 'programs'))
+        with open(os.path.join(t, 'locale', 'programs', 'ld-collate.c'),
+                  'w') as fh:
+            fh.write('int f (void) { return 0; }\n')
+        git(t, 'add', '.', env=env)
+        git(t, 'commit', '-q', '-m', 'add ld-collate.c', env=env)
+        git(t, 'tag', 't2', env=env)
+        git(t, 'rm', '-q', '-r', 'locale', env=env)
+        git(t, 'commit', '-q', '-m', 'remove locale/', env=env)
+        git(t, 'tag', 't3', env=env)
+
+        probe = ['git', 'ls-tree', '--name-only', 't2', '--',
+                 'locale/programs/ld-collate.c']
+        before = subprocess.run(probe, cwd=t, capture_output=True, text=True)
+        self.assertEqual(before.stdout.strip(), 'locale/programs/ld-collate.c',
+                         'the file must exist at t2 before the damage')
+        sub = subprocess.run(['git', 'rev-parse', 't2:locale/programs'],
+                             cwd=t, capture_output=True, text=True,
+                             check=True).stdout.strip()
+        os.remove(os.path.join(t, '.git', 'objects', sub[:2], sub[2:]))
+        for premise in (['rev-parse', '--verify', 't2^{commit}'],
+                        ['ls-tree', 't2']):
+            self.assertEqual(
+                subprocess.run(['git', *premise], cwd=t,
+                               capture_output=True).returncode, 0,
+                f'git {" ".join(premise)} must still succeed on t2')
+        self.assertNotEqual(
+            subprocess.run(probe, cwd=t, capture_output=True).returncode, 0,
+            'the per-path read at t2 must fail, or nothing is tested')
+        for tag in ('t1', 't3'):
+            read = subprocess.run(probe[:3] + [tag] + probe[4:], cwd=t,
+                                  capture_output=True, text=True)
+            self.assertEqual((read.returncode, read.stdout), (0, ''),
+                             f'the per-path read at {tag} must succeed and '
+                             'find nothing, or a failure there hides t2')
+
+    def assert_aborts(self, old, new):
+        rc, out = in_subprocess(
+            "print(d.check_paths(%r, ['locale/programs/ld-collate.c'],"
+            " %r, %r))" % (self.tmp, old, new))
+        self.assertNotEqual(rc, 0, 'an unreadable tree was swallowed:\n' + out)
+        self.assertIn('error: `git ls-tree ', out)
+
+    def test_an_unreadable_new_tag_aborts(self):
+        self.assert_aborts('t1', 't2')
+
+    def test_an_unreadable_old_tag_aborts(self):
+        self.assert_aborts('t2', 't3')
+
+    def test_the_include_walk_aborts_on_the_unreadable_tag(self):
+        rc, out = in_subprocess(
+            "d.reachable_from_entry_points(%r, 't2')" % self.tmp)
+        self.assertNotEqual(rc, 0,
+                            'an unreadable tree emptied the walk:\n' + out)
+        self.assertIn('error: `git ls-tree -r ', out)
+
+
+class StepFiveStopsOnATreeOnlyTheWalkReads(unittest.TestCase):
+    """Step 5 itself, on a tag with an unreadable tree off every tracked path.
+
+    The class above calls the include walk directly, so a step 5 that caught
+    the walk's abort where main() calls it stayed green. check_paths does not
+    cover that case. It reads only the trees along the tracked paths, and the
+    walk's `ls-tree -r` reads every tree in the tag. On this fixture, a main()
+    that caught the new tag's abort and kept the old tag's walk printed that
+    steps 1-3 are sufficient for t1..t2, at exit 0, where the undamaged answer
+    is one substantive hunk (newhdr.h). die() prints its line before it exits,
+    so a caught abort still leaves the message behind. The exit code is what
+    tells the two apart. That is why setUp checks that the damage is off the
+    paths check_paths reads, and why each test allows one git failure only,
+    the walk's. A later read that also hit the damaged tree would otherwise
+    supply the exit code. One case per side.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-walk-only-')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        t = self.tmp
+        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+
+        def put(path, text):
+            os.makedirs(os.path.dirname(os.path.join(t, path)), exist_ok=True)
+            with open(os.path.join(t, path), 'w') as fh:
+                fh.write(text)
+
+        tracked = list(dict.fromkeys(d.ENTRY_POINTS + d.TIER1 + d.TIER2))
+        put('localedata/locales/x', 'LC_COLLATE\nEND LC_COLLATE\n')
+        for i, path in enumerate(tracked):
+            put(path, f'/* stub */\nint stub_{i};\n')
+        put('locale/programs/ld-collate.c', '#include "oldhdr.h"\n'
+            '#include "newhdr.h"\nint f (void) { return 0; }\n')
+        put('locale/programs/oldhdr.h', 'int old_weight = 1;\n')
+        git(t, 'init', '-q', env=env)
+        for tag, extra in (('t1', None), ('t2', 'locale/programs/newhdr.h'),
+                           ('t3', None)):
+            if extra:
+                put(extra, 'int weight_of_a = 2;\n')
+            put('aaa/z', f'not collation code, {tag}\n')
+            git(t, 'add', '.', env=env)
+            git(t, 'commit', '-q', '-m', tag, env=env)
+            git(t, 'tag', tag, env=env)
+
+        for pair in (('t1', 't2'), ('t2', 't3')):
+            rc, out = self.step5(*pair)
+            self.assertEqual(rc, 0, f'step 5 must run clean on {pair} before '
+                             f'the damage, or a later abort proves nothing:\n'
+                             + out)
+        sub = subprocess.run(['git', 'rev-parse', 't2:aaa'], cwd=t,
+                             capture_output=True, text=True,
+                             check=True).stdout.strip()
+        os.remove(os.path.join(t, '.git', 'objects', sub[:2], sub[2:]))
+        for tag, ok in (('t1', True), ('t2', False), ('t3', True)):
+            rc = subprocess.run(['git', 'ls-tree', '-r', '--name-only', tag],
+                                cwd=t, capture_output=True).returncode
+            self.assertEqual(rc == 0, ok,
+                             f'`git ls-tree -r {tag}` must '
+                             f'{"succeed" if ok else "fail"}')
+        for old, new in (('t1', 't2'), ('t2', 't3')):
+            rc, out = in_subprocess(
+                "print(d.check_paths(%r, %r, %r, %r))"
+                % (t, tracked, old, new))
+            self.assertEqual(rc, 0, 'the damage must be off every path '
+                             'check_paths reads, or it stops step 5 '
+                             'instead of the walk:\n' + out)
+
+    def step5(self, old, new):
+        return run_script('diff_collation_code.py', '--repo', self.tmp,
+                          old, new)
+
+    def assert_step5_stops(self, old, new):
+        rc, out = self.step5(old, new)
+        self.assertNotEqual(rc, 0, 'step 5 read past an unreadable tree:\n'
+                            + out)
+        self.assertIn('error: `git ls-tree -r ', out)
+        self.assertEqual(out.count('error: `git '), 1,
+                         'another git failure can supply the exit code:\n'
+                         + out)
+
+    def test_an_unreadable_new_tag_stops_step_5(self):
+        self.assert_step5_stops('t1', 't2')
+
+    def test_an_unreadable_old_tag_stops_step_5(self):
+        self.assert_step5_stops('t2', 't3')
 
 
 @needs_clone
