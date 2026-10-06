@@ -5,6 +5,7 @@ says which, because a test whose purpose is forgotten is a test somebody
 deletes during a refactor.
 """
 import contextlib
+import importlib.util
 import io
 import os
 import re
@@ -14,11 +15,14 @@ import unittest
 from unittest import mock
 
 import _harness  # also puts scripts/ on sys.path
+from _harness import flat
 
 import glibc_locale_data as g
 import diff_collation_code as d
 import filter_lc_collate_changes as f
 import diff_distro_locales as dd
+import diff_node_locales as nl
+import flag_algorithmic_ranges as fa
 
 
 def collate(*body):
@@ -174,7 +178,56 @@ class CorpusFloorIsShared(unittest.TestCase):
     constants would drift the way two copies of a count do."""
 
     def test_one_floor_for_tags_and_nodes(self):
-        self.assertIs(dd.DEFAULT_MIN_FILES, g.MIN_LOCALE_FILES)
+        """Moving the floor in glibc_locale_data moves the node modes' floor
+        with it. This used to be an assertIs between the two constants, which
+        passed with a second 200 typed by hand, because CPython keeps one
+        object per small integer."""
+        for floor in (7, 4321):
+            with self.subTest(floor=floor):
+                with mock.patch.object(g, 'MIN_LOCALE_FILES', floor):
+                    spec = importlib.util.spec_from_file_location(
+                        'dd_fresh', dd.__file__)
+                    fresh = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(fresh)
+                self.assertEqual(fresh.DEFAULT_MIN_FILES, floor)
+
+    def test_the_node_modes_refuse_below_the_shared_floor(self):
+        """The rest of the path. The floor each node mode applies is the
+        default of its --min-files, and audit.sh passes no --min-files, so a
+        literal typed there would keep that mode at the old floor after the
+        shared one moved."""
+        base = tempfile.mkdtemp(prefix='pg-glibc-floor-')
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        for side in ('old', 'new'):
+            os.mkdir(os.path.join(base, side))
+            for i in range(3):
+                with open(os.path.join(base, side, f'x{i}'), 'w') as fh:
+                    fh.write('LC_CTYPE\nEND LC_CTYPE\n')
+        old, new = os.path.join(base, 'old'), os.path.join(base, 'new')
+        modes = (
+            ('diff_node_locales', nl.main,
+             ['--old-locales-dir', old, '--old-build-id', 'o',
+              '--new-locales-dir', new, '--new-build-id', 'n']),
+            ('flag_algorithmic_ranges', fa.main,
+             ['--locales-dir', new, '--build-id', 'n']),
+        )
+        # Both directions: a floor moved down and left behind by a mode is a
+        # drift too. OUT_DIR is base, so a mode that stopped refusing writes
+        # its lists there and not into the shared /tmp directory.
+        for name, main, argv in modes:
+            for floor in (4, 4321):
+                with self.subTest(mode=name, floor=floor):
+                    err = io.StringIO()
+                    with mock.patch.object(g, 'MIN_LOCALE_FILES', floor), \
+                            mock.patch.object(dd, 'DEFAULT_MIN_FILES', floor), \
+                            mock.patch.object(g, 'OUT_DIR', base), \
+                            contextlib.redirect_stderr(err), \
+                            contextlib.redirect_stdout(io.StringIO()), \
+                            self.assertRaises(SystemExit) as cm:
+                        main(argv)
+                    self.assertEqual(cm.exception.code, 2)
+                    self.assertIn(f'below the floor of {floor}.',
+                                  flat(err.getvalue()))
 
     def test_the_floor_is_below_every_pinned_tag_and_measured_node(self):
         """286 is glibc-2.12, the smallest tag the suite pins; 355 the
