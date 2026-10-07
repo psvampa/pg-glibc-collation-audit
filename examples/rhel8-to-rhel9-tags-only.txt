@@ -116,7 +116,7 @@ Additionally affected via copy-chain inheritance: 2
 
 Full affected set (4 locale source file(s)): or_IN, sv_FI, sv_FI@euro, sv_SE
 
-These are locales, not spellings: a collation or a database uses one when its
+These are locales, not spellings. A collation or a database uses one when its
 locale, without the part from the dot up to any @, is one of them
 (sv_SE.UTF-8, sv_SE.utf8 and sv_SE.iso885915 are all sv_SE).
 Also named by glibc's locale.alias: swedish (sv_SE)
@@ -155,8 +155,8 @@ Additionally exposed through localedef's default weight: 7
   gets the weight localedef assigns to UNDEFINED, in code, not from the file.
 
 Full set needing empirical confirmation: 342 locale(s), and 43 more
-name(s), the aliases glibc's locale.alias gives them. Locales, not spellings:
-one is in use wherever a locale name, without the part from the dot up to
+name(s), the aliases glibc's locale.alias gives them. Locales, not spellings.
+One is in use wherever a locale name, without the part from the dot up to
 any @, is one of them.
   e.g. POSIX, aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, agr_PE, ak_GH, ...
   not in SUPPORTED (not built by default): POSIX, cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
@@ -545,7 +545,7 @@ empirical sort-order test, however clean its data diff is.
      sv_SE
      swedish
    (5 name(s); full list: /tmp/pg-glibc-collation-audit/step3_affected_locales.txt)
-   These are locales, not spellings: a collation or a database uses one
+   These are locales, not spellings. A collation or a database uses one
    when its locale, without the part from the dot up to any @, is in this
    list (sv_SE.UTF-8, sv_SE.utf8 and sv_SE.iso885915 are all sv_SE). The
    list also holds the aliases glibc's locale.alias gives these locales.
@@ -566,10 +566,10 @@ empirical sort-order test, however clean its data diff is.
 
 -- Needs an empirical test: step 5 found 24 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged
-     385 name(s) to confirm: locales, and the aliases
-     glibc's locale.alias gives them. A collation or a database uses one
-     when its locale, without the part from the dot up to any @, is one
-     of them.
+     385 name(s) to confirm. They are locales and the
+     aliases glibc's locale.alias gives them. A collation or a database
+     uses one when its locale, without the part from the dot up to any @,
+     is one of them.
      full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
 
 -- Distro patches, steps 6 and 7: NOT RUN

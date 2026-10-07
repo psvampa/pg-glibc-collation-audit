@@ -45,8 +45,8 @@
 --     `locale -a` first: if a locale is not generated on the box,
 --     sort/PostgreSQL silently fall back to C, and two boxes both missing it
 --     will agree with each other while proving nothing. In the COLLATE
---     clauses below use a name that exists for this database's encoding:
---     in a UTF8 database "sv_SE" is sv_SE.utf8.
+--     clauses below use a name that exists for this database's encoding.
+--     In a UTF8 database "sv_SE" is sv_SE.utf8.
 --   * ONE LOCALE INVERTS THE RULE ABOVE: C.UTF-8. Agreement with LC_ALL=C is
 --     the CORRECT answer there -- it is what the glibc fix produces, and what
 --     upstream's codepoint_collation guarantees from 2.35 on -- so reading
@@ -94,18 +94,18 @@ WHERE d.datname = current_database();
 -- disconnect and changes nothing in the database.
 --
 -- C and POSIX are recognised by collcollate, the locale the collation
--- loads, not by its name: ucs_basic is a libc collation with collcollate C
+-- loads, not by its name. ucs_basic is a libc collation with collcollate C
 -- in PostgreSQL 13 to 16, and so is any CREATE COLLATION x (locale = 'C').
 --
--- `locale` is the locale each one is built from, by glibc's own rule: the
--- locale name without the part from the dot up to any @ (localedata/Makefile
--- builds every locale from that file). sv_SE.UTF-8, sv_SE.utf8 and
--- sv_SE.iso885915 are all sv_SE. Compare it with the Reindex list and
--- step 4's list, which hold locales and the aliases glibc gives them
+-- `locale` is the locale each one is built from, by glibc's own rule. That is
+-- the locale name without the part from the dot up to any @
+-- (localedata/Makefile builds every locale from that file). sv_SE.UTF-8,
+-- sv_SE.utf8 and sv_SE.iso885915 are all sv_SE. Compare it with the Reindex
+-- list and step 4's list, which hold locales and the aliases glibc gives them
 -- (swedish), not spellings. It is read from collcollate and datcollate, never
--- from collname: "sv_SE" is three collations, one per encoding, each loading
+-- from collname. "sv_SE" is three collations, one per encoding, each loading
 -- a different locale name. The dot is written [.] and not with a backslash,
--- which a server with standard_conforming_strings off reads as an escape:
+-- which a server with standard_conforming_strings off reads as an escape.
 -- '\.' would then match any first character and empty every name. glibc reads
 -- an alias in any case (Swedish is swedish), so the comparison below ignores
 -- case.
@@ -125,17 +125,20 @@ WHERE d.datname = current_database()
      OR (c.collprovider = 'd' AND d.datlocprovider = 'c'
          AND d.datcollate NOT IN ('C', 'POSIX')) );
 
--- Confirms which glibc version these collations were imported against:
--- every collation built from a locale on the audit's list, in every
--- encoding. Put the names you are confirming in place of <LOCALE>. It starts
--- from the list, so a name that matches no collation still prints a row
--- with nothing beside it: a locale this database does not have, or a name
--- left unreplaced. Both sides go through the same rule, so a spelling put
--- on the list (sv_SE.utf8) matches too. lower() runs under the C
--- collation (catalog columns are C, and the list side says so), which
--- changes ASCII letters only: under a Turkish locale lower('I') is a
--- dotless i, and or_IN, sv_FI and sv_FI@euro matched nothing (measured,
--- PostgreSQL 18.6).
+-- Confirms which glibc version these collations were imported against. It
+-- lists every collation built from a locale on the audit's list, in every
+-- encoding. Put the names you are confirming in place of <LOCALE>. The query
+-- starts from the list, so a name that matches no collation still prints a
+-- row with nothing beside it. That happens for a locale this database does
+-- not have, for a name left unreplaced, and for a locale whose collations
+-- were never imported into pg_collation (the note on
+-- pg_import_system_collations, above). Both sides go through the same rule,
+-- so a spelling put on the list (sv_SE.utf8) matches too. lower() runs under
+-- the C collation (catalog columns are C, and the list side says so), which
+-- changes ASCII letters only. Under a Turkish locale's own rules lower('I')
+-- is a dotless i, and before this query used C, or_IN, sv_FI and sv_FI@euro
+-- matched nothing in a Turkish database (measured, PostgreSQL 18.6). With C
+-- they all match.
 SELECT n AS listed, c.collname, c.collcollate,
        pg_encoding_to_char(c.collencoding) AS encoding, c.collversion
 FROM unnest(ARRAY['<LOCALE>']) AS n
@@ -289,7 +292,7 @@ ORDER BY con.conrelid::regclass::text, con.conname;
 -- it takes no editing, its corpus is derived from the ranges the backported
 -- locale actually declares, and it carries the inverted control described in
 -- the notes at the top of this file.
-\echo '--- collversion mismatch, named collations (PostgreSQL 15+) ---'
+\echo '--- collversion mismatch, named collations (PostgreSQL 13+) ---'
 SELECT collname, collversion, pg_collation_actual_version(oid) AS actual
 FROM pg_collation
 WHERE collprovider = 'c'

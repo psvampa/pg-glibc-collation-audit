@@ -52,9 +52,9 @@ clean.
 
 ## Command 3 — the worked-example scripts
 
-The PostgreSQL scripts [docs/results.md](../docs/results.md) cites for each
-pair: run one on both machines and diff the outputs. They pick collations by
-name. For a new confirmation, start from
+These are the PostgreSQL scripts [docs/results.md](../docs/results.md) cites
+for each pair. Run one on both machines and diff the outputs. They pick
+collations by name. For a new confirmation, start from
 [the template](../sql/collation_confirmation_template.sql), which reads each
 collation's locale instead.
 

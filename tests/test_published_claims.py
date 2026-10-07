@@ -428,27 +428,49 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
             r'|\b(?:%s)\s+and\s+a\s+half\b'
             % (digits, half, words, half, words))
         command = re.compile(r'unittest discover -s tests|run_parallel\.py')
-        # README.md is read whether or not it publishes the command: it
-        # stopped doing so when its Tests section moved to tests/README.md,
-        # and it still sends readers there to run the tests, so a duration in
-        # it reads as the suite's all the same.
+        # Two more places read as being about the suite without printing the
+        # command. README.md, whole: its Tests section moved to
+        # tests/README.md and it still sends readers there to run them. And
+        # any section whose heading names the tests, to its next heading of
+        # the same level or above: docs/requirements.md's "The test suite"
+        # took a duration and passed while README was named file by file.
+        # Headings are read outside fenced code, where a `# comment` would
+        # otherwise end a section early and hide what follows.
+        heading = re.compile(r'^(#{1,6})\s')
+        about_tests = re.compile(r'(?i)^#{1,6}\s.*\b(?:test suite|tests)\b')
         published = docs()
         self.assertIn('README.md', published)
         for name, text in published.items():
-            if not command.search(text) and name != 'README.md':
-                continue
-            for number_of, line in enumerate(text.split('\n'), start=1):
-                found = duration.search(line)
+            lines = text.split('\n')
+            levels, fenced = [], False
+            for line in lines:
+                if line.startswith('```'):
+                    fenced = not fenced
+                found = None if fenced else heading.match(line)
+                levels.append(len(found.group(1)) if found else None)
+            if command.search(text) or name == 'README.md':
+                scan = range(len(lines))
+            else:
+                scan = []
+                for i, line in enumerate(lines):
+                    if levels[i] is None or not about_tests.match(line):
+                        continue
+                    end = next((j for j in range(i + 1, len(lines))
+                                if levels[j] is not None
+                                and levels[j] <= levels[i]), len(lines))
+                    scan += range(i, end)
+            for i in scan:
+                found = duration.search(lines[i])
                 if found is not None:
                     self.fail(
-                        f'{name}:{number_of} states a duration '
-                        f'({found.group(0)!r} in {line.strip()!r}) in a file '
-                        f'that publishes the test-suite command, so a reader '
-                        f'will take it for the suite\'s. Drop the figure, or '
-                        f'move the sentence to a page that does not publish '
-                        f'the command; a measurement belongs in '
-                        f'tests/run_parallel.py\'s header, with its date and '
-                        f'its machine')
+                        f'{name}:{i + 1} states a duration '
+                        f'({found.group(0)!r} in {lines[i].strip()!r}) where '
+                        f'a reader will take it for the test suite\'s: in a '
+                        f'file that publishes the suite command, in README.md, '
+                        f'or in a section about the tests. Drop the figure, '
+                        f'or move the sentence out of those; a measurement '
+                        f'belongs in tests/run_parallel.py\'s header, with its '
+                        f'date and its machine')
 
     def test_the_layer_counts_come_from_the_files(self):
         """Which layers need the glibc clone is stated twice in tests/README.md

@@ -97,7 +97,7 @@ def main(argv):
     not_ascii = g.non_ascii_alias_targets(set(affected), all_aliases)
     unbuilt = [loc for loc in affected if not supported.get(loc)]
     print()
-    print("These are locales, not spellings: a collation or a database uses "
+    print("These are locales, not spellings. A collation or a database uses "
           "one when its\nlocale, without the part from the dot up to any @, "
           "is one of them\n(sv_SE.UTF-8, sv_SE.utf8 and sv_SE.iso885915 are "
           "all sv_SE).")

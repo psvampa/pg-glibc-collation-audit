@@ -35,8 +35,8 @@ skip.
 "The tests pass" does not mean "the audit is correct".
 
 - The SQL files, `sql/collation_confirmation_template.sql` and
-  `sql/c_utf8_probe.sql`, are never run: that needs PostgreSQL on two
-  machines.
+  `sql/c_utf8_probe.sql`, are never run, because that needs PostgreSQL on
+  two machines.
 - A real machine: the half of `scripts/locale_order.py` that measures needs
   Linux with glibc, and the transport over `ssh` was measured by hand.
 - Distro backports: they are not in the upstream tags the suite reads.

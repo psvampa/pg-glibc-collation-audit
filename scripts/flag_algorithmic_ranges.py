@@ -356,7 +356,7 @@ def report(texts, supported, label, out_name, next_hint,
         # path used to write it and never say where, so the promise pointed at
         # nothing and the twelve names it prints were all a reader could get.
         names = set(unresolved) | set(default_only)
-        print("  Locales, not spellings: one is in use wherever a locale name, "
+        print("  Locales, not spellings. One is in use wherever a locale name, "
               "without the part\n  from the dot up to any @, is one of them; "
               "the list adds the aliases\n  glibc's locale.alias gives them.")
         not_ascii = g.non_ascii_alias_targets(names, aliases)
@@ -406,7 +406,7 @@ def report(texts, supported, label, out_name, next_hint,
     if supported:
         print(f"\nFull set needing empirical confirmation: {len(to_confirm)} "
               f"locale(s), and {len(alias_names)} more\nname(s), the aliases "
-              f"glibc's locale.alias gives them. Locales, not spellings:\none "
+              f"glibc's locale.alias gives them. Locales, not spellings.\nOne "
               f"is in use wherever a locale name, without the part from the "
               f"dot up to\nany @, is one of them.")
         print(f"  e.g. {', '.join(exposed[:8])}, ...")
