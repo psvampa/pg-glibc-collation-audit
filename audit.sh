@@ -7,9 +7,6 @@
 # hands step 2's result to step 3 so nobody has to retype locale names, and
 # ends with a consolidated summary.
 #
-# The individual scripts keep working on their own. Use them to re-run one step
-# against a hand-picked locale list.
-#
 # Usage:
 #   ./audit.sh <old_tag> <new_tag>
 #              [--old-locales-dir DIR --old-build-id NVR]
@@ -152,6 +149,17 @@ fi
 if { [ -n "$OLD_LOCALES" ] && [ -z "$OLD_BUILD" ]; } ||
    { [ -n "$NEW_LOCALES" ] && [ -z "$NEW_BUILD" ]; }; then
   echo "error: --*-locales-dir requires the matching --*-build-id" >&2
+  exit 2
+fi
+# Checked here, before any step: left to steps 6 and 7, a path that is not a
+# directory was refused after steps 1 to 5 had run, and under the step's own
+# option name, --locales-dir.
+if [ -n "$OLD_LOCALES" ] && [ ! -d "$OLD_LOCALES" ]; then
+  echo "error: --old-locales-dir $OLD_LOCALES is not a directory" >&2
+  exit 2
+fi
+if [ -n "$NEW_LOCALES" ] && [ ! -d "$NEW_LOCALES" ]; then
+  echo "error: --new-locales-dir $NEW_LOCALES is not a directory" >&2
   exit 2
 fi
 # One machine's measurement compares nothing, and a run that dropped the other

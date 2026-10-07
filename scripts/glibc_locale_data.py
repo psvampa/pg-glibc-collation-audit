@@ -577,8 +577,7 @@ def require_pair_order(repo, old, new, allow_reverse=False):
                 f"       the older tag, step 2 reports a deleted locale as a "
                 f"harmless addition, and\n"
                 f"       step 3 closes over the wrong copy graph. Swap the "
-                f"arguments, or pass\n"
-                f"       --allow-reverse if this is deliberate.")
+                f"arguments.")
         warn(f"REVERSED PAIR, allowed on request: {detail}. Every finding "
              f"below has old and new the other way round -- what reads as "
              f"added was deleted in the real upgrade, and step 4 scanned the "

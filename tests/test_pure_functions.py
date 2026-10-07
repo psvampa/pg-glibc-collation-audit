@@ -435,9 +435,10 @@ class ChangedCharacters(unittest.TestCase):
         self.assertEqual(self.chars(section), ['A', 'B'])
 
     def test_context_lines_move_both_sides(self):
-        """A --diff-file can carry context. Unless those lines are counted,
-        both changed lines below are numbered as if they sat before the
-        block, and nothing is found."""
+        """Step 2 reads git's -U0 diff, with --inter-hunk-context=0 pinned in
+        DIFF_FLAGS, so no run hands this branch a context line. It is held for
+        a diff that has them: uncounted, both changed lines below are numbered
+        as if they sat before the block, and nothing is found."""
         section = ('\n@@ -5,3 +8,3 @@\n END LC_CTYPE\n LC_COLLATE\n'
                    '-<U0041> <a>\n+<U0048> <a>\n')
         self.assertEqual(self.chars(section), ['A', 'H'])
