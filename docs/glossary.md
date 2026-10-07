@@ -42,7 +42,8 @@ explicit weight per character. `localedef` expands it at build time, so those
 weights are **not** in the locale file. If the expansion logic changes, every
 character in the range can get a different weight with zero change to the
 locale's own source. Step 4 lists the locales that use these, and every
-other locale as well except one that declares `codepoint_collation`, because
+other locale as well except one whose `LC_COLLATE` is `codepoint_collation`
+alone, or only a copy of a byte-order locale, because
 `localedef`'s code, not the file, gives every character a locale does not
 list the `UNDEFINED` weight. Steps 1 to 3 cannot clear any of them on data
 alone.
@@ -80,10 +81,13 @@ which one merely copies it. Both files show a large diff while the effective
 sort order does not move. `ber_DZ` and `kab_DZ` over glibc 2.34..2.39 are
 this case, not a rule change.
 
-**`codepoint_collation`** — a glibc `LC_COLLATE` keyword which, in glibc's own
-words, "in any part of any LC_COLLATE immediately discards all collation
-information and causes the locale to use strcmp/wcscmp for collation
-comparison". A locale that declares it is byte order **by construction**, so no
+**`codepoint_collation`** — a glibc `LC_COLLATE` keyword that makes a
+locale compare strings with strcmp/wcscmp, which is byte order, but only when
+it is alone in `LC_COLLATE`. A comment in glibc's own `C` says it works
+"in any part of any LC_COLLATE"; glibc's code does not do that, so beside a
+`copy` or any sort rule the audit does not clear it. A locale that declares it
+alone, or only copies a byte-order locale, is byte order **by construction**,
+so no
 change to how `localedef` expands ranges can move it. Upstream's `C` declares
 it from glibc 2.35. RHEL9 backports that file, RHEL10 is glibc 2.39 and has it
 upstream, and RHEL8 ships the older ellipsis-based copy. It is the whole reason

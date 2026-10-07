@@ -1284,12 +1284,16 @@ class CollationStyle(unittest.TestCase):
             g.classify_collation_style(collate('no_codepoint_collation')),
             'explicit')
 
-    def test_codepoint_outranks_an_ellipsis_in_the_same_block(self):
-        """glibc: the keyword "in any part of any LC_COLLATE immediately
-        discards all collation information", so it cannot be outvoted by a
-        range sitting beside it."""
+    def test_an_ellipsis_beside_the_keyword_is_not_byte_order(self):
+        """This test used to assert the opposite, on the strength of the
+        comment in glibc's C ("in any part of any LC_COLLATE immediately
+        discards all collation information"). Measured false (glibc study,
+        E5): beside a sort rule the keyword gives broken tables, not byte
+        order. Byte order is the keyword alone; beside a range the range is
+        what the warnings name."""
         both = collate('codepoint_collation', '<U0000>', '..', '<U10FFFF>')
-        self.assertEqual(g.classify_collation_style(both), 'codepoint')
+        self.assertEqual(g.classify_collation_style(both), 'ellipsis')
+        self.assertFalse(g.declares_byte_order(both))
 
     def test_a_symbolic_copy_target_is_the_locale_it_spells(self):
         """`copy "<U0069><U0073><U006F>..."` is iso14651_t1 to localedef
@@ -1319,6 +1323,240 @@ class CollationStyle(unittest.TestCase):
     def test_no_block_is_none(self):
         self.assertEqual(g.classify_collation_style('LC_TIME\nEND LC_TIME\n'),
                          'none')
+
+
+ISO_COPY = 'copy "iso14651_t1"'
+SORT_RULE = ('order_start forward', '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
+             'order_end')
+
+
+class ByteOrderByConstruction(unittest.TestCase):
+    """Backlog 13.2: glibc builds byte order from `codepoint_collation` only
+    when it is the whole of LC_COLLATE. The number of sort rules is one
+    global for the localedef run and collate_output writes it before it
+    looks at the keyword (ld-collate.c:273, :2120@2.39). Each shape below
+    used to read as byte order here, which clears the locale outright. Those
+    named E5 or E6 were built with localedef on the three fixtures (glibc
+    study); the others are read from glibc's source, or refused because this
+    code cannot read them with certainty, which only keeps a locale listed."""
+
+    def not_byte_order(self, text):
+        self.assertFalse(g.declares_byte_order(text))
+        self.assertNotEqual(g.classify_collation_style(text), 'codepoint')
+        self.assertEqual(g.byte_order_locales({'X': text}), (set(), {}))
+
+    def test_the_keyword_alone_is_byte_order(self):
+        """The shape of C from glibc 2.35 and of RHEL9's and RHEL10's,
+        byte-identical (md5 850352c6). Indentation and blank lines are space
+        to glibc's reader, and so are the defaults `#` and `\\` when the file
+        declares no characters (linereader.c:79-80@2.39)."""
+        self.assertTrue(g.declares_byte_order(_harness.upstream_c()))
+        self.assertTrue(g.declares_byte_order(
+            collate('', '   codepoint_collation  ', '')))
+        bare = 'LC_COLLATE\n# a note\ncodepoint_collation\nEND LC_COLLATE\n'
+        self.assertTrue(g.declares_byte_order(bare))
+        self.assertEqual(g.byte_order_locales({'C': bare}), ({'C'}, {}))
+
+    def test_a_sort_rule_beside_the_keyword_is_not_byte_order(self):
+        both = collate('codepoint_collation', *SORT_RULE)
+        self.not_byte_order(both)
+        self.assertEqual(g.classify_collation_style(both),
+                         'codepoint-not-alone')
+
+    def test_a_copy_beside_the_keyword_is_not_byte_order(self):
+        """E5: broken tables on RHEL9 and RHEL10, garbage from strcoll and a
+        crash; plain iso14651_t1 order on RHEL8. On the copy's own line (E6a)
+        localedef drops the keyword as trailing garbage."""
+        self.not_byte_order(collate(ISO_COPY, 'codepoint_collation'))
+        self.not_byte_order(collate(f'{ISO_COPY} codepoint_collation'))
+        # A comment after the copy is no error to glibc (lr_ignore_rest
+        # stops at it), so this is E5's shape too. A line is a comment only
+        # when it starts with the comment character.
+        self.not_byte_order(collate(f'{ISO_COPY} % the template',
+                                    'codepoint_collation'))
+        self.assertEqual(
+            g.classify_collation_style(collate(ISO_COPY, 'codepoint_collation')),
+            'codepoint-not-alone')
+
+    def test_the_keyword_in_a_skipped_branch_is_not_byte_order(self):
+        """E6b: skip_to reads nothing in a branch not taken."""
+        self.not_byte_order(collate(ISO_COPY, 'ifdef NEVER_DEFINED',
+                                    'codepoint_collation', 'endif'))
+
+    def test_the_keyword_glued_to_the_comment_char_is_not_byte_order(self):
+        """E6c: `%` inside a word starts no comment, so the line is one
+        unknown word and a syntax error."""
+        self.not_byte_order(collate(ISO_COPY, 'codepoint_collation%x'))
+
+    def test_a_continued_line_is_not_byte_order(self):
+        """E6d: a line ending in the escape character takes the next one with
+        it, and after a `copy` the keyword is then dropped as trailing
+        garbage. After the header it would be read as the header's rest
+        (from the source). After a comment glibc skips only that physical
+        line (linereader.c:222-229@2.39) and would still read the keyword;
+        refused anyway, because this code does not follow continued lines."""
+        self.not_byte_order(collate(f'{ISO_COPY} /', 'codepoint_collation'))
+        self.not_byte_order('\n'.join(['comment_char %', 'escape_char /', '',
+                                       'LC_COLLATE /', 'codepoint_collation',
+                                       'END LC_COLLATE', '']))
+        self.not_byte_order(collate('% a note /', 'codepoint_collation'))
+
+    def test_the_keyword_as_a_define_argument_is_not_byte_order(self):
+        """E6e, before and after the copy."""
+        self.not_byte_order(collate('define BYTE codepoint_collation',
+                                    ISO_COPY))
+        self.not_byte_order(collate(ISO_COPY,
+                                    'define BYTE codepoint_collation'))
+
+    def test_a_second_lc_collate_section_is_not_byte_order(self):
+        """locfile.c:179-180@2.39 hands every LC_COLLATE section of the file
+        to collate_read, so a sort rule in a second one is read in the same
+        run. Indented, too: glibc's reader skips the space."""
+        second = '\n'.join(['LC_COLLATE', *SORT_RULE, 'END LC_COLLATE', ''])
+        self.not_byte_order(_harness.upstream_c() + second)
+        self.not_byte_order(_harness.upstream_c() + '  ' + second)
+        # A header with more on its word is no header to glibc, so the one
+        # section it reads is the copy below (round 3 of
+        # false-negative-reviewer: no test held the exact-header guard).
+        self.not_byte_order('\n'.join(['comment_char %', 'escape_char /', '',
+                                       'LC_COLLATEX', 'codepoint_collation',
+                                       'END LC_COLLATE', '', 'LC_COLLATE',
+                                       ISO_COPY, 'END LC_COLLATE', '']))
+
+    def test_a_header_built_with_the_escape_character_is_not_byte_order(self):
+        """Inside a word glibc takes the character after the escape as it is
+        (get_ident, linereader.c:580-589@2.39), and a line ending in the
+        escape joins the next one on, so these open a second LC_COLLATE that
+        no search for the word sees. The copy in it then shares
+        iso14651_t1's rules with the keyword: E5's broken tables. Found by
+        false-negative-reviewer, which measured the tool declaring this C
+        byte order, the first two spellings in round 1 and the two that start
+        a line with the escape, or leave one behind, in round 2. lr_next
+        removes only the last escape of a line. glibc's own C writes no word
+        this way (2.35 to 2.42)."""
+        up = _harness.upstream_c()
+        for header in ('LC_COLL/ATE', 'LC_COL/\nLATE', '% a note /\nLC_COL/\nLATE',
+                       'LC_COL/\n/LATE', 'LC_COLL//\nATE', 'LC_/COLLATE',
+                       'LC/_COLLATE'):
+            with self.subTest(header=header):
+                hidden = f'{header}\n{ISO_COPY}\nEND LC_COLLATE\n\nLC_COLLATE\n'
+                self.not_byte_order(up.replace('LC_COLLATE\n', hidden, 1))
+        # The real C's comments write C/POSIX and glibc/locale: a comment is
+        # skipped whole, by glibc and here.
+        self.assertTrue(g.declares_byte_order(
+            up.replace('% locale to use', '% C/POSIX locale to use')))
+
+    def test_a_range_this_code_sees_wins_over_byte_order(self):
+        """With no comment_char directive glibc's comment character is `#`
+        and this code's ellipsis reader takes `%` (backlog 13.8), so a `#`
+        comment holding `..` is a range to the reader and a comment to
+        glibc. Before the two agreed, step 4 listed such a locale and named
+        it byte order on the next line, and a C copying it read "IS exposed"
+        and "byte order too" in one status. Found by false-negative-reviewer,
+        round 2. The range wins, which can only keep a locale listed."""
+        hashed = ('LC_COLLATE\n# U+0000..U+10FFFF sort by code point\n'
+                  'codepoint_collation\nEND LC_COLLATE\n')
+        self.assertTrue(g.scan_ellipsis({'zz_ZZ': hashed})[0])
+        self.not_byte_order(hashed)
+        self.assertEqual(g.classify_collation_style(hashed), 'ellipsis')
+        copier = 'LC_COLLATE\n# planes 0..16\ncopy "C"\nEND LC_COLLATE\n'
+        self.assertEqual(g.byte_order_locales(
+            {'C': _harness.upstream_c(), 'X': copier, 'Y': collate('copy "zz_ZZ"'),
+             'zz_ZZ': hashed}), ({'C'}, {}))
+        # The same disagreement over the keyword: a C that only copies a
+        # byte-order locale, under a `#` comment naming the keyword, read as
+        # 'codepoint-not-alone' and as a copy in one status (round 3).
+        named = ('LC_COLLATE\n# not codepoint_collation: a copy\n'
+                 'copy "zz_ZZ"\nEND LC_COLLATE\n')
+        self.assertEqual(g.classify_collation_style(named),
+                         'codepoint-not-alone')
+        self.assertEqual(g.byte_order_locales(
+            {'C': named, 'zz_ZZ': _harness.upstream_c()}), ({'zz_ZZ'}, {}))
+
+    def test_an_unterminated_block_is_not_byte_order(self):
+        text = '\n'.join(['comment_char %', 'escape_char /', '',
+                          'LC_COLLATE', 'codepoint_collation', ''])
+        self.not_byte_order(text)
+
+    def test_characters_read_without_certainty_are_not_byte_order(self):
+        """The comment and escape characters are read with certainty only
+        when the directives come first, with a value glibc's own files use.
+        Otherwise localedef may read them differently from this code: a
+        leading line continued into the directive swallows it, one inside a
+        section is a syntax error there, and glibc refuses `<` as an argument
+        (it reads as a symbol) and keeps `#`. Refused rather than guessed;
+        that can only keep a locale listed, never clear one. Repeated
+        directives at the top are read in order, as glibc does, unless one
+        ends in the escape character in force: glibc then reads its argument
+        from the next line (round 3 of false-negative-reviewer measured the
+        tool reading `\\` where glibc reads `/`, and clearing C). A trailing
+        space after the escape does not continue the line."""
+        block = ['', 'LC_COLLATE', '% note', 'codepoint_collation',
+                 'END LC_COLLATE', '']
+        self.assertTrue(g.declares_byte_order(
+            '\n'.join(['comment_char %', 'escape_char /', *block])))
+        self.assertTrue(g.declares_byte_order(
+            '\n'.join(['comment_char #', 'comment_char %', 'escape_char /',
+                       *block])))
+        self.assertFalse(g.declares_byte_order(
+            '\n'.join(['comment_char %', 'comment_char #', 'escape_char /',
+                       *block])))
+        self.not_byte_order('\n'.join(['% a note first \\', 'comment_char %',
+                                       'escape_char /', *block]))
+        self.not_byte_order('\n'.join(['escape_char /', 'LC_CTYPE',
+                                       'comment_char %', 'END LC_CTYPE',
+                                       *block]))
+        self.not_byte_order('\n'.join(['comment_char <', 'escape_char /', '',
+                                       'LC_COLLATE', '< note',
+                                       'codepoint_collation',
+                                       'END LC_COLLATE', '']))
+        hidden = ['', 'LC_COLL/ATE', 'order_start forward', '<U0041>',
+                  'order_end', 'END LC_COLLATE', '']
+        self.not_byte_order('\n'.join(['comment_char %', 'escape_char \\',
+                                       '/', *block, *hidden]))
+        self.not_byte_order('\n'.join(['comment_char %', 'escape_char /',
+                                       'escape_char /', '\\', *block,
+                                       *[h.replace('/', '\\') for h in hidden]]))
+        self.assertTrue(g.declares_byte_order(
+            '\n'.join(['comment_char %', 'escape_char \\ ', *block])))
+
+    def test_unicode_space_is_not_space_to_glibc(self):
+        """glibc's reader skips isspace in the C locale; U+00A0 is part of
+        the word for it, while Python's str.strip() removes it."""
+        self.not_byte_order(collate(' codepoint_collation'))
+
+    def test_a_copy_of_a_byte_order_locale_is_byte_order(self):
+        """Backlog 6.9. A copy and nothing else shares the copied locale's
+        data (ld-collate.c:1518-1521@2.39). Measured on RHEL9 and RHEL10:
+        `copy "C"`, a copy of that copy, and a copy of a file holding the
+        keyword alone compile byte-identical to the installed C.UTF-8."""
+        texts = {'C': _harness.upstream_c(),
+                 'X': collate('copy "C"'),
+                 'Y': collate('% via X', 'copy "X"'),
+                 'Z': collate('copy "<U0043>"')}
+        self.assertEqual(g.byte_order_locales(texts),
+                         ({'C'}, {'X': 'C', 'Y': 'X', 'Z': 'C'}))
+        self.assertEqual(g.classify_collation_style(texts['X']), 'copy-only')
+
+    def test_a_copy_with_anything_else_is_not_byte_order(self):
+        """Its own sort rule is read in the same run as the keyword, so the
+        tables break as in E5 (backlog 6.9's refresh)."""
+        texts = {'C': _harness.upstream_c(),
+                 'X': collate('copy "C"', *SORT_RULE),
+                 'Y': collate('copy "C"', ISO_COPY)}
+        self.assertEqual(g.byte_order_locales(texts), ({'C'}, {}))
+
+    def test_a_copy_that_cannot_resolve_is_not_byte_order(self):
+        """A missing target is exit 4 and a cycle exit 5 in localedef, and
+        a copy of RHEL8's C or of the keyword beside a copy is not byte
+        order either."""
+        texts = {'A': collate('copy "B"'), 'B': collate('copy "A"'),
+                 'M': collate('copy "no_such_locale"'),
+                 'C8': _harness.backported_c(),
+                 'R': collate('copy "C8"'),
+                 'N': collate(ISO_COPY, 'codepoint_collation'),
+                 'S': collate('copy "N"')}
+        self.assertEqual(g.byte_order_locales(texts), (set(), {}))
 
 
 class ScanEllipsis(unittest.TestCase):

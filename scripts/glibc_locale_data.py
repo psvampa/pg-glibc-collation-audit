@@ -141,17 +141,34 @@ ELLIPSIS_RE = re.compile(r'(?<!\.)\.{2,}')
 # comments are stripped before looking for one.
 _COMMENT_CHAR_RE = re.compile(r'^\s*comment_char\s+(\S)', re.M)
 
-# glibc's own keyword for "this locale sorts by code point, full stop"
-# (locale/programs/ld-collate.c). Present in upstream's C from 2.35 on, and the
-# thing that makes C.UTF-8 immovable from that release forward. Matched as a
-# whole token because the file that declares it also DISCUSSES it in a comment.
-# `<` and `>` are in the guards because glibc's lexer reads `<name>` as a
-# collating symbol and never as this keyword, while the bare word without them
-# reads as the keyword: `collating-symbol <codepoint_collation>` used to
-# classify a file as byte-order-by-construction, which is the one verdict here
-# that clears a locale outright.
+# glibc's keyword for byte order (locale/programs/ld-collate.c, from 2.35;
+# RHEL9 backports it). This pattern only answers "does the file NAME the
+# keyword outside a comment", which is not "does the locale sort by bytes":
+# declares_byte_order answers that, and a file this matches and that does not
+# answer gets a style of its own. Matched as a whole token because the file
+# that declares it also DISCUSSES it in a comment. `<` and `>` are in the
+# guards because glibc's lexer reads `<name>` as a collating symbol and never
+# as this keyword.
 _CODEPOINT_RE = re.compile(
     r'(?<![A-Za-z0-9_<])codepoint_collation(?![A-Za-z0-9_>])')
+
+# What localedef's line reader counts as space (isspace in the C locale).
+# Python's str.strip() also strips U+00A0 and other Unicode spaces, which
+# glibc reads as part of a word.
+_SPACE = ' \t\n\r\f\v'
+
+# The two directives, in the one place declares_byte_order accepts them.
+_DIRECTIVE_RE = re.compile(r'(comment_char|escape_char)[ \t\r\f\v]+(\S)')
+
+# A physical line whose first word opens this category.
+_COLLATE_WORD_RE = re.compile(
+    r'^[ \t\r\f\v]*LC_COLLATE(?![A-Za-z0-9_])', re.M)
+
+# A character a word can hold on both sides of an escape.
+_WORD_CHAR = '[A-Za-z0-9_]'
+
+# A `copy` line and nothing else on it.
+_SOLE_COPY_RE = re.compile(r'copy[ \t\r\f\v]+"([^"]*)"')
 
 _COPY_RE = re.compile(r'^\s*copy\s+"([^"]+)"', re.M)
 
@@ -889,43 +906,265 @@ def copy_targets(text):
     return [decode_symbolic(t) for t in _COPY_RE.findall(block)]
 
 
+def _glibc_chars(lines):
+    """(comment char, escape char) localedef reads this file with, or None.
+
+    linereader starts every file at `#` and `\\` (lr_create,
+    locale/programs/linereader.c:79-80@2.39), and a `comment_char` or
+    `escape_char` line at top level changes them from that line on
+    (locfile.c:123-149), in order, so the last one read wins. The answer is
+    certain only in one shape: the directives come first, with nothing but
+    blank lines before them, so no earlier line can be continued into one,
+    and none appears anywhere else, where it would change the characters for
+    what follows. Each value must be one glibc's own files use or the default
+    it restates: glibc refuses an argument it does not read as a
+    one-character word ("bad argument"; `<` reads as a symbol, a digit as a
+    number, linereader.c lr_token), and keeps the old character. A directive
+    line ending in the escape character in force when it is read is joined
+    to the next line before its argument is (lr_next :162-171; locfile.c:126
+    reads it with lr_token), so `escape_char \\` with `/` below it sets `/`.
+    Any of these shapes is None, which declares_byte_order reads as "not
+    byte order".
+    """
+    chars = {'comment_char': '#', 'escape_char': '\\'}
+    allowed = {'comment_char': '%#', 'escape_char': '/\\'}
+    leading = True
+    for line in lines:
+        stripped = line.strip(_SPACE)
+        directive = re.match(r'(comment_char|escape_char)(?![A-Za-z0-9_])',
+                             stripped)
+        if directive:
+            word = directive.group(1)
+            m = _DIRECTIVE_RE.fullmatch(stripped)
+            if (not leading or m is None
+                    or m.group(2) not in allowed[word]
+                    or line.endswith(chars['escape_char'])):
+                return None
+            chars[word] = m.group(2)
+        elif stripped:
+            leading = False
+    return chars['comment_char'], chars['escape_char']
+
+
+def _escape_builds_a_word(lines, cc, ec):
+    """Can the escape character build a word out of pieces, outside a comment?
+
+    glibc's reader keeps a word going across it: inside a word the character
+    after the escape is taken as it is (get_ident, linereader.c:580-589@2.39),
+    and a line ending in the escape is joined to the next one with only that
+    last escape removed (lr_next :162-171, lr_getc linereader.h:125). So
+    `LC_COLL/ATE`, `LC_COL/` then `LATE`, `LC_COL/` then `/LATE`, or
+    `LC_COLL//` then `ATE` all open an LC_COLLATE section that a search for
+    the word cannot see, and a second section is read in the same run.
+
+    Lines are joined here the way lr_next joins them, and the join is refused
+    when it glues a word character to a word character, or when the joined
+    line holds the escape between two of them. Refused rather than reassembled:
+    no file that declares the keyword does either at any tag from 2.35 to
+    2.42 or on the RHEL8, RHEL9 and RHEL10 fixtures. A line opening with the
+    comment character is skipped whole by glibc, continued or not
+    (linereader.c:222-229), and so is skipped here when it opens a line.
+    """
+    word = re.compile(_WORD_CHAR)
+    joined = re.compile(_WORD_CHAR + re.escape(ec) + _WORD_CHAR)
+    cur = None
+    for line in lines:
+        if cur is None and line.strip(_SPACE).startswith(cc):
+            continue
+        if cur and line and word.fullmatch(cur[-1]) and word.match(line):
+            return True
+        cur = line if cur is None else cur + line
+        if line.endswith(ec):
+            cur = cur[:-len(ec)]
+            continue
+        if joined.search(cur):
+            return True
+        cur = None
+    return bool(cur) and joined.search(cur) is not None
+
+
+def _collate_body(text):
+    """(comment char, body lines) of an LC_COLLATE localedef reads with
+    certainty, or None.
+
+    Certain means: the characters are known (_glibc_chars); the file has one
+    line opening LC_COLLATE, at column 0, with nothing else on it, and no
+    word built with the escape character (_escape_builds_a_word) that could
+    open another, because a second one would be read too (locfile.c:179-180
+    hands every LC_COLLATE section to collate_read); the block ends at a bare
+    `END LC_COLLATE`; and no line from the header to that END ends in the
+    escape character, which joins it to the next line (linereader.c:162-171):
+    the header would swallow the first line of the block, a `copy` line the
+    line after it (ld-collate.c:2661@2.39, lr_ignore_rest).
+    """
+    lines = text.split('\n')
+    chars = _glibc_chars(lines)
+    if chars is None or len(_COLLATE_WORD_RE.findall(text)) != 1:
+        return None
+    cc, ec = chars
+    if _escape_builds_a_word(lines, cc, ec):
+        return None
+    bounds = collate_bounds(text)
+    if bounds is None:
+        return None
+    start, end = bounds
+    if (lines[start - 1].strip(_SPACE) != 'LC_COLLATE'
+            or lines[end - 1].strip(_SPACE) != 'END LC_COLLATE'):
+        return None
+    if any(line.endswith(ec) for line in lines[start - 1:end]):
+        return None
+    return cc, lines[start:end - 1]
+
+
+def _content(text):
+    """The lines of the LC_COLLATE block that are not blank and not a
+    comment, stripped, or None when _collate_body cannot read it.
+
+    None too when this module's own ellipsis reader sees a range in the
+    block. That reader takes `%` as the comment character when a file
+    declares none, and glibc takes `#` (backlog 13.8), so a `#` comment
+    holding `..` is a range to one and a comment to the other. Where they
+    disagree the range wins: a locale is never both listed by step 4 and
+    called byte order beside it.
+    """
+    frame = _collate_body(text)
+    if frame is None:
+        return None
+    if ellipsis_hits(collate_text(text), comment_char(text)):
+        return None
+    cc, body = frame
+    words = [line.strip(_SPACE) for line in body]
+    return [w for w in words if w and not w.startswith(cc)]
+
+
+def declares_byte_order(text):
+    """Does glibc build this locale in byte order from its own LC_COLLATE?
+
+    Only when `codepoint_collation` is the whole of the block, comments and
+    blank lines aside. The keyword sets a flag (ld-collate.c:2691-2692@2.39),
+    but the number of sort rules is one global for the whole localedef run
+    (:273), set by the first `order_start` or `reorder-sections-after` read in
+    it (:613-619, :3197-3202, :3678), and collate_output writes that global
+    before it looks at the flag (:2120-2123). Measured (glibc study, E5):
+    `copy "iso14651_t1"` plus the keyword compiles on RHEL9 and RHEL10 with no
+    message into tables whose strcoll returns garbage and crashes; on the same
+    line as the copy, inside an `ifdef`, glued to `%`, after a continued line
+    or as the argument of `define` the keyword does nothing (E6). Anything but
+    the keyword alone is therefore not byte order here, and the conservative
+    answer for a shape not read with certainty is False: the locale stays
+    listed.
+
+    The other categories of the file do not reach this. A file read for
+    LC_TIME or LC_CTYPE reads its LC_COLLATE with ignore_content
+    (locfile.c:53, :179-180), and `order_start` is skipped there
+    (ld-collate.c:3113-3117).
+
+    Where the build does not know the keyword (upstream before 2.35, RHEL8)
+    the keyword alone does not compile at all: "too many errors; giving up"
+    (ld-collate.c:1852@2.28), measured on glibc-2.28-251.el8_10.40. No
+    collation is built, so nothing can be sorted wrongly by it; PostgreSQL
+    refuses a collation whose locale the machine lacks ("could not create
+    locale", pg_locale.c:1445@REL_14_24, pg_locale_libc.c:831@REL_18_6).
+    """
+    return _content(text) == ['codepoint_collation']
+
+
+def _sole_copy_target(text):
+    """The locale this LC_COLLATE copies, when that copy is the whole block,
+    or None.
+
+    None too unless classify_collation_style also reads the file as nothing
+    but a copy. It strips comments with `%` when a file declares no comment
+    character, and glibc with `#` (backlog 13.8), so a `#` comment naming the
+    keyword made a C both 'codepoint-not-alone' and a copy of a byte-order
+    locale in one status. Every reader here has to agree before a copy
+    clears anything.
+    """
+    if classify_collation_style(text) != 'copy-only':
+        return None
+    content = _content(text)
+    if content is None or len(content) != 1:
+        return None
+    m = _SOLE_COPY_RE.fullmatch(content[0])
+    if m is None:
+        return None
+    target = decode_symbolic(m.group(1))
+    return target if re.fullmatch(r'[A-Za-z0-9_.@+-]+', target) else None
+
+
+def byte_order_locales(texts):
+    """({names that declare byte order}, {name: the locale it copies}).
+
+    The second part is backlog 6.9: a locale whose LC_COLLATE is a `copy` and
+    nothing else shares the copied locale's data (ld-collate.c:1518-1521@2.39,
+    first-statement copy), so copying one that declares byte order, directly
+    or through more such copies, reads no sort rule either. Measured on
+    glibc-2.34-275.el9_8 and glibc-2.39-128.el10_2: `copy "C"`, a copy of that
+    copy, and a copy of a file holding the keyword alone all compile
+    byte-identical to the installed C.UTF-8. A cycle or a target this corpus
+    lacks is not byte order: localedef refuses both (exit 5 and exit 4).
+    """
+    declared = {name for name, text in texts.items()
+                if declares_byte_order(text)}
+    copies = {}
+    for name, text in texts.items():
+        target = _sole_copy_target(text)
+        if target is not None:
+            copies[name] = target
+    by_copy = {}
+    for name, target in copies.items():
+        seen, cur = {name}, target
+        while cur in copies and cur not in seen:
+            seen.add(cur)
+            cur = copies[cur]
+        if cur in declared:
+            by_copy[name] = target
+    return declared, by_copy
+
+
 def classify_collation_style(text):
     """How does this locale's LC_COLLATE define its order? One of:
 
       'none'      -- no LC_COLLATE block; no sort order of its own
-      'codepoint' -- declares `codepoint_collation`. Byte order by
-                     construction, and nothing localedef does to ranges can
-                     move it. Upstream's C is this from glibc 2.35 on.
+      'codepoint' -- `codepoint_collation` is the whole block
+                     (declares_byte_order). Byte order by construction, and
+                     nothing localedef does to ranges can move it. Upstream's
+                     C is this from glibc 2.35 on, and RHEL9's and RHEL10's.
       'ellipsis'  -- uses ellipsis ranges, whose weights localedef computes at
-                     build time, so a data diff can never clear it. RHEL8's and
-                     RHEL9's BACKPORTED C is this -- which is why C.UTF-8's
-                     order moved between them from a file no tag diff can see.
+                     build time, so a data diff can never clear it. RHEL8's
+                     BACKPORTED C is this -- which is why C.UTF-8's order
+                     moved from RHEL8 to RHEL9 from a file no tag diff can see.
+      'codepoint-not-alone'
+                  -- names `codepoint_collation`, but declares_byte_order
+                     could not read it as the keyword alone: either glibc
+                     gives no byte order (a copied template or a sort rule
+                     beside it, the keyword in a branch not taken, ...) or
+                     this code cannot tell with certainty. Not cleared
+                     either way.
       'copy-only' -- nothing but `copy`; its order is whatever it inherits
       'explicit'  -- the weights are spelled out in this file
 
-    Precedence is deliberate. `codepoint_collation` "in any part of any
-    LC_COLLATE immediately discards all collation information" (glibc's own
-    comment), so it outranks an ellipsis in the same block; and 'ellipsis'
-    outranks 'copy-only' because a copy cannot undo a range this file declares.
+    Precedence: 'ellipsis' outranks 'codepoint-not-alone', because both are
+    not cleared and the range is the reason the warnings already name; and
+    both outrank 'copy-only', because a copy cannot undo what this file adds.
 
-    Comments are stripped first and the keyword is matched as a whole token.
+    Comments are stripped and the keyword is matched as a whole token.
     glibc-2.39:localedata/locales/C names `codepoint_collation` in prose three
-    lines ABOVE the declaration -- "The keyword 'codepoint_collation' in any
-    part of any LC_COLLATE..." -- so a substring search reads that comment as a
-    declaration. Which direction that fails in is what makes it worth a test:
-    it would report an ellipsis-based backport as byte order, i.e. clear the
-    one locale this whole classification exists to catch.
+    lines ABOVE the declaration, so a substring search reads that comment as
+    the keyword.
     """
     block = collate_text(text)
     if block is None:
         return 'none'
+    if declares_byte_order(text):
+        return 'codepoint'
     cc = comment_char(text)
     body = [line.split(cc)[0] for line in block.split('\n')
             if not line.startswith(('LC_COLLATE', 'END LC_COLLATE'))]
-    if any(_CODEPOINT_RE.search(line) for line in body):
-        return 'codepoint'
     if any(ELLIPSIS_RE.search(line) for line in body):
         return 'ellipsis'
+    if any(_CODEPOINT_RE.search(line) for line in body):
+        return 'codepoint-not-alone'
     content = [line.strip() for line in body if line.strip()]
     if content and all(line.startswith('copy') for line in content):
         return 'copy-only'
