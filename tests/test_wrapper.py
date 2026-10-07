@@ -767,6 +767,9 @@ class WrapperRefusesBadInput(unittest.TestCase):
         self.assertNotIn('AUDIT SUMMARY', out)
         self.assertIn('This pair is REVERSED', flat(out))
         self.assertIn('Swap the arguments', flat(out))
+        # The refusal told the reader to pass --allow-reverse, which audit.sh
+        # refuses as an unknown argument (the next test).
+        self.assertNotIn('--allow-reverse', out)
 
     def test_the_wrapper_offers_no_way_to_run_a_reversed_pair(self):
         """--allow-reverse exists on the individual steps, for the deliberate
@@ -796,6 +799,22 @@ class WrapperRefusesBadInput(unittest.TestCase):
                 self.assertEqual(rc, 2, out)
                 self.assertIn(f'error: {tail[0]} needs a value', out)
                 self.assertIn('usage:', out)
+
+    def test_a_locales_dir_that_is_not_a_directory_is_refused_first(self):
+        """Measured on 381b5dc: `--old-locales-dir /no/such/dir` ran steps 1
+        to 5, and step 6 then refused it as "--locales-dir /no/such/dir is not
+        a directory", an option the reader never typed. Each side is checked
+        on its own, so each side has its own case."""
+        missing = os.path.join(self.out_dir, 'no-such-dir')
+        for side in ('old', 'new'):
+            with self.subTest(side=side):
+                rc, out = run_wrapper(OLD, MID, f'--{side}-locales-dir',
+                                      missing, f'--{side}-build-id', 'x',
+                                      out_dir=self.out_dir)
+                self.assertEqual(rc, 2, out)
+                self.assertIn(f'error: --{side}-locales-dir {missing} is not '
+                              f'a directory', out)
+                self.assertNotIn('STEP 1', out)
 
     def test_step_2_rewrites_the_list_so_a_seed_cannot_survive(self):
         """This is the real protection on the file that becomes step 3's argv.
