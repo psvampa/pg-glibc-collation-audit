@@ -1806,6 +1806,43 @@ class WrapperNodeCWithExplicitWeights(unittest.TestCase):
 
 
 @needs_clone
+class WrapperNodeCNamesTheKeywordNotAlone(unittest.TestCase):
+    """Backlog 13.2, where it surfaces. A C that copies `iso14651_t1` and
+    also holds codepoint_collation compiles on RHEL9 and RHEL10 into tables
+    whose strcoll returns garbage and crashes (glibc study, E5). Step 9
+    called it byte order, and the summary printed "byte order by
+    construction" over it. The summary decides C's line by how the step's
+    status starts, so the new status must not start with the keyword. No
+    RHEL build ships this shape; it is injected."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-cmixed-')
+        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-cmixedtree-')
+        root = dd.materialise_tag(GLIBC_CLONE, OLD, os.path.join(cls.nodes, 'a'))
+        with open(os.path.join(root, 'C'), 'w', encoding='utf-8') as fh:
+            fh.write(locale_file('copy "iso14651_t1"', 'codepoint_collation'))
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID, '--old-locales-dir', root, '--old-build-id', 'build-old',
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    def test_the_summary_does_not_call_it_byte_order(self):
+        self.assertEqual(self.rc, 0, self.out)
+        flat = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
+        self.assertIn('C (C.UTF-8): names codepoint_collation, but could not '
+                      'be read as the keyword alone in its LC_COLLATE <- the '
+                      'one form glibc builds in byte order, so this is NOT '
+                      'cleared; and it copies iso14651_t1, which this step '
+                      'flagged -- so this locale IS exposed', flat)
+        self.assertNotIn('byte order by construction', flat)
+
+
+@needs_clone
 class WrapperNodeWithoutC(unittest.TestCase):
     """A locale directory with no C at all. Absent is not cleared, and with one
     side only nothing else in the summary says so."""

@@ -3,7 +3,8 @@
 Find locales whose LC_COLLATE relies on range-expansion (ellipsis) syntax
 instead of listing every character's collation weight explicitly, then close
 that set over the `copy` graph. Every other locale is added too, except one
-declaring codepoint_collation, for the default weight described below.
+glibc builds in byte order -- codepoint_collation alone, or only a copy of a
+byte-order locale -- for the default weight described below.
 
 Why this matters: a source diff (audit-locale-diff.sh +
 filter_lc_collate_changes.py) proves that a locale's sort order didn't change
@@ -40,10 +41,11 @@ changed for the version pair you care about. If it did, every locale printed
 here needs an empirical sort-order test regardless of what the source diff
 says.
 
-Every other locale is printed too, except one that declares
-codepoint_collation. A character a locale does not list takes the UNDEFINED
-weight, which localedef's code assigns and the file does not hold, so even a
-locale with no range depends on localedef (backlog 1.6).
+Every other locale is printed too, except one glibc builds in byte order:
+codepoint_collation alone, or only a copy of a byte-order locale
+(glibc_locale_data.byte_order_locales). A character a locale does not list
+takes the UNDEFINED weight, which localedef's code assigns and the file does
+not hold, so even a locale with no range depends on localedef (backlog 1.6).
 
 It also scans a DIRECTORY of locale sources -- a copy of a node's
 /usr/share/i18n/locales/ -- instead of a tag, which reaches a locale the distro
@@ -148,18 +150,31 @@ def report_codepoint(texts):
     """Name the locales that cannot be moved by an expansion change at all.
 
     Reported rather than left unnamed: since backlog 1.6 these are the only
-    locales this step does not list. `codepoint_collation`
-    is a positive statement -- byte order by construction -- and it is the
+    locales this step does not list. `codepoint_collation` alone is a
+    positive statement -- byte order by construction -- and it is the
     difference between upstream's C from glibc 2.35 on and the ellipsis-based
-    copy RHEL backports. A reader who cannot see which one is in front of them
-    cannot tell a cleared locale from an unexamined one.
+    copy RHEL8 ships. A locale that copies a byte-order locale and nothing
+    else sorts the same way (backlog 6.9), directly or through a chain of such
+    copies, and is named on a line of its own, because it declares nothing.
+    A reader who cannot see which one is in front of them cannot tell a
+    cleared locale from an unexamined one.
+
+    The keyword beside anything else is not here: glibc does not build byte
+    order from it, or this code cannot tell that it does
+    (glibc_locale_data.declares_byte_order), so such a locale stays listed.
+
+    Returns (every name above, {name: the locale it copies}).
     """
-    immune = sorted(name for name, text in texts.items()
-                    if g.classify_collation_style(text) == 'codepoint')
-    if immune:
+    declared, by_copy = g.byte_order_locales(texts)
+    if declared:
         print(f"\nDeclare codepoint_collation, so no expansion change can "
-              f"move them: {', '.join(immune)}")
-    return immune
+              f"move them: {', '.join(sorted(declared))}")
+    if by_copy:
+        named = ', '.join(f'{n} (copies {t})'
+                          for n, t in sorted(by_copy.items()))
+        print(f"\nCopy a byte-order locale and nothing else, so glibc builds "
+              f"them in byte order too: {named}")
+    return sorted(declared | set(by_copy)), by_copy
 
 
 def listed_names(names, aliases):
@@ -175,7 +190,7 @@ def listed_names(names, aliases):
 
 
 def report_backported(texts, inherited=None, unresolved=None,
-                      default_only=()):
+                      default_only=(), by_copy=None):
     """Declare, one by one, what this scan found for each locale the distros
     are known to BACKPORT. Returns {name: status}.
 
@@ -194,8 +209,20 @@ def report_backported(texts, inherited=None, unresolved=None,
     C read "no ellipsis range for localedef to expand" in the summary while the
     step's own list named it.
 
-    `codepoint_collation` is the exception to both and outranks the copy: glibc
-    discards all inherited collation information when it sees that keyword.
+    `codepoint_collation` is byte order only alone
+    (glibc_locale_data.declares_byte_order), and a file holding it alone
+    copies nothing, so none of the three notes can reach it. Beside anything
+    else this code does not call it byte order. Beside a copied template
+    glibc gives none (`copy "iso14651_t1"` plus the keyword compiles into
+    broken tables on RHEL9 and RHEL10, glibc study E5), and the other shapes
+    are ones this code cannot read with certainty. The style is then
+    'codepoint-not-alone', or 'ellipsis' when a range sits beside the
+    keyword, and the notes apply to it as to any other file.
+    `by_copy` is the fourth, and the one that clears: {name: the locale it
+    copies}, for a locale whose LC_COLLATE copies a byte-order locale and
+    nothing else (backlog 6.9). Its style says "copy-only", which is true of
+    the file; without the note the status would leave the order unsaid while
+    step 4 names the locale as byte order.
 
     The wrapper used to infer C's state from two greps -- is it in the ellipsis
     list, else does the codepoint line name it -- and a C that was neither
@@ -212,6 +239,12 @@ def report_backported(texts, inherited=None, unresolved=None,
         'ellipsis': 'ellipsis-based  <- localedef computes the weights, so '
                     'identical data is not identical order',
         'codepoint': 'codepoint_collation  <- byte order by construction',
+        # Must not start with "codepoint_collation": audit.sh reads C's line
+        # by how it starts and would print "byte order by construction".
+        'codepoint-not-alone': 'names codepoint_collation, but could not be '
+                               'read as the keyword alone in its LC_COLLATE  '
+                               '<- the one form glibc builds in byte order, '
+                               'so this is NOT cleared',
         'explicit': 'explicit weights  <- no ellipsis range for localedef to '
                     'expand',
         'copy-only': 'copy-only  <- its order is whatever it inherits; follow '
@@ -220,6 +253,7 @@ def report_backported(texts, inherited=None, unresolved=None,
     }
     inherited = inherited or {}
     unresolved = unresolved or {}
+    by_copy = by_copy or {}
     found = {}
     print("\nDistro-backported locales, declared one by one -- absent, "
           "cleared and")
@@ -231,7 +265,7 @@ def report_backported(texts, inherited=None, unresolved=None,
         else:
             style = g.classify_collation_style(text)
             status = styles[style]
-            if name in inherited and style != 'codepoint':
+            if name in inherited:
                 status += (f"; and it copies "
                            f"{', '.join(sorted(inherited[name]))}, which this "
                            f"step flagged -- so this locale IS exposed")
@@ -239,11 +273,15 @@ def report_backported(texts, inherited=None, unresolved=None,
                 status += ("; and every character it does not list takes "
                            "localedef's default weight -- so this locale IS "
                            "exposed")
-            if name in unresolved and style != 'codepoint':
+            if name in unresolved:
                 status += (f"; and it copies "
                            f"{', '.join(sorted(unresolved[name]))}, which is "
                            f"NOT in this corpus -- what that carries was never "
                            f"read, so this locale is NOT cleared")
+            if name in by_copy:
+                status += (f"; and it copies {by_copy[name]} and nothing "
+                           f"else, which glibc builds in byte order -- so "
+                           f"this locale is byte order too")
         found[name] = status
         print(f"  {name} ({KNOWN_BACKPORTED[name]}): {status}")
     return found
@@ -297,7 +335,7 @@ def report(texts, supported, label, out_name, next_hint,
         if len(flagged[name]) > 3:
             print(f"      ... and {len(flagged[name]) - 3} more")
 
-    immune = report_codepoint(texts)
+    immune, by_copy = report_codepoint(texts)
 
     # Built before anything can return, because a `copy` target this corpus
     # does not contain is a locale whose order was NOT read, and
@@ -331,8 +369,10 @@ def report(texts, supported, label, out_name, next_hint,
     inherited = g.inherited_from(graph, set(flagged)) if flagged else {}
     # What neither an ellipsis nor a copy of one reaches still sorts every
     # character it does not list by localedef's default weight, so it is
-    # exposed too. Only codepoint_collation is free of it, and a locale whose
-    # copy target is absent is already named in the `!!` block above.
+    # exposed too. Only a locale glibc builds in byte order is free of it
+    # (`immune`: codepoint_collation alone, or a copy of one and nothing
+    # else), and a locale whose copy target is absent is already named in the
+    # `!!` block above.
     default_only = sorted(set(graph) - set(flagged) - set(inherited)
                           - set(immune) - set(unresolved))
 
@@ -373,7 +413,7 @@ def report(texts, supported, label, out_name, next_hint,
         # C is -- returning here without a status made the wrapper print
         # "NOT DECLARED" over a scan that had looked and found an answer.
         if node_dir:
-            report_backported(texts, {}, unresolved, default_only)
+            report_backported(texts, {}, unresolved, default_only, by_copy)
         return 0
 
     print(f"\nAdditionally exposed via `copy` inheritance: {len(inherited)}")
@@ -457,7 +497,8 @@ def report(texts, supported, label, out_name, next_hint,
     # directly above it, where a reader takes C for one of "these" and tests a
     # locale glibc settled by construction. Noise is a cost like any other.
     if node_dir:
-        report_backported(texts, inherited, unresolved, default_only)
+        report_backported(texts, inherited, unresolved, default_only,
+                          by_copy)
     return 0
 
 
@@ -465,9 +506,10 @@ def main(argv):
     ap = argparse.ArgumentParser(
         description="Flag locales whose LC_COLLATE uses algorithmic ellipsis "
                     "ranges, plus everything inheriting them. Every other "
-                    "locale is flagged too, except one declaring "
-                    "codepoint_collation, because a character a locale does "
-                    "not list takes localedef's default weight.")
+                    "locale is flagged too, except one glibc builds in byte "
+                    "order (codepoint_collation alone, or only a copy of a "
+                    "byte-order locale), because a character a locale "
+                    "does not list takes localedef's default weight.")
     ap.add_argument('tag', nargs='?',
                     help="glibc tag to scan, e.g. glibc-2.34")
     ap.add_argument('--locales-dir',

@@ -60,6 +60,8 @@ Side = collections.namedtuple(
 STYLE_TEXT = {
     'ellipsis': 'ellipsis ranges -- weights computed by localedef',
     'codepoint': 'codepoint_collation -- byte order by construction',
+    'codepoint-not-alone': 'names codepoint_collation, but could not be read '
+                           'as the keyword alone -- NOT cleared',
     'copy-only': 'pure copy; inherits its order',
     'explicit': 'weights spelled out in the file',
     'none': 'no LC_COLLATE block',
@@ -319,7 +321,7 @@ def report_backported(old, new, buckets, invisible):
     cleared it look identical on a terminal, and that is how this locale gets
     missed -- it is the false negative this whole script was written for.
 
-    Returns (computed, unexamined, fallback, settled):
+    Returns (computed, unexamined, fallback, not_alone, settled):
 
       computed    backported locales that are ellipsis-based on at least one
                   side. That -- not the fact of being backported -- is what
@@ -336,20 +338,36 @@ def report_backported(old, new, buckets, invisible):
                   C.UTF-8" ends up printed directly above "the data comparison
                   is the whole story".
       fallback    backported locales compared on both nodes with explicit
-                  weights or a copy, and no ellipsis range on either side.
+                  weights or a copy, and no ellipsis range on either side; a
+                  copy of a byte-order locale and nothing else is not one of
+                  them (backlog 6.9, glibc_locale_data.byte_order_locales).
                   Every character such a file does not list takes localedef's
                   default weight (backlog 1.6), so identical data does not
                   settle their order either. Until that was named, an explicit
                   C read "the data comparison is the whole story" here, which
                   the default weight makes false.
-      settled     True when every backported locale compared declares
-                  codepoint_collation on both nodes: the one case the closing
-                  "whole story" is true of. A C with no LC_COLLATE block at all
-                  is neither, and gets no reassurance.
+      not_alone   backported locales that name codepoint_collation on at
+                  least one side, but could not be read as the keyword alone
+                  (glibc_locale_data.declares_byte_order), and use no ellipsis
+                  range. The data does not settle their order either. Kept
+                  apart from `fallback`, whose warning gives the default
+                  weight as the reason.
+      settled     None, unless every backported locale compared sorts by
+                  byte order on both nodes: the one case the closing "whole
+                  story" is true of. 'declared' when each declares
+                  codepoint_collation alone, 'by-copy' when one only copies a
+                  byte-order locale, so the closing line can say which. A C
+                  with no LC_COLLATE block at all is neither, and gets no
+                  reassurance.
     """
     print(f"\nBackported locales, reported whether or not they differ "
           f"(these are why this comparison exists):")
-    computed, unexamined, fallback, compared, byte_order = [], [], [], [], []
+    computed, unexamined, fallback, not_alone = [], [], [], []
+    compared, byte_order, via_copy = [], [], []
+    # Backlog 6.9: a copy of a byte-order locale and nothing else sorts by
+    # bytes too, which only the whole directory can show.
+    copies = {side.label: g.byte_order_locales(
+        read_texts(side.root, side.names))[1] for side in (old, new)}
     for name in sorted(KNOWN_BACKPORTED):
         locale_name = KNOWN_BACKPORTED[name]
         on_old = name in old.names
@@ -378,26 +396,36 @@ def report_backported(old, new, buckets, invisible):
         else:
             verdict = 'no LC_COLLATE block on either node'
         print(f"  {name} ({locale_name}): present on both nodes, {verdict}")
+        styles = []
         for side, text in ((old, old_text), (new, new_text)):
             style, hits = style_of(text)
             extra = f" ({hits} hit(s))" if style == 'ellipsis' else ''
+            via = copies[side.label].get(name)
+            if via is not None:
+                extra = f", of {via}, which glibc builds in byte order"
             print(f"      {side.build_id}: {STYLE_TEXT[style]}{extra}")
+            styles.append('codepoint' if via is not None else style)
+        styles = tuple(styles)
         if invisible is not None and name in set(invisible):
             print(f"      exists at neither tag: nothing in steps 1-5 can see "
                   f"this file at all")
-        styles = (g.classify_collation_style(old_text),
-                  g.classify_collation_style(new_text))
         compared.append(locale_name)
+        if name in copies['old'] or name in copies['new']:
+            via_copy.append(locale_name)
         if 'ellipsis' in styles:
             computed.append(locale_name)
             print(f"      an ellipsis range means localedef computes the "
                   f"weights, so identical data does NOT clear the order")
+        elif 'codepoint-not-alone' in styles:
+            not_alone.append(locale_name)
         elif {'explicit', 'copy-only'} & set(styles):
             fallback.append(locale_name)
         elif styles == ('codepoint', 'codepoint'):
             byte_order.append(locale_name)
-    settled = bool(compared) and compared == byte_order
-    return computed, unexamined, fallback, settled
+    settled = None
+    if compared and compared == byte_order:
+        settled = 'by-copy' if set(via_copy) & set(byte_order) else 'declared'
+    return computed, unexamined, fallback, not_alone, settled
 
 
 def main(argv):
@@ -490,7 +518,7 @@ def main(argv):
     removed, undetermined = removal_verdicts(old, new, only_old, opts.old_tag,
                                              old_tag_names)
     report_undetermined(undetermined)
-    computed, unexamined, fallback, settled = report_backported(
+    computed, unexamined, fallback, not_alone, settled = report_backported(
         old, new, buckets, invisible)
 
     slug = g.pair_slug(old.build_id, new.build_id)
@@ -555,9 +583,23 @@ def main(argv):
                 f"character's order through each machine's glibc when the "
                 f"run has both machines' measurements, and "
                 f"sql/c_utf8_probe.sql measures it inside PostgreSQL.")
+    # The keyword is not the same as settled either: beside anything else in
+    # LC_COLLATE glibc does not give byte order (backlog 13.2).
+    if not_alone:
+        dd.warn(f"{', '.join(not_alone)}: names codepoint_collation on at "
+                f"least one of these nodes, but could not be read as the "
+                f"keyword alone in its LC_COLLATE, the one form glibc builds "
+                f"in byte order. So the order is NOT settled by comparing the "
+                f"data. PostgreSQL also "
+                f"reports collversion as NULL for every C.* name, so nothing "
+                f"warns either. Step 11 measures each character's order "
+                f"through each machine's glibc when the run has both "
+                f"machines' measurements, and sql/c_utf8_probe.sql measures "
+                f"it inside PostgreSQL.")
     # No ellipsis is not the same as settled: a file with explicit weights or
     # a copy still takes localedef's default weight for every character it
-    # does not list (backlog 1.6). Only codepoint_collation on both nodes
+    # does not list (backlog 1.6). Only byte order on both nodes --
+    # codepoint_collation alone, or a copy of nothing but a byte-order locale --
     # earns the reassuring line below.
     if fallback:
         dd.warn(f"{', '.join(fallback)}: no ellipsis range on either node, but "
@@ -569,7 +611,10 @@ def main(argv):
                 f"run has both machines' measurements, and "
                 f"sql/c_utf8_probe.sql measures it inside PostgreSQL.")
     if settled and not unexamined:
-        dd.warn(f"Every backported locale here declares codepoint_collation "
+        how = ("declares codepoint_collation" if settled == 'declared' else
+               "declares codepoint_collation alone, or copies nothing but a "
+               "byte-order locale,")
+        dd.warn(f"Every backported locale here {how} "
                 f"on both nodes, so for those the data comparison is the whole "
                 f"story. Run "
                 f"sql/c_utf8_probe.sql anyway if C.UTF-8 is your database "

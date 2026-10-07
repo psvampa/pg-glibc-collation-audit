@@ -622,6 +622,70 @@ class NodeToNodeRefusesToGuess(NodeCase):
                                  'order is NOT settled by comparing the data '
                                  'either.' in flat(text), warned)
 
+    def test_the_keyword_beside_anything_else_is_not_the_whole_story(self):
+        """Backlog 13.2. `copy "iso14651_t1"` plus codepoint_collation
+        compiles on RHEL9 and RHEL10 into tables whose strcoll returns garbage
+        and crashes (glibc study, E5), and it read here as codepoint_collation
+        on both nodes, so "the data comparison is the whole story". It gets a
+        warning of its own, which names the reason, on one node or on both,
+        and either node may be the one (round 2 of false-negative-reviewer
+        found the old-only side untested); the default-weight warning gives a
+        reason that is not this one."""
+        mixed = locale_file('copy "iso14651_t1"', 'codepoint_collation')
+        for name, old_body, new_body, side in (
+                ('both', mixed, mixed, 'build-B'),
+                ('new only', upstream_c(), mixed, 'build-B'),
+                ('old only', mixed, upstream_c(), 'build-A')):
+            with self.subTest(case=name):
+                slug = name.replace(' ', '-')
+                rc, text = self.node_to_node(
+                    self.node(OLD, f'{slug}-a', extra={'C': old_body}),
+                    self.node(MID, f'{slug}-b', extra={'C': new_body}),
+                    'build-A', 'build-B')
+                self.assertEqual(rc, 0, text)
+                self.assertNotIn('the data comparison is the whole story',
+                                 flat(text))
+                self.assertIn('C.UTF-8: names codepoint_collation on at least '
+                              'one of these nodes, but could not be read as '
+                              'the keyword alone in its LC_COLLATE, the one '
+                              'form glibc builds in byte order.', flat(text))
+                self.assertIn(f'{side}: names codepoint_collation, but could '
+                              'not be read as the keyword alone -- NOT '
+                              'cleared', flat(text))
+                self.assertNotIn('no ellipsis range on either node',
+                                 flat(text))
+
+    def test_a_C_that_only_copies_a_byte_order_locale_is_the_whole_story(self):
+        """Backlog 6.9 in step 8. A C whose LC_COLLATE copies a locale holding
+        the keyword alone, and nothing else, is byte order (measured on RHEL9
+        and RHEL10: byte-identical to the installed C.UTF-8). It took the
+        default-weight warning, whose reason is false there, while step 4
+        named it byte order. The closing line says how it got there. The
+        control: on the node where the copied locale is not the keyword
+        alone, it is not settled."""
+        copy_c = locale_file('copy "zz_ZZ"')
+        mixed = locale_file('copy "iso14651_t1"', 'codepoint_collation')
+        for name, new_target, settled in (('alone', upstream_c(), True),
+                                          ('control', mixed, False)):
+            with self.subTest(case=name):
+                rc, text = self.node_to_node(
+                    self.node(OLD, f'{name}-a',
+                              extra={'C': copy_c, 'zz_ZZ': upstream_c()}),
+                    self.node(MID, f'{name}-b',
+                              extra={'C': copy_c, 'zz_ZZ': new_target}),
+                    'build-A', 'build-B')
+                self.assertEqual(rc, 0, text)
+                self.assertIn('build-A: pure copy; inherits its order, of '
+                              'zz_ZZ, which glibc builds in byte order',
+                              flat(text))
+                self.assertEqual(
+                    'Every backported locale here declares codepoint_collation '
+                    'alone, or copies nothing but a byte-order locale, on both '
+                    'nodes, so for those the data comparison is the whole '
+                    'story.' in flat(text), settled)
+                self.assertEqual('no ellipsis range on either node'
+                                 in flat(text), not settled)
+
     def test_the_caveat_does_not_assert_a_shape_it_did_not_see(self):
         """It used to say "C.UTF-8, whose backported source IS built from
         ellipsis ranges" on every run -- including the RHEL9 -> RHEL10 run
@@ -982,11 +1046,15 @@ class DirectoryModeStepFour(NodeCase):
                   encoding='utf-8') as fh:
             self.assertIn('C', [ln.strip() for ln in fh])
 
-    def test_a_codepoint_C_is_not_called_exposed_by_a_copy_it_discards(self):
-        """The control on the line above: `codepoint_collation` discards all
-        collation information, inherited included, so a copy cannot expose it.
-        A fix that appended the exposure note unconditionally would clear
-        nothing and alarm about a locale glibc has already settled."""
+    def test_a_C_with_a_copy_beside_the_keyword_is_exposed(self):
+        """This test asserted the opposite until backlog 13.2: that
+        `codepoint_collation` discards what the copy brings, so "IS exposed"
+        was an alarm over a locale glibc had settled. Measured false (glibc
+        study, E5): `copy "iso14651_t1"` plus the keyword compiles on RHEL9
+        and RHEL10 into tables whose strcoll returns garbage and crashes, and
+        into plain iso14651_t1 order on RHEL8. Byte order is the keyword
+        alone. The status must not start with the keyword either: audit.sh
+        reads C's line by how it starts."""
         body = upstream_c().replace('\ncodepoint_collation\n',
                                     '\ncopy "iso14651_t1"\ncodepoint_collation\n')
         self.assertIn('copy "iso14651_t1"', body)
@@ -996,8 +1064,82 @@ class DirectoryModeStepFour(NodeCase):
                        self.node(MID, 'cpc', extra={'C': body}),
                        '--build-id', 'fake', out_dir=self.out)
         self.assertEqual(rc, 0, text)
-        self.assertIn('C (C.UTF-8): codepoint_collation', text)
-        self.assertNotIn('so this locale IS exposed', flat(text))
+        self.assertIn('C (C.UTF-8): names codepoint_collation, but could '
+                      'not be read as the keyword alone', flat(text))
+        self.assertIn('so this locale IS exposed', flat(text))
+        self.assertNotIn('C (C.UTF-8): codepoint_collation', flat(text))
+        self.assertNotIn('Declare codepoint_collation', flat(text))
+        with open(os.path.join(self.out, 'step4_exposed_locales.fake.txt'),
+                  encoding='utf-8') as fh:
+            self.assertIn('C', [ln.strip() for ln in fh])
+
+    def test_a_sole_copy_of_a_byte_order_locale_is_named_not_listed(self):
+        """Backlog 6.9. A locale whose LC_COLLATE is `copy "C"` and nothing
+        else shares C's data, so glibc builds it in byte order: measured on
+        RHEL9 and RHEL10 byte-identical to the installed C.UTF-8. It was
+        listed for the default weight. It leaves the list and is named on a
+        line of its own; a copy of C with a sort rule of its own stays
+        listed, because that rule is read in the same build."""
+        extra = {'C': upstream_c(),
+                 'xx_XX': locale_file('copy "C"'),
+                 'yy_YY': locale_file('copy "C"', 'order_start forward',
+                                      '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
+                                      'order_end')}
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir',
+                       self.node(MID, 'copyofc', extra=extra),
+                       '--build-id', 'fake', out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertIn('Declare codepoint_collation, so no expansion change '
+                      'can move them: C', flat(text))
+        self.assertIn('Copy a byte-order locale and nothing else, so glibc '
+                      'builds them in byte order too: xx_XX (copies C)',
+                      flat(text))
+        with open(os.path.join(self.out, 'step4_exposed_locales.fake.txt'),
+                  encoding='utf-8') as fh:
+            written = [ln.strip() for ln in fh]
+        self.assertNotIn('xx_XX', written)
+        self.assertNotIn('C', written)
+        self.assertIn('yy_YY', written)
+
+    def test_a_C_that_only_copies_a_byte_order_locale_says_so(self):
+        """Backlog 6.9 in the status steps 9 and 10 declare. Step 4 names such
+        a C as byte order and leaves it off the list, and the status stopped
+        at "copy-only", true of the file and silent about the order; the two
+        disagreed until false-negative-reviewer noticed. The control: when
+        what it copies is not the keyword alone, the copy is no byte order.
+        The status is declared on two paths, one for a corpus where nothing
+        uses an ellipsis range, so that path has a case of its own."""
+        flat_body = locale_file('order_start forward',
+                                '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
+                                'order_end')
+        no_ranges = {name: flat_body for name in
+                     ('i18n', 'iso14651_t1', 'iso14651_t1_common', 'ko_KR')}
+        cases = (('alone', upstream_c(), {}, True),
+                 ('alone, no ranges', upstream_c(), no_ranges, True),
+                 ('beside a copy', locale_file('copy "iso14651_t1"',
+                                               'codepoint_collation'), {},
+                  False))
+        for name, target, more, byte_order in cases:
+            with self.subTest(case=name):
+                slug = re.sub(r'\W+', '_', name)
+                out = os.path.join(self.out, slug)
+                os.makedirs(out)
+                rc, text = run('flag_algorithmic_ranges.py', '--locales-dir',
+                               self.node(MID, f'ccopy-{slug}',
+                                         extra={'C': locale_file('copy "zz_ZZ"'),
+                                                'zz_ZZ': target, **more}),
+                               '--build-id', 'fake', out_dir=out)
+                self.assertEqual(rc, 0, text)
+                self.assertEqual(
+                    'C (C.UTF-8): copy-only <- its order is whatever it '
+                    'inherits; follow the copy chain; and it copies zz_ZZ and '
+                    'nothing else, which glibc builds in byte order -- so '
+                    'this locale is byte order too' in flat(text), byte_order)
+                with open(os.path.join(out, 'step4_exposed_locales.fake.txt'),
+                          encoding='utf-8') as fh:
+                    self.assertEqual('C' in [ln.strip() for ln in fh],
+                                     not byte_order)
 
     def test_a_copy_target_absent_from_the_corpus_is_named_not_followed(self):
         """`inherited_from` treats an unknown target as a leaf, so a copy the
@@ -1110,10 +1252,11 @@ class DirectoryModeStepFour(NodeCase):
                       'sufficient for those', flat(text))
         self.assertNotIn('default weight', text)
 
-    def test_a_codepoint_C_is_not_called_unresolved_by_a_copy_it_discards(self):
-        """The control the exposure note has and this one lacked:
-        `codepoint_collation` discards inherited collation information, so a
-        copy it cannot resolve cannot leave it unresolved either."""
+    def test_a_C_with_a_missing_copy_beside_the_keyword_is_not_cleared(self):
+        """This test asserted the opposite until backlog 13.2, on the same
+        false premise as the one above. A copy of a file that is not there
+        stops localedef with exit 4, keyword or not (localedef.c load_locale),
+        so what this C would sort by was never read."""
         body = upstream_c().replace('\ncodepoint_collation\n',
                                     '\ncopy "no_such_locale"\ncodepoint_collation\n')
         rc, text = run('flag_algorithmic_ranges.py',
@@ -1121,8 +1264,12 @@ class DirectoryModeStepFour(NodeCase):
                        self.node(MID, 'cpdangle', extra={'C': body}),
                        '--build-id', 'fake', out_dir=self.out)
         self.assertEqual(rc, 0, text)
-        self.assertIn('C (C.UTF-8): codepoint_collation', text)
-        self.assertNotIn('so this locale is NOT cleared', flat(text))
+        self.assertIn('C (C.UTF-8): names codepoint_collation, but could '
+                      'not be read as the keyword alone', flat(text))
+        self.assertIn('so this locale is NOT cleared', flat(text))
+        with open(os.path.join(self.out, 'step4_exposed_locales.fake.txt'),
+                  encoding='utf-8') as fh:
+            self.assertIn('C', [ln.strip() for ln in fh])
 
     def test_a_corpus_with_no_collation_block_at_all_is_refused(self):
         """The file-count floor asks whether enough files were read. This asks
