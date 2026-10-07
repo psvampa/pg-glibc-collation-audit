@@ -47,11 +47,15 @@ other locale as well except one that declares `codepoint_collation`, because
 list the `UNDEFINED` weight. Steps 1 to 3 cannot clear any of them on data
 alone.
 
-**generated locale name** — the name `locale -a` and `pg_collation` actually
-show, which is not the source file name. `localedata/SUPPORTED` says
-`sv_SE.UTF-8`; the installed locale, `locale -a` and `pg_collation` all say
-`sv_SE.utf8`. `COLLATE "sv_SE.UTF-8"` does not exist. Step 3 prints the
-generated names — use those.
+**locale, in the Reindex and step 4 lists** — the locale a collation is built
+from (`sv_SE`), not one way of writing it. `locale -a`, `pg_collation` and a
+database's own locale write one locale many ways (`sv_SE.utf8`,
+`sv_SE.iso885915`, `sv_SE.UTF-8`), and glibc builds all of them from one file,
+named as the locale is without the part from the dot up to any `@`. Both lists
+also hold the aliases glibc's `locale.alias` gives these locales (`swedish`).
+`sql/collation_confirmation_template.sql` reads collations the same way. Its
+inventories show the locale of each collation they list, and its version query
+lists the collations each name in its list reaches.
 
 **hunk** — one contiguous changed block in a `git diff`. Step 5 reports how
 many it found and prints them. "Read the hunks" means reading those blocks

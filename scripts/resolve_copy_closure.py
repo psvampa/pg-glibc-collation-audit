@@ -81,20 +81,33 @@ def main(argv):
     print(f"Full affected set ({len(affected)} locale source file(s)): "
           f"{', '.join(affected)}")
 
-    # The audit works in source file names, but an admin and pg_collation see
-    # generated names with codesets. Map one to the other.
-    generated = sorted({n for loc in affected for n in supported.get(loc, [])})
+    # Locales, not spellings. This used to print the names SUPPORTED generates
+    # (sv_SE, sv_SE.utf8) as "the names `locale -a` and pg_collation show",
+    # and on the real machines the same locales are also sv_SE.iso88591 and
+    # sv_SE.iso885915 (the archive adds `<name>.<codeset>`, RHEL adds the
+    # ISO-8859-15 builds), swedish (locale.alias) and, as a database's
+    # locale, whatever spelling initdb was given (sv_SE.UTF-8). Measured on
+    # RHEL8 -> RHEL9: names that changed order were in no line printed here
+    # (backlog 13.1). No list of spellings can be complete; the locale
+    # each one is built from is one name, and glibc_locale_data.locale_source
+    # is glibc's rule for getting from a spelling to it. The aliases are the
+    # names that rule cannot reach, so they are listed with their locale.
+    all_aliases = g.locale_aliases(repo, opts.tag)
+    aliases = g.aliases_of(set(affected), all_aliases)
+    not_ascii = g.non_ascii_alias_targets(set(affected), all_aliases)
     unbuilt = [loc for loc in affected if not supported.get(loc)]
     print()
-    if generated:
-        # Normalised by glibc_locale_data.normalize_locale_name: localedef
-        # lowercases and strips the codeset when it builds the locale, so the
-        # installed name is sv_SE.utf8, not the SUPPORTED spelling sv_SE.UTF-8.
-        # COLLATE "sv_SE.UTF-8" does not exist in pg_collation.
-        print(f"Generated locales per localedata/SUPPORTED -- these are the "
-              f"names `locale -a` and pg_collation show ({len(generated)}):")
-        for name in generated:
-            print(f"  {name}")
+    print("These are locales, not spellings. A collation or a database uses "
+          "one when its\nlocale, without the part from the dot up to any @, "
+          "is one of them\n(sv_SE.UTF-8, sv_SE.utf8 and sv_SE.iso885915 are "
+          "all sv_SE).")
+    if aliases:
+        print(f"Also named by glibc's locale.alias: "
+              f"{', '.join(f'{a} ({s})' for a, s in sorted(aliases.items()))}")
+    if not_ascii:
+        print(f"Not listed: an alias of {', '.join(not_ascii)} whose name is "
+              f"not ASCII; PostgreSQL never imports such a name as a "
+              f"collation.")
     if unbuilt:
         print(f"Not listed in localedata/SUPPORTED (not built by default, so "
               f"normally absent from `locale -a`): {', '.join(unbuilt)}")
@@ -103,12 +116,8 @@ def main(argv):
     # inheritance to add" from "the step never ran". The announce stays gated
     # on the list being longer than what was already printed inline, so
     # terminal output for a hand-run audit is unchanged.
-    # The union, not the mapped names alone: a locale the tag's
-    # SUPPORTED does not name is still affected, and writing only
-    # `generated` made the file narrower than the sentences above it.
-    # Same defect as step 4's list, where the dropped name was C.
     path = g.write_list('step3_affected_locales.txt',
-                        sorted(set(generated) | set(unbuilt)))
+                        sorted(set(affected) | set(aliases)))
     if len(affected) > len(changed):
         print(f"\nFull list also written to {path}")
     return 0

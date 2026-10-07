@@ -130,11 +130,10 @@ Additionally affected via copy-chain inheritance: 0
 
 Full affected set (3 locale source file(s)): ber_DZ, kab_DZ, th_TH
 
-Generated locales per localedata/SUPPORTED -- these are the names `locale -a` and pg_collation show (4):
-  ber_DZ
-  kab_DZ
-  th_TH
-  th_TH.utf8
+These are locales, not spellings. A collation or a database uses one when its
+locale, without the part from the dot up to any @, is one of them
+(sv_SE.UTF-8, sv_SE.utf8 and sv_SE.iso885915 are all sv_SE).
+Also named by glibc's locale.alias: thai (th_TH)
 
 ================================================================
 == STEP 4  Which locales a data diff can never clear
@@ -169,10 +168,13 @@ Additionally exposed through localedef's default weight: 6
   No ellipsis range reaches these, but every character a locale does not list
   gets the weight localedef assigns to UNDEFINED, in code, not from the file.
 
-Full set needing empirical confirmation: 351 locale source file(s), 496 generated locale name(s) per localedata/SUPPORTED
-  e.g. aa_DJ, aa_DJ.utf8, aa_ER, aa_ET, af_ZA, af_ZA.utf8, agr_PE, ak_GH, ...
+Full set needing empirical confirmation: 351 locale(s), and 43 more
+name(s), the aliases glibc's locale.alias gives them. Locales, not spellings.
+One is in use wherever a locale name, without the part from the dot up to
+any @, is one of them.
+  e.g. POSIX, aa_DJ, aa_ER, aa_ET, ab_GE, af_ZA, agr_PE, ak_GH, ...
   not in SUPPORTED (not built by default): POSIX, ab_GE, cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
-  full list (503 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
+  full list (394 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
 
 These cannot be cleared by a source diff alone.
 Step 5 below decides whether that matters for this pair.
@@ -1295,8 +1297,13 @@ empirical sort-order test, however clean its data diff is.
      ber_DZ
      kab_DZ
      th_TH
-     th_TH.utf8
+     thai
    (4 name(s); full list: /tmp/pg-glibc-collation-audit/step3_affected_locales.txt)
+   These are locales, not spellings. A collation or a database uses one
+   when its locale, without the part from the dot up to any @, is in this
+   list (sv_SE.UTF-8, sv_SE.utf8 and sv_SE.iso885915 are all sv_SE). The
+   list also holds the aliases glibc's locale.alias gives these locales.
+   sql/collation_confirmation_template.sql reads collations the same way.
 
 -- Removed: locale files the old side has and the new side does not
      The tags cannot show what your distro adds or drops: NOT CHECKED.
@@ -1315,8 +1322,10 @@ empirical sort-order test, however clean its data diff is.
 
 -- Needs an empirical test: step 5 found 52 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged
-     503 name(s) to confirm: generated names, and
-     source names for the locales SUPPORTED does not list
+     394 name(s) to confirm. They are locales and the
+     aliases glibc's locale.alias gives them. A collation or a database
+     uses one when its locale, without the part from the dot up to any @,
+     is one of them.
      full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
 
 -- Distro patches, steps 6 and 7: NOT RUN

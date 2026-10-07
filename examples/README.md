@@ -50,10 +50,13 @@ clean.
 | [`c-utf8-probe-rhel8-vs-rhel9.txt`](c-utf8-probe-rhel8-vs-rhel9.txt) | RHEL8 against RHEL9 |
 | [`c-utf8-probe-rhel9-vs-rhel10.txt`](c-utf8-probe-rhel9-vs-rhel10.txt) | RHEL9 against RHEL10 |
 
-## Command 3 — the confirmation template, filled in
+## Command 3 — the worked-example scripts
 
-The template with its placeholders replaced for one pair, ready to run on both
-machines and diff.
+These are the PostgreSQL scripts [docs/results.md](../docs/results.md) cites
+for each pair. Run one on both machines and diff the outputs. They pick
+collations by name. For a new confirmation, start from
+[the template](../sql/collation_confirmation_template.sql), which reads each
+collation's locale instead.
 
 | File | |
 |---|---|

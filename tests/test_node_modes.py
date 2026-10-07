@@ -678,8 +678,8 @@ class DirectoryModeStepFour(NodeCase):
                      'ellipsis (algorithmic) ranges: 4'):
             self.assertIn(line, tag_text)
             self.assertIn(line, dir_text)
-        self.assertIn('342 locale source file(s), 488 generated', tag_text)
-        self.assertIn('342 locale source file(s), 488 generated', dir_text)
+        self.assertIn('342 locale(s), and 43 more', tag_text)
+        self.assertIn('342 locale(s), and 43 more', dir_text)
         self.assertEqual(default_weight_section(dir_text),
                          default_weight_section(tag_text))
 
@@ -865,8 +865,9 @@ class DirectoryModeStepFour(NodeCase):
                        '--build-id', 'glibc-2.28-251.el8_10.40',
                        '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 0, text)
-        counts = re.search(r'(\d+) locale source file\(s\), (\d+) generated '
-                           r'locale name\(s\)', text)
+        counts = re.search(r'(\d+) locale\(s\), and (\d+) more\nname\(s\), '
+                           r"the aliases glibc's locale.alias gives them",
+                           text)
         self.assertIsNotNone(counts, text)
         unbuilt = re.search(r"^  not in \S+ SUPPORTED[^:]*: (.+)$", text, re.M)
         self.assertIsNotNone(unbuilt, text)
@@ -879,8 +880,9 @@ class DirectoryModeStepFour(NodeCase):
         self.assertIn('C', written)
         for name in unbuilt_names:
             self.assertIn(name, written)
+        # Every locale reported, and the aliases: the two numbers above it.
         self.assertEqual(len(written),
-                         int(counts.group(2)) + len(unbuilt_names))
+                         int(counts.group(1)) + int(counts.group(2)))
 
     def test_a_locale_the_node_builds_is_not_called_an_unbuilt_template(self):
         """"Not in SUPPORTED" is a fact about the TAG, printed as a fact about
@@ -1015,14 +1017,25 @@ class DirectoryModeStepFour(NodeCase):
         self.assertEqual(rc, 0, text)
         self.assertIn('no_such_locale', text)
         self.assertIn('so this locale is NOT cleared', flat(text))
-        # Named, not just counted, and under the spelling pg_collation shows:
-        # a reader greps this list for the collation their database uses.
+        # Named, not just counted: a reader looks the collation their database
+        # uses up in this list, by its locale or its alias (backlog 13.1).
         self.assertIn('sv_SE', flat(text))
         with open(os.path.join(self.out, 'step4_exposed_locales.fake.txt'),
                   encoding='utf-8') as fh:
             written = [ln.strip() for ln in fh]
         self.assertIn('C', written)
-        self.assertIn('sv_SE.utf8', written)
+        self.assertIn('sv_SE', written)
+        self.assertIn('swedish', written)
+        # The two numbers above the list add up to it with an unresolved
+        # locale in it too: N once left C and sv_SE out, and the sum fell
+        # short of the list.
+        counts = re.findall(r'Full set needing empirical confirmation: (\d+) '
+                            r'locale\(s\), and (\d+) more', text)
+        listed = re.findall(r'full list \((\d+) name\(s\)\)', text)
+        self.assertEqual((len(counts), len(listed)), (1, 1), text)
+        self.assertEqual(int(counts[0][0]) + int(counts[0][1]),
+                         int(listed[0]))
+        self.assertEqual(int(listed[0]), len(written))
 
     def test_an_absent_copy_target_is_not_cleared_by_an_empty_ellipsis_scan(self):
         """The two reassuring things at once: nothing readable uses an
@@ -1063,10 +1076,12 @@ class DirectoryModeStepFour(NodeCase):
         with open(named.group(2), encoding='utf-8') as fh:
             written = [ln.strip() for ln in fh if ln.strip()]
         self.assertIn('C', written)
-        # This path maps through SUPPORTED too, and had no test saying so.
-        self.assertIn('sv_SE.utf8', written)
+        # This path adds the aliases of locale.alias too (backlog 13.1), and
+        # had no test saying so: sv_SE reaches the absent target here.
+        self.assertIn('sv_SE', written)
+        self.assertIn('swedish', written)
         # And it carries the default-weight locales, not only the unresolved.
-        self.assertIn('ja_JP.utf8', written)
+        self.assertIn('ja_JP', written)
         self.assertEqual(int(named.group(1)), len(written))
 
     def test_a_corpus_left_only_unresolved_says_so(self):

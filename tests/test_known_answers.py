@@ -20,6 +20,7 @@ from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
                        needs_floor_pair, run_step)
 
 import glibc_locale_data as g
+import test_locale_order as tlo
 
 
 def one_int(pattern, text, what):
@@ -382,10 +383,26 @@ class Step3Closure(StepRun):
                            out_dir=self.out_dir)
         self.assertNotEqual(rc, 0)
 
-    def test_generated_names_use_the_locale_a_spelling(self):
-        out = self.step('resolve_copy_closure.py', MID, 'sv_SE')
-        self.assertIn('sv_SE.utf8', out)
-        self.assertNotIn('sv_SE.UTF-8', out)
+    def test_the_list_holds_locales_not_spellings(self):
+        """Backlog 13.1. The list once held SUPPORTED's spellings (sv_SE,
+        sv_SE.utf8), and on the real machines the same locale is also
+        sv_SE.iso88591, sv_SE.iso885915 and swedish. It holds the locale and
+        the aliases glibc's locale.alias gives it, and here no name with a
+        codeset: every spelling reaches its locale by glibc's rule, and a
+        spelling in the list would invite matching names one by one again.
+        (A few aliases are spelled with one, ja_JP.ujis; none is sv_SE's.)"""
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-audit-test-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        rc, out = run_step('resolve_copy_closure.py', MID, 'sv_SE',
+                           out_dir=out_dir)
+        self.assertEqual(rc, 0, out)
+        with open(os.path.join(out_dir, 'step3_affected_locales.txt'),
+                  encoding='utf-8') as fh:
+            written = sorted(ln.strip() for ln in fh if ln.strip())
+        self.assertEqual(written, ['sv_FI', 'sv_FI@euro', 'sv_SE', 'swedish'])
+        self.assertEqual([n for n in written if g.locale_source(n) != n], [])
+        self.assertIn("Also named by glibc's locale.alias: swedish (sv_SE)",
+                      out)
 
 
     def test_the_written_list_keeps_a_locale_SUPPORTED_does_not_name(self):
@@ -393,8 +410,8 @@ class Step3Closure(StepRun):
         the empirical test. Writing only the names SUPPORTED maps dropped every
         affected locale it does not name -- the same line that dropped C from
         step 4's list on a node that builds it. Both halves are asserted: the
-        mapped names must survive too, or the fix trades one omission for
-        another."""
+        locales SUPPORTED names must survive too, or the fix trades one
+        omission for another."""
         out = self.step('resolve_copy_closure.py', MID, 'sv_SE',
                         'cns11643_stroke')
         self.assertIn('cns11643_stroke', out)
@@ -402,7 +419,7 @@ class Step3Closure(StepRun):
                   encoding='utf-8') as fh:
             written = [ln.strip() for ln in fh if ln.strip()]
         self.assertIn('cns11643_stroke', written)
-        self.assertIn('sv_SE.utf8', written)
+        self.assertIn('sv_SE', written)
 
 
 @needs_clone
@@ -435,7 +452,8 @@ class Step4AlgorithmicRanges(StepRun):
         switched from collate_block to collate_text, which changes which files
         count as defining LC_COLLATE for files that open with it."""
         out = self.step('flag_algorithmic_ranges.py', MID)
-        self.assertIn('342 locale source file(s), 488 generated', out)
+        self.assertIn('Full set needing empirical confirmation: 342 locale(s)',
+                      out)
         self.assertIn('of which 342 define LC_COLLATE', out)
 
     def test_each_way_in_is_counted_apart(self):
@@ -487,10 +505,9 @@ class Step4AlgorithmicRanges(StepRun):
         with open(named.group(2), encoding='utf-8') as fh:
             written = [ln.strip() for ln in fh if ln.strip()]
         self.assertEqual(int(named.group(1)), len(written))
-        for name in ('ja_JP.utf8', 'ar_SA.utf8'):
+        for name in ('ja_JP', 'ar_SA'):
             self.assertIn(name, written)
-        for name in ('C', 'C.utf8'):
-            self.assertNotIn(name, written)
+        self.assertNotIn('C', written)
         # POSIX is listed by its source name, among the files SUPPORTED does
         # not build. Not "templates": nothing copies POSIX.
         self.assertIn('  not in SUPPORTED (not built by default): POSIX, ',
@@ -711,24 +728,35 @@ class BelowTheOldVersionFloor(StepRun):
             one_int(r'Full affected set \((\d+) locale', out, 'the set'),
             280)
 
-    def test_step_3_maps_its_280_files_to_409_generated_names(self):
-        """A first patch put the WRITTEN list's count in step 3's `pg_collation
-        show` header instead -- 414, which also carries the five names
-        SUPPORTED does not list. Two different numbers, and only one of them
-        was printed."""
-        out = self.step('resolve_copy_closure.py', FLOOR_NEW,
-                        'dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
-                        'se_NO', 'ug_CN')
-        self.assertEqual(
-            one_int(r'pg_collation show \((\d+)\)', out,
-                    'the generated names'),
-            409)
-        # And the written list, which is the other number: 409 mapped names
-        # plus the five SUPPORTED does not list. The step prints this one
-        # nowhere, so nothing but this line keeps it honest.
-        with open(os.path.join(self.out_dir, 'step3_affected_locales.txt'),
+    def test_step_3_writes_its_280_files_and_24_aliases(self):
+        """The written list is the affected set and the aliases step 3 prints,
+        and nothing else (backlog 13.1; it held 409 SUPPORTED spellings and
+        five unmapped names, 414, until then). glibc-2.17's locale.alias also
+        carries two names in Latin-1 bytes, an alias each of fr_FR and nb_NO;
+        they are not written, and the step says so rather than dropping them
+        in silence or writing a name with U+FFFD in it."""
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-audit-test-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        rc, out = run_step('resolve_copy_closure.py', FLOOR_NEW,
+                           'dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
+                           'se_NO', 'ug_CN', out_dir=out_dir)
+        self.assertEqual(rc, 0, out)
+        affected = re.search(r'^Full affected set \(\d+ locale source file'
+                             r'\(s\)\): (.+)$', out, re.M)
+        aliases = re.search(r"^Also named by glibc's locale.alias: (.+)$",
+                            out, re.M)
+        self.assertIsNotNone(affected, out)
+        self.assertIsNotNone(aliases, out)
+        affected = affected.group(1).split(', ')
+        aliases = [a.split(' (')[0] for a in aliases.group(1).split(', ')]
+        self.assertEqual((len(affected), len(aliases)), (280, 24))
+        with open(os.path.join(out_dir, 'step3_affected_locales.txt'),
                   encoding='utf-8') as fh:
-            self.assertEqual(len([ln for ln in fh if ln.strip()]), 414)
+            written = sorted(ln.strip() for ln in fh if ln.strip())
+        self.assertEqual(written, sorted(affected + aliases))
+        self.assertTrue(all(n.isascii() for n in written))
+        self.assertIn('Not listed: an alias of fr_FR, nb_NO whose name is not '
+                      'ASCII', out)
 
     def test_step_5_prints_65_hunks(self):
         """It was 63 until the two wide-char wrappers joined TIER 1: each
@@ -763,13 +791,17 @@ class BelowTheOldVersionFloor(StepRun):
                     out, 'the exposed set'),
             300)
         # Both halves of the sentence, and the file it names. Only the first
-        # used to be pinned.
+        # used to be pinned. The aliases were 445 SUPPORTED spellings, and the
+        # list 451, until backlog 13.1.
         self.assertEqual(
-            one_int(r'confirmation: \d+ locale source file\(s\), (\d+) '
-                    r'generated', out, 'the generated names'),
-            445)
+            one_int(r'confirmation: \d+ locale\(s\), and (\d+) more', out,
+                    'the aliases'),
+            43)
         self.assertEqual(
-            one_int(r'full list \((\d+) name\(s\)\)', out, 'the list'), 451)
+            one_int(r'full list \((\d+) name\(s\)\)', out, 'the list'),
+            300 + 43)
+        self.assertIn('not listed: an alias of fr_FR, nb_NO whose name is not '
+                      'ASCII', out)
 
     def test_the_locales_the_bug_used_to_drop_are_reported(self):
         """A count can be right for the wrong reason. These are examples of
@@ -781,6 +813,35 @@ class BelowTheOldVersionFloor(StepRun):
                      'pt_BR', 'ru_RU', 'sv_SE', 'zh_CN', 'zh_TW'):
             self.assertIn(name, out, f'{name} is not in the affected set')
 
+
+
+@needs_clone
+class EveryMeasuredNameReachesItsLocale(unittest.TestCase):
+    """glibc's rule, checked against every libc collation PostgreSQL imported
+    on the three machines (tests/locale_order/*.pg_collation.txt): each name,
+    through that tag's locale.alias when it is an alias, is a locale source
+    file of the machine's tag, or one of the two the distro adds (C before
+    glibc 2.35, en_US@ampm on RHEL8). A name the rule cannot take back to a
+    file is a name the Reindex list cannot cover (backlog 13.1)."""
+
+    MACHINES = (('rhel8', OLD), ('rhel9', MID), ('rhel10', NEW))
+    DISTRO_ONLY = {'C', 'en_US@ampm'}
+
+    def test_every_collation_name_reaches_a_locale_file(self):
+        for machine, tag in self.MACHINES:
+            files = {os.path.basename(p)
+                     for p in g.list_locale_files(GLIBC_CLONE, tag)}
+            aliases = g.locale_aliases(GLIBC_CLONE, tag)
+            with open(os.path.join(REPO_ROOT, 'tests', 'locale_order',
+                                   f'{machine}.pg_collation.txt'),
+                      encoding='utf-8') as fh:
+                names = {ln.rstrip('\n').split('|')[2] for ln in fh if ln.strip()}
+            with self.subTest(machine=machine, tag=tag):
+                self.assertGreater(len(names), 800)
+                lost = sorted(n for n in names
+                              if g.locale_source(aliases.get(n, n))
+                              not in files | self.DISTRO_ONLY)
+                self.assertEqual(lost, [])
 
 
 @needs_clone
@@ -823,17 +884,21 @@ class SkippingAReleaseReportsTheUnion(StepRun):
         return set(names)
 
     def _step3_generated(self, new, names):
-        """The generated names step 3 maps an affected set to."""
+        """The names step 3 lists for an affected set: its locales, and the
+        aliases glibc's locale.alias gives them, read from what it prints."""
         out = self.step('resolve_copy_closure.py', new, *sorted(names))
-        count = one_int(r'pg_collation show \((\d+)\)', out,
-                        f'the generated names at {new}')
-        block = out.split('pg_collation show (')[1].split(':', 1)[1]
-        got = [ln.strip() for ln in block.split('\n\n')[0].split('\n')
-               if ln.strip()]
-        self.assertEqual(len(got), count,
-                         f'step 3 at {new} says {count} generated names and '
-                         f'prints {len(got)}')
-        return set(got)
+        count = one_int(r'Full affected set \((\d+) locale', out,
+                        f'the affected set at {new}')
+        affected = re.search(r'^Full affected set \(\d+ locale source file'
+                             r'\(s\)\): (.+)$', out, re.M).group(1).split(', ')
+        self.assertEqual(len(affected), count,
+                         f'step 3 at {new} says {count} locales and prints '
+                         f'{len(affected)}')
+        aliases = re.search(r"^Also named by glibc's locale.alias: (.+)$", out,
+                            re.M)
+        named = ([a.split(' (')[0] for a in aliases.group(1).split(', ')]
+                 if aliases else [])
+        return set(affected) | set(named)
 
     def test_step_2_is_the_exact_union_of_the_two_steps(self):
         first, second = self._step2_names(OLD, MID), self._step2_names(MID, NEW)
@@ -849,19 +914,44 @@ class SkippingAReleaseReportsTheUnion(StepRun):
     def test_step_3_is_the_exact_union_of_the_two_steps(self):
         """The reindex verdict, which is what a reader acts on. Each side is
         closed over the copy graph of ITS OWN new tag, which is why this is
-        asserted on the generated names rather than on the source files: sv_FI
-        and sv_FI@euro reach sv_SE at both 2.34 and 2.39."""
+        asserted on what step 3 lists rather than on step 2's source files:
+        sv_FI and sv_FI@euro reach sv_SE at both 2.34 and 2.39. The list is
+        locales and their aliases (backlog 13.1)."""
         first = self._step3_generated(MID, self._step2_names(OLD, MID))
         second = self._step3_generated(NEW, self._step2_names(MID, NEW))
         direct = self._step3_generated(NEW, self._step2_names(OLD, NEW))
-        self.assertEqual(len(first), 6)
-        self.assertEqual(len(second), 4)
+        self.assertEqual(first, {'or_IN', 'sv_FI', 'sv_FI@euro', 'sv_SE',
+                                 'swedish'})
+        self.assertEqual(second, {'ber_DZ', 'kab_DZ', 'th_TH', 'thai'})
         self.assertEqual(
             direct, first | second,
             'the direct pair no longer reports the union: '
             f'missing {sorted(first | second - direct)}, '
             f'extra {sorted(direct - (first | second))}')
-        self.assertEqual(len(direct), 10)
+        self.assertEqual(len(direct), 9)
+
+    def test_every_name_the_machines_measured_as_changed_is_on_the_list(self):
+        """Backlog 13.1, the defect itself. Step 11 measured on the three
+        fixtures which names sort differently (tests/test_locale_order.py):
+        for RHEL8 -> RHEL9 that included sv_SE.iso885915, swedish and
+        or_IN.utf8, which no line of the tags-only list reached. Each one now
+        reaches it, as a locale by glibc's rule or as an alias. Two names are
+        on no Reindex list by design, and this pins exactly those two:
+        ko_KR.utf8 moved through localedef's code with its file unchanged, so
+        it is on step 4's list; C.utf8 is the distro's own file, which step 2
+        names under a `!!`."""
+        lists = ((tlo.CHANGED_8_TO_9,
+                  self._step3_generated(MID, self._step2_names(OLD, MID)),
+                  {'C.utf8', 'ko_KR.utf8'}),
+                 (tlo.CHANGED_9_TO_10,
+                  self._step3_generated(NEW, self._step2_names(MID, NEW)),
+                  set()))
+        for measured, listed, elsewhere in lists:
+            with self.subTest(listed=sorted(listed)):
+                missed = {n for n in measured
+                          if n not in listed and g.locale_source(n) not in listed}
+                self.assertEqual(missed, elsewhere)
+        self.assertIn('ko_KR', self._step4_written(MID))
 
     def _step4_written(self, tag):
         """The names step 4 writes at `tag`, read whole from its list file.

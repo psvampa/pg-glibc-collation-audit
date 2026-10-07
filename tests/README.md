@@ -18,7 +18,7 @@ this tool shipped, or a way of losing one, and its docstring says which.
 | `test_node_modes.py` | yes | the steps that read a machine's own locale files |
 | `test_distro_diff.py` | yes | the comparison of a machine's locale files against its upstream tag (steps 6 and 7) |
 | `test_git_helpers.py` | mostly | code that cannot tell "nothing here" from "could not look"; some of its classes build a small repository of their own |
-| `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, generated names, the comment filter |
+| `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, locale names and their aliases, the comment filter |
 | `test_locale_order.py` | no | step 11: the comparison on three real machines' measurements, the file each machine writes, and the progress lines |
 | `test_parallel_runner.py` | no | guards against losing tests quietly, in the parallel runner and in a test file run on its own |
 | `test_published_claims.py` | no | the figures, links and paths the documentation publishes |
@@ -35,7 +35,8 @@ skip.
 "The tests pass" does not mean "the audit is correct".
 
 - The SQL files, `sql/collation_confirmation_template.sql` and
-  `sql/c_utf8_probe.sql`: they need PostgreSQL on two machines.
+  `sql/c_utf8_probe.sql`, are never run, because that needs PostgreSQL on
+  two machines.
 - A real machine: the half of `scripts/locale_order.py` that measures needs
   Linux with glibc, and the transport over `ssh` was measured by hand.
 - Distro backports: they are not in the upstream tags the suite reads.

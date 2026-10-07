@@ -796,6 +796,47 @@ class SupportedMap(unittest.TestCase):
 
 
 @needs_clone
+class LocaleAliases(unittest.TestCase):
+    """Backlog 13.1: the names glibc's locale.alias gives a locale (swedish)
+    are names a database can use, and a missing file must stop the run rather
+    than read as "no aliases", which would drop swedish from the list."""
+
+    def test_aborts_when_locale_alias_is_absent(self):
+        rc, out = in_subprocess("g.locale_aliases(repo, '%s')" % BAD)
+        self.assertNotEqual(rc, 0)
+        self.assertIn('intl/locale.alias does not exist', out)
+
+    def test_aborts_when_locale_alias_holds_no_alias(self):
+        """A file that is there and holds nothing but comments is a reader or
+        a corpus problem, not "no aliases"."""
+        repo = tempfile.mkdtemp(prefix='pg-glibc-empty-alias-')
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        os.makedirs(os.path.join(repo, 'intl'))
+        with open(os.path.join(repo, 'intl', 'locale.alias'), 'w') as fh:
+            fh.write('# only a comment\n\n')
+        git = ['git', '-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t',
+               '-c', 'commit.gpgsign=false']
+        subprocess.run(['git', 'init', '-q', repo], check=True)
+        subprocess.run(git + ['add', '-A'], check=True)
+        subprocess.run(git + ['commit', '-q', '-m', 'x'], check=True)
+        boot = ("import sys; sys.path.insert(0, %r); "
+                "import glibc_locale_data as g\n" % os.path.dirname(g.__file__))
+        p = subprocess.run([sys.executable, '-c',
+                            boot + 'g.locale_aliases(%r, "HEAD")' % repo],
+                           capture_output=True)
+        out = (p.stdout + p.stderr).decode('utf-8', 'replace')
+        self.assertNotEqual(p.returncode, 0, out)
+        self.assertIn('holds no alias at all', out)
+
+    def test_reads_the_tag_s_aliases_and_no_comment(self):
+        got = g.locale_aliases(GLIBC_CLONE, NEW)
+        self.assertEqual(got['swedish'], 'sv_SE.ISO-8859-1')
+        self.assertEqual(got['thai'], 'th_TH.TIS-620')
+        self.assertEqual(len(got), 45)
+        self.assertEqual([a for a in got if a.startswith('#')], [])
+
+
+@needs_clone
 class CloneDetection(unittest.TestCase):
     """"Nothing ran on a clean machine": the clone is made --no-checkout, so
     localedata/locales never appears on disk and a filesystem test says no."""
