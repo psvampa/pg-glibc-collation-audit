@@ -428,8 +428,14 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
             r'|\b(?:%s)\s+and\s+a\s+half\b'
             % (digits, half, words, half, words))
         command = re.compile(r'unittest discover -s tests|run_parallel\.py')
-        for name, text in docs().items():
-            if not command.search(text):
+        # README.md is read whether or not it publishes the command: it
+        # stopped doing so when its Tests section moved to tests/README.md,
+        # and it still sends readers there to run the tests, so a duration in
+        # it reads as the suite's all the same.
+        published = docs()
+        self.assertIn('README.md', published)
+        for name, text in published.items():
+            if not command.search(text) and name != 'README.md':
                 continue
             for number_of, line in enumerate(text.split('\n'), start=1):
                 found = duration.search(line)
@@ -1401,8 +1407,9 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
         """"full list (N name(s))" against the two numbers printed above it.
         The written list used to hold only the names SUPPORTED maps, so it was
         narrower than the set the same paragraph reported -- on a node, by
-        exactly the locale the audit exists for. The arithmetic is the check a
-        reader can repeat."""
+        exactly the locale the audit exists for. It holds the locales and the
+        aliases glibc's locale.alias gives them (backlog 13.1), and N is their
+        sum. The arithmetic is the check a reader can repeat."""
         blocks = 0
         for name in ('rhel8-to-rhel9-audit-output.txt',
                      'rhel9-to-rhel10-audit-output.txt'):
@@ -1411,17 +1418,16 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
             # block's count with the next block's list, which is how the first
             # version of this test read 404 and 413 as the same paragraph.
             for m in re.finditer(
-                    r'^Full set needing empirical confirmation: \d+ locale '
-                    r'source file\(s\), (\d+) generated locale name\(s\)'
-                    r'[^\n]*\n  e\.g\. [^\n]*\n'
-                    r'  not in [^\n]*?: ([^\n]+)\n'
+                    r'^Full set needing empirical confirmation: (\d+) '
+                    r'locale\(s\), and (\d+) more\n(?:[^\n]*\n){3}'
+                    r'  e\.g\. [^\n]*\n'
+                    r'  not in [^\n]*?: [^\n]+\n'
                     r'  full list \((\d+) name\(s\)\):',
                     text, re.M):
                 blocks += 1
-                generated, unbuilt, listed = m.group(1), m.group(2), m.group(3)
+                locales, aliases, listed = m.group(1), m.group(2), m.group(3)
                 with self.subTest(example=name, listed=listed):
-                    self.assertEqual(int(listed),
-                                     int(generated) + len(unbuilt.split(', ')))
+                    self.assertEqual(int(listed), int(locales) + int(aliases))
         self.assertEqual(blocks, 6, 'a step 4 block stopped being checked')
 
 

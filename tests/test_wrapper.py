@@ -289,8 +289,21 @@ class Wrapper(unittest.TestCase):
         self.assertIn(f'\nCopy chains read at {MID}\n', step3)
         self.assertNotIn(f'Copy chains read at {OLD}', flat(step3))
 
+    def test_the_step_4_lines_say_how_to_read_their_list(self):
+        """The `hunks` branch of the step 4 summary lines, the one every
+        published example prints; WrapperEmptyPair holds the other branch
+        (backlog 13.1)."""
+        summary = self.out.split('AUDIT SUMMARY')[1]
+        block = summary.split('-- Needs an empirical test', 1)[1]
+        block = block.split('\n\n', 1)[0]
+        self.assertIn('step 5 found', block)
+        self.assertIn('A collation or a database uses one when its locale, '
+                      'without the part from the dot up to any @, is one of '
+                      'them.', flat(block))
+
     def test_answer_matches_the_published_result(self):
-        """The published set for 2.28..2.34, as generated locale names.
+        """The published set for 2.28..2.34: locales, and the alias glibc gives
+        one of them (backlog 13.1).
 
         examples/rhel8-to-rhel9-tags-only.txt prints these. A wrapper that
         changes an answer is a bug, not a feature. This does not catch step 3
@@ -300,8 +313,8 @@ class Wrapper(unittest.TestCase):
         listed = os.path.join(self.out_dir, 'step3_affected_locales.txt')
         with open(listed, encoding='utf-8') as fh:
             names = sorted(n.strip() for n in fh if n.strip())
-        self.assertEqual(names, ['or_IN', 'sv_FI', 'sv_FI.utf8', 'sv_FI@euro',
-                                 'sv_SE', 'sv_SE.utf8'])
+        self.assertEqual(names, ['or_IN', 'sv_FI', 'sv_FI@euro', 'sv_SE',
+                                 'swedish'])
 
     def test_the_distro_patch_block_says_it_did_not_run(self):
         """Steps 6 and 7 need the machines' files. Until 2026-09-27 the
@@ -583,6 +596,18 @@ class WrapperEmptyPair(unittest.TestCase):
         # only until backlog 1.14 was fixed.
         self.assertIn("upstream diff cannot see your distro's backports",
                       summary)
+
+    def test_the_step_4_lines_say_how_to_read_their_list(self):
+        """Reindex is "none" here, so the explanation printed under a
+        non-empty Reindex list is not printed. The step 4 lines carry the rule
+        themselves, and must not send the reader to that explanation, which
+        is not there (backlog 13.1)."""
+        summary = self.out.split('AUDIT SUMMARY')[1]
+        self.assertIn('none -- no locale', summary)
+        self.assertIn('A collation or a database uses one when its locale, '
+                      'without the part from the dot up to any @, is one of '
+                      'them.', flat(summary))
+        self.assertNotIn('read as the Reindex list is', flat(summary))
 
 
 @needs_clone
@@ -1834,12 +1859,13 @@ class WrapperMeasuredOrder(unittest.TestCase):
         self.assertNotIn(MEASURED_NOT_RUN, summary)
 
     def test_reindex_says_where_the_measured_answer_is(self):
-        """Reindex lists six names from the tags and comes first; the block
+        """Reindex lists five names from the tags and comes first; the block
         that lists fourteen from the machines is further down. Without a
-        pointer the six read as the whole answer."""
+        pointer the five read as the whole answer. Between them, the five
+        lines that say how to read the list."""
         body = summary_block(self.out, REINDEX)
         self.assertEqual(body[-2:], REINDEX_POINTER)
-        self.assertEqual(len(body), 6 + 1 + 2)
+        self.assertEqual(len(body), 5 + 1 + 5 + 2)
 
     def test_node_to_node_NOT_RUN_does_not_deny_what_step_11_compared(self):
         """The plain NOT RUN block says nothing compared the two nodes'

@@ -530,6 +530,16 @@ echo "-- Reindex: sort order changes, confirm then REINDEX"
 if [ "$(count_lines "$STEP3_LIST")" -gt 0 ]; then
   sed 's/^/     /' "$STEP3_LIST"
   echo "   ($(count_lines "$STEP3_LIST") name(s); full list: $STEP3_LIST)"
+  # Locales, not spellings (backlog 13.1): the names a machine and a database
+  # use for one locale are many (sv_SE.utf8, sv_SE.iso885915, sv_SE.UTF-8),
+  # and none of those lists can be complete. glibc's own rule takes each back
+  # to the locale it is built from; the aliases that rule cannot reach are in
+  # the list.
+  echo "   These are locales, not spellings: a collation or a database uses one"
+  echo "   when its locale, without the part from the dot up to any @, is in this"
+  echo "   list (sv_SE.UTF-8, sv_SE.utf8 and sv_SE.iso885915 are all sv_SE). The"
+  echo "   list also holds the aliases glibc's locale.alias gives these locales."
+  echo "   sql/collation_confirmation_template.sql reads collations the same way."
 else
   echo "     none -- no locale's LC_COLLATE changed between these two tags"
 fi
@@ -672,8 +682,10 @@ case $STEP5 in
   hunks)
     echo "-- Needs an empirical test: step 5 found $HUNKS substantive hunk(s),"
     echo "   so a clean data diff CANNOT clear the locales step 4 flagged"
-    echo "     $(count_lines "$STEP4_LIST") name(s) to confirm: generated names, and"
-    echo "     source names for the locales SUPPORTED does not list"
+    echo "     $(count_lines "$STEP4_LIST") name(s) to confirm: locales, and the aliases"
+    echo "     glibc's locale.alias gives them. A collation or a database uses one"
+    echo "     when its locale, without the part from the dot up to any @, is one"
+    echo "     of them."
     echo "     full list: $STEP4_LIST" ;;
   clean)
     echo "-- Needs an empirical test: none on this evidence. Step 5 found no"
@@ -686,8 +698,10 @@ case $STEP5 in
     echo "   before both of them, a tracked path exists at no ref in the"
     echo "   clone, the include walk reached nothing, the two tags are one"
     echo "   commit, or the step did not finish."
-    echo "     $(count_lines "$STEP4_LIST") name(s) to confirm: generated names, and"
-    echo "     source names for the locales SUPPORTED does not list"
+    echo "     $(count_lines "$STEP4_LIST") name(s) to confirm: locales, and the aliases"
+    echo "     glibc's locale.alias gives them. A collation or a database uses one"
+    echo "     when its locale, without the part from the dot up to any @, is one"
+    echo "     of them."
     echo "     full list: $STEP4_LIST" ;;
 esac
 

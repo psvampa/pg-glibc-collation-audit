@@ -1016,6 +1016,7 @@ def fan_in(graph):
 
 
 _CODESET_RE = re.compile(r'\.([^.@]+)(?=@|$)')
+_SOURCE_RE = re.compile(r'\.[^@]*')
 
 
 def normalize_locale_name(entry):
@@ -1034,12 +1035,91 @@ def normalize_locale_name(entry):
     return _CODESET_RE.sub(norm, entry)
 
 
-def supported_map(repo, tag):
-    """{source file name: [generated locale names]} from localedata/SUPPORTED.
+def locale_source(name):
+    """The locale source file a locale name is built from.
 
-    The audit works in source file names (sv_FI@euro), but `locale -a` and
-    pg_collation show generated names with codesets (sv_FI.utf8, sv_FI). This
-    is the mapping between them, in the spelling those tools use.
+    glibc's own rule: localedata/Makefile builds each SUPPORTED entry from
+    `locales/<name>` with everything from the first dot up to the next @, or
+    to the end, removed (`sed 's/\\([^.]*\\)[^@]*\\(.*\\)/\\1\\2/'`, the same
+    at 2.12 and 2.39). setlocale reads a codeset the same way only when its
+    dot comes before any @ (intl/explodename.c): glibc-2.12's
+    tt_RU@iqtelif.UTF-8 is built from tt_RU@iqtelif, and setlocale reads
+    iqtelif.UTF-8 as its modifier. So sv_SE.utf8, sv_SE.iso885915, sv_SE and
+    a database's sv_SE.UTF-8 are all sv_SE, sv_FI.iso885915@euro is
+    sv_FI@euro, and a.b.c is a, as the sed makes it. The one rule this module
+    uses for it: supported_map derives its source names with it too, and
+    sql/collation_confirmation_template.sql applies the same expression.
+    """
+    return _SOURCE_RE.sub('', name, count=1)
+
+
+def locale_aliases(repo, tag):
+    """{alias: locale} from intl/locale.alias at `tag`.
+
+    These are names too: `locale -a` lists swedish, and PostgreSQL imports it
+    as a collation, because the locale archive adds every alias whose locale
+    is built (locale/programs/locarchive.c, add_locale_to_archive). Parsed as
+    glibc parses it (intl/localealias.c, read_alias_file): a line whose first
+    non-blank character is `#` is a comment, and an entry is the first two
+    words of a line. A missing file is an error rather than no aliases: an
+    empty map would drop swedish from the list and read as nothing to add.
+    """
+    path = 'intl/locale.alias'
+    contents, missing = read_blobs(repo, tag, [path])
+    if missing:
+        die(f"{path} does not exist at {tag}; cannot name the aliases glibc "
+            f"gives a locale (swedish for sv_SE).")
+    out = {}
+    for line in contents[path].split('\n'):
+        words = line.split()
+        if len(words) < 2 or words[0].startswith('#'):
+            continue
+        out[words[0]] = words[1]
+    if not out:
+        die(f"{path} at {tag} holds no alias at all; that is a reader or a "
+            f"corpus problem, not an answer.")
+    return out
+
+
+def _aliases_reaching(sources, aliases):
+    return {alias: locale_source(target) for alias, target in aliases.items()
+            if locale_source(target) in sources
+            and alias != locale_source(target)}
+
+
+def aliases_of(sources, aliases):
+    """{alias: source} for every alias whose locale is built from one of
+    `sources` (swedish -> sv_SE.ISO-8859-1 -> sv_SE). An alias spelled as its
+    own locale (ko_KR -> ko_KR.eucKR, ja_JP -> ja_JP.eucJP) is that locale's
+    name already, and is left out. So is an alias whose name is not ASCII,
+    which non_ascii_alias_targets names for the caller to say so."""
+    return {a: s for a, s in _aliases_reaching(sources, aliases).items()
+            if a.isascii()}
+
+
+def non_ascii_alias_targets(sources, aliases):
+    """The locales of `sources` that have an alias whose name is not ASCII.
+
+    Until glibc 2.22 locale.alias carried bokmal and francais spelled in
+    Latin-1 bytes; glibc removed them because they broke `locale -a`
+    (Bug 18412). read_blobs decodes such a byte to U+FFFD, so the name cannot
+    be written as it is, and PostgreSQL never imports a name that is not
+    ASCII as a collation (pg_import_system_collations). They are left out of
+    the list, and this is what lets the caller say so instead of dropping
+    them in silence."""
+    return sorted({s for a, s in _aliases_reaching(sources, aliases).items()
+                   if not a.isascii()})
+
+
+def supported_map(repo, tag):
+    """{source file name: [names SUPPORTED installs it under]} from
+    localedata/SUPPORTED, in the spelling localedef gives them (sv_FI.utf8).
+
+    Step 2 prints these names for the locales a tag adds; steps 3 and 4 read
+    the map to say which locales are not built by default, and step 4 also
+    takes an empty map for a run with no tag. They are not every name a
+    locale takes: the archive and RHEL add others (sv_SE.iso885915), and
+    locale.alias adds swedish (backlog 13.1).
     """
     contents, missing = read_blobs(repo, tag, ['localedata/SUPPORTED'])
     if missing:
@@ -1047,8 +1127,9 @@ def supported_map(repo, tag):
         # SUPPORTED, so normally absent from `locale -a`" -- a false and
         # reassuring claim -- and wrote an empty step4 list under the heading
         # "full list of generated names".
-        die(f"localedata/SUPPORTED does not exist at {tag}; cannot map source "
-            f"file names to the generated names `locale -a` shows.")
+        die(f"localedata/SUPPORTED does not exist at {tag}; cannot tell which "
+            f"locales are built by default, or the names they are installed "
+            f"under.")
     out = {}
     for line in contents['localedata/SUPPORTED'].split('\n'):
         line = line.strip().rstrip('\\').strip()
@@ -1057,7 +1138,7 @@ def supported_map(repo, tag):
         entry = line.split('/')[0].strip()
         if not entry:
             continue
-        source = _CODESET_RE.sub('', entry)
+        source = locale_source(entry)
         generated = normalize_locale_name(entry)
         if generated not in out.setdefault(source, []):
             out[source].append(generated)

@@ -162,19 +162,16 @@ def report_codepoint(texts):
     return immune
 
 
-def generated_names(names, supported):
-    """SUPPORTED's spellings for `names`, falling back to the source name.
+def listed_names(names, aliases):
+    """`names`, and every alias glibc's locale.alias gives one of them.
 
-    `locale -a` and pg_collation show the generated spelling, so a list that
-    carries `sv_SE` where the database says `sv_SE.utf8` cannot be grepped for
-    the collation anyone actually uses -- and a name that cannot be found in
-    the list reads as a name that was cleared. The fallback is the source name
-    rather than nothing, for the same reason.
+    The list holds locales, not spellings, for the reason step 3 gives
+    (backlog 13.1): SUPPORTED's spellings missed sv_SE.iso885915, swedish and
+    the others the real machines carry, and a name that cannot be found in
+    the list reads as a name that was cleared. A spelling reaches its locale
+    by glibc_locale_data.locale_source; an alias does not, so it is listed.
     """
-    out = set()
-    for name in names:
-        out.update(supported.get(name) or [name])
-    return out
+    return set(names) | set(g.aliases_of(set(names), aliases))
 
 
 def report_backported(texts, inherited=None, unresolved=None,
@@ -274,7 +271,8 @@ def report_default_weight(names):
 
 
 def report(texts, supported, label, out_name, next_hint,
-           supported_tag=None, node_dir=False):
+           supported_tag=None, node_dir=False, aliases=None):
+    aliases = aliases or {}
     flagged, with_collate = g.scan_ellipsis(texts)
 
     print(f"Files at {label}: {len(texts)}, of which {with_collate} define "
@@ -357,8 +355,16 @@ def report(texts, supported, label, out_name, next_hint,
         # run". Announced too -- the `!!` block above promises a list, and this
         # path used to write it and never say where, so the promise pointed at
         # nothing and the twelve names it prints were all a reader could get.
-        listed = sorted(generated_names(set(unresolved) | set(default_only),
-                                        supported))
+        names = set(unresolved) | set(default_only)
+        print("  Locales, not spellings: one is in use wherever a locale name, "
+              "without the part\n  from the dot up to any @, is one of them; "
+              "the list adds the aliases\n  glibc's locale.alias gives them.")
+        not_ascii = g.non_ascii_alias_targets(names, aliases)
+        if not_ascii:
+            print(f"  not listed: an alias of {', '.join(not_ascii)} whose "
+                  f"name is not ASCII; PostgreSQL never imports such a name "
+                  f"as a collation")
+        listed = sorted(listed_names(names, aliases))
         out_path = g.write_list(out_name, listed)
         print(f"  full list ({len(listed)} name(s)): {out_path}")
         # Declared on this path too. A directory where nothing uses an
@@ -386,14 +392,28 @@ def report(texts, supported, label, out_name, next_hint,
     report_default_weight(default_only)
 
     exposed = sorted(set(flagged) | set(inherited) | set(default_only))
-    generated = sorted({n for loc in exposed for n in supported.get(loc, [])})
+    # N counts the unresolved locales too: they are on the list, and the `!!`
+    # block above says why. Counted as what they add: an alias can share its
+    # name with a locale already in the set, and "N locales and M aliases"
+    # must add up to the full list printed below.
+    to_confirm = set(exposed) | set(unresolved)
+    alias_names = sorted(set(g.aliases_of(set(exposed) | set(unresolved),
+                                          aliases))
+                         - set(exposed) - set(unresolved))
+    not_ascii = g.non_ascii_alias_targets(set(exposed) | set(unresolved),
+                                          aliases)
     unbuilt = [loc for loc in exposed if not supported.get(loc)]
     if supported:
-        print(f"\nFull set needing empirical confirmation: {len(exposed)} "
-              f"locale source file(s), {len(generated)} generated locale "
-              f"name(s) per localedata/SUPPORTED")
-        if generated:
-            print(f"  e.g. {', '.join(generated[:8])}, ...")
+        print(f"\nFull set needing empirical confirmation: {len(to_confirm)} "
+              f"locale(s), and {len(alias_names)} more\nname(s), the aliases "
+              f"glibc's locale.alias gives them. Locales, not spellings:\none "
+              f"is in use wherever a locale name, without the part from the "
+              f"dot up to\nany @, is one of them.")
+        print(f"  e.g. {', '.join(exposed[:8])}, ...")
+        if not_ascii:
+            print(f"  not listed: an alias of {', '.join(not_ascii)} whose "
+                  f"name is not ASCII; PostgreSQL never imports such a name "
+                  f"as a collation")
         if unbuilt:
             if node_dir:
                 # Measured on the three Rocky 8/9/10 fixtures, 2026-09-07:
@@ -410,20 +430,20 @@ def report(texts, supported, label, out_name, next_hint,
                 print(f"  not in SUPPORTED (not built by default): "
                       f"{', '.join(unbuilt)}")
     else:
-        # No SUPPORTED to map through: these are source file names, and the
-        # node's own `locale -a` is the authority on which of them are built.
-        print(f"\nFull set needing empirical confirmation: {len(exposed)} "
-              f"locale source file(s). Source file names, NOT the generated "
-              f"names pg_collation shows -- run `locale -a` on the node, or "
-              f"pass --supported-tag to map them.")
+        # No tag: nothing to read locale.alias or SUPPORTED from, and the
+        # node's own `locale -a` is the authority on which of these are built.
+        print(f"\nFull set needing empirical confirmation: {len(to_confirm)} "
+              f"locale(s). Locales, not spellings; no tag was given, so the "
+              f"aliases glibc's locale.alias gives them are not added -- pass "
+              f"--supported-tag to add them.")
         print(f"  e.g. {', '.join(exposed[:8])}, ...")
-    # Same rule as step 3, and this is the line that broke it: `generated`
-    # alone drops every exposed locale the tag's SUPPORTED does not name, so
-    # the file the sentence above calls the full list was NARROWER than what
-    # was reported. On a node that omission is C -- the collation initdb picks
-    # -- and a name absent from the list reads as a name cleared.
-    listed = sorted(set(generated) | set(unbuilt)
-                    | generated_names(unresolved, supported))
+    # Same rule as step 3: every exposed and every unresolved locale, and
+    # their aliases. A list of SUPPORTED's spellings once dropped every exposed
+    # locale SUPPORTED does not name, so the file the sentence above calls the
+    # full list was NARROWER than what was reported. On a node that omission
+    # was C -- the collation initdb picks -- and a name absent from the list
+    # reads as a name cleared.
+    listed = sorted(set(exposed) | set(unresolved) | set(alias_names))
     out_path = g.write_list(out_name, listed)
     print(f"  full list ({len(listed)} name(s)): {out_path}")
 
@@ -461,14 +481,15 @@ def main(argv):
                          "directory carries a version.")
     ap.add_argument('--supported-tag',
                     help="with --locales-dir: a tag whose localedata/SUPPORTED "
-                         "maps source file names to the generated names "
-                         "`locale -a` shows. A node ships no SUPPORTED -- "
-                         "measured on Rocky 8/9/10, none has "
+                         "says which locales are built by default and whose "
+                         "intl/locale.alias names their aliases (swedish for "
+                         "sv_SE), which the written list adds. A node ships "
+                         "no SUPPORTED -- measured on Rocky 8/9/10, none has "
                          "/usr/share/i18n/SUPPORTED and glibc-locale-source "
-                         "installs none -- so the mapping is the tag's, and "
-                         "the tag does not know what the node built. Also "
-                         "the list the directory is checked against: every "
-                         "file of the tag it lacks is named under a `!!`.")
+                         "installs none -- so both are the tag's, and the "
+                         "tag does not know what the node built. Also the "
+                         "list the directory is checked against: every file "
+                         "of the tag it lacks is named under a `!!`.")
     ap.add_argument('--expect-files', type=int,
                     help="with --locales-dir: abort unless exactly this many "
                          "files are read")
@@ -510,9 +531,11 @@ def main(argv):
                 "docs/confirming-on-a-real-system.md for the glibc each node "
                 "actually runs."]
 
+    alias_tag = opts.tag or opts.supported_tag
+    aliases = g.locale_aliases(repo, alias_tag) if alias_tag else {}
     return report(texts, supported, label, out_name, hint,
                   supported_tag=opts.supported_tag or opts.tag,
-                  node_dir=bool(opts.locales_dir))
+                  node_dir=bool(opts.locales_dir), aliases=aliases)
 
 
 if __name__ == '__main__':

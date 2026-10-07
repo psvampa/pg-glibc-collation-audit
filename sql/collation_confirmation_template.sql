@@ -36,14 +36,17 @@
 --     half of the collversion block. Keep the named-collation half:
 --     pg_collation_actual_version() exists since PG 10 and reports a libc
 --     version from 13 on.
---   * Use the generated locale names step 3 prints (sv_SE.utf8), and check
+--   * Use the names docs/confirming-on-a-real-system.md says to run it for
+--     ("Which locales to run it for"). The Reindex list and step 4's list
+--     hold locales, not spellings (sv_SE, not sv_SE.utf8 or sv_SE.iso885915),
+--     plus the aliases glibc's locale.alias gives them (swedish). The queries
+--     below read each collation's locale from collcollate, so every spelling
+--     and every encoding of one locale counts as that locale. Check
 --     `locale -a` first: if a locale is not generated on the box,
 --     sort/PostgreSQL silently fall back to C, and two boxes both missing it
---     will agree with each other while proving nothing. Note the spelling:
---     localedef normalises the codeset when it builds the locale, so
---     localedata/SUPPORTED says sv_SE.UTF-8 while `locale -a` and
---     pg_collation both say sv_SE.utf8. COLLATE "sv_SE.UTF-8" does not
---     exist.
+--     will agree with each other while proving nothing. In the COLLATE
+--     clauses below use a name that exists for this database's encoding:
+--     in a UTF8 database "sv_SE" is sv_SE.utf8.
 --   * ONE LOCALE INVERTS THE RULE ABOVE: C.UTF-8. Agreement with LC_ALL=C is
 --     the CORRECT answer there -- it is what the glibc fix produces, and what
 --     upstream's codepoint_collation guarantees from 2.35 on -- so reading
@@ -89,24 +92,59 @@ WHERE d.datname = current_database();
 -- libc collation other than C/POSIX, OR the database default when that
 -- resolves to one. Temporary and session-scoped -- it disappears when you
 -- disconnect and changes nothing in the database.
+--
+-- C and POSIX are recognised by collcollate, the locale the collation
+-- loads, not by its name: ucs_basic is a libc collation with collcollate C
+-- in PostgreSQL 13 to 16, and so is any CREATE COLLATION x (locale = 'C').
+--
+-- `locale` is the locale each one is built from, by glibc's own rule: the
+-- locale name without the part from the dot up to any @ (localedata/Makefile
+-- builds every locale from that file). sv_SE.UTF-8, sv_SE.utf8 and
+-- sv_SE.iso885915 are all sv_SE. Compare it with the Reindex list and
+-- step 4's list, which hold locales and the aliases glibc gives them
+-- (swedish), not spellings. It is read from collcollate and datcollate, never
+-- from collname: "sv_SE" is three collations, one per encoding, each loading
+-- a different locale name. The dot is written [.] and not with a backslash,
+-- which a server with standard_conforming_strings off reads as an escape:
+-- '\.' would then match any first character and empty every name. glibc reads
+-- an alias in any case (Swedish is swedish), so the comparison below ignores
+-- case.
 CREATE OR REPLACE TEMP VIEW exposed_collation AS
 SELECT c.oid AS colloid,
        c.collname,
        CASE WHEN c.collprovider = 'd'
             THEN 'database default -> ' || d.datcollate
             ELSE c.collname
-       END AS effective_collation
+       END AS effective_collation,
+       regexp_replace(CASE WHEN c.collprovider = 'd' THEN d.datcollate
+                           ELSE c.collcollate END, '[.][^@]*', '') AS locale
 FROM pg_collation c
 CROSS JOIN pg_database d
 WHERE d.datname = current_database()
-  AND ( (c.collprovider = 'c' AND c.collname NOT IN ('C', 'POSIX'))
+  AND ( (c.collprovider = 'c' AND c.collcollate NOT IN ('C', 'POSIX'))
      OR (c.collprovider = 'd' AND d.datlocprovider = 'c'
          AND d.datcollate NOT IN ('C', 'POSIX')) );
 
--- Confirms which glibc version this collation was imported against.
-SELECT collname, collcollate, collversion
-FROM pg_collation
-WHERE collname IN ('<LOCALE>');  -- e.g. 'sv_SE.utf8','sv_FI.utf8','or_IN'
+-- Confirms which glibc version these collations were imported against:
+-- every collation built from a locale on the audit's list, in every
+-- encoding. Put the names you are confirming in place of <LOCALE>. It starts
+-- from the list, so a name that matches no collation still prints a row
+-- with nothing beside it: a locale this database does not have, or a name
+-- left unreplaced. Both sides go through the same rule, so a spelling put
+-- on the list (sv_SE.utf8) matches too. lower() runs under the C
+-- collation (catalog columns are C, and the list side says so), which
+-- changes ASCII letters only: under a Turkish locale lower('I') is a
+-- dotless i, and or_IN, sv_FI and sv_FI@euro matched nothing (measured,
+-- PostgreSQL 18.6).
+SELECT n AS listed, c.collname, c.collcollate,
+       pg_encoding_to_char(c.collencoding) AS encoding, c.collversion
+FROM unnest(ARRAY['<LOCALE>']) AS n
+LEFT JOIN pg_collation c
+  ON c.collprovider = 'c'
+ AND lower(regexp_replace(c.collcollate, '[.][^@]*', ''))
+   = lower(regexp_replace(n COLLATE "C", '[.][^@]*', ''))
+ORDER BY n, c.collname;
+  -- e.g. ARRAY['sv_SE','sv_FI','sv_FI@euro','or_IN','swedish']
 
 DROP TABLE IF EXISTS collation_test;
 CREATE TABLE collation_test (w text COLLATE "<LOCALE>");
@@ -155,7 +193,8 @@ ORDER BY pos;
 SELECT i.indexrelid::regclass AS index_name,
        i.indrelid::regclass   AS table_name,
        am.amname              AS access_method,
-       x.effective_collation
+       x.effective_collation,
+       x.locale
 FROM pg_index i
 JOIN pg_class ir ON ir.oid = i.indexrelid
 JOIN pg_am am ON am.oid = ir.relam
@@ -177,6 +216,7 @@ ORDER BY i.indrelid::regclass::text, i.indexrelid::regclass::text;
 \echo '--- partitioned tables keyed on a non-C/POSIX libc collation (REINDEX does NOT fix these) ---'
 SELECT pt.partrelid::regclass AS partitioned_table,
        x.effective_collation,
+       x.locale,
        pg_get_partkeydef(pt.partrelid) AS partition_key
 FROM pg_partitioned_table pt
 CROSS JOIN LATERAL unnest(pt.partcollation::oid[]) AS pc(oid)
@@ -190,7 +230,8 @@ ORDER BY pt.partrelid::regclass::text;
 SELECT a.attrelid::regclass AS table_name,
        a.attname            AS column_name,
        t.typname            AS type,
-       x.effective_collation
+       x.effective_collation,
+       x.locale
 FROM pg_attribute a
 JOIN pg_class k ON k.oid = a.attrelid
 JOIN pg_type t ON t.oid = a.atttypid

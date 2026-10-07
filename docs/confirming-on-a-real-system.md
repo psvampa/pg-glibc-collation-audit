@@ -76,8 +76,11 @@ Each of these makes a comparison agree with itself while proving nothing.
 
 Check `locale -a` first. If a locale is not generated, `sort` and PostgreSQL
 silently fall back to `C`, and two machines both missing it agree with each
-other perfectly. Use the [generated names](glossary.md) step 3 prints
-(`sv_SE.utf8`), not the source file names.
+other perfectly. Check the exact name the test runs under, such as
+`sv_SE.utf8`. The Reindex list and step 4's list name [locales, not
+spellings](glossary.md): a name in `locale -a` belongs to a list when, without
+the part from the dot up to any `@`, it is one of that list's names
+(`sv_SE.utf8` and `sv_SE.iso885915` both become `sv_SE`).
 
 Step 11, in command 1.b, catches half of this. It names every locale the old
 machine has and the new one does not, as not known to be unchanged. A locale

@@ -206,8 +206,8 @@ What this box leaves out is in
 - what it reports beyond indexes, text partition keys among them, which no
   `REINDEX` fixes
 
-What it prints, filled in for each pair, is in
-[examples/README.md, under Command 3](examples/README.md#command-3--the-confirmation-template-filled-in).
+A worked example for each pair is in
+[examples/README.md, under Command 3](examples/README.md#command-3--the-worked-example-scripts).
 
 ## Results for the two RHEL pairs
 
@@ -269,15 +269,4 @@ short version:
 - [docs/requirements.md](docs/requirements.md) — what each run needs, on your machine and on each server, and the three setup traps
 - [docs/glossary.md](docs/glossary.md) — `copy` graph, blast radius, hunk, tier, ellipsis range, role swap, build id, measured order, level, contraction
 - [examples/](examples/README.md) — real output of every command, and which file is which
-
-## Tests
-
-```sh
-python3 tests/run_parallel.py                    # one process per class
-python3 -m unittest discover -s tests -t tests   # the same tests, one process
-```
-
-Every test freezes a failure this tool shipped, or a way of losing one, and
-CI runs the serial command on a fresh glibc clone.
-[`tests/README.md`](tests/README.md) says what it covers and, more usefully,
-what it does not.
+- [tests/README.md](tests/README.md) — how to run the tests, what they cover, and what they do not

@@ -901,6 +901,228 @@ class DiffParsing(unittest.TestCase):
         self.assertEqual(body, ['-old', '+new'])
 
 
+class LocaleSource(unittest.TestCase):
+    """glibc's rule from a locale name to the file it is built from
+    (localedata/Makefile builds locales/<name> with everything from the first
+    dot up to any @ removed). Backlog 13.1: every spelling of a locale reaches
+    one name."""
+
+    def test_the_codeset_goes_and_the_modifier_stays(self):
+        # The Makefile's sed takes everything from the first dot up to the
+        # next @, or to the end. So a dot after the @ goes when it is the
+        # first dot (glibc-2.12's SUPPORTED has tt_RU@iqtelif.UTF-8) and
+        # stays when one came before it. No name has two dots today.
+        for name, source in (('sv_SE.utf8', 'sv_SE'), ('sv_SE.UTF-8', 'sv_SE'),
+                             ('sv_SE.iso885915', 'sv_SE'),
+                             ('sv_FI.iso885915@euro', 'sv_FI@euro'),
+                             ('ca_ES.UTF-8@valencia', 'ca_ES@valencia'),
+                             ('C.utf8', 'C'), ('sv_SE', 'sv_SE'),
+                             ('swedish', 'swedish'),
+                             ('tt_RU@iqtelif.UTF-8', 'tt_RU@iqtelif'),
+                             ('a.b.c', 'a'), ('sv_SE.utf8@x.y', 'sv_SE@x.y')):
+            with self.subTest(name=name):
+                self.assertEqual(g.locale_source(name), source)
+
+
+class AliasesOf(unittest.TestCase):
+    """Which aliases go on the list beside the locales they name."""
+
+    ALIASES = {'swedish': 'sv_SE.ISO-8859-1', 'ko_KR': 'ko_KR.eucKR',
+               'no_NO': 'nb_NO.ISO-8859-1', 'bokm\ufffdl': 'nb_NO.ISO-8859-1',
+               'thai': 'th_TH.TIS-620'}
+
+    def test_an_alias_is_listed_with_the_locale_it_is_built_from(self):
+        """no_NO is the case the rule alone gets wrong: it is nb_NO."""
+        self.assertEqual(g.aliases_of({'sv_SE', 'nb_NO', 'ko_KR'},
+                                      self.ALIASES),
+                         {'swedish': 'sv_SE', 'no_NO': 'nb_NO'})
+
+    def test_an_alias_named_as_its_own_locale_is_not_added_again(self):
+        self.assertNotIn('ko_KR', g.aliases_of({'ko_KR'}, self.ALIASES))
+
+    def test_a_name_that_is_not_ascii_is_left_out_and_named(self):
+        """glibc-2.17's locale.alias spells bokmal and francais in Latin-1
+        bytes, which reach this module as U+FFFD."""
+        self.assertNotIn('bokm\ufffdl', g.aliases_of({'nb_NO'}, self.ALIASES))
+        self.assertEqual(g.non_ascii_alias_targets({'nb_NO'}, self.ALIASES),
+                         ['nb_NO'])
+        self.assertEqual(g.non_ascii_alias_targets({'sv_SE'}, self.ALIASES),
+                         [])
+
+
+class TheTemplateComparesByGlibcsRule(unittest.TestCase):
+    """sql/collation_confirmation_template.sql reads each collation's locale,
+    and the database's own, as the locale it is built from, and its version
+    query matches the list's names by the same rule (backlog 13.1). Its
+    regular expression must be glibc_locale_data.locale_source, so this
+    reads it from the template and runs it over every collcollate PostgreSQL
+    imported on the three machines (tests/locale_order/*.pg_collation.txt),
+    plus the spellings a database's own locale takes. regexp_replace without
+    flags replaces the first match only, hence count=1."""
+
+    def test_the_template_s_regex_is_the_rule(self):
+        path = os.path.join(_harness.REPO_ROOT, 'sql',
+                            'collation_confirmation_template.sql')
+        with open(path, encoding='utf-8') as fh:
+            text = fh.read()
+        found = re.findall(r"regexp_replace\([^;]*?'([^']+)', ''\)", text,
+                           re.S)
+        self.assertEqual(len(found), 3, found)
+        self.assertEqual(len(set(found)), 1, found)
+        # Read from what the collation loads, never from its name: "sv_SE"
+        # is three collations, and CREATE COLLATION mine (locale = 'sv_SE.utf8')
+        # is named mine.
+        self.assertIn("THEN d.datcollate\n                           ELSE "
+                      "c.collcollate END, '", text)
+        # A server with standard_conforming_strings off reads a backslash in a
+        # literal as an escape, and '\.' then matches any first character:
+        # every name came back empty, measured on PostgreSQL 18.6.
+        self.assertNotIn('\\', found[0])
+        # glibc reads an alias in any case (a database created as Swedish
+        # works and keeps that spelling, measured), so the version query
+        # lowers both sides.
+        # Both sides of the version query go through the rule, and lower()
+        # runs under C: under a Turkish locale lower('I') is a dotless i and
+        # or_IN matched nothing (measured on PostgreSQL 18.6).
+        self.assertIn("lower(regexp_replace(c.collcollate, '", text)
+        self.assertIn("lower(regexp_replace(n COLLATE \"C\", '", text)
+        self.assertIn("FROM unnest(ARRAY['<LOCALE>']) AS n\nLEFT JOIN "
+                      "pg_collation c", text)
+        # The ISO_8859 spellings are where glibc's rule and PostgreSQL's
+        # alias rule (`\.[A-Za-z0-9-]*`) part: glibc normalises the whole
+        # codeset, so sv_SE.ISO_8859-1 loads sv_SE.iso88591.
+        names = ['sv_SE.UTF-8', 'sv_FI.ISO-8859-15@euro', 'th_TH.TIS-620',
+                 'sv_SE.ISO_8859-1', 'sv_FI.ISO_8859-15@euro']
+        for machine in ('rhel8', 'rhel9', 'rhel10'):
+            with open(os.path.join(_harness.TESTS_DIR, 'locale_order',
+                                   f'{machine}.pg_collation.txt'),
+                      encoding='utf-8') as fh:
+                names += [ln.rstrip('\n').split('|')[2] for ln in fh if ln.strip()]
+        self.assertGreater(len(names), 3000)
+        wrong = [n for n in names
+                 if re.sub(found[0], '', n, count=1) != g.locale_source(n)]
+        self.assertEqual(wrong, [])
+
+    @staticmethod
+    def template():
+        with open(os.path.join(_harness.REPO_ROOT, 'sql',
+                               'collation_confirmation_template.sql'),
+                  encoding='utf-8') as fh:
+            return fh.read()
+
+    @staticmethod
+    def code(text):
+        """`text` without its `--` comments, read as PostgreSQL's scanner
+        reads them (src/backend/parser/scan.l, `comment`): from `--` to the
+        end of the line, outside a quoted literal."""
+        return re.sub(r"('(?:[^']|'')*')|--[^\n]*",
+                      lambda m: m.group(1) or '', text)
+
+    def statement(self, text, anchor):
+        """The statement that starts at `anchor`, up to its `;`, without its
+        comments. A `;` in a comment or a literal is not the statement's end:
+        a cut that stopped there hid what follows from every assertion that
+        something is absent. A missing or doubled anchor, a missing `;`, or a
+        block comment or dollar quote this does not read is refused."""
+        self.assertEqual(text.count(anchor), 1, anchor)
+        body = self.code(text[text.index(anchor):])
+        ends = [m.start() for m in re.finditer(r"'(?:[^']|'')*'|;", body)
+                if m.group(0) == ';']
+        self.assertTrue(ends, f'no ; after {anchor!r}')
+        stmt = body[:ends[0]]
+        self.assertNotRegex(stmt, r'/\*|\$')
+        return stmt
+
+    def test_every_listed_name_gets_a_row(self):
+        """The version query starts from the list, so a name that matches no
+        collation still prints a row: a locale this database does not have,
+        or <LOCALE> left unreplaced. That holds only while the provider test
+        is part of the one outer join and nothing else removes a row. Moved
+        to a WHERE, it drops the rows with no collation; so does a second,
+        inner JOIN after it, or a LIMIT, an EXCEPT and the like. A name then
+        prints nothing at all, which reads as nothing to check."""
+        stmt = flat(self.statement(self.template(), 'SELECT n AS listed'))
+        self.assertIn("FROM unnest(ARRAY['<LOCALE>']) AS n LEFT JOIN "
+                      "pg_collation c ON c.collprovider = 'c' AND lower(",
+                      stmt)
+        self.assertEqual(len(re.findall(r'(?i)\bjoin\b', stmt)), 1, stmt)
+        self.assertNotRegex(stmt, r'(?i)\b(?:where|having|limit|offset|fetch'
+                                  r'|except|intersect)\b')
+
+    def test_the_inventories_show_the_locale(self):
+        """The three inventories print each object's locale beside its
+        collation's name, read through the view from collcollate. The name
+        cannot be compared with the list: CREATE COLLATION mine (locale =
+        'sv_SE.utf8') shows as mine. The view is named five times: where it is
+        made, the three inventories and the CHECK/EXCLUDE review list, which
+        prints no collation. A new statement that reads it changes that
+        count, and has to be added here."""
+        text = self.template()
+        self.assertEqual(
+            len(re.findall(r'(?i)\bexposed_collation\b', self.code(text))), 5)
+        self.assertEqual(text.count('x.effective_collation'), 3)
+        for header in ("'--- indexes on non-C/POSIX libc collations ---'",
+                       "'--- partitioned tables keyed on a non-C/POSIX libc "
+                       "collation (REINDEX does NOT fix these) ---'",
+                       "'--- columns using a non-C/POSIX libc collation ---'"):
+            with self.subTest(header=header):
+                stmt = self.statement(text, '\\echo ' + header)
+                self.assertIn('\nFROM ', stmt)
+                columns = flat(stmt.split('\nFROM ', 1)[0])
+                self.assertIn('x.effective_collation', columns)
+                self.assertRegex(columns, r'\bx\.locale\b')
+
+    def test_c_and_posix_are_recognised_by_their_locale(self):
+        """PostgreSQL treats a libc collation as C when its collcollate is C
+        or POSIX, whatever its name (pg_locale.c at REL_13_23 to REL_17_11,
+        pg_locale_libc.c at REL_18_6). Read by name, the view kept ucs_basic,
+        a libc collation with collcollate C in 13 to 16, as exposed, and left
+        out a collation named C that loads a real locale. The name may not
+        appear in the view's conditions at all, however it is spelled."""
+        conditions = self.view_conditions()
+        self.assertIn("(c.collprovider = 'c' AND c.collcollate NOT IN "
+                      "('C', 'POSIX'))", conditions)
+        self.assertNotRegex(conditions, r'(?i)\bcollname\b')
+
+    def test_the_view_keeps_the_database_default(self):
+        """A column with no COLLATE of its own uses the database default,
+        which the template calls MOST text columns. The view's second arm is
+        what brings them into the three inventories when the default is a
+        libc locale other than C or POSIX; without it they all disappear."""
+        self.assertIn("OR (c.collprovider = 'd' AND d.datlocprovider = 'c' "
+                      "AND d.datcollate NOT IN ('C', 'POSIX'))",
+                      self.view_conditions())
+
+    def view_conditions(self):
+        view = flat(self.statement(
+            self.template(), 'CREATE OR REPLACE TEMP VIEW exposed_collation AS'))
+        self.assertEqual(len(re.findall(r'(?i)\bwhere\b', view)), 1, view)
+        return re.split(r'(?i)\bwhere\b', view)[1]
+
+
+class StepFourWithoutRanges(unittest.TestCase):
+    """The path of step 4 where nothing uses an ellipsis range writes its list
+    too, and says what the other path says: the reading rule, and which
+    aliases it leaves out because their name is not ASCII (backlog 13.1).
+    Driven directly, because no pinned tag reaches it with such an alias."""
+
+    def test_it_states_the_rule_and_the_aliases_it_leaves_out(self):
+        texts = {'nb_NO': _harness.locale_file('copy "no_such_locale"'),
+                 'xx_XX': _harness.locale_file('order_start forward',
+                                               '<U0041>', 'order_end')}
+        aliases = {'norwegian': 'nb_NO.ISO-8859-1',
+                   'bokm\ufffdl': 'nb_NO.ISO-8859-1'}
+        out = io.StringIO()
+        with mock.patch.object(g, 'write_list', return_value='/x') as wl, \
+                contextlib.redirect_stdout(out):
+            fa.report(texts, {}, 'fake', 'list.txt', [], aliases=aliases)
+        text = out.getvalue()
+        self.assertIn('Locales, not spellings', text)
+        self.assertIn('not listed: an alias of nb_NO whose name is not ASCII',
+                      text)
+        self.assertEqual(wl.call_args[0][1], ['nb_NO', 'norwegian', 'xx_XX'])
+
+
 class CommentChar(unittest.TestCase):
     def test_defaults_to_percent(self):
         self.assertEqual(g.comment_char('LC_COLLATE\n'), '%')
