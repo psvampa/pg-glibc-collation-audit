@@ -805,9 +805,10 @@ if [ -n "$NODE_LIST" ] && [ -f "$NODE_LIST" ]; then
     fi
   else
     echo "     no locale differs inside LC_COLLATE between the two nodes'"
-    echo "     own sources. Data only -- the weights an ellipsis range expands"
-    echo "     to, and the default weight of every character a locale does not"
-    echo "     list, are computed by localedef, not stored in these files."
+    echo "     own sources. Data only -- localedef computes the weights an"
+    echo "     ellipsis range expands to, and a rule in its code, not these"
+    echo "     files, picks the default weight of every character a locale"
+    echo "     does not list."
   fi
   if grep -q '^  C (C\.UTF-8): present on both nodes, LC_COLLATE DIFFERS' \
        "$OUT_DIR/step8.$PAIR.log" 2>/dev/null; then

@@ -166,7 +166,7 @@ Additionally exposed via `copy` inheritance: 341
 Additionally exposed through localedef's default weight: 6
       POSIX, ar_SA, ja_JP, km_KH, lo_LA, sl_SI
   No ellipsis range reaches these, but every character a locale does not list
-  gets the weight localedef assigns to UNDEFINED, in code, not from the file.
+  takes a default weight picked by a rule in localedef's code, not by the file.
 
 Full set needing empirical confirmation: 351 locale(s), and 43 more
 name(s), the aliases glibc's locale.alias gives them. Locales, not spellings.
@@ -1532,7 +1532,7 @@ Additionally exposed via `copy` inheritance: 331
 Additionally exposed through localedef's default weight: 7
       POSIX, ar_SA, ja_JP, km_KH, lo_LA, sl_SI, th_TH
   No ellipsis range reaches these, but every character a locale does not list
-  gets the weight localedef assigns to UNDEFINED, in code, not from the file.
+  takes a default weight picked by a rule in localedef's code, not by the file.
 
 Full set needing empirical confirmation: 342 locale(s), and 43 more
 name(s), the aliases glibc's locale.alias gives them. Locales, not spellings.
@@ -1583,7 +1583,7 @@ Additionally exposed via `copy` inheritance: 341
 Additionally exposed through localedef's default weight: 6
       POSIX, ar_SA, ja_JP, km_KH, lo_LA, sl_SI
   No ellipsis range reaches these, but every character a locale does not list
-  gets the weight localedef assigns to UNDEFINED, in code, not from the file.
+  takes a default weight picked by a rule in localedef's code, not by the file.
 
 Full set needing empirical confirmation: 351 locale(s), and 43 more
 name(s), the aliases glibc's locale.alias gives them. Locales, not spellings.

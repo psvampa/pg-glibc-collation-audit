@@ -486,9 +486,9 @@ class Step4AlgorithmicRanges(StepRun):
     def test_a_locale_no_range_reaches_is_in_the_written_list(self):
         """Backlog 1.6. ja_JP and ar_SA use no ellipsis range and copy nothing
         that does, and every character they do not list takes localedef's
-        UNDEFINED weight. ar_SA is the case for the fallback over the keyword:
-        its LC_COLLATE never writes UNDEFINED. The control is C, which declares
-        codepoint_collation at this tag and so stays out."""
+        default weight. ar_SA shows the list follows that rule, not the
+        keyword, because its LC_COLLATE never writes UNDEFINED. The control is
+        C, which declares codepoint_collation at this tag and so stays out."""
         contents, missing = g.read_blobs(GLIBC_CLONE, NEW,
                                          [f'{g.LOCALES_DIR}/ar_SA'])
         self.assertEqual(missing, set())
