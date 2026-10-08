@@ -43,9 +43,9 @@ weights are **not** in the locale file. If the expansion logic changes, every
 character in the range can get a different weight with zero change to the
 locale's own source. Step 4 lists the locales that use these, and every
 other locale as well except one whose `LC_COLLATE` is `codepoint_collation`
-alone, or only a copy of a byte-order locale, because
-`localedef`'s code, not the file, gives every character a locale does not
-list the `UNDEFINED` weight. Steps 1 to 3 cannot clear any of them on data
+alone, or only a copy of a byte-order locale, because every character a
+locale does not list takes a default weight that a rule in `localedef`'s
+code picks, not the file. Steps 1 to 3 cannot clear any of them on data
 alone.
 
 **locale, in the Reindex and step 4 lists** — the locale a collation is built

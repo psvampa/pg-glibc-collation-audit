@@ -64,9 +64,9 @@ file step 3 says it reaches. For a locale that only steps 4, 9 or 10 flagged,
 where step 11 names no characters, read its source and the files it copies.
 Two kinds of character can move there with no file changing: one inside an
 [ellipsis range](glossary.md), best taken at the range's boundary, and one the
-files do not list, which takes the `UNDEFINED` weight. Put one of each kind
-the locale has in the three strings, and fill the rest with characters the
-files do list.
+files do not list, which takes `localedef`'s default weight. Put one of each
+kind the locale has in the three strings, and fill the rest with characters
+the files do list.
 
 ## Three traps
 

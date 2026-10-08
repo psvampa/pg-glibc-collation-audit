@@ -1511,14 +1511,18 @@ class WrapperNodesIdentical(unittest.TestCase):
     def test_the_data_only_caveat_names_both_things_localedef_computes(self):
         """The one caveat on a clean data result. It named only the weights
         an ellipsis range expands to, which gave a reader of ja_JP or ar_SA no
-        reason to doubt it; the default weight is the other (backlog 1.6)."""
-        block = ' '.join(' '.join(summary_block(
-            self.out, '-- Node-to-node locale data (build-x -> build-y)'))
-            .split())
-        self.assertIn('Data only -- the weights an ellipsis range expands to, '
-                      'and the default weight of every character a locale '
-                      'does not list, are computed by localedef, not stored '
-                      'in these files.', block)
+        reason to doubt it; the default weight is the other (backlog 1.6).
+        The whole block, not a phrase of it: a sentence added beside the
+        caveat left an assertIn green."""
+        block = flat(' '.join(summary_block(
+            self.out, '-- Node-to-node locale data (build-x -> build-y)')))
+        self.assertEqual(block,
+                         "no locale differs inside LC_COLLATE between the two "
+                         "nodes' own sources. Data only -- localedef computes "
+                         "the weights an ellipsis range expands to, and a "
+                         "rule in its code, not these files, picks the "
+                         "default weight of every character a locale does "
+                         "not list.")
 
     def test_the_identical_fingerprint_warning_reaches_the_summary(self):
         summary = self.out.split('AUDIT SUMMARY')[1]

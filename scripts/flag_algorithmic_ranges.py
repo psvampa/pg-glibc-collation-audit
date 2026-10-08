@@ -44,8 +44,8 @@ says.
 Every other locale is printed too, except one glibc builds in byte order:
 codepoint_collation alone, or only a copy of a byte-order locale
 (glibc_locale_data.byte_order_locales). A character a locale does not list
-takes the UNDEFINED weight, which localedef's code assigns and the file does
-not hold, so even a locale with no range depends on localedef (backlog 1.6).
+takes a default weight that a rule in localedef's code picks, not the file,
+so even a locale with no range depends on localedef (backlog 1.6).
 
 It also scans a DIRECTORY of locale sources -- a copy of a node's
 /usr/share/i18n/locales/ -- instead of a tag, which reaches a locale the distro
@@ -290,13 +290,14 @@ def report_backported(texts, inherited=None, unresolved=None,
 def report_default_weight(names):
     """Name the locales that only localedef's default weight exposes.
 
-    Every character a locale does not list takes the weight of UNDEFINED, and
-    a file that declares no UNDEFINED gets one appended after everything else
-    (glibc-2.39:locale/programs/ld-collate.c, collate_finish: "simply append
-    UNDEFINED at the end"). That weight comes from the code, not the file, so
-    a locale no ellipsis range reaches still depends on localedef -- the same
-    dependency this step exists to name. It is the fallback that exposes a
-    locale, not the keyword: ar_SA never writes UNDEFINED. Backlog 1.6.
+    Every character a locale does not list takes, byte by byte, the weights
+    of one fixed character of the same table, picked by a rule in
+    localedef's code, not by the file (glibc-2.39:locale/programs/
+    ld-collate.c, collate_finish, collate_output and output_weight). An
+    UNDEFINED line does not change which one. So a locale no ellipsis range
+    reaches still depends on localedef -- the same dependency this step
+    exists to name. It is that rule that exposes a locale, not the keyword,
+    and ar_SA, which never writes UNDEFINED, is listed too. Backlog 1.6.
     """
     if names:
         print(f"\nAdditionally exposed through localedef's default weight: "
@@ -304,8 +305,8 @@ def report_default_weight(names):
         print(f"      {', '.join(names[:12])}"
               f"{', ...' if len(names) > 12 else ''}")
         print("  No ellipsis range reaches these, but every character a locale "
-              "does not list\n  gets the weight localedef assigns to UNDEFINED, "
-              "in code, not from the file.")
+              "does not list\n  takes a default weight picked by a rule in "
+              "localedef's code, not by the file.")
 
 
 def report(texts, supported, label, out_name, next_hint,
