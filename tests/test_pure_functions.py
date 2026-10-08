@@ -102,7 +102,55 @@ class ClassifyChange(unittest.TestCase):
         self.assertEqual(f.classify_change(self.OLD, None, [(5, 1)]), 'collate')
 
     def test_a_hunk_outside_the_block_is_not(self):
-        self.assertEqual(f.classify_change(self.OLD, None, [(1, 1)]), 'other')
+        """Read with the same characters on both sides. Until backlog 13.7
+        this passed no new side and a hunk on line 1, which is the
+        `comment_char` line: the test held the defect in place."""
+        new = self.OLD + 'LC_IDENTIFICATION\nEND LC_IDENTIFICATION\n'
+        self.assertEqual(f.classify_change(self.OLD, new, [(8, 2)]), 'other')
+
+    def test_a_changed_comment_char_is_a_rules_change(self):
+        """The block is the same text and is read differently: another
+        comment character keeps or drops other lines (backlog 13.7, measured
+        on the RHEL 8, 9 and 10 builds)."""
+        new = self.OLD.replace('comment_char %', 'comment_char #', 1)
+        self.assertEqual(f.classify_change(self.OLD, new, [(1, 1)]),
+                         'reading')
+
+    def test_a_changed_escape_char_is_a_rules_change(self):
+        """`/` to the default `\\`, by dropping the directive. Writing
+        `escape_char \\` instead ends the line in the escape in force, which
+        glibc joins to the next line, and the reader refuses that shape."""
+        new = self.OLD.replace('escape_char /\n', '', 1)
+        self.assertEqual(g.reading_chars(new), ('%', '\\'))
+        self.assertEqual(f.classify_change(self.OLD, new, [(2, 1)]),
+                         'reading')
+
+    def test_a_directive_dropped_for_the_default_is_a_rules_change(self):
+        """No directive is glibc's `#`, not this module's `%`: a file that
+        stops declaring `comment_char %` is read with another character."""
+        new = self.OLD.replace('comment_char %\n', '', 1)
+        self.assertEqual(f.classify_change(self.OLD, new, [(1, 1)]),
+                         'reading')
+
+    def test_characters_the_reader_cannot_settle_do_not_clear(self):
+        """A directive after a category is a shape _glibc_chars refuses."""
+        new = self.OLD + 'comment_char #\n'
+        self.assertEqual(f.classify_change(self.OLD, new, [(8, 1)]),
+                         'reading')
+
+    def test_characters_unsettled_on_both_sides_do_not_clear(self):
+        """Two answers of "cannot tell" are not one answer that agrees."""
+        old = self.OLD + 'comment_char #\n'
+        new = old + '% a note\n'
+        self.assertIsNone(g.reading_chars(old))
+        self.assertIsNone(g.reading_chars(new))
+        self.assertEqual(f.classify_change(old, new, [(9, 1)]), 'reading')
+
+    def test_a_block_with_no_new_side_is_not_cleared(self):
+        """main() reads every new side; a caller that passes none cannot
+        settle the characters, so the block is not called unchanged."""
+        self.assertEqual(f.classify_change(self.OLD, None, [(8, 1)]),
+                         'reading')
 
     def test_no_block_on_either_side_is_no_collate(self):
         self.assertEqual(
@@ -146,13 +194,16 @@ class RenamedFileOnTheNewSide(unittest.TestCase):
     RENAMED = {'localedata/locales/x': 'localedata/locales/y'}
 
     def test_a_renamed_file_is_read_under_its_new_name(self):
-        to_read = f.new_side_paths(list(self.OLD), self.OLD, self.RENAMED)
-        self.assertEqual(to_read, {'localedata/locales/x':
-                                   'localedata/locales/y'})
+        to_read = f.new_side_paths(list(self.OLD), self.RENAMED)
+        self.assertEqual(to_read['localedata/locales/x'],
+                         'localedata/locales/y')
 
-    def test_a_file_with_an_old_block_is_not_read_again(self):
-        to_read = f.new_side_paths(list(self.OLD), self.OLD, {})
-        self.assertNotIn('localedata/locales/k', to_read)
+    def test_a_file_with_an_old_block_is_read_too(self):
+        """Its block can be read with other characters at the new tag
+        (backlog 13.7). It used to be left out, and judged on its old side
+        alone."""
+        to_read = f.new_side_paths(list(self.OLD), {})
+        self.assertEqual(to_read, {p: p for p in self.OLD})
 
     def test_a_renamed_file_that_gained_a_block_is_gained_collate(self):
         """Restore the lookup under the old path and this reads 'no-collate':
@@ -243,20 +294,32 @@ class PartitionVerdicts(unittest.TestCase):
     """
 
     def test_a_gained_block_counts_as_a_collation_change(self):
-        changed, gained, _, no_collate = f.partition_verdicts(
+        changed, gained, _, _, no_collate = f.partition_verdicts(
             [('p', 'gained-collate')])
         self.assertIn('p', changed, 'a gained block was not counted as changed')
         self.assertIn('p', gained)
         self.assertNotIn('p', no_collate)
 
+    def test_a_block_read_otherwise_counts_as_a_collation_change(self):
+        changed, _, reading, unchanged, _ = f.partition_verdicts(
+            [('p', 'reading')])
+        self.assertIn('p', changed, 'a block read otherwise was not counted')
+        self.assertIn('p', reading)
+        self.assertNotIn('p', unchanged)
+
     def test_each_verdict_lands_in_its_list(self):
-        changed, gained, unchanged, no_collate = f.partition_verdicts(
+        lists = f.partition_verdicts(
             [('a', 'collate'), ('b', 'other'), ('c', 'no-collate')])
-        self.assertEqual((changed, gained, unchanged, no_collate),
-                         (['a'], [], ['b'], ['c']))
+        self.assertEqual(lists, (['a'], [], [], ['b'], ['c']))
+
+    def test_an_unknown_verdict_is_refused_not_cleared(self):
+        """It used to fall into `unchanged`, the bucket a new answer must not
+        land in by default."""
+        with self.assertRaises(ValueError):
+            f.partition_verdicts([('p', 'something-new')])
 
     def test_order_is_preserved(self):
-        changed, _, _, _ = f.partition_verdicts(
+        changed, _, _, _, _ = f.partition_verdicts(
             [('z', 'collate'), ('a', 'collate')])
         self.assertEqual(changed, ['z', 'a'])
 
@@ -1142,6 +1205,23 @@ class StepFourWithoutRanges(unittest.TestCase):
         self.assertEqual(wl.call_args[0][1], ['nb_NO', 'norwegian', 'xx_XX'])
 
 
+class ByteOrderListName(unittest.TestCase):
+    """Step 4's second list is named after its full list and can never be
+    that list (backlog 13.7)."""
+
+    def test_named_after_the_full_list(self):
+        self.assertEqual(fa.byte_order_list_name('step4_exposed_locales.txt'),
+                         'step4_byte_order_locales.txt')
+        self.assertEqual(
+            fa.byte_order_list_name('step4_exposed_locales.b-1.txt'),
+            'step4_byte_order_locales.b-1.txt')
+
+    def test_never_the_full_list_itself(self):
+        for name in ('list.txt', 'step4_byte_order_locales.txt', 'x'):
+            with self.subTest(name=name):
+                self.assertNotEqual(fa.byte_order_list_name(name), name)
+
+
 class CommentChar(unittest.TestCase):
     def test_defaults_to_percent(self):
         self.assertEqual(g.comment_char('LC_COLLATE\n'), '%')
@@ -1227,6 +1307,158 @@ class DistroDiff(unittest.TestCase):
         self.assertEqual(up.decode('utf-8', 'replace'),
                          node.decode('utf-8', 'replace'))   # the trap itself
         self.assertNotEqual(dd.classify_distro_diff(node, up), 'identical')
+
+
+class ReadingCharsReadsLikeGlibc(unittest.TestCase):
+    """The comment and escape characters a file is read with, found the way
+    glibc's reader finds the directives, not by their spelling (review of
+    backlog 13.7). get_ident keeps the character after an escape inside a
+    word and lr_next joins a line ending in the escape to the next, so these
+    are the directive to localedef, between two categories, where it acts."""
+
+    BASE = collate('<a>')
+
+    def hidden(self, line):
+        return self.BASE.replace('\nLC_COLLATE\n', f'\n{line}LC_COLLATE\n', 1)
+
+    def test_a_plain_file_settles(self):
+        self.assertEqual(g.reading_chars(self.BASE), ('%', '/'))
+
+    def test_a_directive_spelt_with_the_escape_does_not_settle(self):
+        for line in ('comment_c/har #\n', 'comment_/\nchar #\n',
+                     'escape_c/har \\\n'):
+            with self.subTest(line=line):
+                self.assertIsNone(g.reading_chars(self.hidden(line)))
+
+    def test_a_continued_comment_line_drops_only_itself(self):
+        """lr_token drops a physical line that opens with the comment
+        character, and when that line is continued the logical line goes on
+        with the next one: the directive below it is read. Without the drop
+        the two would be read as one comment and the directive missed."""
+        self.assertEqual(g._directive_words(['# note \\', 'comment_char %']),
+                         ['comment_char'])
+        self.assertEqual(g._directive_words(['# note', 'comment_char %']),
+                         ['comment_char'])
+        # lr_token skips white space before it looks for the comment
+        # character, and that skip runs on into a continued line (round 2 of
+        # false-negative-reviewer: either form, read as text, hid the
+        # directive and left the characters settled and wrong).
+        for lines in (['  # note \\', 'comment_char %'],
+                      ['   \\', '# note \\', 'comment_char %']):
+            with self.subTest(lines=lines):
+                self.assertEqual(g._directive_words(lines), ['comment_char'])
+        for line in ('  % note /\ncomment_c/har #\n',
+                     '   /\n% note /\ncomment_c/har #\n'):
+            with self.subTest(line=line):
+                self.assertIsNone(g.reading_chars(self.hidden(line)))
+
+    def test_the_control_a_commented_directive_settles(self):
+        """Under `comment_char %` this line is a comment to glibc too."""
+        self.assertEqual(g.reading_chars(self.hidden('% comment_char #\n')),
+                         ('%', '/'))
+
+    def test_a_hidden_directive_is_a_rules_change_in_step_2(self):
+        new = self.hidden('comment_c/har #\n')
+        # -U0 numbering: one line inserted after old line 3, outside the
+        # block, which opens on line 4.
+        self.assertEqual(f.classify_change(self.BASE, new, [(3, 0)]),
+                         'reading')
+
+    def test_and_in_steps_6_to_8(self):
+        node = self.hidden('comment_c/har #\n')
+        self.assertEqual(dd.classify_distro_diff(node.encode(),
+                                                 self.BASE.encode()), 'collate')
+
+    def test_an_unsettled_side_is_named_as_such(self):
+        """describe_reading's other branch: the two lines must not claim the
+        same settled characters under a header saying they differ."""
+        node = self.hidden('comment_c/har #\n')
+        lines = dd.collate_diff_lines(self.BASE, node, 'up', 'node')
+        self.assertEqual(lines, [
+            'read with comment_char % and escape_char / at up',
+            'read with characters this tool cannot settle at node'])
+
+
+class ReadOtherwise(unittest.TestCase):
+    """Every changed file read with other characters, whatever its verdict
+    (review of backlog 13.7): a hunk inside the block made the verdict
+    'collate' before the characters were compared, and step 2 then listed
+    only the changed lines' characters as if they were all that moved."""
+
+    OLD = collate('<a>')
+
+    def test_a_block_and_its_characters_changed_together(self):
+        new = collate('<b>').replace('comment_char %', 'comment_char #', 1)
+        self.assertEqual(
+            f.read_otherwise(['p'], [], {'p': self.OLD}, {'p': new}, {}),
+            ['p'])
+
+    def test_the_reading_verdict_is_kept(self):
+        self.assertEqual(
+            f.read_otherwise(['p'], ['p'], {'p': self.OLD}, {'p': self.OLD},
+                             {}), ['p'])
+
+    def test_a_block_with_no_new_text_counts(self):
+        self.assertEqual(f.read_otherwise(['p'], [], {'p': self.OLD}, {}, {}),
+                         ['p'])
+
+    def test_a_renamed_file_is_read_under_its_new_name(self):
+        new = self.OLD.replace('comment_char %', 'comment_char #', 1)
+        self.assertEqual(
+            f.read_otherwise(['p'], [], {'p': self.OLD}, {'q': new},
+                             {'p': 'q'}), ['p'])
+
+    def test_the_control_same_characters_are_not_listed(self):
+        self.assertEqual(
+            f.read_otherwise(['p'], [], {'p': self.OLD},
+                             {'p': collate('<b>')}, {}), [])
+
+    def test_a_file_without_an_old_block_is_not_listed(self):
+        """A gained block is its own `!!`; this one is about reading."""
+        no_block = 'comment_char %\nLC_CTYPE\nEND LC_CTYPE\n'
+        self.assertEqual(
+            f.read_otherwise(['p'], [], {'p': no_block}, {'p': self.OLD}, {}),
+            [])
+
+
+class DistroDiffReadingCharacters(unittest.TestCase):
+    """Backlog 13.7: the comment and escape characters a block is read with
+    are part of its rules, and they are declared outside it."""
+
+    UP = collate('<a>')
+
+    def test_the_same_block_read_otherwise_is_a_collation_finding(self):
+        node = self.UP.replace('comment_char %', 'comment_char #', 1)
+        self.assertEqual(dd.classify_distro_diff(node.encode(),
+                                                 self.UP.encode()), 'collate')
+
+    def test_the_diff_says_what_differs_when_the_block_does_not(self):
+        """The block diff is empty for such a file; alone it would print
+        nothing under a file reported as differing."""
+        node = self.UP.replace('escape_char /\n', '', 1)
+        lines = dd.collate_diff_lines(self.UP, node, 'up', 'node')
+        self.assertEqual(lines, [
+            'read with comment_char % and escape_char / at up',
+            'read with comment_char % and escape_char \\ at node'])
+
+    def test_the_side_is_named_read_differently(self):
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-reading-tree-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        for side, text in (('a', self.UP),
+                           ('b', self.UP.replace('comment_char %',
+                                                 'comment_char #', 1))):
+            os.mkdir(os.path.join(tmp, side))
+            with open(os.path.join(tmp, side, 'xx'), 'w') as fh:
+                fh.write(text)
+        buckets, side, _ = dd.compare_trees(os.path.join(tmp, 'a'),
+                                            os.path.join(tmp, 'b'), ['xx'])
+        self.assertEqual(buckets['collate'], ['xx'])
+        self.assertEqual(side['xx'], 'both, read differently')
+
+    def test_the_control_identical_characters_add_nothing(self):
+        node = collate('<b>')
+        lines = dd.collate_diff_lines(self.UP, node, 'up', 'node')
+        self.assertFalse([ln for ln in lines if ln.startswith('read with')])
 
 
 class CollationStyle(unittest.TestCase):

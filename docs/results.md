@@ -164,11 +164,10 @@ RHEL9 nodes and step 11's measurement do.
 
 ## Worked example: RHEL9 to RHEL10 (glibc 2.34 to 2.39)
 
-`C.UTF-8` **cannot** change across this pair, and that is a structural
-statement rather than a measurement that happened to come out clean: both
-nodes' `/usr/share/i18n/locales/C` is byte-identical and declares
+`C.UTF-8` does not change across this pair. Both nodes'
+`/usr/share/i18n/locales/C` is byte-identical and declares
 `codepoint_collation`, so there is no expansion logic left for a `localedef`
-change to move. The 41-code-point probe returns identical output on both
+change to move, and the 41-code-point probe returns identical output on both
 nodes —
 [`examples/c-utf8-probe-rhel9-vs-rhel10.txt`](../examples/c-utf8-probe-rhel9-vs-rhel10.txt).
 

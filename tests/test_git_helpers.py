@@ -327,9 +327,9 @@ class AbsentAtBothIsTwoFacts(unittest.TestCase):
         """A path NO ref in the clone has ever had is not a file waiting to
         be written: it is a name in the curated lists that matches nothing,
         and those lists are the ceiling of what step 5 reads. Measured with
-        `ld-collate.c` spelt `ld-colate.c`: the pair reported 6 substantive
-        hunks instead of 24, the Bug 22668 hunk gone, and the only mention
-        was a note saying there was nothing to miss."""
+        `ld-collate.c` spelt `ld-colate.c`: the pair reported far fewer
+        substantive hunks, the Bug 22668 hunk gone, and the only mention was
+        a note saying there was nothing to miss."""
         renamed, unborn, never = d.absent_at_both(
             GLIBC_CLONE, ['locale/programs/ld-colate.c'], OLD, MID)
         self.assertEqual((renamed, unborn, never),
@@ -420,7 +420,7 @@ class AHijackedDiffIsNotNoChange(unittest.TestCase):
                            cwd=SCRIPTS_DIR, env=env, capture_output=True)
         out = (p.stdout + p.stderr).decode('utf-8', 'replace')
         self.assertEqual(p.returncode, 0, out)
-        self.assertIn('24 substantive hunk(s) found', out)
+        self.assertIn('29 substantive hunk(s) found', out)
 
     def test_a_textconv_driver_does_not_change_the_count(self):
         """--no-ext-diff does NOT disable `diff.<driver>.textconv`, and a
@@ -453,7 +453,7 @@ class AHijackedDiffIsNotNoChange(unittest.TestCase):
                            cwd=SCRIPTS_DIR, env=env, capture_output=True)
         out = (p.stdout + p.stderr).decode('utf-8', 'replace')
         self.assertEqual(p.returncode, 0, out)
-        self.assertIn('24 substantive hunk(s) found', out)
+        self.assertIn('29 substantive hunk(s) found', out)
 
     def hostile(self, body):
         """A GIT_CONFIG_GLOBAL holding `body`, plus a check that it bites."""
@@ -485,7 +485,7 @@ class AHijackedDiffIsNotNoChange(unittest.TestCase):
             self.skipTest('this git does not colour a piped diff here')
         rc, out = self.step5(env, OLD, MID)
         self.assertEqual(rc, 0, out)
-        self.assertIn('24 substantive hunk(s) found', out)
+        self.assertIn('29 substantive hunk(s) found', out)
 
     def test_the_context_count_is_not_the_readers_to_choose(self):
         """The classifier reads the context lines, so the count of them is
@@ -494,9 +494,9 @@ class AHijackedDiffIsNotNoChange(unittest.TestCase):
         the argv does not win and run_git drops the variable instead."""
         for name, env in (
                 ('diff.context', self.hostile('[diff]\n\tcontext = 0\n')),
-                # interHunkContext=50 merges two nearby changes into one hunk:
-                # 31 instead of 52, with the same >> lines. Nothing hidden,
-                # the same drift in a published number.
+                # interHunkContext=50 merges nearby changes into one hunk:
+                # fewer hunks, with the same >> lines. Nothing hidden, the
+                # same drift in a published number.
                 ('diff.interHunkContext',
                  self.hostile('[diff]\n\tinterHunkContext = 50\n')),
                 ('GIT_DIFF_OPTS', dict(os.environ, GIT_DIFF_OPTS='-u0',
@@ -504,12 +504,12 @@ class AHijackedDiffIsNotNoChange(unittest.TestCase):
             with self.subTest(route=name):
                 rc, out = self.step5(env, MID, NEW)
                 self.assertEqual(rc, 0, out)
-                self.assertIn('52 substantive hunk(s) found', out)
+                self.assertIn('55 substantive hunk(s) found', out)
 
     def test_the_diff_algorithm_is_not_the_readers_to_choose(self):
         """patience and histogram pair the same changed lines into different
-        hunks: the hunk count holds at 52 over 2.34..2.39 but the `>>` lines
-        go 733 -> 731, so the count alone would not notice. Nothing is
+        hunks: the hunk count holds over 2.34..2.39 but the number of `>>`
+        lines moves, so the count alone would not notice. Nothing is
         hidden -- every changed line still carries its marker -- but a
         published number must not move with a reader's config."""
         for algo in ('patience', 'histogram'):
@@ -517,10 +517,10 @@ class AHijackedDiffIsNotNoChange(unittest.TestCase):
                 env = self.hostile('[diff]\n\talgorithm = %s\n' % algo)
                 rc, out = self.step5(env, MID, NEW)
                 self.assertEqual(rc, 0, out)
-                self.assertIn('52 substantive hunk(s) found', out)
+                self.assertIn('55 substantive hunk(s) found', out)
                 marked = [ln for ln in out.split('\n')
                           if ln.startswith('      >> ')]
-                self.assertEqual(len(marked), 733)
+                self.assertEqual(len(marked), 761)
 
     def test_output_with_no_hunk_in_it_is_not_read_as_unchanged(self):
         """"Binary files ... differ", or any diff this parser does not
@@ -635,7 +635,7 @@ class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
         while the curated tiers still find hunks. A fifth case leaves one
         hunk, the deletion alone, because one is where a count test written
         as "more than one" would slip. The count is the one the reader is
-        shown, so it is asserted whole: 24 without the injection, one more
+        shown, so it is asserted whole: 29 without the injection, one more
         for the deletion, fewer for what the misspelt or empty walk no longer
         reaches."""
         collate = 'locale/programs/ld-collate.c'
@@ -643,18 +643,18 @@ class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
         no_walk = 'the include walk reached no file'
         cases = (
             ("d.TIER2 = d.TIER2 + ['locale/C-translit.h']",
-             'locale/C-translit.h: ABSENT at glibc-2.34', 25, [vanished]),
+             'locale/C-translit.h: ABSENT at glibc-2.34', 30, [vanished]),
             ("d.ENTRY_POINTS = ['locale/programs/ld-colate.c' if p == %r "
              "else p for p in d.ENTRY_POINTS]\n"
              "d.TIER1 = ['locale/programs/ld-colate.c' if p == %r "
              "else p for p in d.TIER1]" % (collate, collate),
-             'ld-colate.c: no ref in this clone has ever had it', 6,
+             'ld-colate.c: no ref in this clone has ever had it', 11,
              ['1 tracked path(s) exist at no ref in this clone']),
             ("d.TIER2 = d.TIER2 + ['locale/xlocale.h']",
-             'locale/xlocale.h: ABSENT at glibc-2.28 and glibc-2.34', 24,
+             'locale/xlocale.h: ABSENT at glibc-2.28 and glibc-2.34', 29,
              ['1 path(s) this audit must read are absent from both tags']),
             ("d.ENTRY_POINTS = ['locale/C-collate-seq.c']",
-             'The include walk reached 0 file(s).', 8, [no_walk]),
+             'The include walk reached 0 file(s).', 13, [no_walk]),
             ("d.ENTRY_POINTS = ['locale/C-collate-seq.c']\nd.TIER1 = []\n"
              "d.TIER2 = ['locale/C-translit.h']",
              'locale/C-translit.h: ABSENT at glibc-2.34', 1,
@@ -1683,6 +1683,98 @@ class AGainedBlockThatNamesNoCharacter(unittest.TestCase):
                       'changed, but this locale must be considered suspicious',
                       flat(out))
         self.assertNotIn('characters in the changed rules', flat(out))
+
+
+class AChangedCommentCharIsARulesChange(unittest.TestCase):
+    """Backlog 13.7, end to end on a fabricated repository. `loc_000` keeps
+    the text of its LC_COLLATE block from t2 to t3 and is read with another
+    comment character at t3; step 2 must count it as changed, say why, and
+    hand it to step 3. Before, the hunk sat outside the block and the file
+    was filed under "do not touch LC_COLLATE". Fabricated, because no
+    directive changes inside a pinned pair."""
+
+    def setUp(self):
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-reading-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-reading-out-')
+        self.addCleanup(shutil.rmtree, self.out_dir, ignore_errors=True)
+        self.repo = make_glibc_shaped_repo(tmp, n_files=g.MIN_LOCALE_FILES)
+        self.path = os.path.join(self.repo, 'localedata', 'locales',
+                                 'loc_000')
+        with open(self.path, 'a') as fh:
+            fh.write('LC_COLLATE\ncopy "loc_001"\nEND LC_COLLATE\n')
+        git(self.repo, 'commit', '-q', '-am', 't2')
+        git(self.repo, 'tag', 't2')
+
+    def commit_t3(self, old, new, *more):
+        with open(self.path) as fh:
+            text = fh.read()
+        for a, b in ((old, new),) + more:
+            self.assertEqual(text.count(a), 1)
+            text = text.replace(a, b)
+        with open(self.path, 'w') as fh:
+            fh.write(text)
+        git(self.repo, 'commit', '-q', '-am', 't3')
+        git(self.repo, 'tag', 't3')
+        return run_script('filter_lc_collate_changes.py', 't2', 't3',
+                          '--repo', self.repo,
+                          env_extra={'PG_GLIBC_AUDIT_OUT': self.out_dir})
+
+    def written(self):
+        return read_list(os.path.join(self.out_dir,
+                                      'step2_changed_collate.t2..t3.txt'))
+
+    def test_the_file_is_counted_named_and_handed_to_step_3(self):
+        rc, out = self.commit_t3('comment_char %', 'comment_char #')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
+        self.assertIn('Files with changes inside LC_COLLATE: 1', out)
+        self.assertIn('!! 1 file(s) are read at t3 with other comment or '
+                      'escape characters than at t2, or with characters this '
+                      'tool cannot settle, so any rule in them can read '
+                      'differently.', flat(out))
+        self.assertIn('comment_char % and escape_char / at t2', out)
+        self.assertIn('comment_char # and escape_char / at t3', out)
+        self.assertIn('localedata/locales/loc_000 the block is read with '
+                      'other characters', flat(out))
+        self.assertNotIn('could not identify which characters changed',
+                         flat(out))
+        self.assertEqual(self.written(), ['loc_000'])
+
+    def test_a_rule_and_the_characters_changed_together(self):
+        """The verdict is 'collate', from the hunk inside the block. The `!!`
+        still names the file, and the characters of the changed lines are
+        not presented as all that can move."""
+        rc, out = self.commit_t3(
+            'comment_char %', 'comment_char #',
+            ('copy "loc_001"\n', 'copy "loc_001"\nreorder-after <U0041>\n'
+                                  '<U0042>\n'))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
+        self.assertIn('!! 1 file(s) are read at t3 with other comment or '
+                      'escape characters', flat(out))
+        self.assertIn('characters in the changed rules (2):', out)
+        self.assertIn('those are the changed lines; the block is read with '
+                      'other characters', flat(out))
+        self.assertEqual(self.written(), ['loc_000'])
+
+    def test_an_unsettled_new_side_says_so(self):
+        """A hidden directive leaves the new side unsettled; the report says
+        that rather than naming characters it could not establish."""
+        rc, out = self.commit_t3('\nLC_COLLATE\n',
+                                 '\ncomment_c/har #\nLC_COLLATE\n')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('characters this tool cannot settle at t3', out)
+        self.assertEqual(self.written(), ['loc_000'])
+
+    def test_the_control_a_comment_edit_is_not(self):
+        """Same file, same place outside the block, a change that is not a
+        directive: still "do not touch LC_COLLATE"."""
+        rc, out = self.commit_t3('% filler line 0\n', '% filler line zero\n')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('0 touch LC_COLLATE, 1 do not', out)
+        self.assertNotIn('file(s) are read at', flat(out))
+        self.assertEqual(self.written(), [])
 
 
 @needs_clone

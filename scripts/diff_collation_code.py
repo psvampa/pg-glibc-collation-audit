@@ -116,7 +116,29 @@ TIER2 = [
     # table whose hunks are unreadable. This is the source they mean, one
     # line per keyword.
     'locale/programs/locfile-kw.gperf',
+    # (TU) find_translit. A `collating-element ... from "..."` string naming a
+    # character the charmap lacks is completed through LC_CTYPE's translit
+    # table, and the element exists or not by its answer: uz_UZ's "g'"
+    # contraction in ISO-8859-1 is made that way (backlog 13.7). Declared in
+    # locfile.h, which the walk reaches, and defined here, which has no
+    # header of its own.
+    'locale/programs/ld-ctype.c',
 ]
+
+# Not listed, on purpose, though a locale's order passes through them:
+#
+#   string/strcmp.c and the per-architecture strcmp implementations. They
+#   are the whole order of a locale glibc builds in byte order (strcoll_l.c
+#   calls strcmp when it has no rules), but what they return is fixed by the
+#   C standard, and what changes between releases is how fast they get
+#   there, in pages of assembly per release.
+#
+#   The locale-loading code (locale/findlocale.c, loadarchive.c,
+#   setlocale.c, newlocale.c, programs/locarchive.c). It decides which
+#   compiled locale is opened, not how that locale sorts.
+#
+# Both were read hunk by hunk over 2.28..2.34..2.39, and the RHEL patches to
+# them too, without one that moves an order (backlog 13.7).
 
 # Where the include walk descends. Following #include anywhere pulls in all of
 # libc -- measured at 265 files and 243 substantive hunks over 2.34..2.39,
@@ -460,9 +482,9 @@ def absent_at_both(repo, paths, old_tag, new_tag):
     ref in the clone: a path NO ref ever carried is not a file waiting to be
     written, it is a typo in the curated lists -- and the curated lists are
     the ceiling of what a tier gets read. Measured with ld-collate.c spelt
-    `ld-colate.c` in ENTRY_POINTS and TIER1: 2.28..2.34 reported 6 substantive
-    hunks instead of 24 and a coverage of 8 files instead of 27, with the Bug
-    22668 hunk gone and no `!!` anywhere.
+    `ld-colate.c` in ENTRY_POINTS and TIER1: 2.28..2.34 reported far fewer
+    substantive hunks and a far smaller coverage, with the Bug 22668 hunk
+    gone and no `!!` anywhere (backlog 1.24).
     """
     if paths:
         # `git log` on a shallow clone exits 0 with empty output for every path
@@ -529,8 +551,8 @@ def report_file(repo, path, rng, show_all, quiet_when_clean=False):
     # The flags that keep a reader's git config from shaping this text are
     # glibc_locale_data.DIFF_FLAGS, each with what it cost when missing.
     # -U3 is this step's own: how many context lines the classifier reads.
-    # diff.context=0/1/2 gives 106/76/61 hunks over 2.34..2.39 instead of 52,
-    # and at zero context the comment tracking is blind again.
+    # Another diff.context gives other hunk counts for the same pair, and at
+    # zero context the comment tracking is blind again.
     diff_text = g.git_diff(repo, ['-U3', rng, '--', path])
     if not diff_text.strip():
         return 0
@@ -776,15 +798,21 @@ def main(argv):
               f"settle this pair.")
         print("Lines marked >> are the code changes; read them and decide "
               "whether they can")
+        # "And so does": the locales glibc builds in byte order are off step
+        # 4's list, and the code compares them on a branch of its own
+        # (backlog 13.7).
         if g.wrapped():
-            print("move weights. If any can, every locale step 4 listed above "
+            print("change an order. If any can, every locale step 4 listed above "
                   "needs an")
-            print("empirical sort-order test, however clean its data diff is.")
+            print("empirical sort-order test, however clean its data diff is, "
+                  "and so does")
+            print("every locale it names as built in byte order.")
         else:
-            print("move weights. If any can, every locale listed by")
+            print("change an order. If any can, every locale listed by")
             print(f"  python3 flag_algorithmic_ranges.py {opts.new_tag}")
             print("needs an empirical sort-order test, however clean its data "
-                  "diff is.")
+                  "diff is, and so")
+            print("does every locale that script names as built in byte order.")
     return 0
 
 

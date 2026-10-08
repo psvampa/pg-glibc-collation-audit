@@ -699,6 +699,32 @@ class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
                           f'docs/results.md does not say {build} was measured')
 
 
+class AuditShPipesNothingIntoAQuietGrep(unittest.TestCase):
+    """Backlog 13.7, found by doc-sweep in a regenerated example. audit.sh
+    runs under `set -o pipefail`, and `grep -q` exits at its first match:
+    whatever writes into the pipe then dies of SIGPIPE, the pipeline fails,
+    and the test reads "no match". `cat lists | grep -qx C` left the
+    C.UTF-8 note out of a published transcript at random -- measured 158
+    prints in 200 runs with three lists. A race no wrapper run can catch
+    reliably, so the source is read for the shape instead."""
+
+    def test_no_pipe_ends_in_grep_q(self):
+        with open(os.path.join(REPO_ROOT, 'audit.sh'), encoding='utf-8') as fh:
+            source = fh.read()
+        self.assertIn('set -euo pipefail', source)
+        shape = re.compile(r'\|\s*grep\b[^|;&]*\s-(-quiet\b|-silent\b|[A-Za-z]*q)')
+        hits = [line.strip() for line in source.splitlines()
+                if shape.search(line) and not line.lstrip().startswith('#')]
+        self.assertEqual(hits, [])
+
+    def test_the_control_the_shape_is_found(self):
+        shape = re.compile(r'\|\s*grep\b[^|;&]*\s-(-quiet\b|-silent\b|[A-Za-z]*q)')
+        for line in ('cat a | grep -qx C', 'x | grep -e A -q', 'y |grep -q z',
+                     'z | grep --quiet -x C'):
+            with self.subTest(line=line):
+                self.assertIsNotNone(shape.search(line))
+
+
 class Step5HunkCountsAgreeEverywhere(unittest.TestCase):
     """Step 5's hunk count is published in three places in each transcript
     of a pair: the step's own total, the summary's "step 5 found N" and the
@@ -713,7 +739,7 @@ class Step5HunkCountsAgreeEverywhere(unittest.TestCase):
     every published copy says the same thing.
     """
 
-    EXAMPLES = {'rhel8-to-rhel9': 24, 'rhel9-to-rhel10': 52}
+    EXAMPLES = {'rhel8-to-rhel9': 29, 'rhel9-to-rhel10': 55}
 
     def counts(self, filename):
         text = read(os.path.join(REPO_ROOT, 'examples', filename))

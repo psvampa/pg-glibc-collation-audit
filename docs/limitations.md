@@ -75,12 +75,13 @@ be touched by it.
 ## Step 5 reports, it does not decide
 
 Step 5 shows you the changes to the C code that computes sort weights. It
-cannot tell a change that moves a weight from one that moves nothing, so
+cannot tell a change that moves an order from one that moves nothing, so
 somebody has to read them. This is the one part of the method that is not
 mechanical.
 
-If nobody on hand will read C, treat every locale step 4 flagged as unresolved
-and measure it instead. Step 11, in command 1.b, measures every locale it can
+If nobody on hand will read C, treat every locale step 4 flagged, and every
+one it leaves out as built in byte order, as unresolved and measure them
+instead. Step 11, in command 1.b, measures every locale it can
 on both machines, and
 [confirming on the machines](confirming-on-a-real-system.md) measures inside
 PostgreSQL. Either path needs no source reading and is the stronger evidence

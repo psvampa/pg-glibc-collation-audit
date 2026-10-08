@@ -425,6 +425,16 @@ class Step3Closure(StepRun):
 
 @needs_clone
 class Step4AlgorithmicRanges(StepRun):
+    def test_run_alone_its_hint_names_the_byte_order_locales(self):
+        """Backlog 13.7: the hint that sends the reader to step 5 covers the
+        locales this step names as built in byte order, which it leaves off
+        its list. At glibc-2.39 that is C."""
+        out = flat(self.step('flag_algorithmic_ranges.py', NEW))
+        self.assertIn('Declare codepoint_collation, so no expansion change '
+                      'can move them: C', out)
+        self.assertIn('if it did, test these, and any locale named above as '
+                      'built in byte order, empirically', out)
+
     def test_four_locales_use_ellipsis_ranges(self):
         for tag in (MID, NEW):
             with self.subTest(tag=tag):
@@ -543,12 +553,26 @@ class Step4AlgorithmicRanges(StepRun):
 
 @needs_clone
 class Step5CollationCode(StepRun):
+    def test_a_hunk_count_asks_for_the_byte_order_locales_too(self):
+        """Backlog 13.7. Step 4 leaves the locales glibc builds in byte order
+        off its list, and the code compares them on a branch of its own, so
+        a code change asks for them too. Run alone, the step names the script
+        that lists them."""
+        out = flat(self.step('diff_collation_code.py', MID, NEW))
+        self.assertIn('read them and decide whether they can change an order.',
+                      out)
+        self.assertIn('needs an empirical sort-order test, however clean its '
+                      'data diff is, and so does every locale that script '
+                      'names as built in byte order.', out)
+
     def test_substantive_hunk_totals(self):
         """24 and 52 since the noise filter reads the context lines: two hunks
         that are comment on both sides -- localedef.c @@ -226,7 +232,8 @@ and
         strcoll_l.c @@ -104,7 +103,7 @@ -- opened their comment on a context
-        line and were counted as substantive."""
-        for (old, new), expected in (((OLD, MID), 24), ((MID, NEW), 52)):
+        line and were counted as substantive. 29 and 55 since ld-ctype.c
+        joined TIER 2 for find_translit (backlog 13.7): five and three hunks,
+        none in the translit code."""
+        for (old, new), expected in (((OLD, MID), 29), ((MID, NEW), 55)):
             with self.subTest(pair=f'{old}..{new}'):
                 out = self.step('diff_collation_code.py', old, new)
                 self.assertEqual(
@@ -758,15 +782,16 @@ class BelowTheOldVersionFloor(StepRun):
         self.assertIn('Not listed: an alias of fr_FR, nb_NO whose name is not '
                       'ASCII', out)
 
-    def test_step_5_prints_65_hunks(self):
+    def test_step_5_prints_68_hunks(self):
         """It was 63 until the two wide-char wrappers joined TIER 1: each
         contributes one hunk, the 2012 FSF postal-address change, which the
         filter keeps because it cannot prove a bare licence continuation is
-        prose. Conservative, and counted."""
+        prose. Conservative, and counted. 68 since ld-ctype.c joined TIER 2
+        (backlog 13.7), with three hunks of its own."""
         out = self.step('diff_collation_code.py', FLOOR_OLD, FLOOR_NEW)
         self.assertEqual(
             one_int(r'(\d+) substantive hunk\(s\) found', out, 'the total'),
-            65)
+            68)
 
     def test_step_4_reaches_281_not_279(self):
         """277 was the figure before the collate_block fix and 279 after it;
@@ -1000,16 +1025,17 @@ class SkippingAReleaseReportsTheUnion(StepRun):
                        if ln.strip() and not ln.startswith('#')]
         self.assertEqual(removed, ['aa_ER@saaho (renamed to ssy_ER)'])
 
-    def test_step_5_prints_75_hunks_and_not_the_sum(self):
-        """76 is what the two steps add up to, and it is the wrong number: the
+    def test_step_5_prints_83_hunks_and_not_the_sum(self):
+        """84 is what the two steps add up to, and it is the wrong number: the
         copyright string in locale/programs/localedef.c changes "2018" ->
         "2021" -> "2024", which is one hunk read end to end and two read in
-        steps. The direct figure is the right one; if this ever becomes 76,
-        the sum is being reported rather than the diff."""
+        steps. The direct figure is the right one; if this ever becomes 84,
+        the sum is being reported rather than the diff. (75 and 76 until
+        ld-ctype.c joined TIER 2, backlog 13.7.)"""
         out = self.step('diff_collation_code.py', OLD, NEW)
         self.assertEqual(
             one_int(r'(\d+) substantive hunk\(s\) found', out, 'the total'),
-            75)
+            83)
 
     def test_only_a_rename_differs_in_the_two_steps_and_not_end_to_end(self):
         """The one thing a two-endpoint diff structurally cannot see is a

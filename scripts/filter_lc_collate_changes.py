@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Narrow the list of changed locale files down to those whose change falls
-INSIDE the LC_COLLATE...END LC_COLLATE block -- the only part that can move
-sort order -- discarding changes in LC_TIME, LC_MONETARY, comments, etc.
+INSIDE the LC_COLLATE...END LC_COLLATE block, or changes the comment or escape
+characters that block is read with, discarding changes in LC_TIME,
+LC_MONETARY, comments, etc.
 
 This generates its own diff from the two tags. It used to read a hardcoded
 /tmp/localedata_full.diff that no script produced and that nothing tied to the
@@ -77,8 +78,17 @@ def classify_change(old_text, new_text, ranges):
     Returns one of:
       'collate'        -- a hunk falls inside the old LC_COLLATE block
       'gained-collate' -- the old version had no block and the new one does
-      'other'          -- has a block, but nothing changed inside it
+      'reading'        -- the block did not change, but the comment or escape
+                          character it is read with did, or cannot be settled
+      'other'          -- has a block, and neither the block nor the comment
+                          and escape characters it is read with changed
       'no-collate'     -- no block on either side; cannot affect sort order
+
+    `reading` is its own answer for the reason `gained-collate` is: the
+    directives sit outside the block, so no hunk lands inside it, and the
+    same block read with other characters is other rules (backlog 13.7). A
+    new side nobody passed in cannot clear that, so a file with a block and
+    no new text is 'reading' too; main() reads every new side.
 
     `gained-collate` is its own answer rather than being filed under
     "no LC_COLLATE block". A file that acquires one changes its sort order by
@@ -99,6 +109,8 @@ def classify_change(old_text, new_text, ranges):
     lc_start, lc_end = bounds
     if any(hunk_touches_block(s, ln, lc_start, lc_end) for s, ln in ranges):
         return 'collate'
+    if new_text is None or g.reading_changed(old_text, new_text):
+        return 'reading'
     return 'other'
 
 
@@ -111,40 +123,52 @@ def partition_verdicts(verdicts):
     that folds `gained-collate` into the changed list left the whole suite
     green -- the verdict was computed correctly and then thrown away.
 
-    Returns (changed, gained, unchanged, no_collate). `gained` appears BOTH in
-    its own list, so the report can call it out, and inside `changed`, because
-    a file that acquires an LC_COLLATE block acquires a sort order.
+    Returns (changed, gained, reading, unchanged, no_collate). `gained` and
+    `reading` each appear BOTH in their own list, so the report can call
+    them out, and inside `changed`: a file that acquires an LC_COLLATE block
+    acquires a sort order, and one whose block is read with other characters
+    has other rules.
     """
-    changed, gained, unchanged, no_collate = [], [], [], []
+    changed, gained, reading, unchanged, no_collate = [], [], [], [], []
     for path, verdict in verdicts:
         if verdict == 'collate':
             changed.append(path)
         elif verdict == 'gained-collate':
             gained.append(path)
             changed.append(path)
+        elif verdict == 'reading':
+            reading.append(path)
+            changed.append(path)
         elif verdict == 'no-collate':
             no_collate.append(path)
-        else:
+        elif verdict == 'other':
             unchanged.append(path)
-    return changed, gained, unchanged, no_collate
+        else:
+            # Not a default bucket: a verdict this does not know landed in
+            # `unchanged` before, which is how a new answer is cleared unread.
+            raise ValueError(f"unknown verdict {verdict!r} for {path}")
+    return changed, gained, reading, unchanged, no_collate
 
 
-def new_side_paths(content_changed, old_contents, renamed_to):
+def new_side_paths(content_changed, renamed_to):
     """Which paths to read at the NEW tag, and under which name.
 
-    Only files with no LC_COLLATE block on the old side need the new side --
-    they are the only ones that could have gained one. A renamed file lives
-    under its NEW name there: reading the old name aborted the whole step with
-    "could not read" on a legitimate rename, and looking the verdict up under
-    the old name made `gained-collate` undetectable for any renamed file.
-    Neither has happened in an audited pair -- the one rename, aa_ER@saaho to
-    ssy_ER over 2.34..2.39, has a block on the old side -- which is exactly why
-    it is a function with a test rather than two lookups in main().
+    Every content-changed file. One with no LC_COLLATE block on the old side
+    could have gained one, and one with a block could be read with other
+    comment or escape characters while the block itself is unchanged
+    (classify_change, 'reading'). Until backlog 13.7 only the first kind was
+    read, so the second was judged on the old side alone. A renamed file
+    lives under its NEW name there: reading the old name aborted the whole
+    step with "could not read" on a legitimate rename, and looking the
+    verdict up under the old name made `gained-collate` undetectable for any
+    renamed file. Neither has happened in an audited pair -- the one rename,
+    aa_ER@saaho to ssy_ER over 2.34..2.39, has a block on the old side --
+    which is exactly why it is a function with a test rather than two lookups
+    in main().
 
     Returns {old_path: new_path} for the files to read.
     """
-    return {p: renamed_to.get(p, p) for p in content_changed
-            if g.collate_bounds(old_contents[p]) is None}
+    return {p: renamed_to.get(p, p) for p in content_changed}
 
 
 def judge(content_changed, old_contents, new_contents, hunks, renamed_to):
@@ -158,6 +182,26 @@ def judge(content_changed, old_contents, new_contents, hunks, renamed_to):
                                    new_contents.get(renamed_to.get(path, path)),
                                    hunks.get(path, [])))
             for path in content_changed]
+
+
+def read_otherwise(changed, reading, old_contents, new_contents, renamed_to):
+    """The changed files read with other characters at the new tag, sorted.
+
+    Not only the 'reading' verdict. A hunk inside the block returns
+    'collate' before the characters are compared, and the characters
+    printed for such a file name only its changed lines, while every rule in
+    it can read differently -- the list would read as complete. A file with
+    an old block and no new text counts too: nothing settled its characters.
+    """
+    out = []
+    for path in changed:
+        old = old_contents[path]
+        new = new_contents.get(renamed_to.get(path, path))
+        if path in reading or (g.collate_bounds(old) is not None
+                               and (new is None
+                                    or g.reading_changed(old, new))):
+            out.append(path)
+    return sorted(out)
 
 
 def parse_diff(diff_text):
@@ -416,19 +460,20 @@ def main(argv):
                   f"{', '.join(sorted(unread)[:5])}"
                   f"{', ...' if len(unread) > 5 else ''}.")
 
-    # The new side is needed only for the files with no block in the old one:
-    # those are the only ones that could have gained a block. Reading just
-    # those keeps this to one extra batch of a handful of blobs -- read under
-    # the name each file has at the new tag (see new_side_paths).
-    to_read = new_side_paths(content_changed, old_contents, renamed_to)
+    # The new side of every content-changed file, in one batch, read under
+    # the name each file has at the new tag (see new_side_paths): a file
+    # without a block could have gained one, and one with a block could be
+    # read with other comment or escape characters.
+    to_read = new_side_paths(content_changed, renamed_to)
     new_contents = g.read_blobs_strict(
         repo, opts.new_tag, sorted(set(to_read.values())),
-        'the check for files that gained an LC_COLLATE block'
+        'the check for files that gained an LC_COLLATE block or are read '
+        'with other comment or escape characters'
     ) if to_read else {}
 
     verdicts = judge(content_changed, old_contents, new_contents, hunks,
                      renamed_to)
-    (changed_collate, gained_collate,
+    (changed_collate, gained_collate, reading_files,
      unchanged_collate, no_collate_block) = partition_verdicts(verdicts)
 
     total = len(modified) + len(added) + len(deleted) + len(renamed)
@@ -454,6 +499,22 @@ def main(argv):
               f"changed above:")
         for path in sorted(gained_collate):
             print(f"     {path}")
+    reread = read_otherwise(changed_collate, reading_files, old_contents,
+                            new_contents, renamed_to)
+    if reread:
+        print(f"\n!! {len(reread)} file(s) are read at {opts.new_tag} with "
+              f"other comment or escape")
+        print(f"   characters than at {opts.old_tag}, or with characters "
+              f"this tool cannot settle, so")
+        print(f"   any rule in them can read differently. They are counted as "
+              f"changed above:")
+        for path in reread:
+            new_text = new_contents.get(renamed_to.get(path, path))
+            print(f"     {path}")
+            print(f"       {g.describe_reading(old_contents[path], opts.old_tag)}")
+            print(f"       " + (g.describe_reading(new_text, opts.new_tag)
+                                if new_text is not None else
+                                f"not read at {opts.new_tag}"))
 
     # Under each file, the characters its changed rules name: they are what
     # the confirmation template needs as test values. Indented six spaces and
@@ -470,7 +531,15 @@ def main(argv):
         print(f"  {path}")
         chars = changed_characters(sections.get(path, []), old_contents[path],
                                    new_texts.get(renamed_to.get(path, path)))
-        if chars:
+        if path in reread:
+            if chars:
+                print_characters(chars)
+            print(textwrap.fill(
+                ("those are the changed lines; " if chars else "")
+                + "the block is read with other characters (see the `!!` "
+                "above), so any rule in it can read differently",
+                width=78, initial_indent='      ', subsequent_indent='      '))
+        elif chars:
             print_characters(chars)
         else:
             print(textwrap.fill(
