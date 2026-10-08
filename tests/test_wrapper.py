@@ -1574,34 +1574,36 @@ class WrapperStep5Unresolved(unittest.TestCase):
     """"The summary contradicted step 5 when a tracked path vanished."
 
     The summary read its hunk count from the line "N substantive hunk(s)
-    found". When step 5 finds a tracked path present at the old tag and gone
-    at the new one with nothing else to report, it prints "NOT a clean result"
-    and no such line -- and `HUNKS=${HUNKS:-0}` turned that absence into zero,
-    which is the branch that says "a clean data diff is sufficient even for
-    the locales step 4 flagged". Step 5 said one thing; the summary said the
-    opposite, 300 lines lower.
+    found". When step 5 refuses its read and has no hunk to report, it prints
+    "NOT a clean result" and no such line -- and `HUNKS=${HUNKS:-0}` turned
+    that absence into zero, which is the branch that says "a clean data diff
+    is sufficient even for the locales step 4 flagged". Step 5 said one
+    thing; the summary said the opposite, 300 lines lower.
 
-    No tag pair has a vanished path and nothing else to report: going
-    forward in time no tracked path has ever vanished, and reversed, 2.39 ->
-    2.34 loses C-collate-seq.c but still finds 52 hunks. So step 5 is stood in
-    for by a `python3` shim on PATH that prints the lines the real script
-    prints for a vanished path -- its `!!` block is the text test_known_answers
-    ties to the real script on the reversed pair -- and hands every other step
-    to the real interpreter.
+    The canned output below is not one the real script prints: a path that
+    vanishes brings a hunk of its own, its deletion, so its refusal always
+    carries a count (backlog 1.24; that case is
+    WrapperStep5UnresolvedWithHunks). The refusal at zero is real -- an empty
+    include walk, or a path misspelt or renamed away before both tags, when
+    nothing else changed -- and this class guards how the summary reads it.
+    So step 5 is stood in for by a `python3` shim on PATH that prints it,
+    with a vanished-path `!!` block whose first sentence and path line are
+    what test_known_answers ties to the real script on the reversed pair, and
+    hands every other step to the real interpreter.
     """
 
     CANNED = (
         "Collation code changes between glibc-2.39 and glibc-2.39\n"
         "\n"
         "!! 1 tracked path(s) present at glibc-2.39 and GONE at glibc-2.39."
-        " `git diff`\n"
-        "   over a missing path is empty, not an error, so a rename reads"
-        " exactly like\n"
-        '   "unchanged":\n'
+        " Step 5's\n"
+        "   diff shows each one deleted, and nothing here compares it with"
+        " where its\n"
+        "   code went:\n"
         "     locale/programs/ld-collate.c: ABSENT at glibc-2.39\n"
         "   Find where each moved and add the new path to TIER1/TIER2 before"
         " trusting\n"
-        "   a no-change result.\n"
+        "   this step's result.\n"
         "\n"
         "No substantive change in the files this audit could read.\n"
         "This is NOT a clean result:\n"
@@ -1658,11 +1660,73 @@ class WrapperStep5Unresolved(unittest.TestCase):
 
 
 @needs_clone
+class WrapperStep5UnresolvedWithHunks(unittest.TestCase):
+    """Backlog 1.24, end to end: a tracked path step 5 could not read, on a
+    pair where it still finds hunks.
+
+    The summary used to say "step 5 found N substantive hunk(s)" and invite
+    reading them to clear step 4's list, though they came from an incomplete
+    read. Here step 5 is the real script over 2.28..2.34 with one path added
+    to TIER2, locale/C-translit.h, which glibc deleted inside that range, so
+    the vanished-path guard and the hunks both come from the clone. The shim
+    swaps nothing else.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import sys
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-hunks5-')
+        cls.shim_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-shim-')
+        code = ("import os, sys; "
+                "sys.path.insert(0, os.path.dirname(sys.argv[1])); "
+                "import diff_collation_code as d; "
+                "d.TIER2 = d.TIER2 + ['locale/C-translit.h']; "
+                "sys.exit(d.main(sys.argv[2:]))")
+        shim = os.path.join(cls.shim_dir, 'python3')
+        with open(shim, 'w', encoding='utf-8') as fh:
+            fh.write('#!/bin/sh\n'
+                     'case "$1" in\n'
+                     f'  *diff_collation_code.py) exec "{sys.executable}" '
+                     f'-c "{code}" "$@" ;;\n'
+                     'esac\n'
+                     f'exec "{sys.executable}" "$@"\n')
+        os.chmod(shim, 0o755)
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID, out_dir=cls.out_dir,
+            env_extra={'PATH': cls.shim_dir + os.pathsep
+                       + os.environ.get('PATH', '')})
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.shim_dir, ignore_errors=True)
+
+    def test_the_injection_reached_a_count_above_zero(self):
+        """The control: the shim ran, the path vanished, and step 5 found
+        hunks. Without hunks this is the zero case WrapperStep5Unresolved
+        already covers."""
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        self.assertIn('locale/C-translit.h: ABSENT at glibc-2.34', self.out)
+        count = re.search(r'(?m)^(\d+) substantive hunk\(s\)', self.out)
+        self.assertIsNotNone(count, self.out[-2000:])
+        self.assertGreater(int(count.group(1)), 0)
+
+    def test_the_summary_does_not_offer_the_hunks_to_read(self):
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        summary = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
+        self.assertIn('step 5 did NOT reach a clean result, so the locales '
+                      'step 4 flagged stay UNRESOLVED', summary)
+        self.assertIn('Step 5 reached no clean result', summary)
+        self.assertNotIn('Needs an empirical test: step 5 found', summary)
+        self.assertNotIn('hunk(s) marked >> in step 5', summary)
+
+
+@needs_clone
 class WrapperStep5Clean(unittest.TestCase):
     """The summary's clean step 5 branch, "a clean data diff is sufficient".
 
-    One tag against itself was the one real input that reached it, and that
-    is not a clean result any more: it compares nothing. No pinned pair of
+    One tag against itself was the one input the suite used to reach it, and
+    that is not a clean result any more: it compares nothing. No pinned pair of
     two different tags has zero substantive hunks, so step 5 is stood in for
     by a `python3` shim that prints the real script's clean sentence over
     glibc-2.28..glibc-2.34, as WrapperStep5Unresolved does for its branch.

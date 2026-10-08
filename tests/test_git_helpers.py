@@ -8,6 +8,7 @@ The failures are provoked with invalid tags and paths. No network is touched and
 the clone is never modified.
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -257,8 +258,8 @@ class AbsentAtBothIsTwoFacts(unittest.TestCase):
     check_paths files every such path under "nothing to read, and nothing to
     miss". That is true of a file not yet written when the range begins, and
     false of one renamed away before the older tag -- for which the audit reads
-    nothing, `git diff` reports no error, and the step goes on to print its
-    clean sentence. Both shapes are in the real clone: locale/C-collate-seq.c
+    nothing and `git diff` reports no error. Both shapes are in the real
+    clone: locale/C-collate-seq.c
     arrives in glibc 2.35, and locale/xlocale.h was deleted before 2.28.
     """
 
@@ -327,7 +328,7 @@ class AbsentAtBothIsTwoFacts(unittest.TestCase):
         be written: it is a name in the curated lists that matches nothing,
         and those lists are the ceiling of what step 5 reads. Measured with
         `ld-collate.c` spelt `ld-colate.c`: the pair reported 6 substantive
-        hunks instead of 24, the Bug 22668 hunks gone, and the only mention
+        hunks instead of 24, the Bug 22668 hunk gone, and the only mention
         was a note saying there was nothing to miss."""
         renamed, unborn, never = d.absent_at_both(
             GLIBC_CLONE, ['locale/programs/ld-colate.c'], OLD, MID)
@@ -593,9 +594,8 @@ class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
         self.assertIn('are in NEITHER tree', flat(out))
 
     def test_a_vanished_path_is_still_a_blocker(self):
-        """The oldest of the reasons, and the one no test drove: the
-        reversed pair that exercises the `!!` block finds 52 hunks, so it
-        never reaches the verdict where `blockers` is read. Remove the
+        """The oldest of the reasons, driven here with no hunk at all; with
+        hunks it is test_a_blocker_refuses_a_hunk_count_too. Remove the
         `vanished` entry from the list and this fails."""
         rc, out = self.run_injected(
             "d.check_paths = lambda *a: (['locale/xlocale.h'], [])",
@@ -618,6 +618,62 @@ class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
             '1 tracked path(s) exist at no ref in this clone', self.SAME])
         self.assertIn('ld-colate.c: no ref in this clone has ever had it',
                       flat(out))
+
+    def test_a_blocker_refuses_a_hunk_count_too(self):
+        """Backlog 1.24. The reasons above used to be read only when the
+        count was zero, and no pinned pair has zero. With a tracked path
+        missing, step 5 printed "N substantive hunk(s) found" over the files
+        it could read, and the summary invited reading those N to clear step
+        4's list. A path that vanishes always brings a hunk of its own, its
+        deletion, so the case the guard was written for never reached it.
+
+        On 2.28..2.34, real data, one case per path reason, each alone:
+        C-translit.h is a file glibc deleted inside the range (it became
+        generated); ld-collate.c misspelt is the case that hides the Bug 22668
+        hunk; xlocale.h was renamed away before 2.28; and an entry point list
+        holding only C-collate-seq.c, which arrives in 2.35, walks nothing
+        while the curated tiers still find hunks. A fifth case leaves one
+        hunk, the deletion alone, because one is where a count test written
+        as "more than one" would slip. The count is the one the reader is
+        shown, so it is asserted whole: 24 without the injection, one more
+        for the deletion, fewer for what the misspelt or empty walk no longer
+        reaches."""
+        collate = 'locale/programs/ld-collate.c'
+        vanished = '1 tracked path(s) vanished before glibc-2.34'
+        no_walk = 'the include walk reached no file'
+        cases = (
+            ("d.TIER2 = d.TIER2 + ['locale/C-translit.h']",
+             'locale/C-translit.h: ABSENT at glibc-2.34', 25, [vanished]),
+            ("d.ENTRY_POINTS = ['locale/programs/ld-colate.c' if p == %r "
+             "else p for p in d.ENTRY_POINTS]\n"
+             "d.TIER1 = ['locale/programs/ld-colate.c' if p == %r "
+             "else p for p in d.TIER1]" % (collate, collate),
+             'ld-colate.c: no ref in this clone has ever had it', 6,
+             ['1 tracked path(s) exist at no ref in this clone']),
+            ("d.TIER2 = d.TIER2 + ['locale/xlocale.h']",
+             'locale/xlocale.h: ABSENT at glibc-2.28 and glibc-2.34', 24,
+             ['1 path(s) this audit must read are absent from both tags']),
+            ("d.ENTRY_POINTS = ['locale/C-collate-seq.c']",
+             'The include walk reached 0 file(s).', 8, [no_walk]),
+            ("d.ENTRY_POINTS = ['locale/C-collate-seq.c']\nd.TIER1 = []\n"
+             "d.TIER2 = ['locale/C-translit.h']",
+             'locale/C-translit.h: ABSENT at glibc-2.34', 1,
+             [vanished, no_walk]))
+        for injected, notice, hunks, reasons in cases:
+            with self.subTest(reasons=reasons, hunks=hunks):
+                rc, out = self.run_injected(injected, OLD, MID)
+                self.assertEqual(rc, 0, out)
+                self.assertIn(notice, flat(out), 'the injection did not take')
+                # The case under test is a count above zero; at zero the
+                # tests above already cover it.
+                count = re.search(r'(?m)^(\d+) substantive hunk\(s\)', out)
+                self.assertIsNotNone(count, out)
+                self.assertEqual(int(count.group(1)), hunks)
+                self.assertEqual(self.refusals(out), reasons)
+                self.assertIn('Resolve the paths listed above, then re-run.',
+                              out)
+                self.assertNotIn('substantive hunk(s) found', out)
+                self.assertNotIn('No substantive collation code change', out)
 
     def test_a_path_not_yet_written_adds_no_reason(self):
         """The control: same shape, benign cause. C-collate-seq.c arrives in
@@ -715,9 +771,10 @@ class UnreadableBlobsAreNotDropped(unittest.TestCase):
 class MissingIsNotUnchanged(unittest.TestCase):
     """"Step 5 could not tell 'unchanged' from 'not there'".
 
-    git diff over a path absent at both tags is empty and exits 0 -- and so is
-    the truth. A path that vanished between the tags reads the same way and is
-    not the truth.
+    git diff over a path absent at both tags is empty and exits 0, which is
+    the truth only for a path not yet written. A path that vanished between
+    the tags shows as deleted, and nothing compares it with where its code
+    went.
     """
 
     def test_a_path_that_vanished_is_reported_as_vanished(self):

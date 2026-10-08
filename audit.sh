@@ -511,14 +511,12 @@ no_sources() {
   printf '%s\n' "$reason." | fold -s -w 68 | sed 's/ *$//; s/^/     /'
 }
 
-# Step 5 has three outcomes, not two. `hunks`: it printed a count. `clean`: it
-# printed its clean sentence. `unresolved`: neither -- which is what it prints
-# when a tracked path is present at the old tag and gone at the new one, or
-# when the two tags are one commit, and is also what a reworded script or a
-# truncated log would look like. This used
-# to be `HUNKS=${HUNKS:-0}`: anything that was not a count became zero, and
-# zero is the reassuring branch. A vanished ld-collate.c would have been
-# summarised as "a clean data diff is sufficient".
+# Step 5 has three outcomes, not two. `hunks`: it printed "N substantive
+# hunk(s) found". `clean`: it printed its clean sentence. `unresolved`:
+# anything else -- which is what it prints, with or without a count, whenever
+# it refuses its result, and is also what a reworded script or a truncated log
+# would look like. This used to be `HUNKS=${HUNKS:-0}`: anything that was not
+# a count became zero, and zero is the reassuring branch.
 HUNKS=$(sed -n 's/^\([0-9][0-9]*\) substantive hunk(s) found.*/\1/p' \
         "$OUT_DIR/step5.$PAIR.log" | tail -1)
 if [ -n "$HUNKS" ]; then
