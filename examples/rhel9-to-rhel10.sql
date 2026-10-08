@@ -28,9 +28,6 @@
 
 SELECT pg_import_system_collations('pg_catalog');
 
--- If a locale is missing here it is NOT generated on this node, and every
--- comparison below silently falls back to C. Two nodes both missing it agree
--- with each other while proving nothing.
 \echo '--- collations under test: all must be present on BOTH nodes ---'
 SELECT collname, collcollate, collversion
 FROM pg_collation

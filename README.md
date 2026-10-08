@@ -172,8 +172,8 @@ measures this locale's order; the extended run does, in step 11, on each
 machine's own glibc. PostgreSQL will not warn about it either.
 
 Reading its output takes one warning, because the usual tell is inverted for
-this locale — agreeing with byte order is the *fix* here, not the sign that
-nothing was generated. That, and what was measured, are in
+this locale — agreeing with byte order is the *fix* here. That, and what was
+measured, are in
 [docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md#the-cutf-8-probe)
 and
 [docs/limitations.md](docs/limitations.md#cutf-8-is-invisible-to-a-tag-diff).

@@ -126,7 +126,7 @@ cannot see it change.
 
 **inverted positive control** — the one place the rule below runs backwards.
 For `C.UTF-8`, agreeing with `LC_ALL=C` byte order is the *corrected*
-behaviour, not the usual sign that a locale was never generated. Reading it the
+behaviour, not the usual sign that a locale was not applied. Reading it the
 normal way turns the fix into a false alarm and the bug into a clean result.
 
 **positive control** — a check deliberately run against cases whose answer is

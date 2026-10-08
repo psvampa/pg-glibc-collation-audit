@@ -39,7 +39,7 @@
 --     control.
 --
 -- THE POSITIVE CONTROL IS INVERTED HERE. Everywhere else in this project,
--- agreement with LC_ALL=C means the locale was never generated and the
+-- agreement with LC_ALL=C means the locale was not applied and the
 -- comparison proves nothing. For C.UTF-8, agreement with byte order is the
 -- CORRECT answer -- it is what upstream's codepoint_collation guarantees from
 -- glibc 2.35 on. Query 2 spells out how to read it.
@@ -48,9 +48,7 @@
 --   * DROPS AND RECREATES a table named c_utf8_probe. Point it at a scratch
 --     database.
 --   * Needs the collation to be named C.utf8 in pg_collation. If it is not,
---     run SELECT pg_import_system_collations('pg_catalog'); as superuser --
---     AFTER restarting PostgreSQL, or it imports the pre-restart set and
---     reports success (measured: 72 collations versus 1006).
+--     run SELECT pg_import_system_collations('pg_catalog'); as superuser.
 --   * Needs PostgreSQL 15+ for datlocprovider, datcollversion and
 --     pg_database_collation_actual_version(). On 13/14 delete query 5 and
 --     the pg_database half of query 4; the pg_collation half works there,
@@ -108,7 +106,7 @@ BEGIN
     AND collnamespace = 'pg_catalog'::regnamespace;
   IF prov IS NULL THEN
     RAISE EXCEPTION
-      'no collation named C.utf8 in pg_catalog. Restart PostgreSQL, then run '
+      'no collation named C.utf8 in pg_catalog. Run '
       'SELECT pg_import_system_collations(''pg_catalog''); as superuser.';
   END IF;
   IF prov <> 'c' THEN
@@ -243,7 +241,7 @@ ORDER BY pos;
 --          own; query 1 shows where it diverges. An index on this collation
 --          moves on upgrade.
 -- true  -> code point order, which codepoint_collation gives by
---          construction. DO NOT read this as "the locale fell back to C" --
+--          construction. DO NOT read this as "the locale was not applied" --
 --          for C.UTF-8 agreement with byte order IS the right answer, the
 --          opposite of the rule the rest of this project uses.
 WITH under_locale AS (

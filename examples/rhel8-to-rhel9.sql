@@ -15,7 +15,6 @@
 --   rm -f /etc/rpm/macros.image-language-conf   # or dnf installs English only
 --   dnf install -y glibc-langpack-sv glibc-langpack-or glibc-langpack-en \
 --                  glibc-langpack-de glibc-langpack-fr
---   systemctl restart postgresql-18             # BEFORE importing collations
 --
 -- Locales under test were chosen from the audit output for this exact pair
 -- (see ../docs/results.md, "Worked example: RHEL8 to RHEL9"):

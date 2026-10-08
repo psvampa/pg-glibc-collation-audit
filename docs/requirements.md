@@ -88,34 +88,19 @@ install them *after* `initdb`, the collations will not exist yet and
 exist` — which is why the template calls `pg_import_system_collations()`
 before anything else.
 
-### Trap 1: restart PostgreSQL after installing a langpack
+### Trap 1: restart PostgreSQL after installing glibc-all-langpacks
 
 **Restart the server before re-running `pg_import_system_collations()`.**
-Re-running it alone is not enough, and it fails quietly: the function reports
-a plausible count and returns success while importing only the locales that
-existed when the postmaster started.
+Re-running it alone is not enough, and it fails quietly: the function returns
+success while the locales that package added stay missing.
 
 Why: the function takes its list from `locale -a`, a fresh subprocess, which
-does see the new locales. But it then validates each one with `setlocale()`
-inside the backend, and that resolves against the `locale-archive` the
-postmaster already has mapped.
+does see the new locales. But it then checks each one inside the backend, and
+glibc opens the `locale-archive` at most once per process. Every backend
+inherits the postmaster's attempt.
 
-Measured on Rocky Linux 8.9, `glibc-2.28-251.el8_10.40`, **PostgreSQL 18.6**,
-with `glibc-all-langpacks` installed after `initdb`:
-
-| | collations imported | `sv_SE.utf8` present |
-|---|---|---|
-| `pg_import_system_collations()` alone | 72 | no |
-| after `systemctl restart postgresql-18` | +931 (1006 `libc` in total) | yes |
-
-Use your own major version in that unit name — `postgresql-16`,
-`postgresql-18`, whatever `initdb` created the cluster.
-
-**The same 72 and 931 were measured on PostgreSQL 16.15 in an earlier
-session**, on the same OS and glibc build. That the counts survive a
-PostgreSQL major-version change is the expected result and worth stating: the
-mechanism is glibc's `locale-archive` mapping in the postmaster, not anything
-PostgreSQL versions.
+A single `glibc-langpack-<xx>` installs its locales outside the archive and
+needs no restart.
 
 ### Trap 2: minimal container images install no langpacks at all
 
@@ -155,10 +140,8 @@ then say `NOT RUN` with the reason. Step 11 needs the package on neither
 machine.
 
 `sql/c_utf8_probe.sql` needs neither langpacks nor that package — `C.utf8`
-exists on every node regardless — but it does need
-`pg_import_system_collations()` after a postmaster restart, like everything
-else here, and it refuses to run rather than silently fall back if the
-collation is missing.
+exists on every node regardless — and it refuses to run if the collation is
+missing.
 
 ---
 

@@ -80,7 +80,7 @@ usage() {
   echo "       ellipsis ranges (step 9 for old, step 10 for new) -- which is" >&2
   echo "       the only way that question is asked of a node supplied on its" >&2
   echo "       own, since step 4 scans the new TAG, which holds at most" >&2
-  echo "       upstream's C and never speaks for what your node built." >&2
+  echo "       upstream's C and never speaks for what your node has." >&2
   echo >&2
   echo "       Supply BOTH and the run also compares the two nodes to each" >&2
   echo "       other (step 8)." >&2
@@ -878,12 +878,12 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
         no_sources "$side"
         echo "     So nothing above says whether the $side node's own C.UTF-8 is"
         echo "     ellipsis-based. The other node's scan does not answer it,"
-        echo "     because each node built its own locales."
+        echo "     because each node has its own locales."
         continue
       fi
       echo "     No --$side-locales-dir, so nothing above says whether the"
       echo "     $side node's own C.UTF-8 is ellipsis-based. The other node's"
-      echo "     scan does not answer it: each node built its own locales."
+      echo "     scan does not answer it: each node has its own locales."
       echo "     Pass --$side-locales-dir with --$side-build-id."
       continue
     fi
@@ -908,7 +908,7 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
       ABSENT*)
         echo "     C (C.UTF-8): ABSENT from this locale directory  <- not examined,"
         echo "     NOT cleared. If the node has C.UTF-8, the directory passed in"
-        echo "     is not the one that node built it from" ;;
+        echo "     does not hold that node's locale sources" ;;
       '')
         # Unreachable as the step stands -- it declares a status for every
         # backported locale it knows of, on every run -- so no test drives

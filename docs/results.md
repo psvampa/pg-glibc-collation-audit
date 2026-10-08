@@ -93,12 +93,8 @@ Step 4 also flags `iso14651_t1`'s CJK range (U+4E00..U+9FA5), inherited by
 328 locales. Step 5 shows the ellipsis logic did change in this pair, so a
 source diff cannot clear those locales either.
 
-Empirically they are fine, and this one is explainable rather than merely
-observed: the ellipsis is followed by an explicit `<U9FA5>` line, so the
-stale cursor re-inserts U+9FA5 exactly where it already was. Predicted from
-the source, then confirmed on real nodes — the range boundary
-(`一 龤 龥 龦`) sorts identically under `en_US` and `zh_TW` on glibc 2.28 and
-2.34.
+Empirically they are fine. The range boundary (`一 龤 龥 龦`) sorts identically
+under `en_US` and `zh_TW` on glibc 2.28 and 2.34.
 
 Step 11 swept every character of `zh_TW.utf8`, `zh_HK.utf8` and
 `zh_SG.utf8` on the three test machines and found no change in either pair.
@@ -144,7 +140,7 @@ both nodes — as it always is for a `C.*` name — so **nothing warned**, and t
 databases' default collation was `C.UTF-8` on both, which is what an `initdb`
 in a container gives you. And the [positive control](glossary.md) inverts here:
 RHEL9's agreement with byte order is the *fix*, not the usual sign that a
-locale was never generated.
+locale was not applied.
 
 **And it changed inside RHEL8 too.** `glibc-2.28-93.el8` (RHEL 8.2,
 [RHSA-2020:1828](https://access.redhat.com/errata/RHSA-2020:1828), Red Hat bug
