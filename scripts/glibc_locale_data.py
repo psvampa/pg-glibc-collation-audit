@@ -1132,7 +1132,7 @@ def classify_collation_style(text):
                      C is this from glibc 2.35 on, and RHEL9's and RHEL10's.
       'ellipsis'  -- uses ellipsis ranges, whose weights localedef computes at
                      build time, so a data diff can never clear it. RHEL8's
-                     BACKPORTED C is this -- which is why C.UTF-8's order
+                     own C is this -- which is why C.UTF-8's order
                      moved from RHEL8 to RHEL9 from a file no tag diff can see.
       'codepoint-not-alone'
                   -- names `codepoint_collation`, but declares_byte_order

@@ -12,10 +12,10 @@ verdict is about the delta between them.
 Why that is worth a separate comparison: a locale the DISTRO backports may be
 in neither tag of the pair, and then no tag-to-tag diff can see it.
 `localedata/locales/C` is the case that matters -- upstream has it only from
-glibc 2.35, RHEL8 and RHEL9 predate that and backport it, and C.UTF-8's order
-demonstrably differs between them. (RHEL10 is glibc 2.39 and has upstream's
-copy, so on RHEL9 -> RHEL10 the new side is in the tag and RHEL9's own copy
-still is not.)
+glibc 2.35, RHEL8 and RHEL9 predate that and ship one anyway, and C.UTF-8's
+order demonstrably differs between them. (RHEL10 is glibc 2.39 and has
+upstream's copy, so on RHEL9 -> RHEL10 the new side is in the tag and RHEL9's
+own copy still is not.)
 
 What this does NOT prove: that the ORDER is unchanged. Wherever a locale defines
 its collation with ellipsis ranges -- as RHEL8's C does, with six of them --
