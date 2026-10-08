@@ -12,10 +12,9 @@
 --     ship one anyway, so for the RHEL8->RHEL9 pair it is in neither tag and
 --     no tag-to-tag diff can compare it. (RHEL10 is glibc 2.39 and has
 --     upstream's copy.) scripts/diff_node_locales.py compares the two nodes'
---     own copies and settles the DATA; it settles the ORDER only where both
---     copies are byte order by construction, as RHEL9's and RHEL10's are
---     with codepoint_collation alone in LC_COLLATE. Anywhere else
---     localedef computes part of the order when the locale is built: the
+--     own copies and settles the DATA, not the order. Where a copy is not
+--     byte order by construction, localedef computes part of the order
+--     when the locale is built: the
 --     weights of ellipsis ranges, as in RHEL8's copy, and the default weight
 --     of every character a file does not list.
 --

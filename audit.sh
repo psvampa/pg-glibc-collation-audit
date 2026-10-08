@@ -199,6 +199,9 @@ STEP2_LIST="$OUT_DIR/step2_changed_collate.$PAIR.txt"
 STEP2_REMOVED="$OUT_DIR/step2_removed_locales.$PAIR.txt"
 STEP3_LIST="$OUT_DIR/step3_affected_locales.txt"
 STEP4_LIST="$OUT_DIR/step4_exposed_locales.txt"
+# The locales step 4 leaves off that list because glibc builds them in byte
+# order. Named where step 5 found code changes, which can move them too.
+STEP4_BYTE_ORDER="$OUT_DIR/step4_byte_order_locales.txt"
 # What step 7 found missing from the new copy, named after the new tag and the
 # label step 7 is given below.
 NEW_COPY_MISSING="$OUT_DIR/copy_missing.$(slug "$NEW" new).txt"
@@ -258,6 +261,18 @@ if [ -n "$OLD_BUILD" ] && [ -n "$NEW_BUILD" ]; then
   NODE_UNDETERMINED="$OUT_DIR/node_removed_undetermined.$BUILDPAIR.txt"
 fi
 
+# The byte-order lists steps 9 and 10 write over each machine's own data,
+# named as flag_algorithmic_ranges.py names them with --node-label: the build
+# and the side, so two machines on one build cannot share a file. Empty for a
+# side whose step does not run.
+OLD_BYTE_ORDER=""; NEW_BYTE_ORDER=""
+if [ -n "$OLD_LOCALES" ]; then
+  OLD_BYTE_ORDER="$OUT_DIR/step4_byte_order_locales.$(slug "$OLD_BUILD" old).txt"
+fi
+if [ -n "$NEW_LOCALES" ]; then
+  NEW_BYTE_ORDER="$OUT_DIR/step4_byte_order_locales.$(slug "$NEW_BUILD" new).txt"
+fi
+
 mkdir -p "$OUT_DIR"
 
 # Every file this script later READS must have been written by this run. Step 3
@@ -275,6 +290,8 @@ mkdir -p "$OUT_DIR"
 # is why it went unnoticed, but the statement is false and this file's rule is
 # that every file it reads was written by this run.
 rm -f "$STEP2_LIST" "$STEP2_REMOVED" "$STEP3_LIST" "$STEP4_LIST" \
+      "$STEP4_BYTE_ORDER" ${OLD_BYTE_ORDER:+"$OLD_BYTE_ORDER"} \
+      ${NEW_BYTE_ORDER:+"$NEW_BYTE_ORDER"} \
       "$NEW_COPY_MISSING" "$OLD_DISTRO_LIST" "$NEW_DISTRO_LIST" \
       ${NODE_LIST:+"$NODE_LIST"} ${NODE_INHERITED:+"$NODE_INHERITED"} \
       ${NODE_REMOVED:+"$NODE_REMOVED"} ${NODE_UNDETERMINED:+"$NODE_UNDETERMINED"}
@@ -425,7 +442,8 @@ else
   echo "Nothing to close over the copy graph for this pair."
   if [ "$SAME_TAG" = "1" ]; then
     echo "The two tags are one commit, so nothing was compared and this is"
-    echo "NOT a clean result. Step 4's list still needs confirming."
+    echo "NOT a clean result. Step 4's list, and the locales it leaves out as"
+    echo "built in byte order, still need confirming."
   else
     echo "This is a real result, not a failure -- steps 4 and 5 still matter,"
     echo "because they cover what a data diff cannot settle."
@@ -473,12 +491,14 @@ fi
 if [ -n "$OLD_LOCALES" ]; then
   banner "STEP 9  NODE ELLIPSIS  does $OLD_BUILD's own locale data use ellipsis ranges?"
   run_step 9 python3 "$SCRIPTS/flag_algorithmic_ranges.py" \
-    --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --supported-tag "$OLD"
+    --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --supported-tag "$OLD" \
+    --node-label old
 fi
 if [ -n "$NEW_LOCALES" ]; then
   banner "STEP 10  NODE ELLIPSIS  does $NEW_BUILD's own locale data use ellipsis ranges?"
   run_step 10 python3 "$SCRIPTS/flag_algorithmic_ranges.py" \
-    --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --supported-tag "$NEW"
+    --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --supported-tag "$NEW" \
+    --node-label new
 fi
 
 if [ -n "$OLD_ORDER" ]; then
@@ -509,6 +529,69 @@ no_sources() {
   # The file as the reader typed it, whole on its line so it can be copied.
   echo "     $file holds no locale sources."
   printf '%s\n' "$reason." | fold -s -w 68 | sed 's/ *$//; s/^/     /'
+}
+
+# The locales step 4 leaves out because glibc builds them in byte order. No
+# expansion and no default weight reaches them, so step 4 is right to leave
+# them off its list, but changed code can move them: the comparison has a
+# branch of its own for them, in the code step 5 reads (backlog 13.7). With a
+# machine's own data, steps 9 and 10 answer the same question for it, which
+# the tag cannot: a distro can build such a locale the tag does not have, as
+# RHEL9 does C.UTF-8.
+byte_order_names() { awk 'NF' "$1" | paste -sd, - | sed 's/,/, /g'; }
+byte_order_note() {
+  local names side n file build
+  local lists=()
+  if [ ! -f "$STEP4_BYTE_ORDER" ]; then
+    # Unreachable as step 4 stands: it writes the list on every run, before
+    # anything can return. Here because the alternative reads as "none".
+    echo "     Step 4 wrote no list of the locales it leaves out as byte order,"
+    echo "     so whether code changes reach any of them is NOT KNOWN."
+  else
+    lists+=("$STEP4_BYTE_ORDER")
+    names=$(byte_order_names "$STEP4_BYTE_ORDER")
+    if [ -z "$names" ]; then
+      echo "     Step 4 leaves no locale out as built in byte order at $NEW."
+    else
+      echo "     Also the locale(s) step 4 leaves out because glibc builds them in"
+      echo "     byte order, which changed code can move too: $names"
+    fi
+  fi
+  for side in old new; do
+    if [ "$side" = old ]; then n=9; file=$OLD_BYTE_ORDER; build=$OLD_BUILD
+    else n=10; file=$NEW_BYTE_ORDER; build=$NEW_BUILD; fi
+    if [ -z "$file" ]; then
+      # A machine given without its locale sources: its scan did not run, and
+      # the block for it below says why. Named here too, so this list does not
+      # read as complete.
+      [ -n "$build" ] || continue
+      echo "     Step $n did not run on $build, so whether that machine builds a"
+      echo "     locale in byte order is NOT KNOWN."
+      continue
+    fi
+    if [ ! -f "$file" ]; then
+      # Unreachable for the same reason: that step writes it on every run.
+      echo "     Step $n wrote no such list for $build, so whether code changes"
+      echo "     reach a locale that machine builds in byte order is NOT KNOWN."
+      continue
+    fi
+    lists+=("$file")
+    names=$(byte_order_names "$file")
+    if [ -z "$names" ]; then
+      echo "     Step $n finds no locale built in byte order on $build."
+    else
+      echo "     Step $n finds locale(s) built in byte order on $build,"
+      echo "     which changed code can move too: $names"
+    fi
+  done
+  # grep reads the files itself. Piped from cat under pipefail, its early
+  # exit on a match made cat die of SIGPIPE and the test fail at random: the
+  # note was missing from a published example (backlog 13.7).
+  if [ ${#lists[@]} -gt 0 ] && grep -qx -e C -e POSIX "${lists[@]}"; then
+    echo "     Here C means C.UTF-8 and its other spellings. A database or"
+    echo "     collation whose locale is exactly C or POSIX is compared by"
+    echo "     PostgreSQL itself, without glibc."
+  fi
 }
 
 # Step 5 has three outcomes, not two. `hunks`: it printed "N substantive
@@ -692,7 +775,8 @@ case $STEP5 in
     echo "     aliases glibc's locale.alias gives them. A collation or a database"
     echo "     uses one when its locale, without the part from the dot up to any @,"
     echo "     is one of them."
-    echo "     full list: $STEP4_LIST" ;;
+    echo "     full list: $STEP4_LIST"
+    byte_order_note ;;
   clean)
     echo "-- Needs an empirical test: none on this evidence. Step 5 found no"
     echo "   substantive change, so a clean data diff is sufficient even for"
@@ -708,7 +792,8 @@ case $STEP5 in
     echo "     aliases glibc's locale.alias gives them. A collation or a database"
     echo "     uses one when its locale, without the part from the dot up to any @,"
     echo "     is one of them."
-    echo "     full list: $STEP4_LIST" ;;
+    echo "     full list: $STEP4_LIST"
+    byte_order_note ;;
 esac
 
 # Steps 6 and 7. Until 2026-09-27 they had no block here: a difference they
@@ -942,9 +1027,7 @@ else
     echo "     C. The distros this audit targets ship their own C.UTF-8, so if"
     echo "     step 4 named C at all, that verdict is evidence about upstream's"
     echo "     file and none about either node's. Nothing above says how either"
-    echo "     node's own C.UTF-8 defines its order, and unless both nodes' copies"
-    echo "     declare codepoint_collation, a data diff, including the node-to-node"
-    echo "     one, cannot clear it."
+    echo "     node's own C.UTF-8 defines its order."
   else
     echo "     Pass --old-node and --new-node instead of every other --old-*/--new-*"
     echo "     option, or --old-locales-dir and --new-locales-dir with their build ids."
@@ -952,9 +1035,7 @@ else
     echo "     the distros this audit targets ship their own C.UTF-8, so if step 4"
     echo "     named C at all, that verdict is evidence about upstream's file and"
     echo "     none about either node's. Nothing above says how either node's own"
-    echo "     C.UTF-8 defines its order, and unless both nodes' copies declare"
-    echo "     codepoint_collation, a data diff, including the node-to-node one,"
-    echo "     cannot clear it."
+    echo "     C.UTF-8 defines its order."
   fi
 fi
 
@@ -1013,17 +1094,18 @@ echo
 echo "-- Not decided for you"
 case $STEP5 in
   hunks)
-    echo "     $HUNKS hunk(s) marked >> in step 5. Whether any of them moves a"
-    echo "     weight is a judgement call that needs someone to read C."
-    echo "     If nobody will, treat step 4's list as unresolved and confirm"
-    echo "     empirically instead: docs/confirming-on-a-real-system.md" ;;
+    echo "     $HUNKS hunk(s) marked >> in step 5. Whether any of them can change"
+    echo "     an order is a judgement call that needs someone to read C."
+    echo "     If nobody will, treat step 4's list, and the locales it leaves"
+    echo "     out as byte order, as unresolved and confirm empirically instead:"
+    echo "     docs/confirming-on-a-real-system.md" ;;
   clean)
     echo "     Nothing from step 5. Still confirm on real nodes before acting:"
     echo "     docs/confirming-on-a-real-system.md" ;;
   *)
-    echo "     Step 5 reached no clean result (see above), so step 4's list is"
-    echo "     unresolved: confirm empirically instead:"
-    echo "     docs/confirming-on-a-real-system.md" ;;
+    echo "     Step 5 reached no clean result (see above), so step 4's list, and"
+    echo "     the locales it leaves out as byte order, are unresolved: confirm"
+    echo "     empirically instead: docs/confirming-on-a-real-system.md" ;;
 esac
 # Outside the case on purpose: true in all three branches, and printing it in
 # `clean` alone meant no published run ever carried it -- all three take the

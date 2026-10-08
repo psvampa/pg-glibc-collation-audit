@@ -462,6 +462,48 @@ class NodeChecksCloseOverCopy(NodeCase):
 
 
 @needs_clone
+class NodeChecksSeeTheReadingCharacters(NodeCase):
+    """Backlog 13.7. The same LC_COLLATE text read with another comment
+    character is other rules, and the directive sits outside the block, so
+    comparing blocks alone filed the file under "differ outside LC_COLLATE".
+    One file of a tag copy is edited by its first line only."""
+
+    def edited(self, name):
+        root = self.node(MID, name)
+        path = os.path.join(root, 'sv_SE')
+        with open(path, encoding='utf-8') as fh:
+            text = fh.read()
+        self.assertTrue(text.startswith('comment_char %\n'))
+        with open(path, 'w', encoding='utf-8') as fh:
+            fh.write(text.replace('comment_char %', 'comment_char #', 1))
+        return root
+
+    def test_node_to_node(self):
+        rc, text = self.node_to_node(self.node(MID, 'a'), self.edited('b'),
+                                     'build-a', 'build-b')
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(self.result_names(), ['sv_SE'])
+        self.assertIn('differ INSIDE LC_COLLATE:   1', text)
+        self.assertIn('sv_SE  (both, read differently', text)
+        self.assertIn('read with comment_char % and escape_char / at build-a',
+                      text)
+        self.assertIn('read with comment_char # and escape_char / at build-b',
+                      text)
+
+    def test_the_distro_check(self):
+        rc, text = run('diff_distro_locales.py', MID, '--locales-dir',
+                       self.edited('n'), '--build-id', 'edited-build',
+                       '--node-label', 'n', out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertIn('differ INSIDE LC_COLLATE:  1', text)
+        self.assertIn('sv_SE  (both, read differently)', text)
+        self.assertIn(f'read with comment_char % and escape_char / at {MID}',
+                      text)
+        self.assertIn('read with comment_char # and escape_char / at node',
+                      text)
+
+
+@needs_clone
 class NodeToNodeRefusesToGuess(NodeCase):
     """The failure modes that report a flawless clean upgrade."""
 
@@ -563,7 +605,8 @@ class NodeToNodeRefusesToGuess(NodeCase):
                                      'build-A', 'build-B')
         self.assertEqual(rc, 0, text)
         self.assertIn('on NEITHER node', flat(text))
-        self.assertNotIn('the data comparison is the whole story', flat(text))
+        self.assertNotIn('so their data leaves localedef nothing to compute',
+                         flat(text))
         self.assertIn('NOT compared by this run', flat(text))
 
     def test_a_locale_on_one_node_only_is_not_reassured_about_either(self):
@@ -572,7 +615,8 @@ class NodeToNodeRefusesToGuess(NodeCase):
             self.node(MID, 'b'), 'build-A', 'build-B')
         self.assertEqual(rc, 0, text)
         self.assertIn('present on the old node', flat(text))
-        self.assertNotIn('the data comparison is the whole story', flat(text))
+        self.assertNotIn('so their data leaves localedef nothing to compute',
+                         flat(text))
         self.assertIn('NOT compared by this run', flat(text))
 
     def test_the_reassuring_branch_fires_only_when_it_was_actually_compared(self):
@@ -583,9 +627,13 @@ class NodeToNodeRefusesToGuess(NodeCase):
         self.assertEqual(rc, 0, text)
         # The reason as well as the verdict: "no backported locale here is
         # ellipsis-based" was the reason, and backlog 1.6 made it false.
+        # Not "the whole story" since backlog 13.7: changed code can move a
+        # byte-order locale, and step 5 is what says whether it changed.
         self.assertIn('Every backported locale here declares '
-                      'codepoint_collation on both nodes, so for those the '
-                      'data comparison is the whole story', flat(text))
+                      'codepoint_collation on both nodes, so their data leaves '
+                      "localedef nothing to compute; whether changed code "
+                      "moves their order is step 5's question.", flat(text))
+        self.assertNotIn('whole story', flat(text))
         self.assertNotIn('NOT compared by this run', flat(text))
         self.assertNotIn('no ellipsis range on either node', flat(text))
 
@@ -614,8 +662,8 @@ class NodeToNodeRefusesToGuess(NodeCase):
                     self.node(MID, f'{name}-b', extra={'C': new_body}),
                     'build-A', 'build-B')
                 self.assertEqual(rc, 0, text)
-                self.assertNotIn('the data comparison is the whole story',
-                                 flat(text))
+                self.assertNotIn('so their data leaves localedef nothing to '
+                                 'compute', flat(text))
                 self.assertEqual('C.UTF-8: no ellipsis range on either node, '
                                  "but every character the file does not list "
                                  "takes localedef's default weight, so the "
@@ -643,8 +691,8 @@ class NodeToNodeRefusesToGuess(NodeCase):
                     self.node(MID, f'{slug}-b', extra={'C': new_body}),
                     'build-A', 'build-B')
                 self.assertEqual(rc, 0, text)
-                self.assertNotIn('the data comparison is the whole story',
-                                 flat(text))
+                self.assertNotIn('so their data leaves localedef nothing to '
+                                 'compute', flat(text))
                 self.assertIn('C.UTF-8: names codepoint_collation on at least '
                               'one of these nodes, but could not be read as '
                               'the keyword alone in its LC_COLLATE, the one '
@@ -655,7 +703,7 @@ class NodeToNodeRefusesToGuess(NodeCase):
                 self.assertNotIn('no ellipsis range on either node',
                                  flat(text))
 
-    def test_a_C_that_only_copies_a_byte_order_locale_is_the_whole_story(self):
+    def test_a_C_that_only_copies_a_byte_order_locale_is_settled_data(self):
         """Backlog 6.9 in step 8. A C whose LC_COLLATE copies a locale holding
         the keyword alone, and nothing else, is byte order (measured on RHEL9
         and RHEL10: byte-identical to the installed C.UTF-8). It took the
@@ -681,8 +729,9 @@ class NodeToNodeRefusesToGuess(NodeCase):
                 self.assertEqual(
                     'Every backported locale here declares codepoint_collation '
                     'alone, or copies nothing but a byte-order locale, on both '
-                    'nodes, so for those the data comparison is the whole '
-                    'story.' in flat(text), settled)
+                    'nodes, so their data leaves localedef nothing to compute; '
+                    "whether changed code moves their order is step 5's "
+                    'question.' in flat(text), settled)
                 self.assertEqual('no ellipsis range on either node'
                                  in flat(text), not settled)
 

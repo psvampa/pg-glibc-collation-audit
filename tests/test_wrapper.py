@@ -148,9 +148,7 @@ ELLIPSIS_NOT_RUN_BODY = [
     'the distros this audit targets ship their own C.UTF-8, so if step 4',
     "named C at all, that verdict is evidence about upstream's file and",
     "none about either node's. Nothing above says how either node's own",
-    "C.UTF-8 defines its order, and unless both nodes' copies declare",
-    'codepoint_collation, a data diff, including the node-to-node one,',
-    'cannot clear it.',
+    'C.UTF-8 defines its order.',
 ]
 # The steps 6 and 7 block when no machine was given, whole, like the others.
 DISTRO_NOT_RUN_BODY = [
@@ -266,7 +264,7 @@ class Wrapper(unittest.TestCase):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
 
     def test_exits_zero_on_a_pair_with_findings(self):
-        """A finding is not an error. Step 5 reports 24 hunks and returns 0."""
+        """A finding is not an error. Step 5 reports hunks and returns 0."""
         self.assertEqual(self.rc, 0, self.out)
 
     def test_step_4_scanned_the_new_tag(self):
@@ -360,7 +358,30 @@ class Wrapper(unittest.TestCase):
         """Step 5 reports; it does not decide. The summary must say so."""
         summary = self.out[self.out.index('AUDIT SUMMARY'):]
         self.assertIn('Not decided for you', summary)
-        self.assertIn('24 hunk(s)', summary)
+        self.assertIn('29 hunk(s)', summary)
+
+    def test_code_changes_name_the_byte_order_locales_too(self):
+        """Backlog 13.7. Step 4 leaves the locales glibc builds in byte order
+        off its list, and changed code can move them, so the hunks block
+        names them. glibc-2.34 builds none that way, and says so rather than
+        saying nothing; its list is written empty."""
+        self.assertEqual(self.rc, 0, self.out)
+        body = summary_block(self.out, '-- Needs an empirical test: step 5 '
+                                       'found 29 substantive hunk(s),')
+        self.assertIn(f'Step 4 leaves no locale out as built in byte order '
+                      f'at {MID}.', body)
+        with open(os.path.join(self.out_dir, 'step4_byte_order_locales.txt'),
+                  encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), '')
+        decided = ' '.join(summary_block(self.out, '-- Not decided for you'))
+        self.assertIn("treat step 4's list, and the locales it leaves out as "
+                      "byte order, as unresolved", decided)
+        # Step 5 is the last step of a tags-only run: the summary ends it.
+        self.assertEqual(self.out.count('\n== STEP 5 '), 1)
+        self.assertEqual(self.out.count('\n== AUDIT SUMMARY'), 1)
+        step5 = self.out.split('\n== STEP 5 ')[1].split('\n== AUDIT SUMMARY')[0]
+        self.assertIn('and so does every locale it names as built in byte '
+                      'order.', flat(step5))
 
     def test_the_backport_caveat_reaches_this_branch(self):
         """An upstream diff cannot see a distro's patches, whatever step 5
@@ -473,6 +494,10 @@ class WrapperEmptyPair(unittest.TestCase):
         self.assertIn('The two tags are one commit, so nothing was compared',
                       step3)
         self.assertNotIn('a real result', step3)
+        # Backlog 13.7: what is left to confirm includes the locales step 4
+        # leaves out as built in byte order.
+        self.assertIn("Step 4's list, and the locales it leaves out as built "
+                      "in byte order, still need confirming.", step3)
 
     def test_steps_4_and_5_still_ran(self):
         """An empty step 2 is not the end of the audit.
@@ -892,6 +917,23 @@ class WrapperNodeToNode(unittest.TestCase):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
         shutil.rmtree(cls.nodes, ignore_errors=True)
 
+    def test_code_changes_name_each_machines_byte_order_locales(self):
+        """Review of backlog 13.7. The tag has no C at glibc-2.34, and the
+        new machine builds one in byte order (codepoint_collation, as RHEL9
+        does): the hunks block names it from step 10's list, beside the tag's
+        "none", and the old machine's ellipsis-based C is not one."""
+        self.assertEqual(self.rc, 0, self.out)
+        body = ' '.join(summary_block(self.out, '-- Needs an empirical test: '
+                                                'step 5 found 29 substantive '
+                                                'hunk(s),'))
+        self.assertIn(f'Step 4 leaves no locale out as built in byte order at '
+                      f'{MID}.', body)
+        self.assertIn('Step 9 finds no locale built in byte order on '
+                      'build-old.', body)
+        self.assertIn('Step 10 finds locale(s) built in byte order on '
+                      'build-new, which changed code can move too: C', body)
+        self.assertIn('Here C means C.UTF-8', body)
+
     def test_it_runs_and_logs_as_step_8(self):
         self.assertEqual(self.rc, 0, self.out)
         self.assertIn('NODE TO NODE', self.out)
@@ -989,6 +1031,59 @@ class WrapperNodeToNode(unittest.TestCase):
 
 
 @needs_clone
+class WrapperNodesOnOneBuild(unittest.TestCase):
+    """Review of backlog 13.7. Two machines on one build, which step 8 calls
+    a valid control: steps 9 and 10 named their lists after the build alone,
+    so step 10's replaced step 9's and the summary read the new machine's
+    answer under the old machine's name -- "none" for an old machine whose C
+    is byte order. Here only the OLD side builds C in byte order."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-onebuild-')
+        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-onebuild-trees-')
+        cls.old_root = dd.materialise_tag(GLIBC_CLONE, OLD,
+                                          os.path.join(cls.nodes, 'a'))
+        cls.new_root = dd.materialise_tag(GLIBC_CLONE, MID,
+                                          os.path.join(cls.nodes, 'b'))
+        for root, body in ((cls.old_root, upstream_c()),
+                           (cls.new_root, backported_c())):
+            with open(os.path.join(root, 'C'), 'w', encoding='utf-8') as fh:
+                fh.write(body)
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID,
+            '--old-locales-dir', cls.old_root, '--old-build-id', 'same-build',
+            '--new-locales-dir', cls.new_root, '--new-build-id', 'same-build',
+            out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+        shutil.rmtree(cls.nodes, ignore_errors=True)
+
+    def test_each_side_is_read_from_its_own_list(self):
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        body = ' '.join(summary_block(self.out, '-- Needs an empirical test: '
+                                                'step 5 found 29 substantive '
+                                                'hunk(s),'))
+        self.assertIn('Step 9 finds locale(s) built in byte order on '
+                      'same-build, which changed code can move too: C', body)
+        self.assertIn('Step 10 finds no locale built in byte order on '
+                      'same-build.', body)
+
+    def test_the_two_sides_write_two_files(self):
+        """Step 9's full list was overwritten the same way, before this
+        change; both lists now carry the side."""
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        for kind in ('exposed', 'byte_order'):
+            for side in ('old', 'new'):
+                with self.subTest(kind=kind, side=side):
+                    self.assertTrue(os.path.isfile(os.path.join(
+                        self.out_dir,
+                        f'step4_{kind}_locales.same-build..{side}.txt')))
+
+
+@needs_clone
 class WrapperNonAsciiBuildId(unittest.TestCase):
     """A build id with a letter outside ASCII. audit.sh named step 8's lists
     with bash's own replacement, which under LC_ALL=C replaces each byte of
@@ -1058,6 +1153,25 @@ class WrapperTagsRemoveALocale(unittest.TestCase):
         self.assertEqual(m.group(2), os.path.join(
             self.out_dir, f'step2_removed_locales.{pair_slug(MID, NEW)}.txt'))
         self.assertNotIn('none', ' '.join(lines))
+
+    def test_code_changes_name_the_byte_order_locales_too(self):
+        """Backlog 13.7. glibc-2.39 builds C in byte order, so step 4 leaves
+        it off its list, and changed code can move it: the hunks block names
+        it, and says which C it means."""
+        self.assertEqual(self.rc, 0, self.out)
+        body = ' '.join(summary_block(self.out, '-- Needs an empirical test: '
+                                                'step 5 found 55 substantive '
+                                                'hunk(s),'))
+        self.assertIn('Also the locale(s) step 4 leaves out because glibc '
+                      'builds them in byte order, which changed code can move '
+                      'too: C', body)
+        self.assertIn('Here C means C.UTF-8 and its other spellings. A '
+                      'database or collation whose locale is exactly C or '
+                      'POSIX is compared by PostgreSQL itself, without glibc.',
+                      body)
+        with open(os.path.join(self.out_dir, 'step4_byte_order_locales.txt'),
+                  encoding='utf-8') as fh:
+            self.assertEqual(fh.read().split(), ['C'])
 
     def test_step_4_scanned_the_new_tag(self):
         """The premise of SkippingAReleaseReportsTheUnion's step 4 test, which
@@ -1715,6 +1829,18 @@ class WrapperStep5UnresolvedWithHunks(unittest.TestCase):
         self.assertIsNotNone(count, self.out[-2000:])
         self.assertGreater(int(count.group(1)), 0)
 
+    def test_the_byte_order_locales_are_unresolved_too(self):
+        """Backlog 13.7: an unresolved step 5 leaves the locales step 4 calls
+        byte order unresolved as well. glibc-2.34 has none, and says so."""
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        body = summary_block(self.out, '-- Needs an empirical test: step 5 '
+                                       'did NOT reach a clean result, so')
+        self.assertIn(f'Step 4 leaves no locale out as built in byte order '
+                      f'at {MID}.', body)
+        decided = ' '.join(summary_block(self.out, '-- Not decided for you'))
+        self.assertIn("so step 4's list, and the locales it leaves out as "
+                      "byte order, are unresolved", decided)
+
     def test_the_summary_does_not_offer_the_hunks_to_read(self):
         self.assertEqual(self.rc, 0, self.out[-2000:])
         summary = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
@@ -1776,7 +1902,7 @@ class WrapperStep5Clean(unittest.TestCase):
         which is what an absent clean sentence produces."""
         self.assertEqual(self.rc, 0, self.out[-2000:])
         summary = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
-        # The real step 5 finds 24 hunks on this pair, so this line is only
+        # The real step 5 finds hunks on this pair, so this line is only
         # printed when the shim ran.
         self.assertIn('Step 5 found no substantive change, so a clean data '
                       'diff is sufficient even for the locales step 4 flagged',
@@ -2358,6 +2484,20 @@ class NodeFileWithoutSources:
             (distro, 'DISTRO CHECK'), (ellipsis, 'NODE ELLIPSIS'),
             (11, 'MEASURED ORDER')])
 
+    def test_the_byte_order_note_names_the_side_not_scanned(self):
+        """Review of backlog 13.7: the side whose scan did not run gets a
+        line in the step-5 block too, rather than leaving that list to read
+        as complete."""
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        builds = {'old': build_of(RHEL8), 'new': build_of(RHEL9)}
+        n = 9 if self.BARE == 'old' else 10
+        body = ' '.join(summary_block(self.out, '-- Needs an empirical test: '
+                                                'step 5 found 29 substantive '
+                                                'hunk(s),'))
+        self.assertIn(f'Step {n} did not run on {builds[self.BARE]}, so '
+                      f'whether that machine builds a locale in byte order is '
+                      f'NOT KNOWN.', body)
+
     def test_the_distro_patch_block_says_which_file_and_why(self):
         builds = {'old': (build_of(RHEL8), OLD), 'new': (build_of(RHEL9), MID)}
         bare, have = (6, 7) if self.BARE == 'old' else (7, 6)
@@ -2458,9 +2598,7 @@ class WrapperNodeFilesWithoutSources(unittest.TestCase):
             "most upstream's C. The distros this audit targets ship their own "
             "C.UTF-8, so if step 4 named C at all, that verdict is evidence "
             "about upstream's file and none about either node's. Nothing "
-            "above says how either node's own C.UTF-8 defines its order, and "
-            "unless both nodes' copies declare codepoint_collation, a data "
-            "diff, including the node-to-node one, cannot clear it.")
+            "above says how either node's own C.UTF-8 defines its order.")
         self.assertNotIn('Pass --', flat(self.summary))
 
 

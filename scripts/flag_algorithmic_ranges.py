@@ -27,7 +27,7 @@ despite localedata/locales/ko_KR being byte-identical between the two.
 Use diff_collation_code.py to check whether the collation code actually
 changed for the version pair you care about. If it did, every locale printed
 here needs an empirical sort-order test regardless of what the source diff
-says.
+says, and so does every locale it names as built in byte order.
 
 Every other locale is printed too, except one glibc builds in byte order:
 codepoint_collation alone, or only a copy of a byte-order locale
@@ -49,7 +49,8 @@ docs/results.md.
 Usage:
   python3 flag_algorithmic_ranges.py <tag> [--repo <path>]
   python3 flag_algorithmic_ranges.py --locales-dir <path> --build-id <nvr>
-          [--supported-tag <tag>] [--expect-files N] [--min-files N]
+          [--supported-tag <tag>] [--node-label <side>] [--expect-files N]
+          [--min-files N]
 
 Example:
   python3 flag_algorithmic_ranges.py glibc-2.34
@@ -129,7 +130,14 @@ def load_from_dir(opts, repo):
                f"list, so a copy that lost files is not detected here. Pass "
                f"--supported-tag to check it.", split_words=False)
         print()
-    slug = g.pair_slug(opts.build_id, opts.build_id).split('..')[0]
+    # With the side in the name, the two sides of one audit cannot write one
+    # file: both machines may run the same build, which step 8 accepts as a
+    # control, and the new side's lists then replaced the old side's, so the
+    # summary read step 10's answer under step 9's name (backlog 13.7).
+    if opts.node_label:
+        slug = g.pair_slug(opts.build_id, opts.node_label)
+    else:
+        slug = g.pair_slug(opts.build_id, opts.build_id).split('..')[0]
     return (texts, supported, f'{opts.build_id} ({root})',
             f'step4_exposed_locales.{slug}.txt')
 
@@ -163,6 +171,18 @@ def report_codepoint(texts):
         print(f"\nCopy a byte-order locale and nothing else, so glibc builds "
               f"them in byte order too: {named}")
     return sorted(declared | set(by_copy)), by_copy
+
+
+def byte_order_list_name(out_name):
+    """The file the byte-order locales go to, named after the full list.
+
+    Never the full list's own name: a name without the usual prefix gets one
+    in front instead, so the second list cannot overwrite the first.
+    """
+    prefix = 'step4_exposed_locales'
+    if out_name.startswith(prefix):
+        return 'step4_byte_order_locales' + out_name[len(prefix):]
+    return 'byte_order.' + out_name
 
 
 def listed_names(names, aliases):
@@ -325,6 +345,13 @@ def report(texts, supported, label, out_name, next_hint,
             print(f"      ... and {len(flagged[name]) - 3} more")
 
     immune, by_copy = report_codepoint(texts)
+    # Written on every run, empty or not, beside the full list and named like
+    # it: the locales this step leaves out because glibc builds them in byte
+    # order. No expansion or default weight reaches them, but a change to the
+    # code that compares strings can, so audit.sh names them where step 5
+    # found code changes (backlog 13.7). An absent file would read as "none".
+    g.write_list(byte_order_list_name(out_name),
+                 sorted(listed_names(set(immune), aliases)))
 
     # Built before anything can return, because a `copy` target this corpus
     # does not contain is a locale whose order was NOT read, and
@@ -521,6 +548,11 @@ def main(argv):
                          "tag does not know what the node built. Also the "
                          "list the directory is checked against: every file "
                          "of the tag it lacks is named under a `!!`.")
+    ap.add_argument('--node-label',
+                    help="with --locales-dir: which side of the audit this "
+                         "node is, such as old or new. It goes into the names "
+                         "of the lists written, so two sides that run the same "
+                         "build do not write one file.")
     ap.add_argument('--expect-files', type=int,
                     help="with --locales-dir: abort unless exactly this many "
                          "files are read")
@@ -533,6 +565,8 @@ def main(argv):
     if bool(opts.tag) == bool(opts.locales_dir):
         ap.error("give either a tag or --locales-dir, not both and not "
                  "neither")
+    if opts.node_label and not opts.locales_dir:
+        ap.error("--node-label names a node's side; it needs --locales-dir")
     if opts.locales_dir and not opts.build_id:
         ap.error("--locales-dir requires --build-id: a result that does not "
                  "say which build it was taken on cannot be cited")
@@ -547,9 +581,11 @@ def main(argv):
                     f"  python3 diff_collation_code.py <old_tag> {opts.tag}",
                     f"to see whether localedef's collation code changed "
                     f"between your two",
-                    f"versions; if it did, test these empirically before "
-                    f"trusting a",
-                    f"'not flagged' result from steps 1-3."]
+                    f"versions; if it did, test these, and any locale named "
+                    f"above as built",
+                    f"in byte order, empirically before trusting a 'not "
+                    f"flagged' result from",
+                    f"steps 1-3."]
     else:
         repo = g.find_repo(opts.repo) if opts.supported_tag else None
         texts, supported, label, out_name = load_from_dir(opts, repo)

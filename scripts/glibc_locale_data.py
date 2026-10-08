@@ -900,6 +900,67 @@ def copy_targets(text):
     return [decode_symbolic(t) for t in _COPY_RE.findall(block)]
 
 
+# Where get_ident (linereader.c, glibc-2.39) ends a word, besides EOF.
+_IDENT_STOP = frozenset(_SPACE + '";<,')
+
+
+def _directive_words(lines):
+    """The directive keywords localedef reads first on a logical line, in
+    order, or None when a directive's argument leaves the characters in
+    force unsettled.
+
+    Read the way glibc reads them, not by their spelling. lr_next joins a
+    line that ends in the escape character to the next one; lr_token drops
+    a physical line that opens with the comment character, and on a
+    continued line only that physical line; get_ident keeps the character
+    after an escape inside a word, so `comment_c/har #` is the directive
+    (glibc-2.39). A search for the plain keyword finds none of that, and the
+    characters it reported were the ones before the hidden directive.
+    _glibc_chars compares the two readings and refuses where they differ.
+    """
+    cc, ec = '#', '\\'
+    words, i = [], 0
+    while i < len(lines):
+        text = ''
+        while i < len(lines):
+            line = lines[i]
+            i += 1
+            if not text.strip(_SPACE) and line.lstrip(_SPACE).startswith(cc):
+                if line.endswith(ec):
+                    continue
+                text = None
+                break
+            if line.endswith(ec):
+                text += line[:-len(ec)]
+                continue
+            text += line
+            break
+        if not text:
+            continue
+        s = text.lstrip(_SPACE)
+        word, j = '', 0
+        # An escape opening a token is a byte value (get_toplvl_escape),
+        # never the start of a word.
+        if s[:1] != ec:
+            while j < len(s) and s[j] not in _IDENT_STOP:
+                if s[j] == ec:
+                    j += 1
+                    if j == len(s):
+                        break
+                word += s[j]
+                j += 1
+        if word in ('comment_char', 'escape_char'):
+            arg = s[j:].strip(_SPACE)
+            if len(arg) != 1:
+                return None
+            words.append(word)
+            if word == 'comment_char':
+                cc = arg
+            else:
+                ec = arg
+    return words
+
+
 def _glibc_chars(lines):
     """(comment char, escape char) localedef reads this file with, or None.
 
@@ -920,6 +981,16 @@ def _glibc_chars(lines):
     Any of these shapes is None, which declares_byte_order reads as "not
     byte order".
     """
+    # A directive glibc reads that the line-by-line search below does not
+    # see, or the other way round (_directive_words).
+    plain = []
+    for line in lines:
+        m = re.match(r'(comment_char|escape_char)(?![A-Za-z0-9_])',
+                     line.strip(_SPACE))
+        if m:
+            plain.append(m.group(1))
+    if _directive_words(lines) != plain:
+        return None
     chars = {'comment_char': '#', 'escape_char': '\\'}
     allowed = {'comment_char': '%#', 'escape_char': '/\\'}
     leading = True
@@ -938,6 +1009,38 @@ def _glibc_chars(lines):
         elif stripped:
             leading = False
     return chars['comment_char'], chars['escape_char']
+
+
+def reading_chars(text):
+    """(comment char, escape char) localedef reads this file with, or None
+    when _glibc_chars cannot settle them.
+
+    They belong to a file's rules as much as its LC_COLLATE text does. The
+    same block read with another comment character keeps or drops other
+    lines, and another escape character joins other lines and splits weight
+    strings elsewhere (locfile_read, lr_next and collate_read at glibc-2.39).
+    Measured on the RHEL 8, 9 and 10 builds: a block identical byte for byte
+    sorts differently under another `comment_char` (backlog 13.7).
+    """
+    return _glibc_chars(text.split('\n'))
+
+
+def reading_changed(old_text, new_text):
+    """Are the two texts read with different comment or escape characters?
+
+    A side the reader cannot settle counts as changed, because "could not
+    tell" must not clear a locale.
+    """
+    old, new = reading_chars(old_text), reading_chars(new_text)
+    return old is None or new is None or old != new
+
+
+def describe_reading(text, where):
+    """`comment_char % and escape_char / at <where>`, for a report line."""
+    chars = reading_chars(text)
+    if chars is None:
+        return f"characters this tool cannot settle at {where}"
+    return f"comment_char {chars[0]} and escape_char {chars[1]} at {where}"
 
 
 def _escape_builds_a_word(lines, cc, ec):

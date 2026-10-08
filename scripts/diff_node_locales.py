@@ -335,8 +335,9 @@ def report_backported(old, new, buckets, invisible):
                   empty `computed` has two very different causes, and one of
                   them must never produce a reassuring closing line. Getting
                   that wrong is how "this comparison says nothing about
-                  C.UTF-8" ends up printed directly above "the data comparison
-                  is the whole story".
+                  C.UTF-8" ended up printed directly above "the data
+                  comparison is the whole story", the closing line of the
+                  time.
       fallback    backported locales compared on both nodes with explicit
                   weights or a copy, and no ellipsis range on either side; a
                   copy of a byte-order locale and nothing else is not one of
@@ -614,9 +615,13 @@ def main(argv):
         how = ("declares codepoint_collation" if settled == 'declared' else
                "declares codepoint_collation alone, or copies nothing but a "
                "byte-order locale,")
+        # Not "the whole story": the code compares such a locale on a branch
+        # of its own, and step 5 is what says whether that code changed
+        # (backlog 13.7).
         dd.warn(f"Every backported locale here {how} "
-                f"on both nodes, so for those the data comparison is the whole "
-                f"story. Run "
+                f"on both nodes, so their data leaves localedef nothing to "
+                f"compute; whether changed code moves their order is step 5's "
+                f"question. Run "
                 f"sql/c_utf8_probe.sql anyway if C.UTF-8 is your database "
                 f"collation: it measures the order these builds actually "
                 f"produce inside PostgreSQL, as step 11 does one character at "

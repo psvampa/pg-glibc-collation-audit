@@ -1231,6 +1231,48 @@ TIER 2 -- parsing and serialisation
         581c785bf3 Update copyright dates with scripts/update-copyrights
         f5117c6504 Add 'codepoint_collation' support for LC_COLLATE.
         30891f35fa Remove "Contributed by" lines
+  locale/programs/ld-ctype.c: 3 substantive hunk(s), 1 comment/licence hunk(s) filtered
+      @@ -527,7 +526,7 @@ internal error in %s, line %u"), __FUNCTION__, __LINE__);
+      >> -			    snprintf (buf, sizeof buf, "\\%Zo", cnt);
+      >> +			    snprintf (buf, sizeof buf, "\\%zo", cnt);
+      @@ -542,7 +541,7 @@ character '%s' in class `%s' must be in class `%s'"),
+      >> -			    snprintf (buf, sizeof buf, "\\%Zo", cnt);
+      >> +			    snprintf (buf, sizeof buf, "\\%zo", cnt);
+      @@ -3355,33 +3354,6 @@ wctype_table_init (struct wctype_table *t)
+         -/* Retrieve an entry.  */
+      >> -static inline int
+      >> -wctype_table_get (struct wctype_table *t, uint32_t wc)
+      >> -{
+      >> -  uint32_t index1 = wc >> (t->q + t->p + 5);
+      >> -  if (index1 < t->level1_size)
+      >> -    {
+      >> -      uint32_t lookup1 = t->level1[index1];
+      >> -      if (lookup1 != EMPTY)
+      >> -	{
+      >> -	  uint32_t index2 = ((wc >> (t->p + 5)) & ((1 << t->q) - 1))
+      >> -			    + (lookup1 << t->q);
+      >> -	  uint32_t lookup2 = t->level2[index2];
+      >> -	  if (lookup2 != EMPTY)
+      >> -	    {
+      >> -	      uint32_t index3 = ((wc >> 5) & ((1 << t->p) - 1))
+      >> -				+ (lookup2 << t->p);
+      >> -	      uint32_t lookup3 = t->level3[index3];
+      >> -	      uint32_t index4 = wc & 0x1f;
+         -
+      >> -	      return (lookup3 >> index4) & 1;
+      >> -	    }
+      >> -	}
+      >> -    }
+      >> -  return 0;
+      >> -}
+         -
+      commits:
+        dff8da6b3e Update copyright dates with scripts/update-copyrights
+        6d7e8eda9b Update copyright dates with scripts/update-copyrights
+        de477abcaa Use '%z' instead of '%Z' on printf functions
+        41397b9337 locale: Remove ununsed wctype_table_get function
+        581c785bf3 Update copyright dates with scripts/update-copyrights
+        30891f35fa Remove "Contributed by" lines
 
 TIER 3 -- reachable from the collation entry points, not classified
   (derived by walking #include from ld-collate.c, strcoll_l.c, strxfrm_l.c and the
@@ -1284,10 +1326,11 @@ TIER 1/2. The walk cannot follow a macro-computed include (`#include WEIGHT_H`) 
 reach a translation unit with no header of its own -- locale/weight.h, weightwc.h,
 lc-collate.c and C-collate.c are in TIER 1 by hand for exactly that reason.
 
-52 substantive hunk(s) found. Locale data alone does not settle this pair.
+55 substantive hunk(s) found. Locale data alone does not settle this pair.
 Lines marked >> are the code changes; read them and decide whether they can
-move weights. If any can, every locale step 4 listed above needs an
-empirical sort-order test, however clean its data diff is.
+change an order. If any can, every locale step 4 listed above needs an
+empirical sort-order test, however clean its data diff is, and so does
+every locale it names as built in byte order.
 
 ================================================================
 == AUDIT SUMMARY  glibc-2.34 -> glibc-2.39
@@ -1320,13 +1363,18 @@ empirical sort-order test, however clean its data diff is.
      asked either machine's glibc how it sorts, and a locale whose files
      did not change can still sort differently.
 
--- Needs an empirical test: step 5 found 52 substantive hunk(s),
+-- Needs an empirical test: step 5 found 55 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged
      394 name(s) to confirm. They are locales and the
      aliases glibc's locale.alias gives them. A collation or a database
      uses one when its locale, without the part from the dot up to any @,
      is one of them.
      full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
+     Also the locale(s) step 4 leaves out because glibc builds them in
+     byte order, which changed code can move too: C
+     Here C means C.UTF-8 and its other spellings. A database or
+     collation whose locale is exactly C or POSIX is compared by
+     PostgreSQL itself, without glibc.
 
 -- Distro patches, steps 6 and 7: NOT RUN
      Pass --old-node and --new-node instead of every other --old-*/--new-*
@@ -1349,9 +1397,7 @@ empirical sort-order test, however clean its data diff is.
      the distros this audit targets ship their own C.UTF-8, so if step 4
      named C at all, that verdict is evidence about upstream's file and
      none about either node's. Nothing above says how either node's own
-     C.UTF-8 defines its order, and unless both nodes' copies declare
-     codepoint_collation, a data diff, including the node-to-node one,
-     cannot clear it.
+     C.UTF-8 defines its order.
 
 -- Warnings the clean results above do NOT cover
      !! localedata/locales/C is new UPSTREAM at glibc-2.39, but C.UTF-8 is
@@ -1366,9 +1412,10 @@ empirical sort-order test, however clean its data diff is.
      (see docs/limitations.md)
 
 -- Not decided for you
-     52 hunk(s) marked >> in step 5. Whether any of them moves a
-     weight is a judgement call that needs someone to read C.
-     If nobody will, treat step 4's list as unresolved and confirm
-     empirically instead: docs/confirming-on-a-real-system.md
+     55 hunk(s) marked >> in step 5. Whether any of them can change
+     an order is a judgement call that needs someone to read C.
+     If nobody will, treat step 4's list, and the locales it leaves
+     out as byte order, as unresolved and confirm empirically instead:
+     docs/confirming-on-a-real-system.md
      An upstream diff cannot see your distro's backports.
 

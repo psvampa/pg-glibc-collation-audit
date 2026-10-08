@@ -292,6 +292,57 @@ TIER 2 -- parsing and serialisation
         de18a7061c locale: Avoid zero-length array in _nl_category_names [BZ #24962]
         04277e02d7 Update copyright dates with scripts/update-copyrights.
   locale/programs/locfile-kw.gperf: no substantive change (2 comment/licence hunk(s) filtered)
+  locale/programs/ld-ctype.c: 5 substantive hunk(s), 2 comment/licence hunk(s) filtered
+      @@ -842,8 +842,6 @@ no input digits defined and none of the standard names in the charmap"));
+      >> -	static struct charseq replace[2];
+         -
+      @@ -851,10 +849,12 @@ not all characters used in `outdigit' are available in the charmap"));
+      >> -	replace[0].nbytes = 1;
+      >> -	replace[0].bytes[0] = '?';
+      >> -	replace[0].bytes[1] = '\0';
+      >> -	ctype->mboutdigits[cnt] = &replace[0];
+      >> +	static const struct charseq replace =
+      >> +	  {
+      >> +	     .nbytes = 1,
+      >> +	     .bytes = "?",
+      >> +	  };
+      >> +	ctype->mboutdigits[cnt] = (struct charseq *) &replace;
+      @@ -1396,7 +1396,8 @@ charclass_symbolic_ellipsis (struct linereader *ldfile,
+      >> -	  get_character (now, charmap, repertoire, &seq, &wch);
+      >> +	  if (get_character (now, charmap, repertoire, &seq, &wch))
+      >> +	    goto invalid_range;
+      @@ -3148,11 +3149,12 @@ set_class_defaults (struct locale_ctype_t *ctype,
+      >> -      unsigned long int mask = BIT (tok_upper) | BIT (tok_lower) |
+      >> -	BIT (tok_alpha) | BIT (tok_digit) | BIT (tok_xdigit) | BIT (tok_punct);
+      >> -      unsigned long int maskw = BITw (tok_upper) | BITw (tok_lower) |
+      >> -	BITw (tok_alpha) | BITw (tok_digit) | BITw (tok_xdigit) |
+      >> -	BITw (tok_punct);
+      >> +      unsigned long int mask = BIT (tok_upper) | BIT (tok_lower)
+      >> +	| BIT (tok_alpha) | BIT (tok_digit) | BIT (tok_xdigit)
+      >> +	| BIT (tok_punct);
+      >> +      unsigned long int maskw = BITw (tok_upper) | BITw (tok_lower)
+      >> +	| BITw (tok_alpha) | BITw (tok_digit) | BITw (tok_xdigit)
+      >> +	| BITw (tok_punct);
+      @@ -3169,11 +3171,12 @@ set_class_defaults (struct locale_ctype_t *ctype,
+      >> -      unsigned long int mask = BIT (tok_upper) | BIT (tok_lower) |
+      >> -	BIT (tok_alpha) | BIT (tok_digit) | BIT (tok_xdigit) | BIT (tok_punct);
+      >> -      unsigned long int maskw = BITw (tok_upper) | BITw (tok_lower) |
+      >> -	BITw (tok_alpha) | BITw (tok_digit) | BITw (tok_xdigit) |
+      >> -	BITw (tok_punct);
+      >> +      unsigned long int mask = BIT (tok_upper) | BIT (tok_lower)
+      >> +	| BIT (tok_alpha) | BIT (tok_digit) | BIT (tok_xdigit)
+      >> +	| BIT (tok_punct);
+      >> +      unsigned long int maskw = BITw (tok_upper) | BITw (tok_lower)
+      >> +	| BITw (tok_alpha) | BITw (tok_digit) | BITw (tok_xdigit)
+      >> +	| BITw (tok_punct);
+      commits:
+        2b778ceb40 Update copyright dates with scripts/update-copyrights
+        d614a75396 Update copyright dates with scripts/update-copyrights.
+        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
+        1471fa556a localedef: Use initializer for flexible array member [BZ #24950]
+        9e6a7d9c17 Fix build warnings in locale/programs/ld-ctype.c
+        34a5a1460e Break some lines before not after operators.
+        04277e02d7 Update copyright dates with scripts/update-copyrights.
 
 TIER 3 -- reachable from the collation entry points, not classified
   (derived by walking #include from ld-collate.c, strcoll_l.c, strxfrm_l.c and the
@@ -529,10 +580,11 @@ TIER 1/2. The walk cannot follow a macro-computed include (`#include WEIGHT_H`) 
 reach a translation unit with no header of its own -- locale/weight.h, weightwc.h,
 lc-collate.c and C-collate.c are in TIER 1 by hand for exactly that reason.
 
-24 substantive hunk(s) found. Locale data alone does not settle this pair.
+29 substantive hunk(s) found. Locale data alone does not settle this pair.
 Lines marked >> are the code changes; read them and decide whether they can
-move weights. If any can, every locale step 4 listed above needs an
-empirical sort-order test, however clean its data diff is.
+change an order. If any can, every locale step 4 listed above needs an
+empirical sort-order test, however clean its data diff is, and so does
+every locale it names as built in byte order.
 
 ================================================================
 == STEP 6  DISTRO CHECK  do glibc-2.28-251.el8_10.40.x86_64's patches touch LC_COLLATE?
@@ -786,7 +838,7 @@ One is in use wherever a locale name, without the part from the dot up to
 any @, is one of them.
   e.g. C, POSIX, aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, agr_PE, ...
   not in glibc-2.28's SUPPORTED -- the node's `locale -a` is the authority on whether these are built: C, POSIX, cns11643_stroke, en_US@ampm, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
-  full list (385 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.28-251.el8_10.40.x86_64.txt
+  full list (385 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.28-251.el8_10.40.x86_64..old.txt
 
 These cannot be cleared by a source diff alone.
 This is one node's own data. Whether the WEIGHTS localedef computes for these
@@ -837,7 +889,7 @@ One is in use wherever a locale name, without the part from the dot up to
 any @, is one of them.
   e.g. POSIX, aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, agr_PE, ak_GH, ...
   not in glibc-2.34's SUPPORTED -- the node's `locale -a` is the authority on whether these are built: POSIX, cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
-  full list (385 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.34-275.el9_8.x86_64.txt
+  full list (385 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.34-275.el9_8.x86_64..new.txt
 
 These cannot be cleared by a source diff alone.
 This is one node's own data. Whether the WEIGHTS localedef computes for these
@@ -1000,13 +1052,20 @@ Of the 867 locale(s) on the old machine: 14 changed, 847 unchanged (5 of them on
         lower() and the other character rules of LC_CTYPE are not.
      Full report: step 11 above.
 
--- Needs an empirical test: step 5 found 24 substantive hunk(s),
+-- Needs an empirical test: step 5 found 29 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged
      385 name(s) to confirm. They are locales and the
      aliases glibc's locale.alias gives them. A collation or a database
      uses one when its locale, without the part from the dot up to any @,
      is one of them.
      full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
+     Step 4 leaves no locale out as built in byte order at glibc-2.34.
+     Step 9 finds no locale built in byte order on glibc-2.28-251.el8_10.40.x86_64.
+     Step 10 finds locale(s) built in byte order on glibc-2.34-275.el9_8.x86_64,
+     which changed code can move too: C
+     Here C means C.UTF-8 and its other spellings. A database or
+     collation whose locale is exactly C or POSIX is compared by
+     PostgreSQL itself, without glibc.
 
 -- Distro patches, step 6 (glibc-2.28-251.el8_10.40.x86_64 against glibc-2.28)
      No locale compared with glibc-2.28 differs inside LC_COLLATE.
@@ -1068,9 +1127,10 @@ Of the 867 locale(s) on the old machine: 14 changed, 847 unchanged (5 of them on
      (see docs/limitations.md)
 
 -- Not decided for you
-     24 hunk(s) marked >> in step 5. Whether any of them moves a
-     weight is a judgement call that needs someone to read C.
-     If nobody will, treat step 4's list as unresolved and confirm
-     empirically instead: docs/confirming-on-a-real-system.md
+     29 hunk(s) marked >> in step 5. Whether any of them can change
+     an order is a judgement call that needs someone to read C.
+     If nobody will, treat step 4's list, and the locales it leaves
+     out as byte order, as unresolved and confirm empirically instead:
+     docs/confirming-on-a-real-system.md
      An upstream diff cannot see your distro's backports.
 

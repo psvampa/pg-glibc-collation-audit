@@ -5,8 +5,8 @@ somewhere in the docs already; this page exists so you do not have to find
 the file that happens to define it first.
 
 **`LC_COLLATE` block** — the section of a locale source file, from
-`LC_COLLATE` to `END LC_COLLATE`, that defines sort order. The only part of a
-locale file that can move it. A locale file often changes without this block
+`LC_COLLATE` to `END LC_COLLATE`, that defines sort order. A locale file
+often changes without this block
 being touched: most of the 283 files that differ between glibc 2.28 and 2.34
 changed only `LC_TIME` or `LC_MONETARY`.
 
@@ -70,7 +70,7 @@ diffs. Tiers 1 and 2 are curated lists. Tier 3 is *derived*, by walking
 glibc's own `#include` graph from the collation entry points, so it grows as
 glibc changes and catches files a hand-written list would miss.
 
-**substantive change** (step 5 only) — a hunk that can move a weight, as
+**substantive change** (step 5 only) — a hunk that can change an order, as
 opposed to a comment, a licence header, a format-string fix or a type
 replacement. Step 5 cannot tell these apart for you; deciding is a manual
 step, and it is the one part of the method that requires reading C. See
@@ -91,8 +91,7 @@ so no
 change to how `localedef` expands ranges can move it. Upstream's `C` declares
 it from glibc 2.35. RHEL9 backports that file, RHEL10 is glibc 2.39 and has it
 upstream, and RHEL8 ships Red Hat's own ellipsis-based file. It is the whole
-reason `C.UTF-8` changed across RHEL8→RHEL9 and cannot change across
-RHEL9→RHEL10.
+reason `C.UTF-8` changed across RHEL8→RHEL9.
 
 **node-to-node comparison** — comparing two nodes' own locale sources against
 each other, with no upstream tag in the middle

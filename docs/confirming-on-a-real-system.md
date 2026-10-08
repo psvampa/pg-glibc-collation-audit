@@ -25,8 +25,10 @@ psql -f sql/collation_confirmation_template.sql   # edit placeholders first
 
 Every locale steps 1 to 3 flagged, and every locale step 4 flagged that step 5
 does not [clear](limitations.md#step-5-reports-it-does-not-decide), whether or
-not it showed up in steps 1 to 3. With command 1.b, add every locale step 11
-reports as changed, and every one it reports as not known to be unchanged.
+not it showed up in steps 1 to 3. When step 5 does not clear the code, add the
+locales step 4 leaves out as built in byte order, which the summary names. With
+command 1.b, add every locale step 11 reports as changed, and every one it
+reports as not known to be unchanged.
 
 Steps 9 and 10, in command 1.b, run step 4 again on each machine's own files,
 so the same rule holds for every locale they flag. They list `C.UTF-8` by its
@@ -42,7 +44,8 @@ They are the characters the rule that changed moves.
 Derive them from that rule. For a `localedef` change that means the boundaries
 of the affected range. Under each locale it flags, step 2 lists the characters
 its changed rules name, or says it could not identify them and that the locale
-must be considered suspicious. Step 11, in command 1.b, names the characters
+must be considered suspicious, or, for a file read with other comment or escape
+characters, that any rule in it can read differently. Step 11, in command 1.b, names the characters
 that moved, when there are few enough to list.
 
 Step 2's list is where to start, not proof that every character on it moved. A
@@ -131,8 +134,8 @@ Three things make it unlike the template.
   `LC_ALL=C` means the locale was not applied and the comparison proves
   nothing. For `C.UTF-8`, agreement with byte order is the fix. Two
   contradictory rules in one file get read in the wrong order.
-- **It is run even when the audit flagged nothing**, because nothing in steps
-  1 to 5 can reach that locale at all.
+- **It is run even when the audit flagged nothing**, because steps 1 to 5
+  read upstream's files, never your machine's `C.UTF-8`.
 
 The probe refuses to run if `C.utf8` is not in `pg_collation`.
 

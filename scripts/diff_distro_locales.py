@@ -7,7 +7,8 @@ The audit reads glibc's UPSTREAM source. A node runs a distro build with
 patches on top, so a backported collation change would be invisible to a
 tag-to-tag diff. This compares a node's /usr/share/i18n/locales/ against the
 same files at an upstream tag and reports how many differ, and -- the part that
-matters -- how many differ INSIDE the LC_COLLATE block.
+matters -- how many differ INSIDE the LC_COLLATE block, or in the comment and
+escape characters it is read with.
 
 It takes a directory rather than reaching into a node, so the transport is the
 caller's problem and the comparison is testable without one. It does NOT take
@@ -67,14 +68,19 @@ def classify_distro_diff(node_bytes, upstream_bytes):
       'collate'        -- the LC_COLLATE block differs. THE finding: for this
                           locale the upstream diff is not reading what the node
                           runs
-      'other'          -- the files differ but the block is byte-identical, so
-                          the patch landed in LC_TIME, LC_IDENTIFICATION, a
-                          comment, etc.
+      'other'          -- the files differ but the block is byte-identical
+                          and read with the same comment and escape
+                          characters, so the patch landed in LC_TIME,
+                          LC_IDENTIFICATION, a comment, etc.
       'no-collate'     -- neither side has a block; no sort order to change
 
     A block present on one side and absent on the other is a block difference,
     so it returns 'collate' -- the caller reports which side, because "the node
     has rules upstream lacks" is the case a tag diff is blind to.
+
+    So is the same block read with other comment or escape characters, which
+    are declared outside it (glibc_locale_data.reading_changed, backlog 13.7):
+    'collate', and compare_trees names that side 'both, read differently'.
 
     Compares BYTES. read_blobs decodes with errors='replace', and hundreds of
     these files carry non-ASCII: one non-UTF-8 file would collapse to U+FFFD on
@@ -91,7 +97,7 @@ def classify_distro_diff(node_bytes, upstream_bytes):
     nb, ub = collate_text(node), collate_text(up)
     if nb is None and ub is None:
         return 'no-collate'
-    if nb != ub:
+    if nb != ub or g.reading_changed(up, node):
         return 'collate'
     return 'other'
 
@@ -169,7 +175,8 @@ def compare_trees(root_a, root_b, names, label_a='a', label_b='b'):
             block_a, block_b = collate_text(text_a), collate_text(text_b)
             side[name] = (f'{label_a} only' if block_b is None else
                           f'{label_b} only' if block_a is None else
-                          'both, differing')
+                          'both, differing' if block_a != block_b else
+                          'both, read differently')
             texts[name] = (text_a, text_b)
     return buckets, side, texts
 
@@ -214,12 +221,23 @@ def print_inheritance(inherited, where, indent='  '):
 
 
 def collate_diff_lines(text_a, text_b, label_a, label_b, limit=24):
-    """A truncated unified diff of two files' LC_COLLATE blocks."""
+    """A truncated unified diff of two files' LC_COLLATE blocks, and under it
+    the characters each side is read with when they differ.
+
+    That second part is the whole finding for a file whose block is the same
+    text on both sides (classify_distro_diff), where the diff is empty and,
+    alone, would print nothing under a file reported as differing.
+    """
     block_a = collate_text(text_a) or ''
     block_b = collate_text(text_b) or ''
-    return list(difflib.unified_diff(block_a.split('\n'), block_b.split('\n'),
-                                     label_a, label_b, lineterm='',
-                                     n=1))[:limit]
+    lines = list(difflib.unified_diff(block_a.split('\n'),
+                                      block_b.split('\n'),
+                                      label_a, label_b, lineterm='',
+                                      n=1))[:limit]
+    if g.reading_changed(text_a, text_b):
+        lines += [f"read with {g.describe_reading(text_a, label_a)}",
+                  f"read with {g.describe_reading(text_b, label_b)}"]
+    return lines
 
 
 def corpus_problem(compared, expect_files=None, reference=None, floor=None,
