@@ -76,21 +76,18 @@ DO
   41 | U+100000 | plane 16 first (declared)
 (41 rows)
 
-=== 2. does C.utf8 equal byte order? READ THE THREE CASES ===
+=== 2. does C.utf8 equal byte order? READ BOTH CASES ===
  c_utf8_equals_byte_order | positions_differing 
 --------------------------+---------------------
  f                        |                  40
 (1 row)
 
 === 3. the named pairs, so a diff says which side is which ===
-        pair        | holds 
---------------------+-------
- U+007F  < U+FFFF   | f
- U+07FF  < U+FFFF   | f
- U+FFFF  < U+10FFFF | t
- U+10000 < U+20000  | t
- U+FFFFF < U+100000 | t
-(5 rows)
+       pair       | holds 
+------------------+-------
+ U+007F  < U+FFFF | f
+ U+07FF  < U+FFFF | f
+(2 rows)
 
 === 4. collversion asserted as expected-NULL (PostgreSQL 15+) ===
  collname | collversion | actual | both_null_as_expected 
@@ -160,10 +157,6 @@ SET
 (41 rows)
 
 RESET
-=== 6b. tie detector: needs no PostgreSQL, and PostgreSQL cannot do it ===
-U+10000 key: ef85b5
-U+20000 key: f0948b95
-distinct weights
 === done. diff this output against the other node. ===
 
 $ diff el8.out el9.out
@@ -260,12 +253,12 @@ $ diff el8.out el9.out
 ---
 >  t                        |                   0
 87,88c87,88
-<  U+007F  < U+FFFF   | f
-<  U+07FF  < U+FFFF   | f
+<  U+007F  < U+FFFF | f
+<  U+07FF  < U+FFFF | f
 ---
->  U+007F  < U+FFFF   | t
->  U+07FF  < U+FFFF   | t
-119,158c119,158
+>  U+007F  < U+FFFF | t
+>  U+07FF  < U+FFFF | t
+116,155c116,155
 <    2 | U+FFFF
 <    3 | U+1FFFF
 <    4 | U+2FFFF
@@ -347,9 +340,3 @@ $ diff el8.out el9.out
 >   39 | U+FFFFF
 >   40 | U+100000
 >   41 | U+10FFFF
-163,164c163,164
-< U+10000 key: ef85b5
-< U+20000 key: f0948b95
----
-> U+10000 key: f0908080
-> U+20000 key: f0a08080

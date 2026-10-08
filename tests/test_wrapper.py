@@ -927,7 +927,7 @@ class WrapperNodeToNode(unittest.TestCase):
 
     def test_the_ellipsis_scan_lines_for_each_node_are_printed(self):
         """audit.sh's steps 9/10 block prints "C (C.UTF-8): ellipsis-based"
-        for the backported C and "codepoint_collation" for the upstream one.
+        for RHEL8's C and "codepoint_collation" for the upstream one.
         This class has always produced both lines and asserted neither."""
         summary = self.out.split('AUDIT SUMMARY')[1]
         self.assertIn("-- Node's own locale data, ellipsis scan (build-old)",
