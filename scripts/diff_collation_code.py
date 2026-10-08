@@ -408,9 +408,10 @@ def check_paths(repo, paths, old_tag, new_tag):
     when the range begins really has nothing to say about it, while a file
     renamed away BEFORE the older tag reads exactly the same here and is the
     same blind spot one range earlier. A file that appears only at the new tag
-    is fine either way: the diff shows it added, in full. What `git diff`
-    cannot tell you about is a file that was renamed out from under the audit,
-    which reads exactly like "this file did not change".
+    is fine either way: the diff shows it added, in full. For a `vanished`
+    path, what `git diff` cannot tell you is where the file went: over this
+    one path it shows the old file deleted, and nothing here compares it with
+    the code at its new path, so what the move changed is not shown.
 
     Existence is asked with `ls-tree`, not `cat-file -e`. On a
     `--filter=blob:none` clone `cat-file -e` must fetch the blob to answer,
@@ -446,9 +447,7 @@ def absent_at_both(repo, paths, old_tag, new_tag):
     `old_tag` did not exist yet -- locale/C-collate-seq.c arrives in 2.35, so
     over 2.28..2.34 there is genuinely nothing to read. A file that HAS history
     there and is in neither tree was renamed away before the older tag, and
-    that is the same blind spot `vanished` exists for, one range earlier: the
-    include walk starts nowhere, TIER 3 comes back empty, and the step prints
-    its clean sentence over a walk that read nothing.
+    that is the same blind spot `vanished` exists for, one range earlier.
 
     `git log -1 <tag> -- <path>` answers it without a blob: empty output means
     no commit in that tag's history ever touched the path. Measured over
@@ -462,7 +461,7 @@ def absent_at_both(repo, paths, old_tag, new_tag):
     the ceiling of what a tier gets read. Measured with ld-collate.c spelt
     `ld-colate.c` in ENTRY_POINTS and TIER1: 2.28..2.34 reported 6 substantive
     hunks instead of 24 and a coverage of 8 files instead of 27, with the Bug
-    22668 hunks gone and no `!!` anywhere.
+    22668 hunk gone and no `!!` anywhere.
     """
     if paths:
         # `git log` on a shallow clone exits 0 with empty output for every path
@@ -598,16 +597,16 @@ def main(argv):
 
     # Derived at BOTH tags and unioned: the walk at the new tag alone cannot
     # see a file that existed at the old one and was removed or renamed away,
-    # which is the same "reads exactly like unchanged" failure check_paths()
-    # exists for.
+    # and a file nothing diffs reads exactly like one that did not change.
     derived = (reachable_from_entry_points(repo, opts.old_tag)
                | reachable_from_entry_points(repo, opts.new_tag))
     tiered = set(TIER1) | set(TIER2)
     tier3 = sorted(derived - tiered)
 
-    # ENTRY_POINTS included: if one is renamed away the whole walk collapses to
-    # nothing, and a collapsed walk reads exactly like a clean result. Each
-    # path once -- the wide-char wrappers are entry points AND in TIER1.
+    # ENTRY_POINTS included: if one is renamed away, the walk at a tag without
+    # it loses everything only it reaches, and a shrunken walk reads exactly
+    # like a complete one.
+    # Each path once -- the wide-char wrappers are entry points AND in TIER1.
     tracked_paths = list(dict.fromkeys(ENTRY_POINTS + TIER1 + TIER2))
     vanished, outside = check_paths(repo, tracked_paths,
                                     opts.old_tag, opts.new_tag)
@@ -617,15 +616,15 @@ def main(argv):
         # plain prose, printed 300 lines above a summary that went on to say
         # "a clean data diff is sufficient".
         print(f"!! {len(vanished)} tracked path(s) present at {opts.old_tag} "
-              f"and GONE at {opts.new_tag}. `git diff`")
-        print("   over a missing path is empty, not an error, so a rename "
-              "reads exactly like")
-        print('   "unchanged":')
+              f"and GONE at {opts.new_tag}. Step 5's")
+        print("   diff shows each one deleted, and nothing here compares it "
+              "with where its")
+        print("   code went:")
         for path in vanished:
             print(f"     {path}: ABSENT at {opts.new_tag}")
         print("   Find where each moved and add the new path to TIER1/TIER2 "
               "before trusting")
-        print("   a no-change result.")
+        print("   this step's result.")
         print()
     # Absent at both tags is two different facts, and only one of them is
     # harmless. Splitting them is the whole of false negative "a tracked path
@@ -647,7 +646,7 @@ def main(argv):
                   f"{opts.new_tag}")
         print("   Find where each moved and update ENTRY_POINTS/TIER1/TIER2 "
               "before trusting")
-        print("   a no-change result.")
+        print("   this step's result.")
         print()
     if never:
         print(f"!! {len(never)} tracked path(s) exist at no ref in this clone "
@@ -660,12 +659,12 @@ def main(argv):
         for path in never:
             print(f"     {path}: no ref in this clone has ever had it")
         print("   Correct the spelling, or the path if the file moved, before "
-              "trusting a")
-        print("   no-change result.")
+              "trusting")
+        print("   this step's result.")
         print()
     if not derived:
-        print("!! The include walk reached 0 file(s). Every hunk this step "
-              "reports below comes")
+        print("!! The include walk reached 0 file(s). Every hunk step 5 "
+              "reports comes")
         print("   from the curated lists alone, and TIER 3 -- the part that "
               "grows on its own as")
         print("   glibc changes -- is empty because the walk collapsed, not "
@@ -724,9 +723,10 @@ def main(argv):
     print(f"lc-collate.c and C-collate.c are in TIER 1 by hand for exactly "
           f"that reason.")
 
-    # The reasons the clean sentence is refused, each printed as its own `!!`
-    # block above. They are collected rather than tested one at a time so that
-    # adding one cannot leave the clean branch reachable by accident.
+    # The reasons this step's result is refused, whatever the count, each
+    # printed as its own `!!` block above. They are collected rather than
+    # tested one at a time so that adding one cannot leave the clean branch
+    # reachable by accident.
     blockers = []
     if vanished:
         blockers.append(f"{len(vanished)} tracked path(s) vanished before "
@@ -747,11 +747,18 @@ def main(argv):
         blockers.append("the two tags are one commit, so nothing was compared")
 
     print()
-    if total == 0 and blockers:
-        # Deliberately NOT the "No substantive collation code change" sentence:
-        # audit.sh treats that exact sentence as the clean verdict, and this is
-        # not one.
-        print("No substantive change in the files this audit could read.")
+    if blockers:
+        # Deliberately neither the clean sentence nor "N substantive hunk(s)
+        # found": audit.sh reads the first as the clean verdict and the second
+        # as hunks a reader may clear step 4's list by reading, and a file this
+        # step had to read and did not breaks both. Read only at zero, as this
+        # used to be, they were lost whenever anything else changed, and a
+        # path that vanishes always brings a change of its own, its deletion.
+        if total:
+            print(f"{total} substantive hunk(s) in the files this audit "
+                  f"could read.")
+        else:
+            print("No substantive change in the files this audit could read.")
         print("This is NOT a clean result:")
         for reason in blockers:
             print(f"  - {reason}")
