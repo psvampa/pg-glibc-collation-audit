@@ -631,7 +631,7 @@ def rpm_vercmp(a, b):
 def glibc_build():
     """The package build, e.g. 'glibc-2.34-275.el9_8.x86_64', or None.
 
-    Two builds of one glibc version are two measurements: a distro backport
+    Two builds of one glibc version are two measurements: a distro patch
     can sit between them, as one did inside RHEL8 at glibc-2.28-93.
     """
     try:

@@ -117,9 +117,9 @@ locales this tool finds for that pair.
 
 Every other 🔴 row on this page was reached by steps 1-5. This one cannot be:
 `localedata/locales/C` exists upstream only from glibc 2.35, so for a
-`2.28..2.34` comparison it is in neither tag. RHEL8 and RHEL9 both ship it by
-backport, so it is on both **nodes** — and comparing the nodes to each other is
-what settles it.
+`2.28..2.34` comparison it is in neither tag. RHEL8 and RHEL9 both ship one,
+so it is on both **nodes** — and comparing the nodes to each other is what
+settles it.
 
 Measured, and re-measured unchanged, on `glibc-2.28-251.el8_10.40` and
 `glibc-2.34-275.el9_8`, both PostgreSQL 18.6:
@@ -131,12 +131,10 @@ Measured, and re-measured unchanged, on `glibc-2.28-251.el8_10.40` and
 | `C.utf8` equals byte order? | **no**, 40 of 41 probed code points in a different position | yes, 0 |
 | database `datcollate` / `datcollversion` | `C.UTF-8` / NULL | `C.UTF-8` / NULL |
 
-So it **changed**, and the mechanism is fully accounted for rather than merely
-observed. An ellipsis range carries no weights — `localedef` computes them, and
-glibc 2.34 took the Bug 22668 commit that changed exactly that expansion. On
-top of it, planes 3 through 13 have no range at all in the RHEL8 file (Red Hat
-bug 1361965), so those code points fall to `UNDEFINED`; that is why the RHEL8
-order is scrambled rather than merely shifted. RHEL9 backported upstream's
+So it **changed**. RHEL8's file is Red Hat's own, not upstream's. Its ranges
+give a code point a place only where the UTF-8 charmap it is built with gives
+that code point's bytes, and every code point it cannot place sorts at the very
+front. RHEL9 backported upstream's
 `codepoint_collation`, which discards all collation information in favour of
 `strcmp`. Step 11, which asks each node's glibc rather than reading the file,
 measured the change too ([below](#what-step-11-measured)).
@@ -150,8 +148,8 @@ locale was never generated.
 
 **And it changed inside RHEL8 too.** `glibc-2.28-93.el8` (RHEL 8.2,
 [RHSA-2020:1828](https://access.redhat.com/errata/RHSA-2020:1828), Red Hat bug
-1361965) rewrote those ellipsis expressions so that the code points above
-U+10000 gained weights at all.
+1361965) rewrote those ellipsis expressions so that the ones that had been
+unused took effect.
 
 Both sides of that upgrade are upstream glibc 2.28, so the tag pair is
 `glibc-2.28..glibc-2.28` and steps 1-5 have nothing to compare. **Staying on

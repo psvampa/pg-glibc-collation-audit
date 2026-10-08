@@ -1252,7 +1252,7 @@ class CollationStyle(unittest.TestCase):
     def test_the_word_in_a_comment_is_not_a_declaration(self):
         """glibc-2.39:localedata/locales/C names codepoint_collation in prose
         three lines ABOVE the keyword. A substring search reads that comment as
-        a declaration -- and would then report an ellipsis-based backport as
+        a declaration -- and would then report RHEL8's ellipsis-based C as
         byte order, clearing the one locale this exists to catch."""
         prose = collate(
             "% The keyword 'codepoint_collation' in any part of any LC_COLLATE",

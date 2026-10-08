@@ -531,7 +531,7 @@ def main(argv):
     # to be ADDED in this range. The silent case is the one that matters: over
     # 2.28 -> 2.34 (RHEL8 -> RHEL9) localedata/locales/C is in neither tag, so
     # nothing was printed at all -- for the pair where C.UTF-8 demonstrably
-    # does change (Bug 22668).
+    # does change.
     blind = []
     for name in sorted(KNOWN_BACKPORTED):
         path = f'{g.LOCALES_DIR}/{name}'

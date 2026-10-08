@@ -13,11 +13,11 @@ something it cannot see has changed.
 
 ## `C.UTF-8` is invisible to a tag diff
 
-Its source file exists upstream only from glibc 2.35, and RHEL8 and RHEL9
-backport it. Over RHEL8 to RHEL9 the file is therefore on both your machines
-and in neither tag. Over RHEL9 to RHEL10 the new tag holds upstream's copy and
-the old tag still has none. Either way the five steps that read upstream
-source cannot see what your old machine runs.
+Its source file exists upstream only from glibc 2.35, and RHEL8 and RHEL9 ship
+one anyway. Over RHEL8 to RHEL9 the file is therefore on both your machines and
+in neither tag. Over RHEL9 to RHEL10 the new tag holds upstream's copy and the
+old tag still has none. Either way the five steps that read upstream source
+cannot see what your old machine runs.
 
 It is worth knowing about because it is usually the default. Almost anywhere
 `initdb` runs in a container the database collation is `C.UTF-8`, so every
