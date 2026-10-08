@@ -74,7 +74,7 @@ runs. Every summary block that needed those sources says `NOT RUN`, or `NOT
 CHECKED`, with the file's reason, such as `/usr/share/i18n/locales is empty`.
 
 **Steps 6 to 10 settle data, not order.** The weights are computed when the
-locale is built on the machine, so two machines can hold byte-identical files
+locale is built, so two machines can hold byte-identical files
 and still sort differently. That is what step 11 measures, one character at a
 time, and commands 2 and 3 measure inside PostgreSQL.
 

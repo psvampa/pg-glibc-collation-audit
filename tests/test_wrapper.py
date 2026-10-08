@@ -90,7 +90,7 @@ USAGE = [
     '       ellipsis ranges (step 9 for old, step 10 for new) -- which is',
     '       the only way that question is asked of a node supplied on its',
     '       own, since step 4 scans the new TAG, which holds at most',
-    "       upstream's C and never speaks for what your node built.",
+    "       upstream's C and never speaks for what your node has.",
     '',
     '       Supply BOTH and the run also compares the two nodes to each',
     '       other (step 8).',
@@ -2393,7 +2393,7 @@ class NodeFileWithoutSources:
             section_body(self.summary, ELLIPSIS_SIDE_NOT_RUN),
             f"{no_sources_text(self.bare)} So nothing above says whether the "
             f"{self.BARE} node's own C.UTF-8 is ellipsis-based. The other "
-            "node's scan does not answer it, because each node built its own "
+            "node's scan does not answer it, because each node has its own "
             "locales.")
 
     def test_no_block_asks_for_the_options_the_files_replace(self):

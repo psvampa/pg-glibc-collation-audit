@@ -18,17 +18,14 @@
 --     if you are running the inventory queries against production, run them
 --     without that line and accept that a langpack installed after initdb
 --     will be missing from pg_collation.
---   * RESTART PostgreSQL after installing a langpack, BEFORE running this.
---     The function takes its list from `locale -a` (a fresh subprocess, which
---     sees the new locales) but validates each one with setlocale() in the
---     backend, which resolves against the locale-archive the postmaster
---     already mapped. Without a restart it returns success with a plausible
---     count and silently imports only the old set: measured on Rocky Linux
---     8.9 / glibc-2.28-251.el8_10.40 / PostgreSQL 18.6, 72 collations
---     imported and sv_SE.utf8 still absent, versus 1006 libc collations after
---     `systemctl restart postgresql-18`. The same 72 was measured on
---     PG 16.15: the mechanism is glibc's locale-archive mapping, not
---     anything PostgreSQL versions.
+--   * RESTART PostgreSQL after installing glibc-all-langpacks, BEFORE running
+--     this. The function takes its list from `locale -a` (a fresh subprocess,
+--     which sees the new locales) but checks each one inside the backend, and
+--     glibc opens the locale archive at most once per process. Every backend
+--     inherits the postmaster's attempt, so without a restart the function
+--     returns success while the locales that package added stay missing. A
+--     single glibc-langpack-<xx> installs its locales outside the archive and
+--     needs no restart.
 --   * Needs PostgreSQL 15 or newer: it reads pg_database.datlocprovider and
 --     datcollversion and calls pg_database_collation_actual_version(), all
 --     new in 15. On 13/14, drop the datlocprovider conditions (no database
@@ -42,15 +39,13 @@
 --     plus the aliases glibc's locale.alias gives them (swedish). The queries
 --     below read each collation's locale from collcollate, so every spelling
 --     and every encoding of one locale counts as that locale. Check
---     `locale -a` first: if a locale is not generated on the box,
---     sort/PostgreSQL silently fall back to C, and two boxes both missing it
---     will agree with each other while proving nothing. In the COLLATE
---     clauses below use a name that exists for this database's encoding.
---     In a UTF8 database "sv_SE" is sv_SE.utf8.
---   * ONE LOCALE INVERTS THE RULE ABOVE: C.UTF-8. Agreement with LC_ALL=C is
+--     `locale -a` first, and in the COLLATE clauses below use a name that
+--     exists for this database's encoding. In a UTF8 database "sv_SE" is
+--     sv_SE.utf8.
+--   * ONE LOCALE INVERTS THE USUAL RULE: C.UTF-8. Agreement with LC_ALL=C is
 --     the CORRECT answer there -- it is what upstream's codepoint_collation
 --     guarantees from 2.35 on -- so reading
---     "it agrees with C, therefore it was never generated" is exactly
+--     "it agrees with C, therefore it was not applied" is exactly
 --     backwards for that one locale. It has its own script for that reason:
 --     sql/c_utf8_probe.sql. Do not fold it into this one.
 

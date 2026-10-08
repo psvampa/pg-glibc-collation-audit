@@ -8,8 +8,7 @@ measures it too, through each machine's glibc and outside PostgreSQL
 
 It covers commands 2 and 3 of [the README](../README.md#the-commands). Before
 you run either, check the setup traps in [requirements.md](requirements.md).
-Both need PostgreSQL 15 or newer, and a langpack installed in the wrong order
-will hand you a clean result that means nothing.
+Both need PostgreSQL 15 or newer.
 
 ## What the template does
 
@@ -74,9 +73,9 @@ Each of these makes a comparison agree with itself while proving nothing.
 
 ### The locale must actually be generated on both machines
 
-Check `locale -a` first. If a locale is not generated, `sort` and PostgreSQL
-silently fall back to `C`, and two machines both missing it agree with each
-other perfectly. Check the exact name the test runs under, such as
+Check `locale -a` first. If a locale is not generated, `sort` silently falls
+back to `C`, and two machines both missing it agree with each other
+perfectly. Check the exact name the test runs under, such as
 `sv_SE.utf8`. The Reindex list and step 4's list name [locales, not
 spellings](glossary.md). A name in `locale -a` belongs to a list when, without
 the part from the dot up to any `@`, it is one of that list's names
@@ -129,18 +128,13 @@ Three things make it unlike the template.
 - **It must not be edited.** The template is placeholder-driven and has to be;
   this one is fully determined, corpus included.
 - **The positive control inverts here.** Everywhere else, agreement with
-  `LC_ALL=C` means the locale was never generated and the comparison proves
+  `LC_ALL=C` means the locale was not applied and the comparison proves
   nothing. For `C.UTF-8`, agreement with byte order is the fix. Two
   contradictory rules in one file get read in the wrong order.
 - **It is run even when the audit flagged nothing**, because nothing in steps
   1 to 5 can reach that locale at all.
 
-Of the checks inside PostgreSQL, it is also the one the langpack trap cannot
-fake, since `C.utf8` exists on every machine whether or not any langpack is
-installed. It
-still needs `pg_import_system_collations()` after a postmaster restart to
-appear in `pg_collation`, and it refuses to run rather than fall back if it is
-not there.
+The probe refuses to run if `C.utf8` is not in `pg_collation`.
 
 ## What else the template reports
 
