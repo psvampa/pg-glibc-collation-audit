@@ -33,7 +33,7 @@ order; the locale data is the other.
 **build id** — the exact glibc package a machine runs, as `rpm -q glibc`
 prints it, such as `glibc-2.28-251.el8_10.40`, with or without the
 architecture. Two builds of one glibc version can sort differently, because a
-distro backport can sit between them, as one did inside RHEL8 at
+distro patch can sit between them, as one did inside RHEL8 at
 `glibc-2.28-93.el8`. Every result here is bound to the build it was taken on.
 
 **ellipsis range** (also *algorithmic range*, *range expansion*) —
@@ -90,8 +90,9 @@ alone, or only copies a byte-order locale, is byte order **by construction**,
 so no
 change to how `localedef` expands ranges can move it. Upstream's `C` declares
 it from glibc 2.35. RHEL9 backports that file, RHEL10 is glibc 2.39 and has it
-upstream, and RHEL8 ships the older ellipsis-based copy. It is the whole reason
-`C.UTF-8` changed across RHEL8→RHEL9 and cannot change across RHEL9→RHEL10.
+upstream, and RHEL8 ships Red Hat's own ellipsis-based file. It is the whole
+reason `C.UTF-8` changed across RHEL8→RHEL9 and cannot change across
+RHEL9→RHEL10.
 
 **node-to-node comparison** — comparing two nodes' own locale sources against
 each other, with no upstream tag in the middle

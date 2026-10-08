@@ -224,7 +224,7 @@ class Step2Filter(StepRun):
                     self.assertIn(f'localedata/locales/{name}', out)
 
     def test_c_utf8_is_named_on_both_pairs(self):
-        """#1: C.UTF-8 is backported by RHEL8 and RHEL9, so 'added upstream'
+        """#1: C.UTF-8 is shipped by RHEL8 and RHEL9, so 'added upstream'
         does not mean 'new on your system'. It is absent from both tags on the
         first pair and added on the second -- both must warn."""
         for old, new in ((OLD, MID), (MID, NEW)):
@@ -273,7 +273,8 @@ class Step2Filter(StepRun):
     def test_the_false_blanket_claim_is_gone(self):
         """Added files used to be reported as unable to affect an existing
         index, flat. They can, if the locale existed on the old system --
-        distros backport, which is the whole C.UTF-8 story.
+        distros ship locales upstream does not have, which is the whole
+        C.UTF-8 story.
 
         Asserted on whitespace-collapsed output, and that is the point of this
         docstring: the claim is printed across two lines, so the original
@@ -528,8 +529,7 @@ class Step4AlgorithmicRanges(StepRun):
         """Driven by the real file, not a fixture. glibc-2.39's C names
         codepoint_collation in a comment three lines above declaring it, so a
         substring search reads the comment as the declaration -- and would
-        then report RHEL's ellipsis-based backport of the same file as byte
-        order."""
+        then report RHEL8's ellipsis-based C as byte order."""
         path = f'{g.LOCALES_DIR}/C'
         contents, missing = g.read_blobs(GLIBC_CLONE, NEW, [path])
         self.assertEqual(missing, set())

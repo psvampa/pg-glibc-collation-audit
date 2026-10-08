@@ -9,7 +9,7 @@
 --
 --   * The source-diff audit cannot see it. localedata/locales/C exists
 --     upstream only from glibc 2.35. RHEL8 and RHEL9 predate that and
---     BACKPORT the file, so for the RHEL8->RHEL9 pair it is in neither tag and
+--     ship one anyway, so for the RHEL8->RHEL9 pair it is in neither tag and
 --     no tag-to-tag diff can compare it. (RHEL10 is glibc 2.39 and has
 --     upstream's copy.) scripts/diff_node_locales.py compares the two nodes'
 --     own copies and settles the DATA; it settles the ORDER only where both
@@ -34,8 +34,8 @@
 --   * It has already moved twice: between RHEL8 and RHEL9 (measured -- U+007F
 --     sorted AFTER U+FFFF under glibc 2.28 and before it under 2.34), and
 --     WITHIN RHEL8, in glibc-2.28-93.el8 (RHEL 8.2, RHSA-2020:1828, Red Hat
---     bug 1361965), which rewrote those ellipsis expressions so that code
---     points above U+10000 gained weights at all. "Same RHEL major" is not a
+--     bug 1361965), which rewrote those ellipsis expressions so that the
+--     ones that had been unused took effect. "Same RHEL major" is not a
 --     control.
 --
 -- THE POSITIVE CONTROL IS INVERTED HERE. Everywhere else in this project,
@@ -130,9 +130,9 @@ WHERE collname IN ('C', 'POSIX', 'C.utf8', 'C.UTF-8', 'pg_c_utf8')
   AND collnamespace = 'pg_catalog'::regnamespace
 ORDER BY collname;
 
--- THE CORPUS. Not a sample. It is derived from the RHEL8-era backported
--- localedata/locales/C, copied off a node (glibc-2.28-251.el8_10.40) rather
--- than from the patch's general shape, which is what it actually declares:
+-- THE CORPUS. Not a sample. It is derived from RHEL8's own
+-- localedata/locales/C, copied off a node (glibc-2.28-251.el8_10.40). This is
+-- what it actually declares:
 --
 --     order_start forward
 --     <U0000>..<UFFFF>              % plane 0
@@ -144,17 +144,14 @@ ORDER BY collname;
 --     UNDEFINED
 --     order_end
 --
--- SIX ranges, not one per plane. Read what is missing: planes 3 through 13 are
--- declared by NO range at all, so every code point in them falls to UNDEFINED
--- (Red Hat bug 1361965). So the corpus is three things, and it is exhaustive
--- over each:
+-- SIX ranges, not one per plane, and planes 3 through 13 are declared by NO
+-- range at all. On RHEL8 a code point gets a place in this order only where
+-- the UTF-8 charmap gives its bytes; every other one -- whatever no range
+-- covers, and some code points a range does cover -- sorts at the very front.
+-- So the corpus is three things, and it is exhaustive over each:
 --
---   * the first and last code point of every DECLARED range -- Bug 22668 is
---     "LC_COLLATE: Fix last character ellipsis handling", so a range's
---     endpoints are exactly where an expansion change shows up;
---   * the first and last code point of every plane declared by NO range --
---     these are the UNDEFINED ones, and on RHEL8 they are why the order is
---     scrambled rather than merely shifted;
+--   * the first and last code point of every DECLARED range;
+--   * the first and last code point of every plane declared by NO range;
 --   * the UTF-8 length boundaries, plus three ASCII anchors so a human can
 --     read the diff.
 --

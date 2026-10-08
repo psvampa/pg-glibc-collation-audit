@@ -174,8 +174,8 @@ def run_wrapper(*args, out_dir=None, env_extra=None):
 # --- fixtures for the one locale that is in no tag ---------------------------
 #
 # C.UTF-8's source file exists upstream only from glibc 2.35, while RHEL8 and
-# RHEL9 ship a backported copy. Two test modules need both shapes, and neither
-# can get the backported one from the clone -- fabricating it is the only way
+# RHEL9 ship one anyway. Test modules need both shapes, and none
+# can get RHEL8's from the clone -- fabricating it is the only way
 # to test the locale this project's first false negative was about.
 
 def flat(text):
@@ -220,14 +220,7 @@ def backported_c():
     """localedata/locales/C as RHEL8 actually ships it.
 
     Copied from glibc-2.28-251.el8_10.40 on collaudit8, 2026-09-06 -- not
-    invented. Six ellipsis ranges, which is why step 4 flags it and why Bug
-    22668 ("LC_COLLATE: Fix last character ellipsis handling") could move
-    C.UTF-8's order with this file untouched.
-
-    Note which planes are NOT here: 3 through 13 have no range at all, so
-    every code point in them falls to UNDEFINED. That is the defect Red Hat
-    bug 1361965 fixed in glibc-2.28-93.el8, and it is why 40 of 41 measured
-    code points sort out of code point order on RHEL8.
+    invented. Six ellipsis ranges, which is why step 4 flags it.
     """
     return locale_file(
         'order_start forward',
