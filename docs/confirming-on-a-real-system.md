@@ -142,10 +142,6 @@ still needs `pg_import_system_collations()` after a postmaster restart to
 appear in `pg_collation`, and it refuses to run rather than fall back if it is
 not there.
 
-There is a third way to read "equals byte order = true" that PostgreSQL cannot
-rule out, which is a build whose weights are all tied rather than correct. The
-probe settles that itself, outside PostgreSQL, as query 6b.
-
 ## What else the template reports
 
 Besides the index inventory, it reports **text partition keys**, every column
