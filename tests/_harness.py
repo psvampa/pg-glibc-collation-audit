@@ -171,7 +171,7 @@ def run_wrapper(*args, out_dir=None, env_extra=None):
     return p.returncode, (p.stdout + p.stderr).decode('utf-8', 'replace')
 
 
-# --- fixtures for the one locale that is in no tag ---------------------------
+# --- fixtures for C.UTF-8 ----------------------------------------------------
 #
 # C.UTF-8's source file exists upstream only from glibc 2.35, while RHEL8 and
 # RHEL9 ship one anyway. Test modules need both shapes, and none
@@ -237,10 +237,10 @@ def backported_c():
 def upstream_c():
     """What replaced all of that: upstream from glibc 2.35, and RHEL9 by
     backport -- collaudit9's and collaudit10's C are byte-identical to each
-    other and carry exactly this block.
+    other.
 
     The prose above the keyword is quoted from the real file, and is the trap:
-    it names codepoint_collation three lines before declaring it.
+    it names codepoint_collation before declaring it.
     """
     return locale_file(
         "% The keyword 'codepoint_collation' in any part of any LC_COLLATE",

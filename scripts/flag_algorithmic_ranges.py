@@ -15,11 +15,6 @@ range such as
     .. ..;IGNORE;IGNORE;IGNORE
     <U9FA5> <U9FA5>;IGNORE;IGNORE;IGNORE
 
-or, far more commonly, inline on one line:
-
-    collating-symbol <SAC00>..<SD7A3>  % Hangul syllables (weights constructed)
-    collating-symbol <RFB40>..<RFB41>  % first element of Han computed weights
-
 is not expanded in the data file -- glibc's locale compiler (localedef)
 expands it algorithmically at build time. If that expansion logic changes
 between two glibc releases, every character in the range can get a different
@@ -28,13 +23,6 @@ audit would wrongly report "unaffected". This is not hypothetical: glibc 2.34
 took commit 82292c99b2 ("LC_COLLATE: Fix last character ellipsis handling",
 Bug 22668), which is why ko_KR sorts differently on RHEL9 than on RHEL8
 despite localedata/locales/ko_KR being byte-identical between the two.
-
-The inline form is the one that matters most and the one this script used to
-miss: it lives in iso14651_t1_common, which carries the constructed Hangul and
-Han weights and is reached by most of the locales that define LC_COLLATE.
-Matching only a line-leading ellipsis cleared zh_CN, cmn_TW,
-iso14651_t1_pinyin and cns11643_stroke -- a false "unaffected" for the exact
-class of locale this script exists to catch.
 
 Use diff_collation_code.py to check whether the collation code actually
 changed for the version pair you care about. If it did, every locale printed
@@ -461,9 +449,9 @@ def report(texts, supported, label, out_name, next_hint,
                 # none ships /usr/share/i18n/SUPPORTED and glibc-locale-source
                 # installs none, so this mapping can only come from a tag --
                 # and the tag does not decide what the node built. The RHEL8
-                # fixture (glibc-2.28-251.el8_10.40) builds 867 locales, C.utf8
-                # among them, and audit.sh maps that node through glibc-2.28,
-                # whose SUPPORTED does not list C at all.
+                # fixture (glibc-2.28-251.el8_10.40) builds C.utf8, and
+                # audit.sh maps that node through glibc-2.28, whose SUPPORTED
+                # does not list C at all.
                 print(f"  not in {supported_tag}'s SUPPORTED -- the node's "
                       f"`locale -a` is the authority on whether these are "
                       f"built: {', '.join(unbuilt)}")

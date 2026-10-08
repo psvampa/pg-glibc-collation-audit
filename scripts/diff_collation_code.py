@@ -81,12 +81,13 @@ TIER1 = [
     # 2.28..2.39: copyright and URL lines only, so no verdict moved.
     'wcsmbs/wcscoll_l.c',
     'wcsmbs/wcsxfrm_l.c',
-    # (macro) strcoll_l.c reaches these as `#include WEIGHT_H`, where WEIGHT_H is
-    # defined by whoever includes IT -- weight.h for the narrow build, weightwc.h
-    # for the wide one. Nothing resolves that without a preprocessor, and
-    # locale/weight.h does change over 2.34..2.39.
+    # (macro) strcoll_l.c reaches the next two as `#include WEIGHT_H`, where
+    # WEIGHT_H is defined by whoever includes IT -- weight.h for the narrow
+    # build, weightwc.h for the wide one. Nothing resolves that without a
+    # preprocessor, and locale/weight.h does change over 2.34..2.39.
     'locale/weight.h',
     'locale/weightwc.h',
+    # wcscoll_l.c and wcsxfrm_l.c include this one by name.
     'locale/coll-lookup.h',
     # (TU) __collidx_table_lookup, compiled and linked, included by nobody.
     'locale/coll-lookup.c',
@@ -111,9 +112,9 @@ TIER2 = [
     'locale/loadlocale.c',            # reads the compiled tables back in
     'locale/localeinfo.h',            # the structs those tables live in
     # The keyword table is generated from this by gperf. The generated
-    # locfile-kw.h IS reachable, but it is a machine-built hash table -- 20
-    # substantive hunks over 2.34..2.39, none of them readable. This is the
-    # source those hunks mean, one line per keyword.
+    # locfile-kw.h, which the walk does not reach, is a machine-built hash
+    # table whose hunks are unreadable. This is the source they mean, one
+    # line per keyword.
     'locale/programs/locfile-kw.gperf',
 ]
 
@@ -517,9 +518,9 @@ def report_file(repo, path, rng, show_all, quiet_when_clean=False):
 
     `quiet_when_clean` suppresses the "no substantive change" line. TIER 1 and
     TIER 2 are curated and short, so naming every file that was checked is the
-    point. TIER 3 is derived and mostly clean -- 14 of 20 files over
-    2.34..2.39 -- and a line each buries the two hunks that matter. The count
-    is reported in the coverage line instead, so nothing goes unaccounted for.
+    point. TIER 3 is derived and mostly clean, and a line each buries the
+    hunks that matter. The count is reported in the coverage line instead, so
+    nothing goes unaccounted for.
     """
     # No allow_fail: `git diff` without --quiet exits 0 whether or not there
     # are differences, so a non-zero exit is always a real error. With it

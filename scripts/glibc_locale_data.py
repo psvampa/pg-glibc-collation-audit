@@ -131,9 +131,8 @@ DIFF_FLAGS = ['--text', '--no-textconv', '--no-ext-diff', '--no-color',
 # is length 2, so the alternatives were doing no work.
 #
 # It must NOT be anchored to the start of the line. The dominant form in glibc
-# is inline -- `collating-symbol <SAC00>..<SD7A3>` in iso14651_t1_common carries
-# the constructed Hangul and Han weights -- and anchoring it missed every one of
-# them, which cleared zh_CN and its pinyin siblings.
+# is inline -- `collating-symbol <SAC00>..<SD7A3>` in iso14651_t1_common -- and
+# anchoring it missed every one of them.
 ELLIPSIS_RE = re.compile(r'(?<!\.)\.{2,}')
 
 # Locale files declare their comment character; every one in glibc uses `%`.
@@ -522,7 +521,7 @@ def pair_order(repo, old, new):
     substantive hunk count, no `!!` anywhere. What it hides: step 4 scans the
     tag it is handed, so reversed it scans the older one and the locales added
     in the newer tag (ckb_IQ and mnw_MM, both `copy "iso14651_t1"` at
-    glibc-2.34, in no tag before it) drop out of the exposed set; step 2 swaps
+    glibc-2.34) drop out of the exposed set; step 2 swaps
     the reassuring "Added ... not analysed" for the noisy "Deleted ... any
     index using one of these will fail", so a locale DELETED in the real
     upgrade reads as a harmless addition; and step 3 closes over the wrong
@@ -847,12 +846,7 @@ def collate_bounds(text):
 def collate_text(text):
     """The LC_COLLATE block as text, its header and footer lines included.
 
-    Sliced from collate_bounds' line numbers rather than taken from
-    collate_block: that regex requires a newline before LC_COLLATE, so a file
-    beginning with LC_COLLATE at byte 0 returns None from it. glibc 2.23 and
-    earlier write the three master templates exactly that way, so using
-    collate_block here would silently file iso14651_t1_common -- the highest
-    fan-in file in the corpus -- under "no block at all".
+    Sliced from collate_bounds' line numbers.
 
     Lived in diff_distro_locales.py until three callers needed it.
     """
@@ -1149,9 +1143,8 @@ def classify_collation_style(text):
     both outrank 'copy-only', because a copy cannot undo what this file adds.
 
     Comments are stripped and the keyword is matched as a whole token.
-    glibc-2.39:localedata/locales/C names `codepoint_collation` in prose three
-    lines ABOVE the declaration, so a substring search reads that comment as
-    the keyword.
+    glibc-2.39:localedata/locales/C names `codepoint_collation` in prose ABOVE
+    the declaration, so a substring search reads that comment as the keyword.
     """
     block = collate_text(text)
     if block is None:
@@ -1176,11 +1169,6 @@ def scan_ellipsis(texts):
 
     Pure and shared, so a scan of a git tag and a scan of a node's
     /usr/share/i18n/locales/ cannot drift on comment_char handling.
-
-    Uses collate_text, not collate_block: see collate_text. In a tag scan the
-    difference is nil (every file from 2.24 on opens with escape_char), but a
-    node directory holds arbitrary distro files, and there the regex's blind
-    spot would clear a template rather than flag it.
     """
     flagged, with_collate = {}, 0
     for name, text in texts.items():
