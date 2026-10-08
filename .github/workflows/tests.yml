@@ -11,7 +11,7 @@ name: tests
 
 on:
   # `push` unfiltered plus `pull_request` ran this job TWICE for every pull
-  # request -- two identical four-minute runs of the same commit, measured on
+  # request -- two identical runs of the same commit, measured on
   # #51 and #52. A branch that is not main reaches GitHub as a PR, and the
   # pull_request event tests the merge result, which is the thing being
   # merged; the push event only added a second opinion about the branch head.
@@ -73,9 +73,21 @@ jobs:
         # test_locale_order, and test_published_claims when it is enabled) and
         # the classes of test_git_helpers and test_provenance that need no
         # clone having actually run.
+        #
+        # A pull request, or a run started by hand, gets the suite spread over
+        # four processes, one per processor of this runner, by
+        # tests/run_parallel.py, so its answer comes in minutes. A push to
+        # main, after the merge, runs it serially, so what the parallel runner
+        # passed runs again on main, after the merge rather than before it.
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
           set -o pipefail
-          python3 -m unittest discover -s tests -t tests -v 2>&1 | tee /tmp/out.txt
+          if [ "$EVENT" = push ]; then
+            python3 -m unittest discover -s tests -t tests -v 2>&1 | tee /tmp/out.txt
+          else
+            python3 tests/run_parallel.py -j 4 2>&1 | tee /tmp/out.txt
+          fi
           if grep -q 'skipped=' /tmp/out.txt; then
             echo "::error::tests were SKIPPED in CI: the glibc clone is unusable, so the published results were never checked"
             exit 1
