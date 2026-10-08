@@ -920,7 +920,7 @@ class DirectoryModeStepFour(NodeCase):
         the mapped names dropped every locale that tag does not build -- C
         first among them, on the node where C.utf8 is the collation initdb
         picked and `locale -a` does build it (measured on collaudit8,
-        glibc-2.28-251.el8_10.40, 2026-09-07: 867 locales, C.utf8 among them).
+        glibc-2.28-251.el8_10.40, 2026-09-07).
         The reported set and the written set are one set.
         """
         rc, text = run('flag_algorithmic_ranges.py',

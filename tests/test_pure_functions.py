@@ -44,11 +44,9 @@ class Ellipsis(unittest.TestCase):
                 self.assertEqual(len(hits), 1, f'{form} not matched')
 
     def test_inline_form_is_matched(self):
-        """The form that carries the constructed Hangul and Han weights.
+        """The inline form, as in iso14651_t1_common.
 
-        Anchoring the pattern to the start of a line missed every one of these,
-        which cleared zh_CN, cmn_TW, iso14651_t1_pinyin and cns11643_stroke --
-        a false "unaffected" for the exact class of locale step 4 exists for.
+        Anchoring the pattern to the start of a line missed every one of these.
         """
         block = 'collating-symbol <SAC00>..<SD7A3>  % Hangul syllables'
         self.assertEqual(len(g.ellipsis_hits(block)), 1)
@@ -1251,7 +1249,7 @@ class CollationStyle(unittest.TestCase):
 
     def test_the_word_in_a_comment_is_not_a_declaration(self):
         """glibc-2.39:localedata/locales/C names codepoint_collation in prose
-        three lines ABOVE the keyword. A substring search reads that comment as
+        ABOVE the keyword. A substring search reads that comment as
         a declaration -- and would then report RHEL8's ellipsis-based C as
         byte order, clearing the one locale this exists to catch."""
         prose = collate(
@@ -1610,8 +1608,8 @@ class CopyGraphFromTexts(unittest.TestCase):
                          {'en_US': ['iso14651_t1_common']})
 
     def test_a_node_only_file_participates_as_a_root(self):
-        """C is in no tag, so at a tag it can be neither a root nor a target.
-        Over a node's own corpus it is both."""
+        """A node-only file is in no tag, so at a tag it can be neither a root
+        nor a target. Over a node's own corpus it is both."""
         texts = {'C': _harness.backported_c(), 'zz_MADEUP': collate('copy "C"')}
         graph = g.copy_graph_from_texts(texts)
         self.assertEqual(g.inherited_from(graph, {'C'}), {'zz_MADEUP': ['C']})

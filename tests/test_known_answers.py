@@ -527,7 +527,7 @@ class Step4AlgorithmicRanges(StepRun):
 
     def test_the_prose_above_the_keyword_does_not_count(self):
         """Driven by the real file, not a fixture. glibc-2.39's C names
-        codepoint_collation in a comment three lines above declaring it, so a
+        codepoint_collation in a comment above declaring it, so a
         substring search reads the comment as the declaration -- and would
         then report RHEL8's ellipsis-based C as byte order."""
         path = f'{g.LOCALES_DIR}/C'

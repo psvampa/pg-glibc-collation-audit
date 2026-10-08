@@ -120,9 +120,9 @@ def style_transition(old_text, new_text):
     """(old style, new style) -- a verdict in its own right.
 
     'ellipsis' -> 'codepoint' means the locale stopped depending on what
-    localedef does with ranges and became byte order by construction: upstream
-    made exactly that change to C at glibc 2.35. Either way round, it is a
-    change in what the locale IS, not only in what its bytes say.
+    localedef does with ranges and became byte order by construction. Either
+    way round, it is a change in what the locale IS, not only in what its
+    bytes say.
     """
     return g.classify_collation_style(old_text), \
         g.classify_collation_style(new_text)
