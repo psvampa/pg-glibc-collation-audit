@@ -129,7 +129,6 @@ Measured, and re-measured unchanged, on `glibc-2.28-251.el8_10.40` and
 | its `LC_COLLATE` | six **ellipsis ranges** — planes 0, 1, 2, 14, 15, 16, then `UNDEFINED` | the single keyword **`codepoint_collation`** |
 | steps 9 and 10, over the node's directory | flagged | byte order by construction |
 | `C.utf8` equals byte order? | **no**, 40 of 41 probed code points in a different position | yes, 0 |
-| `strxfrm` key for U+10000 | `ef85b5` — a computed weight | `f0908080` — the UTF-8 bytes themselves |
 | database `datcollate` / `datcollversion` | `C.UTF-8` / NULL | `C.UTF-8` / NULL |
 
 So it **changed**, and the mechanism is fully accounted for rather than merely
@@ -176,7 +175,7 @@ statement rather than a measurement that happened to come out clean: both
 nodes' `/usr/share/i18n/locales/C` is byte-identical and declares
 `codepoint_collation`, so there is no expansion logic left for a `localedef`
 change to move. The 41-code-point probe returns identical output on both
-nodes, down to the sort keys —
+nodes —
 [`examples/c-utf8-probe-rhel9-vs-rhel10.txt`](../examples/c-utf8-probe-rhel9-vs-rhel10.txt).
 
 Full output:

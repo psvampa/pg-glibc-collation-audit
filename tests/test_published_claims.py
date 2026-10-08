@@ -374,6 +374,74 @@ class ThePublishedOutputsMatchTheirProse(unittest.TestCase):
                 self.assertIn(build, text, os.path.basename(path))
 
 
+def node_output(text, name):
+    """The first node's own output in a probe transcript: the lines between
+    its `$ psql` line and its `$ diff` line.
+
+    Refuses a transcript where either line is missing, doubled or out of
+    order, rather than comparing whatever part of it a looser cut would
+    return."""
+    lines = text.split('\n')
+    psql = [i for i, line in enumerate(lines) if line.startswith('$ psql ')]
+    diff = [i for i, line in enumerate(lines) if line.startswith('$ diff ')]
+    if len(psql) != 1 or len(diff) != 1 or psql[0] > diff[0]:
+        raise AssertionError(f'{name}: expected one `$ psql` line followed by '
+                             f'one `$ diff` line, found {len(psql)} and '
+                             f'{len(diff)}')
+    return lines[psql[0] + 1:diff[0]]
+
+
+def query3_section(text):
+    """What lies between query 3's heading and query 4's, in the probe or in
+    a transcript. Refuses when either heading is not there exactly once."""
+    for mark in ('=== 3.', '=== 4.'):
+        if text.count(mark) != 1:
+            raise AssertionError(f'{mark!r} appears {text.count(mark)} times')
+    return text.split('=== 3.')[1].split('=== 4.')[0]
+
+
+class TheProbeTranscriptsComeFromTheProbe(unittest.TestCase):
+    """Nothing tied the published transcripts to the probe said to have
+    printed them. Measured by false-negative-reviewer on 2026-10-08: putting
+    the deleted query 6b back into one transcript, deleting query 3 from the
+    probe, or giving query 3 a third pair all left this module green. A
+    change to the probe has to bring its transcripts with it, re-run on the
+    machines, and this is what says so."""
+
+    def setUp(self):
+        self.probe = read(PROBE)
+        self.headings = re.findall(r"^\\echo '(.*)'$", self.probe, re.M)
+        self.assertTrue(self.headings, 'no \\echo heading read from the probe')
+        for heading in self.headings:
+            self.assertTrue(heading.startswith('=== '),
+                            f'a probe heading this test cannot place: '
+                            f'{heading!r}')
+        # The quoted labels only: the comment above the query names a pair
+        # too, unquoted.
+        self.pairs = [' '.join(p.split()) for p in re.findall(
+            r"'(U\+[0-9A-F]+ +< U\+[0-9A-F]+)'", query3_section(self.probe))]
+        self.assertTrue(self.pairs, 'no query 3 pair read from the probe')
+
+    def test_each_transcript_prints_the_probe_s_headings_in_order(self):
+        for path in (EXAMPLE_8_9, EXAMPLE_9_10):
+            name = os.path.basename(path)
+            with self.subTest(path=name):
+                printed = [line for line in node_output(read(path), name)
+                           if line.startswith('=== ')]
+                self.assertEqual(printed, self.headings)
+
+    def test_each_transcript_prints_the_probe_s_query_3_pairs(self):
+        for path in (EXAMPLE_8_9, EXAMPLE_9_10):
+            name = os.path.basename(path)
+            with self.subTest(path=name):
+                section = query3_section(
+                    '\n'.join(node_output(read(path), name)))
+                printed = [' '.join(p.split()) for p in re.findall(
+                    r'^ (U\+[0-9A-F]+ +< U\+[0-9A-F]+) *\| [tf]$',
+                    section, re.M)]
+                self.assertEqual(printed, self.pairs)
+
+
 class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
     """A quoted output block goes stale silently: the tool changes and the
     quote keeps reading as current."""

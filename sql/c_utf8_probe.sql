@@ -41,9 +41,8 @@
 -- THE POSITIVE CONTROL IS INVERTED HERE. Everywhere else in this project,
 -- agreement with LC_ALL=C means the locale was never generated and the
 -- comparison proves nothing. For C.UTF-8, agreement with byte order is the
--- CORRECT answer -- it is what the fix produces, and what upstream's
--- codepoint_collation guarantees from glibc 2.35 on. Query 2 spells out how to
--- read it, including the third case where agreement means neither.
+-- CORRECT answer -- it is what upstream's codepoint_collation guarantees from
+-- glibc 2.35 on. Query 2 spells out how to read it.
 --
 -- Notes before you run it:
 --   * DROPS AND RECREATES a table named c_utf8_probe. Point it at a scratch
@@ -237,24 +236,19 @@ END $$;
 \echo '=== 1. the order C.utf8 produces on this node (diff this) ==='
 -- Single sort key. PostgreSQL breaks strcoll ties with strcmp for a
 -- deterministic collation, so the printed order is total either way -- which
--- also means this query CANNOT see a tie. Query 6b is the disambiguator.
+-- also means this query CANNOT see a tie.
 SELECT row_number() OVER (ORDER BY w COLLATE "C.utf8") AS pos, cp, kind
 FROM c_utf8_probe
 ORDER BY pos;
 
-\echo '=== 2. does C.utf8 equal byte order? READ THE THREE CASES ==='
--- false -> the glibc 2.28-era bug. C.UTF-8 is NOT code point order; query 1
---          shows where it diverges. An index on this collation moves on
---          upgrade.
--- true  -> the corrected order: glibc >= 2.34, or upstream >= 2.35 where
---          codepoint_collation makes it byte order by construction. DO NOT
---          read this as "the locale fell back to C" -- for C.UTF-8 agreement
---          with byte order IS the right answer, the opposite of the rule the
---          rest of this project uses.
--- true  -> ALSO what you get on a build where the weights above U+10000 are
---          all TIED and PostgreSQL's byte tie-break supplied the order. That
---          is the shape of the intra-RHEL8 change. Query 6b tells the two
---          apart, and nothing inside PostgreSQL can.
+\echo '=== 2. does C.utf8 equal byte order? READ BOTH CASES ==='
+-- false -> C.UTF-8 is NOT code point order, as on RHEL8, whose C is Red Hat's
+--          own; query 1 shows where it diverges. An index on this collation
+--          moves on upgrade.
+-- true  -> code point order, which codepoint_collation gives by
+--          construction. DO NOT read this as "the locale fell back to C" --
+--          for C.UTF-8 agreement with byte order IS the right answer, the
+--          opposite of the rule the rest of this project uses.
 WITH under_locale AS (
   SELECT cp, row_number() OVER (ORDER BY w COLLATE "C.utf8") AS pos
   FROM c_utf8_probe
@@ -268,8 +262,7 @@ FROM under_locale l JOIN under_bytes b USING (cp);
 
 \echo '=== 3. the named pairs, so a diff says which side is which ==='
 -- U+007F < U+FFFF is THE measured inversion: false on glibc 2.28, true on
--- 2.34. U+10000 < U+20000 is the above-BMP pair that covers the intra-RHEL8
--- change, where those code points had no weights at all before 8.2.
+-- 2.34.
 SELECT pair, holds FROM (
   SELECT 1 AS n, 'U+007F  < U+FFFF' AS pair,
          (SELECT w FROM c_utf8_probe WHERE cp = 'U+007F')
@@ -278,18 +271,6 @@ SELECT pair, holds FROM (
   SELECT 2, 'U+07FF  < U+FFFF',
          (SELECT w FROM c_utf8_probe WHERE cp = 'U+07FF')
        < (SELECT w FROM c_utf8_probe WHERE cp = 'U+FFFF')
-  UNION ALL
-  SELECT 3, 'U+FFFF  < U+10FFFF',
-         (SELECT w FROM c_utf8_probe WHERE cp = 'U+FFFF')
-       < (SELECT w FROM c_utf8_probe WHERE cp = 'U+10FFFF')
-  UNION ALL
-  SELECT 4, 'U+10000 < U+20000',
-         (SELECT w FROM c_utf8_probe WHERE cp = 'U+10000')
-       < (SELECT w FROM c_utf8_probe WHERE cp = 'U+20000')
-  UNION ALL
-  SELECT 5, 'U+FFFFF < U+100000',
-         (SELECT w FROM c_utf8_probe WHERE cp = 'U+FFFFF')
-       < (SELECT w FROM c_utf8_probe WHERE cp = 'U+100000')
 ) t ORDER BY n;
 
 \echo '=== 4. collversion asserted as expected-NULL (PostgreSQL 15+) ==='
@@ -347,14 +328,5 @@ SELECT row_number() OVER (ORDER BY w) AS pos, cp
 FROM c_utf8_probe
 ORDER BY pos;
 RESET enable_seqscan;
-
-\echo '=== 6b. tie detector: needs no PostgreSQL, and PostgreSQL cannot do it ==='
--- varstr_cmp and the sortsupport comparator both break a strcoll tie with
--- strcmp, and abbreviated keys cannot bypass it. So a build where every
--- above-BMP weight is TIED is indistinguishable, through SQL alone, from one
--- with correct byte order -- and that is precisely the shape of the
--- intra-RHEL8 change. Equal sort keys below mean every SQL answer above came
--- from PostgreSQL's byte tie-break, not from the locale.
-\! python3 -c "import locale; locale.setlocale(locale.LC_COLLATE,'C.utf8'); k=[locale.strxfrm(chr(c)).encode().hex() for c in (0x10000,0x20000)]; print('U+10000 key:',k[0]); print('U+20000 key:',k[1]); print('TIED -- the locale gives these no distinct weights' if k[0]==k[1] else 'distinct weights')" 2>/dev/null || echo 'python3 not available; run the strxfrm check by hand (see docs/confirming-on-a-real-system.md)'
 
 \echo '=== done. diff this output against the other node. ==='
