@@ -26,6 +26,7 @@ import sys
 import textwrap
 
 LOCALES_DIR = 'localedata/locales'
+SUPPORTED = 'localedata/SUPPORTED'
 
 # Fewer files than this under localedata/locales/ is not a glibc locale corpus.
 # The five pinned tags carry 286 (2.12), 312 (2.17), 353 (2.28), 355 (2.34) and
@@ -235,11 +236,11 @@ def run_git(args, repo, allow_fail=False):
     """Run git, aborting on failure unless explicitly allowed.
 
     `allow_fail=True` is for EXISTENCE PROBES only -- where the caller inspects
-    `returncode` and a non-zero exit is itself the answer (`_is_glibc_clone`,
-    `check_refs`). Never use it to READ CONTENT. git prints nothing on stdout
-    when it fails, so a suppressed failure is indistinguishable from "there is
-    nothing here", and in this tool "nothing here" means "this file did not
-    change" -- a clean verdict, produced by not having looked. That is what
+    `returncode` and a non-zero exit is itself the answer. Never use it to
+    READ CONTENT. git prints nothing on stdout when it fails, so a suppressed
+    failure is indistinguishable from "there is nothing here", and in this
+    tool "nothing here" means "this file did not change" -- a clean verdict,
+    produced by not having looked. That is what
     `report_file` and `check_paths` used to do, on a --filter=blob:none clone
     whose fetches really do fail:
 
@@ -273,25 +274,82 @@ def git_diff(repo, args):
                    repo).stdout.decode('utf-8', 'replace')
 
 
+_COMMIT_LINE_RE = re.compile(rb'([0-9a-f]{40}|[0-9a-f]{64}) commit \d+')
+
+
+def resolve_commits(repo, refs):
+    """{ref: commit id} for each ref that names a commit, asked of git in ONE
+    `cat-file --batch-check` rather than one `rev-parse` per ref.
+
+    Each request line gets one answer line, in order, at exit 0: the commit,
+    or the request followed by `missing` or `ambiguous`. A ref with a newline
+    in it would be two requests, so it is not sent and stays unresolved.
+    Measured with git 2.54 on the pinned clone against what this replaced,
+    `rev-parse --verify <ref>^{commit}`: the same commit for tags and for
+    full and short ids, and unresolved wherever rev-parse exits 1 -- a name
+    that does not exist, an ambiguous short id, a tree, an empty name, a name
+    with spaces or a leading `-`, a tag spelt in the other Unicode form once
+    the refs are packed.
+
+    An answer it cannot read dies: a ref left out of the result is called
+    missing by check_refs, so an unread line must not become one.
+    """
+    asked = [r for r in refs if '\n' not in r]
+    if not asked:
+        return {}
+    # Bytes, as argv carries them: a ref that is not UTF-8 is sent as given,
+    # and git echoes it back byte for byte.
+    requests = [f'{r}^{{commit}}'.encode('utf-8', 'surrogateescape')
+                for r in asked]
+    env = {k: v for k, v in os.environ.items() if k != 'GIT_DIFF_OPTS'}
+    p = subprocess.run(['git', *GIT_CONFIG_OVERRIDES, 'cat-file',
+                        '--batch-check'], cwd=repo, env=env,
+                       input=b''.join(q + b'\n' for q in requests),
+                       capture_output=True)
+    if p.returncode != 0:
+        die(f"`git cat-file --batch-check` failed in {repo}:\n"
+            f"{p.stderr.decode('utf-8', 'replace').strip()}")
+    lines = p.stdout.split(b'\n')
+    if lines[-1] == b'':
+        lines.pop()
+    if len(lines) != len(asked):
+        die(f"`git cat-file --batch-check` answered {len(lines)} line(s) for "
+            f"{len(asked)} ref(s) in {repo}, so no answer can be matched to "
+            f"its ref.")
+    found = {}
+    for ref, request, line in zip(asked, requests, lines):
+        m = _COMMIT_LINE_RE.fullmatch(line)
+        if m:
+            found[ref] = m.group(1).decode()
+        elif line not in (request + b' missing', request + b' ambiguous'):
+            die(f"unreadable `git cat-file --batch-check` answer for {ref!r}: "
+                f"{line!r}")
+    return found
+
+
 def check_refs(repo, *refs):
     """Verify every ref resolves, fetching tags once if some are missing.
 
     A stale clone from an earlier run simply does not have newer tags, and
     `git diff` against a missing tag is a confusing failure at best.
+
+    Returns {ref: commit id}, read after any fetch, for pair_order to take
+    instead of asking git again.
     """
-    missing = [r for r in refs
-               if run_git(['rev-parse', '--verify', '--quiet', f'{r}^{{commit}}'],
-                          repo, allow_fail=True).returncode != 0]
+    commits = resolve_commits(repo, refs)
+    missing = [r for r in refs if r not in commits]
     if not missing:
-        return
+        return commits
     print(f"note: {', '.join(missing)} not present in {repo}, fetching tags...",
           file=sys.stderr)
     run_git(['fetch', '--tags', '--quiet'], repo)
-    still = [r for r in missing
-             if run_git(['rev-parse', '--verify', '--quiet', f'{r}^{{commit}}'],
-                        repo, allow_fail=True).returncode != 0]
+    # Every ref again, not only the missing ones: the fetch also updates
+    # remote-tracking branches, and the steps read every ref after it.
+    commits = resolve_commits(repo, refs)
+    still = [r for r in refs if r not in commits]
     if still:
         die(f"unknown git ref(s) after fetching tags: {', '.join(still)}")
+    return commits
 
 
 def warn(text, split_words=True):
@@ -445,10 +503,11 @@ def nearest_glibc_tag(repo, rev):
     the clone has no object for; and in a repository where NO tag matches the
     glob, git checks the empty name set first and every cause collapses into
     the first message. None of it is parsed: the phrase says what describe
-    answered. `rev-parse --verify` upstream removes the unreadable-rev cause
-    for `pair_order`'s own calls; a clone that never fetched tags can still
-    reach the glob case, and lands on undetermined with neither side named,
-    which is the conservative direction.
+    answered. Both refs are resolved to commits before `pair_order` asks --
+    by check_refs, or by its own `rev-parse --verify` -- which removes the
+    unreadable-rev cause for its calls; a clone that never fetched tags can
+    still reach the glob case, and lands on undetermined with neither side
+    named, which is the conservative direction.
     """
     p = run_git(['describe', '--tags', '--abbrev=0', '--match',
                  'glibc-[0-9]*', rev], repo, allow_fail=True)
@@ -475,7 +534,7 @@ def lineage_phrase(ref, found):
             f'(release {release[0]}.{release[1]})')
 
 
-def pair_order(repo, old, new):
+def pair_order(repo, old, new, commits=None):
     """Which direction this pair runs in. Returns (status, detail).
 
     status is one of:
@@ -527,10 +586,14 @@ def pair_order(repo, old, new):
     upgrade reads as a harmless addition; and step 3 closes over the wrong
     tag's copy graph.
     """
-    shas = []
-    for ref in (old, new):
-        p = run_git(['rev-parse', '--verify', f'{ref}^{{commit}}'], repo)
-        shas.append(p.stdout.decode('utf-8', 'replace').strip())
+    if commits is not None:
+        # check_refs' answer for these two refs, so they are not asked twice.
+        shas = [commits[old], commits[new]]
+    else:
+        shas = []
+        for ref in (old, new):
+            p = run_git(['rev-parse', '--verify', f'{ref}^{{commit}}'], repo)
+            shas.append(p.stdout.decode('utf-8', 'replace').strip())
     if shas[0] == shas[1]:
         return 'same', f'{old} and {new} are one commit, {shas[0][:12]}'
 
@@ -553,7 +616,7 @@ def pair_order(repo, old, new):
         f'{pair}: neither is an ancestor of the other, and {described}')
 
 
-def require_pair_order(repo, old, new, allow_reverse=False):
+def require_pair_order(repo, old, new, allow_reverse=False, commits=None):
     """Refuse a reversed pair -- or say out loud that one was allowed.
 
     Deciding what the pair IS (pair_order) and deciding what to do about it are
@@ -568,7 +631,7 @@ def require_pair_order(repo, old, new, allow_reverse=False):
     prints it into its own log -- measured, steps 1, 2 and 5 -- and the
     summary's warnings block repeats it once.
     """
-    status, detail = pair_order(repo, old, new)
+    status, detail = pair_order(repo, old, new, commits)
     if status == 'same':
         warn(f"{old} and {new} are the same commit. Steps 1, 2 and 5 compare "
              f"upstream source against itself. Steps 1 to 3 can only report "
@@ -705,24 +768,38 @@ def read_blobs(repo, tag, paths):
     answers "I do not have it" -- is printed by `cat-file --batch` as
     `<request> missing` at exit 0 (measured, git 2.50), the same line as a path
     that does not exist. A caller whose paths came from that tag's own tree
-    uses read_blobs_strict, which says the read failed.
+    treats `missing` as a read that failed, as read_blobs_strict and
+    require_read do.
     """
-    paths = list(paths)
-    if not paths:
-        return {}, set()
-    req = ''.join(f'{tag}:{p}\n' for p in paths).encode()
+    return read_blobs_at(repo, [(tag, paths)])[0]
+
+
+def read_blobs_at(repo, groups):
+    """read_blobs for several (tag, paths) groups in ONE `git cat-file
+    --batch`, so a step that reads at two tags starts one git, not one per
+    read. Returns [(contents, missing), ...], one pair per group, in order.
+    """
+    groups = [(tag, list(paths)) for tag, paths in groups]
+    results = [({}, set()) for _ in groups]
+    wanted = [(i, tag, path) for i, (tag, paths) in enumerate(groups)
+              for path in paths]
+    if not wanted:
+        return results
+    req = ''.join(f'{tag}:{p}\n' for _, tag, p in wanted).encode()
     p = subprocess.run(['git', 'cat-file', '--batch'], cwd=repo,
                        input=req, capture_output=True)
     if p.returncode != 0:
         die(f"`git cat-file --batch` failed in {repo}:\n"
             f"{p.stderr.decode('utf-8', 'replace').strip()}")
     out = p.stdout
-    contents, missing, pos = {}, set(), 0
-    for path in paths:
+    pos = 0
+    for i, tag, path in wanted:
+        contents, missing = results[i]
         nl = out.find(b'\n', pos)
         if nl < 0:
+            read = sum(len(c) for c, _ in results)
             die(f"truncated `git cat-file --batch` output while reading "
-                f"{tag}:{path} (read {len(contents)} of {len(paths)} blobs)")
+                f"{tag}:{path} (read {read} of {len(wanted)} blobs)")
         header = out[pos:nl].decode('utf-8', 'replace')
         pos = nl + 1
         # "<oid> missing" / "<oid> ambiguous" carry no body.
@@ -734,9 +811,19 @@ def read_blobs(repo, tag, paths):
         except (IndexError, ValueError):
             die(f"unparsable `git cat-file --batch` header for {tag}:{path}: "
                 f"{header!r}")
+        # The body and the newline after it, or the stream was cut short:
+        # a slice past the end is shorter, not an error, and a cut file
+        # would be judged as if it were whole.
+        if out[pos + size:pos + size + 1] != b'\n':
+            die(f"truncated `git cat-file --batch` output inside {tag}:{path}: "
+                f"its header promised {size} bytes")
         contents[path] = out[pos:pos + size].decode('utf-8', 'replace')
         pos += size + 1  # body plus its trailing newline
-    return contents, missing
+    if pos != len(out):
+        die(f"`git cat-file --batch` printed {len(out) - pos} byte(s) more "
+            f"than the {len(wanted)} answer(s) asked for, so they may not "
+            f"line up with the requests.")
+    return results
 
 
 def read_blobs_strict(repo, tag, paths, what):
@@ -752,6 +839,13 @@ def read_blobs_strict(repo, tag, paths, what):
     incomplete rather than just listing paths.
     """
     contents, missing = read_blobs(repo, tag, paths)
+    require_read(tag, paths, missing, what)
+    return contents
+
+
+def require_read(tag, paths, missing, what):
+    """read_blobs_strict's refusal, for a caller that read in a batch of its
+    own (read_blobs_at)."""
     if missing:
         die(f"{len(missing)} of {len(paths)} file(s) listed at {tag} could not "
             f"be read while building {what}: "
@@ -760,21 +854,24 @@ def read_blobs_strict(repo, tag, paths, what):
             f"       These came from the tree at {tag}, so they exist -- the "
             f"read failed. On a --filter=blob:none clone that usually means a "
             f"fetch could not happen. Re-run with the promisor reachable.")
-    return contents
 
 
 def list_locale_files(repo, tag):
     """Every file under localedata/locales/ at `tag`, as repo-relative paths.
 
-    Aborts below MIN_LOCALE_FILES. Every caller builds a result from this list
-    -- the copy graph, the ellipsis scan, step 2's diff pathspec -- and a
-    result built from nothing reads as "nothing changed", which is the
-    reassuring direction. The node-reading modes had this guard from the
+    Aborts below MIN_LOCALE_FILES. Every caller builds a result from this
+    list, and a result built from nothing reads as "nothing changed", which
+    is the reassuring direction. The node-reading modes had this guard from the
     start; the tag modes did not.
     """
     out = run_git(['ls-tree', '-r', '--name-only', tag, '--', LOCALES_DIR + '/'],
                   repo).stdout.decode('utf-8', 'replace')
-    paths = [ln for ln in out.splitlines() if ln.strip()]
+    # On '\n' only. git ends each name there, and under core.quotePath=false
+    # prints U+0085, U+2028 and U+2029 as they are, where splitlines() also
+    # cuts: a file `x<U+2028>localedata/locales/C` listed a C that is not
+    # there, and step 2 then dropped its C.UTF-8 note (false-negative-
+    # reviewer, measured with git 2.54).
+    paths = [ln for ln in out.split('\n') if ln.strip()]
     if len(paths) < MIN_LOCALE_FILES:
         die(f"only {len(paths)} file(s) under {LOCALES_DIR}/ at {tag}, below "
             f"the floor of {MIN_LOCALE_FILES}. That is not a glibc locale "
@@ -1483,8 +1580,14 @@ def supported_map(repo, tag):
     locale takes: the archive and RHEL add others (sv_SE.iso885915), and
     locale.alias adds swedish (backlog 13.1).
     """
-    contents, missing = read_blobs(repo, tag, ['localedata/SUPPORTED'])
-    if missing:
+    contents, _ = read_blobs(repo, tag, [SUPPORTED])
+    return parse_supported(contents.get(SUPPORTED), tag)
+
+
+def parse_supported(text, tag):
+    """supported_map, for a caller that read SUPPORTED in a batch of its own.
+    `text` is None when the read found nothing, and that dies here too."""
+    if text is None:
         # Returning {} here made every locale print as "not listed in
         # SUPPORTED, so normally absent from `locale -a`" -- a false and
         # reassuring claim -- and wrote an empty step4 list under the heading
@@ -1493,7 +1596,7 @@ def supported_map(repo, tag):
             f"locales are built by default, or the names they are installed "
             f"under.")
     out = {}
-    for line in contents['localedata/SUPPORTED'].split('\n'):
+    for line in text.split('\n'):
         line = line.strip().rstrip('\\').strip()
         if not line or line.startswith('#') or '=' in line:
             continue
@@ -1588,11 +1691,11 @@ def _main(argv):
             die("usage: glibc_locale_data.py order [--allow-reverse] "
                 "[--quiet] <old_tag> <new_tag>")
         repo = find_repo()
-        check_refs(repo, *tags)
+        commits = check_refs(repo, *tags)
         sink = io.StringIO() if quiet else sys.stderr
         with contextlib.redirect_stdout(sink):
             status = require_pair_order(repo, tags[0], tags[1],
-                                        allow_reverse=allow)
+                                        allow_reverse=allow, commits=commits)
         print(status)
         return 0
     if len(argv) >= 2 and argv[0] == 'fanin':

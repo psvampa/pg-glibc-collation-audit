@@ -613,13 +613,14 @@ def main(argv):
     opts = ap.parse_args(argv)
 
     repo = g.find_repo(opts.repo)
-    g.check_refs(repo, opts.old_tag, opts.new_tag)
+    commits = g.check_refs(repo, opts.old_tag, opts.new_tag)
 
     # Reversed, this step reads the same diff backwards and reaches the same
     # hunk count, so nothing in its output would have said which direction it
     # was given. It asks git instead of assuming.
     order = g.require_pair_order(repo, opts.old_tag, opts.new_tag,
-                                 allow_reverse=opts.allow_reverse)
+                                 allow_reverse=opts.allow_reverse,
+                                 commits=commits)
     rng = f'{opts.old_tag}..{opts.new_tag}'
 
     print(f"Collation code changes between {opts.old_tag} and {opts.new_tag}")

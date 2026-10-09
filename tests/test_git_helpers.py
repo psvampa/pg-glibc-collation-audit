@@ -768,6 +768,48 @@ class UnreadableBlobsAreNotDropped(unittest.TestCase):
 
 
 @needs_clone
+class OneBatchForSeveralTags(unittest.TestCase):
+    """read_blobs_at: step 2 reads at two tags in one `cat-file --batch`.
+    Each group must get its own answers: a body landing in the wrong group
+    would judge a file on the other tag's text, and a `missing` landing in
+    the wrong group would refuse the wrong read or none."""
+
+    SV = 'localedata/locales/sv_SE'
+    NONE = 'localedata/locales/no-such-locale'
+
+    def test_each_group_gets_its_own_answers(self):
+        (old, old_missing), (mid, mid_missing), (empty, none) = g.read_blobs_at(
+            GLIBC_CLONE, [(OLD, [self.SV, self.NONE]), (MID, [self.SV]),
+                          (MID, [])])
+        self.assertEqual(old, g.read_blobs(GLIBC_CLONE, OLD, [self.SV])[0])
+        self.assertEqual(mid, g.read_blobs(GLIBC_CLONE, MID, [self.SV])[0])
+        self.assertNotEqual(old[self.SV], mid[self.SV],
+                            'sv_SE no longer differs between the two tags; '
+                            'this test cannot tell the groups apart')
+        self.assertEqual((old_missing, mid_missing), ({self.NONE}, set()))
+        self.assertEqual((empty, none), ({}, set()))
+
+    def test_a_stream_cut_inside_a_body_or_too_long_is_refused(self):
+        """A header promises a size, and a slice past the end of the stream
+        is shorter rather than an error: a body cut short was taken as the
+        whole file. Output left over after the last answer means the
+        answers may not line up with the requests (false-negative-reviewer).
+        """
+        for stdout, said in ((b'abc blob 5000\nshort\n', 'truncated'),
+                             (b'abc blob 2\nok\nextra\n', 'more than')):
+            with self.subTest(said=said):
+                rc, out = in_subprocess(
+                    "class R:\n"
+                    "    returncode = 0\n"
+                    "    stdout = %r\n"
+                    "    stderr = b''\n"
+                    "g.subprocess.run = lambda *a, **k: R()\n"
+                    "g.read_blobs_at(repo, [(%r, ['x'])])" % (stdout, OLD))
+                self.assertNotEqual(rc, 0, out)
+                self.assertIn(said, out)
+
+
+@needs_clone
 class MissingIsNotUnchanged(unittest.TestCase):
     """"Step 5 could not tell 'unchanged' from 'not there'".
 
@@ -1432,6 +1474,74 @@ class TheStepsRefuseAReversedPair(unittest.TestCase):
         self.assertIn('Not an audit of an upgrade', flat(out))
 
 
+class AMissingRefIsNamed(unittest.TestCase):
+    """check_refs: the refs are asked of git in one `cat-file --batch-check`,
+    and when one does not resolve, tags are fetched once and the refs are
+    asked again in one more; a ref still unresolved is named. A clone of a
+    local repository, so the fetch needs no network."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-refs-')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.origin = os.path.join(self.tmp, 'origin')
+        self.clone = os.path.join(self.tmp, 'clone')
+        os.makedirs(self.origin)
+        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+        git(self.origin, 'init', '-q', env=env)
+        git(self.origin, 'commit', '-q', '--allow-empty', '-m', 't1', env=env)
+        git(self.origin, 'tag', 't1', env=env)
+        git(self.tmp, 'clone', '-q', self.origin, self.clone, env=env)
+        self.env = env
+
+    def sha(self, repo, ref):
+        return subprocess.run(['git', 'rev-parse', f'{ref}^{{commit}}'],
+                              cwd=repo, check=True, capture_output=True
+                              ).stdout.decode().strip()
+
+    def test_a_ref_nothing_resolves_is_named_after_the_fetch(self):
+        rc, out = in_subprocess(
+            "g.check_refs(%r, 't1', 'no-such-ref')" % self.clone)
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('no-such-ref not present', out)
+        self.assertIn('unknown git ref(s) after fetching tags: no-such-ref',
+                      out)
+
+    def test_a_tag_the_fetch_brings_is_resolved(self):
+        git(self.origin, 'commit', '-q', '--allow-empty', '-m', 'later',
+            env=self.env)
+        git(self.origin, 'tag', 'later', env=self.env)
+        self.assertEqual(g.check_refs(self.clone, 't1', 'later'),
+                         {'t1': self.sha(self.origin, 't1'),
+                          'later': self.sha(self.origin, 'later')})
+
+    def test_a_ref_with_a_newline_is_missing_not_two_requests(self):
+        """Sent as is, `t1\nt1` would be two request lines for one ref, and
+        the answers would no longer line up with the refs."""
+        rc, out = in_subprocess(
+            "g.check_refs(%r, 't1', 't1\\nt1')" % self.clone)
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('unknown git ref(s) after fetching tags: t1\nt1', out)
+
+    def test_an_answer_that_cannot_be_matched_to_its_ref_dies(self):
+        """A missing ref is fetched for and named, so an answer read wrong
+        must not quietly become one: one line short, or a line of no known
+        shape, dies."""
+        for answer, said in ((b'missing-the-second-line\n', 'answered 1 '),
+                             (b'x\nnot an answer\n', 'unreadable')):
+            with self.subTest(answer=answer):
+                rc, out = in_subprocess(
+                    "import subprocess\n"
+                    "class R:\n"
+                    "    returncode = 0\n"
+                    "    stdout = %r\n"
+                    "    stderr = b''\n"
+                    "g.subprocess.run = lambda *a, **k: R()\n"
+                    "g.resolve_commits(%r, ['t1', 't2'])" % (answer, self.clone))
+                self.assertNotEqual(rc, 0, out)
+                self.assertIn(said, out)
+
+
 @needs_clone
 class Step1RefusesAReversedPairBeforeReportingAnything(unittest.TestCase):
     """Step 1 is the fourth entry point that takes a pair, and the first one
@@ -1899,7 +2009,8 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
         return {'GIT_CONFIG_GLOBAL': cfg, 'GIT_NO_LAZY_FETCH': '1'}
 
     def bare_diff(self, env_extra):
-        """Step 2's `git diff` with nothing pinned: no -c, no flag. Not
+        """The `-U0` half of step 2's `git diff`, with nothing pinned: no -c,
+        no flag. Not
         GIT_CONFIG_OVERRIDES either, which now pins two of these settings
         itself and would make the control for them pass vacuously."""
         p = subprocess.run(['git', 'diff', '-U0',
@@ -1958,10 +2069,11 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
         """The general form of "Binary files": git reports the file as
         modified and the diff shows nothing for it. That is an answer only
         when the two versions are the same bytes -- a pure rename, a mode
-        change. The diff git gives is replaced, by injection, with the real
-        one minus sv_SE's hunks, header kept: a shape parse_diff has no
-        specific rule for, reaching the guard without --diff-file, whose own
-        comparison would stop it first."""
+        change. The patch git gives is replaced, by injection, with the real
+        one minus sv_SE's hunks, header kept, under git's own list of what
+        changed: a shape parse_diff has no specific rule for, reaching the
+        guard without --diff-file, whose own comparison would stop it
+        first."""
         clean = {'GIT_NO_LAZY_FETCH': '1'}
         text = self.bare_diff(clean).decode('utf-8')
         start = text.index('diff --git a/localedata/locales/sv_SE ')
@@ -1976,7 +2088,12 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
             "g.OUT_DIR = %r\n"
             "real = g.git_diff\n"
             "cut = open(%r, encoding='utf-8').read()\n"
-            "g.git_diff = lambda r, a: cut if '-U0' in a else real(r, a)\n"
+            "def fake(r, a):\n"
+            "    text = real(r, a)\n"
+            "    if '-U0' not in a:\n"
+            "        return text\n"
+            "    return text[:text.index('\\ndiff --git') + 1] + cut\n"
+            "g.git_diff = fake\n"
             "f.main([%r, %r, '--repo', repo])" % (out_dir, cut, OLD, MID))
         self.assertNotEqual(rc, 0, out)
         self.assertIn('have no hunk in the diff', flat(out))
@@ -2045,13 +2162,50 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
         -- if you passed --diff-file, it does not match these tags"."""
         rc, out = in_subprocess(
             "import filter_lc_collate_changes as f\n"
-            "real = g.read_blobs\n"
-            "g.read_blobs = lambda r, tag, paths: (\n"
-            "    ({}, set(paths)) if tag == %r else real(r, tag, paths))\n"
+            "real = g.read_blobs_at\n"
+            "g.read_blobs_at = lambda r, groups: [\n"
+            "    ({}, set(paths)) if tag == %r else real(r, [(tag, paths)])[0]\n"
+            "    for tag, paths in groups]\n"
             "f.main([%r, %r, '--repo', repo])" % (OLD, OLD, MID))
         self.assertNotEqual(rc, 0, out)
         self.assertIn('could not be read', flat(out))
         self.assertNotIn('does not match these tags', flat(out))
+
+    def test_an_unreadable_new_blob_is_refused(self):
+        """The new side of every content-changed file is read in the same
+        batch as the old side and refused after the no-hunk check, where it
+        was refused before the reads were batched. Read as absent, every file
+        would be judged on its old text alone."""
+        rc, out = in_subprocess(
+            "import filter_lc_collate_changes as f\n"
+            "real = g.read_blobs_at\n"
+            "g.read_blobs_at = lambda r, groups: [\n"
+            "    ({}, set(paths)) if tag == %r and paths != [g.SUPPORTED]\n"
+            "    else real(r, [(tag, paths)])[0] for tag, paths in groups]\n"
+            "f.main([%r, %r, '--repo', repo])" % (MID, OLD, MID))
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('could not be read while building the check for files '
+                      'that gained an LC_COLLATE block', flat(out))
+
+    def test_a_missing_supported_is_refused_when_an_added_file_needs_it(self):
+        """SUPPORTED is read in the same batch now, and only when a file
+        added at the new tag needs the names it installs -- ckb_IQ and
+        mnw_MM over 2.28..2.34. Read as empty, each would print
+        "(not in SUPPORTED)", a false and reassuring line. The fake answers
+        only at the new tag. A step that read SUPPORTED at the old tag would
+        get the real file, which lacks both names, and print that line at
+        exit 0; with the tag unpinned this test passed over it
+        (false-negative-reviewer)."""
+        rc, out = in_subprocess(
+            "import filter_lc_collate_changes as f\n"
+            "real = g.read_blobs_at\n"
+            "g.read_blobs_at = lambda r, groups: [\n"
+            "    ({}, set(paths)) if (tag, paths) == (%r, [g.SUPPORTED])\n"
+            "    else real(r, [(tag, paths)])[0] for tag, paths in groups]\n"
+            "f.main([%r, %r, '--repo', repo])" % (MID, OLD, MID))
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn(f'localedata/SUPPORTED does not exist at {MID}', out)
+        self.assertNotIn('(not in SUPPORTED)', out)
 
 
 if __name__ == '__main__':
