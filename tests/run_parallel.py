@@ -44,12 +44,9 @@ never a pass. Which classes skipped is printed above them,
 so a skip is never just a number either.
 
 `.github/workflows/tests.yml` runs this runner, over four processes, on every
-pull request and every run started by hand, and the serial command on every
-push to `main`: a pull request gets its answer in minutes from this runner
-alone, and `main` runs the suite serially after every merge, not before it.
-Measured on 2026-10-08 on
-GitHub's ubuntu-latest, four processors: 13 to 16 minutes serial, 4 to 7 here,
-and eight processes slower than four.
+pull request, every push to `main` and every run started by hand. Measured on
+2026-10-08 on GitHub's ubuntu-latest, four processors: 13 to 16 minutes serial,
+4 to 7 here, and eight processes slower than four.
 
 Usage:
 
