@@ -1123,7 +1123,28 @@ def _content(text):
     holding `..` is a range to one and a comment to the other. Where they
     disagree the range wins: a locale is never both listed by step 4 and
     called byte order beside it.
+
+    byte_order_locales asks this several times of each file, through
+    declares_byte_order, classify_collation_style and _sole_copy_target, so
+    for the length of that one call each text is read once and every caller
+    gets its own copy. Nothing is kept past the call: a helper patched
+    between two calls is never answered from before the patch, and a kept
+    answer here is the one that clears a locale.
     """
+    memo = _CONTENT_MEMO
+    if memo is None:
+        content = _content_of(text)
+    else:
+        if text not in memo:
+            memo[text] = _content_of(text)
+        content = memo[text]
+    return None if content is None else list(content)
+
+
+_CONTENT_MEMO = None
+
+
+def _content_of(text):
     frame = _collate_body(text)
     if frame is None:
         return None
@@ -1131,7 +1152,7 @@ def _content(text):
         return None
     cc, body = frame
     words = [line.strip(_SPACE) for line in body]
-    return [w for w in words if w and not w.startswith(cc)]
+    return tuple(w for w in words if w and not w.startswith(cc))
 
 
 def declares_byte_order(text):
@@ -1201,6 +1222,18 @@ def byte_order_locales(texts):
     byte-identical to the installed C.UTF-8. A cycle or a target this corpus
     lacks is not byte order: localedef refuses both (exit 5 and exit 4).
     """
+    global _CONTENT_MEMO
+    outer = _CONTENT_MEMO
+    if outer is None:
+        _CONTENT_MEMO = {}
+    try:
+        return _byte_order_locales(texts)
+    finally:
+        if outer is None:
+            _CONTENT_MEMO = None
+
+
+def _byte_order_locales(texts):
     declared = {name for name, text in texts.items()
                 if declares_byte_order(text)}
     copies = {}

@@ -1587,6 +1587,17 @@ class ByteOrderByConstruction(unittest.TestCase):
         self.assertTrue(g.declares_byte_order(bare))
         self.assertEqual(g.byte_order_locales({'C': bare}), ({'C'}, {}))
 
+    def test_nothing_read_during_one_scan_answers_after_it(self):
+        """byte_order_locales reads each file once per call and keeps the
+        answer only for that call. Kept past it, a reader that can no longer
+        read the file still got the answer that clears the locale, which the
+        first version of this did (false-negative-reviewer, 2026-10-09)."""
+        bare = 'LC_COLLATE\ncodepoint_collation\nEND LC_COLLATE\n'
+        self.assertEqual(g.byte_order_locales({'C': bare}), ({'C'}, {}))
+        with mock.patch.object(g, '_glibc_chars', return_value=None):
+            self.assertFalse(g.declares_byte_order(bare))
+            self.assertEqual(g.byte_order_locales({'C': bare}), (set(), {}))
+
     def test_a_sort_rule_beside_the_keyword_is_not_byte_order(self):
         both = collate('codepoint_collation', *SORT_RULE)
         self.not_byte_order(both)
