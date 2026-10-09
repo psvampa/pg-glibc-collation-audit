@@ -174,9 +174,9 @@ def new_side_paths(content_changed, renamed_to):
 def judge(content_changed, old_contents, new_contents, hunks, renamed_to):
     """[(old_path, verdict)] for every content-changed file.
 
-    `new_contents` is keyed by the path at the NEW tag, as read_blobs returns
-    it; the lookup goes through `renamed_to` so a renamed file finds its own
-    new text.
+    `new_contents` is keyed by the path at the NEW tag, as read_blobs_at
+    returns it; the lookup goes through `renamed_to` so a renamed file finds
+    its own new text.
     """
     return [(path, classify_change(old_contents[path],
                                    new_contents.get(renamed_to.get(path, path)),
@@ -202,6 +202,53 @@ def read_otherwise(changed, reading, old_contents, new_contents, renamed_to):
                                     or g.reading_changed(old, new))):
             out.append(path)
     return sorted(out)
+
+
+def split_raw(text):
+    """([name-status line, ...], patch) from a `--patch-with-raw` diff.
+
+    git writes one `:` line per changed file, a blank line, and the patch;
+    with nothing changed, nothing. A `:` line is `:<old mode> <new mode>
+    <old id> <new id> <status>` and a tab before the path or paths, so what
+    follows its fourth space is the line `--name-status` prints for that
+    file. Measured with git 2.54 on every pair the tests run, renames and
+    the same commit twice included: those lines are the name-status, and the
+    patch is the `-U0` diff, byte for byte. A `:` line of another shape dies:
+    read as a modified file, it would be judged against hunks it has not got.
+    So does a patch with no list above it, which would read as nothing
+    changed.
+    """
+    status, pos = [], 0
+    while text.startswith(':', pos):
+        nl = text.find('\n', pos)
+        line = text[pos:nl if nl >= 0 else len(text)]
+        fields = line.split(' ', 4)
+        if nl < 0 or len(fields) != 5 or '\t' not in fields[4]:
+            g.die(f"unreadable line in git's list of changed files: {line!r}")
+        status.append(fields[4])
+        pos = nl + 1
+    if status and text.startswith('\n', pos):
+        pos += 1
+    if not status and text:
+        g.die(f"git's diff has no list of changed files above it, so nothing "
+              f"says what changed: {text[:80]!r}")
+    return status, text[pos:]
+
+
+def in_listing(path, listed):
+    """Would `git ls-tree <tag> -- <path>` name `path`? Answered from
+    list_locale_files' recursive listing of the same tag, so asking costs no
+    git: a file is in the listing itself, a directory as the files under it,
+    quoted when their names need it. A tree with no file under it at any
+    depth, which only plumbing can commit, is named by ls-tree and absent
+    from the listing; the answer is then no, and the note about the path
+    prints: the noisy direction. ls-tree rather than `cat-file -e` either
+    way: on a --filter=blob:none clone the latter must fetch the blob to
+    answer, and calls a file that exists absent whenever that fetch cannot
+    happen.
+    """
+    return path in listed or any(p.startswith((path + '/', f'"{path}/'))
+                                 for p in listed)
 
 
 def parse_diff(diff_text):
@@ -348,31 +395,36 @@ def main(argv):
     opts = ap.parse_args(argv)
 
     repo = g.find_repo(opts.repo)
-    g.check_refs(repo, opts.old_tag, opts.new_tag)
+    commits = g.check_refs(repo, opts.old_tag, opts.new_tag)
 
     # Which of the two is newer, asked of git rather than assumed. Reversed,
     # this step swaps its reassuring bucket for its noisy one: a locale
     # DELETED in the real upgrade is reported as "Added ... not analysed".
     g.require_pair_order(repo, opts.old_tag, opts.new_tag,
-                         allow_reverse=opts.allow_reverse)
+                         allow_reverse=opts.allow_reverse, commits=commits)
     rng = f'{opts.old_tag}..{opts.new_tag}'
     pathspec = g.LOCALES_DIR + '/'
 
     # The corpus floor. `git diff` over a pathspec that matches nothing at
     # either tag is empty and exits 0, and this step then reports "0 changed"
     # -- the node-reading modes refuse a directory that small, and a tag
-    # deserves the same refusal. list_locale_files dies below the floor.
+    # deserves the same refusal. list_locale_files dies below the floor. The
+    # lists are kept: they answer the KNOWN_BACKPORTED check below.
+    listed = {}
     for tag in (opts.old_tag, opts.new_tag):
-        g.list_locale_files(repo, tag)
+        if tag not in listed:
+            listed[tag] = g.list_locale_files(repo, tag)
+
+    # One diff for both questions. Its --raw half is git's list of what
+    # changed and how, and its -U0 half is the text every verdict reads.
+    status, generated = split_raw(g.git_diff(
+        repo, ['--patch-with-raw', '-U0', '--find-renames', rng,
+               '--', pathspec]))
 
     # Classify every change first, so added/deleted/renamed files are reported
     # as such instead of vanishing into a `continue`.
-    status = g.git_diff(repo, ['--name-status', '--find-renames', rng,
-                               '--', pathspec])
     modified, added, deleted, renamed = [], [], [], []
-    for line in status.splitlines():
-        if not line.strip():
-            continue
+    for line in status:
         parts = line.split('\t')
         code = parts[0]
         if code.startswith('R'):
@@ -385,8 +437,6 @@ def main(argv):
             modified.append(parts[1])
     renamed_to = {old_path: new_path for old_path, new_path in renamed}
 
-    generated = g.git_diff(repo, ['-U0', '--find-renames', rng,
-                                  '--', pathspec])
     if opts.diff_file:
         with open(opts.diff_file, encoding='utf-8', errors='replace') as fh:
             diff_text = fh.read()
@@ -429,14 +479,46 @@ def main(argv):
               f"       git's diff and its list of changed files disagree, so "
               f"the diff was not read the way this script expects.")
 
+    # KNOWN_BACKPORTED locales a tag-to-tag diff is structurally blind to on
+    # the OLD side: no source file at the old tag means nothing to diff
+    # against, whether or not the file shows up at the new one.
+    #
+    # Reported whenever the old side is missing, NOT only when the file happens
+    # to be ADDED in this range. The silent case is the one that matters: over
+    # 2.28 -> 2.34 (RHEL8 -> RHEL9) localedata/locales/C is in neither tag, so
+    # nothing was printed at all -- for the pair where C.UTF-8 demonstrably
+    # does change. Decided here and printed further down; the added files it
+    # leaves are the ones that need SUPPORTED, read in the batch below.
+    blind = []
+    for name in sorted(KNOWN_BACKPORTED):
+        path = f'{g.LOCALES_DIR}/{name}'
+        if in_listing(path, listed[opts.old_tag]):
+            continue          # present at the old tag: judged like any file
+        blind.append((path, KNOWN_BACKPORTED[name],
+                      in_listing(path, listed[opts.new_tag])))
+    blind_paths = {path for path, _, _ in blind}
+    rest = [path for path in added if path not in blind_paths]
+
+    # Every file text this step reads, in one batch: the old side of every
+    # content-changed file, its new side under the name it has at the new tag
+    # (see new_side_paths) -- a file without a block could have gained one,
+    # and one with a block could be read with other comment or escape
+    # characters -- and SUPPORTED when an added file needs its names.
+    to_read = new_side_paths(content_changed, renamed_to)
+    new_paths = sorted(set(to_read.values()))
+    groups = [(opts.old_tag, content_changed), (opts.new_tag, new_paths)]
+    if rest:
+        groups.append((opts.new_tag, [g.SUPPORTED]))
+    read = g.read_blobs_at(repo, groups)
+    (old_contents, old_missing), (new_contents, new_missing) = read[:2]
+
     # Content-changed files are judged against their OLD LC_COLLATE bounds.
     # These paths come from git's own list of what changed, so every one of
     # them exists at the old tag, and a blob that comes back missing is a read
     # that failed -- a partial clone that cannot fetch. The message used to
     # blame a --diff-file that did not match the tags, which it cannot be.
-    old_contents = g.read_blobs_strict(
-        repo, opts.old_tag, content_changed,
-        'the LC_COLLATE bounds of the files that changed')
+    g.require_read(opts.old_tag, content_changed, old_missing,
+                   'the LC_COLLATE bounds of the files that changed')
 
     # The general form of "Binary files": git reports a file as changed and
     # the diff holds no hunk for it. That is an answer only when both versions
@@ -460,16 +542,11 @@ def main(argv):
                   f"{', '.join(sorted(unread)[:5])}"
                   f"{', ...' if len(unread) > 5 else ''}.")
 
-    # The new side of every content-changed file, in one batch, read under
-    # the name each file has at the new tag (see new_side_paths): a file
-    # without a block could have gained one, and one with a block could be
-    # read with other comment or escape characters.
-    to_read = new_side_paths(content_changed, renamed_to)
-    new_contents = g.read_blobs_strict(
-        repo, opts.new_tag, sorted(set(to_read.values())),
-        'the check for files that gained an LC_COLLATE block or are read '
-        'with other comment or escape characters'
-    ) if to_read else {}
+    # Refused only now, after the check above, so a run that has both
+    # failures still names the one it named before the reads were batched.
+    g.require_read(opts.new_tag, new_paths, new_missing,
+                   'the check for files that gained an LC_COLLATE block or '
+                   'are read with other comment or escape characters')
 
     verdicts = judge(content_changed, old_contents, new_contents, hunks,
                      renamed_to)
@@ -518,19 +595,14 @@ def main(argv):
 
     # Under each file, the characters its changed rules name: they are what
     # the confirmation template needs as test values. Indented six spaces and
-    # with no blank line, so the list keeps parsing as one path per line. A
-    # file whose new version cannot be read gets None below, and with it the
-    # "could not identify" line rather than an abort: the other locales are
-    # still reported.
+    # with no blank line, so the list keeps parsing as one path per line. The
+    # new side is the one already read, strictly, for the verdicts above.
     sections = diff_sections(diff_text)
-    new_texts, _ = g.read_blobs(repo, opts.new_tag,
-                                sorted({renamed_to.get(p, p)
-                                        for p in changed_collate}))
     print(f"\nFiles with changes inside LC_COLLATE: {len(changed_collate)}")
     for path in sorted(changed_collate):
         print(f"  {path}")
         chars = changed_characters(sections.get(path, []), old_contents[path],
-                                   new_texts.get(renamed_to.get(path, path)))
+                                   new_contents.get(renamed_to.get(path, path)))
         if path in reread:
             if chars:
                 print_characters(chars)
@@ -592,29 +664,6 @@ def main(argv):
         print(f"\nLocale names for step 3:")
         print(f"  python3 resolve_copy_closure.py {opts.new_tag} {' '.join(names)}")
 
-    # KNOWN_BACKPORTED locales a tag-to-tag diff is structurally blind to on
-    # the OLD side: no source file at the old tag means nothing to diff
-    # against, whether or not the file shows up at the new one.
-    #
-    # Reported whenever the old side is missing, NOT only when the file happens
-    # to be ADDED in this range. The silent case is the one that matters: over
-    # 2.28 -> 2.34 (RHEL8 -> RHEL9) localedata/locales/C is in neither tag, so
-    # nothing was printed at all -- for the pair where C.UTF-8 demonstrably
-    # does change.
-    blind = []
-    for name in sorted(KNOWN_BACKPORTED):
-        path = f'{g.LOCALES_DIR}/{name}'
-        # ls-tree, not cat-file -e: on a --filter=blob:none clone the latter
-        # must fetch the blob to answer, and calls a file that exists absent
-        # whenever that fetch cannot happen.
-        at_old = g.run_git(['ls-tree', '--name-only', opts.old_tag, '--', path],
-                           repo).stdout.strip()
-        if at_old:
-            continue          # present at the old tag: judged like any file
-        at_new = g.run_git(['ls-tree', '--name-only', opts.new_tag, '--', path],
-                           repo).stdout.strip()
-        blind.append((path, KNOWN_BACKPORTED[name], bool(at_new)))
-
     for path, locale_name, at_new in blind:
         where = (f"is new UPSTREAM at {opts.new_tag}" if at_new
                  else f"exists at NEITHER {opts.old_tag} nor {opts.new_tag}")
@@ -636,10 +685,9 @@ def main(argv):
             f"docs/limitations.md.",
             width=78, initial_indent='!! ', subsequent_indent='   '))
 
-    blind_paths = {path for path, _, _ in blind}
-    rest = [path for path in added if path not in blind_paths]
     if rest:
-        supported = g.supported_map(repo, opts.new_tag)
+        supported = g.parse_supported(read[2][0].get(g.SUPPORTED),
+                                      opts.new_tag)
         # Generated names, not source file names: `locale -a` and pg_collation
         # spell it sv_SE.utf8, and the reader is about to go grep for it.
         def generated(path):
