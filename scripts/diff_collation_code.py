@@ -441,20 +441,27 @@ def check_paths(repo, paths, old_tag, new_tag):
     and calls a file that exists absent whenever that fetch cannot happen --
     offline, or against a dead promisor. `ls-tree` reads the tree, which such
     a clone always has.
+
+    One `ls-tree` per tag names every path at once and reads the same trees
+    the per-path calls it replaced did, one git process per tag instead of
+    one per path and tag.
     """
-    def present(tag, path):
+    def present_at(tag):
         # No allow_fail: `git ls-tree` exits 0 with empty output for a path
         # that is not in the tree, and non-zero only on a real error (a bad
         # tag, an unreadable object). Suppressing that turned an error into
         # `False` for BOTH tags, which check_paths then filed under "exists at
         # neither tag -- nothing to read, and nothing to miss" and printed as
         # harmless, for a file that exists and was never read.
-        out = g.run_git(['ls-tree', '--name-only', tag, '--', path], repo)
-        return bool(out.stdout.strip())
+        if not paths:
+            return set()
+        out = g.run_git(['ls-tree', '--name-only', tag, '--', *paths], repo)
+        return set(out.stdout.decode('utf-8', 'replace').split('\n')) - {''}
 
+    old_present, new_present = present_at(old_tag), present_at(new_tag)
     vanished, outside = [], []
     for path in paths:
-        at_old, at_new = present(old_tag, path), present(new_tag, path)
+        at_old, at_new = path in old_present, path in new_present
         if at_old and not at_new:
             vanished.append(path)
         elif not at_old and not at_new:
