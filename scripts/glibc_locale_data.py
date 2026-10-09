@@ -1691,11 +1691,11 @@ def _main(argv):
             die("usage: glibc_locale_data.py order [--allow-reverse] "
                 "[--quiet] <old_tag> <new_tag>")
         repo = find_repo()
-        check_refs(repo, *tags)
+        commits = check_refs(repo, *tags)
         sink = io.StringIO() if quiet else sys.stderr
         with contextlib.redirect_stdout(sink):
             status = require_pair_order(repo, tags[0], tags[1],
-                                        allow_reverse=allow)
+                                        allow_reverse=allow, commits=commits)
         print(status)
         return 0
     if len(argv) >= 2 and argv[0] == 'fanin':
