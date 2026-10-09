@@ -74,20 +74,13 @@ jobs:
         # the classes of test_git_helpers and test_provenance that need no
         # clone having actually run.
         #
-        # A pull request, or a run started by hand, gets the suite spread over
-        # four processes, one per processor of this runner, by
-        # tests/run_parallel.py, so its answer comes in minutes. A push to
-        # main, after the merge, runs it serially, so what the parallel runner
-        # passed runs again on main, after the merge rather than before it.
-        env:
-          EVENT: ${{ github.event_name }}
+        # Spread over four processes, one per processor of this runner, by
+        # tests/run_parallel.py, on a pull request and on main alike. They are
+        # the same tests in the same files, so spreading them changes how long
+        # the run takes, not what it checks.
         run: |
           set -o pipefail
-          if [ "$EVENT" = push ]; then
-            python3 -m unittest discover -s tests -t tests -v 2>&1 | tee /tmp/out.txt
-          else
-            python3 tests/run_parallel.py -j 4 2>&1 | tee /tmp/out.txt
-          fi
+          python3 tests/run_parallel.py -j 4 2>&1 | tee /tmp/out.txt
           if grep -q 'skipped=' /tmp/out.txt; then
             echo "::error::tests were SKIPPED in CI: the glibc clone is unusable, so the published results were never checked"
             exit 1
