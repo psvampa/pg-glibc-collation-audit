@@ -23,7 +23,7 @@ checks in order and ends with one summary.
 | The run's step | The question it answers |
 |---|---|
 | 1 | which locale files changed between the two versions, and how far the change reaches |
-| 2 | which of those changes fall inside the part that defines sort order |
+| 2 | which of those changes fall inside the part that defines sort order, and which locales' rules name a character their character set added, removed or gave other bytes |
 | 3 | which other locales inherit a change, because they copy from the file that changed |
 | 4 | which locales a comparison of files can never clear, because part of their order is computed later: the weights of abbreviated ranges, and the default weight of each character they do not list |
 | 5 | whether the code that computes those weights changed |

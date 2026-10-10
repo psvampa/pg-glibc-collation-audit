@@ -171,6 +171,48 @@ class Step2Filter(StepRun):
                     f'between glibc-2.28 and glibc-2.34, not [283]; '
                     f'regenerate it')
 
+    def test_the_character_set_lines_published_for_each_pair(self):
+        """Backlog 13.7, PR B. Over each audited pair step 2 compares the
+        charmaps the SUPPORTED builds use and lists nothing: no build's
+        rules name a character they changed. K is exact, and checked by a
+        brute-force expansion when it was written (2026-10-09): over
+        2.34..2.39 GB18030 gains 24 characters and moves 6, 30 in all, where
+        the time-gate prototype counted 38. The four transcripts must print
+        the run's lines, so a figure that moves without regenerating them
+        goes red."""
+        expect = {(OLD, MID): ('rhel8-to-rhel9', 486, 1,
+                               'UTF-8: 6485 characters added.'),
+                  (MID, NEW): ('rhel9-to-rhel10', 487, 2,
+                               'GB18030: 24 characters added, 6 given other '
+                               'bytes. UTF-8: 5954 characters added.')}
+        for (old, new), (pair, builds, differ, figures) in expect.items():
+            with self.subTest(pair=f'{old}..{new}'):
+                out = self.step('filter_lc_collate_changes.py', old, new)
+                m = re.search(r'(?ms)^Character sets \(localedata/charmaps/\)'
+                              r'.*?\n\n', out)
+                self.assertIsNotNone(m, out)
+                block = m.group(0)
+                self.assertIn(f'{differ} of the 30 that the {builds} locale '
+                              f'builds in SUPPORTED at both tags use',
+                              flat(block))
+                self.assertIn(figures, flat(block))
+                self.assertIn("No build's LC_COLLATE names one of those "
+                              "characters.", block)
+                path = os.path.join(
+                    self.out_dir,
+                    f'step2_keyed_locales.{g.pair_slug(old, new)}.txt')
+                with open(path, encoding='utf-8') as fh:
+                    self.assertEqual(fh.read(), '')
+                for kind in ('audit-output', 'tags-only'):
+                    name = f'examples/{pair}-{kind}.txt'
+                    with self.subTest(transcript=kind):
+                        with open(os.path.join(REPO_ROOT, *name.split('/')),
+                                  encoding='utf-8') as f:
+                            said = f.read().count(block)
+                        self.assertEqual(said, 1, f'{name} does not print '
+                                                  f'the run\'s character set '
+                                                  f'lines once; regenerate it')
+
     def test_the_step_3_list_is_written_for_each_pair(self):
         """audit.sh reads this file instead of the user retyping the names.
 
@@ -690,6 +732,24 @@ class Step5CollationCode(StepRun):
         self.assertNotIn('No substantive collation code change', out)
 
 
+@needs_clone
+class StepThreeKeyed(StepRun):
+    """resolve_copy_closure.py --keyed: the locales step 2's character set
+    check lists (backlog 13.7, PR B)."""
+
+    def test_an_unknown_keyed_name_is_refused_like_any_other(self):
+        rc, out = run_step('resolve_copy_closure.py', NEW, 'sv_SE', '--keyed',
+                           'no_such_locale', out_dir=self.out_dir)
+        self.assertEqual(rc, 2, out)
+        self.assertIn(f'not locale file(s) at {NEW}: no_such_locale', out)
+
+    def test_no_locale_at_all_is_refused(self):
+        rc, out = run_step('resolve_copy_closure.py', NEW,
+                           out_dir=self.out_dir)
+        self.assertEqual(rc, 2, out)
+        self.assertIn('no locale given', out)
+
+
 def _harness_scripts():
     from _harness import SCRIPTS_DIR
     return SCRIPTS_DIR
@@ -740,6 +800,28 @@ class BelowTheOldVersionFloor(StepRun):
         self.assertIsNone(chars['hu_HU'])
         for name in set(chars) - {'hu_HU'}:
             self.assertTrue(chars[name], f'{name} got the warning')
+
+    def test_zh_CN_GB18030_names_206_characters_GB18030_changed(self):
+        """Backlog 13.7, PR B: the one pinned pair where a charmap change
+        reaches a build's rules. GB18030 changes 12,384 characters, and the
+        rules zh_CN.GB18030 reads name 206 of them, all in
+        iso14651_t1_common. That file also changed its own rules, so step 3
+        lists zh_CN anyway: counted, not repeated, and nothing goes to the
+        keyed list. With step 2's own names as the skip, instead of step 3's
+        closure, the time-gate prototype listed 287 sources here."""
+        out = self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW)
+        self.assertIn('GB18030: 12352 characters added, 24 removed, 8 given '
+                      'other bytes. UTF-8: 4357 characters added.', flat(out))
+        self.assertRegex(flat(out), r'step 3 lists anyway, whose LC_COLLATE '
+                                    r'names one of those characters or '
+                                    r'could not be compared \(1\): '
+                                    r'zh_CN\.GB18030 \(GB18030\): 206 '
+                                    r'characters, named in iso14651_t1_common')
+        path = os.path.join(
+            self.out_dir,
+            f'step2_keyed_locales.{g.pair_slug(FLOOR_OLD, FLOOR_NEW)}.txt')
+        with open(path, encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), '')
 
     def test_step_3_reaches_280_not_11(self):
         """11 was what it reported with the three roots missing; 278 was the

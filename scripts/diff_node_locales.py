@@ -629,9 +629,9 @@ def main(argv):
                 f"a time through glibc when the run has both machines' "
                 f"measurements, and PostgreSQL reports collversion as NULL "
                 f"for every C.* name.")
-    dd.warn(f"localedata/charmaps/ is NOT compared. glibc-locale-source ships "
-            f"it and it is an input to localedef, so a repertoire change is "
-            f"outside this result as well as outside the audit. See "
+    dd.warn(f"A machine's own localedata/charmaps/ is NOT compared. "
+            f"glibc-locale-source ships it and it is an input to localedef, so "
+            f"a change a distro makes to it is outside this result. See "
             f"docs/limitations.md.")
     return 0
 

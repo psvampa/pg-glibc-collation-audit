@@ -23,6 +23,7 @@ import filter_lc_collate_changes as f
 import diff_distro_locales as dd
 import diff_node_locales as nl
 import flag_algorithmic_ranges as fa
+import collation_keys as ck
 
 
 def collate(*body):
@@ -2114,6 +2115,626 @@ class SameTreeAndManifest(unittest.TestCase):
         b = self._dir('b', (('C', _harness.upstream_c()),))
         self.assertNotEqual(dd.tree_manifest(a, ['C'])[2],
                             dd.tree_manifest(b, ['C'])[2])
+
+
+
+# --- step 2's character set check (backlog 13.7, PR B) ----------------------
+
+_PROLOG = ('<code_set_name> TEST', '<comment_char> %', '<escape_char> /',
+           '<mb_cur_min> 1', '<mb_cur_max> 4')
+
+
+def charmap(*body, prolog=_PROLOG, tail=()):
+    """A charmap as glibc's files are written: prolog, body, END CHARMAP."""
+    return '\n'.join([*prolog, 'CHARMAP', *body, 'END CHARMAP', *tail, ''])
+
+
+class CharmapReader(unittest.TestCase):
+    """read_charmap models charmap.c strictly: what it reads it reads as
+    glibc does, and any other shape is Unsettled, which keeps every build in
+    that charmap listed. The prototype it replaced counted only data lines at
+    column 0, so an indented line glibc reads was skipped in silence."""
+
+    def test_singles_and_ranges_get_glibc_s_bytes(self):
+        cm = ck.read_charmap(charmap('<U0041>     /x41         A',
+                                     '<U0100>..<U0102> /xc4/x80 <A>'), 'T')
+        self.assertEqual(ck.key(cm, 0x41), '/x41')
+        self.assertEqual(ck.key(cm, 0x101), '/xc4/x81')
+        self.assertIsNone(ck.key(cm, 0x103))
+        self.assertEqual(cm.code_set_name, 'TEST')
+
+    def test_the_first_definition_wins_whatever_the_spelling(self):
+        """charmap.c stores <U> names as U and eight digits, and the hash
+        keeps the first (charmap.c:983-984)."""
+        cm = ck.read_charmap(charmap('<U00000041> /x41', '<U0041> /x42'), 'T')
+        self.assertEqual(ck.key(cm, 0x41), '/x41')
+
+    def test_an_indented_data_line_is_read(self):
+        cm = ck.read_charmap(charmap('<U0041> /x41', '   <U0042> /x42'), 'T')
+        self.assertEqual(ck.key(cm, 0x42), '/x42')
+
+    def test_a_comment_line_ending_in_the_escape_drops_only_itself(self):
+        """linereader.c:216-231@2.39, measured in M3 of the 13.7 handoff."""
+        cm = ck.read_charmap(charmap('% a comment /', '<U0042> /x42'), 'T')
+        self.assertEqual(ck.key(cm, 0x42), '/x42')
+
+    def test_width_sections_after_the_body_are_skipped(self):
+        cm = ck.read_charmap(charmap('<U0041> /x41',
+                                     tail=('WIDTH', '<U0041> 1', 'END WIDTH',
+                                           'WIDTH_DEFAULT 1')), 'T')
+        self.assertEqual(ck.key(cm, 0x41), '/x41')
+
+    def test_body_lines_glibc_reads_another_way_are_unsettled(self):
+        bad = {'one hex digit': ['<U0041> /x4 A'],
+               # /x4 then /x42 would read as one byte if one digit passed:
+               # the byte count alone does not catch it.
+               'one hex digit, then a byte': ['<U0041> /x4/x42 A'],
+               'decimal byte': ['<U0041> /d65'],
+               'seventeen bytes': ['<U0041> ' + '/x41' * 17],
+               'more bytes than mb_cur_max': ['<U0041> /x41/x42/x43/x44/x45'],
+               'absolute range': ['<U0041>...<U0043> /x41'],
+               'decimal range': ['<U0041>....<U0043> /x41'],
+               'step range': ['<U0041>..(2)..<U0043> /x41'],
+               'a name that is not <U>': ['<ch> /x41'],
+               'lower-case u': ['<u0041> /x41'],
+               'an escape inside the name': ['<U00/41> /x41'],
+               'garbage after the bytes': ['<U0041> /x414'],
+               'a data line continued': ['<U0041> /x41 A /', '<U0042> /x42'],
+               'a range that ends below its start': ['<U0045>..<U0041> /x45'],
+               'a range past one byte': ['<U0000>..<U0002> /xfe'],
+               'overlapping ranges': ['<U0100>..<U0105> /xc4/x80',
+                                      '<U0104>..<U0108> /xc5/x80'],
+               'a single inside a range': ['<U0100>..<U0105> /xc4/x80',
+                                           '<U0103> /xc6/x80'],
+               'END of another section': ['<U0041> /x41', 'END WIDTH'],
+               'a line of no shape': ['<U0041> /x41', 'nonsense']}
+        for why, body in bad.items():
+            with self.subTest(why):
+                with self.assertRaises(ck.Unsettled):
+                    ck.read_charmap(charmap(*body), 'T')
+
+    def test_prologs_and_ends_it_does_not_model_are_unsettled(self):
+        bad = {'include': _PROLOG + ('<include> X',),
+               'repertoiremap (H10)': _PROLOG + ('<repertoiremap> X',),
+               'escape_char |': ('<code_set_name> T', '<escape_char> |'),
+               'comment_char !': ('<code_set_name> T', '<comment_char> !'),
+               'mb_cur_max twice': _PROLOG + ('<mb_cur_max> 4',),
+               'mb_cur_min over mb_cur_max': ('<code_set_name> T',
+                                              '<mb_cur_min> 4',
+                                              '<mb_cur_max> 2'),
+               'no code_set_name': ('<comment_char> %', '<escape_char> /')}
+        for why, prolog in bad.items():
+            with self.subTest(why):
+                with self.assertRaises(ck.Unsettled):
+                    ck.read_charmap(charmap('<U0041> /x41', prolog=prolog),
+                                    'T')
+        with self.subTest('no END CHARMAP: a truncated file'):
+            with self.assertRaises(ck.Unsettled):
+                ck.read_charmap('\n'.join(_PROLOG + ('CHARMAP',
+                                                      '<U0041> /x41')), 'T')
+        with self.subTest('END of something else, and no END CHARMAP'):
+            with self.assertRaises(ck.Unsettled):
+                ck.read_charmap('\n'.join(_PROLOG + ('CHARMAP', '<U0041> /x41',
+                                                      'END WIDTH', '')), 'T')
+        with self.subTest('the file ends inside WIDTH'):
+            with self.assertRaises(ck.Unsettled):
+                ck.read_charmap(charmap('<U0041> /x41',
+                                        tail=('WIDTH', '<U0041> 1')), 'T')
+
+
+class CharmapDelta(unittest.TestCase):
+    """K: the code points whose bytes differ, are added or removed. The
+    time-gate prototype counted U+20086 and U+20088 of GB18030 as changed
+    (2.34 -> 2.39: 38 against 30), because they moved from single lines to
+    a range with the same bytes."""
+
+    def k(self, old, new):
+        return ck.delta(ck.read_charmap(charmap(*old), 'T'),
+                        ck.read_charmap(charmap(*new), 'T'))
+
+    def test_a_move_between_a_single_and_a_range_is_no_change(self):
+        singles = ['<U0100> /xc4/x80', '<U0101> /xc4/x81', '<U0102> /xc4/x82']
+        ranged = ['<U0100>..<U0102> /xc4/x80']
+        self.assertEqual(self.k(singles, ranged), set())
+        self.assertEqual(self.k(ranged, singles), set())
+
+    def test_added_removed_and_other_bytes(self):
+        old = ['<U0041> /x41', '<U0042> /x42', '<U0044> /x44']
+        new = ['<U0041> /x61', '<U0043> /x43']
+        self.assertEqual(self.k(old, new), {0x41, 0x42, 0x43, 0x44})
+        kk = ck.K(self.k(old, new), ck.read_charmap(charmap(*old), 'T'),
+                  ck.read_charmap(charmap(*new), 'T'))
+        self.assertEqual((kk.size, kk.added, kk.removed), (4, 1, 2))
+
+    def test_swapped_duplicates_change_the_key(self):
+        self.assertEqual(self.k(['<U0041> /x41', '<U0041> /x42'],
+                                ['<U0041> /x42', '<U0041> /x41']), {0x41})
+
+    def test_a_range_that_grows_adds_its_new_end(self):
+        self.assertEqual(self.k(['<U0100>..<U0104> /xc4/x80'],
+                                ['<U0100>..<U0105> /xc4/x80']), {0x105})
+
+    def test_a_range_with_other_first_bytes_changes_every_member(self):
+        self.assertEqual(self.k(['<U0100>..<U0102> /xc4/x80'],
+                                ['<U0100>..<U0102> /xc4/x81']),
+                         {0x100, 0x101, 0x102})
+
+
+def locale_text(*collate_body, head=('comment_char %', 'escape_char /')):
+    return '\n'.join([*head, '', 'LC_COLLATE', *collate_body,
+                      'END LC_COLLATE', ''])
+
+
+class LcCollateSearch(unittest.TestCase):
+    """What the search reads in an LC_COLLATE block. It must be a superset
+    of what glibc resolves through the charmap: what it misses, a charmap
+    change can move unseen."""
+
+    def test_every_spelling_of_a_name_is_found(self):
+        scan = ck.Scan(locale_text('copy "x"', '<U00E9> IGNORE',
+                                   '<U000000E8> IGNORE', '<U00/E7> IGNORE',
+                                   '\u00f1 IGNORE'))
+        names = scan.names()
+        self.assertLessEqual({'00E9', '000000E8', '000000E7'}, names.spell)
+        self.assertIn(0xF1, names.raw)
+        self.assertIn(ord('x'), names.raw)      # the copy string (H6)
+        self.assertEqual(scan.copies, ('x',))
+
+    def test_a_comment_starts_only_where_a_token_does(self):
+        cs = ck._certain_comment_start
+        pct = ('%', '/')
+        self.assertEqual(cs('foo%bar <U4E00>', pct), 15)
+        self.assertEqual(cs('<U0041> % <U4E00>', pct), 8)
+        self.assertEqual(cs('"a%b" <U4E00>', pct), 13)
+        self.assertEqual(cs('<U0041>%<U4E00>', pct), 7)
+        self.assertEqual(cs('<U0041> % x', None), 11)
+
+    def test_only_the_file_s_escape_character_escapes(self):
+        """With escape_char /, a backslash in a string is a plain character
+        and `/"` an escaped quote, so the string runs on past the `%`
+        (get_string, linereader.c:773ff@2.39). Reading both as escapes cut
+        the line at the `%` and dropped the <U00E9> after it."""
+        line = 'collating-element <e-x> from "<U0041>\\/" % <U00E9>"'
+        self.assertEqual(ck._certain_comment_start(line, ('%', '/')),
+                         len(line))
+        self.assertEqual(
+            ck._certain_comment_start('from "<U0041>\\" % x', ('%', '/')), 16)
+
+    def test_a_hit_only_in_a_comment_is_dropped_and_one_in_code_kept(self):
+        k = ck.K(frozenset({0xE9}))
+        only = ck.Scan(locale_text('% <U00E9> is not named here',
+                                   '<U0041> IGNORE'))
+        code = ck.Scan(locale_text('<U00E9> IGNORE % <U00E9>'))
+        word = ck.Scan(locale_text('foo%bar <U00E9>'))
+        continued = ck.Scan(locale_text('<U0041> IGNORE /', '% <U00E9>'))
+        self.assertFalse(ck.confirmed_hit(only, k))
+        self.assertTrue(ck.confirmed_hit(code, k))
+        self.assertTrue(ck.confirmed_hit(word, k))
+        self.assertTrue(ck.confirmed_hit(continued, k))
+
+    def test_every_spelling_is_read_where_it_stands(self):
+        """The upper-case spelling in a comment does not clear a lower-case
+        or escaped one in code: glibc reads both as the code point
+        (get_symname, linereader.c:502-546@2.39). Only the upper-case one
+        was looked for, found in the comment, and the hit dropped."""
+        k = ck.K(frozenset({0xE9}))
+        for spelt in ('<U00e9> <U00e9>', '<U00/E9> <U00/E9>'):
+            with self.subTest(spelt):
+                scan = ck.Scan(locale_text('% <U00E9> is e-acute', spelt))
+                self.assertTrue(ck.confirmed_hit(scan, k))
+
+    def test_an_escape_before_the_u_is_read_too(self):
+        """`</U00E9>` is U+00E9: get_symname keeps the character after the
+        escape, whichever it is (linereader.c:516-524@2.39). The pattern
+        wanted an escape after the U, so the name was not read, and a
+        comment spelling it plainly cleared the hit (false-negative-
+        reviewer, round 2)."""
+        k = ck.K(frozenset({0xE9}))
+        alone = ck.Scan(locale_text('</U00E9> IGNORE'))
+        self.assertIn(0xE9, k.named(alone.names()))
+        commented = ck.Scan(locale_text('% <U00E9> e-acute',
+                                        '</U00E9> IGNORE'))
+        self.assertTrue(ck.confirmed_hit(commented, k))
+
+    def test_a_raw_character_in_code_keeps_the_hit(self):
+        k = ck.K(frozenset({0xE9}))
+        scan = ck.Scan(locale_text('% <U00E9> e-acute', '\u00e9 IGNORE'))
+        self.assertTrue(ck.confirmed_hit(scan, k))
+
+    def test_a_member_spelt_by_a_copy_string_keeps_the_hit(self):
+        """The copy string is translated through the charmap (H6); a member
+        spelt there keeps the hit even when its plain spelling sits in a
+        comment."""
+        k = ck.K(frozenset({ord('x')}))
+        scan = ck.Scan(locale_text('copy "x"', '% <U0078>'))
+        self.assertTrue(ck.confirmed_hit(scan, k))
+
+    def test_an_escape_character_it_does_not_read_with_is_odd(self):
+        """glibc takes any one-character word as escape_char
+        (locfile.c:123-149@2.39); every search here knows only `/` and
+        `\\`, so `<U00!E9>` under `escape_char !` would go unread."""
+        odd = ck.Scan(locale_text('<U00!E9> IGNORE',
+                                  head=('comment_char %', 'escape_char !')))
+        self.assertIsNotNone(odd.odd)
+        self.assertIsNone(ck.Scan(locale_text('<U00E9> IGNORE')).odd)
+        # A directive line ending in the escape in force reads its argument
+        # from the next line (lr_next; locfile.c:126): `\\` by default, `/`
+        # once `escape_char /` was read (false-negative-reviewer, round 3).
+        for head in (('escape_char \\', 'X'),
+                     ('escape_char /', 'escape_char /', 'X')):
+            with self.subTest(head):
+                self.assertIsNotNone(ck.Scan(locale_text('<U00XE9> IGNORE',
+                                                         head=head)).odd)
+
+    def test_a_file_read_with_unsettled_characters_keeps_its_hit(self):
+        """glibc_locale_data.reading_chars gives None for a comment_char
+        line below the first rule: nothing is then a certain comment."""
+        text = locale_text('% <U00E9>', head=('LC_CTYPE', 'END LC_CTYPE',
+                                              'comment_char %'))
+        self.assertIsNone(ck._reading(text))
+        self.assertTrue(ck.confirmed_hit(ck.Scan(text), ck.K(frozenset({0xE9}))))
+
+    def test_a_name_split_at_an_escaped_line_end_is_read(self):
+        """lr_next joins `<U00/` and `E9>` into <U00E9>
+        (linereader.c:152-171@2.39)."""
+        for esc in ('/', '\\'):
+            with self.subTest(esc):
+                scan = ck.Scan(locale_text(f'<U00{esc}', 'E9> <U0041>'))
+                self.assertIn('00E9', scan.names().spell)
+
+    def test_a_range_split_at_an_escaped_line_end_is_odd(self):
+        """`./` then `.` is `..` to glibc (lr_next): a range on a continued
+        line cannot be placed. Kept even when the same text stands as a
+        plain line above, which a set of lines lost (false-negative-
+        reviewer, round 2)."""
+        for body in (('<U00E0>', './', '.', '<U00EF>'),
+                     ('<U0041>', '..', '<U0045>', '<U00E0>', './', '.',
+                      '<U00EF>')):
+            with self.subTest(body):
+                self.assertIsNotNone(ck.Scan(locale_text(*body)).odd)
+
+    def test_a_copy_split_at_an_escaped_line_end_is_followed(self):
+        scan = ck.Scan(locale_text('co/', 'py "tmpl"'))
+        self.assertEqual(scan.copies, ('tmpl',))
+
+    def test_a_copy_after_a_form_feed_is_followed(self):
+        """glibc_locale_data.copy_targets follows it (`\\s*`), and so does
+        glibc; the closure did not (false-negative-reviewer, round 3)."""
+        self.assertEqual(ck.Scan(locale_text('\fcopy "tmpl"')).copies,
+                         ('tmpl',))
+
+    def test_a_line_range_settles_only_between_two_order_lines(self):
+        """H4: glibc starts a `..` range at its cursor, which an order line
+        naming something already defined does not move."""
+        def interval(*body, others=()):
+            texts = {'loc': locale_text('order_start forward', *body,
+                                        'order_end')}
+            texts.update(others)
+            side = ck.Side('t', set(texts), texts, {}, {})
+            scan = side.scan('loc')
+            off = scan.line_ranges[-1]          # the last range in the block
+            return ck.range_interval(side, ('loc',) + tuple(others), 'loc',
+                                     off)
+        self.assertEqual(interval('<U0041>', '..', '<U0045>'), (0x41, 0x45))
+        self.assertIsNone(interval('<U0041>', '<U0042>', '<U0041>', '..',
+                                   '<U0045>'))
+        self.assertIsNone(interval('<U0041>', '..'))     # order_end below
+        self.assertIsNone(interval('<SYM>', '..', '<U0045>'))
+        self.assertIsNone(interval('<U0041>', '..', '<U0045>',
+                                   others={'base': locale_text('<U0041>')}))
+        # The line above is a weight of a continued line, which leaves the
+        # cursor at <U0030>; the same with the start defined by an escaped
+        # name, by a raw character, or by an earlier range of the run.
+        self.assertIsNone(interval('<U0030> <U0030>;/', '<U0041>', '..',
+                                   '<U0050>'))
+        # The line above runs on into the `..` line: one statement, no
+        # range of its own.
+        self.assertIsNone(interval('<U0041>/', '..', '<U0050>'))
+        # A head after a form feed is a head: lr_token skips every isspace.
+        self.assertIsNone(interval('<U0030>', '\f<U0041> IGNORE', '<U0039>',
+                                   '<U0041>', '..', '<U00FF>'))
+        self.assertIsNone(interval('<U00/41>', '<U0035>', '<U0041>', '..',
+                                   '<U0050>'))
+        self.assertIsNone(interval('\u00e0', '<U0035>', '<U00E0>', '..',
+                                   '<U00F0>'))
+        self.assertIsNone(interval('<U0040>', '..', '<U0042>', '<U0035>',
+                                   '<U0041>', '..', '<U0050>'))
+        # Defined by a range that opens a line, by a name split across a
+        # continued line, by a raw character in another file of the run.
+        self.assertIsNone(interval('<U0020>..<U0035> IGNORE', '<U0030>',
+                                   '..', '<U0050>'))
+        self.assertIsNone(interval('<U00/', 'E0>', '<U0035>', '<U00E0>',
+                                   '..', '<U00F0>'))
+        self.assertIsNone(interval('<U00E0>', '..', '<U00F0>',
+                                   others={'base': locale_text(
+                                       '\u00e0 IGNORE')}))
+
+    def test_range_forms(self):
+        decimal = ck.Scan(locale_text('<U0041>....<U0050> IGNORE'))
+        self.assertEqual(decimal.inline, ((0x41, 0x50),))    # H5
+        self.assertIsNone(decimal.odd)
+        self.assertTrue(ck.Scan(locale_text('<U0041>', '...', '<U0050>'))
+                        .absolute)                           # H8
+        self.assertIsNotNone(ck.Scan(locale_text('<U0041>', '..(2)..',
+                                                 '<U0050>')).odd)
+        weights = ck.Scan(locale_text('<U4E00> <U4E00>;IGNORE',
+                                      '.. ..;IGNORE', '<U9FA5> <U9FA5>;IGNORE'))
+        self.assertIsNone(weights.odd)
+        self.assertEqual(len(weights.line_ranges), 1)
+        symbols = ck.Scan(locale_text('collating-symbol <S0041>..<S005A>'))
+        self.assertEqual((symbols.odd, symbols.inline), (None, ()))
+
+    def test_a_repertoiremap_is_odd_and_a_comment_naming_one_is_not(self):
+        """H10: with a repertoire map loaded, a name the charmap lacks
+        resolves through it (ld-collate.c:966-971@2.39). Unused upstream;
+        sgs_LT names it in a comment."""
+        self.assertIsNotNone(ck.Scan('repertoiremap mnemonic\n'
+                                     + locale_text('<U0041>')).odd)
+        self.assertIsNone(ck.Scan('% repertoiremap mnemonic\n'
+                                  + locale_text('<U0041>')).odd)
+
+    def test_a_section_the_search_does_not_read_is_odd(self):
+        """H11: glibc reads every LC_COLLATE section and the keyword after
+        blanks; an argument naming the category is neither."""
+        two = locale_text('<U0041>') + 'LC_COLLATE\n<U0042>\nEND LC_COLLATE\n'
+        self.assertIsNotNone(ck.Scan(two).odd)
+        indented = 'comment_char %\n  LC_COLLATE\n<U0041>\nEND LC_COLLATE\n'
+        self.assertIsNotNone(ck.Scan(indented).odd)
+        ident = locale_text('<U0041>') + (
+            'LC_IDENTIFICATION\ncategory "i18n:2012";LC_COLLATE\n'
+            'END LC_IDENTIFICATION\n')
+        self.assertIsNone(ck.Scan(ident).odd)
+
+
+def sides(old_texts, new_texts, old_cm, new_cm):
+    """Two Sides from {name: text} and {charmap: text}; a charmap's blob id
+    is its text, so identical texts compare as one blob."""
+    def side(tag, texts, cms):
+        return ck.Side(tag, set(texts), dict(texts),
+                       {n: f'id:{hash(t)}' for n, t in cms.items()},
+                       dict(cms))
+    return side('t1', old_texts, old_cm), side('t2', new_texts, new_cm)
+
+
+class CompareBuilds(unittest.TestCase):
+    """compare() over two Sides built in memory: which builds it lists,
+    counts, or cannot settle."""
+
+    UTF8_OLD = charmap('<U0041> /x41', '<U0042> /x42')
+    UTF8_NEW = charmap('<U0041> /x41', '<U0042> /x42', '<U00E9> /xc3/xa9')
+
+    def builds(self, *lines):
+        return ck.supported_builds('SUPPORTED-LOCALES=\\\n' + ''.join(
+            f'{ln} \\\n' for ln in lines), 't')
+
+    def run_compare(self, texts, old_cm, new_cm, supported, listed=(),
+                    new_texts=None):
+        old, new = sides(texts, new_texts or texts, old_cm, new_cm)
+        b = self.builds(*supported)
+        return ck.compare(old, new, b, b, lambda: set(listed))
+
+    def test_a_build_whose_rules_name_a_changed_character_is_listed(self):
+        r = self.run_compare({'loc_a': locale_text('<U00E9> IGNORE'),
+                              'loc_b': locale_text('<U0041> IGNORE')},
+                             {'UTF-8': self.UTF8_OLD}, {'UTF-8': self.UTF8_NEW},
+                             ['loc_a.UTF-8/UTF-8', 'loc_b.UTF-8/UTF-8'])
+        self.assertEqual([(f.source, f.chars, f.reason) for f in r.found],
+                         [('loc_a', {0xE9}, None)])
+        self.assertEqual(ck.listed_sources(r), ['loc_a'])
+
+    def test_a_copier_is_listed_through_the_file_it_copies(self):
+        r = self.run_compare({'loc_c': locale_text('copy "tmpl"'),
+                              'tmpl': locale_text('<U00E9> IGNORE')},
+                             {'UTF-8': self.UTF8_OLD}, {'UTF-8': self.UTF8_NEW},
+                             ['loc_c.UTF-8/UTF-8'])
+        # tmpl itself is listed too, by point 5: no SUPPORTED entry builds
+        # it, and a file with rules is a locale a distro can build (ab_GE at
+        # glibc-2.39 is one, outside SUPPORTED).
+        self.assertEqual([(f.source, f.entry, f.via) for f in r.found],
+                         [('loc_c', 'loc_c.UTF-8', ['tmpl']),
+                          ('tmpl', None, ['tmpl'])])
+
+    def test_a_line_range_spanning_a_changed_character_is_a_hit(self):
+        r = self.run_compare({'loc': locale_text('order_start forward',
+                                                 '<U00E0>', '..', '<U00EF>',
+                                                 'order_end')},
+                             {'UTF-8': self.UTF8_OLD}, {'UTF-8': self.UTF8_NEW},
+                             ['loc.UTF-8/UTF-8'])
+        self.assertEqual([f.chars for f in r.found], [{0xE9}])
+
+    def test_an_identical_blob_is_not_read(self):
+        r = self.run_compare({'loc_a': locale_text('<U00E9> IGNORE')},
+                             {'UTF-8': self.UTF8_NEW}, {'UTF-8': self.UTF8_NEW},
+                             ['loc_a.UTF-8/UTF-8'])
+        self.assertEqual((r.changed, r.found), ([], []))
+
+    def test_a_build_step_3_lists_anyway_is_counted_not_repeated(self):
+        r = self.run_compare({'loc_a': locale_text('<U00E9> IGNORE')},
+                             {'UTF-8': self.UTF8_OLD}, {'UTF-8': self.UTF8_NEW},
+                             ['loc_a.UTF-8/UTF-8'], listed={'loc_a'})
+        self.assertEqual(([f.source for f in r.skipped], r.found),
+                         (['loc_a'], []))
+
+    def test_a_source_a_distro_can_build_in_a_changed_charmap(self):
+        """H3: Red Hat builds en_US in ISO-8859-15, which SUPPORTED never
+        does. A source with no build in a changed charmap whose rules name a
+        changed character is listed, with no SUPPORTED entry; not in a
+        charmap PostgreSQL never uses on a server (GB18030)."""
+        old15 = charmap('<U0041> /x41', '<U00E9> /xe9',
+                        prolog=('<code_set_name> ISO-8859-15',) + _PROLOG[1:])
+        new15 = charmap('<U0041> /x41', '<U00E9> /xea',
+                        prolog=('<code_set_name> ISO-8859-15',) + _PROLOG[1:])
+        texts = {'en_XX': locale_text('<U00E9> IGNORE'),
+                 'de_XX': locale_text('<U0041> IGNORE')}
+        supported = ['en_XX.UTF-8/UTF-8', 'de_XX/CS']
+        r = self.run_compare(texts, {'UTF-8': self.UTF8_NEW, 'CS': old15},
+                             {'UTF-8': self.UTF8_NEW, 'CS': new15}, supported)
+        self.assertEqual([(f.source, f.entry, f.charmaps[1]) for f in r.found],
+                         [('en_XX', None, 'CS')])
+        gb_old = old15.replace('ISO-8859-15', 'GB18030')
+        gb_new = new15.replace('ISO-8859-15', 'GB18030')
+        r = self.run_compare(texts, {'UTF-8': self.UTF8_NEW, 'CS': gb_old},
+                             {'UTF-8': self.UTF8_NEW, 'CS': gb_new}, supported)
+        self.assertEqual(r.found, [])
+
+    def test_an_entry_renamed_between_the_tags_is_one_build(self):
+        """A build is a source in a charmap: az_AZ.UTF-8 at one tag and
+        az_AZ at the next (2.12..2.17) is the same build. Matched by entry
+        it was compared by neither path."""
+        old, new = sides({'xx_YY': locale_text('<U00E9> IGNORE')},
+                         {'xx_YY': locale_text('<U00E9> IGNORE')},
+                         {'UTF-8': self.UTF8_OLD}, {'UTF-8': self.UTF8_NEW})
+        r = ck.compare(old, new, self.builds('xx_YY.UTF-8/UTF-8'),
+                       self.builds('xx_YY/UTF-8'), set)
+        self.assertEqual([(f.source, f.entry) for f in r.found],
+                         [('xx_YY', 'xx_YY')])
+
+    def test_a_build_only_at_one_tag_is_searched_as_a_distro_s(self):
+        """At the old tag only a distro could build loc in CS, H3's own
+        case, so a build SUPPORTED adds at the new tag does not exempt it
+        from the search."""
+        cs_old = charmap('<U0041> /x41', '<U00E9> /xe9',
+                         prolog=('<code_set_name> CS',) + _PROLOG[1:])
+        cs_new = cs_old.replace('/xe9', '/xea')
+        texts = {'loc': locale_text('<U00E9> IGNORE'),
+                 'de_XX': locale_text('<U0041> IGNORE')}
+        old, new = sides(texts, texts, {'UTF-8': self.UTF8_NEW, 'CS': cs_old},
+                         {'UTF-8': self.UTF8_NEW, 'CS': cs_new})
+        r = ck.compare(old, new,
+                       self.builds('loc.UTF-8/UTF-8', 'de_XX/CS'),
+                       self.builds('loc.UTF-8/UTF-8', 'de_XX/CS', 'loc/CS'),
+                       set)
+        self.assertEqual([(f.source, f.entry, f.charmaps[1])
+                          for f in r.found], [('loc', None, 'CS')])
+
+    def test_what_it_cannot_settle_is_listed_with_its_reason(self):
+        cases = {
+            'a charmap it does not read':
+                ({'loc': locale_text('<U0041> IGNORE')},
+                 charmap('<U0041> /x41', prolog=_PROLOG + ('<include> X',))),
+            'a code_set_name that changes':
+                ({'loc': locale_text('<U0041> IGNORE')},
+                 charmap('<U0041> /x41',
+                         prolog=('<code_set_name> OTHER',) + _PROLOG[1:])),
+            'a copy target that is not there':
+                ({'loc': locale_text('copy "gone"')}, self.UTF8_NEW),
+            'copies in a cycle':
+                ({'loc': locale_text('copy "loop"'),
+                  'loop': locale_text('copy "loc"')}, self.UTF8_NEW),
+            'a second section':
+                ({'loc': locale_text('<U0041> IGNORE')
+                  + 'LC_COLLATE\n<U0042>\nEND LC_COLLATE\n'}, self.UTF8_NEW),
+        }
+        for why, (texts, new_cm) in cases.items():
+            with self.subTest(why):
+                r = self.run_compare(texts, {'UTF-8': self.UTF8_OLD},
+                                     {'UTF-8': new_cm}, ['loc.UTF-8/UTF-8'])
+                got = {f.source: f.reason for f in r.found if f.entry}
+                self.assertEqual(list(got), ['loc'])
+                self.assertIsNotNone(got['loc'])
+
+    def test_an_absolute_range_is_unsettled_even_when_k_is_empty(self):
+        """H8: `...` walks the charmap's byte table, which a blob that
+        changes only in its comments can still reorder (the first name of
+        a byte sequence)."""
+        r = self.run_compare({'loc': locale_text('<U0041>', '...', '<U0042>')},
+                             {'UTF-8': self.UTF8_OLD},
+                             {'UTF-8': self.UTF8_OLD.replace(
+                                 'CHARMAP', '% changed\nCHARMAP', 1)},
+                             ['loc.UTF-8/UTF-8'])
+        self.assertEqual(r.sizes, {('UTF-8', 'UTF-8'): (0, 0, 0)})
+        self.assertEqual([f.source for f in r.found], ['loc'])
+        self.assertIn('`...`', r.found[0].reason)
+
+    def test_a_distro_build_with_an_absolute_range_and_k_empty(self):
+        """Point 5 ran only when K had members, and `...` can move with K
+        empty: a source no SUPPORTED entry builds in the charmap, with `...`
+        in its rules, was never evaluated (false-negative-reviewer, round
+        2)."""
+        r = self.run_compare({'loc': locale_text('<U0041> IGNORE'),
+                              'other': locale_text('<U0041>', '...',
+                                                   '<U0042>')},
+                             {'UTF-8': self.UTF8_OLD},
+                             {'UTF-8': self.UTF8_OLD.replace(
+                                 'CHARMAP', '% changed\nCHARMAP', 1)},
+                             ['loc.UTF-8/UTF-8'])
+        self.assertEqual([(f.source, f.entry) for f in r.found],
+                         [('other', None)])
+        self.assertIn('`...`', r.found[0].reason)
+
+    def test_a_keyword_the_search_does_not_read_with_k_empty(self):
+        """With K empty only a `...` range can move, and glibc reads every
+        LC_COLLATE section: a `...` in a second section or under a keyword
+        after blanks was dropped with every other odd reason when K was
+        empty, for SUPPORTED builds and for point 5 (false-negative-
+        reviewer, round 3)."""
+        second = (locale_text('<U0041> IGNORE')
+                  + 'LC_COLLATE\n<U0041>\n...\n<U0042>\nEND LC_COLLATE\n')
+        r = self.run_compare({'loc': second}, {'UTF-8': self.UTF8_OLD},
+                             {'UTF-8': self.UTF8_OLD.replace(
+                                 'CHARMAP', '% changed\nCHARMAP', 1)},
+                             ['loc.UTF-8/UTF-8'])
+        self.assertEqual([(f.source, f.entry) for f in r.found],
+                         [('loc', 'loc.UTF-8')])
+        self.assertIsNotNone(r.found[0].reason)
+
+    def test_point_5_reads_a_file_whose_keyword_has_blanks_before_it(self):
+        indented = ('comment_char %\nescape_char /\n  LC_COLLATE\n'
+                    '<U00E9> IGNORE\nEND LC_COLLATE\n')
+        r = self.run_compare({'loc': locale_text('<U0041> IGNORE'),
+                              'ind': indented},
+                             {'UTF-8': self.UTF8_OLD}, {'UTF-8': self.UTF8_NEW},
+                             ['loc.UTF-8/UTF-8'])
+        self.assertEqual([(f.source, f.entry) for f in r.found],
+                         [('ind', None)])
+        self.assertIsNotNone(r.found[0].reason)
+
+    def test_a_charmap_supported_names_that_is_not_there_is_not_run(self):
+        old, new = sides({'loc': locale_text('<U0041>')},
+                         {'loc': locale_text('<U0041>')},
+                         {'UTF-8': self.UTF8_OLD}, {})
+        b = self.builds('loc.UTF-8/UTF-8')
+        r = ck.compare(old, new, b, b, set)
+        self.assertIn('UTF-8 at t2', r.not_run)
+
+    def test_supported_lines_it_does_not_read_are_unsettled(self):
+        for line in ('a/b/c', 'a b/c', '/c', 'a/'):
+            with self.subTest(line):
+                with self.assertRaises(ck.Unsettled):
+                    self.builds(line)
+        self.assertEqual([b.entry for b in self.builds('sv_SE.UTF-8/UTF-8')],
+                         ['sv_SE.UTF-8'])
+
+
+
+class CharmapReportLines(unittest.TestCase):
+    """Lines print_charmap_report writes that no real pair reaches."""
+
+    def lines(self, **fields):
+        base = dict(not_run=None, builds=2, charmaps=['UTF-8'],
+                    changed=[('UTF-8', 'UTF-8')],
+                    sizes={('UTF-8', 'UTF-8'): (1, 1, 0)}, found=[],
+                    skipped=[], not_compared=[], unsearched=[])
+        base.update(fields)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            f.print_charmap_report(ck.Report(**base), 't1', 't2')
+        return buf.getvalue()
+
+    def test_the_clean_line_says_compared_when_entries_were_not(self):
+        out = self.lines(not_compared=['ghost.UTF-8'])
+        self.assertIn("No compared build's LC_COLLATE names one of those "
+                      "characters.", out)
+        self.assertIn('!! 1 SUPPORTED entry at both tags is not compared',
+                      out)
+        self.assertIn("No build's LC_COLLATE", self.lines())
+
+    def test_a_code_point_beyond_unicode_is_printed_as_a_number(self):
+        found = ck.Found('loc', 'loc.UTF-8', ('UTF-8', 'UTF-8'),
+                         {0x41, 0x110000}, ['loc'], None)
+        out = self.lines(found=[found])
+        self.assertIn('2 characters, named in loc', out)
+        self.assertIn('A (U+0041)  U+110000', out)
 
 
 if __name__ == '__main__':

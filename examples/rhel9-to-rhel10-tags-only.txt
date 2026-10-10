@@ -93,6 +93,12 @@ Files with changes inside LC_COLLATE: 3
       ํ (U+0E4D)  ะ (U+0E30)  ั (U+0E31)  า (U+0E32)  ๅ (U+0E45)  ำ (U+0E33)
       ิ (U+0E34)  ี (U+0E35)  ึ (U+0E36)  ื (U+0E37)  ุ (U+0E38)  ู (U+0E39)
 
+Character sets (localedata/charmaps/): 2 of the 30 that the 487 locale builds
+in SUPPORTED at both tags use differ between glibc-2.34 and glibc-2.39.
+GB18030: 24 characters added, 6 given other bytes. UTF-8: 5954 characters
+added.
+No build's LC_COLLATE names one of those characters.
+
 !! localedata/locales/C is new UPSTREAM at glibc-2.39, but C.UTF-8 is
    BACKPORTED by the distros this audit targets -- so it very likely DOES
    exist on your old system, with an order of its own, and that order can
