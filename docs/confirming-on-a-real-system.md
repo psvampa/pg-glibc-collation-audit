@@ -45,8 +45,11 @@ Derive them from that rule. For a `localedef` change that means the boundaries
 of the affected range. Under each locale it flags, step 2 lists the characters
 its changed rules name, or says it could not identify them and that the locale
 must be considered suspicious, or, for a file read with other comment or escape
-characters, that any rule in it can read differently. Step 11, in command 1.b, names the characters
-that moved, when there are few enough to list.
+characters, that any rule in it can read differently. For a locale it lists
+because its character set changed, it prints which of the characters its rules
+name the character set changed, or why it could not compare them. Step 11, in
+command 1.b, names the characters that moved, when there are few enough to
+list.
 
 Step 2's list is where to start, not proof that every character on it moved. A
 rule that was rewritten names everything it touches, weights included, so

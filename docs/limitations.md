@@ -6,7 +6,7 @@ something it cannot see has changed.
 1. [`C.UTF-8` is invisible to a tag diff](#cutf-8-is-invisible-to-a-tag-diff)
 2. [Upstream tags are not your distro's glibc](#upstream-tags-are-not-your-distros-glibc)
 3. [Below glibc 2.24 the method rests on one measured pair](#below-glibc-224-the-method-rests-on-one-measured-pair)
-4. [Character repertoire changes are not audited](#character-repertoire-changes-are-not-audited)
+4. [A machine's character sets are not compared](#a-machines-character-sets-are-not-compared)
 5. [Step 5 reports, it does not decide](#step-5-reports-it-does-not-decide)
 6. [Step 11 measures one character at a time](#step-11-measures-one-character-at-a-time)
 7. [`LC_CTYPE` is not audited at all](#lc_ctype-is-not-audited-at-all)
@@ -61,16 +61,19 @@ is not every pair.
 If both your versions are that old, read the result as thinner evidence than
 the two RHEL pairs carry, and confirm it on the machines.
 
-## Character repertoire changes are not audited
+## A machine's character sets are not compared
 
-`localedata/charmaps/` decides which characters exist to be given a sort
-weight, and no step reads it. Every glibc release adds thousands of code
-points to it.
+A locale's character set (`localedata/charmaps/`) decides the bytes of every
+character its rules name, and an unchanged rule sorts differently when those
+bytes change, or when the character appears or disappears. Step 2 compares,
+between the two glibc versions, the character sets the locales in SUPPORTED
+are built with, and lists the locales whose rules name a character the newer
+version added, removed or gave other bytes. A distro can patch the character
+sets it ships, and no step compares a machine's own.
 
-Adding a character gives that character a weight rather than moving the
-characters that already had one, and no impact from this has been found. It is
-still a gap, and only data containing those newly added characters could ever
-be touched by it.
+Transliteration is not compared either. Through it a locale builds some
+collating elements out of characters its character set lacks, so a change to
+it, or to the character set, can move those elements with no rule changing.
 
 ## Step 5 reports, it does not decide
 

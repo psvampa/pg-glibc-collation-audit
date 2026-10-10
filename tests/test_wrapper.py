@@ -20,8 +20,9 @@ import shutil
 import tempfile
 import unittest
 
-from _harness import (EXPECTED_SHA, MID, NEW, OLD, REPO_ROOT, backported_c,
-                      flat, locale_file, needs_clone, run_wrapper, upstream_c)
+from _harness import (EXPECTED_SHA, MID, NEW, OLD, REPO_ROOT, SCRIPTS_DIR,
+                      backported_c, flat, locale_file, needs_clone,
+                      run_wrapper, upstream_c)
 
 import diff_distro_locales as dd
 import glibc_locale_data as g
@@ -454,13 +455,62 @@ class Wrapper(unittest.TestCase):
 
 
 @needs_clone
+class WrapperHandsTheKeyedListToStepThree(unittest.TestCase):
+    """audit.sh passes step 2's second list -- the locales its character set
+    check lists (backlog 13.7, PR B) -- to step 3 after --keyed, and step 3's
+    result reaches the summary. No pinned pair lists a locale there, so the
+    list is injected: a sitecustomize on PYTHONPATH, which every Python the
+    run starts imports, makes step 2 write sv_SE into it. glibc-2.39 against
+    itself, so nothing else reaches step 3."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-keyed-')
+        hook = os.path.join(cls.out_dir, 'hook')
+        os.makedirs(hook)
+        with open(os.path.join(hook, 'sitecustomize.py'), 'w',
+                  encoding='utf-8') as fh:
+            fh.write(f"import sys\n"
+                     f"sys.path.insert(0, {SCRIPTS_DIR!r})\n"
+                     f"import glibc_locale_data as g\n"
+                     f"real = g.write_list\n"
+                     f"def write_list(name, items):\n"
+                     f"    if name.startswith('step2_keyed_locales.'):\n"
+                     f"        items = ['sv_SE']\n"
+                     f"    return real(name, items)\n"
+                     f"g.write_list = write_list\n"
+                     f"del sys.path[0]\n")
+        cls.rc, cls.out = run_wrapper(NEW, NEW, out_dir=cls.out_dir,
+                                      env_extra={'PYTHONPATH': hook})
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_step_3_runs_on_the_keyed_list_alone(self):
+        self.assertEqual(self.rc, 0, self.out)
+        self.assertIn('STEP 3  Which locales inherit those changes', self.out)
+        self.assertIn('Directly changed (own LC_COLLATE diff): none', self.out)
+        self.assertIn('Directly changed (character set, step 2): sv_SE',
+                      self.out)
+
+    def test_the_keyed_locale_reaches_the_reindex_list_without_its_copiers(self):
+        """Step 2 followed every copy each listed build reads, at both
+        tags, so step 3 adds the keyed locales as they are: sv_FI copies
+        sv_SE and sorts by its own charmap, which step 2 compared for
+        sv_FI's own builds."""
+        names = summary_block(self.out, REINDEX)
+        self.assertIn('sv_SE', names)
+        self.assertNotIn('sv_FI', names)
+
+
+@needs_clone
 class WrapperEmptyPair(unittest.TestCase):
     """A pair with no LC_COLLATE change at all.
 
     glibc-2.39 against itself: no new tag to pin, so EXPECTED_SHA and
     has_tags() stay as they are. Step 2 finds nothing, and step 3 must be
-    skipped rather than called with no arguments -- its `nargs='+'` makes an
-    empty invocation an argparse error, exit 2.
+    skipped rather than called with no locale -- it refuses that, exit 2.
     """
 
     @classmethod
@@ -483,6 +533,7 @@ class WrapperEmptyPair(unittest.TestCase):
         So assert the complaint is absent, not just that the run was green.
         """
         self.assertNotIn('the following arguments are required', self.out)
+        self.assertNotIn('no locale given', self.out)
         self.assertIn('STEP 3  Skipped', self.out)
 
     def test_step_3_says_nothing_was_compared(self):
@@ -842,11 +893,12 @@ class WrapperRefusesBadInput(unittest.TestCase):
                 self.assertNotIn('STEP 1', out)
 
     def test_step_2_rewrites_the_list_so_a_seed_cannot_survive(self):
-        """This is the real protection on the file that becomes step 3's argv.
+        """This is the real protection on the files that become step 3's
+        argv.
 
-        Step 2 writes the list unconditionally for the pair being audited,
-        before step 3 reads it, so nothing a previous run or another process
-        left there can reach step 3. Revert step 2's write and this fails: the
+        Step 2 writes both lists unconditionally for the pair being audited,
+        before step 3 reads them, so nothing a previous run or another process
+        left there can reach step 3. Revert either write and this fails: the
         seeded line survives into the file and into the run.
 
         audit.sh also validates each name and refuses anything that is not a
@@ -855,15 +907,20 @@ class WrapperRefusesBadInput(unittest.TestCase):
         """
         import glibc_locale_data as g
         os.makedirs(self.out_dir, exist_ok=True)
-        path = os.path.join(
-            self.out_dir,
-            f'step2_changed_collate.{g.pair_slug(NEW, NEW)}.txt')
-        with open(path, 'w', encoding='utf-8') as fh:
-            fh.write('--repo /nonexistent/elsewhere\n')
+        # Both lists step 3 reads: the changed files and the locales the
+        # character set check lists (backlog 13.7, PR B).
+        paths = [os.path.join(self.out_dir,
+                              f'step2_{kind}.{g.pair_slug(NEW, NEW)}.txt')
+                 for kind in ('changed_collate', 'keyed_locales')]
+        for path in paths:
+            with open(path, 'w', encoding='utf-8') as fh:
+                fh.write('--repo /nonexistent/elsewhere\n')
         rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir)
         self.assertEqual(rc, 0, out)
-        with open(path, encoding='utf-8') as fh:
-            self.assertNotIn('nonexistent', fh.read())
+        for path in paths:
+            with self.subTest(os.path.basename(path)):
+                with open(path, encoding='utf-8') as fh:
+                    self.assertNotIn('nonexistent', fh.read())
         self.assertNotIn('/nonexistent/elsewhere', out)
 
     def test_a_stale_step_3_list_is_not_summarised(self):
