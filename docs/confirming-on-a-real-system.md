@@ -47,7 +47,11 @@ its changed rules name, or says it could not identify them and that the locale
 must be considered suspicious, or, for a file read with other comment or escape
 characters, that any rule in it can read differently. For a locale it lists
 because its character set changed, it prints which of the characters its rules
-name the character set changed, or why it could not compare them. Step 11, in
+name the character set changed, or why it could not compare them. For a locale
+it lists because a collating element, a combination of letters sorted as one,
+is built differently out of a transliteration, it names the file that defines
+the element and the characters transliterated. The strings must contain the
+whole element: step 11 does not measure combinations of letters. Step 11, in
 command 1.b, names the characters that moved, when there are few enough to
 list.
 

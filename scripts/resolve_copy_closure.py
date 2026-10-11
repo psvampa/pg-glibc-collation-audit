@@ -25,8 +25,8 @@ Usage:
   python3 resolve_copy_closure.py <tag> [<locale> ...] [--keyed <locale> ...]
                                   [--repo <path>]
 
-`--keyed` takes the locales step 2 lists because their character set changed
-what their LC_COLLATE names (collation_keys.py), not their own rules. Step 2
+`--keyed` takes the locales step 2 lists from its character set or
+transliteration check (collation_keys.py), not for their own rules. Step 2
 already followed every `copy` each of those builds reads, at both tags, so
 they join the affected set as they are, on a line of their own, and are not
 closed over the copy graph again: a locale that copies one of them sorts by
@@ -51,8 +51,8 @@ def main(argv):
                     help="locales whose own LC_COLLATE changed, as bare names "
                          "or paths")
     ap.add_argument('--keyed', nargs='+', default=[],
-                    help="locales step 2 lists because their character set "
-                         "changed what their LC_COLLATE names")
+                    help="locales step 2 lists from its character set or "
+                         "transliteration check, not for their own rules")
     ap.add_argument('--repo', help="path to the glibc clone (autodetected)")
     opts = ap.parse_args(argv)
 
@@ -90,7 +90,7 @@ def main(argv):
     print(f"Directly changed (own LC_COLLATE diff): "
           f"{', '.join(sorted(changed)) if changed else 'none'}")
     if keyed:
-        print(f"Directly changed (character set, step 2): "
+        print(f"Listed by step 2 (character set or transliteration check): "
               f"{', '.join(sorted(keyed))}")
     print(f"Additionally affected via copy-chain inheritance: {len(inherited)}")
     for loc, roots in sorted(inherited.items()):

@@ -248,7 +248,7 @@ evidence is in
 Sort order (`LC_COLLATE`) only, and in PostgreSQL terms the **`libc` provider**
 only. Nothing about `LC_CTYPE` (`upper()`, `lower()`, pattern matching), ICU,
 or the `builtin` provider — and the two pairs named above. `LC_CTYPE` is the
-exclusion that can still cost you an index, and no step of this tool reads
+exclusion that can still cost you an index, and no step of this tool audits
 it.
 
 Full scope, including the `builtin` provider as a mitigation:

@@ -500,22 +500,9 @@ def absent_at_both(repo, paths, old_tag, new_tag):
         # of the same repository: locale/xlocale.h, deleted before 2.28, came
         # back not-yet-born and the step printed its clean sentence.
         #
-        # Only `true` and `false` are answers. `--is-shallow-repository` dates
-        # from git 2.15, and an older `rev-parse` ECHOES an option it does not
-        # know and exits 0 -- which is not `true`, so the guard would be off
-        # with nothing said. "Could not ask" is its own case.
-        shallow = g.run_git(['rev-parse', '--is-shallow-repository'],
-                            repo).stdout.strip()
-        if shallow not in (b'true', b'false'):
-            g.die(f"`git rev-parse --is-shallow-repository` answered "
-                  f"{shallow!r}, which is neither true nor false, so whether "
-                  f"this clone has the history step 5 needs is unknown "
-                  f"(git older than 2.15?).", 2)
-        if shallow == b'true':
-            g.die("this glibc clone is shallow, so `git log` cannot say "
-                  "whether a path absent at both tags was renamed away or had "
-                  "not been written yet. Clone without --depth "
-                  "(--filter=blob:none is fine).", 2)
+        g.require_full_history(
+            repo, 'step 5', '`git log` cannot say whether a path absent at '
+            'both tags was renamed away or had not been written yet')
     renamed, unborn, never = [], [], []
     for path in paths:
         # BOTH tags, and --full-history. Asking only the older one files a path

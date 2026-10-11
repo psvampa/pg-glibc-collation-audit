@@ -491,8 +491,8 @@ class WrapperHandsTheKeyedListToStepThree(unittest.TestCase):
         self.assertEqual(self.rc, 0, self.out)
         self.assertIn('STEP 3  Which locales inherit those changes', self.out)
         self.assertIn('Directly changed (own LC_COLLATE diff): none', self.out)
-        self.assertIn('Directly changed (character set, step 2): sv_SE',
-                      self.out)
+        self.assertIn('Listed by step 2 (character set or transliteration '
+                      'check): sv_SE', self.out)
 
     def test_the_keyed_locale_reaches_the_reindex_list_without_its_copiers(self):
         """Step 2 followed every copy each listed build reads, at both

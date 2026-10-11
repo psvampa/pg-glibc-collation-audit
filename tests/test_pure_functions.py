@@ -2372,6 +2372,14 @@ class LcCollateSearch(unittest.TestCase):
         text = locale_text('% <U00E9>', head=('LC_CTYPE', 'END LC_CTYPE',
                                               'comment_char %'))
         self.assertIsNone(ck._reading(text))
+        # The range readers take reading_chars, not the transliteration
+        # reader: one name for both once gave them the other (round 6 of
+        # the 13.7 review). `LC_TI\ME` opens LC_TIME, so the directives
+        # below it are not read: reading_chars says so, the other does not.
+        shadow = ('LC_TI\\ME\ncomment_char %\nescape_char /\nEND LC_TIME\n'
+                  'LC_COLLATE\norder_start forward\n<U0041>\norder_end\n'
+                  'END LC_COLLATE\n')
+        self.assertIsNone(ck._reading(shadow))
         self.assertTrue(ck.confirmed_hit(ck.Scan(text), ck.K(frozenset({0xE9}))))
 
     def test_a_name_split_at_an_escaped_line_end_is_read(self):
@@ -2402,6 +2410,29 @@ class LcCollateSearch(unittest.TestCase):
         glibc; the closure did not (false-negative-reviewer, round 3)."""
         self.assertEqual(ck.Scan(locale_text('\fcopy "tmpl"')).copies,
                          ('tmpl',))
+
+    def test_the_range_readers_ask_reading_chars(self):
+        """Scan's ranges and range_interval, for the range's own file and
+        for another file of the run, take the comment and escape
+        characters from _reading (glibc_locale_data.reading_chars), never
+        from the transliteration reader: one name for both once gave them
+        the other (round 6 of the 13.7 review)."""
+        def refuse(text):
+            raise AssertionError('a range reader asked _ctype_reading')
+        texts = {name: locale_text('order_start forward', lo, '..', hi,
+                                   'order_end')
+                 for name, lo, hi in (('loc', '<U0041>', '<U0045>'),
+                                      ('two', '<U0050>', '<U0055>'))}
+        real = ck._ctype_reading
+        ck._ctype_reading = refuse
+        try:
+            ck.reset()
+            side = ck.Side('t', set(texts), texts, {}, {})
+            off = side.scan('loc').line_ranges[-1]
+            self.assertEqual(ck.range_interval(side, ('loc', 'two'), 'loc',
+                                               off), (0x41, 0x45))
+        finally:
+            ck._ctype_reading = real
 
     def test_a_line_range_settles_only_between_two_order_lines(self):
         """H4: glibc starts a `..` range at its cursor, which an order line
@@ -2735,6 +2766,1193 @@ class CharmapReportLines(unittest.TestCase):
         out = self.lines(found=[found])
         self.assertIn('2 characters, named in loc', out)
         self.assertIn('A (U+0041)  U+110000', out)
+
+
+
+# --- step 2's transliteration check (backlog 13.7, PR C) --------------------
+
+def _ascii_charmap(*extra):
+    """ISO-8859-1's shape: ASCII, no U+02BB and no U+2018."""
+    return charmap(*[f'<U{c:04X}> /x{c:02x}' for c in range(0x20, 0x7f)],
+                   *extra)
+
+
+def ctype_text(ctype=None, collate=None, ctype_first=True):
+    """A locale file with an LC_CTYPE body and an LC_COLLATE body, in that
+    order or the other."""
+    head = 'comment_char %\nescape_char /\n'
+    c = f'LC_CTYPE\n{ctype}\nEND LC_CTYPE\n' if ctype is not None else ''
+    o = (f'LC_COLLATE\n{collate}\nEND LC_COLLATE\n' if collate is not None
+         else '')
+    return head + (c + o if ctype_first else o + c)
+
+
+def translit(*lines):
+    return 'translit_start\n' + '\n'.join(lines) + '\ntranslit_end'
+
+
+# i18n as glibc writes it: `copy "i18n_ctype"`, then an include whose only
+# answer for U+02BB is U+2018, which the charmap lacks (M1 c and d).
+I18N = {
+    'i18n_ctype': ctype_text('upper <U0041>'),
+    'i18n': ctype_text('copy "i18n_ctype"\n\n'
+                       + translit('include "translit_neutral";""')),
+    'translit_neutral': ctype_text(translit('<U02BB> "<U2018>"')),
+    'Z': ctype_text(translit('<U02BB> "<U0060>"')),
+}
+ELEMENT = ('collating-element <gtc> from "g<U02BB>"\norder_start forward\n'
+           '<gtc>\norder_end')
+GRAVE = '<U02BB> "<U0060>"'
+APOS = '<U02BB> "<U0027>"'
+
+
+class TranslitTable(unittest.TestCase):
+    """TranslitRun against M1 of the 13.7 handoff: the element
+    `g` + U+02BB, which ISO-8859-1 cannot hold, built with the table glibc
+    has when it reads the from string, on RHEL 8, 9 and 10. D defines the
+    element; M is the build's source. Every expected key is the measured
+    one (`.claude/glibc-study/m137/pr2-rediseno/nodes/README.md`)."""
+
+    CASES = {
+        # M's LC_CTYPE writes into i18n's table before its LC_COLLATE copies D.
+        'a': ({'D': ctype_text('copy "i18n"', ELEMENT),
+               'M': ctype_text('copy "i18n"\n' + translit(GRAVE),
+                               'copy "D"')}, 'D', '/x67/x60'),
+        # The same, M's LC_COLLATE first: M's entry is read too late.
+        'b': ({'D': ctype_text('copy "i18n"', ELEMENT),
+               'M': ctype_text('copy "i18n"\n' + translit(GRAVE), 'copy "D"',
+                               ctype_first=False)}, 'D', None),
+        'c': ({'D': ctype_text('copy "i18n"', ELEMENT),
+               'M': ctype_text('copy "i18n"', 'copy "D"')}, 'D', None),
+        # A table without `copy` is M's own.
+        'e': ({'D': ctype_text('copy "i18n"', ELEMENT),
+               'M': ctype_text(translit(GRAVE), 'copy "D"')}, 'D', None),
+        # An include M adds goes to the end of the shared table.
+        'g': ({'D': ctype_text('copy "i18n"', ELEMENT),
+               'M': ctype_text('copy "i18n"\n' + translit('include "Z";""'),
+                               'copy "D"')}, 'D', '/x67/x60'),
+        # D with no LC_CTYPE never transliterates.
+        'h': ({'D': ctype_text(None, ELEMENT),
+               'M': ctype_text('copy "i18n"\n' + translit(GRAVE),
+                               'copy "D"')}, 'D', None),
+        # D's own entry is read at the lookup, after M's, and wins.
+        'i': ({'D': ctype_text('copy "i18n"\n' + translit(APOS), ELEMENT),
+               'M': ctype_text('copy "i18n"\n' + translit(GRAVE),
+                               'copy "D"')}, 'D', '/x67/x27'),
+        # A file reached by `copy` in LC_COLLATE is read for LC_COLLATE only.
+        'j': ({'D': ctype_text('copy "i18n"', ELEMENT),
+               'X': ctype_text('copy "i18n"\n' + translit(GRAVE), 'copy "D"'),
+               'M': ctype_text('copy "i18n"', 'copy "X"')}, 'D', None),
+        # M copied D's LC_CTYPE first, so M's own entry is the newer one.
+        'k': ({'Down': ctype_text('copy "i18n"\n' + translit(APOS), ELEMENT),
+               'M': ctype_text('copy "Down"\n' + translit(GRAVE),
+                               'copy "Down"')}, 'Down', '/x67/x60'),
+        'l': ({'Down': ctype_text('copy "i18n"\n' + translit(APOS), ELEMENT),
+               'M': ctype_text('copy "Down"\n' + translit(GRAVE),
+                               'copy "Down"', ctype_first=False)},
+              'Down', '/x67/x27'),
+        # N3c: the later of two lines wins; the first alternative the
+        # charmap has; an entry with none leaves the answer to the includes.
+        'later line': ({'D': ctype_text('copy "i18n"\n' + translit(APOS, GRAVE),
+                                        ELEMENT),
+                        'M': ctype_text('copy "i18n"', 'copy "D"')},
+                       'D', '/x67/x60'),
+        'first available': ({'D': ctype_text(
+            'copy "i18n"\n' + translit('<U02BB> "<U2018>";"<U0060>"'),
+            ELEMENT), 'M': ctype_text('copy "i18n"', 'copy "D"')},
+            'D', '/x67/x60'),
+        # A bare <U....> is not checked when it is read, only when it is
+        # looked up (find_translit2): the next alternative answers.
+        'first available bare': ({'D': ctype_text(
+            'copy "i18n"\n' + translit('<U02BB> <U2018>;<U0060>'), ELEMENT),
+            'M': ctype_text('copy "i18n"', 'copy "D"')}, 'D', '/x67/x60'),
+        'include answers': ({'D': ctype_text(
+            'copy "i18n"\n' + translit('include "Z";""', '<U02BB> "<U2018>"'),
+            ELEMENT), 'M': ctype_text('copy "i18n"', 'copy "D"')},
+            'D', '/x67/x60'),
+        # A trailing `;` is an empty alternative: the character is dropped.
+        'empty alternative': ({'D': ctype_text(
+            'copy "i18n"\n' + translit('<U02BB> "<U2018>";'), ELEMENT),
+            'M': ctype_text('copy "i18n"', 'copy "D"')}, 'D', '/x67'),
+        # The newest entry has no alternative the charmap holds: the
+        # older entries of the table are not asked, only the includes.
+        'newest without answer': ({'D': ctype_text(
+            'copy "i18n"\n' + translit('<U02BB> "<U2018>"'), ELEMENT),
+            'M': ctype_text('copy "i18n"\n' + translit(GRAVE), 'copy "D"')},
+            'D', None),
+        # A line glibc cannot read is no entry: the older line answers.
+        'dropped newest': ({'D': ctype_text(
+            'copy "i18n"\n' + translit(GRAVE, '<U02BB> ;"<U0027>"'), ELEMENT),
+            'M': ctype_text('copy "i18n"', 'copy "D"')}, 'D', '/x67/x60'),
+    }
+
+    def key(self, files, defining):
+        texts = dict(I18N, **files)
+        ck.reset()
+        cm = ck.read_charmap(_ascii_charmap(), 'TEST')
+        side = ck.Side('t', set(texts), texts, {'TEST': '1'}, {})
+        run = ck.TranslitRun(side, cm, 'M')
+        parts = ck.elements_of(side.scan(defining))['<gtc>']
+        return ck._element_key(parts, cm, run, defining)[0]
+
+    def test_every_measured_case(self):
+        for name, (files, defining, want) in self.CASES.items():
+            with self.subTest(name):
+                self.assertEqual(self.key(files, defining), want)
+
+    def unsettled(self, files, defining='D'):
+        with self.assertRaises(ck.Unsettled) as cm:
+            self.key(files, defining)
+        return str(cm.exception)
+
+    def test_translit_ignore_is_not_settled(self):
+        """H12: find_translit2 never moves past a translit_ignore range that
+        does not answer, so glibc does not finish."""
+        why = self.unsettled({'D': ctype_text(
+            'copy "i18n"\n' + translit('translit_ignore <U0300>'), ELEMENT),
+            'M': ctype_text('copy "i18n"', 'copy "D"')})
+        self.assertIn('translit_ignore', why)
+
+    def test_a_cycle_is_not_settled(self):
+        """H12 too: a copy cycle, and an include that leads back to the
+        table being searched, never come back with an answer."""
+        self.assertIn('cycle', self.unsettled({
+            'D': ctype_text('copy "E"', ELEMENT),
+            'E': ctype_text('copy "D"'),
+            'M': ctype_text('copy "i18n"', 'copy "D"')}))
+        self.assertIn('leads back', self.unsettled({
+            'D': ctype_text('copy "i18n"\n' + translit('include "i18n";""'),
+                            ELEMENT),
+            'M': ctype_text('copy "i18n"', 'copy "D"')}))
+
+    def test_a_source_spelled_with_escapes_is_refused(self):
+        """M's LC_CTYPE head and END built with the escape: glibc reads
+        it before M's LC_COLLATE; the run is refused, never built without
+        it."""
+        m = ctype_text('copy "i18n"\n' + translit(GRAVE), 'copy "D"') \
+            .replace('LC_CTYPE', 'LC_C/TYPE')
+        self.assertIn('LC_CTYPE', self.unsettled(
+            {'D': ctype_text('copy "i18n"', ELEMENT), 'M': m}))
+
+    def test_lookups_in_two_files_are_not_settled(self):
+        files = {'D': ctype_text('copy "i18n"', ELEMENT),
+                 'M': ctype_text('copy "i18n"', 'copy "D"')}
+        texts = dict(I18N, **files)
+        ck.reset()
+        cm = ck.read_charmap(_ascii_charmap(), 'TEST')
+        run = ck.TranslitRun(ck.Side('t', set(texts), texts, {}, {}), cm, 'M')
+        run.lookup('D', 0x2BB)
+        with self.assertRaises(ck.Unsettled):
+            run.lookup('M', 0x2BB)
+
+    def test_a_missing_include_is_not_settled(self):
+        self.assertIn('is not there', self.unsettled({
+            'D': ctype_text('copy "i18n"\n' + translit('include "nope";""'),
+                            ELEMENT),
+            'M': ctype_text('copy "i18n"', 'copy "D"')}))
+
+
+class TranslitLines(unittest.TestCase):
+    """How a translit line is read: its head, and its alternatives as
+    read_translit_entry and get_string take them (ld-ctype.c:1786-1917,
+    linereader.c:773-1000@2.39)."""
+
+    CHARS = ('%', '/')
+
+    def alts(self, rest):
+        return ck._alternatives(rest, self.CHARS)
+
+    def test_alternatives(self):
+        for rest, want in (
+                (' "<U2018>";"<U0027>" % a comment', [[0x2018], [0x27]]),
+                (' <U0068><U0065>', [[0x68, 0x65]]),
+                (' "<U2018>";', [[0x2018], []]),
+                (' "<U2018>";;"<U0027>"', [[0x2018], [], [0x27]]),
+                (' ""', [None]),
+                (' <foo>;"x"', [None, [0x78]]),
+                (' "<foo>";"x"', [None, [0x78]]),
+                (' "a/"b"', [[0x61, 0x22, 0x62]]),
+                (' ;"x"', None),
+                ('', None),
+                ('  % nothing but a comment', None)):
+            with self.subTest(rest):
+                self.assertEqual(self.alts(rest), want)
+
+    def test_a_string_the_charmap_cannot_hold_is_dropped_as_glibc_reads(self):
+        """get_string with no locale drops a string naming a `<U....>` the
+        charmap lacks (linereader.c:897-899@2.39), and what the alternative
+        had collected stays in glibc's buffer for the next one: Unsettled.
+        Alone in its alternative it is just dropped."""
+        has = lambda c: c != 0x2018
+        self.assertEqual(ck._alternatives(' "<U2018>";"<U0060>"', self.CHARS,
+                                          has), [None, [0x60]])
+        with self.assertRaises(ck.Unsettled):
+            ck._alternatives(' <U0067>"<U2018>";"<U0060>"', self.CHARS, has)
+
+    def test_what_is_not_read_is_unsettled(self):
+        for rest in (' /x27', ' "<foo>" "x";"y"', ' "‘"', ' "x',
+                     ' default_missing', ' 39'):
+            with self.subTest(rest), self.assertRaises(ck.Unsettled):
+                self.alts(rest)
+
+    def ct(self, *lines):
+        text = ctype_text(translit(*lines))
+        return text, ck.ctype_of(text)
+
+    def heads(self, *lines, cp=0x2BB):
+        text, ct = self.ct(*lines)
+        self.assertIsNone(ct.odd)
+        return [rest for _, rest in ck._translit_lines(text, ct, cp)]
+
+    def test_heads(self):
+        """A `<U....>` head in either case of hex and either length; a
+        quoted head followed by strings, a comment and another code point
+        are not entries for U+02BB."""
+        self.assertEqual(self.heads('<U02bb> "a"', '<U000002BB> "b"',
+                                    '"<U02BB>" "d"', '% <U02BB> "e"',
+                                    '<U02BC> "f"'),
+                         [' "a"', ' "b"'])
+
+    def test_a_head_spelled_another_way_is_refused(self):
+        """`<u02bb>` is a symbol whose entry glibc drops, leaving the rest
+        of the line read as an entry of its own; `<U02/BB>` names U+02BB
+        through the escape; a raw head is read as the code point from 2.36
+        on and not before. The first two make the block unread, the third
+        refuses the lookup of that code point only."""
+        for line in ('<u02bb> "c"', '<U02/BB> "a"', '"" <U02BB> "a"',
+                     '"" include "Z";""'):
+            with self.subTest(line):
+                self.assertIsNotNone(self.ct(line)[1].odd)
+        text, ct = self.ct('ʻ "a"', '<U02BC> "b"')
+        self.assertIsNone(ct.odd)
+        with self.assertRaises(ck.Unsettled):
+            ck._translit_lines(text, ct, 0x2BB)
+        self.assertEqual(len(ck._translit_lines(text, ct, 0x2BC)), 1)
+
+
+class TranslitCtype(unittest.TestCase):
+    """ctype_of reads LC_CTYPE as ctype_read does for the forms every
+    LC_CTYPE from 2.12 to 2.42 uses, and refuses every other: the four
+    rounds of false-negative-reviewer on PR C each found a spelling the
+    narrower checks before it read differently from glibc."""
+
+    def test_copy_includes_and_blocks(self):
+        ct = ck.ctype_of(ctype_text('copy "i18n"\n\n' + translit(
+            'include "a";""', 'include  "<U0062>";""', '<U0041> "a"')
+            + '\n' + translit('include "c";""')))
+        self.assertIsNone(ct.odd)
+        self.assertEqual((ct.copy, ct.includes), ('i18n', ('a', 'b', 'c')))
+        self.assertEqual(len(ct.blocks), 2)
+        self.assertIsNone(ck.ctype_of(ctype_text(None, ELEMENT)))
+        ident = ('comment_char %\nLC_IDENTIFICATION\ncategory '
+                 '"i18n:2012";LC_CTYPE\nEND LC_IDENTIFICATION\n')
+        self.assertIsNone(ck.ctype_of(ident))
+
+    def test_spellings_glibc_reads_as_copy_and_include(self):
+        """get_ident ends a word at `"` and keeps the character after the
+        escape inside it (linereader.c:569-589@2.39): `copy"X"` and
+        `co/py "X"` are copies, `include"X";""` an include."""
+        for body in ('copy"i18n"', 'co/py "i18n"'):
+            with self.subTest(body):
+                ct = ck.ctype_of(ctype_text(body))
+                self.assertEqual((ct.odd, ct.copy), (None, 'i18n'))
+                self.assertIn('i18n', ck._named_files(ctype_text(body)))
+        ct = ck.ctype_of(ctype_text(translit('include"Z";""')))
+        self.assertEqual((ct.odd, ct.includes), (None, ('Z',)))
+        # Spellings it does not take are refused, and still followed by
+        # the search for names, as a superset.
+        for body in (translit('in/clude "i18n";""'), translit('inc/\nlude '
+                                                              '"i18n";""')):
+            with self.subTest(body):
+                self.assertIsNotNone(ck.ctype_of(ctype_text(body)).odd)
+                self.assertIn('i18n', ck._named_files(ctype_text(body)))
+
+    def test_what_is_odd(self):
+        body = translit('<U02BB> "a"')
+        good = ctype_text(body)
+        self.assertIsNone(ck.ctype_of(good).odd)
+        for name, text in (
+                ('second section', good + 'LC_CTYPE\nEND LC_CTYPE\n'),
+                ('indented keyword', 'comment_char %\n  LC_CTYPE\n'
+                 'copy "i18n"\nEND LC_CTYPE\n'),
+                ('indented beside one', good + '  LC_CTYPE\nEND LC_CTYPE\n'),
+                ('no END', 'comment_char %\nLC_CTYPE\ncopy "i18n"\n'),
+                ('copy not first', ctype_text('upper <U0041>\ncopy "i18n"')),
+                ('another word for copy', ctype_text('copying "x"')),
+                ('repertoire include', ctype_text(translit(
+                    'include "a";"rep"'))),
+                ('include outside', ctype_text('include "a";""')),
+                ('unquoted include', ctype_text(translit('include a;""'))),
+                ('escaped include', ctype_text(translit(
+                    'include "trans/lit";""'))),
+                ('translit_ignore', ctype_text(translit(
+                    'translit_ignore <U0300>'))),
+                ('escaped translit_ignore', ctype_text(translit(
+                    'translit_ig/nore <U0300>'))),
+                ('continued keyword', ctype_text('upper <U0041>;/\n' + body)),
+                ('continued entry', ctype_text(translit('<U0041> "a";/',
+                                                        '"b"'))),
+                ('unclosed block', ctype_text('translit_start\n<U0041> "a"')),
+                ('joined block', ctype_text('copy "i18n"\ntranslit_st/\nart\n'
+                                            '<U02BB> "<U0060>"\ntranslit_e/\n'
+                                            'nd')),
+                ('balanced', ctype_text(translit('translit_ignore/x',
+                                                 'translit_ignore/y')
+                                        + '\ntranslit_st/\nart\n<U02BB> "a"\n'
+                                          'translit_e/\nnd')),
+                ('head continued', good.replace('LC_CTYPE\n',
+                                                'LC_CTYPE /\n', 1)),
+                ('above continued', good.replace(
+                    'LC_CTYPE\n', 'END LC_IDENTIFICATION/\nLC_CTYPE\n', 1)),
+                ('past a comment', good.replace(
+                    'LC_CTYPE\n', 'END LC_IDENTIFICATION/\n% note /\n'
+                    'LC_CTYPE\n', 1)),
+                ('escaped head', good.replace('LC_CTYPE\n', 'LC_CT/YPE\n',
+                                              1)),
+                ('escaped head and end', good.replace('LC_CTYPE',
+                                                      'LC_CT/YPE')),
+                ('indented END', ctype_text('  END LC_CTYPE\n' + body)),
+                ('bare END', ctype_text('END\n' + body)),
+                ('END of another', ctype_text('END LC_COLLATE\n' + body)),
+                ('escaped END', ctype_text('EN/D LC_CTYPE\n' + body)),
+                ('END escaped name', ctype_text('END LC_C/TYPE\n' + body)),
+                ('END after a word', ctype_text('xyz END LC_CTYPE\n' + body)),
+                ('line above END', ctype_text(body + '\nupper <U0041>/')),
+                ('other comment above END', ctype_text(body + '\n#x/')),
+                ('directive above END', ctype_text(body + '\nescape_char /')),
+                ('second, escaped', good + 'LC_C/TYPE\n' + body
+                 + '\nEND LC_C/TYPE\n'),
+                ('escape alone', ctype_text('/\n' + body)),
+                ('escape alone above', good.replace('LC_CTYPE\n',
+                                                    '/\nLC_CTYPE\n', 1)),
+                # Joined to a blank line, so only the escape-alone check
+                # sees it.
+                ('escape alone, then a blank line', ctype_text(
+                    'copy "i18n"\n/\n\n' + body)),
+                # The comment takes the next physical line with it.
+                ('head with a comment continued', good.replace(
+                    'LC_CTYPE\n', 'LC_CTYPE % note /\n', 1)),
+                ('keyword after a known statement', ctype_text(
+                    'upper <U0041> END LC_CTYPE\n' + body)),
+                ('copy naming a keyword', ctype_text('copy "x END"')),
+                ('keyword joined after the section', good
+                 + 'foo /\nLC_CTYPE\n'),
+                ('escape before a second keyword', good + '/ LC_CTYPE\n'
+                 + body + '\nEND LC_CTYPE\n'),
+                # Round 5. A comment does not stop the join: the next line
+                # joins the entry, or lr_ignore_rest drops it.
+                ('block comment continued', ctype_text(translit(
+                    '<U02BB> "<U0060>" % note /', '<U02BB> "<U0027>"'))),
+                ('include comment continued', ctype_text(translit(
+                    'include "Z";"" % note /', '<U02BB> "<U0027>"'))),
+                ('marker comment continued', ctype_text(
+                    'translit_start % note /\n<U02BB> "a"\ntranslit_end')),
+                ('END comment continued', good.replace(
+                    'END LC_CTYPE\n', 'END LC_CTYPE % note /\n')),
+                ('inside another section', good.replace(
+                    'LC_CTYPE\n', 'LC_IDENTIFICATION\nLC_CTYPE\n', 1)
+                 + 'END LC_IDENTIFICATION\n'),
+                ('the END above joined', good.replace(
+                    'LC_CTYPE\n', 'LC_IDENTIFICATION\nx /\n'
+                    'END LC_IDENTIFICATION\nLC_CTYPE\n', 1)),
+                ('a word above that only starts like END', good.replace(
+                    'LC_CTYPE\n', 'LC_IDENTIFICATION\nENDING\n'
+                    'LC_CTYPE\n', 1)),
+                ('two dropped strings, then ;', ctype_text(translit(
+                    '"" "";""', 'include "Z";""'))),
+                ('the default escape alone', good.replace(
+                    'escape_char /\n', '\\\n\nescape_char /\n', 1)),
+                ('bytes that are not UTF-8', ctype_text(translit(
+                    '<U02BB> "\ufffd"'))),
+                # A syntax error on `foo` drops the head with it.
+                ('head joined to a plain line above', good.replace(
+                    'LC_CTYPE\n', 'foo /\nLC_CTYPE\n', 1)),
+                # `#` is no comment where comment_char is `%`.
+                ('head joined to a # line above', good.replace(
+                    'LC_CTYPE\n', '#x /\nLC_CTYPE\n', 1)),
+                # get_ident keeps the character after the escape: glibc
+                # opens the section, and LC_CTYPE is inside it.
+                ('a section above opened with the escape', good.replace(
+                    'LC_CTYPE\n', 'LC_IDENT/IFICATION\nLC_CTYPE\n', 1)),
+                ('an opening above in another form', good.replace(
+                    'LC_CTYPE\n', 'LC_IDENTIFICATION x\n'
+                    'END LC_IDENTIFICATION\nLC_CTYPE\n', 1)),
+                # Round 6. The END above is indented; the line that joins
+                # it is still the one above its line.
+                ('an indented END above joined', good.replace(
+                    'LC_CTYPE\n', 'LC_IDENTIFICATION\nx /\n'
+                    '  END LC_IDENTIFICATION\nLC_CTYPE\n', 1)),
+                ('a tab-indented END above joined', good.replace(
+                    'LC_CTYPE\n', 'LC_IDENTIFICATION\nx /\n'
+                    '\tEND LC_IDENTIFICATION\nLC_CTYPE\n', 1)),
+                # 0x1A ended the file for glibc before 2.36, wherever it
+                # stands above the end of LC_CTYPE.
+                ('0x1A in a statement', ctype_text(
+                    'upper <U0041>\x1a\n' + body)),
+                ('0x1A alone above', good.replace(
+                    'LC_CTYPE\n', '\x1a\nLC_CTYPE\n', 1)),
+                ('0x1A in a comment above', good.replace(
+                    'escape_char /\n', 'escape_char /\n% \x1a\n', 1)),
+                ('0x1A in a block', ctype_text(translit(
+                    '<U02BB> "a" % \x1a'))),
+                ('unknown statement', ctype_text('frobnicate <U0041>\n'
+                                                 + body)),
+                ('a comment run into the block', ctype_text(
+                    'upper <U0041>/\n% note /\n' + body)),
+                ('repertoiremap', good.replace(
+                    'escape_char /\n', 'escape_char /\nrepertoiremap x\n')),
+                ('escaped repertoiremap', good.replace(
+                    'escape_char /\n', 'escape_char /\nrepertoire/map x\n'))):
+            with self.subTest(name):
+                ct = ck.ctype_of(text)
+                self.assertIsNotNone(ct)
+                self.assertIsNotNone(ct.odd)
+        # A section above that ends above (with its END indented or not),
+        # an entry headed by a string followed by one string (scn_IT at
+        # 2.41), and a 0x1A below LC_CTYPE, which glibc meets only after
+        # reading it, are read.
+        for text in (good.replace('LC_CTYPE\n', 'LC_IDENTIFICATION\n'
+                                  'title "x"\nEND LC_IDENTIFICATION\n\n'
+                                  'LC_CTYPE\n', 1),
+                     good.replace('LC_CTYPE\n', 'LC_IDENTIFICATION\n'
+                                  'title "x"\n  END LC_IDENTIFICATION\n'
+                                  'LC_CTYPE\n', 1),
+                     good + 'LC_TIME\n% \x1a\nEND LC_TIME\n',
+                     # Bytes that are not UTF-8 in a comment (with the
+                     # comment character in force there) or in a string
+                     # are skipped or end only the string.
+                     good.replace('escape_char /\n',
+                                  'escape_char /\n% caf\ufffd\n', 1),
+                     '# caf\ufffd\n' + good,
+                     good.replace('LC_CTYPE\n', 'LC_IDENTIFICATION\ntitle '
+                                  '"caf\ufffd"\nEND LC_IDENTIFICATION\n'
+                                  'LC_CTYPE\n', 1),
+                     ctype_text(translit('"a" "b"', '<U02BB> "a"'))):
+            with self.subTest(text[:60]):
+                self.assertIsNone(ck.ctype_of(text).odd)
+        # A comment run into the next line drops only itself, and a
+        # directive's argument does not join: neither is refused.
+        for text in (good.replace('LC_CTYPE\n', '% a comment /\nLC_CTYPE\n',
+                                  1),
+                     'comment_char %\nescape_char /\nLC_CTYPE\ncopy "i18n"\n'
+                     'END LC_CTYPE\n'):
+            with self.subTest(text[:40]):
+                self.assertIsNone(ck.ctype_of(text).odd)
+        self.assertEqual(ck._joined('a/\n% c /\nb\n% d\nc', '%', '/'),
+                         'ab\n\nc')
+
+    def test_a_0xff_byte_is_odd_wherever_it_stands(self):
+        """A text read from bytes that held 0xFF (read_blobs_at records it)
+        is odd wherever the byte stands, a file with no LC_CTYPE in sight
+        included: before 2.36 it ends a string, a section or the file, so
+        what glibc reads cannot be told from the text, where it and every
+        other byte that is not UTF-8 are one U+FFFD (round 8 of the 13.7
+        review). The same texts not so recorded are read."""
+        body = translit('<U02BB> "a"')
+        good = ctype_text(body)
+        texts = {
+            'top level': good.replace('LC_CTYPE\n', '\ufffd\nLC_CTYPE\n', 1),
+            'in a string above': good.replace(
+                'LC_CTYPE\n', 'LC_IDENTIFICATION\ntitle "\ufffd\ufffd '
+                'x"\nEND LC_IDENTIFICATION\nLC_CTYPE\n', 1),
+            'in a comment': good.replace('escape_char /\n',
+                                         'escape_char /\n% \ufffd\n', 1),
+            'below LC_CTYPE': good + 'LC_TIME\n% \ufffd\nEND LC_TIME\n',
+            'no LC_CTYPE in sight': ctype_text(None, ELEMENT).replace(
+                'escape_char /\n', 'escape_char /\ntitle "\ufffd'
+                'LC_CTYPE"\n', 1),
+            # Two 0xFF end the string and the section before 2.36, so the
+            # escape_char in it is read at the top level, and LC_C!TYPE is
+            # then LC_CTYPE: nothing but the record says the file names it.
+            'an escape set inside a string': (
+                'comment_char %\nescape_char /\nLC_IDENTIFICATION\n'
+                'title "\ufffd\ufffd escape_char !"\nEND LC_IDENTIFICATION\n'
+                'LC_C!TYPE\ncopy "i18n"\nEND LC_C!TYPE\nLC_COLLATE\n'
+                + ELEMENT + '\nEND LC_COLLATE\n')}
+        for name, text in texts.items():
+            with self.subTest(name):
+                ck.reset()
+                self.assertTrue(ck.ctype_of(text) is None
+                                or ck.ctype_of(text).odd is None)
+                g.TEXTS_WITH_0XFF.add(text)
+                try:
+                    ck.reset()
+                    self.assertIsNotNone(ck.ctype_of(text))
+                    self.assertIn('0xFF', ck.ctype_of(text).odd)
+                    self.assertTrue(ck._names_ctype(text))
+                finally:
+                    g.TEXTS_WITH_0XFF.discard(text)
+                    ck.reset()
+
+    def test_a_0xff_record_wins_over_an_earlier_look(self):
+        """The caches are keyed by text value, and a text with the same
+        value, decoded from another invalid byte, can be looked at before
+        the one read from 0xFF is recorded (ctype_moved runs before the
+        unchanged files are read): with no reset in between, the record
+        still decides (round 9 of the 13.7 review)."""
+        text = ('comment_char %\nescape_char /\nLC_IDENTIFICATION\n'
+                'title "\ufffd\ufffd x"\nEND LC_IDENTIFICATION\n'
+                'LC_C!TYPE\ncopy "i18n"\nEND LC_C!TYPE\n')
+        ck.reset()
+        self.assertIsNone(ck.ctype_of(text))
+        self.assertFalse(ck._names_ctype(text))
+        g.TEXTS_WITH_0XFF.add(text)
+        try:
+            self.assertIn('0xFF', ck.ctype_of(text).odd)
+            self.assertTrue(ck._names_ctype(text))
+        finally:
+            g.TEXTS_WITH_0XFF.discard(text)
+            ck.reset()
+
+    def test_reading_characters(self):
+        """`%` or `#` and `/` or `\\`, set by plain directive lines before
+        the first section: what every file from 2.12 to 2.42 does. glibc
+        takes any one character, reads a directive's argument from the next
+        line when its line ends in the escape in force, and reads
+        directives only at the top level (locfile.c:107-150@2.39)."""
+        base = ctype_text(translit('<U02BB> "a"'))
+        self.assertEqual(ck._ctype_reading(base), ('%', '/'))
+        self.assertEqual(ck._ctype_reading(base.replace('escape_char /\n', '')
+                                     .replace('comment_char %\n', '')),
+                         ('#', '\\'))
+        # escape_char above comment_char, as af_ZA writes it at 2.12: a
+        # directive line ending in the escape joins nothing.
+        self.assertEqual(ck._ctype_reading('escape_char /\ncomment_char %\n'
+                                     + base.split('\n', 2)[2]), ('%', '/'))
+        for name, text in (
+                ('escape !', base.replace('escape_char /', 'escape_char !')),
+                ('comment !', base.replace('comment_char %', 'comment_char !')),
+                ('escaped word', base.replace('escape_char /',
+                                              'escape_ch/ar !')),
+                ('comment char /', base.replace('comment_char %',
+                                                'comment_char /')),
+                ('argument below', base.replace('escape_char /',
+                                                'escape_char \\\n!')),
+                ('word split', base.replace('escape_char /',
+                                            'escape_\\\nchar !')),
+                ('escape_char \\ alone', base.replace('escape_char /',
+                                                      'escape_char \\')),
+                # A valid argument, so that only the position refuses it.
+                ('a valid directive after a section', base.replace(
+                    'escape_char /\n', 'escape_char /\nLC_IDENTIFICATION\n'
+                    'END LC_IDENTIFICATION\ncomment_char #\n', 1)),
+                ('directive continued from above', base.replace(
+                    'escape_char /\n', 'escape_char /\nupper /\n'
+                    'comment_char #\n', 1)),
+                # The syntax error on `x` drops the logical line, both
+                # continued lines with it (round 5, finding 6).
+                ('directive past a continued comment', base.replace(
+                    'escape_char /\n', 'x \\\n% c \\\nescape_char /\n', 1)),
+                ('after a section', 'comment_char %\nLC_IDENTIFICATION\n'
+                 'END LC_IDENTIFICATION\nescape_char !\n'
+                 + base.split('\n', 2)[2])):
+            with self.subTest(name):
+                self.assertIsNone(ck._ctype_reading(text))
+                self.assertTrue(ck._names_ctype(text))
+                self.assertIsNotNone(ck.ctype_of(text).odd)
+        bang = 'comment_char %\nescape_char !\nLC_C!TYPE\nEND LC_C!TYPE\n'
+        self.assertTrue(ck._names_ctype(bang))
+        self.assertIsNotNone(ck.ctype_of(bang).odd)
+        self.assertIn(-1, ck._quick_cps(ck.Scan(ctype_text(None, ELEMENT)
+                      .replace('escape_char /', 'escape_char !'))))
+        # Scan's own refusal knows escape_char only: comment_char is this
+        # check's alone.
+        bang = ck.Scan(ctype_text(None, ELEMENT).replace('comment_char %',
+                                                          'comment_char !'))
+        self.assertIsNone(bang.odd_keyword)
+        self.assertIn(-1, ck._quick_cps(bang))
+        odd = ctype_text(None, 'collating-element <x> from "g<U02!BB>"') \
+            .replace('escape_char /', 'escape_char \\\n!')
+        self.assertIn(-1, ck._quick_cps(ck.Scan(odd)))
+
+    def test_the_escape_free_text_of_a_large_file(self):
+        """Over 1 MB _bare goes by position (iso14651_t1_common, 3.4 MB,
+        holds four escapes): the same text as for a small one."""
+        tail = 'collating-ele/\nment <x> from "a\\"b"'
+        for text in (tail, 'x' * (1 << 20) + tail):
+            with self.subTest(len(text)):
+                ck.reset()
+                self.assertTrue(ck._bare(text).endswith(
+                    'collating-element <x> from "a"b"'))
+
+    def test_elements(self):
+        scan = ck.Scan(ctype_text(None, 'collating-element <D-Z<> from '
+                                  '"<U0044><U017D>"\n'
+                                  'collating-element <x> from "a/"<U0042>"'))
+        self.assertEqual(ck.elements_of(scan),
+                         {'<D-Z<>': (('u', 0x44), ('u', 0x17D)),
+                          '<x>': (('a', 'a'), ('a', '"'), ('u', 0x42))})
+        with self.assertRaises(ck.Unsettled):
+            ck.reset()
+            ck.elements_of(ck.Scan(ctype_text(None, 'collating-element <x> '
+                                              'from "a"\ncollating-element '
+                                              '<x> from "b"')))
+        # The keyword built with the escape (round 2 of the reviewer).
+        for line in ('collating-ele/ment <x> from "g<U02BB>"',
+                     'collating-ele/\nment <x> from "g<U02BB>"'):
+            with self.subTest(line):
+                ck.reset()
+                sc = ck.Scan(ctype_text('copy "i18n"', line))
+                side = ck.Side('t', {'D'}, {'D': sc.text}, {}, {})
+                self.assertTrue(ck._defines_elements(side, 'D'))
+                self.assertIn(-1, ck._quick_cps(sc))
+                with self.assertRaises(ck.Unsettled):
+                    ck.elements_of(sc)
+        # One block, read with two escape characters: two answers.
+        ck.reset()
+        body = 'collating-element <x> from "a/"<U02BB>"'
+        slash = ctype_text(None, body)
+        back = slash.replace('escape_char /', 'escape_char \\')
+        self.assertEqual(ck.elements_of(ck.Scan(slash)),
+                         {'<x>': (('a', 'a'), ('a', '"'), ('u', 0x2BB))})
+        with self.assertRaises(ck.Unsettled):
+            ck.elements_of(ck.Scan(back))
+        for line in ('collating-element <x> from "a" junk',
+                     'collating-element <x> from "ʻ"',
+                     'collating-element <x> from /\n"a"'):
+            with self.subTest(line), self.assertRaises(ck.Unsettled):
+                ck.reset()
+                ck.elements_of(ck.Scan(ctype_text(None, line)))
+
+
+class TranslitCompare(unittest.TestCase):
+    """compare()'s point 6 over two Sides: when it compares, what it lists,
+    and what it does not settle."""
+
+    SUP = 'SUPPORTED-LOCALES=\\\nM/TEST \\\n'
+
+    def run_compare(self, old_texts, new_texts, old_cm=None, new_cm=None,
+                    listed=(), ask_utf8=None):
+        old_cm = old_cm or _ascii_charmap()
+        new_cm = new_cm or old_cm
+        old, new = sides(dict(I18N, **old_texts), dict(I18N, **new_texts),
+                         {'TEST': old_cm}, {'TEST': new_cm})
+        if isinstance(ask_utf8, tuple):
+            old.ask_utf8, new.ask_utf8 = ask_utf8
+        else:
+            old.ask_utf8 = new.ask_utf8 = ask_utf8
+        b = ck.supported_builds(self.SUP, 't')
+        return ck.compare(old, new, b, b, lambda: set(listed))
+
+    BASE = {'D': ctype_text('copy "i18n"', ELEMENT),
+            'M': ctype_text('copy "i18n"', 'copy "D"')}
+
+    def test_a_charmap_change_alone_is_found(self):
+        """H1, measured as M2: the charmap gains U+2018, which D's
+        transliteration names and no LC_COLLATE does. The character set
+        search finds nothing; point 6 does."""
+        files = {'D': ctype_text('copy "i18n"\n'
+                                 + translit('<U02BB> "<U2018>";"<U0027>"'),
+                                 ELEMENT),
+                 'M': ctype_text('copy "i18n"', 'copy "D"')}
+        r = self.run_compare(files, files,
+                             new_cm=_ascii_charmap('<U2018> /x91'))
+        self.assertEqual(r.found, [])
+        self.assertEqual([(f.source, f.changed, f.chars, f.via, f.reason)
+                          for f in r.translit.found],
+                         [('M', 1, {0x2BB}, ['D'], None)])
+        self.assertEqual(ck.listed_sources(r), ['M'])
+
+    def test_a_change_in_the_source_s_lc_ctype_is_found(self):
+        """H2: neither D nor anything its LC_CTYPE reaches changes; M's
+        LC_CTYPE, read before its LC_COLLATE, gains the entry."""
+        new = dict(self.BASE, M=ctype_text('copy "i18n"\n' + translit(GRAVE),
+                                           'copy "D"'))
+        r = self.run_compare(self.BASE, new)
+        self.assertEqual([(f.source, f.changed) for f in r.translit.found],
+                         [('M', 1)])
+
+    def test_a_change_in_an_include_is_found(self):
+        new = dict(self.BASE)
+        new['translit_neutral'] = ctype_text(translit(APOS))
+        r = self.run_compare(self.BASE, new)
+        self.assertEqual([(f.source, f.changed) for f in r.translit.found],
+                         [('M', 1)])
+
+    def test_d_gaining_lc_ctype_is_found(self):
+        old = dict(self.BASE, D=ctype_text(None, ELEMENT))
+        new = dict(self.BASE, D=ctype_text('copy "i18n"\n' + translit(APOS),
+                                           ELEMENT))
+        r = self.run_compare(old, new)
+        self.assertEqual([(f.source, f.changed) for f in r.translit.found],
+                         [('M', 1)])
+
+    def test_nothing_that_changed_is_not_compared(self):
+        """With no charmap changed, no LC_CTYPE read differently: no point
+        6 at all. With a charmap changed and nothing the run reads, the
+        build is counted as not compared, never as compared and equal."""
+        r = self.run_compare(self.BASE, dict(self.BASE))
+        self.assertIsNone(r.translit)
+        r = self.run_compare(self.BASE, dict(self.BASE),
+                             new_cm=_ascii_charmap('<U00E9> /xe9'))
+        self.assertIsNotNone(r.translit)
+        self.assertEqual((r.translit.elements, r.translit.unmoved), (1, 0))
+        unrelated = dict(self.BASE, other=ctype_text('upper <U0042>'))
+        r = self.run_compare(dict(self.BASE, other=ctype_text('upper <U0041>')),
+                             unrelated)
+        self.assertEqual((r.translit.elements, r.translit.unmoved,
+                          r.translit.found), (0, 1, []))
+
+    def test_a_raw_character_in_a_from_string_is_listed(self):
+        """The quick search takes a raw non-ASCII character as the code
+        point it is, so the build is planned and the strict read refuses
+        the string; missed there, the build would never be compared."""
+        raw = ELEMENT.replace('g<U02BB>', 'gʻ')
+        old = dict(self.BASE, D=ctype_text('copy "i18n"', raw))
+        new = dict(old, M=ctype_text('copy "i18n"\n' + translit(GRAVE),
+                                     'copy "D"'))
+        r = self.run_compare(old, new)
+        self.assertEqual([(f.source, f.changed) for f in r.translit.found],
+                         [('M', 0)])
+        self.assertIn('raw non-ASCII', r.translit.found[0].reason)
+        self.assertEqual(ck.listed_sources(r), ['M'])
+
+    def test_a_raw_character_is_read_only_where_localedef_reads_utf8(self):
+        """Before UTF8_READER (2.36) a raw head is bytes that make glibc
+        swallow the next line: the build is compared only where git says
+        the tag holds the commit, and listed where it does not or cannot
+        say. A raw character in a comment is skipped by every glibc."""
+        def files(entry, comment=''):
+            return dict(self.BASE, D=ctype_text(
+                'copy "i18n"\n' + translit('é "e"' + comment, entry),
+                ELEMENT))
+        old, new = files(APOS), files(GRAVE)
+        r = self.run_compare(old, new, ask_utf8=lambda: True)
+        self.assertEqual([(f.source, f.changed, f.reason)
+                          for f in r.translit.found], [('M', 1, None)])
+        for ask, why in ((lambda: False, 'does not hold it'),
+                         (lambda: None, 'could not tell'),
+                         (None, 'could not tell')):
+            with self.subTest(why):
+                r = self.run_compare(old, new, ask_utf8=ask)
+                self.assertEqual([(f.source, f.changed)
+                                  for f in r.translit.found], [('M', 0)])
+                self.assertIn(why, r.translit.found[0].reason)
+                self.assertIn('raw non-ASCII', r.translit.found[0].reason)
+        def commented(entry):
+            return dict(self.BASE, D=ctype_text(
+                'copy "i18n"\n' + translit(entry + ' % ‘ -> x'), ELEMENT))
+        r = self.run_compare(commented(APOS), commented(GRAVE))
+        self.assertEqual([(f.source, f.changed, f.reason)
+                          for f in r.translit.found], [('M', 1, None)])
+
+    def test_an_unchanged_raw_table_is_compared_across_the_utf8_reader(self):
+        """The same raw head reads as other code points on either side of
+        UTF8_READER, so a file that did not change is compared there: with
+        nothing else changed (compare runs point 6 for it), and with point 6
+        running for another reason (the shortcut does not count it as
+        unchanged). Two sides that read alike, or that git places neither
+        way, leave it alone."""
+        raw = dict(self.BASE, translit_neutral=ctype_text(translit(
+            'é "e"', '<U02BB> "<U2018>"')))
+        yes, no, unknown = (lambda: True), (lambda: False), (lambda: None)
+        moved = dict(raw, other=ctype_text('upper <U0042>'))
+        for name, new in (('nothing else changed', raw),
+                          ('another file moved', moved)):
+            old = dict(raw, other=ctype_text('upper <U0041>')) \
+                if new is moved else raw
+            for asks, why in (((no, yes), 'does not hold it'),
+                              ((unknown, yes), 'could not tell')):
+                with self.subTest(name, why=why):
+                    r = self.run_compare(old, new, ask_utf8=asks)
+                    self.assertEqual([(f.source, f.changed)
+                                      for f in r.translit.found], [('M', 0)])
+                    self.assertIn(why, r.translit.found[0].reason)
+            for asks in ((yes, yes), (unknown, unknown)):
+                with self.subTest(name, asks=asks):
+                    r = self.run_compare(old, new, ask_utf8=asks)
+                    if new is raw:
+                        self.assertIsNone(r.translit)
+                    else:
+                        self.assertEqual((r.translit.found,
+                                          r.translit.unmoved), ([], 1))
+
+    def test_an_unchanged_raw_from_string_is_compared_across_the_reader(self):
+        """A raw character in a from string is bytes before UTF8_READER and
+        a code point from it, so an unchanged defining file is compared
+        where the readers differ: on the element line, or on the line a
+        continued from string goes on to. In a comment it is skipped."""
+        yes, no = (lambda: True), (lambda: False)
+        for name, el in (
+                ('on the line', ELEMENT.replace('g<U02BB>', 'gʻ')),
+                ('on a continued line', ELEMENT.replace(
+                    'from "g<U02BB>"', 'from /\n"gʻ"')),
+                # The string goes on across the join; get_string knows no
+                # comment (round 8 of the review).
+                ('continued past a %', ELEMENT.replace(
+                    'from "g<U02BB>"', 'from "g/\n%ʻ"')),
+                # A line joined to the one above is no comment line, so
+                # the join goes on past it (round 9).
+                ('three lines, the middle one opening with %',
+                 ELEMENT.replace('from "g<U02BB>"', 'from "g/\n%/\n%ʻ"'))):
+            files = dict(self.BASE, D=ctype_text('copy "i18n"', el))
+            with self.subTest(name):
+                r = self.run_compare(files, files, ask_utf8=(no, yes))
+                self.assertEqual([(f.source, f.changed)
+                                  for f in r.translit.found], [('M', 0)])
+                self.assertIsNone(self.run_compare(
+                    files, files, ask_utf8=(yes, yes)).translit)
+        files = dict(self.BASE, D=ctype_text('copy "i18n"', ELEMENT.replace(
+            'from "g<U02BB>"', 'from "g<U02BB>" % ʻ')))
+        r = self.run_compare(files, files, ask_utf8=(no, yes))
+        self.assertEqual((r.translit.found, r.translit.unmoved), ([], 1))
+
+    def test_a_byte_that_is_not_utf8_above_counts_from_2_36(self):
+        """From 2.36 a byte that is not UTF-8 ends a string as illegal, and
+        LC_IDENTIFICATION's string fields go on reading the rest of the line
+        as statements; before, it is a byte of the string, and only 0xFF
+        (recorded apart) changes anything. So a build whose source has one
+        above LC_CTYPE is listed where a tag reads UTF-8 or git cannot
+        say, and compared where neither does; unchanged, it is compared
+        where the readers differ."""
+        yes, no, unknown = (lambda: True), (lambda: False), (lambda: None)
+        def m(entry):
+            return ('comment_char %\nescape_char /\nLC_IDENTIFICATION\n'
+                    'title "caf\ufffd"\nEND LC_IDENTIFICATION\n'
+                    + 'LC_CTYPE\ncopy "i18n"\n' + translit(entry)
+                    + '\nEND LC_CTYPE\nLC_COLLATE\ncopy "D"\nEND LC_COLLATE\n')
+        old, new = dict(self.BASE, M=m(GRAVE)), dict(self.BASE, M=m(APOS))
+        r = self.run_compare(old, new, ask_utf8=(no, no))
+        self.assertEqual([(f.source, f.changed, f.reason)
+                          for f in r.translit.found], [('M', 1, None)])
+        for asks in ((yes, yes), (unknown, unknown), (no, yes)):
+            with self.subTest(asks=asks):
+                r = self.run_compare(old, new, ask_utf8=asks)
+                self.assertEqual([(f.source, f.changed)
+                                  for f in r.translit.found], [('M', 0)])
+                self.assertIn('not UTF-8', r.translit.found[0].reason)
+        r = self.run_compare(old, old, ask_utf8=(no, yes))
+        self.assertEqual([(f.source, f.changed)
+                          for f in r.translit.found], [('M', 0)])
+        self.assertIsNone(self.run_compare(old, old,
+                                           ask_utf8=(no, no)).translit)
+
+    def test_a_0xff_byte_anywhere_in_the_run_lists_every_build(self):
+        """One gate for the byte read_blobs_at records: with one in any
+        locale file or charmap the run holds, every build is listed, so no
+        path of the plan can pass over it -- an unrelated file; the build's
+        own source, whose two 0xFF let an escape_char inside a string act
+        and spell `<U02!BB>` (round 10 of the 13.7 review); a charmap read
+        only once the plan is made. Not recorded, the same run compares."""
+        new_neutral = ctype_text(translit('<U02BB> "<U2018>"', APOS))
+        zz = ctype_text('upper <U0041>') + '% \ufffd\n'
+        esc = ('comment_char %\nescape_char /\nLC_IDENTIFICATION\n'
+               'title "\ufffd\ufffd escape_char !"\nEND LC_IDENTIFICATION\n'
+               'LC_CTYPE\ncopy "i18n"\nEND LC_CTYPE\nLC_COLLATE\n'
+               + ELEMENT.replace('<U02BB>', '<U02!BB>') + '\nEND LC_COLLATE\n')
+        for name, old, recorded in (
+                ('an unrelated file', dict(self.BASE, zz=zz), zz),
+                ('the source itself', dict(self.BASE, M=esc), esc)):
+            new = dict(old, translit_neutral=new_neutral)
+            with self.subTest(name):
+                ck.reset()
+                self.assertNotIn('0xFF', str(self.run_compare(old, new)))
+                g.TEXTS_WITH_0XFF.add(recorded)
+                try:
+                    r = self.run_compare(old, new)
+                    self.assertEqual([(f.source, f.changed)
+                                      for f in r.translit.found], [('M', 0)])
+                    self.assertIn('0xFF', r.translit.found[0].reason)
+                finally:
+                    g.TEXTS_WITH_0XFF.discard(recorded)
+                    ck.reset()
+        # A charmap the Sides do not hold until the plan asks for it.
+        cm = _ascii_charmap()
+        old, new = sides(dict(I18N, **self.BASE),
+                         dict(I18N, **self.BASE, translit_neutral=new_neutral),
+                         {'TEST': cm}, {'TEST': cm})
+        for side in (old, new):
+            del side.charmap_texts['TEST']
+
+        def read_more(charmaps, locales=False):
+            # Only what the plan asks for: a read of locale files alone
+            # brings no charmap.
+            for side in (old, new):
+                if 'TEST' in charmaps.get(side.tag, ()):
+                    side.charmap_texts['TEST'] = cm
+        b = ck.supported_builds(self.SUP, 't')
+        g.TEXTS_WITH_0XFF.add(cm)
+        try:
+            ck.reset()
+            r = ck.compare(old, new, b, b, lambda: set(), read_more)
+            self.assertEqual([(f.source, f.changed)
+                              for f in r.translit.found], [('M', 0)])
+            self.assertIn('TEST at t1', r.translit.found[0].reason)
+        finally:
+            g.TEXTS_WITH_0XFF.discard(cm)
+            ck.reset()
+
+    def test_a_raw_table_is_read_with_its_own_characters(self):
+        """One LC_CTYPE section, two files: under escape `/` the raw é is
+        in a comment, under the default `\\` the backslash escapes the
+        quote and é is in the string. The first look must not answer for
+        the other file (round 10 of the 13.7 review)."""
+        section = ('LC_CTYPE\ntranslit_start\n<U02BB> "x\\" % é"\n'
+                   'translit_end\nEND LC_CTYPE\n')
+        f = dict(I18N)
+        for n, head in (('1', 'comment_char %\nescape_char /\n'),
+                        ('2', 'comment_char %\n')):
+            f['T' + n] = head + section
+            f['D' + n] = ctype_text('copy "i18n"\n' + translit(
+                f'include "T{n}";""'), ELEMENT.replace('<gtc>', f'<gt{n}>'))
+            f['M' + n] = ctype_text('copy "i18n"', f'copy "D{n}"')
+        sup = 'SUPPORTED-LOCALES=\\\nM1/TEST \\\nM2/TEST \\\n'
+        cm = _ascii_charmap('<U00E9> /xe9')
+        old, new = sides(f, dict(f), {'TEST': cm}, {'TEST': cm})
+        old.ask_utf8, new.ask_utf8 = (lambda: False), (lambda: True)
+        b = ck.supported_builds(sup, 't')
+        ck.reset()
+        r = ck.compare(old, new, b, b, lambda: set())
+        self.assertEqual([(x.source, x.changed) for x in r.translit.found],
+                         [('M2', 0)])
+        self.assertIn('raw non-ASCII', r.translit.found[0].reason)
+        self.assertEqual(r.translit.unmoved, 1)
+
+    def test_which_readers_differ(self):
+        """Across UTF8_READER, or where git places one side and not the
+        other; two sides git places neither way are one reader (the
+        repository does not hold the commit; a shallow clone is refused
+        before this is asked)."""
+        def side(ans):
+            s = ck.Side('t', set(), {}, {}, {})
+            s.ask_utf8 = lambda: ans
+            return s
+        for a, b, want in ((True, True, False), (False, False, False),
+                           (None, None, False), (True, False, True),
+                           (False, True, True), (True, None, True),
+                           (None, False, True)):
+            with self.subTest(a=a, b=b):
+                self.assertIs(ck._readers_differ(side(a), side(b)), want)
+
+    def test_what_cannot_be_settled_is_listed(self):
+        bad = dict(self.BASE, D=ctype_text(
+            'copy "i18n"\n' + translit('translit_ignore <U0300>'), ELEMENT))
+        r = self.run_compare(bad, dict(bad, M=ctype_text(
+            'copy "i18n"\n' + translit(GRAVE), 'copy "D"')))
+        self.assertEqual(len(r.translit.found), 1)
+        self.assertIn('translit_ignore', r.translit.found[0].reason)
+        self.assertEqual(ck.listed_sources(r), ['M'])
+        # Not counted among the compared, which the line above the `!!`
+        # would otherwise call "none is built differently".
+        self.assertEqual((r.translit.elements, r.translit.builds), (0, 0))
+
+    def test_a_continued_element_line_is_not_settled(self):
+        """The from string is on the next line, which glibc joins: the
+        quick search sees no code point on the line it reads, and must
+        still send the file to the strict reader, which refuses it."""
+        d = ctype_text('copy "i18n"', 'collating-element <x> from /\n'
+                       '"g<U02BB>"\norder_start forward\n<x>\norder_end')
+        old = dict(self.BASE, D=d)
+        new = dict(old, M=ctype_text('copy "i18n"\n' + translit(GRAVE),
+                                     'copy "D"'))
+        r = self.run_compare(old, new)
+        self.assertEqual([f.source for f in r.translit.found], ['M'])
+        self.assertIn('continued', r.translit.found[0].reason)
+
+    def test_elements_that_differ_between_the_tags_are_listed(self):
+        """Round 2 of the reviewer, on 2.27..2.28: fi_FI gains its
+        elements, so they are not compared, and the line said "no compared
+        locale build builds a collating element out of a transliteration".
+        Now each such build is listed with that reason: counted as listed
+        anyway when step 3 lists it, a `!!` when it does not."""
+        new = dict(self.BASE, D=ctype_text(
+            'copy "i18n"', ELEMENT.replace(
+                'order_start', 'collating-element <y> from "h<U02BB>"\n'
+                'order_start')))
+        r = self.run_compare(self.BASE, new, listed=['M'])
+        self.assertEqual((r.translit.found, r.translit_skipped,
+                          r.translit.elements), ([], 1, 0))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            f.print_translit_report(r, 't2')
+        self.assertEqual(flat(buf.getvalue()), flat(
+            'Transliteration (LC_CTYPE): the 1 locale build that may build a '
+            'collating element out of a transliteration is listed already, '
+            'so none was compared.'))
+        r = self.run_compare(self.BASE, new)
+        self.assertIn('differ between the tags', r.translit.found[0].reason)
+
+    def test_a_build_step_3_lists_anyway_is_counted(self):
+        """Counted, and its changed elements still in the printed total:
+        the line read "none is built differently" over it (reviewer of PR
+        C)."""
+        new = dict(self.BASE, M=ctype_text('copy "i18n"\n' + translit(GRAVE),
+                                           'copy "D"'))
+        r = self.run_compare(self.BASE, new, listed=['M'])
+        self.assertEqual((r.translit.found, r.translit_skipped), ([], 1))
+        self.assertEqual(ck.listed_sources(r), [])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            f.print_translit_report(r, 't2')
+        self.assertIn('1 is built differently at t2.', flat(buf.getvalue()))
+
+    def test_a_second_lc_collate_in_the_defining_file_is_refused(self):
+        """glibc reads every LC_COLLATE section of a file (H11); an element
+        defined in a second one is not in elements_of's block."""
+        d = (ctype_text('copy "i18n"', ELEMENT)
+             + 'LC_COLLATE\ncollating-element <y> from "h<U02BB>"\n'
+               'END LC_COLLATE\n')
+        old = dict(self.BASE, D=d)
+        new = dict(old, M=ctype_text('copy "i18n"\n' + translit(GRAVE),
+                                     'copy "D"'))
+        r = self.run_compare(old, new)
+        self.assertEqual([f.source for f in r.translit.found], ['M'])
+        self.assertIn('second LC_COLLATE', r.translit.found[0].reason)
+
+    def test_elements_only_in_a_second_section_are_refused(self):
+        """The first block defines none, the second one does: the file
+        is still planned, and refused."""
+        d = (ctype_text('copy "i18n"', 'order_start forward\n<U0041>\n'
+                        'order_end')
+             + 'LC_COLLATE\ncollating-element <y> from "h<U02BB>"\n'
+               'END LC_COLLATE\n')
+        old = dict(self.BASE, D=d)
+        new = dict(old, M=ctype_text('copy "i18n"\n' + translit(GRAVE),
+                                     'copy "D"'))
+        r = self.run_compare(old, new)
+        self.assertEqual([f.source for f in r.translit.found], ['M'])
+        self.assertIsNotNone(r.translit.found[0].reason)
+
+    def test_what_cannot_be_read_is_refused_before_the_shortcut(self):
+        """Round 3 of the reviewer: M's LC_COLLATE keyword after blanks
+        (glibc reads it), D includes Z2, Z2 changes, no charmap change.
+        The shortcut "nothing it reads changed" ran first and said so."""
+        m = ctype_text('copy "i18n"', 'copy "D"').replace(
+            '\nLC_COLLATE', '\n  LC_COLLATE')
+        old = dict(self.BASE, M=m, Z2=ctype_text(translit(GRAVE)),
+                   D=ctype_text('copy "i18n"\n' + translit('include "Z2";""'),
+                                ELEMENT))
+        new = dict(old, Z2=ctype_text(translit(APOS)))
+        r = self.run_compare(old, new)
+        self.assertEqual([f.source for f in r.translit.found], ['M'])
+        self.assertIsNotNone(r.translit.found[0].reason)
+        self.assertEqual(r.translit.unmoved, 0)
+
+    def test_an_include_read_with_another_escape_stops_the_shortcut(self):
+        """Z, identical at both tags, is read with `!` and includes Z2
+        as `in!clude`, which the search for names cannot see; Z2 changes.
+        Z is not read as it looks, so nothing is taken as unchanged."""
+        z = ctype_text(translit('in!clude "Z2";""')).replace(
+            'escape_char /', 'escape_char !')
+        old = dict(self.BASE, Z=z, Z2=ctype_text(translit(GRAVE)),
+                   D=ctype_text('copy "i18n"\n' + translit('include "Z";""'),
+                                ELEMENT))
+        new = dict(old, Z2=ctype_text(translit(APOS)))
+        r = self.run_compare(old, new)
+        self.assertEqual([f.source for f in r.translit.found], ['M'])
+        self.assertEqual(r.translit.unmoved, 0)
+
+    def test_a_source_with_an_escaped_head_is_refused(self):
+        """`LC_C/TYPE` before LC_COLLATE: glibc reads M's LC_CTYPE
+        first; the run was built without it."""
+        m = ctype_text('copy "i18n"\n' + translit(GRAVE), 'copy "D"').replace(
+            'LC_CTYPE', 'LC_C/TYPE')
+        r = self.run_compare(dict(self.BASE, M=m), dict(self.BASE, M=m),
+                             new_cm=_ascii_charmap('<U00E9> /xe9'))
+        self.assertEqual([f.source for f in r.translit.found], ['M'])
+        self.assertIsNotNone(r.translit.found[0].reason)
+
+    def test_a_copy_spelled_without_a_blank_is_followed(self):
+        """`copy"i18n"` is a copy to glibc: a change in what it reaches
+        is compared."""
+        old = dict(self.BASE, D=ctype_text('copy"i18n"', ELEMENT))
+        new = dict(old, translit_neutral=ctype_text(translit(APOS)))
+        r = self.run_compare(old, new)
+        self.assertEqual([(f.source, f.changed) for f in r.translit.found],
+                         [('M', 1)])
+
+    def test_a_table_read_with_another_escape_is_refused(self):
+        """translit_neutral, reached through i18n, is read with `!` as its
+        escape: refused, never compared as if `/` were."""
+        odd = ctype_text(translit(APOS)).replace('escape_char /',
+                                                 'escape_char !')
+        new = dict(self.BASE, translit_neutral=odd)
+        r = self.run_compare(self.BASE, new)
+        self.assertEqual([f.source for f in r.translit.found], ['M'])
+        self.assertIsNotNone(r.translit.found[0].reason)
+
+
+class CtypeMoved(unittest.TestCase):
+    """ctype_moved decides that nothing needs reading: every way an
+    LC_CTYPE can be read differently must say yes."""
+
+    def moved(self, old, new, old_present=None, new_present=None):
+        o = ck.Side('t1', set(old_present or old), dict(old), {}, {})
+        n = ck.Side('t2', set(new_present or new), dict(new), {}, {})
+        return ck.ctype_moved(o, n)
+
+    def test_each_way(self):
+        base = ctype_text('copy "i18n"', 'copy "x"')
+        for name, new in (
+                ('LC_CTYPE', ctype_text('copy "i18n"\n' + translit(GRAVE),
+                                        'copy "x"')),
+                ('order', ctype_text('copy "i18n"', 'copy "x"',
+                                     ctype_first=False)),
+                ('comment char', base.replace('comment_char %',
+                                              'comment_char #')),
+                ('repertoiremap', 'repertoiremap x\n' + base)):
+            with self.subTest(name):
+                self.assertTrue(self.moved({'a': base}, {'a': new}))
+        self.assertTrue(self.moved({'a': base}, {'a': base},
+                                   new_present={'a', 'b'}))
+        # An escaped head: its section is compared as the whole text.
+        esc = base.replace('LC_CTYPE', 'LC_C/TYPE')
+        self.assertTrue(self.moved({'a': esc}, {'a': esc.replace(
+            'copy "i18n"', 'copy "i18n"\n' + translit(GRAVE))}))
+        self.assertFalse(self.moved({'a': base}, {'a': ctype_text(
+            'copy "i18n"', 'copy "y"')}))
+        # Two blobs whose bytes differ only where they decode as U+FFFD:
+        # equal texts, two objects (round 5, finding 7).
+        a = base + '% \ufffd\n'
+        b = ''.join([base, '% \ufffd\n'])
+        self.assertIsNot(a, b)
+        self.assertTrue(self.moved({'a': a}, {'a': b}))
+
+
+class TranslitReportLines(unittest.TestCase):
+    """Lines print_translit_report writes."""
+
+    def lines(self, translit, skipped=0, builds=2):
+        r = ck.Report(None, builds, ['TEST'], [], {}, [], [], [], [],
+                      translit, skipped)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            f.print_translit_report(r, 't2')
+        return buf.getvalue()
+
+    def test_each_line(self):
+        self.assertIn('24 collating elements of 3 locale builds depend on a '
+                      'transliteration; none is built differently at t2.',
+                      flat(self.lines(ck.TranslitReport(24, 3, 0, []))))
+        self.assertIn('no character set and no locale file\'s LC_CTYPE '
+                      'changed', flat(self.lines(None)))
+        found = ck.Translit('uz_XX', 'uz_XX', ('TEST', 'TEST'), 4, {0x2BB},
+                            ['uz_XX'], None)
+        out = self.lines(ck.TranslitReport(4, 1, 0, [found]))
+        self.assertIn('4 are built differently at t2.', flat(out))
+        self.assertIn('  uz_XX (TEST): 4 elements, defined in uz_XX', out)
+        self.assertIn('ʻ (U+02BB)', out)
+        why = ck.Translit('fi_XX', 'fi_XX', ('TEST', 'TEST'), 0, set(), [],
+                          'a reason')
+        out = self.lines(ck.TranslitReport(0, 0, 0, [why]))
+        self.assertTrue(any(b.startswith('!! 1 locale build(s) could not be '
+                                         'compared for the collating '
+                                         'elements') and 'fi_XX (TEST): a '
+                            'reason' in b for b in _bang_blocks(out)), out)
+        self.assertEqual(self.lines(None, builds=0), '')
+
+
+def _bang_blocks(out):
+    blocks, cur = [], None
+    for line in out.split('\n'):
+        if line.startswith('!!'):
+            cur = [line]
+            blocks.append(cur)
+        elif cur is not None and line.startswith('   '):
+            cur.append(line)
+        else:
+            cur = None
+    return [' '.join(x.strip() for x in b) for b in blocks]
 
 
 if __name__ == '__main__':

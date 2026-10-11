@@ -71,9 +71,11 @@ are built with, and lists the locales whose rules name a character the newer
 version added, removed or gave other bytes. A distro can patch the character
 sets it ships, and no step compares a machine's own.
 
-Transliteration is not compared either. Through it a locale builds some
-collating elements out of characters its character set lacks, so a change to
-it, or to the character set, can move those elements with no rule changing.
+Step 2 also compares, for the same builds, the collating elements a locale
+builds out of transliterations. localedef builds them for the characters a
+character set lacks, so a change to a transliteration file, or to the
+character set, can move them with no rule changing. What a machine's own
+transliterations build is not compared.
 
 ## Step 5 reports, it does not decide
 
@@ -118,7 +120,7 @@ machine, where only a simulation was run, a machine on cgroup v1, and ARM.
 ## `LC_CTYPE` is not audited at all
 
 The other six sections are ways a sort-order change can be missed. This one
-is a whole category nothing here looks at.
+is a whole category nothing here audits.
 
 `LC_COLLATE` decides sort order. `LC_CTYPE` decides `upper()`, `lower()`,
 `initcap()`, character classification and pattern matching, and under the
@@ -132,8 +134,10 @@ PostgreSQL warns less here than it does for collation, not more. There is no
 ctype version to compare, so a ctype change leaves no trail at all and there
 is no mismatch for anything to detect.
 
-No step of this tool reads it, and no verdict this project publishes says
-anything about it in either direction, including "unchanged". A 🟢 on the
+No step of this tool audits it, and no verdict this project publishes says
+anything about it in either direction, including "unchanged". Step 2 reads
+its transliterations only for the collating elements they build, which are
+sort order. A 🟢 on the
 results table is a statement about sort order and nothing else. If a
 `lower()`-based index matters to you, confirm it the way this project confirms
 collation — on both machines, naming the builds.
