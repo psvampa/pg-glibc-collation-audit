@@ -181,9 +181,9 @@ def is_noise_line(line):
 
     and surviving hunks showed lines like `case tok_codepoint_collation:`
     without the `>>` marker a reader is told to scan for. In a tool whose
-    zero-hunk verdict is "every locale whose data file is unchanged is
-    genuinely unaffected", guessing wrong in that direction is the one
-    failure that matters.
+    zero-hunk verdict is "every locale at both tags that steps 2 and 3 did
+    not list is genuinely unaffected", guessing wrong in that direction is the
+    one failure that matters.
     """
     body = line[1:].strip()
     if not body:
@@ -783,9 +783,10 @@ def main(argv):
         if paths_blocked:
             print("Resolve the paths listed above, then re-run.")
     elif total == 0:
-        print("No substantive collation code change. Every locale whose data "
-              "file is unchanged")
-        print("is genuinely unaffected, including every locale that")
+        print("No substantive collation code change. Every locale at both "
+              "tags that steps 2")
+        print("and 3 did not list is genuinely unaffected, including every "
+              "locale that")
         print("flag_algorithmic_ranges.py lists -- steps 1-3 are sufficient "
               "for this pair.")
     else:

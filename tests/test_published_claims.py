@@ -878,7 +878,7 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
         ('the locale files that differ between glibc 2.28 and 2.34',
          r'(\d+) files that differ between (?:glibc )?2\.28 and 2\.34'
          r'|one line out of (\d+)',
-         2,
+         1,
          (Evidence('examples/rhel8-to-rhel9-audit-output.txt',
                    shape='Locale files changed between glibc-2.28 and '
                          'glibc-2.34: {n}'),
@@ -1164,7 +1164,7 @@ class ASectionNeverWidensInSilence(unittest.TestCase):
 
     AUDIT = 'examples/rhel8-to-rhel9-audit-output.txt'
     SHAPE = 'Locale files changed between glibc-2.28 and glibc-2.34: {n}'
-    STEP_2 = ('== STEP 2  Which of those changes are inside LC_COLLATE\n'
+    STEP_2 = ('== STEP 2  Which changes can reach sort order\n'
               + '=' * 64)
     STEP_4 = ('== STEP 4  Which locales a data diff can never clear\n'
               + '=' * 64)
@@ -1490,9 +1490,9 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
             text = self.example(name)
             for banner in (
                     f"== STEP 6  DISTRO CHECK  do {old}'s patches touch "
-                    "LC_COLLATE?",
+                    "sort order?",
                     f"== STEP 7  DISTRO CHECK  do {new}'s patches touch "
-                    "LC_COLLATE?",
+                    "sort order?",
                     f"== STEP 8  NODE TO NODE  does {old}'s collation data "
                     f"differ from {new}'s?",
                     f"== STEP 9  NODE ELLIPSIS  does {old}'s own locale data "

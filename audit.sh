@@ -439,7 +439,7 @@ case $ORDER in
     ;;
 esac
 
-banner "STEP 2  Which of those changes are inside LC_COLLATE"
+banner "STEP 2  Which changes can reach sort order"
 run_step 2 python3 "$SCRIPTS/filter_lc_collate_changes.py" "$OLD" "$NEW"
 
 # Absent is not empty. Step 2 writes these files whether or not it found
@@ -459,7 +459,8 @@ fi
 
 # Read without a subshell and without mapfile -- macOS ships bash 3.2, and
 # requirements.md promises only "bash". The second list holds the locales
-# step 2's character set check lists, which step 3 takes after --keyed.
+# step 2's character set and transliteration checks list, which step 3 takes
+# after --keyed.
 STEP3_ARGS=()
 KEYED_ARGS=()
 for list in "$STEP2_LIST" "$STEP2_KEYED"; do
@@ -502,7 +503,7 @@ if [ ${#STEP3_ARGS[@]} -gt 0 ] || [ ${#KEYED_ARGS[@]} -gt 0 ]; then
   banner "STEP 3  Which locales inherit those changes"
   run_step 3 python3 "$SCRIPTS/resolve_copy_closure.py" "${STEP3_CALL[@]}"
 else
-  banner "STEP 3  Skipped: no locale changed inside LC_COLLATE"
+  banner "STEP 3  Skipped: step 2 gave it no locale"
   echo "Nothing to close over the copy graph for this pair."
   if [ "$SAME_TAG" = "1" ]; then
     echo "The two tags are one commit, so nothing was compared and this is"
@@ -525,13 +526,13 @@ run_step 5 python3 "$SCRIPTS/diff_collation_code.py" "$OLD" "$NEW"
 # clone, while steps 6 to 11 need a node's files. They run only when you
 # supply them, and keep their numbers when a side is left out.
 if [ -n "$OLD_LOCALES" ]; then
-  banner "STEP 6  DISTRO CHECK  do $OLD_BUILD's patches touch LC_COLLATE?"
+  banner "STEP 6  DISTRO CHECK  do $OLD_BUILD's patches touch sort order?"
   run_step 6 python3 "$SCRIPTS/diff_distro_locales.py" "$OLD" \
     --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --node-label old \
     ${OLD_CM[@]+"${OLD_CM[@]}"}
 fi
 if [ -n "$NEW_LOCALES" ]; then
-  banner "STEP 7  DISTRO CHECK  do $NEW_BUILD's patches touch LC_COLLATE?"
+  banner "STEP 7  DISTRO CHECK  do $NEW_BUILD's patches touch sort order?"
   run_step 7 python3 "$SCRIPTS/diff_distro_locales.py" "$NEW" \
     --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --node-label new \
     ${NEW_CM[@]+"${NEW_CM[@]}"}
@@ -747,7 +748,7 @@ if [ "$(count_lines "$STEP3_LIST")" -gt 0 ]; then
   echo "   list also holds the aliases glibc's locale.alias gives these locales."
   echo "   sql/collation_confirmation_template.sql reads collations the same way."
 else
-  echo "     none -- no locale's LC_COLLATE changed between these two tags"
+  echo "     none -- no locale at both tags changed in what step 2 compares"
 fi
 # With the two measurements the summary holds a second answer to the same
 # question, and this one comes first: it says where the other is, so that the
@@ -896,8 +897,8 @@ case $STEP5 in
     byte_order_note ;;
   clean)
     echo "-- Needs an empirical test: none on this evidence. Step 5 found no"
-    echo "   substantive change, so a clean data diff is sufficient even for"
-    echo "   the locales step 4 flagged." ;;
+    echo "   substantive change, so steps 1 to 3 are sufficient even for the"
+    echo "   locales step 4 flagged." ;;
   *)
     echo "-- Needs an empirical test: step 5 did NOT reach a clean result, so"
     echo "   the locales step 4 flagged stay UNRESOLVED. Read step 5's output:"
@@ -936,7 +937,7 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
         echo "     --$side-build-id."
       fi
       echo "     So nothing above says whether the $side machine's own patches"
-      echo "     touch LC_COLLATE, which the tags cannot show."
+      echo "     touch sort order, which the tags cannot show."
       continue
     fi
     echo "-- Distro patches, step $n ($build against $tag)"
@@ -993,7 +994,7 @@ else
     echo "     option, or --old-locales-dir and --new-locales-dir with their build ids."
   fi
   echo "     So nothing above says whether either machine's own patches touch"
-  echo "     LC_COLLATE, which the tags cannot show."
+  echo "     sort order, which the tags cannot show."
 fi
 
 echo

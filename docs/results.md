@@ -31,12 +31,7 @@ The sections below are the evidence behind each row.
 - 🟡 **Unresolved** — flagged and *not* cleared. Treat as changed until
   tested.
 - 🟢 **No difference** — the audit flagged it, but a targeted test or a
-  mechanism argument shows the order does not move. Weaker than "unaffected".
-- ⚪ **Unaffected** — neither the locale's `LC_COLLATE` nor the collation code
-  changed. Note that a locale's *file* often changes without this being
-  disturbed: most of the 283 files that differ between 2.28 and 2.34 changed
-  only `LC_TIME` or `LC_MONETARY`. This is the deterministic verdict the
-  method exists to produce.
+  mechanism argument shows the order does not move.
 
 ## Worked example: RHEL8 to RHEL9 (glibc 2.28 to 2.34)
 

@@ -323,8 +323,7 @@ warn = g.warn
 def main(argv):
     ap = argparse.ArgumentParser(
         description="Compare a node's locale sources against an upstream tag, "
-                    "and report whether any difference falls inside "
-                    "LC_COLLATE.")
+                    "and report whether any difference touches sort order.")
     ap.add_argument('tag', help="upstream glibc tag, e.g. glibc-2.28")
     ap.add_argument('--locales-dir', required=True,
                     help="a copy of the node's /usr/share/i18n/locales/")
@@ -424,9 +423,8 @@ def _main(opts):
             inherited = inherited_via_copy(node_texts, buckets['collate'])
             print_inheritance(inherited, opts.build_id)
         else:
-            print(f"\nNothing differs inside LC_COLLATE. For every locale "
-                  f"compared, the tag diff is reading the same collation data "
-                  f"{opts.build_id} runs.")
+            print(f"\nNo locale compared with {opts.tag} differs inside "
+                  f"LC_COLLATE.")
 
         if absent_upstream:
             print(f"\nAbsent upstream ({len(absent_upstream)}) -- backported "

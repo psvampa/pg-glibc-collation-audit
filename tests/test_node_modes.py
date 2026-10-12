@@ -493,6 +493,8 @@ class NodeChecksSeeTheReadingCharacters(NodeCase):
                       text)
         self.assertIn('read with comment_char # and escape_char / at build-b',
                       text)
+        self.assertNotIn('No locale present on both nodes differs',
+                         flat(text))
 
     def test_the_distro_check(self):
         rc, text = run('diff_distro_locales.py', MID, '--locales-dir',
@@ -505,6 +507,26 @@ class NodeChecksSeeTheReadingCharacters(NodeCase):
                       text)
         self.assertIn('read with comment_char # and escape_char / at node',
                       text)
+        self.assertNotIn(f'No locale compared with {MID} differs', flat(text))
+
+    def test_unedited_copies_say_nothing_differs_among_what_was_compared(self):
+        """The control for the two above, and the line's scope. Steps 6/7
+        and 8 print their clean line under counts that can hold files they
+        never compared (absent on the node, on one node only), so the line
+        names what it covers: printed bare, "Nothing differs inside
+        LC_COLLATE" read as covering a copy that lost 140 files
+        (false-negative-reviewer, 2026-10-12)."""
+        rc, text = self.node_to_node(self.node(MID, 'a'), self.node(MID, 'b'),
+                                     'build-a', 'build-b')
+        self.assertEqual(rc, 0, text)
+        self.assertIn('No locale present on both nodes differs inside '
+                      'LC_COLLATE.', flat(text))
+        rc, text = run('diff_distro_locales.py', MID, '--locales-dir',
+                       self.node(MID, 'n'), '--build-id', 'unedited-build',
+                       '--node-label', 'n', out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertIn(f'No locale compared with {MID} differs inside '
+                      f'LC_COLLATE.', flat(text))
 
 
 @needs_clone

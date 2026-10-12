@@ -156,7 +156,7 @@ DISTRO_NOT_RUN_BODY = [
     'Pass --old-node and --new-node instead of every other --old-*/--new-*',
     'option, or --old-locales-dir and --new-locales-dir with their build ids.',
     "So nothing above says whether either machine's own patches touch",
-    'LC_COLLATE, which the tags cannot show.',
+    'sort order, which the tags cannot show.',
 ]
 
 
@@ -652,8 +652,8 @@ class WrapperEmptyPair(unittest.TestCase):
         clean run printed that error. Restore the old function and this fails.
         """
         self.assertNotIn('integer expression expected', self.out)
-        self.assertIn("none -- no locale's LC_COLLATE changed between these "
-                      "two tags", self.out)
+        self.assertIn("none -- no locale at both tags changed in what step 2 "
+                      "compares", self.out)
 
     def test_one_commit_leaves_step_4_unresolved(self):
         """One tag against itself compares nothing, and step 5 used to print
@@ -663,7 +663,7 @@ class WrapperEmptyPair(unittest.TestCase):
         and the summary says why. The clean branch is driven by
         WrapperStep5Clean."""
         summary = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
-        self.assertNotIn('a clean data diff is sufficient', summary)
+        self.assertNotIn('steps 1 to 3 are sufficient', summary)
         self.assertIn('step 5 did NOT reach a clean result, so the locales '
                       'step 4 flagged stay UNRESOLVED', summary)
         self.assertIn('the two tags are one commit', summary)
@@ -721,7 +721,7 @@ class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
         # printed its clean sentence over this pair (false-negative-reviewer,
         # 2026-09-30, measured with that mutant).
         self.assertIn('step 5 did NOT reach a clean result', summary)
-        self.assertNotIn('a clean data diff is sufficient', summary)
+        self.assertNotIn('steps 1 to 3 are sufficient', summary)
 
 
 @needs_clone
@@ -1751,7 +1751,7 @@ class WrapperStep5Unresolved(unittest.TestCase):
     The summary read its hunk count from the line "N substantive hunk(s)
     found". When step 5 refuses its read and has no hunk to report, it prints
     "NOT a clean result" and no such line -- and `HUNKS=${HUNKS:-0}` turned
-    that absence into zero, which is the branch that says "a clean data diff
+    that absence into zero, which was the branch that said "a clean data diff
     is sufficient even for the locales step 4 flagged". Step 5 said one
     thing; the summary said the opposite, 300 lines lower.
 
@@ -1814,7 +1814,7 @@ class WrapperStep5Unresolved(unittest.TestCase):
                       'the shim did not run')
         summary = out.split('AUDIT SUMMARY')[1]
         flat = ' '.join(summary.split())
-        self.assertNotIn('a clean data diff is sufficient', flat)
+        self.assertNotIn('steps 1 to 3 are sufficient', flat)
         self.assertNotIn('Nothing from step 5', flat)
         self.assertIn('step 5 did NOT reach a clean result, so the locales '
                       'step 4 flagged stay UNRESOLVED', flat)
@@ -1910,7 +1910,7 @@ class WrapperStep5UnresolvedWithHunks(unittest.TestCase):
 
 @needs_clone
 class WrapperStep5Clean(unittest.TestCase):
-    """The summary's clean step 5 branch, "a clean data diff is sufficient".
+    """The summary's clean step 5 branch, "steps 1 to 3 are sufficient".
 
     One tag against itself was the one input the suite used to reach it, and
     that is not a clean result any more: it compares nothing. No pinned pair of
@@ -1922,9 +1922,10 @@ class WrapperStep5Clean(unittest.TestCase):
     CANNED = (
         "Collation code changes between glibc-2.28 and glibc-2.34\n"
         "\n"
-        "No substantive collation code change. Every locale whose data file "
-        "is unchanged\n"
-        "is genuinely unaffected, including every locale that\n"
+        "No substantive collation code change. Every locale at both tags "
+        "that steps 2\n"
+        "and 3 did not list is genuinely unaffected, including every locale "
+        "that\n"
         "flag_algorithmic_ranges.py lists -- steps 1-3 are sufficient for "
         "this pair.\n")
 
@@ -1961,8 +1962,8 @@ class WrapperStep5Clean(unittest.TestCase):
         summary = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
         # The real step 5 finds hunks on this pair, so this line is only
         # printed when the shim ran.
-        self.assertIn('Step 5 found no substantive change, so a clean data '
-                      'diff is sufficient even for the locales step 4 flagged',
+        self.assertIn('Step 5 found no substantive change, so steps 1 to 3 '
+                      'are sufficient even for the locales step 4 flagged',
                       summary)
         self.assertIn('Nothing from step 5.', summary)
         self.assertNotIn('did NOT reach a clean result', summary)
@@ -1972,6 +1973,33 @@ class WrapperStep5Clean(unittest.TestCase):
         # fail when it moves back in (backlog 1.14).
         self.assertIn("upstream diff cannot see your distro's backports",
                       summary)
+
+    def test_the_canned_sentence_is_the_one_the_script_prints(self):
+        """The shim stands in for step 5, so what it prints is evidence only
+        while it is the real script's clean sentence. A rewording the copy
+        did not follow left this class green over a sentence no run prints:
+        reverting "at both tags", which keeps the locales a release adds out
+        of the clean verdict, reddened nothing (false-negative-reviewer,
+        2026-10-12). Read from the `total == 0` branch of
+        diff_collation_code.py, which must be plain prints of one string."""
+        path = os.path.join(SCRIPTS_DIR, 'diff_collation_code.py')
+        with open(path, encoding='utf-8') as fh:
+            tree = ast.parse(fh.read())
+        branches = [node for node in ast.walk(tree)
+                    if isinstance(node, ast.If)
+                    and ast.unparse(node.test) == 'total == 0']
+        self.assertEqual(len(branches), 1, 'the clean branch of step 5')
+        lines = []
+        for stmt in branches[0].body:
+            shown = ast.unparse(stmt)
+            self.assertIsInstance(stmt, ast.Expr, shown)
+            self.assertIsInstance(stmt.value, ast.Call, shown)
+            self.assertEqual(ast.unparse(stmt.value.func), 'print', shown)
+            self.assertEqual(len(stmt.value.args), 1, shown)
+            self.assertEqual(stmt.value.keywords, [], shown)
+            lines.append(ast.literal_eval(stmt.value.args[0]))
+        self.assertEqual(self.CANNED.split('\n\n', 1)[1],
+                         '\n'.join(lines) + '\n')
 
 
 @needs_clone
@@ -2677,7 +2705,7 @@ class NodeFileWithoutSources:
             ' '.join(summary_block(self.out,
                                    f'-- Distro patches, step {bare}: NOT RUN')),
             f"{no_sources_text(self.bare)} So nothing above says whether the "
-            f"{self.BARE} machine's own patches touch LC_COLLATE, which the "
+            f"{self.BARE} machine's own patches touch sort order, which the "
             f"tags cannot show.")
         build, tag = builds[side]
         body = summary_block(self.out, f'-- Distro patches, step {have} '
@@ -2898,7 +2926,7 @@ class WrapperNodeFilesWithoutSources(unittest.TestCase):
             ' '.join(summary_block(
                 self.out, '-- Distro patches, steps 6 and 7: NOT RUN')),
             f"{self.both} So nothing above says whether either machine's own "
-            f"patches touch LC_COLLATE, which the tags cannot show.")
+            f"patches touch sort order, which the tags cannot show.")
 
     def test_every_block_names_both_files(self):
         self.assertEqual(

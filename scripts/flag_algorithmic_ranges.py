@@ -7,8 +7,8 @@ glibc builds in byte order -- codepoint_collation alone, or only a copy of a
 byte-order locale -- for the default weight described below.
 
 Why this matters: a source diff (audit-locale-diff.sh +
-filter_lc_collate_changes.py) proves that a locale's sort order didn't change
-ONLY if every character's weight is spelled out in the data file itself. A
+filter_lc_collate_changes.py) can clear a locale's sort order ONLY if every
+character's weight is spelled out in the data file itself. A
 range such as
 
     <U4E00> <U4E00>;IGNORE;IGNORE;IGNORE

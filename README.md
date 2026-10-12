@@ -14,11 +14,10 @@ without moving that string. It is a version comparison, not a check of the
 real sort rules
 ([background](https://wiki.postgresql.org/wiki/Locale_data_changes)).
 
-This tool answers the real question from glibc's own source, deterministically
-and across every locale in the tree: if neither a locale's rules nor the code
-that compiles them changed, its order cannot have changed. Given one file from
-each of your machines, it also measures how each machine's own glibc sorts the
-locales installed on it, and names the characters that moved.
+This tool reads glibc's own source, across every locale in the tree, and lists
+the locales the upgrade can affect. Given one file from each of your machines,
+it also measures how each machine's own glibc sorts the locales installed on
+it, and names the characters that moved.
 
 **This project does not set out to give a single, infallible answer.** It
 gives you a few simple ways to compare the source of two glibc versions —
