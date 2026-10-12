@@ -629,10 +629,10 @@ def main(argv):
                 f"a time through glibc when the run has both machines' "
                 f"measurements, and PostgreSQL reports collversion as NULL "
                 f"for every C.* name.")
-    dd.warn(f"A machine's own localedata/charmaps/ is NOT compared. "
-            f"glibc-locale-source ships it and it is an input to localedef, so "
-            f"a change a distro makes to it is outside this result. See "
-            f"docs/limitations.md.")
+    dd.warn(f"A machine's own localedata/charmaps/ is NOT compared, nor what "
+            f"its own transliterations build. glibc-locale-source ships both, "
+            f"and they are inputs to localedef, so a change a distro makes to "
+            f"either is outside this result. See docs/limitations.md.")
     return 0
 
 

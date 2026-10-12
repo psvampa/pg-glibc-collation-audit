@@ -72,7 +72,10 @@ def classify_distro_diff(node_bytes, upstream_bytes):
                           and read with the same comment and escape
                           characters, so the patch landed in LC_TIME,
                           LC_IDENTIFICATION, a comment, etc.
-      'no-collate'     -- neither side has a block; no sort order to change
+      'no-collate'     -- neither side has a block, so no sort rules of its
+                          own; a transliteration it holds can still change a
+                          collating element another locale builds, which
+                          these steps do not compare
 
     A block present on one side and absent on the other is a block difference,
     so it returns 'collate' -- the caller reports which side, because "the node
@@ -444,10 +447,10 @@ def main(argv):
          f"CODE change that is in neither tag. That gap is closed by the "
          f"empirical check on real nodes, which measures the glibc actually "
          f"installed, patches and all: docs/confirming-on-a-real-system.md.")
-    warn(f"A machine's own localedata/charmaps/ is NOT compared. "
-         f"glibc-locale-source ships it and it is an input to localedef, so a "
-         f"change a distro makes to it is outside this result. See "
-         f"docs/limitations.md.")
+    warn(f"A machine's own localedata/charmaps/ is NOT compared, nor what "
+         f"its own transliterations build. glibc-locale-source ships both, "
+         f"and they are inputs to localedef, so a change a distro makes to "
+         f"either is outside this result. See docs/limitations.md.")
     return 0
 
 

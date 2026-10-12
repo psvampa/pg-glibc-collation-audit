@@ -47,7 +47,7 @@ NOT a collation verdict: most of these changed LC_TIME or LC_MONETARY. Step 2 fi
 Locale files changed between glibc-2.28 and glibc-2.34: 283
   modified: 281   added: 2   deleted: 0   renamed: 0
 Of the 281 content-changed file(s): 2 touch LC_COLLATE, 271 do not, 8 have no LC_COLLATE block
-  (no LC_COLLATE on either side, so no sort order to change: i18n_ctype, translit_circle, translit_cjk_compat, translit_combining, translit_compat, translit_font, translit_fraction, translit_neutral)
+  (no LC_COLLATE on either side, so no sort rules of their own; for what their transliterations build, see the transliteration lines below: i18n_ctype, translit_circle, translit_cjk_compat, translit_combining, translit_compat, translit_font, translit_fraction, translit_neutral)
 
 Files with changes inside LC_COLLATE: 2
   localedata/locales/or_IN
@@ -92,6 +92,8 @@ Character sets (localedata/charmaps/): 1 of the 30 that the 486 locale builds
 in SUPPORTED at both tags use differs between glibc-2.28 and glibc-2.34.
 UTF-8: 6485 characters added.
 No build's LC_COLLATE names one of those characters.
+Transliteration (LC_CTYPE): 24 collating elements of 3 locale builds depend on
+a transliteration; none is built differently at glibc-2.34.
 
 !! localedata/locales/C exists at NEITHER glibc-2.28 nor glibc-2.34, but
    C.UTF-8 is BACKPORTED by the distros this audit targets -- so it very
@@ -626,9 +628,10 @@ Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.gl
    neither tag. That gap is closed by the empirical check on real nodes, which
    measures the glibc actually installed, patches and all: docs/confirming-on-
    a-real-system.md.
-!! A machine's own localedata/charmaps/ is NOT compared. glibc-locale-source
-   ships it and it is an input to localedef, so a change a distro makes to it
-   is outside this result. See docs/limitations.md.
+!! A machine's own localedata/charmaps/ is NOT compared, nor what its own
+   transliterations build. glibc-locale-source ships both, and they are inputs
+   to localedef, so a change a distro makes to either is outside this result.
+   See docs/limitations.md.
 
 ================================================================
 == STEP 7  DISTRO CHECK  do glibc-2.34-275.el9_8.x86_64's patches touch LC_COLLATE?
@@ -664,9 +667,10 @@ Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.gl
    neither tag. That gap is closed by the empirical check on real nodes, which
    measures the glibc actually installed, patches and all: docs/confirming-on-
    a-real-system.md.
-!! A machine's own localedata/charmaps/ is NOT compared. glibc-locale-source
-   ships it and it is an input to localedef, so a change a distro makes to it
-   is outside this result. See docs/limitations.md.
+!! A machine's own localedata/charmaps/ is NOT compared, nor what its own
+   transliterations build. glibc-locale-source ships both, and they are inputs
+   to localedef, so a change a distro makes to either is outside this result.
+   See docs/limitations.md.
 
 ================================================================
 == STEP 8  NODE TO NODE  does glibc-2.28-251.el8_10.40.x86_64's collation data differ from glibc-2.34-275.el9_8.x86_64's?
@@ -797,9 +801,10 @@ Full result written to /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.
    nothing warns either. Step 11 measures each character's order through each
    machine's glibc when the run has both machines' measurements, and
    sql/c_utf8_probe.sql measures it inside PostgreSQL.
-!! A machine's own localedata/charmaps/ is NOT compared. glibc-locale-source
-   ships it and it is an input to localedef, so a change a distro makes to it
-   is outside this result. See docs/limitations.md.
+!! A machine's own localedata/charmaps/ is NOT compared, nor what its own
+   transliterations build. glibc-locale-source ships both, and they are inputs
+   to localedef, so a change a distro makes to either is outside this result.
+   See docs/limitations.md.
 
 ================================================================
 == STEP 9  NODE ELLIPSIS  does glibc-2.28-251.el8_10.40.x86_64's own locale data use ellipsis ranges?
@@ -1115,9 +1120,10 @@ Of the 867 locale(s) on the old machine: 14 changed, 847 unchanged (5 of them on
         neither tag. That gap is closed by the empirical check on real nodes, which
         measures the glibc actually installed, patches and all: docs/confirming-on-
         a-real-system.md.
-     !! A machine's own localedata/charmaps/ is NOT compared. glibc-locale-source
-        ships it and it is an input to localedef, so a change a distro makes to it
-        is outside this result. See docs/limitations.md.
+     !! A machine's own localedata/charmaps/ is NOT compared, nor what its own
+        transliterations build. glibc-locale-source ships both, and they are inputs
+        to localedef, so a change a distro makes to either is outside this result.
+        See docs/limitations.md.
      !! This compares locale DATA. Identical data is NOT identical ORDER: the
         weights for an ellipsis range are computed by localedef when the locale is
         built, and that code differs between two glibc builds. Bug 22668 (commit

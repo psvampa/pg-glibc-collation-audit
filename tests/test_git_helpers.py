@@ -39,6 +39,28 @@ def in_subprocess(code):
 
 
 @needs_clone
+class DescendsFrom(unittest.TestCase):
+    """Whether a tag's localedef reads its input as UTF-8 is a question of
+    ancestry, and a commit git cannot place is not a no."""
+
+    def test_the_utf8_reader_by_tag(self):
+        import collation_keys as ck
+        for tag, want in (('glibc-2.35', False), ('glibc-2.36', True),
+                          ('glibc-2.39', True)):
+            with self.subTest(tag):
+                self.assertIs(g.descends_from(GLIBC_CLONE, ck.UTF8_READER,
+                                              tag), want)
+        self.assertIsNone(g.descends_from(GLIBC_CLONE, '0' * 40,
+                                          'glibc-2.39'))
+        # Step 2 asks through reads_utf8, which refuses a shallow clone
+        # whenever git cannot say yes (AShallowCloneCannotAnswerThis): the
+        # full one answers.
+        import filter_lc_collate_changes as f
+        self.assertIs(f.reads_utf8(GLIBC_CLONE, 'glibc-2.39'), True)
+        self.assertIs(f.reads_utf8(GLIBC_CLONE, 'glibc-2.34'), False)
+
+
+@needs_clone
 class GitFailureIsNotSilence(unittest.TestCase):
     """"A failed git was indistinguishable from 'this file did not change'".
 
@@ -382,6 +404,28 @@ class AShallowCloneCannotAnswerThis(unittest.TestCase):
         self.assertNotEqual(rc, 0, 'a shallow clone was read as history')
         self.assertIn('shallow', out)
         self.assertNotIn("([], ['locale/xlocale.h'], [])", out)
+
+    def test_step_2_refuses_it_when_git_cannot_say_yes(self):
+        """On a depth-1 clone git places neither tag relative to
+        UTF8_READER, whatever they hold, and two such sides would read as
+        one reader (round 7 of the 13.7 review): anything but a yes is
+        refused there."""
+        rc, out = in_subprocess(
+            "import filter_lc_collate_changes as f\n"
+            "print('ANSWER', f.reads_utf8(%r, '%s'))" % (self.repo, OLD))
+        self.assertNotEqual(rc, 0, 'a shallow clone answered about UTF-8')
+        self.assertIn('shallow', out)
+        self.assertIn('reads its input as UTF-8', flat(out))
+        self.assertNotIn('ANSWER', out)
+        # A no can be wrong on a shallow clone too (one that holds the
+        # commit and cuts the path to it): refused as well.
+        rc, out = in_subprocess(
+            "import filter_lc_collate_changes as f\n"
+            "g.descends_from = lambda *a: False\n"
+            "print('ANSWER', f.reads_utf8(%r, '%s'))" % (self.repo, OLD))
+        self.assertNotEqual(rc, 0, 'a shallow clone answered no about UTF-8')
+        self.assertIn('reads its input as UTF-8', flat(out))
+        self.assertNotIn('ANSWER', out)
 
     def test_an_answer_that_is_neither_true_nor_false_is_not_read_as_deep(self):
         """`--is-shallow-repository` dates from git 2.15; an older `rev-parse`
@@ -2214,19 +2258,58 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
         """UTF-8 differs between 2.28 and 2.34, so both copies are read. A
         copy that comes back empty is a read that failed, never a charmap
         that defines nothing, which would put every character it holds in
-        K, or none."""
+        K, or none. Only the batch's read fails: the transliteration check
+        reads charmaps later (PR C), and a fake that failed that read too
+        let this pass with the batch's refusal removed."""
         rc, out = in_subprocess(
             "import filter_lc_collate_changes as f\n"
-            "real = g.read_blobs_at\n"
-            "g.read_blobs_at = lambda r, groups: [\n"
-            "    ({}, set(paths)) if tag == %r and paths and\n"
-            "    paths[0].startswith('localedata/charmaps/')\n"
-            "    else real(r, [(tag, paths)])[0] for tag, paths in groups]\n"
+            "real, failed = g.read_blobs_at, []\n"
+            "def fake(r, groups):\n"
+            "    out = []\n"
+            "    for tag, paths in groups:\n"
+            "        if (tag == %r and paths and not failed and\n"
+            "                paths[0].startswith('localedata/charmaps/')):\n"
+            "            failed.append(paths)\n"
+            "            out.append(({}, set(paths)))\n"
+            "        else:\n"
+            "            out.append(real(r, [(tag, paths)])[0])\n"
+            "    return out\n"
+            "g.read_blobs_at = fake\n"
             "f.main([%r, %r, '--repo', repo])" % (OLD, OLD, MID))
         self.assertNotEqual(rc, 0, out)
         self.assertIn(f'listed at {OLD} could not be read while building the '
                       f'character set check: localedata/charmaps/', flat(out))
         self.assertNotIn('Character sets', out)
+
+    def test_an_unreadable_charmap_read_ahead_is_refused(self):
+        """The charmaps the transliteration check needs and the batch did
+        not read -- ISO-8859-1 among them, for fi_FI and uz_UZ -- are read
+        by a thread while step 2 judges its verdicts (CharmapReads.prefetch).
+        A copy that comes back empty there is refused like any other read,
+        never taken as a charmap that defines nothing: every element would
+        then be transliterated, or none. Only the first read of it fails,
+        which is the one made ahead: a check that dropped it there would read
+        it again later, get it, and print a clean line."""
+        rc, out = in_subprocess(
+            "import filter_lc_collate_changes as f\n"
+            "real, failed = g.read_blobs_at, []\n"
+            "def fake(r, groups):\n"
+            "    out = []\n"
+            "    for tag, paths in groups:\n"
+            "        if (tag == %r and 'localedata/charmaps/ISO-8859-1' in\n"
+            "                paths and not failed):\n"
+            "            failed.append(paths)\n"
+            "            out.append(({}, set(paths)))\n"
+            "        else:\n"
+            "            out.append(real(r, [(tag, paths)])[0])\n"
+            "    return out\n"
+            "g.read_blobs_at = fake\n"
+            "f.main([%r, %r, '--repo', repo])" % (OLD, OLD, MID))
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn(f'listed at {OLD} could not be read while building the '
+                      f'character set check: localedata/charmaps/', flat(out))
+        self.assertIn('ISO-8859-1', flat(out))
+        self.assertNotIn('Transliteration', out)
 
 
 
@@ -2328,6 +2411,174 @@ def make_charmap_repo(root):
         change()
         commit(tag)
     return root
+
+
+def make_translit_repo(root):
+    """A glibc-shaped repository for step 2's transliteration check
+    (backlog 13.7, PR C). uz_XX defines the element g + U+02BB, which its
+    ISO-8859-1 cannot hold, and copies i18n in LC_CTYPE, whose only answer
+    for U+02BB is translit_neutral's U+2018, which ISO-8859-1 lacks too:
+    at t1 the element is not built. t2 adds "<U0027>" after it in
+    translit_neutral, so the element is g'; no charmap changes. From t1:
+    t3 makes the same change and UTF-8 gains a character; t4 gives
+    ISO-8859-1 U+2018, and nothing else changes (H1); t5 changes UTF-8
+    alone. t6 puts a line holding the byte 0xFF above translit_neutral's
+    LC_CTYPE."""
+    env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+               GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+    for d_ in ('localedata/locales', 'localedata/charmaps'):
+        os.makedirs(os.path.join(root, *d_.split('/')))
+
+    def put(path, text):
+        with open(os.path.join(root, path), 'w', encoding='utf-8') as fh:
+            fh.write(text)
+    head = 'comment_char %\nescape_char /\n'
+
+    def neutral(*alts):
+        return (head + 'LC_CTYPE\ntranslit_start\n<U02BB> '
+                + ';'.join(alts) + '\ntranslit_end\nEND LC_CTYPE\n')
+    ascii_ = [f'<U{c:04X}> /x{c:02x}' for c in range(0x20, 0x7f)]
+    for i in range(g.MIN_LOCALE_FILES):
+        put(f'localedata/locales/filler_{i:03d}', 'LC_CTYPE\nEND LC_CTYPE\n')
+    put('localedata/locales/i18n_ctype',
+        head + 'LC_CTYPE\nupper <U0041>\nEND LC_CTYPE\n')
+    put('localedata/locales/i18n',
+        head + 'LC_CTYPE\ncopy "i18n_ctype"\n\ntranslit_start\n'
+        'include "translit_neutral";""\ntranslit_end\nEND LC_CTYPE\n')
+    put('localedata/locales/translit_neutral', neutral('"<U2018>"'))
+    put('localedata/locales/uz_XX',
+        head + 'LC_CTYPE\ncopy "i18n"\nEND LC_CTYPE\n\nLC_COLLATE\n'
+        'collating-element <g-tc> from "g<U02BB>"\norder_start forward\n'
+        '<U0067>\n<g-tc>\n<U0068>\norder_end\nEND LC_COLLATE\n')
+    put('localedata/locales/loc_u', _rules('<U0041>'))
+    put('localedata/charmaps/ISO-8859-1',
+        _cm('ISO-8859-1', *ascii_[2:]))
+    put('localedata/charmaps/UTF-8', _cm('UTF-8'))
+    put('localedata/SUPPORTED', 'SUPPORTED-LOCALES=\\\nuz_XX/ISO-8859-1 '
+        '\\\nloc_u.UTF-8/UTF-8 \\\n')
+    git(root, 'init', '-q', env=env)
+    git(root, 'config', 'user.name', 't', env=env)
+    git(root, 'config', 'user.email', 't@t', env=env)
+
+    def commit(tag):
+        git(root, 'add', '-A', '.', env=env)
+        git(root, 'commit', '-q', '-m', tag, env=env)
+        git(root, 'tag', tag, env=env)
+    commit('t1')
+    put('localedata/locales/translit_neutral',
+        neutral('"<U2018>"', '"<U0027>"'))
+    commit('t2')
+    for tag, changes in (
+            ('t3', [('localedata/charmaps/UTF-8', _cm('UTF-8', '<U00E9> /xc3/xa9')),
+                    ('localedata/locales/translit_neutral',
+                     neutral('"<U2018>"', '"<U0027>"'))]),
+            ('t4', [('localedata/charmaps/ISO-8859-1',
+                     _cm('ISO-8859-1', *ascii_[2:], '<U2018> /x91'))]),
+            ('t5', [('localedata/charmaps/UTF-8',
+                     _cm('UTF-8', '<U00E9> /xc3/xa9'))])):
+        git(root, 'checkout', '-q', 't1', env=env)
+        for path, text in changes:
+            put(path, text)
+        commit(tag)
+    git(root, 'checkout', '-q', 't1', env=env)
+    with open(os.path.join(root, 'localedata/locales/translit_neutral'),
+              'wb') as fh:
+        fh.write(neutral('"<U2018>"').encode().replace(
+            b'LC_CTYPE\n', b'\xff\nLC_CTYPE\n', 1))
+    commit('t6')
+    return root
+
+
+class StepTwoComparesTransliterations(unittest.TestCase):
+    """Step 2's transliteration check end to end on a repository built for
+    it: the element uz_XX builds out of a transliteration, at both tags,
+    and the list step 3 takes after --keyed."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='pg-glibc-translit-')
+        cls.repo = make_translit_repo(os.path.join(cls.tmp, 'repo'))
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def step2(self, old, new):
+        out_dir = tempfile.mkdtemp(dir=self.tmp)
+        rc, out = run_script('filter_lc_collate_changes.py', old, new,
+                             '--repo', self.repo,
+                             env_extra={'PG_GLIBC_AUDIT_OUT': out_dir})
+        path = os.path.join(out_dir,
+                            f'step2_keyed_locales.{g.pair_slug(old, new)}.txt')
+        listed = None
+        if os.path.exists(path):
+            with open(path, encoding='utf-8') as fh:
+                listed = fh.read().split()
+        return rc, out, listed
+
+    def test_a_transliteration_file_that_changes_is_found(self):
+        """No charmap and no LC_COLLATE changes: only translit_neutral,
+        which no build's rules name. With nothing read beyond the changed
+        files, the check reads what it needs (t2), and with every file read
+        it reads the charmap ahead (t3)."""
+        for new in ('t2', 't3'):
+            with self.subTest(new):
+                rc, out, listed = self.step2('t1', new)
+                self.assertEqual(rc, 0, out)
+                self.assertEqual(listed, ['uz_XX'])
+                self.assertIn('Transliteration (LC_CTYPE): 1 collating '
+                              f'element of 1 locale build depends on a '
+                              f'transliteration; 1 is built differently at '
+                              f'{new}.', flat(out))
+                self.assertRegex(out, r'(?m)^  uz_XX \(ISO-8859-1\): 1 '
+                                      r'element, defined in uz_XX\n      '
+                                      r'transliterated characters \(1\): '
+                                      '\u02bb \\(U\\+02BB\\)$')
+                self.assertIn('--keyed uz_XX', out)
+
+    def test_a_0xff_byte_is_seen_where_the_bytes_are_read(self):
+        """read_blobs_at records the text it decoded from bytes that held
+        0xFF, which errors='replace' makes one U+FFFD with every other
+        invalid byte; step 2 then lists the build whose run reads it."""
+        (got, _), = g.read_blobs_at(self.repo, [
+            ('t6', ['localedata/locales/translit_neutral']),
+        ])
+        (plain, _), = g.read_blobs_at(self.repo, [
+            ('t1', ['localedata/locales/translit_neutral']),
+        ])
+        self.assertIn(got['localedata/locales/translit_neutral'],
+                      g.TEXTS_WITH_0XFF)
+        self.assertNotIn(plain['localedata/locales/translit_neutral'],
+                         g.TEXTS_WITH_0XFF)
+        rc, out, listed = self.step2('t1', 't6')
+        self.assertEqual(rc, 0, out[-1500:])
+        self.assertIn('holds a 0xFF byte', flat(out))
+        # Every build of the run, not only the one that reads the file: one
+        # gate, so that no path of the plan passes over the byte.
+        self.assertEqual(listed, ['loc_u', 'uz_XX'])
+
+    def test_a_charmap_that_gains_an_answer_is_found(self):
+        """H1, as M2 measured it: ISO-8859-1 gains U+2018, which only the
+        transliteration of U+02BB names. The character set search finds no
+        rule that names it; the element is now g and that byte."""
+        rc, out, listed = self.step2('t1', 't4')
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(listed, ['uz_XX'])
+        self.assertIn("No build's LC_COLLATE names one of those characters.",
+                      out)
+        self.assertIn('1 is built differently at t4.', flat(out))
+
+    def test_nothing_built_differently_says_so(self):
+        """t5 changes UTF-8 alone and uz_XX is built in ISO-8859-1:
+        nothing it reads changed, and that is what is printed, not a
+        comparison that was not made."""
+        rc, out, listed = self.step2('t1', 't5')
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(listed, [])
+        self.assertIn('Transliteration (LC_CTYPE): 1 locale build may build '
+                      'a collating element out of a transliteration, and '
+                      'nothing it reads changed between the tags.', flat(out))
+        self.assertNotIn('built differently', flat(out))
 
 
 class StepTwoNamesWhatItDidNotCompare(unittest.TestCase):
@@ -2465,8 +2716,8 @@ class StepTwoComparesCharmaps(unittest.TestCase):
     def test_one_commit_twice_compares_nothing_and_says_so(self):
         rc, out, listed = self.step2('t2', 't2')
         self.assertEqual(rc, 0, out)
-        self.assertIn('Character sets: not compared, the two tags are one '
-                      'commit.', out)
+        self.assertIn('Character sets and transliterations: not compared, the '
+                      'two tags are one commit.', out)
         self.assertEqual(listed, [])
 
 

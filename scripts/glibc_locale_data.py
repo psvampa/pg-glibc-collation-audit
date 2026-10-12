@@ -426,6 +426,37 @@ def report_missing_from_copy(copy_names, tag_names, tag, where, skipped=()):
     return sorted(missing + unread)
 
 
+def require_full_history(repo, step, why):
+    """Die unless git says this clone is not shallow; `why` says what the
+    step could not tell on a shallow one. Only `true` and `false` are
+    answers. `--is-shallow-repository` dates from git 2.15, and an older
+    `rev-parse` ECHOES an option it does not know and exits 0 -- which is
+    not `true`, so the guard would be off with nothing said. "Could not
+    ask" is its own case. Step 5 asks it before reading `git log` for paths
+    absent at both tags; step 2 when descends_from does not answer yes
+    (13.7 PR C)."""
+    shallow = run_git(['rev-parse', '--is-shallow-repository'],
+                      repo).stdout.strip()
+    if shallow not in (b'true', b'false'):
+        die(f"`git rev-parse --is-shallow-repository` answered "
+            f"{shallow!r}, which is neither true nor false, so whether "
+            f"this clone has the history {step} needs is unknown "
+            f"(git older than 2.15?).", 2)
+    if shallow == b'true':
+        die(f"this glibc clone is shallow, so {why}. Clone without --depth "
+            f"(--filter=blob:none is fine).", 2)
+
+
+def descends_from(repo, ancestor, rev):
+    """True or False when git can say whether `rev` descends from
+    `ancestor`; None when it cannot (a commit this clone does not hold, a
+    fabricated repository). The caller counts None as not known, never as
+    no: unlike _is_ancestor, nothing here orders a pair."""
+    p = run_git(['merge-base', '--is-ancestor', ancestor, rev], repo,
+                allow_fail=True)
+    return {0: True, 1: False}.get(p.returncode)
+
+
 def _is_ancestor(repo, maybe_ancestor, descendant):
     """Does git say the first commit is an ancestor of the second?
 
@@ -774,6 +805,14 @@ def read_blobs(repo, tag, paths):
     return read_blobs_at(repo, [(tag, paths)])[0]
 
 
+# The texts read_blobs_at decoded from bytes that held 0xFF. errors='replace'
+# turns 0xFF and every other byte that is not UTF-8 into the same U+FFFD,
+# and glibc before 2.36 reads only 0xFF as the end of a string, a section
+# or the file (signed char, linereader.h:137@2.35). No locale or charmap
+# file at 2.12..2.42 holds one (measured 2026-10-11, 3045 blobs).
+TEXTS_WITH_0XFF = set()
+
+
 def read_blobs_at(repo, groups):
     """read_blobs for several (tag, paths) groups in ONE `git cat-file
     --batch`, so a step that reads at two tags starts one git, not one per
@@ -817,7 +856,10 @@ def read_blobs_at(repo, groups):
         if out[pos + size:pos + size + 1] != b'\n':
             die(f"truncated `git cat-file --batch` output inside {tag}:{path}: "
                 f"its header promised {size} bytes")
-        contents[path] = out[pos:pos + size].decode('utf-8', 'replace')
+        raw = out[pos:pos + size]
+        contents[path] = raw.decode('utf-8', 'replace')
+        if b'\xff' in raw:
+            TEXTS_WITH_0XFF.add(contents[path])
         pos += size + 1  # body plus its trailing newline
     if pos != len(out):
         die(f"`git cat-file --batch` printed {len(out) - pos} byte(s) more "

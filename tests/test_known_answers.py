@@ -179,7 +179,14 @@ class Step2Filter(StepRun):
         2.34..2.39 GB18030 gains 24 characters and moves 6, 30 in all, where
         the time-gate prototype counted 38. The four transcripts must print
         the run's lines, so a figure that moves without regenerating them
-        goes red."""
+        goes red.
+
+        PR C: the transliteration line under it. 24 collating elements of
+        fi_FI, fi_FI@euro and uz_UZ in ISO-8859-1 and ISO-8859-15 depend on
+        a transliteration over both pairs, the 24 instances the 2026-10-08
+        emulation found, and none differs. The 20 of fi_FI and fi_FI@euro
+        are not built at either tag (translit_combining gives U+0335 an
+        empty string)."""
         expect = {(OLD, MID): ('rhel8-to-rhel9', 486, 1,
                                'UTF-8: 6485 characters added.'),
                   (MID, NEW): ('rhel9-to-rhel10', 487, 2,
@@ -198,6 +205,10 @@ class Step2Filter(StepRun):
                 self.assertIn(figures, flat(block))
                 self.assertIn("No build's LC_COLLATE names one of those "
                               "characters.", block)
+                self.assertIn(f'Transliteration (LC_CTYPE): 24 collating '
+                              f'elements of 3 locale builds depend on a '
+                              f'transliteration; none is built differently '
+                              f'at {new}.', flat(block))
                 path = os.path.join(
                     self.out_dir,
                     f'step2_keyed_locales.{g.pair_slug(old, new)}.txt')
@@ -334,9 +345,14 @@ class Step2Filter(StepRun):
 
     def test_the_files_with_no_collate_block_are_named_not_just_counted(self):
         """A count alone leaves a reader unable to tell a transliteration
-        table from a locale that was skipped by mistake."""
-        out = self.step('filter_lc_collate_changes.py', MID, NEW)
-        self.assertIn('no LC_COLLATE on either side', out)
+        table from a locale that was skipped by mistake. And the line must
+        not say they cannot change an order: a collating element built out
+        of their transliterations can move (backlog 13.7, PR C)."""
+        out = flat(self.step('filter_lc_collate_changes.py', MID, NEW))
+        self.assertIn('no LC_COLLATE on either side, so no sort rules of '
+                      'their own; for what their transliterations build, see '
+                      'the transliteration lines below:', out)
+        self.assertNotIn('no sort order to change', out)
         for name in ('i18n_ctype', 'translit_combining'):
             self.assertIn(name, out)
 

@@ -5,7 +5,8 @@ INSIDE the LC_COLLATE...END LC_COLLATE block, or changes the comment or escape
 characters that block is read with, discarding changes in LC_TIME,
 LC_MONETARY, comments, etc.
 
-It also compares the charmaps the SUPPORTED builds use between the two tags
+It also compares, between the two tags, the charmaps the SUPPORTED builds
+use and the collating elements they build out of transliterations
 (collation_keys.py), and writes the builds that check lists to
 step2_keyed_locales.<pair>.txt, which step 3 takes after --keyed.
 
@@ -34,6 +35,7 @@ import os
 import re
 import sys
 import textwrap
+import threading
 
 import collation_keys as ck
 import glibc_locale_data as g
@@ -87,7 +89,10 @@ def classify_change(old_text, new_text, ranges):
                           character it is read with did, or cannot be settled
       'other'          -- has a block, and neither the block nor the comment
                           and escape characters it is read with changed
-      'no-collate'     -- no block on either side; cannot affect sort order
+      'no-collate'     -- no block on either side, so no sort rules of its
+                          own; a transliteration it holds can still change a
+                          collating element another locale builds, which
+                          point 6 of collation_keys compares
 
     `reading` is its own answer for the reason `gained-collate` is: the
     directives sit outside the block, so no hunk lands inside it, and the
@@ -410,6 +415,7 @@ class CharmapReads:
 
     def __init__(self, old, new, listed, ids, content_changed, new_paths):
         self.old, self.new, self.ids = old, new, ids
+        self._early = self._ahead = None
         self.cm = {t: _named_under(ids[t], ck.CHARMAPS_DIR) for t in (old, new)}
         self.loc = {t: _named_under(ids[t], g.LOCALES_DIR) for t in (old, new)}
         differ = sorted(c for c in self.cm[old].keys() & self.cm[new].keys()
@@ -434,6 +440,71 @@ class CharmapReads:
         batch is back. `results` holds this object's groups, in order. A
         file in the tree that comes back unread dies, as every read of a
         listed file does (require_read); one not in the tree is None."""
+        got = self._sides(results, old_contents, new_contents, sup_new,
+                          strict=True)
+        self._early = None
+        return got
+
+    def prefetch(self, repo, results, old_contents, new_contents, sup_new):
+        """Start reading, in a thread, the charmaps the transliteration
+        check (collation_keys point 6) will read, while the step judges its
+        verdicts: one `git cat-file`, about 20 ms on the Mac, that would
+        otherwise be waited for. Only when the batch read every locale file
+        and nothing came back unread; otherwise read_more reads them when
+        they are needed, and sides() names whatever is missing, as before.
+        The read goes through g.read_blobs_at like every other."""
+        if not self.all_read:
+            return
+        got = self._sides(results, old_contents, new_contents, sup_new,
+                          strict=False)
+        if got is None:
+            return
+        side_old, side_new, sup = got
+        try:
+            builds = [ck.supported_builds(sup[t], t) for t in
+                      (self.old, self.new) if sup[t] is not None]
+        except ck.Unsettled:
+            return
+        if len(builds) != 2:
+            return
+        need = ck.translit_charmaps(side_old, side_new, *builds)
+        groups = [(side.tag, [f'{ck.CHARMAPS_DIR}/{c}' for c in sorted(
+                      need.get(side.tag, ())) if c in side.charmap_oids
+                      and c not in side.charmap_texts])
+                  for side in (side_old, side_new)]
+        if not any(paths for _, paths in groups):
+            return
+        box = {}
+
+        def work():
+            try:
+                box['read'] = g.read_blobs_at(repo, groups)
+            except BaseException as e:
+                box['error'] = e
+        thread = threading.Thread(target=work, daemon=True)
+        thread.start()
+        self._early = got
+        self._ahead = (thread, groups, box)
+
+    def _join(self, side_old, side_new):
+        """The prefetched charmaps into the Sides, or what the read
+        raised (die's SystemExit included)."""
+        ahead, self._ahead = self._ahead, None
+        if ahead is None:
+            return
+        thread, groups, box = ahead
+        thread.join()
+        if 'error' in box:
+            raise box['error']
+        for (tag, paths), (contents, missing), side in zip(
+                groups, box['read'], (side_old, side_new)):
+            g.require_read(tag, paths, missing, 'the character set check')
+            for path, text in contents.items():
+                side.charmap_texts[path.rsplit('/', 1)[1]] = text
+
+    def _sides(self, results, old_contents, new_contents, sup_new, strict):
+        if self._early is not None:
+            return self._early
         old, new = self.old, self.new
         sup = {}
         sup_old = results[0]
@@ -441,6 +512,8 @@ class CharmapReads:
                 (old, sup_old, g.SUPPORTED in self.ids[old]),
                 (new, sup_new, g.SUPPORTED in self.ids[new])):
             if present:
+                if not strict and missing:
+                    return None
                 g.require_read(tag, [g.SUPPORTED], missing,
                                'the character set check')
             sup[tag] = contents.get(g.SUPPORTED)
@@ -453,6 +526,8 @@ class CharmapReads:
         if self.all_read:
             for (tag, paths), (contents, missing) in zip(self.groups[1:],
                                                          results[1:]):
+                if not strict and missing:
+                    return None
                 g.require_read(tag, paths, missing,
                                'the character set check')
                 for path, text in contents.items():
@@ -471,6 +546,7 @@ class CharmapReads:
         """Read `charmaps` at both tags where they are, and, if the batch
         read no locale file beyond the verdicts', every one, in one more
         `git cat-file --batch`."""
+        self._join(side_old, side_new)
         old, new = self.old, self.new
         want = {old: [], new: []}
         for tag, side in ((old, side_old), (new, side_new)):
@@ -496,6 +572,11 @@ def check_charmaps(reads, repo, side_old, side_new, sup, names):
     """Run collation_keys.compare over the two tags, print what it found,
     and return the source names it lists for step 3."""
     old, new = side_old.tag, side_new.tag
+    # The charmaps read ahead of time (CharmapReads.prefetch) are back by
+    # now: the verdicts above took far longer than one `git cat-file`.
+    # Joined first, so that a git that failed says so here, whatever path
+    # the check takes.
+    reads._join(side_old, side_new)
     try:
         builds_old = (ck.supported_builds(sup[old], old)
                       if sup[old] is not None else None)
@@ -523,10 +604,37 @@ def check_charmaps(reads, repo, side_old, side_new, sup, names):
         graph = g.copy_graph_from_texts(side_new.texts)
         return set(names) | set(g.inherited_from(graph, set(names)))
 
+    def read_more(charmaps, locales=False):
+        # Point 6 of collation_keys: the charmaps of the builds whose
+        # collating elements may be transliterated, and, when no charmap
+        # changed, every locale file the batch did not read.
+        names = sorted(set().union(*charmaps.values())) if charmaps else []
+        if names or locales:
+            reads.read_more(repo, side_old, side_new, names)
+
+    for side in (side_old, side_new):
+        # Asked when compare needs to know whether the two tags read bytes
+        # alike (collation_keys._readers_differ).
+        side.ask_utf8 = (lambda tag=side.tag: reads_utf8(repo, tag))
     report = ck.compare(side_old, side_new, builds_old, builds_new,
-                        already_listed)
+                        already_listed, read_more, fresh=False)
     print_charmap_report(report, old, new)
     return ck.listed_sources(report)
+
+
+def reads_utf8(repo, tag):
+    """Does `tag` hold collation_keys.UTF8_READER: True, False, or None when
+    git cannot place it. A shallow clone can answer no, or nothing, for a
+    tag that holds it, and _readers_differ would read two such sides as one
+    reader (round 7 of the 13.7 review): it is refused, as step 5 refuses
+    it. A yes is a path git found in the history it has, so it stands on
+    any clone, and the check (a git process) is not paid for it."""
+    got = g.descends_from(repo, ck.UTF8_READER, tag)
+    if got is not True:
+        g.require_full_history(
+            repo, 'step 2', 'git cannot say which tag holds the commit from '
+            'which localedef reads its input as UTF-8')
+    return got
 
 
 def _charmaps_not_run(reason):
@@ -534,8 +642,9 @@ def _charmaps_not_run(reason):
     print(textwrap.fill(
         f"NOT RUN: the comparison of the character sets locales are built "
         f"with (localedata/charmaps/). {reason}. A rule that names a "
-        f"character whose bytes changed in its charmap is not covered by "
-        f"this result.",
+        f"character whose bytes changed in its charmap, and a collating "
+        f"element built out of a transliteration, are not covered by this "
+        f"result.",
         width=78, initial_indent='!! ', subsequent_indent='   '))
     return []
 
@@ -578,9 +687,10 @@ def print_charmap_report(report, old, new):
     changed = report.changed
     if not report.builds:
         _warn_block("NOT RUN: the comparison of the character sets locales "
-                    "are built with. No locale build is in SUPPORTED at both "
-                    "tags with its source file at both, so none was "
-                    "compared.", [])
+                    "are built with, and of the collating elements they "
+                    "build out of transliterations. No locale build is in "
+                    "SUPPORTED at both tags with its source file at both, so "
+                    "none was compared.", [])
     elif not changed:
         print(textwrap.fill(
             f"Character sets (localedata/charmaps/): the "
@@ -658,6 +768,7 @@ def print_charmap_report(report, old, new):
                     "run for these charmaps, so no such locale is listed for "
                     "them:", [f"{name}: {why}"
                               for name, why in report.unsearched])
+    print_translit_report(report, new)
     if report.not_compared:
         n = len(report.not_compared)
         _warn_block(f"{n} SUPPORTED entr{'y' if n == 1 else 'ies'} at both "
@@ -666,11 +777,82 @@ def print_charmap_report(report, old, new):
                     f"both.", [', '.join(report.not_compared)])
 
 
+def print_translit_report(report, new):
+    """Point 6 of collation_keys: the collating elements built out of
+    transliterations."""
+    t = report.translit
+    if not report.builds:
+        return
+    if t is None:
+        print(textwrap.fill(
+            "Transliteration (LC_CTYPE): no character set and no locale "
+            "file's LC_CTYPE changed between the tags, so no collating "
+            "element is built differently.", width=78))
+        return
+    plain = [f for f in t.found if not f.reason]
+    unsettled = [f for f in t.found if f.reason]
+    if t.elements:
+        n = t.changed if t.changed is not None else sum(
+            f.changed for f in plain)
+        line = (f"Transliteration (LC_CTYPE): {t.elements} collating "
+                f"element{'s' if t.elements != 1 else ''} of {t.builds} "
+                f"locale build{'s' if t.builds != 1 else ''} "
+                f"depend{'' if t.elements != 1 else 's'} on a "
+                f"transliteration; "
+                + (f"{n or 'none'} {'is' if n < 2 else 'are'} built "
+                   f"differently at {new}."))
+    elif t.unmoved:
+        u = t.unmoved
+        line = (f"Transliteration (LC_CTYPE): {u} locale build"
+                f"{'s' if u != 1 else ''} may build a collating element out "
+                f"of a transliteration, and nothing "
+                f"{'they read' if u != 1 else 'it reads'} changed between "
+                f"the tags.")
+    elif not unsettled and not report.translit_skipped:
+        line = ("Transliteration (LC_CTYPE): no compared locale build "
+                "builds a collating element out of a transliteration.")
+    elif not unsettled:
+        k = report.translit_skipped
+        line = (f"Transliteration (LC_CTYPE): the {k} locale build"
+                f"{'s' if k != 1 else ''} that may build a collating "
+                f"element out of a transliteration "
+                f"{'are' if k != 1 else 'is'} listed already, so none was "
+                f"compared.")
+    else:
+        line = None
+    if line:
+        print(textwrap.fill(line, width=78))
+    if plain:
+        print(textwrap.fill(
+            f"Locale builds whose collating elements are built differently "
+            f"({len(plain)}), listed for step 3:", width=78))
+        for f in plain:
+            print(f"  {f.entry} ({f.charmaps[1]}): {f.changed} "
+                  f"element{'s' if f.changed != 1 else ''}, defined in "
+                  f"{', '.join(f.via)}")
+            print_characters([chr(c) if c < 0x110000 else c
+                              for c in sorted(f.chars)],
+                             indent='      ', label='transliterated characters')
+    if report.translit_skipped and (t.elements or t.unmoved or unsettled):
+        n = report.translit_skipped
+        print(textwrap.fill(
+            f"{n} more locale build{'s' if n != 1 else ''} with collating "
+            f"elements built differently, or not compared, "
+            f"{'are' if n != 1 else 'is'} listed already.", width=78))
+    if unsettled:
+        _warn_block(f"{len(unsettled)} locale build(s) could not be compared "
+                    f"for the collating elements they build out of "
+                    f"transliterations, so they are listed for step 3:",
+                    [f"{f.entry} ({f.charmaps[1]}): {f.reason}"
+                     for f in unsettled])
+
+
 def main(argv):
     ap = argparse.ArgumentParser(
         description="Filter changed locale files down to real LC_COLLATE "
                     "changes, and compare the charmaps the SUPPORTED builds "
-                    "use.")
+                    "use and the collating elements they build out of "
+                    "transliterations.")
     ap.add_argument('old_tag')
     ap.add_argument('new_tag')
     ap.add_argument('--repo', help="path to the glibc clone (autodetected)")
@@ -867,6 +1049,9 @@ def _main(opts):
     g.require_read(opts.new_tag, new_paths, new_missing,
                    'the check for files that gained an LC_COLLATE block or '
                    'are read with other comment or escape characters')
+    if charmap_reads is not None:
+        charmap_reads.prefetch(repo, read[3:], old_contents, new_contents,
+                               read[2])
 
     verdicts = judge(content_changed, old_contents, new_contents, hunks,
                      renamed_to)
@@ -883,11 +1068,15 @@ def _main(opts):
           f"{len(no_collate_block)} have no LC_COLLATE block")
     if no_collate_block:
         # Named, not just counted. These are LC_CTYPE transliteration tables
-        # and character-class data, which define no collation on either side --
-        # but printing only a number leaves a reader unable to tell that from a
+        # and character-class data, which define no collation rules on either
+        # side; what their transliterations build is compared by the
+        # character set check below (collation_keys, point 6). Printing only
+        # a number would leave a reader unable to tell that from a
         # locale that was skipped by mistake.
         names = ', '.join(sorted(os.path.basename(p) for p in no_collate_block))
-        print(f"  (no LC_COLLATE on either side, so no sort order to change: "
+        print(f"  (no LC_COLLATE on either side, so no sort rules of their "
+              f"own; for what their transliterations build, see the "
+              f"transliteration lines below: "
               f"{names})")
     if gained_collate:
         print(f"\n!! {len(gained_collate)} file(s) GAINED an LC_COLLATE block "
@@ -962,10 +1151,12 @@ def _main(opts):
 
     # The character sets the locales are built with (collation_keys): a rule
     # identical at both tags sorts differently when its charmap gives a
-    # character it names other bytes. What it lists goes to step 3 in a list
-    # of its own, so step 3 does not call it an LC_COLLATE change.
+    # character it names other bytes, or when a collating element it defines
+    # is built out of another transliteration. What it lists goes to step 3
+    # in a list of its own, so step 3 does not call it an LC_COLLATE change.
     if charmap_reads is None:
-        print("\nCharacter sets: not compared, the two tags are one commit.")
+        print("\nCharacter sets and transliterations: not compared, the two "
+              "tags are one commit.")
         keyed = []
     else:
         side_old, side_new, sup = charmap_reads.sides(
