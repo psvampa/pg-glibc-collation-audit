@@ -2187,15 +2187,16 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
         self.assertIn('could not be read while building the check for files '
                       'that gained an LC_COLLATE block', flat(out))
 
-    def test_a_missing_supported_is_refused_when_an_added_file_needs_it(self):
-        """SUPPORTED is read in the same batch now, and only when a file
-        added at the new tag needs the names it installs -- ckb_IQ and
-        mnw_MM over 2.28..2.34. Read as empty, each would print
+    def test_an_unreadable_supported_is_refused(self):
+        """SUPPORTED is read in the same batch, at both tags: the added
+        files need its names -- ckb_IQ and mnw_MM over 2.28..2.34 -- and the
+        character set check its builds. It is in the tree, so a read that
+        comes back empty failed. Read as empty, each added file would print
         "(not in SUPPORTED)", a false and reassuring line. The fake answers
-        only at the new tag. A step that read SUPPORTED at the old tag would
-        get the real file, which lacks both names, and print that line at
-        exit 0; with the tag unpinned this test passed over it
-        (false-negative-reviewer)."""
+        only at the new tag. A step that read SUPPORTED at the old tag for
+        the added files would get the real file, which lacks both names, and
+        print that line at exit 0; with the tag unpinned this test passed
+        over it (false-negative-reviewer)."""
         rc, out = in_subprocess(
             "import filter_lc_collate_changes as f\n"
             "real = g.read_blobs_at\n"
@@ -2204,8 +2205,269 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
             "    else real(r, [(tag, paths)])[0] for tag, paths in groups]\n"
             "f.main([%r, %r, '--repo', repo])" % (MID, OLD, MID))
         self.assertNotEqual(rc, 0, out)
-        self.assertIn(f'localedata/SUPPORTED does not exist at {MID}', out)
+        self.assertIn(f'file(s) listed at {MID} could not be read while '
+                      f'building the character set check: '
+                      f'localedata/SUPPORTED', flat(out))
         self.assertNotIn('(not in SUPPORTED)', out)
+
+    def test_an_unreadable_charmap_is_refused(self):
+        """UTF-8 differs between 2.28 and 2.34, so both copies are read. A
+        copy that comes back empty is a read that failed, never a charmap
+        that defines nothing, which would put every character it holds in
+        K, or none."""
+        rc, out = in_subprocess(
+            "import filter_lc_collate_changes as f\n"
+            "real = g.read_blobs_at\n"
+            "g.read_blobs_at = lambda r, groups: [\n"
+            "    ({}, set(paths)) if tag == %r and paths and\n"
+            "    paths[0].startswith('localedata/charmaps/')\n"
+            "    else real(r, [(tag, paths)])[0] for tag, paths in groups]\n"
+            "f.main([%r, %r, '--repo', repo])" % (OLD, OLD, MID))
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn(f'listed at {OLD} could not be read while building the '
+                      f'character set check: localedata/charmaps/', flat(out))
+        self.assertNotIn('Character sets', out)
+
+
+
+def bang_blocks(out):
+    """The `!!` blocks of a step's output as audit.sh's warnings block reads
+    them: a line opening with `!!` and every line after it that opens with
+    three blanks, each block flattened to one line."""
+    blocks, cur = [], None
+    for line in out.split('\n'):
+        if line.startswith('!!'):
+            cur = [line]
+            blocks.append(cur)
+        elif cur is not None and line.startswith('   '):
+            cur.append(line)
+        else:
+            cur = None
+    return [flat(' '.join(b)) for b in blocks]
+
+
+def _cm(name, *body):
+    return '\n'.join([f'<code_set_name> {name}', '<comment_char> %',
+                      '<escape_char> /', '<mb_cur_min> 1', '<mb_cur_max> 4',
+                      'CHARMAP', '<U0041> /x41', '<U0042> /x42', *body,
+                      'END CHARMAP', ''])
+
+
+def _rules(*lines):
+    return '\n'.join(['comment_char %', 'escape_char /', 'LC_COLLATE',
+                      'order_start forward', *lines, 'order_end',
+                      'END LC_COLLATE', ''])
+
+
+def make_charmap_repo(root):
+    """A glibc-shaped repository for step 2's character set check (backlog
+    13.7, PR B). t1: UTF-8 lacks U+00E9 and ISO-8859-15 gives it /xe9.
+    t2: UTF-8 gains it, ISO-8859-15 moves it to /xea, and loc_c's rules
+    change. From t2: t3 has no SUPPORTED, t4 no ISO-8859-15, t5 a UTF-8
+    with an <include>, which this tool does not read, t6 builds loc_a in
+    ISO-8859-15 instead of UTF-8 under the same entry, t7 changes a comment
+    of UTF-8 and nothing else, t8 has an empty SUPPORTED."""
+    env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+               GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+    loc = os.path.join(root, 'localedata', 'locales')
+    cms = os.path.join(root, 'localedata', 'charmaps')
+    os.makedirs(loc)
+    os.makedirs(cms)
+
+    def put(path, text):
+        with open(os.path.join(root, path), 'w', encoding='utf-8') as fh:
+            fh.write(text)
+
+    for i in range(g.MIN_LOCALE_FILES):
+        put(f'localedata/locales/filler_{i:03d}', 'LC_CTYPE\nEND LC_CTYPE\n')
+    put('localedata/locales/loc_a', _rules('<U00E9>', '<U0041>'))
+    put('localedata/locales/loc_b', _rules('<U0041>'))
+    put('localedata/locales/loc_c', _rules('<U00E9>'))
+    put('localedata/locales/en_XX', _rules('<U00E9>'))
+    put('localedata/locales/de_XX', _rules('<U0041>'))
+    put('localedata/SUPPORTED', 'SUPPORTED-LOCALES=\\\n' + ''.join(
+        f'{e} \\\n' for e in ('loc_a.UTF-8/UTF-8', 'loc_b.UTF-8/UTF-8',
+                               'loc_c.UTF-8/UTF-8', 'en_XX.UTF-8/UTF-8',
+                               'de_XX/ISO-8859-15')))
+    put('localedata/charmaps/UTF-8', _cm('UTF-8'))
+    put('localedata/charmaps/ISO-8859-15', _cm('ISO-8859-15',
+                                               '<U00E9> /xe9'))
+    git(root, 'init', '-q', env=env)
+    git(root, 'config', 'user.name', 't', env=env)
+    git(root, 'config', 'user.email', 't@t', env=env)
+
+    def commit(tag):
+        git(root, 'add', '-A', '.', env=env)
+        git(root, 'commit', '-q', '-m', tag, env=env)
+        git(root, 'tag', tag, env=env)
+
+    commit('t1')
+    put('localedata/charmaps/UTF-8', _cm('UTF-8', '<U00E9> /xc3/xa9'))
+    put('localedata/charmaps/ISO-8859-15', _cm('ISO-8859-15',
+                                               '<U00E9> /xea'))
+    put('localedata/locales/loc_c', _rules('<U0042>', '<U00E9>'))
+    commit('t2')
+    for tag, change in (('t3', lambda: os.remove(
+                            os.path.join(root, 'localedata', 'SUPPORTED'))),
+                        ('t4', lambda: os.remove(
+                            os.path.join(cms, 'ISO-8859-15'))),
+                        ('t5', lambda: put('localedata/charmaps/UTF-8',
+                                           '<include> X\n'
+                                           + _cm('UTF-8',
+                                                 '<U00E9> /xc3/xa9'))),
+                        ('t6', lambda: put(
+                            'localedata/SUPPORTED',
+                            open(os.path.join(root, 'localedata',
+                                              'SUPPORTED')).read().replace(
+                                'loc_a.UTF-8/UTF-8', 'loc_a.UTF-8/ISO-8859-15'))),
+                        ('t7', lambda: put('localedata/charmaps/UTF-8',
+                                           _cm('UTF-8', '% a new comment',
+                                               '<U00E9> /xc3/xa9'))),
+                        ('t8', lambda: put('localedata/SUPPORTED', ''))):
+        git(root, 'checkout', '-q', 't2', env=env)
+        change()
+        commit(tag)
+    return root
+
+
+class StepTwoNamesWhatItDidNotCompare(unittest.TestCase):
+    """make_glibc_shaped_repo's SUPPORTED names x and y at both tags, and
+    the rename leaves each source at one tag only: nothing is compared, and
+    both facts are `!!` blocks, which audit.sh repeats in its summary."""
+
+    def test_nothing_compared_is_said_twice_where_the_summary_reads(self):
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-charmaps-none-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        repo = make_glibc_shaped_repo(os.path.join(tmp, 'r'),
+                                      n_files=g.MIN_LOCALE_FILES, rename=True)
+        rc, out = run_script('filter_lc_collate_changes.py', 't1', 't2',
+                             '--repo', repo,
+                             env_extra={'PG_GLIBC_AUDIT_OUT': tmp})
+        self.assertEqual(rc, 0, out)
+        blocks = bang_blocks(out)
+        self.assertTrue(any(b.startswith('!! NOT RUN: the comparison of the '
+                                         'character sets') for b in blocks),
+                        out)
+        self.assertIn('!! 2 SUPPORTED entries at both tags are not compared: '
+                      'their source file is not at both. x.UTF-8, y.UTF-8',
+                      blocks)
+
+
+class StepTwoComparesCharmaps(unittest.TestCase):
+    """Step 2 end to end on a repository built for it: what goes to step 3
+    in step2_keyed_locales.<pair>.txt, what it counts as listed anyway, and
+    when it says NOT RUN instead of a clean line."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='pg-glibc-charmaps-')
+        cls.repo = make_charmap_repo(os.path.join(cls.tmp, 'repo'))
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def step2(self, old, new):
+        out_dir = tempfile.mkdtemp(dir=self.tmp)
+        rc, out = run_script('filter_lc_collate_changes.py', old, new,
+                             '--repo', self.repo,
+                             env_extra={'PG_GLIBC_AUDIT_OUT': out_dir})
+        path = os.path.join(out_dir,
+                            f'step2_keyed_locales.{g.pair_slug(old, new)}.txt')
+        listed = None
+        if os.path.exists(path):
+            with open(path, encoding='utf-8') as fh:
+                listed = fh.read().split()
+        return rc, out, listed
+
+    def test_what_a_charmap_change_reaches_goes_to_step_3(self):
+        """loc_a and en_XX name U+00E9, which UTF-8 gains: listed, each with
+        the character. They are found through ISO-8859-15 too, which
+        SUPPORTED never builds them in and which moves U+00E9 (H3). loc_c
+        names it as well, and its own rules changed, so step 3 lists it
+        anyway: counted, not repeated. loc_b and de_XX name only A."""
+        rc, out, listed = self.step2('t1', 't2')
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(listed, ['en_XX', 'loc_a'])
+        self.assertRegex(out, r'(?m)^  loc_a\.UTF-8 \(UTF-8\): 1 character, '
+                              r'named in loc_a\n      characters its character '
+                              r'set changed \(1\): \xe9 \(U\+00E9\)$')
+        self.assertIn('ISO-8859-15: 1 character given other bytes. UTF-8: 1 '
+                      'character added.', flat(out))
+        self.assertRegex(flat(out), r'step 3 lists anyway, whose LC_COLLATE '
+                                    r'names one of those characters or '
+                                    r'could not be compared \(2\): '
+                                    r'loc_c\.UTF-8 \(UTF-8\)')
+        self.assertRegex(flat(out), r'!! 2 locale\(s\) that SUPPORTED never '
+                                    r'builds in a charmap that changed .*'
+                                    r'en_XX \(ISO-8859-15\).* loc_a '
+                                    r'\(ISO-8859-15\)')
+        self.assertNotIn('loc_b', out)
+        self.assertNotIn('de_XX', out)
+        self.assertIn('--keyed en_XX loc_a', out)
+
+    def test_a_missing_supported_or_charmap_is_not_run(self):
+        """Absent is not empty: a tag with no SUPPORTED, or without a
+        charmap SUPPORTED names, gets a `!!` NOT RUN, never the clean
+        line."""
+        for new, why in (('t3', f'{g.SUPPORTED} does not exist at t3'),
+                         ('t4', 'ISO-8859-15 at t4'),
+                         ('t8', f'{g.SUPPORTED} at t8 lists no locale')):
+            with self.subTest(new):
+                rc, out, listed = self.step2('t2', new)
+                self.assertEqual(rc, 0, out)
+                self.assertIn('!! NOT RUN: the comparison of the character '
+                              'sets', flat(out))
+                self.assertIn(why, flat(out))
+                # Whole, in the shape audit.sh repeats in its summary.
+                self.assertTrue(any('NOT RUN: the comparison' in b and why in b
+                                    for b in bang_blocks(out)), out)
+                self.assertNotIn("No build's LC_COLLATE names", out)
+                self.assertEqual(listed, [])
+
+    def test_a_charmap_glibc_reads_another_way_lists_its_builds(self):
+        """And says that the search for builds a distro could add in it did
+        not run: en_XX's ISO-8859-15 build is found only by that search, and
+        the same silence over UTF-8 would hide such a build."""
+        rc, out, listed = self.step2('t2', 't5')
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(listed, ['en_XX', 'loc_a', 'loc_b', 'loc_c'])
+        blocks = bang_blocks(out)
+        self.assertTrue(any(b.startswith('!! 4 locale build(s) could not be '
+                                         'compared') and
+                            'charmap UTF-8: line 1, before CHARMAP' in b
+                            for b in blocks), out)
+        self.assertTrue(any('did not run for these charmaps' in b and
+                            'UTF-8: charmap UTF-8: line 1' in b
+                            for b in blocks), out)
+
+    def test_a_charmap_with_no_character_changed(self):
+        """UTF-8 changes in a comment only: it was read, K is empty, and
+        step 2 said so. It died on this, over five pairs of real tags,
+        2.39..2.40 among them (false-negative-reviewer)."""
+        rc, out, listed = self.step2('t2', 't7')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('UTF-8: no character changed.', out)
+        self.assertEqual(listed, [])
+
+    def test_a_build_that_changes_charmap_is_compared_old_against_new(self):
+        """loc_a.UTF-8 is built with UTF-8 at t2 and ISO-8859-15 at t6, and
+        no charmap changed under its own name, so the batch read neither
+        charmap, and both are read in one more batch (read_more). Their
+        code_set_names differ, so the build is listed with that reason,
+        which needs both texts: unread, the reason would say so."""
+        rc, out, listed = self.step2('t2', 't6')
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(listed, ['loc_a'])
+        self.assertIn("loc_a.UTF-8 (ISO-8859-15): the charmap's code_set_name "
+                      "is UTF-8 at t2 and ISO-8859-15 at t6", flat(out))
+
+    def test_one_commit_twice_compares_nothing_and_says_so(self):
+        rc, out, listed = self.step2('t2', 't2')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('Character sets: not compared, the two tags are one '
+                      'commit.', out)
+        self.assertEqual(listed, [])
 
 
 if __name__ == '__main__':

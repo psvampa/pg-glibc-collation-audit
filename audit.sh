@@ -197,6 +197,7 @@ slug() { python3 "$SCRIPTS/glibc_locale_data.py" pair-slug "$1" "$2"; }
 PAIR=$(slug "$OLD" "$NEW")
 STEP2_LIST="$OUT_DIR/step2_changed_collate.$PAIR.txt"
 STEP2_REMOVED="$OUT_DIR/step2_removed_locales.$PAIR.txt"
+STEP2_KEYED="$OUT_DIR/step2_keyed_locales.$PAIR.txt"
 STEP3_LIST="$OUT_DIR/step3_affected_locales.txt"
 STEP4_LIST="$OUT_DIR/step4_exposed_locales.txt"
 # The locales step 4 leaves off that list because glibc builds them in byte
@@ -289,7 +290,7 @@ mkdir -p "$OUT_DIR"
 # one of these nodes" when it read no node. The direction is conservative, which
 # is why it went unnoticed, but the statement is false and this file's rule is
 # that every file it reads was written by this run.
-rm -f "$STEP2_LIST" "$STEP2_REMOVED" "$STEP3_LIST" "$STEP4_LIST" \
+rm -f "$STEP2_LIST" "$STEP2_REMOVED" "$STEP2_KEYED" "$STEP3_LIST" "$STEP4_LIST" \
       "$STEP4_BYTE_ORDER" ${OLD_BYTE_ORDER:+"$OLD_BYTE_ORDER"} \
       ${NEW_BYTE_ORDER:+"$NEW_BYTE_ORDER"} \
       "$NEW_COPY_MISSING" "$OLD_DISTRO_LIST" "$NEW_DISTRO_LIST" \
@@ -396,7 +397,7 @@ esac
 banner "STEP 2  Which of those changes are inside LC_COLLATE"
 run_step 2 python3 "$SCRIPTS/filter_lc_collate_changes.py" "$OLD" "$NEW"
 
-# Absent is not empty. Step 2 writes this file whether or not it found
+# Absent is not empty. Step 2 writes these files whether or not it found
 # anything, so a missing file means step 2 did not get that far -- an error to
 # report, never an empty result to pass on as a clean audit.
 #
@@ -404,39 +405,57 @@ run_step 2 python3 "$SCRIPTS/filter_lc_collate_changes.py" "$OLD" "$NEW"
 # script. Kept because it is the difference between a wrong answer and an
 # error if step 2 ever stops writing, and the suite cannot reach it to prove
 # that -- so treat it as untested defence, not as a checked guarantee.
-if [ ! -f "$STEP2_LIST" ]; then
-  echo "error: step 2 did not write $STEP2_LIST. Not continuing: an empty" >&2
-  echo "       locale list would read as 'nothing changed'." >&2
+if [ ! -f "$STEP2_LIST" ] || [ ! -f "$STEP2_KEYED" ]; then
+  echo "error: step 2 did not write both $STEP2_LIST and $STEP2_KEYED." >&2
+  echo "       Not continuing: an empty locale list would read as 'nothing" >&2
+  echo "       changed'." >&2
   exit 1
 fi
 
 # Read without a subshell and without mapfile -- macOS ships bash 3.2, and
-# requirements.md promises only "bash".
+# requirements.md promises only "bash". The second list holds the locales
+# step 2's character set check lists, which step 3 takes after --keyed.
 STEP3_ARGS=()
-while IFS= read -r name; do
-  [ -n "$name" ] || continue
-  # This file lives under a world-writable /tmp by default and becomes argv
-  # below. A pre-seeded line like `--repo /elsewhere` would silently point the
-  # audit at different source, so validate before trusting.
-  #
-  # Also unreachable today, and for a better reason: step 2 rewrites this file
-  # for THIS pair immediately above, so the only names that get here are the
-  # basenames it just wrote. That property is what
-  # test_step_2_rewrites_the_list_so_a_seed_cannot_survive pins; this check is
-  # what stops the file being trusted if that ever changes.
-  case $name in
-    *[!A-Za-z0-9_.@+-]* | -*)
-      echo "error: refusing to pass '$name' from $STEP2_LIST to step 3." >&2
-      echo "       That is not a locale file name. Delete the file and re-run." >&2
-      exit 1
-      ;;
-  esac
-  STEP3_ARGS+=("$name")
-done < "$STEP2_LIST"
+KEYED_ARGS=()
+for list in "$STEP2_LIST" "$STEP2_KEYED"; do
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    # These files live under a world-writable /tmp by default and become argv
+    # below. A pre-seeded line like `--repo /elsewhere` would silently point
+    # the audit at different source, so validate before trusting.
+    #
+    # Also unreachable today, and for a better reason: step 2 rewrites both
+    # files for THIS pair immediately above, so the only names that get here
+    # are the ones it just wrote. That property is what
+    # test_step_2_rewrites_the_list_so_a_seed_cannot_survive pins; this check
+    # is what stops the file being trusted if that ever changes.
+    case $name in
+      *[!A-Za-z0-9_.@+-]* | -*)
+        echo "error: refusing to pass '$name' from $list to step 3." >&2
+        echo "       That is not a locale file name. Delete the file and re-run." >&2
+        exit 1
+        ;;
+    esac
+    if [ "$list" = "$STEP2_LIST" ]; then
+      STEP3_ARGS+=("$name")
+    else
+      KEYED_ARGS+=("$name")
+    fi
+  done < "$list"
+done
 
-if [ ${#STEP3_ARGS[@]} -gt 0 ]; then
+if [ ${#STEP3_ARGS[@]} -gt 0 ] || [ ${#KEYED_ARGS[@]} -gt 0 ]; then
+  # One array, never empty, because bash 3.2 under set -u calls an empty
+  # "${array[@]}" unbound.
+  STEP3_CALL=("$NEW")
+  if [ ${#STEP3_ARGS[@]} -gt 0 ]; then
+    STEP3_CALL+=("${STEP3_ARGS[@]}")
+  fi
+  if [ ${#KEYED_ARGS[@]} -gt 0 ]; then
+    STEP3_CALL+=(--keyed "${KEYED_ARGS[@]}")
+  fi
   banner "STEP 3  Which locales inherit those changes"
-  run_step 3 python3 "$SCRIPTS/resolve_copy_closure.py" "$NEW" "${STEP3_ARGS[@]}"
+  run_step 3 python3 "$SCRIPTS/resolve_copy_closure.py" "${STEP3_CALL[@]}"
 else
   banner "STEP 3  Skipped: no locale changed inside LC_COLLATE"
   echo "Nothing to close over the copy graph for this pair."

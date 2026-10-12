@@ -88,6 +88,11 @@ Files with changes inside LC_COLLATE: 2
   localedata/locales/sv_SE
       characters in the changed rules (2): W (U+0057)  w (U+0077)
 
+Character sets (localedata/charmaps/): 1 of the 30 that the 486 locale builds
+in SUPPORTED at both tags use differs between glibc-2.28 and glibc-2.34.
+UTF-8: 6485 characters added.
+No build's LC_COLLATE names one of those characters.
+
 !! localedata/locales/C exists at NEITHER glibc-2.28 nor glibc-2.34, but
    C.UTF-8 is BACKPORTED by the distros this audit targets -- so it very
    likely DOES exist on your old system, with an order of its own, and that

@@ -5,8 +5,8 @@ two glibc tags (output of filter_lc_collate_changes.py), find every OTHER
 locale that inherits its LC_COLLATE via `copy "<name>"` -- directly or
 transitively.
 
-This closes a gap in filter_lc_collate_changes.py: that script only flags
-files whose OWN LC_COLLATE block changed. A locale that just does
+This closes a gap in filter_lc_collate_changes.py: that script flags a file
+whose OWN LC_COLLATE block changed, not the locales that copy it. A locale that just does
 `copy "sv_SE"` and adds no tailoring of its own never shows up in a source
 diff (its file didn't change), but its actual sort order changes whenever
 sv_SE's does.
@@ -22,7 +22,15 @@ Two things this gets right that are easy to get wrong:
     om_KE; following only the first hides any change to the second.
 
 Usage:
-  python3 resolve_copy_closure.py <tag> <locale> [<locale> ...] [--repo <path>]
+  python3 resolve_copy_closure.py <tag> [<locale> ...] [--keyed <locale> ...]
+                                  [--repo <path>]
+
+`--keyed` takes the locales step 2 lists because their character set changed
+what their LC_COLLATE names (collation_keys.py), not their own rules. Step 2
+already followed every `copy` each of those builds reads, at both tags, so
+they join the affected set as they are, on a line of their own, and are not
+closed over the copy graph again: a locale that copies one of them sorts by
+its own charmap, which step 2 compared for that locale's own builds.
 
 Example:
   python3 resolve_copy_closure.py glibc-2.34 or_IN sv_SE
@@ -36,10 +44,15 @@ import glibc_locale_data as g
 
 def main(argv):
     ap = argparse.ArgumentParser(
-        description="Close a set of changed locales over the LC_COLLATE `copy` graph.")
+        description="Close a set of changed locales over the LC_COLLATE "
+                    "`copy` graph; --keyed ones are added as they are.")
     ap.add_argument('tag', help="glibc tag whose copy graph to walk")
-    ap.add_argument('locales', nargs='+',
-                    help="changed locales, as bare names or paths")
+    ap.add_argument('locales', nargs='*',
+                    help="locales whose own LC_COLLATE changed, as bare names "
+                         "or paths")
+    ap.add_argument('--keyed', nargs='+', default=[],
+                    help="locales step 2 lists because their character set "
+                         "changed what their LC_COLLATE names")
     ap.add_argument('--repo', help="path to the glibc clone (autodetected)")
     opts = ap.parse_args(argv)
 
@@ -48,10 +61,15 @@ def main(argv):
 
     changed = {os.path.basename(name.strip()) for name in opts.locales
                if name.strip()}
+    keyed = {os.path.basename(name.strip()) for name in opts.keyed
+             if name.strip()} - changed
+    if not changed and not keyed:
+        ap.error("no locale given: pass the changed locales, --keyed ones, "
+                 "or both")
     graph = g.build_copy_graph(repo, opts.tag)
 
     known = {os.path.basename(p) for p in g.list_locale_files(repo, opts.tag)}
-    unknown = sorted(changed - known)
+    unknown = sorted((changed | keyed) - known)
     if unknown:
         g.die(f"not locale file(s) at {opts.tag}: {', '.join(unknown)}\n"
               f"       (a typo here would otherwise look like "
@@ -70,13 +88,16 @@ def main(argv):
     # read just as complete without it. Printed so a test can see the tag.
     print(f"Copy chains read at {opts.tag}")
     print(f"Directly changed (own LC_COLLATE diff): "
-          f"{', '.join(sorted(changed))}")
+          f"{', '.join(sorted(changed)) if changed else 'none'}")
+    if keyed:
+        print(f"Directly changed (character set, step 2): "
+              f"{', '.join(sorted(keyed))}")
     print(f"Additionally affected via copy-chain inheritance: {len(inherited)}")
     for loc, roots in sorted(inherited.items()):
         shown = ', '.join(f'copy "{t}"' for t in graph.get(loc, [])) or '?'
         print(f"  {loc}: {shown} -> reaches {', '.join(roots)}")
 
-    affected = sorted(changed | set(inherited))
+    affected = sorted(changed | set(inherited) | keyed)
     print()
     print(f"Full affected set ({len(affected)} locale source file(s)): "
           f"{', '.join(affected)}")
@@ -118,7 +139,7 @@ def main(argv):
     # terminal output for a hand-run audit is unchanged.
     path = g.write_list('step3_affected_locales.txt',
                         sorted(set(affected) | set(aliases)))
-    if len(affected) > len(changed):
+    if len(affected) > len(changed) + len(keyed):
         print(f"\nFull list also written to {path}")
     return 0
 

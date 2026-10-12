@@ -872,6 +872,11 @@ def list_locale_files(repo, tag):
     # there, and step 2 then dropped its C.UTF-8 note (false-negative-
     # reviewer, measured with git 2.54).
     paths = [ln for ln in out.split('\n') if ln.strip()]
+    _require_corpus(paths, tag)
+    return paths
+
+
+def _require_corpus(paths, tag):
     if len(paths) < MIN_LOCALE_FILES:
         die(f"only {len(paths)} file(s) under {LOCALES_DIR}/ at {tag}, below "
             f"the floor of {MIN_LOCALE_FILES}. That is not a glibc locale "
@@ -879,7 +884,34 @@ def list_locale_files(repo, tag):
             f"directory existed. Refusing to report: an empty corpus reads "
             f"as 'nothing changed' and 'no locale uses ellipsis ranges', "
             f"which is indistinguishable from a clean run.")
-    return paths
+
+
+def list_tree_ids(repo, tag, extra):
+    """list_locale_files, and the blob id of every file it lists and of
+    every file under the `extra` paths, from ONE `git ls-tree -r`.
+
+    Step 2 compares charmaps by blob id (collation_keys), and asking for
+    them in the listing it already makes costs no git process. Returns
+    (locale paths as list_locale_files gives them, {path: blob id}). Split
+    on '\\n' only, for list_locale_files' reason; a line that is not
+    `<mode> <type> <id>` and a tab dies, because a path read without its id
+    would compare as missing.
+    """
+    out = run_git(['ls-tree', '-r', tag, '--', LOCALES_DIR + '/', *extra],
+                  repo).stdout.decode('utf-8', 'replace')
+    paths, ids = [], {}
+    for ln in out.split('\n'):
+        if not ln.strip():
+            continue
+        meta, tab, path = ln.partition('\t')
+        fields = meta.split(' ')
+        if not tab or len(fields) != 3:
+            die(f"unreadable `git ls-tree` line at {tag}: {ln!r}")
+        ids[path] = fields[2]
+        if path.startswith((LOCALES_DIR + '/', f'"{LOCALES_DIR}/')):
+            paths.append(path)
+    _require_corpus(paths, tag)
+    return paths, ids
 
 
 def collate_block(text):

@@ -5,6 +5,10 @@ INSIDE the LC_COLLATE...END LC_COLLATE block, or changes the comment or escape
 characters that block is read with, discarding changes in LC_TIME,
 LC_MONETARY, comments, etc.
 
+It also compares the charmaps the SUPPORTED builds use between the two tags
+(collation_keys.py), and writes the builds that check lists to
+step2_keyed_locales.<pair>.txt, which step 3 takes after --keyed.
+
 This generates its own diff from the two tags. It used to read a hardcoded
 /tmp/localedata_full.diff that no script produced and that nothing tied to the
 tags being audited, so a leftover diff from an earlier run against different
@@ -31,6 +35,7 @@ import re
 import sys
 import textwrap
 
+import collation_keys as ck
 import glibc_locale_data as g
 
 _FILE_HDR_RE = re.compile(r'^diff --git a/(\S+) b/(\S+)$', re.M)
@@ -361,13 +366,15 @@ def changed_characters(sections, old_text, new_text):
     return found
 
 
-def print_characters(chars, indent='      ', width=78):
+def print_characters(chars, indent='      ', width=78,
+                     label='characters in the changed rules'):
     """`W (U+0057)  w (U+0077)`, wrapped, never splitting one character's
     entry. A character a terminal would not show -- a control character, a
     space -- is printed as its code point alone."""
-    entries = [f'{c} (U+{ord(c):04X})' if c.isprintable() and not c.isspace()
-               else f'U+{ord(c):04X}' for c in chars]
-    line = f'{indent}characters in the changed rules ({len(chars)}):'
+    entries = [f'U+{c:X}' if isinstance(c, int)
+               else f'{c} (U+{ord(c):04X})' if c.isprintable()
+               and not c.isspace() else f'U+{ord(c):04X}' for c in chars]
+    line = f'{indent}{label} ({len(chars)}):'
     sep = ' '
     for entry in entries:
         if len(line) + len(sep) + len(entry) > width:
@@ -379,9 +386,291 @@ def print_characters(chars, indent='      ', width=78):
     print(line)
 
 
+def _named_under(ids, directory):
+    """{file name: blob id} for the files directly under `directory` in a
+    list_tree_ids map. A quoted path (a name git escapes) is left out: it
+    cannot be read by that spelling, and a run that needs it finds it
+    missing and says so (collation_keys.Side.closure)."""
+    prefix = directory + '/'
+    return {p[len(prefix):]: i for p, i in ids.items()
+            if p.startswith(prefix) and '/' not in p[len(prefix):]}
+
+
+class CharmapReads:
+    """What step 2's one batch reads for the character set check, and the
+    texts that come back (collation_keys).
+
+    Always SUPPORTED at both tags. When a charmap differs between the tags
+    -- by blob id, in the listing already made -- also those charmaps at
+    both tags and every locale file not read for the verdicts: the search
+    reads every LC_COLLATE block a build can reach. A locale file with the
+    same blob at both tags is read once, at the new tag, and the old side
+    shares the text.
+    """
+
+    def __init__(self, old, new, listed, ids, content_changed, new_paths):
+        self.old, self.new, self.ids = old, new, ids
+        self.cm = {t: _named_under(ids[t], ck.CHARMAPS_DIR) for t in (old, new)}
+        self.loc = {t: _named_under(ids[t], g.LOCALES_DIR) for t in (old, new)}
+        differ = sorted(c for c in self.cm[old].keys() & self.cm[new].keys()
+                        if self.cm[old][c] != self.cm[new][c])
+        self.groups = [(old, [g.SUPPORTED])]
+        self.charmap_paths = [f'{ck.CHARMAPS_DIR}/{c}' for c in differ]
+        self.all_read = bool(differ)
+        if differ:
+            self.groups += [(old, self.charmap_paths),
+                            (new, self.charmap_paths)]
+            have_new, have_old = set(new_paths), set(content_changed)
+            self.groups.append((new, [
+                f'{g.LOCALES_DIR}/{n}' for n in sorted(self.loc[new])
+                if f'{g.LOCALES_DIR}/{n}' not in have_new]))
+            self.groups.append((old, [
+                f'{g.LOCALES_DIR}/{n}' for n, i in sorted(self.loc[old].items())
+                if f'{g.LOCALES_DIR}/{n}' not in have_old
+                and self.loc[new].get(n) != i]))
+
+    def sides(self, repo, results, old_contents, new_contents, sup_new):
+        """(old Side, new Side, SUPPORTED texts {tag: text or None}) once the
+        batch is back. `results` holds this object's groups, in order. A
+        file in the tree that comes back unread dies, as every read of a
+        listed file does (require_read); one not in the tree is None."""
+        old, new = self.old, self.new
+        sup = {}
+        sup_old = results[0]
+        for tag, (contents, missing), present in (
+                (old, sup_old, g.SUPPORTED in self.ids[old]),
+                (new, sup_new, g.SUPPORTED in self.ids[new])):
+            if present:
+                g.require_read(tag, [g.SUPPORTED], missing,
+                               'the character set check')
+            sup[tag] = contents.get(g.SUPPORTED)
+        cm_texts = {old: {}, new: {}}
+        texts = {old: {}, new: {}}
+        for path, text in old_contents.items():
+            texts[old][os.path.basename(path)] = text
+        for path, text in new_contents.items():
+            texts[new][os.path.basename(path)] = text
+        if self.all_read:
+            for (tag, paths), (contents, missing) in zip(self.groups[1:],
+                                                         results[1:]):
+                g.require_read(tag, paths, missing,
+                               'the character set check')
+                for path, text in contents.items():
+                    if path.startswith(ck.CHARMAPS_DIR + '/'):
+                        cm_texts[tag][path.rsplit('/', 1)[1]] = text
+                    else:
+                        texts[tag][path.rsplit('/', 1)[1]] = text
+            for n, i in self.loc[old].items():
+                if n not in texts[old] and self.loc[new].get(n) == i:
+                    texts[old][n] = texts[new][n]
+        mk = lambda tag: ck.Side(tag, set(self.loc[tag]), texts[tag],
+                                 self.cm[tag], cm_texts[tag])
+        return mk(old), mk(new), sup
+
+    def read_more(self, repo, side_old, side_new, charmaps):
+        """Read `charmaps` at both tags where they are, and, if the batch
+        read no locale file beyond the verdicts', every one, in one more
+        `git cat-file --batch`."""
+        old, new = self.old, self.new
+        want = {old: [], new: []}
+        for tag, side in ((old, side_old), (new, side_new)):
+            want[tag] += [f'{ck.CHARMAPS_DIR}/{c}' for c in charmaps
+                          if c in side.charmap_oids
+                          and c not in side.charmap_texts]
+            if not self.all_read:
+                want[tag] += [f'{g.LOCALES_DIR}/{n}' for n in sorted(
+                    self.loc[tag]) if n not in side.texts]
+        groups = [(old, want[old]), (new, want[new])]
+        for (tag, paths), (contents, missing), side in zip(
+                groups, g.read_blobs_at(repo, groups), (side_old, side_new)):
+            g.require_read(tag, paths, missing, 'the character set check')
+            for path, text in contents.items():
+                if path.startswith(ck.CHARMAPS_DIR + '/'):
+                    side.charmap_texts[path.rsplit('/', 1)[1]] = text
+                else:
+                    side.texts[path.rsplit('/', 1)[1]] = text
+        self.all_read = True
+
+
+def check_charmaps(reads, repo, side_old, side_new, sup, names):
+    """Run collation_keys.compare over the two tags, print what it found,
+    and return the source names it lists for step 3."""
+    old, new = side_old.tag, side_new.tag
+    try:
+        builds_old = (ck.supported_builds(sup[old], old)
+                      if sup[old] is not None else None)
+        builds_new = (ck.supported_builds(sup[new], new)
+                      if sup[new] is not None else None)
+    except ck.Unsettled as e:
+        return _charmaps_not_run(str(e))
+    if builds_old is None or builds_new is None:
+        where = ' and '.join(t for t in (old, new) if sup[t] is None)
+        return _charmaps_not_run(f"{g.SUPPORTED} does not exist at {where}")
+    by_entry = {b.entry: b.charmap for b in builds_old}
+    cross = {(by_entry[b.entry], b.charmap) for b in builds_new
+             if b.entry in by_entry and by_entry[b.entry] != b.charmap}
+    if cross:
+        # A build whose entry stays and whose charmap does not. The batch
+        # read only the charmaps whose blob changed under one name, so its
+        # two are read here, in one more batch, with every locale file the
+        # batch did not read if it read none.
+        reads.read_more(repo, side_old, side_new,
+                        sorted({a for a, _ in cross} | {b for _, b in cross}))
+
+    def already_listed():
+        # Step 3's own rule (resolve_copy_closure): the names step 2 passes
+        # it, and every locale that copies one of them at the new tag.
+        graph = g.copy_graph_from_texts(side_new.texts)
+        return set(names) | set(g.inherited_from(graph, set(names)))
+
+    report = ck.compare(side_old, side_new, builds_old, builds_new,
+                        already_listed)
+    print_charmap_report(report, old, new)
+    return ck.listed_sources(report)
+
+
+def _charmaps_not_run(reason):
+    print()
+    print(textwrap.fill(
+        f"NOT RUN: the comparison of the character sets locales are built "
+        f"with (localedata/charmaps/). {reason}. A rule that names a "
+        f"character whose bytes changed in its charmap is not covered by "
+        f"this result.",
+        width=78, initial_indent='!! ', subsequent_indent='   '))
+    return []
+
+
+def _warn_block(head, items):
+    """A `!!` block audit.sh repeats in its summary: the first line opens
+    with `!!`, every other with three blanks or more (audit.sh's warnings
+    block reads exactly that)."""
+    print()
+    print(textwrap.fill(head, width=78, initial_indent='!! ',
+                        subsequent_indent='   '))
+    for item in items:
+        print(textwrap.fill(item, width=78, initial_indent='     ',
+                            subsequent_indent='       '))
+
+
+_CHANGED_IN_CHARMAP = 'characters its character set changed'
+
+
+def _chars_phrase(f):
+    via = ', '.join(f.via) if f.via else '?'
+    n = len(f.chars)
+    return f"{n} character{'s' if n != 1 else ''}, named in {via}"
+
+
+def _print_chars(f, indent='      '):
+    """f's characters, in code point order; one beyond U+10FFFF, which a
+    `<U........>` name can spell, as its number."""
+    cps = sorted(f.chars)
+    print_characters([chr(c) if c < 0x110000 else c for c in cps],
+                     indent=indent, label=_CHANGED_IN_CHARMAP)
+
+
+def print_charmap_report(report, old, new):
+    """The character set check's lines in step 2's output."""
+    if report.not_run:
+        _charmaps_not_run(report.not_run)
+        return
+    print()
+    changed = report.changed
+    if not report.builds:
+        _warn_block("NOT RUN: the comparison of the character sets locales "
+                    "are built with. No locale build is in SUPPORTED at both "
+                    "tags with its source file at both, so none was "
+                    "compared.", [])
+    elif not changed:
+        print(textwrap.fill(
+            f"Character sets (localedata/charmaps/): the "
+            f"{len(report.charmaps)} that the {report.builds} locale builds "
+            f"in SUPPORTED at both tags use are identical at {old} and "
+            f"{new}.", width=78))
+    else:
+        def size(p):
+            name = p[1] if p[0] == p[1] else f"{p[0]} -> {p[1]}"
+            if report.sizes[p] is None:
+                return f"{name}: could not be compared (see below)."
+            n, added, removed = report.sizes[p]
+            other = n - added - removed
+            parts = [f"{added} added"] * bool(added) + \
+                [f"{removed} removed"] * bool(removed) + \
+                [f"{other} given other bytes"] * bool(other)
+            if not parts:
+                # The file changed and no character's bytes did: a comment,
+                # a WIDTH line, the order of two lines.
+                return f"{name}: no character changed."
+            parts[0] = parts[0].replace(
+                ' ', ' character ' if parts[0].startswith('1 ')
+                else ' characters ', 1)
+            return f"{name}: {', '.join(parts)}."
+        n = len(changed)
+        print(textwrap.fill(
+            f"Character sets (localedata/charmaps/): {n} of the "
+            f"{len(report.charmaps)} that the {report.builds} locale builds "
+            f"in SUPPORTED at both tags use {'differs' if n == 1 else 'differ'}"
+            f" between {old} and {new}.", width=78))
+        print(textwrap.fill(' '.join(size(p) for p in changed), width=78))
+        if not report.found and not report.skipped:
+            print(f"No {'compared ' if report.not_compared else ''}build's "
+                  f"LC_COLLATE names one of those characters.")
+    plain = [f for f in report.found if f.entry and not f.reason]
+    if plain:
+        print(textwrap.fill(
+            f"Locale builds whose LC_COLLATE names one of those characters "
+            f"({len(plain)}), listed for step 3:", width=78))
+        for f in plain:
+            print(f"  {f.entry} ({f.charmaps[1]}): {_chars_phrase(f)}")
+            _print_chars(f)
+    if report.skipped:
+        print(textwrap.fill(
+            f"Locale builds step 3 lists anyway, whose LC_COLLATE names one "
+            f"of those characters or could not be compared "
+            f"({len(report.skipped)}):", width=78))
+        for f in report.skipped:
+            what = f.entry or f"{f.source} (not in SUPPORTED in this charmap)"
+            print(f"  {what} ({f.charmaps[1]}): "
+                  + (f"could not be compared: {f.reason}" if f.reason
+                     else _chars_phrase(f)))
+    unsettled = [f for f in report.found if f.reason]
+    if unsettled:
+        _warn_block(f"{len(unsettled)} locale build(s) could not be compared "
+                    f"for what their character set does to the characters "
+                    f"their LC_COLLATE names, so they are listed for step 3:",
+                    [f"{f.entry or f.source} ({f.charmaps[1]}): {f.reason}"
+                     for f in unsettled])
+    distro = [f for f in report.found if not f.entry and not f.reason]
+    if distro:
+        print()
+        print(textwrap.fill(
+            f"!! {len(distro)} locale(s) that SUPPORTED never builds in a "
+            f"charmap that changed name one of the characters it changed. A "
+            f"distro can build them in it (Red Hat builds en_US in "
+            f"ISO-8859-15), so they are listed for step 3:",
+            width=78, subsequent_indent='   '))
+        for f in distro:
+            print(f"     {f.source} ({f.charmaps[1]}): {_chars_phrase(f)}")
+            _print_chars(f, indent='       ')
+    if report.unsearched:
+        _warn_block("The search for locales a distro can build in a changed "
+                    "charmap, which SUPPORTED does not build in it, did not "
+                    "run for these charmaps, so no such locale is listed for "
+                    "them:", [f"{name}: {why}"
+                              for name, why in report.unsearched])
+    if report.not_compared:
+        n = len(report.not_compared)
+        _warn_block(f"{n} SUPPORTED entr{'y' if n == 1 else 'ies'} at both "
+                    f"tags {'is' if n == 1 else 'are'} not compared: "
+                    f"{'its' if n == 1 else 'their'} source file is not at "
+                    f"both.", [', '.join(report.not_compared)])
+
+
 def main(argv):
     ap = argparse.ArgumentParser(
-        description="Filter changed locale files down to real LC_COLLATE changes.")
+        description="Filter changed locale files down to real LC_COLLATE "
+                    "changes, and compare the charmaps the SUPPORTED builds "
+                    "use.")
     ap.add_argument('old_tag')
     ap.add_argument('new_tag')
     ap.add_argument('--repo', help="path to the glibc clone (autodetected)")
@@ -394,6 +683,26 @@ def main(argv):
                          "reads git's diff")
     opts = ap.parse_args(argv)
 
+    # Each text's comment and escape characters, read once for this run:
+    # classify_change and read_otherwise ask for the same texts, and the
+    # character set check asks again. Confined to this step and this run,
+    # and restored on the way out: steps 6/7 call the same reader, and a
+    # saving there belongs to their own time gate (backlog 13.7, PR D).
+    real_reading_chars, memo = g.reading_chars, {}
+
+    def reading_chars(text):
+        got = memo.get(text, memo)
+        if got is memo:
+            got = memo[text] = real_reading_chars(text)
+        return got
+    g.reading_chars = reading_chars
+    try:
+        return _main(opts)
+    finally:
+        g.reading_chars = real_reading_chars
+
+
+def _main(opts):
     repo = g.find_repo(opts.repo)
     commits = g.check_refs(repo, opts.old_tag, opts.new_tag)
 
@@ -410,10 +719,14 @@ def main(argv):
     # -- the node-reading modes refuse a directory that small, and a tag
     # deserves the same refusal. list_locale_files dies below the floor. The
     # lists are kept: they answer the KNOWN_BACKPORTED check below.
-    listed = {}
+    # The same listing gives the blob ids the character set check compares,
+    # for charmaps and SUPPORTED too, so it costs no git process.
+    listed, ids = {}, {}
     for tag in (opts.old_tag, opts.new_tag):
         if tag not in listed:
-            listed[tag] = g.list_locale_files(repo, tag)
+            listed[tag], ids[tag] = g.list_tree_ids(
+                repo, tag, [ck.CHARMAPS_DIR + '/', g.SUPPORTED])
+    same_commit = commits[opts.old_tag] == commits[opts.new_tag]
 
     # One diff for both questions. Its --raw half is git's list of what
     # changed and how, and its -U0 half is the text every verdict reads.
@@ -503,12 +816,19 @@ def main(argv):
     # content-changed file, its new side under the name it has at the new tag
     # (see new_side_paths) -- a file without a block could have gained one,
     # and one with a block could be read with other comment or escape
-    # characters -- and SUPPORTED when an added file needs its names.
+    # characters -- SUPPORTED, which an added file needs for its names and
+    # the character set check at both tags, and what that check reads
+    # (CharmapReads).
     to_read = new_side_paths(content_changed, renamed_to)
     new_paths = sorted(set(to_read.values()))
     groups = [(opts.old_tag, content_changed), (opts.new_tag, new_paths)]
-    if rest:
+    if rest or not same_commit:
         groups.append((opts.new_tag, [g.SUPPORTED]))
+    charmap_reads = None
+    if not same_commit:
+        charmap_reads = CharmapReads(opts.old_tag, opts.new_tag, listed, ids,
+                                     content_changed, new_paths)
+        groups += charmap_reads.groups
     read = g.read_blobs_at(repo, groups)
     (old_contents, old_missing), (new_contents, new_missing) = read[:2]
 
@@ -640,12 +960,29 @@ def main(argv):
             print(f"  {os.path.basename(old_path)} -> "
                   f"{os.path.basename(new_path)}")
 
+    # The character sets the locales are built with (collation_keys): a rule
+    # identical at both tags sorts differently when its charmap gives a
+    # character it names other bytes. What it lists goes to step 3 in a list
+    # of its own, so step 3 does not call it an LC_COLLATE change.
+    if charmap_reads is None:
+        print("\nCharacter sets: not compared, the two tags are one commit.")
+        keyed = []
+    else:
+        side_old, side_new, sup = charmap_reads.sides(
+            repo, read[3:], old_contents, new_contents, read[2])
+        keyed = check_charmaps(charmap_reads, repo, side_old, side_new, sup,
+                               names)
+
     # Written whether or not it is empty, and named after the pair. audit.sh
     # reads this instead of the user retyping it, and an empty file for THIS
     # pair is a different fact from a leftover file for another one -- the
     # confusion this script's docstring exists to record.
     g.write_list(f"step2_changed_collate.{g.pair_slug(opts.old_tag, opts.new_tag)}.txt",
                  names)
+    # Written every run too, for the same reason: the builds the character
+    # set check lists, which step 3 reads with --keyed.
+    g.write_list(f"step2_keyed_locales.{g.pair_slug(opts.old_tag, opts.new_tag)}.txt",
+                 keyed)
 
     # Every file of the old tag that is not at the new one, which is what the
     # summary relays as removed when no node was read: deleted, or renamed
@@ -660,9 +997,10 @@ def main(argv):
                  [f"# locale files at {opts.old_tag} and not at {opts.new_tag}"]
                  + [f"{name} ({how})" for name, how in removed])
 
-    if names and not g.wrapped():
+    if (names or keyed) and not g.wrapped():
         print(f"\nLocale names for step 3:")
-        print(f"  python3 resolve_copy_closure.py {opts.new_tag} {' '.join(names)}")
+        print(f"  python3 resolve_copy_closure.py {opts.new_tag} "
+              + ' '.join(names + (['--keyed'] + keyed if keyed else [])))
 
     for path, locale_name, at_new in blind:
         where = (f"is new UPSTREAM at {opts.new_tag}" if at_new

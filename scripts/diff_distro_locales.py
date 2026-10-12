@@ -444,9 +444,10 @@ def main(argv):
          f"CODE change that is in neither tag. That gap is closed by the "
          f"empirical check on real nodes, which measures the glibc actually "
          f"installed, patches and all: docs/confirming-on-a-real-system.md.")
-    warn(f"localedata/charmaps/ is NOT compared. glibc-locale-source ships it "
-         f"and it is an input to localedef, so a repertoire change is outside "
-         f"this result as well as outside the audit. See docs/limitations.md.")
+    warn(f"A machine's own localedata/charmaps/ is NOT compared. "
+         f"glibc-locale-source ships it and it is an input to localedef, so a "
+         f"change a distro makes to it is outside this result. See "
+         f"docs/limitations.md.")
     return 0
 
 
