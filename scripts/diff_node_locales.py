@@ -500,11 +500,12 @@ def main(argv):
     old_tag_names = None
     if opts.old_tag:
         repo = g.find_repo(opts.repo)
-        g.check_refs(repo, opts.old_tag, opts.new_tag)
+        commits = g.check_refs(repo, opts.old_tag, opts.new_tag)
         # The two tags decide which side's SUPPORTED maps which node's names,
         # so a reversed pair labels the older node as the new one.
         g.require_pair_order(repo, opts.old_tag, opts.new_tag,
-                             allow_reverse=opts.allow_reverse)
+                             allow_reverse=opts.allow_reverse,
+                             commits=commits)
         invisible = in_neither_tag(repo, opts.old_tag, opts.new_tag,
                                    sorted(old_set | new_set))
         old_tag_names = tag_basenames(repo, opts.old_tag)

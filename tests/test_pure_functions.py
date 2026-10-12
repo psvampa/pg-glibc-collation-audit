@@ -176,7 +176,7 @@ class ClassifyChange(unittest.TestCase):
             f.classify_change(self.OLD, self.NO_BLOCK, [(5, 1)]), 'collate')
 
     def test_a_missing_new_side_does_not_crash(self):
-        """main() only reads the new side for files that need it."""
+        """main() reads every new side; a caller may pass none."""
         self.assertEqual(f.classify_change(self.NO_BLOCK, None, []),
                          'no-collate')
 
@@ -961,6 +961,89 @@ class DiffParsing(unittest.TestCase):
                 '+new\n')
         [(_, body)] = d.split_hunks(diff)
         self.assertEqual(body, ['-old', '+new'])
+
+
+class OneDiffForBothQuestions(unittest.TestCase):
+    """split_raw: step 2 asks git for its list of changed files and for the
+    -U0 patch in one `--patch-with-raw` diff, where it used to run two. The
+    list is what classifies every file as modified, added, deleted or
+    renamed, so a line it cannot read must not become a modified file, and a
+    patch with no list above it must not read as nothing changed."""
+
+    RAW = (':100644 100644 1a2b3c4 5d6e7f8 M\tlocaledata/locales/sv_SE\n'
+           ':100644 100644 0a1b2c3 4d5e6f7 R087\t'
+           'localedata/locales/aa_ER@saaho\tlocaledata/locales/ssy_ER\n'
+           ':000000 100644 0000000 9a8b7c6 A\tlocaledata/locales/ckb_IQ\n'
+           '\n')
+
+    def refused(self, text):
+        with self.assertRaises(SystemExit), \
+                contextlib.redirect_stderr(io.StringIO()):
+            f.split_raw(text)
+
+    def test_the_list_is_the_name_status_and_the_rest_is_the_patch(self):
+        status, patch = f.split_raw(self.RAW + DiffParsing.DIFF)
+        self.assertEqual(status, [
+            'M\tlocaledata/locales/sv_SE',
+            'R087\tlocaledata/locales/aa_ER@saaho\tlocaledata/locales/ssy_ER',
+            'A\tlocaledata/locales/ckb_IQ'])
+        self.assertEqual(patch, DiffParsing.DIFF)
+
+    def test_nothing_changed_is_two_empty_answers(self):
+        self.assertEqual(f.split_raw(''), ([], ''))
+
+    def test_a_list_line_of_another_shape_is_refused(self):
+        for bad in (':100644 100644 1a2b3c4 5d6e7f8 M localedata/locales/x\n',
+                    ':100644 M\tlocaledata/locales/x\n'):
+            with self.subTest(line=bad):
+                self.refused(bad + '\n' + DiffParsing.DIFF)
+
+    def test_a_list_cut_off_inside_a_line_is_refused(self):
+        self.refused(':100644 100644 1a2b3c4 5d6e7f8 M\tlocaledata/locales/x')
+
+    def test_a_patch_with_no_list_above_it_is_refused(self):
+        self.refused(DiffParsing.DIFF)
+
+
+class KnownBackportedFromTheListing(unittest.TestCase):
+    """in_listing answers, from the recursive listing step 2 already read,
+    whether a file is at that path or under it, where step 2 used to ask
+    `git ls-tree <tag> -- localedata/locales/C`. Measured in a scratch
+    repository with git 2.54: ls-tree names a directory by its own path, and
+    the recursive listing shows it as the files under it, quoted when their
+    names need it."""
+
+    C = 'localedata/locales/C'
+
+    def test_a_file_at_the_path_is_there(self):
+        self.assertTrue(f.in_listing(self.C, ['localedata/locales/C',
+                                              'localedata/locales/sv_SE']))
+
+    def test_a_name_that_only_starts_the_same_is_not(self):
+        self.assertFalse(f.in_listing(self.C, ['localedata/locales/C.UTF-8',
+                                               'localedata/locales/CN']))
+
+    def test_a_directory_is_there_through_the_files_under_it(self):
+        self.assertTrue(f.in_listing(self.C, ['localedata/locales/C/x']))
+        self.assertTrue(f.in_listing(self.C,
+                                     ['"localedata/locales/C/\\303\\251"']))
+
+    def test_a_name_with_a_line_separator_in_it_stays_one_name(self):
+        """Under core.quotePath=false git prints U+2028 as it is, and
+        splitlines() cut `x<U+2028>localedata/locales/C` in two, listing a C
+        that is not there: step 2 dropped its C.UTF-8 note
+        (false-negative-reviewer; measured with git 2.54)."""
+        names = [f'{g.LOCALES_DIR}/loc_{i:03d}'
+                 for i in range(g.MIN_LOCALE_FILES)]
+        names.append(f'{g.LOCALES_DIR}/x\u2028{self.C}')
+
+        class R:
+            stdout = ('\n'.join(names) + '\n').encode()
+
+        with mock.patch.object(g, 'run_git', lambda *a, **k: R()):
+            listed = g.list_locale_files('/no/clone/here', 't')
+        self.assertEqual(listed, names)
+        self.assertFalse(f.in_listing(self.C, listed))
 
 
 class LocaleSource(unittest.TestCase):
