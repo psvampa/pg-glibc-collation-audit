@@ -502,8 +502,9 @@ class K:
 # match names.
 _ESC_UNAME = re.compile(r'<(?=[^<>\n]*[/\\])[/\\]*U[0-9A-Fa-f/\\]*>')
 # lr_token skips every isspace before a token (linereader.c:189-200@2.39),
-# not only blanks and tabs.
-_COPY_LINE = re.compile(r'[ \t\r\f\v]*copy[ \t\r\f\v]+"([^"\n]*)"')
+# not only blanks and tabs, and needs none after `copy`: get_ident ends the
+# word at a `"` (:580), so `copy"x"` is a copy of x (backlog 13.17).
+_COPY_LINE = re.compile(r'[ \t\r\f\v]*copy[ \t\r\f\v]*"([^"\n]*)"')
 _HEAD = re.compile(r'[ \t\r\f\v]*' + _U)
 _HEAD_M = re.compile(r'^[ \t\r\f\v]*' + _U, re.M)
 # An ellipsis token (linereader.c:244-286@2.39): a run of two dots or more,

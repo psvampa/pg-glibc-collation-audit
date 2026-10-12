@@ -59,6 +59,17 @@ class DescendsFrom(unittest.TestCase):
         self.assertIs(f.reads_utf8(GLIBC_CLONE, 'glibc-2.39'), True)
         self.assertIs(f.reads_utf8(GLIBC_CLONE, 'glibc-2.34'), False)
 
+    def test_the_lr_getc_fix_by_tag(self):
+        """Backlog 13.18: before glibc 2.36, lr_getc reads 0x1A and 0xFF
+        as the end of the file."""
+        import filter_lc_collate_changes as f
+        for tag, want in (('glibc-2.28', True), ('glibc-2.34', True),
+                          ('glibc-2.35', True), ('glibc-2.36', False),
+                          ('glibc-2.39', False)):
+            with self.subTest(tag):
+                self.assertIs(f.predates_lr_getc_fix(GLIBC_CLONE, tag)(),
+                              want)
+
 
 @needs_clone
 class GitFailureIsNotSilence(unittest.TestCase):
@@ -404,6 +415,24 @@ class AShallowCloneCannotAnswerThis(unittest.TestCase):
         self.assertNotEqual(rc, 0, 'a shallow clone was read as history')
         self.assertIn('shallow', out)
         self.assertNotIn("([], ['locale/xlocale.h'], [])", out)
+
+    def test_two_predates_are_not_trusted_on_a_shallow_clone(self):
+        """Round 2 of the 13.18 review, finding 6: on a shallow clone git
+        can answer no for a tag that holds LR_GETC_FIX, and two such
+        answers would skip the files that did not change."""
+        rc, out = in_subprocess(
+            "import filter_lc_collate_changes as f\n"
+            "print('ANSWER', f.unchanged_read_otherwise(%r, '%s', [], "
+            "(lambda: True, lambda: True)))" % (self.repo, OLD))
+        self.assertNotEqual(rc, 0, 'a shallow clone answered for both tags')
+        self.assertIn('shallow', out)
+        self.assertNotIn('ANSWER', out)
+        rc, out = in_subprocess(
+            "import filter_lc_collate_changes as f\n"
+            "print('ANSWER', f.unchanged_read_otherwise(repo, '%s', [], "
+            "(lambda: True, lambda: True)))" % OLD)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('ANSWER []', out, 'the control: the full clone')
 
     def test_step_2_refuses_it_when_git_cannot_say_yes(self):
         """On a depth-1 clone git places neither tag relative to
@@ -1756,6 +1785,142 @@ class APureRenamePassesTheNoHunkCheck(unittest.TestCase):
                              env_extra={'PG_GLIBC_AUDIT_OUT': out_dir})
         self.assertEqual(rc, 0, out)
         self.assertIn('renamed: 1', out)
+
+
+class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
+    """Backlog 13.18 end to end, on a fabricated repository: a file whose
+    LC_COLLATE block is the same text at both tags, and whose line above
+    it stops glibc reading it at one of them. No locale file at
+    glibc-2.12..2.42 has such a line, so step 2 is driven here. The
+    history: base -> ctl (a note on END LC_CTYPE) -> cont (the note ends
+    in the escape); and ctl -> sub (a 0x1A line above LC_COLLATE) -> sub2
+    (gone again), and sub -> same (k as it is, another file changed)."""
+
+    BODY = ('comment_char %\nescape_char /\nLC_CTYPE\ncopy "i18n"\n'
+            'END LC_CTYPE{end}\nLC_COLLATE\ncopy "iso14651_t1"\n'
+            'END LC_COLLATE\n')
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='pg-glibc-unread-repo-')
+        cls.repo = make_glibc_shaped_repo(cls.tmp,
+                                          n_files=g.MIN_LOCALE_FILES)
+        cls.sha = {}
+        for tag, end in (('base', ''), ('ctl', ' % a note'),
+                         ('cont', ' % a note /')):
+            cls.commit(tag, end)
+        git(cls.repo, 'checkout', '-q', 'ctl')
+        cls.commit('sub', ' % a note\n% \x1a')
+        cls.commit('sub2', ' % another note')
+        git(cls.repo, 'checkout', '-q', 'sub')
+        cls.commit('same', ' % a note\n% \x1a', other=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    @classmethod
+    def commit(cls, tag, end, other=False):
+        loc = os.path.join(cls.repo, 'localedata', 'locales')
+        with open(os.path.join(loc, 'k'), 'w', encoding='utf-8') as fh:
+            fh.write(cls.BODY.format(end=end))
+        if other:
+            with open(os.path.join(loc, 'loc_000'), 'a') as fh:
+                fh.write('% changed\n')
+        git(cls.repo, 'add', '.')
+        git(cls.repo, 'commit', '-q', '-m', tag)
+        git(cls.repo, 'tag', tag)
+        cls.sha[tag] = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'], cwd=cls.repo, check=True,
+            capture_output=True, text=True).stdout.strip()
+
+    def step2(self, old, new, fix=None):
+        """(exit, output, step 3's list). `fix` moves LR_GETC_FIX to one of
+        this history's commits, so that a tag can hold it."""
+        out_dir = tempfile.mkdtemp(dir=self.tmp)
+        code = ("import sys; sys.path.insert(0, %r)\n"
+                "import glibc_locale_data as g\n" % SCRIPTS_DIR)
+        if fix:
+            code += "g.LR_GETC_FIX = %r\n" % self.sha[fix]
+        code += ("import filter_lc_collate_changes as f\n"
+                 "sys.exit(f.main([%r, %r, '--repo', %r]))"
+                 % (old, new, self.repo))
+        p = subprocess.run([sys.executable, '-c', code], cwd=SCRIPTS_DIR,
+                           env=dict(os.environ, PG_GLIBC_AUDIT_OUT=out_dir),
+                           capture_output=True)
+        out = (p.stdout + p.stderr).decode('utf-8', 'replace')
+        listed = read_list(os.path.join(
+            out_dir, f'step2_changed_collate.{old}..{new}.txt'))
+        return p.returncode, flat(out), listed
+
+    def test_an_end_that_swallows_lc_collate_is_listed(self):
+        rc, out, listed = self.step2('ctl', 'cont')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
+        self.assertIn('!! 1 file(s) hold something that can stop glibc '
+                      'reading their LC_COLLATE as written', out)
+        self.assertIn('localedata/locales/k at cont: the line above '
+                      'LC_COLLATE ends in the escape character', out)
+        self.assertIn('glibc may not read the block as written', out)
+        self.assertEqual(listed, ['k'])
+
+    def test_the_control_a_note_without_the_escape(self):
+        rc, out, listed = self.step2('base', 'ctl')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('0 touch LC_COLLATE, 1 do not', out)
+        self.assertNotIn('stop glibc reading it', out)
+        self.assertEqual(listed, [])
+
+    def test_a_0x1a_counts_when_git_cannot_place_the_fix(self):
+        """This history does not hold LR_GETC_FIX, and "cannot tell" is
+        not a no."""
+        rc, out, listed = self.step2('ctl', 'sub')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('localedata/locales/k at sub: a 0x1A or 0xFF byte '
+                      'above the end of LC_COLLATE', out)
+        self.assertEqual(listed, ['k'])
+
+    def test_each_tag_is_asked_about_its_own_localedef(self):
+        """The new side holds the byte and the fix: cleared. The old side
+        holds the byte and not the fix: listed. Either question asked of
+        the other tag reverses both answers."""
+        rc, out, listed = self.step2('ctl', 'sub', fix='sub')
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(listed, [], out)
+        rc, out, listed = self.step2('sub', 'sub2', fix='sub2')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('localedata/locales/k at sub: a 0x1A', out)
+        self.assertNotIn('did not change hold', out,
+                         'k changed: it is judged with the changed files, '
+                         'not again as one that did not change')
+        self.assertEqual(listed, ['k'])
+
+    def test_a_file_that_did_not_change_is_read_across_the_fix(self):
+        """Review of 13.18, finding 3: k is the same bytes at both tags,
+        and only the old tag's localedef stops at its 0x1A. Step 2 judges
+        the files that changed, and k is not one of them."""
+        rc, out, listed = self.step2('sub', 'same', fix='same')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('0 touch LC_COLLATE, 0 do not, 1 have no LC_COLLATE '
+                      'block', out)
+        self.assertIn("!! 1 file(s) that did not change hold a 0x1A or 0xFF "
+                      "byte above the end of LC_COLLATE", out)
+        self.assertIn('localedata/locales/k', out)
+        self.assertEqual(listed, ['k'])
+
+    def test_the_control_both_tags_read_it_alike(self):
+        """Both hold the fix: the same bytes are read the same way."""
+        rc, out, listed = self.step2('sub', 'same', fix='sub')
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('did not change hold', out)
+        self.assertEqual(listed, [])
+
+    def test_a_file_that_did_not_change_counts_when_git_cannot_tell(self):
+        """This history does not hold LR_GETC_FIX: no answer from git is
+        not the same answer from both tags."""
+        rc, out, listed = self.step2('sub', 'same')
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(listed, ['k'])
 
 
 def read_list(path):

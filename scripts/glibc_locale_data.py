@@ -167,10 +167,12 @@ _COLLATE_WORD_RE = re.compile(
 # A character a word can hold on both sides of an escape.
 _WORD_CHAR = '[A-Za-z0-9_]'
 
-# A `copy` line and nothing else on it.
-_SOLE_COPY_RE = re.compile(r'copy[ \t\r\f\v]+"([^"]*)"')
+# A `copy` line and nothing else on it. No blank is needed before the
+# string: get_ident ends the word at a `"` (linereader.c:580@2.39, the same
+# at 2.28 and 2.34), so glibc reads `copy"x"` as a copy of x (backlog 13.17).
+_SOLE_COPY_RE = re.compile(r'copy[ \t\r\f\v]*"([^"]*)"')
 
-_COPY_RE = re.compile(r'^\s*copy\s+"([^"]+)"', re.M)
+_COPY_RE = re.compile(r'^\s*copy\s*"([^"]+)"', re.M)
 
 # glibc's symbolic notation for a character. localedef decodes it wherever a
 # string is read (locale/programs/linereader.c, get_string), so
@@ -1247,6 +1249,229 @@ def describe_reading(text, where):
     if chars is None:
         return f"characters this tool cannot settle at {where}"
     return f"comment_char {chars[0]} and escape_char {chars[1]} at {where}"
+
+
+# The glibc commit from which lr_getc no longer reads 0x1A, or 0xFF through
+# a signed char, as the end of the file ("locale: Fix signed char bug in
+# lr_getc", first in glibc-2.36; linereader.h:138@2.34 before it). Two
+# commits before collation_keys.UTF8_READER, so a tag holding that one holds
+# this one; a commit between the two does not hold both.
+LR_GETC_FIX = '19d494445981a09503e4a0175732745c39dd7c21'
+
+
+# The words glibc's top-level reader opens a section with
+# (locfile.c:171-255@2.39). Any other word there is a syntax error, and the
+# line is dropped.
+_CATEGORIES = frozenset((
+    'LC_CTYPE', 'LC_COLLATE', 'LC_MONETARY', 'LC_NUMERIC', 'LC_TIME',
+    'LC_MESSAGES', 'LC_PAPER', 'LC_NAME', 'LC_ADDRESS', 'LC_TELEPHONE',
+    'LC_MEASUREMENT', 'LC_IDENTIFICATION'))
+
+
+def _first_word(s):
+    """The word get_ident reads at the start of `s`: up to a blank, `"`,
+    `;`, `<` or `,` (linereader.c:580-581@2.39, :552-553@2.28 and 2.34).
+    `END.LC_CTYPE` is one word to glibc, not END."""
+    i = 0
+    while i < len(s) and s[i] not in _IDENT_STOP:
+        i += 1
+    return s[:i]
+
+
+def _logical_lines(lines, comments, escapes):
+    """(text, complete) for each line glibc's reader reads out of `lines`,
+    blanks stripped from its start: a line ending in an escape is joined to
+    the next one (lr_next, linereader.c:162@2.39), and a line opening with
+    the comment character is dropped whole (lr_token, :221-229) unless the
+    characters are unsettled (more than one comment character) and it ends
+    in an escape. A line still joined when `lines` run out comes last, with
+    complete False. Blank lines are not given."""
+    settled = len(comments) == 1
+    logical, joined = '', False
+    for line in lines:
+        if not joined and line.lstrip(_SPACE).startswith(comments) \
+                and (settled or not line.endswith(escapes)):
+            continue
+        cont = line.endswith(escapes)
+        logical = (logical if joined else '') + (line[:-1] if cont else line)
+        joined = cont
+        if cont:
+            continue
+        s = logical.lstrip(_SPACE)
+        if s:
+            yield s, True
+    if joined:
+        yield logical.lstrip(_SPACE), False
+
+
+def _collate_below(lines, comments, escapes):
+    """Why the lines below the LC_COLLATE block may open it again, or None:
+    a line glibc reads whose first word is LC_COLLATE once lines are joined
+    (`LC_COLL/` then `ATE`), or a first word that holds the escape, which
+    this tool does not read (round 3 of the 13.18 review)."""
+    for s, _ in _logical_lines(lines, comments, escapes):
+        word = _first_word(s)
+        if word == 'LC_COLLATE' or any(e in word for e in escapes):
+            return ("a line below the LC_COLLATE block can open LC_COLLATE "
+                    "again, and glibc reads every such section into the "
+                    "same tables")
+    return None
+
+
+def _sections_above(lines, comments, escapes):
+    """Why the last of `lines`, the LC_COLLATE line, may not open a section,
+    or None: the lines above it read the way glibc's line reader reads them.
+
+    lr_next joins a line that ends in the escape character to the next one
+    (linereader.c:162@2.39), so the LC_COLLATE line continued from the line
+    above is part of that line. A section opened above and not closed by an
+    `END` that opens a line glibc reads is still open, and a category reader
+    takes the LC_COLLATE line as a syntax error inside it, then closes on
+    `END LC_COLLATE` whatever its argument (ld-identification.c:387-403,
+    ld-ctype.c:2820-2835@2.39): collate_read never runs, and collate_finish
+    only warns (ld-collate.c:1563-1568@2.34). An `END` is lost by being
+    commented out, deleted, or joined to the line above, and after a `copy`
+    line or `END` itself, lr_ignore_rest drops the whole joined line
+    (linereader.c:133-136; ld-ctype.c:2143@2.39). Inside LC_CTYPE, a
+    `translit_start` anywhere on a line is read until `translit_end` or the
+    end of the file, END LC_CTYPE included (ld-ctype.c:2625-2657@2.39): only
+    a line opening with `translit_end` leaves it here, though glibc can
+    leave it sooner. An LC_CTYPE `copy` with no string after it sends
+    ctype_read to skip_category, which stops at the END and leaves the word
+    after it to the top level (ld-ctype.c:2104-2122@2.39), so the LC_CTYPE
+    after END opens a section again. An LC_COLLATE section above the block
+    is a second one, which collate_read reads into the same tables
+    (collate_startup, ld-collate.c:1499@2.39).
+
+    Measured on glibc-2.34-283.el9_8 and glibc-2.39-142.el10_2 (2026-10-12,
+    localedef -c --no-archive): a commented-out END LC_CTYPE or
+    translit_end, an include or copy line ending in the escape above them,
+    `END.LC_CTYPE` and `copy i18n` each make localedef say "No definition
+    for LC_COLLATE category found" and write a 92-byte LC_COLLATE that does
+    not load, where the control writes 2.5 MB.
+
+    When the characters are settled, the directive lines that open the file
+    are read with the characters in force before them, which joins none of
+    them (glibc_locale_data._glibc_chars), and a line opening with the
+    comment character is dropped whole, continued or not (lr_token,
+    :221-229). When they are not settled, `comments` and `escapes` hold
+    both of each, and such a line that ends in an escape is joined: the
+    answer is then a guess in either direction, which step 2 never relies
+    on to list a file: classify_change asks reading_changed first, and every
+    file unread_above asks about is listed already.
+    A word built with an escape (get_ident keeps the character after one,
+    :580-589) is not read here: it is a reason too.
+    """
+    settled = len(comments) == 1
+    start = 0
+    if settled:
+        while start < len(lines) - 1 and (
+                not lines[start].strip(_SPACE)
+                or _first_word(lines[start].lstrip(_SPACE))
+                in ('comment_char', 'escape_char')):
+            start += 1
+    open_section, translit = None, False
+    for s, complete in _logical_lines(lines[start:-1], comments, escapes):
+        if not complete:
+            return ("the line above LC_COLLATE ends in the escape "
+                    "character, so glibc can read LC_COLLATE as part of "
+                    "that line")
+        word = _first_word(s)
+        if any(e in word for e in escapes):
+            return ("a word above LC_COLLATE holds the escape character, "
+                    "which this tool does not read")
+        if translit:
+            translit = word != 'translit_end'
+        elif word == 'END':
+            open_section = None
+        elif word == 'LC_COLLATE':
+            return ("a second LC_COLLATE section above the block, which "
+                    "glibc reads into the same tables")
+        elif open_section == 'LC_CTYPE' and word == 'copy' \
+                and not s[len(word):].lstrip(_SPACE).startswith('"'):
+            return ("an LC_CTYPE copy above LC_COLLATE with no string after "
+                    "it, after which glibc can read LC_COLLATE inside "
+                    "LC_CTYPE")
+        elif word in _CATEGORIES and open_section is None:
+            open_section = word
+        elif open_section == 'LC_CTYPE' and re.search(
+                r'(?<![A-Za-z0-9_])translit_start(?![A-Za-z0-9_])', s):
+            translit = True
+    if open_section:
+        inside = ' inside its translit_start' if translit else ''
+        return (f"{open_section}, opened above LC_COLLATE, has no END line "
+                f"glibc reads before it{inside}, so glibc can read LC_COLLATE "
+                f"inside {open_section}")
+    return None
+
+
+def byte_ends_it_early(text):
+    """Does a 0x1A or 0xFF byte sit above the end of the file's LC_COLLATE
+    block? Before LR_GETC_FIX, lr_getc reads either as EOF
+    (linereader.h:138@2.34): above the block, glibc never reaches it; inside
+    it, collate_read stops there (ld-collate.c:2662@2.34) and every rule
+    after the byte is lost. From 2.36 both are ordinary bytes. The 0xFF is
+    found through TEXTS_WITH_0XFF, since decoding made it a U+FFFD like any
+    byte that is not UTF-8, so every U+FFFD in that part counts. A byte on a
+    comment line, which glibc skips without lr_getc, counts too: it only
+    keeps a locale listed. False for a text with no block."""
+    bounds = collate_bounds(text)
+    if bounds is None:
+        return False
+    head = '\n'.join(text.split('\n')[:bounds[1]])
+    return '\x1a' in head or (text in TEXTS_WITH_0XFF and '\ufffd' in head)
+
+
+def lc_collate_unread(text, early):
+    """Why glibc may not read this file's LC_COLLATE block as written, or
+    None when none of the shapes below is there.
+
+    The block can be the same text at both tags and still not be read as
+    written, by what sits around it (backlog 13.18). The shapes, all read on
+    glibc's line reader at 2.28, 2.34 and 2.39:
+      - A line above holds only the escape character. lr_next leaves an
+        empty buffer, and lr_getc answers EOF from then on
+        (linereader.h:134@2.34).
+      - The LC_COLLATE line is continued from the line above, or a section
+        opened above it is never closed (_sections_above).
+      - A second LC_COLLATE section, above or below the block, spelled
+        plainly, indented or built across a line end (_sections_above,
+        _collate_below): glibc reads each such section into the same tables
+        (collate_startup, ld-collate.c:1499@2.39).
+      - Before LR_GETC_FIX, a 0x1A or 0xFF byte above the end of the block
+        (byte_ends_it_early).
+
+    Each is counted wherever glibc might be stopped by it: a reason only
+    keeps a locale listed. No locale file at glibc-2.12..2.42 holds any of
+    them (measured 2026-10-12).
+
+    The comment and escape characters are the ones reading_chars settles,
+    or both of each when it cannot. `early()` says whether the localedef
+    that reads the text predates LR_GETC_FIX: True, False, or None for
+    "cannot tell", which counts as yes. It is asked only for a text with
+    one of those bytes.
+
+    None for a text with no LC_COLLATE line is not a clean answer: the
+    caller has already filed that text as having no block, or gaining one.
+    """
+    bounds = collate_bounds(text)
+    if bounds is None:
+        return None
+    lines = text.split('\n')[:bounds[0]]
+    chars = reading_chars(text)
+    comments, escapes = (((chars[0],), (chars[1],)) if chars is not None
+                         else (('%', '#'), ('/', '\\')))
+    if any(line in escapes for line in lines[:-1]):
+        return ("a line above LC_COLLATE holds only the escape character, "
+                "which glibc reads as the end of the file")
+    why = (_sections_above(lines, comments, escapes)
+           or _collate_below(text.split('\n')[bounds[1]:], comments, escapes))
+    if why:
+        return why
+    if byte_ends_it_early(text) and early() is not False:
+        return ("a 0x1A or 0xFF byte above the end of LC_COLLATE, which "
+                "glibc before 2.36 reads as the end of the file")
+    return None
 
 
 def _escape_builds_a_word(lines, cc, ec):
