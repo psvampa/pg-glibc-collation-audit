@@ -20,10 +20,19 @@ above that, every file of the tag the directory lacks is named under a `!!`.
 The node is the authoritative side. Upstream is only the reference the audit
 reads; the node is what the running system actually sorts with.
 
+With the machine's charmaps and its measurement (--charmaps-dir and
+--measurement, which audit.sh passes from a file of locale_order.py
+--extract), it also compares the character sets the machine builds its
+locales with, and the collating elements they build out of
+transliterations, against the tag's (node_charmaps). Without them it says
+those are not compared.
+
 Usage:
   python3 diff_distro_locales.py <tag> --locales-dir <path> --build-id <nvr>
                                  [--repo <path>] [--expect-files N]
                                  [--node-label NAME]
+                                 [--charmaps-dir <path> --measurement <file>
+                                  | --no-charmaps <reason>]
 
 Example:
   python3 diff_distro_locales.py glibc-2.28 \\
@@ -75,7 +84,8 @@ def classify_distro_diff(node_bytes, upstream_bytes):
       'no-collate'     -- neither side has a block, so no sort rules of its
                           own; a transliteration it holds can still change a
                           collating element another locale builds, which
-                          these steps do not compare
+                          these steps compare only from a node file
+                          (node_charmaps)
 
     A block present on one side and absent on the other is a block difference,
     so it returns 'collate' -- the caller reports which side, because "the node
@@ -327,8 +337,27 @@ def main(argv):
     ap.add_argument('--expect-files', type=int,
                     help="abort unless exactly this many files are compared")
     ap.add_argument('--repo', help="path to the glibc clone (autodetected)")
+    ap.add_argument('--charmaps-dir',
+                    help="a copy of the machine's /usr/share/i18n/charmaps/, "
+                         "with --measurement: compares the character sets "
+                         "its locales are built with against the tag's")
+    ap.add_argument('--measurement',
+                    help="the machine's locale_order.py measurement, which "
+                         "names the locales it builds and their encodings")
+    ap.add_argument('--no-charmaps', metavar='REASON',
+                    help="why the machine's charmaps are not supplied: "
+                         "printed as the reason that comparison did not run")
     opts = ap.parse_args(argv)
+    if bool(opts.charmaps_dir) != bool(opts.measurement):
+        g.die("--charmaps-dir and --measurement go together: the charmaps "
+              "say nothing about which locales the machine builds with them.")
+    if opts.charmaps_dir and opts.no_charmaps:
+        g.die("--charmaps-dir and --no-charmaps cannot both be given.")
+    with g.reading_chars_once():
+        return _main(opts)
 
+
+def _main(opts):
     if not os.path.isdir(opts.locales_dir):
         g.die(f"--locales-dir {opts.locales_dir} is not a directory")
 
@@ -364,7 +393,11 @@ def main(argv):
                                              label_a='node',
                                              label_b='upstream')
 
-        differ = len(buckets['collate']) + len(buckets['other'])
+        inherited = {}
+        # 'no-collate' holds only files that differ (identical ones are
+        # 'identical'): a changed translit_* file differs in some way.
+        differ = (len(buckets['collate']) + len(buckets['other'])
+                  + len(buckets['no-collate']))
         print(f"\nCompared {len(both)} file(s) against {opts.tag}:")
         print(f"  identical:                 {len(buckets['identical'])}")
         print(f"  differ outside LC_COLLATE: {len(buckets['other'])}")
@@ -437,6 +470,40 @@ def main(argv):
             f"backports_inside_collate."
             f"{g.pair_slug(opts.tag, opts.node_label)}.txt",
             [f"# {opts.build_id} vs {opts.tag}"] + buckets['collate'])
+
+        # The character sets and transliterations, against the tag's. What
+        # this step lists already -- inside LC_COLLATE, or through `copy` --
+        # is counted, not repeated. Its list is written only when the
+        # comparison ran: an absent list is a comparison that did not.
+        if opts.charmaps_dir:
+            import node_charmaps as nc
+            words = nc.STEP67_WORDS
+            try:
+                result = nc.against_tag(
+                    repo, opts.tag, up_root, sorted(up_names),
+                    opts.locales_dir, names, opts.build_id,
+                    opts.charmaps_dir, opts.measurement,
+                    set(buckets['collate']) | set(inherited),
+                    f"step {'6' if opts.node_label == 'old' else '7'}"
+                    if opts.node_label in ('old', 'new') else 'this step')
+            except nc.Unusable as e:
+                nc.not_run(str(e), words, opts.tag, opts.build_id)
+            else:
+                nc.print_result(result, words, [opts.build_id])
+                items = nc.listed(result)
+                if items is not None:
+                    keyed = g.write_list(
+                        f"distro_keyed_locales."
+                        f"{g.pair_slug(opts.tag, opts.node_label)}.txt",
+                        [f"# {opts.build_id} vs {opts.tag}: locales whose "
+                         f"character set or transliterations differ in what "
+                         f"their LC_COLLATE names, or that were not "
+                         f"compared"] + items)
+                    print(f"\nCharacter set result written to {keyed}")
+        elif opts.no_charmaps:
+            import node_charmaps as nc
+            nc.not_run(opts.no_charmaps, nc.STEP67_WORDS, opts.tag,
+                       opts.build_id)
         print(f"\nFull result written to {out}")
 
     print()
@@ -447,10 +514,12 @@ def main(argv):
          f"CODE change that is in neither tag. That gap is closed by the "
          f"empirical check on real nodes, which measures the glibc actually "
          f"installed, patches and all: docs/confirming-on-a-real-system.md.")
-    warn(f"A machine's own localedata/charmaps/ is NOT compared, nor what "
-         f"its own transliterations build. glibc-locale-source ships both, "
-         f"and they are inputs to localedef, so a change a distro makes to "
-         f"either is outside this result. See docs/limitations.md.")
+    if not (opts.charmaps_dir or opts.no_charmaps):
+        warn(f"A machine's own localedata/charmaps/ is NOT compared, nor "
+             f"what its own transliterations build. glibc-locale-source "
+             f"ships both, and they are inputs to localedef, so a change a "
+             f"distro makes to either is outside this result. See "
+             f"docs/limitations.md.")
     return 0
 
 

@@ -427,6 +427,24 @@ class AShallowCloneCannotAnswerThis(unittest.TestCase):
         self.assertIn('reads its input as UTF-8', flat(out))
         self.assertNotIn('ANSWER', out)
 
+    def test_steps_6_to_8_name_themselves_in_the_refusal(self):
+        """node_charmaps asks the same question for a machine's tag, and
+        the refusal names the step that asked, not step 2."""
+        rc, out = in_subprocess(
+            "import filter_lc_collate_changes as f\n"
+            "class R:\n"
+            "    stdout = b'--is-shallow-repository\\n'\n"
+            "g.descends_from = lambda *a: False\n"
+            "real = g.run_git\n"
+            "g.run_git = lambda a, *rest, **k: (R() if a[:1] == ['rev-parse']\n"
+            "                                   else real(a, *rest, **k))\n"
+            "print('ANSWER', f.reads_utf8(%r, '%s', 'step 8'))"
+            % (self.repo, OLD))
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('whether this clone has the history step 8 needs is '
+                      'unknown', flat(out))
+        self.assertNotIn('ANSWER', out)
+
     def test_an_answer_that_is_neither_true_nor_false_is_not_read_as_deep(self):
         """`--is-shallow-repository` dates from git 2.15; an older `rev-parse`
         echoes an option it does not know and exits 0. That is not `true`, so

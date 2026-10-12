@@ -1946,6 +1946,9 @@ class UnpackRefusesWhatItCannotTrust(unittest.TestCase):
     def test_neither_sources_nor_a_reason(self):
         for sources in (None, {'directory': 'x'},
                         {'directory': 'x', 'entries': {}},
+                        # nothing printable: audit.sh's $(cat) reads nothing
+                        {'directory': 'x', 'not_included': '\n'},
+                        {'directory': 'x', 'not_included': '\x00'},
                         {'directory': 'x', 'entries': {'C': 'folder'},
                          'not_included': 'y'}):
             with self.subTest(sources=sources):
@@ -2104,6 +2107,176 @@ class UnpackRefusesWhatItCannotTrust(unittest.TestCase):
         self.assertIn('cannot lay the file out in', err)
         self.assertEqual(os.listdir(self.dest), [])
 
+
+
+class UnpackLaysOutTheCharmaps(unittest.TestCase):
+    """--unpack and the charmaps --extract packs since 13.7 PR D: laid out
+    and read back like the sources, or the reason they are missing, written
+    for steps 6 to 8 to print. A file written before they were packed is
+    read, never refused, and says so."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-unpack-cm-')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.src = os.path.join(self.tmp, 'locales')
+        os.makedirs(self.src)
+        with open(os.path.join(self.src, 'C'), 'wb') as f:
+            f.write(b'c\n')
+        self.cms = os.path.join(self.tmp, 'charmaps')
+        os.makedirs(self.cms)
+        for name, body in (('UTF-8.gz', b'utf8 charmap\n'),
+                           ('ISO-8859-1.gz', b'latin1 charmap\n')):
+            with open(os.path.join(self.cms, name), 'wb') as f:
+                f.write(gzip.compress(body, mtime=0))
+        self.text = small_measurement()
+        self.dest = os.path.join(self.tmp, 'laid-out')
+
+    def archive(self, charmaps):
+        return m.archive(self.text, json.loads(self.text), self.src, charmaps)
+
+    def unpack(self, data):
+        path = os.path.join(self.tmp, 'node.tar')
+        with open(path, 'wb') as f:
+            f.write(data)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            try:
+                rc = m.unpack(path, self.dest)
+            except SystemExit as e:
+                rc = e.code
+        return rc, err.getvalue()
+
+    def assertRefused(self, data, reason):
+        rc, err = self.unpack(data)
+        self.assertEqual(rc, 2, err)
+        self.assertIn(reason, flat(err))
+        self.assertFalse(os.path.exists(self.dest), 'something was laid out')
+
+    def read(self, *path):
+        with open(os.path.join(self.dest, *path), 'rb') as f:
+            return f.read()
+
+    def test_the_charmaps_are_packed_and_laid_out_whole(self):
+        data, manifest = self.archive(self.cms)
+        self.assertEqual(sorted(manifest['charmaps']['entries']),
+                         ['ISO-8859-1.gz', 'UTF-8.gz'])
+        self.assertEqual(self.unpack(data), (0, ''))
+        self.assertEqual(sorted(os.listdir(os.path.join(self.dest,
+                                                        'charmaps'))),
+                         ['ISO-8859-1.gz', 'UTF-8.gz'])
+        with open(os.path.join(self.cms, 'UTF-8.gz'), 'rb') as f:
+            self.assertEqual(self.read('charmaps', 'UTF-8.gz'), f.read())
+        self.assertFalse(os.path.exists(
+            os.path.join(self.dest, 'charmaps-not-included')))
+
+    def test_a_file_from_before_the_charmaps_says_so(self):
+        """No entry at all: the file is whole, and what it lacks is named."""
+        data, manifest = self.archive(None)
+        self.assertNotIn('charmaps', manifest)
+        self.assertEqual(self.unpack(data), (0, ''))
+        self.assertFalse(os.path.exists(os.path.join(self.dest, 'charmaps')))
+        self.assertIn('was written by an --extract that did not pack the '
+                      "machine's charmaps",
+                      flat(self.read('charmaps-not-included').decode()))
+        self.assertTrue(os.path.isdir(os.path.join(self.dest, 'locales')))
+
+    def test_a_machine_without_the_charmaps_says_why(self):
+        data, manifest = self.archive(os.path.join(self.tmp, 'none'))
+        self.assertEqual(self.unpack(data), (0, ''))
+        self.assertEqual(self.read('charmaps-not-included').decode(),
+                         manifest['charmaps']['not_included'] + '\n')
+        self.assertFalse(os.path.exists(os.path.join(self.dest, 'charmaps')))
+
+    def test_a_charmap_edited_left_out_or_added_is_refused(self):
+        data, _ = self.archive(self.cms)
+        members = members_of(data)
+        edited = [(i, d + b'x' if i.name == 'charmaps/UTF-8.gz' else d)
+                  for i, d in members]
+        self.assertRefused(repacked(edited),
+                           'its charmaps are not the ones it lists')
+        self.assertRefused(
+            repacked([x for x in members if x[0].name != 'charmaps/UTF-8.gz']),
+            'its charmaps are not the ones it lists')
+        self.assertRefused(
+            repacked(members[:-1] + [a_member('charmaps/EXTRA.gz', b'x'),
+                                     members[-1]]),
+            'its charmaps are not the ones it lists')
+
+    def test_charmaps_a_manifest_does_not_list_are_refused(self):
+        """A file from before the charmaps holds none: one that holds some
+        and has no entry for them is not that file."""
+        data, _ = self.archive(None)
+        members = members_of(data)
+        self.assertRefused(
+            repacked(members[:-1] + [a_member('charmaps/UTF-8.gz', b'x'),
+                                     members[-1]]),
+            'its charmaps are not the ones it lists')
+
+    def test_neither_charmaps_nor_a_reason(self):
+        data, _ = self.archive(self.cms)
+        members = members_of(data)
+        for charmaps in (None, {'directory': 'x'},
+                         {'directory': 'x', 'entries': {}},
+                         # nothing printable: audit.sh's $(cat) reads
+                         # nothing (NUL included, which strip() keeps)
+                         {'directory': 'x', 'not_included': '\n'},
+                         {'directory': 'x', 'not_included': ' \t'},
+                         {'directory': 'x', 'not_included': '\x00'},
+                         {'directory': 'x', 'not_included': '\x00\n\x01'},
+                         {'directory': 'x', 'entries': {'A': 'folder'},
+                          'not_included': 'y'}):
+            with self.subTest(charmaps=charmaps):
+                self.assertRefused(
+                    repacked(with_manifest(members, charmaps=charmaps)),
+                    'neither which charmaps it holds nor why')
+
+    def test_an_entry_outside_both_folders(self):
+        data, _ = self.archive(self.cms)
+        members = members_of(data)
+        for name, reason in (('evil', 'is outside locales/ and charmaps/'),
+                             ('charmaps/../evil', 'is outside charmaps/'),
+                             ('charmaps/./evil', 'is outside charmaps/')):
+            with self.subTest(name=name):
+                self.assertRefused(
+                    repacked(members[:-1] + [a_member(name, b'x'),
+                                             members[-1]]), reason)
+
+    def test_extract_packs_this_machine_s_charmaps(self):
+        """archive() packs charmaps only when given them; --extract gives it
+        the machine's, from CHARMAPS."""
+        class Out(io.StringIO):
+            buffer = io.BytesIO()
+
+            def isatty(self):
+                return False
+        out, err = Out(), io.StringIO()
+        with unittest.mock.patch.multiple(
+                m, LOCALE_SOURCES=self.src, CHARMAPS=self.cms,
+                measure=lambda jobs: (self.text, json.loads(self.text), 1),
+                finished=lambda *a: 0), \
+                unittest.mock.patch.object(m.sys, 'stdout', out), \
+                contextlib.redirect_stderr(err):
+            self.assertEqual(m.extract(1), 0)
+        manifest = json.loads(members_of(out.buffer.getvalue())[-1][1])
+        self.assertEqual(sorted(manifest['charmaps']['entries']),
+                         ['ISO-8859-1.gz', 'UTF-8.gz'])
+        self.assertIn(f'Charmaps: 2 entr(ies) from {self.cms}.', err.getvalue())
+
+    def test_two_charmaps_one_name_apart_in_case(self):
+        data, _ = self.archive(self.cms)
+        members = members_of(data)
+        info, body = next((i, d) for i, d in members
+                          if i.name == 'charmaps/UTF-8.gz')
+        twin = copy.copy(info)
+        twin.name = 'charmaps/utf-8.gz'
+        entries = json.loads(members[-1][1])['charmaps']['entries']
+        entries['utf-8.gz'] = entries['UTF-8.gz']
+        self.assertRefused(
+            repacked(with_manifest(members[:-1] + [(twin, body),
+                                                   members[-1]],
+                                   charmaps={'directory': 'x',
+                                             'entries': entries})),
+            'charmaps/UTF-8.gz and charmaps/utf-8.gz differ only in case')
 
 if __name__ == '__main__':
     unittest.main()

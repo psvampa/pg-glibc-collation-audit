@@ -13,6 +13,7 @@ negative was about. What stays un-exercised is the transport off a real node,
 the same position sql/ is in and recorded as such in tests/README.md.
 """
 import glob
+import json
 import os
 import re
 import shutil
@@ -20,10 +21,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from _harness import (GLIBC_CLONE, MID, NEW, OLD, SCRIPTS_DIR, backported_c,
                       default_weight_section, flat, locale_file, needs_clone,
-                      upstream_c)
+                      swap_alpha_beta, tag_charmaps, upstream_c)
 
 import diff_distro_locales as dd
 import glibc_locale_data as g
@@ -36,6 +38,8 @@ def tearDownModule():
     for path in _TREES.values():
         shutil.rmtree(os.path.dirname(os.path.dirname(path)),
                       ignore_errors=True)
+    for path in _CHARMAPS.values():
+        shutil.rmtree(os.path.dirname(path), ignore_errors=True)
 
 
 def _tree(tag):
@@ -1404,6 +1408,473 @@ class DirectoryModeStepFour(NodeCase):
         rc, text = run('flag_algorithmic_ranges.py', NEW, out_dir=self.out)
         self.assertEqual(rc, 0, text)
         self.assertNotIn('C (C.UTF-8):', text)
+
+
+_CHARMAPS = {}
+
+
+def _charmaps(tag):
+    """One copy of a tag's charmaps, gzipped as a machine's, per module."""
+    if tag not in _CHARMAPS:
+        base = tempfile.mkdtemp(prefix='pg-glibc-tagcm-')
+        _CHARMAPS[tag] = tag_charmaps(tag, os.path.join(base, 'charmaps'))
+    return _CHARMAPS[tag]
+
+
+def _swap(a, ba, b, bb):
+    """A charmap edit: the lines of code points a and b trade bytes."""
+    def edit(text):
+        la = next(ln for ln in text.split('\n') if ln.startswith(a))
+        lb = next(ln for ln in text.split('\n') if ln.startswith(b))
+        assert ba in la and bb in lb, (la, lb)
+        return text.replace(la, la.replace(ba, bb)).replace(
+            lb, lb.replace(bb, ba))
+    return edit
+
+
+DISTRO_NOTICE = ("A machine's own localedata/charmaps/ is NOT compared, nor "
+                 "what its own transliterations build.")
+
+
+@needs_clone
+class MachineCharmaps(NodeCase):
+    """Steps 6/7 and 8 with a machine's charmaps and measurement
+    (node_charmaps, 13.7 PR D), run directly. The measurement is written by
+    hand with a few names: which builds a machine has comes from it."""
+
+    BUILD = 'glibc-2.28-1.test'
+
+    def cms(self, tag, name='cm', edit=None, extra=None, link=False):
+        if edit is None and extra is None and not link:
+            return _charmaps(tag)
+        dest = tag_charmaps(tag, os.path.join(self.tmp, name), edit)
+        for fname, text in (extra or {}).items():
+            with open(os.path.join(dest, fname), 'w', encoding='utf-8') as fh:
+                fh.write(text)
+        if link:
+            os.symlink('UTF-8.gz', os.path.join(dest, 'LINKED.gz'))
+        return dest
+
+    def measurement(self, locales, build=None, name='m.json'):
+        path = os.path.join(self.tmp, name)
+        with open(path, 'w', encoding='ascii') as fh:
+            json.dump({'glibc_build': build or self.BUILD,
+                       'locales': {n: {'codeset': c}
+                                   for n, c in locales.items()}}, fh)
+        return path
+
+    def step6(self, node, *extra, tag=OLD):
+        return run('diff_distro_locales.py', tag, '--locales-dir', node,
+                   '--build-id', self.BUILD, '--node-label', 'old', *extra,
+                   out_dir=self.out)
+
+    def keyed(self, pattern):
+        """The names in the list the check wrote, or None when it wrote
+        none."""
+        paths = glob.glob(os.path.join(self.out, pattern))
+        if not paths:
+            return None
+        self.assertEqual(len(paths), 1, paths)
+        with open(paths[0], encoding='utf-8') as fh:
+            lines = fh.read().split('\n')
+        self.assertTrue(lines[0].startswith('# '), lines[0])
+        return [ln for ln in lines[1:] if ln]
+
+    GREEK = {'el_GR': 'ISO-8859-7', 'el_GR.iso88597': 'ISO-8859-7',
+             'de_DE.utf8': 'UTF-8', 'C': 'ANSI_X3.4-1968',
+             'POSIX': 'ANSI_X3.4-1968'}
+
+    def test_identical_charmaps_list_nothing_and_say_so(self):
+        rc, out = self.step6(self.node(OLD, 'n'), '--charmaps-dir',
+                             self.cms(OLD), '--measurement',
+                             self.measurement(self.GREEK))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('Character sets (/usr/share/i18n/charmaps/): the 2 that '
+                      'the 2 locale builds on this machine use are identical '
+                      f'on this machine and at {OLD}.', flat(out))
+        self.assertIn(f'Locale names measured on {self.BUILD}: 5, built as 2 '
+                      f'locale build(s)', flat(out))
+        self.assertEqual(self.keyed('distro_keyed_locales.*.txt'), [])
+        self.assertNotIn(DISTRO_NOTICE, flat(out))
+
+    def test_a_charmap_the_distro_changed_lists_the_builds_it_moves(self):
+        cm = self.cms(OLD, edit={'ISO-8859-7': swap_alpha_beta})
+        rc, out = self.step6(self.node(OLD, 'n'), '--charmaps-dir', cm,
+                             '--measurement', self.measurement(self.GREEK))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('ISO-8859-7: 2 characters given other bytes.', flat(out))
+        self.assertIn('el_GR (ISO-8859-7): 2 characters, named in '
+                      'iso14651_t1_common', flat(out))
+        self.assertEqual(self.keyed('distro_keyed_locales.*.txt'), ['el_GR'])
+
+    def test_a_file_without_charmaps_is_not_run_with_its_reason(self):
+        rc, out = self.step6(self.node(OLD, 'n'), '--no-charmaps',
+                             '/a/node-file.tar holds no charmaps, because x')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('!! NOT RUN: the comparison of the character sets '
+                      f"{self.BUILD} builds its locales with, against {OLD}'s "
+                      '(/usr/share/i18n/charmaps/). /a/node-file.tar holds no '
+                      'charmaps, because x.', flat(out))
+        self.assertIsNone(self.keyed('distro_keyed_locales.*.txt'))
+        self.assertNotIn(DISTRO_NOTICE, flat(out))
+
+    def test_a_copied_folder_keeps_its_notice_and_writes_no_list(self):
+        rc, out = self.step6(self.node(OLD, 'n'))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(DISTRO_NOTICE, flat(out))
+        self.assertIsNone(self.keyed('distro_keyed_locales.*.txt'))
+
+    def test_a_charmaps_folder_it_cannot_read_whole_is_not_run(self):
+        rc, out = self.step6(self.node(OLD, 'n'), '--charmaps-dir',
+                             self.cms(OLD, link=True), '--measurement',
+                             self.measurement(self.GREEK))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('NOT RUN: the comparison of the character sets',
+                      flat(out))
+        self.assertIn('LINKED.gz is not a file', flat(out))
+        self.assertIsNone(self.keyed('distro_keyed_locales.*.txt'))
+
+    def test_the_options_that_go_together(self):
+        node, cm = self.node(OLD, 'n'), self.cms(OLD)
+        rc, out = self.step6(node, '--charmaps-dir', cm)
+        self.assertEqual(rc, 2, out)
+        self.assertIn('--charmaps-dir and --measurement go together', out)
+        rc, out = self.step6(node, '--charmaps-dir', cm, '--measurement',
+                             self.measurement(self.GREEK), '--no-charmaps',
+                             'x')
+        self.assertEqual(rc, 2, out)
+        self.assertIn('cannot both be given', out)
+
+    LOOSE = ('<code_set_name> ISO-8859/-7\n<comment> %\n<escape_char> /\n'
+             'CHARMAP\n<U0041> /x41\nEND CHARMAP\n')
+
+    def test_a_loose_charmap_the_machine_added_is_not_run(self):
+        """A charmap added on the machine whose name this cannot read
+        whole: which codeset it gives is not known, so the check says NOT
+        RUN rather than trace builds past it (round 3 of PR D)."""
+        rc, out = self.step6(self.node(OLD, 'n'), '--charmaps-dir',
+                             self.cms(OLD, extra={'LOCAL-GREEK': self.LOOSE}),
+                             '--measurement', self.measurement(self.GREEK))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"NOT RUN: the comparison of the character sets "
+                      f"{self.BUILD} builds its locales with, against {OLD}'s "
+                      f"(/usr/share/i18n/charmaps/). LOCAL-GREEK on the "
+                      f"machine is not {OLD}'s and could not be read whole",
+                      flat(out))
+        self.assertIsNone(self.keyed('distro_keyed_locales.*.txt'))
+
+    def test_a_locale_the_tag_lacks_is_compared_with_the_machines_files(self):
+        """C is on RHEL8's machine and at no tag before 2.35. Its rules,
+        read from the machine on both sides, against the tag's charmap and
+        the machine's: no `!!` saying it was not compared."""
+        node = self.node(OLD, 'n', extra={'C': backported_c()})
+        rc, out = self.step6(node, '--charmaps-dir', self.cms(OLD),
+                             '--measurement',
+                             self.measurement({'C.utf8': 'UTF-8',
+                                               'de_DE.utf8': 'UTF-8'}))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('the 1 that the 2 locale builds on this machine use',
+                      flat(out))
+        self.assertNotIn('not compared', flat(out))
+
+    def test_a_charmap_the_tag_lacks_lists_its_builds(self):
+        cm = self.cms(OLD, extra={
+            'XTEST': '<code_set_name> XTEST\n<comment_char> %\n'
+                     '<escape_char> /\nCHARMAP\n<U0041> /x41\n'
+                     'END CHARMAP\n'})
+        rc, out = self.step6(self.node(OLD, 'n'), '--charmaps-dir', cm,
+                             '--measurement',
+                             self.measurement({'de_DE.xtest': 'XTEST'}))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f'de_DE.xtest (XTEST): {OLD} has no charmap XTEST',
+                      flat(out))
+        self.assertEqual(self.keyed('distro_keyed_locales.*.txt'), ['de_DE'])
+
+    def test_a_locale_this_step_lists_already_is_counted_not_repeated(self):
+        node = self.node(OLD, 'n')
+        with open(os.path.join(node, 'de_DE'), encoding='utf-8') as fh:
+            text = fh.read()
+        with open(os.path.join(node, 'de_DE'), 'w', encoding='utf-8') as fh:
+            fh.write(text.replace('END LC_COLLATE',
+                                  '% changed by the distro\nEND LC_COLLATE',
+                                  1))
+        cm = self.cms(OLD, edit={'ISO-8859-1': _swap(
+            '<U00E8>', '/xe8', '<U00E9>', '/xe9')})
+        rc, out = self.step6(node, '--charmaps-dir', cm, '--measurement',
+                             self.measurement({'de_DE': 'ISO-8859-1'}))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('Inside LC_COLLATE (1)', out)
+        self.assertIn('Locale builds this step lists above, whose LC_COLLATE '
+                      'names one of those characters or could not be compared '
+                      '(1): de_DE (ISO-8859-1)', flat(out))
+        self.assertEqual(self.keyed('distro_keyed_locales.*.txt'), [])
+
+    def test_a_name_it_cannot_trace_is_named_and_listed(self):
+        rc, out = self.step6(self.node(OLD, 'n'), '--charmaps-dir',
+                             self.cms(OLD), '--measurement',
+                             self.measurement({'xx_XX.odd': 'NOPE',
+                                               'de_DE.utf8': 'UTF-8'}))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f'!! 1 locale name(s) on {self.BUILD} could not be '
+                      f'traced to the charmap they are built with, so their '
+                      f'character set is not compared: xx_XX.odd: no charmap '
+                      f'on the machine declares its encoding NOPE', flat(out))
+        self.assertEqual(self.keyed('distro_keyed_locales.*.txt'),
+                         ['xx_XX.odd'])
+
+    FINNISH = {'fi_FI': 'ISO-8859-1', 'fi_FI@euro': 'ISO-8859-15',
+               'fi_FI.utf8': 'UTF-8', 'C': 'ANSI_X3.4-1968'}
+
+    def translit_changed(self, name):
+        """A tag tree whose translit_combining gives U+0335 an answer it has
+        none for at 2.28. fi_FI's collating elements spell U+0335, which
+        ISO-8859-1 and ISO-8859-15 lack, so localedef builds them out of
+        that line (false-negative-reviewer, round 1 of PR D)."""
+        node = self.node(OLD, name)
+        path = os.path.join(node, 'translit_combining')
+        with open(path, encoding='utf-8') as fh:
+            text = fh.read()
+        self.assertEqual(text.count('<U0335> ""'), 1)
+        with open(path, 'w', encoding='utf-8') as fh:
+            fh.write(text.replace('<U0335> ""', '<U0335> "<U002D>"'))
+        return node
+
+    def test_a_machine_s_own_transliteration_is_compared(self):
+        """Only the transliteration file changed: no charmap, no
+        LC_COLLATE. Step 6 compares the machine's own texts with the tag's,
+        and lists the two builds whose elements it builds differently."""
+        rc, out = self.step6(self.translit_changed('n'), '--charmaps-dir',
+                             self.cms(OLD), '--measurement',
+                             self.measurement(self.FINNISH))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('Transliteration (LC_CTYPE): 20 collating elements of 2 '
+                      'locale builds depend on a transliteration; 20 are '
+                      'built differently on this machine.', flat(out))
+        self.assertEqual(self.keyed('distro_keyed_locales.*.txt'),
+                         ['fi_FI', 'fi_FI@euro'])
+        # The file differs, outside any LC_COLLATE: counted as differing.
+        self.assertEqual(re.findall(r'\((\d+) of \d+ differ in some way\)',
+                                    out), ['1'])
+
+    def test_the_two_machines_own_transliterations_are_compared(self):
+        rc, out = self.step8(self.node(OLD, 'o'), self.translit_changed('n'),
+                             *self.four(self.cms(OLD), self.cms(OLD),
+                                        locales=self.FINNISH),
+                             tags=(OLD, OLD))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('20 are built differently on b-new.', flat(out))
+        self.assertEqual(self.keyed('node_keyed_locales.*.txt'),
+                         ['fi_FI', 'fi_FI@euro'])
+
+    def test_a_machine_with_no_build_to_compare_writes_no_list(self):
+        """Only glibc's built-in locale: nothing to compare and nothing to
+        name. The step says NOT RUN and writes no list, which the summary
+        reads as not run, never as nothing to add."""
+        rc, out = self.step6(self.node(OLD, 'n'), '--charmaps-dir',
+                             self.cms(OLD), '--measurement',
+                             self.measurement({'C': 'ANSI_X3.4-1968',
+                                               'POSIX': 'ANSI_X3.4-1968'}))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('NOT RUN: the comparison of the character sets '
+                      f'{self.BUILD} builds its locales with, against '
+                      f"{OLD}'s, and of the collating elements they build out "
+                      'of transliterations. No locale build on this machine '
+                      'could be compared.', flat(out))
+        self.assertIsNone(self.keyed('distro_keyed_locales.*.txt'))
+
+    # Step 8.
+
+    def test_step_8_counts_what_it_lists_already(self):
+        new = self.node(OLD, 'n')
+        with open(os.path.join(new, 'de_DE'), encoding='utf-8') as fh:
+            text = fh.read()
+        with open(os.path.join(new, 'de_DE'), 'w', encoding='utf-8') as fh:
+            fh.write(text.replace('END LC_COLLATE',
+                                  '% changed on the new machine\n'
+                                  'END LC_COLLATE', 1))
+        cm = self.cms(OLD, edit={'ISO-8859-1': _swap(
+            '<U00E8>', '/xe8', '<U00E9>', '/xe9')})
+        rc, out = self.step8(self.node(OLD, 'o'), new,
+                             *self.four(self.cms(OLD), cm,
+                                        locales={'de_DE': 'ISO-8859-1'}),
+                             tags=(OLD, OLD))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('Locale builds this step lists above, whose LC_COLLATE '
+                      'names one of those characters or could not be compared '
+                      '(1): de_DE (ISO-8859-1)', flat(out))
+        self.assertEqual(self.keyed('node_keyed_locales.*.txt'), [])
+
+    def step8(self, old_root, new_root, *extra, tags=(OLD, MID),
+              builds=('b-old', 'b-new')):
+        return run('diff_node_locales.py',
+                   '--old-locales-dir', old_root, '--old-build-id', builds[0],
+                   '--new-locales-dir', new_root, '--new-build-id', builds[1],
+                   '--old-tag', tags[0], '--new-tag', tags[1], *extra,
+                   out_dir=self.out)
+
+    def four(self, old_cm, new_cm, builds=('b-old', 'b-new'),
+             locales=None):
+        locales = locales or self.GREEK
+        return ['--old-charmaps-dir', old_cm, '--old-measurement',
+                self.measurement(locales, builds[0], 'old.json'),
+                '--new-charmaps-dir', new_cm, '--new-measurement',
+                self.measurement(locales, builds[1], 'new.json')]
+
+    def test_two_machines_with_the_same_charmaps(self):
+        rc, out = self.step8(self.node(OLD, 'o'), self.node(MID, 'n'),
+                             *self.four(self.cms(OLD), self.cms(OLD)))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('Character sets (/usr/share/i18n/charmaps/): the 2 that '
+                      'the 2 locale builds on both machines use are identical '
+                      'on b-old and b-new.', flat(out))
+        self.assertEqual(self.keyed('node_keyed_locales.*.txt'), [])
+        self.assertNotIn(DISTRO_NOTICE, flat(out))
+
+    def test_the_new_machine_s_charmap_moves_a_build(self):
+        cm = self.cms(OLD, edit={'ISO-8859-7': swap_alpha_beta})
+        rc, out = self.step8(self.node(OLD, 'o'), self.node(OLD, 'n'),
+                             *self.four(self.cms(OLD), cm),
+                             tags=(OLD, OLD))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.keyed('node_keyed_locales.*.txt'), ['el_GR'])
+
+    def test_each_machine_s_names_are_its_own(self):
+        """A name only the new machine has, that no charmap traces: the
+        counts and the `!!` name the machine they belong to."""
+        new_names = dict(self.GREEK, **{'xx_XX.odd': 'NOPE'})
+        rc, out = self.step8(
+            self.node(OLD, 'o'), self.node(MID, 'n'),
+            '--old-charmaps-dir', self.cms(OLD), '--old-measurement',
+            self.measurement(self.GREEK, 'b-old', 'old.json'),
+            '--new-charmaps-dir', self.cms(OLD), '--new-measurement',
+            self.measurement(new_names, 'b-new', 'new.json'))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('Locale names measured on b-old: 5, built as 2 locale '
+                      'build(s)', flat(out))
+        self.assertIn('Locale names measured on b-new: 6, built as 2 locale '
+                      'build(s)', flat(out))
+        self.assertIn('!! 1 locale name(s) on b-new could not be traced',
+                      flat(out))
+        self.assertNotIn('on b-old could not be traced', flat(out))
+        self.assertEqual(self.keyed('node_keyed_locales.*.txt'),
+                         ['xx_XX.odd'])
+
+    def test_a_charmap_the_machine_lacks_is_not_run(self):
+        # A copy: self.cms(OLD) is the module's shared folder.
+        cm = os.path.join(self.tmp, 'cm-short')
+        shutil.copytree(self.cms(OLD), cm)
+        os.remove(os.path.join(cm, 'IBM1133.gz'))
+        rc, out = self.step6(self.node(OLD, 'n'), '--charmaps-dir', cm,
+                             '--measurement',
+                             self.measurement({'lo_LA.ibm1133': 'IBM1133'}))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"NOT RUN: the comparison of the character sets "
+                      f"{self.BUILD} builds its locales with, against {OLD}'s "
+                      f"(/usr/share/i18n/charmaps/). The machine lacks 1 of "
+                      f"{OLD}'s charmaps (IBM1133)", flat(out))
+        self.assertIsNone(self.keyed('distro_keyed_locales.*.txt'))
+
+    def test_each_machine_is_held_to_its_own_tag_s_charmaps(self):
+        """between_machines gives each machine its own tag's charmap ids.
+        No real file is one tag's own and not the other's (the three loose
+        ones are one blob at every tag), so the ids are made to differ: a
+        loose file only one tag holds, on the machine of that tag only."""
+        import diff_node_locales as dn
+        import node_charmaps as nc
+        real = nc._tag_charmaps
+        for side in ('old', 'new'):
+            with self.subTest(side=side):
+                tag = OLD if side == 'old' else MID
+                local = os.path.join(self.tmp, f'cm-{side}')
+                shutil.copytree(self.cms(tag), local)
+                with open(os.path.join(local, 'LOCAL-GREEK'), 'w') as fh:
+                    fh.write(self.LOOSE)
+                oid = nc.CharmapsDir(local).oid('LOCAL-GREEK')
+
+                def ids(repo, t, tag=tag, oid=oid):
+                    got = real(repo, t)
+                    return dict(got, **{'LOCAL-GREEK': oid}) if t == tag \
+                        else got
+                cms = {'old': self.cms(OLD), 'new': self.cms(MID)}
+                cms[side] = local
+                sides = [dn.resolve_side(s, self.node(t, f'{s}-{side}'),
+                                         f'b-{s}')
+                         for s, t in (('old', OLD), ('new', MID))]
+                with mock.patch.object(nc, '_tag_charmaps', ids):
+                    r = nc.between_machines(
+                        GLIBC_CLONE, OLD, MID, *sides, cms['old'],
+                        cms['new'],
+                        self.measurement(self.GREEK, 'b-old', 'o.json'),
+                        self.measurement(self.GREEK, 'b-new', 'n.json'),
+                        set())
+                # Held to its own tag the file is read, not refused; it
+                # could declare ISO-8859-7, so el_GR's two names are
+                # untraced on that side and de_DE.utf8 is the one build.
+                self.assertEqual(r.report.builds, 1)
+                m = r.measured[0 if side == 'old' else 1]
+                self.assertEqual([n for n, _ in m.unmapped],
+                                 ['el_GR', 'el_GR.iso88597'])
+
+    def test_a_loose_charmap_on_the_new_machine_stops_step_8(self):
+        """The machine's tag is the one the refusal names. Which tag's
+        ids each machine is held to is the test above."""
+        rc, out = self.step8(
+            self.node(OLD, 'o'), self.node(MID, 'n'),
+            *self.four(self.cms(OLD),
+                       self.cms(MID, extra={'LOCAL-GREEK': self.LOOSE})))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"LOCAL-GREEK on the machine is not {MID}'s and could "
+                      f"not be read whole", flat(out))
+        self.assertIsNone(self.keyed('node_keyed_locales.*.txt'))
+
+    def test_one_build_on_both_machines_gets_two_names(self):
+        """A control run, one build on both: the two sides still need two
+        names, which the check keys its plan by."""
+        rc, out = self.step8(self.node(OLD, 'o'), self.node(OLD, 'n'),
+                             *self.four(self.cms(OLD), self.cms(OLD),
+                                        builds=('b', 'b')),
+                             tags=(OLD, OLD), builds=('b', 'b'))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('are identical on b (old) and b (new).', flat(out))
+
+    def test_each_machine_is_read_with_its_own_tag(self):
+        """2.39 reads its files as UTF-8 and 2.34 does not (UTF8_READER).
+        Two machines with the same files and charmaps, given those two
+        tags, read the same bytes differently, so the collating elements
+        are compared; read with one tag they would not be."""
+        rc, out = self.step8(self.node(MID, 'o'), self.node(MID, 'n'),
+                             *self.four(self.cms(MID), self.cms(MID)),
+                             tags=(MID, NEW))
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("no character set and no locale file's LC_CTYPE "
+                         "changed between the two machines", flat(out))
+        self.assertIn('Transliteration (LC_CTYPE):', out)
+
+    def test_the_options_of_step_8_that_go_together(self):
+        o, n, cm = self.node(OLD, 'o'), self.node(MID, 'n'), self.cms(OLD)
+        rc, out = self.step8(o, n, '--old-charmaps-dir', cm)
+        self.assertEqual(rc, 2, out)
+        self.assertIn('go together', out)
+        rc, out = run('diff_node_locales.py', '--old-locales-dir', o,
+                      '--old-build-id', 'b-old', '--new-locales-dir', n,
+                      '--new-build-id', 'b-new', *self.four(cm, cm),
+                      out_dir=self.out)
+        self.assertEqual(rc, 2, out)
+        self.assertIn('needs --old-tag and --new-tag', out)
+        rc, out = self.step8(o, n, *self.four(cm, cm), '--no-charmaps', 'x')
+        self.assertEqual(rc, 2, out)
+        self.assertIn('cannot both be given', out)
+
+    def test_step_8_without_charmaps_is_not_run_with_its_reason(self):
+        rc, out = self.step8(self.node(OLD, 'o'), self.node(MID, 'n'),
+                             '--no-charmaps', 'the reason given')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('!! NOT RUN: the comparison of the character sets the '
+                      'two machines build their locales with '
+                      '(/usr/share/i18n/charmaps/). the reason given.',
+                      flat(out))
+        self.assertIsNone(self.keyed('node_keyed_locales.*.txt'))
+        self.assertNotIn(DISTRO_NOTICE, flat(out))
 
 if __name__ == '__main__':
     unittest.main()

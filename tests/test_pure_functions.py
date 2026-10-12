@@ -4,9 +4,12 @@ Every case here freezes a failure this tool actually shipped, and its docstring
 says which, because a test whose purpose is forgotten is a test somebody
 deletes during a refactor.
 """
+import bz2
 import contextlib
+import gzip
 import importlib.util
 import io
+import json
 import os
 import re
 import shutil
@@ -24,6 +27,7 @@ import diff_distro_locales as dd
 import diff_node_locales as nl
 import flag_algorithmic_ranges as fa
 import collation_keys as ck
+import node_charmaps as nc
 
 
 def collate(*body):
@@ -2203,6 +2207,12 @@ class CharmapReader(unittest.TestCase):
                                               '<mb_cur_min> 4',
                                               '<mb_cur_max> 2'),
                'no code_set_name': ('<comment_char> %', '<escape_char> /')}
+        # A word glibc reads as a keyword is no name: it stores none
+        # (round 4 of the PR D review).
+        for word in ('CHARMAP', 'END', 'WIDTH', 'WIDTH_VARIABLE',
+                     'WIDTH_DEFAULT'):
+            bad[f'<code_set_name> {word}'] = (f'<code_set_name> {word}',
+                                              ) + _PROLOG[1:]
         for why, prolog in bad.items():
             with self.subTest(why):
                 with self.assertRaises(ck.Unsettled):
@@ -3941,6 +3951,431 @@ class TranslitReportLines(unittest.TestCase):
                             'reason' in b for b in _bang_blocks(out)), out)
         self.assertEqual(self.lines(None, builds=0), '')
 
+
+
+def _cm_file(root, entry, text):
+    """A charmap file as a machine installs it: plain, .gz or .bz2."""
+    data = text.encode('utf-8')
+    if entry.endswith('.gz'):
+        data = gzip.compress(data, mtime=0)
+    elif entry.endswith('.bz2'):
+        data = bz2.compress(data)
+    with open(os.path.join(root, entry), 'wb') as fh:
+        fh.write(data)
+
+
+def _named(code_set_name, *body):
+    return charmap(*(body or ('<U0041> /x41',)),
+                   prolog=(f'<code_set_name> {code_set_name}',) + _PROLOG[1:])
+
+
+class MachineCharmapsDir(unittest.TestCase):
+    """A machine's /usr/share/i18n/charmaps/ as node_charmaps reads it: one
+    file per charmap, and the codeset glibc stores for each, or the folder
+    is refused whole (the table of codesets has to hold every file)."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix='pg-glibc-cmdir-')
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+
+    def cms(self, files):
+        for entry, text in files.items():
+            _cm_file(self.root, entry, text)
+        return nc.CharmapsDir(self.root)
+
+    def test_plain_gzip_and_bzip2_are_read_uncompressed(self):
+        text = _named('A')
+        c = self.cms({'A': text, 'B.gz': text, 'C.bz2': text})
+        self.assertEqual(sorted(c.files), ['A', 'B', 'C'])
+        for name in 'ABC':
+            self.assertEqual(c.raw(name), text.encode())
+        # git's id of the uncompressed bytes, whatever the file's form.
+        self.assertEqual({c.oid(n) for n in 'ABC'}, {c.oid('A')})
+        self.assertEqual(c.text('B'), text)
+        self.assertIsNone(c.text('missing'))
+
+    def test_what_is_not_one_charmap_file_is_refused(self):
+        os.mkdir(os.path.join(self.root, 'sub'))
+        with self.assertRaisesRegex(nc.Unusable, 'sub is not a file'):
+            nc.CharmapsDir(self.root)
+        os.rmdir(os.path.join(self.root, 'sub'))
+        _cm_file(self.root, 'X', _named('X'))
+        os.symlink('X', os.path.join(self.root, 'Y'))
+        with self.assertRaisesRegex(nc.Unusable, 'Y is not a file'):
+            nc.CharmapsDir(self.root)
+        os.remove(os.path.join(self.root, 'Y'))
+        _cm_file(self.root, 'X.gz', _named('X'))
+        with self.assertRaisesRegex(nc.Unusable, 'X and X.gz are one charmap'):
+            nc.CharmapsDir(self.root)
+        os.remove(os.path.join(self.root, 'X.gz'))
+        _cm_file(self.root, 'a b', _named('X'))
+        with self.assertRaisesRegex(nc.Unusable, 'not a charmap name'):
+            nc.CharmapsDir(self.root)
+
+    def test_an_empty_or_missing_folder_is_refused(self):
+        with self.assertRaisesRegex(nc.Unusable, 'holds no charmap'):
+            nc.CharmapsDir(self.root)
+        with self.assertRaisesRegex(nc.Unusable, 'cannot be listed'):
+            nc.CharmapsDir(os.path.join(self.root, 'none'))
+
+    def test_a_file_that_does_not_uncompress_is_refused(self):
+        with open(os.path.join(self.root, 'Z.gz'), 'wb') as fh:
+            fh.write(b'not gzip at all')
+        c = nc.CharmapsDir(self.root)
+        with self.assertRaisesRegex(nc.Unusable, 'cannot be uncompressed'):
+            c.raw('Z')
+        with self.assertRaisesRegex(nc.Unusable, 'cannot be uncompressed'):
+            c.codesets()
+
+    def test_the_codeset_glibc_stores_for_each_file(self):
+        """A prolog read whole gives its <code_set_name>, or the file's own
+        name when it has none (charmap.c:200-203@2.28). One read loosely --
+        an invalid definition glibc skips, no CHARMAP line -- could give any
+        name a <code_set_name> line spells, or the file's."""
+        c = self.cms({
+            'UTF-8.gz': _named('UTF-8'),
+            'NONAME': charmap('<U0041> /x41', prolog=_PROLOG[1:]),
+            'ODD.gz': '<code_set_name> ODDNAME\n<comment> %\n'
+                      + charmap('<U0041> /x41', prolog=_PROLOG[1:]),
+            'NOLINE': '<U0041> /x41\n<code_set_name> LATE\n',
+        })
+        certain, loose = c.codesets()
+        self.assertEqual(dict(certain), {'UTF-8': ['UTF-8'],
+                                         'NONAME': ['NONAME']})
+        # A superset (_loose_names): what glibc reads and the file's name
+        # are in it.
+        self.assertEqual(sorted(loose), ['NOLINE', 'ODD'])
+        self.assertLessEqual({'ODDNAME', 'ODD'}, loose['ODD'])
+        self.assertLessEqual({'LATE', 'NOLINE'}, loose['NOLINE'])
+        self.assertNotIn('UTF-8', loose['ODD'] | loose['NOLINE'])
+
+    def test_a_prolog_longer_than_the_first_read_is_read_whole(self):
+        """Only the start of a .gz file is uncompressed when its CHARMAP
+        line is there; a longer prolog is read whole, not cut."""
+        # `#` is the comment character until <comment_char> changes it
+        # (lr_create, linereader.c:79-80@2.39).
+        long = '\n'.join(['# a comment line of some length'] * 2000)
+        c = self.cms({'L.gz': long + '\n' + _named('LONGNAME')})
+        self.assertEqual(dict(c.codesets()[0]), {'LONGNAME': ['L']})
+
+
+class MachineBuilds(unittest.TestCase):
+    """measured_builds: the builds of a machine, one per source and
+    charmap, traced from each name `locale -a` listed by the codeset
+    measured under it; a name it cannot trace is named, never dropped."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix='pg-glibc-builds-')
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.cmroot = os.path.join(self.root, 'cm')
+        os.mkdir(self.cmroot)
+
+    def cms(self, files):
+        for entry, text in files.items():
+            _cm_file(self.cmroot, entry, text)
+        return nc.CharmapsDir(self.cmroot)
+
+    @staticmethod
+    def built(path, c, aliases, tag_ids=None):
+        """measured_builds with every charmap its tag's own, unless
+        `tag_ids` says otherwise."""
+        if tag_ids is None:
+            tag_ids = {n: c.oid(n) for n in c.files}
+        return nc.measured_builds(path, 'b-1', c, aliases, 't', tag_ids)
+
+    def measurement(self, locales, build='b-1', raw=None):
+        path = os.path.join(self.root, 'm.json')
+        with open(path, 'w', encoding='ascii') as fh:
+            fh.write(raw if raw is not None else json.dumps(
+                {'glibc_build': build,
+                 'locales': {n: ({'codeset': c} if c else {})
+                             for n, c in locales.items()}}))
+        return path
+
+    def test_names_become_one_build_per_source_and_charmap(self):
+        c = self.cms({'UTF-8.gz': _named('UTF-8'),
+                      'ISO-8859-1.gz': _named('ISO-8859-1')})
+        m = self.built(self.measurement({
+            'de_DE': 'ISO-8859-1', 'de_DE.iso88591': 'ISO-8859-1',
+            'deutsch': 'ISO-8859-1', 'de_DE.utf8': 'UTF-8',
+            'C': 'ANSI_X3.4-1968', 'POSIX': 'ANSI_X3.4-1968'}), c, {'deutsch': 'de_DE.ISO-8859-1'})
+        self.assertEqual(m.builds, [ck.Build('de_DE', 'de_DE', 'ISO-8859-1'),
+                                    ck.Build('de_DE.utf8', 'de_DE', 'UTF-8')])
+        self.assertEqual((m.unmapped, m.names), ([], 6))
+
+    def test_a_build_is_named_after_its_own_locale_not_an_alias(self):
+        """With no name spelled as its source alone, the shortest of those
+        spelled after it, not a shorter alias (french)."""
+        c = self.cms({'ISO-8859-1': _named('ISO-8859-1')})
+        m = self.built(self.measurement({
+            'fr_FR.iso88591': 'ISO-8859-1', 'french': 'ISO-8859-1'}), c, {'french': 'fr_FR.ISO-8859-1'})
+        self.assertEqual(m.builds,
+                         [ck.Build('fr_FR.iso88591', 'fr_FR', 'ISO-8859-1')])
+
+    def test_an_alias_is_traced_to_the_locale_it_names(self):
+        """bokmal is nb_NO.ISO-8859-1 in intl/locale.alias; locale_source
+        alone would make it a source named bokmal."""
+        c = self.cms({'ISO-8859-1': _named('ISO-8859-1')})
+        m = self.built(self.measurement({'bokmal': 'ISO-8859-1'}), c,
+                       {'bokmal': 'nb_NO.ISO-8859-1'})
+        self.assertEqual(m.builds, [ck.Build('bokmal', 'nb_NO', 'ISO-8859-1')])
+
+    def test_a_name_traced_to_no_single_charmap_is_named(self):
+        c = self.cms({'A': _named('X'), 'B': _named('X'), 'Z': _named('Z'),
+                      'ODD': '<code_set_name> Y\n<comment> %\n'
+                             + charmap('<U0041> /x41', prolog=_PROLOG[1:])})
+        m = self.built(self.measurement({
+            'n1': None, 'n2': 'Q', 'n3': 'X', 'n4': 'Y', 'n5': 'ODD',
+            'n6': 'Z'}), c, {})
+        self.assertEqual(m.unmapped, [
+            ('n1', 'its encoding was not measured'),
+            ('n2', 'no charmap on the machine declares its encoding Q'),
+            ('n3', 'its encoding X is declared by A, B'),
+            ('n4', 'its encoding Y is declared by ODD'),
+            ('n5', 'its encoding ODD is declared by ODD')])
+        self.assertEqual(m.builds, [ck.Build('n6', 'n6', 'Z')])
+
+    def test_a_loose_name_is_read_as_glibc_reads_it(self):
+        """A second charmap glibc reads as declaring FOO-BAR, spelled so
+        that only glibc's reader makes FOO-BAR of it: an escape inside the
+        word or the keyword, a word joined across lines, a stop character
+        after it, the argument on the next line, a CHARMAP line swallowed by
+        the line above it. With that file its tag's own, the build is not
+        mapped while that file could have built it (false-negative-reviewer,
+        round 2 of PR D)."""
+        head = '<comment_char> %\n<escape_char> /\n'
+        body = 'CHARMAP\n<U0041> /x41\nEND CHARMAP\n'
+        for spelling in ('<code_set_name> FOO/-BAR\n',
+                         '<code_set_name> FOO-/\nBAR\n',
+                         '<code_set_name> FOO-BAR,X\n',
+                         '<code_set_name> FOO-BAR;X\n',
+                         '<code_set_n/ame> FOO-BAR\n',
+                         '</code_set_name> FOO-BAR\n',
+                         '<code_set_name> /\nFOO-BAR\n',
+                         '<code_set_name> "FOO-BAR"\n',
+                         '<mb_cur_max> 1 /\nCHARMAP\n'
+                         '<code_set_name> FOO-BAR\n'):
+            with self.subTest(spelling=spelling):
+                root = tempfile.mkdtemp(prefix='pg-glibc-loose-')
+                self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+                _cm_file(root, 'AAA', _named('FOO-BAR'))
+                _cm_file(root, 'LLL.gz', head + spelling + body)
+                c = nc.CharmapsDir(root)
+                self.assertIn('LLL', c.codesets()[1])
+                m = self.built(self.measurement({'x': 'FOO-BAR'}), c, {})
+                self.assertEqual(m.unmapped, [
+                    ('x', 'its encoding FOO-BAR is declared by AAA, LLL')])
+
+    def test_a_charmap_of_the_tag_the_machine_lacks_stops_the_check(self):
+        """With IBM1133 gone, a build made with it would be traced to
+        IBM1162, which declares the same codeset (round 4 of PR D)."""
+        c = self.cms({'IBM1162': _named('IBM1133')})
+        with self.assertRaisesRegex(
+                nc.Unusable, "The machine lacks 1 of t's charmaps "
+                             r"\(IBM1133\)"):
+            self.built(self.measurement({'lo_LA.ibm1133': 'IBM1133'}), c, {},
+                       {'IBM1133': 'id1', 'IBM1162': c.oid('IBM1162')})
+
+    def test_a_charmap_that_names_a_keyword_is_held_to_its_tag(self):
+        """`<code_set_name> END`: glibc stores the file's name, not END.
+        Read as loose, a file that is not the tag's stops the check."""
+        c = self.cms({'SAMI-WS2': _named('WIN-SAMI-2'),
+                      'WIN-SAMI-2': _named('END')})
+        self.assertIn('WIN-SAMI-2', c.codesets()[1])
+        with self.assertRaisesRegex(nc.Unusable, 'WIN-SAMI-2 on the machine '
+                                                 "is not t's"):
+            self.built(self.measurement({'se_NO.winsami2': 'WIN-SAMI-2'}), c,
+                       {}, {'SAMI-WS2': c.oid('SAMI-WS2')})
+
+    def test_a_loose_charmap_not_the_tag_s_stops_the_check(self):
+        """A loose charmap added or changed on the machine: what codeset
+        glibc stores from it is not known (round 3 of PR D found forms no
+        model of the reader here covers), so no build is traced."""
+        loose = '<comment> %\n' + _named('FOO-BAR')
+        for name, ids in (('added', lambda c: {'AAA': c.oid('AAA')}),
+                          ('changed', lambda c: {'AAA': c.oid('AAA'),
+                                                 'LLL': 'another blob'})):
+            with self.subTest(name):
+                root = tempfile.mkdtemp(prefix='pg-glibc-loose-')
+                self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+                _cm_file(root, 'AAA', _named('X'))
+                _cm_file(root, 'LLL.gz', loose)
+                c = nc.CharmapsDir(root)
+                with self.assertRaisesRegex(
+                        nc.Unusable, "LLL.gz on the machine is not t's and "
+                                     "could not be read whole"):
+                    self.built(self.measurement({'x': 'X'}), c, {}, ids(c))
+
+    def test_a_measurement_that_cannot_stand_for_the_machine_is_refused(self):
+        c = self.cms({'A': _named('A')})
+        for raw, why in (('not json', 'does not read'),
+                         ('{"glibc_build": "b-1"}', 'lists no locale'),
+                         ('{"glibc_build": "b-1", "locales": {"x": 1}}',
+                          'lists no locale')):
+            with self.subTest(raw=raw):
+                with self.assertRaisesRegex(nc.Unusable, why):
+                    self.built(self.measurement({}, raw=raw), c, {})
+        with self.assertRaisesRegex(nc.Unusable, "taken on 'b-2', not on b-1"):
+            self.built(self.measurement({'x': 'A'}, build='b-2'), c, {})
+
+    def test_equal_bytes_are_one_text_and_0xff_is_recorded(self):
+        for side in ('o', 'n'):
+            os.mkdir(os.path.join(self.root, side))
+            for name, body in (('same', b'same bytes\n'),
+                               ('ff', b'x\xffy\n')):
+                with open(os.path.join(self.root, side, name), 'wb') as fh:
+                    fh.write(body)
+        by_bytes = {}
+        o = nc.read_texts(os.path.join(self.root, 'o'), ['same', 'ff'],
+                          by_bytes)
+        n = nc.read_texts(os.path.join(self.root, 'n'), ['same', 'ff'],
+                          by_bytes)
+        self.assertIs(o['same'], n['same'])
+        self.assertIn(o['ff'], g.TEXTS_WITH_0XFF)
+        self.assertNotIn(o['same'], g.TEXTS_WITH_0XFF)
+
+
+class MachineListed(unittest.TestCase):
+    """What the summary reads of a machine check: never a list that reads
+    as nothing to add over a build or a name nobody compared."""
+
+    def report(self, **kw):
+        base = dict(not_run=None, builds=2, charmaps=[], changed=[],
+                    sizes={}, found=[], skipped=[], not_compared=[],
+                    unsearched=[], translit=None, translit_skipped=0)
+        base.update(kw)
+        return ck.Report(**base)
+
+    def test_what_was_listed_not_compared_or_not_traced(self):
+        found = ck.Found('loc_a', 'loc_a.utf8', ('UTF-8', 'UTF-8'), {0xE9},
+                         ['loc_a'], None)
+        r = nc.Result(self.report(found=[found],
+                                  not_compared=['x.utf8', 'y_YY.utf8']),
+                      'o', 'n', [nc.Measured(
+                          [ck.Build('x.utf8', 'x', 'UTF-8')],
+                          [('#odd', 'why'), ('ok_name', 'why')], 3)])
+        # x.utf8 by its locale; y_YY.utf8, which no build names, as itself.
+        self.assertEqual(nc.listed(r), sorted(['loc_a', 'x', 'y_YY.utf8',
+                                               "'#odd'", 'ok_name']))
+
+    def test_nothing_compared_writes_no_list(self):
+        for kw in ({'not_run': 'a reason'}, {'builds': 0}):
+            with self.subTest(**kw):
+                self.assertIsNone(nc.listed(nc.Result(
+                    self.report(**kw), 'o', 'n', [])))
+
+    def test_no_build_compared_still_lists_what_it_names(self):
+        """Every build in a charmap the tag lacks: none compared, all of
+        them named, and the summary must name them too."""
+        absent = ck.Found('de_DE', 'de_DE.x', ('X', 'X'), set(), [],
+                          'the tag has no charmap X')
+        self.assertEqual(nc.listed(nc.Result(
+            self.report(builds=0, found=[absent]), 'o', 'n', [])), ['de_DE'])
+
+
+class MachineReadsWhatItIsAskedFor(unittest.TestCase):
+    """compare's read_more, for a machine: the charmaps it names are read
+    then, so that the 0xFF gate that follows sees them
+    (collation_keys._ff_gate), not later, when a charmap is first used."""
+
+    def test_the_charmaps_named_are_read_now(self):
+        reads = []
+
+        def load(name):
+            reads.append(name)
+            return 'text of ' + name
+        a = ck.Side('a', set(), {}, {'X': '1', 'Y': '2'}, nc._Texts(load))
+        b = ck.Side('b', set(), {}, {'X': '1'}, nc._Texts(load))
+        nc._read_more((a, b))({'a': {'X', 'Y'}, 'b': {'X', 'Z'}})
+        self.assertEqual((sorted(a.charmap_texts), sorted(b.charmap_texts)),
+                         (['X', 'Y'], ['X']))
+        self.assertEqual(sorted(reads), ['X', 'X', 'Y'])
+
+
+class ChecksWithoutTheUnbuiltSearch(unittest.TestCase):
+    """compare(search_unbuilt=False), for machines: their builds are
+    measured, and a locale a machine does not build is not there for
+    PostgreSQL to use."""
+
+    def test_point_5_runs_only_when_asked(self):
+        old15 = _named('CS', '<U0041> /x41', '<U00E9> /xe9')
+        new15 = _named('CS', '<U0041> /x41', '<U00E9> /xea')
+        texts = {'en_XX': locale_text('<U00E9> IGNORE'),
+                 'de_XX': locale_text('<U0041> IGNORE')}
+        b = ck.supported_builds('SUPPORTED-LOCALES=\\\nde_XX/CS \\\n', 't')
+        for unbuilt, expect in ((True, ['en_XX']), (False, [])):
+            with self.subTest(search_unbuilt=unbuilt):
+                old, new = sides(texts, texts, {'CS': old15}, {'CS': new15})
+                r = ck.compare(old, new, b, b, set,
+                               search_unbuilt=unbuilt)
+                self.assertEqual([f.source for f in r.found], expect)
+
+
+class ReadersShared(unittest.TestCase):
+    """Two Sides given one ask_utf8 are read by one localedef, as steps 6
+    and 7 read a machine and its tag; git is not asked."""
+
+    def test_one_reader_is_not_asked_and_two_are(self):
+        calls = []
+
+        def ask():
+            calls.append(1)
+            return True
+        a, b = (ck.Side(t, set(), {}, {}, {}) for t in ('a', 'b'))
+        a.ask_utf8 = b.ask_utf8 = ask
+        self.assertFalse(ck._readers_differ(a, b))
+        self.assertEqual(calls, [])
+        a, b = (ck.Side(t, set(), {}, {}, {}) for t in ('a', 'b'))
+        a.ask_utf8, b.ask_utf8 = (lambda: True), (lambda: False)
+        self.assertTrue(ck._readers_differ(a, b))
+
+
+class ReadingCharsOnce(unittest.TestCase):
+    """g.reading_chars_once: each text read once inside the block, and the
+    reader put back on the way out, an exception included."""
+
+    def test_a_text_is_read_once_and_the_reader_restored(self):
+        real = g.reading_chars
+        with mock.patch.object(g, '_glibc_chars',
+                               wraps=g._glibc_chars) as spy:
+            with g.reading_chars_once():
+                text = locale_text('<U0041> IGNORE')
+                self.assertEqual(g.reading_chars(text),
+                                 g.reading_chars(text))
+                # _collate_body asks through the same memo.
+                g._collate_body(text)
+                self.assertEqual(spy.call_count, 1)
+            self.assertIs(g.reading_chars, real)
+            with self.assertRaises(KeyError):
+                with g.reading_chars_once():
+                    raise KeyError('x')
+            self.assertIs(g.reading_chars, real)
+
+
+class DecodedTexts(unittest.TestCase):
+
+    def test_a_0xff_byte_is_recorded(self):
+        self.assertIn(g.decoded(b'a\xffb'), g.TEXTS_WITH_0XFF)
+        self.assertEqual(g.decoded(b'a\xc3\xa9'), 'a\u00e9')
+        self.assertNotIn(g.decoded(b'plain text 13.7'), g.TEXTS_WITH_0XFF)
+
+
+class MachineNotRun(unittest.TestCase):
+    """A machine's NOT RUN keeps the node file's path whole, so it can be
+    copied; step 2's wraps as it always did."""
+
+    def test_a_path_with_hyphens_is_not_cut(self):
+        path = ('/very-long-folder-name/with-many-hyphens-in-it/'
+                'session-2026-09-25-locale-order/node.tar')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            nc.not_run(f'{path} holds no charmaps', nc.STEP67_WORDS,
+                       'glibc-2.28', 'glibc-2.28-251.el8_10.40.x86_64')
+        self.assertIn(path, out.getvalue().split())
+        self.assertIn('NOT RUN: the comparison of the character sets '
+                      'glibc-2.28-251.el8_10.40.x86_64 builds its locales '
+                      "with, against glibc-2.28's (/usr/share/i18n/charmaps/).",
+                      flat(out.getvalue()))
 
 def _bang_blocks(out):
     blocks, cur = [], None

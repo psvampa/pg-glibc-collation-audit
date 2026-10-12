@@ -4,10 +4,13 @@ Nothing here asserts anything. It exists so that a test that needs the real
 glibc clone SKIPS with a reason instead of failing, and so that running the
 suite never writes into the shared /tmp output directory the scripts default to.
 """
+import gzip
+import io
 import os
 import re
 import subprocess
 import sys
+import tarfile
 import unittest
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -247,3 +250,36 @@ def upstream_c():
         '% immediately discards all collation information and causes the',
         '% locale to use strcmp/wcscmp for collation comparison.',
         'codepoint_collation')
+
+
+def tag_charmaps(tag, dest, edit=None):
+    """The tag's localedata/charmaps/ in dest, each file gzipped as RHEL
+    installs them in /usr/share/i18n/charmaps/, standing in for a machine's
+    as a tag's sources stand in for its locale sources. `edit` maps a
+    charmap's name to a function of its text: a distro's patch, made by
+    hand."""
+    arc = subprocess.run(['git', 'archive', tag, 'localedata/charmaps'],
+                         cwd=GLIBC_CLONE, capture_output=True,
+                         check=True).stdout
+    os.mkdir(dest)
+    with tarfile.open(fileobj=io.BytesIO(arc)) as tf:
+        for member in tf.getmembers():
+            if member.isfile():
+                name = os.path.basename(member.name)
+                data = tf.extractfile(member).read()
+                if edit and name in edit:
+                    data = edit[name](data.decode('latin-1')).encode('latin-1')
+                with open(os.path.join(dest, name + '.gz'), 'wb') as fh:
+                    fh.write(gzip.compress(data, mtime=0))
+    return dest
+
+
+def swap_alpha_beta(text):
+    """ISO-8859-7 with the bytes of alpha and beta swapped: a charmap change
+    no RHEL makes, which every Greek build's rules name (through
+    iso14651_t1_common)."""
+    a = next(ln for ln in text.split('\n') if ln.startswith('<U03B1>'))
+    b = next(ln for ln in text.split('\n') if ln.startswith('<U03B2>'))
+    assert '/xe1' in a and '/xe2' in b, (a, b)
+    return text.replace(a, a.replace('/xe1', '/xe2')).replace(
+        b, b.replace('/xe2', '/xe1'))

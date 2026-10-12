@@ -813,6 +813,18 @@ def read_blobs(repo, tag, paths):
 TEXTS_WITH_0XFF = set()
 
 
+def decoded(raw):
+    """A locale or charmap file's bytes as the readers here take them:
+    UTF-8 with errors='replace', and the text registered in TEXTS_WITH_0XFF
+    when the bytes held 0xFF. read_blobs_at decodes every blob this way, and
+    steps 6 to 8 a machine's files, so that collation_keys reads both
+    alike."""
+    text = raw.decode('utf-8', 'replace')
+    if b'\xff' in raw:
+        TEXTS_WITH_0XFF.add(text)
+    return text
+
+
 def read_blobs_at(repo, groups):
     """read_blobs for several (tag, paths) groups in ONE `git cat-file
     --batch`, so a step that reads at two tags starts one git, not one per
@@ -856,10 +868,7 @@ def read_blobs_at(repo, groups):
         if out[pos + size:pos + size + 1] != b'\n':
             die(f"truncated `git cat-file --batch` output inside {tag}:{path}: "
                 f"its header promised {size} bytes")
-        raw = out[pos:pos + size]
-        contents[path] = raw.decode('utf-8', 'replace')
-        if b'\xff' in raw:
-            TEXTS_WITH_0XFF.add(contents[path])
+        contents[path] = decoded(out[pos:pos + size])
         pos += size + 1  # body plus its trailing newline
     if pos != len(out):
         die(f"`git cat-file --batch` printed {len(out) - pos} byte(s) more "
@@ -1196,6 +1205,32 @@ def reading_chars(text):
     return _glibc_chars(text.split('\n'))
 
 
+@contextlib.contextmanager
+def reading_chars_once():
+    """For the length of the block, reading_chars answers each text once.
+
+    One run of steps 2, 6, 7 or 8 asks it of the same texts several times:
+    step 8 reads each file's characters in compare_trees and again in
+    byte_order_locales, about 0.2 s of every run (13.7 PR D, measured on the
+    Mac). Each step's main wraps its run in this, and the reader is restored
+    on the way out, so nothing is kept past the run: a test that calls two
+    steps in one process gets two fresh readings.
+    """
+    global reading_chars
+    real, memo = reading_chars, {}
+
+    def once(text):
+        got = memo.get(text, memo)
+        if got is memo:
+            got = memo[text] = real(text)
+        return got
+    reading_chars = once
+    try:
+        yield
+    finally:
+        reading_chars = real
+
+
 def reading_changed(old_text, new_text):
     """Are the two texts read with different comment or escape characters?
 
@@ -1266,7 +1301,7 @@ def _collate_body(text):
     line after it (ld-collate.c:2661@2.39, lr_ignore_rest).
     """
     lines = text.split('\n')
-    chars = _glibc_chars(lines)
+    chars = reading_chars(text)
     if chars is None or len(_COLLATE_WORD_RE.findall(text)) != 1:
         return None
     cc, ec = chars

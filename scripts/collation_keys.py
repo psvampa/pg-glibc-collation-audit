@@ -2,7 +2,8 @@
 """
 Step 2's comparison of the character sets locales are built with, and of the
 collating elements they build out of transliterations, between two glibc
-tags (backlog 13.7).
+tags (backlog 13.7). Steps 6 to 8 make the same comparison between a machine
+and its tag, or two machines, through node_charmaps.
 
 localedef resolves every character an LC_COLLATE block names through the
 charmap the locale is built with: the head of an order line, the members of a
@@ -166,6 +167,14 @@ _PROLOG_LINE = re.compile(
     r'<(code_set_name|mb_cur_min|mb_cur_max|comment_char|escape_char)>'
     r'[ \t]+(\S+)')
 _CODE_SET_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_.:+-]*')
+# The words the charmap reader takes as keywords even outside `<...>`
+# (flag 0 in charmap-kw.gperf:38-42@2.28, the same at 2.39). Read as the
+# argument of <code_set_name> one is a keyword, not a name (get_ident,
+# linereader.c:569-575@2.28): a bad argument, and glibc stores no name
+# (charmap.c:377-385), then the file's (:200-203). Round 4 of the PR D
+# review.
+_KEYWORDS = frozenset(('CHARMAP', 'END', 'WIDTH', 'WIDTH_VARIABLE',
+                       'WIDTH_DEFAULT'))
 _END_CHARMAP = re.compile(r'END[ \t]+CHARMAP')
 
 
@@ -203,6 +212,22 @@ def read_charmap(text, name):
 
     After END CHARMAP only WIDTH sections may follow (_check_tail).
     """
+    seen, cc, ec, pos = read_prolog(text, name)
+    if 'code_set_name' not in seen:
+        raise Unsettled(f"charmap {name}: no <code_set_name>")
+    mb_max = int(seen.get('mb_cur_max', '1'))
+    mb_min = int(seen.get('mb_cur_min', str(mb_max)))
+    if mb_min > mb_max:
+        raise Unsettled(f"charmap {name}: <mb_cur_min> {mb_min} is over "
+                        f"<mb_cur_max> {mb_max}")
+    return _read_body(text, name, seen, cc, ec, pos, mb_min, mb_max)
+
+
+def read_prolog(text, name):
+    """(the prolog's declarations {keyword: argument}, comment char, escape
+    char, offset of the line after CHARMAP), read as read_charmap reads it:
+    every line before CHARMAP blank, a comment or one declaration, each at
+    most once, or Unsettled."""
     cc, ec = '#', '\\'
     seen = {}
     pos, lineno = 0, 0
@@ -235,21 +260,18 @@ def read_charmap(text, name):
                 or (key_ in ('mb_cur_min', 'mb_cur_max')
                     and not (arg.isdigit() and int(arg) >= 1))
                 or (key_ == 'code_set_name'
-                    and not _CODE_SET_NAME.fullmatch(arg))):
+                    and (not _CODE_SET_NAME.fullmatch(arg)
+                         or arg in _KEYWORDS))):
             raise Unsettled(f"charmap {name}: <{key_}> {arg}")
         seen[key_] = arg
         if key_ == 'comment_char':
             cc = arg
         elif key_ == 'escape_char':
             ec = arg
-    if 'code_set_name' not in seen:
-        raise Unsettled(f"charmap {name}: no <code_set_name>")
-    mb_max = int(seen.get('mb_cur_max', '1'))
-    mb_min = int(seen.get('mb_cur_min', str(mb_max)))
-    if mb_min > mb_max:
-        raise Unsettled(f"charmap {name}: <mb_cur_min> {mb_min} is over "
-                        f"<mb_cur_max> {mb_max}")
+    return seen, cc, ec, pos
 
+
+def _read_body(text, name, seen, cc, ec, pos, mb_min, mb_max):
     # The body ends at the first line that is END CHARMAP. A line that
     # opens with END in any other way is left in the body, where it is a
     # line of no shape this reads.
@@ -2143,7 +2165,11 @@ def _readers_differ(old, new):
     2 runs, so git places neither side only when this repository does not
     hold UTF8_READER at all: then neither tag holds it, both read bytes the
     old way, and an unchanged file reads the same at both. TranslitRun
-    still refuses a raw table at such a side (Side.reads_utf8 is None)."""
+    still refuses a raw table at such a side (Side.reads_utf8 is None).
+    Two Sides given one ask_utf8 are read by one localedef, as steps 6 and
+    7 read a machine and its tag (node_charmaps), and git is not asked."""
+    if old.ask_utf8 is not None and old.ask_utf8 is new.ask_utf8:
+        return False
     return old.reads_utf8() is not new.reads_utf8()
 
 
@@ -2559,7 +2585,8 @@ def common_builds(old, new, builds_old, builds_new):
     # A build is a source in a charmap, whatever its entry is spelt: an
     # entry renamed between the tags (az_AZ.UTF-8 to az_AZ) is one build.
     # An entry that keeps its name and changes charmap is compared old
-    # charmap against new. A build at one tag only is searched by point 5.
+    # charmap against new. A build at one tag only is searched by point 5,
+    # in step 2 (steps 6 to 8 leave point 5 out, search_unbuilt=False).
     old_by, new_by = {}, {}
     for by, builds in ((old_by, builds_old), (new_by, builds_new)):
         for b in builds:
@@ -2582,7 +2609,8 @@ def common_builds(old, new, builds_old, builds_new):
 
 
 def compare(old, new, builds_old, builds_new, already_listed,
-            read_more=lambda charmaps, locales=False: None, fresh=True):
+            read_more=lambda charmaps, locales=False: None, fresh=True,
+            search_unbuilt=True):
     """Points 1 to 6 of the module docstring over two Sides.
 
     `already_listed()` returns the sources step 3 lists anyway; it is
@@ -2590,6 +2618,10 @@ def compare(old, new, builds_old, builds_new, already_listed,
     locales)` reads those charmaps into the Sides, and with `locales` every
     locale file they do not hold (point 6). `fresh=False` keeps the memos
     of a caller that has used them on these Sides (translit_charmaps).
+    `search_unbuilt=False` leaves out point 5, for two Sides whose builds
+    are measured rather than read from SUPPORTED: a machine's builds are
+    the locales its `locale -a` lists (node_charmaps), and one it does not
+    build is not there for PostgreSQL to use.
     """
     if fresh:
         reset()
@@ -2695,7 +2727,7 @@ def compare(old, new, builds_old, builds_new, already_listed,
         if a.charmap == b.charmap:
             built_in[b.charmap].add(b.source)
     sources, unsearched = None, []
-    for p in changed:
+    for p in changed if search_unbuilt else ():
         if p[0] != p[1]:
             continue
         if p in bad:
