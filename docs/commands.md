@@ -1,8 +1,9 @@
 # What each command does
 
-Three commands. The first reads source and proves what cannot have changed,
-and in its extended form also measures how each of your machines sorts. The
-second and third measure, inside PostgreSQL, what the first leaves open.
+Three commands. The first reads source and lists the locales the upgrade can
+affect, and in its extended form also measures how each of your machines
+sorts. The second and third measure, inside PostgreSQL, what the first leaves
+open.
 
 **Commands are numbered here; steps are what a run prints.** A run of command
 1 does its own work in up to eleven steps, five with the tags alone and six
@@ -28,12 +29,10 @@ checks in order and ends with one summary.
 | 4 | which locales a comparison of files can never clear, because part of their order is computed later: the weights of abbreviated ranges, and the default weight of each character they do not list |
 | 5 | whether the code that computes those weights changed |
 
-What you get is a list to worry about and a proof about everything else: if
-neither a locale's rules nor the code that compiles them changed, its order
-cannot have changed. What you do **not** get is confirmation that a locale on
-the list really moved. A flagged locale can turn out not to move — `ber_DZ` and
-`kab_DZ` were flagged and the change was a role swap that leaves the order
-alone.
+What you get is a list to worry about. What you do **not** get is
+confirmation that a locale on the list really moved. A flagged locale can
+turn out not to move — `ber_DZ` and `kab_DZ` were flagged and the change was
+a role swap that leaves the order alone.
 
 ### 1.b — extended verification, against your two machines
 
@@ -186,9 +185,8 @@ is inverted. That, and how the probe differs from the template, are in
 ## Command 3 — confirming the order on your own builds
 
 `sql/collation_confirmation_template.sql`, edited first, run on both machines.
-Optional. Command 1's result stands on its own; this sorts strings you choose
-inside PostgreSQL, which also reaches a rule for a combination of letters that
-step 11 cannot see.
+Optional. This sorts strings you choose inside PostgreSQL, which also reaches a
+rule for a combination of letters that step 11 cannot see.
 
 It does two separate jobs.
 
@@ -207,6 +205,6 @@ None of them touches your data or your indexes, and none of them decides for
 you. What they do change is small and named: 1.b installs one package on each
 machine, the locale sources of the build it already runs; commands 2 and 3
 each create a test table of their own, and command 3 first imports the
-system's collations into PostgreSQL's catalog. Command 1 hands you a list and
-a proof, and in 1.b a measurement; commands 2 and 3 hand you measurements. The
-decision to reindex is yours.
+system's collations into PostgreSQL's catalog. Command 1 hands you a list,
+and in 1.b a measurement; commands 2 and 3 hand you measurements. The decision
+to reindex is yours.

@@ -42,7 +42,7 @@ NOT a collation verdict: most of these changed LC_TIME or LC_MONETARY. Step 2 fi
 ---
 
 ================================================================
-== STEP 2  Which of those changes are inside LC_COLLATE
+== STEP 2  Which changes can reach sort order
 ================================================================
 Locale files changed between glibc-2.34 and glibc-2.39: 318
   modified: 306   added: 11   deleted: 0   renamed: 1
@@ -1341,7 +1341,7 @@ empirical sort-order test, however clean its data diff is, and so does
 every locale it names as built in byte order.
 
 ================================================================
-== STEP 6  DISTRO CHECK  do glibc-2.34-275.el9_8.x86_64's patches touch LC_COLLATE?
+== STEP 6  DISTRO CHECK  do glibc-2.34-275.el9_8.x86_64's patches touch sort order?
 ================================================================
 Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
   UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was NOT checked
@@ -1360,7 +1360,7 @@ Compared 355 file(s) against glibc-2.34:
   absent on the node:        0
   (2 of 355 differ in some way)
 
-Nothing differs inside LC_COLLATE. For every locale compared, the tag diff is reading the same collation data glibc-2.34-275.el9_8.x86_64 runs.
+No locale compared with glibc-2.34 differs inside LC_COLLATE.
 
 Absent upstream (1) -- backported locales this comparison is structurally blind to:
   C: HAS ITS OWN TAILORING -- unauditable here
@@ -1389,7 +1389,7 @@ Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.gl
    a-real-system.md.
 
 ================================================================
-== STEP 7  DISTRO CHECK  do glibc-2.39-128.el10_2.x86_64's patches touch LC_COLLATE?
+== STEP 7  DISTRO CHECK  do glibc-2.39-128.el10_2.x86_64's patches touch sort order?
 ================================================================
 Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
   UNCHECKED glibc-2.39 = ef321e23c20e  gpg is not installed; the signature was NOT checked
@@ -1408,7 +1408,7 @@ Compared 366 file(s) against glibc-2.39:
   absent on the node:        0
   (3 of 366 differ in some way)
 
-Nothing differs inside LC_COLLATE. For every locale compared, the tag diff is reading the same collation data glibc-2.39-128.el10_2.x86_64 runs.
+No locale compared with glibc-2.39 differs inside LC_COLLATE.
 
 Locale names measured on glibc-2.39-128.el10_2.x86_64: 885, built as 501
 locale build(s) (C and POSIX are glibc's built-in locale, built from no

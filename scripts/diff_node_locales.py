@@ -286,10 +286,8 @@ def report_buckets(old, new, buckets, side, texts, both, only_old, only_new,
                                               old.build_id, new.build_id):
                 print(f"      {line}")
     else:
-        print(f"\nNothing differs inside LC_COLLATE. For every locale present "
-              f"on both nodes, {old.build_id} and {new.build_id} carry the "
-              f"same collation DATA -- see the warnings below for what that "
-              f"does and does not settle.")
+        print("\nNo locale present on both nodes differs inside "
+              "LC_COLLATE.")
 
     if invisible is not None and buckets['collate']:
         hidden = [n for n in buckets['collate'] if n in set(invisible)]
@@ -442,7 +440,7 @@ def report_backported(old, new, buckets, invisible):
 def main(argv):
     ap = argparse.ArgumentParser(
         description="Compare two nodes' locale sources against each other and "
-                    "report whether any difference falls inside LC_COLLATE.")
+                    "report whether any difference touches sort order.")
     for label in ('old', 'new'):
         ap.add_argument(f'--{label}-locales-dir', required=True,
                         help=f"a copy of the {label} node's "

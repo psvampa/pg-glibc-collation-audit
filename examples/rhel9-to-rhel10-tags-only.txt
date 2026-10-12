@@ -42,7 +42,7 @@ NOT a collation verdict: most of these changed LC_TIME or LC_MONETARY. Step 2 fi
 ---
 
 ================================================================
-== STEP 2  Which of those changes are inside LC_COLLATE
+== STEP 2  Which changes can reach sort order
 ================================================================
 Locale files changed between glibc-2.34 and glibc-2.39: 318
   modified: 306   added: 11   deleted: 0   renamed: 1
@@ -1388,7 +1388,7 @@ every locale it names as built in byte order.
      Pass --old-node and --new-node instead of every other --old-*/--new-*
      option, or --old-locales-dir and --new-locales-dir with their build ids.
      So nothing above says whether either machine's own patches touch
-     LC_COLLATE, which the tags cannot show.
+     sort order, which the tags cannot show.
 
 -- Node-to-node locale data: NOT RUN
      Pass --old-node and --new-node instead of every other --old-*/--new-*
