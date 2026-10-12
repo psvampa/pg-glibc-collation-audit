@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Given the locale files with a REAL (non-inherited) LC_COLLATE change between
-two glibc tags (output of filter_lc_collate_changes.py), find every OTHER
+Given the locale files step 2 lists for their own LC_COLLATE between two
+glibc tags (output of filter_lc_collate_changes.py), find every OTHER
 locale that inherits its LC_COLLATE via `copy "<name>"` -- directly or
 transitively.
 
@@ -48,8 +48,8 @@ def main(argv):
                     "`copy` graph; --keyed ones are added as they are.")
     ap.add_argument('tag', help="glibc tag whose copy graph to walk")
     ap.add_argument('locales', nargs='*',
-                    help="locales whose own LC_COLLATE changed, as bare names "
-                         "or paths")
+                    help="locales step 2 lists for their own LC_COLLATE, as "
+                         "bare names or paths")
     ap.add_argument('--keyed', nargs='+', default=[],
                     help="locales step 2 lists from its character set or "
                          "transliteration check, not for their own rules")
