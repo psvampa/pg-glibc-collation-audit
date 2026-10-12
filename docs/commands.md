@@ -72,6 +72,9 @@ A file without the locale sources still holds the measurement and the build,
 because the extraction notes why the sources are missing and goes on. Step 11
 runs. Every summary block that needed those sources says `NOT RUN`, or `NOT
 CHECKED`, with the file's reason, such as `/usr/share/i18n/locales is empty`.
+A file without the charmaps, or one written before `--extract` packed them,
+is read the same way, and steps 6 to 8 say `NOT RUN` for the character sets,
+with the reason.
 
 **Steps 6 to 10 settle data, not order.** The weights are computed when the
 locale is built, so two machines can hold byte-identical files
@@ -84,9 +87,10 @@ The commands that write the two files are in
 [the README](../README.md#the-commands), which holds the only copy of them.
 
 Each file holds the measurement of step 11, a copy of the machine's
-`/usr/share/i18n/locales`, and, written last, a list of both: the glibc build,
-as `rpm -q glibc` prints it on that machine, and a checksum of every file. The
-copy is the whole folder or none of it, and when it is none the list says why.
+`/usr/share/i18n/locales` and `/usr/share/i18n/charmaps`, and, written last,
+a list of them: the glibc build, as `rpm -q glibc` prints it on that machine,
+and a checksum of every file. Each copy is the whole folder or none of it, and
+when it is none the list says why.
 
 The README's install line names the exact glibc build the machine runs, so
 `dnf` installs the sources of that build and nothing else. A plain `dnf
@@ -100,7 +104,7 @@ the reason, on a file that:
 
 - is not whole: a run cut short, text the machine printed ahead of it such as
   a login message, or a second file appended to the first;
-- was written by another version of `--extract`;
+- was written in a format this checkout's `--extract` does not write;
 - holds an entry other than the one its list describes, such as an edited file
   or a name that would land outside the copy;
 - names no glibc build, because `rpm -q glibc` printed none on that machine.
@@ -113,13 +117,16 @@ well.
 The two files go together, since one machine's file compares nothing, and
 they do not mix with the options of the next section.
 
-#### The same checks from separate pieces
+#### The checks from separate pieces
 
 `audit.sh` also takes the pieces of a node file one by one, for when you have
 them already, such as a copy of the locale folder taken from an image:
 `--old-locales-dir` and `--new-locales-dir`, each with its `--old-build-id` or
 `--new-build-id`, and `--old-order` and `--new-order`, each the output of a
-plain `python3 scripts/locale_order.py > old.out` on that machine. Take a
+plain `python3 scripts/locale_order.py > old.out` on that machine. One check
+is not among them. Steps 6 to 8 compare the machines' character sets only
+from a node file, because no piece carries the charmaps, and from the pieces
+they say so. Take a
 folder with `tar` over `ssh`, never `docker cp`, whose target `/tmp` in a
 container is a separate mount, so the copy silently does nothing. `rpm -q
 glibc` gives the build id, with or without the architecture (`...x86_64`).

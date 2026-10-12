@@ -28,12 +28,22 @@ is the caller's problem and the comparison is testable without a node. It does
 not take them on trust: two equally truncated directories agree perfectly, and
 so does one directory compared with itself.
 
+With both machines' charmaps and measurements (--old-charmaps-dir and the
+rest, which audit.sh passes from files of locale_order.py --extract) and the
+two tags, it also compares the character sets the two machines build their
+locales with, and the collating elements they build out of
+transliterations (node_charmaps). Without them it says those are not
+compared.
+
 Usage:
   python3 diff_node_locales.py --old-locales-dir DIR --old-build-id NVR \\
                                --new-locales-dir DIR --new-build-id NVR \\
                                [--old-tag TAG --new-tag TAG] \\
                                [--expect-files N] [--min-files N] [--repo PATH]
                                [--allow-reverse]
+                               [--old-charmaps-dir DIR --old-measurement FILE
+                                --new-charmaps-dir DIR --new-measurement FILE
+                                | --no-charmaps REASON]
 
 Example:
   python3 diff_node_locales.py \\
@@ -460,11 +470,41 @@ def main(argv):
                          f"(default {dd.DEFAULT_MIN_FILES})")
     ap.add_argument('--repo', help="path to the glibc clone (autodetected); "
                                    "only needed with --old-tag/--new-tag")
+    for label in ('old', 'new'):
+        ap.add_argument(f'--{label}-charmaps-dir',
+                        help=f"a copy of the {label} machine's "
+                             f"/usr/share/i18n/charmaps/. With the other "
+                             f"three and the two tags: compares the character "
+                             f"sets the two machines build their locales with")
+        ap.add_argument(f'--{label}-measurement',
+                        help=f"the {label} machine's locale_order.py "
+                             f"measurement, which names the locales it builds "
+                             f"and their encodings")
+    ap.add_argument('--no-charmaps', metavar='REASON',
+                    help="why the machines' charmaps are not supplied: printed "
+                         "as the reason that comparison did not run")
     opts = ap.parse_args(argv)
 
     if bool(opts.old_tag) != bool(opts.new_tag):
         g.die("--old-tag and --new-tag go together: one tag cannot say whether "
               "a file exists at neither.")
+    four = (opts.old_charmaps_dir, opts.old_measurement,
+            opts.new_charmaps_dir, opts.new_measurement)
+    if any(four) and not all(four):
+        g.die("--old-charmaps-dir, --old-measurement, --new-charmaps-dir and "
+              "--new-measurement go together: the comparison needs both "
+              "machines' charmaps and which locales each builds with them.")
+    if all(four) and not opts.old_tag:
+        g.die("comparing the two machines' charmaps needs --old-tag and "
+              "--new-tag: each tag's glibc says how its machine's localedef "
+              "reads the files, and which aliases its locales have.")
+    if all(four) and opts.no_charmaps:
+        g.die("--old-charmaps-dir and --no-charmaps cannot both be given.")
+    with g.reading_chars_once():
+        return _main(opts, all(four))
+
+
+def _main(opts, charmaps):
 
     old, new = resolve_sides(opts)
     report_sides(old, new)
@@ -528,6 +568,36 @@ def main(argv):
         f"node_collate_diffs.{slug}.txt",
         [f"# {old.build_id} ({old.root}) vs {new.build_id} ({new.root})"]
         + buckets['collate'])
+    # The character sets and transliterations, machine against machine. What
+    # this step lists already -- inside LC_COLLATE, or through `copy` on the
+    # new machine -- is counted, not repeated. Its list is written only when
+    # the comparison ran: an absent list is a comparison that did not.
+    if charmaps:
+        import node_charmaps as nc
+        words = nc.STEP8_WORDS
+        try:
+            result = nc.between_machines(
+                repo, opts.old_tag, opts.new_tag, old, new,
+                opts.old_charmaps_dir, opts.new_charmaps_dir,
+                opts.old_measurement, opts.new_measurement,
+                set(buckets['collate']) | set(inherited))
+        except nc.Unusable as e:
+            nc.not_run(str(e), words, old.build_id, new.build_id)
+        else:
+            nc.print_result(result, words, [old.build_id, new.build_id])
+            items = nc.listed(result)
+            if items is not None:
+                keyed = g.write_list(
+                    f"node_keyed_locales.{slug}.txt",
+                    [f"# {old.build_id} ({old.root}) vs {new.build_id} "
+                     f"({new.root}): locales whose character set or "
+                     f"transliterations differ in what their LC_COLLATE "
+                     f"names, or that were not compared"] + items)
+                print(f"\nCharacter set result written to {keyed}")
+    elif opts.no_charmaps:
+        import node_charmaps as nc
+        nc.not_run(opts.no_charmaps, nc.STEP8_WORDS, old.build_id,
+                   new.build_id)
     print(f"\nFull result written to {out}")
     # The dependants, in their own file: the differing files ARE the finding
     # and the summary counts that list; this is its reach.
@@ -629,10 +699,12 @@ def main(argv):
                 f"a time through glibc when the run has both machines' "
                 f"measurements, and PostgreSQL reports collversion as NULL "
                 f"for every C.* name.")
-    dd.warn(f"A machine's own localedata/charmaps/ is NOT compared, nor what "
-            f"its own transliterations build. glibc-locale-source ships both, "
-            f"and they are inputs to localedef, so a change a distro makes to "
-            f"either is outside this result. See docs/limitations.md.")
+    if not (charmaps or opts.no_charmaps):
+        dd.warn(f"A machine's own localedata/charmaps/ is NOT compared, nor "
+                f"what its own transliterations build. glibc-locale-source "
+                f"ships both, and they are inputs to localedef, so a change "
+                f"a distro makes to either is outside this result. See "
+                f"docs/limitations.md.")
     return 0
 
 

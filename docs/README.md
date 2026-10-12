@@ -17,7 +17,7 @@
 
 | Document | What's in it |
 |---|---|
-| [commands.md](commands.md) | What each of the three commands does, what command 1.b adds, the file it takes from each machine and when it refuses one, and the same checks from separate pieces |
+| [commands.md](commands.md) | What each of the three commands does, what command 1.b adds, the file it takes from each machine and when it refuses one, and the checks from separate pieces |
 | [results.md](results.md) | The evidence behind each verdict, both worked examples, and what was tested on which nodes |
 | [confirming-on-a-real-system.md](confirming-on-a-real-system.md) | Running the SQL template and the `C.UTF-8` probe on both nodes, choosing values that prove something, and the three traps that make a comparison lie |
 | [scope.md](scope.md) | What this audits — `LC_COLLATE` and the `libc` provider — and the `builtin` provider as a way out |

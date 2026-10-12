@@ -27,7 +27,7 @@ from _harness import (EXPECTED_SHA, MID, NEW, OLD, REPO_ROOT, SCRIPTS_DIR,
 import diff_distro_locales as dd
 import glibc_locale_data as g
 import locale_order as lom
-from _harness import GLIBC_CLONE
+from _harness import GLIBC_CLONE, swap_alpha_beta, tag_charmaps
 from test_locale_order import (CHANGED_8_TO_9, RHEL8, RHEL9, RHEL10,
                                parse_summary)
 
@@ -104,9 +104,9 @@ USAGE = [
     '',
     '       The --*-node options are OPTIONAL and go together. Each is the',
     '       one file scripts/locale_order.py --extract wrote on that',
-    '       machine, with its measurement, its build and its locale sources',
-    '       (a file without the sources says why), and stands for all the',
-    '       options above.',
+    '       machine, with its measurement, its build, its locale sources and',
+    '       its charmaps (a file without them says why), and stands for all',
+    '       the options above.',
 ]
 
 REINDEX = '-- Reindex: sort order changes, confirm then REINDEX'
@@ -2277,24 +2277,109 @@ class WrapperMeasuredOrderUncheckedTag(unittest.TestCase):
 # Where a node file says its sources were not found. Short, so that the reason
 # wraps between words in the summary, and absent from every machine.
 NO_SOURCES_DIR = '/nonexistent-pg-glibc-audit/locales'
+
+# What a node file's character set check adds to a run (13.7 PR D), and the
+# notice a run without it prints instead.
+CHARMAPS_NOTICE = "!! A machine's own localedata/charmaps/ is NOT compared"
+KEYED_HEAD = '     Character sets and transliterations, '
+BEFORE_CHARMAPS = ("The file was written by an --extract that did not pack "
+                   "the machine's charmaps (/usr/share/i18n/charmaps); extract "
+                   "it again with this checkout's scripts/locale_order.py.")
+
+
+def _cut_blocks(lines, starts, indent):
+    """lines without the `!!` blocks whose first line is one of `starts`,
+    and how many came out. A block is its first line and every line after
+    it indented deeper than `indent`, as audit.sh's warnings block reads
+    it."""
+    out, cut, i = [], 0, 0
+    while i < len(lines):
+        if lines[i] in starts:
+            cut += 1
+            i += 1
+            while i < len(lines) and lines[i].startswith(indent + '   '):
+                i += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    return out, cut
+
+
+def without_the_charmap_check(out):
+    """(out without what a node file's character set check adds, the count
+    of each kind taken out): each step's lines, from the names measured to
+    the list written and the blank after it; the summary's lines; and the
+    `!!` blocks those steps printed, as the summary repeats them."""
+    lines, kept, regions, bangs, i = out.split('\n'), [], 0, set(), 0
+    while i < len(lines):
+        if lines[i].startswith('Locale names measured on '):
+            regions += 1
+            while not lines[i].startswith('Character set result written to '):
+                if lines[i].startswith('!! '):
+                    bangs.add('     ' + lines[i])
+                i += 1
+            i += 2
+            continue
+        kept.append(lines[i])
+        i += 1
+    lines, kept, keyed = kept, [], 0
+    for line in lines:
+        if line.startswith(KEYED_HEAD):
+            keyed += 1
+            kept.append(None)
+        elif kept and kept[-1] is None and line.startswith('     ') \
+                and not line.startswith('     !!'):
+            continue
+        else:
+            kept.append(line)
+    kept, warned = _cut_blocks([x for x in kept if x is not None], bangs,
+                               '     ')
+    return '\n'.join(kept), (regions, keyed, warned)
+
+
+def without_the_charmaps_notice(out):
+    """(out without the notice a run with copied folders prints in steps 6
+    to 8 and repeats once in its summary, how many came out)."""
+    lines = out.split('\n')
+    starts = {x for x in lines if x.startswith(CHARMAPS_NOTICE)}
+    lines, in_steps = _cut_blocks(lines, starts, '')
+    lines, in_summary = _cut_blocks(lines, {'     ' + x for x in starts},
+                                    '     ')
+    return '\n'.join(lines), (in_steps, in_summary)
 NO_SOURCES_REASON = (f'{NO_SOURCES_DIR} does not exist; it comes with the '
                      'package glibc-locale-source.')
 _NODE_FILES = {}
 
 
-def node_file(name, measurement, tag, sources=True):
+def node_file(name, measurement, tag, sources=True, charmaps='tag'):
     """A node file as --extract writes it, with the writer itself: the real
-    measurement of that machine, and a tag's locale sources standing in for
-    the node's (CI has no node; tests/test_node_modes.py does the same).
-    Without sources it names NO_SOURCES_DIR. Built once per module."""
-    key = (name, measurement, tag, sources)
+    measurement of that machine, and a tag's locale sources and charmaps
+    standing in for the node's (CI has no node; tests/test_node_modes.py
+    does the same). Without sources it names NO_SOURCES_DIR for both.
+    `charmaps`: 'tag', the tag's; 'greek', the tag's with alpha and beta
+    swapped in ISO-8859-7, a distro's patch made by hand; 'link', the tag's
+    and a link, which steps 6 to 8 refuse to read; 'before', none and no
+    entry for them, as a file written before --extract packed them.
+    Built once per module."""
+    key = (name, measurement, tag, sources, charmaps)
     if key not in _NODE_FILES:
         base = tempfile.mkdtemp(prefix='pg-glibc-node-file-')
         directory = (dd.materialise_tag(GLIBC_CLONE, tag, base) if sources
                      else NO_SOURCES_DIR)
+        kind = charmaps
+        if not sources:
+            charmaps = NO_SOURCES_DIR
+        elif kind == 'before':
+            charmaps = None
+        else:
+            charmaps = tag_charmaps(
+                tag, os.path.join(base, 'charmaps'),
+                {'ISO-8859-7': swap_alpha_beta} if kind == 'greek' else None)
+            if kind == 'link':
+                os.symlink('UTF-8.gz', os.path.join(charmaps, 'LINKED.gz'))
         with open(measurement, encoding='ascii') as f:
             text = f.read()
-        data, _ = lom.archive(text, json.loads(text), directory)
+        data, _ = lom.archive(text, json.loads(text), directory, charmaps)
         path = os.path.join(base, name)
         with open(path, 'wb') as f:
             f.write(data)
@@ -2419,9 +2504,38 @@ class WrapperNodeFiles(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
 
+    def test_step_8_s_line_reads_step_8_s_list(self):
+        """The summary's character set line under step 8 is step 8's own
+        list, by its path and its names (false-negative-reviewer, round 2 of
+        PR D). Its one name is C: the stand-in sources lack the C both
+        measurements build, so it is named as not compared. Step 6's list
+        holds en_US@ampm too, and step 7's has another path."""
+        path = os.path.join(self.out_dir, f'node_keyed_locales.'
+                            f'{pair_slug(build_of(RHEL8), build_of(RHEL9))}'
+                            f'.txt')
+        body = summary_block(self.out, f'-- Node-to-node locale data '
+                                       f'({build_of(RHEL8)} -> '
+                                       f'{build_of(RHEL9)})')
+        at = [i for i, x in enumerate(body)
+              if x.startswith('Character sets and transliterations')]
+        self.assertEqual(len(at), 1, body)
+        self.assertEqual(' '.join(body[at[0]:]), (
+            f'Character sets and transliterations, between the two machines: '
+            f'1 more locale(s) whose LC_COLLATE names a character whose bytes '
+            f'differ, whose collating elements are built differently, or that '
+            f'could not be compared: C full list: {path}'))
+
     def test_it_is_the_run_the_six_options_give(self):
+        """The same run, plus the one check only a node file carries: the
+        machines' character sets (13.7 PR D). Steps 6, 7 and 8 each add their
+        lines, the summary its three, and the notice that they are not
+        compared, printed three times and repeated once, goes."""
         self.assertEqual((self.rc, self.classic_rc), (0, 0), self.out[-2000:])
-        self.assertEqual(self.out.splitlines(), self.classic.splitlines())
+        node, added = without_the_charmap_check(self.out)
+        classic, notices = without_the_charmaps_notice(self.classic)
+        self.assertEqual(added, (3, 3, 3))
+        self.assertEqual(notices, (3, 1))
+        self.assertEqual(node.splitlines(), classic.splitlines())
 
     def test_every_section_ran(self):
         self.assertEqual(banners(self.out), {
@@ -2566,9 +2680,23 @@ class NodeFileWithoutSources:
             f"{self.BARE} machine's own patches touch LC_COLLATE, which the "
             f"tags cannot show.")
         build, tag = builds[side]
-        self.assertEqual(summary_block(
-            self.out, f'-- Distro patches, step {have} ({build} against '
-                      f'{tag})'), distro_clean(tag, have, unread=()))
+        body = summary_block(self.out, f'-- Distro patches, step {have} '
+                                       f'({build} against {tag})')
+        clean = distro_clean(tag, have, unread=())
+        self.assertEqual(body[:len(clean)], clean)
+        # The side with its sources compares its charmaps too. Its stand-in
+        # sources lack the C (and RHEL8's en_US@ampm) its measurement
+        # builds, so those are named as not compared.
+        listed = 'C' if side == 'new' else 'C en_US@ampm'
+        n = len(listed.split())
+        keyed = os.path.join(self.out_dir, f'distro_keyed_locales.'
+                                           f'{pair_slug(tag, side)}.txt')
+        self.assertEqual(' '.join(body[len(clean):]), (
+            f'Character sets and transliterations, this machine against '
+            f'{tag}: {n} more locale(s) whose LC_COLLATE names a character '
+            f'whose bytes differ, whose collating elements are built '
+            f'differently, or that could not be compared: {listed} full '
+            f'list: {keyed}'))
 
     def test_removed_says_which_file_and_why(self):
         self.assertEqual(
@@ -2607,6 +2735,136 @@ class WrapperNodeFileOldWithoutSources(NodeFileWithoutSources,
 class WrapperNodeFileNewWithoutSources(NodeFileWithoutSources,
                                        unittest.TestCase):
     BARE = 'new'
+
+
+class NodeFileCharmaps:
+    """13.7 PR D in the summary: what a node file's character set check
+    found, per side, or why it did not run. A side's charmaps are 'greek'
+    (alpha and beta swapped by hand in ISO-8859-7, so its step lists the
+    Greek locales), 'before' (a file written before --extract packed them)
+    or 'link' (one steps 6 to 8 refuse to read). A list a run before left
+    in the folder must not be read as this run's.
+
+    Three classes, so that every kind is on each side in one of them: a
+    block that read a FIXED side's list, file or reason would pass a test
+    of one side alone.
+    """
+    KINDS = None   # {'old': kind, 'new': kind}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-charmaps-')
+        cls.old = node_file(f'old-{cls.KINDS["old"]}.tar', RHEL8, OLD,
+                            charmaps=cls.KINDS['old'])
+        cls.new = node_file(f'new-{cls.KINDS["new"]}.tar', RHEL9, MID,
+                            charmaps=cls.KINDS['new'])
+        cls.keyed = {
+            'old': os.path.join(cls.out_dir, f'distro_keyed_locales.'
+                                             f'{pair_slug(OLD, "old")}.txt'),
+            'new': os.path.join(cls.out_dir, f'distro_keyed_locales.'
+                                             f'{pair_slug(MID, "new")}.txt'),
+            'node': os.path.join(cls.out_dir, f'node_keyed_locales.'
+                                 f'{pair_slug(build_of(RHEL8), build_of(RHEL9))}'
+                                 f'.txt')}
+        for path in cls.keyed.values():
+            with open(path, 'w', encoding='utf-8') as fh:
+                fh.write('# from a run before\nstale_XX\n')
+        cls.rc, cls.out = run_wrapper(OLD, MID, '--old-node', cls.old,
+                                      '--new-node', cls.new,
+                                      out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_the_run_ends_cleanly(self):
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        self.assertNotIn('stale_XX', self.out)
+
+    def test_each_side_s_block(self):
+        for side in ('old', 'new'):
+            with self.subTest(side=side, kind=self.KINDS[side]):
+                self.side_block(side, self.KINDS[side])
+
+    def side_block(self, side, kind):
+        n, build, tag, path = ((6, build_of(RHEL8), OLD, self.old)
+                               if side == 'old' else
+                               (7, build_of(RHEL9), MID, self.new))
+        body = summary_block(self.out, f'-- Distro patches, step {n} '
+                                       f'({build} against {tag})')
+        clean = distro_clean(tag, n, unread=())
+        self.assertEqual(body[:len(clean)], clean)
+        lines = body[len(clean):]
+        what = (f'Character sets and transliterations, this machine against '
+                f'{tag}')
+        step = flat(step_text(self.out, n))
+        if kind == 'greek':
+            # The stand-in sources lack the C (and RHEL8's en_US@ampm) the
+            # measurement builds, so those are named as not compared.
+            listed = (['C', 'el_CY', 'el_GR', 'el_GR@euro']
+                      + (['en_US@ampm'] if side == 'old' else []))
+            self.assertEqual(' '.join(lines), (
+                f'{what}: {len(listed)} more locale(s) whose LC_COLLATE '
+                f'names a character whose bytes differ, whose collating '
+                f'elements are built differently, or that could not be '
+                f'compared: {" ".join(listed)} full list: {self.keyed[side]}'))
+            with open(self.keyed[side], encoding='utf-8') as fh:
+                self.assertEqual([x for x in fh.read().split('\n')[1:] if x],
+                                 listed)
+            self.assertIn('el_GR (ISO-8859-7): 2 characters, named in '
+                          'iso14651_t1_common', step)
+            return
+        if kind == 'before':
+            # The file whole on its own line, so it can be copied.
+            self.assertIn(f'{path} holds no charmaps.', lines)
+            self.assertEqual(' '.join(lines), f'{what}: NOT RUN. {path} holds '
+                                              f'no charmaps. {BEFORE_CHARMAPS}')
+            self.assertIn(f'{path} holds no charmaps, because the file was '
+                          f'written by an --extract that did not pack', step)
+        else:
+            self.assertEqual(' '.join(lines), (
+                f'{what}: NOT RUN -- step {n} compared nothing (its warning '
+                f'is below). Do not read this as nothing found.'))
+            self.assertIn('LINKED.gz is not a file', step)
+        self.assertFalse(os.path.exists(self.keyed[side]))
+
+    def test_step_8_s_block(self):
+        body = summary_block(self.out, f'-- Node-to-node locale data '
+                                       f'({build_of(RHEL8)} -> '
+                                       f'{build_of(RHEL9)})')
+        at = [i for i, x in enumerate(body)
+              if x.startswith('Character sets and transliterations')]
+        self.assertEqual(len(at), 1, body)
+        text = ' '.join(body[at[0]:])
+        before = [p for side, p in (('old', self.old), ('new', self.new))
+                  if self.KINDS[side] == 'before']
+        if before:
+            self.assertEqual(text, (
+                'Character sets and transliterations, between the two '
+                'machines: NOT RUN. ' + ' '.join(
+                    f'{p} holds no charmaps. {BEFORE_CHARMAPS}'
+                    for p in before)))
+        else:
+            self.assertEqual(text, (
+                'Character sets and transliterations, between the two '
+                'machines: NOT RUN -- step 8 compared nothing (its warning '
+                'is below). Do not read this as nothing found.'))
+        self.assertFalse(os.path.exists(self.keyed['node']))
+
+
+@needs_clone
+class WrapperNodeFileCharmapsOld(NodeFileCharmaps, unittest.TestCase):
+    KINDS = {'old': 'greek', 'new': 'before'}
+
+
+@needs_clone
+class WrapperNodeFileCharmapsNew(NodeFileCharmaps, unittest.TestCase):
+    KINDS = {'old': 'before', 'new': 'greek'}
+
+
+@needs_clone
+class WrapperNodeFileCharmapsUnread(NodeFileCharmaps, unittest.TestCase):
+    KINDS = {'old': 'link', 'new': 'link'}
 
 
 @needs_clone

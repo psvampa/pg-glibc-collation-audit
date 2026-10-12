@@ -43,9 +43,10 @@
 #
 # The --*-node options go together and stand for all of the above. Each is the
 # one file `scripts/locale_order.py --extract` wrote on that machine, holding
-# its measurement, its locale sources and its glibc build. A file without the
-# sources says why, and the summary repeats it where their checks would have
-# answered.
+# its measurement, its locale sources, its charmaps and its glibc build. A
+# file without the sources or the charmaps says why, and the summary repeats
+# it where their checks would have answered. Only a node file carries the
+# charmaps, so only with these options do steps 6 to 8 compare them.
 #
 # Example (the tags are examples -- run `ldd --version` on each node):
 #   ./audit.sh glibc-2.28 glibc-2.34
@@ -93,9 +94,9 @@ usage() {
   echo >&2
   echo "       The --*-node options are OPTIONAL and go together. Each is the" >&2
   echo "       one file scripts/locale_order.py --extract wrote on that" >&2
-  echo "       machine, with its measurement, its build and its locale sources" >&2
-  echo "       (a file without the sources says why), and stands for all the" >&2
-  echo "       options above." >&2
+  echo "       machine, with its measurement, its build, its locale sources and" >&2
+  echo "       its charmaps (a file without them says why), and stands for all" >&2
+  echo "       the options above." >&2
   exit 2
 }
 
@@ -210,6 +211,10 @@ NEW_COPY_MISSING="$OUT_DIR/copy_missing.$(slug "$NEW" new).txt"
 # way. The summary reads them for its steps 6 and 7 block.
 OLD_DISTRO_LIST="$OUT_DIR/backports_inside_collate.$(slug "$OLD" old).txt"
 NEW_DISTRO_LIST="$OUT_DIR/backports_inside_collate.$(slug "$NEW" new).txt"
+# What their character set check lists (13.7 PR D), written only when it
+# ran, which it does with a machine's file that holds the charmaps.
+OLD_DISTRO_KEYED="$OUT_DIR/distro_keyed_locales.$(slug "$OLD" old).txt"
+NEW_DISTRO_KEYED="$OUT_DIR/distro_keyed_locales.$(slug "$NEW" new).txt"
 
 # The node files are laid out before anything reads them. locale_order.py
 # --unpack checks each one whole, and it then stands for the options above:
@@ -217,7 +222,14 @@ NEW_DISTRO_LIST="$OUT_DIR/backports_inside_collate.$(slug "$NEW" new).txt"
 # A file without the sources says why, and the summary prints that reason
 # where their checks would have answered. Each is laid out afresh, under a name
 # for the pair, like every other file this run reads.
-OLD_NO_SOURCES=""; NEW_NO_SOURCES=""
+#
+# The charmaps go to steps 6 to 8 with the measurement, which names the
+# locales the machine builds with them; a file without them says why, and the
+# steps print that reason under their NOT RUN. A copied folder
+# (--*-locales-dir) has neither, and the steps keep their notice that the
+# character sets are not compared.
+OLD_NO_SOURCES=""; NEW_NO_SOURCES=""; OLD_CM=(); NEW_CM=(); NODE_CM=()
+OLD_CM_WHY=""; NEW_CM_WHY=""; reasons=""; NOCM=()
 if [ -n "$OLD_NODE" ]; then
   mkdir -p "$OUT_DIR"
   for side in old new; do
@@ -240,19 +252,49 @@ if [ -n "$OLD_NODE" ]; then
       echo "       nor why they are missing. Not continuing." >&2
       exit 2
     fi
+    cmreason=""
+    if [ -d "$dir/charmaps" ]; then
+      cm=(--charmaps-dir "$dir/charmaps" --measurement "$dir/locale_order.out")
+      NODE_CM+=("--$side-charmaps-dir" "$dir/charmaps"
+                "--$side-measurement" "$dir/locale_order.out")
+    elif [ -s "$dir/charmaps-not-included" ]; then
+      cmreason=$(cat "$dir/charmaps-not-included")
+      if [ -z "$cmreason" ]; then
+        # Unreachable as --unpack stands: it refuses a reason with nothing
+        # printable. An empty one here would drop the side's summary line.
+        cmreason="the file gives no reason that can be printed"
+      fi
+      cm=(--no-charmaps "$file holds no charmaps, because $cmreason")
+    else
+      # Unreachable as --unpack stands: it lays out one of the two or fails.
+      echo "error: the $side node's file laid out neither its charmaps nor" >&2
+      echo "       why they are missing. Not continuing." >&2
+      exit 2
+    fi
     if [ "$side" = old ]; then
       OLD_BUILD=$build; OLD_LOCALES=$locales; OLD_NO_SOURCES=$reason
-      OLD_ORDER="$dir/locale_order.out"
+      OLD_ORDER="$dir/locale_order.out"; OLD_CM=("${cm[@]}"); OLD_CM_WHY=$cmreason
     else
       NEW_BUILD=$build; NEW_LOCALES=$locales; NEW_NO_SOURCES=$reason
-      NEW_ORDER="$dir/locale_order.out"
+      NEW_ORDER="$dir/locale_order.out"; NEW_CM=("${cm[@]}"); NEW_CM_WHY=$cmreason
+    fi
+    if [ -n "$cmreason" ]; then
+      reasons="${reasons:+$reasons; and }$file holds no charmaps, because $cmreason"
+      # Each file without them and its reason, for the summary.
+      NOCM+=("$file" "$cmreason")
     fi
   done
+  # Step 8 compares the charmaps only with both machines'; otherwise it
+  # prints what each file that lacks them says.
+  if [ -n "$reasons" ]; then
+    NODE_CM=(--no-charmaps "$reasons")
+  fi
 fi
 
 # Named after both builds, so a node-to-node result cannot be read as another
 # pair's. Empty unless both sides were supplied, which is what gates step 8.
 NODE_LIST=""; NODE_INHERITED=""; NODE_REMOVED=""; NODE_UNDETERMINED=""
+NODE_KEYED=""
 if [ -n "$OLD_BUILD" ] && [ -n "$NEW_BUILD" ]; then
   # Spelled by slug(), like step 8's own names for these files.
   BUILDPAIR=$(slug "$OLD_BUILD" "$NEW_BUILD")
@@ -260,6 +302,7 @@ if [ -n "$OLD_BUILD" ] && [ -n "$NEW_BUILD" ]; then
   NODE_INHERITED="$OUT_DIR/node_collate_inherited.$BUILDPAIR.txt"
   NODE_REMOVED="$OUT_DIR/node_removed_locales.$BUILDPAIR.txt"
   NODE_UNDETERMINED="$OUT_DIR/node_removed_undetermined.$BUILDPAIR.txt"
+  NODE_KEYED="$OUT_DIR/node_keyed_locales.$BUILDPAIR.txt"
 fi
 
 # The byte-order lists steps 9 and 10 write over each machine's own data,
@@ -294,8 +337,10 @@ rm -f "$STEP2_LIST" "$STEP2_REMOVED" "$STEP2_KEYED" "$STEP3_LIST" "$STEP4_LIST" 
       "$STEP4_BYTE_ORDER" ${OLD_BYTE_ORDER:+"$OLD_BYTE_ORDER"} \
       ${NEW_BYTE_ORDER:+"$NEW_BYTE_ORDER"} \
       "$NEW_COPY_MISSING" "$OLD_DISTRO_LIST" "$NEW_DISTRO_LIST" \
+      "$OLD_DISTRO_KEYED" "$NEW_DISTRO_KEYED" \
       ${NODE_LIST:+"$NODE_LIST"} ${NODE_INHERITED:+"$NODE_INHERITED"} \
-      ${NODE_REMOVED:+"$NODE_REMOVED"} ${NODE_UNDETERMINED:+"$NODE_UNDETERMINED"}
+      ${NODE_REMOVED:+"$NODE_REMOVED"} ${NODE_UNDETERMINED:+"$NODE_UNDETERMINED"} \
+      ${NODE_KEYED:+"$NODE_KEYED"}
 rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
 
 # Step 11 is worked out before step 1, so that a measurement the comparison
@@ -482,12 +527,14 @@ run_step 5 python3 "$SCRIPTS/diff_collation_code.py" "$OLD" "$NEW"
 if [ -n "$OLD_LOCALES" ]; then
   banner "STEP 6  DISTRO CHECK  do $OLD_BUILD's patches touch LC_COLLATE?"
   run_step 6 python3 "$SCRIPTS/diff_distro_locales.py" "$OLD" \
-    --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --node-label old
+    --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --node-label old \
+    ${OLD_CM[@]+"${OLD_CM[@]}"}
 fi
 if [ -n "$NEW_LOCALES" ]; then
   banner "STEP 7  DISTRO CHECK  do $NEW_BUILD's patches touch LC_COLLATE?"
   run_step 7 python3 "$SCRIPTS/diff_distro_locales.py" "$NEW" \
-    --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --node-label new
+    --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --node-label new \
+    ${NEW_CM[@]+"${NEW_CM[@]}"}
 fi
 
 # Both sides come from the nodes, so a locale the distro backports is in both
@@ -497,7 +544,7 @@ if [ -n "$OLD_LOCALES" ] && [ -n "$NEW_LOCALES" ]; then
   run_step 8 python3 "$SCRIPTS/diff_node_locales.py" \
     --old-locales-dir "$OLD_LOCALES" --old-build-id "$OLD_BUILD" \
     --new-locales-dir "$NEW_LOCALES" --new-build-id "$NEW_BUILD" \
-    --old-tag "$OLD" --new-tag "$NEW"
+    --old-tag "$OLD" --new-tag "$NEW" ${NODE_CM[@]+"${NODE_CM[@]}"}
 fi
 
 # Step 4 again, over each NODE's own locale directory instead of the new tag.
@@ -548,6 +595,57 @@ no_sources() {
   # The file as the reader typed it, whole on its line so it can be copied.
   echo "     $file holds no locale sources."
   printf '%s\n' "$reason." | fold -s -w 68 | sed 's/ *$//; s/^/     /'
+}
+
+# What a step's character set check (13.7 PR D) adds to its block, read from
+# the list the step wrote. Only with the machines' files: a copied folder
+# holds no charmaps, and the step's `!!` in the warnings below says so.
+#   $1 step, $2 list, $3 whether the step was given the charmaps (yes/no),
+#   $4 against what; then, for each file that holds none, the file as the
+#   reader typed it and its reason.
+keyed_lines() {
+  local n=$1 list=$2 given=$3 what=$4 k="" text file why
+  shift 4
+  if [ $# -gt 0 ]; then
+    text="Character sets and transliterations, $what: NOT RUN."
+    printf '%s\n' "$text" | fold -s -w 68 | sed 's/ *$//; s/^/     /'
+    while [ $# -ge 2 ]; do
+      file=$1; why=$2; shift 2
+      # The file whole on its line so it can be copied, as no_sources
+      # prints it; the reason as --unpack wrote it, which the steps print
+      # after "because", with a capital here, where it opens a sentence.
+      echo "     $file holds no charmaps."
+      why="$(printf '%s' "${why:0:1}" | tr '[:lower:]' '[:upper:]')${why:1}"
+      printf '%s\n' "$why." | fold -s -w 68 | sed 's/ *$//; s/^/     /'
+    done
+    return 0
+  fi
+  [ "$given" = yes ] || return 0
+  if [ ! -f "$list" ]; then
+    # The step compared nothing and said why in its own NOT RUN, which the
+    # warnings below repeat.
+    text="Character sets and transliterations, $what: NOT RUN -- step $n"
+    text="$text compared nothing (its warning is below). Do not read this as"
+    text="$text nothing found."
+  else
+    k=$(count_names "$list")
+    if [ "$k" -eq 0 ]; then
+      text="Character sets and transliterations, $what: nothing to add. No"
+      text="$text other locale's LC_COLLATE names a character whose bytes"
+      text="$text differ, and no collating element is built differently."
+    else
+      text="Character sets and transliterations, $what: $k more locale(s)"
+      text="$text whose LC_COLLATE names a character whose bytes differ,"
+      text="$text whose collating elements are built differently, or that"
+      text="$text could not be compared:"
+    fi
+  fi
+  printf '%s\n' "$text" | fold -s -w 68 | sed 's/ *$//; s/^/     /'
+  if [ -n "$k" ] && [ "$k" -gt 0 ]; then
+    text=$(awk '!/^#/ && NF' "$list" | tr '\n' ' ')
+    printf '%s\n' "$text" | fold -s -w 64 | sed 's/ *$//; s/^/       /'
+    echo "     full list: $list"
+  fi
 }
 
 # The locales step 4 leaves out because glibc builds them in byte order. No
@@ -874,6 +972,16 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
       echo "     their own, so no tag diff reads them (step $n above):"
       printf '%s\n' "$unread" | fold -s -w 64 | sed 's/ *$//; s/^/       /'
     fi
+    if [ "$side" = old ]; then
+      keyed=$OLD_DISTRO_KEYED; why=$OLD_CM_WHY; given=${OLD_CM[0]:-}
+      file=$OLD_NODE
+    else
+      keyed=$NEW_DISTRO_KEYED; why=$NEW_CM_WHY; given=${NEW_CM[0]:-}
+      file=$NEW_NODE
+    fi
+    [ "$given" = --charmaps-dir ] && given=yes || given=no
+    keyed_lines "$n" "$keyed" "$given" "this machine against $tag" \
+      ${why:+"$file" "$why"}
   done
 else
   echo "-- Distro patches, steps 6 and 7: NOT RUN"
@@ -918,6 +1026,9 @@ if [ -n "$NODE_LIST" ] && [ -f "$NODE_LIST" ]; then
        "$OUT_DIR/step8.$PAIR.log" 2>/dev/null; then
     echo "     C (C.UTF-8): DIFFERS  <- LC_COLLATE is not the same on the two nodes"
   fi
+  [ "${NODE_CM[0]:-}" = --old-charmaps-dir ] && given=yes || given=no
+  keyed_lines 8 "$NODE_KEYED" "$given" "between the two machines" \
+    ${NOCM[@]+"${NOCM[@]}"}
 elif [ -n "$OLD_LOCALES" ] && [ -n "$NEW_LOCALES" ]; then
   # Unreachable as the step stands: this is step 8's own gate, so step 8 ran,
   # and it writes its list on every run or has already ended this script.
@@ -1084,8 +1195,8 @@ fi
 # Repeated verbatim. A warning that scrolled past 400 lines ago has not been
 # delivered, and these are the cases where a clean result means nothing.
 #
-# Deduplicated by whole block. Three steps read node files and each closes with
-# the same charmaps caveat; printing it three times trains the reader to skip
+# Deduplicated by whole block. Given copied folders, three steps each close
+# with the same charmaps caveat; printing it three times trains the reader to skip
 # the section, which costs more than the repetition buys. Identical text only --
 # two warnings that differ by one word are two warnings.
 WARNINGS=$(awk '

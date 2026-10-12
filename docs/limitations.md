@@ -6,7 +6,7 @@ something it cannot see has changed.
 1. [`C.UTF-8` is invisible to a tag diff](#cutf-8-is-invisible-to-a-tag-diff)
 2. [Upstream tags are not your distro's glibc](#upstream-tags-are-not-your-distros-glibc)
 3. [Below glibc 2.24 the method rests on one measured pair](#below-glibc-224-the-method-rests-on-one-measured-pair)
-4. [A machine's character sets are not compared](#a-machines-character-sets-are-not-compared)
+4. [A copied folder's character sets are not compared](#a-copied-folders-character-sets-are-not-compared)
 5. [Step 5 reports, it does not decide](#step-5-reports-it-does-not-decide)
 6. [Step 11 measures one character at a time](#step-11-measures-one-character-at-a-time)
 7. [`LC_CTYPE` is not audited at all](#lc_ctype-is-not-audited-at-all)
@@ -61,7 +61,7 @@ is not every pair.
 If both your versions are that old, read the result as thinner evidence than
 the two RHEL pairs carry, and confirm it on the machines.
 
-## A machine's character sets are not compared
+## A copied folder's character sets are not compared
 
 A locale's character set (`localedata/charmaps/`) decides the bytes of every
 character its rules name, and an unchanged rule sorts differently when those
@@ -69,13 +69,18 @@ bytes change, or when the character appears or disappears. Step 2 compares,
 between the two glibc versions, the character sets the locales in SUPPORTED
 are built with, and lists the locales whose rules name a character the newer
 version added, removed or gave other bytes. A distro can patch the character
-sets it ships, and no step compares a machine's own.
+sets it ships. Given the file from each machine, as in command 1.b, steps 6
+and 7 compare each machine's own with the version its distro started from,
+and step 8 compares the two machines'.
+Given copied folders instead (`--old-locales-dir` and `--new-locales-dir`),
+they are not compared, and those steps say so.
 
 Step 2 also compares, for the same builds, the collating elements a locale
 builds out of transliterations. localedef builds them for the characters a
 character set lacks, so a change to a transliteration file, or to the
-character set, can move them with no rule changing. What a machine's own
-transliterations build is not compared.
+character set, can move them with no rule changing. Steps 6 to 8 compare
+what a machine's own transliterations build from its file, and not from a
+copied folder.
 
 ## Step 5 reports, it does not decide
 
@@ -135,9 +140,9 @@ ctype version to compare, so a ctype change leaves no trail at all and there
 is no mismatch for anything to detect.
 
 No step of this tool audits it, and no verdict this project publishes says
-anything about it in either direction, including "unchanged". Step 2 reads
-its transliterations only for the collating elements they build, which are
-sort order. A 🟢 on the
+anything about it in either direction, including "unchanged". Steps 2 and 6
+to 8 read its transliterations only for the collating elements they build,
+which are sort order. A 🟢 on the
 results table is a statement about sort order and nothing else. If a
 `lower()`-based index matters to you, confirm it the way this project confirms
 collation — on both machines, naming the builds.

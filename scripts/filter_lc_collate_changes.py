@@ -31,6 +31,7 @@ Example:
   python3 filter_lc_collate_changes.py glibc-2.28 glibc-2.34
 """
 import argparse
+import collections
 import os
 import re
 import sys
@@ -622,30 +623,62 @@ def check_charmaps(reads, repo, side_old, side_new, sup, names):
     return ck.listed_sources(report)
 
 
-def reads_utf8(repo, tag):
+def reads_utf8(repo, tag, step='step 2'):
     """Does `tag` hold collation_keys.UTF8_READER: True, False, or None when
     git cannot place it. A shallow clone can answer no, or nothing, for a
     tag that holds it, and _readers_differ would read two such sides as one
     reader (round 7 of the 13.7 review): it is refused, as step 5 refuses
     it. A yes is a path git found in the history it has, so it stands on
-    any clone, and the check (a git process) is not paid for it."""
+    any clone, and the check (a git process) is not paid for it. Steps 6
+    to 8 ask it of the tag a machine's glibc is built from (node_charmaps),
+    and name themselves in the refusal."""
     got = g.descends_from(repo, ck.UTF8_READER, tag)
     if got is not True:
         g.require_full_history(
-            repo, 'step 2', 'git cannot say which tag holds the commit from '
+            repo, step, 'git cannot say which tag holds the commit from '
             'which localedef reads its input as UTF-8')
     return got
 
 
-def _charmaps_not_run(reason):
+# What the character set check's lines say about the two sides, which are
+# two tags in step 2 and a machine and its tag, or two machines, in steps 6
+# to 8 (node_charmaps). Each is formatted with old= and new=, the Sides'
+# names.
+Words = collections.namedtuple(
+    'Words', 'subject label builds identical between listed_for '
+             'lists_anyway none_compared not_compared changed_between at_new')
+STEP2_WORDS = Words(
+    subject="the character sets locales are built with",
+    label="localedata/charmaps/",
+    builds="in SUPPORTED at both tags",
+    identical="are identical at {old} and {new}",
+    between="between {old} and {new}",
+    listed_for="listed for step 3",
+    lists_anyway="step 3 lists anyway",
+    none_compared="No locale build is in SUPPORTED at both tags with its "
+                  "source file at both, so none was compared.",
+    not_compared="{n} SUPPORTED entr{y_ies} at both tags {is_are} not "
+                 "compared: {its_their} source file is not at both.",
+    changed_between="between the tags",
+    at_new="at {new}")
+
+
+def _said(words, field, old, new, **more):
+    return getattr(words, field).format(old=old, new=new, **more)
+
+
+def _charmaps_not_run(reason, subject=STEP2_WORDS.subject,
+                      label=STEP2_WORDS.label, split_words=True):
+    """The check's NOT RUN. `split_words=False` keeps a path in the reason
+    whole, as glibc_locale_data.warn does, so that it can be copied."""
     print()
     print(textwrap.fill(
-        f"NOT RUN: the comparison of the character sets locales are built "
-        f"with (localedata/charmaps/). {reason}. A rule that names a "
-        f"character whose bytes changed in its charmap, and a collating "
-        f"element built out of a transliteration, are not covered by this "
-        f"result.",
-        width=78, initial_indent='!! ', subsequent_indent='   '))
+        f"NOT RUN: the comparison of {subject} ({label}). {reason}. A rule "
+        f"that names a character whose bytes changed in its charmap, and a "
+        f"collating element built out of a transliteration, are not covered "
+        f"by this result.",
+        width=78, initial_indent='!! ', subsequent_indent='   ',
+        break_on_hyphens=split_words, break_long_words=split_words))
     return []
 
 
@@ -678,25 +711,24 @@ def _print_chars(f, indent='      '):
                      indent=indent, label=_CHANGED_IN_CHARMAP)
 
 
-def print_charmap_report(report, old, new):
-    """The character set check's lines in step 2's output."""
+def print_charmap_report(report, old, new, words=STEP2_WORDS):
+    """The character set check's lines in step 2's output, and in steps 6
+    to 8 with their own `words`."""
+    w = lambda field, **more: _said(words, field, old, new, **more)
     if report.not_run:
-        _charmaps_not_run(report.not_run)
+        _charmaps_not_run(report.not_run, w('subject'), w('label'))
         return
     print()
     changed = report.changed
     if not report.builds:
-        _warn_block("NOT RUN: the comparison of the character sets locales "
-                    "are built with, and of the collating elements they "
-                    "build out of transliterations. No locale build is in "
-                    "SUPPORTED at both tags with its source file at both, so "
-                    "none was compared.", [])
+        _warn_block(f"NOT RUN: the comparison of {w('subject')}, and of the "
+                    f"collating elements they build out of "
+                    f"transliterations. {w('none_compared')}", [])
     elif not changed:
         print(textwrap.fill(
-            f"Character sets (localedata/charmaps/): the "
+            f"Character sets ({w('label')}): the "
             f"{len(report.charmaps)} that the {report.builds} locale builds "
-            f"in SUPPORTED at both tags use are identical at {old} and "
-            f"{new}.", width=78))
+            f"{w('builds')} use {w('identical')}.", width=78))
     else:
         def size(p):
             name = p[1] if p[0] == p[1] else f"{p[0]} -> {p[1]}"
@@ -717,10 +749,10 @@ def print_charmap_report(report, old, new):
             return f"{name}: {', '.join(parts)}."
         n = len(changed)
         print(textwrap.fill(
-            f"Character sets (localedata/charmaps/): {n} of the "
+            f"Character sets ({w('label')}): {n} of the "
             f"{len(report.charmaps)} that the {report.builds} locale builds "
-            f"in SUPPORTED at both tags use {'differs' if n == 1 else 'differ'}"
-            f" between {old} and {new}.", width=78))
+            f"{w('builds')} use {'differs' if n == 1 else 'differ'}"
+            f" {w('between')}.", width=78))
         print(textwrap.fill(' '.join(size(p) for p in changed), width=78))
         if not report.found and not report.skipped:
             print(f"No {'compared ' if report.not_compared else ''}build's "
@@ -729,13 +761,13 @@ def print_charmap_report(report, old, new):
     if plain:
         print(textwrap.fill(
             f"Locale builds whose LC_COLLATE names one of those characters "
-            f"({len(plain)}), listed for step 3:", width=78))
+            f"({len(plain)}), {w('listed_for')}:", width=78))
         for f in plain:
             print(f"  {f.entry} ({f.charmaps[1]}): {_chars_phrase(f)}")
             _print_chars(f)
     if report.skipped:
         print(textwrap.fill(
-            f"Locale builds step 3 lists anyway, whose LC_COLLATE names one "
+            f"Locale builds {w('lists_anyway')}, whose LC_COLLATE names one "
             f"of those characters or could not be compared "
             f"({len(report.skipped)}):", width=78))
         for f in report.skipped:
@@ -747,7 +779,8 @@ def print_charmap_report(report, old, new):
     if unsettled:
         _warn_block(f"{len(unsettled)} locale build(s) could not be compared "
                     f"for what their character set does to the characters "
-                    f"their LC_COLLATE names, so they are listed for step 3:",
+                    f"their LC_COLLATE names, so they are "
+                    f"{w('listed_for')}:",
                     [f"{f.entry or f.source} ({f.charmaps[1]}): {f.reason}"
                      for f in unsettled])
     distro = [f for f in report.found if not f.entry and not f.reason]
@@ -768,26 +801,28 @@ def print_charmap_report(report, old, new):
                     "run for these charmaps, so no such locale is listed for "
                     "them:", [f"{name}: {why}"
                               for name, why in report.unsearched])
-    print_translit_report(report, new)
+    print_translit_report(report, new, words, old)
     if report.not_compared:
         n = len(report.not_compared)
-        _warn_block(f"{n} SUPPORTED entr{'y' if n == 1 else 'ies'} at both "
-                    f"tags {'is' if n == 1 else 'are'} not compared: "
-                    f"{'its' if n == 1 else 'their'} source file is not at "
-                    f"both.", [', '.join(report.not_compared)])
+        one = n == 1
+        _warn_block(w('not_compared', n=n, y_ies='y' if one else 'ies',
+                      s='' if one else 's', is_are='is' if one else 'are',
+                      its_their='its' if one else 'their'),
+                    [', '.join(report.not_compared)])
 
 
-def print_translit_report(report, new):
+def print_translit_report(report, new, words=STEP2_WORDS, old=None):
     """Point 6 of collation_keys: the collating elements built out of
     transliterations."""
+    w = lambda field: _said(words, field, old, new)
     t = report.translit
     if not report.builds:
         return
     if t is None:
         print(textwrap.fill(
-            "Transliteration (LC_CTYPE): no character set and no locale "
-            "file's LC_CTYPE changed between the tags, so no collating "
-            "element is built differently.", width=78))
+            f"Transliteration (LC_CTYPE): no character set and no locale "
+            f"file's LC_CTYPE changed {w('changed_between')}, so no "
+            f"collating element is built differently.", width=78))
         return
     plain = [f for f in t.found if not f.reason]
     unsettled = [f for f in t.found if f.reason]
@@ -800,14 +835,14 @@ def print_translit_report(report, new):
                 f"depend{'' if t.elements != 1 else 's'} on a "
                 f"transliteration; "
                 + (f"{n or 'none'} {'is' if n < 2 else 'are'} built "
-                   f"differently at {new}."))
+                   f"differently {w('at_new')}."))
     elif t.unmoved:
         u = t.unmoved
         line = (f"Transliteration (LC_CTYPE): {u} locale build"
                 f"{'s' if u != 1 else ''} may build a collating element out "
                 f"of a transliteration, and nothing "
-                f"{'they read' if u != 1 else 'it reads'} changed between "
-                f"the tags.")
+                f"{'they read' if u != 1 else 'it reads'} changed "
+                f"{w('changed_between')}.")
     elif not unsettled and not report.translit_skipped:
         line = ("Transliteration (LC_CTYPE): no compared locale build "
                 "builds a collating element out of a transliteration.")
@@ -825,7 +860,7 @@ def print_translit_report(report, new):
     if plain:
         print(textwrap.fill(
             f"Locale builds whose collating elements are built differently "
-            f"({len(plain)}), listed for step 3:", width=78))
+            f"({len(plain)}), {w('listed_for')}:", width=78))
         for f in plain:
             print(f"  {f.entry} ({f.charmaps[1]}): {f.changed} "
                   f"element{'s' if f.changed != 1 else ''}, defined in "
@@ -842,7 +877,7 @@ def print_translit_report(report, new):
     if unsettled:
         _warn_block(f"{len(unsettled)} locale build(s) could not be compared "
                     f"for the collating elements they build out of "
-                    f"transliterations, so they are listed for step 3:",
+                    f"transliterations, so they are {w('listed_for')}:",
                     [f"{f.entry} ({f.charmaps[1]}): {f.reason}"
                      for f in unsettled])
 
@@ -867,21 +902,9 @@ def main(argv):
 
     # Each text's comment and escape characters, read once for this run:
     # classify_change and read_otherwise ask for the same texts, and the
-    # character set check asks again. Confined to this step and this run,
-    # and restored on the way out: steps 6/7 call the same reader, and a
-    # saving there belongs to their own time gate (backlog 13.7, PR D).
-    real_reading_chars, memo = g.reading_chars, {}
-
-    def reading_chars(text):
-        got = memo.get(text, memo)
-        if got is memo:
-            got = memo[text] = real_reading_chars(text)
-        return got
-    g.reading_chars = reading_chars
-    try:
+    # character set check asks again.
+    with g.reading_chars_once():
         return _main(opts)
-    finally:
-        g.reading_chars = real_reading_chars
 
 
 def _main(opts):

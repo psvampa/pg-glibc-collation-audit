@@ -83,10 +83,13 @@ from concurrent.futures.process import BrokenProcessPool
 FORMAT = 'locale_order/1'
 
 # The file --extract writes holds the measurement, the machine's locale sources
-# and its glibc build. The sources are what glibc-locale-source installs on
-# RHEL, and they are copied as found or not at all, with the reason.
+# and charmaps, and its glibc build. The sources and the charmaps are what
+# glibc-locale-source installs on RHEL, and each is copied as found or not at
+# all, with the reason. A file written before the charmaps were packed has no
+# entry for them, and --unpack says so in the reason (13.7 PR D).
 EXTRACT_FORMAT = 'locale_order_extract/1'
 LOCALE_SOURCES = '/usr/share/i18n/locales'
+CHARMAPS = '/usr/share/i18n/charmaps'
 
 # What one more measuring process adds to the peak memory of the whole run:
 # 255 to 280 MiB on glibc 2.34 (the cgroup's memory.peak was 396, 2356 and
@@ -908,9 +911,10 @@ def on_disk(directory):
     return out
 
 
-def pack_sources(tar, directory):
-    """Add the locale sources under 'locales/' in tar, and return their
-    manifest entry.
+def pack_sources(tar, directory, prefix='locales/'):
+    """Add the files of directory under `prefix` in tar, and return their
+    manifest entry: the locale sources under 'locales/', the charmaps under
+    'charmaps/'.
 
     All of them or none. When none, the entry says why, so that a copy is
     never handed on with a file missing. Owners and times are dropped, so
@@ -923,7 +927,7 @@ def pack_sources(tar, directory):
     members, listed = [], {}
     try:
         for rel, full in source_entries(directory):
-            ti = tar.gettarinfo(full, 'locales/' + rel)
+            ti = tar.gettarinfo(full, prefix + rel)
             if ti is None:
                 raise OSError(f'{full} is a socket, which tar cannot hold')
             ti.mtime, ti.uid, ti.gid, ti.uname, ti.gname = 0, 0, 0, '', ''
@@ -963,13 +967,17 @@ def generated_member(name, data):
     return ti, io.BytesIO(data)
 
 
-def archive(text, out, directory=LOCALE_SOURCES):
+def archive(text, out, directory=LOCALE_SOURCES, charmaps=None):
     """The file of --extract as (its bytes, the manifest written last in it).
 
     The measurement first, exactly the file a plain run writes; then the
-    locale sources; then extract.json, which describes both and is written
-    last, so a file cut short lacks it. gzip without a name or a time, so
-    that two runs on one machine write the same bytes.
+    locale sources; then the charmaps; then extract.json, which describes
+    them and is written last, so a file cut short lacks it. gzip without a
+    name or a time, so that two runs on one machine write the same bytes.
+    extract() passes CHARMAPS; with charmaps=None the manifest has no entry
+    for them, as a file written before they were packed has none, and a
+    test that builds a file never reads the charmaps of the machine it runs
+    on.
     """
     buf = io.BytesIO()
     with gzip.GzipFile(filename='', mode='wb', fileobj=buf, mtime=0) as gz:
@@ -986,6 +994,9 @@ def archive(text, out, directory=LOCALE_SOURCES):
                     'sha256': hashlib.sha256(measurement).hexdigest()},
                 'locale_sources': pack_sources(tar, directory),
             }
+            if charmaps is not None:
+                manifest['charmaps'] = pack_sources(tar, charmaps,
+                                                    'charmaps/')
             tar.addfile(*generated_member(
                 'extract.json',
                 (json.dumps(manifest, sort_keys=True, indent=1) + '\n')
@@ -999,7 +1010,7 @@ def extract(jobs):
         die('--extract writes a compressed file, not text; send it to a file '
             '(python3 locale_order.py --extract > old.tar)')
     text, out, seconds = measure(jobs)
-    data, manifest = archive(text, out)
+    data, manifest = archive(text, out, LOCALE_SOURCES, CHARMAPS)
     sys.stdout.buffer.write(data)
     sys.stdout.buffer.flush()
     status = finished(out, seconds, len(data))
@@ -1014,8 +1025,15 @@ def extract(jobs):
                             if others else '') + '.\n')
     else:
         sys.stderr.write(f'!! Locale sources NOT included: '
-                         f'{sources["not_included"]}. The file holds the '
-                         'measurement and the glibc build only.\n')
+                         f'{sources["not_included"]}.\n')
+    charmaps = manifest['charmaps']
+    if 'entries' in charmaps:
+        sys.stderr.write(f'Charmaps: {len(charmaps["entries"])} entr(ies) '
+                         f'from {charmaps["directory"]}.\n')
+    else:
+        sys.stderr.write(f'!! Charmaps NOT included: '
+                         f'{charmaps["not_included"]}. The character sets '
+                         'its locales are built with cannot be compared.\n')
     return status
 
 
@@ -1023,8 +1041,9 @@ def unpack(path, dest):
     """--unpack: check a file --extract wrote, and lay it out in dest.
 
     dest must not exist. What audit.sh reads there: locale_order.out, the
-    measurement; build-id, the glibc build; and either locales/, the sources,
-    or sources-not-included, the reason they are missing. Every entry must be
+    measurement; build-id, the glibc build; either locales/, the sources, or
+    sources-not-included, the reason they are missing; and either charmaps/
+    or charmaps-not-included, the same for the charmaps. Every entry must be
     the one the manifest describes, so a file cut short, edited, or with text
     in front of it stops here with the reason, and nothing is laid out. What
     is written is then read back and held to the manifest too.
@@ -1093,24 +1112,87 @@ def unpack(path, dest):
     sources = manifest.get('locale_sources')
     entries = sources.get('entries') if isinstance(sources, dict) else None
     missing = sources.get('not_included') if isinstance(sources, dict) else None
-    packed = members[1:-1]
+    # A reason with nothing printable in it is none: audit.sh reads it with
+    # $(cat), which drops newlines and NUL bytes and can leave nothing, and
+    # a summary block with nothing to say about a side reads as a side with
+    # nothing to report.
     if not ((isinstance(entries, dict) and entries and missing is None)
-            or (isinstance(missing, str) and missing and entries is None)):
+            or (_says_why(missing) and entries is None)):
         refuse('it says neither which locale sources it holds nor why it '
                'holds none')
-    # Each name once, even to a disk that does not tell case apart (macOS,
-    # Windows): there two names that differ only in case are one file, and
-    # the second would land on the first, or go through it if it is a link.
+    # The charmaps (13.7 PR D). A file written before --extract packed them
+    # has no entry: steps 6 to 8 then say the character sets were not
+    # compared, and why, rather than refuse a file that is whole.
+    if 'charmaps' in manifest:
+        charmaps = manifest['charmaps']
+        cm_entries = (charmaps.get('entries') if isinstance(charmaps, dict)
+                      else None)
+        cm_missing = (charmaps.get('not_included')
+                      if isinstance(charmaps, dict) else None)
+        if not ((isinstance(cm_entries, dict) and cm_entries
+                 and cm_missing is None)
+                or (_says_why(cm_missing) and cm_entries is None)):
+            refuse('it says neither which charmaps it holds nor why it holds '
+                   'none')
+    else:
+        cm_entries = None
+        cm_missing = (f'the file was written by an --extract that did not '
+                      f'pack the machine\'s charmaps ({CHARMAPS}); extract '
+                      f'it again with this checkout\'s '
+                      f'scripts/locale_order.py')
+    groups = {'locales/': [], 'charmaps/': []}
+    for m, content in members[1:-1]:
+        prefix = m.name.split('/', 1)[0] + '/'
+        if prefix not in groups:
+            refuse(f'an entry, {m.name!r}, is outside locales/ and charmaps/')
+        groups[prefix].append((m, content))
+    check_entries(groups['locales/'], 'locales/', entries, refuse,
+                  'its locale sources are not the ones it lists')
+    check_entries(groups['charmaps/'], 'charmaps/', cm_entries, refuse,
+                  'its charmaps are not the ones it lists')
+
+    try:
+        os.makedirs(dest)
+    except OSError as e:
+        die(f'cannot lay the file out in {dest}: {e}')
+    with open(os.path.join(dest, 'locale_order.out'), 'wb') as f:
+        f.write(measurement)
+    with open(os.path.join(dest, 'build-id'), 'w') as f:
+        f.write(build.strip() + '\n')
+    for name, why in (('sources-not-included', missing),
+                      ('charmaps-not-included', cm_missing)):
+        if why is not None:
+            with open(os.path.join(dest, name), 'w') as f:
+                f.write(why + '\n')
+    for prefix, listed in (('locales/', entries), ('charmaps/', cm_entries)):
+        if listed is not None:
+            lay_out(groups[prefix], prefix, os.path.join(dest, prefix[:-1]),
+                    listed, path, dest)
+    return 0
+
+
+def _says_why(reason):
+    """Is `reason` a text with something printable in it?"""
+    return isinstance(reason, str) and any(
+        c.isprintable() and not c.isspace() for c in reason)
+
+
+def check_entries(packed, prefix, entries, refuse, differs):
+    """Hold the members under `prefix` to the manifest's `entries`, or
+    refuse with the reason. Each name once, even to a disk that does not
+    tell case apart (macOS, Windows): there two names that differ only in
+    case are one file, and the second would land on the first, or go
+    through it if it is a link."""
     found, folded = {}, {}
     for m, content in packed:
-        rel = m.name[len('locales/'):] if m.name.startswith('locales/') else ''
+        rel = m.name[len(prefix):]
         parts = rel.split('/')
         if not rel or any(p in ('', '.', '..') for p in parts):
-            refuse(f'an entry, {m.name!r}, is outside locales/')
+            refuse(f'an entry, {m.name!r}, is outside {prefix}')
         if rel in found:
             refuse(f'{m.name} appears twice')
         if rel.casefold() in folded:
-            refuse(f'locales/{folded[rel.casefold()]} and {m.name} differ '
+            refuse(f'{prefix}{folded[rel.casefold()]} and {m.name} differ '
                    'only in case')
         folded[rel.casefold()] = rel
         parent = '/'.join(parts[:-1])
@@ -1128,25 +1210,16 @@ def unpack(path, dest):
         else:
             refuse(f'{m.name} is not a file, a folder or a link')
     if found != (entries or {}):
-        refuse('its locale sources are not the ones it lists')
+        refuse(differs)
 
-    try:
-        os.makedirs(dest)
-    except OSError as e:
-        die(f'cannot lay the file out in {dest}: {e}')
-    with open(os.path.join(dest, 'locale_order.out'), 'wb') as f:
-        f.write(measurement)
-    with open(os.path.join(dest, 'build-id'), 'w') as f:
-        f.write(build.strip() + '\n')
-    if missing is not None:
-        with open(os.path.join(dest, 'sources-not-included'), 'w') as f:
-            f.write(missing + '\n')
-        return 0
-    root = os.path.join(dest, 'locales')
+
+def lay_out(packed, prefix, root, entries, path, dest):
+    """Write the members under `prefix` into root, then read root back and
+    hold it to the manifest."""
     try:
         os.mkdir(root)
         for m, content in packed:
-            target = os.path.join(root, m.name[len('locales/'):])
+            target = os.path.join(root, m.name[len(prefix):])
             # Every folder above an entry is one made here, before it
             # (checked above). Each entry is made new: nothing that exists
             # is reused, and no link is followed, so none lands outside dest.
@@ -1167,7 +1240,6 @@ def unpack(path, dest):
     if written != entries:
         die(f'what was written to {root} is not what {path} lists, so it '
             'cannot stand for that machine\'s files')
-    return 0
 
 
 def shown(name):
@@ -1804,8 +1876,8 @@ def main():
                          'at about 0.3 GB each)')
     ap.add_argument('--extract', action='store_true',
                     help='measure, and write one compressed file with the '
-                         'measurement, this machine\'s locale sources and its '
-                         'glibc build (> old.tar)')
+                         'measurement, this machine\'s locale sources and '
+                         'charmaps, and its glibc build (> old.tar)')
     ap.add_argument('--unpack', nargs=2, metavar=('FILE', 'DIR'),
                     help='check a file --extract wrote and lay it out in DIR, '
                          'which must not exist, for audit.sh')

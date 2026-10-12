@@ -27,8 +27,8 @@ Every locale steps 1 to 3 flagged, and every locale step 4 flagged that step 5
 does not [clear](limitations.md#step-5-reports-it-does-not-decide), whether or
 not it showed up in steps 1 to 3. When step 5 does not clear the code, add the
 locales step 4 leaves out as built in byte order, which the summary names. With
-command 1.b, add every locale step 11 reports as changed, and every one it
-reports as not known to be unchanged.
+command 1.b, add every locale steps 6 to 8 list, every locale step 11 reports
+as changed, and every one it reports as not known to be unchanged.
 
 Steps 9 and 10, in command 1.b, run step 4 again on each machine's own files,
 so the same rule holds for every locale they flag. They list `C.UTF-8` by its
