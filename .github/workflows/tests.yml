@@ -54,6 +54,20 @@ jobs:
           python3 scripts/glibc_locale_data.py provenance \
             glibc-2.28 glibc-2.34 glibc-2.39 glibc-2.12 glibc-2.17
 
+      - name: Keep the reader's answers between runs
+        # scripts/reader_cache.py keeps the localedef runs that
+        # glibc_reader.py emulates for it, about 0.2 s of work per locale.
+        # Unlike the clone above, what is kept here cannot answer for
+        # anything but what it was computed from: each run is used only for
+        # the same bytes of every file it read, and the directory names a
+        # hash of the reader's own source, so a changed reader finds nothing
+        # and starts over. The key below says the same, so a run after such
+        # a change restores nothing instead of a cache it would throw away.
+        uses: actions/cache@v4
+        with:
+          path: scripts/glibc-reader-cache
+          key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}
+
       - name: Say so if the documentation layer is switched off
         # Renaming that file out of `test*.py` removes its tests from the run
         # without producing a single skip, so the step below stays green and

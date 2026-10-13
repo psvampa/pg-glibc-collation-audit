@@ -485,6 +485,21 @@ def _cases():
     add('s45', S, {'@': HEAD + b'order_start forward\ncopy "@-t"\n' + END
                    + twice, '@-t': HEAD + b'..\n' + END + TIME7},
         'an ellipsis in a file copied in the middle, read again for LC_TIME')
+    # A number that ends the file with no newline is read again on every
+    # lr_token (lr_ungetn after EOF, linereader.c:288-301@2.39).
+    add('s46', S, IDENT + coll('a') + b'LC_NUMERIC\nX 1',
+        'a statement ending the file in a number, no newline')
+    add('s47', S, IDENT + coll('a') + b'LC_CTYPE\ncopy\n1',
+        'skip_category of LC_CTYPE meeting a number at the end, no newline')
+    add('s48', S, IDENT + HEAD + b'copy\n1',
+        'skip_category of LC_COLLATE meeting a number at the end, no newline')
+    add('s49', S, IDENT + HEAD + b'copy\n1\n', 'control for s48: a newline')
+    # Before 2.36 a 0x1A reads as EOF without being consumed, so the same
+    # holds in the middle of a file (linereader.h:138@2.34).
+    add('s50', S, IDENT + HEAD + b'copy\n7\x1a\nEND LC_COLLATE\n',
+        'skip_category of LC_COLLATE meeting a number, then 0x1A')
+    add('s51', S, IDENT + HEAD + D('a') + ORDER_HEAD + b'7\x1a\n' + O('a')
+        + ORDER_TAIL + END, 'a statement of a number, then 0x1A')
     cond = (HEAD + D('t') + D('v') + ORDER_HEAD + b'ifdef YES\n' + O('t')
             + b'else\n' + O('v') + b'endif\n' + ORDER_TAIL + END)
     add('c31', P, {'@': HEAD + b'define YES\ncopy "@-t"\n' + END,

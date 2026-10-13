@@ -4,7 +4,7 @@ The tool reads glibc's locale files to decide what changed between two
 versions. That reading used to be written by hand in several modules, each a
 little differently from the others and from glibc; every fix corrected one copy
 and the next review found its twin (backlog block 15). This module is the one
-reader the steps are moved onto, one PR at a time. Nothing calls it yet.
+reader the steps are moved onto, one PR at a time. No step calls it yet.
 
 It reads the way localedef reads, for one glibc BUILD, in layers:
 
@@ -44,7 +44,10 @@ and tests/test_glibc_reader.py compares this module with it.
 
 Not modelled, on purpose: a `-` at the very start of a buffer makes get_ident
 read lr->buf[-1] (linereader.c:578@2.39, after lr_ungetn at :329), which is
-undefined behaviour; Python's buf[-1] is used. Keyword lookup is exact, where
+undefined behaviour; Python's buf[-1] is used, which agrees with localedef
+on the measured case (t16). On an empty buffer there is no such byte, and
+the run is reported unsettled there (GlibcUndefined). Keyword lookup is
+exact, where
 gperf's strncmp could in theory match an identifier holding a NUL byte. A
 translated string holding a character the charmap lacks makes get_string
 try to transliterate it, which can load the file's own LC_CTYPE in the
@@ -55,6 +58,7 @@ whether the charmap has a character, it reports that place unsettled.
 Written for Python 3.6, the oldest the fixtures run, with the standard
 library only.
 """
+import re
 import subprocess
 
 # ---------------------------------------------------------------------------
@@ -64,6 +68,8 @@ EOF_ = -1
 _SPACE = frozenset(b' \t\n\v\f\r')
 _HEX = frozenset(b'0123456789abcdefABCDEF')
 _MASK64 = (1 << 64) - 1
+# {(escape char, pre236): the bytes that end LR._symname_in_buffer's search}
+_SYMNAME_STOP = {}
 
 
 class ReaderError(Exception):
@@ -71,14 +77,29 @@ class ReaderError(Exception):
     table the clone does not hold). Never an answer about a locale."""
 
 
+class GlibcUndefined(Exception):
+    """glibc reads outside an empty buffer for this input: get_ident takes
+    lr->buf[lr->idx - 1] with idx 0 after a `-` whose next character was an
+    EOF on an empty line (linereader.c:329 and :578@2.39). What it reads is
+    undefined and Python has no byte to stand for it, so run() reports the
+    place unsettled instead of answering."""
+
+    def __init__(self, fname, line):
+        Exception.__init__(self, '%s:%d' % (fname, line))
+        self.fname = fname
+        self.line = line
+
+
 class GlibcHang(Exception):
-    """glibc's lr_token never returns for this input.
+    """localedef never returns for this input, one of two ways.
 
     get_symname has no EOF test (the do ... while ending at
     linereader.c:528@2.39, :493@2.34): when lr_getc keeps returning EOF
     without consuming anything -- the end of the input, a line holding only
     the escape character, or a 0x1A byte before 2.36 -- glibc appends
-    (char) EOF to a growing buffer forever."""
+    (char) EOF to a growing buffer forever, and lr_token never returns.
+    Or lr_token returns, but the same token every time (_repeats), inside
+    skip_category, whose loop waits for END or EOF."""
 
 
 class Build(object):
@@ -101,6 +122,16 @@ class Build(object):
         self.locfile_kw = locfile_kw
         self.charmap_kw = charmap_kw
         self.label = label
+        # What the reader has already worked out for this build, kept for
+        # as long as the Build lives. Each is a pure function of its key,
+        # and the key holds every input of it, so a kept answer is the
+        # answer the reader would compute again (see LR and
+        # _Runner.statement). A run of every locale of a tree reads
+        # iso14651_t1_common once per locale; this is what makes the
+        # second reading cheap (backlog 15.2: 0.45 s to 0.22 s per locale
+        # at glibc-2.39, every Run of glibc-2.12..2.39 identical).
+        self.lines_of = {}        # file bytes -> its physical lines
+        self.lookahead = {}       # statement lookahead, _Runner.statement
 
     @property
     def utf8(self):
@@ -203,6 +234,24 @@ class Tok(object):
         return 'Tok(%s,%r,L%d)' % (self.tok, self.val, self.line)
 
 
+# Every field of LR, and how _Runner.statement's kept lookahead covers it.
+# A field missing here is one the key may lack: tests/test_glibc_reader.py
+# fails when LR's fields and these differ.
+LR_KEY_FIELDS = {
+    'data': 'in the key', 'table': 'in the key',
+    'pi': 'in the key (snapshot)', 'buf': 'in the key (snapshot)',
+    'bufact': 'in the key (snapshot)', 'idx': 'in the key (snapshot)',
+    'lineno': 'in the key (snapshot)', '_cc': 'in the key',
+    '_ec': 'in the key', 'translate_strings': 'in the key',
+    'return_widestr': 'in the key',
+    'build': 'the kept answers live on it',
+    'fname': 'only in the text of a GlibcHang, which the lookahead catches, '
+             'or of a GlibcUndefined, which leaves before anything is kept',
+    'utf8': 'from build', 'kw': 'from build and table',
+    'getc': 'from build', 'phys': 'from data', 'empty': 'from data',
+}
+
+
 class LR(object):
     """glibc's struct linereader over one file's bytes: lr_create, lr_next,
     lr_getc, lr_ungetc, lr_ungetn, lr_ignore_rest and lr_token."""
@@ -212,6 +261,8 @@ class LR(object):
             raise TypeError('LR needs a Build')
         self.fname = fname
         self.build = build
+        self.data = data
+        self.table = table
         self.utf8 = build.utf8
         self.kw = build.locfile_kw if table == 'locfile' else build.charmap_kw
         if build.pre236:
@@ -220,15 +271,19 @@ class LR(object):
         else:
             self.getc = self._getc_post236
         # The physical lines, each with its newline, as getdelim returns them.
-        self.phys = []
-        start = 0
-        while start < len(data):
-            j = data.find(b'\n', start)
-            if j < 0:
-                self.phys.append(data[start:])
-                break
-            self.phys.append(data[start:j + 1])
-            start = j + 1
+        # Only read, never changed, so files with the same bytes share them.
+        self.phys = build.lines_of.get(data)
+        if self.phys is None:
+            self.phys = []
+            start = 0
+            while start < len(data):
+                j = data.find(b'\n', start)
+                if j < 0:
+                    self.phys.append(data[start:])
+                    break
+                self.phys.append(data[start:j + 1])
+                start = j + 1
+            build.lines_of[data] = self.phys
         self.pi = 0
         self._cc = 0x23          # comment_char '#' (linereader.c:79@2.39)
         self._ec = 0x5c          # escape_char '\' (:80)
@@ -497,6 +552,60 @@ class LR(object):
         return Tok('charcode', bytes(nbytes), line)
 
     def symname(self, line):
+        # ch is what ended get_symname's loop, `>` or the newline. It is not
+        # always the last byte appended: when the escape character is `>`,
+        # the loop appends the byte after it and stops on the `>` itself.
+        got = self._symname_in_buffer()
+        b, ch = got if got is not None else self._symname_slow()
+        if len(b) and b[0] == 0x55 and len(b) in (6, 10):
+            if all(c in _HEX for c in b[1:-1]):
+                return Tok('ucs4', int(bytes(b[1:-1]), 16), line)
+        name = bytes(b[:-1])
+        k = self.kw.get(name)
+        if k is not None and k[1] == 1:
+            t = Tok('kw', name.decode('ascii'), line)
+            t.kwtok = k[0]
+            return t
+        t = Tok('bsymbol', name, line)
+        if ch != 0x3e:
+            t.closed = False
+        return t
+
+    def _symname_in_buffer(self):
+        """(the bytes get_symname appends, the byte that ended its loop) when
+        the name ends inside the line already in the buffer, at a `>` or the
+        newline that is appended last; None when this cannot say, and
+        _symname_slow reads it byte by byte.
+
+        Between here and the first `>` or newline, the loop of get_symname
+        (linereader.c:510-530@2.39) appends each byte lr_getc returns, as
+        it is: no byte there is the escape character, and none is one
+        lr_getc reads as EOF (0x1A before 2.36; 0xFF too, through a signed
+        char, but its masked value is appended all the same, which is what
+        is kept here). The escape character is searched for as the byte it
+        is; it can be NUL or negative only as a C char value (a byte at or
+        above 0x80 on a signed-char build), which no lr_getc value equals
+        but EOF, and `>` or the newline as escape change what ends the
+        name: those are left to _symname_slow.
+        """
+        ec = self._ec
+        if ec <= 0 or ec in (0x3e, 10):
+            return None
+        key = (ec, self.build.pre236)
+        stop = _SYMNAME_STOP.get(key)
+        if stop is None:
+            stop = _SYMNAME_STOP[key] = re.compile(
+                b'[>\n' + re.escape(bytes([ec]))
+                + (b'\x1a' if self.build.pre236 else b'') + b']')
+        m = stop.search(self.buf, self.idx, self.bufact)
+        if m is None or self.buf[m.start()] not in (0x3e, 10):
+            return None
+        end = m.start() + 1
+        b = bytearray(self.buf[self.idx:end])
+        self.idx = end
+        return b, b[-1]
+
+    def _symname_slow(self):
         getc = self.getc
         ec = self._ec
         b = bytearray()
@@ -518,24 +627,13 @@ class LR(object):
                                     'the end of the input'
                                     % (self.fname, self.lineno))
             if ch == 0x3e or ch == 10:
-                break
-        if len(b) and b[0] == 0x55 and len(b) in (6, 10):
-            if all(c in _HEX for c in b[1:-1]):
-                return Tok('ucs4', int(bytes(b[1:-1]), 16), line)
-        name = bytes(b[:-1])
-        k = self.kw.get(name)
-        if k is not None and k[1] == 1:
-            t = Tok('kw', name.decode('ascii'), line)
-            t.kwtok = k[0]
-            return t
-        t = Tok('bsymbol', name, line)
-        if ch != 0x3e:
-            t.closed = False
-        return t
+                return b, ch
 
     def ident(self, line):
         getc = self.getc
         ec = self._ec
+        if self.idx == 0 and self.bufact == 0:
+            raise GlibcUndefined(self.fname, line)
         b = bytearray([self.buf[self.idx - 1]])
         while True:
             ch = getc()
@@ -682,8 +780,9 @@ class Fatal(object):
     'crash' (a NULL dereference or a failed assertion). Each is measured on
     the RHEL 8, 9 and 10 builds by a case in tests/reader_oracle/, except
     the translit include with a NULL name, read from the source, and
-    GlibcHang, whose loop was measured against glibc's compiled line reader
-    (backlog 15.0), not against localedef.
+    get_symname's GlibcHang, whose loop was measured against glibc's
+    compiled line reader (backlog 15.0), not against localedef; the
+    skip_category one is measured against localedef (s47, s48, s50).
     `name` is the file the message names, `where` the file and line being
     read."""
 
@@ -785,7 +884,8 @@ class Run(object):
                when glibc stored none: localedef then warns "No definition
                for LC_COLLATE category found" and writes the 92-byte file
                that loads as no order at all (ld-collate.c:1566-1571 and
-               :2120-2146@2.39).
+               :2120-2146@2.39). None too when the run is fatal, or stopped
+               where glibc reads outside its buffer, which is unsettled.
     unsettled  [(file, line, why)]: places where this reader's model of a
                statement can differ from the handler glibc runs. A caller
                that needs a settled answer refuses one with any of these.
@@ -850,6 +950,11 @@ def run(name, resolve, build, charmap='UTF-8'):
         r.out.fatal = stop.fatal
     except GlibcHang as hang:
         r.out.fatal = Fatal('hang', None, detail=str(hang))
+    except GlibcUndefined as undefined:
+        # Nothing after this place can be read as glibc reads it.
+        r.out.unsettled.append((undefined.fname, undefined.line,
+                                'glibc reads outside its buffer here'))
+        return r.out
     if r.out.fatal is None:
         r.out.collate = main.data.get('LC_COLLATE')
     return r.out
@@ -860,6 +965,31 @@ def run(name, resolve, build, charmap='UTF-8'):
 _QUEUED = ('LC_NUMERIC', 'LC_TIME', 'LC_MONETARY', 'LC_MESSAGES', 'LC_PAPER',
            'LC_NAME', 'LC_ADDRESS', 'LC_TELEPHONE', 'LC_MEASUREMENT',
            'LC_IDENTIFICATION')
+
+
+def _repeats(lr, seen):
+    """True when the line reader is back in a state it was in before:
+    lr_token will give the same tokens again, forever.
+
+    It can come back only where lr_getc returns EOF without reading
+    anything, which it does at the end of the input, on an empty buffer,
+    and, before 2.36, at a 0x1A byte (linereader.h:125-138@2.34): lr_token
+    then gives back what it read with lr_ungetn as if EOF had been a
+    character -- after a number (linereader.c:288-301, the same at 2.28,
+    2.34 and 2.39), after a `-`, after an escaped byte value -- and the
+    next call reads the same again. Anywhere else every call moves on.
+    Only a loop that never drops the rest of a line meets it: glibc's own
+    (skip_category) never returns, and this reader's lookahead cannot
+    settle the statement. `seen` holds the states one loop has met; the
+    state is everything lr_token reads that these loops do not set."""
+    if lr.pi < len(lr.phys) and lr.bufact != 0 and not (
+            lr.build.pre236 and 0x1a in lr.buf):
+        return False
+    state = (lr.pi, lr.idx, lr.bufact, bytes(lr.buf), lr.lineno)
+    if state in seen:
+        return True
+    seen.add(state)
+    return False
 
 
 class _Runner(object):
@@ -1038,10 +1168,14 @@ class _Runner(object):
         after END, which the top level then reads as a new statement
         (ld-collate.c:2624-2643@2.39, ld-ctype.c:2106-2125)."""
         sec.skipped = True
+        seen = set()
         while True:
             t = lr.token()
             if t.tok == 'eof' or _kw(t, 'tok_end'):
                 break
+            if _repeats(lr, seen):
+                raise GlibcHang('%s:%d: skip_category reads the same token '
+                                'forever' % (lr.fname, t.line))
         if t.tok != 'eof':
             sec.end = t.line
         return
@@ -1076,30 +1210,26 @@ class _Runner(object):
                 store.statements.append((lr.fname, t.line, toks))
             return
         snap = lr.snapshot()
-        loud = _TAIL_KEYWORDS.get(sec.category, _TAIL_KEYWORDS[None])
-        try:
-            while True:
-                x = lr.token()
-                if x.tok == 'eof' and lr.stuck() and (
-                        lr.pi < len(lr.phys) or lr.idx < lr.bufact):
-                    # A byte lr_getc reads as EOF (0x1A before 2.36) with
-                    # the line going on after it: a handler that reads
-                    # tokens stops the file there, one that calls
-                    # lr_ignore_rest skips it (measured, case b19).
-                    self.unsettled(lr, t.line, 'a byte read as the end of '
-                                   'the file inside a statement')
-                if x.tok in ('eol', 'eof'):
-                    break
-                toks.append(x)
-                if x.tok == 'kw' and x.kwtok in loud:
-                    self.unsettled(lr, t.line, '`%s` after the first token '
-                                   'of a statement in %s' % (
-                                       x.val, sec.category))
-        except GlibcHang:
-            self.unsettled(lr, t.line, 'a statement whose tokens do not end '
-                           'before the end of the file')
-        scanned = lr.pi
-        lr.restore(snap)
+        # The lookahead reads only the line reader: its tokens, the reasons
+        # and how far it got follow from the reader's state and nothing
+        # else, and the state is put back after it. So it is kept per
+        # state, every field LR has but the derived ones (fname is only in
+        # the text of a GlibcHang, which is caught here, or of a
+        # GlibcUndefined, which leaves before anything is kept; utf8, kw,
+        # getc and phys follow from build, table and data). LR_KEY_FIELDS
+        # names them, and a test fails when LR grows a field this key does
+        # not cover.
+        key = (lr.data, lr.table, snap, lr._cc, lr._ec, lr.translate_strings,
+               lr.return_widestr, sec.category)
+        kept = lr.build.lookahead.get(key)
+        if kept is None:
+            kept = self._lookahead(lr, sec)
+            lr.build.lookahead[key] = kept
+            lr.restore(snap)
+        rest, reasons, scanned = kept
+        toks.extend(rest)
+        for why in reasons:
+            self.unsettled(lr, t.line, why)
         lr.ignore_rest()
         if scanned > lr.pi:
             self.unsettled(lr, t.line, 'a statement whose tokens run past '
@@ -1110,6 +1240,39 @@ class _Runner(object):
                            'LC_COLLATE')
         if store is not None:
             store.statements.append((lr.fname, t.line, toks))
+
+    @staticmethod
+    def _lookahead(lr, sec):
+        """(tokens after the first, reasons, lr.pi reached) of the rest of a
+        statement's logical line; leaves lr moved, statement() restores it."""
+        rest, reasons = [], []
+        loud = _TAIL_KEYWORDS.get(sec.category, _TAIL_KEYWORDS[None])
+        seen = set()
+        try:
+            while True:
+                x = lr.token()
+                if x.tok not in ('eol', 'eof') and _repeats(lr, seen):
+                    reasons.append('a statement whose tokens the line '
+                                   'reader gives again forever')
+                    break
+                if x.tok == 'eof' and lr.stuck() and (
+                        lr.pi < len(lr.phys) or lr.idx < lr.bufact):
+                    # A byte lr_getc reads as EOF (0x1A before 2.36) with
+                    # the line going on after it: a handler that reads
+                    # tokens stops the file there, one that calls
+                    # lr_ignore_rest skips it (measured, case b19).
+                    reasons.append('a byte read as the end of the file '
+                                   'inside a statement')
+                if x.tok in ('eol', 'eof'):
+                    break
+                rest.append(x)
+                if x.tok == 'kw' and x.kwtok in loud:
+                    reasons.append('`%s` after the first token of a '
+                                   'statement in %s' % (x.val, sec.category))
+        except GlibcHang:
+            reasons.append('a statement whose tokens do not end before the '
+                           'end of the file')
+        return tuple(rest), tuple(reasons), lr.pi
 
     def end_of_section(self, lr, t, sec):
         """`END` in statement position: the next token, then return

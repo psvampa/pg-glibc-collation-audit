@@ -333,6 +333,11 @@ def main(argv=None):
         return 2
     expected = dict(units)
     workers = max(1, min(args.workers, len(units)))
+    # scripts/reader_cache.py fills what it lacks with one process per
+    # processor; with `workers` classes running at once, that many each
+    # would only fight over the processors.
+    os.environ.setdefault('PG_GLIBC_READER_JOBS',
+                          str(max(1, (os.cpu_count() or 1) // workers)))
     started = time.time()
     with ThreadPoolExecutor(max_workers=workers) as pool:
         shards = list(pool.map(lambda u: run_unit(u[0]), units))
