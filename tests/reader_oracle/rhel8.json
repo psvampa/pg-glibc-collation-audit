@@ -4672,6 +4672,104 @@
     ]
    }
   },
+  "c50": {
+   "c": {
+    "collate": {
+     "markers": [
+      "a"
+     ],
+     "md5": "58f22df8a7b60c8b042c9c9439b57494",
+     "size": 10266
+    },
+    "messages": [
+     "rd-c50:3: LC_CTYPE: syntax error",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   },
+   "nc": {
+    "collate": {
+     "markers": [
+      "a"
+     ],
+     "md5": "58f22df8a7b60c8b042c9c9439b57494",
+     "size": 10266
+    },
+    "messages": [
+     "rd-c50:3: LC_CTYPE: syntax error",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   }
+  },
+  "c51": {
+   "c": {
+    "collate": null,
+    "messages": [
+     "[error] cannot open locale definition file `rd-c51-gone': No such file or directory"
+    ],
+    "rc": 4,
+    "timed_out": false,
+    "written": []
+   },
+   "nc": {
+    "collate": null,
+    "messages": [
+     "[error] cannot open locale definition file `rd-c51-gone': No such file or directory"
+    ],
+    "rc": 4,
+    "timed_out": false,
+    "written": []
+   }
+  },
   "d01": {
    "c": {
     "collate": {
@@ -9198,6 +9296,458 @@
     "written": []
    }
   },
+  "s36": {
+   "c": {
+    "collate": {
+     "markers": [
+      "a"
+     ],
+     "md5": "58f22df8a7b60c8b042c9c9439b57494",
+     "size": 10266
+    },
+    "messages": [
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[error] LC_TIME: field `day' not defined",
+     "[error] LC_TIME: field `abmon' not defined",
+     "[error] LC_TIME: field `mon' not defined",
+     "[error] LC_TIME: field `am_pm' not defined",
+     "[error] LC_TIME: field `d_t_fmt' not defined",
+     "[error] LC_TIME: field `d_fmt' not defined",
+     "[error] LC_TIME: field `t_fmt' not defined",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   },
+   "nc": {
+    "collate": null,
+    "messages": [
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[error] LC_TIME: field `day' not defined",
+     "[error] LC_TIME: field `abmon' not defined",
+     "[error] LC_TIME: field `mon' not defined",
+     "[error] LC_TIME: field `am_pm' not defined",
+     "[error] LC_TIME: field `d_t_fmt' not defined",
+     "[error] LC_TIME: field `d_fmt' not defined",
+     "[error] LC_TIME: field `t_fmt' not defined",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found",
+     "[error] no output file produced because errors were issued"
+    ],
+    "rc": 4,
+    "timed_out": false,
+    "written": []
+   }
+  },
+  "s37": {
+   "c": {
+    "collate": {
+     "markers": [
+      "a"
+     ],
+     "md5": "58f22df8a7b60c8b042c9c9439b57494",
+     "size": 10266
+    },
+    "messages": [
+     "rd-s37-x:2: LC_CTYPE: syntax error in definition of new character class",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[error] LC_TIME: field `day' not defined",
+     "[error] LC_TIME: field `abmon' not defined",
+     "[error] LC_TIME: field `mon' not defined",
+     "[error] LC_TIME: field `am_pm' not defined",
+     "[error] LC_TIME: field `d_t_fmt' not defined",
+     "[error] LC_TIME: field `d_fmt' not defined",
+     "[error] LC_TIME: field `t_fmt' not defined",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   },
+   "nc": {
+    "collate": null,
+    "messages": [
+     "rd-s37-x:2: LC_CTYPE: syntax error in definition of new character class",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[error] LC_TIME: field `day' not defined",
+     "[error] LC_TIME: field `abmon' not defined",
+     "[error] LC_TIME: field `mon' not defined",
+     "[error] LC_TIME: field `am_pm' not defined",
+     "[error] LC_TIME: field `d_t_fmt' not defined",
+     "[error] LC_TIME: field `d_fmt' not defined",
+     "[error] LC_TIME: field `t_fmt' not defined",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found",
+     "[error] no output file produced because errors were issued"
+    ],
+    "rc": 4,
+    "timed_out": false,
+    "written": []
+   }
+  },
+  "s38": {
+   "c": {
+    "collate": {
+     "markers": [
+      "a"
+     ],
+     "md5": "58f22df8a7b60c8b042c9c9439b57494",
+     "size": 10266
+    },
+    "messages": [
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[error] LC_TIME: field `day' not defined",
+     "[error] LC_TIME: field `abmon' not defined",
+     "[error] LC_TIME: field `mon' not defined",
+     "[error] LC_TIME: field `am_pm' not defined",
+     "[error] LC_TIME: field `d_t_fmt' not defined",
+     "[error] LC_TIME: field `d_fmt' not defined",
+     "[error] LC_TIME: field `t_fmt' not defined",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   },
+   "nc": {
+    "collate": null,
+    "messages": [
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[error] LC_TIME: field `day' not defined",
+     "[error] LC_TIME: field `abmon' not defined",
+     "[error] LC_TIME: field `mon' not defined",
+     "[error] LC_TIME: field `am_pm' not defined",
+     "[error] LC_TIME: field `d_t_fmt' not defined",
+     "[error] LC_TIME: field `d_fmt' not defined",
+     "[error] LC_TIME: field `t_fmt' not defined",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found",
+     "[error] no output file produced because errors were issued"
+    ],
+    "rc": 4,
+    "timed_out": false,
+    "written": []
+   }
+  },
+  "s39": {
+   "c": {
+    "collate": null,
+    "messages": [],
+    "rc": -11,
+    "timed_out": false,
+    "written": []
+   },
+   "nc": {
+    "collate": null,
+    "messages": [],
+    "rc": -11,
+    "timed_out": false,
+    "written": []
+   }
+  },
+  "s40": {
+   "c": {
+    "collate": null,
+    "messages": [],
+    "rc": -11,
+    "timed_out": false,
+    "written": []
+   },
+   "nc": {
+    "collate": null,
+    "messages": [],
+    "rc": -11,
+    "timed_out": false,
+    "written": []
+   }
+  },
+  "s41": {
+   "c": {
+    "collate": null,
+    "messages": [],
+    "rc": -11,
+    "timed_out": false,
+    "written": []
+   },
+   "nc": {
+    "collate": null,
+    "messages": [],
+    "rc": -11,
+    "timed_out": false,
+    "written": []
+   }
+  },
+  "s42": {
+   "c": {
+    "collate": null,
+    "messages": [
+     "rd-s42-t:2: LC_COLLATE: syntax error",
+     "rd-s42-t:3: LC_COLLATE: empty category description not allowed",
+     "rd-s42-t:2: LC_COLLATE: syntax error",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[error] LC_TIME: field `day' not defined",
+     "[error] LC_TIME: field `abmon' not defined",
+     "[error] LC_TIME: field `mon' not defined",
+     "[error] LC_TIME: field `am_pm' not defined",
+     "[error] LC_TIME: field `d_t_fmt' not defined",
+     "[error] LC_TIME: field `d_fmt' not defined",
+     "[error] LC_TIME: field `t_fmt' not defined",
+     "[error] too many errors; giving up"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": []
+   },
+   "nc": {
+    "collate": null,
+    "messages": [
+     "rd-s42-t:2: LC_COLLATE: syntax error",
+     "rd-s42-t:3: LC_COLLATE: empty category description not allowed",
+     "rd-s42-t:2: LC_COLLATE: syntax error",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[error] LC_TIME: field `day' not defined",
+     "[error] LC_TIME: field `abmon' not defined",
+     "[error] LC_TIME: field `mon' not defined",
+     "[error] LC_TIME: field `am_pm' not defined",
+     "[error] LC_TIME: field `d_t_fmt' not defined",
+     "[error] LC_TIME: field `d_fmt' not defined",
+     "[error] LC_TIME: field `t_fmt' not defined",
+     "[error] too many errors; giving up"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": []
+   }
+  },
+  "s43": {
+   "c": {
+    "collate": {
+     "markers": [
+      "a"
+     ],
+     "md5": "58f22df8a7b60c8b042c9c9439b57494",
+     "size": 10266
+    },
+    "messages": [
+     "rd-s43-t:2: character class `foo' already defined",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[error] LC_TIME: field `day' not defined",
+     "[error] LC_TIME: field `abmon' not defined",
+     "[error] LC_TIME: field `mon' not defined",
+     "[error] LC_TIME: field `am_pm' not defined",
+     "[error] LC_TIME: field `d_t_fmt' not defined",
+     "[error] LC_TIME: field `d_fmt' not defined",
+     "[error] LC_TIME: field `t_fmt' not defined",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   },
+   "nc": {
+    "collate": null,
+    "messages": [
+     "rd-s43-t:2: character class `foo' already defined",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[error] LC_TIME: field `day' not defined",
+     "[error] LC_TIME: field `abmon' not defined",
+     "[error] LC_TIME: field `mon' not defined",
+     "[error] LC_TIME: field `am_pm' not defined",
+     "[error] LC_TIME: field `d_t_fmt' not defined",
+     "[error] LC_TIME: field `d_fmt' not defined",
+     "[error] LC_TIME: field `t_fmt' not defined",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found",
+     "[error] no output file produced because errors were issued"
+    ],
+    "rc": 4,
+    "timed_out": false,
+    "written": []
+   }
+  },
+  "s44": {
+   "c": {
+    "collate": null,
+    "messages": [
+     "rd-s44-t:2: LC_COLLATE: syntax error",
+     "rd-s44-t:3: LC_COLLATE: empty category description not allowed",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[error] too many errors; giving up"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": []
+   },
+   "nc": {
+    "collate": null,
+    "messages": [
+     "rd-s44-t:2: LC_COLLATE: syntax error",
+     "rd-s44-t:3: LC_COLLATE: empty category description not allowed",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[error] too many errors; giving up"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": []
+   }
+  },
+  "s45": {
+   "c": {
+    "collate": null,
+    "messages": [
+     "rd-s45-t:3: LC_COLLATE: empty category description not allowed",
+     "rd-s45:4: LC_COLLATE: missing `order_end' keyword",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[error] LC_TIME: field `day' not defined",
+     "[error] LC_TIME: field `abmon' not defined",
+     "[error] LC_TIME: field `mon' not defined",
+     "[error] LC_TIME: field `am_pm' not defined",
+     "[error] LC_TIME: field `d_t_fmt' not defined",
+     "[error] LC_TIME: field `d_fmt' not defined",
+     "[error] LC_TIME: field `t_fmt' not defined"
+    ],
+    "rc": -9,
+    "timed_out": true,
+    "written": []
+   },
+   "nc": {
+    "collate": null,
+    "messages": [
+     "rd-s45-t:3: LC_COLLATE: empty category description not allowed",
+     "rd-s45:4: LC_COLLATE: missing `order_end' keyword",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[error] LC_TIME: field `day' not defined",
+     "[error] LC_TIME: field `abmon' not defined",
+     "[error] LC_TIME: field `mon' not defined",
+     "[error] LC_TIME: field `am_pm' not defined",
+     "[error] LC_TIME: field `d_t_fmt' not defined",
+     "[error] LC_TIME: field `d_fmt' not defined",
+     "[error] LC_TIME: field `t_fmt' not defined"
+    ],
+    "rc": -9,
+    "timed_out": true,
+    "written": []
+   }
+  },
   "t01": {
    "c": {
     "collate": {
@@ -11475,7 +12025,7 @@
    }
   }
  },
- "content": "e950a33d5b0a737f94b95c85501b0d6f6b989c6a1e46f3cdbec9e3f8adbcfc3c",
- "corpus": "1f866eead506f40812443d03fb901953c0d32cd7a31d40d28f29e9a9443f1bd0",
+ "content": "3f3f49d946ca23c3436ca8d66b0dd499d8b099b82cb82c88b2ad11e692a26f42",
+ "corpus": "784648fd0d0ad17092ed423408a280b710b8d0f21440b4be54e0750876922b3d",
  "format": "reader_oracle/1"
 }

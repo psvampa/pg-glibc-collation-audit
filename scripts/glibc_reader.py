@@ -48,9 +48,9 @@ undefined behaviour; Python's buf[-1] is used. Keyword lookup is exact, where
 gperf's strncmp could in theory match an identifier holding a NUL byte. A
 translated string holding a character the charmap lacks makes get_string
 try to transliterate it, which can load the file's own LC_CTYPE in the
-middle of the run (linereader.c:640-660@2.39); charmaps are read in a later
-step of block 15, and until then a copy name or translit value with a
-character above U+007F is reported unsettled, other strings are not.
+middle of the run (linereader.c:640-660@2.39). Charmaps are read in a later
+step of block 15; until then, where the reader sees an answer depend on
+whether the charmap has a character, it reports that place unsettled.
 
 Written for Python 3.6, the oldest the fixtures run, with the standard
 library only.
@@ -681,10 +681,9 @@ class Fatal(object):
     (localedef never returns: GlibcHang, or a cycle of `copy` names), or
     'crash' (a NULL dereference or a failed assertion). Each is measured on
     the RHEL 8, 9 and 10 builds by a case in tests/reader_oracle/, except
-    three read from the source: the translit include with a NULL name,
-    charconv in a file read for another category, and GlibcHang, whose
-    loop was measured against glibc's compiled line reader (backlog 15.0),
-    not against localedef.
+    the translit include with a NULL name, read from the source, and
+    GlibcHang, whose loop was measured against glibc's compiled line reader
+    (backlog 15.0), not against localedef.
     `name` is the file the message names, `where` the file and line being
     read."""
 
@@ -712,6 +711,7 @@ class Collate(object):
     def __init__(self):
         self.statements = []
         self.else_action = 'none'     # else_none / else_ignore / else_seen
+        self.order_started = False
 
 
 class Section(object):
@@ -795,11 +795,7 @@ class Run(object):
         self.fatal = None
         self.reads = []
         self.collate = None
-        self.stored = frozenset()
         self.unsettled = []
-        self.entries = ()
-        self.defined = frozenset()
-        self.else_action = None
 
     def sections(self, category, fname=None):
         return [s for r in self.reads for s in r.sections
@@ -816,79 +812,30 @@ def run(name, resolve, build, charmap='UTF-8'):
     (locfile.c:57-105@2.39) are the caller's to search. Names are bytes, as
     glibc compares them (strcmp, localedef.c:617).
 
+    Every file is read the way localedef reads it, in localedef's order and
+    with the state localedef carries from file to file: a copy at the start
+    of LC_COLLATE or LC_CTYPE is read at once, the other copies and translit
+    includes after the -i file (localedef.c:266-282@2.39). There is no
+    shortcut that reads a copied file on its own: one was tried in backlog
+    15.1, and review found it wrong where glibc's state crosses from file
+    to file.
+
     Only the UTF-8 charmap is modelled: a translated `copy` string is turned
     into a name the way that charmap turns it, and a name it cannot settle
     that way is reported unsettled. Returns a Run.
     """
     if charmap != 'UTF-8':
         raise ValueError('only the UTF-8 charmap is modelled')
-    return _run(name, resolve, build, None)
-
-
-def read_file(name, data, build, has_category, needed=None, context=None):
-    """One file read the way localedef reads it as its -i input, without
-    reading the files it copies or includes.
-
-    glibc reads a file copied at the start of LC_COLLATE or LC_CTYPE before
-    going on, and returns early when that file has no such section
-    (ld-collate.c:2657-2658@2.39), so this file's own reading depends on
-    that answer: `has_category(name, category)` gives it -- True, False,
-    or None for "no such file", which is localedef's fatal "cannot open".
-    Copies queued for later (the other ten categories, translit includes)
-    are answered the same way once the file is read, as localedef reads
-    them after it (localedef.c:266-282@2.39). With corpus_categories as
-    has_category, each answer is the copied file's own reading, taken
-    whole (_Runner.answer). Returns a Run whose `collate` holds only this
-    file's own LC_COLLATE statements.
-
-    `needed` is the categories the file is read for: all of them for an -i
-    input, and only the copied one for a file glibc reads because another
-    copies it (localedef.c:658@2.39); the rest are read with
-    ignore_content, so their own copies are not followed. `context` is the
-    state glibc carries into a copied file: the symbols defined so far,
-    one list for the whole run (ld-collate.c:276@2.39), and for a file
-    copied in the middle of LC_COLLATE the copier's struct, whose
-    if/else state it shares (localedef.c:648-656).
-    """
-    def resolve(n):
-        return data if n == name else None
-    return _run(name, resolve, build, has_category, needed, context)
-
-
-class Context(object):
-    """What a copied file's reading starts from (see read_file)."""
-
-    def __init__(self, defined=(), shared=None):
-        self.defined = frozenset(defined)
-        self.shared = shared            # None, or the copier's else_action
-
-    def key(self):
-        return (self.defined, self.shared)
-
-
-# The ten categories whose <cat>_finish follows the `copy` chain
-# (ld-time.c:143-153@2.39 and its nine siblings).
-_QUEUED = ('LC_NUMERIC', 'LC_TIME', 'LC_MONETARY', 'LC_MESSAGES', 'LC_PAPER',
-           'LC_NAME', 'LC_ADDRESS', 'LC_TELEPHONE', 'LC_MEASUREMENT',
-           'LC_IDENTIFICATION')
-
-
-def _run(name, resolve, build, has_category, needed=None, context=None):
-    r = _Runner(resolve, build, has_category)
+    r = _Runner(resolve, build)
     main = _Entry(name)
-    main.needed = set(CATEGORIES if needed is None else needed)
+    main.needed = set(CATEGORIES)
     r.entries.append(main)
-    if context is not None:
-        r.defined = list(context.defined)
-        if context.shared is not None:
-            main.data['LC_COLLATE'] = Collate()
-            main.data['LC_COLLATE'].else_action = context.shared
     try:
         if r.locfile_read(main) != 0:
             raise _Stop(Fatal('missing', name))
         # localedef.c:266-282@2.39: read every queued file until each has
         # what it is needed for.
-        while has_category is None:
+        while True:
             runp = None
             for e in r.entries:
                 if not e.needed <= e.avail:
@@ -898,97 +845,28 @@ def _run(name, resolve, build, has_category, needed=None, context=None):
                 break
             if r.locfile_read(runp) != 0:
                 raise _Stop(Fatal('missing', runp.name))
-        # read_file: what reading each queued file would do, unread.
-        while has_category is not None:
-            todo = [(e, c) for e in r.entries for c in sorted(e.needed)
-                    if c not in e.avail]
-            if not todo:
-                break
-            for e, c in todo:
-                r.answer(e, c, via='queue')
-        if needed is None:
-            r.finish_chains(main)
+        r.finish_chains(main)
     except _Stop as stop:
         r.out.fatal = stop.fatal
     except GlibcHang as hang:
         r.out.fatal = Fatal('hang', None, detail=str(hang))
     if r.out.fatal is None:
         r.out.collate = main.data.get('LC_COLLATE')
-        r.out.stored = frozenset(c for c, d in main.data.items()
-                                 if d is not None)
-        coll = main.data.get('LC_COLLATE')
-        r.out.else_action = coll.else_action if coll is not None else None
-    r.out.defined = frozenset(r.defined)
-    r.out.entries = tuple(
-        (e.name, frozenset(e.needed), frozenset(e.avail),
-         frozenset(c for c, d in e.data.items() if d is not None))
-        for e in r.entries)
     return r.out
 
 
-def corpus_categories(files, build):
-    """has_category for read_file over a set of files {name: bytes}, such
-    as one glibc tag's localedata/locales: a name it does not hold is None,
-    and a file has a category when reading it for that category alone, as
-    glibc reads a copied file, stores that category's data. Each file is
-    read once per category and starting state (read_file's `context`).
-
-    `has.result(name, category, context, via)` is the Run of that reading,
-    which read_file takes whole (_Runner.answer): its fatal outcome, its
-    unsettled places and the files its own copies loaded,
-    so that localedef's "a second time" refusal is found several copies
-    down (case c35, measured on el8/el9/el10). A (file, category) met
-    again while it is being read is, through a copy glibc reads at once
-    (LC_COLLATE, LC_CTYPE), localedef's circular refusal
-    (localedef.c:640-646@2.39); through a copy it queues, the outcome
-    depends on what localedef had already read, which a reading on its own
-    does not know, and the Run says so in `unsettled`. `has` itself raises
-    ReaderError for a file whose reading is fatal.
-    """
-    memo = {}
-    busy = set()
-
-    def result(name, category, context=None, via='load'):
-        if name not in files:
-            return None
-        if (name, category) in busy:
-            r = Run()
-            if via == 'load':
-                r.fatal = Fatal('circular', name)
-            else:
-                r.unsettled.append((name.decode('utf-8', 'surrogateescape'),
-                                    0, 'a cycle of copies localedef reads '
-                                    'later'))
-            return r
-        key = (name, category, context.key() if context else None)
-        if key not in memo:
-            busy.add((name, category))
-            try:
-                memo[key] = read_file(name, files[name], build, has,
-                                      (category,), context)
-            finally:
-                busy.discard((name, category))
-        return memo[key]
-
-    def has(name, category):
-        got = result(name, category)
-        if got is None:
-            return None
-        if got.fatal is not None:
-            raise ReaderError('%r cannot be read on its own: %r'
-                              % (name, got.fatal))
-        return category in got.stored
-    has.result = result
-    has.memo = memo
-    return has
+# The ten categories whose <cat>_finish follows the `copy` chain
+# (ld-time.c:143-153@2.39 and its nine siblings).
+_QUEUED = ('LC_NUMERIC', 'LC_TIME', 'LC_MONETARY', 'LC_MESSAGES', 'LC_PAPER',
+           'LC_NAME', 'LC_ADDRESS', 'LC_TELEPHONE', 'LC_MEASUREMENT',
+           'LC_IDENTIFICATION')
 
 
 class _Runner(object):
 
-    def __init__(self, resolve, build, has_category=None):
+    def __init__(self, resolve, build):
         self.resolve = resolve
         self.build = build
-        self.has_category = has_category
         self.entries = []
         self.out = Run()
         # `defined`: one static list for the whole run, every file and
@@ -1024,72 +902,9 @@ class _Runner(object):
     def load_locale(self, category, name, copy_locale=None):
         """localedef.c:685-701@2.39: queue and read now."""
         result = self.add_to_readlist(category, name, True, copy_locale)
-        if category in result.avail:
-            return result
-        if self.has_category is None:
-            if self.locfile_read(result) != 0:
-                raise _Stop(Fatal('missing', name))
-            return result
-        self.answer(result, category, copy_locale)
+        if category not in result.avail and self.locfile_read(result) != 0:
+            raise _Stop(Fatal('missing', name))
         return result
-
-    def answer(self, entry, category, copy_locale=None, via='load'):
-        """read_file: what reading `entry` for `category` would do, from
-        has_category instead of reading it. With a has_category that has a
-        `result` (corpus_categories), the copied file's whole reading is
-        taken, started from the state glibc would carry into it (the
-        defined symbols; for a copy in the middle of LC_COLLATE, the
-        copier's if/else state): its fatal outcome, its unsettled places,
-        the symbols it leaves defined, and every file its copies put in
-        the read list -- which is a circular copy when
-        this run still needs that file for that category
-        (add_to_readlist, localedef.c:640-646@2.39)."""
-        name = entry.name
-        result_of = getattr(self.has_category, 'result', None)
-        if result_of is None:
-            has = self.has_category(name, category)
-            if has is None:
-                raise _Stop(Fatal('missing', name))
-        else:
-            shared = None
-            if copy_locale is not None:
-                shared = copy_locale.data['LC_COLLATE'].else_action
-            got = result_of(name, category, Context(self.defined, shared),
-                            via)
-            if got is None:
-                raise _Stop(Fatal('missing', name))
-            if got.fatal is not None:
-                raise _Stop(got.fatal)
-            for where in got.unsettled:
-                if where not in self.out.unsettled:
-                    self.out.unsettled.append(where)
-            has = category in got.stored
-            self.defined = list(got.defined)
-            if shared is not None:
-                copy_locale.data['LC_COLLATE'].else_action = got.else_action
-            for n, needed, avail, stored in got.entries:
-                if n == name:
-                    continue
-                e = None
-                for x in self.entries:
-                    if x.name == n:
-                        e = x
-                        break
-                if e is None:
-                    e = _Entry(n)
-                    self.entries.append(e)
-                elif any(c in e.needed and c not in e.avail for c in needed):
-                    raise _Stop(Fatal('circular', n))
-                e.needed |= needed
-                e.avail |= avail
-                for c in stored:
-                    if e.data.get(c) is None:
-                        e.data[c] = Collate() if c == 'LC_COLLATE' \
-                            else object()
-        entry.avail.add(category)
-        if has and entry.data.get(category) is None:
-            entry.data[category] = Collate() if category == 'LC_COLLATE' \
-                else object()
 
     def finish_chains(self, main):
         """<cat>_finish of the ten categories that copy through
@@ -1097,8 +912,7 @@ class _Runner(object):
         `copy` names from file to file until one has the category
         (ld-time.c:143-153@2.39, the same loop in the nine others), with no
         test for a cycle: a cycle never returns. Measured for LC_TIME on
-        el8/el9/el10 (case c43). read_file never gets here with a cycle:
-        corpus_categories meets it first and reports it unsettled."""
+        el8/el9/el10 (case c43)."""
         for cat in _QUEUED:
             if main.data.get(cat) is not None or cat not in main.copy_name:
                 continue
@@ -1413,6 +1227,16 @@ class _Runner(object):
                 if t is None:
                     return
                 continue
+            if store is not None:
+                if _kw(t, 'tok_order_start'):
+                    store.order_started = True
+                elif t.tok in ('ellipsis2', 'ellipsis3', 'ellipsis4') \
+                        and not store.order_started:
+                    # localedef crashes on a range before any order_start
+                    # (measured on el8/el9/el10, case s41); why is the
+                    # statement grammar's to say (block 15, step 15.3).
+                    self.unsettled(lr, t.line, 'an ellipsis before '
+                                   'order_start')
             self.statement(lr, t, sec, store)
             t = lr.token()
 
@@ -1608,16 +1432,24 @@ class _Runner(object):
             elif sec.category == 'LC_CTYPE' and ignore and t.tok == 'kw' \
                     and t.kwtok in ('tok_charclass', 'tok_charconv'):
                 # No ignore_content test (ld-ctype.c:2177-2203@2.39, the
-                # same at 2.28 and 2.34): ctype_class_new on the struct,
-                # NULL in a file read for another category. Measured for
-                # charclass: a segmentation fault on el8/el9/el10 (case
-                # s32); charconv takes the same path, not measured.
-                if entry.data.get('LC_CTYPE') is None:
-                    raise _Stop(Fatal('crash', None, (lr.fname, t.line),
-                                      '%s in an LC_CTYPE read for another '
-                                      'category' % t.val))
-                self.unsettled(lr, t.line, 'a statement written into a '
-                               'struct read for another category')
+                # same at 2.28 and 2.34): when a name or a string follows,
+                # ctype_class_new or ctype_map_new writes into the struct,
+                # NULL in a file read for another category. Measured on
+                # el8/el9/el10: a segmentation fault for both, and a
+                # build when nothing or a number follows (cases s32,
+                # s36-s40).
+                snap = lr.snapshot()
+                try:
+                    nxt = lr.token()
+                finally:
+                    lr.restore(snap)
+                if nxt.tok in ('ident', 'string'):
+                    if entry.data.get('LC_CTYPE') is None:
+                        raise _Stop(Fatal('crash', None, (lr.fname, t.line),
+                                          '%s in an LC_CTYPE read for '
+                                          'another category' % t.val))
+                    self.unsettled(lr, t.line, 'a statement written into a '
+                                   'struct read for another category')
                 self.statement(lr, t, sec, None)
             else:
                 self.statement(lr, t, sec, None)
@@ -1729,6 +1561,13 @@ class _Runner(object):
                 self.copy_name(lr, rep_, t.line, False) is None):
             lr.ignore_rest()
             return
+        if rep_.tok == 'string' and any(k == 'ucp' and v >= 0x80
+                                        for k, v in rep_.items or ()):
+            # A character the charmap lacks makes the string NULL and the
+            # line a syntax error (measured, case c50); charmaps are read
+            # in a later step of block 15.
+            self.unsettled(lr, t.line, 'a translit include whose '
+                           'repertoire name holds a character above U+007F')
         if name.tok == 'ident':
             target = name.val
         else:

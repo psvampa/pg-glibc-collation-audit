@@ -447,6 +447,10 @@ def _cases():
         'a file copied inside an else branch meets an else of its own')
     add('c49', P, {'@': HEAD + b'ifdef NOPE\nelse\ncopy "@-t"\nendif\n'
                    + body('a') + END, '@-t': HEAD + END}, 'control for c48')
+    add('c50', P, {'@': tl % b'include "@-gone";"<U0378>"' + coll('a')},
+        'a translit include whose repertoire name is not in the charmap')
+    add('c51', P, {'@': tl % b'include "@-gone";"<U0041>"' + coll('a')},
+        'control for c50')
     qt = b'LC_TIME\ncopy "@-x"\nEND LC_TIME\n' + coll('a')
     add('s32', S, {'@': qt, '@-x': b'LC_CTYPE\ncharclass foo\nEND LC_CTYPE\n'
                    + TIME7}, 'charclass in a file read for LC_TIME')
@@ -457,6 +461,30 @@ def _cases():
     add('s35', S, {'@': qt, '@-x': b'LC_CTYPE\nfoo\nEND LC_CTYPE\n' + HEAD
                    + b'<U0061>\n' + END + TIME7},
         'control for s32 to s34')
+    for cid, line, note in (
+            ('s36', b'charclass', 'charclass alone'),
+            ('s37', b'charclass 5', 'charclass and a number'),
+            ('s38', b'charconv', 'charconv alone'),
+            ('s39', b'charconv foo', 'charconv and a name'),
+            ('s40', b'charclass "foo"', 'charclass and a string')):
+        add(cid, S, {'@': qt, '@-x': b'LC_CTYPE\n' + line + b'\nEND LC_CTYPE\n'
+                     + TIME7}, note + ' in a file read for LC_TIME')
+    add('s41', S, HEAD + D('a') + b'..\n' + ORDER_HEAD + O('a') + ORDER_TAIL
+        + END, 'an ellipsis before order_start')
+    twice = b'LC_TIME\ncopy "@-t"\nEND LC_TIME\n'
+    add('s42', S, {'@': HEAD + b'copy "@-t"\n' + END + twice,
+                   '@-t': HEAD + b'codepoint_collation\n' + END + TIME7},
+        'codepoint_collation in a file read again for LC_TIME')
+    add('s43', S, {'@': b'LC_CTYPE\ncopy "@-t"\nEND LC_CTYPE\n' + coll('a')
+                   + twice,
+                   '@-t': b'LC_CTYPE\ncharclass foo\nEND LC_CTYPE\n' + TIME7},
+        'charclass in a file read again for LC_TIME')
+    add('s44', S, {'@': HEAD + b'copy "@-t"\n' + END + twice,
+                   '@-t': HEAD + b'codepoint_collation\n' + END},
+        'control for s42: the copied file has no LC_TIME')
+    add('s45', S, {'@': HEAD + b'order_start forward\ncopy "@-t"\n' + END
+                   + twice, '@-t': HEAD + b'..\n' + END + TIME7},
+        'an ellipsis in a file copied in the middle, read again for LC_TIME')
     cond = (HEAD + D('t') + D('v') + ORDER_HEAD + b'ifdef YES\n' + O('t')
             + b'else\n' + O('v') + b'endif\n' + ORDER_TAIL + END)
     add('c31', P, {'@': HEAD + b'define YES\ncopy "@-t"\n' + END,

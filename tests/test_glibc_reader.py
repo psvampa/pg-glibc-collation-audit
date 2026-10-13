@@ -1,5 +1,5 @@
-"""scripts/glibc_reader.py, the one reader of glibc's locale sources, held to
-glibc itself.
+"""scripts/glibc_reader.py, a reader of glibc's locale sources that follows
+localedef, held to glibc itself. No step of the audit uses it yet.
 
 The tool's reading of glibc's files used to be copied by hand into several
 modules, and every copy read a little differently from glibc (backlog block
@@ -11,29 +11,26 @@ what localedef did:
   reader_oracle/rhel10.json  glibc-2.39-128.el10_2    (collaudit10)
 
 are localedef's answers to the cases in reader_oracle/cases.py, recorded on
-2026-10-12 with reader_oracle/measure.py on the three fixtures. The
+2026-10-13 with reader_oracle/measure.py on the three fixtures. The
 comparison needs no machine; an answer that is missing, damaged or recorded
 for other cases is a failure, never a skip. When cases.py changes, the
 corpus digest stops matching and the three files have to be measured again.
 
 The reader also says where it cannot answer (Run.unsettled): for the shapes
-whose statement grammar is a later step of block 15. Which cases those are
+a later step of block 15 reads. Which cases those are
 is pinned below, so a reader that stops answering anywhere else goes red,
 and a step that settles one has to move it here.
 """
 import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
 import unittest
 
 import _harness  # also puts scripts/ on sys.path
-from _harness import FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD
-from _harness import needs_clone, needs_floor_pair
+from _harness import GLIBC_CLONE, MID, NEW, needs_clone
 
-import glibc_locale_data as g
 import glibc_reader as gr
 
 ORACLE_DIR = os.path.join(_harness.TESTS_DIR, 'reader_oracle')
@@ -56,23 +53,20 @@ ORACLE_BUILDS = {'rhel8': ('2.28', '.el8'), 'rhel9': ('2.34', '.el9'),
 # of a line, LC_TIME's fields and translit's entries among them). b18 and
 # b19 are settled on el10 because a 0x1A or 0xFF there is an ordinary byte
 # from glibc 2.36 on.
-# c44 waits for the charmap reader (15.6), which says whether a translit
-# value has a character the charmap lacks; c45 and c46, like c34, for the
-# translit entry grammar (15.4).
-_PAST_THE_LINE = {'s18', 's27', 's30', 's31', 'c34', 'c44', 'c45', 'c46'}
+# c44 and c50 wait for the charmap reader (15.6), which says whether a
+# string has a character the charmap lacks; c45 and c46, like c34, for the
+# translit entry grammar (15.4). s41, s43 and s45 for the LC_COLLATE and
+# LC_CTYPE statement grammars (15.3, 15.4): a range before order_start,
+# and statements written into a struct the file shares while read for
+# another category; s42 too on el9 and el10, where codepoint_collation is a
+# keyword.
+_LATER = {'s18', 's27', 's30', 's31', 'c34', 'c44', 'c45', 'c46', 'c50',
+          's41', 's43', 's45'}
 EXPECTED_UNSETTLED = {
-    'rhel8': {'b18', 'b19'} | _PAST_THE_LINE,
-    'rhel9': {'b18', 'b19'} | _PAST_THE_LINE,
-    'rhel10': _PAST_THE_LINE,
+    'rhel8': {'b18', 'b19'} | _LATER,
+    'rhel9': {'b18', 'b19', 's42'} | _LATER,
+    'rhel10': {'s42'} | _LATER,
 }
-# read_file reads each copied file on its own, so it cannot know what
-# localedef had read before a cycle of queued copies (c42, c43): unsettled
-# there, where run() reads them in localedef's order.
-EXPECTED_UNSETTLED_READ_FILE = {
-    k: v | {'c42', 'c43'} for k, v in EXPECTED_UNSETTLED.items()}
-_FATAL = ('missing', 'circular', 'duplicate', 'crash', 'hang')
-
-
 def load_oracle(path):
     """The answers in `path`, checked whole: format, seal, the corpus they
     answer, and both runs of every case. Raises ValueError otherwise."""
@@ -101,8 +95,9 @@ def predict(case, build):
     when LC_COLLATE was read, the markers it holds. A marker is in the
     output when the statement defining it and the order line placing it
     were both read into the output's LC_COLLATE, in that order, the order
-    line between order_start and order_end; a struct with no order_start
-    read makes collate_finish give up (ld-collate.c:1849-1853@2.28)."""
+    line between order_start and order_end; a struct with neither an
+    order_start nor codepoint_collation read makes collate_finish give up
+    (ld-collate.c:1849-1853@2.28)."""
     files = {k.encode('latin-1'): v for k, v in case.files.items()}
     r = gr.run(case.main.encode('latin-1'), files.get, build)
     if r.unsettled:
@@ -119,6 +114,8 @@ def predict(case, build):
         t = toks[0]
         if t.tok == 'kw' and t.kwtok == 'tok_order_start':
             state, order = 1, True
+        elif t.tok == 'kw' and t.kwtok == 'tok_codepoint_collation':
+            order = True
         elif t.tok == 'kw' and t.kwtok == 'tok_order_end':
             state = 2
         elif t.tok == 'kw' and t.kwtok == 'tok_collating_element' \
@@ -131,24 +128,6 @@ def predict(case, build):
     return {'outcome': 'read',
             'markers': sorted(m for m in case.markers
                               if ('mk-' + m).encode() in placed)}
-
-
-def predict_read_file(case, build):
-    """What read_file, with copies answered by corpus_categories, says of
-    `case`: only whether localedef ends without output, and how, since it
-    does not merge the copied files' statements."""
-    files = {k.encode('latin-1'): v for k, v in case.files.items()}
-    main = case.main.encode('latin-1')
-    r = gr.read_file(main, files[main], build,
-                     gr.corpus_categories(files, build))
-    if r.unsettled:
-        return {'outcome': 'unsettled'}
-    if r.fatal is not None:
-        if r.fatal.kind == 'missing':
-            return {'outcome': 'missing',
-                    'name': r.fatal.name.decode('latin-1')}
-        return {'outcome': r.fatal.kind}
-    return {'outcome': 'built'}
 
 
 def observed(run):
@@ -256,24 +235,6 @@ class _OracleCompare(object):
                              % (case.id, case.note, p, o))
         self.assertEqual([], wrong)
 
-    def test_read_file_ends_where_localedef_ends(self):
-        wrong = []
-        unsettled = set()
-        for case in self.cases:
-            p = predict_read_file(case, self.build)
-            if p['outcome'] == 'unsettled':
-                unsettled.add(case.id)
-                continue
-            o = observed(self.data['cases'][case.id]['c'])
-            if o['outcome'] not in _FATAL:
-                o = {'outcome': 'built'}
-            if p != o:
-                wrong.append('%s (%s): read_file %s, localedef %s'
-                             % (case.id, case.note, p, o))
-        self.assertEqual([], wrong)
-        self.assertEqual(EXPECTED_UNSETTLED_READ_FILE[self.build_name],
-                         unsettled)
-
     def test_the_reader_leaves_unsettled_only_the_known_cases(self):
         got = {c.id for c in self.cases
                if predict(c, self.build)['outcome'] == 'unsettled'}
@@ -300,104 +261,6 @@ class OracleRhel9(_OracleCompare, unittest.TestCase):
 @needs_clone
 class OracleRhel10(_OracleCompare, unittest.TestCase):
     build_name = 'rhel10'
-
-
-def _tag_files(tag):
-    """{name: bytes} of localedata/locales at `tag`, every blob read or a
-    failure: a corpus read short would agree with anything."""
-    paths = g.list_locale_files(GLIBC_CLONE, tag)
-    req = ''.join('%s:%s\n' % (tag, p) for p in paths).encode()
-    out = subprocess.run(['git', 'cat-file', '--batch'], cwd=GLIBC_CLONE,
-                         input=req, capture_output=True, check=True).stdout
-    files, pos = {}, 0
-    for p in paths:
-        nl = out.index(b'\n', pos)
-        header = out[pos:nl].split()
-        if len(header) != 3:
-            raise AssertionError('%s:%s not read: %r' % (tag, p, header))
-        size = int(header[2])
-        files[p.rsplit('/', 1)[1].encode()] = out[nl + 1:nl + 1 + size]
-        pos = nl + 1 + size + 1
-    if pos != len(out):
-        raise AssertionError('cat-file output does not line up at ' + tag)
-    return files
-
-
-class _RealFiles(object):
-    """Every locale file of one tag, read on its own as localedef's -i
-    input with its copies answered from the same tag: no fatal outcome, the
-    expected unsettled files only, and the LC_COLLATE bounds and copies the
-    line readers of glibc_locale_data find today, which step 15.2 moves onto
-    this reader. Measured 2026-10-12: 0 differences at the five tags."""
-    tag = None
-    pre236 = None
-    unsettled = set()
-
-    def test_every_file_reads_as_the_line_readers_read_it(self):
-        build = gr.Build.at(GLIBC_CLONE, self.tag, self.pre236)
-        files = _tag_files(self.tag)
-        has = gr.corpus_categories(files, build)
-        wrong, fatal, unsettled = [], [], set()
-        for name, data in sorted(files.items()):
-            r = gr.read_file(name, data, build, has)
-            if r.fatal is not None:
-                fatal.append((name, r.fatal))
-                continue
-            if r.unsettled:
-                unsettled.add(name.decode())
-            secs = r.sections('LC_COLLATE', name)
-            mine = (secs[0].start, secs[0].end) if secs else None
-            text = data.decode('utf-8', 'replace')
-            theirs = g.collate_bounds(text)
-            if mine != theirs:
-                wrong.append((name, 'bounds', mine, theirs))
-            copies = []
-            if secs:
-                if secs[0].copy:
-                    copies.append(secs[0].copy[0])
-                copies += [n for n, _ in secs[0].mid_copies]
-            copies = [c.decode('utf-8', 'replace') for c in copies]
-            if copies != g.copy_targets(text):
-                wrong.append((name, 'copies', copies, g.copy_targets(text)))
-        self.assertEqual([], fatal)
-        self.assertEqual(self.unsettled, unsettled)
-        self.assertEqual([], wrong)
-        self.assertGreater(len(files), 250)
-
-
-@needs_clone
-class RealFilesOld(_RealFiles, unittest.TestCase):
-    tag, pre236 = OLD, True
-
-
-@needs_clone
-class RealFilesMid(_RealFiles, unittest.TestCase):
-    tag, pre236 = MID, True
-
-
-@needs_clone
-class RealFilesNew(_RealFiles, unittest.TestCase):
-    tag, pre236 = NEW, False
-
-
-# reorder-sections-after <LATIN> in am_ET and <SPECIAL> in ber_MA, whose
-# handler can drop the lines after it (the statement grammar of step 15.3),
-# and every file whose LC_COLLATE copies am_ET, which inherits that reading.
-# The same at both tags, measured 2026-10-12.
-_FLOOR_UNSETTLED = {
-    'aa_ER', 'aa_ER@saaho', 'aa_ET', 'am_ET', 'ber_MA', 'byn_ER', 'gez_ER',
-    'gez_ER@abegede', 'gez_ET', 'gez_ET@abegede', 'om_ET', 'sid_ET', 'so_ET',
-    'ti_ER', 'ti_ET', 'tig_ER', 'wal_ET'}
-
-
-@needs_floor_pair
-class RealFilesFloorOld(_RealFiles, unittest.TestCase):
-    tag, pre236, unsettled = FLOOR_OLD, True, _FLOOR_UNSETTLED
-
-
-@needs_floor_pair
-class RealFilesFloorNew(_RealFiles, unittest.TestCase):
-    tag, pre236, unsettled = FLOOR_NEW, True, _FLOOR_UNSETTLED
 
 
 @needs_clone
@@ -454,32 +317,14 @@ class ReaderFailureModes(unittest.TestCase):
         r = self.run_one(b'LC_TIME\ncopy "gone"\nEND LC_TIME\n')
         self.assertEqual(('missing', b'gone'), (r.fatal.kind, r.fatal.name))
 
-    def test_read_file_takes_a_missing_copy_as_fatal(self):
-        r = gr.read_file(b'm', b'LC_COLLATE\ncopy "gone"\nEND LC_COLLATE\n',
-                         self.b39, lambda n, c: None)
-        self.assertEqual(('missing', b'gone'), (r.fatal.kind, r.fatal.name))
-
-    def test_read_file_stops_where_the_copied_file_lacks_the_category(self):
+    def test_a_copied_file_without_the_category_ends_the_section_early(self):
         text = b'LC_COLLATE\ncopy "t"\nEND LC_COLLATE\n'
-        r = gr.read_file(b'm', text, self.b39, lambda n, c: False)
-        sec = r.sections('LC_COLLATE')[0]
-        self.assertTrue(sec.returned)
+        r = self.run_one(text, t=b'LC_TIME\nEND LC_TIME\n')
+        self.assertTrue(r.sections('LC_COLLATE', b'm')[0].returned)
         self.assertIsNone(r.collate)
-        r = gr.read_file(b'm', text, self.b39, lambda n, c: True)
-        self.assertFalse(r.sections('LC_COLLATE')[0].returned)
+        r = self.run_one(text, t=b'LC_COLLATE\nEND LC_COLLATE\n')
+        self.assertFalse(r.sections('LC_COLLATE', b'm')[0].returned)
         self.assertIsNotNone(r.collate)
-
-    def test_corpus_categories_refuses_a_cycle_and_names_absence(self):
-        files = {b'a': b'LC_COLLATE\ncopy "b"\nEND LC_COLLATE\n',
-                 b'b': b'LC_COLLATE\ncopy "a"\nEND LC_COLLATE\n'}
-        has = gr.corpus_categories(files, self.b39)
-        with self.assertRaisesRegex(gr.ReaderError, 'circular'):
-            has(b'a', 'LC_COLLATE')
-        self.assertIsNone(has(b'zz', 'LC_COLLATE'))
-        bad = gr.corpus_categories(
-            {b'x': b'LC_COLLATE\ncopy "gone"\nEND LC_COLLATE\n'}, self.b39)
-        with self.assertRaisesRegex(gr.ReaderError, 'cannot be read'):
-            bad(b'x', 'LC_COLLATE')
 
     def test_an_unclosed_name_at_the_end_is_a_hang_not_an_answer(self):
         r = self.run_one(b'LC_COLLATE\n<U0061')
@@ -551,6 +396,15 @@ class ReaderFailureModes(unittest.TestCase):
         self.assertTrue(any('a struct read for another category' in w
                             for _, _, w in r.unsettled), r.unsettled)
 
+    def test_an_ellipsis_inside_an_order_section_is_settled(self):
+        r = self.run_one(b'LC_COLLATE\norder_start forward\n<U0061>\n..\n'
+                         b'<U0063>\norder_end\nEND LC_COLLATE\n')
+        self.assertEqual([], r.unsettled)
+        r = self.run_one(b'LC_COLLATE\n..\norder_start forward\n'
+                         b'order_end\nEND LC_COLLATE\n')
+        self.assertTrue(any('before order_start' in w
+                            for _, _, w in r.unsettled), r.unsettled)
+
     def test_a_nested_conditional_is_skipped_whole(self):
         r = self.run_one(b'LC_COLLATE\nifdef NOPE\nifdef X\nelse\n'
                          b'copy "t"\nendif\nendif\norder_start forward\n'
@@ -563,33 +417,6 @@ class ReaderFailureModes(unittest.TestCase):
                          b'END LC_COLLATE\n')
         self.assertIsNotNone(r.fatal, 'a second else read as an answer')
         self.assertEqual('crash', r.fatal.kind)
-
-    def test_read_file_keeps_what_the_copied_files_loaded(self):
-        files = {b'm': b'LC_COLLATE\ncopy "t"\ncopy "u"\nEND LC_COLLATE\n',
-                 b't': b'LC_COLLATE\ncopy "u"\nEND LC_COLLATE\n',
-                 b'u': b'LC_COLLATE\norder_start forward\nEND LC_COLLATE\n'}
-        self.assertEqual('duplicate', gr.run(b'm', files.get, self.b39)
-                         .fatal.kind)
-        has = gr.corpus_categories(files, self.b39)
-        r = gr.read_file(b'm', files[b'm'], self.b39, has)
-        self.assertIsNotNone(r.fatal, 'the second load of u was not seen')
-        self.assertEqual(('duplicate', b'u'), (r.fatal.kind, r.fatal.name))
-
-    def test_read_file_checks_the_queued_copies(self):
-        files = {b'm': b'LC_TIME\ncopy "gone"\nEND LC_TIME\n'}
-        has = gr.corpus_categories(files, self.b39)
-        r = gr.read_file(b'm', files[b'm'], self.b39, has)
-        self.assertIsNotNone(r.fatal, 'the queued copy was not looked for')
-        self.assertEqual(('missing', b'gone'), (r.fatal.kind, r.fatal.name))
-
-    def test_read_file_carries_the_copied_files_unsettled_places(self):
-        files = {b'm': b'LC_COLLATE\ncopy "t"\nEND LC_COLLATE\n',
-                 b't': b'LC_COLLATE\nreorder-sections-after <x>\n'
-                       b'END LC_COLLATE\n'}
-        has = gr.corpus_categories(files, self.b39)
-        r = gr.read_file(b'm', files[b'm'], self.b39, has)
-        self.assertTrue(any(f == 't' for f, _, _ in r.unsettled),
-                        r.unsettled)
 
     def test_a_byte_read_as_eof_inside_a_statement_is_unsettled(self):
         text = b'LC_NUMERIC\ndecimal_point "\x1a"\nEND LC_NUMERIC\n'
