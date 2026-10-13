@@ -18,6 +18,7 @@ this tool shipped, or a way of losing one, and its docstring says which.
 | `test_node_modes.py` | yes | the steps that read a machine's own locale files |
 | `test_distro_diff.py` | yes | the comparison of a machine's locale files against its upstream tag (steps 6 and 7) |
 | `test_git_helpers.py` | mostly | code that cannot tell "nothing here" from "could not look"; some of its classes build a small repository of their own |
+| `test_glibc_reader.py` | mostly | `scripts/glibc_reader.py`, a reader of glibc's locale files that follows `localedef` and that no step uses yet, against what `localedef` did on the three RHEL builds (`reader_oracle/`) and against today's line readers on every locale file of the pinned tags |
 | `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, locale names and their aliases, the comment filter |
 | `test_locale_order.py` | no | step 11: the comparison on three real machines' measurements, the file each machine writes, and the progress lines |
 | `test_parallel_runner.py` | no | guards against losing tests quietly, in the parallel runner and in a test file run on its own |
@@ -26,9 +27,9 @@ this tool shipped, or a way of losing one, and its docstring says which.
 Without a clone at `scripts/glibc`, every layer marked "yes" skips with a
 reason; `test_pure_functions.py`, `test_parallel_runner.py`,
 `test_locale_order.py`, `test_published_claims.py` and the classes of
-`test_git_helpers.py` and `test_provenance.py` that do not need it still
-run. A skip is never a pass, and CI, which clones glibc fresh, fails on any
-skip.
+`test_git_helpers.py`, `test_glibc_reader.py` and `test_provenance.py` that
+do not need it still run. A skip is never a pass, and CI, which clones
+glibc fresh, fails on any skip.
 
 ## What this suite does NOT cover
 
@@ -37,8 +38,11 @@ skip.
 - The SQL files, `sql/collation_confirmation_template.sql` and
   `sql/c_utf8_probe.sql`, are never run, because that needs PostgreSQL on
   two machines.
-- A real machine: the half of `scripts/locale_order.py` that measures needs
-  Linux with glibc, and the transport over `ssh` was measured by hand.
+- A real machine: what runs on one -- the half of `scripts/locale_order.py`
+  that measures, and `tests/reader_oracle/measure.py run`, which compiles
+  the reader's cases with `localedef` -- needs Linux with glibc. The suite
+  replays what they recorded, and the transport over `ssh` was measured by
+  hand.
 - Distro backports: they are not in the upstream tags the suite reads.
 - Any pair of glibc versions other than the ones the suite pins.
 - Some guards of `audit.sh` that cannot be reached as it stands, so no test
