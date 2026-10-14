@@ -42,15 +42,22 @@ jobs:
       # promise broke and the job should be what says so.
 
       - name: Clone glibc
-        # Whole, not --filter=blob:none: on a partial clone git fetches each
-        # blob the suite reads one at a time, and reading the locale files
-        # of one tag took 98 to 259 s that way, against 0.1 s on a whole
-        # clone (measured 2026-10-13 from the Mac, #102). The whole clone
-        # costs about 20 s more.
         run: |
-          git clone --no-checkout \
+          git clone --filter=blob:none --no-checkout \
             https://github.com/bminor/glibc.git scripts/glibc
           git -C scripts/glibc fetch --tags --quiet
+
+      - name: Fetch the files the reader reads, in one request
+        # On this partial clone git fetches each blob it is asked for one at
+        # a time. The comparison of run() with every locale file of the five
+        # tags reads about 1,400 of them, and that took 98 to 259 s per tag
+        # (measured from the Mac, #102), against 2 s for this one request. A
+        # whole clone answers too, but cost 58 s against 7 s here. The tags
+        # are the suite's own; the paths are what glibc_reader reads.
+        run: |
+          tags=$(cd tests && python3 -c "import _harness as h; print(h.FLOOR_OLD, h.FLOOR_NEW, h.OLD, h.MID, h.NEW)")
+          oids=$(for t in $tags; do git -C scripts/glibc ls-tree -r "$t" localedata/locales locale/programs/locfile-kw.gperf locale/programs/charmap-kw.gperf; done | awk '{print $3}' | sort -u)
+          git -C scripts/glibc -c fetch.negotiationAlgorithm=noop fetch --quiet --no-tags --no-write-fetch-head origin $oids
 
       - name: Report tag provenance
         # Printed before anything else, and kept in the log: these are the
