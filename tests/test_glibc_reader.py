@@ -20,18 +20,29 @@ The reader also says where it cannot answer (Run.unsettled): for the shapes
 a later step of block 15 reads. Which cases those are
 is pinned below, so a reader that stops answering anywhere else goes red,
 and a step that settles one has to move it here.
+
+Below the oracle: what a Build keeps between runs and scripts/reader_cache.py
+keeps on disk give exactly what the reader computes without them (backlog
+15.2), and run() agrees with the line readers the steps use today on the
+LC_COLLATE bounds and copies of every locale file of the five tags, which
+the cache makes cheap after the first time.
 """
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import _harness  # also puts scripts/ on sys.path
-from _harness import GLIBC_CLONE, MID, NEW, needs_clone
+from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
+                      needs_clone, needs_floor_pair)
 
+import glibc_locale_data as g
 import glibc_reader as gr
+import reader_cache as rc
 
 ORACLE_DIR = os.path.join(_harness.TESTS_DIR, 'reader_oracle')
 if ORACLE_DIR not in sys.path:
@@ -52,20 +63,27 @@ ORACLE_BUILDS = {'rhel8': ('2.28', '.el8'), 'rhel9': ('2.34', '.el9'),
 # reads the grammar it depends on (15.4: the grammars that read past the end
 # of a line, LC_TIME's fields and translit's entries among them). b18 and
 # b19 are settled on el10 because a 0x1A or 0xFF there is an ordinary byte
-# from glibc 2.36 on.
+# from glibc 2.36 on, and so is s51, where a 0x1A after a number makes
+# lr_token give the number again forever before 2.36.
 # c44 and c50 wait for the charmap reader (15.6), which says whether a
 # string has a character the charmap lacks; c45 and c46, like c34, for the
 # translit entry grammar (15.4). s41, s43 and s45 for the LC_COLLATE and
 # LC_CTYPE statement grammars (15.3, 15.4): a range before order_start,
 # and statements written into a struct the file shares while read for
 # another category; s42 too on el9 and el10, where codepoint_collation is a
-# keyword.
+# keyword. s46 too: a number that ends the file is read again on every
+# lr_token, so whether glibc returns depends on what the statement's
+# handler does with the rest of its line (15.4); s47, s48 and, before
+# 2.36, s50, where the loop is glibc's own, are a hang, measured.
 _LATER = {'s18', 's27', 's30', 's31', 'c34', 'c44', 'c45', 'c46', 'c50',
-          's41', 's43', 's45'}
+          's41', 's43', 's45', 's46'}
+# For good: glibc reads outside its buffer there (GlibcUndefined), t16 at
+# the start of the file and s52 at the start of a continued line.
+_UNDEFINED = {'t16', 's52'}
 EXPECTED_UNSETTLED = {
-    'rhel8': {'b18', 'b19'} | _LATER,
-    'rhel9': {'b18', 'b19', 's42'} | _LATER,
-    'rhel10': {'s42'} | _LATER,
+    'rhel8': {'b18', 'b19', 's51'} | _LATER | _UNDEFINED,
+    'rhel9': {'b18', 'b19', 's42', 's51'} | _LATER | _UNDEFINED,
+    'rhel10': {'s42'} | _LATER | _UNDEFINED,
 }
 def load_oracle(path):
     """The answers in `path`, checked whole: format, seal, the corpus they
@@ -423,11 +441,426 @@ class ReaderFailureModes(unittest.TestCase):
         self.assertTrue(self.run_one(text, self.b34).unsettled)
         self.assertEqual([], self.run_one(text, self.b39).unsettled)
 
+    def test_reading_outside_glibcs_buffer_is_unsettled(self):
+        # `-` ends one line in the escape, the next holds only the escape:
+        # lr_ungetn cannot step back over the `-`, and get_ident reads
+        # lr->buf[-1] of an empty buffer.
+        r = self.run_one(b'LC_COLLATE\n-\\\n\\\nEND LC_COLLATE\n')
+        self.assertIsNone(r.fatal)
+        self.assertIn('glibc reads outside its buffer here',
+                      [w for _, _, w in r.unsettled])
+        # A whole LC_COLLATE read before the place is still not an answer.
+        r = self.run_one(b'LC_COLLATE\norder_start forward\n<U0041>\n'
+                         b'order_end\nEND LC_COLLATE\nLC_NUMERIC\n-x\n'
+                         b'END LC_NUMERIC\n')
+        self.assertIsNone(r.collate, 'a run stopped there read as one')
+        self.assertIn('glibc reads outside its buffer here',
+                      [w for _, _, w in r.unsettled])
+        # Not only an empty buffer: two names glibc reads alike, the byte
+        # before its buffer and `-y`, must not be told apart by the line.
+        r = self.run_one(b'LC_COLLATE\ndefine \\\n-y\nifdef \\\n-y \\\n\n'
+                         b'copy "t"\nendif\nEND LC_COLLATE\n',
+                         t=b'LC_COLLATE\nEND LC_COLLATE\n')
+        self.assertIn('glibc reads outside its buffer here',
+                      [w for _, _, w in r.unsettled])
+
     def test_written_collate_lists_every_block_and_an_open_one(self):
         text = (b'LC_COLLATE\nEND LC_COLLATE\nx\nLC_COLLATE\n'
                 b'order_start forward\n')
         self.assertEqual([(1, 2), (4, None)], gr.written_collate(text))
         self.assertEqual([], gr.written_collate(b'  LC_COLLATE\n'))
+
+
+def _tok(t):
+    return tuple(getattr(t, s) for s in gr.Tok.__slots__)
+
+
+def _twin(build):
+    """The same build with nothing kept yet."""
+    return gr.Build(build.pre236, build.signed_char, build.locfile_kw,
+                    build.charmap_kw, build.label)
+
+
+@needs_clone
+class ReaderKeepsOnlyWhatItWouldCompute(unittest.TestCase):
+    """What a Build keeps (the statement lookahead, a file's lines) and the
+    fast path for <names> give exactly what the reader computes without
+    them (backlog 15.2). Every Run of glibc-2.12..2.39 was compared whole
+    with the reader before them; these hold the parts no real file
+    exercises."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.b39 = gr.Build.at(GLIBC_CLONE, NEW, False)
+        cls.b34 = gr.Build.at(GLIBC_CLONE, MID, True)
+
+    def test_every_field_of_the_line_reader_is_accounted_for(self):
+        for data in (b'x\n', b''):
+            lr = gr.LR(data, 'f', self.b39)
+            self.assertEqual(set(gr.LR_KEY_FIELDS), set(vars(lr)),
+                             'LR has a field the kept lookahead does not '
+                             'account for; add it to the key in '
+                             '_Runner.statement and to LR_KEY_FIELDS')
+
+    @staticmethod
+    def lookahead(build, data, table='locfile', category='LC_COLLATE',
+                  cc=None, ec=None, ts=1, rest=None):
+        """The statement _Runner.statement stores for the first line of
+        `data` and the reasons it gives, with the line reader set up as
+        asked."""
+        r = gr._Runner({}.get, build)
+        lr = gr.LR(data, 'f', build, table=table)
+        if cc is not None:
+            lr.comment_char = cc
+        if ec is not None:
+            lr.escape_char = ec
+        lr.translate_strings = ts
+        t = lr.token()
+        if rest is not None:
+            assert len(rest) == lr.bufact - lr.idx, 'not the same length'
+            lr.buf[lr.idx:] = rest
+        store = gr.Collate()
+        r.statement(lr, t, gr.Section(category, b'f', 1, True), store)
+        toks = [_tok(x) for x in store.statements[-1][2]]
+        return toks, [w for _, _, w in r.out.unsettled], (lr.pi, lr.idx)
+
+    def test_a_kept_lookahead_is_used_only_for_the_same_state(self):
+        # One variation per part of the key that a real run can change.
+        # Each must change the answer, or the case proves nothing, and
+        # after the base state was kept, the variation must still get the
+        # answer a build that kept nothing gives.
+        base = dict(data=b'<U0041> %x copy "ab" /x41\\\n+\n')
+        lr = gr.LR(base['data'], 'f', _twin(self.b39))
+        lr.token()
+        rest = b' ' + b'z' * (lr.bufact - lr.idx - 1)
+        variants = {
+            'comment_char': dict(cc=0x25),
+            'escape_char': dict(ec=0x2f),
+            'translate_strings': dict(ts=0),
+            'category': dict(category='LC_NUMERIC'),
+            'table': dict(table='charmap'),
+            # The line in the buffer is the same; the one it continues
+            # into, read from the file, is not.
+            'data': dict(data=b'<U0041> %x copy "ab" /x41\\\n-\n'),
+            # Same length, so only the bytes in the buffer differ.
+            'buffer': dict(rest=rest),
+        }
+        for what, change in variants.items():
+            with self.subTest(what):
+                for build in (self.b39, self.b34):
+                    args = dict(base, **change)
+                    kept = _twin(build)
+                    first = self.lookahead(kept, **base)
+                    again = self.lookahead(kept, **args)
+                    alone = self.lookahead(_twin(build), **args)
+                    self.assertNotEqual(first, alone,
+                                        'the variation changes nothing')
+                    self.assertEqual(alone, again)
+                    self.assertEqual(first, self.lookahead(kept, **base))
+
+    def test_files_of_one_length_keep_their_own_lines(self):
+        shared = _twin(self.b39)
+        files = {b'm': b'LC_COLLATE\ncopy "aa"\nEND LC_COLLATE\n',
+                 b'n': b'LC_COLLATE\ncopy "bb"\nEND LC_COLLATE\n'}
+        self.assertEqual(len(files[b'm']), len(files[b'n']))
+        for name, want in ((b'm', b'aa'), (b'n', b'bb')):
+            r = gr.run(name, files.get, shared)
+            self.assertEqual((want, 2), r.sections('LC_COLLATE', name)[0].copy)
+
+    def test_a_name_says_whether_a_greater_than_sign_closed_it(self):
+        # A line ending in the escape is joined to the next (lr_next), so
+        # the third name is closed on the line below.
+        # With `>` as the escape, the byte after it is appended and the
+        # loop stops on the `>` (linereader.c:510-530@2.39): closed.
+        for data, ec, closed in ((b'<abc>\n', None, True),
+                                 (b'<abc\n', None, False),
+                                 (b'<abc\\\n>\n', None, True),
+                                 (b'<abc\\\nd\n', None, False),
+                                 (b'<abc> x\n', 0x3e, True),
+                                 (b'<abc\n', 0x3e, False)):
+            for fast in (True, False):
+                with self.subTest(data=data, ec=ec, fast=fast), \
+                        mock.patch.object(
+                            gr.LR, '_symname_in_buffer',
+                            gr.LR._symname_in_buffer if fast
+                            else (lambda self: None)):
+                    lr = gr.LR(data, 'f', _twin(self.b39))
+                    if ec is not None:
+                        lr.escape_char = ec
+                    t = lr.token()
+                    self.assertEqual(('bsymbol', closed), (t.tok, t.closed))
+
+    def test_the_name_fast_path_reads_what_the_slow_one_reads(self):
+        unsigned = gr.Build(True, False, self.b34.locfile_kw,
+                            self.b34.charmap_kw, 'pre236-unsigned')
+        lines = [b'<U0041>', b'<abc> x', b'<a/>b>', b'<a\\>b>', b'<a\x1ab>',
+                 b'<a\xffb>', b'<a\xc3\xa9>', b'<abc', b'<abc\\\ndef>',
+                 b'<abc/\ndef>', b'<>', b'<U00000041>', b'<a>>', b'<a\n>',
+                 b'<code_set_name>', b'<a', b'<a\\', b'<a/']
+        escapes = (None, 0x2f, 0x3e, 0x0a, 0x1a, 0xe9, 0x41)
+
+        def tokens(build, data, ec):
+            lr = gr.LR(data, 'f', build)
+            if ec is not None:
+                lr.escape_char = ec
+            out = []
+            try:
+                while True:
+                    t = lr.token()
+                    out.append(_tok(t))
+                    if t.tok == 'eof':
+                        return out
+            except gr.GlibcHang:
+                return out + ['hang']
+
+        for build in (self.b39, self.b34, unsigned):
+            for line in lines:
+                for ec, data in ((e, d) for e in escapes
+                                 for d in (line + b'\n', line)):
+                    with self.subTest(build=build.label, data=data, ec=ec):
+                        fast = tokens(_twin(build), data, ec)
+                        with mock.patch.object(
+                                gr.LR, '_symname_in_buffer',
+                                lambda self: None):
+                            slow = tokens(_twin(build), data, ec)
+                        self.assertEqual(slow, fast)
+
+
+def _small_tree():
+    return {
+        b'a': b'LC_COLLATE\ncopy "b"\nEND LC_COLLATE\n',
+        b'b': (b'LC_COLLATE\norder_start forward\n<U0041>\norder_end\n'
+               b'END LC_COLLATE\n'),
+        b'c': b'LC_CTYPE\nEND LC_CTYPE\n',
+    }
+
+
+@needs_clone
+class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
+    """scripts/reader_cache.py answers every name of a tree with what run()
+    answers, and with nothing it kept for another tree, another build or
+    another reader; what it cannot read it computes again."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.b39 = gr.Build.at(GLIBC_CLONE, NEW, False)
+        cls.b34 = gr.Build.at(GLIBC_CLONE, MID, True)
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix='pg-glibc-reader-cache-')
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        env = mock.patch.dict(os.environ, {'PG_GLIBC_READER_JOBS': '1'})
+        env.start()
+        self.addCleanup(env.stop)
+        self.calls = []
+        real = gr.run
+
+        def counted(name, *a, **k):
+            self.calls.append(name)
+            return real(name, *a, **k)
+        p = mock.patch.object(gr, 'run', counted)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def fresh(self, files, build=None):
+        return {n: rc.summary(gr.run(n, files.get, _twin(build or self.b39)))
+                for n in files}
+
+    def kept(self, files, build=None, cache=None):
+        del self.calls[:]
+        return rc.tree_runs(files, build or self.b39,
+                            cache_dir=self.dir if cache is None else cache)
+
+    def test_a_kept_tree_is_the_fresh_answer(self):
+        files = _small_tree()
+        want = self.fresh(files)
+        self.assertEqual(want, self.kept(files))
+        self.assertEqual(sorted(files), sorted(self.calls))
+        self.assertEqual(want, self.kept(files))
+        self.assertEqual([], self.calls, 'a kept tree was read again')
+
+    def test_a_changed_copy_target_is_read_again(self):
+        files = _small_tree()
+        self.kept(files)
+        files[b'b'] = b'\n' + files[b'b']
+        got = self.kept(files)
+        self.assertEqual([b'a', b'b'], sorted(self.calls),
+                         'only what reads b is read again')
+        self.assertEqual(self.fresh(files), got)
+
+    def test_a_name_the_tree_gains_is_read_again(self):
+        files = _small_tree()
+        files[b'a'] = b'LC_COLLATE\ncopy "x"\nEND LC_COLLATE\n'
+        first = self.kept(files)
+        self.assertEqual('missing', first[b'a'][0][0])
+        files[b'x'] = files.pop(b'b')
+        got = self.kept(files)
+        self.assertIsNone(got[b'a'][0])
+        self.assertEqual(self.fresh(files), got)
+
+    def test_a_damaged_entry_is_computed_again(self):
+        files = _small_tree()
+        want = self.fresh(files)
+        damage = [b'', b'{', b'[]', b'{}', b'null', b'"x"',
+                  b'{"a": 1, "b": 2, "c": 3}',
+                  b'[[{}, ["l", []]]]',
+                  b'[[{"b": null}, ["l", [null, ["l", []], ["l", []], '
+                  b'null]]]]']
+        for bad in damage:
+            with self.subTest(bad):
+                self.kept(files)
+                for dirpath, _, names in os.walk(self.dir):
+                    for n in names:
+                        if n.endswith('.json'):
+                            with open(os.path.join(dirpath, n), 'wb') as fh:
+                                fh.write(bad)
+                self.assertEqual(want, self.kept(files))
+                self.assertEqual(sorted(files), sorted(self.calls))
+
+    def test_a_name_is_never_served_another_names_run(self):
+        # Two names sharing a long prefix, and a kept entry that names no
+        # file at all: neither is the run of `a`.
+        files = _small_tree()
+        long = {b'x' * 80 + b'_one': files[b'a'],
+                b'x' * 80 + b'_two': b'LC_CTYPE\nEND LC_CTYPE\n'}
+        files.update(long)
+        self.kept(files)
+        files[b'c'] = b'\n' + files[b'c']
+        self.assertEqual(self.fresh(files), self.kept(files))
+        planted = [[{}, rc._enc(self.fresh(files)[b'c'])]]
+        for dirpath, _, names in os.walk(self.dir):
+            for n in names:
+                if n.endswith('.json'):
+                    with open(os.path.join(dirpath, n), 'w') as fh:
+                        json.dump(planted, fh)
+        self.assertEqual(self.fresh(files), self.kept(files))
+        self.assertEqual(sorted(files), sorted(self.calls))
+
+    def test_another_build_shares_nothing(self):
+        # The same keyword tables, and only lr_getc told apart: before 2.36
+        # a 0x1A byte ends the file, so d has no LC_COLLATE there.
+        files = _small_tree()
+        files[b'd'] = b'\x1a\n' + files[b'b']
+        after = self.b39
+        before = gr.Build(True, after.signed_char, after.locfile_kw,
+                          after.charmap_kw, 'pre236')
+        self.assertNotEqual(self.fresh(files, after)[b'd'],
+                            self.fresh(files, before)[b'd'])
+        self.kept(files, after)
+        self.assertEqual(self.fresh(files, before),
+                         self.kept(files, before))
+        self.assertEqual(sorted(files), sorted(self.calls))
+        for other in (self.b34, gr.Build(False, False, after.locfile_kw,
+                                         after.charmap_kw, 'unsigned')):
+            self.assertNotEqual(rc.build_id(after), rc.build_id(other))
+
+    def test_the_version_follows_the_readers_source(self):
+        both = ('glibc_reader.py', 'reader_cache.py')
+        for changed in both + (None,):
+            copy = tempfile.mkdtemp(dir=self.dir)
+            for f in both:
+                shutil.copy(os.path.join(_harness.SCRIPTS_DIR, f), copy)
+            if changed:
+                with open(os.path.join(copy, changed), 'ab') as fh:
+                    fh.write(b'\n')
+            with self.subTest(changed), \
+                    mock.patch.object(rc, '_HERE', copy):
+                if changed:
+                    self.assertNotEqual(rc.VERSION, rc._version())
+                else:
+                    self.assertEqual(rc.VERSION, rc._version())
+
+    def test_another_reader_starts_from_nothing_and_drops_the_old(self):
+        files = _small_tree()
+        self.kept(files)
+        old = rc.VERSION
+        keep = os.path.join(self.dir, 'not-a-version')
+        os.mkdir(keep)
+        with mock.patch.object(rc, 'VERSION', 'f' * 20):
+            self.assertEqual(self.fresh(files), self.kept(files))
+            self.assertEqual(sorted(files), sorted(self.calls))
+        self.assertFalse(os.path.exists(os.path.join(self.dir, old)))
+        self.assertTrue(os.path.isdir(keep))
+
+    def test_a_directory_it_cannot_write_still_answers(self):
+        blocker = os.path.join(self.dir, 'file')
+        with open(blocker, 'w') as fh:
+            fh.write('x')
+        files = _small_tree()
+        self.assertEqual(self.fresh(files),
+                         self.kept(files, cache=os.path.join(blocker, 'c')))
+
+    def test_many_processes_answer_what_one_does(self):
+        files = {b'l%02d' % i: b'LC_COLLATE\ncopy "b"\nEND LC_COLLATE\n'
+                 for i in range(12)}
+        files.update(_small_tree())
+        with mock.patch.dict(os.environ, {'PG_GLIBC_READER_JOBS': '4'}):
+            got = self.kept(files)
+        self.assertEqual(self.fresh(files), got)
+
+
+@needs_floor_pair
+class ReaderAgreesOnEveryRealFile(unittest.TestCase):
+    """run() against the line readers the steps use today, over every locale
+    file of the five tags, each as the -i of a localedef run with its
+    copies found in the same tag: the same LC_COLLATE bounds and the same
+    copies, no fatal run, and nothing unsettled but the known grammar
+    (backlog 15.1 measured this outside the suite, 9.4 minutes on the Mac;
+    reader_cache keeps the runs, so after the first time it takes
+    seconds)."""
+
+    TAGS = (FLOOR_OLD, FLOOR_NEW, OLD, MID, NEW)
+    # reorder-sections-after, read in 15.3; at 2.12 and 2.17 only.
+    UNSETTLED = {FLOOR_OLD: {'reorder-sections-after in LC_COLLATE': 17},
+                 FLOOR_NEW: {'reorder-sections-after in LC_COLLATE': 17}}
+
+    def test_each_tag(self):
+        for tag in self.TAGS:
+            with self.subTest(tag):
+                self.check(tag)
+
+    def check(self, tag):
+        names, data = _tag_files(tag)
+        pre236 = g.descends_from(GLIBC_CLONE, g.LR_GETC_FIX, tag)
+        self.assertIsNotNone(pre236, 'git cannot place %s' % tag)
+        runs = rc.tree_runs(data, gr.Build.at(GLIBC_CLONE, tag, not pre236))
+        self.assertEqual(sorted(data), sorted(runs))
+        self.assertGreater(len(runs), 250)
+        bad, unsettled = [], {}
+        for name in names:
+            fatal, reads, uns, _ = runs[name]
+            if fatal is not None:
+                bad.append((name, 'fatal', fatal))
+            for _, _, why in uns:
+                unsettled[why] = unsettled.get(why, 0) + 1
+            secs = [s for fr in reads for s in fr[3]
+                    if s[0] == 'LC_COLLATE' and s[1] == name]
+            mine = (secs[0][2], secs[0][3]) if secs else None
+            text = g.decoded(data[name])
+            theirs = g.collate_bounds(text)
+            if mine != theirs:
+                bad.append((name, 'bounds', mine, theirs))
+            cps = []
+            for s in secs[:1]:
+                if s[6]:
+                    cps.append(s[6][0])
+                cps += [n for n, _ in s[10]]
+            cps = [c.decode('utf-8', 'replace') if c is not None else None
+                   for c in cps]
+            if cps != g.copy_targets(text):
+                bad.append((name, 'copies', cps, g.copy_targets(text)))
+        self.assertEqual([], bad)
+        self.assertEqual(self.UNSETTLED.get(tag, {}), unsettled)
+
+
+def _tag_files(tag):
+    """(names in order, {name: bytes}) for localedata/locales at `tag`."""
+    paths = g.list_locale_files(GLIBC_CLONE, tag)
+    contents, missing = g.read_blobs(GLIBC_CLONE, tag, paths, raw=True)
+    g.require_read(tag, paths, missing, 'the corpus')
+    data = {os.path.basename(p).encode('utf-8', 'surrogateescape'): v
+            for p, v in contents.items()}
+    return sorted(data), data
 
 
 if __name__ == '__main__':

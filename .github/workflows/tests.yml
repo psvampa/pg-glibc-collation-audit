@@ -47,12 +47,50 @@ jobs:
             https://github.com/bminor/glibc.git scripts/glibc
           git -C scripts/glibc fetch --tags --quiet
 
+      - name: Fetch the files the reader reads, in one request
+        # On this partial clone git fetches each blob it is asked for one at
+        # a time. The comparison of run() with every locale file of the five
+        # tags reads about 1,400 of them, and that took 98 to 259 s per tag
+        # (measured from the Mac, #102), against 2 s for this one request. A
+        # whole clone answers too, but cost 58 s against 7 s here. The tags
+        # are the suite's own; the paths are what glibc_reader reads.
+        run: |
+          tags=$(cd tests && python3 -c "import _harness as h; print(h.FLOOR_OLD, h.FLOOR_NEW, h.OLD, h.MID, h.NEW)")
+          oids=$(for t in $tags; do git -C scripts/glibc ls-tree -r "$t" localedata/locales locale/programs/locfile-kw.gperf locale/programs/charmap-kw.gperf; done | awk '{print $3}' | sort -u)
+          git -C scripts/glibc -c fetch.negotiationAlgorithm=noop fetch --quiet --no-tags --no-write-fetch-head origin $oids
+
       - name: Report tag provenance
         # Printed before anything else, and kept in the log: these are the
         # commit ids the run actually read. An invalid signature aborts here.
         run: |
           python3 scripts/glibc_locale_data.py provenance \
             glibc-2.28 glibc-2.34 glibc-2.39 glibc-2.12 glibc-2.17
+
+      - name: Keep the reader's answers between runs
+        # scripts/reader_cache.py keeps the localedef runs that
+        # glibc_reader.py emulates for it, about 0.2 s of work per locale.
+        # Unlike the clone above, what is kept here cannot answer for
+        # anything but what it was computed from: each run is used only for
+        # the same bytes of every file it read, and the directory names a
+        # hash of the reader's own source, so a changed reader finds nothing
+        # and starts over. The key below says the same, so a run after such
+        # a change restores nothing instead of a cache it would throw away.
+        uses: actions/cache@v4
+        with:
+          path: scripts/glibc-reader-cache
+          key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}
+
+      - name: Fill the reader's answers for the five tags
+        # After a change to the reader nothing kept is used, and the
+        # comparison of run() with every locale file of the five tags
+        # computes about 1,700 runs. Inside the suite it gets one of the four
+        # processors and ran past its shard timeout (measured on #102); here
+        # it gets all four, and the suite below finds it kept. With nothing
+        # changed it takes seconds.
+        run: |
+          cd tests
+          PG_GLIBC_READER_JOBS=$(nproc) python3 -m unittest -q \
+            test_glibc_reader.ReaderAgreesOnEveryRealFile
 
       - name: Say so if the documentation layer is switched off
         # Renaming that file out of `test*.py` removes its tests from the run

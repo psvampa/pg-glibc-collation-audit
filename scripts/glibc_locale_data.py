@@ -2,7 +2,7 @@
 """
 Shared helpers for reading glibc locale data out of a git clone.
 
-Every script in this directory needs the same handful of primitives: locate the
+The scripts in this directory need the same handful of primitives: locate the
 glibc clone, read blobs at a tag, find the LC_COLLATE block, and walk the
 `copy` graph. They used to each spawn one `git show` per locale file (~350
 subprocesses) with a 30s timeout and an ignored return code, so a slow blob
@@ -788,7 +788,7 @@ def report_tag_provenance(repo, *tags):
               "(sourceware.org/git/glibc.git) if it matters.")
 
 
-def read_blobs(repo, tag, paths):
+def read_blobs(repo, tag, paths, raw=False):
     """Read many blobs at `tag` in one pass.
 
     Returns (contents, missing): a {path: text} map and the set of paths that
@@ -803,8 +803,11 @@ def read_blobs(repo, tag, paths):
     that does not exist. A caller whose paths came from that tag's own tree
     treats `missing` as a read that failed, as read_blobs_strict and
     require_read do.
+
+    raw=True gives each blob's bytes as they are, for glibc_reader, which
+    reads bytes the way glibc does and never a decoded text.
     """
-    return read_blobs_at(repo, [(tag, paths)])[0]
+    return read_blobs_at(repo, [(tag, paths)], raw=raw)[0]
 
 
 # The texts read_blobs_at decoded from bytes that held 0xFF. errors='replace'
@@ -827,10 +830,11 @@ def decoded(raw):
     return text
 
 
-def read_blobs_at(repo, groups):
+def read_blobs_at(repo, groups, raw=False):
     """read_blobs for several (tag, paths) groups in ONE `git cat-file
     --batch`, so a step that reads at two tags starts one git, not one per
-    read. Returns [(contents, missing), ...], one pair per group, in order.
+    read. Returns [(contents, missing), ...], one pair per group, in order;
+    with raw=True the contents are the blobs' bytes, not decoded().
     """
     groups = [(tag, list(paths)) for tag, paths in groups]
     results = [({}, set()) for _ in groups]
@@ -870,7 +874,8 @@ def read_blobs_at(repo, groups):
         if out[pos + size:pos + size + 1] != b'\n':
             die(f"truncated `git cat-file --batch` output inside {tag}:{path}: "
                 f"its header promised {size} bytes")
-        contents[path] = decoded(out[pos:pos + size])
+        body = out[pos:pos + size]
+        contents[path] = body if raw else decoded(body)
         pos += size + 1  # body plus its trailing newline
     if pos != len(out):
         die(f"`git cat-file --batch` printed {len(out) - pos} byte(s) more "
