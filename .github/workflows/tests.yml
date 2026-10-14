@@ -68,6 +68,18 @@ jobs:
           path: scripts/glibc-reader-cache
           key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}
 
+      - name: Fill the reader's answers for the five tags
+        # After a change to the reader nothing kept is used, and the
+        # comparison of run() with every locale file of the five tags
+        # computes about 1,700 runs. Inside the suite it gets one of the four
+        # processors and ran past its shard timeout (measured on #102); here
+        # it gets all four, and the suite below finds it kept. With nothing
+        # changed it takes seconds.
+        run: |
+          cd tests
+          PG_GLIBC_READER_JOBS=$(nproc) python3 -m unittest -q \
+            test_glibc_reader.ReaderAgreesOnEveryRealFile
+
       - name: Say so if the documentation layer is switched off
         # Renaming that file out of `test*.py` removes its tests from the run
         # without producing a single skip, so the step below stays green and
