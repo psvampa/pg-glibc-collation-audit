@@ -42,8 +42,13 @@ jobs:
       # promise broke and the job should be what says so.
 
       - name: Clone glibc
+        # Whole, not --filter=blob:none: on a partial clone git fetches each
+        # blob the suite reads one at a time, and reading the locale files
+        # of one tag took 98 to 259 s that way, against 0.1 s on a whole
+        # clone (measured 2026-10-13 from the Mac, #102). The whole clone
+        # costs about 20 s more.
         run: |
-          git clone --filter=blob:none --no-checkout \
+          git clone --no-checkout \
             https://github.com/bminor/glibc.git scripts/glibc
           git -C scripts/glibc fetch --tags --quiet
 
