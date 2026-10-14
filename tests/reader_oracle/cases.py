@@ -500,6 +500,12 @@ def _cases():
         'skip_category of LC_COLLATE meeting a number, then 0x1A')
     add('s51', S, IDENT + HEAD + D('a') + ORDER_HEAD + b'7\x1a\n' + O('a')
         + ORDER_TAIL + END, 'a statement of a number, then 0x1A')
+    # get_ident reads lr->buf[-1] when lr_ungetn cannot step back over a
+    # `-` that opens a continued line (linereader.c:329, :578@2.39).
+    add('s52', S, {'@': IDENT + HEAD + b'define \\\n-y\nifdef \\\n-y \\\n\n'
+                   b'copy "@-t"\nendif\n' + body('a') + END,
+                   '@-t': coll('b')},
+        'a define and an ifdef whose names open a continued line with `-`')
     cond = (HEAD + D('t') + D('v') + ORDER_HEAD + b'ifdef YES\n' + O('t')
             + b'else\n' + O('v') + b'endif\n' + ORDER_TAIL + END)
     add('c31', P, {'@': HEAD + b'define YES\ncopy "@-t"\n' + END,

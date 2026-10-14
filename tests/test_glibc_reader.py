@@ -77,10 +77,13 @@ ORACLE_BUILDS = {'rhel8': ('2.28', '.el8'), 'rhel9': ('2.34', '.el9'),
 # 2.36, s50, where the loop is glibc's own, are a hang, measured.
 _LATER = {'s18', 's27', 's30', 's31', 'c34', 'c44', 'c45', 'c46', 'c50',
           's41', 's43', 's45', 's46'}
+# For good: glibc reads outside its buffer there (GlibcUndefined), t16 at
+# the start of the file and s52 at the start of a continued line.
+_UNDEFINED = {'t16', 's52'}
 EXPECTED_UNSETTLED = {
-    'rhel8': {'b18', 'b19', 's51'} | _LATER,
-    'rhel9': {'b18', 'b19', 's42', 's51'} | _LATER,
-    'rhel10': {'s42'} | _LATER,
+    'rhel8': {'b18', 'b19', 's51'} | _LATER | _UNDEFINED,
+    'rhel9': {'b18', 'b19', 's42', 's51'} | _LATER | _UNDEFINED,
+    'rhel10': {'s42'} | _LATER | _UNDEFINED,
 }
 def load_oracle(path):
     """The answers in `path`, checked whole: format, seal, the corpus they
@@ -444,6 +447,20 @@ class ReaderFailureModes(unittest.TestCase):
         # lr->buf[-1] of an empty buffer.
         r = self.run_one(b'LC_COLLATE\n-\\\n\\\nEND LC_COLLATE\n')
         self.assertIsNone(r.fatal)
+        self.assertIn('glibc reads outside its buffer here',
+                      [w for _, _, w in r.unsettled])
+        # A whole LC_COLLATE read before the place is still not an answer.
+        r = self.run_one(b'LC_COLLATE\norder_start forward\n<U0041>\n'
+                         b'order_end\nEND LC_COLLATE\nLC_NUMERIC\n-x\n'
+                         b'END LC_NUMERIC\n')
+        self.assertIsNone(r.collate, 'a run stopped there read as one')
+        self.assertIn('glibc reads outside its buffer here',
+                      [w for _, _, w in r.unsettled])
+        # Not only an empty buffer: two names glibc reads alike, the byte
+        # before its buffer and `-y`, must not be told apart by the line.
+        r = self.run_one(b'LC_COLLATE\ndefine \\\n-y\nifdef \\\n-y \\\n\n'
+                         b'copy "t"\nendif\nEND LC_COLLATE\n',
+                         t=b'LC_COLLATE\nEND LC_COLLATE\n')
         self.assertIn('glibc reads outside its buffer here',
                       [w for _, _, w in r.unsettled])
 

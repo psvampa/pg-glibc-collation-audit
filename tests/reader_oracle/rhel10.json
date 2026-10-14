@@ -10058,6 +10058,94 @@
     ]
    }
   },
+  "s52": {
+   "c": {
+    "collate": {
+     "markers": [
+      "a",
+      "b"
+     ],
+     "md5": "0283b92c332b5e007b790dfb900dc20e",
+     "size": 10374
+    },
+    "messages": [
+     "rd-s52:8: trailing garbage at end of line",
+     "rd-s52:13: LC_COLLATE: multiple order definitions for unnamed section",
+     "rd-s52:14: order for `U00000062' already defined at rd-s52-t:4",
+     "rd-s52:15: order for `U00000061' already defined at rd-s52-t:5",
+     "rd-s52:17: LC_COLLATE: order for `UNDEFINED' already defined at rd-s52-t:7",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   },
+   "nc": {
+    "collate": {
+     "markers": [
+      "a",
+      "b"
+     ],
+     "md5": "0283b92c332b5e007b790dfb900dc20e",
+     "size": 10374
+    },
+    "messages": [
+     "rd-s52:8: trailing garbage at end of line",
+     "rd-s52:13: LC_COLLATE: multiple order definitions for unnamed section",
+     "rd-s52:14: order for `U00000062' already defined at rd-s52-t:4",
+     "rd-s52:15: order for `U00000061' already defined at rd-s52-t:5",
+     "rd-s52:17: LC_COLLATE: order for `UNDEFINED' already defined at rd-s52-t:7",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   }
+  },
   "t01": {
    "c": {
     "collate": {
@@ -12335,7 +12423,7 @@
    }
   }
  },
- "content": "0380e8bedc263dddbd466b2a867d23120da32cc84675f4dff3e519f5e20fb795",
- "corpus": "e1b62c2d3ae014d720a0814aa0c54c52b6a88efa40a92ecac446f9633da7b134",
+ "content": "5c7db15fbb65c19e4bf9b274f15fa4c3b635dec0d7d190c1570053420dd3d884",
+ "corpus": "4a6def01980f446132d0ccc4021e7e1ba978fa9ddcdcd5e00a14b1c7f4dc48dc",
  "format": "reader_oracle/1"
 }

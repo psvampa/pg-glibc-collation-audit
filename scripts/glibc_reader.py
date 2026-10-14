@@ -44,10 +44,10 @@ and tests/test_glibc_reader.py compares this module with it.
 
 Not modelled, on purpose: a `-` at the very start of a buffer makes get_ident
 read lr->buf[-1] (linereader.c:578@2.39, after lr_ungetn at :329), which is
-undefined behaviour; Python's buf[-1] is used, which agrees with localedef
-on the measured case (t16). On an empty buffer there is no such byte, and
-the run is reported unsettled there (GlibcUndefined). Keyword lookup is
-exact, where
+undefined behaviour, and the run is reported unsettled there
+(GlibcUndefined): the byte glibc reads is the same on every line, since
+getdelim reuses the buffer, and no byte of the line stands for it. Keyword
+lookup is exact, where
 gperf's strncmp could in theory match an identifier holding a NUL byte. A
 translated string holding a character the charmap lacks makes get_string
 try to transliterate it, which can load the file's own LC_CTYPE in the
@@ -78,11 +78,12 @@ class ReaderError(Exception):
 
 
 class GlibcUndefined(Exception):
-    """glibc reads outside an empty buffer for this input: get_ident takes
-    lr->buf[lr->idx - 1] with idx 0 after a `-` whose next character was an
-    EOF on an empty line (linereader.c:329 and :578@2.39). What it reads is
-    undefined and Python has no byte to stand for it, so run() reports the
-    place unsettled instead of answering."""
+    """glibc reads outside its buffer for this input: get_ident takes
+    lr->buf[lr->idx - 1] with idx 0 when lr_ungetn could not step back over
+    a `-` (linereader.c:329 and :578@2.39), as at the start of a file or
+    of a line continued from one ending in `-` and the escape. What it
+    reads is undefined, and can decide an answer (two `define`/`ifdef`
+    names glibc reads alike), so run() reports the place unsettled."""
 
     def __init__(self, fname, line):
         Exception.__init__(self, '%s:%d' % (fname, line))
@@ -632,7 +633,7 @@ class LR(object):
     def ident(self, line):
         getc = self.getc
         ec = self._ec
-        if self.idx == 0 and self.bufact == 0:
+        if self.idx == 0:
             raise GlibcUndefined(self.fname, line)
         b = bytearray([self.buf[self.idx - 1]])
         while True:
@@ -972,8 +973,9 @@ def _repeats(lr, seen):
     lr_token will give the same tokens again, forever.
 
     It can come back only where lr_getc returns EOF without reading
-    anything, which it does at the end of the input, on an empty buffer,
-    and, before 2.36, at a 0x1A byte (linereader.h:125-138@2.34): lr_token
+    anything, which it does at the end of the input and, before 2.36, at a
+    0x1A byte (linereader.h:125-138@2.34); on an empty buffer too, but there
+    lr_token gives `eof`, which both loops stop at first. lr_token
     then gives back what it read with lr_ungetn as if EOF had been a
     character -- after a number (linereader.c:288-301, the same at 2.28,
     2.34 and 2.39), after a `-`, after an escaped byte value -- and the
@@ -982,8 +984,7 @@ def _repeats(lr, seen):
     (skip_category) never returns, and this reader's lookahead cannot
     settle the statement. `seen` holds the states one loop has met; the
     state is everything lr_token reads that these loops do not set."""
-    if lr.pi < len(lr.phys) and lr.bufact != 0 and not (
-            lr.build.pre236 and 0x1a in lr.buf):
+    if lr.pi < len(lr.phys) and not (lr.build.pre236 and 0x1a in lr.buf):
         return False
     state = (lr.pi, lr.idx, lr.bufact, bytes(lr.buf), lr.lineno)
     if state in seen:
