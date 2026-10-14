@@ -506,7 +506,77 @@ def _cases():
                    b'copy "@-t"\nendif\n' + body('a') + END,
                    '@-t': coll('b')},
         'a define and an ifdef whose names open a continued line with `-`')
-    cond = (HEAD + D('t') + D('v') + ORDER_HEAD + b'ifdef YES\n' + O('t')
+    # Before 2.36 an 0xFF reads as EOF through a signed char and IS
+    # consumed. After END, an EOF is `break`, not `return`: the section
+    # reads on (ld-collate.c:3772-3773@2.34, ld-numeric.c:320-321,
+    # ld-ctype.c:2823-2824); skip_category reads one more token after it
+    # and drops the rest of that line (ld-collate.c:2611-2624@2.34).
+    # False-negative-reviewer, round 2 of 15.2 B2.
+    add('s53', S, HEAD + D('a') + D('b') + b'END \xff\n' + ORDER_HEAD
+        + O('a') + O('b') + ORDER_TAIL + END,
+        'END then 0xFF in LC_COLLATE, the order after it')
+    add('s54', S, HEAD + b'codepoint_collation\nEND \xff\n' + D('a')
+        + ORDER_HEAD + O('a') + ORDER_TAIL + END,
+        'codepoint_collation, END then 0xFF, an order after it')
+    add('s55', S, IDENT + HEAD + b'copy\n\xff\nLC_COLLATE\n' + body('a')
+        + END, 'skip_category of LC_COLLATE meeting 0xFF, then LC_COLLATE')
+    add('s56', S, b'LC_NUMERIC\ndecimal_point "."\nEND \xff\n' + coll('a'),
+        'END then 0xFF in LC_NUMERIC, LC_COLLATE after it')
+    add('s57', S, b'LC_CTYPE\ncopy\n\xff\n' + coll('a'),
+        'skip_category of LC_CTYPE meeting 0xFF, then LC_COLLATE')
+    add('s58', S, HEAD + D('a') + D('b') + b'END \x1a\n' + ORDER_HEAD
+        + O('a') + O('b') + ORDER_TAIL + END,
+        'control for s53: 0x1A, which is not consumed')
+    # The same EOF with more on its line: skip_category's extra token is
+    # that word, and handle_copy drops the rest of the line after END; and
+    # an END that ends a skipped conditional branch is the END case itself
+    # (seen_end, ld-collate.c:3741@2.34).
+    add('s59', S, IDENT + HEAD + b'copy\n\xff LC_COLLATE\n' + body('a')
+        + END, 'skip_category of LC_COLLATE meeting 0xFF, LC_COLLATE after '
+        'it on the same line')
+    add('s60', S, {'@': b'LC_NUMERIC\ncopy "@-t"\nEND \xff LC_COLLATE\n'
+                   + body('a') + END,
+                   '@-t': b'LC_NUMERIC\ndecimal_point "."\nEND LC_NUMERIC\n'},
+        'a copy in LC_NUMERIC, END then 0xFF, LC_COLLATE after it on the '
+        'same line')
+    add('s61', S, HEAD + D('a') + D('b') + b'ifdef NOPE\nEND \xff\n'
+        + ORDER_HEAD + O('a') + O('b') + ORDER_TAIL + END,
+        'END then 0xFF inside a skipped ifdef branch, the order after it')
+    # An 0xFF inside a statement: many handlers leave the rest of their
+    # line or stop at that EOF without lr_ignore_rest, and the statement
+    # loop reads on from the byte after it (ld-ctype.c:2789@2.34,
+    # ld-numeric.c:202-239, ld-collate.c:733-737 and :918-933). And
+    # translit_start's loops, which end at EOF and `break`
+    # (ld-ctype.c:2637-2643, :2782-2787). False-negative-reviewer, round 3
+    # of 15.2 B2.
+    cl = HEAD + b'copy "@-t"\n' + END
+    add('s62', S, {'@': b'LC_CTYPE\nfoo \xff\n' + cl + b'END LC_CTYPE\n',
+                   '@-t': coll('a')},
+        'an unknown word then 0xFF in LC_CTYPE, LC_COLLATE after it')
+    add('s63', S, {'@': b'LC_CTYPE\nfoo\n' + cl + b'END LC_CTYPE\n',
+                   '@-t': coll('a')},
+        'control for s62: no 0xFF, LC_CTYPE swallows LC_COLLATE')
+    add('s64', S, {'@': b'LC_NUMERIC\ndecimal_point "." \xff\n' + cl
+                   + b'END LC_NUMERIC\n', '@-t': coll('a')},
+        'decimal_point then 0xFF in LC_NUMERIC, LC_COLLATE after it')
+    add('s65', S, HEAD + D('a') + D('b') + ORDER_HEAD
+        + b'<U0063> \xff END LC_COLLATE\n' + O('a') + O('b') + ORDER_TAIL
+        + END, 'an order line, 0xFF, then END LC_COLLATE on the same line')
+    add('s66', S, b'LC_CTYPE\nclass \xff END LC_CTYPE\n' + coll('a'),
+        'class then 0xFF then END LC_CTYPE on the same line')
+    add('s67', S, {'@': b'LC_CTYPE\ntranslit_start\n\xff\nLC_COLLATE\n'
+                   b'codepoint_collation\nEND LC_CTYPE\n' + cl,
+                   '@-t': coll('a')},
+        'translit_start then 0xFF; LC_COLLATE words inside LC_CTYPE')
+    add('s68', S, {'@': b'LC_CTYPE\ntranslit_start\n\xff\nLC_COLLATE\n'
+                   b'copy "@-t"\nEND LC_CTYPE\nEND LC_COLLATE\n',
+                   '@-t': coll('a')},
+        'translit_start then 0xFF; a copy inside LC_CTYPE')
+    add('s69', S, {'@': HEAD + b'copy "@-t"\n' + END,
+                   '@-t': b'LC_CTYPE\ntranslit_start\n\xff\n' + coll('a')
+                   + b'END LC_CTYPE\n' + coll('b')},
+        'translit_start then 0xFF in an LC_CTYPE read for LC_COLLATE only')
+    cond =(HEAD + D('t') + D('v') + ORDER_HEAD + b'ifdef YES\n' + O('t')
             + b'else\n' + O('v') + b'endif\n' + ORDER_TAIL + END)
     add('c31', P, {'@': HEAD + b'define YES\ncopy "@-t"\n' + END,
                    '@-t': cond},

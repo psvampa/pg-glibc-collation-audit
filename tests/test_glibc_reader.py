@@ -1,5 +1,6 @@
 """scripts/glibc_reader.py, a reader of glibc's locale sources that follows
-localedef, held to glibc itself. No step of the audit uses it yet.
+localedef, held to glibc itself. Steps 1, 3, 4 and 9/10 read through it
+(scripts/glibc_tree.py).
 
 The tool's reading of glibc's files used to be copied by hand into several
 modules, and every copy read a little differently from glibc (backlog block
@@ -23,14 +24,19 @@ and a step that settles one has to move it here.
 
 Below the oracle: what a Build keeps between runs and scripts/reader_cache.py
 keeps on disk give exactly what the reader computes without them (backlog
-15.2), and run() agrees with the line readers the steps use today on the
-LC_COLLATE bounds and copies of every locale file of the five tags, which
-the cache makes cheap after the first time.
+15.2), and run() agrees with the line readers steps 2 and 6 to 8 still
+use on the LC_COLLATE bounds and copies of every locale file of the five
+tags, which the cache makes cheap after the first time. Last, glibc_tree:
+the shapes those line readers got wrong, through steps 1, 3 and 4, and its
+answers on the five tags against theirs, every difference named.
 """
+import contextlib
+import io
 import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -80,10 +86,15 @@ _LATER = {'s18', 's27', 's30', 's31', 'c34', 'c44', 'c45', 'c46', 'c50',
 # For good: glibc reads outside its buffer there (GlibcUndefined), t16 at
 # the start of the file and s52 at the start of a continued line.
 _UNDEFINED = {'t16', 's52'}
+# An 0xFF inside a statement: what each handler reads after it is the
+# statement grammars' (block 15, 15.3 to 15.4); until then the reader says
+# so (false-negative-reviewer, round 3 of 15.2 B2).
+_MID_STATEMENT = {'s62', 's64', 's65', 's66'}
 EXPECTED_UNSETTLED = {
-    'rhel8': {'b18', 'b19', 's51'} | _LATER | _UNDEFINED,
-    'rhel9': {'b18', 'b19', 's42', 's51'} | _LATER | _UNDEFINED,
-    'rhel10': {'s42'} | _LATER | _UNDEFINED,
+    'rhel8': {'b18', 'b19', 's51'} | _LATER | _UNDEFINED | _MID_STATEMENT,
+    'rhel9': {'b18', 'b19', 's42', 's51'} | _LATER | _UNDEFINED
+    | _MID_STATEMENT,
+    'rhel10': {'s42', 's67', 's68'} | _LATER | _UNDEFINED | _MID_STATEMENT,
 }
 def load_oracle(path):
     """The answers in `path`, checked whole: format, seal, the corpus they
@@ -115,7 +126,9 @@ def predict(case, build):
     were both read into the output's LC_COLLATE, in that order, the order
     line between order_start and order_end; a struct with neither an
     order_start nor codepoint_collation read makes collate_finish give up
-    (ld-collate.c:1849-1853@2.28)."""
+    (ld-collate.c:1849-1853@2.28), and one with codepoint_collation read
+    writes no table of elements at all, whatever else it holds
+    (ld-collate.c:1575, :2123@2.39), so no marker."""
     files = {k.encode('latin-1'): v for k, v in case.files.items()}
     r = gr.run(case.main.encode('latin-1'), files.get, build)
     if r.unsettled:
@@ -127,13 +140,13 @@ def predict(case, build):
         return {'outcome': r.fatal.kind}
     if r.collate is None:
         return {'outcome': 'absent'}
-    defined, placed, state, order = set(), set(), 0, False
+    defined, placed, state, order, codepoint = set(), set(), 0, False, False
     for _, _, toks in r.collate.statements:
         t = toks[0]
         if t.tok == 'kw' and t.kwtok == 'tok_order_start':
             state, order = 1, True
         elif t.tok == 'kw' and t.kwtok == 'tok_codepoint_collation':
-            order = True
+            order = codepoint = True
         elif t.tok == 'kw' and t.kwtok == 'tok_order_end':
             state = 2
         elif t.tok == 'kw' and t.kwtok == 'tok_collating_element' \
@@ -144,8 +157,8 @@ def predict(case, build):
     if not order:
         return {'outcome': 'giving-up'}
     return {'outcome': 'read',
-            'markers': sorted(m for m in case.markers
-                              if ('mk-' + m).encode() in placed)}
+            'markers': [] if codepoint else sorted(
+                m for m in case.markers if ('mk-' + m).encode() in placed)}
 
 
 def observed(run):
@@ -190,6 +203,23 @@ class OracleFiles(unittest.TestCase):
                                                   % version), rpm)
                 # The reader takes `char` as signed for these builds.
                 self.assertEqual(data['build']['machine'], 'x86_64')
+
+    def test_after_END_and_an_0xFF_localedef_reads_the_order_on(self):
+        """What the markers cannot show when codepoint_collation is read:
+        on el9 the table s54 writes is not s44's, the keyword alone, so
+        glibc read the order after `END <0xFF>` and did not build byte
+        order. On el10 the 0xFF is a byte and the section ended at END.
+        On el8, s53 holds both markers placed after it (false-negative-
+        reviewer, round 2 of 15.2 B2; measured 2026-10-14)."""
+        got = {n: load_oracle(os.path.join(ORACLE_DIR, n + '.json'))['cases']
+               for n in ('rhel8', 'rhel9', 'rhel10')}
+
+        def md5(n, cid):
+            return got[n][cid]['c']['collate']['md5']
+        self.assertNotEqual(md5('rhel9', 's44'), md5('rhel9', 's54'))
+        self.assertEqual(md5('rhel10', 's44'), md5('rhel10', 's54'))
+        self.assertEqual(['a', 'b'],
+                         got['rhel8']['s53']['c']['collate']['markers'])
 
     def _damaged(self, change):
         with open(os.path.join(ORACLE_DIR, 'rhel9.json')) as f:
@@ -717,6 +747,64 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
                 self.assertEqual(want, self.kept(files))
                 self.assertEqual(sorted(files), sorted(self.calls))
 
+    def test_kept_tree_says_whether_an_entry_exists(self):
+        """What the fill asks before it reads a tree: blob ids alone, the
+        same tree, the same build."""
+        files = _small_tree()
+        ids = {n: rc.blob_id(d) for n, d in files.items()}
+        self.assertFalse(rc.kept_tree(ids, self.b39, cache_dir=self.dir))
+        self.kept(files)
+        self.assertTrue(rc.kept_tree(ids, self.b39, cache_dir=self.dir))
+        self.assertFalse(rc.kept_tree(ids, self.b34, cache_dir=self.dir))
+        ids[b'c'] = rc.blob_id(b'other')
+        self.assertFalse(rc.kept_tree(ids, self.b39, cache_dir=self.dir))
+
+    def test_a_collate_kept_in_another_shape_is_computed_again(self):
+        """The shape before backlog 15.2 part B2 kept (files, count); read as
+        today's, its count would be a list of ranges. Refused, computed."""
+        files = _small_tree()
+        want = self.fresh(files)
+        self.kept(files)
+        for dirpath, _, names in os.walk(self.dir):
+            for n in names:
+                if not n.endswith('.json'):
+                    continue
+                path = os.path.join(dirpath, n)
+                with open(path) as fh:
+                    got = json.load(fh)
+                old = rc._enc((None, (), (), (('b',), 4)))
+                if isinstance(got, dict):
+                    got = {k: old for k in got}
+                else:
+                    got = [[deps, old] for deps, _ in got]
+                with open(path, 'w') as fh:
+                    json.dump(got, fh)
+        self.assertEqual(want, self.kept(files))
+        self.assertEqual(sorted(files), sorted(self.calls))
+
+    def test_the_kept_collate_says_where_ranges_and_codepoint_are(self):
+        """What steps 4, 9 and 10 read from a run: per file, how many
+        statements, which lines hold a range ld-collate.c reads as one
+        (`..`, `...`, `....`; not the charmap's `(2)` forms, not a `#`
+        comment), and where codepoint_collation was read."""
+        files = {
+            b'a': (b'LC_COLLATE\ncopy "b"\n<U0041>\n# <U0042>..<U0043>\n'
+                   b'<U0044>..<U0045>\n<U0046> ...\n<U0047>..(2)..<U0048>\n'
+                   b'END LC_COLLATE\n'),
+            b'b': b'LC_COLLATE\ncodepoint_collation\nEND LC_COLLATE\n'}
+        fatal, _, unsettled, collate = self.kept(files)[b'a']
+        self.assertIsNone(fatal)
+        counts, ranges, codepoint = collate
+        self.assertEqual((('a', 4), ('b', 1)), counts)
+        self.assertEqual((('a', 5), ('a', 6)), ranges)
+        self.assertEqual((('b', 2),), codepoint)
+        self.assertEqual(self.fresh(files)[b'a'], self.kept(files)[b'a'])
+        # A statement joined over three lines by the escape: the range is on
+        # the line that holds it, which is the one a reader is shown.
+        files = {b'c': (b'LC_COLLATE\norder_start forward\n<U0041> \\\n'
+                        b'..\\\n <U0045>\norder_end\nEND LC_COLLATE\n')}
+        self.assertEqual((('c', 4),), self.kept(files)[b'c'][3][1])
+
     def test_a_name_is_never_served_another_names_run(self):
         # Two names sharing a long prefix, and a kept entry that names no
         # file at all: neither is the run of `a`.
@@ -801,7 +889,7 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
 
 @needs_floor_pair
 class ReaderAgreesOnEveryRealFile(unittest.TestCase):
-    """run() against the line readers the steps use today, over every locale
+    """run() against the line readers steps 2 and 6 to 8 use, over every locale
     file of the five tags, each as the -i of a localedef run with its
     copies found in the same tag: the same LC_COLLATE bounds and the same
     copies, no fatal run, and nothing unsettled but the known grammar
@@ -852,6 +940,443 @@ class ReaderAgreesOnEveryRealFile(unittest.TestCase):
         self.assertEqual([], bad)
         self.assertEqual(self.UNSETTLED.get(tag, {}), unsettled)
 
+
+
+# The shapes the line readers steps 1, 3 and 4 used before backlog 15.2 got
+# wrong, each with what localedef reads (backlog items in the names). Every
+# one copies or ranges like a real locale, so a step that reads it wrong
+# moves a real answer.
+_HEAD = b'comment_char %\nescape_char /\n'
+_SHAPES = {
+    # 13.22: a `copy` split by the escape at the end of a line; lr_next
+    # joins the two lines (linereader.c:162-171@2.39).
+    'zz_SP': _HEAD + b'LC_COLLATE\nco/\npy "iso14651_t1"\nEND LC_COLLATE\n',
+    # 13.26: the escape inside the word; get_ident keeps the character after
+    # it (linereader.c:583-592@2.39).
+    'zz_SW': _HEAD + b'LC_COLLATE\nc/opy "iso14651_t1"\nEND LC_COLLATE\n',
+    # 13.27: the escape inside the string of a copy that opens LC_COLLATE,
+    # read before collate_startup turns string translation off
+    # (ld-collate.c:1524@2.39), so glibc drops it.
+    'zz_SS': _HEAD + b'LC_COLLATE\ncopy "iso14651/_t1"\nEND LC_COLLATE\n',
+    # 2.21: the section keywords indented; lr_token skips blanks first.
+    'zz_IN': _HEAD + b'  LC_COLLATE\ncopy "iso14651_t1"\n  END LC_COLLATE\n',
+    # 13.8: no comment_char, so `#` is the comment and `%` is not
+    # (linereader.c:79@2.39): a range only in a `#` comment is no range, and
+    # one followed by `%` text is one.
+    'zz_HC': (b'LC_COLLATE\n# <U0041>..<U0045> IGNORE\norder_start forward\n'
+              b'<U0041> IGNORE\norder_end\nEND LC_COLLATE\n'),
+    'zz_PC': (b'LC_COLLATE\norder_start forward\n<U0041>\n'
+              b'<U0042>..<U0045> % not a comment here\n<U0046>\norder_end\n'
+              b'END LC_COLLATE\n'),
+}
+_COPIERS = ('zz_IN', 'zz_SP', 'zz_SS', 'zz_SW')
+
+
+def _tree_with(tag, extra, build=None):
+    """glibc_tree.Tree of every locale file at `tag` plus `extra`."""
+    import glibc_tree
+    names, data = _tag_files(tag)
+    data = dict(data)
+    for n, b in extra.items():
+        data[n.encode('ascii')] = b
+    pre = g.descends_from(GLIBC_CLONE, g.LR_GETC_FIX, tag)
+    build = build or gr.Build.at(GLIBC_CLONE, tag, not pre)
+    return glibc_tree.Tree(tag, data, build, g.decoded)
+
+
+@needs_clone
+class TreeReadsWhatLocaledefReads(unittest.TestCase):
+    """scripts/glibc_tree.py answers from run() and nothing else: the
+    shapes the old line readers got wrong come out the way localedef reads
+    them, and a run it cannot settle, or that localedef does not finish, is
+    named rather than read as clean (backlog 15.2)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tree = _tree_with(NEW, _SHAPES)
+
+    def test_each_copy_shape_is_the_copy_glibc_reads(self):
+        for name in _COPIERS:
+            with self.subTest(name):
+                self.assertTrue(self.tree.defines(name))
+                self.assertEqual(['iso14651_t1'], self.tree.copies(name))
+                self.assertIn('iso14651_t1', self.tree.reach(name))
+                self.assertEqual(['iso14651_t1'],
+                                 self.tree.roots(name, {'iso14651_t1'}))
+
+    def test_the_old_readers_really_got_these_wrong(self):
+        """Control: each shape is one the line readers missed, so the test
+        above cannot pass by testing what they already got right."""
+        for name in ('zz_SP', 'zz_SW', 'zz_SS'):
+            with self.subTest(name):
+                text = _SHAPES[name].decode('ascii')
+                self.assertNotEqual(['iso14651_t1'], g.copy_targets(text))
+        self.assertIsNone(g.collate_block(_SHAPES['zz_IN'].decode('ascii')))
+        # 13.8 is the other direction: `%` taken for the comment made the
+        # `#` comment a range. Over-reporting, but not what glibc reads.
+        flagged, _ = g.scan_ellipsis(
+            {n: _SHAPES[n].decode('ascii') for n in ('zz_HC', 'zz_PC')})
+        self.assertEqual({'zz_HC', 'zz_PC'}, set(flagged))
+
+    def test_a_range_is_what_localedef_reads_as_one(self):
+        self.assertEqual([], self.tree.ranges('zz_HC'))
+        self.assertEqual([(4, '<U0042>..<U0045> % not a comment here')],
+                         self.tree.ranges('zz_PC'))
+        self.assertEqual('explicit', self.tree.style('zz_HC'))
+        self.assertEqual('ellipsis', self.tree.style('zz_PC'))
+
+    def test_a_run_that_does_not_finish_or_settle_is_named(self):
+        tree = _tree_with(NEW, {
+            'zz_CA': _HEAD + b'LC_COLLATE\ncopy "zz_CB"\nEND LC_COLLATE\n',
+            'zz_CB': _HEAD + b'LC_COLLATE\ncopy "zz_CA"\nEND LC_COLLATE\n',
+            'zz_MI': _HEAD + b'LC_COLLATE\ncopy "zz_NONE"\nEND LC_COLLATE\n',
+            # A copy of a file without LC_COLLATE: glibc returns there and
+            # stores none (ld-collate.c:2657-2658@2.39).
+            'zz_NR': _HEAD + b'LC_COLLATE\ncopy "zz_NOC"\nEND LC_COLLATE\n',
+            'zz_NOC': _HEAD + b'LC_CTYPE\nEND LC_CTYPE\n',
+            'zz_RS': _HEAD + (b'LC_COLLATE\ncopy "iso14651_t1"\n'
+                              b'reorder-sections-after <LATIN> <X>\n'
+                              b'END LC_COLLATE\n')})
+        why = tree.unresolved()
+        self.assertEqual('localedef stops (circular)', why['zz_CA'])
+        self.assertEqual('localedef stops (circular)', why['zz_CB'])
+        self.assertEqual('localedef cannot open zz_NONE', why['zz_MI'])
+        self.assertEqual({'zz_MI': ['zz_NONE']}, tree.missing())
+        self.assertEqual('localedef stores no LC_COLLATE for it',
+                         why['zz_NR'])
+        self.assertIn('reorder-sections-after in LC_COLLATE', why['zz_RS'])
+        for name in why:
+            self.assertEqual('unread', tree.style(name))
+        self.assertEqual({'zz_CA', 'zz_CB', 'zz_MI', 'zz_NR', 'zz_RS'},
+                         set(why), 'every tag file reads clean')
+
+    def test_byte_order_follows_the_build(self):
+        """codepoint_collation is a keyword from glibc 2.35 and on RHEL 9
+        (glibc_reader.RHEL_BUILDS). Without it the word is a syntax error,
+        and byte order is not what glibc builds."""
+        import glibc_tree
+        c = {'C': _harness.upstream_c().encode('utf-8')}
+        plain = _tree_with(MID, c, glibc_tree.build_at(GLIBC_CLONE, MID))
+        rhel9 = _tree_with(MID, c, glibc_tree.build_at(
+            GLIBC_CLONE, MID, 'glibc-2.34-275.el9_8'))
+        self.assertEqual((set(), {}), plain.byte_order())
+        self.assertEqual(({'C'}, {}), rhel9.byte_order())
+        self.assertEqual('codepoint', rhel9.style('C'))
+
+    def test_a_file_glibc_stops_reading_is_not_read_as_having_no_order(self):
+        """Before 2.36 lr_getc gives the top level an EOF at a 0x1A, and at
+        an 0xFF through a signed char, and glibc reads nothing more of the
+        file (case b02, measured on el8 and el9). The file then reads as
+        having no LC_COLLATE although it has one below: named, never put on
+        no list (false-negative-reviewer, round 1 of B2). From 2.36 the byte
+        is a byte, and the same file reads to its end."""
+        import glibc_tree
+        c = _harness.upstream_c().encode('utf-8')
+        rhel9 = glibc_tree.build_at(GLIBC_CLONE, MID, 'glibc-2.34-1.el9')
+        for byte in (b'\x1a', b'\xff'):
+            with self.subTest(byte):
+                tree = _tree_with(MID, {'C': byte + b'\n' + c,
+                                        'zz_B': (_HEAD + b'LC_CTYPE\ncopy '
+                                                 b'"i18n"\nEND LC_CTYPE\n'
+                                                 + byte + b'\nLC_COLLATE\n'
+                                                 b'copy "iso14651_t1"\n'
+                                                 b'END LC_COLLATE\n')}, rhel9)
+                why = tree.unresolved()
+                for name, line in (('C', 1), ('zz_B', 6)):
+                    self.assertEqual(
+                        'localedef stops reading %s at line %d, before the '
+                        'end of the file' % (name, line), why.get(name))
+                    self.assertEqual('unread', tree.style(name))
+                self.assertEqual((set(), {}), tree.byte_order())
+        tree = _tree_with(NEW, {'C': b'\x1a\n' + c})
+        self.assertNotIn('C', tree.unresolved())
+        self.assertEqual(({'C'}, {}), tree.byte_order())
+        # A line holding only the escape character stops every build,
+        # 2.39 included (b14, b15): the buffer is empty, nothing on the
+        # line is left, and only the lines below it are.
+        esc = b'comment_char %\nescape_char /\n/\n'
+        for tag, build in ((MID, rhel9), (NEW, None)):
+            with self.subTest(tag):
+                tree = _tree_with(tag, {'C': esc + c}, build)
+                self.assertEqual('localedef stops reading C at line 3, '
+                                 'before the end of the file',
+                                 tree.unresolved().get('C'))
+
+    def test_a_cut_in_a_copied_file_is_named(self):
+        """zz_X is cut above a range; zz_Y copies zz_X. glibc reads zz_X up
+        to the cut in both runs, so both are named, not read as a settled
+        copy (false-negative-reviewer, round 2 of B2)."""
+        import glibc_tree
+        tree = _tree_with(MID, {
+            'zz_X': _HEAD + (b'LC_COLLATE\ncopy "iso14651_t1"\n\x1a\n'
+                             b'order_start forward\n<U0041>..<U0045>\n'
+                             b'order_end\nEND LC_COLLATE\n'),
+            'zz_Y': _HEAD + b'LC_COLLATE\ncopy "zz_X"\nEND LC_COLLATE\n'},
+            glibc_tree.build_at(GLIBC_CLONE, MID, 'x.el9'))
+        why = tree.unresolved()
+        for name in ('zz_X', 'zz_Y'):
+            self.assertEqual('localedef stops reading zz_X at line 5, before '
+                             'the end of the file', why.get(name), name)
+
+    def test_codepoint_then_END_and_an_0xFF_is_not_byte_order(self):
+        """Before 2.36 an 0xFF after END is an EOF lr_getc consumes, and the
+        section reads on (case s54): the order after it joins the keyword,
+        and glibc does not build byte order (false-negative-reviewer, round
+        2 of B2)."""
+        import glibc_tree
+        c = (b'LC_COLLATE\ncodepoint_collation\nEND \xff\n'
+             b'order_start forward\n<U0041>\n<U0042>\norder_end\n'
+             b'END LC_COLLATE\n')
+        tree = _tree_with(MID, {'C': c},
+                          glibc_tree.build_at(GLIBC_CLONE, MID, 'x.el9'))
+        self.assertEqual((set(), {}), tree.byte_order())
+        self.assertEqual('codepoint-not-alone', tree.style('C'))
+
+    def test_an_0xFF_inside_a_statement_is_not_read_as_settled(self):
+        """An 0xFF that lr_getc consumes ends a statement whose handler may
+        leave the rest of its line, and LC_CTYPE then reads on after it
+        (case s62): the LC_COLLATE below is read at the top level. The
+        reader does not settle which handler does what yet, so zz_A is
+        named, not read as defining no LC_COLLATE and dropped
+        (false-negative-reviewer, round 3 of B2)."""
+        import glibc_tree
+        tree = _tree_with(MID, {
+            'zz_A': _HEAD + (b'LC_CTYPE\nfoo \xff\nLC_COLLATE\n'
+                             b'copy "iso14651_t1"\nEND LC_COLLATE\n'
+                             b'END LC_CTYPE\n')},
+            glibc_tree.build_at(GLIBC_CLONE, MID, 'x.el9'))
+        self.assertIn('a byte read as the end of the file inside a '
+                      'statement', tree.unresolved()['zz_A'])
+
+    def test_translit_start_then_an_0xFF_reads_LC_CTYPE_on(self):
+        """translit_start's loop ends at the consumed EOF and LC_CTYPE goes
+        on (case s67): the LC_COLLATE word and codepoint_collation after it
+        are LC_CTYPE's syntax errors, and the real LC_COLLATE copies
+        iso14651_t1. Read as byte order before the fix (false-negative-
+        reviewer, round 3 of B2)."""
+        import glibc_tree
+        tree = _tree_with(MID, {
+            'C': (b'LC_CTYPE\ntranslit_start\n\xff\nLC_COLLATE\n'
+                  b'codepoint_collation\nEND LC_CTYPE\nLC_COLLATE\n'
+                  b'copy "iso14651_t1"\nEND LC_COLLATE\n')},
+            glibc_tree.build_at(GLIBC_CLONE, MID, 'x.el9'))
+        self.assertEqual((set(), {}), tree.byte_order())
+        self.assertEqual(['iso14651_t1'], tree.copies('C'))
+        self.assertEqual('copy-only', tree.style('C'))
+
+    def test_an_unsettled_run_is_not_byte_order(self):
+        """A run with an unsettled place is not read as byte order, even
+        when its one stored statement is codepoint_collation."""
+        import glibc_tree
+        c = _harness.upstream_c().encode('utf-8')
+        tree = _tree_with(MID, {'C': b'repertoiremap mnemonic.ds\n' + c},
+                          glibc_tree.build_at(GLIBC_CLONE, MID, 'x.el9'))
+        self.assertIn('a repertoiremap directive', tree.unresolved()['C'])
+        self.assertEqual((set(), {}), tree.byte_order())
+
+    def test_a_copy_is_byte_order_only_through_byte_order_locales(self):
+        """zz_A copies an empty LC_COLLATE, then C: the one statement it
+        stores is C's codepoint_collation, but its copy is not a byte-order
+        locale, and localedef refuses the empty one (ld-collate.c:3763-3770
+        @2.39). zz_K copies zz_J, which copies C: byte order, named by the
+        locale it copies."""
+        import glibc_tree
+        c = _harness.upstream_c().encode('utf-8')
+        tree = _tree_with(MID, {
+            'C': c,
+            'zz_E': _HEAD + b'LC_COLLATE\nEND LC_COLLATE\n',
+            'zz_A': _HEAD + (b'LC_COLLATE\ncopy "zz_E"\ncopy "C"\n'
+                             b'END LC_COLLATE\n'),
+            'zz_J': _HEAD + b'LC_COLLATE\ncopy "C"\nEND LC_COLLATE\n',
+            'zz_K': _HEAD + b'LC_COLLATE\ncopy "zz_J"\nEND LC_COLLATE\n',
+            # One copy, of zz_A's shape: one stored statement, still not
+            # byte order, because what it copies is not.
+            'zz_M': _HEAD + b'LC_COLLATE\ncopy "zz_A"\nEND LC_COLLATE\n'},
+            glibc_tree.build_at(GLIBC_CLONE, MID, 'x.el9'))
+        declared, by_copy = tree.byte_order()
+        self.assertEqual({'C'}, declared)
+        self.assertEqual({'zz_J': 'C', 'zz_K': 'zz_J'}, by_copy)
+        self.assertEqual(['zz_A'], tree.copies('zz_M'))
+        self.assertEqual(1, sum(n for _, n in tree._collate('zz_M')[0]))
+
+    def test_a_build_id_names_a_rhel_major_or_nothing(self):
+        import glibc_tree
+        kw = 'codepoint_collation'.encode('ascii')
+        for build_id, has in (('glibc-2.34-275.el9_8', True),
+                              ('fake.el9', True),
+                              ('glibc-2.28-251.el8_10.40', False),
+                              ('glibc-2.34-1.el90', False),
+                              ('fake', False), (None, False)):
+            with self.subTest(build_id):
+                b = glibc_tree.build_at(GLIBC_CLONE, MID, build_id)
+                self.assertEqual(has, kw in b.locfile_kw)
+                self.assertTrue(b.pre236)
+
+    def test_a_ref_git_cannot_place_is_refused(self):
+        """Before or after the lr_getc fix decides how 0x1A and 0xFF read;
+        a repository without glibc's history cannot say, and a guess is not
+        an answer (glibc_tree.build_at)."""
+        import glibc_tree
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-tree-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_COMMITTER_NAME='t',
+                   GIT_AUTHOR_EMAIL='t@example.invalid',
+                   GIT_COMMITTER_EMAIL='t@example.invalid')
+        subprocess.run(['git', 'init', '-q', tmp], check=True)
+        subprocess.run(['git', '-C', tmp, 'commit', '-q', '--allow-empty',
+                        '-m', 'x'], check=True, env=env)
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf), \
+                self.assertRaises(SystemExit) as cm:
+            glibc_tree.build_at(tmp, 'HEAD')
+        self.assertEqual(2, cm.exception.code)
+        self.assertIn("lr_getc fix", _harness.flat(buf.getvalue()))
+        self.assertIn('refusing to guess', _harness.flat(buf.getvalue()))
+
+
+@needs_clone
+class StepsReadWhatLocaledefReads(unittest.TestCase):
+    """The same shapes through steps 1, 3 and 4, on glibc-2.39 plus the
+    files (a commit git can place, _harness.glibc_commit). Before backlog
+    15.2 step 3 left all four copiers out of the set a change to
+    iso14651_t1 affects: a reassuring answer about four locales that
+    inherit its order."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='pg-glibc-steps-')
+        cls.repo, cls.ref = _harness.glibc_commit(NEW, _SHAPES, cls.tmp)
+        cls.out = os.path.join(cls.tmp, 'out')
+        os.mkdir(cls.out)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def step(self, script, *args, cwd=None):
+        env = dict(os.environ, PG_GLIBC_AUDIT_OUT=self.out)
+        p = subprocess.run([sys.executable, os.path.join(
+            _harness.SCRIPTS_DIR, script)] + list(args),
+            cwd=cwd or _harness.SCRIPTS_DIR, env=env, capture_output=True)
+        out = (p.stdout + p.stderr).decode('utf-8', 'replace')
+        self.assertEqual(0, p.returncode, out)
+        return out
+
+    def test_step_3_lists_every_copier_of_a_changed_template(self):
+        out = self.step('resolve_copy_closure.py', self.ref, 'iso14651_t1',
+                        '--repo', self.repo)
+        full = re.search(r'^Full affected set \(\d+ locale source file\(s\)'
+                         r'\): (.+)$', out, re.M)
+        self.assertIsNotNone(full, out)
+        for name in _COPIERS:
+            self.assertIn(name, full.group(1).split(', '))
+            self.assertIn('  %s: copy "iso14651_t1" -> reaches iso14651_t1'
+                          % name, out)
+
+    def test_step_4_reads_ranges_and_copies_as_localedef_does(self):
+        base = self.step('flag_algorithmic_ranges.py', NEW)
+        out = self.step('flag_algorithmic_ranges.py', self.ref,
+                        '--repo', self.repo)
+        via = r'^  via iso14651_t1: (\d+) locale'
+        self.assertEqual(int(re.search(via, base, re.M).group(1)) + 4,
+                         int(re.search(via, out, re.M).group(1)), out)
+        flagged = out.split('ranges: ', 1)[1].split('\n\n', 1)[0]
+        self.assertIn('  zz_PC\n', flagged)
+        self.assertNotIn('zz_HC', flagged)
+
+    def test_step_3_names_a_changed_locale_it_could_not_read(self):
+        """zz_X's LC_CTYPE copies a file the tree lacks, so localedef stops
+        before zz_X's LC_COLLATE. Step 3 must not tell its reader that zz_X
+        has none and nothing can inherit from it: zz_X is named under the
+        `!!`, and zz_Y, which copies it, is listed (false-negative-reviewer,
+        round 1 of B2)."""
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-steps-x-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        repo, ref = _harness.glibc_commit(NEW, {
+            'zz_X': _HEAD + (b'LC_CTYPE\ncopy "zz_nope"\nEND LC_CTYPE\n'
+                             b'LC_COLLATE\ncopy "iso14651_t1"\n'
+                             b'END LC_COLLATE\n'),
+            'zz_Y': _HEAD + b'LC_COLLATE\ncopy "zz_X"\nEND LC_COLLATE\n'},
+            tmp)
+        out = self.step('resolve_copy_closure.py', ref, 'zz_X',
+                        '--repo', repo)
+        self.assertNotIn('have no LC_COLLATE block', out)
+        self.assertIn('\n     zz_X: localedef cannot open zz_nope\n', out)
+        self.assertIn('  zz_Y: copy "zz_X" -> reaches zz_X', out)
+
+    def test_step_1_counts_every_copier(self):
+        here = self.step('glibc_locale_data.py', 'fanin', self.ref,
+                         cwd=self.repo)
+        base = self.step('glibc_locale_data.py', 'fanin', NEW)
+        count = r'^\s+(\d+) locales inherit from iso14651_t1$'
+        self.assertEqual(int(re.search(count, base, re.M).group(1)) + 4,
+                         int(re.search(count, here, re.M).group(1)), here)
+
+
+@needs_floor_pair
+class TreeAgreesWithTheOldReadersOnTheTags(unittest.TestCase):
+    """On the five tags, glibc_tree gives steps 1, 3 and 4 the answers the
+    line readers gave them, except where those read differently from
+    localedef, and those exceptions are named here: at 2.12 and 2.17 the
+    ranges in iso14651_t1_common are inside `#` comments (backlog 13.8), and
+    17 runs meet reorder-sections-after, which the reader does not settle
+    yet (backlog 15.3). Anything else that moves is a difference nobody
+    measured."""
+
+    KNOWN = {
+        FLOOR_OLD: {'only_old_ranges': {'iso14651_t1_common'},
+                    'lost_roots': {'iso14651_t1_pinyin', 'zh_CN'},
+                    'unresolved': 17},
+        FLOOR_NEW: {'only_old_ranges': {'iso14651_t1_common'},
+                    'lost_roots': {'iso14651_t1_pinyin', 'zh_CN'},
+                    'unresolved': 17},
+    }
+
+    def test_each_tag(self):
+        for tag in (FLOOR_OLD, FLOOR_NEW, OLD, MID, NEW):
+            with self.subTest(tag):
+                self.check(tag)
+
+    def check(self, tag):
+        import glibc_tree
+        known = self.KNOWN.get(tag, {})
+        tree = glibc_tree.Tree.at_tag(GLIBC_CLONE, tag)
+        _, data = _tag_files(tag)
+        texts = {n.decode('utf-8'): g.decoded(b) for n, b in data.items()}
+        self.assertEqual(sorted(texts), tree.names)
+        self.assertEqual(
+            {n for n, t in texts.items() if g.collate_block(t) is not None},
+            {n for n in tree.names if tree.defines(n)})
+        old_ranges, _ = g.scan_ellipsis(texts)
+        new_ranges = {n: [t for _, t in tree.ranges(n)] for n in tree.names
+                      if tree.ranges(n)}
+        self.assertEqual(known.get('only_old_ranges', set()),
+                         set(old_ranges) - set(new_ranges))
+        self.assertEqual(set(), set(new_ranges) - set(old_ranges))
+        for n in new_ranges:
+            self.assertEqual(old_ranges[n], new_ranges[n], n)
+        graph = g.copy_graph_from_texts(texts)
+        old_in = g.inherited_from(graph, set(old_ranges))
+        new_in = {n: tree.roots(n, set(new_ranges)) for n in tree.names}
+        new_in = {n: r for n, r in new_in.items() if r}
+        self.assertEqual(known.get('lost_roots', set()),
+                         {n for n in old_in if old_in[n] != new_in.get(n)})
+        self.assertEqual(set(), set(new_in) - set(old_in))
+        self.assertEqual(g.byte_order_locales(texts), tree.byte_order())
+        self.assertEqual(known.get('unresolved', 0), len(tree.unresolved()))
+        self.assertEqual({}, tree.missing())
+        for name in graph:
+            if name not in tree.unresolved():
+                self.assertEqual(graph[name], tree.copies(name), name)
+            reach = set()
+            stack = list(graph[name])
+            while stack:
+                cur = stack.pop()
+                if cur not in reach and cur != name:
+                    reach.add(cur)
+                    stack.extend(graph.get(cur, ()))
+            if name not in tree.unresolved():
+                self.assertEqual(reach, tree.reach(name), name)
 
 def _tag_files(tag):
     """(names in order, {name: bytes}) for localedata/locales at `tag`."""

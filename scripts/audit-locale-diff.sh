@@ -11,8 +11,8 @@
 # This used to hardcode iso14651_t1_common as "the master collation table" and
 # signal "unchanged" by printing nothing -- indistinguishable from an error --
 # and it missed that iso14651_t1 (a different file) is the one hundreds of
-# locales actually inherit from. The fan-in is now computed from the copy
-# graph.
+# locales actually inherit from. The fan-in is now computed from what
+# localedef reads to build each locale (glibc_tree), every `copy` followed.
 set -euo pipefail
 
 if [ $# -lt 2 ] || [ $# -gt 3 ]; then

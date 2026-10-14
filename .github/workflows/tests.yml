@@ -28,7 +28,11 @@ on:
 jobs:
   suite:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 30, not 20: the first run after a change to the reader computes its
+    # answers from nothing, and a run that times out saves no cache, so
+    # every run after it would start from nothing too (backlog 15.2: the
+    # first run of #103 was cancelled at 20 minutes).
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -80,17 +84,17 @@ jobs:
           path: scripts/glibc-reader-cache
           key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}
 
-      - name: Fill the reader's answers for the five tags
-        # After a change to the reader nothing kept is used, and the
-        # comparison of run() with every locale file of the five tags
-        # computes about 1,700 runs. Inside the suite it gets one of the four
-        # processors and ran past its shard timeout (measured on #102); here
-        # it gets all four, and the suite below finds it kept. With nothing
-        # changed it takes seconds.
+      - name: Fill the reader's answers before the suite
+        # tests/run_parallel.py does the same before its classes, under its
+        # 600 s limit per process. Here, after a change to the reader, it
+        # ran past that (#103's first run), and the classes then computed
+        # the trees one processor each. As a step of its own it has no such
+        # limit and all four processors; with the cache full it takes about
+        # a second, and the runner then finds every tree kept.
         run: |
           cd tests
-          PG_GLIBC_READER_JOBS=$(nproc) python3 -m unittest -q \
-            test_glibc_reader.ReaderAgreesOnEveryRealFile
+          PG_GLIBC_READER_JOBS=$(nproc) python3 -c \
+            "import _harness; _harness.fill_reader_cache()"
 
       - name: Say so if the documentation layer is switched off
         # Renaming that file out of `test*.py` removes its tests from the run
@@ -115,7 +119,12 @@ jobs:
         # Spread over four processes, one per processor of this runner, by
         # tests/run_parallel.py, on a pull request and on main alike. They are
         # the same tests in the same files, so spreading them changes how long
-        # the run takes, not what it checks.
+        # the run takes, not what it checks. The step above has computed
+        # the reader's answers for the five tags already, so the runner's own
+        # fill (_harness.fill_reader_cache) finds them kept: after a change
+        # to the reader, classes that each computed nearly the same tree at
+        # once, one processor each, took this job past 20 minutes (measured
+        # on 2026-10-14, backlog 15.2).
         run: |
           set -o pipefail
           python3 tests/run_parallel.py -j 4 2>&1 | tee /tmp/out.txt

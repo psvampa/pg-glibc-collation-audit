@@ -850,6 +850,35 @@ class BelowTheOldVersionFloor(StepRun):
             one_int(r'Full affected set \((\d+) locale', out, 'the set'),
             280)
 
+    def test_steps_1_and_3_name_the_17_runs_the_reader_cannot_settle(self):
+        """reorder-sections-after, which the reader does not settle yet
+        (backlog 15.3), is reached from am_ET and ber_MA by 17 locales at
+        glibc-2.17. Step 3 cannot tell whether those inherit from what
+        changed, so it lists them under a `!!` of their own; step 1 says its
+        counts may miss them (backlog 15.2)."""
+        out = self.step('resolve_copy_closure.py', FLOOR_NEW, 'sv_SE')
+        self.assertEqual(
+            one_int(r'(?m)^!! Could not be read the way localedef reads '
+                    r'them, so they are listed: (\d+)', out, 'the count'),
+            17)
+        full = re.search(r'^Full affected set \(\d+ locale source file\(s\)'
+                         r'\): (.+)$', out, re.M)
+        self.assertIsNotNone(full, out)
+        for name in ('am_ET', 'ber_MA', 'om_ET', 'sid_ET'):
+            self.assertIn(name, full.group(1).split(', '))
+        # Indented past audit.sh's relay of `!!` blocks, which keeps the
+        # lines under one that start with three spaces: the names reach the
+        # summary, not only the count.
+        self.assertRegex(out, r'(?m)^     am_ET: am_ET:584: '
+                              r'reorder-sections-after in LC_COLLATE$')
+        rc, fan = run_step('glibc_locale_data.py', 'fanin', FLOOR_NEW)
+        self.assertEqual(rc, 0, fan)
+        self.assertEqual(
+            one_int(r'(?m)^!! (\d+) locale\(s\) could not be read the way '
+                    r'localedef reads them, so the counts above may miss',
+                    fan, 'the count'),
+            17)
+
     def test_step_3_writes_its_280_files_and_24_aliases(self):
         """The written list is the affected set and the aliases step 3 prints,
         and nothing else (backlog 13.1; it held 409 SUPPORTED spellings and
@@ -891,24 +920,38 @@ class BelowTheOldVersionFloor(StepRun):
             one_int(r'(\d+) substantive hunk\(s\) found', out, 'the total'),
             68)
 
-    def test_step_4_reaches_281_not_279(self):
+    def test_step_4_reaches_278_and_22(self):
         """277 was the figure before the collate_block fix and 279 after it;
-        281 adds ky_KG and uk_UA, which copy iso14651_t1 spelled in symbolic
+        281 added ky_KG and uk_UA, which copy iso14651_t1 spelled in symbolic
         notation. The 2 docs/limitations.md used to publish was older still,
         and already wrong when it was quoted.
 
-        281 is the ellipsis scan plus the copy walk. Since backlog 1.6 the
-        total adds the 19 locales only the default weight exposes, and it does
-        not move when the walk loses a locale to that section, so the 281 is
-        read from its two parts."""
+        278 since step 4 reads what localedef reads (backlog 15.2, 13.8):
+        glibc's default comment character is `#`, and at 2.12 and 2.17
+        iso14651_t1_common's only ranges are inside `#` comments, so it no
+        longer counts as a range, and iso14651_t1_pinyin and zh_CN, which
+        reached a range only through it, move to the default-weight section,
+        19 -> 22 (measured with the fix alone on 2026-10-06: 281/19 ->
+        278/22). The total stays 300.
+
+        The sum is the ellipsis scan plus the copy walk. Since backlog 1.6
+        the total adds the locales only the default weight exposes, and it
+        does not move when the walk loses a locale to that section, so it is
+        read from its two parts. The 17 locales whose reading meets
+        reorder-sections-after at am_ET and ber_MA, which the reader does
+        not settle yet (backlog 15.3), are named under their own `!!`."""
         out = self.step('flag_algorithmic_ranges.py', FLOOR_NEW)
         self.assertEqual(
             one_int(r'ellipsis \(algorithmic\) ranges: (\d+)', out,
                     'the ellipsis count')
             + one_int(r'exposed via `copy` inheritance: (\d+)', out,
                       'the copy count'),
-            281)
-        self.assertEqual(default_weight_section(out)[0], 19)
+            278)
+        self.assertEqual(default_weight_section(out)[0], 22)
+        self.assertEqual(
+            one_int(r'(?m)^!! (\d+) locale\(s\) could not be read the way '
+                    r'localedef reads them', out, 'the unsettled count'),
+            17)
         self.assertEqual(
             one_int(r'Full set needing empirical confirmation: (\d+) locale',
                     out, 'the exposed set'),

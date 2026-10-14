@@ -4,7 +4,8 @@ The tool reads glibc's locale files to decide what changed between two
 versions. That reading used to be written by hand in several modules, each a
 little differently from the others and from glibc; every fix corrected one copy
 and the next review found its twin (backlog block 15). This module is the one
-reader the steps are moved onto, one PR at a time. No step calls it yet.
+reader the steps are moved onto, one PR at a time: steps 1, 3, 4 and 9/10
+read through it (glibc_tree.py); steps 2 and 6 to 8 not yet.
 
 It reads the way localedef reads, for one glibc BUILD, in layers:
 
@@ -854,8 +855,12 @@ class Section(object):
 
 class FileRead(object):
     """One call of locfile_read: the file, the categories it was read for,
-    the directives it obeyed, its sections, and the lines its top level
-    dropped as syntax errors."""
+    the directives it obeyed, its sections, the lines its top level
+    dropped as syntax errors, and `cut`: the line where lr_getc gave the top
+    level an EOF with the file not read to its end, or None. glibc reads
+    nothing of the file after it (locfile.c:115@2.34). Three bytes do it: a
+    line holding only the escape character (cases b14, b15, every build),
+    and before 2.36 a 0x1A (b02) or an 0xFF through a signed char (b03)."""
 
     def __init__(self, name, mask):
         self.name = name
@@ -863,6 +868,7 @@ class FileRead(object):
         self.directives = []      # (line, 'comment_char'|'escape_char', byte)
         self.sections = []
         self.stray = []           # lines the top level dropped
+        self.cut = None
 
 
 class _Entry(object):
@@ -1083,6 +1089,8 @@ class _Runner(object):
         while True:
             t = lr.token()
             if t.tok == 'eof':
+                if lr.pi < len(lr.phys) or lr.idx < lr.bufact:
+                    fr.cut = t.line
                 break
             if t.tok == 'eol':
                 continue
@@ -1167,7 +1175,10 @@ class _Runner(object):
         tokens to the first END or EOF. Its test is inverted, so on END it
         prints "premature end of file" and returns WITHOUT reading the word
         after END, which the top level then reads as a new statement
-        (ld-collate.c:2624-2643@2.39, ld-ctype.c:2106-2125)."""
+        (ld-collate.c:2624-2643@2.39, ld-ctype.c:2106-2125). On EOF it
+        reads one more token, and unless that is EOF too drops the rest of
+        its line: after an EOF lr_getc consumed (an 0xFF before 2.36) that
+        is the line after it (cases s55, s57)."""
         sec.skipped = True
         seen = set()
         while True:
@@ -1177,8 +1188,11 @@ class _Runner(object):
             if _repeats(lr, seen):
                 raise GlibcHang('%s:%d: skip_category reads the same token '
                                 'forever' % (lr.fname, t.line))
-        if t.tok != 'eof':
-            sec.end = t.line
+        if t.tok == 'eof':
+            if lr.token().tok != 'eof':
+                lr.ignore_rest()
+            return
+        sec.end = t.line
         return
 
     def statement(self, lr, t, sec, store):
@@ -1256,12 +1270,15 @@ class _Runner(object):
                     reasons.append('a statement whose tokens the line '
                                    'reader gives again forever')
                     break
-                if x.tok == 'eof' and lr.stuck() and (
+                if x.tok == 'eof' and (
                         lr.pi < len(lr.phys) or lr.idx < lr.bufact):
-                    # A byte lr_getc reads as EOF (0x1A before 2.36) with
-                    # the line going on after it: a handler that reads
-                    # tokens stops the file there, one that calls
-                    # lr_ignore_rest skips it (measured, case b19).
+                    # A byte lr_getc reads as EOF (0x1A or 0xFF before
+                    # 2.36) with the file going on after it: a handler that
+                    # reads tokens stops there, one that calls
+                    # lr_ignore_rest skips it (measured, case b19), and
+                    # after an 0xFF, which lr_getc consumes, the statement
+                    # loop reads on from the byte after it (cases s62-s66;
+                    # false-negative-reviewer, round 3 of 15.2 B2).
                     reasons.append('a byte read as the end of the file '
                                    'inside a statement')
                 if x.tok in ('eol', 'eof'):
@@ -1278,13 +1295,26 @@ class _Runner(object):
     def end_of_section(self, lr, t, sec):
         """`END` in statement position: the next token, then return
         (ld-collate.c:3760-3800, ld-numeric.c:316-327@2.39). Any word ends
-        the section; a wrong one only draws a message."""
-        sec.end = t.line
+        the section; a wrong one only draws a message. True when the
+        section ended.
+
+        An EOF in that place is `break`, not `return` (ld-collate.c:
+        3772-3773@2.34, ld-numeric.c:320-321, ld-ctype.c:2823-2824, the
+        same at 2.28 and 2.39): the statement loop goes on with the next
+        token. When lr_getc consumed the EOF -- an 0xFF through a signed
+        char before 2.36 -- that token is the line after it, and the
+        section reads on to the next END; False then (cases s53, s54,
+        s56). An EOF that is not consumed comes back and ends the loop."""
         arg = lr.token()
         if arg.tok == 'eof':
-            return
+            if not lr.stuck():
+                return False
+            sec.end = t.line
+            return True
+        sec.end = t.line
         sec.end_word = arg
         lr.ignore_rest()
+        return True
 
     # -- ld-collate.c -----------------------------------------------------
 
@@ -1341,8 +1371,10 @@ class _Runner(object):
                 t = lr.token()
                 continue
             if _kw(t, 'tok_end'):
-                self.end_of_section(lr, t, sec)
-                return
+                if self.end_of_section(lr, t, sec):
+                    return
+                t = lr.token()
+                continue
             if _kw(t, 'tok_copy'):
                 s = lr.token()
                 if s.tok != 'string':
@@ -1469,8 +1501,9 @@ class _Runner(object):
         if stop.tok == 'eof':
             return None
         if _kw(stop, 'tok_end'):
-            self.end_of_section(lr, stop, sec)
-            return None
+            # seen_end is the END case itself (ld-collate.c:3741@2.34).
+            if self.end_of_section(lr, stop, sec):
+                return None
         return lr.token()
 
     def skip_to(self, lr, to_endif):
@@ -1572,7 +1605,14 @@ class _Runner(object):
             lr.ignore_rest()      # "no other keyword shall be specified"
         if t.tok == 'eof':
             return
-        self.end_of_section(lr, t, sec)
+        # handle_copy reads the word after END and drops the rest of the
+        # line whatever it is, an EOF included (locfile.c:997-1010@2.34):
+        # no statement loop to go back to.
+        sec.end = t.line
+        arg = lr.token()
+        if arg.tok != 'eof':
+            sec.end_word = arg
+        lr.ignore_rest()
 
     def body(self, lr, t, sec, entry):
         """The statement loop of every reader but collate_read."""
@@ -1584,8 +1624,10 @@ class _Runner(object):
                 t = lr.token()
                 continue
             if _kw(t, 'tok_end'):
-                self.end_of_section(lr, t, sec)
-                return
+                if self.end_of_section(lr, t, sec):
+                    return
+                t = lr.token()
+                continue
             if sec.category == 'LC_TIME' and t.tok == 'kw' \
                     and t.kwtok in _TIME_ARRAYS and not ignore:
                 self.time_array(lr, t, _TIME_ARRAYS[t.kwtok])
@@ -1666,7 +1708,12 @@ class _Runner(object):
                 now = lr.token()
                 if now.tok == 'eof' or _kw(now, 'tok_translit_end'):
                     break
-            return lr.token() if now.tok != 'eof' else now
+            # Both loops end at EOF too and `break`; the statement loop
+            # then takes the next token (ld-ctype.c:2637-2643, :2782-2787,
+            # :2841@2.34), which after an 0xFF lr_getc consumed is what
+            # follows it, and the same EOF again otherwise (cases s67,
+            # s68; false-negative-reviewer, round 3 of 15.2 B2).
+            return lr.token()
         lr.ignore_rest()
         lr.translate_strings = 1
         lr.return_widestr = 1
@@ -1704,8 +1751,6 @@ class _Runner(object):
                                'value')
             self.statement(lr, now, sec, None)
         lr.return_widestr = 0
-        if now.tok == 'eof':
-            return now
         return lr.token()
 
     def translit_include(self, lr, t, entry):

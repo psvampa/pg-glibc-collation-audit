@@ -198,8 +198,9 @@ def inherited_via_copy(texts, roots):
     """{locale: [roots]} for every locale that is NOT one of `roots` and whose
     LC_COLLATE reaches one of them through `copy`.
 
-    Pure: the same closure step 3 and step 4 take, applied to a node's own
-    files. A backport that edits iso14651_t1 changes the order of the
+    Pure: glibc_locale_data.inherited_from's rule over each file read
+    alone, applied to a node's own files (steps 3 and 4 walk what localedef
+    reads for each locale instead, glibc_tree, backlog 15.2). A backport that edits iso14651_t1 changes the order of the
     hundreds of locales that copy it, and until this existed the
     node-reading checks reported "1 locale(s) differ inside LC_COLLATE" for
     exactly that case -- the one check that can see a backport at all lost

@@ -2,8 +2,9 @@
 
 glibc_reader.run() emulates one whole localedef run, the way glibc reads
 every file it reaches, and that costs about 0.2 s per locale: almost every
-locale reaches iso14651_t1_common, the largest file of the tree. The steps
-will ask it about every locale of a tag or of a node's directory, and the
+locale reaches iso14651_t1_common, the largest file of the tree. Steps 1,
+3, 4, 9 and 10 ask it about every locale of a tag or of a node's directory
+(glibc_tree), and the
 test suite runs them many times over the same trees, so the answers are kept
 on disk, in scripts/glibc-reader-cache/ next to the glibc clone, outside git
 (backlog 15.2). Nothing here reads a locale file differently: a kept answer
@@ -23,10 +24,11 @@ Why a kept answer is the answer:
     here, is computed again, never taken as empty or as no run.
 
 What is kept is run()'s answer without the tokens of each LC_COLLATE
-statement (the kept collate holds only which files its statements came from
-and how many there are): those are megabytes per locale, and no step reads
-them yet. The answers are written as JSON, not pickle, so a damaged or
-planted entry can be wrong data, never code; only its shape is checked.
+statement: those are megabytes per locale. The kept collate holds what the
+steps read from them (summary(), below): how many statements each file
+gave, and where a range or codepoint_collation was read. The answers are
+written as JSON, not pickle, so a damaged or planted entry can be wrong
+data, never code; only its shape is checked.
 
 PG_GLIBC_READER_CACHE names another directory; PG_GLIBC_READER_JOBS caps the
 processes that compute what is missing (default: one per processor). A
@@ -106,16 +108,23 @@ def summary(r):
     """run()'s answer as plain values: (fatal, reads, unsettled, collate).
 
     fatal      None, or (kind, name, where, detail)
-    reads      one (name, mask, directives, sections, stray) per file read,
-               in order; mask is sorted; each section is
+    reads      one (name, mask, directives, sections, stray, cut) per file
+               read, in order; mask is sorted; cut is FileRead.cut; each
+               section is
                (category, fname, start, end, end_word, content, copy,
                 copy_kind, skipped, returned, mid_copies), end_word being
                (tok, val) or None
     unsettled  (file, line, why), in order
     collate    None when Run.collate is (no LC_COLLATE stored, a fatal
                run, or one stopped where glibc reads outside its buffer),
-               else (the files its statements came from, sorted; how many
-               statements)
+               else (counts, ranges, codepoint):
+                 counts     (file, how many statements it gave), sorted
+                 ranges     (file, line) of every token .., ... or ....
+                            in a statement, sorted, each line once: the
+                            three ellipses ld-collate.c reads as a range
+                            (the `(2)` forms are charmap syntax)
+                 codepoint  (file, line) of each codepoint_collation
+                            statement, in reading order
     """
     fatal = None if r.fatal is None else (
         r.fatal.kind, r.fatal.name, r.fatal.where, r.fatal.detail)
@@ -129,12 +138,24 @@ def summary(r):
              tuple(s.mid_copies))
             for s in fr.sections)
         reads.append((fr.name, tuple(sorted(fr.mask)),
-                      tuple(fr.directives), secs, tuple(fr.stray)))
+                      tuple(fr.directives), secs, tuple(fr.stray), fr.cut))
     collate = None
     if r.collate is not None:
-        files = sorted({s[0] for s in r.collate.statements})
-        collate = (tuple(files), len(r.collate.statements))
+        counts, ranges, codepoint = {}, set(), []
+        for fname, line, toks in r.collate.statements:
+            counts[fname] = counts.get(fname, 0) + 1
+            for t in toks:
+                if t.tok in _RANGES:
+                    ranges.add((fname, t.line))
+            if toks and toks[0].tok == 'kw' \
+                    and toks[0].kwtok == 'tok_codepoint_collation':
+                codepoint.append((fname, line))
+        collate = (tuple(sorted(counts.items())), tuple(sorted(ranges)),
+                   tuple(codepoint))
     return _canon((fatal, tuple(reads), tuple(r.unsettled), collate))
+
+
+_RANGES = frozenset(('ellipsis2', 'ellipsis3', 'ellipsis4'))
 
 
 def _canon(x):
@@ -237,8 +258,9 @@ def _check(s):
                                   and len(fatal) == 4):
         raise ValueError('bad fatal')
     if not isinstance(reads, tuple) or not all(
-            isinstance(fr, tuple) and len(fr) == 5
+            isinstance(fr, tuple) and len(fr) == 6
             and isinstance(fr[0], bytes) and isinstance(fr[3], tuple)
+            and (fr[5] is None or isinstance(fr[5], int))
             and all(isinstance(sec, tuple) and len(sec) == 11
                     for sec in fr[3])
             for fr in reads):
@@ -246,8 +268,12 @@ def _check(s):
     if not isinstance(unsettled, tuple) or not all(
             isinstance(u, tuple) and len(u) == 3 for u in unsettled):
         raise ValueError('bad unsettled')
-    if collate is not None and not (isinstance(collate, tuple)
-                                    and len(collate) == 2):
+    if collate is not None and not (
+            isinstance(collate, tuple) and len(collate) == 3
+            and all(isinstance(part, tuple) and all(
+                isinstance(x, tuple) and len(x) == 2
+                and isinstance(x[0], str) and isinstance(x[1], int)
+                for x in part) for part in collate)):
         raise ValueError('bad collate')
     return s
 
@@ -341,6 +367,19 @@ def tree_runs(files, build, cache_dir=None):
     finally:
         if lock is not None:
             lock.close()
+
+
+def kept_tree(ids, build, cache_dir=None):
+    """Is an answer kept for the tree whose files have these git blob ids
+    ({name: id}), read for `build`? Asked without reading a file, from a
+    `git ls-tree` alone: tests/_harness.fill_reader_cache skips a tree that
+    has one. Says only that the entry exists: tree_runs still refuses one
+    it cannot read, and computes it again."""
+    root = cache_dir if cache_dir is not None else os.environ.get(
+        'PG_GLIBC_READER_CACHE') or DEFAULT_DIR
+    tree = hashlib.sha1(repr(sorted(ids.items())).encode('utf-8')).hexdigest()
+    return os.path.isfile(os.path.join(root, VERSION, build_id(build),
+                                       'tree-%s.json' % tree))
 
 
 def _prune(root):
