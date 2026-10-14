@@ -88,6 +88,78 @@ _SKIP_NO_FLOOR_TAGS = (
     f"run `git -C scripts/glibc fetch --tags`.")
 
 
+def fill_reader_cache():
+    """Compute, with every processor, the localedef runs most of the suite
+    asks scripts/reader_cache.py for: every locale of the five tags, and of
+    MID read as RHEL 9 reads it (codepoint_collation is a keyword there).
+    Most trees the tests build are one of these with a file or two changed,
+    so after this they find nearly every run kept. Without it, the classes
+    that run at once each computed nearly the same tree on their own, one
+    processor each: on GitHub's four processors that took a class past its
+    600 s limit and the job past 20 minutes (backlog 15.2, measured
+    2026-10-14). Changes no answer: a kept run is the run.
+
+    tests/run_parallel.py calls this before the classes start. Without a
+    usable clone it does nothing; the tests that need one skip."""
+    if not have_clone():
+        return
+    import glibc_locale_data as g
+    import glibc_tree
+    import reader_cache as rc
+
+    def kept(tag, build):
+        # From the listing alone, so a full cache costs a git ls-tree per
+        # tree and no file read: 0.75 s where reading them took 2.4 s.
+        paths, ids = g.list_tree_ids(GLIBC_CLONE, tag, [])
+        return rc.kept_tree({os.path.basename(p).encode(
+            'utf-8', 'surrogateescape'): ids[p] for p in paths}, build)
+    for tag in (FLOOR_OLD, FLOOR_NEW, OLD, MID, NEW):
+        if has_tags(tag) and not kept(tag, glibc_tree.build_at(GLIBC_CLONE,
+                                                               tag)):
+            glibc_tree.Tree.at_tag(GLIBC_CLONE, tag)
+    if has_tags(MID):
+        rhel9 = glibc_tree.build_at(GLIBC_CLONE, MID, '.el9')
+        if kept(MID, rhel9):
+            return
+        paths = g.list_locale_files(GLIBC_CLONE, MID)
+        contents, missing = g.read_blobs(GLIBC_CLONE, MID, paths, raw=True)
+        g.require_read(MID, paths, missing, 'the locale files')
+        files = {os.path.basename(p).encode('utf-8', 'surrogateescape'): v
+                 for p, v in contents.items()}
+        glibc_tree.Tree(MID, files, rhel9, g.decoded)
+
+
+def glibc_commit(base, files, tmp):
+    """(repo, commit): a clone of scripts/glibc sharing its objects, made in
+    `tmp`, with one commit on top of `base` whose localedata/locales holds
+    `files` ({name: bytes}) added or replaced.
+
+    For a step that needs a glibc git can place: glibc_tree refuses a ref it
+    cannot put before or after glibc's lr_getc fix, which a fabricated
+    repository never can. Nothing is written to scripts/glibc; the commit
+    carries its own identity, as a fabricated repository must."""
+    repo = os.path.join(tmp, 'glibc')
+    subprocess.run(['git', 'clone', '-q', '--shared', '--no-checkout',
+                    GLIBC_CLONE, repo], check=True)
+    env = dict(os.environ, GIT_INDEX_FILE=os.path.join(tmp, 'index'),
+               GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid',
+               GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@example.invalid')
+
+    def git(*args, data=None):
+        p = subprocess.run(['git', '-C', repo] + list(args), env=env,
+                           input=data, stdout=subprocess.PIPE, check=True)
+        return p.stdout.decode('ascii').strip()
+    git('read-tree', base)
+    for name, data in sorted(files.items()):
+        oid = git('hash-object', '-w', '--stdin', data=data)
+        git('update-index', '--add', '--cacheinfo',
+            '100644,%s,localedata/locales/%s' % (oid, name))
+    tree = git('write-tree')
+    commit = git('commit-tree', tree, '-p', '%s^{commit}' % base,
+                 '-m', 'test locales on top of %s' % base)
+    return repo, commit
+
+
 def needs_clone(cls):
     """Class decorator: skip the whole TestCase without a usable clone.
 

@@ -80,18 +80,6 @@ jobs:
           path: scripts/glibc-reader-cache
           key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}
 
-      - name: Fill the reader's answers for the five tags
-        # After a change to the reader nothing kept is used, and the
-        # comparison of run() with every locale file of the five tags
-        # computes about 1,700 runs. Inside the suite it gets one of the four
-        # processors and ran past its shard timeout (measured on #102); here
-        # it gets all four, and the suite below finds it kept. With nothing
-        # changed it takes seconds.
-        run: |
-          cd tests
-          PG_GLIBC_READER_JOBS=$(nproc) python3 -m unittest -q \
-            test_glibc_reader.ReaderAgreesOnEveryRealFile
-
       - name: Say so if the documentation layer is switched off
         # Renaming that file out of `test*.py` removes its tests from the run
         # without producing a single skip, so the step below stays green and
@@ -115,7 +103,12 @@ jobs:
         # Spread over four processes, one per processor of this runner, by
         # tests/run_parallel.py, on a pull request and on main alike. They are
         # the same tests in the same files, so spreading them changes how long
-        # the run takes, not what it checks.
+        # the run takes, not what it checks. Before the classes start, the
+        # runner computes the reader's answers for the five tags with all
+        # four processors (_harness.fill_reader_cache): after a change to the
+        # reader nothing kept is used, and classes that each computed nearly
+        # the same tree at once, one processor each, took this job past 20
+        # minutes (measured on 2026-10-14, backlog 15.2).
         run: |
           set -o pipefail
           python3 tests/run_parallel.py -j 4 2>&1 | tee /tmp/out.txt

@@ -308,7 +308,8 @@ class CorpusFloorIsShared(unittest.TestCase):
              ['--old-locales-dir', old, '--old-build-id', 'o',
               '--new-locales-dir', new, '--new-build-id', 'n']),
             ('flag_algorithmic_ranges', fa.main,
-             ['--locales-dir', new, '--build-id', 'n']),
+             ['--locales-dir', new, '--build-id', 'n',
+              '--supported-tag', 'glibc-2.34']),
         )
         # Both directions: a floor moved down and left behind by a mode is a
         # drift too. OUT_DIR is base, so a mode that stopped refusing writes
@@ -317,9 +318,14 @@ class CorpusFloorIsShared(unittest.TestCase):
             for floor in (4, 4321):
                 with self.subTest(mode=name, floor=floor):
                     err = io.StringIO()
+                    # The floor is checked before the clone is looked for,
+                    # so a truncated copy is refused for what it is on a
+                    # machine without one too.
                     with mock.patch.object(g, 'MIN_LOCALE_FILES', floor), \
                             mock.patch.object(dd, 'DEFAULT_MIN_FILES', floor), \
                             mock.patch.object(g, 'OUT_DIR', base), \
+                            mock.patch.object(g, 'find_repo', side_effect=(
+                                AssertionError('looked for the clone'))), \
                             contextlib.redirect_stderr(err), \
                             contextlib.redirect_stdout(io.StringIO()), \
                             self.assertRaises(SystemExit) as cm:
@@ -1337,21 +1343,47 @@ class StepFourWithoutRanges(unittest.TestCase):
     aliases it leaves out because their name is not ASCII (backlog 13.1).
     Driven directly, because no pinned tag reaches it with such an alias."""
 
+    class _Tree(object):
+        """What glibc_tree.Tree answers for three locales: nb_NO copies a
+        file the tree lacks, xx_XX spells its weights out, and xx_YY the
+        reader could not settle. Answers only
+        what report() asks on this path, and raises on anything else."""
+        names = ['nb_NO', 'xx_XX', 'xx_YY']
+
+        def defines(self, name):
+            return name in self.names
+
+        def ranges(self, name):
+            return []
+
+        def byte_order(self):
+            return set(), {}
+
+        def unresolved(self):
+            return {'nb_NO': 'localedef cannot open no_such_locale',
+                    'xx_YY': 'xx_YY:3: reorder-sections-after in LC_COLLATE'}
+
+        def missing(self):
+            return {'nb_NO': ['no_such_locale']}
+
+        def roots(self, name, roots):
+            raise AssertionError('no range, so no closure to walk')
+
     def test_it_states_the_rule_and_the_aliases_it_leaves_out(self):
-        texts = {'nb_NO': _harness.locale_file('copy "no_such_locale"'),
-                 'xx_XX': _harness.locale_file('order_start forward',
-                                               '<U0041>', 'order_end')}
         aliases = {'norwegian': 'nb_NO.ISO-8859-1',
                    'bokm\ufffdl': 'nb_NO.ISO-8859-1'}
         out = io.StringIO()
         with mock.patch.object(g, 'write_list', return_value='/x') as wl, \
                 contextlib.redirect_stdout(out):
-            fa.report(texts, {}, 'fake', 'list.txt', [], aliases=aliases)
+            fa.report(self._Tree(), {}, 'fake', 'list.txt', [],
+                      aliases=aliases)
         text = out.getvalue()
         self.assertIn('Locales, not spellings', text)
         self.assertIn('not listed: an alias of nb_NO whose name is not ASCII',
                       text)
-        self.assertEqual(wl.call_args[0][1], ['nb_NO', 'norwegian', 'xx_XX'])
+        # xx_YY is unsettled, not missing a file: listed all the same.
+        self.assertEqual(wl.call_args[0][1],
+                         ['nb_NO', 'norwegian', 'xx_XX', 'xx_YY'])
 
 
 class ByteOrderListName(unittest.TestCase):

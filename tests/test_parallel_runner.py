@@ -31,11 +31,13 @@ fastest module in the suite.
 import ast
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 import run_parallel as rp
 from _harness import TESTS_DIR
@@ -440,6 +442,43 @@ class AHungShardIsKilledAndCounted(unittest.TestCase):
         code, text = report([result], {'test_pure_functions': 1})
         self.assertEqual(code, 1, text)
 
+
+
+class TheReaderFillSaysWhenItDidNotFinish(unittest.TestCase):
+    """run_parallel.fill_reader computes the reader's answers before the
+    classes start (backlog 15.2). It changes how long the run takes, never
+    an answer, so a fill that fails or runs out of time is said and the
+    run goes on; it is never read as done."""
+
+    def harness(self, body):
+        d = tempfile.mkdtemp(prefix='pg-glibc-fill-')
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        with open(os.path.join(d, '_harness.py'), 'w') as fh:
+            fh.write('import os, sys, time\n'
+                     'def fill_reader_cache():\n    ' + body + '\n')
+        return d
+
+    def test_a_fill_that_finishes_is_none(self):
+        self.assertIsNone(rp.fill_reader(self.harness('pass')))
+
+    def test_a_fill_that_fails_says_how(self):
+        why = rp.fill_reader(self.harness(
+            "sys.stderr.write('boom\\n'); sys.exit(3)"))
+        self.assertEqual('exit 3: boom', why)
+
+    def test_a_fill_that_runs_out_of_time_says_so(self):
+        why = rp.fill_reader(self.harness('time.sleep(30)'), timeout=1)
+        self.assertEqual('it ran past 1 s', why)
+
+    def test_the_fill_gets_every_processor_unless_told_otherwise(self):
+        d = self.harness("print(os.environ['PG_GLIBC_READER_JOBS']); "
+                         "sys.exit(1)")
+        with mock.patch.dict(os.environ):
+            os.environ.pop('PG_GLIBC_READER_JOBS', None)
+            self.assertEqual('exit 1: %d' % (os.cpu_count() or 1),
+                             rp.fill_reader(d))
+            os.environ['PG_GLIBC_READER_JOBS'] = '2'
+            self.assertEqual('exit 1: 2', rp.fill_reader(d))
 
 class TheRunnerRunsWhatItSaysItRan(unittest.TestCase):
     """End to end against the serial command on the same module: same tests,

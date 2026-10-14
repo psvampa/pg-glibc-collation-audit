@@ -1557,8 +1557,10 @@ def _content(text):
     block. That reader takes `%` as the comment character when a file
     declares none, and glibc takes `#` (backlog 13.8), so a `#` comment
     holding `..` is a range to one and a comment to the other. Where they
-    disagree the range wins: a locale is never both listed by step 4 and
-    called byte order beside it.
+    disagree the range wins: a locale is never both listed by this
+    module's ellipsis reader and called byte order beside it (step 8 reads
+    through both; steps 4, 9 and 10 read through glibc_tree since backlog
+    15.2).
 
     byte_order_locales asks this several times of each file, through
     declares_byte_order, classify_collation_style and _sole_copy_target, so
@@ -1739,8 +1741,8 @@ def classify_collation_style(text):
 def scan_ellipsis(texts):
     """({name: [hit lines]}, how many of `texts` define LC_COLLATE).
 
-    Pure and shared, so a scan of a git tag and a scan of a node's
-    /usr/share/i18n/locales/ cannot drift on comment_char handling.
+    Pure. Steps 4, 9 and 10 no longer call it: they read what localedef
+    reads (glibc_tree, backlog 15.2).
     """
     flagged, with_collate = {}, 0
     for name, text in texts.items():
@@ -2041,8 +2043,18 @@ def _main(argv):
         repo = find_repo()
         tag = argv[1]
         check_refs(repo, tag)
-        graph = build_copy_graph(repo, tag)
-        counts = fan_in(graph)
+        # Imported here: glibc_tree imports this module.
+        import glibc_tree
+        # Who inherits what, from what localedef reads to build each locale
+        # (glibc_tree), every `copy` followed the way glibc follows it.
+        tree = glibc_tree.Tree.at_tag(repo, tag)
+        # Every locale with an LC_COLLATE of its own first, in name order,
+        # so that equal counts print in the order they always have.
+        counts = {name: 0 for name in tree.names if tree.defines(name)}
+        for name in tree.names:
+            for f in tree.reach(name):
+                counts[f] = counts.get(f, 0) + 1
+        unresolved = tree.unresolved()
         changed = None
         if len(argv) >= 3:
             with open(argv[2], encoding='utf-8') as fh:
@@ -2057,6 +2069,11 @@ def _main(argv):
             if changed is not None and name in changed:
                 mark = '  <== has some change in this version pair'
             print(f"  {n:4d} locales inherit from {name}{mark}")
+        if unresolved:
+            print(f"!! {len(unresolved)} locale(s) could not be read the way "
+                  f"localedef reads them, so the counts above may miss what "
+                  f"they inherit: {', '.join(sorted(unresolved)[:12])}"
+                  f"{', ...' if len(unresolved) > 12 else ''}")
         if changed is not None:
             hot = sorted(((counts.get(c, 0), c) for c in changed
                           if counts.get(c, 0) > 0), reverse=True)

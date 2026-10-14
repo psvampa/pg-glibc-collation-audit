@@ -37,6 +37,12 @@ different facts. So it is red whenever it cannot show that the suite ran:
   * a class named on the command line that matches nothing is FAILED, rather
     than a green run of the empty selection.
 
+A run of the whole suite first computes, with every processor, the
+reader's answers most classes ask for (_harness.fill_reader_cache, backlog
+15.2): classes that each computed nearly the same tree at once took GitHub's
+job past 20 minutes. It changes how long the run takes, never an answer, and
+a fill that does not finish is said and the run goes on.
+
 The last two lines are the ones `unittest` prints -- `Ran N tests in Ts`, then
 `OK`, `OK (skipped=N)` or `FAILED (...)` -- because `.claude/hooks/git-gate.sh`
 greps for exactly those and treats `skipped=` as a red, because a skip is
@@ -316,6 +322,28 @@ def aggregate(shards, expected, seconds, workers, tail=80):
     return 0, lines
 
 
+def fill_reader(tests_dir=TESTS_DIR, timeout=SHARD_TIMEOUT):
+    """_harness.fill_reader_cache in a process of its own, before the
+    classes start, given every processor (or PG_GLIBC_READER_JOBS when it
+    is set). Returns None, or why it did not finish: the classes then
+    compute what they need themselves, which costs time and changes no
+    answer, so this is said and the run goes on."""
+    env = dict(os.environ)
+    env.setdefault('PG_GLIBC_READER_JOBS', str(os.cpu_count() or 1))
+    try:
+        p = subprocess.run(
+            [sys.executable, '-c',
+             'import _harness; _harness.fill_reader_cache()'],
+            cwd=tests_dir, env=env, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return 'it ran past %d s' % timeout
+    if p.returncode != 0:
+        tail = p.stdout.decode('utf-8', 'replace').strip().split('\n')[-1:]
+        return 'exit %d: %s' % (p.returncode, ' '.join(tail))
+    return None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description='Run the tests/ suite one process per TestCase class.')
@@ -333,6 +361,12 @@ def main(argv=None):
         return 2
     expected = dict(units)
     workers = max(1, min(args.workers, len(units)))
+    if not args.names:
+        why = fill_reader()
+        if why is not None:
+            print('note: the reader\'s answers were not filled before the '
+                  'classes started (%s); each class computes what it needs.'
+                  % why, flush=True)
     # scripts/reader_cache.py fills what it lacks with one process per
     # processor; with `workers` classes running at once, that many each
     # would only fight over the processors.
