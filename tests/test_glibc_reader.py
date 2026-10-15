@@ -1629,12 +1629,13 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
     def test_a_listing_that_is_not_the_tree_is_refused(self):
         """Reached by injection: main hands file_facts the listing of the
         tag it reads. A file the listing lacks would be one nobody asks
-        about."""
+        about. The suite's own directory, as setUpClass: in one of its own
+        the whole tree was computed before the refusal, 13 s of the class's
+        20. No entry is kept for this listing: the refusal comes first."""
         err = io.StringIO()
         with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
             self.gt.file_facts(self.repo, self.ref, self.paths[1:], self.ids,
-                               self.build,
-                               cache_dir=os.path.join(self.tmp, 'other'))
+                               self.build, cache_dir=self.cache)
         self.assertIn('are not the ones listed there', err.getvalue())
 
     def test_keyword_tables_a_tag_lacks_are_refused(self):
