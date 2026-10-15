@@ -16,7 +16,7 @@ import tempfile
 import unittest
 
 from _harness import (GLIBC_CLONE, MID, NEW, OLD, SCRIPTS_DIR, flat,
-                      needs_clone)
+                      glibc_shaped, needs_clone)
 
 import glibc_locale_data as g
 import diff_collation_code as d
@@ -420,19 +420,19 @@ class AShallowCloneCannotAnswerThis(unittest.TestCase):
         """Round 2 of the 13.18 review, finding 6: on a shallow clone git
         can answer no for a tag that holds LR_GETC_FIX, and two such
         answers would skip the files that did not change."""
+        ask = "(lambda: True, lambda: True), ('%s', '%s')" % (OLD, MID)
         rc, out = in_subprocess(
             "import filter_lc_collate_changes as f\n"
-            "print('ANSWER', f.unchanged_read_otherwise(%r, '%s', [], "
-            "(lambda: True, lambda: True)))" % (self.repo, OLD))
+            "print('ANSWER', f.lr_getc_sides(%r, %s))" % (self.repo, ask))
         self.assertNotEqual(rc, 0, 'a shallow clone answered for both tags')
         self.assertIn('shallow', out)
         self.assertNotIn('ANSWER', out)
         rc, out = in_subprocess(
             "import filter_lc_collate_changes as f\n"
-            "print('ANSWER', f.unchanged_read_otherwise(repo, '%s', [], "
-            "(lambda: True, lambda: True)))" % OLD)
+            "print('ANSWER', f.lr_getc_sides(repo, %s))" % ask)
         self.assertEqual(rc, 0, out)
-        self.assertIn('ANSWER []', out, 'the control: the full clone')
+        self.assertIn("ANSWER {'%s': True, '%s': True}" % (OLD, MID), out,
+                      'the control: the full clone')
 
     def test_step_2_refuses_it_when_git_cannot_say_yes(self):
         """On a depth-1 clone git places neither tag relative to
@@ -823,26 +823,30 @@ class UnreadableBlobsAreNotDropped(unittest.TestCase):
         self.assertIn('LC_COLLATE', got['localedata/locales/sv_SE'])
 
     # The two tests below assert the CALL SITES, not the helper. Mutation
-    # testing showed why: reverting build_copy_graph to `contents, _ =
+    # testing showed why: reverting the copy graph's read (build_copy_graph,
+    # since replaced by glibc_tree.Tree.at_tag) to `contents, _ =
     # read_blobs(...)` left the whole suite green, because every path it reads
     # comes from ls-tree at the same tag and so `missing` is empty in practice.
     # Testing the helper alone guards nothing. Injecting a missing blob is what
     # makes the guard observable.
 
-    def test_build_copy_graph_aborts_on_an_unreadable_blob(self):
-        """A dropped blob silently shrinks the copy graph, and a smaller graph
-        yields a shorter affected-locale list -- the reassuring direction."""
+    def test_the_tree_aborts_on_an_unreadable_blob(self):
+        """A dropped blob silently shrinks the copy chains steps 1 and 3
+        walk (glibc_tree), and a smaller set yields a shorter affected-locale
+        list -- the reassuring direction."""
         rc, out = in_subprocess(
+            "import glibc_tree\n"
             "real = g.read_blobs\n"
-            "def fake(repo, tag, paths):\n"
-            "    c, _ = real(repo, tag, paths)\n"
+            "def fake(repo, tag, paths, raw=False):\n"
+            "    c, _ = real(repo, tag, paths, raw=raw)\n"
             "    dropped = sorted(c)[0]\n"
             "    del c[dropped]\n"
             "    return c, {dropped}\n"
             "g.read_blobs = fake\n"
-            "g.build_copy_graph(repo, %r)\n" % NEW)
+            "glibc_tree.Tree.at_tag(repo, %r)\n" % NEW)
         self.assertNotEqual(rc, 0, 'an unreadable locale was dropped silently')
-        self.assertIn('copy graph', out)
+        self.assertIn('could not be read while building the locale files',
+                      flat(out))
 
     def test_the_include_walk_aborts_on_an_unreadable_blob(self):
         rc, out = in_subprocess(
@@ -1058,11 +1062,21 @@ def git(repo, *args, env=None):
                    env=env)
 
 
-def make_glibc_shaped_repo(root, n_files, rename=False, dates=None):
+def make_glibc_shaped_repo(root, n_files, rename=False, dates=None,
+                           base=MID):
     """A git repository that passes _is_glibc_clone: localedata/locales/ with
-    `n_files` locale sources and a SUPPORTED, committed and tagged `t1`. With
-    `rename`, a second commit `t2` renames the block-less file `x` to `y` AND
-    gives it an LC_COLLATE block -- the case no upstream pair has produced.
+    `n_files` locale sources, the `i18n` they copy, an `iso14651_t1` with
+    rules for a fixture's LC_COLLATE to copy (a copy of a file without
+    LC_COLLATE stores no order, which the reader reports as unresolved),
+    and a SUPPORTED, committed and tagged `t1`. With `rename`, a second commit `t2` renames
+    the block-less file `x` to `y` AND gives it an LC_COLLATE block -- the
+    case no upstream pair has produced.
+
+    `t1` sits on the real tag `base` (_harness.glibc_shaped), so that step
+    2 can place it before or after glibc's lr_getc fix and read its
+    keyword tables; base=None gives a repository of its own, which git
+    cannot place, for the tests that refuse before anything is read and
+    for the one that is about that refusal.
 
     `dates` is (t1, t2) as git date strings, for the pair-order tests: no
     pinned tag pair is reversed, so the reversed pair has to be fabricated.
@@ -1079,6 +1093,11 @@ def make_glibc_shaped_repo(root, n_files, rename=False, dates=None):
     with open(os.path.join(loc, 'x'), 'w') as fh:
         fh.write(f'comment_char %\nescape_char /\n{body}LC_CTYPE\n'
                  f'copy "i18n"\nEND LC_CTYPE\n')
+    with open(os.path.join(loc, 'i18n'), 'w') as fh:
+        fh.write('comment_char %\nescape_char /\nLC_CTYPE\nupper <U0041>\n'
+                 'END LC_CTYPE\n')
+    with open(os.path.join(loc, 'iso14651_t1'), 'w') as fh:
+        fh.write(_rules('<U0041>'))
     with open(os.path.join(root, 'localedata', 'SUPPORTED'), 'w') as fh:
         fh.write('x.UTF-8/UTF-8 \\\ny.UTF-8/UTF-8 \\\n')
     at = lambda when: (env if when is None
@@ -1086,7 +1105,10 @@ def make_glibc_shaped_repo(root, n_files, rename=False, dates=None):
                                  GIT_COMMITTER_DATE=when))
     env1 = at(dates[0] if dates else None)
     env2 = at(dates[1] if dates else None)
-    git(root, 'init', '-q', env=env1)
+    if base is None:
+        git(root, 'init', '-q', env=env1)
+    else:
+        glibc_shaped(root, base)
     # See make_release_line_repo: the identity belongs to the fixture, so that
     # a test adding a commit to it does not depend on the machine's config.
     git(root, 'config', 'user.name', 't', env=env1)
@@ -1117,7 +1139,7 @@ def run_script(script, *args, env_extra=None):
     return p.returncode, (p.stdout + p.stderr).decode('utf-8', 'replace')
 
 
-def add_unrelated_commit(repo, when, name='unrelated'):
+def add_unrelated_commit(repo, when, name='unrelated', parent=None):
     """An orphan root committed at `when`: a commit that is an ancestor of
     nothing and a descendant of nothing, with no glibc tag reachable from it,
     so neither question pair_order asks can order it. No pinned tag pair has
@@ -1125,10 +1147,23 @@ def add_unrelated_commit(repo, when, name='unrelated'):
 
     `--orphan` keeps the index, so the commit still carries whatever corpus
     the repository had; the marker file is only there to make it non-empty,
-    and it is a new path so that this works in either fixture."""
+    and it is a new path so that this works in either fixture.
+
+    With `parent`, a glibc tag, the commit is the current tree on top of
+    that tag instead: still an ancestor and a descendant of none of the
+    fixture's commits, and both describe as that one release, so pair_order
+    cannot order it either -- but git can place it before or after glibc's
+    lr_getc fix, which step 2 needs before it reads anything."""
     env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
                GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t',
                GIT_AUTHOR_DATE=when, GIT_COMMITTER_DATE=when)
+    if parent is not None:
+        sha = subprocess.run(
+            ['git', 'commit-tree', 'HEAD^{tree}', '-p', f'{parent}^{{commit}}',
+             '-m', name], cwd=repo, env=env, check=True,
+            capture_output=True, text=True).stdout.strip()
+        git(repo, 'tag', name, sha, env=env)
+        return name
     git(repo, 'checkout', '-q', '--orphan', name, env=env)
     with open(os.path.join(repo, f'{name}-marker'), 'w') as fh:
         fh.write('a commit with no history behind it\n')
@@ -1214,7 +1249,7 @@ class PairOrderIsMeasuredNotAssumed(unittest.TestCase):
     def linear(self, dates=None):
         """t1 then t2 on one line of history, tagged."""
         return make_glibc_shaped_repo(self.tmp, n_files=3, rename=True,
-                                      dates=dates)
+                                      dates=dates, base=None)
 
     def test_ancestry_settles_the_ordinary_pair(self):
         repo = self.linear()
@@ -1550,7 +1585,8 @@ class TheStepsRefuseAReversedPair(unittest.TestCase):
         way round the pair is. The shim in test_wrapper stands in for the
         wrapper's summary block and cannot reach this warning: it replaces the
         very subcommand that prints it."""
-        add_unrelated_commit(self.repo, '2020-01-01T00:00:00+0000')
+        add_unrelated_commit(self.repo, '2020-01-01T00:00:00+0000',
+                             parent=MID)
         rc, out = self.step2('t1', 'unrelated')
         self.assertEqual(rc, 0, out)
         self.assertIn('!! The DIRECTION of this pair could not be', out)
@@ -1690,14 +1726,15 @@ class TagModeCorpusFloor(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
     def test_step_4_refuses_a_tag_below_the_floor(self):
-        repo = make_glibc_shaped_repo(self.tmp, n_files=3)
+        repo = make_glibc_shaped_repo(self.tmp, n_files=3, base=None)
         rc, out = run_script('flag_algorithmic_ranges.py', 't1', '--repo', repo)
         self.assertEqual(rc, 2, out)
         self.assertIn(f'below the floor of {g.MIN_LOCALE_FILES}', out)
         self.assertNotIn('No locale uses ellipsis ranges', out)
 
     def test_step_2_refuses_a_tag_below_the_floor(self):
-        repo = make_glibc_shaped_repo(self.tmp, n_files=3, rename=True)
+        repo = make_glibc_shaped_repo(self.tmp, n_files=3, rename=True,
+                                      base=None)
         rc, out = run_script('filter_lc_collate_changes.py', 't1', 't2',
                              '--repo', repo)
         self.assertEqual(rc, 2, out)
@@ -1706,7 +1743,7 @@ class TagModeCorpusFloor(unittest.TestCase):
 
     def test_the_shell_step_refuses_too(self):
         """Step 1 is shell; it asks glibc_locale_data.py, which dies."""
-        repo = make_glibc_shaped_repo(self.tmp, n_files=3)
+        repo = make_glibc_shaped_repo(self.tmp, n_files=3, base=None)
         p = subprocess.run([sys.executable,
                             os.path.join(SCRIPTS_DIR, 'glibc_locale_data.py'),
                             'corpus', 't1'],
@@ -1788,13 +1825,14 @@ class APureRenamePassesTheNoHunkCheck(unittest.TestCase):
 
 
 class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
-    """Backlog 13.18 end to end, on a fabricated repository: a file whose
-    LC_COLLATE block is the same text at both tags, and whose line above
-    it stops glibc reading it at one of them. No locale file at
-    glibc-2.12..2.42 has such a line, so step 2 is driven here. The
-    history: base -> ctl (a note on END LC_CTYPE) -> cont (the note ends
-    in the escape); and ctl -> sub (a 0x1A line above LC_COLLATE) -> sub2
-    (gone again), and sub -> same (k as it is, another file changed)."""
+    """Step 2 end to end on a fabricated repository, for what no locale
+    file at glibc-2.12..2.42 does: a line above LC_COLLATE that stops glibc
+    reading it at one tag (backlog 13.18), a section read in place of
+    another, also in a renamed file or under a renamed copier, a file the
+    two tags' localedef read differently.
+    setUpClass builds the history, the commits each test compares and the
+    files each one adds. It sits on glibc's own tag, before the lr_getc fix:
+    step 2 places each tag and reads every file with glibc_reader."""
 
     BODY = ('comment_char %\nescape_char /\nLC_CTYPE\ncopy "i18n"\n'
             'END LC_CTYPE{end}\nLC_COLLATE\ncopy "iso14651_t1"\n'
@@ -1814,14 +1852,129 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
         cls.commit('sub2', ' % another note')
         git(cls.repo, 'checkout', '-q', 'sub')
         cls.commit('same', ' % a note\n% \x1a', other=True)
+        git(cls.repo, 'checkout', '-q', 'ctl')
+        cls.commit('bare', ' % a note\n\x1a')
+        cls.commit('bare2', ' % a note\n\x1a', other=True)
+        git(cls.repo, 'checkout', '-q', 'ctl')
+        cls.commit('miss', ' % a note\nLC_CTYPE\ncopy "zz_none"\n'
+                   'END LC_CTYPE\n\x1a')
+        cls.commit('miss2', ' % a note\nLC_CTYPE\ncopy "zz_none"\n'
+                   'END LC_CTYPE\n\x1a', other=True)
+        git(cls.repo, 'checkout', '-q', 'ctl')
+        cls.commit('ifd', ' % a note', extra={'j': cls.IFDEF})
+        cls.commit('ifd2', ' % a note', other=True)
+        git(cls.repo, 'checkout', '-q', 'ctl')
+        cls.commit('cpd', ' % a note', extra=cls.COPIED)
+        cls.commit('cpd2', ' % a note', other=True)
+        git(cls.repo, 'checkout', '-q', 'ctl')
+        cls.commit('utf', ' % a note', extra={'u': cls.UTF8,
+                                              'w': cls.UTF8_TIME % b'1'})
+        cls.commit('utf2', ' % a note', extra={'w': cls.UTF8_TIME % b'2'})
+        git(cls.repo, 'checkout', '-q', 'ctl')
+        cls.commit('mm', ' % a note', extra={'m': cls.SWALLOW % (b'/', b'')})
+        cls.commit('mm2', ' % a note', extra={'m': cls.SWALLOW % (b'!', b' !')})
+        git(cls.repo, 'checkout', '-q', 'ctl')
+        cls.commit('vv', ' % a note', extra={'v': cls.UTF8})
+        cls.commit('vv2', ' % a note', extra={'v': cls.UTF8.replace(
+            b'<U0062>\norder_end\nelse', b'<U0062>\n<U0063>\norder_end\nelse')})
+        git(cls.repo, 'checkout', '-q', 'ctl')
+        cls.commit('sw', ' % a note', extra={'x': cls.SWAPPED % (b'', b'')})
+        cls.commit('sw2', ' % a note', extra={'x': cls.SWAPPED % (
+            b' % a /', cls.SWAPPED_IN)})
+        git(cls.repo, 'checkout', '-q', 'ctl')
+        cls.commit('rn', ' % a note', extra={'r': cls.PAD + cls.SWAPPED % (
+            b'', b'')})
+        cls.commit('rn2', ' % a note', extra={'r': None, 'r2': cls.PAD
+                                              + cls.SWAPPED % (b' % a /',
+                                                               cls.SWAPPED_IN)})
+        git(cls.repo, 'checkout', '-q', 'ctl')
+        cls.commit('cr', ' % a note', extra={
+            'rf': cls.RF % b'', 'rb': cls.RB, 'rx': cls.RX})
+        cls.commit('cr2', ' % a note', extra={
+            'rf': cls.RF % b' # a \\', 'rb': None, 'rw': cls.RB})
 
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    # j: an 0xFF at the end of an ifdef name. lr_getc ends the word there
+    # before 2.36, so ifdef asks for YES, which is defined, and the order is
+    # a, b; from 2.36 the word holds the byte, and it is b, a (case b25 of
+    # reader_oracle). Read by both tags' localedef, the same file gives as
+    # many statements either way.
+    IFDEF = (b'comment_char %\nescape_char /\nLC_CTYPE\ncopy "i18n"\n'
+             b'END LC_CTYPE\nLC_COLLATE\ndefine YES\nifdef YES\xff\n'
+             b'order_start forward\n<U0061>\n<U0062>\norder_end\nelse\n'
+             b'order_start forward\n<U0062>\n<U0061>\norder_end\nendif\n'
+             b'END LC_COLLATE\n')
+
+    # zz_F's ifdef asks for a name zz_F does not define, either way: its own
+    # run reads the same with both tags' localedef. zz_L defines YES and
+    # then copies zz_F, and glibc keeps one list of defined names for the
+    # whole run (ld-collate.c:273@2.34; cases c31 and b25 of
+    # reader_oracle): only zz_L's run picks a branch by the byte.
+    # False-negative-reviewer, round 2 of 15.2 B3.
+    COPIED = {
+        'zz_L': (b'comment_char %\nescape_char /\nLC_COLLATE\ndefine YES\n'
+                 b'copy "zz_F"\nEND LC_COLLATE\n'),
+        'zz_F': (b'comment_char %\nescape_char /\nLC_COLLATE\nifdef YES\xff\n'
+                 b'order_start forward\n<U0061>\n<U0062>\norder_end\nelse\n'
+                 b'order_start forward\n<U0062>\n<U0061>\norder_end\nendif\n'
+                 b'END LC_COLLATE\n'),
+    }
+
+    # u and w: a define and an ifdef of a name that opens with UTF-8, which
+    # glibc from 2.36 reads as a character (linereader.c:332-341@2.39) and
+    # before it as a name (case b26 of reader_oracle). u does not change; w
+    # changes in LC_TIME only. Round 2 of the 15.2 B3 review.
+    UTF8 = (b'comment_char %\nescape_char /\nLC_COLLATE\n'
+            b'define \xc3\xa9X\nifdef \xc3\xa9X\norder_start forward\n'
+            b'<U0061>\n<U0062>\norder_end\nelse\norder_start forward\n'
+            b'<U0062>\n<U0061>\norder_end\nendif\nEND LC_COLLATE\n')
+    UTF8_TIME = UTF8.replace(b'%', b'%%') + (b'LC_TIME\nabday "%s";"2";"3";"4";'
+                                            b'"5";"6";"7"\nEND LC_TIME\n')
+
+    # m at mm2 sets the escape to `!` and ends END LC_CTYPE with it: lr_next
+    # joins the LC_COLLATE line to it and glibc reads no LC_COLLATE. The
+    # line search behind lc_collate_unread settles only `/` and `\` and does
+    # not see it; glibc_reader does (doc-sweep of 15.2 B3).
+    SWALLOW = (b'comment_char %%\nescape_char %s\nLC_CTYPE\ncopy "i18n"\n'
+               b'END LC_CTYPE%s\nLC_COLLATE\ncopy "iso14651_t1"\n'
+               b'END LC_COLLATE\n')
+
+    # x at sw2 ends END LC_CTYPE with the escape, which swallows its
+    # indented LC_COLLATE line, and appends a section of another order:
+    # glibc reads one section on each side, and not the same one. The line
+    # search does not see an indented header; round 4 of the 15.2 B3
+    # review.
+    SWAPPED = (b'comment_char %%\nescape_char /\n\nLC_CTYPE\ncopy "i18n"\n'
+               b'END LC_CTYPE%s\n LC_COLLATE\norder_start forward\n<U0061>\n'
+               b'<U0062>\norder_end\nEND LC_COLLATE\n%s')
+    SWAPPED_IN = (b' LC_COLLATE\norder_start forward\n<U0062>\n<U0061>\n'
+                  b'order_end\nEND LC_COLLATE\n')
+    # r is x renamed to r2 at rn2: lines enough for git to see a rename.
+    PAD = b''.join(b'# line %d\n' % i for i in range(30))
+    # rf's own run obeys the escape_char inside its LC_CTYPE; rb copies its
+    # LC_COLLATE, skips that section, and reads with the default `\`. At
+    # cr2 the END line ends in `\`, which swallows the first section's
+    # header for rb alone, and rb is renamed rw: one run under two names
+    # (round 6 of the 15.2 B3 review).
+    RF = (b'LC_CTYPE\ncopy "rx"\nescape_char /\nEND LC_CTYPE%s\n'
+          b' LC_COLLATE\norder_start forward\n<U0061>\n<U0062>\norder_end\n'
+          b'END LC_COLLATE\n LC_COLLATE\norder_start forward\n<U0063>\n'
+          b'<U0064>\norder_end\nEND LC_COLLATE\n')
+    RB = b'LC_COLLATE\ncopy "rf"\nEND LC_COLLATE\n'
+    RX = b'LC_IDENTIFICATION\ntitle "t"\nEND LC_IDENTIFICATION\n'
+
     @classmethod
-    def commit(cls, tag, end, other=False):
+    def commit(cls, tag, end, other=False, extra=None):
         loc = os.path.join(cls.repo, 'localedata', 'locales')
+        for name, data in (extra or {}).items():
+            if data is None:
+                os.unlink(os.path.join(loc, name))
+                continue
+            with open(os.path.join(loc, name), 'wb') as fh:
+                fh.write(data)
         with open(os.path.join(loc, 'k'), 'w', encoding='utf-8') as fh:
             fh.write(cls.BODY.format(end=end))
         if other:
@@ -1871,9 +2024,9 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
         self.assertNotIn('stop glibc reading it', out)
         self.assertEqual(listed, [])
 
-    def test_a_0x1a_counts_when_git_cannot_place_the_fix(self):
-        """This history does not hold LR_GETC_FIX, and "cannot tell" is
-        not a no."""
+    def test_a_0x1a_counts_when_both_tags_predate_the_fix(self):
+        """Neither tag holds LR_GETC_FIX: both read the byte as the end of
+        the file."""
         rc, out, listed = self.step2('ctl', 'sub')
         self.assertEqual(rc, 0, out)
         self.assertIn('localedata/locales/k at sub: a 0x1A or 0xFF byte '
@@ -1890,7 +2043,7 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
         rc, out, listed = self.step2('sub', 'sub2', fix='sub2')
         self.assertEqual(rc, 0, out)
         self.assertIn('localedata/locales/k at sub: a 0x1A', out)
-        self.assertNotIn('did not change hold', out,
+        self.assertNotIn('did not change are read', out,
                          'k changed: it is judged with the changed files, '
                          'not again as one that did not change')
         self.assertEqual(listed, ['k'])
@@ -1899,28 +2052,197 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
         """Review of 13.18, finding 3: k is the same bytes at both tags,
         and only the old tag's localedef stops at its 0x1A. Step 2 judges
         the files that changed, and k is not one of them."""
-        rc, out, listed = self.step2('sub', 'same', fix='same')
+        rc, out, listed = self.step2('bare', 'bare2', fix='bare2')
         self.assertEqual(rc, 0, out)
         self.assertIn('0 touch LC_COLLATE, 0 do not, 1 have no LC_COLLATE '
                       'block', out)
-        self.assertIn("!! 1 file(s) that did not change hold a 0x1A or 0xFF "
-                      "byte above the end of LC_COLLATE", out)
+        self.assertIn("!! 1 file(s) that did not change are read differently "
+                      "by the localedef of bare and that of bare2", out)
         self.assertIn('localedata/locales/k', out)
         self.assertEqual(listed, ['k'])
 
-    def test_the_control_both_tags_read_it_alike(self):
-        """Both hold the fix: the same bytes are read the same way."""
-        rc, out, listed = self.step2('sub', 'same', fix='sub')
+    def test_a_file_the_reader_cannot_settle_is_not_cleared(self):
+        """A second LC_CTYPE in k copies a file there is none of, and a
+        copy in LC_CTYPE is loaded where it is read: under both tags'
+        Builds the run stops there, before the 0x1A, and the two runs
+        agree. Agreeing on a run that did not finish is not reading the
+        byte alike: listed."""
+        rc, out, listed = self.step2('miss', 'miss2', fix='miss2')
         self.assertEqual(rc, 0, out)
-        self.assertNotIn('did not change hold', out)
+        self.assertIn('!! 1 file(s) that did not change are read differently', out)
+        self.assertEqual(listed, ['k'])
+
+    def test_a_byte_that_picks_another_branch_is_listed(self):
+        """False-negative-reviewer, 15.2 B3: j did not change, and the two
+        tags' localedef build opposite orders from it, out of the same
+        number of statements: the runs are compared token by token, never
+        by the summary the reader's cache keeps."""
+        rc, out, listed = self.step2('ifd', 'ifd2', fix='ifd2')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('!! 1 file(s) that did not change are read differently', out)
+        self.assertIn('localedata/locales/j', out)
+        self.assertEqual(listed, ['j'])
+        rc, out, listed = self.step2('ifd', 'ifd2', fix='ifd')
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('did not change are read', out, 'the control: one reader')
         self.assertEqual(listed, [])
 
-    def test_a_file_that_did_not_change_counts_when_git_cannot_tell(self):
-        """This history does not hold LR_GETC_FIX: no answer from git is
-        not the same answer from both tags."""
-        rc, out, listed = self.step2('sub', 'same')
+    def test_a_byte_only_a_copier_reads_otherwise_is_listed(self):
+        """zz_L holds no such byte, and its order changes with the reader:
+        every run of the tree is asked, not only the runs of the files that
+        hold the byte, and zz_L is listed. zz_F is listed too: with the
+        reader of 2.34 the 0xFF ends its ifdef line inside a statement, a
+        run this reader does not settle, and one it cannot settle is never
+        cleared."""
+        rc, out, listed = self.step2('cpd', 'cpd2', fix='cpd2')
         self.assertEqual(rc, 0, out)
-        self.assertEqual(listed, ['k'])
+        self.assertIn('!! 2 file(s) that did not change are read differently',
+                      out)
+        self.assertEqual(listed, ['zz_F', 'zz_L'])
+
+    def test_utf8_glibc_reads_from_2_36_is_read_across(self):
+        """u did not change and w changed in LC_TIME alone; glibc before
+        2.36 and after it build different orders from both. u is added to
+        step 3's list, w is counted as changed with its own `!!`."""
+        rc, out, listed = self.step2('utf', 'utf2', fix='utf2')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
+        self.assertIn('!! 1 file(s) that changed are also read differently '
+                      'by the localedef of utf and that of utf2', out)
+        self.assertIn('localedata/locales/w the two tags\' localedef read '
+                      'this file differently', out)
+        self.assertIn('!! 1 file(s) that did not change are read differently',
+                      out)
+        self.assertEqual(listed, ['u', 'w'])
+        rc, out, listed = self.step2('utf', 'utf2', fix='utf')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('0 touch LC_COLLATE, 1 do not', out, 'the control')
+        self.assertEqual(listed, [])
+
+    def test_a_new_side_with_no_lc_collate_is_named(self):
+        """m's new side has no LC_COLLATE to glibc: counted as changed, and
+        its `!!` says why, though the line search finds nothing."""
+        rc, out, listed = self.step2('mm', 'mm2')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
+        self.assertIn('localedata/locales/m at mm2: localedef reads no '
+                      'LC_COLLATE section in it', out)
+        self.assertEqual(listed, ['m'])
+
+    def test_one_section_read_for_another_is_listed(self):
+        """x has one LC_COLLATE section to glibc on each side, and they
+        are not the same lines: a change to its rules, though no hunk
+        falls inside the old section."""
+        rc, out, listed = self.step2('sw', 'sw2')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
+        self.assertIn('localedata/locales/x at sw2: localedef reads other '
+                      'lines as its LC_COLLATE than at sw', out)
+        self.assertIn('glibc may not read the block as written (see the `!!` '
+                      'above that names it), so every rule in it can change',
+                      out)
+        self.assertEqual(listed, ['x'])
+
+    def test_one_section_read_for_another_is_listed_under_a_rename(self):
+        """r is renamed r2, so its own run has two names, r and r2; the
+        sections are compared for that one run all the same (round 5 of
+        the 15.2 B3 review)."""
+        rc, out, listed = self.step2('rn', 'rn2')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('renamed: 1', out)
+        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
+        self.assertIn('localedata/locales/r at rn2: localedef reads other '
+                      'lines as its LC_COLLATE than at rn', out)
+        self.assertEqual(listed, ['r2'])
+
+    def test_a_renamed_copier_reading_less_lists_the_file(self):
+        """rf's own run reads both sections at cr and cr2; rb, renamed
+        rw, reads one fewer at cr2. Compared as one run, rf is listed."""
+        rc, out, listed = self.step2('cr', 'cr2')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('renamed: 1', out)
+        self.assertIn('1 touch LC_COLLATE', out)
+        self.assertIn('localedata/locales/rf at cr2: localedef reads other '
+                      'lines as its LC_COLLATE than at cr', out)
+        # The characters did not change: not named as if they had.
+        self.assertNotIn('file(s) are read at', flat(out))
+        self.assertIn('rf', listed)
+
+    def test_a_change_inside_lc_collate_read_across_says_so(self):
+        """v adds <U0063> to its first branch, and the two readers take
+        different branches: the characters of the changed line are not all
+        that moves, and the `!!` and the note under v say so (round 3 of
+        the 15.2 B3 review)."""
+        rc, out, listed = self.step2('vv', 'vv2', fix='vv2')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
+        self.assertIn('!! 1 file(s) that changed are also read differently '
+                      'by the localedef of vv and that of vv2', out)
+        self.assertIn("localedata/locales/v characters in the changed rules "
+                      "(1): c (U+0063) those are the changed lines; the two "
+                      "tags' localedef read this file differently", out)
+        self.assertEqual(listed, ['v'])
+        rc, out, listed = self.step2('vv', 'vv2', fix='vv')
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('also read differently', out, 'the control')
+        self.assertNotIn("tags' localedef read this file", out)
+
+    def test_each_tag_is_placed_on_its_own_side_of_the_fix(self):
+        """The answer lr_getc_sides hands to the Builds, in its direction:
+        a tag that predates the fix is read with the old lr_getc and one
+        that holds it with the new. Swapped, every test above still sees
+        two different readers (false-negative-reviewer, 15.2 B3)."""
+        code = ("import sys; sys.path.insert(0, %r)\n"
+                "import glibc_locale_data as g\n"
+                "g.LR_GETC_FIX = %r\n"
+                "import filter_lc_collate_changes as f, glibc_tree\n"
+                "repo = %r\n"
+                "early = (f.predates_lr_getc_fix(repo, 'sub'),\n"
+                "         f.predates_lr_getc_fix(repo, 'same'))\n"
+                "pre = f.lr_getc_sides(repo, early, ('sub', 'same'))\n"
+                "b = glibc_tree.builds_at(repo, ['sub', 'same'], pre)\n"
+                "print(pre['sub'], pre['same'], b['sub'].pre236, "
+                "b['same'].pre236)\n" % (SCRIPTS_DIR, self.sha['same'],
+                                          self.repo))
+        p = subprocess.run([sys.executable, '-c', code], cwd=SCRIPTS_DIR,
+                           capture_output=True, timeout=120)
+        self.assertEqual(p.stdout.decode().split(),
+                         ['True', 'False', 'True', 'False'],
+                         p.stderr.decode())
+
+    def test_a_byte_lr_getc_never_reads_is_not_listed(self):
+        """The control of the one above, and a change from the byte search
+        that came before the reader: on a comment line glibc drops the
+        rest of the line without lr_getc reading it, so both tags read k
+        alike, and the reader says so."""
+        rc, out, listed = self.step2('sub', 'same', fix='same')
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('did not change are read', out)
+        self.assertEqual(listed, [])
+
+    def test_the_control_both_tags_read_it_alike(self):
+        """Both hold the fix: the same bytes are read the same way."""
+        rc, out, listed = self.step2('bare', 'bare2', fix='bare')
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('did not change are read', out)
+        self.assertEqual(listed, [])
+
+    def test_a_tag_git_cannot_place_is_refused(self):
+        """Before the reader, a history that does not hold LR_GETC_FIX
+        counted "cannot tell" as "predates" and went on. glibc_reader
+        needs the answer to read 0x1A and 0xFF at all, and steps 1, 3 and
+        4 refuse such a tag already: so does step 2, before it judges
+        anything."""
+        tmp = tempfile.mkdtemp(dir=self.tmp)
+        repo = make_glibc_shaped_repo(tmp, n_files=g.MIN_LOCALE_FILES,
+                                      rename=True, base=None)
+        rc, out = run_script('filter_lc_collate_changes.py', 't1', 't2',
+                             '--repo', repo, env_extra={
+                                 'PG_GLIBC_AUDIT_OUT': tmp})
+        self.assertEqual(rc, 2, out)
+        self.assertIn("git cannot tell whether t1 comes before or after "
+                      "glibc's lr_getc fix", flat(out))
+        self.assertNotIn('Files with changes inside LC_COLLATE', out)
 
 
 def read_list(path):
@@ -2006,7 +2328,7 @@ class AGainedBlockThatNamesNoCharacter(unittest.TestCase):
         self.repo = make_glibc_shaped_repo(tmp, n_files=g.MIN_LOCALE_FILES)
         with open(os.path.join(self.repo, 'localedata', 'locales', 'x'),
                   'a') as fh:
-            fh.write('LC_COLLATE\ncopy "loc_000"\nEND LC_COLLATE\n')
+            fh.write('LC_COLLATE\ncopy "iso14651_t1"\nEND LC_COLLATE\n')
         git(self.repo, 'commit', '-q', '-am', 't2')
         git(self.repo, 'tag', 't2')
 
@@ -2039,7 +2361,7 @@ class AChangedCommentCharIsARulesChange(unittest.TestCase):
         self.path = os.path.join(self.repo, 'localedata', 'locales',
                                  'loc_000')
         with open(self.path, 'a') as fh:
-            fh.write('LC_COLLATE\ncopy "loc_001"\nEND LC_COLLATE\n')
+            fh.write('LC_COLLATE\ncopy "iso14651_t1"\nEND LC_COLLATE\n')
         git(self.repo, 'commit', '-q', '-am', 't2')
         git(self.repo, 'tag', 't2')
 
@@ -2067,9 +2389,8 @@ class AChangedCommentCharIsARulesChange(unittest.TestCase):
         self.assertIn('1 touch LC_COLLATE, 0 do not', out)
         self.assertIn('Files with changes inside LC_COLLATE: 1', out)
         self.assertIn('!! 1 file(s) are read at t3 with other comment or '
-                      'escape characters than at t2, or with characters this '
-                      'tool cannot settle, so any rule in them can read '
-                      'differently.', flat(out))
+                      'escape characters than at t2, so any rule in them can '
+                      'read differently.', flat(out))
         self.assertIn('comment_char % and escape_char / at t2', out)
         self.assertIn('comment_char # and escape_char / at t3', out)
         self.assertIn('localedata/locales/loc_000 the block is read with '
@@ -2084,8 +2405,8 @@ class AChangedCommentCharIsARulesChange(unittest.TestCase):
         not presented as all that can move."""
         rc, out = self.commit_t3(
             'comment_char %', 'comment_char #',
-            ('copy "loc_001"\n', 'copy "loc_001"\nreorder-after <U0041>\n'
-                                  '<U0042>\n'))
+            ('copy "iso14651_t1"\n', 'copy "iso14651_t1"\n'
+                                      'reorder-after <U0041>\n<U0042>\n'))
         self.assertEqual(rc, 0, out)
         self.assertIn('1 touch LC_COLLATE, 0 do not', out)
         self.assertIn('!! 1 file(s) are read at t3 with other comment or '
@@ -2095,13 +2416,16 @@ class AChangedCommentCharIsARulesChange(unittest.TestCase):
                       'other characters', flat(out))
         self.assertEqual(self.written(), ['loc_000'])
 
-    def test_an_unsettled_new_side_says_so(self):
-        """A hidden directive leaves the new side unsettled; the report says
-        that rather than naming characters it could not establish."""
+    def test_a_directive_spelt_across_the_escape_is_read(self):
+        """`comment_c/har #`: inside a word glibc drops the escape and keeps
+        the character after it (get_ident, linereader.c:583-592@2.39), so
+        this is a comment_char directive. The line search before the reader
+        could not settle it and said so; glibc_reader reads it as glibc
+        does, and the report names the character it sets."""
         rc, out = self.commit_t3('\nLC_COLLATE\n',
                                  '\ncomment_c/har #\nLC_COLLATE\n')
         self.assertEqual(rc, 0, out)
-        self.assertIn('characters this tool cannot settle at t3', out)
+        self.assertIn('comment_char # and escape_char / at t3', out)
         self.assertEqual(self.written(), ['loc_000'])
 
     def test_the_control_a_comment_edit_is_not(self):
@@ -2411,8 +2735,8 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
             "    else real(r, [(tag, paths)])[0] for tag, paths in groups]\n"
             "f.main([%r, %r, '--repo', repo])" % (MID, OLD, MID))
         self.assertNotEqual(rc, 0, out)
-        self.assertIn('could not be read while building the check for files '
-                      'that gained an LC_COLLATE block', flat(out))
+        self.assertIn('could not be read while building the check of every '
+                      'content-changed file at the new tag', flat(out))
 
     def test_an_unreadable_supported_is_refused(self):
         """SUPPORTED is read in the same batch, at both tags: the added
@@ -2427,9 +2751,10 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
         rc, out = in_subprocess(
             "import filter_lc_collate_changes as f\n"
             "real = g.read_blobs_at\n"
-            "g.read_blobs_at = lambda r, groups: [\n"
+            "g.read_blobs_at = lambda r, groups, raw=False: [\n"
             "    ({}, set(paths)) if (tag, paths) == (%r, [g.SUPPORTED])\n"
-            "    else real(r, [(tag, paths)])[0] for tag, paths in groups]\n"
+            "    else real(r, [(tag, paths)], raw=raw)[0]\n"
+            "    for tag, paths in groups]\n"
             "f.main([%r, %r, '--repo', repo])" % (MID, OLD, MID))
         self.assertNotEqual(rc, 0, out)
         self.assertIn(f'file(s) listed at {MID} could not be read while '
@@ -2447,7 +2772,7 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
         rc, out = in_subprocess(
             "import filter_lc_collate_changes as f\n"
             "real, failed = g.read_blobs_at, []\n"
-            "def fake(r, groups):\n"
+            "def fake(r, groups, raw=False):\n"
             "    out = []\n"
             "    for tag, paths in groups:\n"
             "        if (tag == %r and paths and not failed and\n"
@@ -2455,7 +2780,7 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
             "            failed.append(paths)\n"
             "            out.append(({}, set(paths)))\n"
             "        else:\n"
-            "            out.append(real(r, [(tag, paths)])[0])\n"
+            "            out.append(real(r, [(tag, paths)], raw=raw)[0])\n"
             "    return out\n"
             "g.read_blobs_at = fake\n"
             "f.main([%r, %r, '--repo', repo])" % (OLD, OLD, MID))
@@ -2476,7 +2801,7 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
         rc, out = in_subprocess(
             "import filter_lc_collate_changes as f\n"
             "real, failed = g.read_blobs_at, []\n"
-            "def fake(r, groups):\n"
+            "def fake(r, groups, raw=False):\n"
             "    out = []\n"
             "    for tag, paths in groups:\n"
             "        if (tag == %r and 'localedata/charmaps/ISO-8859-1' in\n"
@@ -2484,7 +2809,7 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
             "            failed.append(paths)\n"
             "            out.append(({}, set(paths)))\n"
             "        else:\n"
-            "            out.append(real(r, [(tag, paths)])[0])\n"
+            "            out.append(real(r, [(tag, paths)], raw=raw)[0])\n"
             "    return out\n"
             "g.read_blobs_at = fake\n"
             "f.main([%r, %r, '--repo', repo])" % (OLD, OLD, MID))
@@ -2558,7 +2883,7 @@ def make_charmap_repo(root):
     put('localedata/charmaps/UTF-8', _cm('UTF-8'))
     put('localedata/charmaps/ISO-8859-15', _cm('ISO-8859-15',
                                                '<U00E9> /xe9'))
-    git(root, 'init', '-q', env=env)
+    glibc_shaped(root)
     git(root, 'config', 'user.name', 't', env=env)
     git(root, 'config', 'user.email', 't@t', env=env)
 
@@ -2609,7 +2934,7 @@ def make_translit_repo(root):
     LC_CTYPE."""
     env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
                GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
-    for d_ in ('localedata/locales', 'localedata/charmaps'):
+    for d_ in ('localedata/locales', 'localedata/charmaps', 'intl'):
         os.makedirs(os.path.join(root, *d_.split('/')))
 
     def put(path, text):
@@ -2637,9 +2962,12 @@ def make_translit_repo(root):
     put('localedata/charmaps/ISO-8859-1',
         _cm('ISO-8859-1', *ascii_[2:]))
     put('localedata/charmaps/UTF-8', _cm('UTF-8'))
+    # Step 3 names the aliases glibc gives a locale, and refuses a tree
+    # without the file or with none in it.
+    put('intl/locale.alias', 'uzbek uz_XX.ISO-8859-1\n')
     put('localedata/SUPPORTED', 'SUPPORTED-LOCALES=\\\nuz_XX/ISO-8859-1 '
         '\\\nloc_u.UTF-8/UTF-8 \\\n')
-    git(root, 'init', '-q', env=env)
+    glibc_shaped(root)
     git(root, 'config', 'user.name', 't', env=env)
     git(root, 'config', 'user.email', 't@t', env=env)
 
@@ -2737,8 +3065,22 @@ class StepTwoComparesTransliterations(unittest.TestCase):
         self.assertEqual(rc, 0, out[-1500:])
         self.assertIn('holds a 0xFF byte', flat(out))
         # Every build of the run, not only the one that reads the file: one
-        # gate, so that no path of the plan passes over the byte.
-        self.assertEqual(listed, ['loc_u', 'uz_XX'])
+        # gate, so that no path of the plan passes over the byte. uz_XX is
+        # the build that reads it, and since step 2 reads with glibc_reader
+        # (backlog 15.2 B3) its run stops at the byte on this pre-2.36 tag:
+        # step 3 lists it as not settled, so the check counts it among the
+        # builds listed already. Step 3 is run to show it does.
+        self.assertEqual(listed, ['loc_u'])
+        self.assertIn('is listed already', flat(out))
+        rc, out3 = run_script('resolve_copy_closure.py', 't6',
+                              'translit_neutral', '--keyed', 'loc_u',
+                              '--repo', self.repo)
+        self.assertEqual(rc, 0, out3)
+        affected = re.search(r'Full affected set \(\d+ locale source '
+                             r'file\(s\)\): (.*)', out3)
+        self.assertIsNotNone(affected, out3)
+        self.assertEqual(affected.group(1).split(', '),
+                         ['i18n', 'loc_u', 'translit_neutral', 'uz_XX'])
 
     def test_a_charmap_that_gains_an_answer_is_found(self):
         """H1, as M2 measured it: ISO-8859-1 gains U+2018, which only the

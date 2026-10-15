@@ -44,9 +44,9 @@ They are the characters the rule that changed moves.
 Derive them from that rule. For a `localedef` change that means the boundaries
 of the affected range. Under each locale it flags, step 2 lists the characters
 its changed rules name, or says it could not identify them and that the locale
-must be considered suspicious, or, for a file read with other comment or escape
-characters, that any rule in it can read differently, or, for a file whose
-`LC_COLLATE` glibc may not read as written, that every rule in it can change.
+must be considered suspicious, or, when the file is read with other comment or
+escape characters, is read differently by the two versions of glibc, or may not
+be read as written, that every rule in it can change.
 For a locale it lists
 because its character set changed, it prints which of the characters its rules
 name the character set changed, or why it could not compare them. For a locale

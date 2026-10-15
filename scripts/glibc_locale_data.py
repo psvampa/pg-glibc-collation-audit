@@ -985,9 +985,8 @@ def collate_block(text):
     That was the whole of the glibc 2.24 version floor: on glibc-2.12..2.17
     step 3 reported 11 affected locales where there are 280.
 
-    collate_text worked around the same regex, and scan_ellipsis then worked
-    around collate_block. Fixing the function means the next caller inherits
-    the fix instead of having to know about the trap.
+    collate_text worked around the same regex. Fixing the function means the
+    next caller inherits the fix instead of having to know about the trap.
 
     Returns the body WITHOUT the LC_COLLATE and END LC_COLLATE lines;
     collate_text returns the block with them, and callers depend on that.
@@ -1361,9 +1360,10 @@ def _sections_above(lines, comments, escapes):
     comment character is dropped whole, continued or not (lr_token,
     :221-229). When they are not settled, `comments` and `escapes` hold
     both of each, and such a line that ends in an escape is joined: the
-    answer is then a guess in either direction, which step 2 never relies
-    on to list a file: classify_change asks reading_changed first, and every
-    file unread_above asks about is listed already.
+    answer is then a guess in either direction. Step 2 asks it after
+    glibc_reader has placed the file's sections and characters
+    (filter_lc_collate_changes.classify_change), and every file
+    unread_above asks about is listed already.
     A word built with an escape (get_ident keeps the character after one,
     :580-589) is not read here: it is a reason too.
     """
@@ -1456,8 +1456,12 @@ def lc_collate_unread(text, early):
     "cannot tell", which counts as yes. It is asked only for a text with
     one of those bytes.
 
-    None for a text with no LC_COLLATE line is not a clean answer: the
-    caller has already filed that text as having no block, or gaining one.
+    None for a text with no LC_COLLATE line, which this line search reads
+    only at the start of a line, is not a clean answer. Step 2 places the
+    sections with glibc_reader first (glibc_tree.Facts): a file with none
+    at either tag is filed as having no block or gaining one, one whose new
+    side has none is 'unread', and one with another number of sections is
+    'collate', whatever this returns.
     """
     bounds = collate_bounds(text)
     if bounds is None:
@@ -1738,29 +1742,11 @@ def classify_collation_style(text):
     return 'explicit'
 
 
-def scan_ellipsis(texts):
-    """({name: [hit lines]}, how many of `texts` define LC_COLLATE).
-
-    Pure. Steps 4, 9 and 10 no longer call it: they read what localedef
-    reads (glibc_tree, backlog 15.2).
-    """
-    flagged, with_collate = {}, 0
-    for name, text in texts.items():
-        block = collate_text(text)
-        if block is None:
-            continue
-        with_collate += 1
-        hits = ellipsis_hits(block, comment_char(text))
-        if hits:
-            flagged[name] = hits
-    return flagged, with_collate
-
-
 def copy_graph_from_texts(texts):
     """{name: [copy targets]} for every entry of `texts` defining LC_COLLATE.
 
-    Pure, so the graph can be built from a git tag (build_copy_graph) or from a
-    directory of locale sources with one implementation. Keys are used
+    Pure, so the graph can be built from a directory of locale sources
+    (steps 6 to 8) with one implementation. Keys are used
     verbatim: pass the names the caller wants to see, not paths.
 
     Locales with no `copy` map to an empty list, so the graph doubles as the set
@@ -1772,14 +1758,6 @@ def copy_graph_from_texts(texts):
             continue
         graph[name] = copy_targets(text)
     return graph
-
-
-def build_copy_graph(repo, tag):
-    """copy_graph_from_texts over every locale file at `tag`."""
-    paths = list_locale_files(repo, tag)
-    contents = read_blobs_strict(repo, tag, paths, 'the LC_COLLATE copy graph')
-    return copy_graph_from_texts(
-        {os.path.basename(path): text for path, text in contents.items()})
 
 
 def inherited_from(graph, roots):
@@ -1808,11 +1786,6 @@ def inherited_from(graph, roots):
         if hits:
             result[name] = sorted(hits)
     return result
-
-
-def fan_in(graph):
-    """{locale: number of other locales that inherit its LC_COLLATE}."""
-    return {name: len(inherited_from(graph, {name})) for name in graph}
 
 
 _CODESET_RE = re.compile(r'\.([^.@]+)(?=@|$)')
