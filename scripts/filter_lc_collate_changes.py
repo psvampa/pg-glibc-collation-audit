@@ -115,8 +115,8 @@ def classify_change(old_text, new_text, old, new, ranges,
                           (round 4 of the 15.2 B3 review)
       'gained-collate' -- localedef read no LC_COLLATE section in the old
                           file and reads one in the new
-      'reading'        -- the sections did not change, but the comment or
-                          escape character one of them is read with did
+      'reading'        -- as many sections, and the comment or escape
+                          character one of them is read with changed
       'unread'         -- no hunk falls inside the old sections, but
                           localedef reads no LC_COLLATE section in the new
                           file; or the block and its characters did not
@@ -241,7 +241,7 @@ def _sections_moved(old, old_text, new, new_text, diff):
 
 
 def partition_verdicts(verdicts):
-    """Group {path: verdict} into the four lists the report prints.
+    """Group {path: verdict} into the lists the report prints.
 
     Separate from classify_change() because deciding what a file IS and
     deciding what to DO about it are different mistakes. Mutation testing found
@@ -286,11 +286,11 @@ def partition_verdicts(verdicts):
 def new_side_paths(content_changed, renamed_to):
     """Which paths to read at the NEW tag, and under which name.
 
-    Every content-changed file. One with no LC_COLLATE block on the old side
-    could have gained one, and one with a block could be read with other
-    comment or escape characters while the block itself is unchanged
-    (classify_change, 'reading'). Until backlog 13.7 only the first kind was
-    read, so the second was judged on the old side alone. A renamed file
+    Every content-changed file: where its LC_COLLATE sections are and
+    what can stop glibc reading them are asked of the new text as well
+    (classify_change, unread_above). Until backlog 13.7 only a file with no
+    block on the old side was read there, so the others were judged on the
+    old side alone. A renamed file
     lives under its NEW name there: reading the old name aborted the whole
     step with "could not read" on a legitimate rename, and looking the
     verdict up under the old name made `gained-collate` undetectable for any
@@ -1206,7 +1206,7 @@ def main(argv):
     opts = ap.parse_args(argv)
 
     # Each text's comment and escape characters, read once for this run:
-    # classify_change and read_otherwise ask for the same texts, and the
+    # classify_change and unread_above ask for the same texts, and the
     # character set check asks again.
     with g.reading_chars_once():
         return _main(opts)
@@ -1324,9 +1324,8 @@ def _main(opts):
 
     # Every file text this step reads, in one batch: the old side of every
     # content-changed file, its new side under the name it has at the new tag
-    # (see new_side_paths) -- a file without a block could have gained one,
-    # and one with a block could be read with other comment or escape
-    # characters -- SUPPORTED, which an added file needs for its names and
+    # (see new_side_paths) -- where its LC_COLLATE lines are and what can
+    # stop glibc reading them are asked of it too -- SUPPORTED, which an added file needs for its names and
     # the character set check at both tags, and what that check reads
     # (CharmapReads).
     to_read = new_side_paths(content_changed, renamed_to)
@@ -1375,8 +1374,7 @@ def _main(opts):
     # Refused only now, after the check above, so a run that has both
     # failures still names the one it named before the reads were batched.
     g.require_read(opts.new_tag, new_paths, new_missing,
-                   'the check for files that gained an LC_COLLATE block or '
-                   'are read with other comment or escape characters')
+                   'the check of every changed file at the new tag')
     if charmap_reads is not None:
         charmap_reads.prefetch(repo, read[3:], old_contents, new_contents,
                                read[2])

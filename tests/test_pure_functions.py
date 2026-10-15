@@ -115,7 +115,8 @@ class ClassifyChange(unittest.TestCase):
     and nothing checked whether the NEW side had gained one. A file that gains
     a block changes its sort order by definition. Where the sections are and
     which characters read them come from glibc_reader (Facts, injected here);
-    the texts are for lc_collate_unread alone.
+    the texts are the lines those sections are cut from, and what
+    lc_collate_unread searches.
     """
 
     OLD = collate('copy "iso14651_t1"')          # block on lines 4..6

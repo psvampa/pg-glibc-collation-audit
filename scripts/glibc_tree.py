@@ -16,11 +16,10 @@ module answers from those runs and from nothing else (backlog 15.2):
     finish, and why. Such a locale is never reported as clear: the steps
     list it, with `!!`.
 
-Steps 1 to 4 and 9/10 read this; step 2 through file_facts, which keeps
-what it asks of each file next to the runs. Steps 6 to 8, and step 2's
-lc_collate_unread check and its check of character sets and
-transliterations (collation_keys), still read the files with their own
-readers (backlog 15.4 to 15.6).
+Steps 1 to 4 and 9/10 read this. Steps 6 to 8, and step 2's
+lc_collate_unread check and the files its check of character sets and
+transliterations (collation_keys) reads, still read with their own readers
+(backlog 15.4 to 15.6).
 """
 import hashlib
 import json
@@ -386,9 +385,9 @@ def read_otherwise(old, new):
     round 2 of 15.2 B3). A run that reads the file at one tag only is a
     locale added, removed or changed, which step 2 judges on its own; one
     that reads another number of sections reads other lines, which is
-    another question (filter_lc_collate_changes._sections_differ), and
-    answering it here named other characters where there were none
-    (doc-sweep of 15.2 B3)."""
+    another question (filter_lc_collate_changes._sections_differ), and is
+    not compared run by run (doc-sweep of 15.2 B3). The pairs as a whole
+    still answer yes when a section read with a pair of its own is gone."""
     if set(old.reading()) != set(new.reading()):
         return True
     a, b = old.runs(), new.runs()
