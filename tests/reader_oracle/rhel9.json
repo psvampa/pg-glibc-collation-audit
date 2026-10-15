@@ -2002,6 +2002,84 @@
     ]
    }
   },
+  "b27": {
+   "c": {
+    "collate": {
+     "markers": [
+      "t"
+     ],
+     "md5": "00fc3346cd1896cbc6daa884378d7e02",
+     "size": 10266
+    },
+    "messages": [
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   },
+   "nc": {
+    "collate": {
+     "markers": [
+      "t"
+     ],
+     "md5": "00fc3346cd1896cbc6daa884378d7e02",
+     "size": 10266
+    },
+    "messages": [
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   }
+  },
   "c01": {
    "c": {
     "collate": {
@@ -11856,6 +11934,98 @@
     ]
    }
   },
+  "s70": {
+   "c": {
+    "collate": {
+     "markers": [
+      "b"
+     ],
+     "md5": "378027e4e164d6e920d4dbef21258051",
+     "size": 10266
+    },
+    "messages": [
+     "rd-s70:7: syntax error: not inside a locale definition section",
+     "rd-s70:8: syntax error: not inside a locale definition section",
+     "rd-s70:9: syntax error: not inside a locale definition section",
+     "rd-s70:10: syntax error: not inside a locale definition section",
+     "rd-s70:11: syntax error: not inside a locale definition section",
+     "rd-s70:12: syntax error: not inside a locale definition section",
+     "rd-s70:13: syntax error: not inside a locale definition section",
+     "rd-s70:14: syntax error: not inside a locale definition section",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   },
+   "nc": {
+    "collate": {
+     "markers": [
+      "b"
+     ],
+     "md5": "378027e4e164d6e920d4dbef21258051",
+     "size": 10266
+    },
+    "messages": [
+     "rd-s70:7: syntax error: not inside a locale definition section",
+     "rd-s70:8: syntax error: not inside a locale definition section",
+     "rd-s70:9: syntax error: not inside a locale definition section",
+     "rd-s70:10: syntax error: not inside a locale definition section",
+     "rd-s70:11: syntax error: not inside a locale definition section",
+     "rd-s70:12: syntax error: not inside a locale definition section",
+     "rd-s70:13: syntax error: not inside a locale definition section",
+     "rd-s70:14: syntax error: not inside a locale definition section",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   }
+  },
   "t01": {
    "c": {
     "collate": {
@@ -14131,9 +14301,231 @@
      "LC_TIME"
     ]
    }
+  },
+  "t27": {
+   "c": {
+    "collate": {
+     "markers": [],
+     "md5": "7891a4c43153186c50cff5e45e36db89",
+     "size": 1406
+    },
+    "messages": [
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   },
+   "nc": {
+    "collate": {
+     "markers": [],
+     "md5": "7891a4c43153186c50cff5e45e36db89",
+     "size": 1406
+    },
+    "messages": [
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   }
+  },
+  "t28": {
+   "c": {
+    "collate": {
+     "markers": [],
+     "md5": "7891a4c43153186c50cff5e45e36db89",
+     "size": 1406
+    },
+    "messages": [
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   },
+   "nc": {
+    "collate": {
+     "markers": [],
+     "md5": "7891a4c43153186c50cff5e45e36db89",
+     "size": 1406
+    },
+    "messages": [
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   }
+  },
+  "t29": {
+   "c": {
+    "collate": {
+     "markers": [],
+     "md5": "7891a4c43153186c50cff5e45e36db89",
+     "size": 1406
+    },
+    "messages": [
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   },
+   "nc": {
+    "collate": {
+     "markers": [],
+     "md5": "7891a4c43153186c50cff5e45e36db89",
+     "size": 1406
+    },
+    "messages": [
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   }
   }
  },
- "content": "228a7bc2021b9234c73762a6a69d015f02c350a9cff62759192a3fcecddbc0df",
- "corpus": "a03f70d59eff2eebe8d46bca3020335b8cd451a8311133746ce05d6492723bf8",
+ "content": "0136f8c282238113ca6147dafc6cff5ec2c744a2c6553f02f3a909cf9cfc5018",
+ "corpus": "024d519489d2fef91f82be77bf8e72f81325494c9bea4adfebd4e9fd04701060",
  "format": "reader_oracle/1"
 }

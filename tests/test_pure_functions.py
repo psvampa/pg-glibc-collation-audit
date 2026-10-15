@@ -259,6 +259,37 @@ class ClassifyChange(unittest.TestCase):
                                        old_f=facts((4, 6), (20, 25))),
                          'collate')
 
+    # One section on each side, of other lines: the escape at the end of
+    # line 6 swallows the old one, and localedef reads the one appended
+    # below instead (round 4 of the 15.2 B3 review).
+    SWALLOWED = ('comment_char %\nescape_char /\n\nLC_CTYPE\ncopy "i18n"\n'
+                 'END LC_CTYPE{end}\n LC_COLLATE\norder_start forward\n'
+                 '<U0061>\n<U0062>\norder_end\nEND LC_COLLATE\n{more}')
+    APPENDED = (' LC_COLLATE\norder_start forward\n<U0062>\n<U0061>\n'
+                'order_end\nEND LC_COLLATE\n')
+
+    def test_one_section_for_another_is_a_collation_change(self):
+        old = self.SWALLOWED.format(end='', more='')
+        new = self.SWALLOWED.format(end=' % a /', more=self.APPENDED)
+        self.assertEqual('collate', f.classify_change(
+            old, new, facts((7, 12)), facts((13, 18)), [(6, 1), (13, 0)]))
+
+    def test_the_same_section_further_down_is_not(self):
+        """Control: the lines moved, and they are the same lines."""
+        old = self.SWALLOWED.format(end='', more='')
+        new = '% a note\n' + old
+        self.assertEqual('other', f.classify_change(
+            old, new, facts((7, 12)), facts((8, 13)), [(1, 0)]))
+
+    def test_a_run_on_one_side_only_is_not_a_change_to_the_file(self):
+        """Another locale that starts copying the file reads the same
+        lines; what the file says did not change."""
+        old = self.SWALLOWED.format(end='', more='')
+        new = old + '% a note\n'
+        self.assertEqual('other', f.classify_change(
+            old, new, facts((7, 12)),
+            facts((7, 12), (7, 12, 0x25, 0x2f, 'zz_C')), [(13, 0)]))
+
     def test_a_block_localedef_stops_reading_is_a_rules_change(self):
         """No hunk inside the old section, and localedef reads no LC_COLLATE
         in the new file: glibc does not read the block as written."""
@@ -358,6 +389,43 @@ class RenamedFileOnTheNewSide(unittest.TestCase):
         verdicts = dict(f.judge(list(self.OLD), self.OLD, new, {},
                                 self.RENAMED, found))
         self.assertEqual(verdicts['localedata/locales/x'], 'gained-collate')
+
+    def test_a_renamed_file_s_own_run_has_one_name(self):
+        """Its run is the locale of its name, x then y: under two names
+        no run is on both sides, and nothing is compared by run (round 5
+        of the 15.2 B3 review). A copier keeps its own."""
+        found = ({'x': facts((4, 8, 0x25, 0x2f, 'x'))},
+                 {'y': facts((4, 8, 0x25, 0x2f, 'y'),
+                             (4, 8, 0x25, 0x2f, 'zz_C'))})
+        old, new = f.facts_of(found, self.RENAMED, 'localedata/locales/x')
+        self.assertEqual([(4, 8, 0x25, 0x2f, 'x'),
+                          (4, 8, 0x25, 0x2f, 'zz_C')], new.collate)
+
+    def test_a_renamed_copier_keeps_its_old_name_too(self):
+        """k is not renamed; zz_B, which copies it, became zz_W: one run
+        (round 6 of the 15.2 B3 review)."""
+        found = ({'k': facts((4, 8, 0x25, 0x2f, 'k'),
+                             (4, 8, 0x23, 0x5c, 'zz_B'))},
+                 {'k': facts((4, 8, 0x25, 0x2f, 'k'),
+                             (4, 8, 0x23, 0x5c, 'zz_W'))})
+        old, new = f.facts_of(
+            found, {'localedata/locales/zz_B': 'localedata/locales/zz_W'},
+            'localedata/locales/k')
+        self.assertEqual(old.collate, new.collate)
+
+    def test_a_renamed_file_reading_its_sections_swapped_is_listed(self):
+        """The run reads two sections with two pairs of characters, and
+        at the new tag each with the other's: the same pairs, the same
+        lines, other rules."""
+        text = collate('order_start forward', '<U0041>', 'order_end')
+        a, b = (0x23, 0x5c), (0x25, 0x2f)
+        found = ({'x': facts((4, 8) + a + ('x',), (10, 14) + b + ('x',))},
+                 {'y': facts((4, 8) + b + ('y',), (10, 14) + a + ('y',))})
+        verdicts = dict(f.judge(['localedata/locales/x'],
+                                {'localedata/locales/x': text},
+                                {'localedata/locales/y': text}, {},
+                                self.RENAMED, found))
+        self.assertEqual('reading', verdicts['localedata/locales/x'])
 
     def test_an_unrenamed_file_still_finds_its_own_new_side(self):
         new = {'localedata/locales/x': collate('order_start forward',
@@ -1703,6 +1771,68 @@ class FoldAcross(unittest.TestCase):
     def test_the_control_nothing_read_across(self):
         self.assertEqual(f.fold_across(['a'], ['b'], ['d'], set()),
                          (['a'], ['b'], ['d'], []))
+
+
+class SectionsReadAgainstCharacters(unittest.TestCase):
+    """Which lines are read as LC_COLLATE, apart from which characters
+    they are read with (doc-sweep of 15.2 B3): a run that reads one
+    section fewer with the same pairs was named as read with other
+    characters, and a section swallowed and replaced got only its changed
+    lines' characters, with no word that every rule can change."""
+
+    # Lines 7-12 a section, swallowed at the new side; 13-18 its
+    # replacement, appended (ClassifyChange.SWALLOWED).
+    OLD_TEXT = ClassifyChange.SWALLOWED.format(end='', more='')
+    NEW_TEXT = ClassifyChange.SWALLOWED.format(end=' % a /',
+                                               more=ClassifyChange.APPENDED)
+    SWAP_DIFF = ['@@ -6 +6 @@\n-END LC_CTYPE\n+END LC_CTYPE % a /\n'
+                 '@@ -12,0 +13,6 @@\n']
+
+    def test_one_section_fewer_with_the_same_characters_is_not_other_characters(self):
+        old = facts((4, 6), (10, 12), (4, 6, 0x25, 0x2f, 'zz_C'),
+                    (10, 12, 0x25, 0x2f, 'zz_C'))
+        new = facts((4, 6), (10, 12), (10, 12, 0x25, 0x2f, 'zz_C'))
+        self.assertFalse(glibc_tree.read_otherwise(old, new))
+
+    def test_swapped_characters_in_as_many_sections_still_are(self):
+        a, b = (0x23, 0x5c), (0x25, 0x2f)
+        self.assertTrue(glibc_tree.read_otherwise(
+            facts((4, 6) + a, (10, 12) + b), facts((4, 6) + b, (10, 12) + a)))
+
+    def test_a_section_swallowed_and_replaced_has_moved(self):
+        self.assertTrue(f._sections_moved(
+            facts((7, 12)), self.OLD_TEXT, facts((13, 18)), self.NEW_TEXT,
+            self.SWAP_DIFF))
+
+    def test_a_rule_edited_in_place_has_not(self):
+        new = self.OLD_TEXT.replace('<U0062>', '<U0063>')
+        self.assertFalse(f._sections_moved(
+            facts((7, 12)), self.OLD_TEXT, facts((7, 12)), new,
+            ['@@ -10 +10 @@\n-<U0062>\n+<U0063>\n']))
+
+    def test_a_section_pushed_down_by_a_line_above_has_not(self):
+        new = '% a note\n' + self.OLD_TEXT
+        self.assertFalse(f._sections_moved(
+            facts((7, 12)), self.OLD_TEXT, facts((8, 13)), new,
+            ['@@ -0,0 +1 @@\n+% a note\n']))
+
+    def test_the_swap_is_named_with_every_rule_able_to_change(self):
+        got = f.unread_above(
+            ['p'], {'p': self.OLD_TEXT}, {'p': self.NEW_TEXT}, {},
+            (lambda: None, lambda: None), ('t1', 't2'),
+            ({'p': facts((7, 12))}, {'p': facts((13, 18))}),
+            {'p': self.SWAP_DIFF})
+        self.assertEqual([('p', ['at t2: localedef reads other lines as its '
+                                 'LC_COLLATE than at t1'])], got)
+
+    def test_without_the_diff_it_says_nothing_of_lines(self):
+        """main always passes the diff; a caller that has none is not
+        given an answer about lines it cannot place."""
+        got = f.unread_above(
+            ['p'], {'p': self.OLD_TEXT}, {'p': self.NEW_TEXT}, {},
+            (lambda: None, lambda: None), ('t1', 't2'),
+            ({'p': facts((7, 12))}, {'p': facts((13, 18))}))
+        self.assertEqual([], got)
 
 
 class ReadOtherwise(unittest.TestCase):

@@ -1454,7 +1454,20 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
         cls.repo, cls.ref = _harness.glibc_commit(NEW, files, cls.tmp)
         cls.paths, cls.ids = g.list_tree_ids(cls.repo, cls.ref, [])
         cls.build = glibc_tree.build_at(cls.repo, cls.ref)
-        cls.cache = os.path.join(cls.tmp, 'cache')
+        # The suite's own directory, where the runs of this tree, one file
+        # or two from NEW, are kept already (_harness.fill_reader_cache): a
+        # directory of its own computed the whole tree again, more than
+        # 600 s with the other classes running. What is kept here is named
+        # after this tree, which no other class reads; the facts a run
+        # before this one kept are dropped, so that cls.facts is computed
+        # and test_a_kept_answer_is_the_answer compares two answers, not one
+        # kept answer with itself (round 5 of the 15.2 B3 review).
+        cls.cache = None
+        try:
+            os.unlink(glibc_tree._facts_path(cls.paths, cls.ids, cls.build,
+                                             cls.cache))
+        except FileNotFoundError:
+            pass
         cls.facts = cls.ask()
 
     @classmethod
@@ -1581,6 +1594,25 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
             self.assertNotEqual(path, self.gt._facts_path(
                 self.paths, self.ids, self.build, self.cache))
 
+    def test_the_runs_it_reads_are_kept_where_it_is_told(self):
+        """The runs of the tree are asked of cache_dir, with the facts
+        (round 3 of 15.2 B3). Stopped at the ask: computing the whole
+        tree in a directory of its own is what setUpClass avoids."""
+        told = os.path.join(self.tmp, 'told')
+        asked = []
+
+        class Asked(Exception):
+            pass
+
+        def stop(files, build, cache_dir=None):
+            asked.append(cache_dir)
+            raise Asked
+        with mock.patch.object(rc, 'tree_runs', stop), \
+                self.assertRaises(Asked):
+            self.gt.file_facts(self.repo, self.ref, self.paths, self.ids,
+                               self.build, cache_dir=told)
+        self.assertEqual([told], asked)
+
     def test_two_files_with_one_name_are_refused(self):
         """Reached by injection: localedata/locales has no subdirectory at
         any tag, and one with a file of a name the top level has would
@@ -1680,6 +1712,16 @@ class AcrossTheTwoReaders(unittest.TestCase):
             return dict(files or self.FILES)
         return self.gt.across(self.ids, load, self.b0, self.b1,
                               cache_dir=os.path.join(self.tmp, cache))
+
+    def test_the_runs_it_reads_are_kept_where_it_is_told(self):
+        """The runs of the tree go to cache_dir with the answer, not to
+        the directory the environment names (round 3 of 15.2 B3)."""
+        env = os.path.join(self.tmp, 'env')
+        with mock.patch.dict(os.environ, {'PG_GLIBC_READER_CACHE': env}):
+            self.ask('told')
+        self.assertFalse(os.path.exists(env))
+        self.assertTrue(os.path.isdir(os.path.join(
+            self.tmp, 'told', rc.VERSION, rc.build_id(self.b0))))
 
     def test_what_the_two_readers_read_differently(self):
         """zz_U by its bytes, zz_K by a keyword one table has; zz_C's

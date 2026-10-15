@@ -153,6 +153,14 @@ def _cases():
     add('b26', B, HEAD + b'define \xc3\xa9X\n' + D('t') + D('v') + ORDER_HEAD
         + b'ifdef \xc3\xa9X\n' + O('t') + b'else\n' + O('v') + b'endif\n'
         + ORDER_TAIL + END, 'define and ifdef of a name that opens with UTF-8')
+    # b26 with each branch a whole order, under declared comment and escape
+    # characters: the shape of file v in test_git_helpers'
+    # ALineAboveLcCollateThatStopsGlibc (round 3 of 15.2 B3).
+    add('b27', B, b'comment_char %\nescape_char /\n' + HEAD
+        + b'define \xc3\xa9X\n' + D('t') + D('v') + b'ifdef \xc3\xa9X\n'
+        + ORDER_HEAD + O('t') + ORDER_TAIL + b'else\n' + ORDER_HEAD + O('v')
+        + ORDER_TAIL + b'endif\n' + END,
+        'define and ifdef of a UTF-8 name, a whole order in each branch')
     add('b21', B, {'@': HEAD + b'copy "@-t"\n' + END, '@-t': b''},
         'LC_COLLATE copies an empty file')
     add('b22', B, b'% caf\xc3\xa9\n' + IDENT + coll('a'),
@@ -281,6 +289,19 @@ def _cases():
         'a comment after the word')
     add('t26', T, b'LC_COLLATE\\\n' + body('a') + END,
         'the LC_COLLATE line continued onto the next')
+    # A keyword continued across an escaped newline: lr_next drops the
+    # escape and the newline (linereader.c:162-171@2.39) and lr_getc reads
+    # the next line on into the same word (linereader.h:125-138), so where the table has codepoint_collation (2.35, and RHEL 9 by a patch)
+    # it is read and no element is stored. glibc_tree.across matched the
+    # word in the file's text and missed this spelling (false-negative-
+    # reviewer, round 3 of 15.2 B3); t29 is the control.
+    cp = D('a') + ORDER_HEAD + O('a') + ORDER_TAIL + END
+    add('t27', T, HEAD + b'codepoint_coll\\\nation\n' + cp,
+        'codepoint_collation continued across the escape')
+    add('t28', T, b'escape_char /\n' + HEAD + b'codepoint_coll/\nation\n' + cp,
+        'codepoint_collation continued across a declared escape')
+    add('t29', T, HEAD + b'codepoint_collation\n' + cp,
+        'control for t27 and t28: the keyword on one line')
 
     # -- sections: where each category ends (locfile.c, ld-*.c) ------------
     S = 'sections'
@@ -609,6 +630,13 @@ def _cases():
                    '@-t': b'LC_CTYPE\ntranslit_start\n\xff\n' + coll('a')
                    + b'END LC_CTYPE\n' + coll('b')},
         'translit_start then 0xFF in an LC_CTYPE read for LC_COLLATE only')
+    # The escape that ends the section above swallows an indented
+    # LC_COLLATE line (b11), and a second section follows: one section is
+    # read, and it is the second. Step 2 compared how many sections it read
+    # (round 4 of the 15.2 B3 review).
+    add('s70', S, b'comment_char %\nescape_char /\nLC_IDENTIFICATION\n'
+        b'title "t"\nEND LC_IDENTIFICATION % a /\n ' + coll('a') + b' '
+        + coll('b'), 'a swallowed LC_COLLATE line, then a second section')
     cond =(HEAD + D('t') + D('v') + ORDER_HEAD + b'ifdef YES\n' + O('t')
             + b'else\n' + O('v') + b'endif\n' + ORDER_TAIL + END)
     add('c31', P, {'@': HEAD + b'define YES\ncopy "@-t"\n' + END,

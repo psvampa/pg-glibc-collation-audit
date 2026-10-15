@@ -114,25 +114,26 @@ class Tree(object):
     """The runs of every locale of one tree. Names are str, as the steps
     print them; the files are the bytes glibc reads."""
 
-    def __init__(self, label, files, build, decode):
+    def __init__(self, label, files, build, decode, cache_dir=None):
         self.label = label
         self.build = build
         self._files = files
         self._decode = decode
         self._unresolved = None
-        self._runs = {_name(k): v for k, v in rc.tree_runs(files,
-                                                           build).items()}
+        self._runs = {_name(k): v for k, v in rc.tree_runs(
+            files, build, cache_dir).items()}
         self.names = sorted(self._runs)
 
     @classmethod
-    def at_tag(cls, repo, tag, build=None):
+    def at_tag(cls, repo, tag, build=None, cache_dir=None):
         """Every locale file at `tag`, read for glibc at `tag`, or for
         `build` when the caller has it already."""
         paths = g.list_locale_files(repo, tag)
         contents, missing = g.read_blobs(repo, tag, paths, raw=True)
         g.require_read(tag, paths, missing, 'the locale files')
         files = {_key(os.path.basename(p)): v for p, v in contents.items()}
-        return cls(tag, files, build or build_at(repo, tag), g.decoded)
+        return cls(tag, files, build or build_at(repo, tag), g.decoded,
+                   cache_dir)
 
     @classmethod
     def at_dir(cls, root, names, repo, tag, build_id):
@@ -383,11 +384,16 @@ def read_otherwise(old, new):
     tags reads it with other pairs: two runs that swap their pairs leave
     the pairs as they were and change both orders (false-negative-reviewer,
     round 2 of 15.2 B3). A run that reads the file at one tag only is a
-    locale added, removed or changed, which step 2 judges on its own."""
+    locale added, removed or changed, which step 2 judges on its own; one
+    that reads another number of sections reads other lines, which is
+    another question (filter_lc_collate_changes._sections_differ), and
+    answering it here named other characters where there were none
+    (doc-sweep of 15.2 B3)."""
     if set(old.reading()) != set(new.reading()):
         return True
     a, b = old.runs(), new.runs()
-    return any(a[run] != b[run] for run in a.keys() & b.keys())
+    return any(a[run] != b[run] and len(a[run]) == len(b[run])
+               for run in a.keys() & b.keys())
 
 
 def chars_before(directives, line):
@@ -482,7 +488,7 @@ def file_facts(repo, tag, paths, ids, build, cache_dir=None):
     got = _load_facts(path, names)
     if got is not None:
         return got
-    tree = Tree.at_tag(repo, tag, build)
+    tree = Tree.at_tag(repo, tag, build, cache_dir)
     if set(tree.names) != names:
         g.die(f"the locale files read at {tag} are not the ones listed "
               f"there; refusing to answer for either list.")
@@ -586,7 +592,7 @@ def across(ids, load, b0, b1, cache_dir=None):
         got = _kept_across(path, names) if lock is not None else None
         if got is not None:
             return got
-        return _across(ids, load(), names, b0, b1, path)
+        return _across(ids, load(), names, b0, b1, path, cache_dir)
     finally:
         if lock is not None:
             lock.close()
@@ -621,7 +627,7 @@ def keyword_words(b0, b1):
     return out, named
 
 
-def _across(ids, files, names, b0, b1, path):
+def _across(ids, files, names, b0, b1, path, cache_dir):
     if {_name(k) for k in files} != names or any(
             rc.blob_id(v) != ids[_name(k)] for k, v in files.items()):
         g.die("the locale files read are not the ones listed; refusing to "
@@ -629,7 +635,7 @@ def _across(ids, files, names, b0, b1, path):
     words, named = keyword_words(b0, b1)
     bytes_differ = (b0.pre236 != b1.pre236 or b0.utf8 != b1.utf8
                     or b0.signed_char != b1.signed_char)
-    tree = Tree('across', files, b0, g.decoded)
+    tree = Tree('across', files, b0, g.decoded, cache_dir)
     bad = tree.unresolved()
     out, todo = set(), []
     for name in tree.names:

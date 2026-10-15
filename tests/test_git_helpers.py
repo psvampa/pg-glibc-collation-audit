@@ -1828,14 +1828,10 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
     """Backlog 13.18 end to end, on a fabricated repository: a file whose
     LC_COLLATE block is the same text at both tags, and whose line above
     it stops glibc reading it at one of them. No locale file at
-    glibc-2.12..2.42 has such a line, so step 2 is driven here. The
-    history: base -> ctl (a note on END LC_CTYPE) -> cont (the note ends
-    in the escape); and ctl -> sub (a 0x1A on a comment line above
-    LC_COLLATE) -> sub2 (gone again), and sub -> same (k as it is, another
-    file changed); and ctl -> bare (the 0x1A alone on a line, where lr_getc
-    reads it) -> bare2 (k as it is, another file changed). It sits on
-    glibc's own tag, before the lr_getc fix: step 2 now places each tag and
-    reads k with glibc_reader."""
+    glibc-2.12..2.42 has such a line, so step 2 is driven here.
+    setUpClass builds the history, the commits each test compares and the
+    files each one adds. It sits on glibc's own tag, before the lr_getc fix:
+    step 2 places each tag and reads every file with glibc_reader."""
 
     BODY = ('comment_char %\nescape_char /\nLC_CTYPE\ncopy "i18n"\n'
             'END LC_CTYPE{end}\nLC_COLLATE\ncopy "iso14651_t1"\n'
@@ -1880,6 +1876,21 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
         cls.commit('vv', ' % a note', extra={'v': cls.UTF8})
         cls.commit('vv2', ' % a note', extra={'v': cls.UTF8.replace(
             b'<U0062>\norder_end\nelse', b'<U0062>\n<U0063>\norder_end\nelse')})
+        git(cls.repo, 'checkout', '-q', 'ctl')
+        cls.commit('sw', ' % a note', extra={'x': cls.SWAPPED % (b'', b'')})
+        cls.commit('sw2', ' % a note', extra={'x': cls.SWAPPED % (
+            b' % a /', cls.SWAPPED_IN)})
+        git(cls.repo, 'checkout', '-q', 'ctl')
+        cls.commit('rn', ' % a note', extra={'r': cls.PAD + cls.SWAPPED % (
+            b'', b'')})
+        cls.commit('rn2', ' % a note', extra={'r': None, 'r2': cls.PAD
+                                              + cls.SWAPPED % (b' % a /',
+                                                               cls.SWAPPED_IN)})
+        git(cls.repo, 'checkout', '-q', 'ctl')
+        cls.commit('cr', ' % a note', extra={
+            'rf': cls.RF % b'', 'rb': cls.RB, 'rx': cls.RX})
+        cls.commit('cr2', ' % a note', extra={
+            'rf': cls.RF % b' # a \\', 'rb': None, 'rw': cls.RB})
 
     @classmethod
     def tearDownClass(cls):
@@ -1930,10 +1941,37 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
                b'END LC_CTYPE%s\nLC_COLLATE\ncopy "iso14651_t1"\n'
                b'END LC_COLLATE\n')
 
+    # x at sw2 ends END LC_CTYPE with the escape, which swallows its
+    # indented LC_COLLATE line, and appends a section of another order:
+    # glibc reads one section on each side, and not the same one. The line
+    # search does not see an indented header; round 4 of the 15.2 B3
+    # review.
+    SWAPPED = (b'comment_char %%\nescape_char /\n\nLC_CTYPE\ncopy "i18n"\n'
+               b'END LC_CTYPE%s\n LC_COLLATE\norder_start forward\n<U0061>\n'
+               b'<U0062>\norder_end\nEND LC_COLLATE\n%s')
+    SWAPPED_IN = (b' LC_COLLATE\norder_start forward\n<U0062>\n<U0061>\n'
+                  b'order_end\nEND LC_COLLATE\n')
+    # r is x renamed to r2 at rn2: lines enough for git to see a rename.
+    PAD = b''.join(b'# line %d\n' % i for i in range(30))
+    # rf's own run obeys the escape_char inside its LC_CTYPE; rb copies its
+    # LC_COLLATE, skips that section, and reads with the default `\`. At
+    # cr2 the END line ends in `\`, which swallows the first section's
+    # header for rb alone, and rb is renamed rw: one run under two names
+    # (round 6 of the 15.2 B3 review).
+    RF = (b'LC_CTYPE\ncopy "rx"\nescape_char /\nEND LC_CTYPE%s\n'
+          b' LC_COLLATE\norder_start forward\n<U0061>\n<U0062>\norder_end\n'
+          b'END LC_COLLATE\n LC_COLLATE\norder_start forward\n<U0063>\n'
+          b'<U0064>\norder_end\nEND LC_COLLATE\n')
+    RB = b'LC_COLLATE\ncopy "rf"\nEND LC_COLLATE\n'
+    RX = b'LC_IDENTIFICATION\ntitle "t"\nEND LC_IDENTIFICATION\n'
+
     @classmethod
     def commit(cls, tag, end, other=False, extra=None):
         loc = os.path.join(cls.repo, 'localedata', 'locales')
         for name, data in (extra or {}).items():
+            if data is None:
+                os.unlink(os.path.join(loc, name))
+                continue
             with open(os.path.join(loc, name), 'wb') as fh:
                 fh.write(data)
         with open(os.path.join(loc, 'k'), 'w', encoding='utf-8') as fh:
@@ -2089,6 +2127,45 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
         self.assertIn('localedata/locales/m at mm2: localedef reads no '
                       'LC_COLLATE section in it', out)
         self.assertEqual(listed, ['m'])
+
+    def test_one_section_read_for_another_is_listed(self):
+        """x has one LC_COLLATE section to glibc on each side, and they
+        are not the same lines: a change to its rules, though no hunk
+        falls inside the old section."""
+        rc, out, listed = self.step2('sw', 'sw2')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
+        self.assertIn('localedata/locales/x at sw2: localedef reads other '
+                      'lines as its LC_COLLATE than at sw', out)
+        self.assertIn('glibc may not read the block as written (see the `!!` '
+                      'above that names it), so every rule in it can change',
+                      out)
+        self.assertEqual(listed, ['x'])
+
+    def test_one_section_read_for_another_is_listed_under_a_rename(self):
+        """r is renamed r2, so its own run has two names, r and r2; the
+        sections are compared for that one run all the same (round 5 of
+        the 15.2 B3 review)."""
+        rc, out, listed = self.step2('rn', 'rn2')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('renamed: 1', out)
+        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
+        self.assertIn('localedata/locales/r at rn2: localedef reads other '
+                      'lines as its LC_COLLATE than at rn', out)
+        self.assertEqual(listed, ['r2'])
+
+    def test_a_renamed_copier_reading_less_lists_the_file(self):
+        """rf's own run reads both sections at cr and cr2; rb, renamed
+        rw, reads one fewer at cr2. Compared as one run, rf is listed."""
+        rc, out, listed = self.step2('cr', 'cr2')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('renamed: 1', out)
+        self.assertIn('1 touch LC_COLLATE', out)
+        self.assertIn('localedata/locales/rf at cr2: localedef reads other '
+                      'lines as its LC_COLLATE than at cr', out)
+        # The characters did not change: not named as if they had.
+        self.assertNotIn('file(s) are read at', flat(out))
+        self.assertIn('rf', listed)
 
     def test_a_change_inside_lc_collate_read_across_says_so(self):
         """v adds <U0063> to its first branch, and the two readers take

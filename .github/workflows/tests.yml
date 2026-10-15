@@ -28,11 +28,12 @@ on:
 jobs:
   suite:
     runs-on: ubuntu-latest
-    # 30, not 20: the first run after a change to the reader computes its
-    # answers from nothing, and a run that times out saves no cache, so
-    # every run after it would start from nothing too (backlog 15.2: the
-    # first run of #103 was cancelled at 20 minutes).
-    timeout-minutes: 30
+    # 45, not 20 or 30: the first run after a change to the reader computes
+    # its answers from nothing, and a run that times out saves no cache, so
+    # every run after it would start from nothing too. The first run of
+    # #103 was cancelled at 20 minutes; with step 2 reading through the
+    # reader, three such runs took 20 to 26 minutes (backlog 15.2 B3).
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -79,10 +80,16 @@ jobs:
         # hash of the reader's own source, so a changed reader finds nothing
         # and starts over. The key below says the same, so a run after such
         # a change restores nothing instead of a cache it would throw away.
+        # What glibc_tree.py derives from the runs is kept under that file's
+        # hash as well; the key names it too, and falls back to the runs of
+        # the same reader, so after a change to that file alone one run
+        # computes it again and saves it, instead of every run computing it
+        # and none saving it (backlog 15.2 B3).
         uses: actions/cache@v4
         with:
           path: scripts/glibc-reader-cache
-          key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}
+          key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}-${{ hashFiles('scripts/glibc_tree.py') }}
+          restore-keys: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}
 
       - name: Fill the reader's answers before the suite
         # tests/run_parallel.py does the same before its classes, under its
