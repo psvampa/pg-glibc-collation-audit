@@ -2,9 +2,9 @@
 
 glibc_reader.run() emulates one whole localedef run, the way glibc reads
 every file it reaches, and that costs about 0.2 s per locale: almost every
-locale reaches iso14651_t1_common, the largest file of the tree. Steps 1,
-3, 4, 9 and 10 ask it about every locale of a tag or of a node's directory
-(glibc_tree), and the
+locale reaches iso14651_t1_common, the largest file of the tree. Steps 1
+to 4, 9 and 10 ask it about every locale of a tag or of a node's directory
+(glibc_tree), step 2 of both tags, and the
 test suite runs them many times over the same trees, so the answers are kept
 on disk, in scripts/glibc-reader-cache/ next to the glibc clone, outside git
 (backlog 15.2). Nothing here reads a locale file differently: a kept answer
@@ -105,7 +105,8 @@ def _dec(x):
 
 
 def summary(r):
-    """run()'s answer as plain values: (fatal, reads, unsettled, collate).
+    """run()'s answer as plain values: (fatal, reads, unsettled, collate,
+    meets).
 
     fatal      None, or (kind, name, where, detail)
     reads      one (name, mask, directives, sections, stray, cut) per file
@@ -125,6 +126,8 @@ def summary(r):
                             (the `(2)` forms are charmap syntax)
                  codepoint  (file, line) of each codepoint_collation
                             statement, in reading order
+    meets      (Run.met, Run.words sorted): what another build could read
+               differently in this run (glibc_tree.across)
     """
     fatal = None if r.fatal is None else (
         r.fatal.kind, r.fatal.name, r.fatal.where, r.fatal.detail)
@@ -152,7 +155,8 @@ def summary(r):
                 codepoint.append((fname, line))
         collate = (tuple(sorted(counts.items())), tuple(sorted(ranges)),
                    tuple(codepoint))
-    return _canon((fatal, tuple(reads), tuple(r.unsettled), collate))
+    return _canon((fatal, tuple(reads), tuple(r.unsettled), collate,
+                   (r.met, tuple(sorted(r.words)))))
 
 
 _RANGES = frozenset(('ellipsis2', 'ellipsis3', 'ellipsis4'))
@@ -251,9 +255,9 @@ def _tree_entry(path, files):
 
 def _check(s):
     """A kept summary, if it has the shape summary() writes; else raises."""
-    if not (isinstance(s, tuple) and len(s) == 4):
+    if not (isinstance(s, tuple) and len(s) == 5):
         raise ValueError('not a run summary')
-    fatal, reads, unsettled, collate = s
+    fatal, reads, unsettled, collate, meets = s
     if fatal is not None and not (isinstance(fatal, tuple)
                                   and len(fatal) == 4):
         raise ValueError('bad fatal')
@@ -275,6 +279,10 @@ def _check(s):
                 and isinstance(x[0], str) and isinstance(x[1], int)
                 for x in part) for part in collate)):
         raise ValueError('bad collate')
+    if not (isinstance(meets, tuple) and len(meets) == 2
+            and isinstance(meets[0], bool) and isinstance(meets[1], tuple)
+            and all(isinstance(w, bytes) for w in meets[1])):
+        raise ValueError('bad meets')
     return s
 
 

@@ -139,6 +139,20 @@ def _cases():
     add('b20', B, {'@': IDENT + HEAD + b'copy "@-t"\n' + END,
                    '@-t': b'\x1a\n' + coll('t')},
         '0x1A above LC_COLLATE in the file LC_COLLATE copies')
+    # 0xFF inside an identifier: lr_getc ends the word there before 2.36
+    # (signed char, linereader.h:138@2.34), so ifdef asks for YES, which
+    # is defined; from 2.36 the word is YES and the byte. False-negative-
+    # reviewer, 15.2 B3.
+    add('b25', B, HEAD + b'define YES\n' + D('t') + D('v') + ORDER_HEAD
+        + b'ifdef YES\xff\n' + O('t') + b'else\n' + O('v') + b'endif\n'
+        + ORDER_TAIL + END, '0xFF at the end of an ifdef name')
+    # A word that opens with a byte above 0x7F: from 2.36 lr_token reads a
+    # UTF-8 character there (linereader.c:332-341@2.39), before it a name.
+    # So `define` and `ifdef` read the same name before 2.36 and a
+    # character after it. False-negative-reviewer, round 2 of 15.2 B3.
+    add('b26', B, HEAD + b'define \xc3\xa9X\n' + D('t') + D('v') + ORDER_HEAD
+        + b'ifdef \xc3\xa9X\n' + O('t') + b'else\n' + O('v') + b'endif\n'
+        + ORDER_TAIL + END, 'define and ifdef of a name that opens with UTF-8')
     add('b21', B, {'@': HEAD + b'copy "@-t"\n' + END, '@-t': b''},
         'LC_COLLATE copies an empty file')
     add('b22', B, b'% caf\xc3\xa9\n' + IDENT + coll('a'),
@@ -199,6 +213,25 @@ def _cases():
         'trailing garbage after the directive argument')
     add('d24', C, b'repertoiremap\n' + coll('a'),
         'repertoiremap with no argument')
+    # A directive in a section's text after a `copy` that returns (the
+    # copied file has no such category): the file's own run reads it at
+    # the top level, a run that reads the file for LC_COLLATE alone skips
+    # the section and never sees it. The escape decides whether `define Y/`
+    # and the next line are one `define YES`, and the ifdef picks t or v.
+    # False-negative-reviewer, 15.2 B3.
+    ret = (b'LC_CTYPE\ncopy "@-x"\nescape_char /\nEND LC_CTYPE\n' + HEAD
+           + b'define Y/\nES\n' + D('t') + D('v') + ORDER_HEAD
+           + b'ifdef YES\n' + O('t') + b'else\n' + O('v') + b'endif\n'
+           + ORDER_TAIL + END)
+    add('d25', C, {'@': HEAD + b'copy "@-f"\n' + END, '@-f': ret,
+                   '@-x': IDENT},
+        'escape_char after a returning LC_CTYPE copy, read through a copy '
+        'of LC_COLLATE')
+    add('d26', C, {'@': ret, '@-x': IDENT},
+        'control for d25: the same file read as the main file')
+    add('d27', C, {'@': b'LC_CTYPE\ncopy "@-x"\nEND LC_CTYPE\n'
+                   + coll('a'), '@-x': IDENT},
+        'an LC_CTYPE whose copy returns, and LC_COLLATE after it')
 
     # -- tokens: how a line becomes keywords (lr_token) --------------------
     T = 'tokens'

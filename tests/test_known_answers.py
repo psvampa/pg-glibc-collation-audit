@@ -12,12 +12,14 @@ their exit status.
 import os
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 
 from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
-                       REPO_ROOT, default_weight_section, flat, needs_clone,
-                       needs_floor_pair, run_step)
+                       REPO_ROOT, SCRIPTS_DIR, default_weight_section, flat,
+                       needs_clone, needs_floor_pair, run_step)
 
 import glibc_locale_data as g
 import test_locale_order as tlo
@@ -517,9 +519,10 @@ class Step4AlgorithmicRanges(StepRun):
             self.assertIn(name, out)
 
     def test_the_exposed_total_is_unchanged(self):
-        """342 at MID, as the examples print it. Pinned here because scan_ellipsis
-        switched from collate_block to collate_text, which changes which files
-        count as defining LC_COLLATE for files that open with it."""
+        """342 at MID, as the examples print it. Pinned here because what
+        decides which files define LC_COLLATE has changed twice (collate_block
+        to collate_text, then glibc_tree), and the two readers first differed
+        on files that open with it."""
         out = self.step('flag_algorithmic_ranges.py', MID)
         self.assertIn('Full set needing empirical confirmation: 342 locale(s)',
                       out)
@@ -792,29 +795,70 @@ class BelowTheOldVersionFloor(StepRun):
         """The root cause, asserted directly rather than through a count.
         These three are the highest fan-in files in the corpus; dropping them
         is what collapsed the closure."""
-        graph = g.build_copy_graph(GLIBC_CLONE, FLOOR_NEW)
+        import glibc_tree
+        tree = glibc_tree.Tree.at_tag(GLIBC_CLONE, FLOOR_NEW)
         for tmpl in ('iso14651_t1', 'iso14651_t1_common',
                      'iso14651_t1_pinyin'):
-            self.assertIn(tmpl, graph,
-                          f'{tmpl} is not a node of the {FLOOR_NEW} copy '
-                          f'graph; collate_block has regressed to a form that '
-                          f'cannot read a block at byte 0')
+            self.assertTrue(tree.defines(tmpl),
+                            f'{tmpl} defines no LC_COLLATE at {FLOOR_NEW} '
+                            f'to the copy chains steps 1 and 3 walk; a block '
+                            f'at byte 0 is not read any more')
 
-    def test_step_2_finds_six_locales_touching_lc_collate(self):
+    def test_the_list_step_3_will_give_is_read_at_the_new_tag(self):
+        """The character set check skips what step 3 lists anyway, and
+        works that out on step 3's own tree: the new tag's files read with
+        the new tag's localedef. Read with the old tag's, the list could be
+        other than step 3's, and a list larger than step 3's hides a
+        finding (false-negative-reviewer, 15.2 B3)."""
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-floor-tree-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        code = ("import sys; sys.path.insert(0, %r)\n"
+                "import glibc_tree\n"
+                "real = glibc_tree.Tree.at_tag.__func__\n"
+                "def spy(cls, repo, tag, build=None):\n"
+                "    print('TREE', tag, build.label if build else None)\n"
+                "    return real(cls, repo, tag, build)\n"
+                "glibc_tree.Tree.at_tag = classmethod(spy)\n"
+                "import filter_lc_collate_changes as f\n"
+                "sys.exit(f.main([%r, %r]))\n"
+                % (SCRIPTS_DIR, FLOOR_OLD, FLOOR_NEW))
+        p = subprocess.run([sys.executable, '-c', code], cwd=SCRIPTS_DIR,
+                           capture_output=True, timeout=600,
+                           env=dict(os.environ, PG_GLIBC_AUDIT_OUT=out_dir))
+        out = (p.stdout + p.stderr).decode('utf-8', 'replace')
+        self.assertEqual(0, p.returncode, out[-2000:])
+        trees = re.findall(r'^TREE (\S+) (\S+)$', out, re.M)
+        self.assertIn((FLOOR_NEW, FLOOR_NEW), trees, out[-2000:])
+        self.assertEqual([], [t for t in trees if t[0] != t[1]])
+
+    def test_step_2_finds_seven_locales_touching_lc_collate(self):
+        """Six whose rules changed, and wal_ET, whose change glibc_reader
+        cannot place: it copies am_ET, which uses reorder-sections-after,
+        a statement the reader does not settle (backlog 15.3). Before step
+        2 read with the reader (15.2 B3) wal_ET was cleared as "does not
+        touch LC_COLLATE"; one it cannot settle is never cleared."""
         out = self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW)
         self.assertEqual(
             one_int(r'Files with changes inside LC_COLLATE: (\d+)', out,
                     'the step 2 count'),
-            6)
+            7)
+        self.assertIn('!! 1 file(s) could not be read the way localedef '
+                      'reads them', flat(out))
+        for tag in (FLOOR_OLD, FLOOR_NEW):
+            self.assertIn(f'localedata/locales/wal_ET at {tag}: am_ET:584: '
+                          f'reorder-sections-after in LC_COLLATE',
+                          flat(out).replace('- ', '-'))
 
-    def test_hu_HU_gets_the_warning_and_the_other_five_their_characters(self):
-        """The real case of a change whose lines name no character. It must
-        read as "could not identify", never as an empty list, which would look
-        like nothing to test."""
+    def test_hu_HU_and_wal_ET_get_the_warning_the_other_five_characters(self):
+        """The real case of a change whose lines name no character, and one
+        whose reading is not settled. Each must read as "could not
+        identify", never as an empty list, which would look like nothing to
+        test."""
         chars = step2_characters(
             self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW))
         self.assertIsNone(chars['hu_HU'])
-        for name in set(chars) - {'hu_HU'}:
+        self.assertIsNone(chars['wal_ET'])
+        for name in set(chars) - {'hu_HU', 'wal_ET'}:
             self.assertTrue(chars[name], f'{name} got the warning')
 
     def test_zh_CN_GB18030_names_206_characters_GB18030_changed(self):

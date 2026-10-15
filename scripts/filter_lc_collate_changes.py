@@ -4,8 +4,9 @@ Narrow the list of changed locale files down to those whose change falls
 INSIDE the LC_COLLATE...END LC_COLLATE block, or changes the comment or escape
 characters that block is read with, or whose file holds something that can
 stop glibc reading that block as written, discarding changes in LC_TIME,
-LC_MONETARY, comments, etc. Across glibc 2.36, files that did not change are
-added when the two tags' localedef can read their LC_COLLATE differently.
+LC_MONETARY, comments, etc. When the two tags' localedef differ, a file they
+read differently is listed whether or not it changed, and so is one the reader
+cannot settle.
 
 It also compares, between the two tags, the charmaps the SUPPORTED builds
 use and the collating elements they build out of transliterations
@@ -42,6 +43,8 @@ import threading
 
 import collation_keys as ck
 import glibc_locale_data as g
+import glibc_tree
+import reader_cache as rc
 
 _FILE_HDR_RE = re.compile(r'^diff --git a/(\S+) b/(\S+)$', re.M)
 _HUNK_RE = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@', re.M)
@@ -86,36 +89,57 @@ def _cannot_tell():
     return None
 
 
-def classify_change(old_text, new_text, ranges,
+def classify_change(old_text, new_text, old, new, ranges,
                     early=(_cannot_tell, _cannot_tell)):
     """How does one content-changed file relate to LC_COLLATE?
 
+    `old` and `new` are the file's glibc_tree.Facts at the two tags: where
+    localedef reads its LC_COLLATE and with which comment and escape
+    characters, from what glibc_reader read (backlog 15.2 B3); `new` is
+    None when the new side was not read. The texts are for
+    lc_collate_unread alone.
+
     Returns one of:
-      'collate'        -- a hunk falls inside the old LC_COLLATE block
-      'gained-collate' -- the old version had no block and the new one does
-      'reading'        -- the block did not change, but the comment or escape
-                          character it is read with did, or cannot be settled
-      'unread'         -- the block and its characters did not change, but
-                          something in the file can stop glibc reading the
-                          block as written on either side
+      'unsettled'      -- the reader could not settle how localedef reads
+                          the file at one of the tags (Facts.unresolved);
+                          asked first, because nothing below can be
+                          answered for it
+      'collate'        -- a hunk falls inside an LC_COLLATE section of the
+                          old file, or localedef reads another number of
+                          LC_COLLATE sections in the new one (each is read
+                          into the same tables, ld-collate.c:1499@2.39)
+      'gained-collate' -- localedef read no LC_COLLATE section in the old
+                          file and reads one in the new
+      'reading'        -- the sections did not change, but the comment or
+                          escape character one of them is read with did
+      'unread'         -- no hunk falls inside the old sections, but
+                          localedef reads no LC_COLLATE section in the new
+                          file; or the block and its characters did not
+                          change, and something in the file can stop glibc
+                          reading the block as written on either side
                           (glibc_locale_data.lc_collate_unread, backlog
                           13.18); `early` is that function's question for
                           the old side and the new, and a caller that cannot
                           ask it gets "cannot tell", which counts as yes
-      'other'          -- has a block, and neither the block nor the comment
-                          and escape characters it is read with changed, and
-                          lc_collate_unread finds nothing in the file that
-                          can stop glibc reading the block
-      'no-collate'     -- no block on either side, so no sort rules of its
-                          own; a transliteration it holds can still change a
-                          collating element another locale builds, which
-                          point 6 of collation_keys compares
+      'other'          -- has a section, and neither it nor the characters
+                          it is read with changed, and lc_collate_unread
+                          finds nothing in the file that can stop glibc
+                          reading it
+      'no-collate'     -- no LC_COLLATE section on either side, so no sort
+                          rules of its own; a transliteration it holds can
+                          still change a collating element another locale
+                          builds, which point 6 of collation_keys compares
+
+    The sections are where glibc's own reader puts them, so an indented
+    `LC_COLLATE` (backlog 2.21) and an `END LC_COLLATE` joined by the escape
+    to the rule above it, which glibc reads as a weight and not as the end
+    (13.25), are read as glibc reads them.
 
     `reading` is its own answer for the reason `gained-collate` is: the
     directives sit outside the block, so no hunk lands inside it, and the
     same block read with other characters is other rules (backlog 13.7). A
     new side nobody passed in cannot clear that, so a file with a block and
-    no new text is 'reading' too; main() reads every new side.
+    no new side is 'reading' too; main() reads every new side.
 
     `gained-collate` is its own answer rather than being filed under
     "no LC_COLLATE block". A file that acquires one changes its sort order by
@@ -125,23 +149,35 @@ def classify_change(old_text, new_text, ranges,
     it needs a name: an unguarded path that nothing exercises is one nobody
     notices when it finally fires.
 
-    Pure so that `gained-collate` can be tested by handing it two strings,
-    rather than by fabricating a glibc clone in which it occurs.
+    Pure so that each answer can be tested by handing it Facts, rather than
+    by fabricating a glibc clone in which it occurs.
     """
-    bounds = g.collate_bounds(old_text)
-    if bounds is None:
-        if new_text is not None and g.collate_bounds(new_text) is not None:
+    if old.unresolved or (new is not None and new.unresolved):
+        return 'unsettled'
+    if not old.collate:
+        if new is not None and new.collate:
             return 'gained-collate'
         return 'no-collate'
-    lc_start, lc_end = bounds
-    if any(hunk_touches_block(s, ln, lc_start, lc_end) for s, ln in ranges):
+    if any(hunk_touches_block(s, ln, start,
+                              end if end is not None else float('inf'))
+           for start, end, _, _, _ in old.collate for s, ln in ranges):
         return 'collate'
-    if new_text is None or g.reading_changed(old_text, new_text):
+    if new is not None and not new.collate:
+        return 'unread'
+    if new is not None and _sections(old) != _sections(new):
+        return 'collate'
+    if new is None or glibc_tree.read_otherwise(old, new):
         return 'reading'
-    if (g.lc_collate_unread(old_text, early[0])
+    # A new text nobody read cannot be asked, and "could not look" keeps
+    # the file listed; main() reads every new side.
+    if (g.lc_collate_unread(old_text, early[0]) or new_text is None
             or g.lc_collate_unread(new_text, early[1])):
         return 'unread'
     return 'other'
+
+
+def _sections(facts):
+    return len({(start, end) for start, end, _, _, _ in facts.collate})
 
 
 def partition_verdicts(verdicts):
@@ -153,16 +189,22 @@ def partition_verdicts(verdicts):
     that folds `gained-collate` into the changed list left the whole suite
     green -- the verdict was computed correctly and then thrown away.
 
-    Returns (changed, gained, reading, unchanged, no_collate). `gained` and
-    `reading` each appear BOTH in their own list, so the report can call
-    them out, and inside `changed`: a file that acquires an LC_COLLATE block
-    acquires a sort order, and one whose block is read with other characters
-    has other rules. `unread` goes into `changed` only: its `!!` is built
-    from every changed file (unread_above), not from this verdict.
+    Returns (changed, gained, reading, unsettled, unchanged, no_collate).
+    `gained`, `reading` and `unsettled` each appear BOTH in their own list,
+    so the report can call them out, and inside `changed`: a file that
+    acquires an LC_COLLATE block acquires a sort order, one whose block is
+    read with other characters has other rules, and one the reader could
+    not settle is never cleared. `unread` goes into `changed` only: its `!!`
+    is built from every changed file (unread_above), not from this verdict,
+    and names the files whose new side reads no LC_COLLATE section too.
     """
-    changed, gained, reading, unchanged, no_collate = [], [], [], [], []
+    changed, gained, reading, unsettled, unchanged, no_collate = (
+        [], [], [], [], [], [])
     for path, verdict in verdicts:
         if verdict in ('collate', 'unread'):
+            changed.append(path)
+        elif verdict == 'unsettled':
+            unsettled.append(path)
             changed.append(path)
         elif verdict == 'gained-collate':
             gained.append(path)
@@ -178,7 +220,7 @@ def partition_verdicts(verdicts):
             # Not a default bucket: a verdict this does not know landed in
             # `unchanged` before, which is how a new answer is cleared unread.
             raise ValueError(f"unknown verdict {verdict!r} for {path}")
-    return changed, gained, reading, unchanged, no_collate
+    return changed, gained, reading, unsettled, unchanged, no_collate
 
 
 def new_side_paths(content_changed, renamed_to):
@@ -202,28 +244,44 @@ def new_side_paths(content_changed, renamed_to):
     return {p: renamed_to.get(p, p) for p in content_changed}
 
 
+def facts_of(facts, renamed_to, path):
+    """(old Facts, new Facts or None) of a changed file: `facts` is the
+    pair of {name: Facts} glibc_tree.file_facts gives for the two tags, and
+    a renamed file is looked up under its name at the new tag. Every
+    content-changed file is in the old tag's listing, so a name missing
+    there dies rather than be judged on nothing."""
+    name = os.path.basename(path)
+    if name not in facts[0]:
+        g.die(f"{path} changed but is not among the locale files listed at "
+              f"the old tag, so how glibc reads it was not looked at.")
+    return (facts[0][name],
+            facts[1].get(os.path.basename(renamed_to.get(path, path))))
+
+
 def judge(content_changed, old_contents, new_contents, hunks, renamed_to,
-          early=(_cannot_tell, _cannot_tell)):
+          facts, early=(_cannot_tell, _cannot_tell)):
     """[(old_path, verdict)] for every content-changed file.
 
     `new_contents` is keyed by the path at the NEW tag, as read_blobs_at
     returns it; the lookup goes through `renamed_to` so a renamed file finds
-    its own new text. `early` goes to classify_change as it is.
+    its own new text, and its own Facts (facts_of). `early` goes to
+    classify_change as it is.
     """
     return [(path, classify_change(old_contents[path],
                                    new_contents.get(renamed_to.get(path, path)),
+                                   *facts_of(facts, renamed_to, path),
                                    hunks.get(path, []), early))
             for path in content_changed]
 
 
 def predates_lr_getc_fix(repo, tag):
-    """A zero-argument question for lc_collate_unread: does `tag`'s
-    localedef read 0x1A and 0xFF as the end of the file? True, False, or
-    None when git cannot place glibc_locale_data.LR_GETC_FIX (a shallow
-    clone, a fabricated repository), which the caller counts as yes. None
-    is not refused the way reads_utf8 refuses: "cannot tell" only keeps a
-    locale listed here. Two "predates" on a shallow clone are refused
-    (unchanged_read_otherwise). Asked of git at most once per tag."""
+    """A zero-argument question: does `tag`'s localedef read 0x1A and 0xFF
+    as the end of the file? True, False, or None when git cannot place
+    glibc_locale_data.LR_GETC_FIX (a shallow clone, a fabricated
+    repository). main asks it of both tags before anything is judged and
+    refuses a None (glibc_tree.builds_at), and two "predates" on a shallow
+    clone; lc_collate_unread asks it again, and would count None as yes.
+    Asked of git at most once per tag."""
     box = []
 
     def ask():
@@ -234,14 +292,33 @@ def predates_lr_getc_fix(repo, tag):
     return ask
 
 
+def lr_getc_sides(repo, early, tags):
+    """{tag: predates LR_GETC_FIX} for the two tags, which decides how
+    their localedef reads 0x1A and 0xFF. A tag git cannot place is left as
+    None, and glibc_tree.builds_at refuses it before anything is read. Two
+    "predates" on a shallow clone are refused here: git can answer no
+    there for a tag that holds the fix (round 2 of the 13.18 review), as
+    reads_utf8 refuses."""
+    pre = {tag: ask() for tag, ask in zip(tags, early)}
+    if all(v is True for v in pre.values()):
+        g.require_full_history(
+            repo, 'step 2', 'git cannot say which tag holds the commit from '
+            'which localedef reads 0x1A and 0xFF as ordinary bytes')
+    return pre
+
+
 def unread_above(changed, old_contents, new_contents, renamed_to, early,
-                 tags):
+                 tags, facts=None):
     """[(old_path, [why, ...])], sorted, for every changed file whose
     LC_COLLATE something in it can stop glibc reading as written at
-    either tag (glibc_locale_data.lc_collate_unread). Not only the
-    'unread' verdict, for read_otherwise's reason: a file whose block also
-    changed is 'collate', and the characters printed for it name only its
-    changed lines, while glibc may not read the block as written. `early` and
+    either tag (glibc_locale_data.lc_collate_unread), or that localedef
+    reads an LC_COLLATE section in at the old tag and none in at the new
+    one (`facts`, the pair main has; the 'unread' verdict of
+    classify_change, which the line search behind lc_collate_unread does
+    not always see, doc-sweep of 15.2 B3). Not only the 'unread' verdict,
+    for read_otherwise's reason: a file whose block also changed is
+    'collate', and the characters printed for it name only its changed
+    lines, while glibc may not read the block as written. `early` and
     `tags` are (old, new); a side with no text is not asked."""
     out = []
     for path in changed:
@@ -250,56 +327,96 @@ def unread_above(changed, old_contents, new_contents, renamed_to, early,
         why = [f"at {tag}: {reason}" for text, ask, tag
                in zip(texts, early, tags) if text is not None
                for reason in [g.lc_collate_unread(text, ask)] if reason]
+        if facts is not None:
+            old, new = facts_of(facts, renamed_to, path)
+            if old.collate and new is not None and not new.collate \
+                    and not any(w.startswith(f"at {tags[1]}:") for w in why):
+                why.append(f"at {tags[1]}: localedef reads no LC_COLLATE "
+                           f"section in it")
         if why:
             out.append((path, why))
     return sorted(out)
 
 
-def unchanged_read_otherwise(repo, tag, paths, early):
-    """The files of `paths`, the same bytes at both tags and read at `tag`,
-    whose LC_COLLATE one tag's localedef can stop early and the other's
-    cannot: a 0x1A or 0xFF above the end of the block
-    (glibc_locale_data.byte_ends_it_early) when one side predates
-    LR_GETC_FIX and the other does not, sorted. Step 2 judges only the
-    files that changed, and these did not (review of backlog 13.18; the
-    same as collation_keys._readers_differ for the reader of 2.36). [] when
-    both tags answer the same and git placed both: they then read the same
-    bytes alike. An answer git could not give is not the same answer, and
-    neither is two "predates" on a shallow clone, where git can answer no
-    for a tag that holds LR_GETC_FIX: refused there, as reads_utf8 refuses
-    (round 2 of the 13.18 review)."""
-    old, new = early[0](), early[1]()
-    if old is True and new is True:
-        g.require_full_history(
-            repo, 'step 2', 'git cannot say which tag holds the commit from '
-            'which localedef reads 0x1A and 0xFF as ordinary bytes')
-    if old is not None and old == new:
+def read_across(repo, tag, builds, paths, ids):
+    """Every locale at `tag` that the localedef of the two tags builds
+    differently, sorted (glibc_tree.across): before glibc 2.36 lr_getc
+    reads 0x1A, and 0xFF through a signed char, as the end of the file,
+    from 2.36 a token that opens with a byte above 0x7F is a UTF-8
+    character, and a word one tag's keyword table has and the other's has
+    not (codepoint_collation from 2.35) is read otherwise. A run that can
+    be read differently is read whole with both tags' Builds (`builds`, old
+    and new): an 0xFF that ends an ifdef name picks the other branch with
+    the same number of statements, so nothing less than every token is
+    compared (false-negative-reviewer, 15.2 B3). Asked of every pair, not
+    only one that crosses 2.36: two tags on one side of it can still have
+    other keyword tables (round 3 of the same review). Step 2 judges the
+    changed files by their diff and these by how they are read; main lists
+    the ones that did not change and folds the changed ones in
+    (fold_across). [] at once when the two Builds are the same. Two
+    "predates" on a shallow clone, where git can answer no for a tag that
+    holds LR_GETC_FIX, are refused before anything is read (lr_getc_sides).
+    `paths` and `ids` are list_tree_ids' answer for `tag`: a kept answer is
+    found by the blob ids alone."""
+    if rc.build_id(builds[0]) == rc.build_id(builds[1]):
         return []
-    (texts, missing), = g.read_blobs_at(repo, [(tag, paths)])
-    g.require_read(tag, paths, missing, 'the check for bytes glibc before '
-                   '2.36 reads as the end of the file, in the files that did '
-                   'not change')
-    return sorted(p for p, text in texts.items() if g.byte_ends_it_early(text))
+
+    def load():
+        got, missing = g.read_blobs(repo, tag, paths, raw=True)
+        g.require_read(tag, paths, missing, "the check for files the two "
+                       "tags' localedef read differently")
+        return {glibc_tree._key(os.path.basename(p)): v
+                for p, v in got.items()}
+    names = set(glibc_tree.across(
+        {os.path.basename(p): ids[p] for p in paths}, load, *builds))
+    return sorted(p for p in paths if os.path.basename(p) in names)
 
 
-def read_otherwise(changed, reading, old_contents, new_contents, renamed_to):
+def fold_across(changed, unchanged, no_collate, across):
+    """(changed, unchanged, no_collate, folded): a changed file the two
+    tags' localedef read differently (read_across) is a change to its sort
+    order whatever its diff touched, so one filed as not touching
+    LC_COLLATE, or as having none, moves into `changed` and into `folded`,
+    which names it. Separate from partition_verdicts because deciding what
+    a file is and acting on it are different mistakes."""
+    folded = sorted(p for p in unchanged + no_collate if p in across)
+    return (changed + folded, [p for p in unchanged if p not in across],
+            [p for p in no_collate if p not in across], folded)
+
+
+def read_otherwise(changed, reading, facts, renamed_to):
     """The changed files read with other characters at the new tag, sorted.
 
     Not only the 'reading' verdict. A hunk inside the block returns
     'collate' before the characters are compared, and the characters
     printed for such a file name only its changed lines, while every rule in
     it can read differently -- the list would read as complete. A file with
-    an old block and no new text counts too: nothing settled its characters.
+    an LC_COLLATE section and no new side counts too: nothing settled its
+    characters.
     """
     out = []
     for path in changed:
-        old = old_contents[path]
-        new = new_contents.get(renamed_to.get(path, path))
-        if path in reading or (g.collate_bounds(old) is not None
-                               and (new is None
-                                    or g.reading_changed(old, new))):
+        old, new = facts_of(facts, renamed_to, path)
+        if path in reading or (old.collate and (
+                new is None or (new.collate and
+                                glibc_tree.read_otherwise(old, new)))):
             out.append(path)
     return sorted(out)
+
+
+def _byte(b):
+    return chr(b) if 0x21 <= b < 0x7f else f'0x{b:02X}'
+
+
+def describe_reading(facts, where):
+    """`comment_char % and escape_char / at <where>`, for a report line:
+    the characters localedef reads the file's LC_COLLATE with, one entry
+    per distinct pair when it is read with more than one."""
+    pairs = facts.reading()
+    if not pairs:
+        return f"no LC_COLLATE read at {where}"
+    return ' and '.join(f"comment_char {_byte(c)} and escape_char {_byte(e)}"
+                        for c, e in pairs) + f" at {where}"
 
 
 def split_raw(text):
@@ -403,28 +520,32 @@ def diff_sections(diff_text):
     return sections
 
 
-def changed_characters(sections, old_text, new_text):
+def changed_characters(sections, old, new):
     """The characters named on the changed lines inside LC_COLLATE, in order.
 
-    A removed line is placed by its old line number against the old block and
-    an added line by its new line number against the new block, so a hunk that
-    crosses the block's edge contributes only the lines inside it, and a file
-    that gained its block is read from the new one. Each line's comment is cut
-    before the `<U....>` escapes are read: a comment names characters too, and
-    a changed comment is not a changed rule.
+    `old` and `new` are the file's glibc_tree.Facts at the two tags. A
+    removed line is placed by its old line number against the old sections
+    and an added line by its new line number against the new ones, so a
+    hunk that crosses a section's edge contributes only the lines inside
+    it, and a file that gained its section is read from the new one. Each
+    line's comment is cut before the `<U....>` escapes are read: a comment
+    names characters too, and a changed comment is not a changed rule. The
+    comment character is the one localedef reads that line with
+    (Facts.chars_at): `#` unless a directive above it says otherwise, never
+    a `%` assumed (backlog 13.8).
 
     Returns [] when the lines name no character and also when this cannot
-    tell -- the new text could not be read, the path does not have exactly one
-    section in the diff, a hunk header does not parse. The caller prints the
+    tell -- no new side, the path does not have exactly one section in the
+    diff, a hunk header does not parse, a line localedef reads with two
+    comment characters (Facts.chars_at: one run reads the file whole,
+    another skips a directive), a comment character that is not ASCII,
+    which the decoded diff cannot be cut at. The caller prints the
     same thing for all of them: the locale stays flagged, and the reader is
     told the characters are unknown, never that there are none.
     """
-    if new_text is None or len(sections) != 1:
+    if new is None or len(sections) != 1:
         return []
-    bounds = {'-': g.collate_bounds(old_text), '+': g.collate_bounds(new_text)}
-    # Once per side, not once per line: comment_char searches the whole file,
-    # and called per line it took 17 minutes on cns11643_stroke.
-    cchar = {'-': g.comment_char(old_text), '+': g.comment_char(new_text)}
+    facts = {'-': old, '+': new}
     line_no = None
     seen, found = set(), []
     for line in sections[0].split('\n'):
@@ -447,10 +568,13 @@ def changed_characters(sections, old_text, new_text):
             continue
         n = line_no[side]
         line_no[side] += 1
-        block = bounds[side]
-        if block is None or not block[0] <= n <= block[1]:
+        if not facts[side].inside(n):
             continue
-        for hexcp in g._UCHAR_RE.findall(line[1:].split(cchar[side])[0]):
+        chars = facts[side].chars_at(n)
+        if chars is None or chars[0] >= 0x80:
+            return []
+        cchar = chars[0]
+        for hexcp in g._UCHAR_RE.findall(line[1:].split(chr(cchar))[0]):
             code = int(hexcp, 16)
             if code > 0x10FFFF or chr(code) in seen:
                 continue
@@ -656,9 +780,11 @@ class CharmapReads:
         self.all_read = True
 
 
-def check_charmaps(reads, repo, side_old, side_new, sup, names):
+def check_charmaps(reads, repo, side_old, side_new, sup, names, new_tree):
     """Run collation_keys.compare over the two tags, print what it found,
-    and return the source names it lists for step 3."""
+    and return the source names it lists for step 3. `new_tree()` gives the
+    glibc_tree.Tree of the new tag, asked only if compare needs step 3's
+    list."""
     old, new = side_old.tag, side_new.tag
     # The charmaps read ahead of time (CharmapReads.prefetch) are back by
     # now: the verdicts above took far longer than one `git cat-file`.
@@ -687,10 +813,13 @@ def check_charmaps(reads, repo, side_old, side_new, sup, names):
                         sorted({a for a, _ in cross} | {b for _, b in cross}))
 
     def already_listed():
-        # Step 3's own rule (resolve_copy_closure): the names step 2 passes
-        # it, and every locale that copies one of them at the new tag.
-        graph = g.copy_graph_from_texts(side_new.texts)
-        return set(names) | set(g.inherited_from(graph, set(names)))
+        # Step 3's own rule (resolve_copy_closure), on the same tree: the
+        # names step 2 passes it, every locale whose run at the new tag
+        # reaches one of them through `copy`, and every locale whose run
+        # is not settled.
+        tree, roots = new_tree(), set(names)
+        return (roots | {n for n in tree.names if tree.roots(n, roots)}
+                | set(tree.unresolved()))
 
     def read_more(charmaps, locales=False):
         # Point 6 of collation_keys: the charmaps of the builds whose
@@ -1167,10 +1296,24 @@ def _main(opts):
 
     early = (predates_lr_getc_fix(repo, opts.old_tag),
              predates_lr_getc_fix(repo, opts.new_tag))
+    # How localedef reads every locale file at each tag (glibc_tree): where
+    # its LC_COLLATE sections are and with which comment and escape
+    # characters, from the runs glibc_reader computed.
+    pre = lr_getc_sides(repo, early, (opts.old_tag, opts.new_tag))
+    builds = glibc_tree.builds_at(repo, [opts.old_tag, opts.new_tag], pre)
+    facts = tuple(glibc_tree.file_facts(repo, tag, listed[tag], ids[tag],
+                                        builds[tag])
+                  for tag in (opts.old_tag, opts.new_tag))
     verdicts = judge(content_changed, old_contents, new_contents, hunks,
-                     renamed_to, early)
-    (changed_collate, gained_collate, reading_files,
+                     renamed_to, facts, early)
+    (changed_collate, gained_collate, reading_files, unsettled_files,
      unchanged_collate, no_collate_block) = partition_verdicts(verdicts)
+    across = set(read_across(repo, opts.old_tag,
+                             (builds[opts.old_tag], builds[opts.new_tag]),
+                             listed[opts.old_tag], ids[opts.old_tag]))
+    (changed_collate, unchanged_collate, no_collate_block,
+     folded) = fold_across(changed_collate, unchanged_collate,
+                           no_collate_block, across)
 
     total = len(modified) + len(added) + len(deleted) + len(renamed)
     print(f"Locale files changed between {opts.old_tag} and {opts.new_tag}: {total}")
@@ -1199,24 +1342,45 @@ def _main(opts):
               f"changed above:")
         for path in sorted(gained_collate):
             print(f"     {path}")
-    reread = read_otherwise(changed_collate, reading_files, old_contents,
-                            new_contents, renamed_to)
+    if unsettled_files:
+        lines = []
+        for path in sorted(unsettled_files):
+            for side, tag in zip(facts_of(facts, renamed_to, path),
+                                 (opts.old_tag, opts.new_tag)):
+                if side is not None and side.unresolved:
+                    lines.append(f"{path} at {tag}: {side.unresolved}")
+        _warn_block(
+            f"{len(unsettled_files)} file(s) could not be read the way "
+            f"localedef reads them, so whether their change reaches "
+            f"LC_COLLATE is not known. They are counted as changed above:",
+            lines)
+    across_changed = sorted(p for p in content_changed if p in across)
+    if across_changed:
+        _warn_block(
+            f"{len(across_changed)} file(s) that changed are also read "
+            f"differently by the localedef of {opts.old_tag} and that of "
+            f"{opts.new_tag} (glibc 2.36 reads 0x1A and 0xFF as bytes and "
+            f"bytes above 0x7F as UTF-8, and the keyword tables can differ), "
+            f"so any rule in them can change, not only the changed lines. "
+            f"They are counted as changed above:", across_changed)
+    reread = read_otherwise(changed_collate, reading_files, facts,
+                            renamed_to)
     if reread:
         print(f"\n!! {len(reread)} file(s) are read at {opts.new_tag} with "
               f"other comment or escape")
-        print(f"   characters than at {opts.old_tag}, or with characters "
-              f"this tool cannot settle, so")
-        print(f"   any rule in them can read differently. They are counted as "
-              f"changed above:")
+        print(f"   characters than at {opts.old_tag}, so any rule in them "
+              f"can read differently.")
+        print(f"   They are counted as changed above:")
         for path in reread:
-            new_text = new_contents.get(renamed_to.get(path, path))
+            old, new = facts_of(facts, renamed_to, path)
             print(f"     {path}")
-            print(f"       {g.describe_reading(old_contents[path], opts.old_tag)}")
-            print(f"       " + (g.describe_reading(new_text, opts.new_tag)
-                                if new_text is not None else
+            print(f"       {describe_reading(old, opts.old_tag)}")
+            print(f"       " + (describe_reading(new, opts.new_tag)
+                                if new is not None else
                                 f"not read at {opts.new_tag}"))
     unread = unread_above(changed_collate, old_contents, new_contents,
-                          renamed_to, early, (opts.old_tag, opts.new_tag))
+                          renamed_to, early, (opts.old_tag, opts.new_tag),
+                          facts)
     if unread:
         _warn_block(
             f"{len(unread)} file(s) hold something that can stop glibc "
@@ -1226,16 +1390,16 @@ def _main(opts):
             [f"{path} {why}" for path, whys in unread for why in whys])
     unread_paths = {path for path, _ in unread}
     judged = set(content_changed) | set(deleted)
-    stopped = unchanged_read_otherwise(
-        repo, opts.old_tag, [p for p in listed[opts.old_tag]
-                             if p not in judged], early)
+    stopped = sorted(p for p in across if p not in judged)
     if stopped:
         _warn_block(
-            f"{len(stopped)} file(s) that did not change hold a 0x1A or 0xFF "
-            f"byte above the end of LC_COLLATE, which glibc before 2.36 reads "
-            f"as the end of the file, and the localedef of {opts.old_tag} and "
-            f"that of {opts.new_tag} may read it differently, so every rule "
-            f"in their block can change. They are added to step 3's list:",
+            f"{len(stopped)} file(s) that did not change are read differently "
+            f"by the localedef of {opts.old_tag} and that of {opts.new_tag}, "
+            f"or could not be settled by one of them: glibc before 2.36 reads "
+            f"0x1A, and 0xFF, as the end of the file, and from 2.36 reads "
+            f"bytes above 0x7F as UTF-8, and the two keyword tables can "
+            f"differ. Every rule in their LC_COLLATE, or in one that copies "
+            f"them, can change. They are added to step 3's list:",
             stopped)
 
     # Under each file, the characters its changed rules name: they are what
@@ -1246,8 +1410,8 @@ def _main(opts):
     print(f"\nFiles with changes inside LC_COLLATE: {len(changed_collate)}")
     for path in sorted(changed_collate):
         print(f"  {path}")
-        chars = changed_characters(sections.get(path, []), old_contents[path],
-                                   new_contents.get(renamed_to.get(path, path)))
+        chars = changed_characters(sections.get(path, []),
+                                   *facts_of(facts, renamed_to, path))
         if path in reread:
             if chars:
                 print_characters(chars)
@@ -1256,6 +1420,14 @@ def _main(opts):
                 + "the block is read with other characters (see the `!!` "
                 "above that names it), so any rule in it can read "
                 "differently",
+                width=78, initial_indent='      ', subsequent_indent='      '))
+        elif path in across_changed:
+            if chars:
+                print_characters(chars)
+            print(textwrap.fill(
+                ("those are the changed lines; " if chars else "")
+                + "the two tags' localedef read this file differently (see "
+                "the `!!` above that names it), so any rule in it can change",
                 width=78, initial_indent='      ', subsequent_indent='      '))
         elif path in unread_paths:
             if chars:
@@ -1307,8 +1479,15 @@ def _main(opts):
     else:
         side_old, side_new, sup = charmap_reads.sides(
             repo, read[3:], old_contents, new_contents, read[2])
+        trees = []
+
+        def new_tree():
+            if not trees:
+                trees.append(glibc_tree.Tree.at_tag(repo, opts.new_tag,
+                                                    builds[opts.new_tag]))
+            return trees[0]
         keyed = check_charmaps(charmap_reads, repo, side_old, side_new, sup,
-                               names)
+                               names, new_tree)
 
     # Written whether or not it is empty, and named after the pair. audit.sh
     # reads this instead of the user retyping it, and an empty file for THIS

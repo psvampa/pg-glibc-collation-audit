@@ -4,8 +4,10 @@ The tool reads glibc's locale files to decide what changed between two
 versions. That reading used to be written by hand in several modules, each a
 little differently from the others and from glibc; every fix corrected one copy
 and the next review found its twin (backlog block 15). This module is the one
-reader the steps are moved onto, one PR at a time: steps 1, 3, 4 and 9/10
-read through it (glibc_tree.py); steps 2 and 6 to 8 not yet.
+reader the steps are moved onto, one PR at a time: steps 1 to 4 and 9/10
+read through it (glibc_tree.py); steps 6 to 8 not yet, nor step 2's
+lc_collate_unread check and its check of character sets and
+transliterations (collation_keys).
 
 It reads the way localedef reads, for one glibc BUILD, in layers:
 
@@ -251,6 +253,10 @@ LR_KEY_FIELDS = {
              'or of a GlibcUndefined, which leaves before anything is kept',
     'utf8': 'from build', 'kw': 'from build and table',
     'getc': 'from build', 'phys': 'from data', 'empty': 'from data',
+    'met': 'an answer, not an input: kept with each lookahead and added '
+           'back when one is used',
+    'words': 'an answer, not an input: kept with each lookahead and added '
+             'back when one is used',
 }
 
 
@@ -292,6 +298,9 @@ class LR(object):
         self.translate_strings = 1
         self.return_widestr = 0
         self.lineno = 1
+        # What another build could read differently (Run.met, Run.words).
+        self.met = False
+        self.words = set()
         if not self.phys:        # getdelim < 0: lr_create returns NULL
             self.buf = bytearray()
             self.bufact = 0
@@ -357,6 +366,8 @@ class LR(object):
             if self.bufact == 0:
                 return EOF_
         c = self.buf[self.idx]
+        if c >= 0x80 or c == 0x1a:
+            self.met = True
         self.idx += 1
         return c
 
@@ -368,6 +379,8 @@ class LR(object):
             if self.bufact == 0:
                 return EOF_
         c = self.buf[self.idx]
+        if c >= 0x80 or c == 0x1a:
+            self.met = True
         if c == 0x1a:
             return EOF_
         self.idx += 1
@@ -381,6 +394,8 @@ class LR(object):
             if self.bufact == 0:
                 return EOF_
         c = self.buf[self.idx]
+        if c >= 0x80 or c == 0x1a:
+            self.met = True
         if c == 0x1a:
             return EOF_
         self.idx += 1
@@ -604,6 +619,9 @@ class LR(object):
             return None
         end = m.start() + 1
         b = bytearray(self.buf[self.idx:end])
+        if not b.isascii() or 0x1a in b:
+            # What lr_getc would have flagged, byte by byte.
+            self.met = True
         self.idx = end
         return b, b[-1]
 
@@ -649,6 +667,7 @@ class LR(object):
             b.append(ch & 0xff)
         self.ungetc(ch)
         s = bytes(b)
+        self.words.add(s)
         k = self.kw.get(s)
         if k is not None and k[1] == 0:
             t = Tok('kw', s.decode('ascii'), line)
@@ -896,6 +915,21 @@ class Run(object):
     unsettled  [(file, line, why)]: places where this reader's model of a
                statement can differ from the handler glibc runs. A caller
                that needs a settled answer refuses one with any of these.
+    met        True when lr_getc read, or stopped at, a byte above 0x7F or
+               a 0x1A, in any file of the run: the only bytes the builds on
+               the two sides of glibc 2.36 read differently (lr_getc reads
+               0x1A, and 0xFF through a signed char, as the end of the file
+               before it; a token that opens with a byte above 0x7F is a
+               UTF-8 character from it). A run that met none reads alike
+               with both, step by step.
+    words      every bare word looked up in a keyword table (get_ident): a
+               build whose table gives one of them another entry reads the
+               run differently. A <name> is looked up too, for the
+               keywords read as one (k[1] == 1), and is not kept: there are
+               tens of thousands per run, and no locfile table of
+               glibc-2.12..2.39 has such a keyword; glibc_tree.across
+               treats every run as one to compare when two tables differ in
+               one.
     """
 
     def __init__(self):
@@ -903,6 +937,8 @@ class Run(object):
         self.reads = []
         self.collate = None
         self.unsettled = []
+        self.met = False
+        self.words = set()
 
     def sections(self, category, fname=None):
         return [s for r in self.reads for s in r.sections
@@ -1082,6 +1118,15 @@ class _Runner(object):
                 self.build)
         if lr.empty:
             return 1
+        try:
+            return self._locfile_read(lr, entry)
+        finally:
+            # Also when the read ends in a _Stop, a GlibcHang or a
+            # GlibcUndefined: what it met is the run's.
+            self.out.met = self.out.met or lr.met
+            self.out.words |= lr.words
+
+    def _locfile_read(self, lr, entry):
         mask = entry.needed - entry.avail
         fr = FileRead(entry.name, mask)
         self.out.reads.append(fr)
@@ -1238,10 +1283,21 @@ class _Runner(object):
                lr.return_widestr, sec.category)
         kept = lr.build.lookahead.get(key)
         if kept is None:
-            kept = self._lookahead(lr, sec)
+            met, words = lr.met, lr.words
+            lr.met, lr.words = False, set()
+            try:
+                kept = self._lookahead(lr, sec) + (lr.met, frozenset(lr.words))
+            finally:
+                # A GlibcUndefined leaves from here: what the file met
+                # before the lookahead, and in it, is the run's all the same.
+                lr.met, lr.words = met or lr.met, words | lr.words
             lr.build.lookahead[key] = kept
             lr.restore(snap)
-        rest, reasons, scanned = kept
+        rest, reasons, scanned, met, words = kept
+        # A kept lookahead read its bytes and words once, for every run
+        # that uses it: each run counts them as its own.
+        lr.met = lr.met or met
+        lr.words |= words
         toks.extend(rest)
         for why in reasons:
             self.unsettled(lr, t.line, why)

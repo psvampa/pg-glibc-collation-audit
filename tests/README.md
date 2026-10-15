@@ -18,7 +18,7 @@ this tool shipped, or a way of losing one, and its docstring says which.
 | `test_node_modes.py` | yes | the steps that read a machine's own locale files |
 | `test_distro_diff.py` | yes | the comparison of a machine's locale files against its upstream tag (steps 6 and 7) |
 | `test_git_helpers.py` | mostly | code that cannot tell "nothing here" from "could not look"; some of its classes build a small repository of their own |
-| `test_glibc_reader.py` | mostly | `scripts/glibc_reader.py`, a reader of glibc's locale files that follows `localedef`, against what `localedef` did on the three RHEL builds (`reader_oracle/`); `scripts/reader_cache.py`, which keeps its answers; and `scripts/glibc_tree.py`, through which steps 1, 3, 4, 9 and 10 read them |
+| `test_glibc_reader.py` | mostly | `scripts/glibc_reader.py`, a reader of glibc's locale files that follows `localedef`, against what `localedef` did on the three RHEL builds (`reader_oracle/`); `scripts/reader_cache.py`, which keeps its answers; and `scripts/glibc_tree.py`, through which steps 1 to 4, 9 and 10 read them |
 | `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, locale names and their aliases, the comment filter |
 | `test_locale_order.py` | no | step 11: the comparison on three real machines' measurements, the file each machine writes, and the progress lines |
 | `test_parallel_runner.py` | no | guards against losing tests quietly, in the parallel runner and in a test file run on its own |
