@@ -1828,8 +1828,8 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
     """Step 2 end to end on a fabricated repository, for what no locale
     file at glibc-2.12..2.42 does: a line above LC_COLLATE that stops glibc
     reading it at one tag (backlog 13.18), a section read in place of
-    another, a renamed file or copier, a file the two tags' localedef read
-    differently.
+    another, also in a renamed file or under a renamed copier, a file the
+    two tags' localedef read differently.
     setUpClass builds the history, the commits each test compares and the
     files each one adds. It sits on glibc's own tag, before the lr_getc fix:
     step 2 places each tag and reads every file with glibc_reader."""
@@ -2736,7 +2736,7 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
             "f.main([%r, %r, '--repo', repo])" % (MID, OLD, MID))
         self.assertNotEqual(rc, 0, out)
         self.assertIn('could not be read while building the check of every '
-                      'changed file at the new tag', flat(out))
+                      'content-changed file at the new tag', flat(out))
 
     def test_an_unreadable_supported_is_refused(self):
         """SUPPORTED is read in the same batch, at both tags: the added

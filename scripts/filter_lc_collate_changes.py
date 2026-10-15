@@ -286,13 +286,13 @@ def partition_verdicts(verdicts):
 def new_side_paths(content_changed, renamed_to):
     """Which paths to read at the NEW tag, and under which name.
 
-    Every content-changed file: where its LC_COLLATE sections are and
-    what can stop glibc reading them are asked of the new text as well
+    Every content-changed file: which lines its LC_COLLATE sections hold
+    and what can stop glibc reading them are asked of the new text as well
     (classify_change, unread_above). Until backlog 13.7 only a file with no
     block on the old side was read there, so the others were judged on the
-    old side alone. A renamed file
-    lives under its NEW name there: reading the old name aborted the whole
-    step with "could not read" on a legitimate rename, and looking the
+    old side alone. A renamed file lives under its NEW name there: reading
+    the old name aborted the whole step with "could not read" on a
+    legitimate rename, and looking the
     verdict up under the old name made `gained-collate` undetectable for any
     renamed file. Neither has happened in an audited pair -- the one rename,
     aa_ER@saaho to ssy_ER over 2.34..2.39, has a block on the old side --
@@ -1324,10 +1324,10 @@ def _main(opts):
 
     # Every file text this step reads, in one batch: the old side of every
     # content-changed file, its new side under the name it has at the new tag
-    # (see new_side_paths) -- where its LC_COLLATE lines are and what can
-    # stop glibc reading them are asked of it too -- SUPPORTED, which an added file needs for its names and
-    # the character set check at both tags, and what that check reads
-    # (CharmapReads).
+    # (see new_side_paths) -- which lines its LC_COLLATE sections hold and
+    # what can stop glibc reading them are asked of it too -- SUPPORTED,
+    # which an added file needs for its names and the character set check at
+    # both tags, and what that check reads (CharmapReads).
     to_read = new_side_paths(content_changed, renamed_to)
     new_paths = sorted(set(to_read.values()))
     groups = [(opts.old_tag, content_changed), (opts.new_tag, new_paths)]
@@ -1374,7 +1374,8 @@ def _main(opts):
     # Refused only now, after the check above, so a run that has both
     # failures still names the one it named before the reads were batched.
     g.require_read(opts.new_tag, new_paths, new_missing,
-                   'the check of every changed file at the new tag')
+                   'the check of every content-changed file at the new '
+                   'tag')
     if charmap_reads is not None:
         charmap_reads.prefetch(repo, read[3:], old_contents, new_contents,
                                read[2])
