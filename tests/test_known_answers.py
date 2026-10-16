@@ -36,14 +36,35 @@ WARNING = ('could not identify which characters changed, but this locale '
            'must be considered suspicious')
 
 
+# The line under a file that says its changed lines are not all that can
+# move (step 2, filter_lc_collate_changes.main), after the characters or
+# on its own.
+EVERY_RULE = re.compile(r'(those are the changed lines; )?(.+), so (any|every) '
+                        r'rule in it can (change|read differently)')
+
+
 def step2_characters(out):
     """{locale: [code point, ...]} from step 2's LC_COLLATE list, or None for
-    a locale that got the could-not-identify warning.
+    a locale whose changed lines name no character it could identify: the
+    could-not-identify warning, or a line that every rule in it can change
+    with no list above it (step2_every_rule names those).
 
     Refuses rather than guesses: the files it finds must number what the
-    header says, every line under a file must be part of one of the two forms,
+    header says, every line under a file must be part of one of the forms,
     and a list must print as many entries as it says it has.
     """
+    return {name: points for name, (points, _) in _step2_entries(out).items()}
+
+
+def step2_every_rule(out):
+    """The locales under which step 2 says every (or any) rule in the file
+    can change, sorted: its changed lines are not all that moves."""
+    return sorted(name for name, (_, every) in _step2_entries(out).items()
+                  if every)
+
+
+def _step2_entries(out):
+    """{locale: (points or None, the every-rule line or None)}."""
     count = one_int(r'Files with changes inside LC_COLLATE: (\d+)', out,
                     'the step 2 count')
     block = out.split('Files with changes inside LC_COLLATE:')[1]
@@ -64,10 +85,28 @@ def step2_characters(out):
     for name, lines in chunks.items():
         text = flat('\n'.join(lines))
         if text == WARNING:
-            found[name] = None
+            found[name] = (None, None)
+            continue
+        listed, sep, every = text.partition(' those are the changed lines; ')
+        if sep:
+            every = 'those are the changed lines; ' + every
+        elif not listed.startswith('characters in the changed rules'):
+            listed, every = None, listed
+        else:
+            every = None
+        if every is not None and not EVERY_RULE.fullmatch(every):
+            raise AssertionError(f'{name}: neither a character list, the '
+                                 f'warning nor an every-rule line: {text!r}')
+        if every is not None and (listed is None) == every.startswith(
+                'those are the changed lines; '):
+            raise AssertionError(f'{name}: "those are the changed lines" '
+                                 f'with no list, or a list without it: '
+                                 f'{text!r}')
+        if listed is None:
+            found[name] = (None, every)
             continue
         m = re.fullmatch(r'characters in the changed rules \((\d+)\): (.+)',
-                         text)
+                         listed)
         if not m:
             raise AssertionError(f'{name}: neither a character list nor the '
                                  f'warning: {text!r}')
@@ -76,7 +115,7 @@ def step2_characters(out):
         if len(points) != int(m.group(1)):
             raise AssertionError(f'{name}: says {m.group(1)} characters and '
                                  f'prints {len(points)}')
-        found[name] = points
+        found[name] = (points, every)
     return found
 
 
@@ -398,6 +437,19 @@ class Step2NamesTheCharacters(StepRun):
         chars = step2_characters(
             self.step('filter_lc_collate_changes.py', MID, NEW))
         self.assertLessEqual(set(range(0x0E40, 0x0E45)), set(chars['th_TH']))
+
+    def test_an_edited_instruction_says_every_rule_can_change(self):
+        """Backlog 13.36: a changed reorder-after, collating-symbol,
+        order_start or conditional inside LC_COLLATE moves rules on lines
+        that did not change. Measured by the false-negative-reviewer of
+        15.2 B3 on these pairs, from the diff: or_IN over 2.28..2.34, and
+        ber_DZ, kab_DZ and th_TH over 2.34..2.39; until then none of them
+        said it. The others name only rules."""
+        for old, new, want in ((OLD, MID, ['or_IN']),
+                               (MID, NEW, ['ber_DZ', 'kab_DZ', 'th_TH'])):
+            with self.subTest(pair=f'{old}..{new}'):
+                self.assertEqual(want, step2_every_rule(
+                    self.step('filter_lc_collate_changes.py', old, new)))
 
     def test_every_locale_flagged_on_the_audited_pairs_gets_characters(self):
         """Measured: all five name at least one, so on these two pairs the
@@ -849,17 +901,26 @@ class BelowTheOldVersionFloor(StepRun):
                           f'reorder-sections-after in LC_COLLATE',
                           flat(out).replace('- ', '-'))
 
-    def test_hu_HU_and_wal_ET_get_the_warning_the_other_five_characters(self):
+    def test_hu_HU_and_wal_ET_name_no_character_the_other_five_do(self):
         """The real case of a change whose lines name no character, and one
-        whose reading is not settled. Each must read as "could not
-        identify", never as an empty list, which would look like nothing to
-        test."""
-        chars = step2_characters(
-            self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW))
+        whose reading is not settled. Neither may read as an empty list,
+        which would look like nothing to test: wal_ET gets "could not
+        identify", and hu_HU, whose changed lines are instructions, that
+        every rule in it can change (backlog 13.36). So do the five that
+        name characters. Two of se_NO's changed lines place U+00E3 and
+        U+00C3, the anchors of two reorder-after blocks below them, so
+        moving them would move those blocks too; only their comments
+        changed, so the line is noise there,
+        measured and accepted with that rule (round 1 of the 13.36
+        review)."""
+        out = self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW)
+        chars = step2_characters(out)
         self.assertIsNone(chars['hu_HU'])
         self.assertIsNone(chars['wal_ET'])
         for name in set(chars) - {'hu_HU', 'wal_ET'}:
             self.assertTrue(chars[name], f'{name} got the warning')
+        self.assertEqual(['dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
+                          'se_NO', 'ug_CN'], step2_every_rule(out))
 
     def test_zh_CN_GB18030_names_206_characters_GB18030_changed(self):
         """Backlog 13.7, PR B: the one pinned pair where a charmap change

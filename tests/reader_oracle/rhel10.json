@@ -11916,6 +11916,324 @@
     ]
    }
   },
+  "s71": {
+   "c": {
+    "collate": {
+     "markers": [],
+     "md5": "e9567d982b05dd67dd531a07e87b562c",
+     "size": 10178
+    },
+    "messages": [
+     "rd-s71:15: LC_COLLATE: missing `order_end' keyword",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   },
+   "nc": {
+    "collate": {
+     "markers": [],
+     "md5": "e9567d982b05dd67dd531a07e87b562c",
+     "size": 10178
+    },
+    "messages": [
+     "rd-s71:15: LC_COLLATE: missing `order_end' keyword",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   }
+  },
+  "s72": {
+   "c": {
+    "collate": {
+     "markers": [
+      "b"
+     ],
+     "md5": "378027e4e164d6e920d4dbef21258051",
+     "size": 10266
+    },
+    "messages": [
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   },
+   "nc": {
+    "collate": {
+     "markers": [
+      "b"
+     ],
+     "md5": "378027e4e164d6e920d4dbef21258051",
+     "size": 10266
+    },
+    "messages": [
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   }
+  },
+  "s73": {
+   "c": {
+    "collate": {
+     "markers": [
+      "a",
+      "b"
+     ],
+     "md5": "2d81bee27af307e129dc10fb6bb4413a",
+     "size": 10374
+    },
+    "messages": [
+     "rd-s73:10: LC_COLLATE: syntax error",
+     "rd-s73:12: LC_COLLATE: missing `order_end' keyword",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   },
+   "nc": {
+    "collate": {
+     "markers": [
+      "a",
+      "b"
+     ],
+     "md5": "2d81bee27af307e129dc10fb6bb4413a",
+     "size": 10374
+    },
+    "messages": [
+     "rd-s73:10: LC_COLLATE: syntax error",
+     "rd-s73:12: LC_COLLATE: missing `order_end' keyword",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   }
+  },
+  "s74": {
+   "c": {
+    "collate": {
+     "markers": [
+      "a"
+     ],
+     "md5": "58f22df8a7b60c8b042c9c9439b57494",
+     "size": 10266
+    },
+    "messages": [
+     "rd-s74:11: LC_COLLATE: syntax error",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   },
+   "nc": {
+    "collate": {
+     "markers": [
+      "a"
+     ],
+     "md5": "58f22df8a7b60c8b042c9c9439b57494",
+     "size": 10266
+    },
+    "messages": [
+     "rd-s74:11: LC_COLLATE: syntax error",
+     "[warning] No definition for LC_CTYPE category found",
+     "[warning] No definition for LC_NUMERIC category found",
+     "[warning] No definition for LC_TIME category found",
+     "[warning] No definition for LC_MONETARY category found",
+     "[warning] No definition for LC_MESSAGES category found",
+     "[warning] No definition for LC_PAPER category found",
+     "[warning] No definition for LC_NAME category found",
+     "[warning] No definition for LC_ADDRESS category found",
+     "[warning] No definition for LC_TELEPHONE category found",
+     "[warning] No definition for LC_MEASUREMENT category found",
+     "[warning] No definition for LC_IDENTIFICATION category found"
+    ],
+    "rc": 1,
+    "timed_out": false,
+    "written": [
+     "LC_ADDRESS",
+     "LC_COLLATE",
+     "LC_CTYPE",
+     "LC_IDENTIFICATION",
+     "LC_MEASUREMENT",
+     "LC_MESSAGES",
+     "LC_MONETARY",
+     "LC_NAME",
+     "LC_NUMERIC",
+     "LC_PAPER",
+     "LC_TELEPHONE",
+     "LC_TIME"
+    ]
+   }
+  },
   "t01": {
    "c": {
     "collate": {
@@ -14415,7 +14733,7 @@
    }
   }
  },
- "content": "33193072e79c63ee029372406f89a0d6e5b7a580b2acd8efbba7a3b768154efe",
- "corpus": "024d519489d2fef91f82be77bf8e72f81325494c9bea4adfebd4e9fd04701060",
+ "content": "3ec1e45eb7cd53d64ac22eafe236c6e62936e9235e8e599ead11b6f0fdfb7ba5",
+ "corpus": "d8f5709ac3bbbc08144bdf93acd6de5204fdb5f89ce61ca0c7dbc1d2253c7f45",
  "format": "reader_oracle/1"
 }

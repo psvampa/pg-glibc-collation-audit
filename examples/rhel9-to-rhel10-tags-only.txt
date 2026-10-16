@@ -55,11 +55,15 @@ Files with changes inside LC_COLLATE: 3
       Č (U+010C)  ḍ (U+1E0D)  Ḍ (U+1E0C)  ğ (U+011F)  Ğ (U+011E)  ḥ (U+1E25)
       Ḥ (U+1E24)  ɣ (U+0263)  Ɣ (U+0194)  ṛ (U+1E5B)  Ṛ (U+1E5A)  ṣ (U+1E63)
       Ṣ (U+1E62)  ṭ (U+1E6D)  Ṭ (U+1E6C)  ẓ (U+1E93)  Ẓ (U+1E92)
+      those are the changed lines; a changed line decides how other lines are
+      read or where other rules sort, so every rule in it can change
   localedata/locales/kab_DZ
       characters in the changed rules (20): ɛ (U+025B)  Ɛ (U+0190)  č (U+010D)
       Č (U+010C)  ḍ (U+1E0D)  Ḍ (U+1E0C)  ğ (U+011F)  Ğ (U+011E)  ḥ (U+1E25)
       Ḥ (U+1E24)  ɣ (U+0263)  Ɣ (U+0194)  ṛ (U+1E5B)  Ṛ (U+1E5A)  ṣ (U+1E63)
       Ṣ (U+1E62)  ṭ (U+1E6D)  Ṭ (U+1E6C)  ẓ (U+1E93)  Ẓ (U+1E92)
+      those are the changed lines; a changed line decides how other lines are
+      read or where other rules sort, so every rule in it can change
   localedata/locales/th_TH
       characters in the changed rules (182): เ (U+0E40)  ก (U+0E01)
       แ (U+0E41)  โ (U+0E42)  ใ (U+0E43)  ไ (U+0E44)  ข (U+0E02)  ฃ (U+0E03)
@@ -92,6 +96,8 @@ Files with changes inside LC_COLLATE: 3
       Y (U+0059)  y (U+0079)  Z (U+005A)  z (U+007A)  ฤ (U+0E24)  ฦ (U+0E26)
       ํ (U+0E4D)  ะ (U+0E30)  ั (U+0E31)  า (U+0E32)  ๅ (U+0E45)  ำ (U+0E33)
       ิ (U+0E34)  ี (U+0E35)  ึ (U+0E36)  ื (U+0E37)  ุ (U+0E38)  ู (U+0E39)
+      those are the changed lines; a changed line decides how other lines are
+      read or where other rules sort, so every rule in it can change
 
 Character sets (localedata/charmaps/): 2 of the 30 that the 487 locale builds
 in SUPPORTED at both tags use differ between glibc-2.34 and glibc-2.39.

@@ -795,16 +795,39 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
             b'b': b'LC_COLLATE\ncodepoint_collation\nEND LC_COLLATE\n'}
         fatal, _, unsettled, collate, _ = self.kept(files)[b'a']
         self.assertIsNone(fatal)
-        counts, ranges, codepoint = collate
+        counts, ranges, codepoint, steer = collate
         self.assertEqual((('a', 4), ('b', 1)), counts)
         self.assertEqual((('a', 5), ('a', 6)), ranges)
         self.assertEqual((('b', 2),), codepoint)
+        # The opening copy and the two lines that hold a range, joined
+        # where they touch; codepoint_collation in b. Neither range opens
+        # its line, so neither has end points to mark (glibc reads a range
+        # only in a statement that opens with the ellipsis).
+        self.assertEqual((('a', (2, 2, 5, 6)), ('b', (2, 2))), steer)
         self.assertEqual(self.fresh(files)[b'a'], self.kept(files)[b'a'])
         # A statement joined over three lines by the escape: the range is on
-        # the line that holds it, which is the one a reader is shown.
+        # the line that holds it, which is the one a reader is shown, and
+        # the instruction is every line of it.
         files = {b'c': (b'LC_COLLATE\norder_start forward\n<U0041> \\\n'
                         b'..\\\n <U0045>\norder_end\nEND LC_COLLATE\n')}
         self.assertEqual((('c', 4),), self.kept(files)[b'c'][3][1])
+        self.assertEqual((('c', (2, 6)),), self.kept(files)[b'c'][3][3])
+
+    def test_a_kept_collate_of_another_shape_is_refused(self):
+        """_check is what stands between a damaged entry and an answer:
+        the shape before backlog 13.36 (three parts), and instruction lines
+        that are not (file, (first, last, ...)) of whole numbers."""
+        fatal, reads, unsettled, collate, meets = self.kept(_small_tree())[b'a']
+        good = (fatal, reads, unsettled, collate, meets)
+        self.assertEqual(good, rc._check(good))
+        for bad in (collate[:3], collate[:3] + ((('b', 2),),),
+                    collate[:3] + ((('b', (2,)),),),
+                    collate[:3] + ((('b', (2, 'x')),),),
+                    collate[:3] + (((7, (2, 2)),),),
+                    collate[:3] + ((('b', [2, 2]),),)):
+            with self.subTest(bad):
+                with self.assertRaises(ValueError):
+                    rc._check((fatal, reads, unsettled, bad, meets))
 
     def test_a_name_is_never_served_another_names_run(self):
         # Two names sharing a long prefix, and a kept entry that names no
@@ -1355,6 +1378,417 @@ _STEP2 = {
 
 
 @needs_clone
+class CollateInstructionsAreTheLinesThatSteer(unittest.TestCase):
+    """Collate.instructions (backlog 13.36): the lines read into an
+    LC_COLLATE struct that steer other lines, so that step 2 can tell a
+    changed rule from a changed instruction. Each line
+    of the file below is one kind; the comment names what the reader
+    must do with it."""
+
+    TEXT = (b'comment_char %\n'                            # 1
+            b'LC_COLLATE\n'                                # 2
+            b'define XX\n'                                 # 3 before the copy
+            b'copy "y"\n'                                  # 4 the opening copy
+            b'collating-symbol <s1>\n'                     # 5
+            b'collating-element <ch> from "<U0063><U0068>"\n'   # 6
+            b'reorder-after <U0041>\n'                     # 7
+            b'<U0042> <U0042>;<U0042>;<U0042>;<U0042>\n'   # 8 own entry
+            b'<s1>\n'                                      # 9 a symbol placed
+            b'<ch>\n'                                      # 10 an element
+            b'UNDEFINED\n'                                 # 11 UNDEFINED
+            b'<U0043>..<U0045>\n'                          # 12 holds a range,
+                                                           # no end points
+            b'reorder-end\n'                               # 13
+            b'ifdef XX\n'                                  # 14 taken
+            b'<U0046>\n'                                   # 15 own entry
+            b'else\n'                                      # 16
+            b'<U0047>\n'                                   # 17 skipped
+            b'endif\n'                                     # 18 where it stops
+            b'ifdef YY\n'                                  # 19 not taken
+            b'order_start forward\n'                       # 20 skipped
+            b'endif\n'                                     # 21
+            b'copy "z"\n'                                  # 22 a copy inside
+            b'collating-symbol \\\n'                       # 23 joined by the
+            b'<s2>\n'                                      # 24 escape
+            b'% reorder-after <U0041>\n'                   # 25 a comment
+            b'END LC_COLLATE\n')
+
+    FILES = {b'x': TEXT,
+             b'y': (b'LC_COLLATE\norder_start forward\n<U0041>\norder_end\n'
+                    b'END LC_COLLATE\n'),
+             b'z': b'LC_COLLATE\n<U0050>\nEND LC_COLLATE\n'}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.build = gr.Build.at(GLIBC_CLONE, NEW, False)
+
+    def steer(self, name):
+        collate = rc.summary(gr.run(name, self.FILES.get,
+                                    _twin(self.build)))[3]
+        return dict(collate[3])
+
+    def test_each_kind_of_line(self):
+        self.assertEqual((3, 7, 9, 14, 16, 16, 18, 19, 21, 24),
+                         self.steer(b'x')['x'])
+
+    def test_undefined_is_one(self):
+        """That an explicit UNDEFINED line changes nothing in the tables
+        is inferred from the source and not measured (glibc study,
+        collate/REPORT.md 5.2): round 1 of the 13.36 review. Counted."""
+        files = {b'u': b'LC_COLLATE\norder_start forward\n<U0041>\n'
+                       b'UNDEFINED\n<U0042>\norder_end\nEND LC_COLLATE\n'}
+        self.assertEqual((2, 2, 4, 4, 6, 6), self.one(files, b'u'))
+
+    def one(self, files, name):
+        collate = rc.summary(gr.run(name, files.get, _twin(self.build)))[3]
+        return dict(collate[3])[name.decode()]
+
+    def test_the_end_points_of_a_range_are_one(self):
+        """handle_ellipsis fills the range from the entry before it to
+        the one after it (ld-collate.c:1072-1095@2.34): change <U0045>
+        and the characters the range fills change, on no line of theirs
+        (round 1 of the 13.36 review). Lines 3 to 5; line 6 is a rule, the
+        control."""
+        files = {b'r': b'LC_COLLATE\norder_start forward\n<U0041>\n..\n'
+                       b'<U0045>\n<U0046>\norder_end\nEND LC_COLLATE\n'}
+        self.assertEqual((2, 5, 7, 7), self.one(files, b'r'))
+
+    def test_a_line_another_names_is_one(self):
+        """Groups b and c of round 1 of the 13.36 review: move the line
+        of a character another statement names, and the rules that name
+        it move with it. Line 3 is named in a weight string (line 6), line
+        4 as a reorder-after anchor (line 10), line 5 as a weight (line 7);
+        line 8 names only itself, the control."""
+        files = {b'n': b'LC_COLLATE\norder_start forward\n<U0041>\n'
+                       b'<U0042>\n<U0043>\n'
+                       b'<U00C1> "<U0041><U0301>";<U00C1>\n'
+                       b'<U00C3> <U0043>;<U00C3>\n'
+                       b'<U0044> <U0044>;<U0044>\norder_end\n'
+                       b'reorder-after <U0042>\n<U0045>\nreorder-end\n'
+                       b'END LC_COLLATE\n'}
+        self.assertEqual((2, 5, 9, 10, 12, 12), self.one(files, b'n'))
+
+    def test_each_kind_of_statement_that_names_a_character(self):
+        """Round 2 of the 13.36 review: a collating element's entry naming
+        A as its weight (line 7), a weight string naming B in eight digits
+        (line 8, the name find_element looks up, ld-collate.c:636-669
+        @2.34), UNDEFINED naming C (line 9). Lines 4, 5 and 6 count."""
+        files = {b'w': b'LC_COLLATE\n'
+                       b'collating-element <ch> from "<U0063><U0068>"\n'
+                       b'order_start forward\n<U0041>\n<U0042>\n<U0043>\n'
+                       b'<ch> <U0041>;<ch>\n<U00C2> "<U00000042>";<U00C2>\n'
+                       b'UNDEFINED <U0043>;IGNORE\norder_end\n'
+                       b'END LC_COLLATE\n'}
+        self.assertEqual((2, 7, 9, 10), self.one(files, b'w'))
+
+    def test_a_range_starts_at_the_last_entry_placed(self):
+        """handle_ellipsis starts the range where glibc's cursor stands,
+        the last entry placed (ld-collate.c:1081-1083@2.34); an
+        order_start or a script does not move it (round 2 of the 13.36
+        review). Line 6 is the start, not line 8; line 5, the entry before
+        it, counts too, in case glibc rejected line 6."""
+        files = {b'g': b'LC_COLLATE\nscript <rd-a>\nscript <rd-b>\n'
+                       b'order_start <rd-a>;forward\n<U0041>\n<U0042>\n'
+                       b'order_end\norder_start <rd-b>;forward\n..\n'
+                       b'<U0045>\norder_end\nEND LC_COLLATE\n'}
+        self.assertEqual((2, 11), self.one(files, b'g'))
+
+    def test_a_range_in_any_other_shape_is_unsettled(self):
+        """Round 4 of the 13.36 review. glibc refuses a character placed a
+        second time (ld-collate.c:1056-1063@2.34) and then fills no range
+        that ends on it (:1086-1090), and its cursor stays on the last
+        entry it accepted; a range opened in state 0, after order_end, or
+        closed by a reorder-after is filled from no line, or not at all.
+        The reader settles none of these."""
+        head = b'LC_COLLATE\norder_start forward\n'
+        tail = b'order_end\nEND LC_COLLATE\n'
+        twice = 'a range whose end points are not each placed once'
+        outside = 'a range outside order_start and order_end, or after another'
+        for text, why in (
+                (head + b'<U005A>\n<U0030>\n<U0041>\n..\n<U005A>\n<U0031>\n'
+                 + tail, twice),
+                (head + b'<U0041>\n<U0042>\n<U0043>\n<U0050>\n<U0042>\n'
+                 b'<U0043>\n..\n<U0058>\n' + tail, twice),
+                (b'LC_COLLATE\n<a>\n..\n<b>\nEND LC_COLLATE\n', outside),
+                (head + b'<U0041>\norder_end\n..\n<U0045>\nEND LC_COLLATE\n',
+                 outside),
+                (head + b'<U0041>\n..\nreorder-after <U0041>\n<U0045>\n'
+                 b'reorder-end\nEND LC_COLLATE\n',
+                 'a range with no entry after it')):
+            with self.subTest(why=why, text=text):
+                r = gr.run(b'q', {b'q': text}.get, _twin(self.build))
+                self.assertIn(why, [w for _, _, w in r.unsettled])
+
+    def test_a_line_that_places_an_end_point_elsewhere_is_one(self):
+        """Round 5 of the 13.36 review, F1: b places <U0045>, the end of
+        a's range, first (the opening copy is read before a's lines), so
+        glibc refuses a's and fills nothing
+        (ld-collate.c:1057, 1086-1090@2.34). Remove b's line and the range
+        fills: b's line 3 counts, in a's run, and a's range is unsettled.
+        A character between the end points (b's <U0043>, line 4) counts
+        too, and line 5, one of the two entries before the range."""
+        files = {b'a': b'LC_COLLATE\ncopy "b"\norder_start forward\n'
+                       b'<U0041>\n..\n<U0045>\n<U0031>\norder_end\n'
+                       b'END LC_COLLATE\n',
+                 b'b': b'LC_COLLATE\norder_start forward\n<U0045>\n'
+                       b'<U0043>\n<U0030>\norder_end\nEND LC_COLLATE\n'}
+        r = gr.run(b'a', files.get, _twin(self.build))
+        self.assertEqual((2, 6), dict(rc.summary(r)[3][3])['b'])
+        self.assertIn('a range whose end points are not each placed once',
+                      [w for _, _, w in r.unsettled])
+
+    def test_a_range_this_reader_does_not_fill_is_unsettled(self):
+        """F2: an absolute range (`...`) enters what it fills in the
+        sequence table and the order (ld-collate.c:1206-1223, 1241-1257
+        @2.34), and a range between two symbols is
+        filled by names this reader does not generate."""
+        for text in (b'LC_COLLATE\norder_start forward\n<U0041>\n...\n'
+                     b'<U0045>\norder_end\nEND LC_COLLATE\n',
+                     b'LC_COLLATE\ncollating-symbol <s1>\n'
+                     b'collating-symbol <s5>\norder_start forward\n<s1>\n'
+                     b'..\n<s5>\norder_end\nEND LC_COLLATE\n'):
+            with self.subTest(text=text):
+                r = gr.run(b'q', {b'q': text}.get, _twin(self.build))
+                self.assertIn('a range this reader does not fill',
+                              [w for _, _, w in r.unsettled])
+
+    def test_a_range_s_start_skips_what_places_nothing(self):
+        """A script line places nothing (ld-collate.c:3045-3089@2.34): the
+        range starts at <U0042>, and is settled; an entry glibc rejects
+        after order_end (state 2, :3484-3485) is no start either, so the
+        lines that count are 3 and 4, not 6."""
+        text = (b'LC_COLLATE\norder_start forward\n<U0041>\n<U0042>\n'
+                b'script <rd-s>\n..\n<U0045>\norder_end\nEND LC_COLLATE\n')
+        r = gr.run(b'q', {b'q': text}.get, _twin(self.build))
+        self.assertEqual([], r.unsettled)
+        files = {b'p': b'LC_COLLATE\norder_start forward\n<U0041>\n<U0042>\n'
+                       b'order_end\n<U0058>\norder_start forward\n..\n'
+                       b'<U0045>\norder_end\nEND LC_COLLATE\n'}
+        self.assertEqual((2, 5, 7, 10), self.one(files, b'p'))
+
+    def test_a_range_closed_by_undefined_is_unsettled(self):
+        """glibc drops a range UNDEFINED follows (ld-collate.c:3696-3704
+        @2.34)."""
+        text = (b'LC_COLLATE\norder_start forward\n<U0041>\n..\n'
+                b'UNDEFINED\n<U0045>\norder_end\nEND LC_COLLATE\n')
+        r = gr.run(b'q', {b'q': text}.get, _twin(self.build))
+        self.assertIn('a range closed by UNDEFINED',
+                      [w for _, _, w in r.unsettled])
+
+    def test_each_section_starts_from_state_0(self):
+        """collate_read's state is its own (ld-collate.c:2558@2.34): the
+        first section ends inside order_start, and the second still
+        starts outside it, where a range is not settled."""
+        text = (b'LC_COLLATE\norder_start forward\n<U0041>\nEND LC_COLLATE\n'
+                b'LC_COLLATE\n<a>\n..\n<b>\nEND LC_COLLATE\n')
+        r = gr.run(b'q', {b'q': text}.get, _twin(self.build))
+        self.assertIn('a range outside order_start and order_end, or after '
+                      'another', [w for _, _, w in r.unsettled])
+
+    def test_a_reorder_after_another_file_reads_inside_a_range(self):
+        """Round 7 of the 13.36 review: z, copied in the middle of x's
+        open range, places no entry but a reorder-after, which sets glibc's
+        cursor to its anchor (ld-collate.c:3305-3355@2.34); x's range is
+        then not filled from its lines."""
+        files = {b'x': b'LC_COLLATE\norder_start forward\n<U0030>\n<U0041>\n'
+                       b'<U0042>\n..\ncopy "z"\n<U0045>\n<U0060>\n'
+                       b'order_end\nEND LC_COLLATE\n',
+                 b'z': b'LC_COLLATE\norder_start forward\norder_end\n'
+                       b'reorder-after <U0041>\nreorder-end\n'
+                       b'END LC_COLLATE\n'}
+        r = gr.run(b'x', files.get, _twin(self.build))
+        self.assertIn(('z', 4, 'a statement of another file read inside an '
+                       'open range'), r.unsettled)
+
+    def test_a_range_after_a_reorder_after_of_another_file(self):
+        """Round 8 of the 13.36 review: y ends with a reorder-after (its
+        reorder-end moves no cursor), which leaves glibc's cursor on its
+        anchor <U0030>
+        (ld-collate.c:3305@2.34), not on <U0042>; x's range starts there,
+        on no entry line the reader can name."""
+        files = {b'x': b'LC_COLLATE\ncopy "y"\nscript <rd-sec>\n'
+                       b'order_start <rd-sec>;forward\n..\n<U0045>\n'
+                       b'order_end\nEND LC_COLLATE\n',
+                 b'y': b'LC_COLLATE\norder_start forward\n<U0030>\n'
+                       b'<U0035>\n<U0038>\n<U0041>\n<U0042>\norder_end\n'
+                       b'reorder-after <U0030>\nreorder-end\nEND LC_COLLATE\n'}
+        r = gr.run(b'x', files.get, _twin(self.build))
+        self.assertIn('a range that starts where no entry line put the '
+                      'cursor', [w for _, _, w in r.unsettled])
+
+    def test_a_range_that_starts_on_an_unsure_cursor(self):
+        """Round 9 of the 13.36 review: a reorder-after whose anchor glibc
+        does not know sets the cursor to NULL and drops the entries after
+        it (ld-collate.c:3355, 3566-3570@2.34); a range right after another
+        starts on the first one's last entry only from glibc 2.34 (:1488);
+        and a decimal range (`....`) is filled in base 10 (:1322). None
+        is a start or a fill this reader is sure of."""
+        start = 'a range that starts where no entry line put the cursor'
+        fill = 'a range this reader does not fill'
+        cases = (
+            ({b'x': b'LC_COLLATE\ncopy "y"\nscript <rd-sec>\n'
+                    b'order_start <rd-sec>;forward\n..\n<U0045>\n'
+                    b'order_end\nEND LC_COLLATE\n',
+              b'y': b'LC_COLLATE\norder_start forward\n<U0030>\n<U0041>\n'
+                    b'order_end\nreorder-after <U0099>\n<U0042>\n'
+                    b'reorder-end\nEND LC_COLLATE\n'}, start),
+            ({b'x': b'LC_COLLATE\norder_start forward\n<U0041>\n..\n'
+                    b'<U0045>\n..\n<U0049>\norder_end\nEND LC_COLLATE\n'},
+             start),
+            ({b'x': b'LC_COLLATE\norder_start forward\n<U0041>\n....\n'
+                    b'<U0049>\norder_end\nEND LC_COLLATE\n'}, fill))
+        for files, why in cases:
+            with self.subTest(why=why, files=files):
+                r = gr.run(b'x', files.get, _twin(self.build))
+                self.assertIn(why, [w for _, _, w in r.unsettled])
+
+    def test_a_range_a_statement_interrupts_is_unsettled(self):
+        """An order_start between the range and the next entry: glibc
+        closes no range at order_start, and this reader does not follow
+        what it does after one (round 4 of the 13.36 review), so the run
+        is unsettled; the lines up to it count."""
+        files = {b'e': b'LC_COLLATE\norder_start forward\n<U0041>\n..\n'
+                       b'order_start forward\n<U0045>\norder_end\n'
+                       b'END LC_COLLATE\n'}
+        self.assertEqual((2, 5, 7, 7), self.one(files, b'e'))
+        r = gr.run(b'e', files.get, _twin(self.build))
+        self.assertEqual(['a range with no entry after it'],
+                         [w for _, _, w in r.unsettled])
+
+    def test_a_range_starts_at_an_entry_a_copy_placed(self):
+        """The cursor is the struct's, which the opening copy shares: the
+        range in x starts at y's <U0042>, line 4 of y (and line 3, the
+        entry before it, counts too)."""
+        files = {b'x': b'LC_COLLATE\ncopy "y"\nscript <rd-sec>\n'
+                       b'order_start <rd-sec>;forward\n..\n<U0045>\n'
+                       b'order_end\nEND LC_COLLATE\n',
+                 b'y': b'LC_COLLATE\norder_start forward\n<U0041>\n<U0042>\n'
+                       b'order_end\nEND LC_COLLATE\n'}
+        collate = rc.summary(gr.run(b'x', files.get, _twin(self.build)))[3]
+        got = dict(collate[3])
+        self.assertEqual((2, 7), got['x'])
+        self.assertEqual((2, 5), got['y'])
+
+    def test_a_range_waits_for_the_next_entry_of_its_own_file(self):
+        """A copy in the middle of the section reads its file with a
+        collate_read of its own, whose was_ellipsis is its own
+        (ld-collate.c:2547@2.34): x's range ends at x's next entry, line
+        6, not at what z places, and z's line counts too. But z's entry
+        becomes the cursor that handle_ellipsis then unlinks in place of
+        the range's own (:1082, doc-sweep of round 6 of the 13.36
+        review): the run is unsettled."""
+        files = {b'x': b'LC_COLLATE\norder_start forward\n<U0041>\n..\n'
+                       b'copy "z"\n<U0045>\norder_end\nEND LC_COLLATE\n',
+                 b'z': b'LC_COLLATE\norder_start forward\n<U0050>\n'
+                       b'order_end\nEND LC_COLLATE\n'}
+        r = gr.run(b'x', files.get, _twin(self.build))
+        got = dict(rc.summary(r)[3][3])
+        self.assertEqual((2, 7), got['x'])
+        self.assertEqual((2, 4), got['z'])
+        self.assertIn('a statement of another file read inside an open range',
+                      [w for _, _, w in r.unsettled])
+
+    def test_a_range_in_a_copy_inside_a_range_ends_each_its_own(self):
+        """Round 3 of the 13.36 review: y's own range, read inside x's,
+        closes at y's <U0050>; x's still waits for x's next entry, line
+        6, which counts. Lines 6 and 7 lie outside y's range (A to P), so
+        only x's range can name line 6; line 7 is the control. y's range
+        opens while x's is open, which glibc does not fill from these
+        lines (the one placeholder is linked twice): unsettled."""
+        files = {b'x': b'LC_COLLATE\norder_start forward\n<U0041>\n..\n'
+                       b'copy "y"\n<U0070>\n<U0071>\norder_end\n'
+                       b'END LC_COLLATE\n',
+                 b'y': b'LC_COLLATE\norder_start forward\n..\n<U0050>\n'
+                       b'order_end\nEND LC_COLLATE\n'}
+        r = gr.run(b'x', files.get, _twin(self.build))
+        self.assertEqual((2, 6, 8, 8), dict(rc.summary(r)[3][3])['x'])
+        self.assertIn('a statement of another file read inside an open range',
+                      [w for _, _, w in r.unsettled])
+
+    def test_a_range_with_no_end_is_unsettled(self):
+        """Closed by order_end or END with no entry after it, or inside a
+        reorder block, a range's end is not a line this reader can name."""
+        for text, why in (
+                (b'LC_COLLATE\norder_start forward\n<U0041>\n..\n'
+                 b'order_end\nEND LC_COLLATE\n',
+                 'a range with no entry after it'),
+                (b'LC_COLLATE\norder_start forward\n<U0041>\n..\n'
+                 b'END LC_COLLATE\n', 'a range with no entry after it'),
+                # order_end closes it; the entry after is too late.
+                (b'LC_COLLATE\norder_start forward\n<U0041>\n..\n'
+                 b'order_end\norder_start forward\n<U0045>\norder_end\n'
+                 b'END LC_COLLATE\n', 'a range with no entry after it'),
+                (b'LC_COLLATE\norder_start forward\n<U0041>\norder_end\n'
+                 b'reorder-after <U0041>\n..\n<U0042>\nreorder-end\n'
+                 b'END LC_COLLATE\n', 'a range outside order_start and '
+                 'order_end, or after another')):
+            with self.subTest(why=why, text=text):
+                r = gr.run(b'q', {b'q': text}.get, _twin(self.build))
+                self.assertIn(why, [w for _, _, w in r.unsettled])
+        r = gr.run(b'q', {b'q': b'LC_COLLATE\norder_start forward\n<U0041>\n'
+                          b'..\n<U0045>\norder_end\nEND LC_COLLATE\n'}.get,
+                   _twin(self.build))
+        self.assertEqual([], r.unsettled, 'the control: a range with an end')
+
+    def test_a_define_in_the_body_is_one(self):
+        """Round 3 of the 13.36 review: a define or undef in the body
+        flips the ifdef below it; lines 4 and 9 count."""
+        files = {b'd': b'LC_COLLATE\norder_start forward\n<U0041>\n'
+                       b'define XX\nifdef XX\n<U0042>\nendif\n<U0043>\n'
+                       b'undef XX\norder_end\nEND LC_COLLATE\n'}
+        self.assertEqual((2, 2, 4, 5, 7, 7, 9, 10), self.one(files, b'd'))
+
+    def test_every_line_that_places_a_named_character_is_one(self):
+        """E is placed on line 4 and again on line 8, in a reorder block
+        (move_entry, ld-collate.c:3607-3633@2.39), and line 5 names it as
+        a weight: both lines count, not the first alone."""
+        files = {b'm': b'LC_COLLATE\norder_start forward\n<U0041>\n'
+                       b'<U0045>\n<U00C9> <U0045>;<U00C9>\norder_end\n'
+                       b'reorder-after <U0041>\n<U0045>\nreorder-end\n'
+                       b'END LC_COLLATE\n'}
+        self.assertEqual((2, 4, 6, 9), self.one(files, b'm'))
+
+    def test_a_line_joined_to_the_next_is_one(self):
+        """lr_next joins a line that ends in the escape to the next
+        (linereader.c:162-171@2.39): `<U0061> /` swallows the unchanged
+        reorder-after below it (round 1 of the 13.36 review, zz_EB), and
+        a comment can swallow a line the same way. Both lines count; a
+        line joined after the section's END is not the section's."""
+        files = {b'j': b'comment_char %\nescape_char /\nLC_COLLATE\n'
+                       b'order_start forward\n<U0061> /\n'
+                       b'reorder-after <U0043>\n<U0062>\n% a note /\n'
+                       b'<U0063>\norder_end\nEND LC_COLLATE\n'
+                       b'% after the section /\n% joined\n'}
+        self.assertEqual((4, 6, 8, 10), self.one(files, b'j'))
+
+    def test_a_line_joined_in_a_skipped_branch_is_one(self):
+        """skip_to's lr_ignore_rest reads the continued line too
+        (linereader.c:133-136@2.34): `<U0047> /` in a branch not taken
+        takes the endif with it, and everything to END is skipped (round
+        1 of the 13.36 review, zz_E7). The reader records the join."""
+        files = {b'k': b'comment_char %\nescape_char /\nLC_COLLATE\n'
+                       b'order_start forward\nifdef NOPE\n<U0047> /\n'
+                       b'endif\n<U0048>\norder_end\nEND LC_COLLATE\n'}
+        self.assertEqual((4, 7), self.one(files, b'k'))
+
+    def test_a_conditional_inside_a_skipped_branch_is_one(self):
+        """skip_to steps over a nested ifdef to its endif (ld-collate.c:
+        2509-2516@2.34): edit line 3 and the endif on line 5 ends the skip
+        instead, so other lines are read."""
+        files = {b'v': (b'LC_COLLATE\nifdef YY\nifdef ZZ\n<U0041>\nendif\n'
+                        b'else\n<U0042>\nendif\nEND LC_COLLATE\n')}
+        collate = rc.summary(gr.run(b'v', files.get, _twin(self.build)))[3]
+        self.assertEqual((('v', (2, 3, 5, 6, 8, 8)),), collate[3])
+
+    def test_the_lines_of_a_copied_file_are_its_own(self):
+        """y and z are read into x's struct; their lines are theirs. y's
+        <U0041> on line 3 is the anchor of x's reorder-after."""
+        got = self.steer(b'x')
+        self.assertEqual((2, 4), got['y'])
+        self.assertNotIn('z', got, '<U0050> names only itself')
+
+
+@needs_clone
 class StepTwoReadsWhereLocaledefReads(unittest.TestCase):
     """Step 2 on two commits on top of glibc-2.39 (_harness.glibc_commit):
     where a change sits against LC_COLLATE is decided by the sections
@@ -1450,6 +1884,14 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
                           b'escape_char \\\n')
         files['zz_CP'] = _HEAD + b'LC_COLLATE\ncopy "zz_EJ"\nEND LC_COLLATE\n'
         files['zz_MI'] = _HEAD + b'LC_COLLATE\ncopy "zz_NONE"\nEND LC_COLLATE\n'
+        # Lines 6-8: a reorder only a locale that defines ZZ_ON reads
+        # (backlog 13.36).
+        files['zz_BR'] = _HEAD + (b'LC_COLLATE\ncopy "iso14651_t1"\n'
+                                  b'ifdef ZZ_ON\nreorder-after <U0041>\n'
+                                  b'<U0042>\nreorder-end\nendif\n'
+                                  b'END LC_COLLATE\n')
+        files['zz_DF'] = _HEAD + (b'LC_COLLATE\ndefine ZZ_ON\n'
+                                  b'copy "zz_BR"\nEND LC_COLLATE\n')
         files.update(_RETURNS)
         cls.repo, cls.ref = _harness.glibc_commit(NEW, files, cls.tmp)
         cls.paths, cls.ids = g.list_tree_ids(cls.repo, cls.ref, [])
@@ -1503,8 +1945,7 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
         own run or zz_CP's reads it: one pair, two runs."""
         ej = self.facts['zz_EJ']
         self.assertEqual([(0x23, 0x5c)], ej.reading())
-        self.assertEqual({'zz_CP': ((0x23, 0x5c),), 'zz_EJ': ((0x23, 0x5c),)},
-                         ej.runs())
+        self.assertEqual({'zz_CP', 'zz_EJ'}, {r[4] for r in ej.collate})
         self.assertEqual([(3, 5, 0x25, 0x2f, 'zz_CP')],
                          self.facts['zz_CP'].collate)
 
@@ -1516,9 +1957,14 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
         self.assertIsNone(rf.unresolved)
         self.assertEqual([(5, 7, 0x23, 0x5c, 'zz_RB'),
                           (5, 7, 0x23, 0x2f, 'zz_RF')], rf.collate)
-        self.assertEqual({'zz_RB': ((0x23, 0x5c),), 'zz_RF': ((0x23, 0x2f),)},
-                         rf.runs())
         self.assertIsNone(rf.chars_at(6))
+
+    def test_a_branch_only_a_copier_takes_is_an_instruction_too(self):
+        """zz_BR's own run skips lines 6-8 (`ifdef ZZ_ON` not defined)
+        and zz_DF's reads them: the file's answer is every run's, or a
+        changed reorder-after there would read as a rule of its own."""
+        self.assertEqual([(4, 6), (8, 9)], self.facts['zz_BR'].instructions)
+        self.assertEqual([(4, 5)], self.facts['zz_DF'].instructions)
 
     def test_a_run_that_does_not_finish_or_settle_is_named(self):
         self.assertEqual('localedef cannot open zz_NONE',
@@ -1539,7 +1985,8 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
                     self.assertTrue(got.collate, name)
 
     def kept(self, facts):
-        return {n: (f.collate, f.unresolved) for n, f in facts.items()}
+        return {n: (f.collate, f.unresolved, f.instructions)
+                for n, f in facts.items()}
 
     def test_a_kept_answer_is_the_answer(self):
         self.assertEqual(self.kept(self.facts), self.kept(self.ask()))
@@ -1550,14 +1997,22 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
         self.ask()
         with open(path) as fh:
             kept = json.load(fh)
-        for bad in ({}, [], {'zz_EJ': [[], None]},
-                    dict(kept, zz_EJ=[[[1, 'x', 35, 92, 'zz_EJ']], None]),
-                    dict(kept, zz_EJ=[[[1, 10, 35, 92]], None]),
-                    dict(kept, zz_EJ=[[[1, 10, '#', 92, 'zz_EJ']], None]),
-                    dict(kept, zz_EJ=[[[1, 10, 35, None, 'zz_EJ']], None]),
-                    dict(kept, zz_EJ=[[[1, 10, 35, 92, 7]], None]),
-                    dict(kept, zz_EJ=[[], 7]),
-                    dict(kept, zz_EJ=[[], None, None])):
+        for bad in ({}, [], {'zz_EJ': [[], None, []]},
+                    dict(kept, zz_EJ=[[[1, 'x', 35, 92, 'zz_EJ']], None, []]),
+                    dict(kept, zz_EJ=[[[1, 10, 35, 92]], None, []]),
+                    dict(kept, zz_EJ=[[[1, 10, '#', 92, 'zz_EJ']], None, []]),
+                    dict(kept, zz_EJ=[[[1, 10, 35, None, 'zz_EJ']], None,
+                                      []]),
+                    dict(kept, zz_EJ=[[[1, 10, 35, 92, 7]], None, []]),
+                    dict(kept, zz_EJ=[[], 7, []]),
+                    # the shape before backlog 13.36, and instruction
+                    # lines that are not (first, last) of whole numbers
+                    dict(kept, zz_EJ=[[], None]),
+                    dict(kept, zz_EJ=[[], None, None]),
+                    dict(kept, zz_EJ=[[], None, [[1]]]),
+                    dict(kept, zz_EJ=[[], None, [[1, 'x']]]),
+                    dict(kept, zz_EJ=[[], None, [1, 2]]),
+                    dict(kept, zz_EJ=[[], None, [], 'x'])):
             with open(path, 'w') as fh:
                 json.dump(bad, fh)
             self.assertEqual(self.kept(self.facts), self.kept(self.ask()),
@@ -1577,10 +2032,11 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
             kept = json.load(fh)
         try:
             with open(path, 'w') as fh:
-                json.dump(dict(kept, zz_EJ=[[[2, 3, 35, 92, 'zz_EJ']], None]),
-                          fh)
-            self.assertEqual([(2, 3, 35, 92, 'zz_EJ')],
-                             self.ask()['zz_EJ'].collate)
+                json.dump(dict(kept, zz_EJ=[[[2, 3, 35, 92, 'zz_EJ']], None,
+                                            [[4, 5]]]), fh)
+            got = self.ask()['zz_EJ']
+            self.assertEqual([(2, 3, 35, 92, 'zz_EJ')], got.collate)
+            self.assertEqual([(4, 5)], got.instructions)
         finally:
             os.unlink(path)
 
