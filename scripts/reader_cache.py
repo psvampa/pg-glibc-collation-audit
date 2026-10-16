@@ -25,8 +25,7 @@ Why a kept answer is the answer:
 
 What is kept is run()'s answer without the tokens of each LC_COLLATE
 statement: those are megabytes per locale. The kept collate holds what the
-steps read from them (summary(), below): how many statements each file
-gave, and where a range or codepoint_collation was read. The answers are
+steps read from them (summary(), below). The answers are
 written as JSON, not pickle, so a damaged or planted entry can be wrong
 data, never code; only its shape is checked.
 
@@ -118,7 +117,7 @@ def summary(r):
     unsettled  (file, line, why), in order
     collate    None when Run.collate is (no LC_COLLATE stored, a fatal
                run, or one stopped where glibc reads outside its buffer),
-               else (counts, ranges, codepoint):
+               else (counts, ranges, codepoint, instructions):
                  counts     (file, how many statements it gave), sorted
                  ranges     (file, line) of every token .., ... or ....
                             in a statement, sorted, each line once: the
@@ -126,6 +125,15 @@ def summary(r):
                             (the `(2)` forms are charmap syntax)
                  codepoint  (file, line) of each codepoint_collation
                             statement, in reading order
+                 instructions
+                            (file, (first, last, first, last, ...)) of
+                            the lines Collate.instructions holds, sorted by
+                            file, the stretches of one file joined where
+                            they touch (join_spans) and flat: as (file,
+                            first, last) rows, iso14651_t1_common's
+                            stretches in every run that reads it made a
+                            tree's answers much larger. What step 2 asks
+                            of a changed line (backlog 13.36)
     meets      (Run.met, Run.words sorted): what another build could read
                differently in this run (glibc_tree.across)
     """
@@ -154,12 +162,34 @@ def summary(r):
                     and toks[0].kwtok == 'tok_codepoint_collation':
                 codepoint.append((fname, line))
         collate = (tuple(sorted(counts.items())), tuple(sorted(ranges)),
-                   tuple(codepoint))
+                   tuple(codepoint), _instructions(r.collate.instructions))
     return _canon((fatal, tuple(reads), tuple(r.unsettled), collate,
                    (r.met, tuple(sorted(r.words)))))
 
 
 _RANGES = frozenset(('ellipsis2', 'ellipsis3', 'ellipsis4'))
+
+
+def join_spans(spans):
+    """[(first, last)], sorted, the ones that overlap or touch joined
+    into one: iso14651_t1_common's collating-symbol lines in a row are
+    one."""
+    out = []
+    for a, b in sorted(spans):
+        if out and a <= out[-1][1] + 1:
+            if b > out[-1][1]:
+                out[-1] = (out[-1][0], b)
+        else:
+            out.append((a, b))
+    return out
+
+
+def _instructions(lines):
+    by = {}
+    for f, a, b in lines:
+        by.setdefault(f, []).append((a, b))
+    return tuple((f, tuple(n for span in join_spans(v) for n in span))
+                 for f, v in sorted(by.items()))
 
 
 def _canon(x):
@@ -273,11 +303,17 @@ def _check(s):
             isinstance(u, tuple) and len(u) == 3 for u in unsettled):
         raise ValueError('bad unsettled')
     if collate is not None and not (
-            isinstance(collate, tuple) and len(collate) == 3
+            isinstance(collate, tuple) and len(collate) == 4
             and all(isinstance(part, tuple) and all(
                 isinstance(x, tuple) and len(x) == 2
                 and isinstance(x[0], str) and isinstance(x[1], int)
-                for x in part) for part in collate)):
+                for x in part) for part in collate[:3])
+            and isinstance(collate[3], tuple) and all(
+                isinstance(x, tuple) and len(x) == 2
+                and isinstance(x[0], str) and isinstance(x[1], tuple)
+                and len(x[1]) % 2 == 0
+                and all(isinstance(n, int) for n in x[1])
+                for x in collate[3])):
         raise ValueError('bad collate')
     if not (isinstance(meets, tuple) and len(meets) == 2
             and isinstance(meets[0], bool) and isinstance(meets[1], tuple)

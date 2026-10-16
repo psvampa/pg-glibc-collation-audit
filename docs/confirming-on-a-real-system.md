@@ -45,8 +45,9 @@ Derive them from that rule. For a `localedef` change that means the boundaries
 of the affected range. Under each locale it flags, step 2 lists the characters
 its changed rules name, or says it could not identify them and that the locale
 must be considered suspicious, or, when the file is read with other comment or
-escape characters, is read differently by the two versions of glibc, or may not
-be read as written, that every rule in it can change.
+escape characters, is read differently by the two versions of glibc, may not
+be read as written, or has a changed line that decides how other lines are
+read or where other rules sort, that every rule in it can change.
 For a locale it lists
 because its character set changed, it prints which of the characters its rules
 name the character set changed, or why it could not compare them. For a locale
@@ -60,7 +61,9 @@ list.
 Step 2's list is where to start, not proof that every character on it moved. A
 rule that was rewritten names everything it touches, weights included, so
 three characters from the list that sort the same on both machines do not
-clear the locale.
+clear the locale. And when step 2 says every rule in a file can change, the
+list is not all the values to test. Read the file's rules, and those of the
+files it copies or that copy it.
 
 The worked example is `ko_KR` between glibc 2.28 and 2.34, where the whole
 difference is the last syllable of the Hangul block against any Hanja.
@@ -70,7 +73,7 @@ failure this step exists to avoid. The characters, and what they print on each
 build, are in
 [results.md](results.md#the-ko_kr-mechanism-and-its-minimal-test-case).
 
-For a locale step 3 adds, the characters are the ones step 2 lists under the
+For a locale step 3 adds, start from the characters step 2 lists under the
 file step 3 says it reaches. For a locale that only steps 4, 9 or 10 flagged,
 where step 11 names no characters, read its source and the files it copies.
 Two kinds of character can move there with no file changing: one inside an

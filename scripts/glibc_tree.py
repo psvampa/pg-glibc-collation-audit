@@ -11,7 +11,8 @@ module answers from those runs and from nothing else (backlog 15.2):
     every `copy` as glibc follows it, with the state glibc carries from file
     to file (one run per locale, never a graph pieced together from each
     file read alone: backlog 15.1 measured that shortcut wrong);
-  - where a range (.., ..., ....) or codepoint_collation was read;
+  - where a range (.., ..., ....) or codepoint_collation was read, and
+    which lines of each file steer other lines (step 2, backlog 13.36);
   - which runs this reader could not settle, or that localedef does not
     finish, and why. Such a locale is never reported as clear: the steps
     list it, with `!!`.
@@ -281,7 +282,7 @@ class Tree(object):
             collate = self._collate(name)
             if name in bad or collate is None:
                 continue
-            counts, _, codepoint = collate
+            counts, _, codepoint, _ = collate
             if sum(n for _, n in counts) != 1 or len(codepoint) != 1:
                 continue
             if codepoint[0][0] == name:
@@ -343,31 +344,34 @@ class Facts(object):
                 section to the top level, ld-ctype.c:2128-2139@2.34).
     unresolved  why the file's own run is not settled (Tree.unresolved), or
                 None.
+    instructions
+                [(first, last)], sorted and joined: the lines of the file
+                that steer other lines in some run that reads it
+                (glibc_reader.Collate.instructions). A changed line among
+                them can move rules on lines that did not change (backlog
+                13.36).
     """
 
-    __slots__ = ('collate', 'unresolved')
+    __slots__ = ('collate', 'unresolved', 'instructions')
 
-    def __init__(self, collate, unresolved):
+    def __init__(self, collate, unresolved, instructions):
         self.collate = collate
         self.unresolved = unresolved
+        self.instructions = instructions
 
     def reading(self):
         """The (comment, escape) pairs LC_COLLATE is read with, each once,
         in the order of the sections."""
         return list(dict.fromkeys((c, e) for _, _, c, e, _ in self.collate))
 
-    def runs(self):
-        """{run: ((comment, escape), ...)}: the pairs each run reads the
-        sections with, in their order."""
-        out = {}
-        for _, _, c, e, run in self.collate:
-            out.setdefault(run, []).append((c, e))
-        return {run: tuple(pairs) for run, pairs in out.items()}
-
     def inside(self, line):
         """Is `line` inside one of the LC_COLLATE sections?"""
         return any(start <= line and (end is None or line <= end)
                    for start, end, _, _, _ in self.collate)
+
+    def instruction(self, line):
+        """Is `line` on one of the instructions?"""
+        return any(a <= line <= b for a, b in self.instructions)
 
     def chars_at(self, line):
         """(comment, escape) `line` is read with, or None when it is in no
@@ -375,24 +379,6 @@ class Facts(object):
         pairs = {(c, e) for start, end, c, e, _ in self.collate
                  if start <= line and (end is None or line <= end)}
         return pairs.pop() if len(pairs) == 1 else None
-
-
-def read_otherwise(old, new):
-    """Do the two sides read a file's LC_COLLATE with other characters?
-    Yes when the pairs differ, and when one run that reads the file at both
-    tags reads it with other pairs: two runs that swap their pairs leave
-    the pairs as they were and change both orders (false-negative-reviewer,
-    round 2 of 15.2 B3). A run that reads the file at one tag only is a
-    locale added, removed or changed, which step 2 judges on its own; one
-    that reads another number of sections reads other lines, which is
-    another question (filter_lc_collate_changes._sections_differ), and is
-    not compared run by run (doc-sweep of 15.2 B3). The pairs as a whole
-    still answer yes when a section read with a pair of its own is gone."""
-    if set(old.reading()) != set(new.reading()):
-        return True
-    a, b = old.runs(), new.runs()
-    return any(a[run] != b[run] and len(a[run]) == len(b[run])
-               for run in a.keys() & b.keys())
 
 
 def chars_before(directives, line):
@@ -412,15 +398,21 @@ def chars_before(directives, line):
 def _facts(tree):
     bad = tree.unresolved()
     collate = {n: set() for n in tree.names}
+    steer = {n: set() for n in tree.names}
     for name in tree.names:
-        for fr in tree._runs[name][1]:
+        run = tree._runs[name]
+        for fr in run[1]:
             for sec in fr[3]:
                 f = _name(sec[1])
                 if sec[0] == 'LC_COLLATE' and sec[5] and f in collate:
                     collate[f].add((sec[2], sec[3])
                                    + chars_before(fr[2], sec[2]) + (name,))
+        for f, flat in (run[3][3] if run[3] is not None else ()):
+            if f in steer:
+                steer[f].update(zip(flat[0::2], flat[1::2]))
     return {n: Facts(sorted(collate[n], key=lambda r: (r[4], r[0])),
-                     bad.get(n)) for n in tree.names}
+                     bad.get(n), rc.join_spans(steer[n]))
+            for n in tree.names}
 
 
 with open(os.path.abspath(__file__), 'rb') as _fh:
@@ -449,9 +441,9 @@ def _load_facts(path, names):
         return None
     out = {}
     for n, v in got.items():
-        if not (isinstance(v, list) and len(v) == 2):
+        if not (isinstance(v, list) and len(v) == 3):
             return None
-        collate, why = v
+        collate, why, steer = v
         if not (isinstance(collate, list) and all(
                 isinstance(r, list) and len(r) == 5
                 and isinstance(r[0], int)
@@ -459,9 +451,13 @@ def _load_facts(path, names):
                 and isinstance(r[2], int) and isinstance(r[3], int)
                 and isinstance(r[4], str)
                 for r in collate)
-                and (why is None or isinstance(why, str))):
+                and (why is None or isinstance(why, str))
+                and isinstance(steer, list) and all(
+                    isinstance(x, list) and len(x) == 2
+                    and all(isinstance(y, int) for y in x) for x in steer)):
             return None
-        out[n] = Facts([tuple(r) for r in collate], why)
+        out[n] = Facts([tuple(r) for r in collate], why,
+                       [tuple(x) for x in steer])
     return out
 
 
@@ -469,9 +465,9 @@ def file_facts(repo, tag, paths, ids, build, cache_dir=None):
     """{name: Facts} for every locale file at `tag` read for `build`.
 
     `paths` and `ids` are list_tree_ids' answer for the tag, which step 2
-    has already, so a kept answer costs no file read: the whole tree's
-    runs are a JSON of about 3 MB per tag, and loading two of them cost
-    each run of step 2 about 0.5 s (backlog 15.2 B3, measured). The answer
+    has already, so a kept answer costs no file read: loading the whole
+    tree's runs for two tags cost each run of step 2 about 0.5 s (backlog
+    15.2 B3, measured). The answer
     is derived from those runs and nothing else, kept next to them under
     the reader's version, the build and this file's hash; an entry that
     cannot be read, or reads as another shape or other names, is computed
@@ -496,7 +492,8 @@ def file_facts(repo, tag, paths, ids, build, cache_dir=None):
         os.makedirs(os.path.dirname(path), exist_ok=True)
     except OSError:
         return got
-    rc._write_json(path, {n: [[list(r) for r in f.collate], f.unresolved]
+    rc._write_json(path, {n: [[list(r) for r in f.collate], f.unresolved,
+                              [list(x) for x in f.instructions]]
                           for n, f in got.items()})
     return got
 

@@ -2317,8 +2317,11 @@ class Step2RemovalListOnThePublishedPairs(unittest.TestCase):
 class AGainedBlockThatNamesNoCharacter(unittest.TestCase):
     """The case the attempt before it got wrong: a file
     that gains a block naming no character -- a bare `copy` -- was reported as
-    "no character is named", which loses that it gained a sort order. It gets
-    the warning. Fabricated, because no file gains a block in a pinned pair."""
+    "no character is named", which loses that it gained a sort order. Its
+    changed lines are a copy and where the block starts and ends, so it is
+    told every rule in it can change (backlog 13.36); before that, it got
+    the could-not-identify warning. Fabricated, because no file gains a
+    block in a pinned pair."""
 
     def setUp(self):
         tmp = tempfile.mkdtemp(prefix='pg-glibc-gained-copy-')
@@ -2332,15 +2335,15 @@ class AGainedBlockThatNamesNoCharacter(unittest.TestCase):
         git(self.repo, 'commit', '-q', '-am', 't2')
         git(self.repo, 'tag', 't2')
 
-    def test_it_gets_the_warning_not_an_empty_list(self):
+    def test_it_is_told_every_rule_can_change_not_an_empty_list(self):
         rc, out = run_script('filter_lc_collate_changes.py', 't1', 't2',
                              '--repo', self.repo,
                              env_extra={'PG_GLIBC_AUDIT_OUT': self.out_dir})
         self.assertEqual(rc, 0, out)
         self.assertIn('GAINED an LC_COLLATE block', out)
-        self.assertIn('localedata/locales/x could not identify which characters '
-                      'changed, but this locale must be considered suspicious',
-                      flat(out))
+        self.assertIn('localedata/locales/x a changed line decides how other '
+                      'lines are read or where other rules sort, so every '
+                      'rule in it can change', flat(out))
         self.assertNotIn('characters in the changed rules', flat(out))
 
 

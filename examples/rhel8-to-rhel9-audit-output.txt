@@ -85,6 +85,8 @@ Files with changes inside LC_COLLATE: 2
       ୟ (U+0B5F)  ଽ (U+0B3D)  ା (U+0B3E)  ି (U+0B3F)  ୀ (U+0B40)  ୁ (U+0B41)
       ୂ (U+0B42)  ୃ (U+0B43)  େ (U+0B47)  ୈ (U+0B48)  ୋ (U+0B4B)  ୌ (U+0B4C)
       ୖ (U+0B56)  ୗ (U+0B57)
+      those are the changed lines; a changed line decides how other lines are
+      read or where other rules sort, so every rule in it can change
   localedata/locales/sv_SE
       characters in the changed rules (2): W (U+0057)  w (U+0077)
 

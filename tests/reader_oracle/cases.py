@@ -637,6 +637,28 @@ def _cases():
     add('s70', S, b'comment_char %\nescape_char /\nLC_IDENTIFICATION\n'
         b'title "t"\nEND LC_IDENTIFICATION % a /\n ' + coll('a') + b' '
         + coll('b'), 'a swallowed LC_COLLATE line, then a second section')
+    # An order line that ends in the escape joins the line below it (round
+    # 1 of the 13.36 review): in a branch not taken, skip_to's
+    # lr_ignore_rest takes the endif with it and mk-b is skipped; in the
+    # order, it takes the order_end below it, and mk-b, after it, is still
+    # placed. Measured on the three builds on 2026-10-16 and not kept: the
+    # same join in a reorder block placed mk-b after mk-a where the control
+    # drops it (the markers do not see a reorder block, backlog 15.3), and
+    # one taking `<mk-b>` as mk-a's weight crashed localedef -c (signal
+    # 11, "symbol `mk-b' not defined"), a weight the reader does not model.
+    esc = b'comment_char %\nescape_char /\n'
+    skip = (esc + HEAD + D('a') + D('b') + ORDER_HEAD + b'ifdef RD_NOPE\n'
+            + b'<mk-a> /\nendif\n' + O('b') + ORDER_TAIL + END)
+    add('s71', S, skip, 'an order line ending in the escape, in an ifdef '
+        'branch not taken, joins the endif below it')
+    add('s72', S, skip.replace(b'<mk-a> /\n', b'<mk-a>\n'),
+        'control for s71: no escape')
+    joined = (esc + HEAD + D('a') + D('b') + ORDER_HEAD + b'<mk-a> /\n'
+              + b'order_end\n' + O('b') + END)
+    add('s73', S, joined, 'an order line ending in the escape joins the '
+        'order_end below it')
+    add('s74', S, joined.replace(b'<mk-a> /\n', b'<mk-a>\n'),
+        'control for s73: no escape')
     cond =(HEAD + D('t') + D('v') + ORDER_HEAD + b'ifdef YES\n' + O('t')
             + b'else\n' + O('v') + b'endif\n' + ORDER_TAIL + END)
     add('c31', P, {'@': HEAD + b'define YES\ncopy "@-t"\n' + END,

@@ -90,7 +90,7 @@ def _cannot_tell():
     return None
 
 
-def classify_change(old_text, new_text, old, new, ranges,
+def classify_change(old_text, new_text, old, new, ranges, diff,
                     early=(_cannot_tell, _cannot_tell)):
     """How does one content-changed file relate to LC_COLLATE?
 
@@ -98,7 +98,10 @@ def classify_change(old_text, new_text, old, new, ranges,
     localedef reads its LC_COLLATE and with which comment and escape
     characters, from what glibc_reader read (backlog 15.2 B3); `new` is
     None when the new side was not read. The texts are the lines those
-    sections are cut from, and what lc_collate_unread searches.
+    sections are cut from, and what lc_collate_unread searches. `ranges`
+    are the old side's hunks (parse_diff) and `diff` the file's diff
+    sections, -U0 (diff_sections), which place each section's lines on
+    the other side (_line_map).
 
     Returns one of:
       'unsettled'      -- the reader could not settle how localedef reads
@@ -115,8 +118,9 @@ def classify_change(old_text, new_text, old, new, ranges,
                           (round 4 of the 15.2 B3 review)
       'gained-collate' -- localedef read no LC_COLLATE section in the old
                           file and reads one in the new
-      'reading'        -- as many sections, and the comment or escape
-                          character one of them is read with changed
+      'reading'        -- as many sections, and a section both sides read
+                          is read with another comment or escape character
+                          (_read_otherwise)
       'unread'         -- no hunk falls inside the old sections, but
                           localedef reads no LC_COLLATE section in the new
                           file; or the block and its characters did not
@@ -171,7 +175,8 @@ def classify_change(old_text, new_text, old, new, ranges,
         return 'unread'
     if new is not None and _sections(old) != _sections(new):
         return 'collate'
-    if new is None or glibc_tree.read_otherwise(old, new):
+    if new is None or (new_text is not None and _read_otherwise(
+            old, old_text, new, new_text, diff)):
         return 'reading'
     # After 'reading': the characters a section is read with are its text
     # too, and a change to them has its own answer.
@@ -192,8 +197,8 @@ def _sections(facts):
 
 def _sections_differ(old, old_text, new, new_text):
     """Does a run both sides have read other lines as this file's
-    LC_COLLATE sections? As glibc_tree.read_otherwise compares the
-    characters: a run on one side only is another locale copying the file
+    LC_COLLATE sections? As _read_otherwise compares the characters: a
+    run on one side only is another locale copying the file
     or no longer copying it, not a change to what the file says."""
     def texts(facts, text):
         lines, out = text.split('\n'), {}
@@ -212,6 +217,20 @@ def _sections_moved(old, old_text, new, new_text, diff):
     business (changed_characters), and comparing whole texts named it as
     a section read in place of another (doc-sweep of 15.2 B3). `diff` is
     the file's diff sections, -U0."""
+    to_new, added = _line_map(diff)
+    for run in _common_runs(old, new):
+        moved = {to_new(n) for n in _run_lines(old, old_text, run)} - {None}
+        kept = set(_run_lines(new, new_text, run)) - added
+        if moved != kept:
+            return True
+    return False
+
+
+def _line_map(diff):
+    """(to_new, added) from a file's diff sections, -U0: to_new gives the
+    new side's number of an old line the diff did not change, or None for
+    one it removed or replaced; `added` holds the new side's lines a hunk
+    wrote."""
     # findall gives '' for a length git leaves out, which means 1.
     hunks = sorted((int(a), int(b) if b else 1, int(c), int(d) if d else 1)
                    for text in diff for a, b, c, d in _BOTH_RE.findall(text))
@@ -225,18 +244,40 @@ def _sections_moved(old, old_text, new, new_text, diff):
             if (b and a + b <= line) or (not b and a < line):
                 shift += d - b
         return line + shift
+    return to_new, added
 
-    def lines(facts, text, run):
-        last = text.count('\n') + 1
-        return {n for start, end, _, _, r in facts.collate if r == run
-                for n in range(start, (end if end is not None else last) + 1)}
-    runs_old = {r for _, _, _, _, r in old.collate}
-    runs_new = {r for _, _, _, _, r in new.collate}
-    for run in runs_old & runs_new:
-        moved = {to_new(n) for n in lines(old, old_text, run)} - {None}
-        kept = lines(new, new_text, run) - added
-        if moved != kept:
-            return True
+
+def _run_lines(facts, text, run):
+    """{line: (comment, escape)} for every line of the LC_COLLATE sections
+    `run` reads in this file, with the pair it reads that section with."""
+    last = text.count('\n') + 1
+    return {n: (c, e) for start, end, c, e, r in facts.collate if r == run
+            for n in range(start, (end if end is not None else last) + 1)}
+
+
+def _common_runs(old, new):
+    return ({r for _, _, _, _, r in old.collate}
+            & {r for _, _, _, _, r in new.collate})
+
+
+def _read_otherwise(old, old_text, new, new_text, diff):
+    """Does a run both sides have read a line the diff did not change,
+    inside this file's LC_COLLATE at both tags, with another comment or
+    escape character? Line by line through _line_map, never the pairs as
+    a whole: a section that goes with a pair of its own leaves the others
+    read as before, and the `!!` would name the wrong cause (backlog 13.36
+    (a)); a run that reads one section with another pair and gains a
+    second one is still found, as are two runs that swap their pairs
+    (round 2 of the 15.2 B3 review). A section of changed lines only is
+    the changed lines' business: each is read with its own side's
+    characters (changed_characters)."""
+    to_new, _ = _line_map(diff)
+    for run in _common_runs(old, new):
+        after = _run_lines(new, new_text, run)
+        for n, pair in _run_lines(old, old_text, run).items():
+            m = to_new(n)
+            if m is not None and m in after and after[m] != pair:
+                return True
     return False
 
 
@@ -313,7 +354,8 @@ def facts_of(facts, renamed_to, path):
 
     A Facts row names the run that read it, the locale built: a locale
     renamed between the tags is two names for one run, and every
-    comparison by run (read_otherwise, _sections_differ) would find it on
+    comparison by run (_read_otherwise, _sections_moved, _sections_differ)
+    would find it on
     one side only and compare nothing for it. So every renamed run on the
     new side takes its old name, the file's own and any locale that copies
     it (rounds 5 and 6 of the 15.2 B3 review). git reports a rename only
@@ -328,23 +370,26 @@ def facts_of(facts, renamed_to, path):
             for o, n in renamed_to.items()}
     if new is not None and back:
         new = glibc_tree.Facts([r[:4] + (back.get(r[4], r[4]),)
-                                for r in new.collate], new.unresolved)
+                                for r in new.collate], new.unresolved,
+                               new.instructions)
     return facts[0][name], new
 
 
-def judge(content_changed, old_contents, new_contents, hunks, renamed_to,
-          facts, early=(_cannot_tell, _cannot_tell)):
+def judge(content_changed, old_contents, new_contents, hunks, sections,
+          renamed_to, facts, early=(_cannot_tell, _cannot_tell)):
     """[(old_path, verdict)] for every content-changed file.
 
     `new_contents` is keyed by the path at the NEW tag, as read_blobs_at
     returns it; the lookup goes through `renamed_to` so a renamed file finds
-    its own new text, and its own Facts (facts_of). `early` goes to
-    classify_change as it is.
+    its own new text, and its own Facts (facts_of). `hunks` is parse_diff's
+    answer and `sections` diff_sections'. `early` goes to classify_change
+    as it is.
     """
     return [(path, classify_change(old_contents[path],
                                    new_contents.get(renamed_to.get(path, path)),
                                    *facts_of(facts, renamed_to, path),
-                                   hunks.get(path, []), early))
+                                   hunks.get(path, []),
+                                   sections.get(path, []), early))
             for path in content_changed]
 
 
@@ -388,8 +433,9 @@ def unread_above(changed, old_contents, new_contents, renamed_to, early,
     either tag (glibc_locale_data.lc_collate_unread), or that localedef
     reads an LC_COLLATE section in at the old tag and none in at the new
     one, or other lines as its sections (`facts`, the pair main has; the
-    'unread' verdict of classify_change and its section rules, which the
-    line search behind lc_collate_unread does not always see, doc-sweep of
+    'unread' verdict of classify_change and the lines it reads as
+    sections, which the line search behind lc_collate_unread does not
+    always see, though not their number, backlog 13.36 (b); doc-sweep of
     15.2 B3; `sections`, diff_sections' answer, says which lines are
     the same lines). Not only the 'unread' verdict,
     for read_otherwise's reason: a file whose block also changed is
@@ -410,14 +456,17 @@ def unread_above(changed, old_contents, new_contents, renamed_to, early,
                 why.append(f"at {tags[1]}: localedef reads no LC_COLLATE "
                            f"section in it")
             elif old.collate and new is not None and new.collate \
-                    and texts[1] is not None and sections is not None and (
-                        _sections(old) != _sections(new) or _sections_moved(
-                            old, texts[0], new, texts[1],
-                            sections.get(path, []))):
+                    and texts[1] is not None and sections is not None \
+                    and _sections_moved(old, texts[0], new, texts[1],
+                                        sections.get(path, [])):
                 # The characters of the changed lines are not all that
                 # moves: a section swallowed by a line above it loses
                 # every rule, and those lines did not change (doc-sweep of
-                # 15.2 B3).
+                # 15.2 B3). Another number of sections is not asked here:
+                # a section of added or removed lines is the changed
+                # lines' business, and a changed line that starts or ends
+                # one is an instruction (instruction_changed; backlog
+                # 13.36 (b)).
                 why.append(f"at {tags[1]}: localedef reads other lines as "
                            f"its LC_COLLATE than at {tags[0]}")
         if why:
@@ -471,7 +520,8 @@ def fold_across(changed, unchanged, no_collate, across):
             [p for p in no_collate if p not in across], folded)
 
 
-def read_otherwise(changed, reading, facts, renamed_to):
+def read_otherwise(changed, reading, facts, renamed_to, old_contents,
+                   new_contents, sections):
     """The changed files read with other characters at the new tag, sorted.
 
     Not only the 'reading' verdict. A hunk inside the block returns
@@ -479,14 +529,18 @@ def read_otherwise(changed, reading, facts, renamed_to):
     printed for such a file name only its changed lines, while every rule in
     it can read differently -- the list would read as complete. A file with
     an LC_COLLATE section and no new side counts too: nothing settled its
-    characters.
+    characters. The texts and `sections` (diff_sections) are what
+    _read_otherwise places each line with.
     """
     out = []
     for path in changed:
         old, new = facts_of(facts, renamed_to, path)
+        new_text = new_contents.get(renamed_to.get(path, path))
         if path in reading or (old.collate and (
-                new is None or (new.collate and
-                                glibc_tree.read_otherwise(old, new)))):
+                new is None or new_text is None or (
+                    new.collate and _read_otherwise(
+                        old, old_contents[path], new, new_text,
+                        sections.get(path, []))))):
             out.append(path)
     return sorted(out)
 
@@ -626,20 +680,66 @@ def changed_characters(sections, old, new):
     diff, a hunk header does not parse, a line localedef reads with two
     comment characters (Facts.chars_at: one run reads the file whole,
     another skips a directive), a comment character that is not ASCII,
-    which the decoded diff cannot be cut at. The caller prints the
-    same thing for all of them: the locale stays flagged, and the reader is
-    told the characters are unknown, never that there are none.
+    which the decoded diff cannot be cut at. The caller never prints an
+    empty list: the locale stays flagged, with the could-not-identify
+    warning or a line saying every rule in it can change.
     """
-    if new is None or len(sections) != 1:
+    lines = _changed_lines(sections, old, new)
+    if lines is None:
         return []
+    seen, found = set(), []
+    for facts, n, text in lines:
+        chars = facts.chars_at(n)
+        if chars is None or chars[0] >= 0x80:
+            return []
+        cchar = chars[0]
+        for hexcp in g._UCHAR_RE.findall(text.split(chr(cchar))[0]):
+            code = int(hexcp, 16)
+            if code > 0x10FFFF or chr(code) in seen:
+                continue
+            seen.add(chr(code))
+            found.append(chr(code))
+    return found
+
+
+def instruction_changed(sections, old, new):
+    """Does a changed line inside LC_COLLATE decide how other lines are
+    read or where other rules sort? Placed as changed_characters places
+    it, a line is one when the reader read it, on its own side, as an
+    instruction
+    (glibc_tree.Facts.instruction: a reorder-after, an order_start, a
+    conditional, a copy, a range, a symbol placed in the order ...), or
+    when it starts or ends one of the sections: glibc starts each
+    LC_COLLATE section reading from state 0 (`int state = 0`,
+    ld-collate.c:2558@2.34), so a section split in two reads the lines
+    after the split otherwise. Then rules move on lines that did not
+    change, and the characters of the changed lines are not all the test
+    values (backlog 13.36). False when the diff cannot be placed; the
+    caller then prints that the characters are not known."""
+    lines = _changed_lines(sections, old, new)
+    return lines is not None and any(
+        facts.instruction(n) or any(n in (start, end)
+                                    for start, end, _, _, _ in facts.collate)
+        for facts, n, _ in lines)
+
+
+def _changed_lines(sections, old, new):
+    """[(Facts, line, text)] for every changed line inside LC_COLLATE: a
+    removed line by its old number against the old sections, an added one
+    by its new number against the new; `text` is the line without its
+    `-` or `+`. None when this cannot tell: no new side, the path does not
+    have exactly one section in the diff, or a hunk header does not
+    parse."""
+    if new is None or len(sections) != 1:
+        return None
     facts = {'-': old, '+': new}
     line_no = None
-    seen, found = set(), []
+    out = []
     for line in sections[0].split('\n'):
         if line.startswith('@@'):
             m = _HUNK_LINE_RE.match(line)
             if not m:
-                return []
+                return None
             line_no = {'-': int(m.group(1)), '+': int(m.group(2))}
             continue
         # Before the first hunk header come the ---/+++ file names; after it,
@@ -655,19 +755,9 @@ def changed_characters(sections, old, new):
             continue
         n = line_no[side]
         line_no[side] += 1
-        if not facts[side].inside(n):
-            continue
-        chars = facts[side].chars_at(n)
-        if chars is None or chars[0] >= 0x80:
-            return []
-        cchar = chars[0]
-        for hexcp in g._UCHAR_RE.findall(line[1:].split(chr(cchar))[0]):
-            code = int(hexcp, 16)
-            if code > 0x10FFFF or chr(code) in seen:
-                continue
-            seen.add(chr(code))
-            found.append(chr(code))
-    return found
+        if facts[side].inside(n):
+            out.append((facts[side], n, line[1:]))
+    return out
 
 
 def print_characters(chars, indent='      ', width=78,
@@ -1390,8 +1480,9 @@ def _main(opts):
     facts = tuple(glibc_tree.file_facts(repo, tag, listed[tag], ids[tag],
                                         builds[tag])
                   for tag in (opts.old_tag, opts.new_tag))
+    sections = diff_sections(diff_text)
     verdicts = judge(content_changed, old_contents, new_contents, hunks,
-                     renamed_to, facts, early)
+                     sections, renamed_to, facts, early)
     (changed_collate, gained_collate, reading_files, unsettled_files,
      unchanged_collate, no_collate_block) = partition_verdicts(verdicts)
     across = set(read_across(repo, opts.old_tag,
@@ -1450,7 +1541,7 @@ def _main(opts):
             f"so any rule in them can change, not only the changed lines. "
             f"They are counted as changed above:", across_changed)
     reread = read_otherwise(changed_collate, reading_files, facts,
-                            renamed_to)
+                            renamed_to, old_contents, new_contents, sections)
     if reread:
         print(f"\n!! {len(reread)} file(s) are read at {opts.new_tag} with "
               f"other comment or escape")
@@ -1464,7 +1555,6 @@ def _main(opts):
             print(f"       " + (describe_reading(new, opts.new_tag)
                                 if new is not None else
                                 f"not read at {opts.new_tag}"))
-    sections = diff_sections(diff_text)
     unread = unread_above(changed_collate, old_contents, new_contents,
                           renamed_to, early, (opts.old_tag, opts.new_tag),
                           facts, sections)
@@ -1489,8 +1579,8 @@ def _main(opts):
             f"them, can change. They are added to step 3's list:",
             stopped)
 
-    # Under each file, the characters its changed rules name: they are what
-    # the confirmation template needs as test values. Indented six spaces and
+    # Under each file, the characters its changed rules name: where the
+    # confirmation template's test values start. Indented six spaces and
     # with no blank line, so the list keeps parsing as one path per line. The
     # new side is the one already read, strictly, for the verdicts above.
     print(f"\nFiles with changes inside LC_COLLATE: {len(changed_collate)}")
@@ -1522,6 +1612,15 @@ def _main(opts):
                 ("those are the changed lines; " if chars else "")
                 + "glibc may not read the block as written (see the `!!` "
                 "above that names it), so every rule in it can change",
+                width=78, initial_indent='      ', subsequent_indent='      '))
+        elif instruction_changed(sections.get(path, []),
+                                 *facts_of(facts, renamed_to, path)):
+            if chars:
+                print_characters(chars)
+            print(textwrap.fill(
+                ("those are the changed lines; " if chars else "")
+                + "a changed line decides how other lines are read or where "
+                "other rules sort, so every rule in it can change",
                 width=78, initial_indent='      ', subsequent_indent='      '))
         elif chars:
             print_characters(chars)
