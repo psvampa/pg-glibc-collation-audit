@@ -255,8 +255,9 @@ class Tree(object):
         return self._runs[name][3]
 
     def ranges(self, name):
-        """[(line, text)] where `name`'s own file gave a range to the
-        LC_COLLATE localedef builds for `name`."""
+        """[(line, text)] where `name`'s own file has a range in a
+        statement of the LC_COLLATE localedef builds for `name`, ranges
+        glibc refuses included."""
         collate = self._collate(name)
         own = [ln for f, ln in (collate[1] if collate else ()) if f == name]
         if not own:

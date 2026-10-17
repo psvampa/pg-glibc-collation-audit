@@ -14,9 +14,10 @@ result if it changed. Each run of localedef has a time limit.
 
 What is recorded per run: the exit status (negative for a signal), whether
 the time limit stopped it, the LC_COLLATE file written (size, md5, and which
-of the case's marker strings its bytes hold), and localedef's messages. The
-file is sealed like tests/locale_order/rhelN.out: `content` is a sha256 over
-every other key, so a hand edit is caught on load.
+of the case's marker strings its bytes hold, each string read as Latin-1
+bytes), and localedef's messages. The file is sealed like
+tests/locale_order/rhelN.out: `content` is a sha256 over every other key,
+so a hand edit is caught on load.
 """
 import base64
 import hashlib
@@ -49,7 +50,7 @@ def pack():
     cases = cs.generate()
     out = {'format': BUNDLE_FORMAT, 'corpus': cs.corpus_digest(cases),
            'cases': [{'id': c.id, 'main': c.main,
-                      'markers': c.markers,
+                      'markers': c.markers, 'charmap': c.charmap,
                       'files': {n: base64.b64encode(d).decode('ascii')
                                 for n, d in sorted(c.files.items())}}
                      for c in cases]}
@@ -95,8 +96,8 @@ def _build():
 def _one(case, src, out, force):
     if os.path.exists(out):
         shutil.rmtree(out)
-    cmd = ['localedef', '--no-archive', '-i', case['main'], '-f', 'UTF-8',
-           out]
+    cmd = ['localedef', '--no-archive', '-i', case['main'], '-f',
+           case['charmap'], out]
     if force:
         cmd.insert(1, '-c')
     env = dict(os.environ, LC_ALL='C', I18NPATH=src)
@@ -120,7 +121,7 @@ def _one(case, src, out, force):
         obs['collate'] = {
             'size': len(data), 'md5': hashlib.md5(data).hexdigest(),
             'markers': sorted(m for m, text in case['markers'].items()
-                              if text.encode('ascii') in data)}
+                              if text.encode('latin-1') in data)}
     else:
         obs['collate'] = None
     obs['written'] = sorted(os.listdir(out)) if os.path.isdir(out) else []

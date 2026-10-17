@@ -34,7 +34,9 @@ what most statement handlers end with, but not all: some leave the rest of
 the line to be read as further statements, and some read past the end of the
 line. Where this reader sees a shape on which that model can differ from the
 handler glibc runs, it says so in Run.unsettled rather than answer as if it
-had read it. The statement grammars come in later steps of block 15.
+had read it. In LC_COLLATE it follows collate_read's state as well: a
+statement glibc refuses in the state it comes in changes nothing
+(Collate.refused). The statement grammars come in later steps of block 15.
 
 The token layer is the one backlog 15.0 compared token by token with
 glibc's linereader.c compiled at glibc-2.28, 2.34 and 2.39, on every locale
@@ -882,7 +884,9 @@ class Collate(object):
     move by reading the changed lines (backlog 13.36). `before`,
     `open_ranges`, `ranges` and `state` are the reading's state for a
     range's end points: the last two entries placed, the range each file
-    has open, every range read, and each file's collate_read state."""
+    has open, every range read, and each file's collate_read state.
+    `refused` holds the index in `statements` of each statement glibc sent
+    to err_label for the state it came in (_refused): it changed nothing."""
 
     def __init__(self):
         self.statements = []
@@ -893,6 +897,7 @@ class Collate(object):
         self.state = {}               # file -> collate_read's state
         self.else_action = 'none'     # else_none / else_ignore / else_seen
         self.order_started = False
+        self.refused = set()          # statements glibc sent to err_label
 
 
 class Section(object):
@@ -974,7 +979,8 @@ class Run(object):
                :2120-2146@2.39). None too when the run is fatal, or stopped
                where glibc reads outside its buffer, which is unsettled.
     unsettled  [(file, line, why)]: places where this reader's model of a
-               statement can differ from the handler glibc runs. A caller
+               statement can differ from the handler glibc runs, or where
+               what localedef writes depends on -c. A caller
                that needs a settled answer refuses one with any of these.
     met        True when lr_getc read, or stopped at, a byte above 0x7F or
                a 0x1A, in any file of the run: the only bytes the builds on
@@ -1074,13 +1080,65 @@ _WEIGHT_NAME = re.compile(rb'<U([0-9A-Fa-f]{8}|[0-9A-Fa-f]{4})>')
 
 
 # collate_read's state after each statement that changes it
-# (ld-collate.c:2549-2558, 3091-3472@2.34). Applied whether or not glibc
-# accepts the statement: one it refuses (err_label) keeps the state, which
-# this reader does not follow (backlog 15.3).
+# (ld-collate.c:2549-2558, 3091-3472@2.34), applied only when glibc
+# accepts the statement (_refused).
 _STATE_AFTER = {'tok_order_start': 1, 'tok_order_end': 2,
                 'tok_reorder_after': 3, 'tok_reorder_end': 4,
                 'tok_reorder_sections_after': 5,
                 'tok_reorder_sections_end': 6}
+
+# The states in which collate_read accepts each statement that changes the
+# state, places something or defines an element; in any other it goes to
+# err_label, which prints "syntax error" (not counted: lr_error,
+# linereader.h:101-121@2.34), drops the rest of the line and keeps the
+# state (ld-collate.c:3958-3960@2.34). The same at 2.28 and 2.39.
+# collating-symbol, symbol-equivalence, coll_weight_max and section-symbol
+# test the state too (:2833, :2979, :2697, :2720) and are not asked: this
+# reader keeps no symbols, and they change no state and place nothing
+# (what a symbol-equivalence leaves on its line is _Runner.statement's).
+
+_ACCEPTED_IN = {
+    'tok_collating_element': (0, 2),                 # :2767-2768
+    'tok_order_start': (0, 1, 2),                    # :3100-3101
+    'tok_order_end': (1,),                           # :3234-3235
+    # reorder-after in state 0 only after an opening copy (:3273-3276)
+    'tok_reorder_after': (0, 1, 2, 3),
+    'tok_reorder_end': (3,),                         # :3373-3374
+    'tok_reorder_sections_after': (1, 2, 3, 4),      # :3388-3409
+    'tok_reorder_sections_end': (5,),                # :3468-3469
+    'tok_undefined': (1,),                           # :3693-3694
+    'ucs4': (1, 3),                                  # :3484-3488
+    'bsymbol': (0, 1, 3, 5),                         # :3484-3485
+    'ellipsis': (0, 1, 3),                           # :3731-3732
+}
+
+
+def _refused(toks, state, opening_copy):
+    """Does collate_read send this LC_COLLATE statement to err_label in
+    `state`? Only the statements of _ACCEPTED_IN are asked; a refused
+    one changes the state, the cursor and the order not at all
+    (backlog 15.3; the o cases of tests/reader_oracle, measured on el8,
+    el9 and el10). A bsymbol in state 0 must also name a declared
+    collating-symbol, or an element already placed that is not a
+    character (:3518-3536); this reader does not keep the declarations
+    and takes such a line as accepted. That is the cautious side: the
+    line is an instruction either way (it does not open with a
+    character), what it places is a symbol, never a character a range
+    could end on, and the cursor after it is a place this reader is not
+    sure of (_Runner.instruction)."""
+    t = toks[0]
+    if t.tok == 'kw':
+        ok = _ACCEPTED_IN.get(t.kwtok)
+        if ok is None:
+            return False
+        if t.kwtok == 'tok_reorder_after' and state == 0 \
+                and not opening_copy:
+            return True
+        return state not in ok
+    if t.tok in _RANGE_TOKS:
+        return state not in _ACCEPTED_IN['ellipsis']
+    ok = _ACCEPTED_IN.get(t.tok)
+    return ok is not None and state not in ok
 
 
 def _ranges_settled(coll, out):
@@ -1105,7 +1163,9 @@ def _ranges_settled(coll, out):
     the ranges of ko_KR and iso14651_t1 stay settled, and no line of any
     file is added."""
     placed, places = {}, []
-    for fname, line, toks in coll.statements:
+    for i, (fname, line, toks) in enumerate(coll.statements):
+        if i in coll.refused:
+            continue
         if toks[0].tok in ('ucs4', 'bsymbol'):
             key = (toks[0].tok, toks[0].val)
             placed[key] = placed.get(key, 0) + 1
@@ -1142,8 +1202,8 @@ def _named_places(coll):
     that places the character counts: a reorder block places it again
     (move_entry, ld-collate.c:3607-3633@2.39)."""
     place = {}
-    for fname, line, toks in coll.statements:
-        if toks[0].tok == 'ucs4':
+    for i, (fname, line, toks) in enumerate(coll.statements):
+        if toks[0].tok == 'ucs4' and i not in coll.refused:
             place.setdefault(toks[0].val, []).append(
                 (fname, line, max(t.line for t in toks)))
     for fname, line, toks in coll.statements:
@@ -1432,7 +1492,7 @@ class _Runner(object):
                                'runs past the end of its line')
             if store is not None:
                 store.statements.append((lr.fname, t.line, toks))
-                self.instruction(lr, store, t.line, toks)
+                self.instruction(lr, store, t.line, toks, sec)
             return
         snap = lr.snapshot()
         # The lookahead reads only the line reader: its tokens, the reasons
@@ -1474,11 +1534,46 @@ class _Runner(object):
                 and _kw(t, 'tok_reorder_sections_after'):
             self.unsettled(lr, t.line, 'reorder-sections-after in '
                            'LC_COLLATE')
+        if store is not None and t.tok == 'bsymbol' and rest \
+                and store.state.get(lr.fname, 0) == 0:
+            # Before any statement of this section read an argument, glibc
+            # takes such a symbol as "bad symbol" and reads the rest of the
+            # line as statements (arg == NULL, ld-collate.c:3496-3507
+            # @2.34, :3516-3526@2.39); after one, as its weights, or drops
+            # the line when the symbol is not declared or is a character
+            # already placed (:3518-3536@2.34). This reader does not keep
+            # which
+            # (false-negative-reviewer, rounds 1 and 2 of 15.3 C1; cases
+            # o40 to o42 of reader_oracle).
+            self.unsettled(lr, t.line, 'a symbol before order_start with '
+                           'more on its line')
+        if store is not None and _kw(t, 'tok_symbol_equivalence') \
+                and len(rest) > 2:
+            # When its second name is no declared collating-symbol, or its
+            # new name is defined already, symbol-equivalence `break`s
+            # without dropping the rest of its line (sym_equiv_free,
+            # ld-collate.c:3023-3038@2.34), which glibc then reads as
+            # statements; otherwise it drops it (:3042). This reader keeps
+            # no symbols (false-negative-reviewer, round 3 of 15.3 C1;
+            # cases o47 to o52 of reader_oracle).
+            self.unsettled(lr, t.line, 'symbol-equivalence with more on its '
+                           'line')
+        if not sec.content and sec.category == 'LC_COLLATE' and rest \
+                and (_kw(t, 'tok_reorder_end')
+                     or _kw(t, 'tok_reorder_sections_end')):
+            # In a section read for another category these two `break`
+            # without dropping the rest of their line (ld-collate.c:3370-3371,
+            # :3465-3466@2.34), which glibc then reads as statements: an
+            # ellipsis or codepoint_collation there writes into a struct
+            # that is not this section's (false-negative-reviewer, round 2
+            # of 15.3 C1; cases o43 to o45 of reader_oracle).
+            self.unsettled(lr, t.line, '%s with more on its line, in an '
+                           'LC_COLLATE read for another category' % t.val)
         if store is not None:
             store.statements.append((lr.fname, t.line, toks))
-            self.instruction(lr, store, t.line, toks)
+            self.instruction(lr, store, t.line, toks, sec)
 
-    def instruction(self, lr, store, line, toks=None):
+    def instruction(self, lr, store, line, toks=None, sec=None):
         """Record lines `line` to where the reader stands as one of
         store's instructions (Collate.instructions), unless `toks` is a
         statement that opens with a character and holds no range; an
@@ -1512,6 +1607,14 @@ class _Runner(object):
             return
         f, first = lr.fname, toks[0]
         state = store.state.get(f, 0)
+        if _refused(toks, state, sec is not None and sec.copy is not None):
+            # err_label: the state, the cursor and the order stay as they
+            # were. A keyword or a range is an instruction already (above):
+            # edit it and glibc may accept it. A refused entry places
+            # nothing, whatever character it names. `toks` is the statement
+            # just appended (statement(), _collate_read).
+            store.refused.add(len(store.statements) - 1)
+            return
         # Another file's range still open: a statement read here can move
         # glibc's cursor, an entry or a range linked after the range's
         # placeholder (insert_weights, ld-collate.c:725@2.34) or a
@@ -1677,6 +1780,28 @@ class _Runner(object):
                                  else len(lr.phys))
             store.state.pop(lr.fname, None)
 
+    def collate_end(self, lr, line, store):
+        """The checks of the END case, which run at every END in
+        statement position, before its argument is read: also at an END
+        whose argument is an EOF lr_getc consumed (an 0xFF before 2.36),
+        after which the section reads on, and at one a skipped conditional
+        branch meets (seen_end, ld-collate.c:3740-3770, :3891-3892@2.34;
+        false-negative-reviewer, round 1 of 15.3 C1). In state 1 glibc
+        closes a range still open there, with no entry (handle_ellipsis with
+        NULL, :3751-3762); in states 0, 3 and 4 it leaves the range pending,
+        a shape the reader holds unsettled already (instruction). Either
+        way this reader closes it as unsettled. In a reorder block,
+        "missing `reorder-end'" (or reorder-sections-end) is a counted
+        error, and localedef without -c
+        writes nothing (:3764-3769; cases o16, o22, o31 and o37 of
+        reader_oracle, rc 4 on el8, el9 and el10)."""
+        if store is None:
+            return
+        self.open_range_ends(lr, store, line)
+        if store.state.get(lr.fname, 0) in (3, 5):
+            self.unsettled(lr, line, 'END inside a reorder block, an '
+                           'error that stops localedef without -c')
+
     def _collate_read(self, lr, entry, sec):
         ignore = not sec.content
         lr.ignore_rest()
@@ -1736,6 +1861,7 @@ class _Runner(object):
                 t = lr.token()
                 continue
             if _kw(t, 'tok_end'):
+                self.collate_end(lr, t.line, store)
                 if self.end_of_section(lr, t, sec):
                     return
                 t = lr.token()
@@ -1830,7 +1956,7 @@ class _Runner(object):
             self.instruction(lr, coll, t.line)
             if coll.else_action == 'ignore':
                 stop = self.skip_to(lr, True, coll)
-                return self.after_skip(lr, stop, sec)
+                return self.after_skip(lr, stop, sec, coll)
             if coll.else_action == 'seen':
                 # assert (collate->else_action == else_none) fails
                 # (ld-collate.c:3953@2.39): SIGABRT on el8/el9/el10, where
@@ -1852,7 +1978,7 @@ class _Runner(object):
             if coll.else_action != 'none':
                 # nested: not supported
                 stop = self.skip_to(lr, True, coll)
-                return self.after_skip(lr, stop, sec)
+                return self.after_skip(lr, stop, sec, coll)
             hit = arg.val in self.defined
             if (kw == 'tok_ifdef') == hit:
                 coll.else_action = 'ignore'
@@ -1868,15 +1994,16 @@ class _Runner(object):
             if _kw(stop, 'tok_elifndef'):
                 kw = 'tok_ifndef'
                 continue
-            return self.after_skip(lr, stop, sec)
+            return self.after_skip(lr, stop, sec, coll)
 
-    def after_skip(self, lr, stop, sec):
+    def after_skip(self, lr, stop, sec, coll):
         """What follows a skip_to that met the end of the file or END
         (seen_eof, seen_end); any other stop reads on."""
         if stop.tok == 'eof':
             return None
         if _kw(stop, 'tok_end'):
             # seen_end is the END case itself (ld-collate.c:3741@2.34).
+            self.collate_end(lr, stop.line, coll)
             if self.end_of_section(lr, stop, sec):
                 return None
         return lr.token()
