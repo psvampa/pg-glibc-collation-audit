@@ -11,14 +11,15 @@ what localedef did:
   reader_oracle/rhel9.json   glibc-2.34-275.el9_8     (collaudit9)
   reader_oracle/rhel10.json  glibc-2.39-128.el10_2    (collaudit10)
 
-are localedef's answers to the cases in reader_oracle/cases.py, recorded on
-2026-10-13 with reader_oracle/measure.py on the three fixtures. The
+are localedef's answers to the cases in reader_oracle/cases.py, recorded
+with reader_oracle/measure.py on the three fixtures. The
 comparison needs no machine; an answer that is missing, damaged or recorded
 for other cases is a failure, never a skip. When cases.py changes, the
 corpus digest stops matching and the three files have to be measured again.
 
 The reader also says where it cannot answer (Run.unsettled): for the shapes
-a later step of block 15 reads. Which cases those are
+it does not read the way glibc does, and where what localedef writes depends
+on -c. Which cases those are
 is pinned below, so a reader that stops answering anywhere else goes red,
 and a step that settles one has to move it here.
 
@@ -91,12 +92,46 @@ _UNDEFINED = {'t16', 's52'}
 # statement grammars' (block 15, 15.3 to 15.4); until then the reader says
 # so (false-negative-reviewer, round 3 of 15.2 B2).
 _MID_STATEMENT = {'s62', 's64', 's65', 's66'}
+# LC_COLLATE statements the reader leaves unsettled (backlog 15.3):
+#   - a range it does not fill, or closed by something other than an entry,
+#     among them o14's reorder-after, which closes the range with whatever
+#     string the line reader last read (ld-collate.c:3265-3269@2.34), and
+#     ranges a reorder-after or an order_start meets open, or opened in a
+#     reorder block (o53, o57, o58);
+#   - reorder-sections-after (o15, in a reorder block, where it is also a
+#     counted error, :3402-3406);
+#   - END in a reorder block (o16, o22, o31, and o37 and o38, where before
+#     2.36 the section reads on after it), a counted error that stops
+#     localedef without -c, which el9 and el10 build their locales without;
+#   - a symbol before order_start with more on its line, which glibc reads
+#     as statements or as weights depending on what was read before it
+#     (o40, o42);
+#   - reorder-end or reorder-sections-end with more on its line in a section
+#     read for another category, whose rest glibc reads as statements (o43,
+#     o44);
+#   - symbol-equivalence with more on its line, which glibc reads as
+#     statements or drops depending on symbols this reader does not keep
+#     (o47, o49 to o52).
+_STATEMENTS = {'o14', 'o15', 'o16', 'o20', 'o21', 'o22', 'o23', 'o24', 'o25',
+               'o26', 'o27', 'o28', 'o31', 'o37', 'o38', 'o39', 'o40', 'o42',
+               'o43', 'o44', 'o47', 'o49', 'o50', 'o51', 'o52', 'o53', 'o57',
+               'o58'}
+# Before 2.36 only: an 0xFF that lr_getc reads as EOF inside order_start's
+# directions or inside a weight, with more on the line (o55, o56); from
+# 2.36 it is a byte and the reader follows glibc.
+_EOF_MID_LINE = {'o55', 'o56'}
 EXPECTED_UNSETTLED = {
-    'rhel8': {'b18', 'b19', 's51'} | _LATER | _UNDEFINED | _MID_STATEMENT,
+    'rhel8': {'b18', 'b19', 's51'} | _LATER | _UNDEFINED | _MID_STATEMENT
+    | _STATEMENTS | _EOF_MID_LINE,
     'rhel9': {'b18', 'b19', 's42', 's51'} | _LATER | _UNDEFINED
-    | _MID_STATEMENT,
-    'rhel10': {'s42', 's67', 's68'} | _LATER | _UNDEFINED | _MID_STATEMENT,
+    | _MID_STATEMENT | _STATEMENTS | _EOF_MID_LINE,
+    'rhel10': {'s42', 's67', 's68'} | _LATER | _UNDEFINED | _MID_STATEMENT
+    | _STATEMENTS,
 }
+# Cases run under another charmap than UTF-8, the only one the reader
+# models (run()); they wait for the charmap reader (15.6) and are compared
+# by OracleFiles alone.
+OTHER_CHARMAP = {'o34', 'o35'}
 def load_oracle(path):
     """The answers in `path`, checked whole: format, seal, the corpus they
     answer, and both runs of every case. Raises ValueError otherwise."""
@@ -124,9 +159,14 @@ def predict(case, build):
     """What the reader says localedef -c does with `case`: an outcome and,
     when LC_COLLATE was read, the markers it holds. A marker is in the
     output when the statement defining it and the order line placing it
-    were both read into the output's LC_COLLATE, in that order, the order
-    line between order_start and order_end; a struct with neither an
-    order_start nor codepoint_collation read makes collate_finish give up
+    were both read into the output's LC_COLLATE, in that order, and glibc
+    accepted both (Collate.refused), the order line between order_start
+    and order_end or in a reorder block whose reorder-after names a
+    character or marker placed before it: there an entry not yet in the
+    order is added at the cursor (ld-collate.c:3557-3616@2.34), and an
+    anchor glibc cannot find leaves no cursor and every entry of the block
+    dropped (:3348-3357, :3566-3570). A struct with neither an order_start
+    nor codepoint_collation read makes collate_finish give up
     (ld-collate.c:1849-1853@2.28), and one with codepoint_collation read
     writes no table of elements at all, whatever else it holds
     (ld-collate.c:1575, :2123@2.39), so no marker."""
@@ -141,8 +181,11 @@ def predict(case, build):
         return {'outcome': r.fatal.kind}
     if r.collate is None:
         return {'outcome': 'absent'}
-    defined, placed, state, order, codepoint = set(), set(), 0, False, False
-    for _, _, toks in r.collate.statements:
+    defined, placed, chars = set(), set(), set()
+    state, order, codepoint, cursor = 0, False, False, False
+    for i, (_, _, toks) in enumerate(r.collate.statements):
+        if i in r.collate.refused:
+            continue
         t = toks[0]
         if t.tok == 'kw' and t.kwtok == 'tok_order_start':
             state, order = 1, True
@@ -150,11 +193,21 @@ def predict(case, build):
             order = codepoint = True
         elif t.tok == 'kw' and t.kwtok == 'tok_order_end':
             state = 2
+        elif t.tok == 'kw' and t.kwtok == 'tok_reorder_after':
+            a = toks[1] if len(toks) > 1 else None
+            state, cursor = 3, a is not None and (
+                (a.tok == 'ucs4' and a.val in chars)
+                or (a.tok == 'bsymbol' and a.val in placed))
+        elif t.tok == 'kw' and t.kwtok == 'tok_reorder_end':
+            state = 4
         elif t.tok == 'kw' and t.kwtok == 'tok_collating_element' \
                 and len(toks) > 1 and toks[1].tok == 'bsymbol':
             defined.add(toks[1].val)
-        elif t.tok == 'bsymbol' and state == 1 and t.val in defined:
-            placed.add(t.val)
+        elif state == 1 or (state == 3 and cursor):
+            if t.tok == 'ucs4':
+                chars.add(t.val)
+            elif t.tok == 'bsymbol' and t.val in defined:
+                placed.add(t.val)
     if not order:
         return {'outcome': 'giving-up'}
     return {'outcome': 'read',
@@ -222,6 +275,49 @@ class OracleFiles(unittest.TestCase):
         self.assertEqual(['a', 'b'],
                          got['rhel8']['s53']['c']['collate']['markers'])
 
+    def test_end_in_a_reorder_block_stops_localedef_without_c(self):
+        """What the reader's 'END inside a reorder block' rests on: the
+        missing reorder-end is a counted error (ld-collate.c:3764-3766
+        @2.34), so without -c localedef exits 4 and writes nothing, and
+        with -c it writes the table; the same for reorder-sections-after
+        in a reorder block (:3402-3406). Cases o15, o16, o22 and o31, and
+        o37 and o38, where the END is followed by an 0xFF (the section reads
+        on before 2.36) or met in a skipped branch. A
+        file that ends in a reorder block with no END draws only "premature
+        end of file", which is not counted (:3968-3970, lr_error), and is
+        written without -c too: o36, where the reader says nothing."""
+        for n in ('rhel8', 'rhel9', 'rhel10'):
+            got = load_oracle(os.path.join(ORACLE_DIR, n + '.json'))['cases']
+            for cid in ('o15', 'o16', 'o22', 'o31', 'o37', 'o38'):
+                with self.subTest(n + ' ' + cid):
+                    self.assertEqual((4, None), (got[cid]['nc']['rc'],
+                                                 got[cid]['nc']['collate']))
+                    self.assertIsNotNone(got[cid]['c']['collate'])
+            with self.subTest(n + ' o36'):
+                self.assertEqual(got['o36']['c']['collate'],
+                                 got['o36']['nc']['collate'])
+                self.assertEqual(['a', 'b'],
+                                 got['o36']['nc']['collate']['markers'])
+
+    def test_a_raw_character_in_a_from_string_before_2_36(self):
+        """Backlog 13.23: a raw byte above 0x7F in a collating-element's
+        `from` string is copied as it is before 2.36, and decoded as UTF-8
+        and looked up in the charmap from 2.36 (linereader.c:649-670@2.34,
+        :855-871@2.39). Under ISO-8859-1 the element el8 and el9 build
+        from a raw UTF-8 e-acute is not the one for U+00E9, whose byte the
+        table does not hold (o34); el10 builds it, and every build does
+        with <U00E9> (o35) and under UTF-8 (o32, o33). The reader models
+        UTF-8 only (OTHER_CHARMAP)."""
+        got = {n: load_oracle(os.path.join(ORACLE_DIR, n + '.json'))['cases']
+               for n in ('rhel8', 'rhel9', 'rhel10')}
+        self.assertEqual(
+            {'rhel8': [], 'rhel9': [], 'rhel10': ['e']},
+            {n: got[n]['o34']['c']['collate']['markers'] for n in got})
+        for cid in ('o32', 'o33', 'o35'):
+            self.assertEqual(
+                {n: ['e'] for n in got},
+                {n: got[n][cid]['c']['collate']['markers'] for n in got})
+
     def _damaged(self, change):
         with open(os.path.join(ORACLE_DIR, 'rhel9.json')) as f:
             data = json.load(f)
@@ -275,6 +371,8 @@ class _OracleCompare(object):
     def test_every_settled_case_agrees_with_localedef(self):
         wrong = []
         for case in self.cases:
+            if case.id in OTHER_CHARMAP:
+                continue
             p = predict(case, self.build)
             if p['outcome'] == 'unsettled':
                 continue
@@ -285,9 +383,13 @@ class _OracleCompare(object):
         self.assertEqual([], wrong)
 
     def test_the_reader_leaves_unsettled_only_the_known_cases(self):
-        got = {c.id for c in self.cases
-               if predict(c, self.build)['outcome'] == 'unsettled'}
+        got = {c.id for c in self.cases if c.id not in OTHER_CHARMAP
+               and predict(c, self.build)['outcome'] == 'unsettled'}
         self.assertEqual(EXPECTED_UNSETTLED[self.build_name], got)
+
+    def test_only_the_named_cases_leave_utf_8(self):
+        self.assertEqual(OTHER_CHARMAP, {c.id for c in self.cases
+                                         if c.charmap != 'UTF-8'})
 
     def test_every_answer_is_one_the_comparison_recognises(self):
         # An outcome observed() cannot name would compare unequal to every
@@ -1497,8 +1599,8 @@ class CollateInstructionsAreTheLinesThatSteer(unittest.TestCase):
         """Round 4 of the 13.36 review. glibc refuses a character placed a
         second time (ld-collate.c:1056-1063@2.34) and then fills no range
         that ends on it (:1086-1090), and its cursor stays on the last
-        entry it accepted; a range opened in state 0, after order_end, or
-        closed by a reorder-after is filled from no line, or not at all.
+        entry it accepted; a range opened in state 0 or closed by a
+        reorder-after is filled from no line, or not at all.
         The reader settles none of these."""
         head = b'LC_COLLATE\norder_start forward\n'
         tail = b'order_end\nEND LC_COLLATE\n'
@@ -1510,14 +1612,67 @@ class CollateInstructionsAreTheLinesThatSteer(unittest.TestCase):
                 (head + b'<U0041>\n<U0042>\n<U0043>\n<U0050>\n<U0042>\n'
                  b'<U0043>\n..\n<U0058>\n' + tail, twice),
                 (b'LC_COLLATE\n<a>\n..\n<b>\nEND LC_COLLATE\n', outside),
-                (head + b'<U0041>\norder_end\n..\n<U0045>\nEND LC_COLLATE\n',
-                 outside),
                 (head + b'<U0041>\n..\nreorder-after <U0041>\n<U0045>\n'
                  b'reorder-end\nEND LC_COLLATE\n',
                  'a range with no entry after it')):
             with self.subTest(why=why, text=text):
                 r = gr.run(b'q', {b'q': text}.get, _twin(self.build))
                 self.assertIn(why, [w for _, _, w in r.unsettled])
+
+    def test_a_statement_glibc_refuses_changes_nothing(self):
+        """collate_read sends a statement to err_label in a state that
+        does not accept it, and keeps the state (ld-collate.c:3100,
+        :3373, :3484-3488, :3731, :3958-3960@2.34). After order_end a
+        range and the entry after it are refused: no range. After
+        reorder-end an order_start is refused, and so is everything after
+        it (case o30 of reader_oracle, measured on el8, el9 and el10). An
+        order_end inside a reorder block is refused, the block goes on,
+        and END in it is an error that stops localedef without -c (case
+        o31: rc 4, nothing written)."""
+        head = b'LC_COLLATE\norder_start forward\n<U0041>\norder_end\n'
+        r = gr.run(b'q', {b'q': head + b'..\n<U0045>\nEND LC_COLLATE\n'}.get,
+                   _twin(self.build))
+        self.assertEqual(([], []), (r.collate.ranges, r.unsettled))
+        reorder = head + b'reorder-after <U0041>\n<U0042>\n'
+        tail = b'order_start forward\n<U0043>\n..\n<U0045>\norder_end\n' \
+            b'END LC_COLLATE\n'
+        r = gr.run(b'q', {b'q': reorder + b'reorder-end\n' + tail}.get,
+                   _twin(self.build))
+        self.assertEqual(([], []), (r.collate.ranges, r.unsettled))
+        self.assertEqual(list(range(8, 13)),
+                         [r.collate.statements[i][1]
+                          for i in sorted(r.collate.refused)])
+        r = gr.run(b'q', {b'q': reorder + b'order_end\n' + tail}.get,
+                   _twin(self.build))
+        self.assertIn('END inside a reorder block, an error that stops '
+                      'localedef without -c', [w for _, _, w in r.unsettled])
+
+    def test_which_statements_glibc_refuses_in_each_state(self):
+        """UNDEFINED is accepted between order_start and order_end only
+        (ld-collate.c:3693@2.34), a symbol or element in states 0, 1, 3
+        and 5 (:3484), a character in states 1 and 3 (:3484-3488), a
+        collating-element in states 0 and 2 (:2767): the others go to
+        err_label. Lines 3, 10, 14 and 17 are UNDEFINED outside the order;
+        lines 4, 12 and 19 a character outside the order and the reorder
+        block (case o12 of reader_oracle); line 11 an element after
+        order_end, line 18 one after reorder-end (case o04: not placed on
+        el8, el9 or el10)."""
+        text = (b'LC_COLLATE\n'                                   # 1
+                b'collating-element <mk-a> from "<U0061><U0062>"\n'  # 2
+                b'UNDEFINED\n<U0042>\n'                           # 3-4
+                b'order_start forward\n<U0041>\n'                 # 5-6
+                b'UNDEFINED\n<mk-a>\n'                            # 7-8
+                b'order_end\n'                                    # 9
+                b'UNDEFINED\n<mk-a>\n<U0042>\n'                   # 10-12
+                b'reorder-after <U0041>\n'                        # 13
+                b'UNDEFINED\n<mk-a>\n'                            # 14-15
+                b'reorder-end\n'                                  # 16
+                b'UNDEFINED\n<mk-a>\n<U0042>\n'                   # 17-19
+                b'END LC_COLLATE\n')
+        r = gr.run(b'q', {b'q': text}.get, _twin(self.build))
+        self.assertEqual([3, 4, 10, 11, 12, 14, 17, 18, 19],
+                         [r.collate.statements[i][1]
+                          for i in sorted(r.collate.refused)])
 
     def test_a_line_that_places_an_end_point_elsewhere_is_one(self):
         """Round 5 of the 13.36 review, F1: b places <U0045>, the end of
@@ -1747,6 +1902,17 @@ class CollateInstructionsAreTheLinesThatSteer(unittest.TestCase):
                        b'reorder-after <U0041>\n<U0045>\nreorder-end\n'
                        b'END LC_COLLATE\n'}
         self.assertEqual((2, 4, 6, 9), self.one(files, b'm'))
+
+    def test_a_line_glibc_refuses_is_no_place_of_a_named_character(self):
+        """E on line 10, after reorder-end, is refused (ld-collate.c:3484
+        @2.34; case o19 of reader_oracle) and places nothing: line 5
+        names E as a weight, and line 4 counts, line 10 does not (backlog
+        15.3)."""
+        files = {b'w': b'LC_COLLATE\norder_start forward\n<U0041>\n'
+                       b'<U0045>\n<U00C9> <U0045>;<U00C9>\norder_end\n'
+                       b'reorder-after <U0041>\n<U0042>\nreorder-end\n'
+                       b'<U0045>\nEND LC_COLLATE\n'}
+        self.assertEqual((2, 4, 6, 7, 9, 9), self.one(files, b'w'))
 
     def test_a_line_joined_to_the_next_is_one(self):
         """lr_next joins a line that ends in the escape to the next

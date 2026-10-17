@@ -1,10 +1,12 @@
 """The cases localedef answers for scripts/glibc_reader.py (backlog 15.1).
 
-Each case is one `localedef -i <main> -f UTF-8` run on a small locale built
-for one question about how glibc reads a file: its bytes, its comment and
-escape directives, its tokens, where its sections end, and what its `copy`
-statements load. measure.py runs every case on a RHEL machine and records
-what localedef did; tests/test_glibc_reader.py holds the reader to it.
+Each case is one `localedef -i <main> -f <charmap>` run, UTF-8 unless the
+case names another, on a small locale built for one question about how
+glibc reads a file: its bytes, its comment and escape directives, its
+tokens, where its sections end, what its `copy` statements load, and how
+collate_read reads LC_COLLATE statements. measure.py runs every case on a
+RHEL machine and records what localedef did; tests/test_glibc_reader.py
+holds the reader to it.
 
 What a case observes: the exit status, whether the time limit stopped
 localedef, the messages that name an outcome (a file it cannot open, a
@@ -14,7 +16,8 @@ LC_COLLATE, or a table whose bytes hold the `from` string of every
 collating element that glibc both defined and placed in the order. Most
 cases define such marker elements, `<mk-X>` with a four-byte `from` string
 that is in no other part of the file, at the places whose reading is the
-question.
+question. A case can name a marker's bytes itself, as a Latin-1 string,
+when the question is which bytes glibc made of the `from` string.
 
 The files are self-contained: every name a case means to be found starts
 with `rd-`, which no locale glibc ships does, so no shipped locale can
@@ -26,7 +29,8 @@ Standard library only, Python 3.6.
 import hashlib
 import json
 
-FAMILIES = ('bytes', 'directives', 'tokens', 'sections', 'copy')
+FAMILIES = ('bytes', 'directives', 'tokens', 'sections', 'copy',
+            'statements')
 
 
 def marker_text(name):
@@ -72,10 +76,11 @@ TIME7 = b'LC_TIME\nabday "1";"2";"3";"4";"5";"6";"7"\nEND LC_TIME\n'
 
 class Case(object):
     def __init__(self, cid, family, files, main=None, markers=None,
-                 note=''):
+                 note='', charmap='UTF-8'):
         self.id = cid
         self.family = family
         self.main = main or 'rd-' + cid
+        self.charmap = charmap
         self.files = {}
         for name, data in files.items():
             self.files[name.replace('@', 'rd-' + cid)] = data.replace(
@@ -87,8 +92,11 @@ class Case(object):
             for line in data.split(b'\n'):
                 if line.startswith(b'collating-element <mk-'):
                     found.add(line.split(b'<mk-')[1].split(b'>')[0].decode())
-        self.markers = {m: marker_text(m).decode() for m in
-                        sorted(found if markers is None else markers)}
+        if isinstance(markers, dict):
+            self.markers = dict(markers)
+        else:
+            self.markers = {m: marker_text(m).decode() for m in
+                            sorted(found if markers is None else markers)}
         self.note = note
 
 
@@ -643,9 +651,9 @@ def _cases():
     # order, it takes the order_end below it, and mk-b, after it, is still
     # placed. Measured on the three builds on 2026-10-16 and not kept: the
     # same join in a reorder block placed mk-b after mk-a where the control
-    # drops it (the markers do not see a reorder block, backlog 15.3), and
-    # one taking `<mk-b>` as mk-a's weight crashed localedef -c (signal
-    # 11, "symbol `mk-b' not defined"), a weight the reader does not model.
+    # drops it, and one taking `<mk-b>` as mk-a's weight crashed localedef
+    # -c (signal 11, "symbol `mk-b' not defined"), a weight the reader does
+    # not model.
     esc = b'comment_char %\nescape_char /\n'
     skip = (esc + HEAD + D('a') + D('b') + ORDER_HEAD + b'ifdef RD_NOPE\n'
             + b'<mk-a> /\nendif\n' + O('b') + ORDER_TAIL + END)
@@ -666,6 +674,233 @@ def _cases():
         'a define in the main file decides an ifdef in the copied file')
     add('c32', P, {'@': HEAD + b'copy "@-t"\n' + END, '@-t': cond},
         'control for c31: no define')
+
+    # -- statements: what collate_read accepts in each state (backlog 15.3)
+    # A statement whose handler tests collate_read's state goes to
+    # err_label in any other state, and the state stays as it was
+    # (ld-collate.c:2697-3738, :3958-3960@2.34). Markers stand after the
+    # statement glibc refuses, with a control where it is accepted.
+    O_ = 'statements'
+    ab = HEAD + D('a') + D('b') + ORDER_HEAD + O('a') + ORDER_TAIL
+    after = b'reorder-after <U0061>\n'
+    add('o01', O_, ab + after + b'<U0063>\nreorder-end\norder_start forward\n'
+        + O('b') + b'order_end\n' + END,
+        'after reorder-end, order_start and the entry after it are refused')
+    add('o02', O_, ab + b'order_start forward\n' + O('b') + b'order_end\n'
+        + END, 'control for o01: a second order_start after order_end')
+    add('o03', O_, ab + after + O('b') + b'reorder-end\n' + END,
+        'control for o04 to o06: an entry in a reorder block')
+    add('o04', O_, ab + after + b'<U0063>\nreorder-end\n' + O('b') + END,
+        'an entry after reorder-end is refused')
+    add('o05', O_, ab + after + b'<U0063>\norder_end\n' + O('b')
+        + b'reorder-end\n' + END,
+        'order_end in a reorder block is refused; the block goes on')
+    add('o06', O_, ab + after + b'order_start forward\n' + O('b')
+        + b'reorder-end\n' + END,
+        'order_start in a reorder block is refused; the block goes on')
+    add('o07', O_, HEAD + D('a') + ORDER_HEAD + O('a') + D('b') + O('b')
+        + ORDER_TAIL + END,
+        'collating-element between order_start and order_end is refused')
+    add('o08', O_, HEAD + D('a') + ORDER_HEAD + O('a') + ORDER_TAIL + D('b')
+        + after + O('b') + b'reorder-end\n' + END,
+        'control for o07 and o09: collating-element after order_end')
+    add('o09', O_, HEAD + D('a') + ORDER_HEAD + O('a') + ORDER_TAIL + after
+        + D('b') + O('b') + b'reorder-end\n' + END,
+        'collating-element in a reorder block is refused')
+    add('o10', O_, HEAD + D('a') + b'reorder-after <U0062>\n' + ORDER_HEAD
+        + O('a') + ORDER_TAIL + END,
+        'reorder-after before order_start, with no opening copy, is refused')
+    add('o11', O_, {'@': HEAD + b'copy "@-t"\n' + D('a') + after + O('a')
+                    + b'reorder-end\n' + END, '@-t': coll('t')},
+        'control for o10: reorder-after after an opening copy')
+    add('o12', O_, HEAD + D('a') + ORDER_HEAD + O('a') + ORDER_TAIL
+        + b'..\n<U0045>\n' + END,
+        'a range after order_end is refused, and the entry after it')
+    add('o13', O_, HEAD + D('a') + O('a') + ORDER_HEAD + ORDER_TAIL + END,
+        'an entry before order_start that names no collating-symbol')
+    add('o14', O_, HEAD + D('a') + b'order_start forward\n<U0061>\n..\n'
+        + after + O('a') + b'reorder-end\n' + END,
+        'reorder-after with a range open: it closes the range with a stale '
+        'argument')
+    add('o15', O_, ab + after + b'<U0063>\nreorder-sections-after <x>\n'
+        b'reorder-sections-end\n' + END,
+        'reorder-sections-after in a reorder block: a counted error')
+    add('o16', O_, ab + after + O('b') + END,
+        'END in a reorder block: a counted error')
+    add('o17', O_, HEAD + D('a') + D('b') + D('c') + ORDER_HEAD + O('a')
+        + ORDER_TAIL + after + O('b') + b'reorder-after <U9999>\n' + O('c')
+        + b'reorder-end\n' + END,
+        'a second reorder-after in the block, whose anchor is not there')
+    add('o18', O_, ab + after + b'<U0063>\nreorder-end\n' + after + O('b')
+        + b'reorder-end\n' + END,
+        'a second reorder block after reorder-end is refused')
+    add('o19', O_, HEAD + D('a') + b'order_start forward\n<U0041>\n..\n'
+        b'<U0045>\n' + O('a') + ORDER_TAIL + b'reorder-after <U0041>\n'
+        b'<U0063>\nreorder-end\n<U0045>\n' + END,
+        'the end of a range, again on a line glibc refuses')
+    add('o36', O_, ab + after + O('b'),
+        'control for o16: the file ends in a reorder block, with no END')
+    # Round 1 of the false-negative review of 15.3 C1: the END case's
+    # checks run at an END the section reads on after (an 0xFF before
+    # 2.36), and at one a skipped branch meets; and a symbol read while no
+    # statement has read an argument leaves the rest of its line.
+    add('o37', O_, ab + after + O('b') + b'END \xff\nreorder-end\n' + END,
+        'END then 0xFF in a reorder block, reorder-end after it')
+    add('o38', O_, ab + after + O('b') + b'ifdef RD_NOPE\nEND \xff\n'
+        b'endif\nreorder-end\n' + END,
+        'END then 0xFF in a skipped branch of a reorder block')
+    add('o39', O_, HEAD + D('a') + b'order_start forward\n<U0041>\n..\n'
+        b'END \xff\n<U0045>\n' + O('a') + ORDER_TAIL + END,
+        'END then 0xFF with a range open')
+    add('o40', O_, HEAD + b'<rd-x> order_start forward\n<U0062>\n<U0061>\n'
+        b'order_end\n' + D('a') + after + O('a') + b'reorder-end\n' + END,
+        'a symbol first in the section, order_start after it on its line')
+    add('o41', O_, HEAD + b'<rd-x>\norder_start forward\n<U0062>\n<U0061>\n'
+        b'order_end\n' + D('a') + after + O('a') + b'reorder-end\n' + END,
+        'control for o40: order_start on a line of its own')
+    add('o42', O_, HEAD + b'define rdX\n<rd-x> order_start forward\n'
+        b'<U0062>\n<U0061>\norder_end\n' + D('a') + after + O('a')
+        + b'reorder-end\n' + END,
+        'control for o40: a define before the symbol')
+    # Round 2 of the same review: in a section read for another category,
+    # reorder-end and reorder-sections-end leave the rest of their line to
+    # be read as statements. s33 is the ellipsis alone on its line.
+    for cid, line, note in (
+            ('o43', b'reorder-end ..', 'reorder-end then an ellipsis'),
+            ('o44', b'reorder-sections-end ..',
+             'reorder-sections-end then an ellipsis'),
+            ('o45', b'reorder-end', 'control for o43: reorder-end alone')):
+        add(cid, O_, {'@': qt, '@-x': HEAD + line + b'\n' + END + TIME7},
+            note + ', in a file read for LC_TIME')
+    add('o46', O_, ab + after + O('b') + b'reorder-end ..\n' + END,
+        'control for o43: reorder-end then an ellipsis, in a section read '
+        'for itself, where glibc drops the rest of the line')
+    # Round 3 of the same review: symbol-equivalence leaves the rest of its
+    # line to be read as statements when its second name is no declared
+    # collating-symbol or its new name is defined already
+    # (ld-collate.c:3023-3038@2.34), and drops it on success (:3042).
+    se = b'symbol-equivalence <rd-q> '
+    ab0 = HEAD + D('a') + D('b')
+    tail = O('a') + O('b') + ORDER_TAIL + END
+    add('o47', O_, ab0 + se + b'<rd-nope> ' + ORDER_HEAD + tail,
+        'symbol-equivalence to an undeclared symbol, order_start after it')
+    add('o48', O_, ab0 + se + b'<rd-nope>\n' + ORDER_HEAD + tail,
+        'control for o47: order_start on a line of its own')
+    add('o49', O_, ab0 + se + b'<rd-nope> codepoint_collation\n'
+        + ORDER_HEAD + tail,
+        'symbol-equivalence to an undeclared symbol, codepoint_collation '
+        'after it')
+    add('o50', O_, ab0 + se + b'<rd-nope> ..\n' + ORDER_HEAD + tail,
+        'symbol-equivalence to an undeclared symbol, a range after it')
+    sym = b'collating-symbol <rd-s>\n'
+    add('o51', O_, ab0 + sym + se + b'<rd-s>\n' + se + b'<rd-s> '
+        + ORDER_HEAD + tail,
+        'symbol-equivalence of a name defined already, order_start after it')
+    add('o52', O_, ab0 + sym + se + b'<rd-s> ' + ORDER_HEAD + tail,
+        'control for o51: a symbol-equivalence that succeeds drops the '
+        'order_start after it')
+    # Round 4 of the same review, the exits of collate_read that leave a
+    # line unfinished: a reorder-after closing a range with a stale
+    # argument (ld-collate.c:3264-3271@2.34), an 0xFF read as EOF inside
+    # order_start's directions and inside a weight, a range in a reorder
+    # block, and order_start with a range pending.
+    add('o53', O_, ab0 + ORDER_HEAD + b'...\n' + after + O('a') + O('b')
+        + b'reorder-end\n' + END,
+        'reorder-after with an absolute range open')
+    add('o54', O_, ab0 + ORDER_HEAD + b'order_end\n' + after + O('a')
+        + O('b') + b'reorder-end\n' + END,
+        'control for o53: order_end before the reorder block')
+    add('o55', O_, ab0 + b'order_start forward \xff <mk-a>\n<U0062>\n'
+        b'<U0061>\n' + O('b') + ORDER_TAIL + END,
+        'order_start, then 0xFF, then an entry on its line')
+    add('o56', O_, ab0 + ORDER_HEAD + b'<U0063> <U0063>\xff <mk-a>\n'
+        + O('b') + ORDER_TAIL + END,
+        'a weight ending in 0xFF, then an entry on its line')
+    add('o57', O_, ab0 + ORDER_HEAD + O('a') + O('b') + b'order_end\n'
+        + after + b'...\n<U0062>\nreorder-end\n' + END,
+        'an absolute range in a reorder block')
+    add('o58', O_, ab0 + ORDER_HEAD + b'...\norder_start forward\n' + O('a')
+        + O('b') + ORDER_TAIL + END,
+        'order_start with an absolute range pending')
+    # The cases of the 13.36 review that collate_read's state decides,
+    # measured again for backlog 15.3: no markers, an outcome each.
+    for cid, files, note in (
+            ('o20', {'@': HEAD + b'order_start forward\n<U0041>\n..\n'
+                     b'copy "@-b"\n<U0045>\norder_end\n' + END,
+                     '@-b': HEAD + b'order_start forward\n<U0061>\n<U0062>\n'
+                     b'order_end\n' + END},
+             'a copy in the middle of a range'),
+            ('o21', {'@': HEAD + b'order_start forward\n<U0041>\n'
+                     b'copy "@-b"\n..\n<U0045>\norder_end\n' + END,
+                     '@-b': HEAD + b'order_start forward\n<U0061>\n'
+                     b'order_end\nreorder-after <U9999>\n<U0063>\n'
+                     b'reorder-end\n' + END},
+             'a range after a copy whose reorder-after names nothing'),
+            ('o22', {'@': HEAD + b'order_start forward\n<U0041>\norder_end\n'
+                     b'reorder-after <U0041>\n<U0042>\norder_start forward\n'
+                     b'<U0043>\n..\n<U0045>\n' + END},
+             'order_start in a reorder block, then a range; END in the '
+             'block'),
+            ('o23', {'@': HEAD + b'<foo>\norder_start forward\n..\n<U0045>\n'
+                     b'order_end\n' + END},
+             'a symbol before order_start, a range right after it'),
+            ('o24', {'@': HEAD + b'order_start forward\n..\n<U0045>\n'
+                     b'order_end\n' + END},
+             'a range right after order_start'),
+            ('o25', {'@': HEAD + b'copy "@-y"\norder_start forward\n..\n'
+                     b'<U0045>\norder_end\n' + END,
+                     '@-y': HEAD + b'order_start forward\n<U0041>\n<U0042>\n'
+                     b'<U0043>\norder_end\nreorder-after <U0041>\n'
+                     b'reorder-end\n' + END},
+             'a range right after order_start, after an opening copy'),
+            ('o26', {'@': HEAD + b'order_start forward\n<U00010000>\n...\n'
+                     b'<U00010010>\n<U00010020>\n<U00010005>\n<U00010006>\n'
+                     b'...\n<U00010030>\norder_end\n' + END},
+             'two absolute ranges, the second after a character the first '
+             'filled'),
+            ('o27', {'@': HEAD + b'order_start forward\n<U00010000>\n...\n'
+                     b'<U00010010>\n<U00010028>\n<U00010005>\n<U00010006>\n'
+                     b'...\n<U00010030>\norder_end\n' + END},
+             'two absolute ranges, the second after a character the first '
+             'filled'),
+            ('o28', {'@': HEAD + b'copy "@-b"\norder_start forward\n'
+                     b'<U0041>\n..\n<U0045>\n<U0031>\norder_end\n' + END,
+                     '@-b': HEAD + b'order_start forward\n<U0045>\n<U0030>\n'
+                     b'<U0032>\norder_end\n' + END},
+             'a range whose end the opening copy placed'),
+            ('o29', {'@': HEAD + b'copy "@-b"\norder_start forward\n'
+                     b'<U0041>\n..\n<U0045>\n<U0031>\norder_end\n' + END,
+                     '@-b': HEAD + b'order_start forward\n<U0030>\n<U0032>\n'
+                     b'order_end\n' + END},
+             'a range after an opening copy'),
+            ('o30', {'@': HEAD + b'order_start forward\n<U0041>\norder_end\n'
+                     b'reorder-after <U0041>\n<U0042>\nreorder-end\n'
+                     b'order_start forward\n<U0043>\n..\n<U0045>\norder_end\n'
+                     + END},
+             'a range in an order_start after reorder-end'),
+            ('o31', {'@': HEAD + b'order_start forward\n<U0041>\norder_end\n'
+                     b'reorder-after <U0041>\n<U0042>\norder_end\n'
+                     b'order_start forward\n<U0043>\n..\n<U0045>\norder_end\n'
+                     + END},
+             'order_end in a reorder block, then a range; END in the block')):
+        add(cid, O_, files, note)
+    # The `from` string of a collating-element is read translated
+    # (ld-collate.c:2786-2793@2.34). A raw byte above 0x7F is copied as it
+    # is before 2.36 and decoded as UTF-8 and looked up in the charmap from
+    # 2.36 (backlog 13.23). The marker is the bytes the table holds when
+    # the string is read as <U00E9> and the marker text, in that charmap.
+    raw = b'"\xc3\xa9Zqew"'
+    named = b'"<U00E9>' + _ucs(b'Zqew') + b'"'
+    for cid, string, charmap, text, note in (
+            ('o32', raw, 'UTF-8', '\xc3\xa9Zqew',
+             'a raw UTF-8 character in a `from` string, under UTF-8'),
+            ('o33', named, 'UTF-8', '\xc3\xa9Zqew', 'control for o32'),
+            ('o34', raw, 'ISO-8859-1', '\xe9Zqew',
+             'a raw UTF-8 character in a `from` string, under ISO-8859-1'),
+            ('o35', named, 'ISO-8859-1', '\xe9Zqew', 'control for o34')):
+        add(cid, O_, HEAD + b'collating-element <mk-e> from ' + string + b'\n'
+            + ORDER_HEAD + O('e') + ORDER_TAIL + END, note,
+            markers={'e': text}, charmap=charmap)
     return out
 
 
@@ -679,12 +914,13 @@ def generate():
 
 
 def corpus_digest(cases=None):
-    """sha256 over every case: its id, main name, files and markers."""
+    """sha256 over every case: its id, family, main name, markers,
+    charmap and files."""
     cases = generate() if cases is None else cases
     h = hashlib.sha256(b'reader_oracle_cases/1\n')
     for c in cases:
-        h.update(json.dumps([c.id, c.family, c.main, sorted(c.markers.items())],
-                            sort_keys=True).encode('ascii'))
+        h.update(json.dumps([c.id, c.family, c.main, sorted(c.markers.items()),
+                             c.charmap], sort_keys=True).encode('ascii'))
         for name in sorted(c.files):
             h.update(name.encode('ascii') + b'\0')
             h.update(hashlib.sha256(c.files[name]).digest())
