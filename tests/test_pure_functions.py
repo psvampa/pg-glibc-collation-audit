@@ -31,20 +31,29 @@ import collation_keys as ck
 import node_charmaps as nc
 
 
-def facts(*collate, cc=0x25, ec=0x2f, unresolved=None, instructions=()):
+def facts(*collate, cc=0x25, ec=0x2f, unresolved=None, instructions=(),
+          names=None):
     """A glibc_tree.Facts by hand, so step 2's logic is tested without
     glibc_reader: LC_COLLATE sections on the (start, end) lines given, read
     with `cc` and `ec` by the run '@', or (start, end, comment, escape) for
     a section read with its own pair, or (..., run) by another run;
-    `instructions` are (first, last) lines the reader read as instructions.
-    What the reader puts in Facts for real files is tested in
+    `instructions` are (first, last) lines the reader read as instructions;
+    `names` is {line: code point string, or None} for what the reader read
+    each line to name (Facts.characters), one character map. What the
+    reader puts in Facts for real files is tested in
     test_glibc_reader.FileFactsReadLikeGlibc."""
     rows = []
     for r in collate:
         r = tuple(r)
         r = r + (cc, ec) if len(r) == 2 else r
         rows.append(r + ('@',) if len(r) == 4 else r)
-    return glibc_tree.Facts(rows, unresolved, list(instructions))
+    if names is None:
+        return glibc_tree.Facts(rows, unresolved, list(instructions), (),
+                                (), None)
+    kept = {'m': {n: None if v is None else tuple(map(ord, v))
+                  for n, v in names.items()}}
+    return glibc_tree.Facts(rows, unresolved, list(instructions), ['m'], (),
+                            kept.get)
 
 
 def same_lines(ranges):
@@ -431,6 +440,19 @@ class RenamedFileOnTheNewSide(unittest.TestCase):
         self.assertEqual([(5, 6)], new.instructions,
                          'a renamed file keeps its instructions (13.36)')
 
+    def test_a_renamed_file_keeps_what_its_lines_name(self):
+        """Facts.chars and Facts.stopped go with the file through a rename
+        (15.3 C2): made again without them, no line named a character,
+        and a renamed run the reader stopped in kept a name no row has."""
+        y = glibc_tree.Facts([(4, 8, 0x25, 0x2f, 'y'),
+                              (4, 8, 0x25, 0x2f, 'zz_C')], None, [], ['m'],
+                             ['y'], {'m': {5: (0x41,)}}.get)
+        found = ({'x': facts((4, 8, 0x25, 0x2f, 'x'))}, {'y': y})
+        _, new = f.facts_of(found, self.RENAMED, 'localedata/locales/x')
+        self.assertEqual(('m',), new.chars)
+        self.assertEqual(('x',), new.stopped)
+        self.assertIsNone(new.characters(5))
+
     def test_a_renamed_copier_keeps_its_old_name_too(self):
         """k is not renamed; zz_B, which copies it, became zz_W: one run
         (round 6 of the 15.2 B3 review)."""
@@ -739,27 +761,32 @@ class ChangedCharacters(unittest.TestCase):
     """"Step 2 named the file and stopped": the characters
     the confirmation template needs as test values were in the diff step 2
     had already read, and reaching them meant a `git diff` by hand. These pin
-    how the changed lines are read, by injection, because the corpus never
-    produces most of these shapes. Where the sections are and the comment
-    character each line is read with come from glibc_reader (Facts).
+    how the changed lines are placed, by injection, because the corpus never
+    produces most of these shapes. Where the sections are and what each
+    line names come from glibc_reader (Facts); how it reads them, comments
+    and strings included, is tested on real files in
+    test_glibc_reader.StepTwoNamesWhatTheReaderRead.
 
     The new block sits three lines lower than the old one, so a line placed
     against the wrong side's block lands outside it.
     """
 
-    # LC_COLLATE is old lines 6..9 and new lines 9..12.
-    OLD, NEW = facts((6, 9)), facts((9, 12))
+    # LC_COLLATE is old lines 6..9 and new lines 9..12. Each side names a
+    # character on every line, inside the block and out, so a line placed
+    # against the wrong side names the wrong one.
+    OLD = facts((6, 9), names={n: chr(0x40 + n) for n in range(1, 16)})
+    NEW = facts((9, 12), names={n: chr(0x60 + n) for n in range(1, 16)})
 
     def chars(self, section, old=OLD, new=NEW):
         return f.changed_characters([section], old, new)
 
     def test_a_removed_rule_is_read_against_the_old_block(self):
         """Old line 8 is inside the old block and outside the new one."""
-        self.assertEqual(self.chars('\n@@ -8 +10,0 @@\n-<U0042> <b>\n'), ['B'])
+        self.assertEqual(self.chars('\n@@ -8 +10,0 @@\n-<U0042> <b>\n'), ['H'])
 
     def test_an_added_rule_is_read_against_the_new_block(self):
         """New line 11 is inside the new block and outside the old one."""
-        self.assertEqual(self.chars('\n@@ -8,0 +11 @@\n+<U0044> <b>\n'), ['D'])
+        self.assertEqual(self.chars('\n@@ -8,0 +11 @@\n+<U0044> <b>\n'), ['k'])
 
     def test_lines_outside_the_block_name_nothing(self):
         self.assertEqual(self.chars('\n@@ -4 +4,4 @@\n-<U0043>\n+<U0043>\n'
@@ -770,7 +797,7 @@ class ChangedCharacters(unittest.TestCase):
         past its end. The character named before the block is not a rule."""
         section = ('\n@@ -4,5 +4,0 @@\n-<U0043>\n-END LC_CTYPE\n-LC_COLLATE\n'
                    '-<U0041> <a>\n-<U0042> <b>\n')
-        self.assertEqual(self.chars(section, old=facts((6, 9))), ['A', 'B'])
+        self.assertEqual(self.chars(section), ['F', 'G', 'H'])
 
     def test_context_lines_move_both_sides(self):
         """Step 2 reads git's -U0 diff, with --inter-hunk-context=0 pinned in
@@ -779,52 +806,44 @@ class ChangedCharacters(unittest.TestCase):
         as if they sat before the block, and nothing is found."""
         section = ('\n@@ -5,3 +8,3 @@\n END LC_CTYPE\n LC_COLLATE\n'
                    '-<U0041> <a>\n+<U0048> <a>\n')
-        self.assertEqual(self.chars(section), ['A', 'H'])
+        self.assertEqual(self.chars(section), ['G', 'j'])
 
     def test_a_removed_line_opening_with_two_dashes_is_a_rule(self):
         """After the first hunk header, `---` is a removed line whose text
         opens with `--`, not a file name."""
         section = '\n--- a/x\n+++ b/x\n@@ -8 +11 @@\n---<U0046>\n+<U0044> <b>\n'
-        self.assertEqual(self.chars(section), ['F', 'D'])
+        self.assertEqual(self.chars(section), ['H', 'k'])
 
-    def test_a_comment_names_no_rule(self):
-        """A comment names characters too, and a changed comment is not a
-        changed rule."""
-        section = '\n@@ -7 +10 @@\n-<U0041> <a>\n+<U0041> <a> % <U005A>\n'
-        self.assertEqual(self.chars(section), ['A'])
+    def test_a_line_that_names_no_character_adds_none(self):
+        """A comment line, a keyword, a refused entry: the reader names
+        nothing there (Facts.characters gives [])."""
+        old = facts((6, 9), names={7: 'A'})
+        self.assertEqual(self.chars('\n@@ -7,2 +10,0 @@\n-<U0041>\n-% x\n',
+                                    old=old), ['A'])
 
-    def test_the_file_s_own_comment_char_is_used(self):
-        own = facts((2, 4), cc=0x23)
-        section = '\n@@ -3 +3 @@\n-<U0041> <a>\n+<U0041> <a> # <U005A>\n'
-        self.assertEqual(self.chars(section, own, own), ['A'])
+    def test_each_character_once_in_the_order_met(self):
+        old = facts((6, 9), names={7: 'BA', 8: 'AC'})
+        self.assertEqual(self.chars('\n@@ -7,2 +10,0 @@\n-x\n-y\n', old=old),
+                         ['B', 'A', 'C'])
 
-    def test_with_no_directive_the_comment_char_is_glibcs(self):
-        """Backlog 13.8: no `comment_char` line is `#` to glibc (lr_create,
-        linereader.c:79@2.39); this used to assume `%`, cut a `%` line short
-        and read a `#` comment as rules. The reader's pair for a file with
-        no directive (glibc_tree.chars_before) is what this is handed."""
-        self.assertEqual(glibc_tree.chars_before([], 3), (0x23, 0x5c))
-        bare = facts((1, 3), cc=0x23, ec=0x5c)
-        section = ('\n@@ -2 +2,2 @@\n-<U0041> <a>\n+<U0041> <a> # <U005A>\n'
-                   '+<U0042> <b> % <U0043>\n')
-        self.assertEqual(self.chars(section, bare, bare), ['A', 'B', 'C'])
+    def test_a_code_point_above_unicode_is_left_out(self):
+        """A <U....> name of eight digits can name one (glibc reads it
+        as tok_ucs4, linereader.c:534@2.39); no character is printed for
+        it, and the list is not cut."""
+        new = glibc_tree.Facts([(9, 12, 0x25, 0x2f, '@')], None, [], ['m'],
+                               (), {'m': {11: (0x110000, 0x41)}}.get)
+        self.assertEqual(self.chars('\n@@ -8,0 +11 @@\n+x\n', new=new),
+                         ['A'])
 
-    def test_each_section_is_read_with_its_own_characters(self):
-        """Lines 2..4 are read with `%`, lines 6..9 with `#`."""
-        mixed = facts((2, 4, 0x25, 0x2f), (6, 9, 0x23, 0x2f))
-        section = ('\n@@ -4 +4 @@\n-<U0041> # <U005A>\n'
-                   '+<U0041> # <U0059>\n@@ -7 +7 @@\n-<U0042> # <U0058>\n'
-                   '+<U0042>\n')
-        self.assertEqual(self.chars(section, mixed, mixed),
-                         ['A', 'Z', 'Y', 'B'])
-
-    def test_a_line_read_with_two_comment_chars_cannot_tell(self):
-        """One run reads the file whole and obeys a directive another run
-        skips (false-negative-reviewer, 15.2 B3): which part of the line is
-        a comment has two answers, so none is given."""
-        two = facts((2, 9, 0x25, 0x2f), (2, 9, 0x23, 0x2f, 'cp'))
-        section = '\n@@ -4 +4 @@\n-<U0041> # <U005A>\n+<U0041>\n'
-        self.assertEqual(self.chars(section, two, two), [])
+    def test_every_run_s_reading_counts_once(self):
+        """Facts.characters: two runs read the line with two maps, and a
+        character both name is named once, in the order met."""
+        two = glibc_tree.Facts([(9, 12, 0x25, 0x2f, '@')], None, [],
+                               ['m1', 'm2'], (),
+                               {'m1': {11: (0x42, 0x41)},
+                                'm2': {11: (0x41, 0x43)}}.get)
+        self.assertEqual([0x42, 0x41, 0x43], two.characters(11))
+        self.assertEqual([], two.characters(10))
 
     def test_a_directive_acts_from_the_line_after_it(self):
         """glibc_tree.chars_before: a `comment_char #` on line 5 does not
@@ -835,16 +854,10 @@ class ChangedCharacters(unittest.TestCase):
         self.assertEqual(glibc_tree.chars_before(dirs, 6), (0x23, 0x5c))
         self.assertEqual(glibc_tree.chars_before(dirs, 7), (0x23, 0x2f))
 
-    def test_a_comment_char_that_is_not_ascii_cannot_tell(self):
-        """The diff was decoded, and a byte above 0x7F is not one character
-        of it: the answer is "cannot tell", which prints the warning."""
-        odd = facts((1, 3), cc=0xa7)
-        section = '\n@@ -2 +2 @@\n-<U0041>\n+<U0042>\n'
-        self.assertEqual(self.chars(section, odd, odd), [])
-
     def test_a_gained_block_is_read_from_the_new_side(self):
         section = '\n@@ -3,0 +4,3 @@\n+LC_COLLATE\n+<U0041> <a>\n+END LC_COLLATE\n'
-        self.assertEqual(self.chars(section, facts(), facts((4, 6))), ['A'])
+        self.assertEqual(self.chars(section, facts(names={}),
+                                    facts((4, 6), names={5: 'A'})), ['A'])
 
     def test_a_gained_block_that_names_no_character_is_empty(self):
         """The caller turns this into the warning, so a character named on a
@@ -854,7 +867,8 @@ class ChangedCharacters(unittest.TestCase):
         section = ('\n@@ -3 +3 @@\n-<U0043>\n+<U0044>\n'
                    '@@ -4,0 +5,3 @@\n+LC_COLLATE\n+copy "iso14651_t1"\n'
                    '+END LC_COLLATE\n')
-        self.assertEqual(self.chars(section, facts(), facts((5, 7))), [])
+        self.assertEqual(self.chars(section, facts(names={3: 'C'}),
+                                    facts((5, 7), names={3: 'D'})), [])
 
 
 class ChangedCharactersCannotTell(unittest.TestCase):
@@ -867,7 +881,7 @@ class ChangedCharactersCannotTell(unittest.TestCase):
 
     def test_the_control_names_both(self):
         self.assertEqual(
-            f.changed_characters([self.SECTION], self.OLD, self.NEW), ['B', 'D'])
+            f.changed_characters([self.SECTION], self.OLD, self.NEW), ['H', 'k'])
 
     def test_an_unreadable_new_version(self):
         self.assertEqual(f.changed_characters([self.SECTION], self.OLD, None), [])
@@ -882,6 +896,42 @@ class ChangedCharactersCannotTell(unittest.TestCase):
     def test_an_unparsable_hunk_header_after_a_good_one(self):
         section = self.SECTION + '@@ not a header @@\n-<U0041> <a>\n'
         self.assertEqual(f.changed_characters([section], self.OLD, self.NEW), [])
+
+    def test_a_line_the_reader_cannot_name(self):
+        """A pre-2.36 `from` holding a raw byte above 0x7F
+        (glibc_reader.statement_characters): the line before it names one,
+        and none is printed."""
+        new = facts((9, 12), names={10: 'x', 11: None})
+        self.assertEqual(f.changed_characters(
+            ['\n@@ -8 +10,2 @@\n-a\n+b\n+c\n'], self.OLD, new), [])
+
+    def test_a_tree_with_a_run_the_reader_stopped_in(self):
+        """Facts.stopped: what glibc reads after the place the reader
+        stopped is not known in any file, whatever the maps say."""
+        new = glibc_tree.Facts([(9, 12, 0x25, 0x2f, '@')], None, [], ['m'],
+                               ['zz_S'], {'m': {10: (0x41,)}}.get)
+        self.assertIsNone(new.characters(10))
+        self.assertEqual([], f.changed_characters(
+            ['\n@@ -8 +10 @@\n-a\n+b\n'], self.OLD, new))
+
+    def test_a_map_known_up_to_a_line(self):
+        """The map's 'from' (glibc_reader.Run.named_lines): the
+        lines before it are named, none from it on."""
+        new = glibc_tree.Facts([(9, 12, 0x25, 0x2f, '@')], None, [], ['m'],
+                               (), {'m': {10: (0x41,), 'from': 11}}.get)
+        self.assertEqual([0x41], new.characters(10))
+        self.assertIsNone(new.characters(11))
+        self.assertIsNone(new.characters(12))
+        self.assertEqual([], f.changed_characters(
+            ['\n@@ -8 +10,2 @@\n-a\n+b\n+c\n'], self.OLD, new))
+
+    def test_a_character_map_that_cannot_be_read(self):
+        """reader_cache.char_map answers None for a map not kept or
+        damaged."""
+        new = glibc_tree.Facts([(9, 12, 0x25, 0x2f, '@')], None, [], ['m'],
+                               (), lambda sha: None)
+        self.assertEqual(f.changed_characters([self.SECTION], self.OLD, new),
+                         [])
 
 
 class PrintCharacters(unittest.TestCase):

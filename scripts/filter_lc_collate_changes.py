@@ -360,7 +360,9 @@ def facts_of(facts, renamed_to, path):
     new side takes its old name, the file's own and any locale that copies
     it (rounds 5 and 6 of the 15.2 B3 review). git reports a rename only
     when the old name is gone at the new tag, so no run there already
-    holds it."""
+    holds it. What each line names (Facts.chars) goes with them: it is
+    the same file's, whatever the run is called; a run the reader
+    stopped in (Facts.stopped) is renamed with the rest."""
     name = os.path.basename(path)
     if name not in facts[0]:
         g.die(f"{path} changed but is not among the locale files listed at "
@@ -371,7 +373,9 @@ def facts_of(facts, renamed_to, path):
     if new is not None and back:
         new = glibc_tree.Facts([r[:4] + (back.get(r[4], r[4]),)
                                 for r in new.collate], new.unresolved,
-                               new.instructions)
+                               new.instructions, new.chars,
+                               [back.get(b, b) for b in new.stopped],
+                               new.load)
     return facts[0][name], new
 
 
@@ -668,33 +672,33 @@ def changed_characters(sections, old, new):
     removed line is placed by its old line number against the old sections
     and an added line by its new line number against the new ones, so a
     hunk that crosses a section's edge contributes only the lines inside
-    it, and a file that gained its section is read from the new one. Each
-    line's comment is cut before the `<U....>` escapes are read: a comment
-    names characters too, and a changed comment is not a changed rule. The
-    comment character is the one localedef reads that line with
-    (Facts.chars_at): `#` unless a directive above it says otherwise, never
-    a `%` assumed (backlog 13.8).
+    it, and a file that gained its section is read from the new one. What
+    a line names is what glibc_reader read there, in every run of its tag
+    that reads the file (Facts.characters): its tokens, each read with the
+    comment and escape characters that run reads the line with, so a
+    comment names nothing and a comment character inside a <name> or a
+    string cuts nothing (backlog 13.29); a weight string's <U....> names;
+    the characters of a collating-element's `from`, read translated as
+    glibc reads it; nothing from a statement glibc refuses in its state,
+    which it drops unread (glibc_reader.Collate.characters).
 
     Returns [] when the lines name no character and also when this cannot
     tell -- no new side, the path does not have exactly one section in the
-    diff, a hunk header does not parse, a line localedef reads with two
-    comment characters (Facts.chars_at: one run reads the file whole,
-    another skips a directive), a comment character that is not ASCII,
-    which the decoded diff cannot be cut at. The caller never prints an
-    empty list: the locale stays flagged, with the could-not-identify
-    warning or a line saying every rule in it can change.
+    diff, a hunk header does not parse, a character map that cannot be
+    read, a line the reader cannot say that of (Facts.characters). The
+    caller never prints an empty list: the locale stays flagged, with the
+    could-not-identify warning or a line saying every rule in it can
+    change.
     """
     lines = _changed_lines(sections, old, new)
     if lines is None:
         return []
     seen, found = set(), []
-    for facts, n, text in lines:
-        chars = facts.chars_at(n)
-        if chars is None or chars[0] >= 0x80:
+    for facts, n in lines:
+        cps = facts.characters(n)
+        if cps is None:
             return []
-        cchar = chars[0]
-        for hexcp in g._UCHAR_RE.findall(text.split(chr(cchar))[0]):
-            code = int(hexcp, 16)
+        for code in cps:
             if code > 0x10FFFF or chr(code) in seen:
                 continue
             seen.add(chr(code))
@@ -720,16 +724,15 @@ def instruction_changed(sections, old, new):
     return lines is not None and any(
         facts.instruction(n) or any(n in (start, end)
                                     for start, end, _, _, _ in facts.collate)
-        for facts, n, _ in lines)
+        for facts, n in lines)
 
 
 def _changed_lines(sections, old, new):
-    """[(Facts, line, text)] for every changed line inside LC_COLLATE: a
+    """[(Facts, line)] for every changed line inside LC_COLLATE: a
     removed line by its old number against the old sections, an added one
-    by its new number against the new; `text` is the line without its
-    `-` or `+`. None when this cannot tell: no new side, the path does not
-    have exactly one section in the diff, or a hunk header does not
-    parse."""
+    by its new number against the new. None when this cannot tell: no new
+    side, the path does not have exactly one section in the diff, or a
+    hunk header does not parse."""
     if new is None or len(sections) != 1:
         return None
     facts = {'-': old, '+': new}
@@ -756,7 +759,7 @@ def _changed_lines(sections, old, new):
         n = line_no[side]
         line_no[side] += 1
         if facts[side].inside(n):
-            out.append((facts[side], n, line[1:]))
+            out.append((facts[side], n))
     return out
 
 

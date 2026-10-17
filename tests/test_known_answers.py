@@ -901,24 +901,27 @@ class BelowTheOldVersionFloor(StepRun):
                           f'reorder-sections-after in LC_COLLATE',
                           flat(out).replace('- ', '-'))
 
-    def test_hu_HU_and_wal_ET_name_no_character_the_other_five_do(self):
-        """The real case of a change whose lines name no character, and one
-        whose reading is not settled. Neither may read as an empty list,
-        which would look like nothing to test: wal_ET gets "could not
-        identify", and hu_HU, whose changed lines are instructions, that
-        every rule in it can change (backlog 13.36). So do the five that
-        name characters. Two of se_NO's changed lines place U+00E3 and
-        U+00C3, the anchors of two reorder-after blocks below them, so
-        moving them would move those blocks too; only their comments
-        changed, so the line is noise there,
-        measured and accepted with that rule (round 1 of the 13.36
-        review)."""
+    def test_the_floor_pair_names_characters_only_where_the_reader_is_sure(
+            self):
+        """The real case of a change whose lines name no character, one
+        whose reading is not settled, and files the reader cannot name.
+        None may read as an empty list, which would look like nothing to
+        test: wal_ET gets "could not identify", and hu_HU, whose changed
+        lines are instructions, that every rule in it can change (backlog
+        13.36). At glibc-2.12 and 2.17 the seventeen runs of am_ET, ber_MA
+        and the locales that copy them are unsettled at a
+        reorder-sections-after, after which glibc may read any file
+        through a `copy` (15.3 C2, round 3 of its review): dz_BT, fi_FI,
+        se_NO and ug_CN, which those runs do not begin, print no list,
+        each still with the sentence that every rule in it can change.
+        iso14651_t1_common is read to its end by their opening copies
+        before that place, and keeps its list."""
         out = self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW)
         chars = step2_characters(out)
-        self.assertIsNone(chars['hu_HU'])
-        self.assertIsNone(chars['wal_ET'])
-        for name in set(chars) - {'hu_HU', 'wal_ET'}:
-            self.assertTrue(chars[name], f'{name} got the warning')
+        self.assertEqual({'iso14651_t1_common'},
+                         {name for name, got in chars.items() if got})
+        self.assertEqual({'dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
+                          'se_NO', 'ug_CN', 'wal_ET'}, set(chars))
         self.assertEqual(['dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
                           'se_NO', 'ug_CN'], step2_every_rule(out))
 

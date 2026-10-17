@@ -36,7 +36,11 @@ line. Where this reader sees a shape on which that model can differ from the
 handler glibc runs, it says so in Run.unsettled rather than answer as if it
 had read it. In LC_COLLATE it follows collate_read's state as well: a
 statement glibc refuses in the state it comes in changes nothing
-(Collate.refused). The statement grammars come in later steps of block 15.
+(Collate.refused); a collating-element's `from` string is read translated,
+as collate_read reads it; and the characters each line names are the ones
+in its tokens (Collate.characters), as far as the reader is sure of the
+run (Run.named_lines). The statement grammars come in later
+steps of block 15.
 
 The token layer is the one backlog 15.0 compared token by token with
 glibc's linereader.c compiled at glibc-2.28, 2.34 and 2.39, on every locale
@@ -888,6 +892,40 @@ class Collate(object):
     `refused` holds the index in `statements` of each statement glibc sent
     to err_label for the state it came in (_refused): it changed nothing."""
 
+    def characters(self):
+        """{file: {line: [code points] or None}}: the characters each line
+        of each file names in a statement glibc accepted
+        (statement_characters), each once, in reading order; None for a
+        line this reader cannot say that of. A statement's characters go
+        to every line it spans. A line no statement names a character on
+        is not there, and neither is a refused one: err_label drops it
+        unread (ld-collate.c:3958-3960@2.34). A statement spans the lines
+        from its first token to where the reader stood after it (`last`,
+        which _Runner.instruction records), a string continued over an
+        escaped newline included. Step 2 prints them under each changed
+        file (backlog 13.29)."""
+        out = {}
+        for i, (fname, line, toks) in enumerate(self.statements):
+            if i in self.refused or (self.unsure_from is not None
+                                     and i >= self.unsure_from):
+                continue
+            cps = statement_characters(toks)
+            if cps == []:
+                continue
+            lines = out.setdefault(fname, {})
+            end = max([self.last.get(i, line)] + [t.line for t in toks])
+            for n in range(line, end + 1):
+                have = lines.get(n, [])
+                if cps is None or have is None:
+                    lines[n] = None
+                    continue
+                have = list(have)
+                for c in cps:
+                    if c not in have:
+                        have.append(c)
+                lines[n] = have
+        return out
+
     def __init__(self):
         self.statements = []
         self.instructions = []
@@ -898,6 +936,10 @@ class Collate(object):
         self.else_action = 'none'     # else_none / else_ignore / else_seen
         self.order_started = False
         self.refused = set()          # statements glibc sent to err_label
+        self.last = {}                # statement index -> its last line
+        # The statements before this index are the ones read before
+        # Run.unsure_at; None while the reader is sure.
+        self.unsure_from = None
 
 
 class Section(object):
@@ -982,6 +1024,16 @@ class Run(object):
                statement can differ from the handler glibc runs, or where
                what localedef writes depends on -c. A caller
                that needs a settled answer refuses one with any of these.
+    unsure_at  (file, line) of the first of them met while reading, a
+               GlibcUndefined included, or None: what the reader read
+               before it is what glibc reads, and nothing after it is
+               known (named_lines). The ones _ranges_settled adds once the
+               run has ended are not such a place: they are about which
+               characters a range puts on no line, and every line of a
+               range is an instruction already.
+    began      every file whose LC_COLLATE the run began to read, in order.
+    finished   the files of `began` whose LC_COLLATE read had ended at
+               unsure_at.
     met        True when lr_getc read, or stopped at, a byte above 0x7F or
                a 0x1A, in any file of the run: the only bytes the builds on
                the two sides of glibc 2.36 read differently (lr_getc reads
@@ -1004,8 +1056,72 @@ class Run(object):
         self.reads = []
         self.collate = None
         self.unsettled = []
+        self.unsure_at = None
+        self.began = []
+        self.finished = frozenset()
         self.met = False
         self.words = set()
+
+    def named_lines(self):
+        """What this run tells of the characters each line names, as
+        ({file: (lines, cut)}, rest), by one rule: what the reader read
+        before the first place it could not settle (`unsure_at`) is
+        known, and nothing after it is.
+
+        lines  Collate.characters() of the file: {line: [code points], or
+               None for a line this reader cannot say that of}; a line
+               not there names none. With a cut, the lines before it
+               only: a place met inside _Runner.instruction comes after
+               its statement was stored, and that statement's lines are
+               not known either (review of the one-rule rewrite: the map
+               held the cut's own line, read as no map at all).
+        cut    None, or the first line from which the file's lines are
+               not known: its LC_COLLATE read had not ended at that place,
+               and glibc may read every line after it otherwise. Known up
+               to the last line of its last statement before the place,
+               and short of the place's own line when the place is in the
+               file: codepoint_collation leaves the rest of its line to be
+               read as statements (ld-collate.c:2691-2693@2.39).
+        rest   True when a file not in the answer cannot be told either:
+               after that place glibc may read any file, through a `copy`
+               the reader did not read as glibc does. False when such a
+               file names nothing in this run.
+
+        A file whose read had ended at the place is known whole: an
+        opening copy reads the copied file to its end first
+        (iso14651_t1_common for the locales that copy am_ET at glibc-2.12
+        and 2.17, which reorder-sections-after leaves unsettled). A run
+        that stored no LC_COLLATE (a fatal one, one that hangs, one
+        stopped where glibc reads outside its buffer) gives no file: when
+        the reader was sure throughout, glibc stored no LC_COLLATE
+        statement, and localedef writes nothing or no order (collate_finish
+        with no definition, ld-collate.c:1563-1566@2.34), so the run names
+        nothing; otherwise glibc may never reach that end, and nothing is
+        known. Rounds 1 to 4 of the 15.3 C2 review each found
+        one more route by which a reading the reader was not sure of
+        reached step 2 as a sure one; this is the one place that decides
+        it, and the callers only keep and join its answer."""
+        c, sure = self.collate, self.unsure_at is None
+        if c is None:
+            return {}, not sure
+        named = c.characters()
+        out = {f: (named.get(f, {}), None)
+               for f in dict.fromkeys(self.began + list(named))}
+        if sure:
+            return out, False
+        known = {}
+        for i, (fname, line, toks) in enumerate(
+                c.statements[:c.unsure_from]):
+            end = max([c.last.get(i, line)] + [t.line for t in toks])
+            known[fname] = max(known.get(fname, 0), end)
+        at_file, at_line = self.unsure_at
+        for f, (lines, _) in out.items():
+            if f not in self.finished:
+                cut = known.get(f, 0) + 1
+                if f == at_file:
+                    cut = min(cut, at_line)
+                out[f] = ({n: v for n, v in lines.items() if n < cut}, cut)
+        return out, True
 
     def sections(self, category, fname=None):
         return [s for r in self.reads for s in r.sections
@@ -1062,8 +1178,8 @@ def run(name, resolve, build, charmap='UTF-8'):
         r.out.fatal = Fatal('hang', None, detail=str(hang))
     except GlibcUndefined as undefined:
         # Nothing after this place can be read as glibc reads it.
-        r.out.unsettled.append((undefined.fname, undefined.line,
-                                'glibc reads outside its buffer here'))
+        r.stop_being_sure(undefined.fname, undefined.line,
+                          'glibc reads outside its buffer here')
         return r.out
     if r.out.fatal is None:
         r.out.collate = main.data.get('LC_COLLATE')
@@ -1077,6 +1193,48 @@ def run(name, resolve, build, charmap='UTF-8'):
 # between `<` and `>` (ld-collate.c:800-829@2.34). Eight digits as well as
 # four: a name of four is written as the one of eight it is looked up by.
 _WEIGHT_NAME = re.compile(rb'<U([0-9A-Fa-f]{8}|[0-9A-Fa-f]{4})>')
+
+
+def statement_characters(toks):
+    """The code points glibc reads as characters in one LC_COLLATE
+    statement's tokens, in reading order, or None when this reader cannot
+    say which.
+
+      - every <U....> name, and from 2.36 every raw UTF-8 character
+        (tok_ucs4, lr_token);
+      - in an untranslated string, a weight, each <U....> name
+        (_WEIGHT_NAME); any other character of a weight string is the
+        name of a symbol, one byte long (insert_weights, ld-collate.c:
+        796-842@2.34), never a character;
+      - in a translated string, the `from` of a collating-element
+        (_lookahead), every character it holds: a byte below 0x80, an
+        escaped one included, a <U....> name or, from 2.36, a UTF-8
+        character. What a <U....> name gives the wide string is the code
+        point written, before the charmap is asked (get_string,
+        linereader.c:697-717@2.34); a code point the charmap lacks is then
+        transliterated, which this reader does not model (charmaps come
+        in backlog 15.6). Before 2.36 a byte above 0x7F is copied as it
+        is, a byte and not a character (linereader.c:649-670@2.34;
+        backlog 13.23): None. Under the UTF-8 charmap a symbolic name
+        other than <U....> is not in the charmap (as copy_name).
+
+    Every token of the logical line counts, a token after one that makes
+    the handler drop the rest of the line included: this reader reads a
+    statement as its first token and the rest of its line (the module's
+    docstring), the wide side."""
+    out = []
+    for t in toks:
+        if t.tok == 'ucs4':
+            out.append(t.val)
+        elif t.tok == 'string' and t.raw is not None:
+            out.extend(int(h, 16) for h in _WEIGHT_NAME.findall(t.raw))
+        elif t.tok == 'string':
+            for kind, v in t.items:
+                if kind in ('cp', 'ucp'):
+                    out.append(v)
+                elif kind == 'byte':
+                    return None
+    return out
 
 
 # collate_read's state after each statement that changes it
@@ -1269,9 +1427,28 @@ class _Runner(object):
         # `defined`: one static list for the whole run, every file and
         # section (ld-collate.c:276@2.39), most recent first.
         self.defined = []
+        # For Run.named_lines: every LC_COLLATE struct of the run, and
+        # the files whose LC_COLLATE read has ended.
+        self.collates = []
+        self.done = []
 
     def unsettled(self, lr, line, why):
-        self.out.unsettled.append((lr.fname, line, why))
+        self.stop_being_sure(lr.fname, line, why)
+
+    def stop_being_sure(self, fname, line, why):
+        self.out.unsettled.append((fname, line, why))
+        if self.out.unsure_at is None:
+            self.out.unsure_at = (fname, line)
+            self.out.finished = frozenset(self.done)
+            for c in self.collates:
+                c.unsure_from = len(c.statements)
+
+    def new_collate(self):
+        c = Collate()
+        if self.out.unsure_at is not None:
+            c.unsure_from = 0
+        self.collates.append(c)
+        return c
 
     # -- localedef.c ------------------------------------------------------
 
@@ -1342,8 +1519,14 @@ class _Runner(object):
                 self.build)
         if lr.empty:
             return 1
+        collate = 'LC_COLLATE' in entry.needed - entry.avail
+        if collate:
+            self.out.began.append(lr.fname)
         try:
-            return self._locfile_read(lr, entry)
+            got = self._locfile_read(lr, entry)
+            if collate:
+                self.done.append(lr.fname)
+            return got
         finally:
             # Also when the read ends in a _Stop, a GlibcHang or a
             # GlibcUndefined: what it met is the run's.
@@ -1504,14 +1687,17 @@ class _Runner(object):
         # getc and phys follow from build, table and data). LR_KEY_FIELDS
         # names them, and a test fails when LR grows a field this key does
         # not cover.
+        element = sec.category == 'LC_COLLATE' \
+            and _kw(t, 'tok_collating_element')
         key = (lr.data, lr.table, snap, lr._cc, lr._ec, lr.translate_strings,
-               lr.return_widestr, sec.category)
+               lr.return_widestr, sec.category, element)
         kept = lr.build.lookahead.get(key)
         if kept is None:
             met, words = lr.met, lr.words
             lr.met, lr.words = False, set()
             try:
-                kept = self._lookahead(lr, sec) + (lr.met, frozenset(lr.words))
+                kept = self._lookahead(lr, sec, element) \
+                    + (lr.met, frozenset(lr.words))
             finally:
                 # A GlibcUndefined leaves from here: what the file met
                 # before the lookahead, and in it, is the run's all the same.
@@ -1605,6 +1791,10 @@ class _Runner(object):
             store.instructions.append(span)
         if not toks:
             return
+        # Where the statement just appended ends: a string continued over
+        # an escaped newline ends a line below the one its token starts on
+        # (false-negative-reviewer, round 1 of 15.3 C2).
+        store.last[len(store.statements) - 1] = span[2]
         f, first = lr.fname, toks[0]
         state = store.state.get(f, 0)
         if _refused(toks, state, sec is not None and sec.copy is not None):
@@ -1706,15 +1896,32 @@ class _Runner(object):
             store.instructions.append((lr.fname, n, n + 1))
 
     @staticmethod
-    def _lookahead(lr, sec):
+    def _lookahead(lr, sec, element=False):
         """(tokens after the first, reasons, lr.pi reached) of the rest of a
-        statement's logical line; leaves lr moved, statement() restores it."""
+        statement's logical line; leaves lr moved, statement() restores it.
+
+        `element`: the statement opens with collating-element in
+        LC_COLLATE, whose handler reads the token after `<name> from`
+        with translate_strings and return_widestr set, and sets both back
+        to 0 after it (ld-collate.c:2786-2793@2.34, the same at 2.28 and
+        2.39): that string is read translated, as get_string's translating
+        branch reads it (`.items`). In a state that refuses the statement,
+        or a section read for another category, glibc drops the line
+        without reading it, and its tokens change nothing (Collate.refused)."""
         rest, reasons = [], []
         loud = _TAIL_KEYWORDS.get(sec.category, _TAIL_KEYWORDS[None])
         seen = set()
         try:
             while True:
-                x = lr.token()
+                if element and len(rest) == 2 and rest[0].tok == 'bsymbol' \
+                        and _kw(rest[1], 'tok_from'):
+                    lr.translate_strings = lr.return_widestr = 1
+                    try:
+                        x = lr.token()
+                    finally:
+                        lr.translate_strings = lr.return_widestr = 0
+                else:
+                    x = lr.token()
                 if x.tok not in ('eol', 'eof') and _repeats(lr, seen):
                     reasons.append('a statement whose tokens the line '
                                    'reader gives again forever')
@@ -1847,7 +2054,8 @@ class _Runner(object):
             t = lr.token()
         # collate_startup (ld-collate.c:1496-1528@2.39).
         if not ignore and entry.data.get('LC_COLLATE') is None:
-            entry.data['LC_COLLATE'] = Collate() if copy_locale is None \
+            entry.data['LC_COLLATE'] = self.new_collate() \
+                if copy_locale is None \
                 else copy_locale.data.get('LC_COLLATE')
         lr.translate_strings = 0
         lr.return_widestr = 0

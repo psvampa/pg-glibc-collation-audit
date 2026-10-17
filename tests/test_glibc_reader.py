@@ -33,6 +33,7 @@ asks of each file (file_facts) and how it is kept, and its answers on the
 five tags against theirs, every difference named.
 """
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -608,6 +609,13 @@ def _tok(t):
     return tuple(getattr(t, s) for s in gr.Tok.__slots__)
 
 
+def _cuts(r):
+    """{file: cut} of every file Run.named_lines knows only up to a
+    line."""
+    return {f: cut for f, (_, cut) in r.named_lines()[0].items()
+            if cut is not None}
+
+
 def _twin(build):
     """The same build with nothing kept yet."""
     return gr.Build(build.pre236, build.signed_char, build.locfile_kw,
@@ -849,6 +857,12 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
                                 fh.write(bad)
                 self.assertEqual(want, self.kept(files))
                 self.assertEqual(sorted(files), sorted(self.calls))
+                # The maps were damaged with the rest, and the runs
+                # computed again wrote them again: a new process reads
+                # them whole.
+                self.forget_maps()
+                for name in self.maps_on_disk():
+                    self.assertIsNotNone(rc.char_map(name[:-5], self.dir))
 
     def test_kept_tree_says_whether_an_entry_exists(self):
         """What the fill asks before it reads a tree: blob ids alone, the
@@ -870,7 +884,10 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
         self.kept(files)
         for dirpath, _, names in os.walk(self.dir):
             for n in names:
-                if not n.endswith('.json'):
+                # The character maps (reader_cache.char_maps) are another
+                # kind of entry, read by their sha1.
+                if not n.endswith('.json') \
+                        or os.path.basename(dirpath) == 'chars':
                     continue
                 path = os.path.join(dirpath, n)
                 with open(path) as fh:
@@ -895,10 +912,17 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
                    b'<U0044>..<U0045>\n<U0046> ...\n<U0047>..(2)..<U0048>\n'
                    b'END LC_COLLATE\n'),
             b'b': b'LC_COLLATE\ncodepoint_collation\nEND LC_COLLATE\n'}
-        fatal, _, unsettled, collate, _ = self.kept(files)[b'a']
+        fatal, _, unsettled, collate, _, named = self.kept(files)[b'a']
         self.assertIsNone(fatal)
         counts, ranges, codepoint, steer = collate
+        maps, rest = named
+        self.assertFalse(rest, 'the reader was sure of every line')
         self.assertEqual((('a', 4), ('b', 1)), counts)
+        # Every entry of a is read in state 0, after the opening copy,
+        # and refused there (ld-collate.c:3484-3488@2.34): no line names
+        # a character, and both files are known to name none.
+        empty = hashlib.sha1(b'[]').hexdigest()
+        self.assertEqual((('a', empty), ('b', empty)), maps)
         self.assertEqual((('a', 5), ('a', 6)), ranges)
         self.assertEqual((('b', 2),), codepoint)
         # The opening copy and the two lines that hold a range, joined
@@ -917,19 +941,38 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
 
     def test_a_kept_collate_of_another_shape_is_refused(self):
         """_check is what stands between a damaged entry and an answer:
-        the shape before backlog 13.36 (three parts), and instruction lines
-        that are not (file, (first, last, ...)) of whole numbers."""
-        fatal, reads, unsettled, collate, meets = self.kept(_small_tree())[b'a']
-        good = (fatal, reads, unsettled, collate, meets)
-        self.assertEqual(good, rc._check(good))
+        the shape before backlog 13.36 (three parts), instruction lines
+        that are not (file, (first, last, ...)) of whole numbers, the
+        shapes the 15.3 C2 drafts kept, and what each line names
+        (Run.named_lines) kept as anything but (file, sha1) pairs and a
+        bool."""
+        s = self.kept(_small_tree())[b'a']
+        fatal, reads, unsettled, collate, meets, named = s
+        self.assertEqual(s, rc._check(s))
+        self.assertTrue(named[0])
         for bad in (collate[:3], collate[:3] + ((('b', 2),),),
                     collate[:3] + ((('b', (2,)),),),
                     collate[:3] + ((('b', (2, 'x')),),),
                     collate[:3] + (((7, (2, 2)),),),
-                    collate[:3] + ((('b', [2, 2]),),)):
+                    collate[:3] + ((('b', [2, 2]),),),
+                    collate + ((('b', 'a' * 40),),),
+                    collate + ((('b', 'a' * 40),), None)):
             with self.subTest(bad):
                 with self.assertRaises(ValueError):
-                    rc._check((fatal, reads, unsettled, bad, meets))
+                    rc._check((fatal, reads, unsettled, bad, meets, named))
+        for bad in ((), (named[0],), named + (False,),
+                    ((('b', 'x' * 40),), False), ((('b', 7),), False),
+                    (((7, 'a' * 40),), False), ((('b', 'A' * 40),), False),
+                    ((('b', 'a' * 40, 1),), False),
+                    (named[0], None), (named[0], 1), (named[0], ('b',))):
+            with self.subTest(bad):
+                with self.assertRaises(ValueError):
+                    rc._check((fatal, reads, unsettled, collate, meets, bad))
+        with self.assertRaises(ValueError):
+            rc._check(s[:5])
+        for ok in (((('b', 'a' * 40),), True), ((), False)):
+            ok = (fatal, reads, unsettled, collate, meets, ok)
+            self.assertEqual(ok, rc._check(ok))
 
     def test_a_name_is_never_served_another_names_run(self):
         # Two names sharing a long prefix, and a kept entry that names no
@@ -1012,6 +1055,96 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
             got = self.kept(files)
         self.assertEqual(self.fresh(files), got)
 
+    def maps_on_disk(self):
+        d = rc._chars_dir(self.dir)
+        return sorted(os.listdir(d)) if os.path.isdir(d) else []
+
+    # The map of a file the run read that names no character
+    # (Run.named_lines): a and c's runs give it.
+    EMPTY = hashlib.sha1(b'[]').hexdigest() + '.json'
+
+    def forget_maps(self):
+        """What a new process has: no map kept in memory."""
+        for kept in (rc._TEXTS, rc._MAPS):
+            saved = dict(kept)
+            kept.clear()
+            self.addCleanup(kept.update, saved)
+
+    def test_a_character_map_is_kept_once_for_every_run(self):
+        """Backlog 15.3 C2: a and d both read b's LC_COLLATE, and b's map
+        is kept once, under the sha1 both runs name; so is the map of a
+        file that names no character, which a and d give for theirs."""
+        files = _small_tree()
+        files[b'd'] = files[b'a']
+        got = self.kept(files)
+        shas = {sha for s in got.values() for f, sha in s[5][0]
+                if f == 'b'}
+        self.assertEqual(1, len(shas))
+        self.assertEqual(sorted([shas.pop() + '.json', self.EMPTY]),
+                         self.maps_on_disk())
+        sha = dict(got[b'a'][5][0])['b']
+        self.forget_maps()
+        self.assertEqual({3: (0x41,)}, rc.char_map(sha, self.dir))
+
+    def test_a_lost_character_map_reads_the_runs_again(self):
+        """A kept run whose map is gone is not an answer: it would read
+        as a file whose lines name nothing."""
+        files = _small_tree()
+        want = self.kept(files)
+        name = dict(want[b'b'][5][0])['b'] + '.json'
+        both = self.maps_on_disk()
+        self.assertEqual(sorted([name, self.EMPTY]), both)
+        os.unlink(os.path.join(rc._chars_dir(self.dir), name))
+        self.forget_maps()
+        self.assertEqual(want, self.kept(files))
+        self.assertEqual([b'a', b'b'], sorted(self.calls))
+        self.assertEqual(both, self.maps_on_disk())
+
+    def test_a_damaged_character_map_is_not_an_answer(self):
+        """Its text no longer has its sha1: char_map answers None, which
+        step 2 prints as "could not identify", and removes it, so the
+        next reading computes it again."""
+        files = _small_tree()
+        want = self.kept(files)
+        name = dict(want[b'b'][5][0])['b'] + '.json'
+        both = self.maps_on_disk()
+        self.assertEqual(sorted([name, self.EMPTY]), both)
+        path = os.path.join(rc._chars_dir(self.dir), name)
+        for bad in (b'[3,1,66]', b'', b'[3,1', b'\xff', b'[3,1,65] '):
+            with self.subTest(bad):
+                with open(path, 'wb') as fh:
+                    fh.write(bad)
+                self.forget_maps()
+                self.assertIsNone(rc.char_map(name[:-5], self.dir))
+                self.assertEqual([self.EMPTY], self.maps_on_disk())
+                self.assertEqual(want, self.kept(files))
+                self.assertEqual([b'a', b'b'], sorted(self.calls))
+                self.assertEqual(both, self.maps_on_disk())
+
+    def test_a_map_of_another_shape_is_refused(self):
+        """_parse_map is what stands between the text and an answer: each
+        line once, as many code points as it says, -1 alone."""
+        for flat in ([3], [3, 2, 65], [3, 0], [3, 1, 65, 3, 1, 66],
+                     [3, -3], [3, 1, True], [[3], 1, 65], {'3': [65]},
+                     [3, 1, 65.0]):
+            with self.subTest(flat):
+                text = json.dumps(flat, separators=(',', ':'))
+                sha = hashlib.sha1(text.encode('ascii')).hexdigest()
+                self.assertIsNone(rc._parse_map(text, sha))
+        text = '[3,-1,5,2,65,66]'
+        sha = hashlib.sha1(text.encode('ascii')).hexdigest()
+        self.assertEqual({3: None, 5: (65, 66)}, rc._parse_map(text, sha))
+        # The place the reader stopped being sure: last, once, a line.
+        for flat, want in (([3, 1, 65, 5, -2], {3: (65,), 'from': 5}),
+                           ([5, -2, 3, 1, 65], None), ([0, -2], None),
+                           ([5, -2, 6, -2], None)):
+            with self.subTest(flat):
+                text = json.dumps(flat, separators=(',', ':'))
+                sha = hashlib.sha1(text.encode('ascii')).hexdigest()
+                self.assertEqual(want, rc._parse_map(text, sha))
+        self.assertIsNone(rc._parse_map(text, 'f' * 40))
+        self.assertIsNone(rc.char_map('../x', self.dir))
+
 
 @needs_floor_pair
 class ReaderAgreesOnEveryRealFile(unittest.TestCase):
@@ -1042,7 +1175,7 @@ class ReaderAgreesOnEveryRealFile(unittest.TestCase):
         self.assertGreater(len(runs), 250)
         bad, unsettled = [], {}
         for name in names:
-            fatal, reads, uns, _, _ = runs[name]
+            fatal, reads, uns, _, _, _ = runs[name]
             if fatal is not None:
                 bad.append((name, 'fatal', fatal))
             for _, _, why in uns:
@@ -1446,6 +1579,320 @@ class StepsReadWhatLocaledefReads(unittest.TestCase):
 # run; zz_RB copies zz_RF's LC_COLLATE alone, its run skips LC_CTYPE and
 # never meets the directive (cases d25 and d26 of reader_oracle).
 # False-negative-reviewer, 15.2 B3.
+@needs_clone
+class ReaderNamesTheCharactersOfEachLine(unittest.TestCase):
+    """glibc_reader.Collate.characters (backlog 13.29, 15.3 C2): what each
+    line of LC_COLLATE names, from the tokens glibc reads there, in every
+    shape step 2 used to read from the text of the line."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.b39 = gr.Build.at(GLIBC_CLONE, NEW, False)
+        cls.b34 = gr.Build.at(GLIBC_CLONE, MID, True)
+
+    def names(self, body, build=None, head=_HEAD):
+        src = head + b'LC_COLLATE\n' + body + b'END LC_COLLATE\n'
+        r = gr.run(b'zz', {b'zz': src}.get, _twin(build or self.b39))
+        self.assertEqual([], r.unsettled)
+        first = head.count(b'\n') + 2
+        return {n - first + 1: None if v is None else ''.join(map(chr, v))
+                for n, v in r.collate.characters().get('zz', {}).items()}
+
+    def test_each_kind_of_line(self):
+        got = self.names(
+            b'collating-symbol <a%1>\n'                         # 1
+            b'collating-element <x> from "%<U0042>"\n'          # 2
+            b'collating-element <ch> from "c/h"\n'              # 3
+            b'order_start forward;forward\n'                    # 4
+            b'<U0041> <a%1>;<U0045>\n'                          # 5
+            b'<U0046> "<U0047>%<U0048>a";<U0046>\n'             # 6
+            b'<U0049> % <U004A>\n'                              # 7
+            b'<x>\n<ch>\n<a%1>\n'                               # 8-10
+            b'<U004B> <U004B>;<U004B>\n'                        # 11 once
+            b'order_end\n'                                      # 12
+            b'<U004C>\n')                                       # 13 refused
+        self.assertEqual({2: '%B', 3: 'ch', 5: 'AE', 6: 'FGH', 7: 'I',
+                          11: 'K'}, got)
+
+    def test_a_from_string_is_read_translated_only_after_its_name(self):
+        """glibc sets translate_strings for the token after `<name> from`
+        (ld-collate.c:2786-2793@2.34). With no name before `from`, or
+        another word than `from` after the name, the statement is refused
+        before the string is read (:2771-2783), and the reader keeps it
+        untranslated."""
+        src = (b'LC_COLLATE\ncollating-element <x> from "a<U0042>"\n'
+               b'collating-element from "a<U0042>"\n'
+               b'collating-element <y> <z> "a<U0042>"\nEND LC_COLLATE\n')
+        r = gr.run(b'zz', {b'zz': src}.get, _twin(self.b39))
+        good, bad, other = (toks[-1] for _, _, toks in r.collate.statements)
+        self.assertEqual([('cp', 0x61), ('ucp', 0x42)], good.items)
+        self.assertIsNone(good.raw)
+        self.assertEqual(b'a<U0042>', bad.raw)
+        self.assertEqual(b'a<U0042>', other.raw)
+
+    def test_only_lc_collate_reads_the_from_string_translated(self):
+        """LC_CTYPE reads its strings translated (translate_strings is 1
+        from lr_create, linereader.c:81@2.34), and a collating-element
+        line there is no statement of LC_COLLATE: the mode it leaves for
+        the next line is the one it found. There the `"` of `"<a" END>"`
+        is inside a name and END is no token. LC_COLLATE reads every
+        string but the `from` untranslated (ld-collate.c:1520@2.34), and
+        there the END after the first token, and the `"` left open, are
+        held unsettled."""
+        for cat, want in ((b'LC_CTYPE', []),
+                          (b'LC_COLLATE', ['`END` after the first token of a '
+                                           'statement in LC_COLLATE',
+                                           'a statement whose tokens run '
+                                           'past the end of its line'])):
+            with self.subTest(cat):
+                src = (_HEAD + cat + b'\ncollating-element <x> from "a"\n'
+                       b'x "<a" END>"\nEND ' + cat + b'\n')
+                r = gr.run(b'zz', {b'zz': src}.get, _twin(self.b39))
+                self.assertEqual(want, [w for _, _, w in r.unsettled])
+
+    def test_a_translated_string_reads_a_quote_inside_a_name(self):
+        """get_string's translating branch reads a <name> to its `>`,
+        over a `"` (linereader.c:676-690@2.34): the name here is
+        `a"<U0042`, no character, and the string goes on to `>`. Read
+        untranslated it stopped at the `"`, and the <U0042> after it was a
+        character of the line."""
+        src = (_HEAD + b'LC_COLLATE\n'
+               b'collating-element <x> from "<a"<U0042>>"\n'
+               b'END LC_COLLATE\n')
+        r = gr.run(b'zz', {b'zz': src}.get, _twin(self.b39))
+        (_, _, toks), = r.collate.statements
+        self.assertEqual([('name', b'a"<U0042'), ('cp', 0x3e)],
+                         toks[-1].items)
+        self.assertEqual({'zz': {4: [0x3e]}}, r.collate.characters())
+
+    def test_before_2_36_a_raw_byte_is_not_a_character(self):
+        """glibc-2.34 copies a raw byte above 0x7F as it is
+        (linereader.c:649-670@2.34): the line names something this reader
+        cannot put a code point on. From 2.36 it is a UTF-8 character."""
+        body = (u'collating-element <e> from "\u00e9"\n'
+                u'order_start forward\n<e>\n\u00e9\norder_end\n'
+                ).encode('utf-8')
+        self.assertEqual({1: None}, self.names(body, self.b34))
+        self.assertEqual({1: '\u00e9', 4: '\u00e9'}, self.names(body))
+
+    def test_a_line_two_statements_name_keeps_both(self):
+        """A statement joined to the next line by the escape names every
+        line it spans."""
+        got = self.names(b'order_start forward\n<U0041> /\n<U0042>\n'
+                         b'order_end\n')
+        self.assertEqual({2: 'AB', 3: 'AB'}, got)
+
+    def test_two_statements_on_one_line_keep_what_each_names(self):
+        """Two statements share a physical line where a token runs past
+        its line, which the reader holds unsettled, and after
+        codepoint_collation, which leaves the rest of its line to be read
+        as statements. Collate.characters merges them all the same,
+        and a line one of them cannot name stays one it cannot name,
+        whichever comes first."""
+        def tok(kind, val, line, items=None):
+            t = gr.Tok(kind, val, line)
+            t.items = items
+            return t
+        a = ('f', 2, [tok('ucs4', 0x41, 2), tok('ucs4', 0x42, 3)])
+        b = ('f', 3, [tok('ucs4', 0x43, 3)])
+        cut = ('f', 3, [tok('string', None, 3, [('byte', 0xc3)])])
+        for order, want in (((a, b), {2: [0x41, 0x42],
+                                      3: [0x41, 0x42, 0x43]}),
+                            ((a, cut), {2: [0x41, 0x42], 3: None}),
+                            ((cut, a), {2: [0x41, 0x42], 3: None})):
+            with self.subTest(order):
+                coll = gr.Collate()
+                coll.statements = list(order)
+                self.assertEqual({'f': want}, coll.characters())
+
+    def test_a_string_continued_on_the_next_line_names_both(self):
+        """The weight string runs over an escaped newline: its last name
+        is on the line below the one its token starts on (round 1 of the
+        15.3 C2 review)."""
+        got = self.names(b'order_start forward;forward\n'
+                         b'<U0041> <U0041>;"<U0042>/\n<U0043>"\norder_end\n')
+        self.assertEqual({2: 'ABC', 3: 'ABC'}, got)
+
+    def test_a_line_glibc_cannot_name_is_kept_as_one(self):
+        """The map kept for a run (reader_cache.char_maps, then _parse_map)
+        holds a line the reader cannot name as None, not as a line that
+        names nothing (round 1 of the 15.3 C2 review: dropping it left
+        the suite green)."""
+        src = (_HEAD + u'LC_COLLATE\ncollating-element <e> from "\u00e9"\n'
+               u'END LC_COLLATE\n'.encode('utf-8'))
+        r = gr.run(b'zz', {b'zz': src}.get, _twin(self.b34))
+        (sha, text), = rc.char_maps(r).values()
+        self.assertEqual({4: None}, rc._parse_map(text, sha))
+
+    def test_what_follows_a_place_the_reader_cannot_settle(self):
+        """Run.named_lines: zz_e is read to its end by the opening
+        copy, before zz's unsettled line, and is known; zz's own lines
+        are not, from its first (it named nothing before that place).
+        The map kept carries the place."""
+        files = {b'zz': b'LC_COLLATE\ncopy "zz_e"\n<foo> x\nEND LC_COLLATE\n',
+                 b'zz_e': (b'LC_COLLATE\norder_start forward\n<U0042>\n'
+                           b'order_end\nEND LC_COLLATE\n')}
+        r = gr.run(b'zz', files.get, _twin(self.b39))
+        self.assertEqual(['a symbol before order_start with more on its '
+                          'line'], [w for _, _, w in r.unsettled])
+        self.assertEqual({'zz_e': {3: [0x42]}}, r.collate.characters())
+        self.assertEqual({'zz': 1}, _cuts(r))
+        maps = rc.char_maps(r)
+        self.assertEqual({'from': 1}, rc._parse_map(*maps['zz'][::-1]))
+        self.assertEqual({3: (0x42,)}, rc._parse_map(*maps['zz_e'][::-1]))
+
+    def test_the_first_place_is_the_one(self):
+        """Two places in one run: the cut is at the first (round 3 of the
+        15.3 C2 review: the last one set it, and the lines between were
+        named)."""
+        got = gr.run(b'zz', {b'zz': _HEAD + (
+            b'LC_COLLATE\norder_start forward\n<U0041>\n<U0042> "abc\n'
+            b'<U0043>\n<U0044> "def\n<U0045>\norder_end\nEND LC_COLLATE\n'
+            )}.get, _twin(self.b39))
+        self.assertEqual(2, len(got.unsettled))
+        self.assertEqual({'zz': {5: [0x41]}}, got.collate.characters())
+        self.assertEqual({'zz': 6}, _cuts(got))
+
+    def test_a_file_copied_after_that_place_is_not_known(self):
+        """zz_G is read by a copy met after the place, into a struct made
+        before it (round 3 of the 15.3 C2 review: the struct kept the
+        files begun when it was made, and zz_G kept its lines)."""
+        files = {b'zz': _HEAD + (b'LC_COLLATE\norder_start forward\n'
+                                 b'<U0041>\n<U0042> "abc\ncopy "zz_G"\n'
+                                 b'order_end\nEND LC_COLLATE\n'),
+                 b'zz_G': (b'LC_COLLATE\norder_start forward\n<U0043>\n'
+                           b'order_end\nEND LC_COLLATE\n')}
+        got = gr.run(b'zz', files.get, _twin(self.b39))
+        self.assertTrue(got.unsettled)
+        self.assertEqual({'zz': 6, 'zz_G': 1}, _cuts(got))
+
+    def test_a_place_on_the_line_of_the_statement_before_it(self):
+        """codepoint_collation leaves the rest of its line to be read as
+        statements (ld-collate.c:2691-2693@2.39): `<foo>` there is "bad
+        symbol" and glibc reads the collating-element after it. The cut
+        starts on that line, not on the next."""
+        got = gr.run(b'zz', {b'zz': _HEAD + (
+            b'LC_COLLATE\ncodepoint_collation <foo> collating-element '
+            b'<U0058><U0059> from "<U0058><U0059>"\norder_start forward\n'
+            b'<U0041>\norder_end\nEND LC_COLLATE\n')}.get, _twin(self.b39))
+        self.assertTrue(got.unsettled)
+        self.assertEqual({'zz': 4}, _cuts(got))
+
+    def test_a_section_begun_after_that_place_is_not_known(self):
+        """The repertoiremap directive is unsettled before LC_COLLATE
+        begins (glibc_reader._locfile_read): the struct made after it is
+        known nowhere."""
+        got = gr.run(b'zz', {b'zz': (
+            b'repertoiremap x\nLC_COLLATE\norder_start forward\n<U0041>\n'
+            b'order_end\nEND LC_COLLATE\n')}.get, _twin(self.b39))
+        self.assertEqual(['a repertoiremap directive'],
+                         [w for _, _, w in got.unsettled])
+        self.assertEqual({}, got.collate.characters())
+        self.assertEqual({'zz': 1}, _cuts(got))
+
+    def test_the_files_finished_are_the_ones_at_the_place(self):
+        """Run.finished is taken once, at the first place (review of the
+        one-rule rewrite). zz_a is read whole by a copy after the place,
+        and the struct is made after that, by zz's second section: had
+        each struct taken the files finished when it was made, zz_a would
+        be known whole. zz_e is read whole by the opening copy after the
+        first place and before the second: had every place taken them
+        again, zz_e would be known whole, and its line 3, which names
+        U+0042 in the reader's own reading, would name nothing."""
+        head = _HEAD + b'repertoiremap foo\nLC_COLLATE\n'
+        for name, files, want in (
+                ('struct made later', {
+                    b'zz': head + (b'copy "zz_a"\nEND LC_COLLATE\n'
+                                   b'LC_COLLATE\norder_start forward\n'
+                                   b'<U0041>\norder_end\nEND LC_COLLATE\n'),
+                    b'zz_a': b'LC_CTYPE\nEND LC_CTYPE\n'},
+                 {'zz': ({}, 1), 'zz_a': ({}, 1)}),
+                ('a second place', {
+                    b'zz': head + b'copy "zz_e"\n<foo> x\nEND LC_COLLATE\n',
+                    b'zz_e': (b'LC_COLLATE\norder_start forward\n<U0042>\n'
+                              b'order_end\nEND LC_COLLATE\n')},
+                 {'zz': ({}, 1), 'zz_e': ({}, 1)})):
+            with self.subTest(name):
+                got = gr.run(b'zz', files.get, _twin(self.b39))
+                self.assertEqual((want, True), got.named_lines())
+
+    def test_the_lines_of_a_place_met_after_its_statement(self):
+        """A range closed by UNDEFINED is found once the UNDEFINED line is
+        stored (_Runner.instruction): its line is the cut, and the map
+        does not hold it, so it is read as a map; line 5 stays named
+        (review of the one-rule rewrite: the map held line 7 twice and
+        could not be read, and every line of the file was lost)."""
+        for last in (b'UNDEFINED <U0042>', b'.. <U0042>'):
+            with self.subTest(last):
+                r = gr.run(b'zz', {b'zz': _HEAD + (
+                    b'LC_COLLATE\norder_start forward\n<U0041>\n..\n'
+                    + last + b'\norder_end\nEND LC_COLLATE\n')}.get,
+                    _twin(self.b39))
+                self.assertEqual(({'zz': ({5: [0x41]}, 7)}, True),
+                                 r.named_lines())
+                (sha, text), = rc.char_maps(r).values()
+                self.assertEqual({5: (0x41,), 'from': 7},
+                                 rc._parse_map(text, sha))
+
+    def test_a_file_read_on_past_that_place_is_known_up_to_it(self):
+        """The unsettled line is the file's third statement, a string
+        that runs past its line: the lines of the two before it are
+        named, and nothing from the line after the last of them."""
+        got = gr.run(b'zz', {b'zz': _HEAD + (
+            b'LC_COLLATE\norder_start forward\n<U0041>\n<U0042> "abc\n'
+            b'<U0043>\norder_end\nEND LC_COLLATE\n')}.get, _twin(self.b39))
+        self.assertTrue(got.unsettled)
+        self.assertEqual({'zz': {5: [0x41]}}, got.collate.characters())
+        self.assertEqual({'zz': 6}, _cuts(got))
+
+    def test_a_sure_run_knows_every_file_it_read(self):
+        """Run.named_lines of a run the reader is sure of: every file
+        whose LC_COLLATE it read, a file that names no character
+        included, known whole, and every other file names nothing in
+        it."""
+        files = {b'zz': b'LC_COLLATE\ncopy "zz_e"\nEND LC_COLLATE\n',
+                 b'zz_e': (b'LC_COLLATE\norder_start forward\n<U0042>\n'
+                           b'order_end\nEND LC_COLLATE\n')}
+        got = gr.run(b'zz', files.get, _twin(self.b39))
+        self.assertEqual(({'zz': ({}, None), 'zz_e': ({3: [0x42]}, None)},
+                          False), got.named_lines())
+
+    def test_after_a_place_no_other_file_is_known(self):
+        """Run.named_lines' rest: after a place the reader cannot settle,
+        glibc may read any file through a `copy` the reader did not read
+        as glibc does (round 3 of the 15.3 C2 review)."""
+        got = gr.run(b'zz', {b'zz': _HEAD + (
+            b'LC_COLLATE\norder_start forward\n<U0041>\n<U0042> "abc\n'
+            b'<U0043>\norder_end\nEND LC_COLLATE\n')}.get, _twin(self.b39))
+        self.assertEqual(({'zz': ({5: [0x41]}, 6)}, True),
+                         got.named_lines())
+
+    def test_a_run_that_stores_no_collate(self):
+        """A fatal run the reader was sure of throughout names nothing
+        (localedef writes nothing); one that stopped where glibc reads
+        outside its buffer, or reached its fatal end after a place the
+        reader was not sure of, which glibc may never reach, tells
+        nothing of any file (rounds 1 and 4 of the 15.3 C2 review)."""
+        for name, src, rest in (
+                ('fatal', b'LC_COLLATE\ncopy "zz_NONE"\nEND LC_COLLATE\n',
+                 False),
+                ('outside its buffer', b'LC_NUMERIC\n-x\nEND LC_NUMERIC\n',
+                 True),
+                ('fatal after a place', _HEAD + (
+                    b'LC_COLLATE\n<foo> x\ncopy "zz_NONE"\n'
+                    b'END LC_COLLATE\n'), True)):
+            with self.subTest(name):
+                got = gr.run(b'zz', {b'zz': src}.get, _twin(self.b39))
+                self.assertIsNone(got.collate)
+                self.assertEqual(rest, got.unsure_at is not None)
+                self.assertEqual(({}, rest), got.named_lines())
+
+    def test_a_skipped_branch_names_nothing(self):
+        got = self.names(b'order_start forward\nifdef ZZ_NO\n<U0041>\n'
+                         b'else\n<U0042>\nendif\norder_end\n')
+        self.assertEqual({5: 'B'}, got)
+
+
 _RETURNS = {
     'zz_RF': (b'LC_CTYPE\ncopy "zz_RX"\nescape_char /\nEND LC_CTYPE\n'
               b'LC_COLLATE\ncopy "iso14651_t1"\nEND LC_COLLATE\n'),
@@ -1960,7 +2407,7 @@ class StepTwoReadsWhereLocaledefReads(unittest.TestCase):
     where a change sits against LC_COLLATE is decided by the sections
     glibc_reader read (glibc_tree.file_facts), so a change the line
     readers put outside the block, or in a file they found no block in, is
-    counted as one, with its characters named. zz_IN is read and judged
+    counted as one. zz_IN is read and judged
     'collate', and zz_RF 'reading'. zz_EJ's section is read to its second END, as glibc reads
     it, but the reader does not settle an END inside a statement, so the
     file is counted under the `!!` that says so: listed, never cleared."""
@@ -2019,10 +2466,17 @@ class StepTwoReadsWhereLocaledefReads(unittest.TestCase):
         self.assertNotIn('zz_IN at', _harness.flat(self.text))
 
     def test_the_changed_rules_name_their_characters(self):
-        self.assertIn('  localedata/locales/zz_EJ\n      characters in the '
-                      'changed rules (1): c (U+0063)', self.text)
-        self.assertIn('  localedata/locales/zz_IN\n      characters in the '
-                      'changed rules (2): B (U+0042)  C (U+0043)', self.text)
+        """zz_EJ's changed rule, line 7, comes after the END on line 5
+        that the reader holds unsettled: what glibc reads after that
+        place is not something it is sure of, in that file or in any it
+        did not begin, zz_IN's included (rounds 2 and 3 of the 15.3 C2
+        review). The warning is printed for both rather than a list; the
+        characters of zz_IN's changed rule are named in a tree with no
+        such run (StepTwoNamesWhatTheReaderRead)."""
+        for name in ('zz_EJ', 'zz_IN'):
+            self.assertIn('localedata/locales/%s could not identify which '
+                          'characters changed' % name,
+                          _harness.flat(self.text))
 
     def test_the_line_readers_really_put_these_outside(self):
         """Control: each change is one the line readers placed outside a
@@ -2050,6 +2504,12 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
                           b'escape_char \\\n')
         files['zz_CP'] = _HEAD + b'LC_COLLATE\ncopy "zz_EJ"\nEND LC_COLLATE\n'
         files['zz_MI'] = _HEAD + b'LC_COLLATE\ncopy "zz_NONE"\nEND LC_COLLATE\n'
+        # A run the reader stops in (GlibcUndefined): Facts.stopped.
+        files['zz_SV'] = b'LC_NUMERIC\n-x\nEND LC_NUMERIC\n'
+        # A fatal end reached after a place the reader is not sure of:
+        # glibc may never reach it (round 4 of the 15.3 C2 review).
+        files['zz_FU'] = (_HEAD + b'LC_COLLATE\n<foo> x\ncopy "zz_NONE"\n'
+                          b'END LC_COLLATE\n')
         # Lines 6-8: a reorder only a locale that defines ZZ_ON reads
         # (backlog 13.36).
         files['zz_BR'] = _HEAD + (b'LC_COLLATE\ncopy "iso14651_t1"\n'
@@ -2103,8 +2563,8 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
         under the section acts after it, on nothing of it."""
         hd = self.facts['zz_HD']
         self.assertEqual([(7, 9, 0x23, 0x2f, 'zz_HD')], hd.collate)
-        self.assertEqual((0x23, 0x2f), hd.chars_at(8))
-        self.assertIsNone(hd.chars_at(11))
+        self.assertTrue(hd.inside(8))
+        self.assertFalse(hd.inside(11))
 
     def test_a_section_read_only_through_a_copy_is_the_file_s(self):
         """zz_EJ's section is the same lines and characters whether its
@@ -2117,13 +2577,12 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
 
     def test_a_section_each_run_reads_with_its_own_characters(self):
         """zz_RF's own run obeys the escape_char a run copying its
-        LC_COLLATE skips: the section is read with both pairs, and a line
-        in it has no single answer."""
+        LC_COLLATE skips: the section is read with both pairs."""
         rf = self.facts['zz_RF']
         self.assertIsNone(rf.unresolved)
         self.assertEqual([(5, 7, 0x23, 0x5c, 'zz_RB'),
                           (5, 7, 0x23, 0x2f, 'zz_RF')], rf.collate)
-        self.assertIsNone(rf.chars_at(6))
+        self.assertEqual([(0x23, 0x5c), (0x23, 0x2f)], rf.reading())
 
     def test_a_branch_only_a_copier_takes_is_an_instruction_too(self):
         """zz_BR's own run skips lines 6-8 (`ifdef ZZ_ON` not defined)
@@ -2131,6 +2590,40 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
         changed reorder-after there would read as a rule of its own."""
         self.assertEqual([(4, 6), (8, 9)], self.facts['zz_BR'].instructions)
         self.assertEqual([(4, 5)], self.facts['zz_DF'].instructions)
+
+    def test_an_answer_whose_character_map_is_gone_is_computed_again(self):
+        """reader_cache.maps_kept: kept Facts that name a map no longer
+        kept would answer "could not identify" for every changed line of
+        the file; they are computed again from the runs, which compute the
+        map again (backlog 15.3 C2)."""
+        made = []
+        real = self.gt._facts
+
+        def counted(*a, **k):
+            made.append(1)
+            return real(*a, **k)
+        with mock.patch.object(self.gt, '_facts', counted):
+            self.ask()
+            self.assertEqual([], made, 'kept Facts were computed again')
+            with mock.patch.object(self.gt.rc, 'maps_kept',
+                                   lambda shas, cache_dir=None: False):
+                again = self.ask()
+        self.assertEqual([1], made)
+        self.assertEqual(self.facts['zz_EJ'].chars, again['zz_EJ'].chars)
+
+    def test_a_run_the_reader_stops_in_is_every_file_s(self):
+        """Facts.stopped, computed and kept: what glibc reads after the
+        place zz_SV's run stopped is not known in any file, nor after the
+        place zz_FU's was unsure of before its fatal end; after the
+        place zz_EJ's run (and zz_CP's, which copies it) stopped being
+        sure, in any file it did not begin. A fatal run (zz_MI) builds
+        nothing and is not one."""
+        for facts in (self.facts, self.ask()):
+            self.assertEqual(('zz_CP', 'zz_EJ', 'zz_FU', 'zz_SV'),
+                             facts['zz_IN'].stopped)
+            self.assertEqual(('zz_FU', 'zz_SV'), facts['zz_EJ'].stopped)
+            self.assertNotIn('zz_MI', facts['zz_MI'].stopped)
+            self.assertIsNone(facts['zz_IN'].characters(5))
 
     def test_a_run_that_does_not_finish_or_settle_is_named(self):
         self.assertEqual('localedef cannot open zz_NONE',
@@ -2151,7 +2644,8 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
                     self.assertTrue(got.collate, name)
 
     def kept(self, facts):
-        return {n: (f.collate, f.unresolved, f.instructions)
+        return {n: (f.collate, f.unresolved, f.instructions, f.chars,
+                    f.stopped)
                 for n, f in facts.items()}
 
     def test_a_kept_answer_is_the_answer(self):
@@ -2178,7 +2672,17 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
                     dict(kept, zz_EJ=[[], None, [[1]]]),
                     dict(kept, zz_EJ=[[], None, [[1, 'x']]]),
                     dict(kept, zz_EJ=[[], None, [1, 2]]),
-                    dict(kept, zz_EJ=[[], None, [], 'x'])):
+                    dict(kept, zz_EJ=[[], None, [], 'x']),
+                    # the shape before backlog 15.3 C2, and character maps
+                    # that are not named by a string
+                    dict(kept, zz_EJ=[[], None, []]),
+                    dict(kept, zz_EJ=[[], None, [], [7]]),
+                    dict(kept, zz_EJ=[[], None, [], None]),
+                    # the shape before round 1 of the 15.3 C2 review, and
+                    # runs that are not named by a string
+                    dict(kept, zz_EJ=[[], None, [], []]),
+                    dict(kept, zz_EJ=[[], None, [], [], None]),
+                    dict(kept, zz_EJ=[[], None, [], [], [7]])):
             with open(path, 'w') as fh:
                 json.dump(bad, fh)
             self.assertEqual(self.kept(self.facts), self.kept(self.ask()),
@@ -2197,12 +2701,17 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
         with open(path) as fh:
             kept = json.load(fh)
         try:
+            # The maps zz_EJ's runs name are kept: Facts that name one
+            # that is not are computed again (the test above this one).
+            shas = kept['zz_EJ'][3]
+            self.assertTrue(shas)
             with open(path, 'w') as fh:
                 json.dump(dict(kept, zz_EJ=[[[2, 3, 35, 92, 'zz_EJ']], None,
-                                            [[4, 5]]]), fh)
+                                            [[4, 5]], shas[:1], []]), fh)
             got = self.ask()['zz_EJ']
             self.assertEqual([(2, 3, 35, 92, 'zz_EJ')], got.collate)
             self.assertEqual([(4, 5)], got.instructions)
+            self.assertEqual(tuple(shas[:1]), got.chars)
         finally:
             os.unlink(path)
 
@@ -2291,6 +2800,303 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
         other = self.gt.build_at(self.repo, MID)
         self.assertNotEqual(path, self.gt._facts_path(
             self.paths, self.ids, other, self.cache))
+
+
+# Backlog 13.29: what step 2 prints under each changed file is what the
+# reader read on its changed lines. Pairs, as _STEP2: each file's first
+# version and its second, one shape each, on top of NEW (2.39).
+def _order(*lines, head=_HEAD):
+    return head + b'LC_COLLATE\n' + b''.join(
+        x + b'\n' for x in lines) + b'END LC_COLLATE\n'
+
+
+_NAMES = {
+    # A comment character starts a comment only where a token starts
+    # (linereader.c:218@2.39): not inside the `from` string, which glibc
+    # reads translated (ld-collate.c:2786-2793@2.34), so `%` is a
+    # character of the element.
+    'zz_FP': tuple(_order(b'collating-element <x> from "%s"' % s,
+                          b'order_start forward', b'<x>', b'order_end')
+                   for s in (b'<U0041>', b'%<U0042>')),
+    # Nor inside a <name> (get_symname, linereader.c:510-530@2.39).
+    'zz_PN': tuple(_order(b'collating-symbol <a%1>',
+                          b'order_start forward;forward', b'<a%1>',
+                          b'<U0041> <a%1>;' + w, b'order_end')
+                   for w in (b'<U0045>', b'<U0046>')),
+    # Nor inside a weight string, whose <U....> names are characters
+    # (insert_weights, ld-collate.c:796-842@2.34).
+    'zz_WS': tuple(_order(b'order_start forward;forward',
+                          b'<U0046> "<U0047>%' + w + b'";<U0046>',
+                          b'order_end')
+                   for w in (b'<U0048>', b'<U0049>')),
+    # The same with the comment character the file declares.
+    'zz_CC': tuple(_order(b'order_start forward;forward',
+                          b'<U0046> "<U0047>#' + w + b'";<U0046>',
+                          b'order_end',
+                          head=b'comment_char #\nescape_char /\n')
+                   for w in (b'<U0048>', b'<U0049>')),
+    # The escape before the comment character, in a translated string:
+    # the character after it is taken as it is (linereader.c:836-849@2.39).
+    'zz_ES': tuple(_order(b'collating-element <q> from "/%' + w + b'"',
+                          b'order_start forward', b'<q>', b'order_end')
+                   for w in (b'<U0044>', b'<U0045>')),
+    # A `from` written as the characters themselves (cs_CZ since 2.28).
+    'zz_RW': tuple(_order(b'collating-element <c-h> from "c%s"' % s,
+                          b'order_start forward', b'<c-h>', b'order_end')
+                   for s in (b'h', b'x')),
+    # From 2.36 a raw UTF-8 character is a tok_ucs4 (lr_token).
+    'zz_U8': tuple(_order(b'order_start forward', b'<U0041>', e,
+                          b'order_end')
+                   for e in (b'<U0042>', b'\xc3\xa9')),
+    # Entries after order_end: glibc refuses them (err_label,
+    # ld-collate.c:3484-3488, 3958-3960@2.34), and they name nothing.
+    'zz_RE': tuple(_order(b'order_start forward', b'<U0041>', b'order_end',
+                           e) for e in (b'<U004B>', b'<U004C>')),
+}
+# A line two runs read with two comment characters: zz_TW's own run obeys
+# the comment_char its LC_CTYPE leaves to the top level (the copy there
+# returns, ld-ctype.c:2128-2139@2.34), zz_TB's run reads zz_TW's LC_COLLATE
+# alone and does not. Each run's reading names its own characters.
+_NAMES['zz_TW'] = tuple(
+    b'comment_char %\nescape_char /\nLC_CTYPE\ncopy "zz_RX"\n'
+    b'comment_char #\nEND LC_CTYPE\nLC_COLLATE\norder_start forward\n'
+    b'<U0041> % ' + w + b'\norder_end\nEND LC_COLLATE\n'
+    for w in (b'<U005A>', b'<U0059>'))
+_NAMES['zz_TB'] = (b'LC_COLLATE\ncopy "zz_TW"\nEND LC_COLLATE\n',) * 2
+_NAMES['zz_RX'] = (_RETURNS['zz_RX'],) * 2
+# The reader stops being sure where it cannot settle a statement
+# (glibc_reader.Run.named_lines). zz_BS: `<foo>` before any statement
+# that read an argument is "bad symbol" and glibc reads the rest of its
+# line as statements (ld-collate.c:3496-3506@2.34), so it defines ZZ_TWO
+# and takes the ifdef branch the reader skips (round 2 of the 15.3 C2
+# review). zz_EA is read whole, through zz_LA's opening copy, before
+# zz_LA's own unsettled line: what it names is known.
+# A plain rule, named in a tree with no run the reader is unsure of, and
+# not named in one with such a run that does not begin it.
+_PLAIN = tuple(_order(b'order_start forward', b'<U0041>', w, b'order_end')
+               for w in (b'<U0044>', b'<U0045>'))
+_NAMES['zz_PL'] = _PLAIN
+_UNSURE_A = {
+    'zz_BS': tuple(
+        _order(b'<foo> define ZZ_TWO', b'order_start forward',
+               b'ifdef ZZ_TWO', a, b'else', c, b'endif', b'<U0042>',
+               b'order_end')
+        for a, c in ((b'<U0041>', b'<U0043>'), (b'<U0058>', b'<U005A>'))),
+    # glibc reads `<foo>` as "bad symbol" and the `copy` after it as a
+    # statement (ld-collate.c:2696-2706, :3521-3527@2.39): zz_G is read
+    # into zz_M's struct with ZZ_ON defined by zz_D, its ifdef branch. The
+    # reader does not open zz_G there (round 3 of the 15.3 C2 review).
+    'zz_D': (_order(b'define ZZ_ON', b'order_start forward', b'<U0044>',
+                    b'order_end'),) * 2,
+    'zz_M': (b'LC_COLLATE\ncopy "zz_D"\n<foo> copy "zz_G"\nEND LC_COLLATE\n',
+             ) * 2,
+    'zz_G': tuple(
+        _order(b'order_start forward', b'ifdef ZZ_ON', a, b'else', c,
+               b'endif', b'<U0042>', b'order_end')
+        for a, c in ((b'<U0041>', b'<U0043>'), (b'<U0058>', b'<U005A>'))),
+}
+# zz_EA is read whole, through zz_LA's opening copy, before zz_LA's own
+# unsettled line, and keeps its list; zz_PL, which zz_LA's run never
+# begins, does not.
+_UNSURE_B = {
+    'zz_EA': tuple(_order(b'order_start forward', b'<U0041>', w,
+                          b'order_end') for w in (b'<U0042>', b'<U0043>')),
+    'zz_LA': (b'LC_COLLATE\ncopy "zz_EA"\n<foo> x\nEND LC_COLLATE\n',) * 2,
+    'zz_PL': _PLAIN,
+}
+# A run the reader cannot finish: zz_RV's `-x` makes get_ident read before
+# its buffer (GlibcUndefined) before it reaches its LC_COLLATE, which
+# defines ZZ_ON before its opening copy (ld-collate.c:2567-2597@2.34): glibc
+# then takes the ifdef branch zz_FB's own run skips. The reader keeps
+# nothing of that run, nor knows which files glibc reads after the place
+# it stopped (rounds 1 and 2 of the 15.3 C2 review).
+_STOPPED = {
+    'zz_FB': tuple(
+        _order(b'order_start forward', b'ifdef ZZ_ON', a, b'else', c,
+               b'endif', b'<U0042>', b'order_end')
+        for a, c in ((b'<U0041>', b'<U0043>'), (b'<U0058>', b'<U005A>'))),
+    'zz_RV': (b'LC_NUMERIC\n-x\nEND LC_NUMERIC\nLC_COLLATE\ndefine ZZ_ON\n'
+              b'copy "zz_FB"\nEND LC_COLLATE\n',) * 2,
+}
+
+
+class _StepTwoNames(object):
+    """Step 2 run on a pair of commits on top of NEW whose files are
+    FILES: {name: (first version, second)}."""
+
+    FILES = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='pg-glibc-step2-names-')
+        _, cls.old = _harness.glibc_commit(
+            NEW, {n: v[0] for n, v in cls.FILES.items()}, cls.tmp)
+        cls.repo, cls.new = _harness.glibc_commit(
+            cls.old, {n: v[1] for n, v in cls.FILES.items()}, cls.tmp)
+        cls.out = os.path.join(cls.tmp, 'out')
+        os.mkdir(cls.out)
+        p = subprocess.run(
+            [sys.executable, os.path.join(_harness.SCRIPTS_DIR,
+                                          'filter_lc_collate_changes.py'),
+             cls.old, cls.new, '--repo', cls.repo],
+            cwd=_harness.SCRIPTS_DIR, capture_output=True,
+            env=dict(os.environ, PG_GLIBC_AUDIT_OUT=cls.out))
+        cls.rc = p.returncode
+        cls.text = (p.stdout + p.stderr).decode('utf-8', 'replace')
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def listed(self, name):
+        """The characters printed under `name`, as code points, or None
+        when no list is printed there."""
+        m = re.search(r'^  localedata/locales/%s\n((?:      .*\n)*)'
+                      % re.escape(name), self.text, re.M)
+        self.assertIsNotNone(m, self.text)
+        block = m.group(1)
+        if 'characters in the changed rules' not in block:
+            return None
+        return [int(h, 16) for h in re.findall(r'\(U\+([0-9A-F]{4,6})\)',
+                                               block)]
+
+    def test_every_file_is_listed(self):
+        self.assertEqual(0, self.rc, self.text)
+        with open(os.path.join(self.out, 'step2_changed_collate.%s.txt'
+                               % g.pair_slug(self.old, self.new))) as fh:
+            got = fh.read().split()
+        for name, (first, second) in self.FILES.items():
+            if first != second:
+                self.assertIn(name, got)
+
+
+@needs_clone
+class StepTwoNamesNothingAfterAStoppedRun(_StepTwoNames, unittest.TestCase):
+    """glibc_tree.Facts.stopped: zz_FB's own run names C and Z on the else
+    branch, and the branch zz_RV builds is read only by a run the reader
+    stopped in. Printing C and Z alone would hand zz_RV test values it
+    never places: the warning is printed instead."""
+
+    FILES = _STOPPED
+
+    def test_no_line_can_be_named(self):
+        self.assertIsNone(self.listed('zz_FB'))
+
+
+@needs_clone
+class StepTwoNamesNothingAfterAnUnsurePlace(_StepTwoNames, unittest.TestCase):
+    """glibc_reader.Run.named_lines and Facts.stopped: after a
+    statement the reader cannot settle, glibc may read every line
+    otherwise, and any file through a `copy` the reader did not read as
+    it does (rounds 2 and 3 of the 15.3 C2 review)."""
+
+    FILES = _UNSURE_A
+
+    def test_after_a_statement_the_reader_cannot_settle_nothing_is_named(
+            self):
+        """zz_BS's own run is unsettled on its first statement."""
+        self.assertIsNone(self.listed('zz_BS'))
+
+    def test_a_file_glibc_may_copy_there_is_not_named(self):
+        """zz_G's own run names C and Z; zz_M's, which the reader does not
+        follow into zz_G, places X."""
+        self.assertIsNone(self.listed('zz_G'))
+
+
+# zz_K's own run skips an ifdef branch holding a line the reader cannot
+# settle; zz_RK defines ZZ_ON and copies zz_K, and is unsure from that
+# line. zz_K's changed line after it is named by zz_K's own run only, and
+# zz_RK's map cuts it (round 4 of the 15.3 C2 review).
+_CUT = {
+    'zz_K': tuple(
+        _order(b'order_start forward', b'<U0041>', b'ifdef ZZ_ON',
+               b'<U0042> "abc', b'endif', w, b'order_end')
+        for w in (b'<U0043>', b'<U0044>')),
+    'zz_RK': (b'LC_COLLATE\ndefine ZZ_ON\ncopy "zz_K"\nEND LC_COLLATE\n',) * 2,
+}
+
+
+@needs_clone
+class StepTwoNamesNothingAnotherRunCannotSay(_StepTwoNames, unittest.TestCase):
+    """The map's 'from' (glibc_reader.Run.named_lines) through step 2:
+    one run is sure of the line, the other is not, and the warning is
+    printed."""
+
+    FILES = _CUT
+
+    def test_a_line_one_run_cuts_is_not_named(self):
+        self.assertIsNone(self.listed('zz_K'))
+
+
+@needs_clone
+class StepTwoNamesAFileReadBeforeThatPlace(_StepTwoNames, unittest.TestCase):
+    """The control of the class above: a file read to its end before the
+    place keeps its list, as iso14651_t1_common does under the locales
+    that copy am_ET at glibc-2.12 and 2.17; one the unsure run never
+    begins does not."""
+
+    FILES = _UNSURE_B
+
+    def test_a_file_read_whole_before_that_place_keeps_its_list(self):
+        self.assertEqual([0x42, 0x43], self.listed('zz_EA'))
+
+    def test_a_file_the_unsure_run_never_begins_is_not_named(self):
+        self.assertIsNone(self.listed('zz_PL'))
+
+
+@needs_clone
+class StepTwoNamesWhatTheReaderRead(_StepTwoNames, unittest.TestCase):
+    """Backlog 13.29 (15.3 C2): step 2 lists under each changed file the
+    characters glibc_reader read on its changed lines, in every run that
+    reads them (glibc_tree.Facts.characters), and no longer cuts the text
+    of the line at the first comment character: a `%` inside a <name> or
+    a string, or after the escape, cut the list short, and a line two runs
+    read with two comment characters gave no list at all."""
+
+    FILES = _NAMES
+
+    def test_a_comment_character_in_a_from_string_cuts_nothing(self):
+        self.assertEqual([0x41, 0x25, 0x42], self.listed('zz_FP'))
+
+    def test_a_comment_character_in_a_name_cuts_nothing(self):
+        self.assertEqual([0x41, 0x45, 0x46], self.listed('zz_PN'))
+
+    def test_a_comment_character_in_a_weight_string_cuts_nothing(self):
+        """Only its <U....> names are characters; `%` there names a
+        symbol."""
+        self.assertEqual([0x46, 0x47, 0x48, 0x49], self.listed('zz_WS'))
+
+    def test_the_declared_comment_character_too(self):
+        self.assertEqual([0x46, 0x47, 0x48, 0x49], self.listed('zz_CC'))
+
+    def test_an_escaped_comment_character_in_a_from_string(self):
+        self.assertEqual([0x25, 0x44, 0x45], self.listed('zz_ES'))
+
+    def test_a_from_string_of_raw_characters_names_them(self):
+        self.assertEqual([0x63, 0x68, 0x78], self.listed('zz_RW'))
+
+    def test_a_raw_utf8_character_from_2_36(self):
+        self.assertEqual([0x42, 0xE9], self.listed('zz_U8'))
+
+    def test_a_line_read_with_two_comment_characters_names_both_readings(
+            self):
+        """zz_TW's own run reads `%` as a word and the name after it; the
+        run of zz_TB reads `%` as a comment."""
+        self.assertEqual([0x41, 0x5A, 0x59], self.listed('zz_TW'))
+
+    def test_a_plain_rule_in_a_tree_the_reader_is_sure_of(self):
+        """The control of StepTwoNamesAFileReadBeforeThatPlace: the same
+        file, named."""
+        self.assertEqual([0x44, 0x45], self.listed('zz_PL'))
+
+    def test_a_refused_entry_names_nothing(self):
+        """The control of the list: an entry glibc drops unread, on both
+        sides, moves nothing. The locale stays listed, with the warning."""
+        self.assertIsNone(self.listed('zz_RE'))
+        self.assertIn('could not identify which characters changed',
+                      _harness.flat(self.text.split(
+                          'localedata/locales/zz_RE', 1)[1].split(
+                              'localedata/locales/', 1)[0]))
 
 
 @needs_clone
