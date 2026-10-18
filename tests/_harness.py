@@ -4,19 +4,41 @@ Nothing here asserts anything. It exists so that a test that needs the real
 glibc clone SKIPS with a reason instead of failing, and so that running the
 suite never writes into the shared /tmp output directory the scripts default to.
 """
+import atexit
 import gzip
 import io
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import unittest
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(TESTS_DIR)
 SCRIPTS_DIR = os.path.join(REPO_ROOT, 'scripts')
 GLIBC_CLONE = os.path.join(SCRIPTS_DIR, 'glibc')
+
+# Where audit.sh and every step write when PG_GLIBC_AUDIT_OUT is unset.
+# audit.sh, scripts/audit-locale-diff.sh and glibc_locale_data.OUT_DIR each
+# spell it; test_parallel_runner ties every one of them to this name, because
+# run_parallel watches this folder and a guard watching a folder nothing
+# writes to any more would pass for ever.
+DEFAULT_OUT_DIR = '/tmp/pg-glibc-collation-audit'
+
+# Every process that imports this module sends the steps' output to a folder
+# of its own, before any script module is imported (glibc_locale_data reads
+# the variable at import), and whatever the caller had set, since a value
+# inherited from the shell can be a real audit's folder too. A test that
+# passes out_dir= still gets the folder it names; one that forgets, or that
+# launches a step through a helper of its own, lands here. In the default
+# folder it would overwrite the step 2 list that a real audit.sh running at
+# the same time reads back between its steps (backlog 13.37).
+SUITE_OUT_DIR = tempfile.mkdtemp(prefix='pg-glibc-audit-suite-')
+os.environ['PG_GLIBC_AUDIT_OUT'] = SUITE_OUT_DIR
+atexit.register(shutil.rmtree, SUITE_OUT_DIR, True)
 
 # The scripts import each other as top-level modules (`import glibc_locale_data
 # as g`), so they are only importable with scripts/ on the path.
@@ -138,8 +160,9 @@ def run_step(script, *args, out_dir=None):
 
     A subprocess, not an in-process main(), for two reasons. The scripts read
     PG_GLIBC_AUDIT_OUT at import time (glibc_locale_data.OUT_DIR), so only a
-    fresh process can be pointed at a scratch directory instead of the shared
-    /tmp one. And the contract these tools actually offer a user is their
+    fresh process can be pointed at a scratch directory other than this
+    process's SUITE_OUT_DIR. And the
+    contract these tools actually offer a user is their
     printed output and their exit status, which is what this returns.
     """
     env = dict(os.environ)
