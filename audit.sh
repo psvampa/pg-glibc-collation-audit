@@ -397,8 +397,8 @@ run_step 1 "$SCRIPTS/audit-locale-diff.sh" "$OLD" "$NEW"
 # adding one more copy of their `!!` block. Two questions in one answer:
 #
 #   reversed -- step 1 has already exited 2 and this script stopped with it.
-#               Reversed, all five steps run to the end and print a plausible
-#               clean result; the direction was never compared at all.
+#               Reversed, all five steps run to the end; the direction was
+#               never compared at all.
 #   same     -- one commit, however each side is spelt. This used to be
 #               `[ "$OLD" = "$NEW" ]`, a comparison of TEXT, so
 #               `./audit.sh glibc-2.39 ef321e23...` -- the sha this run's own

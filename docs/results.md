@@ -6,7 +6,7 @@
 |---|---|---|---|
 | `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | 🟢 No difference | steps 1–3 — `sv_FI` only via `copy`; the second pair is cleared by step 11's measurement |
 | `or_IN` | 🔴 **Changed** | 🟢 No difference | steps 1–3; the second pair is cleared by step 11's measurement |
-| `ko_KR` | 🔴 **Changed** | 🟢 No difference | **step 5** — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement |
+| `ko_KR` | 🔴 **Changed** | 🟢 No difference | step 4 flags it and **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement, as far as it can measure |
 | `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | **step 2 warns** and cannot settle it <sup>†</sup> — the node-to-node check settles the data, step 11 or `sql/c_utf8_probe.sql` the order |
 | `th_TH` | 🟢 No difference | 🔴 **Changed** | steps 1–3; the first pair is cleared by step 11's measurement |
 | `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap; the first pair is cleared by step 11's measurement |
@@ -48,7 +48,7 @@ never flagged by a plain file diff.
 ### `ko_KR` — from the code diff
 
 **`ko_KR` also changes**, and its data file is byte-identical between the two
-tags. Step 5 pins the cause to a single commit,
+tags. The cause is a single commit,
 [`82292c99b2`](https://sourceware.org/bugzilla/show_bug.cgi?id=22668)
 ("LC_COLLATE: Fix last character ellipsis handling", Bug 22668), which landed
 in glibc 2.34 and changed how `localedef` expands the ellipsis ranges that
@@ -58,8 +58,7 @@ Two independent checks agree: `localedata/locales/ko_KR` is unchanged across
 both `2.28..2.34` and `2.31..2.36`, and
 [ardentperf's](https://github.com/ardentperf/glibc-unicode-sorting)
 checksums show `ko` changing on Debian exactly between 2.31 and 2.36 —
-bracketing 2.34. This is the case a data-only audit gets wrong, which is why
-step 5 exists.
+bracketing 2.34. This is the case a data-only audit gets wrong.
 
 #### The `ko_KR` mechanism, and its minimal test case
 
