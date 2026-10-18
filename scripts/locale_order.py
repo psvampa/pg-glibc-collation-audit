@@ -245,10 +245,9 @@ def libc():
     Python's locale.strxfrm and locale.strcoll are wcsxfrm and wcscoll, which
     compare wide characters through tables of their own. PostgreSQL calls
     strcoll on the bytes of the database's encoding. Measured on glibc 2.34
-    the two orders differ: by U+0001 in every UTF-8 locale tried, and by 482
-    of 17,175 characters in ko_KR (EUC-KR). The argument types are declared,
-    so that a str passed by mistake fails instead of reaching C as wide
-    characters.
+    the two orders differ, by U+0001 in every UTF-8 locale tried. The
+    argument types are declared, so that a str passed by mistake fails
+    instead of reaching C as wide characters.
     """
     global LIBC
     if LIBC is None:

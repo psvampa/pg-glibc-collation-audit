@@ -684,8 +684,7 @@ def require_pair_order(repo, old, new, allow_reverse=False, commits=None):
             die(f"{detail}.\n"
                 f"       This pair is REVERSED. Every step takes <old_tag> "
                 f"<new_tag>, and reversed\n"
-                f"       they all run to the end and print a plausible clean "
-                f"result: step 4 scans\n"
+                f"       they all run to the end: step 4 scans\n"
                 f"       the older tag, step 2 reports a deleted locale as a "
                 f"harmless addition, and\n"
                 f"       step 3 closes over the wrong copy graph. Swap the "
@@ -696,9 +695,10 @@ def require_pair_order(repo, old, new, allow_reverse=False, commits=None):
              f"older tag. Not an audit of an upgrade.")
     elif status == 'undetermined':
         warn(f"The DIRECTION of this pair could not be established: {detail}. "
-             f"Nothing below is wrong on that account, but neither is it "
-             f"checked: if the two arguments are the wrong way round, every "
-             f"step still runs and still prints a plausible clean result. "
+             f"Nothing below has checked it: if the two arguments are the "
+             f"wrong way round, every "
+             f"step still runs: step 4 scans the older tag, and step 2 reports "
+             f"a deleted locale as a harmless addition. "
              f"Confirm which build is the older one.")
     return status
 

@@ -21,8 +21,7 @@ independently of the OS.
 project audits and publishes results for. RHEL7 is out of scope — it is years
 past end of life, and documenting it bought nothing.
 
-The method itself works on any pair of upstream tags, so equivalents on other
-distros (Ubuntu 18.04+, Debian 9+, SLES 15+) behave the same. The extended
+The method itself works on any pair of upstream tags. The extended
 run, 1.b, has been measured on RHEL only, and it reads the glibc build with
 `rpm -q glibc`. On a machine without RPM, such as Debian or Ubuntu, `audit.sh`
 refuses that machine's file and says why. The two pairs
@@ -41,17 +40,16 @@ templates were dropped from the `copy` graph and the answer collapsed silently
 a claim about every older glibc. See
 [limitations.md](limitations.md#below-glibc-224-the-method-rests-on-one-measured-pair).
 
-## The `builtin` provider is the way out
+## The `builtin` provider
 
-The `builtin` provider (PG 17+) implements `C`, `C.UTF-8` and
-`PG_UNICODE_FAST` inside PostgreSQL, in code-point order, with no call into
-glibc. So:
+The `builtin` provider (PG 17+) implements `C` and `C.UTF-8` inside
+PostgreSQL, in code-point order. So:
 
 ```sh
 initdb --locale-provider=builtin --locale=C.UTF-8
 ```
 
-is immune to everything this tool looks for, and is the mitigation if
+is the mitigation if
 [the `C.UTF-8` limitation](limitations.md#cutf-8-is-invisible-to-a-tag-diff)
 is what you are worried about.
 

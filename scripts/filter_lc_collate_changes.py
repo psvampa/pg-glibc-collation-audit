@@ -981,7 +981,7 @@ def main(argv):
     ap.add_argument('new_tag')
     ap.add_argument('--repo', help="path to the glibc clone (autodetected)")
     ap.add_argument('--allow-reverse', action='store_true',
-                    help="run a pair whose new tag is the OLDER commit. Refused by default: reversed, every step still prints a plausible clean result. Prints a `!!` block saying the direction is reversed.")
+                    help="run a pair whose new tag is the OLDER commit. Refused by default. Prints a `!!` block saying the direction is reversed.")
     ap.add_argument('--diff-file',
                     help="a -U0 diff to check against the one git gives for "
                          "the two tags: refused unless it places every change "

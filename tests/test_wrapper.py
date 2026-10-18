@@ -833,7 +833,7 @@ class WrapperRefusesBadInput(unittest.TestCase):
 
     def test_a_reversed_pair_is_refused_before_any_summary(self):
         """"Nothing stopped a reversed pair." Reversed, all five steps run to
-        the end and print a plausible clean result: step 4 scans the older
+        the end: step 4 scans the older
         tag, so the locales added in the newer one -- ckb_IQ and mnw_MM, both
         `copy "iso14651_t1"` -- leave the exposed set, and step 2 reports a
         locale DELETED in the real upgrade as an addition it did not analyse.

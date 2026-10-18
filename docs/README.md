@@ -20,7 +20,7 @@
 | [commands.md](commands.md) | What each of the three commands does, what command 1.b adds, the file it takes from each machine and when it refuses one, and the checks from separate pieces |
 | [results.md](results.md) | The evidence behind each verdict, both worked examples, and what was tested on which nodes |
 | [confirming-on-a-real-system.md](confirming-on-a-real-system.md) | Running the SQL template and the `C.UTF-8` probe on both nodes, choosing values that prove something, and the three traps that make a comparison lie |
-| [scope.md](scope.md) | What this audits — `LC_COLLATE` and the `libc` provider — and the `builtin` provider as a way out |
+| [scope.md](scope.md) | What this audits — `LC_COLLATE` and the `libc` provider — and the `builtin` provider as a mitigation |
 | [limitations.md](limitations.md) | The seven things to know before acting on a clean result — `C.UTF-8` among them, what step 11 does not see, and `LC_CTYPE`, which no step audits |
 | [requirements.md](requirements.md) | What each run needs, on your machine and on each server, and the three setup traps |
 | [glossary.md](glossary.md) | `copy` graph, blast radius, hunk, tier, ellipsis range, role swap, build id, measured order, level, contraction |

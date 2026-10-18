@@ -8,8 +8,7 @@ B-tree indexes on `text`/`varchar`/`char`/`citext` columns need a `REINDEX`
 after an OS upgrade or a physical migration?
 
 **PostgreSQL will not tell you.** `pg_collation.collversion` stores glibc's
-version string, so it warns on *any* version bump whether or not your data
-would sort differently, and stays silent when a distro patches collation data
+version string, so it stays silent when a distro patches collation data
 without moving that string. It is a version comparison, not a check of the
 real sort rules
 ([background](https://wiki.postgresql.org/wiki/Locale_data_changes)).
@@ -36,7 +35,7 @@ which sorts real strings on real nodes, and there are others.
 
 **On the machine that runs `audit.sh`** — yours, or any other:
 
-- `git`, `python3` (standard library only) and `bash`
+- `git`, `python3` 3.7 or newer (standard library only) and `bash`
 - network the first time, to clone glibc (about 370 MB)
 - `gpg`, optional, to check the signature of each glibc tag
 
@@ -68,8 +67,7 @@ cd pg-glibc-collation-audit
 
 Run `ldd --version` on the old and the new node. Those two numbers are the
 tags you pass, written as `glibc-<version>`. **Old first, new second** — a
-reversed pair is refused rather than answered, because backwards every step
-still prints a plausible clean result.
+reversed pair is refused rather than answered.
 
 Any two versions are allowed, however far apart, and nothing in the tool looks
 at the distance between them. That is the answer for a direct upgrade. If you
@@ -214,7 +212,7 @@ A worked example for each pair is in
 |---|---|---|---|
 | `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | 🟢 No difference | steps 1–3 — `sv_FI` only via `copy`; the second pair is cleared by step 11's measurement |
 | `or_IN` | 🔴 **Changed** | 🟢 No difference | steps 1–3; the second pair is cleared by step 11's measurement |
-| `ko_KR` | 🔴 **Changed** | 🟢 No difference | **step 5** — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement |
+| `ko_KR` | 🔴 **Changed** | 🟢 No difference | step 4 flags it and **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement, as far as it can measure |
 | `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | **step 2 warns** and cannot settle it <sup>†</sup> — the node-to-node check settles the data, step 11 or `sql/c_utf8_probe.sql` the order |
 | `th_TH` | 🟢 No difference | 🔴 **Changed** | steps 1–3; the first pair is cleared by step 11's measurement |
 | `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap; the first pair is cleared by step 11's measurement |
@@ -264,7 +262,7 @@ short version:
 - [docs/results.md](docs/results.md) — the evidence behind each verdict, both worked examples, tested-on
 - [docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md) — the empirical check
 - [docs/limitations.md](docs/limitations.md) — the seven things to know before acting on a clean result
-- [docs/scope.md](docs/scope.md) — what it audits, and the `builtin` provider as a way out
+- [docs/scope.md](docs/scope.md) — what it audits, and the `builtin` provider as a mitigation
 - [docs/requirements.md](docs/requirements.md) — what each run needs, on your machine and on each server, and the three setup traps
 - [docs/glossary.md](docs/glossary.md) — `copy` graph, blast radius, hunk, tier, ellipsis range, role swap, build id, measured order, level, contraction
 - [examples/](examples/README.md) — real output of every command, and which file is which

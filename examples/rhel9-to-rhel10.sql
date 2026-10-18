@@ -1,7 +1,7 @@
 -- Worked example: glibc 2.34 (RHEL9) -> glibc 2.39 (RHEL10).
 --
--- Run on both a RHEL9-family and a RHEL10-family node (Rocky/Alma/Oracle are
--- binary-compatible for this purpose), and diff the two outputs. Feed both
+-- Run on both a RHEL9-family and a RHEL10-family node, and diff the two
+-- outputs. Feed both
 -- sides this identical file: a comparison of differently-ordered input differs
 -- for reasons that have nothing to do with glibc.
 --

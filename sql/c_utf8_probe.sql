@@ -295,7 +295,7 @@ WHERE datlocprovider = 'c'
   AND datcollate ~ '^[Cc]\.';
 
 \echo '=== 5. is THIS database exposed through its default collation? ==='
--- The full index / partition-key / column / constraint inventory lives in
+-- The index / partition-key / column / constraint inventory lives in
 -- sql/collation_confirmation_template.sql. This is only the one-line answer
 -- for the database default, because that is the way C.UTF-8 normally reaches
 -- your data: a text column with no explicit COLLATE resolves to
@@ -304,8 +304,8 @@ SELECT datname,
        datlocprovider,
        datcollate,
        CASE
-         WHEN datlocprovider <> 'c' THEN 'not libc -- this probe does not apply'
-         WHEN datcollate IN ('C', 'POSIX') THEN 'byte order, immutable'
+         WHEN datlocprovider <> 'c' THEN 'not libc'
+         WHEN datcollate IN ('C', 'POSIX') THEN 'byte order'
          WHEN datcollate ~ '^[Cc]\.' THEN
            'EXPOSED via C.UTF-8, and no collversion can ever warn'
          ELSE 'EXPOSED via ' || datcollate || ' (collversion can warn)'
