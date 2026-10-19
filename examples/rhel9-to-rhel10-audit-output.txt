@@ -1697,18 +1697,33 @@ Sort order CHANGED in 4 locale(s):
 
   th_TH, th_TH.tis620, thai (TIS-620)
     also, in PostgreSQL: database locale th_TH.TIS-620
-    88 characters moved, too many to list here
+    88 characters moved: U+0002..U+0020, U+0023..U+0027, U+002C..U+002F,
+      U+003A..U+003B, U+003F..U+0060, U+007B, U+007D..U+007F, U+0E2F, U+0E3A,
+      U+0E3F, U+0E46, U+0E4C, U+0E4F, U+0E5A..U+0E5B
+    245 character(s) sort differently against at least one other
     the pairs that tell letters, accents and case apart here are told apart differently themselves:
       before: letters a/b, accent U+009F/_, case A/a
       now:    letters a/b, accent ๏/U+0E4E from the end, case a/A
+      so pairs are compared only by letters
+    31 pairs of characters told apart differently, too many to list here
+      among them 1 character(s) that did not move: U+0030
+    60 more pair(s) may be told apart differently; what was measured cannot decide
 
   th_TH.utf8 (UTF-8)
     also, in PostgreSQL: collation "th_TH" where the database encoding is
       UTF-8; database locale th_TH.UTF-8
     50,584 characters moved, too many to list here
+    1,112,062 character(s) sort differently against at least one other
     the pairs that tell letters, accents and case apart here are told apart differently themselves:
       before: letters a/b, accent á/a from the end, case A/a
       now:    letters a/b, accent a/á, case a/A
+      so pairs are compared only by letters
+    45,693 pairs of characters told apart differently, too many to list here
+      among them 1 character(s) that did not move: U+0030
+    8,364 more pair(s) may be told apart differently; what was measured cannot decide
+
+Every character and pair found, by locale:
+  /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.34..glibc-2.39.tsv
 
 Unchanged: 859 locale(s).
 !! Unchanged only as far as measured: 6 of them. In each, the pairs of
@@ -1790,14 +1805,23 @@ Of the 869 locale(s) on the old machine: 4 changed, 859 unchanged (6 of them onl
    (glibc-2.34-275.el9_8.x86_64 -> glibc-2.39-128.el10_2.x86_64)
      4 locale(s) sort differently -- reindex what uses them:
        th_TH, th_TH.tis620, thai (TIS-620)
-         88 characters moved; the pairs that tell letters, accents and case
-           apart are told apart differently themselves
+         88 characters moved; 245 sort differently against another; the pairs
+           that tell letters, accents and case apart are told apart
+           differently themselves; pairs compared only by letters; 31 pairs of
+           characters told apart differently; among them 1 character(s) that
+           did not move: U+0030; 60 more pair(s) the measurement cannot decide
          also, in PostgreSQL: database locale th_TH.TIS-620
        th_TH.utf8 (UTF-8)
-         50,584 characters moved; the pairs that tell letters, accents and
-           case apart are told apart differently themselves
+         50,584 characters moved; 1,112,062 sort differently against another;
+           the pairs that tell letters, accents and case apart are told apart
+           differently themselves; pairs compared only by letters; 45,693
+           pairs of characters told apart differently; among them 1
+           character(s) that did not move: U+0030; 8,364 more pair(s) the
+           measurement cannot decide
          also, in PostgreSQL: collation "th_TH" where the database encoding is
            UTF-8; database locale th_TH.UTF-8
+       every character and pair:
+         /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.34..glibc-2.39.tsv
      NOT known to be unchanged: 6 locale(s)
        could not be measured: hy_AM.armscii8, ka_GE, ka_GE.georgianps,
          zh_TW.euctw
