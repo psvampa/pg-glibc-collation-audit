@@ -2,17 +2,20 @@
 
 ## What it audits
 
-**Sort order (`LC_COLLATE`) only.** It says nothing about `LC_CTYPE`
-behavior — `upper()`, `lower()`, `initcap()`, character classification, pattern
-matching — and nothing about `LC_NUMERIC`, `LC_TIME`, `LC_MONETARY` or
-`LC_MESSAGES`, except the decimals of the `money` type, which step 11 compares
-given each machine's file.
+**Sort order (`LC_COLLATE`) only.** Of `LC_CTYPE` behavior, step 11 checks
+one thing, whether each machine can convert a locale's text at all.
+Without that, in a database whose encoding has characters of more than one
+byte, `upper()`, `lower()`, `initcap()`, `ILIKE` and full-text search stop
+with an error on any text that is not ASCII. What those functions return,
+character classification and pattern matching are not audited, nor
+`LC_NUMERIC`, `LC_TIME`, `LC_MONETARY` or `LC_MESSAGES`, except the decimals
+of the `money` type, which step 11 compares given each machine's file.
 
-`LC_CTYPE` is the exclusion that can still cost you an index: a functional index
-on `lower(email)` breaks on a glibc upgrade the same way a `COLLATE` index does,
-and PostgreSQL has no `collversion` equivalent for ctype to warn you. No step
-audits it — see
-[limitations.md](limitations.md#lc_ctype-is-not-audited-at-all).
+What `LC_CTYPE` returns is the exclusion that can still cost you an index: a
+functional index on `lower(email)` breaks on a glibc upgrade the same way a
+`COLLATE` index does, and PostgreSQL has no `collversion` equivalent for
+ctype to warn you. No step audits it — see
+[limitations.md](limitations.md#what-lc_ctype-returns-is-not-audited).
 
 **The `libc` provider only.** It is about glibc, so in PostgreSQL terms that
 is the only provider it applies to. ICU collations version their CLDR data

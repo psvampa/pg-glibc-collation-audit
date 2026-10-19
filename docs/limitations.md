@@ -9,7 +9,7 @@ something it cannot see has changed.
 4. [A copied folder's character sets are not compared](#a-copied-folders-character-sets-are-not-compared)
 5. [Step 5 reports, it does not decide](#step-5-reports-it-does-not-decide)
 6. [Step 11 measures one character at a time](#step-11-measures-one-character-at-a-time)
-7. [`LC_CTYPE` is not audited at all](#lc_ctype-is-not-audited-at-all)
+7. [What `LC_CTYPE` returns is not audited](#what-lc_ctype-returns-is-not-audited)
 
 ## `C.UTF-8` is invisible to a tag diff
 
@@ -112,20 +112,28 @@ see:
   would compare cannot be built. On the three test machines that was four
   locales each, `hy_AM.armscii8`, `ka_GE`, `ka_GE.georgianps` and
   `zh_TW.euctw`, and the run names them as not known to be unchanged;
+- the few byte sequences that PostgreSQL stores, for characters it converts
+  from UTF-8, in a database of an EUC-JP, EUC-KR or TIS-620 locale, and that
+  the strings measured do not hold. The run names them under the locales of
+  those encodings, and its characters file lists every one;
+- a locale whose encoding PostgreSQL does not know, in a database of another
+  encoding, which PostgreSQL allows. The bytes it sorts and converts there are
+  not the ones measured, and the run names those locales;
 - a locale that is not installed, because it measures what `locale -a` lists
   and nothing else.
 
-The run prints the first two beside its result every time. Command 3 sorts
+The run prints the first two beside its result every time, and the fourth
+and fifth whenever it measured a locale they apply to. Command 3 sorts
 strings you choose inside PostgreSQL, and reaches a rule for a combination of
 letters when the strings contain it.
 
 Not tried yet, so a failure there would be new: Python 3.14 on a real
 machine, where only a simulation was run, a machine on cgroup v1, and ARM.
 
-## `LC_CTYPE` is not audited at all
+## What `LC_CTYPE` returns is not audited
 
 The other six sections are ways a sort-order change can be missed. This one
-is a whole category nothing here audits.
+is a whole category nothing here audits, but for one check.
 
 `LC_COLLATE` decides sort order. `LC_CTYPE` decides `upper()`, `lower()`,
 `initcap()`, character classification and pattern matching, and under the
@@ -139,8 +147,11 @@ PostgreSQL warns less here than it does for collation, not more. There is no
 ctype version to compare, so a ctype change leaves no trail at all and there
 is no mismatch for anything to detect.
 
-No step of this tool audits it, and no verdict this project publishes says
-anything about it in either direction, including "unchanged". Steps 2 and 6
+No step of this tool audits what those functions return, and no verdict
+this project publishes says anything about it in either direction, including
+"unchanged". Step 11 checks only whether each machine can convert a locale's
+text at all, and names the locales where `upper()`, `lower()` and `ILIKE`
+would stop with an error. Steps 2 and 6
 to 8 read its transliterations only for the collating elements they build,
 which are sort order. A 🟢 on the
 results table is a statement about sort order and nothing else. If a

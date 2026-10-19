@@ -112,6 +112,36 @@ CLIENT_ONLY_CODESETS = frozenset(name.upper() for name in (
     'GB18030', 'CP54936',
     'SJIS_2004'))
 
+# Every code_set_name PostgreSQL maps to an encoding (encoding_match_list in
+# src/port/chklocale.c, the same 110 names at REL_13_23, REL_14_24,
+# REL_15_19, REL_16_15, REL_17_11 and REL_18_6, compared with
+# pg_strcasecmp). For a locale whose codeset is not here,
+# pg_get_encoding_from_locale gives -1, and CREATE DATABASE and initdb let
+# a database of any encoding use it, with only a WARNING ("could not
+# determine encoding for locale"); C and POSIX are accepted with every
+# encoding before the table is read.
+POSTGRES_CODESETS = frozenset(name.upper() for name in (
+    'EUC-JP', 'eucJP', 'IBM-eucJP', 'sdeckanji', 'CP20932', 'EUC-CN',
+    'eucCN', 'IBM-eucCN', 'GB2312', 'dechanzi', 'CP20936', 'EUC-KR',
+    'eucKR', 'IBM-eucKR', 'deckorean', '5601', 'CP51949', 'EUC-TW',
+    'eucTW', 'IBM-eucTW', 'cns11643', 'UTF-8', 'utf8', 'CP65001',
+    'ISO-8859-1', 'ISO8859-1', 'iso88591', 'CP28591', 'ISO-8859-2',
+    'ISO8859-2', 'iso88592', 'CP28592', 'ISO-8859-3', 'ISO8859-3',
+    'iso88593', 'CP28593', 'ISO-8859-4', 'ISO8859-4', 'iso88594',
+    'CP28594', 'ISO-8859-9', 'ISO8859-9', 'iso88599', 'CP28599',
+    'ISO-8859-10', 'ISO8859-10', 'iso885910', 'ISO-8859-13', 'ISO8859-13',
+    'iso885913', 'ISO-8859-14', 'ISO8859-14', 'iso885914', 'ISO-8859-15',
+    'ISO8859-15', 'iso885915', 'CP28605', 'ISO-8859-16', 'ISO8859-16',
+    'iso885916', 'KOI8-R', 'CP20866', 'KOI8-U', 'CP21866', 'CP866',
+    'CP874', 'CP1250', 'CP1251', 'ansi-1251', 'CP1252', 'CP1253',
+    'CP1254', 'CP1255', 'CP1256', 'CP1257', 'CP1258', 'ISO-8859-5',
+    'ISO8859-5', 'iso88595', 'CP28595', 'ISO-8859-6', 'ISO8859-6',
+    'iso88596', 'CP28596', 'ISO-8859-7', 'ISO8859-7', 'iso88597',
+    'CP28597', 'ISO-8859-8', 'ISO8859-8', 'iso88598', 'CP28598', 'SJIS',
+    'PCK', 'CP932', 'SHIFT_JIS', 'BIG5', 'BIG5HKSCS', 'Big5-HKSCS',
+    'CP950', 'GBK', 'CP936', 'UHC', 'CP949', 'JOHAB', 'CP1361', 'GB18030',
+    'CP54936', 'SJIS_2004', 'US-ASCII'))
+
 _WS = ' \t\r\f\v'
 _U = r'<U([0-9A-Fa-f]{4}|[0-9A-Fa-f]{8})>'
 
