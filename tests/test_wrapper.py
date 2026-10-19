@@ -121,7 +121,9 @@ MEASURED_NOT_RUN_BODY = [
     'option, or --old-order and --new-order, each written by',
     'scripts/locale_order.py on that machine. Without them nothing above',
     "asked either machine's glibc how it sorts, and a locale whose files",
-    'did not change can still sort differently.',
+    'did not change can still sort differently. Nor did anything compare',
+    'the decimals of money or check which C library PostgreSQL runs on',
+    'either machine.',
 ]
 MEASURED_FOOTER = '     Full report: step 11 above.'
 # audit.sh's last word when step 11 exits non-zero: a refusal or a crash.

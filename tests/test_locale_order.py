@@ -177,6 +177,172 @@ def warning_kind(text):
     raise ReportShapeError(f'unknown warning: {text!r}')
 
 
+SIDE = r'(OLD|NEW)'
+EARLIER_FILES = (r'(?:the OLD and NEW files were|the (OLD|NEW) file was) '
+                 r'written by an earlier version of locale_order\.py, which '
+                 r'did not measure this; run it again on (both machines|the '
+                 r'(OLD|NEW) machine)\.')
+
+
+def earlier_sides(mt, one, where, again):
+    """The sides a not-checked-for-an-earlier-version line names, refused
+    unless its three mentions of them agree."""
+    sides = [mt[one]] if mt[one] else ['OLD', 'NEW']
+    named = ([mt[again]] if mt[again] else ['OLD', 'NEW'])
+    if where is not None:
+        named_where = [mt[where]] if mt[where] else ['OLD', 'NEW']
+        if named_where != sides:
+            raise ReportShapeError(f'sides disagree: {mt[0]!r}')
+    if named != sides:
+        raise ReportShapeError(f'sides disagree: {mt[0]!r}')
+    return sides
+
+
+def check_kind(text):
+    """(kind, data) of a line about the checks beside the order: the
+    control, the decimals of money, the PostgreSQL processes. Raises on a
+    line of any other shape, so a reader cannot skip one."""
+    mt = re.fullmatch(r'Control: C and POSIX measured as byte order on both '
+                      r'machines, which is how glibc sorts them in every '
+                      r'version\.', text)
+    if mt:
+        return 'control', {'held': True}
+    mt = re.fullmatch(r'!! Control FAILED on the ' + SIDE + r' machine: '
+                      r'(C|POSIX|C and POSIX) did not measure as byte order, '
+                      r'which is how glibc sorts C and POSIX in every '
+                      r'version\. This script did not measure there what it '
+                      r'means to, and nothing it measured on that machine can '
+                      r'be trusted; measure it again with this checkout\'s '
+                      r'scripts/locale_order\.py\.', text)
+    if mt:
+        return 'control', {'failed': mt[1], 'names': mt[2].split(' and ')}
+    mt = re.fullmatch(r'!! Control NOT checked: (.+)\.', text)
+    if mt:
+        return 'control', {'unknown': mt[1].split('; ')}
+    mt = re.fullmatch(r'Decimals of money: the same in the (\d+) locale\(s\) '
+                      r'measured on both machines\.', text)
+    if mt:
+        return 'money', {'same': int(mt[1])}
+    mt = re.fullmatch(r'!! Decimals of money CHANGE in (\d+) locale\(s\): a '
+                      r'money value stored with lc_monetary set to one of them '
+                      r'reads with another number of decimals on the new '
+                      r'machine, as a number 10 or more times larger or '
+                      r'smaller: (.+)\.', text)
+    if mt:
+        changed = {}
+        for item in mt[2].split(', '):
+            it = re.fullmatch(r'(\S+) \((\d+) -> (\d+)\)', item)
+            if not it or it[2] == it[3]:
+                raise ReportShapeError(f'unknown money change: {item!r}')
+            changed[it[1]] = (int(it[2]), int(it[3]))
+        if len(changed) != int(mt[1]):
+            raise ReportShapeError(f'money says {mt[1]} and lists {len(changed)}')
+        return 'money', {'changed': changed}
+    mt = re.fullmatch(r'!! Decimals of money NOT checked in (\d+) '
+                      r'locale\(s\): (.+)\.', text)
+    if mt:
+        unknown = {}
+        for item in mt[2].split('; '):
+            it = re.fullmatch(r'(\S+) \((old|new) machine\): (.+)', item)
+            if not it:
+                raise ReportShapeError(f'unknown money item: {item!r}')
+            unknown.setdefault(it[1], {})[it[2]] = it[3]
+        if len(unknown) != int(mt[1]):
+            raise ReportShapeError(f'money says {mt[1]} and lists {len(unknown)}')
+        return 'money', {'unknown': unknown}
+    mt = re.fullmatch(r'!! Decimals of money NOT checked: ' + EARLIER_FILES, text)
+    if mt:
+        return 'money', {'earlier': earlier_sides(mt, 1, None, 3)}
+    mt = re.fullmatch(r'PostgreSQL on the ' + SIDE + r' machine: (\d+) '
+                      r'process\(es\) named postgres or postmaster, all running '
+                      r'the C library measured there\.', text)
+    if mt:
+        return 'libc', {'side': mt[1], 'clean': int(mt[2])}
+    mt = re.fullmatch(r'!! PostgreSQL on the ' + SIDE + r' machine: no process '
+                      r'named postgres or postmaster was found, so nothing '
+                      r'checked which C library PostgreSQL runs there\.', text)
+    if mt:
+        return 'libc', {'side': mt[1], 'none': True}
+    mt = re.fullmatch(r'!! PostgreSQL on the ' + SIDE + r' machine: (\d+) '
+                      r'process\(es\) run another C library than the one '
+                      r'measured there, as when PostgreSQL runs in a container, '
+                      r'so they do not sort with the glibc measured there\.', text)
+    if mt:
+        return 'libc', {'side': mt[1], 'other': int(mt[2])}
+    mt = re.fullmatch(r'!! PostgreSQL on the ' + SIDE + r' machine: (\d+) '
+                      r'process\(es\) still run the glibc that was replaced on '
+                      r'disk, so they do not sort with the glibc measured '
+                      r'there until PostgreSQL is restarted\.', text)
+    if mt:
+        return 'libc', {'side': mt[1], 'stale': int(mt[2])}
+    mt = re.fullmatch(r'!! PostgreSQL processes NOT checked on (both machines|'
+                      r'the (OLD|NEW) machine): ' + EARLIER_FILES, text)
+    if mt:
+        return 'libc', {'earlier': earlier_sides(mt, 3, 2, 5)}
+    mt = re.fullmatch(r'!! PostgreSQL processes NOT checked on the ' + SIDE
+                      + r' machine: (.+)\. Run locale_order\.py there as root, '
+                      r'or as the user PostgreSQL runs as where /proc does not '
+                      r'hide other users\' processes\.', text)
+    if mt:
+        return 'libc', {'side': mt[1], 'why': mt[2]}
+    mt = re.fullmatch(r'!! The glibc of the ' + SIDE + r' machine was replaced '
+                      r'on disk while it was measured, so what was measured may '
+                      r'not be what that machine runs now; measure it again\.',
+                      text)
+    if mt:
+        return 'libc', {'side': mt[1], 'replaced': True}
+    if text == ('This looks at the C library PostgreSQL runs, not at its '
+                'locale data: a PostgreSQL that was not restarted can already '
+                'use locales installed after it started.'):
+        return 'libc', {'note': True}
+    raise ReportShapeError(f'unknown check line: {text!r}')
+
+
+def voids(kind, d):
+    """Does this check void the comparison, and so stand above the list of
+    changes: the control; the OLD machine's PostgreSQL on a replaced or
+    another C library; the NEW machine's on another; a side whose glibc was
+    replaced while it was measured."""
+    return kind == 'control' or (kind == 'libc' and (
+        d.get('replaced') or 'other' in d
+        or ('stale' in d and d['side'] == 'OLD')))
+
+
+def rank(kind, d):
+    """Where a check stands: the control, then what else voids the
+    comparison, above the list; money, then the rest of PostgreSQL's, after
+    the totals."""
+    if kind == 'control':
+        return 0
+    if voids(kind, d):
+        return 1
+    return 2 if kind == 'money' else 3
+
+
+def after_totals(found, where):
+    """A check read after the totals, refused if it voids the comparison:
+    that stands above the list of changes, where it is read before the list
+    it voids."""
+    if voids(*found):
+        raise ReportShapeError(f'{where}: {found} after the totals')
+    return found
+
+
+def above_the_list(found, where):
+    """A check read above the list, refused unless it voids the comparison."""
+    if not voids(*found):
+        raise ReportShapeError(f'{where}: {found} above the list')
+    return found
+
+
+def checks_in_order(found, where):
+    """found, refused unless the checks come in rank order."""
+    ranks = [rank(*f) for f in found]
+    if ranks != sorted(ranks):
+        raise ReportShapeError(f'{where}: checks out of order: {found}')
+    return found
+
+
 # The two lines of the summary that name locales under a warning: what the
 # warning says comes first, the names after the colon.
 NOT_ON_NEW = ('not on the new machine, so a database or collation that uses '
@@ -232,8 +398,12 @@ def parse_summary(text):
     mt = take(r'   \((.+) -> (.+)\)')
     s['machines'] = (mt[1], mt[2])
     s['warnings'] = []
-    while line().startswith('     !! ') and not line().startswith('     !! Not measured: '):
+    while (line().startswith('     !! ') and not line().startswith('     !! Not measured: ')
+           and not line().startswith(tuple('     ' + p for p in ('Control: ', '!! Control ', '!! PostgreSQL on the ', '!! The glibc of the ')))):
         s['warnings'].append(warning_kind(item(5, 8)))
+    s['checks'] = []
+    while line().startswith(tuple('     ' + p for p in ('Control: ', '!! Control ', '!! PostgreSQL on the ', '!! The glibc of the '))):
+        s['checks'].append(above_the_list(check_kind(item(5, 8)), 'summary'))
     s['changes'] = {}
     s['characters_file'] = None
     if line() == '     no locale measured on both machines sorts differently':
@@ -298,6 +468,9 @@ def parse_summary(text):
     s['totals'] = item(5, 7)
     if not (s['totals'] or '').startswith('Of the '):
         fail('expected the totals')
+    while re.fullmatch(r'     \S.*', line()) and not line().startswith('     !! Not measured: '):
+        s['checks'].append(after_totals(check_kind(item(5, 8)), 'summary'))
+    checks_in_order(s['checks'], 'summary')
     s['closing'] = item(5, 8)
     if not (s['closing'] or '').startswith('!! Not measured: '):
         fail('expected the closing warning')
@@ -368,8 +541,11 @@ def parse_report(text):
     mt = take(r'New machine: (.+), (\d+) locale\(s\)')
     r['new'] = (mt[1], int(mt[2]))
     r['warnings'] = []
-    while line().startswith('!! '):
+    while line().startswith('!! ') and not line().startswith(('Control: ', '!! Control ', '!! PostgreSQL on the ', '!! The glibc of the ')):
         r['warnings'].append(warning_kind(paragraph()))
+    r['checks'] = []
+    while line().startswith(('Control: ', '!! Control ', '!! PostgreSQL on the ', '!! The glibc of the ')):
+        r['checks'].append(above_the_list(check_kind(paragraph()), 'report'))
     take('')
 
     changed = int(take(r'Sort order CHANGED in (\d+) locale\(s\):')[1])
@@ -466,6 +642,9 @@ def parse_report(text):
     r['totals'] = {'old': int(mt[1]), 'changed': int(mt[2]),
                    'unchanged': int(mt[3]), 'partly': int(mt[4] or 0),
                    'not measured': int(mt[5]), 'not on new': int(mt[6])}
+    while re.fullmatch(r'\S.*', line()) and not line().startswith('!! Not measured: '):
+        r['checks'].append(after_totals(check_kind(paragraph()), 'report'))
+    checks_in_order(r['checks'], 'report')
     if not line().startswith('!! Not measured: '):
         fail('expected the closing "!! Not measured" paragraph')
     r['closing'] = paragraph()
@@ -886,7 +1065,8 @@ def parse_test(text):
 
 class CharactersFile(dict):
     """{locales (sorted tuple): [row]}, with the notes under the rows:
-    .warnings, their kinds as warning_kind() names them, and .closing."""
+    .warnings, their kinds as warning_kind() names them, .checks, as
+    check_kind() reads them, and .closing."""
 
 
 def parse_characters(text):
@@ -915,7 +1095,15 @@ def parse_characters(text):
         raise ReportShapeError('the characters file has no closing note')
     out = CharactersFile()
     out.closing = notes.pop()
-    out.warnings = [warning_kind(note) for note in notes]
+    at = 0
+    while at < len(notes) and not re.match(
+            r'(Control: |!! Control |Decimals of money|!! Decimals of money|'
+            r'PostgreSQL on |!! PostgreSQL|!! The glibc of |This looks at )',
+            notes[at]):
+        at += 1
+    out.warnings = [warning_kind(note) for note in notes[:at]]
+    out.checks = checks_in_order([check_kind(note) for note in notes[at:]],
+                                 'characters file')
     if int(end[2]) != len(lines) - 2:
         raise ReportShapeError(f'the end line counts {end[2]} rows and the file '
                                f'holds {len(lines) - 2}')
@@ -1595,7 +1783,7 @@ class Variants(unittest.TestCase):
         cls.tmp = tempfile.mkdtemp(prefix='locale_order_test_')
         cls.addClassCleanup(shutil.rmtree, cls.tmp)
         cls.texts = {}
-        for path in (RHEL8, RHEL9):
+        for path in (RHEL8, RHEL9, RHEL10):
             with open(path, encoding='utf-8') as f:
                 cls.texts[path] = f.read()
 
@@ -2826,7 +3014,9 @@ class FindingKinds(unittest.TestCase):
     def test_every_kind_has_all_three_outputs(self):
         self.assertEqual(tuple(m.LOCALE_KINDS), LOCALE_KINDS)
         self.assertEqual(set(m.RUN_KINDS), {'warning', 'partly', 'not measured',
-                                            'not on the new machine', 'closing'})
+                                            'not on the new machine', 'control',
+                                            'postgres libc above', 'money',
+                                            'postgres libc', 'closing'})
         for table in (m.LOCALE_KINDS, m.RUN_KINDS):
             for kind, how in table.items():
                 with self.subTest(kind=kind):
@@ -3878,6 +4068,746 @@ class UnpackLaysOutTheCharmaps(unittest.TestCase):
                                    charmaps={'directory': 'x',
                                              'entries': entries})),
             'charmaps/UTF-8.gz and charmaps/utf-8.gz differ only in case')
+
+
+# --- the parts of a file beside the order --------------------------------------
+
+CLEAN_LIBC = {'looked_for': ['postgres', 'postmaster'], 'processes': 2,
+              'stale': [], 'other': [], 'unreadable': 0, 'no_libc': 0,
+              'unnamed': 0, 'not_checked': None, 'replaced': False}
+EARLIER_BOTH = [('money', {'earlier': ['OLD', 'NEW']}),
+                ('libc', {'earlier': ['OLD', 'NEW']})]
+
+
+def with_parts(money=None, libc=None):
+    """An edit that makes a file of the first format one of this format:
+    the list of its parts, the decimals of money (2 in every locale, but
+    those in money) and its PostgreSQL processes (CLEAN_LIBC, but what libc
+    changes). The order part is the machine's own, untouched."""
+    def edit(d):
+        d['format'] = m.FORMAT
+        d['parts'] = list(m.PARTS[m.FORMAT])
+        d['money'] = {name: 2 for name in d['locales']}
+        d['money'].update(money or {})
+        d['postgres_libc'] = dict(CLEAN_LIBC, **(libc or {}))
+    return edit
+
+
+# Kept of each machine by the classes below, as the machines measured them:
+# C and POSIX (the control), and locales whose order did not change from
+# RHEL 9 to 10, two of them with money decimals that differ (2 and 0). A
+# changed locale would cost each comparison the analysis of its change,
+# which these checks do not read.
+FEW = ('C', 'POSIX', 'de_DE.utf8', 'en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8')
+
+
+def trimmed(text, names=FEW):
+    """A recorded measurement cut to names, with the records they use, as a
+    machine listing only those would have written it."""
+    d = json.loads(text)
+    d['locales'] = {n: d['locales'][n] for n in names}
+    d['locales_listed'] = len(names)
+    for kind, key in (('order_data', 'order'), ('pair_data', 'pairs')):
+        used = {r[key] for r in d['locales'].values() if 'error' not in r}
+        d[kind] = {k: v for k, v in d[kind].items() if k in used}
+    d['content'] = m.content_digest(d)
+    return json.dumps(d, sort_keys=True) + '\n'
+
+
+class Checks(Variants):
+    """Base for the classes that read the checks beside the order: each run
+    writes the report, the summary and the characters file, and the three
+    must name the same checks, in the same order. RHEL9 and RHEL10 are read
+    cut to FEW, which these checks need and which is quick to compare."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        for path in (RHEL9, RHEL10):
+            cls.texts[path] = trimmed(cls.texts[path])
+
+    def made(self, base, tag, *edits):
+        """base with every edit applied, resealed, as its own file."""
+        data = json.loads(self.texts[base])
+        for edit in edits:
+            edit(data)
+        data['content'] = m.content_digest(data)
+        path = os.path.join(self.tmp, f'{self.id().rsplit(".", 1)[-1]}-{tag}.out')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(json.dumps(data, sort_keys=True) + '\n')
+        return path
+
+    def checks(self, old, new, command_line=False):
+        """[(kind, data)] the run names beside the order, the same in its
+        three outputs. Run through main() in this process, with the argv a
+        command line would give it, unless command_line."""
+        tag = self.id().rsplit('.', 1)[-1]
+        summary = os.path.join(self.tmp, f'{tag}.sum')
+        chars = os.path.join(self.tmp, f'{tag}.tsv')
+        args = ['--compare', old, new, '--summary-to', summary,
+                '--characters-to', chars]
+        if command_line:
+            rc, out, err = run_compare(*args[1:])
+        else:
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with unittest.mock.patch.object(m.sys, 'argv', [SCRIPT] + args), \
+                    contextlib.redirect_stdout(stdout), \
+                    contextlib.redirect_stderr(stderr):
+                rc = m.main()
+            out, err = stdout.getvalue(), stderr.getvalue()
+        self.assertEqual((rc, err), (0, ''))
+        report = parse_report(out)['checks']
+        with open(summary, encoding='utf-8') as f:
+            brief = parse_summary(f.read())['checks']
+        with open(chars, encoding='utf-8') as f:
+            notes = parse_characters(f.read()).checks
+        self.assertEqual(report, brief)
+        self.assertEqual(report, notes)
+        return report
+
+    def common(self, old, new):
+        """The locales on both machines."""
+        return set(json.loads(self.texts[old])['locales']) & set(
+            json.loads(self.texts[new])['locales'])
+
+
+class FilesOfEachFormat(Checks):
+    """A file written before the decimals of money and the PostgreSQL
+    processes were measured is whole, and is compared: each part it lacks is
+    NOT checked, naming the side that lacks it, and never reads as "the
+    same". The control needs nothing such a file lacks, and runs on it."""
+
+    HELD = [('control', {'held': True})]
+
+    def test_two_files_of_the_first_format(self):
+        """The two whole files as recorded, on the command line."""
+        self.assertEqual(self.checks(RHEL9, RHEL10, command_line=True),
+                         self.HELD + EARLIER_BOTH)
+
+    def test_two_files_of_the_first_format_cut(self):
+        """The same cut to FEW: what the classes below build on."""
+        self.assertEqual(self.checks(self.made(RHEL9, 'old'),
+                                     self.made(RHEL10, 'new')),
+                         self.HELD + EARLIER_BOTH)
+
+    def test_the_first_format_on_the_old_side(self):
+        new = self.made(RHEL10, 'new', with_parts())
+        self.assertEqual(self.checks(self.made(RHEL9, 'old'), new), self.HELD + [
+            ('money', {'earlier': ['OLD']}), ('libc', {'earlier': ['OLD']}),
+            ('libc', {'side': 'NEW', 'clean': 2}), ('libc', {'note': True})])
+
+    def test_the_first_format_on_the_new_side(self):
+        old = self.made(RHEL9, 'old', with_parts())
+        self.assertEqual(self.checks(old, self.made(RHEL10, 'new')), self.HELD + [
+            ('money', {'earlier': ['NEW']}), ('libc', {'earlier': ['NEW']}),
+            ('libc', {'side': 'OLD', 'clean': 2}), ('libc', {'note': True})])
+
+    def test_two_files_of_this_format(self):
+        old = self.made(RHEL9, 'old', with_parts())
+        new = self.made(RHEL10, 'new', with_parts())
+        self.assertEqual(self.checks(old, new), self.HELD + [
+            ('money', {'same': len(self.common(RHEL9, RHEL10))}),
+            ('libc', {'side': 'OLD', 'clean': 2}),
+            ('libc', {'side': 'NEW', 'clean': 2}), ('libc', {'note': True})])
+
+    def test_the_corpus_digest_did_not_move_with_the_format(self):
+        """The recorded files are of the first format; their corpus digest
+        is still this script's (MeasurementsAreCurrent asserts the same of
+        each file; this names why)."""
+        self.assertNotEqual(m.FORMAT, m.CORPUS_VERSION)
+        self.assertEqual(json.loads(self.texts[RHEL9])['corpus'],
+                         m.corpus_digest())
+
+
+class FilesOfEachFormatRefused(Checks):
+    """A file of this format that lacks a part its format holds, or holds it
+    malformed, is refused with the reason, like a file cut short: it is not
+    a whole measurement, and a part read as missing would read as not
+    checked when the machine did check it."""
+
+    def refused(self, phrase, *edits):
+        """load() of the file stops the run with exit 2 and the phrase: the
+        first thing --compare does with each file, run here in this process
+        (test_refused_on_the_command_line runs the whole way)."""
+        new = self.made(RHEL10, 'new', with_parts(), *edits)
+        err = io.StringIO()
+        with unittest.mock.patch.object(m.sys, 'stderr', err), \
+                self.assertRaises(SystemExit) as stop:
+            m.load(new, m.corpus_digest())
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn(phrase, flat(err.getvalue()))
+
+    def test_refused_on_the_command_line(self):
+        new = self.made(RHEL10, 'new', with_parts(), lambda d: d.pop('money'))
+        rc, out, err = run_compare(self.made(RHEL9, 'old'), new)
+        self.assertEqual((rc, out), (2, ''), err)
+        self.assertIn('lacks a part its format holds', flat(err))
+
+    def test_without_the_decimals_of_money(self):
+        self.refused('lacks a part its format holds',
+                     lambda d: d.pop('money'))
+
+    def test_without_the_postgresql_processes(self):
+        self.refused('lacks a part its format holds',
+                     lambda d: d.pop('postgres_libc'))
+
+    def test_without_its_list_of_parts(self):
+        self.refused('does not list the parts its format holds',
+                     lambda d: d.pop('parts'))
+
+    def test_with_another_list_of_parts(self):
+        for parts in (['order', 'money'], ['money', 'order', 'postgres_libc'],
+                      ['order', 'money', 'postgres_libc', 'more']):
+            with self.subTest(parts=parts):
+                self.refused('does not list the parts its format holds',
+                             lambda d: d.update(parts=parts))
+
+    def test_a_first_format_file_with_a_part_of_this_one(self):
+        def first(d):
+            d['format'] = 'locale_order/1'
+            del d['parts'], d['postgres_libc']
+        self.refused('holds one it does not', first)
+
+    def test_a_first_format_file_that_lists_a_part_of_this_one(self):
+        def first(d):
+            d['format'] = 'locale_order/1'
+            d['parts'] = ['order', 'money']
+            del d['money'], d['postgres_libc']
+        self.refused('does not list the parts its format holds', first)
+
+    def test_decimals_of_money_not_one_per_locale(self):
+        for case, edit in (
+                ('a locale missing', lambda d: d['money'].pop('C')),
+                ('a name more', lambda d: d['money'].update(xx_XX=2)),
+                ('a boolean', lambda d: d['money'].update(C=True)),
+                ('past a char', lambda d: d['money'].update(C=128)),
+                ('below a char', lambda d: d['money'].update(C=-129)),
+                ('a fraction', lambda d: d['money'].update(C=2.0)),
+                ('an empty reason', lambda d: d['money'].update(C='')),
+                ('not a map', lambda d: d.update(money=[]))):
+            with self.subTest(case=case):
+                self.refused('the decimals of money are not one per locale', edit)
+
+    def test_the_postgresql_processes_malformed(self):
+        libc = lambda **k: (lambda d: d['postgres_libc'].update(**k))
+        for case, edit in (
+                ('a key missing', lambda d: d['postgres_libc'].pop('unnamed')),
+                ('a key more', libc(more=1)),
+                ('a count below zero', libc(unreadable=-1)),
+                ('a count that is a boolean', libc(processes=True)),
+                ('more stale than processes', libc(stale=[[1, 'a'], [2, 'b'], [3, 'c']])),
+                ('more on another file than processes', libc(other=[[1, 'a'], [2, 'b'], [3, 'c']])),
+                ('stale and other past processes', libc(stale=[[1, 'a']], other=[[2, 'b']], unreadable=1)),
+                ('no C library past processes', libc(no_libc=3)),
+                ('an other entry of text', libc(other=[['1', 'a']])),
+                ('no list of other', lambda d: d['postgres_libc'].pop('other')),
+                ('replaced not said', lambda d: d['postgres_libc'].pop('replaced')),
+                ('replaced as a number', libc(replaced=1)),
+                ('more unread than processes', libc(unreadable=3)),
+                ('stale and unread past processes', libc(stale=[[1, 'a']], unreadable=2)),
+                ('a stale entry of one item', libc(stale=[[1]])),
+                ('a stale pid that is text', libc(stale=[['1', 'a']])),
+                ('an empty reason', libc(not_checked='')),
+                ('no name looked for', libc(looked_for=[])),
+                ('not a map', lambda d: d.update(postgres_libc=[]))):
+            with self.subTest(case=case):
+                self.refused('what it says of the PostgreSQL processes is '
+                             'malformed', edit)
+
+
+class ControlLocale(Checks):
+    """C and POSIX sort in byte order on every glibc: they are the locale
+    glibc carries inside itself, whose strcoll is strcmp. A machine where
+    they did not measure so did not measure what the script means to, and
+    the run says so, on that side, for each of the two."""
+
+    def test_the_fingerprint_is_what_three_machines_measured(self):
+        order, pairs, probes = m.control_fingerprint()
+        for machine, path in MACHINES:
+            for name in ('C', 'POSIX'):
+                r = read_json(path)['locales'][name]
+                with self.subTest(machine=machine, locale=name):
+                    self.assertEqual((r['order'], r['pairs'], r['probes'],
+                                      r['chars'], r['partly']),
+                                     (order, pairs, probes, 0x7F, 0))
+
+    def without(self, side):
+        return lambda d: d['locales'][side].update(partly=1)
+
+    def control(self, old, new):
+        """Every line the run says about the control, none left out."""
+        return [d for kind, d in self.checks(old, new) if kind == 'control']
+
+    def test_failed_on_the_new_machine(self):
+        new = self.made(RHEL10, 'new', self.without('C'))
+        self.assertEqual(self.control(self.made(RHEL9, 'old'), new),
+                         [{'failed': 'NEW', 'names': ['C']}])
+
+    def test_failed_on_the_old_machine(self):
+        old = self.made(RHEL9, 'old', lambda d: d['locales']['POSIX'].update(
+            probes='61.62> none ?'))
+        self.assertEqual(self.control(old, self.made(RHEL10, 'new')),
+                         [{'failed': 'OLD', 'names': ['POSIX']}])
+
+    def test_both_failed_on_one_machine(self):
+        new = self.made(RHEL10, 'new', self.without('C'), self.without('POSIX'))
+        self.assertEqual(self.control(self.made(RHEL9, 'old'), new),
+                         [{'failed': 'NEW', 'names': ['C', 'POSIX']}])
+
+    def test_failed_on_both_machines(self):
+        old = self.made(RHEL9, 'old', self.without('POSIX'))
+        new = self.made(RHEL10, 'new', self.without('C'))
+        self.assertEqual(self.control(old, new), [
+            {'failed': 'OLD', 'names': ['POSIX']},
+            {'failed': 'NEW', 'names': ['C']}])
+
+    def test_not_checked_without_C_and_POSIX(self):
+        def gone(d):
+            del d['locales']['C'], d['locales']['POSIX']
+            d['locales_listed'] -= 2
+        new = self.made(RHEL10, 'new', gone)
+        self.assertEqual(self.control(self.made(RHEL9, 'old'), new), [{'unknown': [
+            'C is not in the NEW file', 'POSIX is not in the NEW file']}])
+
+    def test_not_checked_where_C_was_not_measured(self):
+        old = self.made(RHEL9, 'old', lambda d: d['locales'].update(
+            C={'error': 'measuring failed: x', 'codeset': 'ANSI_X3.4-1968'}))
+        self.assertEqual(self.control(old, self.made(RHEL10, 'new')), [{'unknown': [
+            'C could not be measured on the OLD machine (measuring failed: x)']}])
+
+
+class DecimalsOfMoney(Checks):
+    """What a stored money value means is frac_digits of the session's
+    lc_monetary, as cash.c reads it: outside 0 to 10 it keeps 2. A change
+    is named with both numbers, a locale that could not be read is NOT
+    checked, and none of either is said with the count of locales read."""
+
+    def pair(self, old_money=None, new_money=None):
+        return (self.made(RHEL9, 'old', with_parts(money=old_money)),
+                self.made(RHEL10, 'new', with_parts(money=new_money)))
+
+    def money(self, *pair):
+        return [d for kind, d in self.checks(*pair) if kind == 'money']
+
+    def test_the_same_everywhere(self):
+        self.assertEqual(self.money(*self.pair()),
+                         [{'same': len(self.common(RHEL9, RHEL10))}])
+
+    def test_two_locales_change(self):
+        self.assertEqual(
+            self.money(*self.pair({'ja_JP.utf8': 0}, {'de_DE.utf8': 3})),
+            [{'changed': {'de_DE.utf8': (2, 3), 'ja_JP.utf8': (0, 2)}}])
+
+    def test_what_cash_c_reads_alike_is_alike(self):
+        names = sorted(self.common(RHEL9, RHEL10))[:6]
+        old = dict(zip(names, (127, 11, -1, -128, 10, 0)))
+        new = dict(zip(names, (2, 2, 2, 127, 11, -1)))
+        self.assertEqual(self.money(*self.pair(old, new)), [
+            {'changed': {names[4]: (10, 2), names[5]: (0, 2)}}])
+
+    def test_two_locales_not_read(self):
+        names = sorted(self.common(RHEL9, RHEL10))[:2]
+        self.assertEqual(
+            self.money(*self.pair({names[0]: 'cannot be selected: x'},
+                                  {names[1]: 'cannot be selected: y'})),
+            [{'unknown': {names[0]: {'old': 'cannot be selected: x'},
+                          names[1]: {'new': 'cannot be selected: y'}}},
+             {'same': len(self.common(RHEL9, RHEL10)) - 2}])
+
+    def test_the_scale_cash_c_keeps(self):
+        self.assertEqual([m.money_scale(v) for v in (-128, -1, 0, 1, 10, 11, 127)],
+                         [2, 2, 0, 1, 10, 2, 2])
+
+    def test_a_locale_that_cannot_be_selected(self):
+        """Its reason is kept, never a number; a locale after it is still
+        read; and LC_MONETARY is put back as it was, since the measurement
+        goes on in this process. glibc's localeconv() and setlocale() are
+        doubles here: this machine need not be Linux."""
+        calls = []
+
+        def setlocale(category, name=None):
+            calls.append((category, name))
+            if name == 'bad':
+                raise m.locale.Error('unsupported locale setting')
+            return 'as it was' if name is None else name
+
+        conv = unittest.mock.Mock()
+        conv.return_value.contents.frac_digits = 3
+        lib = unittest.mock.Mock(localeconv=conv)
+        with unittest.mock.patch.object(m, 'libc', lambda: lib), \
+                unittest.mock.patch.object(m.locale, 'setlocale', setlocale):
+            got = m.money_digits(['bad', 'good'])
+        self.assertEqual(got, {'bad': 'cannot be selected: unsupported locale '
+                                      'setting', 'good': 3})
+        self.assertEqual(calls[-1], (m.locale.LC_MONETARY, 'as it was'))
+        self.assertTrue(all(c == m.locale.LC_MONETARY for c, _ in calls))
+
+
+class PostgresProcessesCompared(Checks):
+    """Each machine's PostgreSQL processes against its glibc on disk, said
+    for each side: those still on a replaced glibc, those not read, and the
+    reason any could not be. What it does not look at is said beside it."""
+
+    def libc(self, old=None, new=None):
+        old = self.made(RHEL9, 'old', with_parts(libc=old))
+        new = self.made(RHEL10, 'new', with_parts(libc=new))
+        return [d for kind, d in self.checks(old, new) if kind == 'libc']
+
+    def test_stale_on_the_new_unread_on_the_old(self):
+        self.assertEqual(self.libc(
+            old={'unreadable': 1},
+            new={'stale': [[7, '/usr/lib64/libc.so.6 (deleted)']]}), [
+            {'side': 'OLD', 'why': '1 of 2 process(es) named postgres or '
+                                   'postmaster could not be read'},
+            {'side': 'NEW', 'stale': 1}, {'note': True}])
+
+    def test_stale_on_the_old_unread_on_the_new_order(self):
+        """The order the three outputs give them: above first."""
+        self.assertEqual(self.libc(old={'stale': [[7, 'a (deleted)']]},
+                                   new={'unnamed': 3})[:2], [
+            {'side': 'OLD', 'stale': 1},
+            {'side': 'NEW', 'why': 'the name of 3 other process(es) could not '
+                                   'be read'}])
+
+    def test_stale_on_the_old_unread_on_the_new(self):
+        self.assertEqual(self.libc(
+            old={'stale': [[7, 'a (deleted)'], [8, 'b (deleted)']]},
+            new={'unnamed': 3}), [
+            {'side': 'OLD', 'stale': 2},
+            {'side': 'NEW', 'why': 'the name of 3 other process(es) could not '
+                                   'be read'}, {'note': True}])
+
+    def test_stale_and_hidden_on_one_machine(self):
+        self.assertEqual(self.libc(new={
+            'stale': [[7, 'x (deleted)']],
+            'not_checked': '/proc is mounted with hidepid=2, which hides other '
+                           'users\' processes'}), [
+            {'side': 'OLD', 'clean': 2}, {'side': 'NEW', 'stale': 1},
+            {'side': 'NEW', 'why': '/proc is mounted with hidepid=2, which '
+                                   'hides other users\' processes'},
+            {'note': True}])
+
+    def test_none_found(self):
+        """No PostgreSQL seen says nothing was checked, with !!: it may run
+        in a container, or under another name, or not yet."""
+        self.assertEqual(self.libc(old={'processes': 0}), [
+            {'side': 'OLD', 'none': True}, {'side': 'NEW', 'clean': 2},
+            {'note': True}])
+
+    def test_another_c_library_on_both(self):
+        """Another C library on either side voids the comparison and stands
+        above the list; the NEW side still on the replaced glibc does not."""
+        self.assertEqual(self.libc(
+            old={'other': [[7, '/x/libc.so.6']]},
+            new={'other': [[7, '/x/libc.so.6'], [8, '/y/libc.so.6']],
+                 'stale': [[9, '/usr/lib64/libc.so.6 (deleted)']],
+                 'processes': 3}), [
+            {'side': 'OLD', 'other': 1}, {'side': 'NEW', 'other': 2},
+            {'side': 'NEW', 'stale': 1}, {'note': True}])
+
+    def where(self, old=None, new=None):
+        old = self.made(RHEL9, 'old', with_parts(libc=old))
+        new = self.made(RHEL10, 'new', with_parts(libc=new))
+        return self.checks(old, new)
+
+    def test_the_old_side_on_the_replaced_glibc_stands_above(self):
+        same = ('money', {'same': len(self.common(RHEL9, RHEL10))})
+        self.assertEqual(self.where(old={'stale': [[7, 'x (deleted)']]}), [
+            ('control', {'held': True}), ('libc', {'side': 'OLD', 'stale': 1}),
+            same, ('libc', {'side': 'NEW', 'clean': 2}), ('libc', {'note': True})])
+
+    def test_the_new_side_on_the_replaced_glibc_stands_below(self):
+        same = ('money', {'same': len(self.common(RHEL9, RHEL10))})
+        self.assertEqual(self.where(new={'stale': [[7, 'x (deleted)']]}), [
+            ('control', {'held': True}), same,
+            ('libc', {'side': 'OLD', 'clean': 2}),
+            ('libc', {'side': 'NEW', 'stale': 1}), ('libc', {'note': True})])
+
+    def test_replaced_while_measured_stands_above(self):
+        same = ('money', {'same': len(self.common(RHEL9, RHEL10))})
+        self.assertEqual(self.where(new={'replaced': True}), [
+            ('control', {'held': True}),
+            ('libc', {'side': 'NEW', 'replaced': True}), same,
+            ('libc', {'side': 'OLD', 'clean': 2}), ('libc', {'note': True})])
+
+    def test_no_c_library_is_not_known(self):
+        self.assertEqual(self.libc(new={'no_libc': 1}), [
+            {'side': 'OLD', 'clean': 2},
+            {'side': 'NEW', 'why': '1 of 2 process(es) named postgres or '
+                                   'postmaster show no C library'},
+            {'note': True}])
+
+
+class PostgresProcessesRead(unittest.TestCase):
+    """postgres_libc() over a /proc built here, and the line the machine's
+    own run prints. A file that cannot be opened is a folder in its place,
+    which no user can read as a file, root included."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='locale_order_proc_')
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.proc = os.path.join(self.tmp, 'proc')
+        os.mkdir(self.proc)
+        self.mounts = os.path.join(self.tmp, 'mounts')
+        self.mounts_say(f'proc {self.proc} proc rw,nosuid,nodev,noexec 0 0')
+        # This process's own C library: the file every process() below maps
+        # unless it says otherwise (device fd:00, inode 1).
+        self.process('self', 'python3', ['/usr/lib64/libc.so.6'])
+
+    def mounts_say(self, *lines):
+        with open(self.mounts, 'w') as f:
+            f.write('\n'.join(lines) + '\n')
+
+    def process(self, pid, comm, maps=()):
+        """A process; comm or maps None for one that cannot be read, False
+        for one that is not there. A mapped path is on fd:00, inode 1, the
+        same file as this process's, unless given as (path, inode)."""
+        d = os.path.join(self.proc, str(pid))
+        os.mkdir(d)
+        for name, text in (('comm', comm), ('maps', maps)):
+            if text is None:
+                os.mkdir(os.path.join(d, name))
+            elif text is not False:
+                with open(os.path.join(d, name), 'w') as f:
+                    f.write(text + '\n' if name == 'comm' else ''.join(
+                        '7f00-7f01 r-xp 00000000 %s %s %s\n'
+                        % (((p + ('fd:00',))[2], p[1], p[0])
+                           if isinstance(p, tuple) else ('fd:00', 1, p))
+                        for p in text))
+
+    def read(self, euid=1000):
+        return m.postgres_libc(self.proc, self.mounts, euid)
+
+    def test_the_replaced_libc_of_each_glibc(self):
+        # A deleted file and the live one that replaced it never share an
+        # inode (measured: 1813959316 before the update, 1701099458 after).
+        for pid, path in ((10, '/usr/lib64/libc.so.6'),
+                          (11, '/usr/lib64/libc-2.28.so')):
+            self.process(pid, 'postgres', [(path + ' (deleted)', 9),
+                                           '/x/libm.so.6'])
+        self.process(12, 'postgres', ['/usr/lib64/libc.so.6'])
+        got = self.read()
+        self.assertEqual((got['processes'], got['stale']), (3, [
+            [10, '/usr/lib64/libc.so.6 (deleted)'],
+            [11, '/usr/lib64/libc-2.28.so (deleted)']]))
+        self.assertIsNone(m.libc_why(got))
+
+    def test_other_deleted_files_are_not_the_libc(self):
+        # Each deleted file on an inode of its own, as a deleted file is.
+        self.process(10, 'postgres', [(p + ' (deleted)', i) for i, p in enumerate((
+            '/usr/lib64/libcrypto.so.3', '/usr/lib64/libc.so.6.old',
+            '/usr/lib64/libc_malloc_debug.so.0', '/tmp/libc.so.6x'), 20)]
+            + ['/usr/lib64/libc.so.6'])
+        self.assertEqual(self.read()['stale'], [])
+
+    def test_only_postgres_and_postmaster_are_read(self):
+        stale = [('/usr/lib64/libc.so.6 (deleted)', 9)]
+        self.process(10, 'postmaster', stale)
+        self.process(11, 'sshd', stale)
+        self.process(12, 'postgres:', stale)
+        got = self.read()
+        self.assertEqual((got['processes'], got['stale']),
+                         (1, [[10, '/usr/lib64/libc.so.6 (deleted)']]))
+
+    def test_another_c_library_not_deleted(self):
+        """A container's C library is another file, never deleted: as clean
+        as the measured one to a check of " (deleted)" alone."""
+        self.process(10, 'postgres', [('/usr/lib64/libc.so.6', 2)])
+        self.process(11, 'postgres', [('/usr/lib/x86_64-linux-gnu/libc.so.6', 3),
+                                      ('/usr/lib64/libc-2.28.so', 4)])
+        self.process(12, 'postgres', ['/usr/lib64/libc.so.6'])
+        got = self.read(0)
+        self.assertEqual((got['processes'], got['stale'], got['other']), (3, [], [
+            [10, '/usr/lib64/libc.so.6'],
+            [11, '/usr/lib/x86_64-linux-gnu/libc.so.6']]))
+        self.assertIsNone(m.libc_why(got))
+
+    def test_no_c_library_in_the_maps(self):
+        self.process(10, 'postgres', ['[vdso]'])
+        self.process(11, 'postgres', ['/usr/bin/postgres'])
+        got = self.read(0)
+        self.assertEqual((got['processes'], got['no_libc'], got['stale'],
+                          got['other']), (2, 2, [], []))
+        self.assertEqual(m.libc_why(got), '2 of 2 process(es) named postgres '
+                                          'or postmaster show no C library')
+
+    def test_an_empty_map_is_passed_over(self):
+        """A process whose maps read empty runs no code: a zombie, measured
+        on Rocky 9 at 0 bytes, or one exiting. Passed over like one that
+        ended, not read as one that shows no C library."""
+        self.process(10, 'postgres', [])
+        self.process(11, 'postgres', ['/usr/lib64/libc.so.6'])
+        got = self.read(0)
+        self.assertEqual((got['processes'], got['no_libc'], m.libc_why(got)),
+                         (1, 0, None))
+
+    def test_the_same_inode_on_another_device(self):
+        self.process(10, 'postgres', [('/usr/lib64/libc.so.6', 1, 'fd:01')])
+        self.assertEqual(self.read(0)['other'], [[10, '/usr/lib64/libc.so.6']])
+
+    def test_the_measured_library_and_another_in_one_process(self):
+        self.process(10, 'postgres', ['/usr/lib64/libc.so.6',
+                                      ('/opt/x/libc.so.6', 5)])
+        self.assertEqual(self.read(0)['other'], [[10, '/opt/x/libc.so.6']])
+
+    def test_replaced_while_this_measured(self):
+        """This process's own C library deleted: an update came while it
+        measured. A postgres process on that very file runs what was
+        measured; one on another deleted file is stale; one on the new file
+        is on another C library."""
+        shutil.rmtree(os.path.join(self.proc, 'self'))
+        self.process('self', 'python3', ['/usr/lib64/libc.so.6 (deleted)'])
+        self.process(10, 'postgres', ['/usr/lib64/libc.so.6 (deleted)'])
+        self.process(11, 'postgres', [('/usr/lib64/libc.so.6', 2)])
+        self.process(12, 'postgres', [('/usr/lib64/libc.so.6 (deleted)', 3)])
+        got = self.read(0)
+        self.assertEqual((got['replaced'], got['stale'], got['other'],
+                          got['not_checked']), (True, [
+            [12, '/usr/lib64/libc.so.6 (deleted)']], [
+            [11, '/usr/lib64/libc.so.6']], None))
+        self.assertEqual([flat(l) for l in m.machine_libc_lines(got)][0],
+                         '!! glibc was replaced on disk while this measured: '
+                         'what was measured may not be what this machine runs '
+                         'now; measure it again.')
+
+    def test_who_runs_it_decides_what_hides(self):
+        """The call measure() makes, with no euid: the process's own."""
+        self.mounts_say(f'proc {self.proc} proc rw,hidepid=2 0 0')
+        for euid, hidden in ((1000, True), (0, False)):
+            with self.subTest(euid=euid), \
+                    unittest.mock.patch.object(m.os, 'geteuid', lambda: euid):
+                why = m.postgres_libc(self.proc, self.mounts)['not_checked']
+                self.assertEqual(why is not None and 'hidepid=2' in why, hidden)
+
+    def test_own_c_library_not_found(self):  # noqa: the cases share the fake /proc
+        """Without this process's own C library nothing can be the same
+        file: not checked, while a deleted one is still named."""
+        for case in ('no maps', 'no libc in them'):
+            with self.subTest(case=case):
+                shutil.rmtree(os.path.join(self.proc, 'self'))
+                if case == 'no maps':
+                    os.mkdir(os.path.join(self.proc, 'self'))
+                else:
+                    self.process('self', 'python3', ['/usr/bin/python3'])
+                self.process(10, 'postgres', ['/usr/lib64/libc.so.6 (deleted)'])
+                got = self.read(0)
+                self.assertIn('the C library this process measured with is not',
+                              got['not_checked'])
+                self.assertEqual((got['stale'], got['other']),
+                                 ([[10, '/usr/lib64/libc.so.6 (deleted)']], []))
+                shutil.rmtree(os.path.join(self.proc, '10'))
+
+    def test_maps_that_cannot_be_read(self):
+        self.process(10, 'postgres', None)
+        self.process(11, 'postgres', ['/usr/lib64/libc.so.6'])
+        got = self.read()
+        self.assertEqual((got['processes'], got['unreadable']), (2, 1))
+        self.assertEqual(m.libc_why(got), '1 of 2 process(es) named postgres '
+                                          'or postmaster could not be read')
+
+    def test_a_name_that_cannot_be_read(self):
+        self.process(10, None)
+        got = self.read()
+        self.assertEqual((got['processes'], got['unnamed']), (0, 1))
+        self.assertEqual(m.libc_why(got), 'the name of 1 other process(es) '
+                                          'could not be read')
+
+    def test_a_process_that_ended_while_read(self):
+        self.process(10, False)
+        self.process(11, 'postgres', False)
+        got = self.read()
+        self.assertEqual((got['processes'], got['unnamed'], got['unreadable'],
+                          m.libc_why(got)), (0, 0, 0, None))
+
+    def test_no_proc_at_all(self):
+        got = m.postgres_libc(os.path.join(self.tmp, 'none'), self.mounts, 0)
+        self.assertIsNotNone(got['not_checked'])
+        self.assertTrue(got['not_checked'].startswith(
+            os.path.join(self.tmp, 'none') + ' could not be read'))
+
+    def test_what_hides_other_users_processes(self):
+        p = self.proc
+        for mounts, euid, hidden in (
+                ([f'proc {p} proc rw,hidepid=2 0 0'], 1000, 'hidepid=2'),
+                ([f'proc {p} proc rw,hidepid=invisible 0 0'], 1000, 'hidepid=invisible'),
+                ([f'proc {p} proc rw,hidepid=ptraceable 0 0'], 1000, 'hidepid=ptraceable'),
+                ([f'proc {p} proc rw,hidepid=2 0 0'], 0, None),
+                ([f'proc {p} proc rw,hidepid=0 0 0'], 1000, None),
+                ([f'proc {p} proc rw,hidepid=off 0 0'], 1000, None),
+                ([f'proc {p} proc rw,hidepid=2 0 0', f'proc {p} proc rw 0 0'], 1000, None),
+                ([f'proc {p} proc rw 0 0', f'proc {p} proc rw,hidepid=1 0 0'], 1000, 'hidepid=1'),
+                ([f'sysfs {p} sysfs rw 0 0'], 1000, 'lists no proc file system'),
+                ([f'proc /elsewhere proc rw 0 0'], 1000, 'lists no proc file system')):
+            with self.subTest(mounts=mounts, euid=euid):
+                self.mounts_say(*mounts)
+                why = self.read(euid)['not_checked']
+                if hidden is None:
+                    self.assertIsNone(why)
+                else:
+                    self.assertIn(hidden, why)
+
+    def test_mounts_that_cannot_be_read(self):
+        os.remove(self.mounts)
+        os.mkdir(self.mounts)
+        self.assertIn('could not be read', self.read()['not_checked'])
+        self.assertIsNone(self.read(0)['not_checked'])
+
+    def test_what_the_machine_prints(self):
+        clean = dict(CLEAN_LIBC)
+        self.assertEqual(m.machine_libc_lines(clean), [
+            'PostgreSQL processes: 2 process(es) named postgres or postmaster, '
+            'all running the C library measured there.'])
+        self.assertEqual([flat(l) for l in m.machine_libc_lines(
+            dict(clean, processes=0))], [
+            '!! No process named postgres or postmaster was found, so nothing '
+            'checked which C library PostgreSQL runs here.'])
+        three = m.machine_libc_lines(dict(clean, stale=[[1, 'x']],
+                                          other=[[2, 'y']], not_checked='why'))
+        self.assertEqual([flat(line) for line in three], [
+            '!! 1 PostgreSQL process(es) still run the glibc that was replaced '
+            'on disk: what this machine measured is not what that PostgreSQL '
+            'sorts with until it is restarted.',
+            '!! 1 PostgreSQL process(es) run another C library than the one '
+            'measured here, as when PostgreSQL runs in a container: what this '
+            'machine measured is not what that PostgreSQL sorts with.',
+            '!! PostgreSQL processes NOT checked: why. To check, run this as '
+            'root, or as the user PostgreSQL runs as where /proc does not hide '
+            'other users\' processes (README, command 1.b).'])
+
+    def test_the_machine_prints_it_when_done(self):
+        """The call site: what the run prints when it ends carries the line
+        about PostgreSQL, so a check that could not look is fixed there."""
+        screen = Screen()
+        out = {'locales': {}, 'locales_listed': 0,
+               'postgres_libc': dict(CLEAN_LIBC, stale=[[1, 'x']])}
+        with unittest.mock.patch.object(m.sys, 'stderr', screen):
+            m.finished(out, 1, 10)
+        self.assertIn('!! 1 PostgreSQL process(es) still run the glibc',
+                      flat(screen.getvalue()))
+
+    def test_measure_keeps_both_parts(self):
+        """The call site: what measure() writes is what each part returned,
+        under the parts its format lists."""
+        screen = Screen()
+        with unittest.mock.patch.multiple(
+                m, libc_version=lambda: 'glibc 2.34',
+                list_locales=lambda: ['a', 'b'],
+                glibc_build=lambda: 'glibc-2.34-1.el9.x86_64',
+                measure_one=lambda name: (name, {'error': 'x'}, None),
+                UTF8_BYTES=None,
+                fork_pool=lambda jobs: ThreadPoolExecutor(1),
+                money_digits=lambda names: {n: 3 for n in names},
+                postgres_libc=lambda: dict(CLEAN_LIBC, processes=5)), \
+                unittest.mock.patch.object(m.os, 'nice'), \
+                unittest.mock.patch.object(m.sys, 'stderr', screen):
+            text, out, _ = m.measure(1)
+        data = json.loads(text)
+        self.assertEqual((data['format'], data['parts']),
+                         (m.FORMAT, list(m.PARTS[m.FORMAT])))
+        self.assertEqual(data['money'], {'a': 3, 'b': 3})
+        self.assertEqual(data['postgres_libc']['processes'], 5)
+        self.assertEqual(data['content'], m.content_digest(data))
+
 
 if __name__ == '__main__':
     unittest.main()

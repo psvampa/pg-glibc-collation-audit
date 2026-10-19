@@ -26,17 +26,29 @@ Two things are measured for each locale that `locale -a` lists:
      keep its place and change how it is told apart from its neighbour, and
      then only strings of more than one letter sort differently.
 
-Each is kept whole, compressed, once for all the locales that share it, so
-that the comparison can name the characters that moved without a second run
-on the machines. The file was 2.6 MB on each of glibc 2.28, 2.34 and 2.39.
+Beside the order, the file holds each locale's decimals of money (frac_digits
+of its LC_MONETARY, the one number there that changes what a stored money
+value means), and which PostgreSQL processes of the machine run another C
+library than the one measured, because a glibc update replaced it on disk or
+because they run another file, as in a container. Root can see that, and so
+can the user PostgreSQL runs as where /proc does not hide other users'
+processes; otherwise the file says it was not checked. A file written before
+these two were measured still compares, and the comparison says they were not
+checked there. C and POSIX, which glibc sorts in byte order in every version,
+are the control: a machine where they measured otherwise did not measure what
+this means to.
+
+Each order and told-apart record is kept whole, compressed, once for all the
+locales that share it, so that the comparison can name the characters that
+moved without a second run on the machines. The file was 2.6 MB on each of
+glibc 2.28, 2.34 and 2.39.
 
 Not measured: a rule that applies only to a particular combination of letters,
 such as a contraction ("ch" sorted as one letter). Two machines that agree on
 both can still sort some longer strings differently. Where a character counts
 for nothing at some level (glibc ignores it there), how it is told apart from
-its neighbour is read less reliably, so a change there may go unseen. Only sort
-order is measured: upper(), lower() and the other character rules of LC_CTYPE
-are not.
+its neighbour is read less reliably, so a change there may go unseen. upper(),
+lower() and the other character rules of LC_CTYPE are not measured.
 
 Usage:
   python3 locale_order.py > old.out          # on each machine
@@ -50,7 +62,9 @@ there and is Python 3.6:
 Measuring needs Python 3.6 or newer and the language packs of the locales to
 be measured (on RHEL, glibc-all-langpacks or glibc-langpack-*). It needs no
 PostgreSQL and no root, runs at low priority, and takes about 0.3 GB of
-memory per process. Comparing needs only Python.
+memory per process; to see PostgreSQL's processes it runs as root, or as their
+user where /proc does not hide other users' processes. Comparing needs only
+Python.
 """
 import argparse
 import array
@@ -83,7 +97,17 @@ import zlib
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
-FORMAT = 'locale_order/1'
+FORMAT = 'locale_order/2'
+
+# The parts a file of each format holds, as its 'parts' says. A file of an
+# earlier format lacks the parts added since, and the comparison says each
+# was not checked and why, rather than refuse a file that is whole; a file
+# that lacks a part its format holds is refused. The corpus digest starts
+# with the first format's name, not with FORMAT, because a file of that
+# format measured the same strings and still compares.
+PARTS = {'locale_order/1': ('order',),
+         'locale_order/2': ('order', 'money', 'postgres_libc')}
+CORPUS_VERSION = 'locale_order/1'
 
 # The file --extract writes holds the measurement, the machine's locale sources
 # and charmaps, and its glibc build. The sources and the charmaps are what
@@ -150,7 +174,7 @@ def corpus_digest():
     Taken from the data rather than from a description of it, so a copy of
     this script with a different corpus cannot pass for the same one.
     """
-    h = hashlib.sha256(FORMAT.encode())
+    h = hashlib.sha256(CORPUS_VERSION.encode())
     h.update(''.join(map(chr, CODEPOINTS)).encode('utf-8'))
     h.update('|'.join(','.join(p + q for p, q in level)
                       for level in CANDIDATES).encode('utf-8'))
@@ -295,6 +319,227 @@ def libc():
         lib.strcoll.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
         LIBC = lib
     return LIBC
+
+
+class Lconv(ctypes.Structure):
+    """The head of glibc's struct lconv, up to frac_digits: ten strings, then
+    int_frac_digits and frac_digits, each a char (locale/locale.h, in this
+    order in 2.28, 2.34 and 2.39). Read as signed, as PostgreSQL reads it on
+    x86_64; where char is unsigned a value past 127 differs, and cash.c
+    takes every value outside 0 to 10 as 2 either way."""
+    _fields_ = [(n, ctypes.c_char_p) for n in (
+        'decimal_point', 'thousands_sep', 'grouping', 'int_curr_symbol',
+        'currency_symbol', 'mon_decimal_point', 'mon_thousands_sep',
+        'mon_grouping', 'positive_sign', 'negative_sign')] + [
+        ('int_frac_digits', ctypes.c_byte), ('frac_digits', ctypes.c_byte)]
+
+
+def money_digits(names):
+    """{name: frac_digits, or why there is none}: the decimals PostgreSQL's
+    money type keeps in each locale.
+
+    cash.c reads frac_digits of the locale's LC_MONETARY: through
+    setlocale and localeconv() up to PostgreSQL 17 (pg_locale.c), through
+    nl_langinfo_l in 18 (pg_localeconv_r.c), the same data. glibc's
+    localeconv() is called directly: Python's own decodes every string of
+    the struct first, and failed in 86 locales on glibc 2.34 and 2.39
+    (measured). What changes a stored value is this number alone.
+    """
+    lib = libc()
+    lib.localeconv.restype = ctypes.POINTER(Lconv)
+    lib.localeconv.argtypes = []
+    saved = locale.setlocale(locale.LC_MONETARY)
+    out = {}
+    try:
+        for name in names:
+            try:
+                locale.setlocale(locale.LC_MONETARY, name)
+            except (locale.Error, ValueError) as e:
+                out[name] = f'cannot be selected: {e}'
+                continue
+            out[name] = lib.localeconv().contents.frac_digits
+    finally:
+        locale.setlocale(locale.LC_MONETARY, saved)
+    return out
+
+
+def money_scale(digits):
+    """The decimals cash.c keeps for frac_digits: outside 0 to 10 it takes 2
+    (cash.c:201-202 in REL_13_23, :217-218 in REL_18_6; the same from 13 to
+    18). C, POSIX and C.utf8 give 127, glibc's CHAR_MAX, and keep 2."""
+    return digits if 0 <= digits <= 10 else 2
+
+
+# The names a PostgreSQL process has in /proc/PID/comm: the program's, which
+# PostgreSQL never changes (its one prctl is PR_SET_PDEATHSIG; pmsignal.c),
+# and postmaster, the link PostgreSQL 15 and earlier install beside it.
+POSTGRES_NAMES = (b'postgres', b'postmaster')
+# The C library in a line of /proc/PID/maps: libc.so.6 on glibc 2.34 and
+# later, libc-2.28.so on 2.28 (measured on the three fixtures). The kernel
+# ends the path with " (deleted)" once the file was replaced, as a glibc
+# update replaces it; what comes before that must end the libc's name, or
+# libc.so.6.old or libcrypto would count.
+LIBC_PATH = re.compile(rb'/libc(?:-[0-9.]+)?\.so(?:\.[0-9]+)*$')
+DELETED = b' (deleted)'
+
+
+def hidden_processes(proc='/proc', mounts='/proc/mounts'):
+    """Why /proc may hide other users' processes from this one, or None.
+
+    Under hidepid an ordinary user lists none of them: measured on Rocky 9,
+    a user saw no postgres process at all, where without it the same user
+    sees every one and cannot read their maps. Seeing none would then read
+    as "no PostgreSQL runs here".
+    """
+    try:
+        with open(mounts, 'rb') as f:
+            lines = f.read().split(b'\n')
+    except OSError as e:
+        return (f'{mounts} could not be read ({e.strerror}), so whether /proc '
+                'hides other users\' processes is not known')
+    found = None
+    for line in lines:
+        fields = line.split()
+        if (len(fields) > 3 and fields[2] == b'proc'
+                and fields[1] == proc.encode()):
+            found = fields[3]     # the last mount over /proc is the one seen
+    if found is None:
+        return f'{mounts} lists no proc file system mounted on {proc}'
+    hide = [o for o in found.split(b',') if o.startswith(b'hidepid=')
+            and o not in (b'hidepid=0', b'hidepid=off')]
+    if hide:
+        return (f'{proc} is mounted with {hide[-1].decode("ascii", "replace")}, '
+                'which hides other users\' processes')
+    return None
+
+
+def libc_lines(maps):
+    """[(path, device, inode, deleted)] of the C library lines of a
+    /proc/PID/maps text: libc.so.6 on glibc 2.34 and later, libc-2.28.so on
+    2.28. The kernel ends the path with " (deleted)" once the file was
+    replaced, as a glibc update replaces it."""
+    out = []
+    for line in maps.split(b'\n'):
+        fields = line.split(None, 5)
+        if len(fields) != 6:
+            continue
+        name, deleted = fields[5], fields[5].endswith(DELETED)
+        if deleted:
+            name = name[:-len(DELETED)]
+        if LIBC_PATH.search(name):
+            out.append((fields[5].decode('utf-8', 'surrogateescape'),
+                        fields[3], fields[4], deleted))
+    return out
+
+
+def postgres_libc(proc='/proc', mounts='/proc/mounts', euid=None):
+    """Which PostgreSQL processes of this machine do not run the C library
+    this process measured with.
+
+    Two ways, both measured. A glibc update replaces the file, and a process
+    started before it keeps the old one, as does every process it forks
+    (Rocky 9, glibc 2.34-83 to 2.34-283 with the postmaster running: every
+    postgres process mapped "libc.so.6 (deleted)" until the restart). And a
+    PostgreSQL in a container runs the container's C library, another file
+    that was never deleted (false-negative-reviewer, round 1, measured on a
+    host whose containers mapped twelve such files). So a process is clean
+    only when it maps the very file this process does, by device and inode
+    in /proc/PID/maps.
+
+    Only root and the user PostgreSQL runs as can read a postgres process's
+    maps. Every way of not knowing is said: a process whose maps could not
+    be read or show no C library, a process whose name could not be read,
+    this process's own C library not found, and a /proc that hides other
+    users' processes. None of them reads as "none", and finding no postgres
+    process at all is said too, by the outputs. This process's own C library
+    deleted means glibc was replaced while it measured ('replaced'), which
+    the outputs say voids what was measured (measured on Rocky 9: a process
+    loaded before an update). A process whose maps read empty runs no code,
+    a zombie or one exiting (measured: 0 bytes), and is passed over.
+    """
+    out = {'looked_for': [n.decode('ascii') for n in POSTGRES_NAMES],
+           'processes': 0, 'stale': [], 'other': [], 'unreadable': 0,
+           'no_libc': 0, 'unnamed': 0, 'not_checked': None,
+           'replaced': False}
+    try:
+        pids = sorted(int(p) for p in os.listdir(proc) if p.isdigit())
+    except OSError as e:
+        out['not_checked'] = f'{proc} could not be read ({e.strerror})'
+        return out
+    why = []
+    # This process's own C library, the one strcoll ran from, deleted or
+    # not: a glibc update while it measured deletes it, and a process that
+    # maps that very file runs what was measured.
+    try:
+        with open(f'{proc}/self/maps', 'rb') as f:
+            mine = libc_lines(f.read())
+    except OSError:
+        mine = []
+    own = {(dev, ino) for _, dev, ino, _ in mine}
+    out['replaced'] = any(deleted for _, _, _, deleted in mine)
+    if not own:
+        why.append(f'the C library this process measured with is not in '
+                   f'{proc}/self/maps')
+    if (os.geteuid() if euid is None else euid) != 0:
+        hidden = hidden_processes(proc, mounts)
+        if hidden:
+            why.append(hidden)
+    out['not_checked'] = '; '.join(why) or None
+    for pid in pids:
+        try:
+            with open(f'{proc}/{pid}/comm', 'rb') as f:
+                comm = f.read().rstrip(b'\n')
+        except (FileNotFoundError, ProcessLookupError):
+            continue        # it ended between the listing and now
+        except OSError:
+            out['unnamed'] += 1
+            continue
+        if comm not in POSTGRES_NAMES:
+            continue
+        try:
+            with open(f'{proc}/{pid}/maps', 'rb') as f:
+                maps = f.read()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except OSError:
+            out['processes'] += 1
+            out['unreadable'] += 1
+            continue
+        if not maps:
+            continue        # no memory left to map: a zombie, or exiting
+        out['processes'] += 1
+        found = libc_lines(maps)
+        gone = [p for p, dev, ino, deleted in found
+                if deleted and (dev, ino) not in own]
+        elsewhere = [p for p, dev, ino, deleted in found
+                     if not deleted and own and (dev, ino) not in own]
+        if not found:
+            out['no_libc'] += 1
+        elif gone:
+            out['stale'].append([pid, gone[0]])
+        elif elsewhere:
+            out['other'].append([pid, elsewhere[0]])
+    return out
+
+
+def control_fingerprint():
+    """What C and POSIX measure on every glibc: (order, pairs, probes).
+
+    Both are the locale glibc carries inside itself (findlocale.c, from
+    2.12 to 2.39), with no rules, so strcoll is strcmp (strcoll_l.c, the
+    same versions): every character in byte order, every neighbour told
+    apart as a different letter, the first pair of letters as the letters'
+    pair and none for accents or case, which the C locale's 127 characters
+    cannot spell. A machine whose C differs did not measure what this
+    script means to measure, and nothing it measured can be trusted.
+    """
+    seq = list(range(1, 0x80))
+    a, b = CANDIDATES[0][0]
+    probes = f'{ord(a):X}.{ord(b):X}> ? ?'
+    told = bytes([3 << 3 | 3 << 5]) * (len(seq) - 1)
+    return (hashlib.sha256(''.join(map(chr, seq)).encode('utf-8')).hexdigest(),
+            hashlib.sha256(probes.encode('utf-8') + b'\n' + told).hexdigest(),
+            probes)
 
 
 def corpus_for(codeset):
@@ -861,6 +1106,7 @@ def measure(jobs):
             'for lack of memory; run again with a smaller --jobs')
     out = {
         'format': FORMAT,
+        'parts': list(PARTS[FORMAT]),
         'corpus': corpus_digest(),
         'glibc_version': version,
         'glibc_build': build,
@@ -869,6 +1115,10 @@ def measure(jobs):
         'locales': results,
         'order_data': order_data,
         'pair_data': pair_data,
+        # After the measuring processes, which each select a locale of
+        # their own: this one's LC_MONETARY is put back as it was.
+        'money': money_digits(names),
+        'postgres_libc': postgres_libc(),
     }
     out['content'] = content_digest(out)
     text = json.dumps(out, sort_keys=True) + '\n'
@@ -901,7 +1151,71 @@ def finished(out, seconds, size):
                      f'{size / 1e6:.1f} MB written.\n')
     for n in failed:
         sys.stderr.write(f'  {shown(n)}: {results[n]["error"]}\n')
+    for line in machine_libc_lines(out['postgres_libc']):
+        sys.stderr.write(line + '\n')
     return 1 if failed else 0
+
+
+def machine_libc_lines(p):
+    """What the machine's own run says about its PostgreSQL processes, so
+    that a check that could not look is fixed there and then."""
+    out = []
+    if p['replaced']:
+        out.append(filled(
+            '!! glibc was replaced on disk while this measured: what was '
+            'measured may not be what this machine runs now; measure it '
+            'again.'))
+    if p['stale']:
+        out.append(filled(
+            f'!! {len(p["stale"])} PostgreSQL process(es) still run the glibc '
+            'that was replaced on disk: what this machine measured is not '
+            'what that PostgreSQL sorts with until it is restarted.'))
+    if p['other']:
+        out.append(filled(
+            f'!! {len(p["other"])} PostgreSQL process(es) run another C '
+            'library than the one measured here, as when PostgreSQL runs in '
+            'a container: what this machine measured is not what that '
+            'PostgreSQL sorts with.'))
+    why = libc_why(p)
+    if why:
+        out.append(filled(
+            f'!! PostgreSQL processes NOT checked: {why}. To check, run this '
+            f'{ADVICE} (README, command 1.b).'))
+    if not out and not p['processes']:
+        out.append(filled(
+            f'!! No process named {" or ".join(p["looked_for"])} was found, '
+            'so nothing checked which C library PostgreSQL runs here.'))
+    if not out:
+        out.append(f'PostgreSQL processes: {libc_clean(p)}.')
+    return out
+
+
+def libc_why(p):
+    """Why the PostgreSQL processes of a machine were not all checked, or
+    None when every one was."""
+    why = [p['not_checked']] if p['not_checked'] else []
+    if p['unreadable']:
+        why.append(f'{p["unreadable"]} of {p["processes"]} process(es) named '
+                   f'{" or ".join(p["looked_for"])} could not be read')
+    if p['no_libc']:
+        why.append(f'{p["no_libc"]} of {p["processes"]} process(es) named '
+                   f'{" or ".join(p["looked_for"])} show no C library')
+    if p['unnamed']:
+        why.append(f'the name of {p["unnamed"]} other process(es) could not '
+                   'be read')
+    return '; '.join(why) or None
+
+
+def libc_clean(p):
+    """The line for a machine whose PostgreSQL processes were all read and
+    all run the C library measured there."""
+    return (f'{p["processes"]} process(es) named '
+            f'{" or ".join(p["looked_for"])}, all running the C library '
+            'measured there')
+
+
+ADVICE = ('as root, or as the user PostgreSQL runs as where /proc does not '
+          'hide other users\' processes')
 
 
 def source_entries(directory):
@@ -1295,8 +1609,19 @@ def load(path, digest):
     except ValueError:
         die(f'{path} is not a complete output of locale_order.py. A run that '
             'was cut short leaves exactly such a file; measure again.')
-    if not isinstance(data, dict) or data.get('format') != FORMAT:
+    if not isinstance(data, dict) or data.get('format') not in PARTS:
         die(f'{path} is not an output of this version of locale_order.py')
+    held = PARTS[data['format']]
+    # A file of the first format has no list; one of a later format lists
+    # what its format holds, and holds each of it.
+    if 'parts' in data or len(held) > 1:
+        if data.get('parts') != list(held):
+            die(f'{path} does not list the parts its format holds; it is not a '
+                'whole measurement')
+    for part in ('money', 'postgres_libc'):
+        if (part in data) != (part in held):
+            die(f'{path} lacks a part its format holds, or holds one it does '
+                'not; it is not a whole measurement')
     if data.get('corpus') != digest:
         die(f'{path} was measured over a different set of strings than this '
             'script uses; measure both machines with the same copy of it')
@@ -1335,6 +1660,15 @@ def load(path, digest):
                 and isinstance(pair_data.get(r['pairs']), str)):
             die(f'{path}: what was measured for {shown(name)} is missing; it '
                 'is not a whole measurement')
+    if 'money' in held and not (
+            isinstance(data['money'], dict) and set(data['money']) == set(locales)
+            and all((type(v) is int and -128 <= v <= 127)
+                    or (isinstance(v, str) and v) for v in data['money'].values())):
+        die(f'{path}: the decimals of money are not one per locale; it is not '
+            'a whole measurement')
+    if 'postgres_libc' in held and not libc_part_whole(data['postgres_libc']):
+        die(f'{path}: what it says of the PostgreSQL processes is malformed; '
+            'it is not a whole measurement')
     if 'content' not in data:
         die(f'{path} is not an output of this version of locale_order.py')
     if data['content'] != content_digest(data):
@@ -1348,7 +1682,29 @@ def load(path, digest):
             f'the build {data["glibc_build"]}; a measurement is bound to one '
             'build, so measure that machine again')
     data['path'] = path
+    data['held'] = held
     return data, raw
+
+
+def libc_part_whole(p):
+    """Is what a file says of its machine's PostgreSQL processes of the shape
+    postgres_libc() writes, with counts that add up?"""
+    counts = ('processes', 'unreadable', 'no_libc', 'unnamed')
+    return (isinstance(p, dict)
+            and set(p) == {'looked_for', 'stale', 'other',
+                           'not_checked', 'replaced'} | set(counts)
+            and type(p['replaced']) is bool
+            and all(type(p[k]) is int and p[k] >= 0 for k in counts)
+            and isinstance(p['looked_for'], list) and p['looked_for']
+            and all(isinstance(n, str) and n for n in p['looked_for'])
+            and (p['not_checked'] is None
+                 or (isinstance(p['not_checked'], str) and p['not_checked']))
+            and all(isinstance(p[k], list)
+                    and all(isinstance(s, list) and len(s) == 2
+                            and type(s[0]) is int and isinstance(s[1], str)
+                            for s in p[k]) for k in ('stale', 'other'))
+            and len(p['stale']) + len(p['other']) + p['unreadable']
+            + p['no_libc'] <= p['processes'])
 
 
 def order_text(seq):
@@ -2240,16 +2596,170 @@ CLOSING = ('!! Not measured: a rule that applies only to a particular '
            'letter), so two machines that agree here can still sort some longer '
            'strings apart. Where a character counts for nothing at some level '
            '(glibc ignores it there), how it is told apart from its neighbour is '
-           'read less reliably, so a change there may go unseen. Only sort order '
-           'is measured: upper(), lower() and the other character rules of '
-           'LC_CTYPE are not.')
+           'read less reliably, so a change there may go unseen. upper(), '
+           'lower() and the other character rules of LC_CTYPE are not '
+           'measured.')
 
 
-def run_findings(o, n, warnings, partly, unmeasured, only_old):
+EARLIER = ('written by an earlier version of locale_order.py, which did not '
+           'measure this; run it again on {}')
+
+
+def which_machines(sides):
+    """'the OLD machine', 'the NEW machine' or 'both machines'."""
+    return 'both machines' if len(sides) == 2 else f'the {sides[0]} machine'
+
+
+def control_texts(old, new):
+    """[(text, is a warning)]: C and POSIX on each machine against
+    control_fingerprint(). A file of any format holds them, so this needs
+    nothing a file of an earlier format lacks."""
+    order, pairs, probes = control_fingerprint()
+    held, broken, unknown = [], [], []
+    for side, data in zip(('OLD', 'NEW'), (old, new)):
+        for name in ('C', 'POSIX'):
+            r = data['locales'].get(name)
+            if r is None:
+                unknown.append(f'{name} is not in the {side} file')
+            elif 'error' in r:
+                unknown.append(f'{name} could not be measured on the {side} '
+                               f'machine ({r["error"]})')
+            elif (r['order'], r['pairs'], r['probes'], r['chars'],
+                  r['partly']) != (order, pairs, probes, 0x7F, 0):
+                broken.append((side, name))
+            else:
+                held.append(side)
+    out = []
+    for side in ('OLD', 'NEW'):
+        names = [name for s, name in broken if s == side]
+        if names:
+            out.append((f'!! Control FAILED on the {side} machine: '
+                        f'{" and ".join(names)} did not measure as byte order, '
+                        'which is how glibc sorts C and POSIX in every '
+                        'version. This '
+                        'script did not measure there what it means to, and '
+                        'nothing it measured on that machine can be trusted; '
+                        'measure it again with this checkout\'s '
+                        'scripts/locale_order.py.', True))
+    if unknown:
+        out.append(('!! Control NOT checked: ' + '; '.join(unknown) + '.', True))
+    if not broken and not unknown:
+        out.append(('Control: C and POSIX measured as byte order on both '
+                    'machines, which is how glibc sorts them in every version.',
+                    False))
+    return out
+
+
+def money_texts(old, new, both):
+    """[(text, is a warning)]: the decimals of money of each locale on both
+    machines, as cash.c keeps them."""
+    earlier = [side for side, data in zip(('OLD', 'NEW'), (old, new))
+               if 'money' not in data['held']]
+    if earlier:
+        files = ('the OLD and NEW files were' if len(earlier) == 2
+                 else f'the {earlier[0]} file was')
+        return [(f'!! Decimals of money NOT checked: {files} '
+                 + EARLIER.format(which_machines(earlier)) + '.', True)]
+    changed, unknown = [], []
+    for name in both:
+        a, b = old['money'][name], new['money'][name]
+        if isinstance(a, str) or isinstance(b, str):
+            unknown.append('; '.join(
+                f'{shown(name)} ({side} machine): {v}' for side, v
+                in (('old', a), ('new', b)) if isinstance(v, str)))
+        elif money_scale(a) != money_scale(b):
+            changed.append(f'{shown(name)} ({money_scale(a)} -> '
+                           f'{money_scale(b)})')
+    out = []
+    if changed:
+        out.append((f'!! Decimals of money CHANGE in {len(changed)} locale(s): '
+                    'a money value stored with lc_monetary set to one of them '
+                    'reads with another number of decimals on the new machine, '
+                    'as a number 10 or more times larger or smaller: '
+                    + ', '.join(changed) + '.', True))
+    if unknown:
+        out.append((f'!! Decimals of money NOT checked in {len(unknown)} '
+                    'locale(s): ' + '; '.join(unknown) + '.', True))
+    compared = len(both) - len(unknown)
+    if not changed:
+        out.append((f'Decimals of money: the same in the {compared} locale(s) '
+                    'measured on both machines.', False))
+    return out
+
+
+def libc_texts(old, new):
+    """[(text, is a warning, above)]: each machine's PostgreSQL processes
+    against the C library measured there, and what that does not look at.
+    above marks what voids the comparison, drawn above the list of changes
+    as the control is: the OLD machine's PostgreSQL on a replaced or another
+    C library (its indexes were not built with what was measured there), the
+    NEW machine's on another (it will not sort with what was measured there
+    even after a restart), and a side whose glibc was replaced while it was
+    measured. The NEW machine's PostgreSQL still on the replaced glibc is
+    not above: the list is what changes when it restarts."""
+    out = []
+    earlier = [side for side, data in zip(('OLD', 'NEW'), (old, new))
+               if 'postgres_libc' not in data['held']]
+    if earlier:
+        files = ('the OLD and NEW files were' if len(earlier) == 2
+                 else f'the {earlier[0]} file was')
+        out.append((f'!! PostgreSQL processes NOT checked on '
+                    f'{which_machines(earlier)}: {files} '
+                    + EARLIER.format(which_machines(earlier)) + '.', True,
+                    False))
+    for side, data in zip(('OLD', 'NEW'), (old, new)):
+        if side in earlier:
+            continue
+        p = data['postgres_libc']
+        if p['replaced']:
+            out.append((f'!! The glibc of the {side} machine was replaced on '
+                        'disk while it was measured, so what was measured may '
+                        'not be what that machine runs now; measure it again.',
+                        True, True))
+        if p['stale']:
+            out.append((f'!! PostgreSQL on the {side} machine: '
+                        f'{len(p["stale"])} process(es) still run the glibc '
+                        'that was replaced on disk, so they do not sort with '
+                        'the glibc measured there until PostgreSQL is '
+                        'restarted.', True, side == 'OLD'))
+        if p['other']:
+            out.append((f'!! PostgreSQL on the {side} machine: '
+                        f'{len(p["other"])} process(es) run another C library '
+                        'than the one measured there, as when PostgreSQL runs '
+                        'in a container, so they do not sort with the glibc '
+                        'measured there.', True, True))
+        why = libc_why(p)
+        if why:
+            out.append((f'!! PostgreSQL processes NOT checked on the {side} '
+                        f'machine: {why}. Run locale_order.py there {ADVICE}.',
+                        True, False))
+        if not (p['stale'] or p['other'] or why or p['replaced']):
+            if p['processes']:
+                out.append((f'PostgreSQL on the {side} machine: '
+                            f'{libc_clean(p)}.', False, False))
+            else:
+                out.append((f'!! PostgreSQL on the {side} machine: no process '
+                            f'named {" or ".join(p["looked_for"])} was found, '
+                            'so nothing checked which C library PostgreSQL '
+                            'runs there.', True, False))
+    if len(earlier) < 2:
+        out.append(('This looks at the C library PostgreSQL runs, not at its '
+                    'locale data: a PostgreSQL that was not restarted can '
+                    'already use locales installed after it started.', False,
+                    False))
+    return out
+
+
+def run_findings(o, n, warnings, partly, unmeasured, only_old,
+                 checks=()):
     """[(kind, data)]: what the run says beside the changed locales -- its
     warnings, the locales NOT known to be unchanged and those unchanged only
-    as far as measured, and what no comparison measures."""
+    as far as measured, the checks of each machine beside the order
+    (control, money, PostgreSQL processes), and what no comparison
+    measures."""
     found = [('warning', {'text': text, 'wrap': wrap}) for text, wrap in warnings]
+    found += [(kind, {'text': text, 'warning': warning})
+              for kind, texts in checks for text, warning in texts]
     found += [('partly', {'name': name,
                           'count': max(o[name]['partly'], n[name]['partly'])})
               for name in partly]
@@ -2381,6 +2891,14 @@ def only_old_rows(items):
                             '-')]) for d in items]
 
 
+def check_lines(items, ctx):
+    return [filled(d['text']) for d in items]
+
+
+def check_summary(items, ctx):
+    return [line for d in items for line in wrapped(d['text'], 5, 8)]
+
+
 def closing_lines(items, ctx):
     return [textwrap.fill(d['text'], width=78, subsequent_indent='   ')
             for d in items]
@@ -2399,6 +2917,10 @@ RUN_KINDS = {
     'partly': (partly_lines, partly_summary, partly_rows),
     'not measured': (unmeasured_lines, unmeasured_summary, unmeasured_rows),
     'not on the new machine': (only_old_lines, only_old_summary, only_old_rows),
+    'control': (check_lines, check_summary, notes),
+    'postgres libc above': (check_lines, check_summary, notes),
+    'money': (check_lines, check_summary, notes),
+    'postgres libc': (check_lines, check_summary, notes),
     'closing': (closing_lines, closing_summary, notes),
 }
 
@@ -2470,6 +2992,8 @@ def summary_lines(old, new, groups, run, totals, characters_to=None):
     o, n = old['locales'], new['locales']
     out = [f'   ({machine_label(old)} -> {machine_label(new)})']
     out += run('warning')
+    out += run('control')
+    out += run('postgres libc above')
     count = sum(len(names) for names, brief in groups)
     if groups:
         out.append(f'     {count} locale(s) sort differently -- reindex what '
@@ -2495,6 +3019,8 @@ def summary_lines(old, new, groups, run, totals, characters_to=None):
     out += run('not on the new machine')
     out += run('partly')
     out += wrapped(totals, 5, 7)
+    out += run('money')
+    out += run('postgres libc')
     out += run('closing')
     run.done()
     return out
@@ -2615,13 +3141,22 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None):
             'first. This may also compare two machines rather than an upgrade.',
             True))
     warnings += [(text, True) for text in unchecked]
-    found = run_findings(o, n, warnings, partly, unmeasured, only_old)
+    libc = libc_texts(old, new)
+    checks = (('control', control_texts(old, new)),
+              ('postgres libc above',
+               [(text, warning) for text, warning, above in libc if above]),
+              ('money', money_texts(old, new, both)),
+              ('postgres libc',
+               [(text, warning) for text, warning, above in libc if not above]))
+    found = run_findings(o, n, warnings, partly, unmeasured, only_old, checks)
     ctx = {'pg_names': pg_names, 'o': o}
 
     report = [f'Old machine: {machine_label(old)}, {len(old["locales"])} locale(s)',
               f'New machine: {machine_label(new)}, {len(new["locales"])} locale(s)']
     run = Drawn(found, REPORT, ctx)
     report += run('warning')
+    report += run('control')
+    report += run('postgres libc above')
     report += ['', f'Sort order CHANGED in {len(changed)} locale(s):']
     for lines, names in groups:
         report += ['', filled(heading(names, o, n), 2, 2)]
@@ -2645,6 +3180,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None):
     report.append(f'Only on the new machine: {len(only_new)} locale(s).')
     report += [f'  {shown(name)}' for name in only_new]
     report += ['', totals]
+    report += run('money')
+    report += run('postgres libc')
     report += run('closing')
     run.done()
     brief = None
@@ -2661,7 +3198,9 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None):
         run = Drawn(found, FILE)
         for kind in ('partly', 'not measured', 'not on the new machine'):
             rows += run(kind)
-        file_notes = run('warning') + run('closing')
+        file_notes = (run('warning') + run('control')
+                      + run('postgres libc above') + run('money')
+                      + run('postgres libc') + run('closing'))
         run.done()
         # Each group closes with the names PostgreSQL gives it, as the report
         # prints them under its heading: a reader looks a locale up by the

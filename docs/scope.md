@@ -5,7 +5,8 @@
 **Sort order (`LC_COLLATE`) only.** It says nothing about `LC_CTYPE`
 behavior — `upper()`, `lower()`, `initcap()`, character classification, pattern
 matching — and nothing about `LC_NUMERIC`, `LC_TIME`, `LC_MONETARY` or
-`LC_MESSAGES`.
+`LC_MESSAGES`, except the decimals of the `money` type, which step 11 compares
+given each machine's file.
 
 `LC_CTYPE` is the exclusion that can still cost you an index: a functional index
 on `lower(email)` breaks on a glibc upgrade the same way a `COLLATE` index does,

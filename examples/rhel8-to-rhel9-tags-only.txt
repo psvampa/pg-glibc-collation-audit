@@ -621,7 +621,9 @@ every locale it names as built in byte order.
      option, or --old-order and --new-order, each written by
      scripts/locale_order.py on that machine. Without them nothing above
      asked either machine's glibc how it sorts, and a locale whose files
-     did not change can still sort differently.
+     did not change can still sort differently. Nor did anything compare
+     the decimals of money or check which C library PostgreSQL runs on
+     either machine.
 
 -- Needs an empirical test: step 5 found 29 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged

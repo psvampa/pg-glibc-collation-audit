@@ -91,6 +91,14 @@ a list of them: the glibc build, as `rpm -q glibc` prints it on that machine,
 and a checksum of every file. Each copy is the whole folder or none of it, and
 when it is none the list says why.
 
+Beside every locale's order, the measurement holds the decimals each locale
+gives the `money` type, and which PostgreSQL processes on the machine run
+another C library than the one measured, because an update replaced it on
+disk or because they run another file, as in a container. Step 11 compares
+the decimals between the two machines, and checks each machine's processes
+against what was measured there. A file written before they were measured
+still compares, and step 11 says they were not checked on that machine.
+
 The README's install line names the exact glibc build the machine runs, so
 `dnf` installs the sources of that build and nothing else. A plain `dnf
 install glibc-locale-source` installs the newest sources instead, and on a
