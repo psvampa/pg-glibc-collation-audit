@@ -955,19 +955,34 @@ Sort order CHANGED in 14 locale(s):
   C.utf8 (UTF-8)
     also, in PostgreSQL: database locale C.UTF-8
     135,360 characters moved, too many to list here
+    1,112,062 character(s) sort differently against at least one other
+    pairs are compared only by letters: no pair measured accents and case
+    844,774 pairs of characters told apart differently, too many to list here
+      among them 845,406 character(s) that did not move, too many to list here
+    2,591 more pair(s) may be told apart differently; what was measured cannot decide
 
   ko_KR.utf8 (UTF-8)
     also, in PostgreSQL: collation "ko_KR" where the database encoding is
       UTF-8; database locale ko_KR.UTF-8
     1 character(s) moved:
       힣 (U+D7A3 HANGUL SYLLABLE HIH)
+    4,889 character(s) sort differently against at least one other
+    pairs are compared only by letters: no pair measured accents and case
+    2 more pair(s) may be told apart differently; what was measured cannot decide
 
   or_IN, or_IN.utf8 (UTF-8)
     also, in PostgreSQL: database locale or_IN.UTF-8
     50,554 characters moved, too many to list here
+    all 1,112,063 character(s) sort differently against at least one other
     the pairs that tell letters, accents and case apart here are told apart differently themselves:
       before: letters a/b, accent 0/୦, case a/A
       now:    letters a/b, accent a/á, case a/A
+      so pairs are compared only by letters and case
+    46,136 pairs of characters told apart differently, too many to list here
+      among them 37 character(s) that did not move: U+0009..U+000D,
+        U+0020..U+0022, U+0028..U+002B, U+0030..U+0039, U+003C..U+003E,
+        U+007C, U+007E, U+0B66..U+0B6F
+    8,406 more pair(s) may be told apart differently; what was measured cannot decide
 
   sv_FI, sv_FI.iso88591, sv_SE, sv_SE.iso88591, swedish (ISO-8859-1);
   sv_FI.iso885915@euro, sv_FI@euro, sv_SE.iso885915 (ISO-8859-15)
@@ -975,7 +990,7 @@ Sort order CHANGED in 14 locale(s):
       ISO-8859-15; database locales sv_FI.ISO-8859-1, sv_FI.ISO-8859-15@euro,
       sv_SE.ISO-8859-1, sv_SE.ISO-8859-15
     no character moved
-    1 pair(s) of neighbouring characters told apart differently:
+    1 pair(s) of characters told apart differently:
       V (U+0056) and w (U+0077): before like an accent, now as different letters
 
   sv_FI.utf8, sv_SE.utf8 (UTF-8)
@@ -984,6 +999,11 @@ Sort order CHANGED in 14 locale(s):
     2 character(s) moved:
       W (U+0057 LATIN CAPITAL LETTER W)
       w (U+0077 LATIN SMALL LETTER W)
+    44 character(s) sort differently against at least one other
+    7 more pair(s) may be told apart differently; what was measured cannot decide
+
+Every character and pair found, by locale:
+  /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.28..glibc-2.34.tsv
 
 Unchanged: 847 locale(s).
 !! Unchanged only as far as measured: 5 of them. In each, the pairs of
@@ -1051,27 +1071,40 @@ Of the 867 locale(s) on the old machine: 14 changed, 847 unchanged (5 of them on
    (glibc-2.28-251.el8_10.40.x86_64 -> glibc-2.34-275.el9_8.x86_64)
      14 locale(s) sort differently -- reindex what uses them:
        C.utf8 (UTF-8)
-         135,360 characters moved
+         135,360 characters moved; 1,112,062 sort differently against another;
+           pairs compared only by letters; 844,774 pairs of characters told
+           apart differently; among them 845,406 character(s) that did not
+           move; 2,591 more pair(s) the measurement cannot decide
          also, in PostgreSQL: database locale C.UTF-8
        ko_KR.utf8 (UTF-8)
-         1 character(s) moved: 힣 (U+D7A3)
+         1 character(s) moved: 힣 (U+D7A3); 4,889 sort differently against
+           another; pairs compared only by letters; 2 more pair(s) the
+           measurement cannot decide
          also, in PostgreSQL: collation "ko_KR" where the database encoding is
            UTF-8; database locale ko_KR.UTF-8
        or_IN, or_IN.utf8 (UTF-8)
-         50,554 characters moved; the pairs that tell letters, accents and
-           case apart are told apart differently themselves
+         50,554 characters moved; 1,112,063 sort differently against another;
+           the pairs that tell letters, accents and case apart are told apart
+           differently themselves; pairs compared only by letters and case;
+           46,136 pairs of characters told apart differently; among them 37
+           character(s) that did not move: U+0009..U+000D, U+0020..U+0022,
+           U+0028..U+002B, U+0030..U+0039, U+003C..U+003E, U+007C, U+007E,
+           U+0B66..U+0B6F; 8,406 more pair(s) the measurement cannot decide
          also, in PostgreSQL: database locale or_IN.UTF-8
        sv_FI, sv_FI.iso88591, sv_SE, sv_SE.iso88591, swedish (ISO-8859-1);
        sv_FI.iso885915@euro, sv_FI@euro, sv_SE.iso885915 (ISO-8859-15)
-         no character moved; 1 pair(s) of neighbouring characters told apart
-           differently: V (U+0056) and w (U+0077)
+         no character moved; 1 pair(s) of characters told apart differently: V
+           (U+0056) and w (U+0077)
          also, in PostgreSQL: collation "sv_SE" where the database encoding is
            ISO-8859-15; database locales sv_FI.ISO-8859-1,
            sv_FI.ISO-8859-15@euro, sv_SE.ISO-8859-1, sv_SE.ISO-8859-15
        sv_FI.utf8, sv_SE.utf8 (UTF-8)
-         2 character(s) moved: W (U+0057), w (U+0077)
+         2 character(s) moved: W (U+0057), w (U+0077); 44 sort differently
+           against another; 7 more pair(s) the measurement cannot decide
          also, in PostgreSQL: collations "sv_FI", "sv_SE" where the database
            encoding is UTF-8; database locales sv_FI.UTF-8, sv_SE.UTF-8
+       every character and pair:
+         /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.28..glibc-2.34.tsv
      NOT known to be unchanged: 6 locale(s)
        could not be measured: hy_AM.armscii8, ka_GE, ka_GE.georgianps,
          zh_TW.euctw

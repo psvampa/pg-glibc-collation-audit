@@ -53,6 +53,7 @@ PostgreSQL and no root, runs at low priority, and takes about 0.3 GB of
 memory per process. Comparing needs only Python.
 """
 import argparse
+import array
 import base64
 import bisect
 import codecs
@@ -62,6 +63,8 @@ import ctypes.util
 import gzip
 import hashlib
 import io
+import itertools
+import operator
 import json
 import locale
 import multiprocessing
@@ -127,9 +130,13 @@ LIBC = None         # glibc, loaded only to measure
 UTF8_BYTES = None   # CODEPOINTS in UTF-8; built once, before the workers fork
 CORPORA = {}        # per encoding, what corpus_for() built, kept per process
 
-# Characters or pairs listed by name under a changed locale; past this many,
-# only the count is printed.
+# Characters or pairs named one by one under a changed locale. Past this
+# many, characters are listed as runs of code points while the runs are no
+# more than this, and only counted after that; pairs are only counted.
 LIST_LIMIT = 20
+
+# The levels of a told-apart record, as the report names them.
+LEVEL_NAMES = ('letters', 'accents', 'case')
 
 
 def die(msg):
@@ -144,7 +151,7 @@ def corpus_digest():
     this script with a different corpus cannot pass for the same one.
     """
     h = hashlib.sha256(FORMAT.encode())
-    h.update(''.join(chr(c) for c in CODEPOINTS).encode('utf-8'))
+    h.update(''.join(map(chr, CODEPOINTS)).encode('utf-8'))
     h.update('|'.join(','.join(p + q for p, q in level)
                       for level in CANDIDATES).encode('utf-8'))
     return h.hexdigest()
@@ -195,19 +202,49 @@ def content_digest(data):
     return hashlib.sha256(text.encode('ascii')).hexdigest()
 
 
+# A one-byte step of pack_order, decoded.
+ONE_BYTE_STEP = [z // 2 if not z & 1 else -(z + 1) // 2 for z in range(0x80)]
+# bytes.translate tables: 1 for a byte with the high bit; 1 for any byte but 0.
+HIGH_BIT = bytes(0x80) + bytes([1]) * 0x80
+NONZERO = bytes(1) + bytes([1]) * 255
+ONE = bytes([1])
+# A locale name in the characters file, which is tab-separated and lists the
+# names of one change separated by commas.
+TSV_ESCAPES = {9: '\\t', 10: '\\n', 13: '\\r', 44: '\\x2c', 92: '\\\\'}
+# Free text in one cell of it, such as why a locale was not measured.
+TEXT_ESCAPES = {9: '\\t', 10: '\\n', 13: '\\r', 92: '\\\\'}
+# A run of one byte other than 0, repeated.
+SAME_BYTE_RUNS = re.compile(rb'([^\x00])\1*', re.DOTALL)
+# An array type of four bytes, and the codec that reads it as text.
+CODE_POINT = 'I' if array.array('I').itemsize == 4 else 'L'
+UTF32 = 'utf-32-le' if sys.byteorder == 'little' else 'utf-32-be'
+
+
 def unpack_order(raw):
-    """pack_order's input back, or None when the bytes end mid-number."""
-    seq = []
-    prev = z = shift = 0
-    for b in raw:
-        z |= (b & 0x7F) << shift
-        if b & 0x80:
-            shift += 7
-            continue
-        prev += z // 2 if not z & 1 else -(z + 1) // 2
-        seq.append(prev)
+    """pack_order's input back, or None when the bytes end mid-number.
+
+    Most steps take one byte, and are decoded through a table between the
+    bytes that carry the high bit, which are read one by one."""
+    steps = []
+    marks = raw.translate(HIGH_BIT)
+    start = 0
+    while True:
+        end = marks.find(1, start)
+        if end < 0:
+            steps.extend(map(ONE_BYTE_STEP.__getitem__, raw[start:]))
+            break
+        steps.extend(map(ONE_BYTE_STEP.__getitem__, raw[start:end]))
         z = shift = 0
-    return None if shift else seq
+        while end < len(raw) and raw[end] & 0x80:
+            z |= (raw[end] & 0x7F) << shift
+            shift += 7
+            end += 1
+        if end == len(raw):
+            return None
+        z |= raw[end] << shift
+        steps.append(z // 2 if not z & 1 else -(z + 1) // 2)
+        start = end + 1
+    return list(itertools.accumulate(steps))
 
 
 def measure_one(name):
@@ -1314,6 +1351,13 @@ def load(path, digest):
     return data, raw
 
 
+def order_text(seq):
+    """The characters of an order as one string, built in C as UTF-32: three
+    times faster than joining chr() of each. A number that is no character
+    raises ValueError or OverflowError either way."""
+    return array.array(CODE_POINT, seq).tobytes().decode(UTF32)
+
+
 def unpacked(data, kind, digest, count=None, probes=None):
     """One measured order or told-apart record, checked against its digest.
 
@@ -1331,7 +1375,7 @@ def unpacked(data, kind, digest, count=None, probes=None):
         else:
             seq = unpack_order(raw)
             if (seq is not None and len(seq) == count
-                    and hashlib.sha256(''.join(map(chr, seq)).encode('utf-8'))
+                    and hashlib.sha256(order_text(seq).encode('utf-8'))
                     .hexdigest() == digest):
                 return seq
     except (ValueError, OverflowError, zlib.error):
@@ -1342,64 +1386,344 @@ def unpacked(data, kind, digest, count=None, probes=None):
         'the file was damaged after it was written')
 
 
+def new_positions(old_seq, new_seq):
+    """Where each character of the old order stands in the new one."""
+    position = [0] * 0x110000
+    for i, c in enumerate(new_seq):
+        position[c] = i
+    return [position[c] for c in old_seq]
+
+
+def reordering(old_seq, new_seq):
+    """(positions, old_at, steps, apart) of two orders of the same
+    characters: where each character of the old order stands in the new one;
+    where in the old order each place of the new one was; the step from each
+    character's new place to the next one's; and 1 where that step is not 1,
+    that is, where two neighbours of the old order are not neighbours, in
+    that order, in the new one. Worked out once for every use."""
+    positions = new_positions(old_seq, new_seq)
+    old_at = [0] * len(positions)
+    for i, p in enumerate(positions):
+        old_at[p] = i
+    steps = list(map(operator.sub, positions[1:], positions))
+    return positions, old_at, steps, bytes(map((1).__ne__, steps))
+
+
+def kept_in_order(positions, apart=None):
+    """1 for each character of the old order that is among the most that
+    kept their relative order: the longest increasing subsequence of their
+    new positions.
+
+    Patience sorting, with two shortcuts that leave the answer as it was:
+    once a character goes on the end, the rest of its run of consecutive
+    positions goes on after it, in one step; and the subsequence is read
+    back a run at a time.
+    """
+    n = len(positions)
+    tail_positions, tail_indexes = [], []
+    previous = [-1] * n
+    # 1 for an index appended right after the index before it, as part of a
+    # run; its previous is that index.
+    batched = bytearray(n)
+    if apart is None:
+        apart = bytes(map((1).__ne__, map(operator.sub, positions[1:], positions)))
+    ends = apart + ONE
+    last = -1           # tail_positions[-1]
+    i = 0
+    while i < n:
+        p = positions[i]
+        if p > last:
+            k = len(tail_positions)
+            j = ends.find(1, i) + 1
+            tail_positions.extend(positions[i:j])
+            tail_indexes.extend(range(i, j))
+            previous[i] = tail_indexes[k - 1] if k else -1
+            batched[i + 1:j] = ONE * (j - i - 1)
+            last = positions[j - 1]
+            i = j
+            continue
+        k = bisect.bisect_left(tail_positions, p)
+        tail_positions[k] = p
+        tail_indexes[k] = i
+        if k == len(tail_positions) - 1:
+            last = p
+        previous[i] = tail_indexes[k - 1] if k else -1
+        i += 1
+    kept = bytearray(n)
+    i = tail_indexes[-1] if tail_indexes else -1
+    while i >= 0:
+        if batched[i]:
+            start = batched.rfind(0, 0, i)
+            kept[start:i + 1] = ONE * (i - start + 1)
+            i = previous[start]
+        else:
+            kept[i] = 1
+            i = previous[i]
+    return kept
+
+
 def moved_characters(old_seq, new_seq):
     """The characters that moved: all but the most that kept their order.
 
     The characters that kept their relative order are the longest increasing
     subsequence of the new positions read in the old order; every other
-    character is one that moved. A swap of two characters counts one of them.
+    character is one that moved. A swap of two characters counts one of them,
+    so where more than one subsequence is longest, which characters are
+    called moved is a choice; in_a_reversed_pair() is not.
     """
-    position = [0] * 0x110000
-    for i, c in enumerate(new_seq):
-        position[c] = i
-    tail_positions, tail_indexes = [], []
-    previous = [-1] * len(old_seq)
-    for i, c in enumerate(old_seq):
-        p = position[c]
-        k = bisect.bisect_left(tail_positions, p)
-        if k == len(tail_positions):
-            tail_positions.append(p)
-            tail_indexes.append(i)
-        else:
-            tail_positions[k] = p
-            tail_indexes[k] = i
-        previous[i] = tail_indexes[k - 1] if k else -1
-    kept = bytearray(len(old_seq))
-    i = tail_indexes[-1] if tail_indexes else -1
+    kept = kept_in_order(new_positions(old_seq, new_seq))
+    return sorted(c for c, k in zip(old_seq, kept) if not k)
+
+
+def in_a_reversed_pair(positions):
+    """1 for each character of the old order that the two orders put on
+    different sides of at least one other character, ties broken by the
+    bytes as PostgreSQL breaks them.
+
+    Unlike the moved characters, this does not depend on a choice: in ko_KR
+    one character moved, and it and the 4,888 it moved past are each in such
+    a pair. A character is in none exactly when every character before it in
+    one order is before it in the other, which is what the two passes check:
+    the largest new position before it, and the smallest after it.
+    """
+    n = len(positions)
+    flag = bytearray(n)
+    largest = -1
+    for i, p in enumerate(positions):
+        if largest > p:
+            flag[i] = 1
+        elif p > largest:
+            largest = p
+    smallest = n
+    for i in range(n - 1, -1, -1):
+        p = positions[i]
+        if smallest < p:
+            flag[i] = 1
+        elif p < smallest:
+            smallest = p
+    return flag
+
+
+def witnesses(old_seq, new_seq, moves, kept):
+    """For each character that moved, one that kept its place and that the
+    two orders put on the other side of it: the nearest such in the new
+    order. There is always one, or the longest subsequence would not be the
+    longest: a moved character that no kept character crossed could join
+    it."""
+    positions, old_at = moves[:2]
+    kept_new = [p for p, k in zip(positions, kept) if k]   # increasing
+    out = {}
+    i = kept.find(0)
     while i >= 0:
-        kept[i] = 1
-        i = previous[i]
-    return sorted(c for i, c in enumerate(old_seq) if not kept[i])
+        p = positions[i]
+        j = bisect.bisect_left(kept_new, p)
+        if j and old_at[kept_new[j - 1]] > i:
+            out[old_seq[i]] = (new_seq[kept_new[j - 1]], '<')
+        elif j < len(kept_new) and old_at[kept_new[j]] < i:
+            out[old_seq[i]] = (new_seq[kept_new[j]], '>')
+        else:
+            raise ValueError(f'no kept character crosses U+{old_seq[i]:04X}')
+        i = kept.find(0, i + 1)
+    return out
 
 
-def pair_changes(old_seq, old_told, new_seq, new_told):
-    """Neighbours in both orders whose told-apart record differs.
+def uncompared_levels(old_probes, new_probes):
+    """The levels a told-apart record cannot be compared at: no pair measured
+    them on one machine ('?'), or the pairs differ. A level shown not to exist
+    on both ('none') is not one."""
+    a, b = old_probes.split(' '), new_probes.split(' ')
+    return tuple(k for k in range(3)
+                 if a[k] != b[k] or '?' in (a[k], b[k]))
 
-    (x, y, old record, new record) for each. A pair that is next to each other
-    in only one of the orders is left to moved_characters.
+
+def comparable_levels(old_probes, new_probes):
+    """The levels (0 letters, 1 accent, 2 case) measured with the same pair on
+    both machines. Only there does a told-apart record mean the same thing on
+    both sides; where the pairs differ, that is reported on its own."""
+    a, b = old_probes.split(' '), new_probes.split(' ')
+    return tuple(k for k in range(3)
+                 if a[k] == b[k] and a[k] not in ('?', 'none'))
+
+
+def relation_tables(levels):
+    """Two bytes.translate tables over told-apart records. The first gives
+    the relation over the levels compared: bit 0 when strcoll does not call
+    the two equal, bit 1 + k when they differ at least as strongly as the
+    pair of level k. The second gives 1 where that pair compared equal,
+    which says nothing about the level, or where the record says the level
+    had no pair, which a level compared on both machines had: either way two
+    records that differ there are a pair the comparison cannot decide, never
+    one it can drop."""
+    rel, unsure = bytearray(256), bytearray(256)
+    for v in range(256):
+        r = 0 if v & 1 else 1
+        for k in levels:
+            f = (v >> (1 + 2 * k)) & 3
+            if f == 0:
+                r |= 2 << k
+            elif f != 2:
+                unsure[v] = 1
+        rel[v] = r
+    return bytes(rel), bytes(unsure)
+
+
+def strength(rel):
+    """0 tied, 1 told apart by less than every level compared, 2 + (2 - k)
+    told apart at least as strongly as level k: higher is stronger."""
+    if not rel & 1:
+        return 0
+    for k in range(3):
+        if rel >> (1 + k) & 1:
+            return 4 - k
+    return 1
+
+
+class Between:
+    """How two characters of one order that are not neighbours are told
+    apart, worked out from the neighbours between them: they tie only if
+    every neighbour between them ties, and they differ at least as strongly
+    as a level if some neighbour between them does.
+
+    That holds for characters glibc weighs at every level, and is only
+    trusted in one direction (level_changes): where glibc ignores a character
+    at some level, a two-letter string compares the probe letter with the
+    other character instead, and a strong neighbour between two characters
+    does not make them differ strongly. Measured with strcoll on the three
+    fixtures, 2026-10-18: a weaker relation worked out this way held for
+    3,405 pairs of 3,405, a stronger one failed for 395 of 23,591.
     """
-    successor = [-1] * 0x110000
-    record = bytearray(0x110000)
-    for i in range(len(new_seq) - 1):
-        successor[new_seq[i]] = new_seq[i + 1]
-        record[new_seq[i]] = new_told[i]
-    changes = []
-    for i in range(len(old_seq) - 1):
-        x, y = old_seq[i], old_seq[i + 1]
-        if successor[x] == y and record[x] != old_told[i]:
-            changes.append((x, y, old_told[i], record[x]))
-    return changes
+
+    def __init__(self, rel, unsure, bits):
+        self.rel, self.unsure, self.bits = rel, unsure, bits
+        self.counts = None
+
+    def relation(self, i, j):
+        """(relation, unsure) of the characters at positions i < j."""
+        if j - i <= 64:
+            r = 0
+            for v in self.rel[i:j]:
+                r |= v
+            return r, 1 in self.unsure[i:j]
+        if self.counts is None:
+            self.counts = {}
+            for b in self.bits:
+                column = bytes((v >> b) & 1 for v in range(256))
+                self.counts[b] = [0] + list(itertools.accumulate(
+                    self.rel.translate(column)))
+            self.counts['unsure'] = [0] + list(itertools.accumulate(self.unsure))
+        r = 0
+        for b in self.bits:
+            if self.counts[b][j] - self.counts[b][i]:
+                r |= 1 << b
+        return r, self.counts['unsure'][j] - self.counts['unsure'][i] > 0
 
 
-def told_apart_words(v):
-    """What a told-apart record says, in words."""
-    if v & 1:
-        return 'not at all (the bytes decide)'
-    for k, words in enumerate(('as different letters', 'like an accent',
-                               'by case')):
-        if (v >> (1 + 2 * k)) & 3 == 0:
-            return words
-    return 'by less than case'
+def level_changes(old_seq, old_told, new_seq, new_told, levels, moves=None):
+    """Pairs told apart at a different level on the two machines.
+
+    ([(side, first, last, old relation, new relation)], [(x, y)]): the
+    changes, as runs of pairs that follow one another in one order (pair i
+    is the i-th character of that order and the one after it; side 'both'
+    and 'old' count in the old order, 'new' in the new one) and change alike;
+    then the pairs whose change the measurement cannot decide. moves is
+    reordering() of the two orders, or None when they are the same.
+
+    A pair of neighbours in both orders is compared record to record, over
+    the levels compared. A pair of neighbours in one order only, kept in the
+    same order by the other, is compared with what the characters between
+    them say there (Between); that is a change only when the other machine
+    tells them apart more weakly, the one direction that reading can be
+    trusted in. The other direction goes to the second list. So the ten Oriya
+    digits of or_IN, RHEL 8 -> RHEL 9, are named: each was a neighbour of its
+    ASCII digit, told apart like an accent, and on RHEL 9 seven zeros of other
+    scripts stand between them, each told apart from the next by less than
+    case ("0A" against U+0B66 "a" turns round; strcoll on the fixtures).
+    """
+    rel_table, unsure_table = relation_tables(levels)
+    old_rel, old_unsure = old_told.translate(rel_table), old_told.translate(unsure_table)
+    new_rel, new_unsure = new_told.translate(rel_table), new_told.translate(unsure_table)
+    bits = (0,) + tuple(1 + k for k in levels)
+    runs, undecided = [], []
+
+    def change(side, i, before, now):
+        last = runs[-1] if runs else None
+        if (last and last[0] == side and last[2] == i - 1
+                and last[3] == before and last[4] == now):
+            last[2] = i
+        else:
+            runs.append([side, i, i, before, now])
+
+    def weigh(seq, i, mine, mine_unsure, theirs, theirs_unsure, side):
+        # theirs & ~1: a level worked out between, which only says "at least
+        # this strongly" when every character between is weighed at it; the
+        # real relation can be weaker, a change. Measured with strcoll on the
+        # fixtures: 23 of 1,977 such equal readings were changes.
+        if mine_unsure or theirs_unsure:
+            undecided.append((seq[i], seq[i + 1]))
+        elif strength(theirs) < strength(mine):
+            change(side, i, *((mine, theirs) if side == 'old' else (theirs, mine)))
+        elif theirs != mine or theirs & ~1:
+            undecided.append((seq[i], seq[i + 1]))
+
+    if moves is None:
+        aligned, aligned_rel, aligned_unsure = new_told, new_rel, new_unsure
+        positions = old_at = steps = None
+        moved_apart = bytes(len(old_rel))
+    else:
+        positions, old_at, steps, moved_apart = moves
+        # The new record from each character to the one after it there; the
+        # last character has none, and its pair is never a neighbour pair.
+        aligned = bytes(map((new_told + bytes(1)).__getitem__, positions[:-1]))
+        aligned_rel = aligned.translate(rel_table)
+        aligned_unsure = aligned.translate(unsure_table)
+    # Pairs of neighbours in both orders whose record differs, and neither
+    # record holds an equal answer, are found as runs: each byte the two
+    # records side by side, or 0, and a run of one same byte is one row.
+    size = len(old_rel)
+    old_n, aligned_n = int.from_bytes(old_rel, 'big'), int.from_bytes(aligned_rel, 'big')
+    unsure_n = int.from_bytes(old_unsure, 'big') | int.from_bytes(aligned_unsure, 'big')
+    changed_n = int.from_bytes((old_n ^ aligned_n).to_bytes(size, 'big').translate(NONZERO), 'big')
+    apart_n = int.from_bytes(moved_apart, 'big')
+    both_n = changed_n & ~apart_n & ~unsure_n
+    # Every record is below 16, so shifting the whole by four bits moves each
+    # byte into its own upper half; a byte of 0 or 1 times 255 is 0 or 255.
+    key = (((old_n << 4) | aligned_n) & (both_n * 255)).to_bytes(size, 'big')
+    for m in SAME_BYTE_RUNS.finditer(key):
+        runs.append(['both', m.start(), m.end() - 1, key[m.start()] >> 4,
+                     key[m.start()] & 15])
+    # The rest are looked at one by one: pairs that stopped being neighbours,
+    # and neighbours whose records differ at all, the raw bytes, while one
+    # holds an answer that cannot be compared. The relation of two such
+    # records can read the same where the bytes do not; they are undecided.
+    raw_n = int.from_bytes(old_told, 'big') ^ int.from_bytes(aligned, 'big')
+    raw_changed_n = int.from_bytes(raw_n.to_bytes(size, 'big').translate(NONZERO), 'big')
+    mark = (apart_n | (raw_changed_n & unsure_n)).to_bytes(size, 'big')
+    new_between = old_between = None
+    i = mark.find(1)
+    while i >= 0:
+        if steps is None or steps[i] == 1:
+            undecided.append((old_seq[i], old_seq[i + 1]))
+        elif steps[i] > 0:
+            if new_between is None:
+                new_between = Between(new_rel, new_unsure, bits)
+            a = positions[i]
+            theirs, theirs_unsure = new_between.relation(a, a + steps[i])
+            weigh(old_seq, i, old_rel[i], old_unsure[i], theirs, theirs_unsure,
+                  'old')
+        i = mark.find(1, i + 1)
+    runs.sort(key=lambda r: r[1])
+    if steps is not None:
+        apart = bytes(map((1).__lt__, map(operator.sub, old_at[1:], old_at)))
+        j = apart.find(1)
+        while j >= 0:
+            if old_between is None:
+                old_between = Between(old_rel, old_unsure, bits)
+            a, b = old_at[j], old_at[j + 1]
+            theirs, theirs_unsure = old_between.relation(a, b)
+            weigh(new_seq, j, new_rel[j], new_unsure[j], theirs, theirs_unsure,
+                  'new')
+            j = apart.find(1, j + 1)
+    return runs, undecided
 
 
 def glyph(cp):
@@ -1508,7 +1832,7 @@ def also_known_as(names, pg_names, locales):
     if spellings:
         word = 'database locale' if len(spellings) == 1 else 'database locales'
         parts.append(f'{word} {", ".join(spellings)}')
-    return 'also, in PostgreSQL: ' + '; '.join(parts) if parts else None
+    return ALSO + '; '.join(parts) if parts else None
 
 
 def readable_probes(spec):
@@ -1527,61 +1851,390 @@ def readable_probes(spec):
     return ', '.join(words)
 
 
-def describe_change(old, new, o, n):
-    """(lines, phrase): the lines that say what changed between two
-    measurements of a locale, and the same in one phrase for a summary."""
+def code_point_runs(cps):
+    """[(first, last)] of runs of consecutive code points, in order."""
+    runs = []
+    for c in cps:
+        if runs and c == runs[-1][1] + 1:
+            runs[-1][1] = c
+        else:
+            runs.append([c, c])
+    return runs
+
+
+def flagged_runs(seq, flags):
+    """code_point_runs of the characters of seq whose flag is 1, without
+    sorting them: marked in a table by code point and read back in runs."""
+    table = bytearray(0x110000)
+    for c in itertools.compress(seq, flags):
+        table[c] = 1
+    runs, start = [], table.find(1)
+    while start >= 0:
+        end = table.find(0, start)
+        if end < 0:
+            end = len(table)
+        runs.append([start, end - 1])
+        start = table.find(1, end)
+    return runs
+
+
+def report_lines(text, indent):
+    """A line of a change, cut to fit the report beside its four spaces."""
+    return textwrap.wrap(text, width=74, initial_indent=indent,
+                         subsequent_indent=indent + '  ',
+                         break_on_hyphens=False, break_long_words=False)
+
+
+def runs_text(runs):
+    return ', '.join(f'U+{a:04X}' if a == b else f'U+{a:04X}..U+{b:04X}'
+                     for a, b in runs)
+
+
+def relation_words(rel, levels):
+    """How two characters are told apart, over the levels compared."""
+    if not rel & 1:
+        return 'not at all (the bytes decide)'
+    stronger = -1       # the strongest level compared that does not tell them apart
+    for k in range(3):
+        if k in levels:
+            if rel >> (1 + k) & 1:
+                # Somewhere between that level and this one; a level whose
+                # pair differs on the two machines cannot narrow it.
+                return ' or '.join(('as different letters', 'like an accent',
+                                    'by case')[stronger + 1:k + 1])
+            stronger = k
+    return ('by less than ' + ('a letter', 'an accent', 'case')[stronger]
+            if levels else 'told apart')
+
+
+def test_pair(x, y, before, now, probes, levels):
+    """(string a, string b, sign before, sign now) that shows a level change
+    between x and y, or None when no level compared shows it."""
+    for k in levels:
+        if (before ^ now) >> (1 + k) & 1:
+            token = probes.split(' ')[k]
+            lo_, hi_ = (int(h, 16) for h in token[:-1].split('.'))
+            if token[-1] == '<':
+                a, b = (hi_, x), (lo_, y)
+            else:
+                a, b = (x, hi_), (y, lo_)
+            return (a, b, '<' if before >> (1 + k) & 1 else '>',
+                    '<' if now >> (1 + k) & 1 else '>')
+    return None
+
+
+def run_characters(seq, first, last):
+    """The characters of pairs first..last of an order, as code point runs;
+    most such runs are consecutive code points, which is checked whole."""
+    chars = seq[first:last + 2]
+    if chars == list(range(chars[0], chars[0] + len(chars))):
+        return [[chars[0], chars[-1]]]
+    return code_point_runs(chars)
+
+
+MEASURED = {'both': 'on both machines',
+            'old': 'on the old machine; the new one by the characters between',
+            'new': 'on the new machine; the old one by the characters between'}
+
+
+# --- what a comparison found, and how each output prints it -------------------
+#
+# A comparison's answer is one list of findings, each a (kind, data): for
+# every changed locale what changed in it (locale_findings), and for the run
+# what is not known to be unchanged and what a reader must be warned of
+# (run_findings). The report, the summary and the characters file are all
+# drawn from that list through the two tables below, LOCALE_KINDS and
+# RUN_KINDS, which give for each kind what each of the three prints. A kind
+# with no entry, or a finding one of the three never printed, raises before
+# anything is written: the file and the summary are not second accounts of
+# the comparison that could say less than the report.
+
+
+def locale_findings(old, new, o, n):
+    """[(kind, data)]: what changed between two measurements of a locale, in
+    the order the report prints it.
+
+    What moved and how many characters sort differently against another are
+    found when the order changed; how pairs of characters are told apart,
+    when the records or the order changed. A pair the measurement cannot
+    decide is a finding of its own, never dropped: the locale changed either
+    way, and a reader of the list must know it is not the whole of what may
+    differ.
+    """
     old_seq = unpacked(old, 'order', o['order'], o['chars'])
-    new_seq = (old_seq if n['order'] == o['order']
-               else unpacked(new, 'order', n['order'], n['chars']))
-    lines, brief = [], []
-    moved = [] if new_seq is old_seq else moved_characters(old_seq, new_seq)
-    if not moved:
-        lines.append('no character moved')
-        brief.append('no character moved')
-    elif len(moved) > LIST_LIMIT:
-        lines.append(f'{len(moved):,} characters moved, too many to list here')
-        brief.append(f'{len(moved):,} characters moved')
+    same_order = n['order'] == o['order']
+    new_seq = old_seq if same_order else unpacked(new, 'order', n['order'], n['chars'])
+    found = []
+    if same_order:
+        moved, moves = [], None
+        found.append(('moved', {'moved': moved, 'runs': [], 'partner': {}}))
     else:
-        lines.append(f'{len(moved)} character(s) moved:')
-        lines.extend(f'  {character(c)}' for c in moved)
-        brief.append(f'{len(moved)} character(s) moved: '
-                     + ', '.join(short_character(c) for c in moved))
-    if o['pairs'] != n['pairs'] and o['probes'] != n['probes']:
-        # Records taken with different pairs do not compare position by
-        # position; that the pairs had to change is the finding.
-        lines.append('the pairs that tell letters, accents and case apart here '
-                     'are told apart differently themselves:')
-        lines.append(f'  before: {readable_probes(o["probes"])}')
-        lines.append(f'  now:    {readable_probes(n["probes"])}')
-        brief.append('the pairs that tell letters, accents and case apart are '
-                     'told apart differently themselves')
-    elif o['pairs'] != n['pairs']:
-        changes = pair_changes(
-            old_seq, unpacked(old, 'pair', o['pairs'], probes=o['probes']),
-            new_seq, unpacked(new, 'pair', n['pairs'], probes=n['probes']))
-        if len(changes) > LIST_LIMIT and len(moved) > LIST_LIMIT:
-            pass   # a rewrite: the count of moved characters already says it
-        elif len(changes) > LIST_LIMIT:
-            lines.append(f'{len(changes):,} pairs of neighbouring characters '
-                         'told apart differently, too many to list here')
-            brief.append(f'{len(changes):,} pairs of neighbouring characters '
-                         'told apart differently')
-        elif changes:
-            lines.append(f'{len(changes)} pair(s) of neighbouring characters '
-                         'told apart differently:')
-            for x, y, ov, nv in changes:
-                lines.append(f'  {short_character(x)} and {short_character(y)}: '
-                             f'before {told_apart_words(ov)}, now '
-                             f'{told_apart_words(nv)}')
-            brief.append(f'{len(changes)} pair(s) of neighbouring characters '
-                         'told apart differently: ' + ', '.join(
-                             f'{short_character(x)} and {short_character(y)}'
-                             for x, y, ov, nv in changes))
-    return lines, '; '.join(brief)
+        moves = reordering(old_seq, new_seq)
+        positions, old_at = moves[:2]
+        kept = kept_in_order(positions, moves[3])
+        moved = sorted(c for c, k in zip(old_seq, kept) if not k)
+        found.append(('moved', {
+            'moved': moved, 'runs': code_point_runs(moved),
+            'partner': witnesses(old_seq, new_seq, moves, kept)}))
+    if moved:
+        flags = in_a_reversed_pair(positions)
+        count = flags.count(1)
+        found.append(('reversed', {'count': count, 'all': count == len(old_seq),
+                                   'runs': flagged_runs(old_seq, flags)}))
+    probes_differ = o['probes'] != n['probes']
+    if probes_differ:
+        found.append(('probes changed', {'before': o['probes'],
+                                         'now': n['probes']}))
+    if o['pairs'] != n['pairs'] or not same_order:
+        levels = comparable_levels(o['probes'], n['probes'])
+        old_told = unpacked(old, 'pair', o['pairs'], probes=o['probes'])
+        new_told = unpacked(new, 'pair', n['pairs'], probes=n['probes'])
+        changes, undecided = level_changes(old_seq, old_told, new_seq,
+                                           new_told, levels, moves)
+        # What the pairs are compared by, when not by every level: a level
+        # whose pair differs is the finding above; one no pair measured is
+        # said here. Either way it is not compared, and says so.
+        left_out = uncompared_levels(o['probes'], n['probes'])
+        if left_out:
+            found.append(('left out', {'levels': levels, 'left_out': left_out,
+                                       'probes_differ': probes_differ}))
+        count = sum(last - first + 1 for side, first, last, b_, n_ in changes)
+        if count:
+            chains = []
+            for side, first, last, before, now in changes:
+                seq = new_seq if side == 'new' else old_seq
+                chains.append((run_characters(seq, first, last), before, now,
+                               test_pair(seq[first], seq[first + 1], before,
+                                         now, o['probes'], levels), side))
+            pairs = None
+            if count <= LIST_LIMIT:
+                pairs = [(seq[i], seq[i + 1], before, now)
+                         for side, first, last, before, now in changes
+                         for seq in [new_seq if side == 'new' else old_seq]
+                         for i in range(first, last + 1)]
+            found.append(('told apart', {'count': count, 'pairs': pairs,
+                                         'chains': chains, 'levels': levels}))
+            if moved:
+                # The characters these pairs name that did not move, marked by
+                # their place in the old order.
+                named = bytearray(len(old_seq))
+                for side, first, last, b_, n_ in changes:
+                    if side == 'new':
+                        for i in range(first, last + 2):
+                            named[old_at[i]] = 1
+                    else:
+                        named[first:last + 2] = ONE * (last - first + 2)
+                still = flagged_runs(old_seq, bytes(map(operator.and_, named, kept)))
+                if still:
+                    found.append(('did not move', {'runs': still}))
+        if undecided:
+            found.append(('undecided', {'pairs': undecided}))
+    return found
 
 
-# Printed under every report and every summary: what two machines that agree
-# here can still disagree on.
+def moved_lines(d):
+    moved, runs = d['moved'], d['runs']
+    if not moved:
+        return ['no character moved']
+    if len(moved) <= LIST_LIMIT:
+        return ([f'{len(moved)} character(s) moved:']
+                + [f'  {character(c)}' for c in moved])
+    if len(runs) <= LIST_LIMIT:
+        return report_lines(f'{len(moved):,} characters moved: '
+                            f'{runs_text(runs)}', '')
+    return [f'{len(moved):,} characters moved, too many to list here']
+
+
+def moved_brief(d):
+    moved = d['moved']
+    if not moved:
+        return ['no character moved']
+    if len(moved) <= LIST_LIMIT:
+        return [f'{len(moved)} character(s) moved: '
+                + ', '.join(short_character(c) for c in moved)]
+    return [f'{len(moved):,} characters moved']
+
+
+def moved_rows(d):
+    """A run of moved characters and its test pair: the first of the run and
+    a character that kept its place, which the two orders put on opposite
+    sides of it."""
+    rows = []
+    for a, b in d['runs']:
+        w, sign = d['partner'][a]
+        rows.append(('moved', runs_text([(a, b)]), '-', f'U+{a:04X} / U+{w:04X}',
+                     sign, '>' if sign == '<' else '<', MEASURED['both']))
+    return rows
+
+
+def reversed_lines(d):
+    everyone = 'all ' if d['all'] else ''
+    return [f'{everyone}{d["count"]:,} character(s) sort differently against '
+            'at least one other']
+
+
+def reversed_brief(d):
+    return [f'{d["count"]:,} sort differently against another']
+
+
+def reversed_rows(d):
+    return [('sorts differently', runs_text([(a, b)]), '-', '-', '-', '-',
+             MEASURED['both']) for a, b in d['runs']]
+
+
+PROBES_CHANGED = ('the pairs that tell letters, accents and case apart here '
+                  'are told apart differently themselves')
+
+
+def probes_lines(d):
+    return [PROBES_CHANGED + ':',
+            f'  before: {readable_probes(d["before"])}',
+            f'  now:    {readable_probes(d["now"])}']
+
+
+def probes_brief(d):
+    return [PROBES_CHANGED.replace(' here ', ' ')]
+
+
+def probes_rows(d):
+    return [('pairs changed', '-',
+             (f'before: {readable_probes(d["before"])}; '
+              f'now: {readable_probes(d["now"])}').translate(TEXT_ESCAPES),
+             '-', '-', '-', '-')]
+
+
+def compared_by(d):
+    return ' and '.join(LEVEL_NAMES[k] for k in d['levels'])
+
+
+def left_out_lines(d):
+    named = compared_by(d)
+    if d['probes_differ']:
+        # Under the changed pairs, whose lines say why.
+        return [f'  so pairs are compared only by {named}' if d['levels']
+                else '  so no pair can be compared']
+    return [(f'pairs are compared only by {named}' if d['levels']
+             else 'no pair can be compared') + ': no pair measured '
+            + ' and '.join(LEVEL_NAMES[k] for k in d['left_out'])]
+
+
+def left_out_brief(d):
+    return [f'pairs compared only by {compared_by(d)}' if d['levels']
+            else 'no pair compared']
+
+
+def left_out_rows(d):
+    return [('not compared', '-',
+             ' and '.join(LEVEL_NAMES[k] for k in d['left_out']),
+             '-', '-', '-', '-')]
+
+
+def told_apart_lines(d):
+    if d['pairs'] is None:
+        return [f'{d["count"]:,} pairs of characters told apart differently, '
+                'too many to list here']
+    return ([f'{d["count"]} pair(s) of characters told apart differently:']
+            + [f'  {short_character(x)} and {short_character(y)}: before '
+               f'{relation_words(before, d["levels"])}, now '
+               f'{relation_words(now, d["levels"])}'
+               for x, y, before, now in d['pairs']])
+
+
+def told_apart_brief(d):
+    if d['pairs'] is None:
+        return [f'{d["count"]:,} pairs of characters told apart differently']
+    return [f'{d["count"]} pair(s) of characters told apart differently: '
+            + ', '.join(f'{short_character(x)} and {short_character(y)}'
+                        for x, y, b_, n_ in d['pairs'])]
+
+
+def told_apart_rows(d):
+    """A chain of neighbours told apart differently, with the test pair of
+    its first two characters where a level compared shows the change."""
+    rows = []
+    for runs, before, now, t, side in d['chains']:
+        rows.append(('told apart differently', runs_text(runs),
+                     f'{relation_words(before, d["levels"])} -> '
+                     f'{relation_words(now, d["levels"])}',
+                     ' / '.join(' '.join(f'U+{c:04X}' for c in s_) for s_ in t[:2])
+                     if t else '-', t[2] if t else '-', t[3] if t else '-',
+                     MEASURED[side]))
+    return rows
+
+
+def among(d):
+    count = sum(b - a + 1 for a, b in d['runs'])
+    return f'among them {count:,} character(s) that did not move'
+
+
+def still_lines(d):
+    if len(d['runs']) <= LIST_LIMIT:
+        return report_lines(f'{among(d)}: {runs_text(d["runs"])}', '  ')
+    return [f'  {among(d)}, too many to list here']
+
+
+def still_brief(d):
+    if len(d['runs']) <= LIST_LIMIT:
+        return [f'{among(d)}: {runs_text(d["runs"])}']
+    return [among(d)]
+
+
+def still_rows(d):
+    # No rows of their own: they are the characters of the told-apart rows
+    # that no moved row names, each in the chain that shows how it changed.
+    return []
+
+
+def undecided_lines(d):
+    return [f'{len(d["pairs"]):,} more pair(s) may be told apart differently; '
+            'what was measured cannot decide']
+
+
+def undecided_brief(d):
+    return [f'{len(d["pairs"]):,} more pair(s) the measurement cannot decide']
+
+
+def undecided_rows(d):
+    return [('not decided', f'U+{x:04X} U+{y:04X}', '-', '-', '-', '-', '-')
+            for x, y in d['pairs']]
+
+
+# kind: (lines of the report, phrases of the summary, rows of the file), each
+# from the finding's data.
+LOCALE_KINDS = {
+    'moved': (moved_lines, moved_brief, moved_rows),
+    'reversed': (reversed_lines, reversed_brief, reversed_rows),
+    'probes changed': (probes_lines, probes_brief, probes_rows),
+    'left out': (left_out_lines, left_out_brief, left_out_rows),
+    'told apart': (told_apart_lines, told_apart_brief, told_apart_rows),
+    'did not move': (still_lines, still_brief, still_rows),
+    'undecided': (undecided_lines, undecided_brief, undecided_rows),
+}
+REPORT, SUMMARY, FILE = 0, 1, 2
+
+
+def printer(table, kind, part):
+    """What prints a kind of finding in one of the three outputs; a kind the
+    table lacks raises, rather than be left out of an output."""
+    if kind not in table:
+        raise LookupError(f'no way to print a finding of kind {kind!r}')
+    return table[kind][part]
+
+
+def describe_change(old, new, o, n):
+    """(lines, phrase, rows): what changed between two measurements of a
+    locale, drawn from its findings for the report, the summary and the
+    characters file, in which nothing is cut short."""
+    lines, brief, rows = [], [], []
+    for kind, d in locale_findings(old, new, o, n):
+        lines += printer(LOCALE_KINDS, kind, REPORT)(d)
+        brief += printer(LOCALE_KINDS, kind, SUMMARY)(d)
+        rows += printer(LOCALE_KINDS, kind, FILE)(d)
+    return lines, '; '.join(brief), rows
+
+
+# Printed under every report and every summary, and at the end of the
+# characters file: what two machines that agree here can still disagree on.
 CLOSING = ('!! Not measured: a rule that applies only to a particular '
            'combination of letters, such as a contraction ("ch" sorted as one '
            'letter), so two machines that agree here can still sort some longer '
@@ -1590,6 +2243,192 @@ CLOSING = ('!! Not measured: a rule that applies only to a particular '
            'read less reliably, so a change there may go unseen. Only sort order '
            'is measured: upper(), lower() and the other character rules of '
            'LC_CTYPE are not.')
+
+
+def run_findings(o, n, warnings, partly, unmeasured, only_old):
+    """[(kind, data)]: what the run says beside the changed locales -- its
+    warnings, the locales NOT known to be unchanged and those unchanged only
+    as far as measured, and what no comparison measures."""
+    found = [('warning', {'text': text, 'wrap': wrap}) for text, wrap in warnings]
+    found += [('partly', {'name': name,
+                          'count': max(o[name]['partly'], n[name]['partly'])})
+              for name in partly]
+    found += [('not measured', {'name': name, 'old': o[name], 'new': n[name]})
+              for name in unmeasured]
+    found += [('not on the new machine', {'name': name}) for name in only_old]
+    found.append(('closing', {'text': CLOSING}))
+    return found
+
+
+def wrapped(text, indent, more):
+    return textwrap.wrap(text, width=78, initial_indent=' ' * indent,
+                         subsequent_indent=' ' * more, break_on_hyphens=False)
+
+
+def filled(text, indent=0, more=3):
+    return textwrap.fill(text, width=78, initial_indent=' ' * indent,
+                         subsequent_indent=' ' * more, break_on_hyphens=False)
+
+
+def warning_lines(items, ctx):
+    return [textwrap.fill(d['text'], width=78, subsequent_indent='   ')
+            if d['wrap'] else d['text'] for d in items]
+
+
+def warning_summary(items, ctx):
+    return [line for d in items for line in wrapped(d['text'], 5, 8)]
+
+
+def notes(items):
+    return ['# ' + d['text'].translate(TEXT_ESCAPES) for d in items]
+
+
+def partly_lines(items, ctx):
+    return [textwrap.fill(
+        f'!! Unchanged only as far as measured: {len(items)} of them. In '
+        'each, the pairs of neighbouring characters counted in brackets '
+        'differ by less than a letter, and no pair could be found there to '
+        'tell whether by an accent or by case; a change from one to the '
+        'other would not show:', width=78, subsequent_indent='   '),
+        filled(', '.join(f'{shown(d["name"])} ({d["count"]})' for d in items),
+               2, 2)]
+
+
+def partly_summary(items, ctx):
+    return wrapped('!! Unchanged only as far as measured, because a change '
+                   'between an accent and case would not show in them: '
+                   + ', '.join(shown(d['name']) for d in items), 5, 8)
+
+
+def partly_rows(items):
+    return [([d['name']], [('unchanged only as far as measured', '-',
+                            f'{d["count"]} pair(s) of neighbours differ by less '
+                            'than a letter, and no pair could tell whether by '
+                            'an accent or by case', '-', '-', '-', '-')])
+            for d in items]
+
+
+def unmeasured_lines(items, ctx):
+    out = [f'!! Could not be measured, so NOT known to be unchanged: '
+           f'{len(items)} locale(s):']
+    for d in items:
+        name, o_, n_ = d['name'], d['old'], d['new']
+        before, now = o_.get('error'), n_.get('error')
+        if not before and not now:
+            out.append(f'  {shown(name)}: measured over different characters on '
+                       f'the two machines ({o_["chars"]:,} as {o_["codeset"]}, '
+                       f'then {n_["chars"]:,} as {n_["codeset"]}), so the '
+                       'orders cannot be compared')
+        elif before == now:
+            out.append(f'  {shown(name)} (both machines): {before}')
+        else:
+            for side, error in (('old', before), ('new', now)):
+                if error:
+                    out.append(f'  {shown(name)} ({side} machine): {error}')
+        also = also_known_as([name], ctx['pg_names'], ctx['o'])
+        if also:
+            out.append(filled(also, 4, 6))
+    return out
+
+
+def unmeasured_summary(items, ctx):
+    names = [d['name'] for d in items]
+    out = wrapped('could not be measured: ' + ', '.join(map(shown, names)), 7, 9)
+    also = also_known_as(names, ctx['pg_names'], ctx['o'])
+    if also:
+        out += wrapped(also, 9, 11)
+    return out
+
+
+def unmeasured_rows(items):
+    out = []
+    for d in items:
+        before, now = d['old'].get('error'), d['new'].get('error')
+        if not before and not now:
+            why = 'measured over different characters on the two machines'
+        elif before == now:
+            why = f'both machines: {before}'
+        else:
+            why = '; '.join(f'{side} machine: {error}' for side, error
+                            in (('old', before), ('new', now)) if error)
+        out.append(([d['name']], [('not measured', '-',
+                                   why.translate(TEXT_ESCAPES), '-', '-', '-',
+                                   '-')]))
+    return out
+
+
+def only_old_lines(items, ctx):
+    # Not measured on the new machine is not measured: a machine missing
+    # its language packs would otherwise look like a clean upgrade.
+    return [textwrap.fill(
+        f'!! Not on the new machine, so NOT known to be unchanged: '
+        f'{len(items)} locale(s). Either the upgrade removes them or '
+        'their language pack is not installed there; a database or '
+        'collation that uses one cannot use it on the new machine. If a '
+        'language pack is missing, install it and measure the new machine '
+        'again.', width=78, subsequent_indent='   ')] + [
+        f'  {shown(d["name"])}' for d in items]
+
+
+def only_old_summary(items, ctx):
+    return wrapped('not on the new machine, so a database or collation that '
+                   'uses one cannot use it there: '
+                   + ', '.join(shown(d['name']) for d in items), 7, 9)
+
+
+def only_old_rows(items):
+    return [([d['name']], [('not on the new machine', '-', '-', '-', '-', '-',
+                            '-')]) for d in items]
+
+
+def closing_lines(items, ctx):
+    return [textwrap.fill(d['text'], width=78, subsequent_indent='   ')
+            for d in items]
+
+
+def closing_summary(items, ctx):
+    return [line for d in items for line in wrapped(d['text'], 5, 8)]
+
+
+# kind: (lines of the report, lines of the summary, what the file gets), each
+# from every finding of the kind at once. The file gets ([locale], rows)
+# for a locale, which are sorted with the changes, or a note: a line under
+# the rows, starting "# ".
+RUN_KINDS = {
+    'warning': (warning_lines, warning_summary, notes),
+    'partly': (partly_lines, partly_summary, partly_rows),
+    'not measured': (unmeasured_lines, unmeasured_summary, unmeasured_rows),
+    'not on the new machine': (only_old_lines, only_old_summary, only_old_rows),
+    'closing': (closing_lines, closing_summary, notes),
+}
+
+
+class Drawn:
+    """One output's view of the run's findings, taken a kind at a time in
+    the order the output prints them. done() raises if a kind present was
+    never taken, so a finding cannot drop out of one output unseen."""
+
+    def __init__(self, found, part, ctx=None):
+        self.part, self.ctx, self.by_kind = part, ctx, {}
+        for kind, d in found:
+            printer(RUN_KINDS, kind, part)
+            self.by_kind.setdefault(kind, []).append(d)
+        self.left = set(self.by_kind)
+
+    def count(self, kind):
+        return len(self.by_kind.get(kind, ()))
+
+    def __call__(self, kind):
+        self.left.discard(kind)
+        items = self.by_kind.get(kind)
+        if not items:
+            return []
+        how = printer(RUN_KINDS, kind, self.part)
+        return how(items) if self.part == FILE else how(items, self.ctx)
+
+    def done(self):
+        if self.left:
+            raise LookupError(f'findings never printed: {sorted(self.left)}')
 
 
 def machine_label(d):
@@ -1605,25 +2444,32 @@ def tag_version(tag):
     return (int(m[1]), int(m[2])) if m else None
 
 
-def wrapped(text, indent, more):
-    return textwrap.wrap(text, width=78, initial_indent=' ' * indent,
-                         subsequent_indent=' ' * more, break_on_hyphens=False)
+ALSO = 'also, in PostgreSQL: '
 
 
-def summary_lines(old, new, groups, pg_names, unmeasured, only_old, partly,
-                  totals, warnings):
+def also_rows(names, pg_names, locales):
+    """The file's row of the other names PostgreSQL knows a group by, the
+    text the report prints under its heading; none when there is none."""
+    also = also_known_as(names, pg_names, locales)
+    if not also:
+        return []
+    return [('also in PostgreSQL', '-', also[len(ALSO):].translate(TEXT_ESCAPES),
+             '-', '-', '-', '-')]
+
+
+def summary_lines(old, new, groups, run, totals, characters_to=None):
     """The report in brief, for the summary audit.sh prints at the end.
 
     Every locale is named, and so are the names PostgreSQL knows it by: a
     reader looks a locale up by the name the database uses, and "ko_KR" in a
     UTF-8 database is ko_KR.utf8. What moved is said in one phrase; the
-    characters' names and how each pair is told apart are in the report. The
-    report's warnings are here whole, so the summary needs no other copy.
+    characters' names and how each pair is told apart are in the report,
+    and every one of them in the characters file, named under the changes.
+    The report's warnings are here whole, so the summary needs no other copy.
     """
     o, n = old['locales'], new['locales']
     out = [f'   ({machine_label(old)} -> {machine_label(new)})']
-    for text in warnings:
-        out += wrapped(text, 5, 8)
+    out += run('warning')
     count = sum(len(names) for names, brief in groups)
     if groups:
         out.append(f'     {count} locale(s) sort differently -- reindex what '
@@ -1633,34 +2479,37 @@ def summary_lines(old, new, groups, pg_names, unmeasured, only_old, partly,
             # names end and what moved begins is plain.
             out += wrapped(heading(names, o, n), 7, 7)
             out += wrapped(brief, 9, 11)
-            also = also_known_as(names, pg_names, o)
+            also = also_known_as(names, run.ctx['pg_names'], o)
             if also:
                 out += wrapped(also, 9, 11)
+        if characters_to:
+            # On a line of its own, whole, like every other list audit.sh names.
+            out.append('       every character and pair:')
+            out.append('         ' + characters_to)
     else:
         out.append('     no locale measured on both machines sorts differently')
-    if unmeasured or only_old:
-        out.append(f'     NOT known to be unchanged: '
-                   f'{len(unmeasured) + len(only_old)} locale(s)')
-        if unmeasured:
-            out += wrapped('could not be measured: '
-                           + ', '.join(shown(x) for x in unmeasured), 7, 9)
-            also = also_known_as(unmeasured, pg_names, o)
-            if also:
-                out += wrapped(also, 9, 11)
-        if only_old:
-            out += wrapped('not on the new machine, so a database or collation '
-                           'that uses one cannot use it there: '
-                           + ', '.join(shown(x) for x in only_old), 7, 9)
-    if partly:
-        out += wrapped('!! Unchanged only as far as measured, because a change '
-                       'between an accent and case would not show in them: '
-                       + ', '.join(shown(x) for x in partly), 5, 8)
+    unknown = run.count('not measured') + run.count('not on the new machine')
+    if unknown:
+        out.append(f'     NOT known to be unchanged: {unknown} locale(s)')
+    out += run('not measured')
+    out += run('not on the new machine')
+    out += run('partly')
     out += wrapped(totals, 5, 7)
-    out += wrapped(CLOSING, 5, 8)
+    out += run('closing')
+    run.done()
     return out
 
 
-def compare(old_path, new_path, tags=None, summary_to=None):
+def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None):
+    if characters_to:
+        # An earlier run's list under this name would read as this run's
+        # answer if this one is refused or gives up: it goes first.
+        try:
+            os.remove(characters_to)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            die(f'cannot write {characters_to}: {e}')
     digest = corpus_digest()
     old, old_raw = load(old_path, digest)
     new, new_raw = load(new_path, digest)
@@ -1726,18 +2575,20 @@ def compare(old_path, new_path, tags=None, summary_to=None):
 
     # Locales whose measurements are the same on both sides changed the same
     # way, so each change is worked out once; then every locale whose change
-    # reads the same is printed under one heading. All of it is worked out
-    # before the first line is printed, so a record that turns out damaged
-    # stops the run before any part of a report is on the screen.
+    # reads the same is printed under one heading, and every locale measured
+    # alike gets the file's rows under one label. All three outputs are
+    # worked out before anything is written, so a record that turns out
+    # damaged stops the run before any part of a report is on the screen.
     measured_alike = {}
     for name in changed:
         key = (o[name]['order'], o[name]['pairs'], n[name]['order'], n[name]['pairs'])
         measured_alike.setdefault(key, []).append(name)
-    reads_alike, briefs = {}, {}
+    reads_alike, briefs, rows = {}, {}, []
     for names in measured_alike.values():
-        lines, brief = describe_change(old, new, o[names[0]], n[names[0]])
+        lines, brief, found = describe_change(old, new, o[names[0]], n[names[0]])
         reads_alike.setdefault(tuple(lines), []).extend(names)
         briefs[tuple(lines)] = brief
+        rows.append((sorted(names), found))
     groups = sorted(reads_alike.items(), key=lambda item: sorted(item[1]))
     # The names PostgreSQL gives the locales, taken from the old machine: a
     # cluster being upgraded had its collations created there. A locale that
@@ -1764,90 +2615,115 @@ def compare(old_path, new_path, tags=None, summary_to=None):
             'first. This may also compare two machines rather than an upgrade.',
             True))
     warnings += [(text, True) for text in unchecked]
+    found = run_findings(o, n, warnings, partly, unmeasured, only_old)
+    ctx = {'pg_names': pg_names, 'o': o}
+
+    report = [f'Old machine: {machine_label(old)}, {len(old["locales"])} locale(s)',
+              f'New machine: {machine_label(new)}, {len(new["locales"])} locale(s)']
+    run = Drawn(found, REPORT, ctx)
+    report += run('warning')
+    report += ['', f'Sort order CHANGED in {len(changed)} locale(s):']
+    for lines, names in groups:
+        report += ['', filled(heading(names, o, n), 2, 2)]
+        also = also_known_as(names, pg_names, o)
+        if also:
+            report.append(filled(also, 4, 6))
+        report += [f'    {line}' for line in lines]
+    if changed:
+        # The lists above stop at LIST_LIMIT; say where all of it is.
+        report.append('')
+        if characters_to:
+            report += ['Every character and pair found, by locale:',
+                       f'  {characters_to}']
+        else:
+            report.append('Pass --characters-to FILE for every character and '
+                          'pair found.')
+    report += ['', f'Unchanged: {len(same)} locale(s).']
+    report += run('partly')
+    report += run('not measured')
+    report += run('not on the new machine')
+    report.append(f'Only on the new machine: {len(only_new)} locale(s).')
+    report += [f'  {shown(name)}' for name in only_new]
+    report += ['', totals]
+    report += run('closing')
+    run.done()
+    brief = None
+    if summary_to:
+        brief = summary_lines(
+            old, new, [(names, briefs[lines]) for lines, names in groups],
+            Drawn(found, SUMMARY, ctx), totals, characters_to)
+    file_notes = []
+    if characters_to:
+        # The locales NOT known to be unchanged, and those unchanged only as
+        # far as measured, have rows of their own, so that the file does not
+        # read them as unchanged; the warnings and what is not measured are
+        # notes under the rows, as in the report.
+        run = Drawn(found, FILE)
+        for kind in ('partly', 'not measured', 'not on the new machine'):
+            rows += run(kind)
+        file_notes = run('warning') + run('closing')
+        run.done()
+        # Each group closes with the names PostgreSQL gives it, as the report
+        # prints them under its heading: a reader looks a locale up by the
+        # name the database uses.
+        rows = [(names, found_rows + also_rows(names, pg_names, o))
+                for names, found_rows in rows]
+
+    partial = characters_to + '.partial' if characters_to else None
+    written = []    # what this run wrote, removed again if it gives up
+
+    def give_up(msg):
+        # A list half written, or whole beside a summary that is not, is not
+        # this run's answer: nothing is left under either name, nor a summary
+        # that names a list that is not there.
+        for path in [partial] + written:
+            if path:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+        die(msg)
+
+    if characters_to:
+        # Every character and pair, nothing cut at LIST_LIMIT: the report and
+        # the summary say how many and name this file. Written first, like
+        # the summary, so that a list that cannot be written stops the run
+        # before anything points at it; written under another name, and given
+        # its own only once the summary is written too. The last line counts
+        # what is above it, so that a file cut short says so by itself.
+        try:
+            with open(partial, 'w', encoding='utf-8') as f:
+                f.write(f'# Step 11, {machine_label(old)} -> {machine_label(new)}: '
+                        'every character and pair found, by locale.\n')
+                f.write('locales\tfinding\tcharacters\thow\ttest\tbefore\tnow\tmeasured\n')
+                count = 0
+                for names, found_rows in sorted(rows):
+                    label = ','.join(shown(x).translate(TSV_ESCAPES) for x in names)
+                    for row in found_rows:
+                        f.write(label + '\t' + '\t'.join(row) + '\n')
+                        count += 1
+                for note in file_notes:
+                    f.write(note + '\n')
+                f.write(f'# end: {len(rows)} locale group(s), {count} row(s)\n')
+        except OSError as e:
+            give_up(f'cannot write {characters_to}: {e}')
     if summary_to:
         # Written before the report, so that a summary that cannot be written
         # stops the run with no report on the screen, like damage does.
-        brief = summary_lines(
-            old, new, [(names, briefs[lines]) for lines, names in groups],
-            pg_names, unmeasured, only_old, partly, totals,
-            [text for text, wrap in warnings])
         try:
             with open(summary_to, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(brief) + '\n')
         except OSError as e:
-            die(f'cannot write {summary_to}: {e}')
+            give_up(f'cannot write {summary_to}: {e}')
+        written.append(summary_to)
+    if characters_to:
+        try:
+            os.replace(partial, characters_to)
+        except OSError as e:
+            give_up(f'cannot write {characters_to}: {e}')
 
-    print(f'Old machine: {machine_label(old)}, {len(old["locales"])} locale(s)')
-    print(f'New machine: {machine_label(new)}, {len(new["locales"])} locale(s)')
-    for text, wrap in warnings:
-        print(textwrap.fill(text, width=78, subsequent_indent='   ')
-              if wrap else text)
-    print()
-    print(f'Sort order CHANGED in {len(changed)} locale(s):')
-    for lines, names in groups:
-        print()
-        print(textwrap.fill(heading(names, o, n), width=78, initial_indent='  ',
-                            subsequent_indent='  ', break_on_hyphens=False))
-        also = also_known_as(names, pg_names, o)
-        if also:
-            print(textwrap.fill(also, width=78, initial_indent='    ',
-                                subsequent_indent='      ',
-                                break_on_hyphens=False))
-        for line in lines:
-            print(f'    {line}')
-    print()
-    print(f'Unchanged: {len(same)} locale(s).')
-    if partly:
-        print(textwrap.fill(
-            f'!! Unchanged only as far as measured: {len(partly)} of them. In '
-            'each, the pairs of neighbouring characters counted in brackets '
-            'differ by less than a letter, and no pair could be found there to '
-            'tell whether by an accent or by case; a change from one to the '
-            'other would not show:', width=78, subsequent_indent='   '))
-        print(textwrap.fill(
-            ', '.join(f'{shown(name)} ({max(o[name]["partly"], n[name]["partly"])})'
-                      for name in partly),
-            width=78, initial_indent='  ', subsequent_indent='  ',
-            break_on_hyphens=False))
-    if unmeasured:
-        print(f'!! Could not be measured, so NOT known to be unchanged: '
-              f'{len(unmeasured)} locale(s):')
-        for name in unmeasured:
-            before, now = o[name].get('error'), n[name].get('error')
-            if not before and not now:
-                print(f'  {shown(name)}: measured over different characters on '
-                      f'the two machines ({o[name]["chars"]:,} as '
-                      f'{o[name]["codeset"]}, then {n[name]["chars"]:,} as '
-                      f'{n[name]["codeset"]}), so the orders cannot be compared')
-            elif before == now:
-                print(f'  {shown(name)} (both machines): {before}')
-            else:
-                for side, error in (('old', before), ('new', now)):
-                    if error:
-                        print(f'  {shown(name)} ({side} machine): {error}')
-            also = also_known_as([name], pg_names, o)
-            if also:
-                print(textwrap.fill(also, width=78, initial_indent='    ',
-                                    subsequent_indent='      ',
-                                    break_on_hyphens=False))
-    if only_old:
-        # Not measured on the new machine is not measured: a machine missing
-        # its language packs would otherwise look like a clean upgrade.
-        print(textwrap.fill(
-            f'!! Not on the new machine, so NOT known to be unchanged: '
-            f'{len(only_old)} locale(s). Either the upgrade removes them or '
-            'their language pack is not installed there; a database or '
-            'collation that uses one cannot use it on the new machine. If a '
-            'language pack is missing, install it and measure the new machine '
-            'again.', width=78, subsequent_indent='   '))
-        for name in only_old:
-            print(f'  {shown(name)}')
-    print(f'Only on the new machine: {len(only_new)} locale(s).')
-    for name in only_new:
-        print(f'  {shown(name)}')
-    print()
-    print(totals)
-    print(textwrap.fill(CLOSING, width=78, subsequent_indent='   '))
+    for line in report:
+        print(line)
     return 0
 
 
@@ -1869,6 +2745,9 @@ def main():
     ap.add_argument('--summary-to', metavar='FILE',
                     help='with --compare: also write the report in brief to '
                          'FILE, for the summary audit.sh prints')
+    ap.add_argument('--characters-to', metavar='FILE',
+                    help='with --compare: also write every character and pair '
+                         'found, by locale, to FILE (tab-separated)')
     ap.add_argument('--jobs', type=int,
                     help='processes to measure with (default: one per CPU, '
                          'fewer when half the free memory does not hold them '
@@ -1881,8 +2760,8 @@ def main():
                     help='check a file --extract wrote and lay it out in DIR, '
                          'which must not exist, for audit.sh')
     args = ap.parse_args()
-    if (args.tags or args.summary_to) and not args.compare:
-        die('--tags and --summary-to go with --compare')
+    if (args.tags or args.summary_to or args.characters_to) and not args.compare:
+        die('--tags, --summary-to and --characters-to go with --compare')
     if sum(map(bool, (args.extract, args.compare, args.unpack))) > 1:
         die('--extract, --compare and --unpack are three different runs; '
             'give one')
@@ -1890,7 +2769,8 @@ def main():
         return unpack(*args.unpack)
     if args.compare:
         return compare(*args.compare, tags=args.tags,
-                       summary_to=args.summary_to)
+                       summary_to=args.summary_to,
+                       characters_to=args.characters_to)
     if args.jobs is not None and args.jobs < 1:
         die('--jobs must be at least 1')
     jobs = args.jobs or default_jobs()

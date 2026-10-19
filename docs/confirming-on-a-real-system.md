@@ -54,8 +54,8 @@ it lists because a collating element, a combination of letters sorted as one,
 is built differently out of a transliteration, it names the file that defines
 the element and the characters transliterated. The strings must contain the
 whole element: step 11 does not measure combinations of letters. Step 11, in
-command 1.b, names the characters that moved, when there are few enough to
-list.
+command 1.b, names every character and pair it found, in the file its summary
+names.
 
 Step 2's list is where to start, not proof that every character on it moved. A
 rule that was rewritten names everything it touches, weights included, so

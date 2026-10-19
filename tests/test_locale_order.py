@@ -69,9 +69,19 @@ EXPECTED_2_28 = _harness.EXPECTED_SHA['glibc-2.28']
 # Python has no converter for their encodings (ARMSCII-8, GEORGIAN-PS, EUC-TW).
 UNMEASURABLE = {'hy_AM.armscii8', 'ka_GE', 'ka_GE.georgianps', 'zh_TW.euctw'}
 
-# What told_apart_words() can say about a pair of neighbours.
-TOLD_APART = {'not at all (the bytes decide)', 'as different letters',
-              'like an accent', 'by case', 'by less than case'}
+# What relation_words() can say about a pair of characters: a level, or two
+# or three next to each other where a level's pair differs on the two
+# machines, or less than the weakest level compared.
+LEVEL_WORDS = ('as different letters', 'like an accent', 'by case')
+TOLD_APART = ({'not at all (the bytes decide)', 'by less than a letter',
+               'by less than an accent', 'by less than case', 'told apart'}
+              | {' or '.join(LEVEL_WORDS[a:b]) for a in range(3)
+                 for b in range(a + 1, 4)})
+# The two lines that name the characters file, in the report and in the
+# summary.
+FILE_LINE = 'Every character and pair found, by locale:'
+SUMMARY_FILE_LINE = '       every character and pair:'
+NO_FILE_LINE = 'Pass --characters-to FILE for every character and pair found.'
 
 
 def run_compare(old, new, *more):
@@ -123,6 +133,25 @@ def parse_also(text):
             continue
         raise ReportShapeError(f'unknown part of an "also" line: {part!r}')
     return {'aliases': aliases, 'spellings': spellings}
+
+
+def parse_runs(text):
+    """'U+0030..U+0039, U+0B66' as [(0x30, 0x39), (0xB66, 0xB66)]."""
+    runs = []
+    for part in text.split(', '):
+        mt = re.fullmatch(r'U\+([0-9A-F]{4,6})(?:\.\.U\+([0-9A-F]{4,6}))?', part)
+        if not mt:
+            raise ReportShapeError(f'unknown run of characters: {part!r}')
+        a = int(mt[1], 16)
+        b = int(mt[2], 16) if mt[2] else a
+        if b < a or (runs and a <= runs[-1][1] + 1):
+            raise ReportShapeError(f'runs out of order or touching: {text!r}')
+        runs.append((a, b))
+    return runs
+
+
+def run_count(runs):
+    return sum(b - a + 1 for a, b in runs)
 
 
 def warning_kind(text):
@@ -206,6 +235,7 @@ def parse_summary(text):
     while line().startswith('     !! ') and not line().startswith('     !! Not measured: '):
         s['warnings'].append(warning_kind(item(5, 8)))
     s['changes'] = {}
+    s['characters_file'] = None
     if line() == '     no locale measured on both machines sorts differently':
         count = 0
         at[0] += 1
@@ -213,6 +243,10 @@ def parse_summary(text):
         count = int(take(r'     (\d+) locale\(s\) sort differently -- '
                          r'reindex what uses them:')[1])
         while True:
+            if line() == SUMMARY_FILE_LINE:
+                at[0] += 1
+                s['characters_file'] = take(r'         (\S.*)')[1]
+                break
             heading = []
             while re.fullmatch(r'       \S.*', line()):
                 heading.append(line().strip())
@@ -340,9 +374,26 @@ def parse_report(text):
 
     changed = int(take(r'Sort order CHANGED in (\d+) locale\(s\):')[1])
     r['changes'] = []
+    r['characters_file'] = None
     while True:
         take('')
         if line().startswith('Unchanged: '):
+            # Every change is followed by where its whole list is, or by how
+            # to get it.
+            if r['changes']:
+                fail('changes with no word on the characters file')
+            break
+        if line() in (FILE_LINE, NO_FILE_LINE):
+            if not r['changes']:
+                fail('the characters file named with no change')
+            if line() == FILE_LINE:
+                at[0] += 1
+                r['characters_file'] = take(r'  (\S.*)')[1]
+            else:
+                at[0] += 1
+            take('')
+            if not line().startswith('Unchanged: '):
+                fail('expected the unchanged count after the characters file')
             break
         heading = indented(r'  \S.*')
         if not heading:
@@ -423,21 +474,46 @@ def parse_report(text):
     return r
 
 
+def number(text):
+    return int(text.replace(',', ''))
+
+
 def parse_details(details):
-    """What changed in one locale: the characters that moved, the neighbours
-    told apart differently, or the probe pairs that changed."""
-    out = {'moved': None, 'moved_count': None, 'pairs': None,
-           'pairs_count': None, 'probes': None}
+    """What changed in one locale, in the order the report gives it: the
+    characters that moved; how many sort differently against at least one
+    other; the probe pairs, when they changed, and the levels still
+    compared; the pairs told apart differently, and the characters among
+    them that did not move; the pairs the measurement cannot decide."""
+    out = {'moved': None, 'moved_count': None, 'moved_runs': None,
+           'reversed': None, 'all_reversed': False, 'pairs': None,
+           'pairs_count': None, 'probes': None, 'compared': None,
+           'not_measured': None, 'still': None, 'still_count': None,
+           'undecided': 0}
     if not details:
         raise ReportShapeError('a change with no detail lines')
-    first, rest = details[0], details[1:]
+    rest = list(details)
+
+    def wrapped_runs(text, indent):
+        """Runs that wrap onto lines indented by indent."""
+        while rest and re.fullmatch(' ' * indent + r'U\+\S.*', rest[0]):
+            text += ' ' + rest.pop(0).strip()
+        return parse_runs(text)
+
+    first = rest.pop(0)
     many = re.fullmatch(r'([\d,]+) characters moved, too many to list here',
                         first)
+    ranged = re.fullmatch(r'([\d,]+) characters moved: (U\+.*)', first)
     listed = re.fullmatch(r'(\d+) character\(s\) moved:', first)
     if first == 'no character moved':
         out['moved'] = []
     elif many:
-        out['moved_count'] = int(many[1].replace(',', ''))
+        out['moved_count'] = number(many[1])
+    elif ranged:
+        out['moved_runs'] = wrapped_runs(ranged[2], 2)
+        out['moved_count'] = number(ranged[1])
+        if run_count(out['moved_runs']) != out['moved_count']:
+            raise ReportShapeError(f'moved says {ranged[1]} and its runs hold '
+                                   f'{run_count(out["moved_runs"])}')
     elif listed:
         items, rest = rest[:int(listed[1])], rest[int(listed[1]):]
         out['moved'] = []
@@ -451,34 +527,69 @@ def parse_details(details):
     if out['moved'] is not None:
         out['moved_count'] = len(out['moved'])
 
+    mt = rest and re.fullmatch(r'(all )?([\d,]+) character\(s\) sort '
+                               r'differently against at least one other', rest[0])
+    if mt:
+        out['reversed'], out['all_reversed'] = number(mt[2]), bool(mt[1])
+        rest.pop(0)
     if rest and rest[0] == ('the pairs that tell letters, accents and case '
                             'apart here are told apart differently themselves:'):
         before = re.fullmatch(r'  before: (.+)', rest[1] if len(rest) > 1 else '')
         now = re.fullmatch(r'  now:    (.+)', rest[2] if len(rest) > 2 else '')
-        if not (before and now):
-            raise ReportShapeError(f'unknown probe lines: {rest[1:3]!r}')
+        compared = re.fullmatch(r'  so pairs are compared only by (.+)|  so no '
+                                r'pair can be compared',
+                                rest[3] if len(rest) > 3 else '')
+        if not (before and now and compared):
+            raise ReportShapeError(f'unknown probe lines: {rest[1:4]!r}')
         out['probes'] = (before[1], now[1])
-        rest = rest[3:]
-    elif rest:
-        many = re.fullmatch(r'([\d,]+) pairs of neighbouring characters told '
-                            r'apart differently, too many to list here', rest[0])
-        listed = re.fullmatch(r'(\d+) pair\(s\) of neighbouring characters told '
-                              r'apart differently:', rest[0])
-        if many:
-            out['pairs_count'] = int(many[1].replace(',', ''))
-            rest = rest[1:]
-        elif listed:
-            count = int(listed[1])
-            items, rest = rest[1:1 + count], rest[1 + count:]
-            out['pairs'] = []
-            for item in items:
-                mt = re.fullmatch(rf'  {CHARACTER} and {CHARACTER}: before '
-                                  r'(.+), now (.+)', item)
-                if not mt or not {mt[3], mt[4]} <= TOLD_APART:
-                    raise ReportShapeError(f'unknown pair line: {item!r}')
-                out['pairs'].append((int(mt[1], 16), int(mt[2], 16),
-                                     mt[3], mt[4]))
-            out['pairs_count'] = len(out['pairs'])
+        out['compared'] = compared[1].split(' and ') if compared[1] else []
+        rest = rest[4:]
+    mt = rest and re.fullmatch(r'(?:pairs are compared only by (.+)|no pair can '
+                               r'be compared): no pair measured (.+)', rest[0])
+    if mt:
+        if out['probes'] is not None:
+            raise ReportShapeError('levels not measured beside changed probes')
+        out['compared'] = mt[1].split(' and ') if mt[1] else []
+        out['not_measured'] = mt[2].split(' and ')
+        rest.pop(0)
+    many = rest and re.fullmatch(r'([\d,]+) pairs of characters told apart '
+                                 r'differently, too many to list here', rest[0])
+    listed = rest and re.fullmatch(r'(\d+) pair\(s\) of characters told apart '
+                                   r'differently:', rest[0])
+    if many:
+        out['pairs_count'] = number(many[1])
+        rest.pop(0)
+    elif listed:
+        count = int(listed[1])
+        items, rest = rest[1:1 + count], rest[1 + count:]
+        out['pairs'] = []
+        for item in items:
+            mt = re.fullmatch(rf'  {CHARACTER} and {CHARACTER}: before '
+                              r'(.+), now (.+)', item)
+            if not mt or not {mt[3], mt[4]} <= TOLD_APART:
+                raise ReportShapeError(f'unknown pair line: {item!r}')
+            out['pairs'].append((int(mt[1], 16), int(mt[2], 16),
+                                 mt[3], mt[4]))
+        out['pairs_count'] = len(out['pairs'])
+    mt = rest and re.fullmatch(r'  among them ([\d,]+) character\(s\) that did '
+                               r'not move(?:: (U\+.*)|, too many to list here)',
+                               rest[0])
+    if mt:
+        if out['pairs_count'] is None:
+            raise ReportShapeError('characters that did not move, with no pairs')
+        rest.pop(0)
+        out['still_count'] = number(mt[1])
+        if mt[2]:
+            out['still'] = wrapped_runs(mt[2], 4)
+            if run_count(out['still']) != out['still_count']:
+                raise ReportShapeError(f'did not move says {mt[1]} and its runs '
+                                       f'hold {run_count(out["still"])}')
+    mt = rest and re.fullmatch(r'([\d,]+) more pair\(s\) may be told apart '
+                               r'differently; what was measured cannot decide',
+                               rest[0])
+    if mt:
+        out['undecided'] = number(mt[1])
+        rest.pop(0)
     if rest:
         raise ReportShapeError(f'unknown detail lines: {rest!r}')
     return out
@@ -487,8 +598,9 @@ def parse_details(details):
 def parse_brief(text):
     """A summary's one phrase of what moved, read into the keys parse_details
     gives the report's lines, so that the two can be compared one to one."""
-    out = {'moved': None, 'moved_count': None, 'pairs': None,
-           'pairs_count': None, 'probes': False}
+    out = {'moved': None, 'moved_count': None, 'reversed': None,
+           'pairs': None, 'pairs_count': None, 'probes': False, 'still': None,
+           'still_count': None, 'compared': None, 'undecided': 0}
     first, *rest = text.split('; ')
     many = re.fullmatch(r'([\d,]+) characters moved', first)
     listed = re.fullmatch(r'(\d+) character\(s\) moved: (.+)', first)
@@ -505,13 +617,33 @@ def parse_brief(text):
     else:
         raise ReportShapeError(f'unknown phrase: {text!r}')
     for part in rest:
-        many = re.fullmatch(r'([\d,]+) pairs of neighbouring characters told '
-                            r'apart differently', part)
-        listed = re.fullmatch(r'(\d+) pair\(s\) of neighbouring characters '
-                              r'told apart differently: (.+)', part)
+        many = re.fullmatch(r'([\d,]+) pairs of characters told apart '
+                            r'differently', part)
+        listed = re.fullmatch(r'(\d+) pair\(s\) of characters told apart '
+                              r'differently: (.+)', part)
+        reversed_ = re.fullmatch(r'([\d,]+) sort differently against another',
+                                 part)
+        still = re.fullmatch(r'among them ([\d,]+) character\(s\) that did not '
+                             r'move(?:: (.+))?', part)
+        compared = re.fullmatch(r'pairs compared only by (.+)|no pair compared',
+                                part)
+        undecided = re.fullmatch(r'([\d,]+) more pair\(s\) the measurement '
+                                 r'cannot decide', part)
         if part == ('the pairs that tell letters, accents and case apart are '
                     'told apart differently themselves'):
             out['probes'] = True
+        elif reversed_:
+            out['reversed'] = number(reversed_[1])
+        elif compared:
+            out['compared'] = compared[1].split(' and ') if compared[1] else []
+        elif undecided:
+            out['undecided'] = number(undecided[1])
+        elif still:
+            out['still_count'] = number(still[1])
+            if still[2]:
+                out['still'] = parse_runs(still[2])
+                if run_count(out['still']) != out['still_count']:
+                    raise ReportShapeError(f'phrase counts {still[1]}: {text!r}')
         elif many:
             out['pairs_count'] = int(many[1].replace(',', ''))
         elif listed:
@@ -705,29 +837,356 @@ class Rhel9ToRhel10(unittest.TestCase):
         self.assertEqual(len(self.report['only_new']), 18)
 
 
+# --- every character, in a file ------------------------------------------------
+
+FINDINGS = ('moved', 'sorts differently', 'pairs changed', 'not compared',
+            'told apart differently', 'not decided', 'not measured',
+            'not on the new machine', 'unchanged only as far as measured',
+            'also in PostgreSQL')
+# The rows of a locale NOT known to be unchanged, beside the changes.
+NOT_KNOWN = ('not measured', 'not on the new machine')
+# And of a locale unchanged as far as measured: none of the three changed.
+NOT_CHANGED = NOT_KNOWN + ('unchanged only as far as measured',)
+PARTLY_ROW = (r'(\d+) pair\(s\) of neighbours differ by less than a letter, '
+              r'and no pair could tell whether by an accent or by case')
+MEASURED_ON = {'on both machines',
+               'on the old machine; the new one by the characters between',
+               'on the new machine; the old one by the characters between'}
+CODE = r'U\+([0-9A-F]{4,6})'
+
+
+def parse_chain(text):
+    """'U+0030, U+0B66' or 'U+0378..U+0380': the characters of a chain of
+    pairs, in the order of the chain, which need not be ascending."""
+    out = []
+    for part in text.split(', '):
+        mt = re.fullmatch(rf'{CODE}(?:\.\.{CODE})?', part)
+        if not mt:
+            raise ReportShapeError(f'unknown chain of characters: {text!r}')
+        a = int(mt[1], 16)
+        b = int(mt[2], 16) if mt[2] else a
+        if b < a:
+            raise ReportShapeError(f'a run that goes down: {text!r}')
+        out.extend(range(a, b + 1))
+    return out
+
+
+def parse_test(text):
+    """'U+0030 U+0041 / U+0B66 U+0061' as ([0x30, 0x41], [0xB66, 0x61])."""
+    halves = text.split(' / ')
+    if len(halves) != 2:
+        raise ReportShapeError(f'unknown test pair: {text!r}')
+    out = []
+    for half in halves:
+        if not re.fullmatch(rf'{CODE}(?: {CODE})*', half):
+            raise ReportShapeError(f'unknown test string: {half!r}')
+        out.append([int(h, 16) for h in re.findall(CODE, half)])
+    return tuple(out)
+
+
+class CharactersFile(dict):
+    """{locales (sorted tuple): [row]}, with the notes under the rows:
+    .warnings, their kinds as warning_kind() names them, and .closing."""
+
+
+def parse_characters(text):
+    """The file --characters-to writes, every row read and checked, as a
+    CharactersFile; each row a dict. Strict like the report: a line it does
+    not know raises, and so does a note above a row."""
+    lines = text.split('\n')
+    if lines[-1] != '':
+        raise ReportShapeError('the characters file does not end in a newline')
+    lines.pop()
+    if not re.fullmatch(r'# Step 11, .+ -> .+: every character and pair '
+                        r'found, by locale\.', lines[0]):
+        raise ReportShapeError(f'unknown first line: {lines[0]!r}')
+    if lines[1] != 'locales\tfinding\tcharacters\thow\ttest\tbefore\tnow\tmeasured':
+        raise ReportShapeError(f'unknown column line: {lines[1]!r}')
+    # The last line counts the rows above it: a file cut anywhere says so.
+    end = re.fullmatch(r'# end: (\d+) locale group\(s\), (\d+) row\(s\)',
+                       lines.pop() if len(lines) > 2 else '')
+    if not end:
+        raise ReportShapeError('the characters file has no end line')
+    # The notes: the report's warnings, then the closing paragraph, last.
+    notes = []
+    while len(lines) > 2 and lines[-1].startswith('# '):
+        notes.insert(0, lines.pop()[2:])
+    if not notes or not notes[-1].startswith('!! Not measured: '):
+        raise ReportShapeError('the characters file has no closing note')
+    out = CharactersFile()
+    out.closing = notes.pop()
+    out.warnings = [warning_kind(note) for note in notes]
+    if int(end[2]) != len(lines) - 2:
+        raise ReportShapeError(f'the end line counts {end[2]} rows and the file '
+                               f'holds {len(lines) - 2}')
+    for n, line in enumerate(lines[2:], 3):
+        cells = line.split('\t')
+        if len(cells) != 8 or cells[1] not in FINDINGS:
+            raise ReportShapeError(f'characters line {n}: {line!r}')
+        names, finding, chars, how, test, before, now, measured = cells
+        row = {'finding': finding, 'how': None, 'test': None,
+               'before': None, 'now': None, 'measured': None}
+        if finding == 'also in PostgreSQL':
+            if (chars, test, before, now, measured) != ('-',) * 5:
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row['also'] = parse_also('also, in PostgreSQL: ' + how)
+            group = out.setdefault(tuple(names.split(',')), [])
+            if any(r['finding'] == finding for r in group):
+                raise ReportShapeError(f'characters line {n}: a second {line!r}')
+            group.append(row)
+            continue
+        if out.get(tuple(names.split(',')), [{}])[-1].get('finding') == 'also in PostgreSQL':
+            raise ReportShapeError(f'characters line {n}: a row after the '
+                                   f'PostgreSQL names: {line!r}')
+        if finding in ('pairs changed', 'unchanged only as far as measured'):
+            mt = (re.fullmatch(r'before: (.+); now: (.+)', how)
+                  if finding == 'pairs changed' else re.fullmatch(PARTLY_ROW, how))
+            if (chars, test, before, now, measured) != ('-',) * 5 or not mt:
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            if finding == 'pairs changed':
+                row['probes'] = (mt[1], mt[2])
+            else:
+                row['count'] = int(mt[1])
+            out.setdefault(tuple(names.split(',')), []).append(row)
+            continue
+        if finding in NOT_KNOWN:
+            if (chars, test, before, now, measured) != ('-',) * 5 or not how or (
+                    (how == '-') != (finding == 'not on the new machine')):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row['why'] = None if how == '-' else how
+            out.setdefault(tuple(names.split(',')), []).append(row)
+            continue
+        if finding == 'not compared':
+            levels = how.split(' and ')
+            if (chars, test, before, now, measured) != ('-',) * 5 or not (
+                    set(levels) <= {'letters', 'accents', 'case'}):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row['levels'] = levels
+            out.setdefault(tuple(names.split(',')), []).append(row)
+            continue
+        if finding in ('moved', 'sorts differently'):
+            row['runs'] = parse_runs(chars)
+        elif finding == 'told apart differently':
+            row['chars'] = parse_chain(chars)
+            if len(row['chars']) < 2:
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+        else:
+            mt = re.fullmatch(rf'{CODE} {CODE}', chars)
+            if not mt or mt[1] == mt[2]:
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row['chars'] = [int(mt[1], 16), int(mt[2], 16)]
+        if how != '-':
+            pair = how.split(' -> ')
+            if (finding != 'told apart differently' or len(pair) != 2
+                    or not set(pair) <= TOLD_APART):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row['how'] = tuple(pair)
+        if test != '-':
+            row['test'] = parse_test(test)
+            if before not in ('<', '>') or now not in ('<', '>') or before == now:
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row['before'], row['now'] = before, now
+        elif (before, now) != ('-', '-'):
+            raise ReportShapeError(f'characters line {n}: {line!r}')
+        if measured != '-':
+            if measured not in MEASURED_ON or finding == 'not decided':
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row['measured'] = measured
+        elif finding != 'not decided':
+            raise ReportShapeError(f'characters line {n}: {line!r}')
+        if finding == 'told apart differently' and row['how'] is None:
+            raise ReportShapeError(f'characters line {n}: {line!r}')
+        if finding == 'moved' and row['test'] is None:
+            raise ReportShapeError(f'characters line {n}: {line!r}')
+        out.setdefault(tuple(names.split(',')), []).append(row)
+    if len(out) != int(end[1]):
+        raise ReportShapeError(f'the end line counts {end[1]} groups and the '
+                               f'file holds {len(out)}')
+    return out
+
+
+def changes_in(files):
+    """The groups of a characters file that changed, without those NOT
+    known to be unchanged or unchanged only as far as measured."""
+    out = {}
+    for names, rows in files.items():
+        kinds = {r['finding'] in NOT_CHANGED for r in rows
+                 if r['finding'] != 'also in PostgreSQL'}
+        if len(kinds) != 1:
+            raise ReportShapeError(f'{names} is both changed and not')
+        if kinds == {False}:
+            out[names] = rows
+    return out
+
+
+def characters_of(rows, finding):
+    """Every character the rows of one finding name, as a set."""
+    out = set()
+    for row in rows:
+        if row['finding'] == finding:
+            if 'runs' in row:
+                for a, b in row['runs']:
+                    out.update(range(a, b + 1))
+            else:
+                out.update(row['chars'])
+    return out
+
+
+# What each output says of each kind of finding of a change, in one form
+# the three can be compared in: a count, or whether the kind is there.
+LOCALE_KINDS = ('moved', 'reversed', 'probes changed', 'left out',
+                'told apart', 'did not move', 'undecided')
+
+
+def kinds_in_report(c):
+    """From the report's lines of a change, as parse_details reads them."""
+    return {'moved': c['moved_count'], 'reversed': c['reversed'],
+            'probes changed': c['probes'] is not None,
+            'left out': c['compared'] is not None,
+            'told apart': c['pairs_count'] or 0,
+            'did not move': c['still_count'], 'undecided': c['undecided']}
+
+
+def kinds_in_brief(b):
+    """From the summary's phrase, as parse_brief reads it."""
+    return {'moved': b['moved_count'], 'reversed': b['reversed'],
+            'probes changed': b['probes'],
+            'left out': b['compared'] is not None,
+            'told apart': b['pairs_count'] or 0,
+            'did not move': b['still_count'], 'undecided': b['undecided']}
+
+
+def kinds_in_rows(rows):
+    """From the file's rows of a change. The characters that did not move
+    have no rows of their own: they are those the told-apart rows name and
+    no moved row does, and the report names them only when some moved."""
+    moved = characters_of(rows, 'moved')
+    reversed_ = characters_of(rows, 'sorts differently')
+    still = characters_of(rows, 'told apart differently') - moved
+    return {'moved': len(moved), 'reversed': len(reversed_) or None,
+            'probes changed': any(r['finding'] == 'pairs changed' for r in rows),
+            'left out': any(r['finding'] == 'not compared' for r in rows),
+            'told apart': sum(len(r['chars']) - 1 for r in rows
+                              if r['finding'] == 'told apart differently'),
+            'did not move': len(still) if moved and still else None,
+            'undecided': sum(r['finding'] == 'not decided' for r in rows)}
+
+
+def runs_set(runs):
+    return {c for a, b in runs for c in range(a, b + 1)}
+
+
+def named_in_report(c):
+    """The characters and pairs the report's lines of a change name, where
+    it lists them rather than count them; None where it only counts."""
+    moved = (set(c['moved']) if c['moved'] is not None
+             else runs_set(c['moved_runs']) if c['moved_runs'] else None)
+    return {'moved': moved,
+            'did not move': runs_set(c['still']) if c['still'] else None,
+            'told apart': ({(x, y) for x, y, *_ in c['pairs']}
+                           if c['pairs'] is not None else None)}
+
+
+def named_in_brief(b):
+    return {'moved': set(b['moved']) if b['moved'] is not None else None,
+            'did not move': runs_set(b['still']) if b['still'] else None,
+            'told apart': set(b['pairs']) if b['pairs'] is not None else None}
+
+
+def named_in_rows(rows):
+    moved = characters_of(rows, 'moved')
+    return {'moved': moved,
+            'did not move': characters_of(rows, 'told apart differently') - moved,
+            'told apart': {pair for r in rows
+                           if r['finding'] == 'told apart differently'
+                           for pair in zip(r['chars'], r['chars'][1:])}}
+
+
+def assert_named_alike(test, report, brief, rows):
+    """Wherever the report or the summary lists what changed, it lists what
+    the file's rows hold: the same characters, the same pairs."""
+    in_rows = named_in_rows(rows)
+    for said in (named_in_report(report), named_in_brief(brief)):
+        for kind, names in said.items():
+            if names is not None:
+                test.assertEqual(names, in_rows[kind], kind)
+
+
+def also_of(alsos):
+    """parse_also answers merged, as ({encoding: {collation}}, {spelling})."""
+    aliases, spellings = {}, set()
+    for also in alsos:
+        if also:
+            for encoding, names in also['aliases'].items():
+                aliases.setdefault(encoding, set()).update(names)
+            spellings.update(also['spellings'])
+    return aliases, spellings
+
+
+def file_of(rows, label='x', warnings=(), closing=m.CLOSING):
+    """The text of a characters file holding rows (cells) under one label,
+    as compare() writes one."""
+    lines = ['# Step 11, a -> b: every character and pair found, by locale.',
+             'locales\tfinding\tcharacters\thow\ttest\tbefore\tnow\tmeasured']
+    lines += [label + '\t' + '\t'.join(row) for row in rows]
+    lines += ['# ' + text for text in list(warnings) + [closing]]
+    lines.append(f'# end: {1 if rows else 0} locale group(s), {len(rows)} row(s)')
+    return '\n'.join(lines) + '\n'
+
+
+LOADED = {}
+
+
+def order_of(path, name):
+    """The measured order of one locale in a file, as the comparison reads it."""
+    if path not in LOADED:
+        LOADED[path] = m.load(path, m.corpus_digest())[0]
+    data = LOADED[path]
+    r = data['locales'][name]
+    return m.unpacked(data, 'order', r['order'], r['chars'])
+
+
 # --- what audit.sh asks of the comparison -------------------------------------
 
 class SummaryForTheAudit(unittest.TestCase):
-    """--summary-to: the block audit.sh prints under its summary.
+    """--summary-to and --characters-to: the block audit.sh prints under its
+    summary, and the file of every character and pair it names.
 
     Freezes the summary as a second account of the comparison that could say
     less than the report: every locale the report names as changed, not
     measured or missing on the new machine is named here too, with the names
     PostgreSQL gives it, the counts are the report's own, and so are the
     warnings.
+
+    Freezes the characters file as complete. The report prints twenty names
+    at most, and until now printed "too many to list here" and nothing else;
+    the file is where every character is, so a file that held fewer than the
+    comparison found would read as the whole answer. Each list is checked
+    against the comparison's own functions run on the measurements, not
+    against the report's counts. Both pairs are compared once, for every
+    test here.
     """
 
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp(prefix='locale_order_summary_')
         cls.addClassCleanup(shutil.rmtree, cls.tmp)
+        cls.summaries, cls.reports, cls.files = {}, {}, {}
+        for key, old, new in (('8-9', RHEL8, RHEL9), ('9-10', RHEL9, RHEL10)):
+            path = os.path.join(cls.tmp, key)
+            rc, out, err = run_compare(old, new, '--summary-to', path + '.txt',
+                                       '--characters-to', path + '.tsv')
+            assert (rc, err) == (0, ''), err
+            cls.reports[key] = parse_report(out)
+            with open(path + '.txt', encoding='utf-8') as f:
+                cls.summaries[key] = parse_summary(f.read())
+            with open(path + '.tsv', encoding='utf-8') as f:
+                cls.files[key] = parse_characters(f.read())
 
-    def summary_and_report(self, old, new):
-        path = os.path.join(self.tmp, f'{self.id().rsplit(".", 1)[-1]}.txt')
-        rc, out, err = run_compare(old, new, '--summary-to', path)
-        self.assertEqual((rc, err), (0, ''))
-        with open(path, encoding='utf-8') as f:
-            return parse_summary(f.read()), parse_report(out)
+    def summary_and_report(self, key):
+        self.assertEqual(self.reports[key]['characters_file'],
+                         os.path.join(self.tmp, key + '.tsv'))
+        return self.summaries[key], self.reports[key]
 
     def assertSameAnswer(self, summary, report):
         changes = by_name(report)
@@ -739,12 +1198,16 @@ class SummaryForTheAudit(unittest.TestCase):
                 # What moved, in the phrase, is what the report's lines say.
                 brief = parse_brief(summary['changes'][name]['brief'])
                 self.assertEqual(
-                    (brief['moved'], brief['moved_count'], brief['probes'],
-                     brief['pairs'], brief['pairs_count']),
-                    (change['moved'], change['moved_count'],
+                    (brief['moved'], brief['moved_count'], brief['reversed'],
+                     brief['probes'], brief['pairs'], brief['pairs_count'],
+                     brief['still'], brief['still_count'], brief['compared'],
+                     brief['undecided']),
+                    (change['moved'], change['moved_count'], change['reversed'],
                      change['probes'] is not None,
                      change['pairs'] and [(x, y) for x, y, *_ in change['pairs']],
-                     change['pairs_count']))
+                     change['pairs_count'], change['still'], change['still_count'],
+                     change['compared'], change['undecided']))
+        self.assertEqual(summary['characters_file'], report['characters_file'])
         self.assertEqual(summary['machines'],
                          (report['old'][0], report['new'][0]))
         self.assertEqual(summary['unmeasured'], list(report['unmeasured']))
@@ -755,7 +1218,7 @@ class SummaryForTheAudit(unittest.TestCase):
         self.assertEqual(summary['closing'], report['closing'])
 
     def test_rhel8_to_rhel9(self):
-        summary, report = self.summary_and_report(RHEL8, RHEL9)
+        summary, report = self.summary_and_report('8-9')
         self.assertSameAnswer(summary, report)
         self.assertEqual(set(summary['changes']), CHANGED_8_TO_9)
         self.assertIn('U+D7A3', summary['changes']['ko_KR.utf8']['brief'])
@@ -763,9 +1226,354 @@ class SummaryForTheAudit(unittest.TestCase):
                          ['zh_TW'])
 
     def test_rhel9_to_rhel10(self):
-        summary, report = self.summary_and_report(RHEL9, RHEL10)
+        summary, report = self.summary_and_report('9-10')
         self.assertSameAnswer(summary, report)
         self.assertEqual(set(summary['changes']), CHANGED_9_TO_10)
+
+    def rows(self, key, name):
+        """The rows of the change that lists name."""
+        found = [rows for names, rows in self.files[key].items() if name in names]
+        self.assertEqual(len(found), 1, name)
+        return found[0]
+
+    def test_every_change_of_the_report_has_its_rows(self):
+        """The file keeps apart locales measured differently that the report
+        prints under one heading because they read alike (the Swedish
+        locales in ISO-8859-1 and ISO-8859-15): their characters differ."""
+        for key in self.files:
+            with self.subTest(pair=key):
+                report = [set(c['names']) for c in self.reports[key]['changes']]
+                changes = changes_in(self.files[key])
+                for names in changes:
+                    self.assertEqual(sum(set(names) <= r for r in report), 1, names)
+                self.assertEqual(set().union(*map(set, changes)),
+                                 set().union(*report))
+
+    def test_the_file_holds_what_the_report_counts(self):
+        """For every change of both pairs: the moved characters, those that
+        sort differently, the pairs told apart differently and the pairs not
+        decided, counted from the file's rows. A file cut anywhere, at its
+        head or its tail, holds less than the report says."""
+        for key in self.files:
+            report = by_name(self.reports[key])
+            for names, rows in changes_in(self.files[key]).items():
+                change = report[names[0]]
+                with self.subTest(pair=key, locales=names):
+                    moved = characters_of(rows, 'moved')
+                    told = sum(len(r['chars']) - 1 for r in rows
+                               if r['finding'] == 'told apart differently')
+                    undecided = sum(r['finding'] == 'not decided' for r in rows)
+                    self.assertEqual(len(moved), change['moved_count'])
+                    self.assertEqual(len(characters_of(rows, 'sorts differently')),
+                                     change['reversed'] or 0)
+                    self.assertEqual(told, change['pairs_count'] or 0)
+                    self.assertEqual(undecided, change['undecided'])
+
+    def test_the_locales_not_known_to_be_unchanged_have_rows(self):
+        """Each locale the report lists as not measured, with its reason, and
+        each one missing on the new machine: a file that left them out would
+        read them as unchanged."""
+        for key in self.files:
+            with self.subTest(pair=key):
+                report = self.reports[key]
+                rows = {names[0]: rows[0] for names, rows in self.files[key].items()
+                        if rows[0]['finding'] in NOT_KNOWN}
+                self.assertEqual(
+                    {n for n, r in rows.items() if r['finding'] == 'not measured'},
+                    set(report['unmeasured']))
+                self.assertEqual(
+                    {n for n, r in rows.items()
+                     if r['finding'] == 'not on the new machine'},
+                    set(report['not_on_new']))
+                for name, entry in report['unmeasured'].items():
+                    self.assertEqual(rows[name]['why'], 'both machines: '
+                                     + entry['why']['both machines'])
+
+    def test_a_cut_file_is_refused(self):
+        """The end line counts the rows: a file cut on a row boundary, which
+        reads whole otherwise, is refused by its own last line."""
+        path = os.path.join(self.tmp, '9-10.tsv')
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().split('\n')
+        parse_characters('\n'.join(lines))
+        for cut in (lines[:-2] + [''], lines[:-3] + lines[-2:]):
+            with self.subTest(lines=len(cut)):
+                with self.assertRaises(ReportShapeError):
+                    parse_characters('\n'.join(cut))
+
+    def test_every_moved_character_is_listed(self):
+        """Against moved_characters() on the two orders: 1, 2, 135,360 and 88."""
+        for key, old, new, name in (('8-9', RHEL8, RHEL9, 'ko_KR.utf8'),
+                                    ('8-9', RHEL8, RHEL9, 'sv_SE.utf8'),
+                                    ('8-9', RHEL8, RHEL9, 'C.utf8'),
+                                    ('9-10', RHEL9, RHEL10, 'th_TH')):
+            with self.subTest(locale=name):
+                moved = m.moved_characters(order_of(old, name), order_of(new, name))
+                self.assertEqual(characters_of(self.rows(key, name), 'moved'),
+                                 set(moved))
+                change = by_name(self.reports[key])[name]
+                self.assertEqual(change['moved_count'], len(moved))
+
+    def test_every_character_in_a_reversed_pair_is_listed(self):
+        """Counted a second way here: a character is in no reversed pair
+        exactly when it stands at the same place in both orders and the
+        characters before it are the same. ko_KR: the one that moved and the
+        4,888 it moved past."""
+        for key, old, new, name, count in (
+                ('8-9', RHEL8, RHEL9, 'ko_KR.utf8', 4889),
+                ('9-10', RHEL9, RHEL10, 'th_TH', 245)):
+            with self.subTest(locale=name):
+                a, b = order_of(old, name), order_of(new, name)
+                # seen[c] is 1 while c is before the place in one order only;
+                # apart counts those.
+                seen, apart, outside = bytearray(0x110000), 0, set()
+                for x, y in zip(a, b):
+                    if x == y and not apart:
+                        outside.add(x)
+                    for c in (x, y):
+                        seen[c] ^= 1
+                        apart += 1 if seen[c] else -1
+                listed = characters_of(self.rows(key, name), 'sorts differently')
+                self.assertEqual(listed, set(a) - outside)
+                self.assertEqual(len(listed), count)
+                self.assertEqual(by_name(self.reports[key])[name]['reversed'], count)
+        # The Swedish locales in UTF-8, counted by the comparison alone.
+        self.assertEqual(len(characters_of(self.rows('8-9', 'sv_SE.utf8'),
+                                           'sorts differently')), 44)
+        self.assertEqual(by_name(self.reports['8-9'])['sv_SE.utf8']['reversed'], 44)
+
+    def test_a_rewritten_order_reverses_every_character(self):
+        changes = by_name(self.reports['8-9'])
+        self.assertEqual((changes['or_IN']['reversed'],
+                          changes['or_IN']['all_reversed']), (1112063, True))
+        self.assertEqual((changes['C.utf8']['reversed'],
+                          changes['C.utf8']['all_reversed']), (1112062, False))
+        self.assertEqual(by_name(self.reports['9-10'])['th_TH.utf8']['reversed'],
+                         1112062)
+
+    def test_each_moved_run_has_a_test_pair_that_turns_round(self):
+        """Two single characters, the first of the run and one that kept its
+        place, in the order each machine measured: the pair a database would
+        sort differently."""
+        for key, old, new, name in (('8-9', RHEL8, RHEL9, 'ko_KR.utf8'),
+                                    ('8-9', RHEL8, RHEL9, 'sv_SE.utf8'),
+                                    ('9-10', RHEL9, RHEL10, 'th_TH')):
+            with self.subTest(locale=name):
+                before = {c: i for i, c in enumerate(order_of(old, name))}
+                now = {c: i for i, c in enumerate(order_of(new, name))}
+                rows = [r for r in self.rows(key, name) if r['finding'] == 'moved']
+                self.assertTrue(rows)
+                for row in rows:
+                    (x,), (y,) = row['test']
+                    self.assertEqual(x, row['runs'][0][0])
+                    self.assertEqual(row['before'], '<' if before[x] < before[y] else '>')
+                    self.assertEqual(row['now'], '<' if now[x] < now[y] else '>')
+                    self.assertEqual(row['measured'], 'on both machines')
+
+    def test_the_oriya_digits_are_named(self):
+        """or_IN, RHEL8 -> RHEL9: each Oriya digit was a neighbour of its
+        ASCII digit; on RHEL9 seven zeros of other scripts stand between
+        them, so no pair of neighbours holds both, and they are told apart by
+        less than case. "0A" against U+0B66 "a" turns round: strcoll on the
+        three test machines gave < on glibc 2.28 and > on 2.34 and 2.39.
+        None of the ten moved."""
+        orya = by_name(self.reports['8-9'])['or_IN']
+        self.assertEqual(orya['compared'], ['letters', 'case'])
+        self.assertIn((0xB66, 0xB6F), orya['still'])
+        rows = self.rows('8-9', 'or_IN')
+        self.assertFalse(set(range(0xB66, 0xB70)) & characters_of(rows, 'moved'))
+        for k in range(10):
+            with self.subTest(digit=k):
+                row = [r for r in rows if r['finding'] == 'told apart differently'
+                       and r['chars'] == [0x30 + k, 0xB66 + k]]
+                self.assertEqual(len(row), 1)
+                self.assertEqual(
+                    (row[0]['how'], row[0]['test'], row[0]['before'],
+                     row[0]['now'], row[0]['measured']),
+                    (('like an accent or by case', 'by less than case'),
+                     ([0x30 + k, 0x41], [0xB66 + k, 0x61]), '<', '>',
+                     'on the old machine; the new one by the characters between'))
+
+    def test_swedish_V_and_w_with_their_test_pair(self):
+        """"Vb" against "wa", measured on both machines."""
+        for name in ('sv_SE', 'sv_SE.iso885915'):
+            with self.subTest(locale=name):
+                rows = [r for r in self.rows('8-9', name)
+                        if r['finding'] not in ('sorts differently',
+                                                'also in PostgreSQL')]
+                self.assertEqual(rows, [{
+                    'finding': 'told apart differently', 'chars': [0x56, 0x77],
+                    'how': ('like an accent', 'as different letters'),
+                    'test': ([0x56, 0x62], [0x77, 0x61]), 'before': '>',
+                    'now': '<', 'measured': 'on both machines'}])
+
+    def test_a_pair_the_measurement_cannot_decide_is_counted_not_dropped(self):
+        """sv_SE.utf8: W and the fullwidth W were neighbours on RHEL9 only;
+        what RHEL8 measured between them says they differ more strongly,
+        which a character glibc ignores at a level can fake. And four pairs
+        whose relation worked out between them is the one measured, a level
+        included, which can fake it as well. Not a change, not nothing:
+        counted in the report and the summary, named in the file."""
+        change = by_name(self.reports['8-9'])['sv_SE.utf8']
+        self.assertEqual((change['pairs_count'], change['undecided']), (None, 7))
+        rows = self.rows('8-9', 'sv_SE.utf8')
+        self.assertEqual(sorted(r['chars'] for r in rows
+                                if r['finding'] == 'not decided'),
+                         [[0x57, 0xFF37], [0x77, 0x57], [0x77, 0xFF57],
+                          [0x1DBA, 0xFF57], [0x1E7E, 0x77], [0x1E7E, 0x2175],
+                          [0x24E6, 0xFF37]])
+        brief = parse_brief(self.summaries['8-9']['changes']['sv_SE.utf8']['brief'])
+        self.assertEqual(brief['undecided'], 7)
+
+    def test_pairs_are_compared_at_the_levels_whose_pair_is_the_same(self):
+        """The probe pairs changed in or_IN and th_TH. The levels measured
+        with the same pair on both machines still compare: 39,930 pairs of
+        neighbours in or_IN and 27 in th_TH in TIS-620 that no line named
+        before, each now among the pairs counted."""
+        for key, name, compared, count, both in (
+                ('8-9', 'or_IN', ['letters', 'case'], 46136, 39930),
+                ('9-10', 'th_TH', ['letters'], 31, 27),
+                ('9-10', 'th_TH.utf8', ['letters'], 45693, 39924)):
+            with self.subTest(locale=name):
+                change = by_name(self.reports[key])[name]
+                self.assertEqual((change['compared'], change['pairs_count']),
+                                 (compared, count))
+                pairs = sum(len(r['chars']) - 1 for r in self.rows(key, name)
+                            if r['finding'] == 'told apart differently'
+                            and r['measured'] == 'on both machines')
+                self.assertEqual(pairs, both)
+
+    def test_the_levels_left_out_are_said(self):
+        """A level no pair measured (C.utf8 and ko_KR.utf8 have pairs for
+        letters only) or whose pair differs is not compared, and the report,
+        the summary and the file say which: a list that compared less than
+        every level must not read as the whole of it."""
+        changes = by_name(self.reports['8-9'])
+        for name in ('C.utf8', 'ko_KR.utf8'):
+            with self.subTest(locale=name):
+                self.assertEqual((changes[name]['compared'],
+                                  changes[name]['not_measured']),
+                                 (['letters'], ['accents', 'case']))
+        self.assertEqual((changes['or_IN']['compared'],
+                          changes['or_IN']['not_measured']),
+                         (['letters', 'case'], None))
+        for key, name, left_out in (('8-9', 'C.utf8', ['accents', 'case']),
+                                    ('8-9', 'ko_KR.utf8', ['accents', 'case']),
+                                    ('8-9', 'or_IN', ['accents']),
+                                    ('9-10', 'th_TH', ['accents', 'case']),
+                                    ('9-10', 'th_TH.utf8', ['accents', 'case']),
+                                    ('8-9', 'sv_SE', None)):
+            with self.subTest(locale=name):
+                rows = [r['levels'] for r in self.rows(key, name)
+                        if r['finding'] == 'not compared']
+                self.assertEqual(rows, [left_out] if left_out else [])
+
+    def test_a_pair_measured_on_the_new_machine_reads_old_to_new(self):
+        """th_TH in TIS-620: the Thai baht sign and 0 are neighbours on RHEL10
+        only, told apart as different letters there and by less than a
+        letter between them on RHEL9: before is the old machine's."""
+        rows = [r for r in self.rows('9-10', 'th_TH')
+                if r['finding'] == 'told apart differently'
+                and r['chars'] == [0x0E3F, 0x30]]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            (rows[0]['how'], rows[0]['test'], rows[0]['before'], rows[0]['now'],
+             rows[0]['measured']),
+            (('by less than a letter', 'as different letters'),
+             ([0x0E3F, 0x62], [0x30, 0x61]), '>', '<',
+             'on the new machine; the old one by the characters between'))
+
+    def test_each_kind_of_finding_is_counted_alike_in_the_three(self):
+        """For every change of both pairs, each kind of finding: the count
+        or the presence the report gives, the summary's phrase gives, and
+        the file's rows give are the same. And for the run: the locales not
+        measured, missing on the new machine and unchanged only as far as
+        measured, the warnings and the closing paragraph. The three are
+        drawn from one list of findings; this is what that buys."""
+        for key in self.files:
+            report, summary, files = (self.reports[key], self.summaries[key],
+                                      self.files[key])
+            changes = by_name(report)
+            groups = changes_in(files)
+            self.assertTrue(groups)
+            for names, rows in groups.items():
+                change = changes[names[0]]
+                brief = parse_brief(summary['changes'][names[0]]['brief'])
+                said = (kinds_in_report(change), kinds_in_brief(brief),
+                        kinds_in_rows(rows))
+                for kind in LOCALE_KINDS:
+                    with self.subTest(pair=key, locales=names, kind=kind):
+                        self.assertEqual(said[0][kind], said[1][kind])
+                        self.assertEqual(said[0][kind], said[2][kind])
+                with self.subTest(pair=key, locales=names, kind='named'):
+                    assert_named_alike(self, change, brief, rows)
+                with self.subTest(pair=key, locales=names, kind='exact'):
+                    probes = [r['probes'] for r in rows
+                              if r['finding'] == 'pairs changed']
+                    self.assertEqual(probes, [change['probes']]
+                                     if change['probes'] else [])
+                    left = [r['levels'] for r in rows
+                            if r['finding'] == 'not compared']
+                    if change['probes'] is None:
+                        self.assertEqual(left, [change['not_measured']]
+                                         if change['not_measured'] else [])
+                    else:
+                        self.assertEqual(len(left), 1)
+                        self.assertFalse(set(left[0]) & set(change['compared']))
+                    self.assertEqual(brief['compared'], change['compared'])
+            with self.subTest(pair=key, kind='also'):
+                # The names PostgreSQL gives each change, merged over the
+                # file's groups the report prints under one heading, and each
+                # locale not measured, as the report gives them.
+                for change in report['changes']:
+                    self.assertEqual(also_of(
+                        r['also'] for names, rows in files.items()
+                        if set(names) <= set(change['names']) for r in rows
+                        if r['finding'] == 'also in PostgreSQL'),
+                        also_of([change['also']]))
+                for name, entry in report['unmeasured'].items():
+                    self.assertEqual(also_of(
+                        r['also'] for r in files[(name,)]
+                        if r['finding'] == 'also in PostgreSQL'),
+                        also_of([entry['also']]))
+            with self.subTest(pair=key, kind='run'):
+                by_kind = {}
+                for names, rows in files.items():
+                    for row in rows:
+                        if row['finding'] in NOT_CHANGED:
+                            self.assertEqual(len(names), 1)
+                            by_kind.setdefault(row['finding'], {})[names[0]] = row
+                self.assertEqual(set(by_kind.get('not measured', ())),
+                                 set(report['unmeasured']))
+                self.assertEqual(sorted(by_kind.get('not measured', ())),
+                                 summary['unmeasured'])
+                self.assertEqual(sorted(by_kind.get('not on the new machine', ())),
+                                 report['not_on_new'])
+                self.assertEqual(summary['not_on_new'], report['not_on_new'])
+                partly = {name: row['count'] for name, row in
+                          by_kind.get('unchanged only as far as measured',
+                                      {}).items()}
+                self.assertEqual(partly, report['partly'])
+                self.assertEqual(sorted(partly), summary['partly'])
+                self.assertTrue(partly)
+                self.assertEqual(files.warnings, report['warnings'])
+                self.assertEqual(summary['warnings'], report['warnings'])
+                self.assertEqual(files.closing, report['closing'])
+                self.assertEqual(summary['closing'], report['closing'])
+
+    def test_too_many_characters_that_did_not_move_are_counted(self):
+        """C.utf8: too many runs to print, so the count, never nothing."""
+        change = by_name(self.reports['8-9'])['C.utf8']
+        self.assertEqual((change['still'], change['still_count']), (None, 845406))
+
+    def test_no_new_character_where_nothing_else_changed(self):
+        """ko_KR.utf8 and the Swedish locales in UTF-8 gain no pair: what
+        the rule adds is the Oriya case, not noise."""
+        for name in ('ko_KR.utf8', 'sv_SE.utf8'):
+            with self.subTest(locale=name):
+                change = by_name(self.reports['8-9'])[name]
+                self.assertEqual((change['pairs_count'], change['still']),
+                                 (None, None))
 
 
 # --- measurements that are not whole ------------------------------------------
@@ -881,7 +1689,8 @@ class TagsOfTheAuditedPair(Variants):
 
     def test_the_options_go_with_compare(self):
         for args in (('--tags', 'glibc-2.28', 'glibc-2.34'),
-                     ('--summary-to', os.path.join(self.tmp, 'lone.txt'))):
+                     ('--summary-to', os.path.join(self.tmp, 'lone.txt')),
+                     ('--characters-to', os.path.join(self.tmp, 'lone.tsv'))):
             with self.subTest(args=args[0]):
                 rc, out, err = run_script(*args)
                 self.assertEqual(rc, 2, err)
@@ -896,6 +1705,64 @@ class TagsOfTheAuditedPair(Variants):
         self.assertEqual(rc, 2, err)
         self.assertEqual(out, '')
         self.assertTrue(err.startswith('locale_order.py: '), err)
+
+    def test_a_characters_file_that_cannot_be_written_stops_the_run(self):
+        """Before the report and before the summary: a run whose whole list
+        is not on disk must not print a report that points at it."""
+        summary = os.path.join(self.tmp, 'beside-no-list.txt')
+        path = os.path.join(self.tmp, 'no-such-directory', 'characters.tsv')
+        rc, out, err = run_compare(RHEL9, RHEL10, '--summary-to', summary,
+                                   '--characters-to', path)
+        self.assertEqual(rc, 2, err)
+        self.assertEqual(out, '')
+        self.assertRegex(err, r'^locale_order\.py: cannot write .*characters\.tsv')
+        self.assertFalse(os.path.exists(summary))
+
+    def test_a_summary_that_cannot_be_written_leaves_no_list(self):
+        """The list is written first, under another name, and takes its own
+        only once the summary is written: a run that died leaves neither."""
+        chars = os.path.join(self.tmp, 'list-of-a-dead-run.tsv')
+        rc, out, err = run_compare(
+            RHEL9, RHEL10, '--characters-to', chars, '--summary-to',
+            os.path.join(self.tmp, 'no-such-directory', 'summary.txt'))
+        self.assertEqual((rc, out), (2, ''))
+        self.assertFalse(os.path.exists(chars))
+        self.assertFalse(os.path.exists(chars + '.partial'))
+
+    def test_a_list_cut_short_on_disk_is_not_left_behind(self):
+        """A file size limit stops the write half way: the run is refused,
+        and no list that reads as if fewer locales changed is left."""
+        import resource
+        chars = os.path.join(self.tmp, 'cut-list.tsv')
+
+        def limit():
+            resource.setrlimit(resource.RLIMIT_FSIZE, (100000, 100000))
+        p = subprocess.run([sys.executable, SCRIPT, '--compare', RHEL8, RHEL9,
+                            '--characters-to', chars],
+                           capture_output=True, preexec_fn=limit,
+                           env=dict(os.environ, PYTHONIOENCODING='utf-8'))
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertEqual(p.stdout, b'')
+        self.assertFalse(os.path.exists(chars))
+        self.assertFalse(os.path.exists(chars + '.partial'))
+
+    def test_no_characters_file_is_written_for_a_refused_pair(self):
+        """And an earlier run's list under that name is gone: it would read
+        as this run's answer."""
+        path = os.path.join(self.tmp, 'reversed.tsv')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('an earlier run\n')
+        rc, out, err = run_compare(RHEL9, RHEL8, '--characters-to', path)
+        self.assertEqual((rc, out), (2, ''))
+        self.assertFalse(os.path.exists(path))
+
+    def test_without_the_file_the_report_says_how_to_get_it(self):
+        """A report that cuts a list at twenty and names no file reads as the
+        whole list; with nowhere to write it, it says which option writes it."""
+        rc, out, err = run_compare(RHEL9, RHEL10)
+        self.assertEqual((rc, err), (0, ''))
+        self.assertEqual(flat(out).count(NO_FILE_LINE), 1)
+        self.assertIsNone(parse_report(out)['characters_file'])
 
     def test_no_summary_is_written_for_a_refused_pair(self):
         path = os.path.join(self.tmp, 'reversed.txt')
@@ -1149,26 +2016,59 @@ class Reports(Variants):
 
     def test_the_probe_pairs_changed(self):
         def edit(d):
+            # The same record, sealed with the other probes as measured()
+            # seals it: the comparison opens it now, to compare the levels
+            # whose pair is the same.
             e = d['locales']['de_DE.utf8']
             blob = d['pair_data'][e['pairs']]
             e['probes'] = e['probes'].replace('>', '<', 1)
-            e['pairs'] = 'f' * 64
+            e['pairs'] = hashlib.sha256(
+                e['probes'].encode('utf-8') + b'\n'
+                + zlib.decompress(base64.b64decode(blob))).hexdigest()
             d['pair_data'][e['pairs']] = blob
-        r = self.report(RHEL9, self.variant(edit, reseal=True))
-        de = by_name(r)
+        path = os.path.join(self.tmp, 'probes-only.tsv')
+        rc, out, err = run_compare(RHEL9, self.variant(edit, reseal=True),
+                                   '--characters-to', path)
+        self.assertEqual((rc, err), (0, ''))
+        de = by_name(parse_report(out))
         self.assertEqual(set(de), {'de_DE.utf8'})
         self.assertEqual(de['de_DE.utf8']['moved'], [])
         self.assertIsNotNone(de['de_DE.utf8']['probes'])
+        self.assertEqual(de['de_DE.utf8']['compared'], ['accents', 'case'])
+        # Nothing else changed, so the change's only rows say which pairs
+        # changed, as the report does, and what was not compared: a change
+        # with no row would read as nothing found.
+        with open(path, encoding='utf-8') as f:
+            rows = parse_characters(f.read())
+        self.assertEqual(changes_in(rows), {('de_DE.utf8',): [
+            {'finding': 'pairs changed', 'how': None, 'test': None,
+             'before': None, 'now': None, 'measured': None,
+             'probes': de['de_DE.utf8']['probes']},
+            {'finding': 'not compared', 'how': None, 'test': None,
+             'before': None, 'now': None, 'measured': None,
+             'levels': ['letters']},
+            {'finding': 'also in PostgreSQL', 'how': None, 'test': None,
+             'before': None, 'now': None, 'measured': None,
+             'also': de['de_DE.utf8']['also']}]})
 
     def test_a_locale_that_could_not_be_measured_on_one_machine(self):
         def edit(d):
             d['locales']['ko_KR.utf8'] = {'error': 'cannot be selected: test',
                                           'codeset': 'UTF-8'}
-        r = self.report(RHEL9, self.variant(edit, reseal=True))
+        path = os.path.join(self.tmp, 'one-machine.tsv')
+        rc, out, err = run_compare(RHEL9, self.variant(edit, reseal=True),
+                                   '--characters-to', path)
+        self.assertEqual((rc, err), (0, ''))
+        r = parse_report(out)
         ko = r['unmeasured']['ko_KR.utf8']
         self.assertEqual(ko['why'], {'new machine': 'cannot be selected: test'})
         self.assertEqual(ko['also']['aliases'], {'UTF-8': ['ko_KR']})
         self.assertEqual(by_name(r), {})
+        # The file says which machine, like the report.
+        with open(path, encoding='utf-8') as f:
+            rows = parse_characters(f.read())
+        self.assertEqual(rows[('ko_KR.utf8',)][0]['why'],
+                         'new machine: cannot be selected: test')
 
     def test_the_summary_carries_the_warnings_and_says_nothing_changed(self):
         def edit(d):
@@ -1187,14 +2087,20 @@ class Reports(Variants):
         moves: the report's "too many to list here" and the summary's count.
         No real pair of machines reaches this form, so without it the
         comparison of the two was blind to one of the four."""
-        changed = [1000 + 7 * k for k in range(30)]
+        changed = []
 
         def edit(d):
             e = d['locales']['de_DE.utf8']
             raw = bytearray(zlib.decompress(base64.b64decode(
                 d['pair_data'][e['pairs']])))
-            for i in changed:
-                raw[i] ^= 2
+            # Thirty neighbours told apart as different letters that are now
+            # told apart more weakly: a record a machine can write.
+            for i in range(1000, len(raw)):
+                if len(changed) == 30:
+                    break
+                if raw[i] & 7 == 0:
+                    raw[i] ^= 4
+                    changed.append(i)
             digest = hashlib.sha256(e['probes'].encode('utf-8') + b'\n'
                                     + bytes(raw)).hexdigest()
             d['pair_data'][digest] = m.pack(bytes(raw))
@@ -1209,16 +2115,113 @@ class Reports(Variants):
         with open(path, encoding='utf-8') as f:
             brief = parse_brief(parse_summary(f.read())['changes']
                                 ['de_DE.utf8']['brief'])
-        self.assertEqual(brief, {'moved': [], 'moved_count': 0, 'pairs': None,
-                                 'pairs_count': len(changed), 'probes': False})
+        self.assertEqual(brief, {'moved': [], 'moved_count': 0, 'reversed': None,
+                                 'pairs': None, 'pairs_count': len(changed),
+                                 'probes': False, 'still': None,
+                                 'still_count': None, 'compared': None,
+                                 'undecided': 0})
+
+    def test_a_locale_name_with_a_comma_and_a_tab(self):
+        """The file is tab-separated and lists the names of a change with
+        commas: such a name is escaped, never written raw to split a row."""
+        odd = 'th,TH' + chr(9) + 'x'
+        paths = []
+        for base in (RHEL9, RHEL10):
+            with open(base, encoding='utf-8') as f:
+                data = json.loads(f.read())
+            data['locales'][odd] = data['locales']['th_TH']
+            # And a reason, free text in one cell, holding a tab too.
+            data['locales']['ka_GE'] = {'error': 'cannot be selected: a'
+                                        + chr(9) + 'b', 'codeset': 'GEORGIAN-PS'}
+            data['locales_listed'] += 1
+            data['content'] = m.content_digest(data)
+            path = os.path.join(self.tmp, f'odd-name-{len(paths)}.out')
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(json.dumps(data, sort_keys=True) + '\n')
+            paths.append(path)
+        chars = os.path.join(self.tmp, 'odd-name.tsv')
+        rc, out, err = run_compare(*paths, '--characters-to', chars)
+        self.assertEqual((rc, err), (0, ''))
+        with open(chars, encoding='utf-8') as f:
+            text = f.read()
+        rows = parse_characters(text)
+        label = 'th\\x2cTH\\tx'
+        self.assertIn((label, 'th_TH', 'th_TH.tis620', 'thai'), rows)
+        self.assertNotIn(odd, text)
+        self.assertEqual(rows[('ka_GE',)][0]['why'],
+                         'both machines: cannot be selected: a\\tb')
 
     def test_measured_over_different_characters(self):
         def edit(d):
             d['locales']['ko_KR']['corpus'] = '0' * 64
-        r = self.report(RHEL9, self.variant(edit, reseal=True))
+        path = os.path.join(self.tmp, 'different-characters.tsv')
+        rc, out, err = run_compare(RHEL9, self.variant(edit, reseal=True),
+                                   '--characters-to', path)
+        self.assertEqual((rc, err), (0, ''))
+        r = parse_report(out)
+        with open(path, encoding='utf-8') as f:
+            rows = parse_characters(f.read())
+        self.assertEqual(rows[('ko_KR',)][0]['why'],
+                         'measured over different characters on the two machines')
         self.assertEqual(r['unmeasured']['ko_KR']['why'],
                          {'both machines': 'different characters'})
         self.assertEqual(by_name(r), {})
+
+    def test_each_kind_of_the_run_is_said_alike_in_the_three(self):
+        """One edited new machine with each kind of the run: three warnings
+        (both machines run one build, and each tag names no release), a
+        locale measured only in part, one that could not be measured there,
+        one missing there, and the closing paragraph. The report, the summary
+        and the file say each alike, every warning included. And the file
+        gives the missing one the names PostgreSQL gave it on the old
+        machine, where the cluster created its collations."""
+        def edit(d):
+            d['locales']['en_US']['partly'] = 5
+            d['locales']['ko_KR.utf8'] = {'error': 'cannot be selected: test',
+                                          'codeset': 'UTF-8'}
+            del d['locales']['de_DE.utf8']
+            d['locales_listed'] -= 1
+        new = self.variant(edit, reseal=True)
+        summary_path = os.path.join(self.tmp, 'run-kinds.txt')
+        file_path = os.path.join(self.tmp, 'run-kinds.tsv')
+        # Both tags commit ids: two warnings more, one per side.
+        rc, out, err = run_compare(RHEL9, new, '--summary-to', summary_path,
+                                   '--characters-to', file_path,
+                                   '--tags', '3c03baca37fd', '1a2b3c4d5e6f')
+        self.assertEqual((rc, err), (0, ''))
+        report = parse_report(out)
+        with open(summary_path, encoding='utf-8') as f:
+            summary = parse_summary(f.read())
+        with open(file_path, encoding='utf-8') as f:
+            files = parse_characters(f.read())
+        rows = {names[0]: rows[0] for names, rows in files.items()}
+        self.assertEqual(changes_in(files), {})
+        warned = ['same build', 'OLD tag unchecked', 'NEW tag unchecked']
+        self.assertEqual(report['warnings'], warned)
+        self.assertEqual(summary['warnings'], warned)
+        self.assertEqual(files.warnings, warned)
+        self.assertEqual(report['partly'].get('en_US'), 5)
+        self.assertIn('en_US', summary['partly'])
+        self.assertEqual((rows['en_US']['finding'], rows['en_US']['count']),
+                         ('unchanged only as far as measured', 5))
+        self.assertEqual(report['unmeasured']['ko_KR.utf8']['why'],
+                         {'new machine': 'cannot be selected: test'})
+        self.assertEqual(set(report['unmeasured']), UNMEASURABLE | {'ko_KR.utf8'})
+        self.assertEqual(summary['unmeasured'], sorted(report['unmeasured']))
+        self.assertEqual({n for n, r in rows.items()
+                          if r['finding'] == 'not measured'},
+                         set(report['unmeasured']))
+        self.assertEqual(rows['ko_KR.utf8']['why'],
+                         'new machine: cannot be selected: test')
+        self.assertEqual(report['not_on_new'], ['de_DE.utf8'])
+        self.assertEqual(summary['not_on_new'], ['de_DE.utf8'])
+        self.assertEqual(
+            [(r['finding'], r.get('also')) for r in files[('de_DE.utf8',)]],
+            [('not on the new machine', None),
+             ('also in PostgreSQL', {'aliases': {'UTF-8': ['de_DE']},
+                                     'spellings': ['de_DE.UTF-8']})])
+        self.assertEqual(summary['closing'], report['closing'])
+        self.assertEqual(files.closing, report['closing'])
 
     def test_a_new_machine_with_only_the_english_language_pack(self):
         """13 of the 14 changed locales exist only on the old machine: each
@@ -1387,21 +2390,388 @@ class Pieces(unittest.TestCase):
         swapped[a], swapped[a + 1] = swapped[a + 1], swapped[a]
         self.assertEqual(len(m.moved_characters(base, swapped)), 1)
 
-    def test_neighbours_told_apart_differently(self):
-        """Only pairs that are neighbours in both orders count: once A has
-        moved away, what now follows @ is B, and how @ and B are told apart
-        says nothing about @ and A."""
+    # Told-apart records as measured() writes them, every level compared:
+    # bit 0 a tie, then per level 0 when x+hi sorts first (they differ at
+    # least that strongly) and 2 when it does not.
+    REC = {'letters': 0, 'accent': 2 << 1, 'case': (2 << 1) | (2 << 3),
+           'less': (2 << 1) | (2 << 3) | (2 << 5),
+           'tie': 1 | (2 << 1) | (2 << 3) | (2 << 5)}
+    ALL = (0, 1, 2)
+    # The letters pair compared equal and the rest weaker: worked out between
+    # two characters it would read as a weaker relation, a change, if the
+    # equal answer were not taken as saying nothing.
+    UNSURE = (1 << 1) | (2 << 3) | (2 << 5)
+
+    def records(self, seq, special):
+        """Told-apart records of seq: letters, but special {(x, y): kind}."""
+        told = bytearray(len(seq) - 1)
+        for i in range(len(seq) - 1):
+            told[i] = self.REC[special.get((seq[i], seq[i + 1]), 'letters')]
+        return bytes(told)
+
+    def rel(self, kind, levels=ALL):
+        return m.relation_tables(levels)[0][self.REC[kind]]
+
+    def inserted(self, c, before):
+        """BASE with c moved to just before the character before."""
+        seq = [x for x in self.BASE if x != c]
+        seq.insert(seq.index(before), c)
+        return seq
+
+    def test_a_weaker_level_worked_out_between_is_a_change(self):
+        """The Oriya case: 0 and its neighbour were told apart like an
+        accent; on the new machine a character stands between them, told
+        apart from each by less than case. The pair is named, measured on the
+        old machine. The pairs around the moved character, letters apart both
+        where measured and where worked out, cannot be decided: a letter
+        worked out between them may not be one."""
         base = self.BASE
-        old_told = bytearray(len(base) - 1)
+        new = self.inserted(0x70, 0x31)
+        old_told = self.records(base, {(0x30, 0x31): 'accent'})
+        new_told = self.records(new, {(0x30, 0x70): 'less', (0x70, 0x31): 'less'})
+        i = base.index(0x30)
+        self.assertEqual(
+            m.level_changes(base, old_told, new, new_told, self.ALL,
+                            m.reordering(base, new)),
+            ([['old', i, i, self.rel('accent'), self.rel('less')]],
+             [(0x70, 0x71), (0x30, 0x70), (0x6F, 0x71)]))
+
+    def test_a_weaker_level_worked_out_on_the_old_machine_is_a_change(self):
+        """The mirror of the Oriya case: neighbours on the new machine only,
+        told apart like an accent there, and by less than case through the
+        character that stood between them on the old one. Before is the old
+        machine's, worked out; now is the new one's, measured."""
+        base = self.BASE
+        new = self.inserted(0x31, 0x70)
+        old_told = self.records(base, {(0x30, 0x31): 'less', (0x31, 0x32): 'less'})
+        new_told = self.records(new, {(0x30, 0x32): 'accent'})
+        j = new.index(0x30)
+        changes = m.level_changes(base, old_told, new, new_told, self.ALL,
+                                  m.reordering(base, new))[0]
+        self.assertEqual(changes, [['new', j, j, self.rel('less'),
+                                    self.rel('accent')]])
+
+    def test_an_unsure_record_on_either_side_is_undecided(self):
+        """Where the pair is measured, or between them where it is worked
+        out, a record that compared equal says nothing about the level."""
+        base = self.BASE
+        new = self.inserted(0x70, 0x31)
+        kinds = {(0x30, 0x70): 'less', (0x70, 0x31): 'less'}
+        for where in ('measured', 'between'):
+            with self.subTest(where=where):
+                old_told = bytearray(self.records(base, {(0x30, 0x31): 'accent'}))
+                new_told = bytearray(self.records(new, kinds))
+                if where == 'measured':
+                    old_told[base.index(0x30)] = 1 << 1
+                else:
+                    new_told[new.index(0x70)] = self.UNSURE
+                changes, undecided = m.level_changes(
+                    base, bytes(old_told), new, bytes(new_told), self.ALL,
+                    m.reordering(base, new))
+                self.assertEqual(changes, [])
+                self.assertIn((0x30, 0x31), undecided)
+
+    def test_an_unsure_record_on_the_new_machine_only_route(self):
+        """Neighbours on the new machine only: an unsure record of their own,
+        or among the old machine's characters between them, is undecided."""
+        base = self.BASE
+        new = self.inserted(0x31, 0x70)
+        for where in ('measured', 'between'):
+            with self.subTest(where=where):
+                old_told = bytearray(self.records(
+                    base, {(0x30, 0x31): 'less', (0x31, 0x32): 'less'}))
+                new_told = bytearray(self.records(new, {(0x30, 0x32): 'less'}))
+                if where == 'measured':
+                    new_told[new.index(0x30)] = self.UNSURE
+                else:
+                    old_told[base.index(0x30)] = self.UNSURE
+                changes, undecided = m.level_changes(
+                    base, bytes(old_told), new, bytes(new_told), self.ALL,
+                    m.reordering(base, new))
+                self.assertIn((0x30, 0x32), undecided)
+                self.assertNotIn('new', [side for side, *_ in changes])
+
+    def test_neighbours_in_both_unsure_on_one_machine_only(self):
+        """The same relation from different bytes, one of them unsure: on the
+        old machine with the same order, and on the new one after a
+        character moved elsewhere."""
+        base = self.BASE
+        old_told = bytearray(self.records(base, {}))
         new_told = bytearray(old_told)
-        old_told[base.index(0x56)] = 2 << 1
-        self.assertEqual(m.pair_changes(base, old_told, base, new_told),
-                         [(0x56, 0x57, 2 << 1, 0)])
-        moved = [c for c in base if c != 0x41] + [0x41]
-        told = bytearray(len(moved) - 1)
-        told[moved.index(0x56)] = 2 << 1
-        told[moved.index(0x40)] = 3 << 1
-        self.assertEqual(m.pair_changes(base, old_told, moved, told), [])
+        i = base.index(0x61)
+        old_told[i] = 1 << 1                    # letters '=', the rest '<'
+        new_told[i] = 2 << 1                    # letters '>', the rest '<'
+        rel = m.relation_tables(self.ALL)[0]
+        self.assertEqual(rel[old_told[i]], rel[new_told[i]])
+        self.assertEqual(m.level_changes(base, bytes(old_told), base,
+                                         bytes(new_told), self.ALL),
+                         ([], [(0x61, 0x62)]))
+        new = self.inserted(0x70, 0x31)
+        old_told = bytearray(self.records(base, {(0x61, 0x62): 'case'}))
+        new_told = bytearray(self.records(new, {(0x61, 0x62): 'case'}))
+        new_told[new.index(0x61)] = (2 << 1) | (1 << 3)   # accent '='
+        self.assertEqual(rel[old_told[i]], rel[new_told[new.index(0x61)]])
+        self.assertIn((0x61, 0x62), m.level_changes(
+            base, bytes(old_told), new, bytes(new_told), self.ALL,
+            m.reordering(base, new))[1])
+
+    def test_a_long_way_between_is_read_the_same(self):
+        """More than 64 characters between: the counts path, not the short
+        loop, works the relation out; weaker is a change, and an unsure
+        record anywhere between makes it undecided."""
+        base = self.BASE
+        block = list(range(0x2F00, 0x2F50))
+        new = [c for c in base if c not in block]
+        at = new.index(0x31)
+        new[at:at] = block
+        between = {(0x30, block[0]): 'less', (block[-1], 0x31): 'less'}
+        between.update({(x, y): 'less' for x, y in zip(block, block[1:])})
+        old_told = self.records(base, {(0x30, 0x31): 'accent'})
+        new_told = bytearray(self.records(new, between))
+        i = base.index(0x30)
+        moves = m.reordering(base, new)
+        self.assertEqual(
+            m.level_changes(base, old_told, new, bytes(new_told), self.ALL,
+                            moves)[0][0],
+            ['old', i, i, self.rel('accent'), self.rel('less')])
+        # Inside the way, and at each of its two ends: the first record and
+        # the last count as much as the middle one.
+        for where in (block[40], 0x30, block[-1]):
+            with self.subTest(unsure_after=f'U+{where:04X}'):
+                told = bytearray(new_told)
+                told[new.index(where)] = self.UNSURE
+                changes, undecided = m.level_changes(base, old_told, new,
+                                                     bytes(told), self.ALL, moves)
+                self.assertNotIn(i, [first for side, first, *_ in changes])
+                self.assertIn((0x30, 0x31), undecided)
+
+    def test_the_levels_compared_and_left_out(self):
+        """'none' is a level shown absent on both machines: nothing to
+        compare, and nothing left out. '?' is a level no pair measured."""
+        self.assertEqual(m.comparable_levels('61.62> none 61.41>',
+                                             '61.62> none 61.41>'), (0, 2))
+        self.assertEqual(m.uncompared_levels('61.62> none 61.41>',
+                                             '61.62> none 61.41>'), ())
+        self.assertEqual(m.comparable_levels('61.62> ? ?', '61.62> ? ?'), (0,))
+        self.assertEqual(m.uncompared_levels('61.62> ? ?', '61.62> ? ?'), (1, 2))
+        self.assertEqual(m.uncompared_levels('61.62> 30.B66> 61.41>',
+                                             '61.62> 61.E1> 61.41>'), (1,))
+
+    def test_a_reordered_locale_with_the_same_records_is_compared(self):
+        """The records of the two machines can be the same bytes while the
+        order differs: the pairs they belong to are not the same pairs, and
+        are compared."""
+        probes = '61.62> 61.E1> 61.41>'
+        base = self.BASE
+        new = self.inserted(0x70, 0x31)
+        told = self.records(base, {(0x30, 0x31): 'accent'})
+
+        def measurement(seq):
+            text = m.order_text(seq).encode('utf-8')
+            order, pairs = (hashlib.sha256(text).hexdigest(),
+                            hashlib.sha256(probes.encode() + b'\n' + told).hexdigest())
+            return ({'path': 'x', 'order_data': {order: m.pack_order(seq)},
+                     'pair_data': {pairs: m.pack(told)}},
+                    {'order': order, 'pairs': pairs, 'chars': len(seq),
+                     'probes': probes})
+        (old, o), (nw, n) = measurement(base), measurement(new)
+        self.assertEqual(o['pairs'], n['pairs'])
+        rows = m.describe_change(old, nw, o, n)[2]
+        self.assertIn(('not decided', 'U+0030 U+0031', '-', '-', '-', '-', '-'),
+                      rows)
+
+    def test_a_run_keeps_where_it_was_measured(self):
+        """Two pairs in a row change alike, one measured on both machines and
+        one worked out on the new: two entries, or the file would call the
+        second measured on both."""
+        base = self.BASE
+        new = self.inserted(0x70, 0x32)
+        old_told = self.records(base, {(0x30, 0x31): 'accent',
+                                       (0x31, 0x32): 'accent'})
+        new_told = self.records(new, {(0x30, 0x31): 'less', (0x31, 0x70): 'less',
+                                      (0x70, 0x32): 'less'})
+        i = base.index(0x30)
+        changes, undecided = m.level_changes(base, old_told, new, new_told,
+                                             self.ALL, m.reordering(base, new))
+        self.assertEqual(changes, [
+            ['both', i, i, self.rel('accent'), self.rel('less')],
+            ['old', i + 1, i + 1, self.rel('accent'), self.rel('less')]])
+
+    def test_a_stronger_level_worked_out_between_is_not_a_change(self):
+        """The direction a character glibc ignores at a level can fake: a
+        letter between two neighbours told apart by less than case does not
+        make them letters apart. Counted as undecided, not named."""
+        base = self.BASE
+        new = self.inserted(0x70, 0x41)
+        old_told = self.records(base, {(0x40, 0x41): 'less'})
+        new_told = self.records(new, {})
+        changes, undecided = m.level_changes(base, old_told, new, new_told,
+                                             self.ALL, m.reordering(base, new))
+        self.assertEqual(changes, [])
+        self.assertEqual(undecided, [(0x40, 0x41), (0x70, 0x71), (0x40, 0x70),
+                                     (0x6F, 0x71)])
+
+    def test_neighbours_in_both_orders_compare_record_to_record(self):
+        """A run of pairs that change alike is one entry."""
+        base = self.BASE
+        old_told = self.records(base, {(0x56, 0x57): 'accent',
+                                       (0x57, 0x58): 'accent'})
+        new_told = self.records(base, {})
+        i = base.index(0x56)
+        self.assertEqual(m.level_changes(base, old_told, base, new_told, self.ALL),
+                         ([['both', i, i + 1, self.rel('accent'),
+                            self.rel('letters')]], []))
+
+    def test_a_record_that_compared_equal_is_undecided(self):
+        """strcoll called the probe strings equal: the record says nothing
+        about the level, on either side."""
+        base = self.BASE
+        old_told = self.records(base, {})
+        new_told = bytearray(self.records(base, {}))
+        new_told[base.index(0x61)] = 1 << 1
+        self.assertEqual(m.level_changes(base, old_told, base, bytes(new_told),
+                                         self.ALL),
+                         ([], [(0x61, 0x62)]))
+
+    def test_records_unsure_on_both_machines_that_differ_are_undecided(self):
+        """Both records hold an answer that says nothing, so their relations
+        read the same, and the bytes still differ: undecided, not dropped."""
+        base = self.BASE
+        old_told = bytearray(self.records(base, {}))
+        new_told = bytearray(old_told)
+        i = base.index(0x61)
+        old_told[i] = (1 << 1) | (2 << 3) | (2 << 5)
+        new_told[i] = (1 << 1) | (2 << 3) | (3 << 5)
+        rel, unsure = m.relation_tables(self.ALL)
+        self.assertEqual((rel[old_told[i]], unsure[old_told[i]]),
+                         (rel[new_told[i]], unsure[new_told[i]]))
+        self.assertEqual(m.level_changes(base, bytes(old_told), base,
+                                         bytes(new_told), self.ALL),
+                         ([], [(0x61, 0x62)]))
+
+    def test_a_record_with_no_pair_at_a_compared_level_is_undecided(self):
+        """3 is "this level had no pair", which a level compared on both
+        machines had: a record that says so changed in a way the comparison
+        cannot read, and must count rather than read as unchanged."""
+        base = self.BASE
+        old_told = self.records(base, {(0x61, 0x62): 'tie'})
+        new_told = bytearray(old_told)
+        new_told[base.index(0x61)] ^= 2         # the letters field, 2 -> 3
+        self.assertEqual(m.level_changes(base, old_told, base, bytes(new_told),
+                                         self.ALL),
+                         ([], [(0x61, 0x62)]))
+
+    def test_only_the_levels_compared_count(self):
+        """With the accent pair different on the two machines, an accent
+        record that changed is not a change; the case level still is."""
+        base = self.BASE
+        old_told = self.records(base, {(0x61, 0x62): 'accent'})
+        new_told = self.records(base, {(0x61, 0x62): 'case'})
+        self.assertEqual(m.level_changes(base, old_told, base, new_told, (0, 2)),
+                         ([], []))
+        new_told = self.records(base, {(0x61, 0x62): 'less'})
+        self.assertEqual(
+            m.level_changes(base, old_told, base, new_told, (0, 2))[0],
+            [['both', base.index(0x61), base.index(0x61),
+              self.rel('accent', (0, 2)), self.rel('less', (0, 2))]])
+
+    def test_the_relation_in_words(self):
+        self.assertEqual(m.relation_words(self.rel('accent'), self.ALL),
+                         'like an accent')
+        self.assertEqual(m.relation_words(self.rel('accent', (0, 2)), (0, 2)),
+                         'like an accent or by case')
+        self.assertEqual(m.relation_words(self.rel('less', (0, 2)), (0, 2)),
+                         'by less than case')
+        self.assertEqual(m.relation_words(self.rel('case', (0,)), (0,)),
+                         'by less than a letter')
+        self.assertEqual(m.relation_words(self.rel('tie'), self.ALL),
+                         'not at all (the bytes decide)')
+        for kind in self.REC:
+            for levels in ((0,), (0, 2), self.ALL):
+                with self.subTest(kind=kind, levels=levels):
+                    self.assertIn(m.relation_words(self.rel(kind, levels), levels),
+                                  TOLD_APART)
+
+    def test_the_test_pair_of_a_level_change(self):
+        """The Oriya digit zero: "0A" against U+0B66 "a", with the probes
+        or_IN measured on both machines (letters a/b, case a/A)."""
+        self.assertEqual(
+            m.test_pair(0x30, 0xB66, self.rel('accent', (0, 2)),
+                        self.rel('less', (0, 2)), '61.62> 30.B66> 61.41>', (0, 2)),
+            ((0x30, 0x41), (0xB66, 0x61), '<', '>'))
+        # From the end of the string where the level is read from the end.
+        self.assertEqual(
+            m.test_pair(0x56, 0x77, self.rel('accent'), self.rel('letters'),
+                        '61.62< 61.E1> 61.41>', self.ALL),
+            ((0x62, 0x56), (0x61, 0x77), '>', '<'))
+        self.assertIsNone(m.test_pair(0x56, 0x77, self.rel('tie'),
+                                      self.rel('less'), '61.62> 61.E1> 61.41>',
+                                      self.ALL))
+
+    def permutations(self):
+        """200 small orders, each a few moves and reversals away from the
+        first: runs of neighbours that stay together, as in a real upgrade,
+        and characters that cross them."""
+        rng = random.Random(4)
+        for _ in range(200):
+            n = rng.randint(1, 30)
+            seq = list(range(100, 100 + n))
+            new = seq[:]
+            for _ in range(rng.randint(0, 4)):
+                i, j = sorted(rng.sample(range(n), 2)) if n > 1 else (0, 0)
+                new[i:j + 1] = (new[i:j + 1][::-1] if rng.random() < .3
+                                else new[i + 1:j + 1] + new[i:i + 1])
+            yield seq, new
+
+    def test_the_characters_in_a_reversed_pair(self):
+        """Against every pair, on 200 small orders."""
+        for seq, new in self.permutations():
+            at = {c: i for i, c in enumerate(new)}
+            want = [int(any((at[x] < at[y]) != (i < j)
+                            for j, y in enumerate(seq) if y != x))
+                    for i, x in enumerate(seq)]
+            self.assertEqual(list(m.in_a_reversed_pair(m.new_positions(seq, new))),
+                             want, (seq, new))
+
+    def test_the_kept_characters_are_a_longest_increasing_subsequence(self):
+        """In order in both, and as many as any such set: the shortcuts that
+        append a run whole and read it back a run at a time keep it so."""
+        for seq, new in self.permutations():
+            positions = m.new_positions(seq, new)
+            kept = m.kept_in_order(positions)
+            chosen = [p for p, k in zip(positions, kept) if k]
+            self.assertEqual(chosen, sorted(chosen))
+            longest = [1] * len(positions)
+            for i in range(len(positions)):
+                for j in range(i):
+                    if positions[j] < positions[i]:
+                        longest[i] = max(longest[i], longest[j] + 1)
+            self.assertEqual(len(chosen), max(longest), (seq, new))
+
+    def test_every_moved_character_has_a_witness_on_its_other_side(self):
+        for seq, new in self.permutations():
+            moves = m.reordering(seq, new)
+            kept = m.kept_in_order(moves[0])
+            found = m.witnesses(seq, new, moves, kept)
+            self.assertEqual(set(found), set(m.moved_characters(seq, new)))
+            at, keep = {c: i for i, c in enumerate(new)}, set(
+                c for c, k in zip(seq, kept) if k)
+            for c, (w, sign) in found.items():
+                self.assertIn(w, keep)
+                before = seq.index(c) < seq.index(w)
+                self.assertEqual(sign, '<' if before else '>')
+                self.assertNotEqual(before, at[c] < at[w])
+
+    def test_an_order_as_text(self):
+        """Built as UTF-32 for speed, it must say what joining chr() says,
+        and refuse what chr() refuses: a damaged order is a refusal, never a
+        traceback (unpacked catches these two)."""
+        seq = [0x41, 0xD7A3, 0x10FFFF, 1]
+        self.assertEqual(m.order_text(seq), ''.join(map(chr, seq)))
+        with self.assertRaises(ValueError):
+            m.order_text([0x110000])
+        with self.assertRaises(OverflowError):
+            m.order_text([-1])
 
     def test_a_build_is_read_whole_or_not_at_all(self):
         self.assertEqual(
@@ -1443,6 +2813,237 @@ class Pieces(unittest.TestCase):
         self.assertEqual(names['C.utf8'], (None, 'C.UTF-8'))
         self.assertEqual(names['sv_SE.iso885915'], ('sv_SE', 'sv_SE.ISO-8859-15'))
         self.assertEqual(names['ko_KR'], (None, None))
+
+
+class FindingKinds(unittest.TestCase):
+    """The table each output is drawn from, and one made-up change per kind
+    of finding, small enough that every kind appears in both of its forms:
+    named, and counted as too many to name."""
+
+    BASE = list(range(0x20, 0x3000))
+    REC = Pieces.REC
+
+    def test_every_kind_has_all_three_outputs(self):
+        self.assertEqual(tuple(m.LOCALE_KINDS), LOCALE_KINDS)
+        self.assertEqual(set(m.RUN_KINDS), {'warning', 'partly', 'not measured',
+                                            'not on the new machine', 'closing'})
+        for table in (m.LOCALE_KINDS, m.RUN_KINDS):
+            for kind, how in table.items():
+                with self.subTest(kind=kind):
+                    self.assertEqual(len(how), 3)
+                    self.assertTrue(all(map(callable, how)))
+
+    def test_a_kind_with_no_entry_raises(self):
+        """Rather than be left out of an output: a new kind of finding
+        with no way to be printed, and a kind one output never takes."""
+        for part in (m.REPORT, m.SUMMARY, m.FILE):
+            with self.assertRaises(LookupError):
+                m.printer(m.LOCALE_KINDS, 'a new kind', part)
+        with self.assertRaises(LookupError):
+            m.Drawn([('a new kind', {})], m.REPORT)
+        run = m.Drawn([('closing', {'text': m.CLOSING}),
+                       ('not on the new machine', {'name': 'x'})], m.REPORT)
+        run('closing')
+        with self.assertRaises(LookupError):
+            run.done()
+        run('not on the new machine')
+        run.done()
+
+    def measurement(self, seq, told, probes):
+        text = m.order_text(seq).encode('utf-8')
+        order = hashlib.sha256(text).hexdigest()
+        pairs = hashlib.sha256(probes.encode() + b'\n' + told).hexdigest()
+        return ({'path': 'x', 'order_data': {order: m.pack_order(seq)},
+                 'pair_data': {pairs: m.pack(told)}},
+                {'order': order, 'pairs': pairs, 'chars': len(seq),
+                 'probes': probes})
+
+    def records(self, seq, special):
+        told = bytearray(len(seq) - 1)
+        for i in range(len(seq) - 1):
+            told[i] = self.REC[special.get((seq[i], seq[i + 1]), 'letters')]
+        return bytes(told)
+
+    def changes(self):
+        """{name: (old, new, o, n)}: the Oriya case (a character moved
+        between 0 and 1, told apart like an accent before and by less than
+        case through it now); the same with the accent pair changed; two
+        machines that measured a pair for letters only; and the mirror of the
+        Oriya case, a pair told apart differently measured on the new machine
+        only (1 moved between 0 and 2 there)."""
+        all3, other = '61.62> 61.E1> 61.41>', '61.62> 30.B66> 61.41>'
+        new = [x for x in self.BASE if x != 0x70]
+        new.insert(new.index(0x31), 0x70)
+        old_told = self.records(self.BASE, {(0x30, 0x31): 'accent'})
+        new_told = self.records(new, {(0x30, 0x70): 'less', (0x70, 0x31): 'less'})
+        out = {}
+        for name, before, now in (('oriya', all3, all3),
+                                  ('probes', all3, other),
+                                  ('letters only', '61.62> ? ?', '61.62> ? ?')):
+            (old, o), (nw, n) = (self.measurement(self.BASE, old_told, before),
+                                 self.measurement(new, new_told, now))
+            out[name] = (old, nw, o, n)
+        mirror = [x for x in self.BASE if x != 0x31]
+        mirror.insert(mirror.index(0x70), 0x31)
+        (old, o), (nw, n) = (
+            self.measurement(self.BASE, self.records(
+                self.BASE, {(0x30, 0x31): 'less', (0x31, 0x32): 'less'}), all3),
+            self.measurement(mirror, self.records(
+                mirror, {(0x30, 0x32): 'accent'}), all3))
+        out['mirror'] = (old, nw, o, n)
+        return out
+
+    def test_each_kind_is_counted_alike_in_the_three(self):
+        """Every kind of finding of a change, from describe_change itself:
+        its count in the report's lines, in the summary's phrase and in the
+        rows of the file is the same, named and counted as too many."""
+        seen = {kind: set() for kind in LOCALE_KINDS}
+        sides = set()
+        for limit in (m.LIST_LIMIT, 0):
+            with unittest.mock.patch.object(m, 'LIST_LIMIT', limit):
+                for name, args in self.changes().items():
+                    lines, brief, rows = m.describe_change(*args)
+                    found = m.locale_findings(*args)
+                    kinds = {kind for kind, d in found}
+                    sides.update(side for kind, d in found if kind == 'told apart'
+                                 for *_, side in d['chains'])
+                    files = parse_characters(file_of(rows))
+                    said = (kinds_in_report(parse_details(lines)),
+                            kinds_in_brief(parse_brief(brief)),
+                            kinds_in_rows(files.get(('x',), [])))
+                    for kind in LOCALE_KINDS:
+                        with self.subTest(change=name, limit=limit, kind=kind):
+                            self.assertEqual(said[0][kind], said[1][kind])
+                            self.assertEqual(said[0][kind], said[2][kind])
+                            if kind in kinds:
+                                seen[kind].add(limit)
+                                self.assertTrue(said[0][kind])
+                    with self.subTest(change=name, limit=limit, kind='named'):
+                        assert_named_alike(self, parse_details(lines),
+                                           parse_brief(brief),
+                                           files.get(('x',), []))
+        # Each kind came up, in both forms, and changes measured on each side.
+        self.assertEqual(sides, {'old', 'new'})
+        for kind in LOCALE_KINDS:
+            with self.subTest(kind=kind):
+                self.assertEqual(seen[kind], {m.LIST_LIMIT, 0})
+
+
+def pair_by_pair(old_seq, old_told, new_seq, new_told, levels):
+    """level_changes worked out the slow way, one pair of neighbours at a
+    time, as (changes, undecided): changes a set of (side, x, y, before,
+    now), one per pair, undecided a set of (x, y).
+
+    A pair of neighbours in both orders is compared record to record; a pair
+    of neighbours in one order that the other keeps in order is compared
+    with the chain of neighbours between them there, and is a change only
+    when that chain tells them apart more weakly; a pair the other order
+    reverses is not a pair of this kind at all. No runs, no bit tricks, no
+    shortcut for long chains: written from the rule, not from the code."""
+    rel, unsure = m.relation_tables(levels)
+    new_at = {c: i for i, c in enumerate(new_seq)}
+    old_at = {c: i for i, c in enumerate(old_seq)}
+    changes, undecided = set(), set()
+
+    def chain(told, a, b):
+        r, u = 0, False
+        for v in told[a:b]:
+            r |= rel[v]
+            u |= bool(unsure[v])
+        return r, u
+
+    def weigh(x, y, mine, mine_unsure, theirs, theirs_unsure, side):
+        if mine_unsure or theirs_unsure:
+            undecided.add((x, y))
+        elif m.strength(theirs) < m.strength(mine):
+            changes.add((side, x, y) + ((mine, theirs) if side == 'old'
+                                        else (theirs, mine)))
+        elif theirs != mine or theirs & ~1:
+            undecided.add((x, y))
+
+    for i in range(len(old_seq) - 1):
+        x, y = old_seq[i], old_seq[i + 1]
+        a, b = new_at[x], new_at[y]
+        if b == a + 1:
+            before, now = old_told[i], new_told[a]
+            if unsure[before] or unsure[now]:
+                if before != now:
+                    undecided.add((x, y))
+            elif rel[before] != rel[now]:
+                changes.add(('both', x, y, rel[before], rel[now]))
+        elif b > a:
+            weigh(x, y, rel[old_told[i]], unsure[old_told[i]],
+                  *chain(new_told, a, b), 'old')
+    for j in range(len(new_seq) - 1):
+        x, y = new_seq[j], new_seq[j + 1]
+        a, b = old_at[x], old_at[y]
+        if b > a + 1:
+            weigh(x, y, rel[new_told[j]], unsure[new_told[j]],
+                  *chain(old_told, a, b), 'new')
+    return changes, undecided
+
+
+class LevelChangesPairByPair(unittest.TestCase):
+    """level_changes against pair_by_pair on made-up orders and records,
+    the same every run: reorderings by moves and reversed stretches, records
+    with ties, levels absent and pairs that compared equal, and some orders
+    long enough that a chain between two neighbours is longer than the 64
+    characters Between adds up one by one."""
+
+    def record(self, rng, levels):
+        v = 1 if rng.random() < .1 else 0
+        for k in range(3):
+            v |= (rng.choice((0, 0, 2, 2, 1)) if k in levels
+                  else rng.choice((0, 1, 2, 3))) << (1 + 2 * k)
+        return v
+
+    def case(self, rng, long):
+        n = rng.randint(70, 200) if long else rng.randint(2, 30)
+        seq = list(range(100, 100 + n))
+        new = seq[:]
+        for _ in range(rng.randint(1 if long else 0, 4)):
+            i, j = sorted(rng.sample(range(n), 2)) if n > 1 else (0, 0)
+            if long and rng.random() < .5:
+                j = min(n - 1, i + rng.randint(66, 120))
+            new[i:j + 1] = (new[i:j + 1][::-1] if rng.random() < .3
+                            else new[i + 1:j + 1] + new[i:i + 1])
+        levels = tuple(k for k in range(3) if rng.random() < .7)
+        old_told = bytes(self.record(rng, levels) for _ in range(n - 1))
+        new_told = bytearray(self.record(rng, levels) for _ in range(n - 1))
+        if rng.random() < .5:
+            # Mostly the same record for a pair of neighbours in both orders,
+            # so that the unchanged ones are many too.
+            at = {c: i for i, c in enumerate(seq)}
+            for j in range(n - 1):
+                a, b = at[new[j]], at[new[j + 1]]
+                if b == a + 1 and rng.random() < .8:
+                    new_told[j] = old_told[a]
+        return seq, old_told, new, bytes(new_told), levels
+
+    def test_the_same_answer_as_pair_by_pair(self):
+        rng = random.Random(20261018)
+        found = {'change': 0, 'undecided': 0, 'long': 0}
+        for t in range(200):
+            seq, old_told, new, new_told, levels = self.case(rng, t % 10 == 0)
+            moves = None if seq == new else m.reordering(seq, new)
+            runs, undecided = m.level_changes(seq, old_told, new, new_told,
+                                              levels, moves)
+            changes = set()
+            for side, first, last, before, now in runs:
+                order = new if side == 'new' else seq
+                for i in range(first, last + 1):
+                    changes.add((side, order[i], order[i + 1], before, now))
+            with self.subTest(case=t):
+                self.assertEqual(len(undecided), len(set(undecided)))
+                self.assertEqual((changes, set(undecided)),
+                                 pair_by_pair(seq, old_told, new, new_told,
+                                              levels))
+            found['change'] += bool(changes)
+            found['undecided'] += bool(undecided)
+            found['long'] += len(seq) > 64 and seq != new
+        # The cases reach what they are meant to: changes, undecided pairs,
+        # and long chains.
+        self.assertGreater(min(found.values()), 10, found)
 
 
 # --- one file per machine: --extract and --unpack -----------------------------

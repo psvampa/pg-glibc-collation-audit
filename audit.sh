@@ -354,10 +354,13 @@ rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
 # included.
 ORDER_LOG="$OUT_DIR/measured_order.$PAIR.log"
 ORDER_SUMMARY="$OUT_DIR/measured_order_summary.$PAIR.txt"
-rm -f "$ORDER_LOG" "$ORDER_SUMMARY"
+# Every character and pair step 11 found; its report and summary name it.
+ORDER_CHARACTERS="$OUT_DIR/measured_order_characters.$PAIR.tsv"
+rm -f "$ORDER_LOG" "$ORDER_SUMMARY" "$ORDER_CHARACTERS"
 if [ -n "$OLD_ORDER" ]; then
   if ! python3 "$SCRIPTS/locale_order.py" --compare "$OLD_ORDER" "$NEW_ORDER" \
-       --tags "$OLD" "$NEW" --summary-to "$ORDER_SUMMARY" > "$ORDER_LOG" 2>&1; then
+       --tags "$OLD" "$NEW" --summary-to "$ORDER_SUMMARY" \
+       --characters-to "$ORDER_CHARACTERS" > "$ORDER_LOG" 2>&1; then
     cat "$ORDER_LOG" >&2
     if [ -n "$OLD_NODE" ]; then
       # The message above names the measurement as laid out; the reader
@@ -859,7 +862,7 @@ fi
 
 # What each machine's own glibc says, beside what the tags say. Below Removed,
 # not above it: that section sits directly under Reindex on purpose, and this
-# block runs to some forty lines. Step 11 reads no locale source: over RHEL8 ->
+# block is long. Step 11 reads no locale source: over RHEL8 ->
 # RHEL9 it names ko_KR.utf8, whose file is byte-identical in both tags, and
 # eight Swedish locales in which no character moves. Absent is not empty:
 # without the two files this says NOT RUN.
