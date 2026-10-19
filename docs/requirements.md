@@ -35,12 +35,23 @@ and the run continues.
   covers every locale `locale -a` lists and nothing else. A locale a database
   uses is installed already. On a stock RHEL image on EC2 that was English
   alone, 40 locales on RHEL 8.10 and 38 on RHEL 9.8.
-- **No PostgreSQL and no root.** Measured as an ordinary user. Only the
-  package install needs `sudo`.
+- **No PostgreSQL and no root.** Measured as an ordinary user, the order is
+  the same. Run as root, or as the user PostgreSQL runs as where /proc does
+  not hide other users' processes (`hidepid`), the measurement also sees
+  whether PostgreSQL runs the C library it measured; otherwise it says that
+  was not checked.
 
 `sudo` over `ssh` needs a terminal to ask for the password, which is what
 `ssh -t` gives it. Without `-t` it stops at once with `sudo: a terminal is
 required to read the password`, and nothing is installed.
+
+The measurement cannot take `-t`, because the script reaches the machine on
+its standard input. So the README runs it with `sudo -n`, which never asks:
+without a rule that lets you run as `postgres` with no password it stops at
+once with `sudo: a password is required`, and on a machine with no
+`postgres` user it says the user is unknown. Either way it writes an
+empty file, which `audit.sh` refuses. Run the line without
+`sudo -n -u postgres` then.
 
 ### Memory and time
 

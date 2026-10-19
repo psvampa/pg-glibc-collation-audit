@@ -149,7 +149,9 @@ collation — on both machines, naming the builds.
 
 The remaining categories (`LC_NUMERIC`, `LC_TIME`, `LC_MONETARY`,
 `LC_MESSAGES`) are out of scope as well. They move `to_char()` output and
-message text rather than index order, and no step reads them either.
+message text rather than index order. The one exception is the number of
+decimals of the `money` type, from `LC_MONETARY`, which changes what a stored
+value means: step 11 compares it on both machines.
 
 ---
 

@@ -41,7 +41,8 @@ which sorts real strings on real nodes, and there are others.
 
 **On each server, for the extended run of command 1:**
 
-- `ssh` access, and `sudo` for one package install
+- `ssh` access, and `sudo` for one package install and to run the
+  measurement as the user PostgreSQL runs as
 - Python 3.6 or newer (on RHEL8, `/usr/libexec/platform-python`)
 - `glibc-locale-source`, of the exact glibc build the server runs
 - the language packs of the locales your databases use
@@ -135,9 +136,12 @@ ssh -t el9 'sudo dnf install -y glibc-locale-source-$(rpm -q --qf "%{VERSION}-%{
 
 # 2. measure each machine and pack the result into one file: the script
 #    travels over the connection and the file comes back the same way.
+#    It runs as postgres, so that it can see which C library PostgreSQL
+#    runs unless /proc hides other users' processes; sudo cannot ask for a
+#    password here, and -n makes sure it never waits for one.
 #    On RHEL8 python3 may be missing; platform-python is always there
-ssh el8 /usr/libexec/platform-python - --extract < scripts/locale_order.py > old.tar
-ssh el9 python3 - --extract < scripts/locale_order.py > new.tar
+ssh el8 sudo -n -u postgres /usr/libexec/platform-python - --extract < scripts/locale_order.py > old.tar
+ssh el9 sudo -n -u postgres python3 - --extract < scripts/locale_order.py > new.tar
 
 # 3. compare, wherever this checkout is
 ./audit.sh glibc-2.28 glibc-2.34 --old-node old.tar --new-node new.tar
@@ -146,6 +150,10 @@ ssh el9 python3 - --extract < scripts/locale_order.py > new.tar
 - `el8` and `el9` are placeholders for your two machines, the old one and the
   new one. Replace them, in every line above, with the names you reach those
   machines by over ssh, such as `user@host` or a name from `~/.ssh/config`.
+- If `sudo` says a password is required, or that the user postgres is
+  unknown, run the same line without `sudo -n -u postgres`. The measurement
+  is the same; the summary then says PostgreSQL's processes were not checked
+  on that machine.
 - You can also copy `scripts/locale_order.py` to the machine, run
   `python3 locale_order.py --extract > old.tar` there and bring the file back.
 - If the repository no longer has the sources of that exact build, dnf says
@@ -242,8 +250,9 @@ evidence is in
 
 ## Scope
 
-Sort order (`LC_COLLATE`) only, and in PostgreSQL terms the **`libc` provider**
-only. Nothing about `LC_CTYPE` (`upper()`, `lower()`, pattern matching), ICU,
+Sort order (`LC_COLLATE`) only, besides the decimals of the `money` type that
+step 11 compares, and in PostgreSQL terms the **`libc` provider** only. Nothing
+about `LC_CTYPE` (`upper()`, `lower()`, pattern matching), ICU,
 or the `builtin` provider — and the two pairs named above. `LC_CTYPE` is the
 exclusion that can still cost you an index, and no step of this tool audits
 it.

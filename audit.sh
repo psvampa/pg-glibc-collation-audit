@@ -884,7 +884,9 @@ else
   echo "     option, or --old-order and --new-order, each written by"
   echo "     scripts/locale_order.py on that machine. Without them nothing above"
   echo "     asked either machine's glibc how it sorts, and a locale whose files"
-  echo "     did not change can still sort differently."
+  echo "     did not change can still sort differently. Nor did anything compare"
+  echo "     the decimals of money or check which C library PostgreSQL runs on"
+  echo "     either machine."
 fi
 
 echo

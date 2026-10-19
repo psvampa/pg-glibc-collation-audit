@@ -949,6 +949,8 @@ unexamined are three different answers:
 ================================================================
 Old machine: glibc-2.28-251.el8_10.40.x86_64, 867 locale(s)
 New machine: glibc-2.34-275.el9_8.x86_64, 869 locale(s)
+Control: C and POSIX measured as byte order on both machines, which is how
+   glibc sorts them in every version.
 
 Sort order CHANGED in 14 locale(s):
 
@@ -1034,13 +1036,21 @@ Only on the new machine: 4 locale(s).
   mnw_MM.utf8
 
 Of the 867 locale(s) on the old machine: 14 changed, 847 unchanged (5 of them only as far as measured), 4 not measured, 2 not on the new machine.
+Decimals of money: the same in the 865 locale(s) measured on both machines.
+PostgreSQL on the OLD machine: 10 process(es) named postgres or postmaster,
+   all running the C library measured there.
+PostgreSQL on the NEW machine: 10 process(es) named postgres or postmaster,
+   all running the C library measured there.
+This looks at the C library PostgreSQL runs, not at its locale data: a
+   PostgreSQL that was not restarted can already use locales installed after
+   it started.
 !! Not measured: a rule that applies only to a particular combination of
    letters, such as a contraction ("ch" sorted as one letter), so two machines
    that agree here can still sort some longer strings apart. Where a character
    counts for nothing at some level (glibc ignores it there), how it is told
    apart from its neighbour is read less reliably, so a change there may go
-   unseen. Only sort order is measured: upper(), lower() and the other
-   character rules of LC_CTYPE are not.
+   unseen. upper(), lower() and the other character rules of LC_CTYPE are not
+   measured.
 
 ================================================================
 == AUDIT SUMMARY  glibc-2.28 -> glibc-2.34
@@ -1069,6 +1079,8 @@ Of the 867 locale(s) on the old machine: 14 changed, 847 unchanged (5 of them on
 
 -- Measured order: each machine's own glibc
    (glibc-2.28-251.el8_10.40.x86_64 -> glibc-2.34-275.el9_8.x86_64)
+     Control: C and POSIX measured as byte order on both machines, which is
+        how glibc sorts them in every version.
      14 locale(s) sort differently -- reindex what uses them:
        C.utf8 (UTF-8)
          135,360 characters moved; 1,112,062 sort differently against another;
@@ -1119,13 +1131,22 @@ Of the 867 locale(s) on the old machine: 14 changed, 847 unchanged (5 of them on
      Of the 867 locale(s) on the old machine: 14 changed, 847 unchanged (5 of
        them only as far as measured), 4 not measured, 2 not on the new
        machine.
+     Decimals of money: the same in the 865 locale(s) measured on both
+        machines.
+     PostgreSQL on the OLD machine: 10 process(es) named postgres or
+        postmaster, all running the C library measured there.
+     PostgreSQL on the NEW machine: 10 process(es) named postgres or
+        postmaster, all running the C library measured there.
+     This looks at the C library PostgreSQL runs, not at its locale data: a
+        PostgreSQL that was not restarted can already use locales installed
+        after it started.
      !! Not measured: a rule that applies only to a particular combination of
         letters, such as a contraction ("ch" sorted as one letter), so two
         machines that agree here can still sort some longer strings apart.
         Where a character counts for nothing at some level (glibc ignores it
         there), how it is told apart from its neighbour is read less reliably,
-        so a change there may go unseen. Only sort order is measured: upper(),
-        lower() and the other character rules of LC_CTYPE are not.
+        so a change there may go unseen. upper(), lower() and the other
+        character rules of LC_CTYPE are not measured.
      Full report: step 11 above.
 
 -- Needs an empirical test: step 5 found 29 substantive hunk(s),
