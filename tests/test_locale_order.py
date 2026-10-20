@@ -295,7 +295,207 @@ def check_kind(text):
                 'locale data: a PostgreSQL that was not restarted can already '
                 'use locales installed after it started.'):
         return 'libc', {'note': True}
+    found = use_kind(text) or bytes_kind(text)
+    if found:
+        return found
     raise ReportShapeError(f'unknown check line: {text!r}')
+
+
+FN = r'upper\(\), lower\(\) and ILIKE'
+GCONV = (r'On RHEL this is what a machine without glibc-gconv-extra does; '
+         r'install it and measure that machine again\.')
+GROUP = r'\S+: \S+(?:, \S+)*'
+GROUPS = rf'{GROUP}(?:; {GROUP})*'
+
+
+def by_codeset(text, count=None):
+    """'EUC-JP: ja_JP, ja_JP.eucjp; EUC-KR: ko_KR' as {name: encoding},
+    refused unless every name is there once and, given count, as many."""
+    out = {}
+    for group in text.split('; '):
+        mt = re.fullmatch(r'(\S+): (\S+(?:, \S+)*)', group)
+        if not mt:
+            raise ReportShapeError(f'unknown group of locales: {group!r}')
+        for name in mt[2].split(', '):
+            if name in out:
+                raise ReportShapeError(f'{name} named twice: {text!r}')
+            out[name] = mt[1]
+    if count is not None and len(out) != int(count):
+        raise ReportShapeError(f'says {count} and names {len(out)}: {text!r}')
+    return out
+
+
+def use_kind(text):
+    """('use', data) of a line about upper(), lower() and ILIKE; None when
+    the line is not about them."""
+    mt = re.fullmatch(rf'!! {FN} give an ERROR on the new machine in (\d+) '
+                      r'locale\(s\) where they work on the old one\. In a '
+                      r'database of the locale\'s own encoding, any text that '
+                      r'is not ASCII stops them with "ERROR: invalid multibyte '
+                      r'character for locale", and initcap\(\) and full-text '
+                      r'search too, because the new machine\'s glibc cannot '
+                      rf'convert that encoding\. {GCONV} ({GROUPS})\.', text)
+    if mt:
+        return 'use', {'changed': by_codeset(mt[2], mt[1])}
+    mt = re.fullmatch(rf'{FN} work on the new machine in (\d+) locale\(s\) '
+                      rf'where they gave an error on the old one: ({GROUPS})\.',
+                      text)
+    if mt:
+        return 'use', {'back': by_codeset(mt[2], mt[1])}
+    mt = re.fullmatch(rf'!! {FN} give an ERROR on both machines in (\d+) '
+                      r'locale\(s\), as before the upgrade: in a database of '
+                      r'the locale\'s own encoding, any text that is not ASCII '
+                      r'stops them with "ERROR: invalid multibyte character '
+                      rf'for locale"\. {GCONV} ({GROUPS})\.', text)
+    if mt:
+        return 'use', {'both': by_codeset(mt[2], mt[1])}
+    mt = re.fullmatch(rf'!! {FN} give an ERROR on (both machines|the old '
+                      r'machine|the new machine) in (\d+) locale\(s\) that '
+                      r'databases of an encoding not known here may use '
+                      r'\((.+)\): whatever that encoding, a glibc that cannot '
+                      r'convert the locale\'s own converts no text that is not '
+                      r'ASCII \("ERROR: invalid multibyte character for '
+                      rf'locale"\)\. {GCONV} ({GROUPS})\.', text)
+    if mt:
+        return 'use', {'anydb': 'both' if mt[1] == 'both machines'
+                       else mt[1].split()[1], 'why': mt[3],
+                       'names': by_codeset(mt[4], mt[2])}
+    mt = re.fullmatch(rf'!! {FN} give an ERROR on (both machines|the old '
+                      r'machine|the new machine) in (\d+) locale\(s\)(.+?)\. '
+                      r'In a database of the locale\'s own encoding, any text '
+                      r'that is not ASCII stops them there with "ERROR: invalid '
+                      rf'multibyte character for locale"\. {GCONV} ({GROUPS})\.',
+                      text)
+    if mt:
+        side = 'both' if mt[1] == 'both machines' else mt[1].split()[1]
+        other = {'old': 'new', 'new': 'old'}.get(side)
+        out = {'one side': side, 'names': by_codeset(mt[4], mt[2])}
+        said = mt[3]
+        unknown = re.fullmatch(rf', where it is not known what they do on the '
+                               rf'{other} machine \((.+)\)', said) if other else None
+        if unknown:
+            out['why'] = unknown[1]
+        elif other and said == (f' that glibc refused on the {other} machine, '
+                                'where no database could use them'):
+            out['refused'] = True
+        elif side == 'new' and said == ' that the old machine does not have':
+            out['absent'] = True
+        else:
+            raise ReportShapeError(f'unknown error on one side: {text!r}')
+        return 'use', out
+    mt = re.fullmatch(rf'!! {FN} give an ERROR on (both machines|the new machine) '
+                      r'in (\d+) locale\(s\) whose encoding changed from (\S+) on '
+                      r'the old machine to (\S+) on the new one: a database of '
+                      r'(\S+) made on the old machine opens there under (\S+), and '
+                      r'a glibc that cannot convert (\S+) converts no text that '
+                      r'is not ASCII \("ERROR: invalid multibyte character for '
+                      r'locale"\)(?:; what they do on the old machine is not '
+                      rf'known \((.+)\))?\. {GCONV} ({GROUPS})\.', text)
+    if mt:
+        if not (mt[3] == mt[5] and mt[4] == mt[6] == mt[7]):
+            raise ReportShapeError(f'encodings disagree: {text!r}')
+        out = {'moved': 'both' if mt[1] == 'both machines' else 'new',
+               'from': mt[3], 'to': mt[4], 'names': by_codeset(mt[9], mt[2])}
+        if mt[8]:
+            out['why'] = mt[8]
+        return 'use', out
+    mt = re.fullmatch(rf'!! {FN} NOT checked in (\d+) locale\(s\): (.+)', text)
+    if mt:
+        unknown, rest = {}, mt[2]
+        while rest:
+            it = re.match(rf'(.+?): ({GROUPS})\.(?: |$)', rest)
+            if not it:
+                raise ReportShapeError(f'unknown not-checked reasons: {rest!r}')
+            for name in by_codeset(it[2]):
+                if name in unknown:
+                    raise ReportShapeError(f'{name} twice: {text!r}')
+                unknown[name] = it[1]
+            rest = rest[it.end():]
+        if len(unknown) != int(mt[1]):
+            raise ReportShapeError(f'says {mt[1]} and names {len(unknown)}')
+        return 'use', {'unknown': unknown}
+    mt = re.fullmatch(rf'{FN}: text that is not ASCII converts on both '
+                      r'machines in (\d+) locale\(s\); in the (\d+) of an '
+                      r'encoding of one byte PostgreSQL never converts it in '
+                      r'a database of that encoding\.'
+                      r'(?: Left out: (\d+) locale\(s\) of an encoding '
+                      r'PostgreSQL allows only on the client, so no database '
+                      rf'converts text with them \(({GROUPS})\)\.)?'
+                      r'(?: The (\d+) locale\(s\) of an encoding PostgreSQL '
+                      r'does not know are in the line on a database of another '
+                      r'encoding\.)?', text)
+    if mt:
+        out = {'converts': int(mt[1]), 'one byte': int(mt[2]),
+               'left out': by_codeset(mt[4], mt[3]) if mt[3] else {}}
+        if mt[5]:
+            out['elsewhere'] = int(mt[5])
+        return 'use', out
+    mt = re.fullmatch(rf'!! {FN} NOT checked: ' + EARLIER_FILES, text)
+    if mt:
+        return 'use', {'earlier': earlier_sides(mt, 1, None, 3)}
+    if re.match(rf'(!! )?{FN}', text):
+        raise ReportShapeError(f'unknown line about {FN}: {text!r}')
+    return None
+
+
+BYTES_NOTE = (r'(?:Every such byte sequence is in \S.*|Pass --characters-to '
+              r'FILE for every such byte sequence|Every such byte sequence is '
+              r'a row of this file)\. These are PostgreSQL\'s own conversions, '
+              r'measured on PostgreSQL 13 to 18 and read in its source for 10 '
+              r'to 12, where they are the same\.')
+
+
+def bytes_kind(text):
+    """('bytes', data) of a line about what PostgreSQL stores and the order
+    does not measure; None when the line is not about it."""
+    names = r'\((\S+(?:, \S+)*)\)'
+    for codeset, pattern in (
+            ('EUC-JP', r'(\d+) byte sequences that PostgreSQL stores in an '
+                       r'EUC_JP database, for characters it converts from '
+                       r'UTF-8, are not among the strings measured here, so '
+                       r'where they sort is not known, nor whether that '
+                       r'changed\. Among them \u2116 \(U\+2116\), which '
+                       r'PostgreSQL stores as AD E2 rather than the 8F A2 F1 '
+                       r'measured here, and \u2460 \(U\+2460\), AD A1\.'),
+            ('EUC-KR', r'A2 E8, which PostgreSQL stores in an EUC_KR database '
+                       r'for \u327e \(U\+327E\), is not among the strings '
+                       r'measured here, so where it sorts is not known\.()'),
+            ('TIS-620', r'A0, which PostgreSQL stores in a WIN874 database for '
+                        r'the no-break space \(U\+00A0\), is not among the '
+                        r'strings measured here\. PostgreSQL lets a TIS-620 '
+                        r'locale serve a database of any encoding, and in one '
+                        r'other than WIN874 the bytes it compares are not the '
+                        r'ones measured here at all\.()')):
+        mt = re.fullmatch(rf'!! Not measured in {codeset} {names}: {pattern}',
+                          text)
+        if mt:
+            return 'bytes', {'codeset': codeset, 'names': mt[1].split(', '),
+                             'count': int(mt[2]) if mt[2] else 1}
+    mt = re.fullmatch(r'!! Not measured in a database of another encoding: '
+                      r'(\d+) locale\(s\) whose encoding PostgreSQL does not '
+                      r'know, so that CREATE DATABASE lets a database of any '
+                      r'encoding use one, with only a WARNING \("could not '
+                      r'determine encoding for locale"\)\. In such a database, a '
+                      r'UTF8 one say, PostgreSQL hands the locale the '
+                      r'database\'s bytes, not the ones measured here, so neither '
+                      r'its order nor whether upper\(\), lower\(\) and ILIKE give '
+                      rf'an error there is known\. ({GROUPS})\.', text)
+    if mt:
+        return 'bytes', {'other encoding': by_codeset(mt[2], mt[1])}
+    mt = re.fullmatch(rf'!! NOT checked in (\S+) {names}: which byte sequences '
+                      r'PostgreSQL stores that were not measured here, since '
+                      r'these locales were measured over other strings than '
+                      r'the ones that list was made from\.', text)
+    if mt:
+        return 'bytes', {'codeset': mt[1], 'names': mt[2].split(', '),
+                         'unknown': True}
+    if re.fullmatch(BYTES_NOTE, text):
+        return 'bytes', {'note': True}
+    if text.startswith(('!! Not measured in ', '!! NOT checked in ',
+                        '!! Not measured in a database of another',
+                        'Every such byte', 'Pass --characters-to FILE for every such')):
+        raise ReportShapeError(f'unknown line about the bytes: {text!r}')
+    return None
 
 
 def voids(kind, d):
@@ -310,13 +510,14 @@ def voids(kind, d):
 
 def rank(kind, d):
     """Where a check stands: the control, then what else voids the
-    comparison, above the list; money, then the rest of PostgreSQL's, after
-    the totals."""
+    comparison, above the list; money, the rest of PostgreSQL's processes,
+    upper() and lower(), then what PostgreSQL stores that is not measured,
+    after the totals."""
     if kind == 'control':
         return 0
     if voids(kind, d):
         return 1
-    return 2 if kind == 'money' else 3
+    return {'money': 2, 'libc': 3, 'use': 4, 'bytes': 5}[kind]
 
 
 def after_totals(found, where):
@@ -441,11 +642,28 @@ def parse_summary(text):
     if len(s['changes']) != count:
         fail(f'{count} changed and {len(s["changes"])} named')
     s['unmeasured'], s['not_on_new'], s['unmeasured_also'] = [], [], None
+    s['refused'], s['refused_also'] = {}, []
     mt = re.fullmatch(r'     NOT known to be unchanged: (\d+) locale\(s\)',
                       line())
     if mt:
         at[0] += 1
         listed = item(7, 9)
+        while listed:
+            it = re.fullmatch(r'refused by glibc on (both machines|the (?:old|new) '
+                              r'machine), so a database that uses one does not '
+                              r'open there: (\S+(?:, \S+)*)', listed)
+            if not it:
+                break
+            for name in names_of(it[2]):
+                if name in s['refused']:
+                    fail(f'{name} refused twice')
+                s['refused'][name] = it[1]
+            also = item(9, 11)
+            if also is not None:
+                if not also.startswith('also, in PostgreSQL: '):
+                    fail('expected the PostgreSQL names')
+                s['refused_also'].append(parse_also(also))
+            listed = item(7, 9)
         if listed and listed.startswith('could not be measured: '):
             s['unmeasured'] = names_of(listed[len('could not be measured: '):])
             also = item(9, 11)
@@ -459,7 +677,8 @@ def parse_summary(text):
             listed = None
         if listed is not None:
             raise ReportShapeError(f'unknown not-known item: {listed!r}')
-        if len(s['unmeasured']) + len(s['not_on_new']) != int(mt[1]):
+        if (len(s['unmeasured']) + len(s['not_on_new'])
+                + len(s['refused'])) != int(mt[1]):
             fail(f'NOT known says {mt[1]}')
     partly = item(5, 8) if line().startswith('     !! Unchanged only') else None
     if partly is not None and not partly.startswith(PARTLY):
@@ -605,6 +824,35 @@ def parse_report(text):
         if len(r['partly']) != count:
             fail(f'partly measured says {count} and lists {len(r["partly"])}')
 
+    r['refused'] = {}
+    if line().startswith('!! Refused by glibc'):
+        mt = re.fullmatch(
+            r'!! Refused by glibc, so a database that uses one does not open: '
+            r'(\d+) locale\(s\)\. locale -a lists them, but setlocale\(\) does '
+            r'not accept them: PostgreSQL stops a database created with one '
+            r'with "FATAL: database locale is incompatible with operating '
+            r'system", and CREATE DATABASE refuses it\. Their sort order is not '
+            r'measured either\. On RHEL this is what glibc does with the '
+            r'language packs installed as folders \(glibc-langpack-\*\) and '
+            r'glibc-gconv-extra not installed; install it and measure that '
+            r'machine again\.', paragraph())
+        if not mt:
+            fail('unknown refused paragraph')
+        while re.fullmatch(r'  \S.*', line()):
+            it = re.fullmatch(r'  (\S+) \((both machines|old machine|new '
+                              r'machine)\): (LC_COLLATE and LC_CTYPE|LC_COLLATE|'
+                              r'LC_CTYPE) refused', line())
+            if not it:
+                fail('unknown refused line')
+            at[0] += 1
+            entry = r['refused'].setdefault(it[1], {'sides': {}, 'also': None})
+            if it[2] in entry['sides']:
+                fail(f'{it[1]} on the {it[2]} twice')
+            entry['sides'][it[2]] = it[3]
+            entry['also'] = also() or entry['also']
+        if len(r['refused']) != int(mt[1]):
+            fail(f'refused says {mt[1]} and lists {len(r["refused"])}')
+
     r['unmeasured'] = {}
     if line().startswith('!! Could not be measured'):
         count = int(take(r'!! Could not be measured, so NOT known to be '
@@ -637,11 +885,16 @@ def parse_report(text):
     take('')
     mt = take(r'Of the (\d+) locale\(s\) on the old machine: (\d+) changed, '
               r'(\d+) unchanged(?: \((\d+) of them only as far as measured\))?, '
-              r'(\d+) not measured, (\d+) not on the new machine\.')
+              r'(\d+) not measured, (?:([1-9]\d*) refused by glibc, )?(\d+) not '
+              r'on the new machine\.')
     r['totals_line'] = mt[0]
     r['totals'] = {'old': int(mt[1]), 'changed': int(mt[2]),
                    'unchanged': int(mt[3]), 'partly': int(mt[4] or 0),
-                   'not measured': int(mt[5]), 'not on new': int(mt[6])}
+                   'not measured': int(mt[5]), 'refused': int(mt[6] or 0),
+                   'not on new': int(mt[7])}
+    if r['totals']['refused'] != len(r['refused']):
+        fail(f'the totals count {r["totals"]["refused"]} refused and the '
+             f'report lists {len(r["refused"])}')
     while re.fullmatch(r'\S.*', line()) and not line().startswith('!! Not measured: '):
         r['checks'].append(after_totals(check_kind(paragraph()), 'report'))
     checks_in_order(r['checks'], 'report')
@@ -876,9 +1129,10 @@ class Rhel8ToRhel9(unittest.TestCase):
         separate numbers, and they add up to the old machine's locales."""
         t = self.report['totals']
         self.assertEqual(t, {'old': 867, 'changed': 14, 'unchanged': 847,
-                             'partly': 5, 'not measured': 4, 'not on new': 2})
+                             'partly': 5, 'not measured': 4, 'refused': 0,
+                             'not on new': 2})
         self.assertEqual(t['changed'] + t['unchanged'] + t['not measured']
-                         + t['not on new'], t['old'])
+                         + t['refused'] + t['not on new'], t['old'])
         self.assertEqual(t['unchanged'], self.report['unchanged'])
         self.assertEqual(t['partly'], len(self.report['partly']))
         self.assertEqual(t['not measured'], len(self.report['unmeasured']))
@@ -981,9 +1235,10 @@ class Rhel9ToRhel10(unittest.TestCase):
     def test_every_locale_of_the_old_machine_is_counted_once(self):
         t = self.report['totals']
         self.assertEqual(t, {'old': 869, 'changed': 4, 'unchanged': 859,
-                             'partly': 6, 'not measured': 4, 'not on new': 2})
+                             'partly': 6, 'not measured': 4, 'refused': 0,
+                             'not on new': 2})
         self.assertEqual(t['changed'] + t['unchanged'] + t['not measured']
-                         + t['not on new'], t['old'])
+                         + t['refused'] + t['not on new'], t['old'])
         self.assertEqual(t['unchanged'], self.report['unchanged'])
         self.assertEqual(t['partly'], len(self.report['partly']))
         self.assertEqual(t['not measured'], len(self.report['unmeasured']))
@@ -1021,11 +1276,18 @@ class Rhel9ToRhel10(unittest.TestCase):
 FINDINGS = ('moved', 'sorts differently', 'pairs changed', 'not compared',
             'told apart differently', 'not decided', 'not measured',
             'not on the new machine', 'unchanged only as far as measured',
-            'also in PostgreSQL')
+            'also in PostgreSQL', 'refused by glibc', 'upper/lower/ILIKE error',
+            'upper/lower/ILIKE not checked', 'stored by PostgreSQL, not measured')
 # The rows of a locale NOT known to be unchanged, beside the changes.
 NOT_KNOWN = ('not measured', 'not on the new machine')
 # And of a locale unchanged as far as measured: none of the three changed.
-NOT_CHANGED = NOT_KNOWN + ('unchanged only as far as measured',)
+NOT_CHANGED = NOT_KNOWN + ('unchanged only as far as measured', 'refused by glibc')
+# Rows about the locale beside its order, which say nothing of whether the
+# order changed.
+BESIDE_THE_ORDER = ('also in PostgreSQL', 'upper/lower/ILIKE error',
+                    'upper/lower/ILIKE not checked',
+                    'stored by PostgreSQL, not measured')
+SPACED_BYTES = r'((?:[0-9A-F]{2} )*[0-9A-F]{2})'
 PARTLY_ROW = (r'(\d+) pair\(s\) of neighbours differ by less than a letter, '
               r'and no pair could tell whether by an accent or by case')
 MEASURED_ON = {'on both machines',
@@ -1098,7 +1360,9 @@ def parse_characters(text):
     at = 0
     while at < len(notes) and not re.match(
             r'(Control: |!! Control |Decimals of money|!! Decimals of money|'
-            r'PostgreSQL on |!! PostgreSQL|!! The glibc of |This looks at )',
+            r'PostgreSQL on |!! PostgreSQL|!! The glibc of |This looks at |'
+            r'(!! )?upper\(\), lower\(\)|!! Not measured in |!! NOT checked in |'
+            r'Every such byte sequence|Pass --characters-to FILE for every such)',
             notes[at]):
         at += 1
     out.warnings = [warning_kind(note) for note in notes[:at]]
@@ -1126,6 +1390,43 @@ def parse_characters(text):
         if out.get(tuple(names.split(',')), [{}])[-1].get('finding') == 'also in PostgreSQL':
             raise ReportShapeError(f'characters line {n}: a row after the '
                                    f'PostgreSQL names: {line!r}')
+        if finding in ('refused by glibc', 'upper/lower/ILIKE not checked'):
+            mt = (re.fullmatch(r'(old|new) machine: setlocale\(\) does not '
+                               r'accept (LC_COLLATE and LC_CTYPE|LC_COLLATE|'
+                               r'LC_CTYPE)', how)
+                  if finding == 'refused by glibc' else re.fullmatch(r'\S.*', how))
+            if (chars, test, before, now, measured) != ('-',) * 5 or not mt or (
+                    ',' in names):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row['why'] = (mt[1], mt[2]) if finding == 'refused by glibc' else how
+            out.setdefault((names,), []).append(row)
+            continue
+        if finding == 'upper/lower/ILIKE error':
+            mt = re.fullmatch(rf'bytes {SPACED_BYTES}, converted to a wide '
+                              r'character as PostgreSQL does', how)
+            if (not mt or not re.fullmatch(CODE, chars) or test != '-'
+                    or ',' in names
+                    or (measured, before, now) not in (
+                        ('on both machines', 'converts', 'error'),
+                        ('on both machines', 'error', 'converts'),
+                        ('on both machines', 'error', 'error'),
+                        ('on the new machine', 'not measured', 'error'),
+                        ('on the old machine', 'error', 'not measured'))):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row.update(chars=[int(chars[2:], 16)], bytes=mt[1], before=before,
+                       now=now, measured=measured)
+            out.setdefault((names,), []).append(row)
+            continue
+        if finding == 'stored by PostgreSQL, not measured':
+            mt = re.fullmatch(rf'PostgreSQL stores {SPACED_BYTES} in an? '
+                              r'(EUC_JP|EUC_KR|WIN874) database; the strings '
+                              r'measured here do not hold it', how)
+            if ((test, before, now, measured) != ('-',) * 4 or not mt
+                    or not re.fullmatch(CODE, chars)):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row.update(chars=[int(chars[2:], 16)], bytes=mt[1], encoding=mt[2])
+            out.setdefault(tuple(names.split(',')), []).append(row)
+            continue
         if finding in ('pairs changed', 'unchanged only as far as measured'):
             mt = (re.fullmatch(r'before: (.+); now: (.+)', how)
                   if finding == 'pairs changed' else re.fullmatch(PARTLY_ROW, how))
@@ -1199,7 +1500,9 @@ def changes_in(files):
     out = {}
     for names, rows in files.items():
         kinds = {r['finding'] in NOT_CHANGED for r in rows
-                 if r['finding'] != 'also in PostgreSQL'}
+                 if r['finding'] not in BESIDE_THE_ORDER}
+        if not kinds:
+            continue        # nothing about the order: no change, and not unchanged
         if len(kinds) != 1:
             raise ReportShapeError(f'{names} is both changed and not')
         if kinds == {False}:
@@ -3016,7 +3319,10 @@ class FindingKinds(unittest.TestCase):
         self.assertEqual(set(m.RUN_KINDS), {'warning', 'partly', 'not measured',
                                             'not on the new machine', 'control',
                                             'postgres libc above', 'money',
-                                            'postgres libc', 'closing'})
+                                            'postgres libc', 'refused',
+                                            'postgres use', 'postgres use rows',
+                                            'unmeasured bytes',
+                                            'unmeasured bytes rows', 'closing'})
         for table in (m.LOCALE_KINDS, m.RUN_KINDS):
             for kind, how in table.items():
                 with self.subTest(kind=kind):
@@ -4076,21 +4382,73 @@ CLEAN_LIBC = {'looked_for': ['postgres', 'postmaster'], 'processes': 2,
               'stale': [], 'other': [], 'unreadable': 0, 'no_libc': 0,
               'unnamed': 0, 'not_checked': None, 'replaced': False}
 EARLIER_BOTH = [('money', {'earlier': ['OLD', 'NEW']}),
-                ('libc', {'earlier': ['OLD', 'NEW']})]
+                ('libc', {'earlier': ['OLD', 'NEW']}),
+                ('use', {'earlier': ['OLD', 'NEW']})]
 
 
-def with_parts(money=None, libc=None):
-    """An edit that makes a file of the first format one of this format:
-    the list of its parts, the decimals of money (2 in every locale, but
-    those in money) and its PostgreSQL processes (CLEAN_LIBC, but what libc
-    changes). The order part is the machine's own, untouched."""
+def use_of(text, codeset, char=None, collate='accepted', ctype='accepted',
+           why='unsupported locale setting'):
+    """One locale's record of how PostgreSQL uses it, as postgres_use()
+    writes it: text is converts, fails, one byte or not checked (char then
+    the reason); a category is accepted, refused or unknown (why)."""
+    state = lambda s: [s, None if s == 'accepted' else why]
+    detail = (None if text == 'one byte' else
+              char if text == 'not checked' else [char[0], char[1]])
+    return {'collate': state(collate), 'ctype': state(ctype),
+            'codeset': codeset if ctype == 'accepted' else None,
+            'text': [text, detail]}
+
+
+# What postgres_use() writes for the locales of FEW on any of the three
+# machines: the C locale's encoding and ISO-8859-1 have no character of more
+# than one byte; UTF-8's first is U+0080, C2 80, which glibc converts.
+DEFAULT_USE = {'ANSI_X3.4-1968': ('one byte', None),
+               'ISO-8859-1': ('one byte', None),
+               'UTF-8': ('converts', (0x80, 'c280'))}
+
+
+def with_parts(money=None, libc=None, use=None, form=m.FORMAT):
+    """An edit that makes a file of the first format one of a later format
+    (this one unless form): the list of its parts, the decimals of money (2
+    in every locale, but those in money), its PostgreSQL processes
+    (CLEAN_LIBC, but what libc changes) and how PostgreSQL uses each locale
+    (DEFAULT_USE by its encoding, but those in use). The order part is the
+    machine's own, untouched."""
     def edit(d):
-        d['format'] = m.FORMAT
-        d['parts'] = list(m.PARTS[m.FORMAT])
+        d['format'] = form
+        d['parts'] = list(m.PARTS[form])
         d['money'] = {name: 2 for name in d['locales']}
         d['money'].update(money or {})
         d['postgres_libc'] = dict(CLEAN_LIBC, **(libc or {}))
+        if 'postgres_use' in m.PARTS[form]:
+            d['postgres_use'] = {}
+            for name, r in d['locales'].items():
+                if name not in (use or {}):
+                    text, char = DEFAULT_USE[r['codeset']]
+                    d['postgres_use'][name] = use_of(text, r['codeset'], char)
+            d['postgres_use'].update(use or {})
     return edit
+
+
+# What the whole files of RHEL9 and RHEL10 say PostgreSQL stores and their
+# order does not place: every locale of the three encodings, measured on
+# both, th_TH's three included though their order changed.
+STORED_9_TO_10 = [
+    ('bytes', {'other encoding': {
+        'hy_AM.armscii8': 'ARMSCII-8', 'ka_GE': 'GEORGIAN-PS',
+        'ka_GE.georgianps': 'GEORGIAN-PS', 'kk_KZ': 'PT154',
+        'kk_KZ.pt154': 'PT154', 'tg_TJ': 'KOI8-T', 'tg_TJ.koi8t': 'KOI8-T',
+        'th_TH': 'TIS-620', 'th_TH.tis620': 'TIS-620', 'thai': 'TIS-620'}}),
+    ('bytes', {'codeset': 'EUC-JP', 'count': 167, 'names': [
+        'ja_JP', 'ja_JP.eucjp', 'ja_JP.ujis', 'japanese', 'japanese.euc']}),
+    ('bytes', {'codeset': 'EUC-KR', 'count': 1, 'names': [
+        'ko_KR', 'ko_KR.euckr', 'korean', 'korean.euc']}),
+    ('bytes', {'codeset': 'TIS-620', 'count': 1, 'names': [
+        'th_TH', 'th_TH.tis620', 'thai']}),
+    ('bytes', {'note': True})]
+
+# The clean line of FEW: four UTF-8 locales, and C and POSIX of one byte.
+USE_FEW = ('use', {'converts': 4, 'one byte': 2, 'left out': {}})
 
 
 # Kept of each machine by the classes below, as the machines measured them:
@@ -4180,9 +4538,11 @@ class FilesOfEachFormat(Checks):
     HELD = [('control', {'held': True})]
 
     def test_two_files_of_the_first_format(self):
-        """The two whole files as recorded, on the command line."""
+        """The two whole files as recorded, on the command line. What
+        PostgreSQL stores and the order does not place needs nothing such a
+        file lacks, and is said."""
         self.assertEqual(self.checks(RHEL9, RHEL10, command_line=True),
-                         self.HELD + EARLIER_BOTH)
+                         self.HELD + EARLIER_BOTH + STORED_9_TO_10)
 
     def test_two_files_of_the_first_format_cut(self):
         """The same cut to FEW: what the classes below build on."""
@@ -4194,13 +4554,15 @@ class FilesOfEachFormat(Checks):
         new = self.made(RHEL10, 'new', with_parts())
         self.assertEqual(self.checks(self.made(RHEL9, 'old'), new), self.HELD + [
             ('money', {'earlier': ['OLD']}), ('libc', {'earlier': ['OLD']}),
-            ('libc', {'side': 'NEW', 'clean': 2}), ('libc', {'note': True})])
+            ('libc', {'side': 'NEW', 'clean': 2}), ('libc', {'note': True}),
+            ('use', {'earlier': ['OLD']})])
 
     def test_the_first_format_on_the_new_side(self):
         old = self.made(RHEL9, 'old', with_parts())
         self.assertEqual(self.checks(old, self.made(RHEL10, 'new')), self.HELD + [
             ('money', {'earlier': ['NEW']}), ('libc', {'earlier': ['NEW']}),
-            ('libc', {'side': 'OLD', 'clean': 2}), ('libc', {'note': True})])
+            ('libc', {'side': 'OLD', 'clean': 2}), ('libc', {'note': True}),
+            ('use', {'earlier': ['NEW']})])
 
     def test_two_files_of_this_format(self):
         old = self.made(RHEL9, 'old', with_parts())
@@ -4208,7 +4570,24 @@ class FilesOfEachFormat(Checks):
         self.assertEqual(self.checks(old, new), self.HELD + [
             ('money', {'same': len(self.common(RHEL9, RHEL10))}),
             ('libc', {'side': 'OLD', 'clean': 2}),
-            ('libc', {'side': 'NEW', 'clean': 2}), ('libc', {'note': True})])
+            ('libc', {'side': 'NEW', 'clean': 2}), ('libc', {'note': True}),
+            USE_FEW])
+
+    def test_two_files_of_the_second_format(self):
+        """Written by step 2's version: money and the processes checked,
+        how PostgreSQL uses each locale NOT checked, on both sides."""
+        old = self.made(RHEL9, 'old', with_parts(form='locale_order/2'))
+        new = self.made(RHEL10, 'new', with_parts(form='locale_order/2'))
+        self.assertEqual(self.checks(old, new), self.HELD + [
+            ('money', {'same': len(self.common(RHEL9, RHEL10))}),
+            ('libc', {'side': 'OLD', 'clean': 2}),
+            ('libc', {'side': 'NEW', 'clean': 2}), ('libc', {'note': True}),
+            ('use', {'earlier': ['OLD', 'NEW']})])
+
+    def test_the_second_format_beside_this_one(self):
+        old = self.made(RHEL9, 'old', with_parts(form='locale_order/2'))
+        new = self.made(RHEL10, 'new', with_parts())
+        self.assertEqual(self.checks(old, new)[-1], ('use', {'earlier': ['OLD']}))
 
     def test_the_corpus_digest_did_not_move_with_the_format(self):
         """The recorded files are of the first format; their corpus digest
@@ -4514,21 +4893,24 @@ class PostgresProcessesCompared(Checks):
         same = ('money', {'same': len(self.common(RHEL9, RHEL10))})
         self.assertEqual(self.where(old={'stale': [[7, 'x (deleted)']]}), [
             ('control', {'held': True}), ('libc', {'side': 'OLD', 'stale': 1}),
-            same, ('libc', {'side': 'NEW', 'clean': 2}), ('libc', {'note': True})])
+            same, ('libc', {'side': 'NEW', 'clean': 2}), ('libc', {'note': True}),
+            USE_FEW])
 
     def test_the_new_side_on_the_replaced_glibc_stands_below(self):
         same = ('money', {'same': len(self.common(RHEL9, RHEL10))})
         self.assertEqual(self.where(new={'stale': [[7, 'x (deleted)']]}), [
             ('control', {'held': True}), same,
             ('libc', {'side': 'OLD', 'clean': 2}),
-            ('libc', {'side': 'NEW', 'stale': 1}), ('libc', {'note': True})])
+            ('libc', {'side': 'NEW', 'stale': 1}), ('libc', {'note': True}),
+            USE_FEW])
 
     def test_replaced_while_measured_stands_above(self):
         same = ('money', {'same': len(self.common(RHEL9, RHEL10))})
         self.assertEqual(self.where(new={'replaced': True}), [
             ('control', {'held': True}),
             ('libc', {'side': 'NEW', 'replaced': True}), same,
-            ('libc', {'side': 'OLD', 'clean': 2}), ('libc', {'note': True})])
+            ('libc', {'side': 'OLD', 'clean': 2}), ('libc', {'note': True}),
+            USE_FEW])
 
     def test_no_c_library_is_not_known(self):
         self.assertEqual(self.libc(new={'no_libc': 1}), [
@@ -4807,6 +5189,1030 @@ class PostgresProcessesRead(unittest.TestCase):
         self.assertEqual(data['money'], {'a': 3, 'b': 3})
         self.assertEqual(data['postgres_libc']['processes'], 5)
         self.assertEqual(data['content'], m.content_digest(data))
+
+
+# --- how PostgreSQL uses each locale --------------------------------------------
+
+class PostgresUseOnTheMachine(unittest.TestCase):
+    """postgres_use(): the calls PostgreSQL makes with a locale, asked of
+    glibc. setlocale, nl_langinfo, mbstowcs and the corpus are doubles here,
+    since this machine need not be Linux; the double of setlocale keeps the
+    two categories as glibc would, and every call is checked to leave both
+    as they were. Freezes a refusal read as accepted, a name never asked
+    about read as refused, and a conversion that could not be tried read as
+    one that worked."""
+
+    NAME = 'ja_JP.eucjp'
+    CORPUS = ([0x41, 0x3000, 0x3001], [b'A', b'\xa1\xa1', b'\xa1\xa2'], 'd')
+
+    def run_use(self, refuse=(), unpassable=False, codeset='EUC-JP',
+                corpus=CORPUS, converts=True, mbstowcs=None):
+        state = {m.locale.LC_COLLATE: 'C', m.locale.LC_CTYPE: 'C'}
+        self.calls = []
+
+        def setlocale(category, name=None):
+            if name is None:
+                return state[category]
+            if name == self.NAME and unpassable:
+                raise ValueError('embedded null character')
+            if name == self.NAME and category in refuse:
+                raise m.locale.Error('unsupported locale setting')
+            state[category] = name
+            return name
+
+        def langinfo(item):
+            self.assertEqual(item, m.locale.CODESET)
+            return codeset if state[m.locale.LC_CTYPE] == self.NAME else 'X'
+
+        def convert(buf, data, n):
+            self.calls.append((data, n, state[m.locale.LC_CTYPE]))
+            return 1 if converts else m.NOT_CONVERTED
+
+        lib = unittest.mock.Mock(mbstowcs=mbstowcs or convert)
+        with unittest.mock.patch.object(m.locale, 'setlocale', setlocale), \
+                unittest.mock.patch.object(m.locale, 'nl_langinfo', langinfo), \
+                unittest.mock.patch.object(m, 'libc', lambda: lib), \
+                unittest.mock.patch.object(m, 'corpus_for', lambda cs: (
+                    self.assertEqual(cs, codeset), corpus)[1]):
+            got = m.postgres_use(self.NAME)
+        self.assertEqual(state, {m.locale.LC_COLLATE: 'C', m.locale.LC_CTYPE: 'C'},
+                         'a category was not put back')
+        return got
+
+    def test_converts(self):
+        self.assertEqual(self.run_use(), use_of('converts', 'EUC-JP',
+                                                (0x3000, 'a1a1')))
+        self.assertEqual(self.calls, [(b'\xa1\xa1', 3, self.NAME)])
+
+    def test_fails(self):
+        self.assertEqual(self.run_use(converts=False),
+                         use_of('fails', 'EUC-JP', (0x3000, 'a1a1')))
+
+    def test_the_first_character_of_more_than_one_byte(self):
+        corpus = ([0x41, 0x42, 0x3001, 0x3000], [b'A', b'B', b'\xa1\xa2', b'\xa1\xa1'], 'd')
+        self.assertEqual(self.run_use(corpus=corpus)['text'],
+                         ['converts', [0x3001, 'a1a2']])
+
+    def test_one_byte(self):
+        corpus = ([0x41, 0xC0], [b'A', b'\xc0'], 'd')
+        self.assertEqual(self.run_use(corpus=corpus)['text'], ['one byte', None])
+        self.assertEqual(self.calls, [])
+
+    def test_no_converter_in_python(self):
+        self.assertEqual(self.run_use(corpus=None)['text'],
+                         ['not checked', m.NO_CONVERTER])
+
+    def test_no_encoding(self):
+        got = self.run_use(codeset='')
+        self.assertEqual((got['codeset'], got['text']),
+                         (None, ['not checked', m.NO_CODESET]))
+
+    def test_both_refused(self):
+        self.assertEqual(
+            self.run_use(refuse=(m.locale.LC_COLLATE, m.locale.LC_CTYPE)),
+            use_of('not checked', None, m.NO_CTYPE, collate='refused',
+                   ctype='refused'))
+
+    def test_lc_ctype_is_asked_when_lc_collate_is_refused(self):
+        got = self.run_use(refuse=(m.locale.LC_COLLATE,))
+        self.assertEqual(got, use_of('converts', 'EUC-JP', (0x3000, 'a1a1'),
+                                     collate='refused'))
+
+    def test_lc_ctype_alone_refused(self):
+        self.assertEqual(self.run_use(refuse=(m.locale.LC_CTYPE,)),
+                         use_of('not checked', None, m.NO_CTYPE, ctype='refused'))
+
+    def test_a_name_glibc_was_never_asked_about(self):
+        got = self.run_use(unpassable=True)
+        self.assertEqual([got['collate'][0], got['ctype'][0]], ['unknown', 'unknown'])
+        self.assertIn('Python cannot pass the name', got['collate'][1])
+        self.assertEqual(got['text'], ['not checked', m.NO_CTYPE])
+
+    def test_a_check_that_fails_says_so(self):
+        def boom(*args):
+            raise OSError('x')
+        got = self.run_use(mbstowcs=boom)
+        self.assertEqual(got['text'], ['not checked', "checking failed: OSError('x')"])
+
+    def test_the_measuring_process_runs_it(self):
+        """The call site: measure_locale gives measure_one's answer and
+        postgres_use's of the same name."""
+        with unittest.mock.patch.multiple(
+                m, measure_one=lambda name: (name, {'error': 'e'}, None),
+                postgres_use=lambda name: {'for': name}):
+            self.assertEqual(m.measure_locale('x'), ('x', {'error': 'e'}, None,
+                                                     {'for': 'x'}))
+
+    def test_measure_keeps_the_part_whole(self):
+        """The call site: measure() writes one entry per locale, each what
+        postgres_use returned for that locale, under the parts its format
+        lists."""
+        with unittest.mock.patch.multiple(
+                m, libc_version=lambda: 'glibc 2.34',
+                list_locales=lambda: ['a', 'b'],
+                glibc_build=lambda: 'glibc-2.34-1.el9.x86_64',
+                measure_one=lambda name: (name, {'error': 'x'}, None),
+                postgres_use=lambda name: use_of('one byte', name),
+                UTF8_BYTES=None,
+                fork_pool=lambda jobs: ThreadPoolExecutor(1),
+                money_digits=lambda names: {n: 3 for n in names},
+                postgres_libc=lambda: dict(CLEAN_LIBC)), \
+                unittest.mock.patch.object(m.os, 'nice'), \
+                unittest.mock.patch.object(m.sys, 'stderr', Screen()):
+            text, out, _ = m.measure(1)
+        data = json.loads(text)
+        self.assertIn('postgres_use', data['parts'])
+        self.assertEqual(data['postgres_use'], {'a': use_of('one byte', 'a'),
+                                                'b': use_of('one byte', 'b')})
+
+
+class PostgresUseRead(Checks):
+    """A file of this format whose part about PostgreSQL's use of each
+    locale is missing or malformed is refused, like any part: read as
+    missing, it would say "not checked" where the machine did check."""
+
+    def refused(self, phrase, *edits, form=m.FORMAT):
+        new = self.made(RHEL10, 'new', with_parts(form=form), *edits)
+        err = io.StringIO()
+        with unittest.mock.patch.object(m.sys, 'stderr', err), \
+                self.assertRaises(SystemExit) as stop:
+            m.load(new, m.corpus_digest())
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn(phrase, flat(err.getvalue()))
+
+    def test_without_the_part(self):
+        self.refused('lacks a part its format holds',
+                     lambda d: d.pop('postgres_use'))
+
+    def test_a_second_format_file_with_the_part(self):
+        self.refused('holds one it does not',
+                     lambda d: d.update(postgres_use={}), form='locale_order/2')
+
+    def test_malformed(self):
+        def entry(**k):
+            return lambda d: d['postgres_use']['C'].update(**k)
+        ok = use_of('converts', 'UTF-8', (0x80, 'c280'))
+        for case, edit in (
+                ('not a map', lambda d: d.update(postgres_use=[])),
+                ('a locale missing', lambda d: d['postgres_use'].pop('C')),
+                ('a name more', lambda d: d['postgres_use'].update(xx_XX=ok)),
+                ('an entry that is not a map', lambda d: d['postgres_use'].update(C=[])),
+                ('a key missing', lambda d: d['postgres_use']['C'].pop('codeset')),
+                ('a key more', entry(more=1)),
+                ('an unknown state', entry(collate=['maybe', None])),
+                ('accepted with a reason', entry(collate=['accepted', 'x'])),
+                ('refused with no reason', entry(collate=['refused', None])),
+                ('refused with an empty reason', entry(collate=['refused', ''])),
+                ('a state of three items', entry(ctype=['accepted', None, 1])),
+                ('an unknown text', entry(text=['maybe', None])),
+                ('converts with no character', entry(text=['converts', None])),
+                ('a character that is text', entry(text=['converts', ['80', 'c280']])),
+                ('a character past Unicode', entry(text=['fails', [0x110000, 'c280']])),
+                ('a character that is a boolean', entry(text=['fails', [True, 'c280']])),
+                ('bytes of one byte', entry(text=['converts', [0x80, 'c2']])),
+                ('bytes that are not hex', entry(text=['converts', [0x80, 'zz80']])),
+                ('bytes in capitals', entry(text=['converts', [0x80, 'C280']])),
+                ('one byte with a character', entry(text=['one byte', [0x80, 'c280']])),
+                ('not checked with no reason', entry(text=['not checked', ''])),
+                ('an empty encoding', entry(codeset='')),
+                ('an encoding with LC_CTYPE refused',
+                 entry(ctype=['refused', 'x'], text=['not checked', 'y'])),
+                ('a conversion with LC_CTYPE refused',
+                 entry(ctype=['refused', 'x'], codeset=None)),
+                ('a conversion with no encoding', entry(codeset=None))):
+            with self.subTest(case=case):
+                self.refused('what it says of how PostgreSQL uses each locale '
+                             'is malformed', edit)
+
+    def test_each_form_postgres_use_writes_is_read(self):
+        """The control: every shape the tests above build from is whole."""
+        use = {'ja_JP.utf8': use_of('not checked', None, m.NO_CTYPE,
+                                    collate='unknown', ctype='unknown'),
+               'en_US.utf8': use_of('not checked', None, m.NO_CTYPE,
+                                    collate='refused', ctype='refused'),
+               'POSIX': use_of('not checked', 'ANSI_X3.4-1968', m.NO_CONVERTER),
+               'de_DE.utf8': use_of('fails', 'UTF-8', (0x80, 'c280'))}
+        new = self.made(RHEL10, 'new', with_parts(use=use),
+                        selected_not('en_US.utf8', 'ja_JP.utf8'))
+        self.assertEqual(m.load(new, m.corpus_digest())[0]['postgres_use']['ja_JP.utf8'],
+                         use['ja_JP.utf8'])
+
+    def test_a_refusal_beside_its_measured_order(self):
+        """measure_one selects LC_COLLATE, then LC_CTYPE: a locale glibc
+        refused either has no order. A file that holds both was measured by
+        two glibcs, and is refused (review round 2, finding 5)."""
+        for collate, ctype in (('refused', 'refused'), ('refused', 'accepted'),
+                               ('accepted', 'refused')):
+            with self.subTest(collate=collate, ctype=ctype):
+                use = {'de_DE.utf8': use_of(
+                    'not checked' if ctype == 'refused' else 'converts',
+                    None if ctype == 'refused' else 'UTF-8',
+                    m.NO_CTYPE if ctype == 'refused' else (0x80, 'c280'),
+                    collate=collate, ctype=ctype)}
+                new = self.made(RHEL10, 'new', with_parts(use=use))
+                err = io.StringIO()
+                with unittest.mock.patch.object(m.sys, 'stderr', err), \
+                        self.assertRaises(SystemExit):
+                    m.load(new, m.corpus_digest())
+                self.assertIn('and holds the order or the encoding measured '
+                              'for it; glibc changed while that machine was measured',
+                              flat(err.getvalue()))
+
+    def test_the_twins_of_that_contradiction(self):
+        """Review round 3, finding 2: a name Python could not hand to C
+        has no order either, and postgres_use reads the encoding the order
+        read, in the same process; a file that says otherwise is refused.
+        Review round 5: the name Python could not hand to C is its own
+        message, as no glibc explains it, and an encoding read for only one
+        of the two, the order or PostgreSQL's use, is two encodings too, in
+        either direction."""
+        kept = {'de_DE.utf8': {'error': 'measuring failed: x', 'codeset': 'UTF-8'}}
+        unread = {'de_DE.utf8': {'error': 'cannot be measured: its encoding '
+                                          'could not be read'}}
+        for case, use, locales, phrase in (
+                ('never asked', {'de_DE.utf8': use_of('not checked', None, m.NO_CTYPE,
+                                                      collate='unknown', ctype='unknown')},
+                 None,
+                 'says Python could not pass its name to the C library, and holds '
+                 'the order or the encoding measured for it; the file contradicts '
+                 'itself'),
+                ('two encodings', {'de_DE.utf8': use_of('converts', 'ISO-8859-1',
+                                                        (0x80, 'c280'))},
+                 None,
+                 'reads its encoding as UTF-8 for the order and as ISO-8859-1 for '
+                 'how PostgreSQL uses it'),
+                ('two encodings beside an order that failed',
+                 {'de_DE.utf8': use_of('converts', 'ISO-8859-1', (0x80, 'c280'))},
+                 kept,
+                 'reads its encoding as UTF-8 for the order and as ISO-8859-1 for '
+                 'how PostgreSQL uses it'),
+                ('no encoding beside an order that read one',
+                 {'de_DE.utf8': use_of('not checked', None, m.NO_CODESET)},
+                 None,
+                 'reads its encoding as UTF-8 for the order and could not read it '
+                 'for how PostgreSQL uses it'),
+                ('an encoding beside an order that read none',
+                 {'de_DE.utf8': use_of('converts', 'UTF-8', (0x80, 'c280'))},
+                 unread,
+                 'could not read its encoding for the order and read it as UTF-8 '
+                 'for how PostgreSQL uses it'),
+                ('an encoding kept beside a refusal',
+                 {'de_DE.utf8': use_of('not checked', None, m.NO_CTYPE,
+                                       collate='refused', ctype='refused')},
+                 kept,
+                 'says glibc refused it, and holds the order or the encoding '
+                 'measured for it')):
+            with self.subTest(case=case):
+                edit = ((lambda d, e=locales: d['locales'].update(**e)) if locales
+                        else (lambda d: None))
+                new = self.made(RHEL10, 'new', with_parts(use=use), edit)
+                err = io.StringIO()
+                with unittest.mock.patch.object(m.sys, 'stderr', err), \
+                        self.assertRaises(SystemExit):
+                    m.load(new, m.corpus_digest())
+                self.assertIn(phrase, flat(err.getvalue()))
+
+
+# Measured on 2026-10-19 with the standalone probe of T4 step 3, which makes
+# postgres_use()'s calls, on collaudit8 (glibc-gconv-extra installed) and
+# collaudit9 (not installed): (encoding, text, first character of more than
+# one byte). The same answers as PostgreSQL 13 to 18 gave in six own
+# environments (372 cases, 0 disagreements).
+USE_MEASURED = {
+    8: {'C': ('ANSI_X3.4-1968', 'one byte', None),
+        'POSIX': ('ANSI_X3.4-1968', 'one byte', None),
+        'de_DE': ('ISO-8859-1', 'one byte', None),
+        'de_DE.utf8': ('UTF-8', 'converts', (0x80, 'c280')),
+        'hy_AM.armscii8': ('ARMSCII-8', 'not checked', m.NO_CONVERTER),
+        'ja_JP': ('EUC-JP', 'converts', (0xFF61, '8ea1')),
+        'ja_JP.eucjp': ('EUC-JP', 'converts', (0xFF61, '8ea1')),
+        'ko_KR': ('EUC-KR', 'converts', (0x3000, 'a1a1')),
+        'ko_KR.euckr': ('EUC-KR', 'converts', (0x3000, 'a1a1')),
+        'th_TH.tis620': ('TIS-620', 'one byte', None),
+        'zh_CN': ('GB2312', 'converts', (0x3000, 'a1a1')),
+        'zh_CN.gbk': ('GBK', 'converts', (0x4E02, '8140')),
+        'zh_TW': ('BIG5', 'converts', (0x3000, 'a140'))},
+    9: {'C': ('ANSI_X3.4-1968', 'one byte', None),
+        'POSIX': ('ANSI_X3.4-1968', 'one byte', None),
+        'de_DE': ('ISO-8859-1', 'one byte', None),
+        'de_DE.utf8': ('UTF-8', 'converts', (0x80, 'c280')),
+        'hy_AM.armscii8': ('ARMSCII-8', 'not checked', m.NO_CONVERTER),
+        'ja_JP': ('EUC-JP', 'fails', (0xFF61, '8ea1')),
+        'ja_JP.eucjp': ('EUC-JP', 'fails', (0xFF61, '8ea1')),
+        'ko_KR': ('EUC-KR', 'fails', (0x3000, 'a1a1')),
+        'ko_KR.euckr': ('EUC-KR', 'fails', (0x3000, 'a1a1')),
+        'th_TH.tis620': ('TIS-620', 'one byte', None),
+        'zh_CN': ('GB2312', 'fails', (0x3000, 'a1a1')),
+        'zh_CN.gbk': ('GBK', 'fails', (0x4E02, '8140')),
+        'zh_TW': ('BIG5', 'fails', (0x3000, 'a140'))}}
+USE_NAMES = tuple(USE_MEASURED[8])
+
+
+def measured_use(machine, **edits):
+    """USE_MEASURED of a machine as postgres_use() records, with edits
+    ({name: record}) in place."""
+    out = {name: use_of(text, codeset, char) for name, (codeset, text, char)
+           in USE_MEASURED[machine].items()}
+    out.update(edits)
+    return out
+
+
+def refused_use(name, machine, collate='refused', ctype='refused'):
+    codeset, text, char = USE_MEASURED[machine][name]
+    if ctype != 'accepted':
+        return use_of('not checked', None, m.NO_CTYPE, collate=collate, ctype=ctype)
+    return use_of(text, codeset, char, collate=collate, ctype=ctype)
+
+
+def selected_not(*names):
+    """An edit that records the order of names as measure_one does when
+    setlocale refuses them."""
+    def edit(d):
+        for name in names:
+            d['locales'][name] = {'error': 'cannot be selected: unsupported '
+                                           'locale setting'}
+    return edit
+
+
+class PostgresUseCompared(Checks):
+    """What the comparison says of how PostgreSQL uses each locale, on RHEL8
+    and RHEL9 cut to USE_NAMES, with what the two machines measured.
+
+    Freezes: a locale glibc refuses read as unchanged, or only as "could not
+    be measured" with nothing said about the database not opening; a
+    conversion that fails on one side read as no change; a locale left out
+    or not checked dropped from the count; the three outputs naming
+    different locales."""
+
+    @classmethod
+    def setUpClass(cls):
+        super(Checks, cls).setUpClass()
+        for path in (RHEL8, RHEL9):
+            cls.texts[path] = trimmed(cls.texts[path], USE_NAMES)
+
+    def outputs(self, old, new):
+        """(report, summary, file) of the run, each read whole."""
+        tag = self.id().rsplit('.', 1)[-1]
+        summary = os.path.join(self.tmp, f'{tag}.sum')
+        chars = os.path.join(self.tmp, f'{tag}.tsv')
+        self.checks(old, new)
+        stdout = io.StringIO()
+        with unittest.mock.patch.object(m.sys, 'argv', [
+                SCRIPT, '--compare', old, new, '--summary-to', summary,
+                '--characters-to', chars]), contextlib.redirect_stdout(stdout):
+            self.assertEqual(m.main(), 0)
+        with open(summary, encoding='utf-8') as f, \
+                open(chars, encoding='utf-8') as g:
+            return parse_report(stdout.getvalue()), parse_summary(f.read()), \
+                parse_characters(g.read())
+
+    def report_text(self, old, new):
+        stdout = io.StringIO()
+        with unittest.mock.patch.object(m.sys, 'argv', [SCRIPT, '--compare', old, new]), \
+                contextlib.redirect_stdout(stdout):
+            self.assertEqual(m.main(), 0)
+        return stdout.getvalue()
+
+    def pair(self, old_use, new_use, old_edits=(), new_edits=()):
+        return (self.made(RHEL8, 'old', with_parts(use=old_use), *old_edits),
+                self.made(RHEL9, 'new', with_parts(use=new_use), *new_edits))
+
+    def use(self, *pair):
+        return [d for kind, d in self.checks(*pair) if kind == 'use']
+
+    def test_rhel8_to_rhel9_as_measured(self):
+        self.assertEqual(self.use(*self.pair(measured_use(8), measured_use(9))), [
+            {'changed': {'ja_JP': 'EUC-JP', 'ja_JP.eucjp': 'EUC-JP',
+                         'ko_KR': 'EUC-KR', 'ko_KR.euckr': 'EUC-KR',
+                         'zh_CN': 'GB2312'}},
+            {'converts': 1, 'one byte': 3,
+             'left out': {'zh_CN.gbk': 'GBK', 'zh_TW': 'BIG5'}, 'elsewhere': 2}])
+
+    def test_failing_on_both_machines(self):
+        self.assertEqual(self.use(*self.pair(measured_use(9), measured_use(9))), [
+            {'both': {'ja_JP': 'EUC-JP', 'ja_JP.eucjp': 'EUC-JP',
+                      'ko_KR': 'EUC-KR', 'ko_KR.euckr': 'EUC-KR',
+                      'zh_CN': 'GB2312'}},
+            {'converts': 1, 'one byte': 3,
+             'left out': {'zh_CN.gbk': 'GBK', 'zh_TW': 'BIG5'}, 'elsewhere': 2}])
+
+    def test_working_again_on_the_new_machine(self):
+        found = self.use(*self.pair(measured_use(9), measured_use(8)))
+        self.assertEqual(found[0], {'back': {
+            'ja_JP': 'EUC-JP', 'ja_JP.eucjp': 'EUC-JP', 'ko_KR': 'EUC-KR',
+            'ko_KR.euckr': 'EUC-KR', 'zh_CN': 'GB2312'}})
+
+    def test_one_side_not_checked_is_named_with_its_side(self):
+        new = measured_use(9, **{'de_DE.utf8': use_of('not checked', 'UTF-8',
+                                                      'checking failed: x')})
+        found = self.use(*self.pair(measured_use(8), new))
+        self.assertEqual(found[1], {'unknown': {
+            'de_DE.utf8': 'checking failed: x (on the new machine)'}})
+        self.assertEqual(found[2]['converts'], 0)
+        # An encoding of one byte never converts: ISO-8859-1 is of one
+        # byte in PostgreSQL (pg_wchar_table), so a check that failed on
+        # the new changes nothing for de_DE.
+        new = measured_use(9, de_DE=use_of('not checked', 'ISO-8859-1',
+                                           'checking failed: x'))
+        found = self.use(*self.pair(measured_use(8), new))
+        self.assertEqual(found[1]['one byte'], 3)
+
+    def test_an_error_beside_a_file_of_an_earlier_format(self):
+        """Review round 1, finding 1: the side that measured an error names
+        it; the other side's NOT checked is said beside it, not instead. On
+        each side, and in the file's rows."""
+        old = self.made(RHEL8, 'old', with_parts(form='locale_order/2'))
+        new = self.made(RHEL9, 'new', with_parts(use=measured_use(9)))
+        report, summary, rows = self.outputs(old, new)
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertEqual(use, [
+            {'earlier': ['OLD']},
+            {'one side': 'new', 'why': 'the OLD file was written by an earlier '
+                                       'version of locale_order.py',
+             'names': {'ja_JP': 'EUC-JP', 'ja_JP.eucjp': 'EUC-JP',
+                       'ko_KR': 'EUC-KR', 'ko_KR.euckr': 'EUC-KR',
+                       'zh_CN': 'GB2312'}}])
+        errors = {names[0]: [(r['before'], r['now'], r['measured']) for r in g
+                             if r['finding'] == 'upper/lower/ILIKE error']
+                  for names, g in rows.items() if len(names) == 1}
+        self.assertEqual(errors['ja_JP'], [('not measured', 'error', 'on the new machine')])
+        old = self.made(RHEL8, 'old', with_parts(use=measured_use(9)))
+        new = self.made(RHEL9, 'new', with_parts(form='locale_order/2'))
+        use = self.use(old, new)
+        self.assertEqual([d.get('one side') for d in use], [None, 'old'])
+        self.assertEqual(len(use[1]['names']), 5)
+
+    def test_an_error_beside_a_side_not_checked(self):
+        """Review round 1, finding 2: one side not checked does not hide the
+        other side's error; the locale is in that line alone, and the counts
+        still add up."""
+        why = use_of('not checked', 'GB2312', 'checking failed: x')
+        found = self.use(*self.pair(measured_use(8, zh_CN=why), measured_use(9)))
+        self.assertEqual(found[1], {'one side': 'new', 'why': 'checking failed: x',
+                                    'names': {'zh_CN': 'GB2312'}})
+        self.assertNotIn('zh_CN', found[0]['changed'])
+        self.assertEqual(found[2], {'converts': 1, 'one byte': 3, 'left out': {
+            'zh_CN.gbk': 'GBK', 'zh_TW': 'BIG5'}, 'elsewhere': 2})
+        found = self.use(*self.pair(measured_use(9), measured_use(8, zh_CN=why)))
+        self.assertEqual(found[1], {'one side': 'old', 'why': 'checking failed: x',
+                                    'names': {'zh_CN': 'GB2312'}})
+        report, summary, rows = self.outputs(*self.pair(measured_use(8, zh_CN=why),
+                                                        measured_use(9)))
+        self.assertEqual([(r['finding'], r['before'], r['now'], r['measured'])
+                          for r in rows[('zh_CN',)]
+                          if r['finding'].startswith('upper/')],
+                         [('upper/lower/ILIKE error', 'not measured', 'error',
+                           'on the new machine')])
+
+    def test_locales_whose_encoding_postgresql_does_not_know(self):
+        """Review round 1, findings 3 and 4: a database of another encoding
+        can use them, and the run says that nothing measured it, on the
+        three outputs; C and POSIX, accepted with every encoding, are not
+        named."""
+        report, summary, rows = self.outputs(*self.pair(measured_use(8),
+                                                        measured_use(9)))
+        lines = [d for kind, d in report['checks']
+                 if kind == 'bytes' and 'other encoding' in d]
+        self.assertEqual(lines, [{'other encoding': {
+            'hy_AM.armscii8': 'ARMSCII-8', 'th_TH.tis620': 'TIS-620'}}])
+
+    def test_the_encodings_postgresql_knows(self):
+        import collation_keys
+        known = collation_keys.POSTGRES_CODESETS
+        self.assertEqual(len(known), 110)
+        self.assertLessEqual(collation_keys.CLIENT_ONLY_CODESETS, known)
+        for codeset in ('UTF-8', 'EUC-JP', 'ISO-8859-1', 'KOI8-R', 'GB2312'):
+            self.assertIn(codeset.upper(), known)
+        for codeset in ('TIS-620', 'KOI8-T', 'PT154', 'ARMSCII-8', 'GEORGIAN-PS',
+                        'ANSI_X3.4-1968'):
+            self.assertNotIn(codeset.upper(), known)
+
+    def test_two_not_checked_for_one_reason(self):
+        why = use_of('not checked', 'EUC-JP', 'checking failed: x')
+        utf8 = use_of('not checked', 'UTF-8', 'checking failed: x')
+        found = self.use(*self.pair(
+            measured_use(8, ja_JP=why, **{'de_DE.utf8': utf8}),
+            measured_use(9, ja_JP=why, **{'de_DE.utf8': utf8})))
+        self.assertEqual(found[1], {'unknown': {
+            'ja_JP': 'checking failed: x', 'de_DE.utf8': 'checking failed: x'}})
+
+    def test_one_byte_is_what_postgresql_says(self):
+        """Review round 7, findings 3 and 4: an encoding is of one byte
+        when PostgreSQL keeps it so (pg_wchar_table), whatever a probe
+        said. A database of ISO-8859-1 never converts, even beside an
+        error in BIG5; one of EUC-JP does, and the new machine's error is
+        named though the old machine's file said 'one byte'."""
+        found = self.use(*self.pair(
+            measured_use(8, de_DE=use_of('not checked', 'ISO-8859-1', 'checking failed: x')),
+            measured_use(9, de_DE=use_of('fails', 'BIG5', (0x3000, 'a140'))),
+            new_edits=[lambda d: d['locales']['de_DE'].update(codeset='BIG5')]))
+        self.assertNotIn('de_DE', {n for d in found for v in d.values()
+                                   if isinstance(v, dict) for n in v})
+        self.assertEqual(found[-1]['one byte'], 3)
+        found = self.use(*self.pair(
+            measured_use(9, ja_JP=use_of('one byte', 'EUC-JP')), measured_use(9)))
+        self.assertEqual(found[0], {'changed': {'ja_JP': 'EUC-JP'}})
+
+    def test_a_locale_only_on_the_new_machine(self):
+        """Review round 7, finding 1: a locale the old machine does not
+        have serves the databases made on the new one. Their error is
+        named, and that they could not be checked; that they convert is
+        not counted with the locales of both machines."""
+        def dropped(d):
+            for part in ('locales', 'money', 'postgres_use'):
+                d[part].pop('ja_JP.eucjp')
+            d['locales_listed'] = len(d['locales'])
+        found = self.use(*self.pair(measured_use(8), measured_use(9),
+                                    old_edits=[dropped]))
+        self.assertIn({'one side': 'new', 'absent': True,
+                       'names': {'ja_JP.eucjp': 'EUC-JP'}}, found)
+        self.assertNotIn('ja_JP.eucjp', found[0]['changed'])
+        found = self.use(*self.pair(
+            measured_use(8),
+            measured_use(9, **{'ja_JP.eucjp': use_of('not checked', 'EUC-JP',
+                                                     m.NO_CONVERTER)}),
+            old_edits=[dropped]))
+        self.assertIn({'unknown': {'ja_JP.eucjp': m.NO_CONVERTER
+                                   + ' (on the new machine)'}}, found)
+        found = self.use(*self.pair(measured_use(8), measured_use(8),
+                                    old_edits=[dropped]))
+        self.assertNotIn('ja_JP.eucjp', {n for d in found for v in d.values()
+                                         if isinstance(v, dict) for n in v})
+        self.assertEqual(found[-1]['converts'], 5)
+        # Of an encoding PostgreSQL does not know: in the line on a
+        # database of another encoding, as one on both machines is.
+        def gone(d):
+            for name in ('th_TH.tis620', 'hy_AM.armscii8'):
+                for part in ('locales', 'money', 'postgres_use'):
+                    d[part].pop(name)
+            d['locales_listed'] = len(d['locales'])
+        checks = self.checks(*self.pair(measured_use(8), measured_use(9),
+                                        old_edits=[gone]))
+        self.assertEqual([d for kind, d in checks if kind == 'use'][-1]['elsewhere'], 2)
+        self.assertEqual([d['other encoding'] for kind, d in checks
+                          if kind == 'bytes' and 'other encoding' in d],
+                         [{'hy_AM.armscii8': 'ARMSCII-8', 'th_TH.tis620': 'TIS-620'}])
+        # Refused there too: no database with it opens anywhere.
+        found = self.use(*self.pair(
+            measured_use(8),
+            measured_use(9, **{'ja_JP.eucjp': refused_use('ja_JP.eucjp', 9)}),
+            old_edits=[dropped], new_edits=[selected_not('ja_JP.eucjp')]))
+        self.assertNotIn('ja_JP.eucjp', {n for d in found for v in d.values()
+                                         if isinstance(v, dict) for n in v})
+
+    def test_a_refusal_beside_a_side_not_checked(self):
+        """Review round 7, finding 2: glibc refused the locale on the old
+        machine, and on the new one its text could not be checked: the
+        databases made there are NOT checked, beside the refusal. A
+        refusal on the new machine says all there is: nothing opens."""
+        not_checked = use_of('not checked', 'EUC-JP', m.NO_CONVERTER)
+        report, summary, rows = self.outputs(*self.pair(
+            measured_use(8, **{'ja_JP.eucjp': refused_use('ja_JP.eucjp', 8)}),
+            measured_use(9, **{'ja_JP.eucjp': not_checked}),
+            old_edits=[selected_not('ja_JP.eucjp')]))
+        self.assertIn('ja_JP.eucjp', report['refused'])
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertIn({'unknown': {'ja_JP.eucjp': m.NO_CONVERTER
+                                   + ' (on the new machine)'}}, use)
+        found = self.use(*self.pair(
+            measured_use(8, **{'ja_JP.eucjp': not_checked}),
+            measured_use(9, **{'ja_JP.eucjp': refused_use('ja_JP.eucjp', 9)}),
+            new_edits=[selected_not('ja_JP.eucjp')]))
+        self.assertNotIn('ja_JP.eucjp', {n for d in found for v in d.values()
+                                         if isinstance(v, dict) for n in v})
+
+    def test_c_and_posix_never_reach_glibc(self):
+        """PostgreSQL lowers text under C or POSIX itself (asc_tolower,
+        formatting.c, 13 to 18), so what glibc does with them is no
+        finding: counted with the encodings of one byte."""
+        c = use_of('not checked', 'ANSI_X3.4-1968', 'checking failed: x')
+        fails = use_of('fails', 'ANSI_X3.4-1968', (0x80, 'c280'))
+        found = self.use(*self.pair(measured_use(8, C=c, POSIX=fails),
+                                    measured_use(9, C=fails, POSIX=c)))
+        self.assertFalse({'C', 'POSIX'} & {n for d in found for v in d.values()
+                                           if isinstance(v, dict) for n in v})
+        self.assertEqual(found[-1]['one byte'], 3)
+
+    def test_left_out_only_where_every_encoding_is_client_only(self):
+        """A locale whose encoding is BIG5 on one machine and one PostgreSQL
+        allows for a database on the other is compared, not left out."""
+        old = measured_use(8)
+        old['zh_TW'] = use_of('converts', 'EUC-TW', (0x3000, 'a1a1'))
+        def euctw(d):
+            d['locales']['zh_TW']['codeset'] = 'EUC-TW'
+        found = self.use(*self.pair(old, measured_use(9), old_edits=[euctw]))
+        # Review round 6: a database of EUC-TW made on the old machine opens
+        # on the new one under BIG5, whose converter glibc lacks there.
+        self.assertIn({'moved': 'new', 'from': 'EUC-TW', 'to': 'BIG5',
+                       'names': {'zh_TW': 'EUC-TW'}}, found)
+        self.assertEqual(found[-1]['left out'], {'zh_CN.gbk': 'GBK'})
+
+    def test_both_errors_beside_a_client_only_one(self):
+        """Review round 6: both sides fail and the encoding changed to
+        BIG5: the databases of EUC-JP made on the old machine fail there
+        and on the new one, each machine's error a row of its own
+        character."""
+        report, summary, rows = self.outputs(*self.pair(
+            measured_use(9), measured_use(9, ja_JP=use_of('fails', 'BIG5', (0x3000, 'a140'))),
+            new_edits=[lambda d: d['locales']['ja_JP'].update(codeset='BIG5')]))
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertIn({'moved': 'both', 'from': 'EUC-JP', 'to': 'BIG5',
+                       'names': {'ja_JP': 'EUC-JP'}}, use)
+        self.assertEqual([(r['bytes'], r['before'], r['now'], r['measured'])
+                          for r in rows[('ja_JP',)]
+                          if r['finding'] == 'upper/lower/ILIKE error'],
+                         [('8E A1', 'error', 'not measured', 'on the old machine'),
+                          ('A1 40', 'not measured', 'error', 'on the new machine')])
+
+    def test_an_earlier_file_beside_an_encoding_whose_converter_is_missing(self):
+        """Review round 6, finding 2: the old file is of an earlier
+        format and its order read EUC-TW; on the new machine the locale is
+        BIG5 and glibc cannot convert it. The databases of EUC-TW carried
+        over fail there, and the line says what is not known of the old."""
+        old = self.made(RHEL8, 'old', with_parts(form='locale_order/2'),
+                        lambda d: d['locales']['zh_TW'].update(codeset='EUC-TW'))
+        new = self.made(RHEL9, 'new', with_parts(use=measured_use(9)))
+        self.assertIn({'moved': 'new', 'from': 'EUC-TW', 'to': 'BIG5',
+                       'why': 'the OLD file was written by an earlier version of '
+                              'locale_order.py',
+                       'names': {'zh_TW': 'EUC-TW'}}, self.use(old, new))
+
+    def test_a_change_between_encodings_of_one_byte(self):
+        """A database of an encoding of one byte never converts, so a
+        locale whose encoding changes between two of them is counted
+        with those, not NOT checked."""
+        found = self.use(*self.pair(
+            measured_use(8), measured_use(9, de_DE=use_of('one byte', 'ISO-8859-15')),
+            new_edits=[lambda d: d['locales']['de_DE'].update(codeset='ISO-8859-15')]))
+        self.assertEqual(found[-1]['one byte'], 3)
+        self.assertNotIn('de_DE', {n for d in found for v in d.values()
+                                   if isinstance(v, dict) for n in v})
+
+    def test_an_encoding_postgresql_does_not_know_beside_an_error(self):
+        """A database of any encoding can use such a locale; where the
+        new machine's glibc cannot convert the locale's own encoding, it
+        converts no text that is not ASCII, so every such database fails
+        there."""
+        fails = use_of('fails', 'ARMSCII-8', (0x531, 'b2b2'))
+        found = self.use(*self.pair(measured_use(8),
+                                    measured_use(9, **{'hy_AM.armscii8': fails})))
+        self.assertIn({'anydb': 'new', 'why': 'its encoding is one PostgreSQL '
+                       'does not know, so a database of any encoding can use it',
+                       'names': {'hy_AM.armscii8': 'ARMSCII-8'}}, found)
+        self.assertEqual(found[-1]['elsewhere'], 1)
+
+    def test_an_encoding_of_the_client_before_one_that_fails(self):
+        """BIG5 on the old machine (no database there converts with it),
+        EUC-TW failing on the new: the databases made on the new machine
+        fail."""
+        found = self.use(*self.pair(
+            measured_use(8), measured_use(9, zh_TW=use_of('fails', 'EUC-TW', (0x3000, 'a1a1'))),
+            new_edits=[lambda d: d['locales']['zh_TW'].update(codeset='EUC-TW')]))
+        self.assertIn({'one side': 'new', 'why': 'its encoding changed from BIG5 on '
+                       'the old machine to EUC-TW on the new one',
+                       'names': {'zh_TW': 'EUC-TW'}}, found)
+
+    def test_an_old_error_beside_databases_not_checked_on_the_new(self):
+        """An error is the worst a locale's databases can give: the old
+        machine's EUC-JP error is named, though the databases made on the
+        new machine, in EUC-TW, could not be checked there."""
+        found = self.use(*self.pair(
+            measured_use(9),
+            measured_use(9, ja_JP=use_of('not checked', 'EUC-TW', m.NO_CONVERTER)),
+            new_edits=[lambda d: d['locales']['ja_JP'].update(codeset='EUC-TW')]))
+        self.assertIn({'one side': 'old', 'why': 'its encoding changed from EUC-JP '
+                       'on the old machine to EUC-TW on the new one',
+                       'names': {'ja_JP': 'EUC-JP'}}, found)
+        self.assertFalse(any('ja_JP' in d.get('unknown', {}) for d in found))
+
+    def test_an_encoding_postgresql_does_not_know_beside_an_old_error(self):
+        """The mirror of the test above it: the error the old machine
+        measured, named on the old machine."""
+        fails = use_of('fails', 'ARMSCII-8', (0x531, 'b2b2'))
+        found = self.use(*self.pair(measured_use(8, **{'hy_AM.armscii8': fails}),
+                                    measured_use(9)))
+        self.assertIn({'anydb': 'old', 'why': 'its encoding is one PostgreSQL '
+                       'does not know, so a database of any encoding can use it',
+                       'names': {'hy_AM.armscii8': 'ARMSCII-8'}}, found)
+
+    def test_the_rows_of_the_file(self):
+        report, summary, rows = self.outputs(*self.pair(measured_use(8),
+                                                        measured_use(9)))
+        found = {names[0]: [r for r in group if r['finding'].startswith('upper/')]
+                 for names, group in rows.items() if len(names) == 1}
+        errors = {n for n, g in found.items() for r in g
+                  if r['finding'] == 'upper/lower/ILIKE error'}
+        self.assertEqual(errors, {'ja_JP', 'ja_JP.eucjp', 'ko_KR', 'ko_KR.euckr',
+                                  'zh_CN'})
+        self.assertEqual(found['ja_JP'][0]['chars'], [0xFF61])
+        self.assertEqual((found['ja_JP'][0]['bytes'], found['ja_JP'][0]['before'],
+                          found['ja_JP'][0]['now']), ('8E A1', 'converts', 'error'))
+        # ARMSCII-8 is an encoding PostgreSQL does not know: named in the
+        # line on a database of another encoding, with no row here.
+        self.assertEqual(found['hy_AM.armscii8'], [])
+
+    def test_refused_on_the_new_machine(self):
+        """Two locales, as glibc refuses them on a machine with its
+        language packs as folders and no glibc-gconv-extra: named in the
+        three outputs, counted in the totals, and never as unchanged or as
+        only not measured."""
+        new_use = measured_use(9, **{'ja_JP.eucjp': refused_use('ja_JP.eucjp', 9),
+                                     'ko_KR.euckr': refused_use('ko_KR.euckr', 9)})
+        old, new = self.pair(measured_use(8), new_use,
+                             new_edits=[selected_not('ja_JP.eucjp', 'ko_KR.euckr')])
+        report, summary, rows = self.outputs(old, new)
+        refused = {'ja_JP.eucjp', 'ko_KR.euckr'}
+        self.assertEqual({n: e['sides'] for n, e in report['refused'].items()},
+                         {n: {'new machine': 'LC_COLLATE and LC_CTYPE'} for n in refused})
+        self.assertEqual(summary['refused'], {n: 'the new machine' for n in refused})
+        self.assertEqual({names[0]: [r['why'] for r in g
+                                     if r['finding'] == 'refused by glibc']
+                          for names, g in rows.items()
+                          if any(r['finding'] == 'refused by glibc' for r in g)},
+                         {n: [('new', 'LC_COLLATE and LC_CTYPE')] for n in refused})
+        self.assertFalse(refused & set(report['unmeasured']))
+        self.assertFalse(refused & set(summary['unmeasured']))
+        self.assertEqual(report['totals']['refused'], 2)
+        self.assertEqual(report['totals']['unchanged'] + report['totals']['changed']
+                         + report['totals']['not measured'] + 2
+                         + report['totals']['not on new'], len(USE_NAMES))
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertEqual(set(use[0]['changed']), {'ja_JP', 'ko_KR', 'zh_CN'})
+        # Named as refused, and in no line about the text as well.
+        self.assertFalse(refused & {name for d in use for v in d.values()
+                                    if isinstance(v, dict) for name in v})
+        self.assertEqual(use[-1]['converts'] + use[-1]['one byte']
+                         + len(use[-1]['left out']) + use[-1].get('elsewhere', 0)
+                         + sum(len(d.get(k, {})) for d in use
+                               for k in ('changed', 'back', 'both', 'unknown')),
+                         len(USE_NAMES) - len(refused))
+        self.assertIsNotNone(report['refused']['ja_JP.eucjp']['also'])
+
+    def test_an_error_beside_a_refusal(self):
+        """Review round 2, finding 2: a side glibc refused does not hide
+        the error the other side measured; the locale is named as refused,
+        and in the line of errors measured on one side."""
+        old, new = self.pair(measured_use(8, ja_JP=refused_use('ja_JP', 8)),
+                             measured_use(9), old_edits=[selected_not('ja_JP')])
+        report, summary, rows = self.outputs(old, new)
+        self.assertEqual(report['refused']['ja_JP']['sides'],
+                         {'old machine': 'LC_COLLATE and LC_CTYPE'})
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertNotIn('ja_JP', use[0]['changed'])
+        self.assertEqual(use[1], {'one side': 'new', 'refused': True,
+                                  'names': {'ja_JP': 'EUC-JP'}})
+        self.assertEqual([(r['before'], r['now'], r['measured']) for r in rows[('ja_JP',)]
+                          if r['finding'] == 'upper/lower/ILIKE error'],
+                         [('not measured', 'error', 'on the new machine')])
+        old, new = self.pair(measured_use(9), measured_use(8, ja_JP=refused_use('ja_JP', 8)),
+                             new_edits=[selected_not('ja_JP')])
+        report, summary, rows = self.outputs(old, new)
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertEqual(use[1], {'one side': 'old', 'refused': True,
+                                  'names': {'ja_JP': 'EUC-JP'}})
+        self.assertEqual([(r['before'], r['now'], r['measured']) for r in rows[('ja_JP',)]
+                          if r['finding'] == 'upper/lower/ILIKE error'],
+                         [('error', 'not measured', 'on the old machine')])
+
+    def test_an_error_beside_an_encoding_that_changed(self):
+        """Review round 3, finding 1: the error a side measured is named
+        though the encoding changed, on one side and on both. Review round
+        5: on one side, it is not known what the other does with that
+        encoding, and the line says so."""
+        def euckr(d):
+            d['locales']['ja_JP']['codeset'] = 'EUC-KR'
+        fails = use_of('fails', 'EUC-KR', (0x3000, 'a1a1'))
+        report, summary, rows = self.outputs(*self.pair(
+            measured_use(8), measured_use(9, ja_JP=fails), new_edits=[euckr]))
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        # The databases of EUC-JP made on the old machine open on the new
+        # one under EUC-KR, whose converter glibc lacks there.
+        self.assertIn({'moved': 'new', 'from': 'EUC-JP', 'to': 'EUC-KR',
+                       'names': {'ja_JP': 'EUC-JP'}}, use)
+        self.assertEqual([(r['before'], r['now'], r['measured']) for r in rows[('ja_JP',)]
+                          if r['finding'] == 'upper/lower/ILIKE error'],
+                         [('not measured', 'error', 'on the new machine')])
+        # Both sides failing: one line, under the old encoding, and a row
+        # of each machine's character.
+        report, summary, rows = self.outputs(*self.pair(
+            measured_use(9), measured_use(9, ja_JP=fails), new_edits=[euckr]))
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertIn({'moved': 'both', 'from': 'EUC-JP', 'to': 'EUC-KR',
+                       'names': {'ja_JP': 'EUC-JP'}}, use)
+        self.assertNotIn('ja_JP', use[0].get('both', {}))
+        self.assertEqual([(r['before'], r['now'], r['measured']) for r in rows[('ja_JP',)]
+                          if r['finding'] == 'upper/lower/ILIKE error'],
+                         [('error', 'not measured', 'on the old machine'),
+                          ('not measured', 'error', 'on the new machine')])
+
+    def test_an_old_error_beside_an_encoding_that_changed(self):
+        """Review round 4, findings 1 and 3: the error the old machine
+        measured is named, under the encoding it was measured in."""
+        def utf8(d):
+            d['locales']['ja_JP']['codeset'] = 'UTF-8'
+        report, summary, rows = self.outputs(*self.pair(
+            measured_use(9), measured_use(9, ja_JP=use_of('converts', 'UTF-8', (0x80, 'c280'))),
+            new_edits=[utf8]))
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertIn({'one side': 'old',
+                       'why': 'its encoding changed from EUC-JP on the old machine '
+                              'to UTF-8 on the new one',
+                       'names': {'ja_JP': 'EUC-JP'}}, use)
+        self.assertEqual([(r['before'], r['now'], r['measured']) for r in rows[('ja_JP',)]
+                          if r['finding'] == 'upper/lower/ILIKE error'],
+                         [('error', 'not measured', 'on the old machine')])
+
+    def test_an_unread_encoding_is_not_left_out(self):
+        """Review round 3, finding 3: a side never asked beside a BIG5
+        error on the other is named as an error on the side that measured
+        one, not left out: databases made on the old machine may exist,
+        and the new machine's glibc converts no text that is not ASCII."""
+        never = use_of('not checked', None, m.NO_CTYPE, collate='unknown', ctype='unknown')
+        found = self.use(*self.pair(
+            measured_use(8, zh_TW=never), measured_use(9),
+            old_edits=[lambda d: d['locales'].update(
+                zh_TW={'error': 'cannot be selected: embedded null'})]))
+        self.assertIn({'anydb': 'new', 'why': m.NO_CTYPE + ' (on the old machine)',
+                       'names': {'zh_TW': 'BIG5'}}, found)
+        self.assertNotIn('zh_TW', found[-1]['left out'])
+
+    def test_a_refusal_beside_a_client_only_error(self):
+        """Review round 3: refused on one side, BIG5 failing on the other,
+        is named as refused and nowhere as an error: no database was made
+        with it on the refusing machine, and one made on the other can
+        only be SQL_ASCII, which never converts."""
+        report, summary, rows = self.outputs(*self.pair(
+            measured_use(8, zh_TW=refused_use('zh_TW', 8)), measured_use(9),
+            old_edits=[selected_not('zh_TW')]))
+        self.assertIn('zh_TW', report['refused'])
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertFalse({'zh_TW'} & {n for d in use for v in d.values()
+                                      if isinstance(v, dict) for n in v})
+
+    def test_refused_on_both_sides_is_not_among_the_other_encodings(self):
+        both = refused_use('th_TH.tis620', 8)
+        lines = [d['other encoding'] for kind, d in self.checks(*self.pair(
+            measured_use(8, **{'th_TH.tis620': both}),
+            measured_use(9, **{'th_TH.tis620': refused_use('th_TH.tis620', 9)}),
+            old_edits=[selected_not('th_TH.tis620')],
+            new_edits=[selected_not('th_TH.tis620')]))
+            if kind == 'bytes' and 'other encoding' in d]
+        self.assertEqual(lines, [{'hy_AM.armscii8': 'ARMSCII-8'}])
+
+    def test_an_encoding_that_changed(self):
+        """Review round 2, finding 3: one character of one encoding against
+        one of another says nothing of the database's bytes; NOT checked,
+        with both encodings named, and its row in the file."""
+        new = measured_use(9, ja_JP=use_of('converts', 'UTF-8', (0x80, 'c280')))
+        def utf8(d):
+            d['locales']['ja_JP']['codeset'] = 'UTF-8'
+        report, summary, rows = self.outputs(*self.pair(measured_use(8), new,
+                                                        new_edits=[utf8]))
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertEqual(use[1]['unknown']['ja_JP'],
+                         'Its encoding changed from EUC-JP on the old machine to '
+                         'UTF-8 on the new one')
+        self.assertNotIn('ja_JP', {n for d in use for k in ('changed', 'back', 'both')
+                                   for n in d.get(k, {})})
+        self.assertEqual([r['finding'] for r in rows[('ja_JP',)]
+                          if r['finding'].startswith('upper/')],
+                         ['upper/lower/ILIKE not checked'])
+
+    def test_another_encoding_read_on_either_side(self):
+        """Review round 2, finding 3: a locale whose encoding PostgreSQL
+        does not know on the new machine alone is named."""
+        def koi8t(d):
+            d['locales']['de_DE']['codeset'] = 'KOI8-T'
+        old, new = self.pair(measured_use(8),
+                             measured_use(9, de_DE=use_of('one byte', 'KOI8-T')),
+                             new_edits=[koi8t])
+        lines = [d['other encoding'] for kind, d in self.checks(old, new)
+                 if kind == 'bytes' and 'other encoding' in d]
+        self.assertEqual(lines, [{'de_DE': 'KOI8-T', 'hy_AM.armscii8': 'ARMSCII-8',
+                                  'th_TH.tis620': 'TIS-620'}])
+
+    def test_refused_on_each_side_and_by_category(self):
+        old_use = measured_use(8, **{'de_DE': refused_use('de_DE', 8, ctype='accepted')})
+        new_use = measured_use(9, **{
+            'de_DE': refused_use('de_DE', 9),
+            'th_TH.tis620': refused_use('th_TH.tis620', 9, collate='accepted')})
+        report, summary, rows = self.outputs(*self.pair(
+            old_use, new_use, old_edits=[selected_not('de_DE')],
+            new_edits=[selected_not('de_DE', 'th_TH.tis620')]))
+        self.assertEqual({n: e['sides'] for n, e in report['refused'].items()}, {
+            'de_DE': {'old machine': 'LC_COLLATE', 'new machine': 'LC_COLLATE and LC_CTYPE'},
+            'th_TH.tis620': {'new machine': 'LC_CTYPE'}})
+        self.assertEqual(summary['refused'], {'de_DE': 'both machines',
+                                              'th_TH.tis620': 'the new machine'})
+        # Refused on one side only, so the other side's encoding is read.
+        self.assertEqual([d['other encoding'] for kind, d in report['checks']
+                          if kind == 'bytes' and 'other encoding' in d],
+                         [{'hy_AM.armscii8': 'ARMSCII-8', 'th_TH.tis620': 'TIS-620'}])
+        self.assertEqual([r['why'] for r in rows[('de_DE',)]
+                          if r['finding'] == 'refused by glibc'],
+                         [('old', 'LC_COLLATE'), ('new', 'LC_COLLATE and LC_CTYPE')])
+
+    def test_a_name_glibc_was_never_asked_about_is_not_refused(self):
+        new_use = measured_use(9, de_DE=refused_use('de_DE', 9, collate='unknown',
+                                                    ctype='unknown'))
+        report, summary, rows = self.outputs(*self.pair(
+            measured_use(8), new_use, new_edits=[selected_not('de_DE')]))
+        self.assertEqual(report['refused'], {})
+        self.assertIn('de_DE', report['unmeasured'])
+        unknown = [d['unknown'] for kind, d in report['checks']
+                   if kind == 'use' and 'unknown' in d]
+        self.assertEqual(unknown[0]['de_DE'], m.NO_CTYPE + ' (on the new machine)')
+
+    def test_refused_beside_a_file_of_an_earlier_format(self):
+        """The side that measured it still names its refusals; what PostgreSQL
+        does with the text is NOT checked, naming the other side."""
+        new_use = measured_use(9, **{'ja_JP.eucjp': refused_use('ja_JP.eucjp', 9)})
+        old = self.made(RHEL8, 'old', with_parts(form='locale_order/2'))
+        new = self.made(RHEL9, 'new', with_parts(use=new_use),
+                        selected_not('ja_JP.eucjp'))
+        report, summary, rows = self.outputs(old, new)
+        self.assertEqual(set(report['refused']), {'ja_JP.eucjp'})
+        self.assertEqual([d for kind, d in report['checks'] if kind == 'use'], [
+            {'earlier': ['OLD']},
+            {'one side': 'new', 'why': 'the OLD file was written by an earlier '
+                                       'version of locale_order.py',
+             'names': {'ja_JP': 'EUC-JP', 'ko_KR': 'EUC-KR',
+                       'ko_KR.euckr': 'EUC-KR', 'zh_CN': 'GB2312'}}])
+
+    def bytes_lines(self, *pair):
+        return [d for kind, d in self.checks(*pair) if kind == 'bytes']
+
+    def test_what_postgresql_stores_and_is_not_measured(self):
+        """Decision 10: one line per encoding present, naming its locales,
+        and every byte sequence a row of the file under them."""
+        pair = self.pair(measured_use(8), measured_use(9))
+        self.assertEqual(self.bytes_lines(*pair), [
+            {'other encoding': {'hy_AM.armscii8': 'ARMSCII-8',
+                                'th_TH.tis620': 'TIS-620'}},
+            {'codeset': 'EUC-JP', 'names': ['ja_JP', 'ja_JP.eucjp'], 'count': 167},
+            {'codeset': 'EUC-KR', 'names': ['ko_KR', 'ko_KR.euckr'], 'count': 1},
+            {'codeset': 'TIS-620', 'names': ['th_TH.tis620'], 'count': 1},
+            {'note': True}])
+        report, summary, rows = self.outputs(*pair)
+        stored = {names: [r for r in g if r['finding'] == 'stored by PostgreSQL, not measured']
+                  for names, g in rows.items()}
+        stored = {k: v for k, v in stored.items() if v}
+        self.assertEqual({k: len(v) for k, v in stored.items()}, {
+            ('ja_JP', 'ja_JP.eucjp'): 167, ('ko_KR', 'ko_KR.euckr'): 1,
+            ('th_TH.tis620',): 1})
+        self.assertIn((0x2116, 'AD E2', 'EUC_JP'), {
+            (r['chars'][0], r['bytes'], r['encoding'])
+            for r in stored[('ja_JP', 'ja_JP.eucjp')]})
+        self.assertEqual([(r['chars'][0], r['bytes'], r['encoding'])
+                          for r in stored[('th_TH.tis620',)]], [(0xA0, 'A0', 'WIN874')])
+
+    def test_the_characters_file_is_named_whole(self):
+        """audit.sh names a characters file whose path is longer than a line;
+        the line that points at it keeps it whole, in the report and in the
+        summary, or it could not be copied."""
+        old, new = self.pair(measured_use(8), measured_use(9))
+        deep = os.path.join(self.tmp, 'work.glibc-2.28.glibc-2.34.dir' * 2)
+        os.makedirs(deep, exist_ok=True)
+        chars = os.path.join(deep, 'measured_order_characters.glibc-2.28..glibc-2.34.tsv')
+        summary = os.path.join(deep, 'summary.txt')
+        stdout = io.StringIO()
+        with unittest.mock.patch.object(m.sys, 'argv', [
+                SCRIPT, '--compare', old, new, '--summary-to', summary,
+                '--characters-to', chars]), contextlib.redirect_stdout(stdout):
+            self.assertEqual(m.main(), 0)
+        with open(summary, encoding='utf-8') as f:
+            brief = f.read()
+        for text in (stdout.getvalue(), brief):
+            self.assertIn('\n' + ' ' * (3 if text is not brief else 8) + chars + '.\n', text)
+
+    def test_measured_over_other_strings(self):
+        """A locale whose corpus is not the one the list was made from: the
+        list does not apply, and the line says so instead of naming it."""
+        def other(d):
+            for name in ('ja_JP', 'ja_JP.eucjp'):
+                d['locales'][name]['corpus'] = 'f' * 64
+        pair = self.pair(measured_use(8), measured_use(9), [other], [other])
+        self.assertEqual(self.bytes_lines(*pair)[1], {
+            'codeset': 'EUC-JP', 'names': ['ja_JP', 'ja_JP.eucjp'], 'unknown': True})
+
+    def test_the_list_is_of_bytes_this_script_does_not_measure(self):
+        """Every sequence of the list is outside the corpus this script
+        builds, the examples the lines name are in it, and the corpus is
+        the one it was made from."""
+        for codeset, (encoding, digest, entries) in m.POSTGRES_ONLY.items():
+            cps, data, got = m.corpus_for(codeset)
+            with self.subTest(codeset=codeset):
+                self.assertEqual(got, digest)
+                stored = m.postgres_only(codeset)
+                self.assertFalse({b for cp, b in stored} & set(data))
+                self.assertEqual(len(stored), len(set(stored)))
+        jp = dict(m.postgres_only('EUC-JP'))
+        self.assertEqual((jp[0x2116], jp[0x2460]), (b'\xad\xe2', b'\xad\xa1'))
+        # The line says the corpus measures U+2116 as 8F A2 F1.
+        cps, data, _ = m.corpus_for('EUC-JP')
+        self.assertEqual(data[cps.index(0x2116)], b'\x8f\xa2\xf1')
+        self.assertEqual(m.postgres_only('EUC-KR'), [(0x327E, b'\xa2\xe8')])
+        self.assertEqual(m.postgres_only('TIS-620'), [(0xA0, b'\xa0')])
 
 
 if __name__ == '__main__':

@@ -222,7 +222,7 @@ A worked example for each pair is in
 | `or_IN` | 🔴 **Changed** | 🟢 No difference | steps 1–3; the second pair is cleared by step 11's measurement |
 | `ko_KR` | 🔴 **Changed** | 🟢 No difference | step 4 flags it and **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement, as far as it can measure |
 | `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | **step 2 warns** and cannot settle it <sup>†</sup> — the node-to-node check settles the data, step 11 or `sql/c_utf8_probe.sql` the order |
-| `th_TH` | 🟢 No difference | 🔴 **Changed** | steps 1–3; the first pair is cleared by step 11's measurement |
+| `th_TH` | 🟢 No difference | 🔴 **Changed** | steps 1–3; the first pair is cleared by step 11's measurement, as far as it can measure |
 | `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap; the first pair is cleared by step 11's measurement |
 | CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>the base table a locale inherits unless it<br>defines its own order | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
 | `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | step 4 flagged them via `iso14651_t1_common`; cleared by measurement |
@@ -251,11 +251,13 @@ evidence is in
 ## Scope
 
 Sort order (`LC_COLLATE`) only, besides the decimals of the `money` type that
-step 11 compares, and in PostgreSQL terms the **`libc` provider** only. Nothing
-about `LC_CTYPE` (`upper()`, `lower()`, pattern matching), ICU,
-or the `builtin` provider — and the two pairs named above. `LC_CTYPE` is the
-exclusion that can still cost you an index, and no step of this tool audits
-it.
+step 11 compares, and in PostgreSQL terms the **`libc` provider** only. Of
+`LC_CTYPE`, only whether each machine can convert a locale's text, which
+`upper()`, `lower()` and `ILIKE` need in a database whose encoding has
+characters of more than one byte; nothing about what they return, ICU, or the
+`builtin` provider — and the two pairs named above. What `LC_CTYPE`
+returns is the exclusion that can still cost you an index, and no step of
+this tool audits it.
 
 Full scope, including the `builtin` provider as a mitigation:
 [docs/scope.md](docs/scope.md). The seven things to know before acting on a
