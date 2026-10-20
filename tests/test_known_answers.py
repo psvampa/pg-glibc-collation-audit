@@ -886,7 +886,7 @@ class BelowTheOldVersionFloor(StepRun):
     def test_step_2_finds_seven_locales_touching_lc_collate(self):
         """Six whose rules changed, and wal_ET, whose change glibc_reader
         cannot place: it copies am_ET, which uses reorder-sections-after,
-        a statement the reader does not settle (backlog 15.3). Before step
+        a statement the reader does not settle. Before step
         2 read with the reader (15.2 B3) wal_ET was cleared as "does not
         touch LC_COLLATE"; one it cannot settle is never cleared."""
         out = self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW)
@@ -959,8 +959,8 @@ class BelowTheOldVersionFloor(StepRun):
             280)
 
     def test_steps_1_and_3_name_the_17_runs_the_reader_cannot_settle(self):
-        """reorder-sections-after, which the reader does not settle yet
-        (backlog 15.3), is reached from am_ET and ber_MA by 17 locales at
+        """reorder-sections-after, which the reader does not settle, is
+        reached from am_ET and ber_MA by 17 locales at
         glibc-2.17. Step 3 cannot tell whether those inherit from what
         changed, so it lists them under a `!!` of their own; step 1 says its
         counts may miss them (backlog 15.2)."""
@@ -1047,7 +1047,7 @@ class BelowTheOldVersionFloor(StepRun):
         does not move when the walk loses a locale to that section, so it is
         read from its two parts. The 17 locales whose reading meets
         reorder-sections-after at am_ET and ber_MA, which the reader does
-        not settle yet (backlog 15.3), are named under their own `!!`."""
+        not settle, are named under their own `!!`."""
         out = self.step('flag_algorithmic_ranges.py', FLOOR_NEW)
         self.assertEqual(
             one_int(r'ellipsis \(algorithmic\) ranges: (\d+)', out,

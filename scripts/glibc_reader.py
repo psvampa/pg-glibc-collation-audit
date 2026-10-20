@@ -3,11 +3,10 @@
 The tool reads glibc's locale files to decide what changed between two
 versions. That reading used to be written by hand in several modules, each a
 little differently from the others and from glibc; every fix corrected one copy
-and the next review found its twin (backlog block 15). This module is the one
-reader the steps are moved onto, one PR at a time: steps 1 to 4 and 9/10
-read through it (glibc_tree.py); steps 6 to 8 not yet, nor step 2's
+and the next review found its twin (backlog block 15). Steps 1 to 4 and
+9/10 read through this module (glibc_tree.py); steps 6 to 8, step 2's
 lc_collate_unread check and its check of character sets and
-transliterations (collation_keys).
+transliterations (collation_keys) still read with readers of their own.
 
 It reads the way localedef reads, for one glibc BUILD, in layers:
 
@@ -28,7 +27,7 @@ It reads the way localedef reads, for one glibc BUILD, in layers:
      outcomes (a file it cannot open, a circular copy, a file copied twice
      into LC_COLLATE).
 
-Inside a section, every statement is read, for now, as its first token plus
+Inside a section, every statement is read as its first token plus
 the rest of its logical line, which glibc drops with lr_ignore_rest. That is
 what most statement handlers end with, but not all: some leave the rest of
 the line to be read as further statements, and some read past the end of the
@@ -39,8 +38,7 @@ statement glibc refuses in the state it comes in changes nothing
 (Collate.refused); a collating-element's `from` string is read translated,
 as collate_read reads it; and the characters each line names are the ones
 in its tokens (Collate.characters), as far as the reader is sure of the
-run (Run.named_lines). The statement grammars come in later
-steps of block 15.
+run (Run.named_lines).
 
 The token layer is the one backlog 15.0 compared token by token with
 glibc's linereader.c compiled at glibc-2.28, 2.34 and 2.39, on every locale
@@ -1091,11 +1089,12 @@ class Run(object):
         opening copy reads the copied file to its end first
         (iso14651_t1_common for the locales that copy am_ET at glibc-2.12
         and 2.17, which reorder-sections-after leaves unsettled). A run
-        that stored no LC_COLLATE (a fatal one, one that hangs, one
-        stopped where glibc reads outside its buffer) gives no file: when
-        the reader was sure throughout, glibc stored no LC_COLLATE
-        statement, and localedef writes nothing or no order (collate_finish
-        with no definition, ld-collate.c:1563-1566@2.34), so the run names
+        with no Collate (a fatal one, one that hangs, one stopped where
+        glibc reads outside its buffer, one in which glibc stored no
+        LC_COLLATE) gives no file: when the reader was sure throughout,
+        localedef writes nothing (Fatal) or an LC_COLLATE with no rules
+        (collate_finish and collate_output with no definition,
+        ld-collate.c:1563-1568 and :2117-2131@2.34), so the run names
         nothing; otherwise glibc may never reach that end, and nothing is
         known. Rounds 1 to 4 of the 15.3 C2 review each found
         one more route by which a reading the reader was not sure of
@@ -2130,8 +2129,8 @@ class _Runner(object):
                 elif t.tok in ('ellipsis2', 'ellipsis3', 'ellipsis4') \
                         and not store.order_started:
                     # localedef crashes on a range before any order_start
-                    # (measured on el8/el9/el10, case s41); why is the
-                    # statement grammar's to say (block 15, step 15.3).
+                    # (measured on el8/el9/el10, case s41); this reader
+                    # does not model why.
                     self.unsettled(lr, t.line, 'an ellipsis before '
                                    'order_start')
             self.statement(lr, t, sec, store)
@@ -2502,27 +2501,3 @@ class _Runner(object):
             raise _Stop(Fatal('crash', None, (lr.fname, t.line),
                               'translit include with a NULL name'))
         self.add_to_readlist('LC_CTYPE', target, True)
-
-
-def written_collate(data):
-    """[(start, end)] of every LC_COLLATE block as the TEXT holds it: a line
-    that starts with `LC_COLLATE`, to the next line that starts with
-    `END LC_COLLATE` (end None when there is none). 1-based lines.
-
-    This is where the block is written, which is what the tool compares
-    between two versions; it is not a claim about what glibc reads. Run
-    says that, and the two answers are kept apart because a file can hold a
-    block glibc never reads (backlog 13.18).
-    """
-    out = []
-    start = None
-    for idx, line in enumerate(data.split(b'\n'), 1):
-        if start is None:
-            if line.startswith(b'LC_COLLATE'):
-                start = idx
-        elif line.startswith(b'END LC_COLLATE'):
-            out.append((start, idx))
-            start = None
-    if start is not None:
-        out.append((start, None))
-    return out

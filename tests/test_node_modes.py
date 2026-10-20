@@ -1366,7 +1366,7 @@ class DirectoryModeStepFour(NodeCase):
     def test_a_C_the_reader_cannot_settle_is_not_cleared(self):
         """A run this reader cannot settle is not read as clean: C's status
         says so and C is on the list (backlog 15.2). reorder-sections-after
-        is one such statement until backlog 15.3 reads it."""
+        is one such statement."""
         body = locale_file('copy "iso14651_t1"',
                            'reorder-sections-after <LATIN> <X>')
         rc, text = run('flag_algorithmic_ranges.py',

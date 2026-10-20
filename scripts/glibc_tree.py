@@ -22,8 +22,7 @@ module answers from those runs and from nothing else (backlog 15.2):
 
 Steps 1 to 4 and 9/10 read this. Steps 6 to 8, and step 2's
 lc_collate_unread check and the files its check of character sets and
-transliterations (collation_keys) reads, still read with their own readers
-(backlog 15.4 to 15.6).
+transliterations (collation_keys) reads, still read with their own readers.
 """
 import hashlib
 import json

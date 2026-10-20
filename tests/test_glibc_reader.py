@@ -68,21 +68,20 @@ _OPEN_RE = re.compile(r"cannot open locale definition file `(.*)'")
 ORACLE_BUILDS = {'rhel8': ('2.28', '.el8'), 'rhel9': ('2.34', '.el9'),
                  'rhel10': ('2.39', '.el10')}
 
-# Cases the reader leaves unsettled, each until the step of block 15 that
-# reads the grammar it depends on (15.4: the grammars that read past the end
-# of a line, LC_TIME's fields and translit's entries among them). b18 and
+# Cases the reader leaves unsettled because they depend on a grammar it does
+# not model or on a charmap. b18 and
 # b19 are settled on el10 because a 0x1A or 0xFF there is an ordinary byte
 # from glibc 2.36 on, and so is s51, where a 0x1A after a number makes
 # lr_token give the number again forever before 2.36.
-# c44 and c50 wait for the charmap reader (15.6), which says whether a
-# string has a character the charmap lacks; c45 and c46, like c34, for the
-# translit entry grammar (15.4). s41, s43 and s45 for the LC_COLLATE and
-# LC_CTYPE statement grammars (15.3, 15.4): a range before order_start,
+# c44 and c50 depend on whether a string has a character the charmap
+# lacks, and the reader reads no charmap; c45 and c46, like c34, on the
+# translit entry grammar. s41, s43 and s45 on the LC_COLLATE and
+# LC_CTYPE statement grammars: a range before order_start,
 # and statements written into a struct the file shares while read for
 # another category; s42 too on el9 and el10, where codepoint_collation is a
 # keyword. s46 too: a number that ends the file is read again on every
 # lr_token, so whether glibc returns depends on what the statement's
-# handler does with the rest of its line (15.4); s47, s48 and, before
+# handler does with the rest of its line; s47, s48 and, before
 # 2.36, s50, where the loop is glibc's own, are a hang, measured.
 _LATER = {'s18', 's27', 's30', 's31', 'c34', 'c44', 'c45', 'c46', 'c50',
           's41', 's43', 's45', 's46'}
@@ -90,8 +89,8 @@ _LATER = {'s18', 's27', 's30', 's31', 'c34', 'c44', 'c45', 'c46', 'c50',
 # the start of the file and s52 at the start of a continued line.
 _UNDEFINED = {'t16', 's52'}
 # An 0xFF inside a statement: what each handler reads after it is the
-# statement grammars' (block 15, 15.3 to 15.4); until then the reader says
-# so (false-negative-reviewer, round 3 of 15.2 B2).
+# statement grammars', which the reader does not read; it says so
+# (false-negative-reviewer, round 3 of 15.2 B2).
 _MID_STATEMENT = {'s62', 's64', 's65', 's66'}
 # LC_COLLATE statements the reader leaves unsettled (backlog 15.3):
 #   - a range it does not fill, or closed by something other than an entry,
@@ -597,12 +596,6 @@ class ReaderFailureModes(unittest.TestCase):
                          t=b'LC_COLLATE\nEND LC_COLLATE\n')
         self.assertIn('glibc reads outside its buffer here',
                       [w for _, _, w in r.unsettled])
-
-    def test_written_collate_lists_every_block_and_an_open_one(self):
-        text = (b'LC_COLLATE\nEND LC_COLLATE\nx\nLC_COLLATE\n'
-                b'order_start forward\n')
-        self.assertEqual([(1, 2), (4, None)], gr.written_collate(text))
-        self.assertEqual([], gr.written_collate(b'  LC_COLLATE\n'))
 
 
 def _tok(t):
@@ -1157,7 +1150,8 @@ class ReaderAgreesOnEveryRealFile(unittest.TestCase):
     seconds)."""
 
     TAGS = (FLOOR_OLD, FLOOR_NEW, OLD, MID, NEW)
-    # reorder-sections-after, read in 15.3; at 2.12 and 2.17 only.
+    # reorder-sections-after, which the reader does not settle; at 2.12 and
+    # 2.17 only.
     UNSETTLED = {FLOOR_OLD: {'reorder-sections-after in LC_COLLATE': 17},
                  FLOOR_NEW: {'reorder-sections-after in LC_COLLATE': 17}}
 
@@ -1396,7 +1390,7 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
         """An 0xFF that lr_getc consumes ends a statement whose handler may
         leave the rest of its line, and LC_CTYPE then reads on after it
         (case s62): the LC_COLLATE below is read at the top level. The
-        reader does not settle which handler does what yet, so zz_A is
+        reader does not settle which handler does what, so zz_A is
         named, not read as defining no LC_COLLATE and dropped
         (false-negative-reviewer, round 3 of B2)."""
         import glibc_tree
@@ -3328,8 +3322,8 @@ class TreeAgreesWithTheOldReadersOnTheTags(unittest.TestCase):
     line readers gave them, except where those read differently from
     localedef, and those exceptions are named here: at 2.12 and 2.17 the
     ranges in iso14651_t1_common are inside `#` comments (backlog 13.8), and
-    17 runs meet reorder-sections-after, which the reader does not settle
-    yet (backlog 15.3). Anything else that moves is a difference nobody
+    17 runs meet reorder-sections-after, which the reader does not settle.
+    Anything else that moves is a difference nobody
     measured.
 
     Step 2's view (glibc_tree.file_facts, backlog 15.2 B3) is held to the
