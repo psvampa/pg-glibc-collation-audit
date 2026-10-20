@@ -37,6 +37,12 @@ different facts. So it is red whenever it cannot show that the suite ran:
   * a class named on the command line that matches nothing is FAILED, rather
     than a green run of the empty selection.
 
+It is also red when anything changed during the run in the folder a real
+audit.sh writes to, naming each path, and when that folder cannot be read.
+Each test process writes to a folder of its own (`_harness.SUITE_OUT_DIR`),
+so a change there is a test writing where a real audit reads, or an audit.sh
+run at the same time, and the report says both.
+
 A run of the whole suite first computes, with every processor, the
 reader's answers most classes ask for (_harness.fill_reader_cache, backlog
 15.2): classes that each computed nearly the same tree at once took GitHub's
@@ -69,6 +75,8 @@ import sys
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+
+from _harness import DEFAULT_OUT_DIR
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -224,7 +232,49 @@ def parse_shard(report):
     return int(last.group(1)), last.group(2), counts
 
 
-def aggregate(shards, expected, seconds, workers, tail=80):
+def watch(root):
+    """{path under root: what lstat says of it}, root itself included.
+
+    Kept per entry, not as a count or a hash of the names, because the report
+    names what changed. A file rewritten with the same bytes is a change too
+    (its mtime and ctime move), which is what a test overwriting a real
+    audit's list with an identical one looks like.
+
+    {} when root does not exist, and that is a real answer: nothing was there,
+    so anything there afterwards was put there. A folder that exists and
+    cannot be read raises instead of returning what it could see, because
+    "could not look" is not "nothing changed".
+    """
+    if not os.path.lexists(root):
+        return {}
+
+    def refuse(exc):
+        raise exc
+
+    def entry(path):
+        st = os.lstat(path)
+        return st.st_mode, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+
+    # When root is a link, lstat sees the link, and a file created and
+    # deleted in the folder it points to moves only that folder's own entry,
+    # so '.' holds both.
+    seen = {'.': (entry(root), entry(os.path.realpath(root))
+                  if os.path.islink(root) else None)}
+    for dirpath, dirnames, filenames in os.walk(root, onerror=refuse):
+        for name in dirnames + filenames:
+            path = os.path.join(dirpath, name)
+            seen[os.path.relpath(path, root)] = entry(path)
+    return seen
+
+
+def changed(before, after):
+    """The paths whose entry differs between two watch() results, sorted."""
+    return sorted(p for p in set(before) | set(after)
+                  if before.get(p) != after.get(p))
+
+
+def aggregate(shards, expected, seconds, workers, tail=80, touched=(),
+              unwatched=None):
     """(exit code, report lines) for a finished run.
 
     `expected` is {class name: tests discovery counted in it}, per class and
@@ -239,6 +289,10 @@ def aggregate(shards, expected, seconds, workers, tail=80):
     counted, and a run of nothing at all -- which reaches here as an empty
     list and used to return OK, leaving the refusal to two guards upstream
     that nothing re-checked where the verdict is printed.
+
+    `touched` names what changed during the run under DEFAULT_OUT_DIR, and
+    `unwatched` says why that folder could not be read before or after the
+    run. Either one is a red of its own, whatever the shards said.
     """
     lines, problems = [], []
     totals = collections.Counter()
@@ -295,6 +349,16 @@ def aggregate(shards, expected, seconds, workers, tail=80):
                          % (len(body) - tail))
             body = body[-tail:]
         lines.extend('    ' + line for line in body)
+    if touched:
+        lines.append('--- %d path(s) changed during the run in %s, the folder '
+                     'a real audit.sh reads its own lists back from; the '
+                     'suite writes to a folder of its own, so either a test '
+                     'wrote there or an audit.sh ran at the same time:'
+                     % (len(touched), DEFAULT_OUT_DIR))
+        lines.extend('    ' + path for path in touched)
+    if unwatched:
+        lines.append('--- could not read %s, so whether the run wrote there '
+                     'is unknown: %s' % (DEFAULT_OUT_DIR, unwatched))
     lines.append('Ran %d tests in %.1fs (%d workers, %d classes)'
                  % (ran, seconds, workers, len(shards)))
     # `skipped` stays in the detail on this branch: a run that failed AND
@@ -310,7 +374,12 @@ def aggregate(shards, expected, seconds, workers, tail=80):
         detail.append('unreported classes=%d' % len(missing))
     if repeated:
         detail.append('classes reported twice=%d' % len(repeated))
-    if problems or missing or repeated or ran != total:
+    if touched:
+        detail.append('default output folder changed=%d' % len(touched))
+    if unwatched:
+        detail.append('default output folder unreadable=1')
+    if (problems or missing or repeated or ran != total or touched
+            or unwatched):
         if not detail:
             detail = ['%d problem(s), see the lines above' % len(problems)]
         lines.append('FAILED (%s)' % ', '.join(detail))
@@ -361,6 +430,11 @@ def main(argv=None):
         return 2
     expected = dict(units)
     workers = max(1, min(args.workers, len(units)))
+    unwatched, before = None, None
+    try:
+        before = watch(DEFAULT_OUT_DIR)
+    except OSError as exc:
+        unwatched = 'before the run: %s' % exc
     if not args.names:
         why = fill_reader()
         if why is not None:
@@ -375,7 +449,17 @@ def main(argv=None):
     started = time.time()
     with ThreadPoolExecutor(max_workers=workers) as pool:
         shards = list(pool.map(lambda u: run_unit(u[0]), units))
-    code, lines = aggregate(shards, expected, time.time() - started, workers)
+    seconds = time.time() - started
+    touched = []
+    try:
+        after = watch(DEFAULT_OUT_DIR)
+        if before is not None:
+            touched = changed(before, after)
+    except OSError as exc:
+        unwatched = '; '.join(filter(None, [unwatched,
+                                            'after the run: %s' % exc]))
+    code, lines = aggregate(shards, expected, seconds, workers,
+                            touched=touched, unwatched=unwatched)
     print('\n'.join(lines))
     return code
 

@@ -2,16 +2,20 @@
 
 ## What it audits
 
-**Sort order (`LC_COLLATE`) only.** It says nothing about `LC_CTYPE`
-behavior — `upper()`, `lower()`, `initcap()`, character classification, pattern
-matching — and nothing about `LC_NUMERIC`, `LC_TIME`, `LC_MONETARY` or
-`LC_MESSAGES`.
+**Sort order (`LC_COLLATE`) only.** Of `LC_CTYPE` behavior, step 11 checks
+one thing, whether each machine can convert a locale's text at all.
+Without that, in a database whose encoding has characters of more than one
+byte, `upper()`, `lower()`, `initcap()`, `ILIKE` and full-text search stop
+with an error on any text that is not ASCII. What those functions return,
+character classification and pattern matching are not audited, nor
+`LC_NUMERIC`, `LC_TIME`, `LC_MONETARY` or `LC_MESSAGES`, except the decimals
+of the `money` type, which step 11 compares given each machine's file.
 
-`LC_CTYPE` is the exclusion that can still cost you an index: a functional index
-on `lower(email)` breaks on a glibc upgrade the same way a `COLLATE` index does,
-and PostgreSQL has no `collversion` equivalent for ctype to warn you. No step
-audits it — see
-[limitations.md](limitations.md#lc_ctype-is-not-audited-at-all).
+What `LC_CTYPE` returns is the exclusion that can still cost you an index: a
+functional index on `lower(email)` breaks on a glibc upgrade the same way a
+`COLLATE` index does, and PostgreSQL has no `collversion` equivalent for
+ctype to warn you. No step audits it — see
+[limitations.md](limitations.md#what-lc_ctype-returns-is-not-audited).
 
 **The `libc` provider only.** It is about glibc, so in PostgreSQL terms that
 is the only provider it applies to. ICU collations version their CLDR data
@@ -21,8 +25,7 @@ independently of the OS.
 project audits and publishes results for. RHEL7 is out of scope — it is years
 past end of life, and documenting it bought nothing.
 
-The method itself works on any pair of upstream tags, so equivalents on other
-distros (Ubuntu 18.04+, Debian 9+, SLES 15+) behave the same. The extended
+The method itself works on any pair of upstream tags. The extended
 run, 1.b, has been measured on RHEL only, and it reads the glibc build with
 `rpm -q glibc`. On a machine without RPM, such as Debian or Ubuntu, `audit.sh`
 refuses that machine's file and says why. The two pairs
@@ -41,17 +44,16 @@ templates were dropped from the `copy` graph and the answer collapsed silently
 a claim about every older glibc. See
 [limitations.md](limitations.md#below-glibc-224-the-method-rests-on-one-measured-pair).
 
-## The `builtin` provider is the way out
+## The `builtin` provider
 
-The `builtin` provider (PG 17+) implements `C`, `C.UTF-8` and
-`PG_UNICODE_FAST` inside PostgreSQL, in code-point order, with no call into
-glibc. So:
+The `builtin` provider (PG 17+) implements `C` and `C.UTF-8` inside
+PostgreSQL, in code-point order. So:
 
 ```sh
 initdb --locale-provider=builtin --locale=C.UTF-8
 ```
 
-is immune to everything this tool looks for, and is the mitigation if
+is the mitigation if
 [the `C.UTF-8` limitation](limitations.md#cutf-8-is-invisible-to-a-tag-diff)
 is what you are worried about.
 

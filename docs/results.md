@@ -6,9 +6,9 @@
 |---|---|---|---|
 | `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | 🟢 No difference | steps 1–3 — `sv_FI` only via `copy`; the second pair is cleared by step 11's measurement |
 | `or_IN` | 🔴 **Changed** | 🟢 No difference | steps 1–3; the second pair is cleared by step 11's measurement |
-| `ko_KR` | 🔴 **Changed** | 🟢 No difference | **step 5** — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement |
+| `ko_KR` | 🔴 **Changed** | 🟢 No difference | step 4 flags it and **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement, as far as it can measure |
 | `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | **step 2 warns** and cannot settle it <sup>†</sup> — the node-to-node check settles the data, step 11 or `sql/c_utf8_probe.sql` the order |
-| `th_TH` | 🟢 No difference | 🔴 **Changed** | steps 1–3; the first pair is cleared by step 11's measurement |
+| `th_TH` | 🟢 No difference | 🔴 **Changed** | steps 1–3; the first pair is cleared by step 11's measurement, as far as it can measure |
 | `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap; the first pair is cleared by step 11's measurement |
 | CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>the base table a locale inherits unless it<br>defines its own order | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
 | `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | step 4 flagged them via `iso14651_t1_common`; cleared by measurement |
@@ -48,7 +48,7 @@ never flagged by a plain file diff.
 ### `ko_KR` — from the code diff
 
 **`ko_KR` also changes**, and its data file is byte-identical between the two
-tags. Step 5 pins the cause to a single commit,
+tags. The cause is a single commit,
 [`82292c99b2`](https://sourceware.org/bugzilla/show_bug.cgi?id=22668)
 ("LC_COLLATE: Fix last character ellipsis handling", Bug 22668), which landed
 in glibc 2.34 and changed how `localedef` expands the ellipsis ranges that
@@ -58,8 +58,7 @@ Two independent checks agree: `localedata/locales/ko_KR` is unchanged across
 both `2.28..2.34` and `2.31..2.36`, and
 [ardentperf's](https://github.com/ardentperf/glibc-unicode-sorting)
 checksums show `ko` changing on Debian exactly between 2.31 and 2.36 —
-bracketing 2.34. This is the case a data-only audit gets wrong, which is why
-step 5 exists.
+bracketing 2.34. This is the case a data-only audit gets wrong.
 
 #### The `ko_KR` mechanism, and its minimal test case
 
@@ -214,9 +213,9 @@ RHEL9 and RHEL10.
 
 Step 11 asks each machine's own glibc how it sorts every locale, rather than
 reading source. Measured on the three test machines named under
-[Tested on](#tested-on), with every language pack installed. The measurements
-are kept whole in [`tests/locale_order/`](../tests/locale_order/), and the
-suite checks against them which locales change.
+[Tested on](#tested-on), with every language pack installed. The sort-order
+measurements are kept whole in [`tests/locale_order/`](../tests/locale_order/),
+and the suite checks against them which locales change.
 
 **RHEL8 to RHEL9.** The locales that sort differently are the 🔴 rows of the
 table: `C.utf8`, `ko_KR.utf8`, `or_IN` and `or_IN.utf8`, and the Swedish
@@ -228,12 +227,21 @@ and `en_US.utf8` among them, though a few only as far as they could be
 measured. The comparison names those, and also the few it could not measure
 or that are missing from the new machine.
 
+On those machines glibc also stops converting the text of the EUC-JP,
+EUC-KR and GB2312 locales on RHEL9, which it converts on RHEL8, so in a
+database of their own encoding `upper()`, `lower()` and `ILIKE` stop with an
+error there. The RHEL9 machine has no `glibc-gconv-extra`, which the RHEL8
+one has, and without it glibc converts only ASCII in those encodings.
+Measured on fresh Rocky Linux machines, installing `glibc-all-langpacks`
+brings it in on 8 and not on 9 or 10.
+
 **RHEL9 to RHEL10.** Only `th_TH` sorts differently, in TIS-620 (`th_TH`,
 `th_TH.tis620`, `thai`) and in `th_TH.utf8`. Every other locale it measured is
 unchanged, `ber_DZ`, `kab_DZ` and `C.utf8` among them, though a few only as far
 as they could be measured, `ko_KR.utf8` among those. The comparison names
 them, and also the few it could not measure or that are missing from the new
-machine.
+machine. The same EUC-JP, EUC-KR and GB2312 locales stop `upper()`,
+`lower()` and `ILIKE` with an error on both machines, for the same reason.
 
 No published verdict moved. What step 11 does not see is in
 [limitations.md](limitations.md#step-11-measures-one-character-at-a-time).

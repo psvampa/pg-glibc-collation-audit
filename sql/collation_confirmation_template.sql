@@ -60,24 +60,23 @@ SELECT pg_import_system_collations('pg_catalog');
 -- initdb inherits the locale from the environment and minimal images ship
 -- LANG=C.UTF-8.
 --
--- So the question "is this database exposed to a glibc collation change?" is
--- answered here, once, and not per column. If datlocprovider is 'c' and
--- datcollate is anything other than C or POSIX, every default-collated column
--- in the database is exposed -- C.UTF-8 very much included: PostgreSQL
--- special-cases only the literal strings "C" and "POSIX" to byte comparison
+-- So the question "are the default-collated columns exposed to a glibc
+-- collation change?" is answered here, once, and not per column. If
+-- datlocprovider is 'c' and datcollate is anything other than C or POSIX,
+-- every default-collated column in the database is exposed -- C.UTF-8 very
+-- much included: PostgreSQL special-cases only the literal strings "C" and
+-- "POSIX" to byte comparison
 -- (src/backend/utils/adt/pg_locale.c through PG 17, pg_locale_libc.c from
--- PG 18), so libc C.UTF-8 goes through strcoll like any other locale. The
--- `builtin` provider's C.UTF-8 (PG 17+) is a different thing and is not
--- exposed.
-\echo '--- is this database exposed at all? ---'
+-- PG 18), so libc C.UTF-8 goes through strcoll like any other locale.
+\echo '--- is the database default collation exposed? ---'
 SELECT d.datname,
        d.datlocprovider AS provider,
        d.datcollate,
        CASE
          WHEN d.datlocprovider <> 'c'
-           THEN 'not libc -- a glibc change does not affect the default'
+           THEN 'not libc'
          WHEN d.datcollate IN ('C', 'POSIX')
-           THEN 'byte order -- immune'
+           THEN 'byte order'
          ELSE 'EXPOSED -- every column with no explicit COLLATE uses this'
        END AS default_collation_status
 FROM pg_database d
@@ -221,9 +220,9 @@ CROSS JOIN LATERAL unnest(pt.partcollation::oid[]) AS pc(oid)
 JOIN exposed_collation x ON x.colloid = pc.oid
 ORDER BY pt.partrelid::regclass::text;
 
--- Every column carrying such a collation, indexed or not. This is the full
--- surface: anything comparing these columns (a query plan, a constraint, a
--- generated column, a materialized view's stored order) inherits the change.
+-- Every column carrying such a collation, indexed or not. Anything comparing
+-- these columns (a query plan, a constraint, a generated column, a
+-- materialized view's stored order) inherits the change.
 \echo '--- columns using a non-C/POSIX libc collation ---'
 SELECT a.attrelid::regclass AS table_name,
        a.attname            AS column_name,
@@ -267,14 +266,12 @@ WHERE con.contype IN ('c', 'x')
           AND NOT a.attisdropped)
 ORDER BY con.conrelid::regclass::text, con.conname;
 
--- PostgreSQL's own signal: fires on ANY glibc version bump, whether or not
--- your data would actually sort differently, and stays silent if a distro
--- patches collation data without moving the reported version. Conservative in
--- one direction, blind in the other -- which is why this audit exists.
+-- PostgreSQL's own signal stays silent if a distro patches collation data
+-- without moving the reported version -- which is why this audit exists.
 -- The named-collation query needs PostgreSQL 13+ (libc collations are
 -- versioned from 13); the database-default query needs 15+.
 --
--- THIRD blind spot, and the one that bites hardest here: neither this query
+-- The blind spot that bites hardest here: neither this query
 -- nor the one after it can ever report a C.* collation. Under the libc
 -- provider, get_collation_actual_version() returns NULL for "C", for
 -- "POSIX", and for anything whose name STARTS WITH "C.". PG 13 chops the
