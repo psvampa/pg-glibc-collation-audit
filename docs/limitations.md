@@ -119,6 +119,10 @@ see:
 - a locale whose encoding PostgreSQL does not know, in a database of another
   encoding, which PostgreSQL allows. The bytes it sorts and converts there are
   not the ones measured, and the run names those locales;
+- the bytes a database holds that PostgreSQL did not convert from UTF-8, as
+  from a client of the database's own encoding, and the bytes of a SQL_ASCII
+  database, which a superuser can create with any locale. PostgreSQL stores
+  them as the client sent them, and the run does not name them;
 - a locale that is not installed, because it measures what `locale -a` lists
   and nothing else.
 
@@ -150,10 +154,10 @@ is no mismatch for anything to detect.
 No step of this tool audits what those functions return, and no verdict
 this project publishes says anything about it in either direction, including
 "unchanged". Step 11 checks only whether each machine can convert a locale's
-text at all, and names the locales where `upper()`, `lower()` and `ILIKE`
-would stop with an error. Steps 2 and 6
-to 8 read its transliterations only for the collating elements they build,
-which are sort order. A 🟢 on the
+text at all, and names the locales where it found that `upper()`, `lower()`
+and `ILIKE` stop with an error, those glibc refused, and those it could not
+check. Steps 2 and 6 to 8 read its transliterations only for the collating
+elements they build, which are sort order. A 🟢 on the
 results table is a statement about sort order and nothing else. If a
 `lower()`-based index matters to you, confirm it the way this project confirms
 collation — on both machines, naming the builds.

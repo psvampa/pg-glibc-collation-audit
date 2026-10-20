@@ -1053,16 +1053,17 @@ This looks at the C library PostgreSQL runs, not at its locale data: a
    again. EUC-JP: ja_JP, ja_JP.eucjp, ja_JP.ujis, japanese, japanese.euc;
    EUC-KR: ko_KR, ko_KR.euckr, korean, korean.euc; GB2312: zh_CN,
    zh_CN.gb2312, zh_SG, zh_SG.gb2312.
-!! upper(), lower() and ILIKE NOT checked in 4 locale(s): Python has no
-   converter for their encoding, so no character of it could be built:
-   ARMSCII-8: hy_AM.armscii8; EUC-TW: zh_TW.euctw; GEORGIAN-PS: ka_GE,
-   ka_GE.georgianps.
+!! upper(), lower() and ILIKE NOT checked in 1 locale(s): Python has no
+   converter for their encoding, so no character of it could be built: EUC-TW:
+   zh_TW.euctw.
 upper(), lower() and ILIKE: text that is not ASCII converts on both machines
-   in 476 locale(s); in the 365 of an encoding of one byte PostgreSQL never
+   in 476 locale(s); in the 358 of an encoding of one byte PostgreSQL never
    converts it in a database of that encoding. Left out: 7 locale(s) of an
    encoding PostgreSQL allows only on the client, so no database converts text
    with them (BIG5: zh_TW, zh_TW.big5; BIG5-HKSCS: zh_HK, zh_HK.big5hkscs;
-   GB18030: zh_CN.gb18030; GBK: zh_CN.gbk, zh_SG.gbk).
+   GB18030: zh_CN.gb18030; GBK: zh_CN.gbk, zh_SG.gbk). The 10 locale(s) of an
+   encoding PostgreSQL does not know are in the line on a database of another
+   encoding.
 !! Not measured in a database of another encoding: 10 locale(s) whose encoding
    PostgreSQL does not know, so that CREATE DATABASE lets a database of any
    encoding use one, with only a WARNING ("could not determine encoding for
@@ -1195,17 +1196,17 @@ Every such byte sequence is in
         EUC-JP: ja_JP, ja_JP.eucjp, ja_JP.ujis, japanese, japanese.euc;
         EUC-KR: ko_KR, ko_KR.euckr, korean, korean.euc; GB2312: zh_CN,
         zh_CN.gb2312, zh_SG, zh_SG.gb2312.
-     !! upper(), lower() and ILIKE NOT checked in 4 locale(s): Python has no
+     !! upper(), lower() and ILIKE NOT checked in 1 locale(s): Python has no
         converter for their encoding, so no character of it could be built:
-        ARMSCII-8: hy_AM.armscii8; EUC-TW: zh_TW.euctw; GEORGIAN-PS: ka_GE,
-        ka_GE.georgianps.
+        EUC-TW: zh_TW.euctw.
      upper(), lower() and ILIKE: text that is not ASCII converts on both
-        machines in 476 locale(s); in the 365 of an encoding of one byte
+        machines in 476 locale(s); in the 358 of an encoding of one byte
         PostgreSQL never converts it in a database of that encoding. Left out:
         7 locale(s) of an encoding PostgreSQL allows only on the client, so no
         database converts text with them (BIG5: zh_TW, zh_TW.big5; BIG5-HKSCS:
         zh_HK, zh_HK.big5hkscs; GB18030: zh_CN.gb18030; GBK: zh_CN.gbk,
-        zh_SG.gbk).
+        zh_SG.gbk). The 10 locale(s) of an encoding PostgreSQL does not know
+        are in the line on a database of another encoding.
      !! Not measured in a database of another encoding: 10 locale(s) whose
         encoding PostgreSQL does not know, so that CREATE DATABASE lets a
         database of any encoding use one, with only a WARNING ("could not

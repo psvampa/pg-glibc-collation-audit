@@ -39,10 +39,10 @@ glibc converts a character of its encoding to a wide character, without which
 upper(), lower() and ILIKE stop with an error (postgres_use). A file written
 before these were measured still compares, and the comparison says they were
 not checked there. The comparison also names what PostgreSQL stores in
-EUC-JP, EUC-KR and TIS-620 that no order measured here places
-(POSTGRES_ONLY). C and POSIX, which glibc sorts in byte order in every version,
-are the control: a machine where they measured otherwise did not measure what
-this means to.
+EUC-JP, EUC-KR and TIS-620, converting from UTF-8, that no order measured
+here places (POSTGRES_ONLY). C and POSIX, which glibc sorts in byte order in
+every version, are the control: a machine where they measured otherwise did
+not measure what this means to.
 
 Each order and told-apart record is kept whole, compressed, once for all the
 locales that share it, so that the comparison can name the characters that
@@ -1777,21 +1777,48 @@ def load(path, digest):
                                                      locales):
         die(f'{path}: what it says of how PostgreSQL uses each locale is '
             'malformed; it is not a whole measurement')
-    if 'postgres_use' in held:
-        # measure_one selects LC_COLLATE and then LC_CTYPE (codeset_of), so
-        # a locale glibc refused either has no order of its own: one that
-        # has was refused by another glibc than the one that measured it.
-        for name, r in data['postgres_use'].items():
-            if ('refused' in (r['collate'][0], r['ctype'][0])
-                    and 'error' not in locales[name]):
-                die(f'{path}: the entry for {shown(name)} says glibc refused '
-                    'it, and holds the order measured for it; glibc changed '
-                    'while that machine was measured, so measure it again')
     if 'content' not in data:
         die(f'{path} is not an output of this version of locale_order.py')
     if data['content'] != content_digest(data):
         die(f'{path} does not match the digest its machine wrote into it; the '
             'file was damaged after it was written')
+    if 'postgres_use' in held:
+        # measure_one selects LC_COLLATE and then LC_CTYPE (codeset_of), and
+        # postgres_use reads the same nl_langinfo right after it in the same
+        # process: a locale either refused, or one Python could not hand to
+        # C, has no order of its own, and both read one encoding. A file
+        # that says otherwise was measured by two glibcs.
+        for name, r in data['postgres_use'].items():
+            # measure_one keeps no encoding after either refusal (it returns
+            # before codeset_of, or codeset_of gave None).
+            if ('accepted' != r['collate'][0] or 'accepted' != r['ctype'][0]) \
+                    and ('error' not in locales[name] or 'codeset' in locales[name]):
+                # A name Python cannot pass to C stops measure_one with the
+                # same ValueError, whatever glibc: no second glibc explains it.
+                if 'unknown' in (r['collate'][0], r['ctype'][0]):
+                    die(f'{path}: the entry for {shown(name)} says Python could '
+                        'not pass its name to the C library, and holds the order '
+                        'or the encoding measured for it; the file contradicts '
+                        'itself, so measure that machine again')
+                die(f'{path}: the entry for {shown(name)} says glibc refused '
+                    'it, and holds the order or the encoding measured for it; '
+                    'glibc changed while that machine was measured, so measure '
+                    'it again')
+            # Both accepted: codeset_of and postgres_use read nl_langinfo under
+            # the same LC_CTYPE, one right after the other, so they read the
+            # same encoding, or neither read one.
+            order_codeset = locales[name].get('codeset')
+            if ('accepted' == r['collate'][0] == r['ctype'][0]
+                    and r['codeset'] != order_codeset):
+                first = (f'reads its encoding as {order_codeset} for the order'
+                         if order_codeset else
+                         'could not read its encoding for the order')
+                second = ('could not read it' if not r['codeset'] else
+                          f'as {r["codeset"]}' if order_codeset else
+                          f'read it as {r["codeset"]}')
+                die(f'{path}: the entry for {shown(name)} {first} and {second} '
+                    'for how PostgreSQL uses it; glibc changed while that '
+                    'machine was measured, so measure it again')
     if version_tuple(data.get('glibc_version')) is None:
         die(f'{path} does not say which glibc it was measured on')
     parts = build_parts(data.get('glibc_build'))
@@ -3005,14 +3032,16 @@ def by_codeset(names, codesets):
 
 def postgres_codesets():
     """(the encodings PostgreSQL allows only on the client, every encoding it
-    knows), both in upper case, as collation_keys keeps them; the
-    comparison runs beside it, in scripts/."""
+    knows, those of a database of more than one byte per character), in
+    upper case, as collation_keys keeps them; the comparison runs beside
+    it, in scripts/."""
     try:
         import collation_keys
     except ImportError as e:
         die(f'cannot read which encodings PostgreSQL knows ({e}); run the '
             'comparison from this checkout\'s scripts/')
-    return collation_keys.CLIENT_ONLY_CODESETS, collation_keys.POSTGRES_CODESETS
+    return (collation_keys.CLIENT_ONLY_CODESETS, collation_keys.POSTGRES_CODESETS,
+            collation_keys.MULTIBYTE_CODESETS)
 
 
 def error_row(cp, hexed, before, now, measured):
@@ -3021,20 +3050,115 @@ def error_row(cp, hexed, before, now, measured):
             'character as PostgreSQL does', '-', before, now, measured)
 
 
-def use_texts(old, new, names, refused):
-    """([(text, is a warning)], [file rows]): how PostgreSQL uses each
-    locale of names on the two machines, but those a side refused (named on
-    their own). In a database of the locale's encoding, upper(), lower(),
-    initcap(), ILIKE and full-text search convert text to wide characters
-    whenever the encoding has characters of more than one byte, and stop
-    with an error where glibc cannot convert it. A locale whose every known
-    encoding PostgreSQL allows only on the client (BIG5, GBK, GB18030...)
-    is left out: no database converts text with it, measured from
-    PostgreSQL 13 to 18. Every locale is counted in one line.
+def use_view(data, name, side, refused):
+    """What one machine says of a locale, as use_texts needs it: (state,
+    encoding, text, why, side). state is 'refused' (glibc refused
+    LC_COLLATE or LC_CTYPE), 'unread' (nothing was tried: a file of an
+    earlier format, or a name Python could not pass to C), or 'accepted';
+    use_texts adds 'absent', a machine that does not have the locale.
+    The encoding is the one glibc gave the locale's LC_CTYPE; in a file of
+    an earlier format,
+    the one its order read; None where none was read. text is
+    postgres_use's ['converts' | 'fails' | 'one byte' | 'not checked',
+    detail], None where nothing was tried; why says why nothing is known."""
+    if side in refused.get(name, {}):
+        return 'refused', None, None, None, side
+    if 'postgres_use' not in data['held']:
+        return ('unread', data['locales'][name].get('codeset'), None,
+                (f'the {side.upper()} file was written by an earlier version of '
+                 'locale_order.py', None), side)
+    r = data['postgres_use'][name]
+    if 'accepted' != r['collate'][0] or 'accepted' != r['ctype'][0]:
+        # Not refused, so a category was never asked (refused_by_glibc).
+        return 'unread', None, None, (r['text'][1], side), side
+    return 'accepted', r['codeset'], r['text'], (
+        (r['text'][1], side) if r['text'][0] == 'not checked' else None), side
 
-    An error measured on one side is named whatever the other side says: a
-    side whose file is of an earlier format, or whose check could not run,
-    does not hide what the other measured."""
+
+def use_kinds(view, client_only, known):
+    """The databases a locale can serve, made on the machine view describes
+    (PostgreSQL 13 to 18): none if glibc refuses it there (CREATE DATABASE
+    refuses it, check_locale) or the machine does not have it; ('enc', X) for an encoding X PostgreSQL
+    allows in a database (check_encoding_locale_matches, dbcommands.c);
+    none for one it allows only on the client, where the database can only
+    be SQL_ASCII, of one byte, which never converts; ('any',) for one it
+    does not know, which a database of any encoding may use; ('unread',
+    why) where the encoding is not known."""
+    state, enc, _, why, _ = view
+    if state in ('refused', 'absent'):
+        return []
+    if enc is None:
+        return [('unread', why)]
+    if enc.upper() not in known:
+        return [('any',)]
+    if enc.upper() in client_only:
+        return []
+    return [('enc', enc)]
+
+
+def use_on(view, kind, multibyte, change):
+    """What one machine does with a database of kind, as (state, why, text):
+    state 'closed' (glibc refuses the locale: the database does not open),
+    'works', 'one byte' (PostgreSQL never converts), 'error', 'unknown'
+    or 'elsewhere' (an encoding PostgreSQL does not know, named in the line
+    on a database of another encoding), with why as (text, the machine it
+    is about, or None). A database of an encoding PostgreSQL keeps in one
+    byte per character never converts (multibyte, from pg_wchar_table). A
+    database of the locale's encoding on that machine gets what was
+    measured there. One of
+    another encoding gets an error where that machine's glibc could not
+    convert the locale's own encoding: glibc then falls back to ASCII for
+    the whole LC_CTYPE and fails on every byte past 0x7F, whatever the
+    encoding (wcsmbsload.c, gconv_simple.c, 2.28 and 2.34)."""
+    state, enc, text, why, side = view
+    if state == 'refused':
+        return 'closed', None, None
+    if kind[0] == 'enc' and kind[1].upper() not in multibyte:
+        return 'one byte', None, None
+    if state == 'unread':
+        return 'unknown', why, None
+    s, detail = text
+    if s == 'not checked' and (enc is None or kind == ('enc', enc)):
+        return 'unknown', why, None
+    if kind == ('enc', enc):
+        # 'one byte' of an encoding of more: no character of it failed.
+        return {'converts': 'works', 'fails': 'error',
+                'one byte': 'works'}[s], None, text
+    if s == 'fails':
+        return 'error', None, text
+    if kind[0] == 'any':
+        return 'elsewhere', ('its encoding is one PostgreSQL does not know, so '
+                             'a database of any encoding can use it', None), None
+    if kind[0] == 'unread':
+        return 'unknown', kind[1], None
+    return 'unknown', (change, None), None
+
+
+USE_BEFORE = {'works': 'converts', 'error': 'error'}
+
+
+def use_texts(old, new, names, refused, only_new=()):
+    """([(text, is a warning)], [file rows]): what upper(), lower(),
+    initcap(), ILIKE and full-text search do with each locale of names. In
+    a database of more than one byte per character they turn its text into
+    wide characters through glibc (char2wchar, PostgreSQL 13 to 18), and
+    stop with an error where glibc cannot.
+
+    It follows the databases, not the machines. A database keeps the
+    encoding it was made with, and PostgreSQL checks that encoding against
+    the locale only when the database is made (createdb); on the new
+    machine it opens through setlocale alone (postinit.c). So, for each
+    locale: which databases can exist with it (use_kinds), made on the old
+    machine and carried over, or made on the new one; what each machine
+    does with each (use_on); and the locale goes in one line, that of its
+    worst database: an error, then what is not known, then an encoding
+    PostgreSQL does not know, then what works. C and POSIX never reach
+    glibc (asc_tolower). A locale glibc refuses on a side is named on its
+    own, and here only beside an error of the other side, or, when the old
+    machine refused it, beside a NOT checked of the new one; a locale only
+    on the new machine (only_new) only where its databases made there give
+    an error, were not checked, or are of an encoding PostgreSQL does not
+    know."""
     earlier = [side for side, data in zip(('OLD', 'NEW'), (old, new))
                if 'postgres_use' not in data['held']]
     out = []
@@ -3045,84 +3169,148 @@ def use_texts(old, new, names, refused):
                     + EARLIER.format(which_machines(earlier)) + '.', True))
         if len(earlier) == 2:
             return out, []
-    client_only, _ = postgres_codesets()
+    client_only, known, multibyte = postgres_codesets()
     groups = {k: [] for k in ('changed', 'back', 'both', 'converts', 'one byte',
-                              'left out')}
-    unknown, one_side, rows, codesets = {}, {}, [], {}
-    for name in names:
-        a, b = (data['postgres_use'][name] if 'postgres_use' in data['held']
-                else None for data in (old, new))
-        if name in refused:
-            # Named on its own; an error the side glibc did not refuse
-            # measured is named as well.
-            if len(refused[name]) == 1:
-                side = 'new' if 'old' in refused[name] else 'old'
-                r = b if side == 'new' else a
-                if r is not None and r['text'][0] == 'fails':
-                    codesets[name] = r['codeset']
-                    one_side.setdefault((side, 'glibc refused it there'),
-                                        []).append(name)
-                    rows.append({'names': [name], 'rows': [error_row(
-                        *r['text'][1],
-                        'not measured' if side == 'new' else 'error',
-                        'error' if side == 'new' else 'not measured',
-                        f'on the {side} machine')]})
+                              'left out', 'elsewhere')}
+    unknown, one_side, moved, anydb, rows, codesets = {}, {}, {}, {}, [], {}
+
+    def error(name, label, before, after, text, apart=None):
+        # One row of the character measured; where the two machines
+        # measured characters of two encodings (apart: (old's, new's)),
+        # one row each, of each error.
+        codesets[name] = label
+        if apart:
+            rows.append({'names': [name], 'rows': [
+                error_row(*t[1], *states, f'on the {side} machine')
+                for side, s, t, states in (
+                    ('old', before, apart[0], (before, 'not measured')),
+                    ('new', after, apart[1], ('not measured', after)))
+                if s == 'error']})
+            return
+        measured = ('on both machines' if before in USE_BEFORE and after in USE_BEFORE
+                    else 'on the new machine' if after in USE_BEFORE
+                    else 'on the old machine')
+        rows.append({'names': [name], 'rows': [error_row(
+            *text[1], USE_BEFORE.get(before, 'not measured'),
+            USE_BEFORE.get(after, 'not measured'), measured)]})
+
+    # A locale only on the new machine is checked only where it holds
+    # what postgres_use said, and glibc did not refuse it there: no database
+    # with it was made on the old machine, and where glibc refuses it on the
+    # new one, none opens there.
+    added = [name for name in only_new if 'postgres_use' in new['held']
+             and all(new['postgres_use'][name][k][0] != 'refused'
+                     for k in ('collate', 'ctype'))]
+    for name in list(names) + added:
+        if name in ('C', 'POSIX'):
+            groups['one byte'].append(name)
             continue
-        known = [c for c in (a and a['codeset'], b and b['codeset']) if c]
-        codesets[name] = (known[-1] if known else new['locales'][name].get(
-            'codeset') or old['locales'][name].get('codeset'))
-        if known and all(c.upper() in client_only for c in known):
-            groups['left out'].append(name)
+        vo = (('absent', None, None, None, 'old') if name in added
+              else use_view(old, name, 'old', refused))
+        vn = use_view(new, name, 'new', refused)
+        if vo[0] == vn[0] == 'refused':
             continue
-        if a and b and a['codeset'] and b['codeset'] and a['codeset'] != b['codeset']:
-            # One character of one encoding against one of another: neither
-            # says what the database's bytes do under the new LC_CTYPE.
-            why = (f'Its encoding changed from {a["codeset"]} on the old '
-                   f'machine to {b["codeset"]} on the new one')
+        change = (f'its encoding changed from {vo[1]} on the old machine to '
+                  f'{vn[1]} on the new one')
+        carried = use_kinds(vo, client_only, known)
+        made = [k for k in use_kinds(vn, client_only, known) if k not in carried]
+        found = ([(k, use_on(vo, k, multibyte, change),
+                   use_on(vn, k, multibyte, change)) for k in carried]
+                 + [(k, ('none', None, None), use_on(vn, k, multibyte, change))
+                    for k in made])
+        if not found:
+            # Every database it can serve is of one byte (SQL_ASCII), or
+            # none can be made: named as refused, left out, or among those
+            # only on the new machine.
+            if name not in refused and name not in added:
+                codesets[name] = vn[1] or vo[1]
+                groups['left out'].append(name)
+            continue
+
+        def rank(f):
+            states = (f[1][0], f[2][0])
+            return (0 if 'error' in states else 1 if 'unknown' in states
+                    else 2 if 'elsewhere' in states else 3)
+        kind, (b, bwhy, btext), (a, awhy, atext) = min(found, key=rank)
+        label = kind[1] if kind[0] == 'enc' else (atext and vn[1]) or vo[1] or vn[1]
+        if 'error' in (b, a):
+            text = atext if a == 'error' else btext
+            if a == 'closed':
+                one_side.setdefault(('old', 'refused', ''), []).append(name)
+                error(name, label, b, a, text)
+            elif b == 'none' and vo[0] == 'refused':
+                one_side.setdefault(('new', 'refused', ''), []).append(name)
+                error(name, label, b, a, text)
+            elif b == 'none' and vo[0] == 'absent':
+                one_side.setdefault(('new', 'absent', ''), []).append(name)
+                error(name, label, b, a, text)
+            elif b == 'none':
+                one_side.setdefault(('new', 'unknown', change), []).append(name)
+                error(name, label, b, a, text)
+            elif kind[0] != 'enc':
+                # The databases' encoding is not known, and glibc that
+                # cannot convert the locale's own falls back to ASCII for
+                # every one of them.
+                where = ('both machines' if a == b == 'error' else
+                         'the new machine' if a == 'error' else 'the old machine')
+                why = (kind[1] if kind[0] == 'unread' else
+                       ('its encoding is one PostgreSQL does not know, so a '
+                        'database of any encoding can use it', None))
+                anydb.setdefault((where, why[0] + (f' (on the {why[1]} machine)'
+                                                   if why[1] else '')),
+                                 []).append(name)
+                error(name, label, b, a, text, apart=(btext, atext))
+            elif kind[0] == 'enc' and vn[0] == 'accepted' and vn[1] != kind[1] \
+                    and a == 'error':
+                # A database of the old encoding under the new one, whose
+                # converter the new machine's glibc lacks.
+                where = 'both machines' if b == 'error' else 'the new machine'
+                moved.setdefault((where, vo[1], vn[1], bwhy[0] if b == 'unknown'
+                                  else ''), []).append(name)
+                error(name, label, b, a, text, apart=(btext, atext))
+            elif a == 'error' and b == 'error':
+                groups['both'].append(name)
+                error(name, label, b, a, atext)
+            elif a == 'error' and b == 'works':
+                groups['changed'].append(name)
+                error(name, label, b, a, atext)
+            elif b == 'error' and a == 'works':
+                groups['back'].append(name)
+                error(name, label, b, a, btext)
+            elif a == 'error':
+                one_side.setdefault(('new', 'unknown', bwhy[0]), []).append(name)
+                error(name, label, b, a, atext)
+            else:
+                one_side.setdefault(('old', 'unknown', awhy[0]), []).append(name)
+                error(name, label, b, a, btext)
+            continue
+        # A database that does not open on the new machine says nothing
+        # more than its refusal.
+        if 'unknown' in (b, a) and a != 'closed':
+            # Each reason once, with the machine it is about; one both
+            # machines gave alike is said once, with neither.
+            whys = []
+            for s, w in ((b, bwhy), (a, awhy)):
+                if s == 'unknown' and w not in whys:
+                    whys.append(w)
+            if (len(whys) == 2 and whys[0][0] == whys[1][0]
+                    and None not in (whys[0][1], whys[1][1])):
+                whys = [(whys[0][0], None)]
+            why = ' and '.join(w + (f' (on the {m} machine)' if m else '')
+                               for w, m in whys)
+            why = why[:1].upper() + why[1:] if why.startswith('its encoding') else why
+            codesets[name] = label
             unknown.setdefault(why, []).append(name)
             rows.append({'names': [name], 'rows': [(
                 'upper/lower/ILIKE not checked', '-', why.translate(TEXT_ESCAPES),
                 '-', '-', '-', '-')]})
+        elif name in refused or (name in added and 'elsewhere' not in (b, a)):
+            # Named as refused, or among those only on the new machine; one
+            # of an encoding PostgreSQL does not know is in that line too.
             continue
-        if a is None or b is None:
-            # Only one file holds the part: what that side measured is all
-            # there is, and an error it measured is named.
-            side, r = ('new', b) if a is None else ('old', a)
-            if r['text'][0] == 'fails':
-                other = 'old' if side == 'new' else 'new'
-                why = (f'the {other.upper()} file was written by an earlier '
-                       'version of locale_order.py')
-                one_side.setdefault((side, why), []).append(name)
-                rows.append({'names': [name], 'rows': [error_row(
-                    *r['text'][1], 'not measured' if side == 'new' else 'error',
-                    'error' if side == 'new' else 'not measured',
-                    f'on the {side} machine')]})
-            continue
-        sa, sb = a['text'][0], b['text'][0]
-        if 'fails' in (sa, sb) and 'not checked' in (sa, sb):
-            side, r, other = (('old', a, b) if sa == 'fails' else ('new', b, a))
-            one_side.setdefault((side, other['text'][1]), []).append(name)
-            rows.append({'names': [name], 'rows': [error_row(
-                *r['text'][1], 'error' if side == 'old' else 'not measured',
-                'error' if side == 'new' else 'not measured',
-                f'on the {side} machine')]})
-        elif 'not checked' in (sa, sb):
-            whys = [(side, r['text'][1]) for side, r in (('old', a), ('new', b))
-                    if r['text'][0] == 'not checked']
-            why = (whys[0][1] if len(whys) == 2 and whys[0][1] == whys[1][1]
-                   else ' and '.join(f'{w} (on the {s} machine)' for s, w in whys))
-            unknown.setdefault(why, []).append(name)
-            rows.append({'names': [name], 'rows': [(
-                'upper/lower/ILIKE not checked', '-', why.translate(TEXT_ESCAPES),
-                '-', '-', '-', '-')]})
-        elif 'fails' in (sa, sb):
-            kind = ('both' if sa == sb else 'changed' if sb == 'fails' else 'back')
-            groups[kind].append(name)
-            rows.append({'names': [name], 'rows': [error_row(
-                *(b if sb in ('converts', 'fails') else a)['text'][1],
-                'error' if sa == 'fails' else 'converts',
-                'error' if sb == 'fails' else 'converts', 'on both machines')]})
-        elif sa == sb == 'one byte':
+        elif 'elsewhere' in (b, a):
+            groups['elsewhere'].append(name)
+        elif b in ('one byte', 'none') and a == 'one byte':
             groups['one byte'].append(name)
         else:
             groups['converts'].append(name)
@@ -3146,15 +3334,40 @@ def use_texts(old, new, names, refused):
                     'not ASCII stops them with "ERROR: invalid multibyte '
                     'character for locale". ' + GCONV + ' '
                     + by_codeset(groups['both'], codesets) + '.', True))
-    for (side, why), group in sorted(one_side.items()):
+    for (where, x, y, why), group in sorted(moved.items()):
+        before = (f'; what they do on the old machine is not known ({why})'
+                  if why else '')
+        out.append((f'!! {FN} give an ERROR on {where} in {len(group)} '
+                    f'locale(s) whose encoding changed from {x} on the old '
+                    f'machine to {y} on the new one: a database of {x} made on '
+                    f'the old machine opens there under {y}, and a glibc that '
+                    f'cannot convert {y} converts no text that is not ASCII '
+                    f'("ERROR: invalid multibyte character for locale"){before}. '
+                    + GCONV + ' ' + by_codeset(group, codesets) + '.', True))
+    for (where, why), group in sorted(anydb.items()):
+        out.append((f'!! {FN} give an ERROR on {where} in {len(group)} '
+                    f'locale(s) that databases of an encoding not known here '
+                    f'may use ({why}): whatever that encoding, a glibc that '
+                    'cannot convert the locale\'s own converts no text that is '
+                    'not ASCII ("ERROR: invalid multibyte character for '
+                    'locale"). ' + GCONV + ' ' + by_codeset(group, codesets) + '.',
+                    True))
+    for (side, kind, why), group in sorted(one_side.items()):
         other = 'old' if side == 'new' else 'new'
+        if kind == 'refused':
+            said = (f' that glibc refused on the {other} machine, where no '
+                    'database could use them')
+        elif kind == 'absent':
+            said = ' that the old machine does not have'
+        else:
+            said = (f', where it is not known what they do on the {other} '
+                    f'machine ({why})')
         out.append((f'!! {FN} give an ERROR on the {side} machine in '
-                    f'{len(group)} locale(s), where it is not known what they do '
-                    f'on the {other} machine ({why}). In a database of the '
+                    f'{len(group)} locale(s){said}. In a database of the '
                     'locale\'s own encoding, any text that is not ASCII stops '
-                    f'them on the {side} machine with "ERROR: invalid multibyte '
-                    'character for locale". ' + GCONV + ' '
-                    + by_codeset(group, codesets) + '.', True))
+                    'them there with "ERROR: invalid multibyte character for '
+                    'locale". ' + GCONV + ' ' + by_codeset(group, codesets) + '.',
+                    True))
     if earlier:
         return out, rows
     if unknown:
@@ -3171,6 +3384,10 @@ def use_texts(old, new, names, refused):
                  'encoding PostgreSQL allows only on the client, so no '
                  'database converts text with them ('
                  + by_codeset(groups['left out'], codesets) + ').')
+    if groups['elsewhere']:
+        line += (f' The {len(groups["elsewhere"])} locale(s) of an encoding '
+                 'PostgreSQL does not know are in the line on a database of '
+                 'another encoding.')
     out.append((line, False))
     return out, rows
 
@@ -3180,14 +3397,14 @@ def other_encoding_text(names, o, n):
     does not know, or None: a database of any encoding can use one, and
     nothing here measured what it does there. C and POSIX are accepted with
     every encoding and convert nothing."""
-    _, known = postgres_codesets()
+    _, known, _ = postgres_codesets()
     codesets = {}
     for name in names:
         if name in ('C', 'POSIX'):
             continue
         # Either machine's: a locale whose encoding PostgreSQL does not know
         # on one side can serve a database of another encoding there.
-        for codeset in (o[name].get('codeset'), n[name].get('codeset')):
+        for codeset in (o.get(name, {}).get('codeset'), n[name].get('codeset')):
             if codeset and codeset.upper() not in known:
                 codesets[name] = codeset
                 break
@@ -3270,7 +3487,8 @@ def postgres_only(codeset):
 def stored_texts(o, codesets_of):
     """[(text, codeset or None, names)]: for each encoding of POSTGRES_ONLY
     with a locale in codesets_of ({name: (codeset, corpus digest)}), what
-    PostgreSQL stores there that no measured order places. A locale
+    PostgreSQL stores there, converting from UTF-8, that no measured order
+    places. A locale
     measured over other strings than the list was worked out against is
     NOT checked, since the list may not be what its order lacks."""
     out = []
@@ -3794,7 +4012,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None):
               ('money', money_texts(old, new, both)),
               ('postgres libc',
                [(text, warning) for text, warning, above in libc if not above]))
-    use, use_rows = use_texts(old, new, both, refused)
+    use, use_rows = use_texts(old, new, both, refused, only_new)
     checks += (('postgres use', use),)
     # What PostgreSQL stores in the locales measured on both machines that
     # their order does not place. It needs only the order part, so a file
@@ -3802,8 +4020,11 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None):
     stored = stored_texts(o, {name: (o[name]['codeset'], o[name]['corpus'])
                               for name in same + changed})
     beside = [('postgres use rows', d) for d in use_rows]
-    other = other_encoding_text([name for name in both if name not in refused],
-                                o, n)
+    # A locale refused on both sides keeps no encoding in its order on
+    # either (load() refuses one that does), so it is never named here; nor
+    # is one only on the new machine that glibc refuses there. One only on
+    # the new machine serves the databases made there.
+    other = other_encoding_text(both + only_new, o, n)
     if other:
         beside.append(('unmeasured bytes', {'text': other}))
     beside += [('unmeasured bytes', {'text': text}) for text, _, _ in stored]

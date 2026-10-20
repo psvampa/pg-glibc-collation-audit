@@ -112,6 +112,23 @@ CLIENT_ONLY_CODESETS = frozenset(name.upper() for name in (
     'GB18030', 'CP54936',
     'SJIS_2004'))
 
+# The code_set_names PostgreSQL maps to a database encoding of more than
+# one byte per character: EUC_JP, EUC_CN, EUC_KR, EUC_TW and UTF8
+# (encoding_match_list in src/port/chklocale.c; maxmblen in pg_wchar_table,
+# src/common/wchar.c:1555-1589@REL_13_23, :2087-2121@REL_18_6). Only in a
+# database of one of these do upper(), lower(), ILIKE and full-text search
+# turn text into wide characters through glibc (pg_database_encoding_max_length:
+# formatting.c through PostgreSQL 17, pg_locale_libc.c from 18, like.c for
+# ILIKE); in a database of any other encoding these names map to, they work
+# byte by byte. EUC_JIS_2004 and MULE_INTERNAL are of more than one byte too,
+# and no name maps to them.
+MULTIBYTE_CODESETS = frozenset(name.upper() for name in (
+    'EUC-JP', 'eucJP', 'IBM-eucJP', 'sdeckanji', 'CP20932',
+    'EUC-CN', 'eucCN', 'IBM-eucCN', 'GB2312', 'dechanzi', 'CP20936',
+    'EUC-KR', 'eucKR', 'IBM-eucKR', 'deckorean', '5601', 'CP51949',
+    'EUC-TW', 'eucTW', 'IBM-eucTW', 'cns11643',
+    'UTF-8', 'utf8', 'CP65001'))
+
 # Every code_set_name PostgreSQL maps to an encoding (encoding_match_list in
 # src/port/chklocale.c, the same 110 names at REL_13_23, REL_14_24,
 # REL_15_19, REL_16_15, REL_17_11 and REL_18_6, compared with
