@@ -13,14 +13,16 @@ module answers from those runs and from nothing else (backlog 15.2):
     file read alone: backlog 15.1 measured that shortcut wrong);
   - where a range (.., ..., ....) or codepoint_collation was read, and
     which lines of each file steer other lines (step 2, backlog 13.36);
+  - which characters each line of each file names, in every run, as far
+    as the reader is sure of that run (glibc_reader.Run.named_lines; step
+    2, backlog 13.29);
   - which runs this reader could not settle, or that localedef does not
     finish, and why. Such a locale is never reported as clear: the steps
     list it, with `!!`.
 
 Steps 1 to 4 and 9/10 read this. Steps 6 to 8, and step 2's
 lc_collate_unread check and the files its check of character sets and
-transliterations (collation_keys) reads, still read with their own readers
-(backlog 15.4 to 15.6).
+transliterations (collation_keys) reads, still read with their own readers.
 """
 import hashlib
 import json
@@ -154,7 +156,7 @@ class Tree(object):
         """(file, copies) of every LC_COLLATE section run(name) read for
         its content, in reading order; copies are str names, the opening
         copy first."""
-        fatal, reads, unsettled, collate, _ = self._runs[name]
+        fatal, reads, unsettled, collate, _, _ = self._runs[name]
         out = []
         for fr in reads:
             for sec in fr[3]:
@@ -219,7 +221,7 @@ class Tree(object):
             return self._unresolved
         out = {}
         for name in self.names:
-            fatal, reads, unsettled, collate, _ = self._runs[name]
+            fatal, reads, unsettled, collate, _, _ = self._runs[name]
             cut = [(fr[0], fr[5]) for fr in reads if fr[5] is not None]
             if fatal is not None:
                 kind, what = fatal[0], fatal[1]
@@ -283,7 +285,7 @@ class Tree(object):
             collate = self._collate(name)
             if name in bad or collate is None:
                 continue
-            counts, _, codepoint, _ = collate
+            counts, _, codepoint = collate[:3]
             if sum(n for _, n in counts) != 1 or len(codepoint) != 1:
                 continue
             if codepoint[0][0] == name:
@@ -351,14 +353,31 @@ class Facts(object):
                 (glibc_reader.Collate.instructions). A changed line among
                 them can move rules on lines that did not change (backlog
                 13.36).
+    chars       the sha1 of every character map (reader_cache.char_maps)
+                of this file in a run of the tree, sorted, each once:
+                what glibc_reader.Run.named_lines tells of the file in
+                that run. `load` reads one (reader_cache.char_map).
+    stopped     the runs of the tree, by the locale built, that tell
+                nothing of this file: Run.named_lines gives no map of it
+                and says no other file can be told (its `rest`). Empty
+                at glibc-2.28, 2.34 or 2.39, where no run is unsettled.
+                chars and stopped have no default: a Facts made without
+                them would name no character on any line, and facts_of,
+                which makes one again when the pair renames a file, passes
+                both.
     """
 
-    __slots__ = ('collate', 'unresolved', 'instructions')
+    __slots__ = ('collate', 'unresolved', 'instructions', 'chars', 'stopped',
+                 'load')
 
-    def __init__(self, collate, unresolved, instructions):
+    def __init__(self, collate, unresolved, instructions, chars, stopped,
+                 load):
         self.collate = collate
         self.unresolved = unresolved
         self.instructions = instructions
+        self.chars = tuple(chars)
+        self.stopped = tuple(stopped)
+        self.load = load
 
     def reading(self):
         """The (comment, escape) pairs LC_COLLATE is read with, each once,
@@ -374,12 +393,35 @@ class Facts(object):
         """Is `line` on one of the instructions?"""
         return any(a <= line <= b for a, b in self.instructions)
 
-    def chars_at(self, line):
-        """(comment, escape) `line` is read with, or None when it is in no
-        section or the runs read it with more than one pair."""
-        pairs = {(c, e) for start, end, c, e, _ in self.collate
-                 if start <= line and (end is None or line <= end)}
-        return pairs.pop() if len(pairs) == 1 else None
+    def characters(self, line):
+        """The code points the statements on `line` name, in each run that
+        reads it, in reading order and each once (glibc_reader.Collate.
+        characters, through the maps in `chars`); [] when none does; None
+        when this cannot be told: a run of the tree that tells nothing of
+        the file (`stopped`), a map that cannot be read whole, a run in
+        which the reader cannot say what the line names, or one that
+        knows the file only up to an earlier line (the map's 'from', the
+        cut of glibc_reader.Run.named_lines). Each run reads the line with
+        its own comment and escape characters, so a line two runs read
+        with two pairs is named by both readings."""
+        if self.stopped:
+            return None
+        out = []
+        for sha in self.chars:
+            got = self.load(sha)
+            if got is None:
+                return None
+            if 'from' in got and line >= got['from']:
+                return None
+            if line not in got:
+                continue
+            cps = got[line]
+            if cps is None:
+                return None
+            for c in cps:
+                if c not in out:
+                    out.append(c)
+        return out
 
 
 def chars_before(directives, line):
@@ -396,10 +438,20 @@ def chars_before(directives, line):
     return cc, ec
 
 
-def _facts(tree):
+def _facts(tree, load):
     bad = tree.unresolved()
     collate = {n: set() for n in tree.names}
     steer = {n: set() for n in tree.names}
+    chars = {n: set() for n in tree.names}
+    stopped = {n: set() for n in tree.names}
+    for name in tree.names:
+        maps, rest = tree._runs[name][5]
+        maps = dict(maps)
+        for f in tree.names:
+            if f in maps:
+                chars[f].add(maps[f])
+            elif rest:
+                stopped[f].add(name)
     for name in tree.names:
         run = tree._runs[name]
         for fr in run[1]:
@@ -412,7 +464,8 @@ def _facts(tree):
             if f in steer:
                 steer[f].update(zip(flat[0::2], flat[1::2]))
     return {n: Facts(sorted(collate[n], key=lambda r: (r[4], r[0])),
-                     bad.get(n), rc.join_spans(steer[n]))
+                     bad.get(n), rc.join_spans(steer[n]), sorted(chars[n]),
+                     sorted(stopped[n]), load)
             for n in tree.names}
 
 
@@ -432,7 +485,7 @@ def _facts_path(paths, ids, build, cache_dir):
                         'facts-%s-%s.json' % (_SELF, tree))
 
 
-def _load_facts(path, names):
+def _load_facts(path, names, load):
     try:
         with open(path, encoding='utf-8') as fh:
             got = json.load(fh)
@@ -442,9 +495,9 @@ def _load_facts(path, names):
         return None
     out = {}
     for n, v in got.items():
-        if not (isinstance(v, list) and len(v) == 3):
+        if not (isinstance(v, list) and len(v) == 5):
             return None
-        collate, why, steer = v
+        collate, why, steer, chars, stopped = v
         if not (isinstance(collate, list) and all(
                 isinstance(r, list) and len(r) == 5
                 and isinstance(r[0], int)
@@ -455,10 +508,14 @@ def _load_facts(path, names):
                 and (why is None or isinstance(why, str))
                 and isinstance(steer, list) and all(
                     isinstance(x, list) and len(x) == 2
-                    and all(isinstance(y, int) for y in x) for x in steer)):
+                    and all(isinstance(y, int) for y in x) for x in steer)
+                and isinstance(chars, list) and all(
+                    isinstance(x, str) for x in chars)
+                and isinstance(stopped, list) and all(
+                    isinstance(x, str) for x in stopped)):
             return None
         out[n] = Facts([tuple(r) for r in collate], why,
-                       [tuple(x) for x in steer])
+                       [tuple(x) for x in steer], chars, stopped, load)
     return out
 
 
@@ -471,8 +528,9 @@ def file_facts(repo, tag, paths, ids, build, cache_dir=None):
     15.2 B3, measured). The answer
     is derived from those runs and nothing else, kept next to them under
     the reader's version, the build and this file's hash; an entry that
-    cannot be read, or reads as another shape or other names, is computed
-    again from the runs."""
+    cannot be read, reads as another shape or other names, or names a
+    character map that is not kept (reader_cache.maps_kept), is computed
+    again from the runs, which then compute that map again."""
     path = _facts_path(paths, ids, build, cache_dir)
     names = {os.path.basename(p) for p in paths}
     if len(names) != len(paths):
@@ -481,20 +539,25 @@ def file_facts(repo, tag, paths, ids, build, cache_dir=None):
         g.die(f"two locale files at {tag} share a name "
               f"({len(paths) - len(names)} more paths than names); refusing "
               f"to answer for either.")
-    got = _load_facts(path, names)
-    if got is not None:
+
+    def load(sha):
+        return rc.char_map(sha, cache_dir)
+    got = _load_facts(path, names, load)
+    if got is not None and rc.maps_kept(
+            {sha for f in got.values() for sha in f.chars}, cache_dir):
         return got
     tree = Tree.at_tag(repo, tag, build, cache_dir)
     if set(tree.names) != names:
         g.die(f"the locale files read at {tag} are not the ones listed "
               f"there; refusing to answer for either list.")
-    got = _facts(tree)
+    got = _facts(tree, load)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
     except OSError:
         return got
     rc._write_json(path, {n: [[list(r) for r in f.collate], f.unresolved,
-                              [list(x) for x in f.instructions]]
+                              [list(x) for x in f.instructions],
+                              list(f.chars), list(f.stopped)]
                           for n, f in got.items()})
     return got
 
