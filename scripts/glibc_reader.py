@@ -53,14 +53,14 @@ Not modelled, on purpose: a `-` at the very start of a buffer makes get_ident
 read lr->buf[-1] (linereader.c:578@2.39, after lr_ungetn at :329), which is
 undefined behaviour, and the run is reported unsettled there
 (GlibcUndefined): the byte glibc reads is the same on every line, since
-getdelim reuses the buffer, and no byte of the line stands for it. Keyword
-lookup is exact, where
-gperf's strncmp could in theory match an identifier holding a NUL byte. A
-translated string holding a character the charmap lacks makes get_string
-try to transliterate it, which can load the file's own LC_CTYPE in the
-middle of the run (linereader.c:640-660@2.39). Charmaps are read in a later
-step of block 15; until then, where the reader sees an answer depend on
-whether the charmap has a character, it reports that place unsettled.
+getdelim reuses the buffer, and no byte of the line stands for it. So is a
+word that is a keyword up to a NUL byte: gperf's lookup can read past the
+keyword's text there, and what it finds is the binary's (GlibcUndefined
+again). A translated string holding a character the charmap lacks makes
+get_string try to transliterate it, which can load the file's own LC_CTYPE
+in the middle of the run (linereader.c:640-660@2.39). Charmaps are read in a
+later step of block 15; until then, where the reader sees an answer depend
+on whether the charmap has a character, it reports that place unsettled.
 
 Written for Python 3.6, the oldest the fixtures run, with the standard
 library only.
@@ -86,17 +86,35 @@ class ReaderError(Exception):
 
 
 class GlibcUndefined(Exception):
-    """glibc reads outside its buffer for this input: get_ident takes
-    lr->buf[lr->idx - 1] with idx 0 when lr_ungetn could not step back over
-    a `-` (linereader.c:329 and :578@2.39), as at the start of a file or
-    of a line continued from one ending in `-` and the escape. What it
-    reads is undefined, and can decide an answer (two `define`/`ifdef`
-    names glibc reads alike), so run() reports the place unsettled."""
+    """glibc reads outside an object for this input, so what it reads is
+    undefined and can decide an answer; run() reports the place unsettled
+    with `why`. Two ways:
 
-    def __init__(self, fname, line):
+    - get_ident takes lr->buf[lr->idx - 1] with idx 0 when lr_ungetn could
+      not step back over a `-` (linereader.c:329 and :578@2.39), as at the
+      start of a file or of a line continued from one ending in `-` and the
+      escape (two `define`/`ifdef` names glibc reads alike);
+    - a word that is a keyword K up to a NUL byte: gperf's lookup compares
+      `*str == *s && !strncmp (str + 1, s + 1, len - 1) && s[len] == '\\0'`
+      (locfile-kw.h:614@2.39, :620@2.28), and where the word's hash lands
+      on K's slot, s[len] is past K's literal: the byte there is wherever
+      the binary put the next string. On the three fixtures some such
+      words meet a NUL there and are read as K, others are not
+      (tests/reader_oracle/cases.py, t30 to t33), and another build can
+      lay its strings out otherwise. The charmap table's hash sends no
+      such word to its keyword's slot (glibc-2.28, 2.34 and 2.39, and the
+      fixtures' binaries), so a word read with it is not one of these."""
+
+    def __init__(self, fname, line,
+                 why='glibc reads outside its buffer here'):
         Exception.__init__(self, '%s:%d' % (fname, line))
         self.fname = fname
         self.line = line
+        self.why = why
+
+
+_PAST_KEYWORD = ('a word that is a keyword up to a NUL byte, where glibc\'s '
+                 'keyword lookup can read past the keyword')
 
 
 class GlibcHang(Exception):
@@ -674,6 +692,16 @@ class LR(object):
         self.ungetc(ch)
         s = bytes(b)
         self.words.add(s)
+        if self.table == 'locfile' and 0 in s:
+            # The words gperf may take for a keyword that is their prefix
+            # (GlibcUndefined): only one of kind 0 makes a keyword token.
+            # The prefix is looked up too, so another build's table that
+            # gives it another entry reads the run differently (Run.words).
+            pre = s[:s.index(0)]
+            self.words.add(pre)
+            k = self.kw.get(pre)
+            if k is not None and k[1] == 0:
+                raise GlibcUndefined(self.fname, line, _PAST_KEYWORD)
         k = self.kw.get(s)
         if k is not None and k[1] == 0:
             t = Tok('kw', s.decode('ascii'), line)
@@ -1017,7 +1045,8 @@ class Run(object):
                for LC_COLLATE category found" and writes the 92-byte file
                that loads as no order at all (ld-collate.c:1566-1571 and
                :2120-2146@2.39). None too when the run is fatal, or stopped
-               where glibc reads outside its buffer, which is unsettled.
+               where glibc reads outside an object (GlibcUndefined), which
+               is unsettled.
     unsettled  [(file, line, why)]: places where this reader's model of a
                statement can differ from the handler glibc runs, or where
                what localedef writes depends on -c. A caller
@@ -1090,7 +1119,7 @@ class Run(object):
         (iso14651_t1_common for the locales that copy am_ET at glibc-2.12
         and 2.17, which reorder-sections-after leaves unsettled). A run
         with no Collate (a fatal one, one that hangs, one stopped where
-        glibc reads outside its buffer, one in which glibc stored no
+        glibc reads outside an object, one in which glibc stored no
         LC_COLLATE) gives no file: when the reader was sure throughout,
         localedef writes nothing (Fatal) or an LC_COLLATE with no rules
         (collate_finish and collate_output with no definition,
@@ -1177,8 +1206,7 @@ def run(name, resolve, build, charmap='UTF-8'):
         r.out.fatal = Fatal('hang', None, detail=str(hang))
     except GlibcUndefined as undefined:
         # Nothing after this place can be read as glibc reads it.
-        r.stop_being_sure(undefined.fname, undefined.line,
-                          'glibc reads outside its buffer here')
+        r.stop_being_sure(undefined.fname, undefined.line, undefined.why)
         return r.out
     if r.out.fatal is None:
         r.out.collate = main.data.get('LC_COLLATE')
@@ -1186,6 +1214,29 @@ def run(name, resolve, build, charmap='UTF-8'):
             _named_places(r.out.collate)
             _ranges_settled(r.out.collate, r.out)
     return r.out
+
+
+def _c_name_match(arg, cur):
+    """Whether undef and ifdef take the name `arg` for the defined name
+    `cur`: strncmp (arg, cur, lenmb) == 0 && cur[lenmb] == '\\0', lenmb
+    being len(arg) (ld-collate.c:3841-3843 and :3882-3884@2.39; :3819-3821
+    and :3860-3862@2.34; :3816-3818 and :3857-3859@2.28). Both names keep
+    their NUL bytes, and glibc stores `cur` with one NUL after it (:2607-2608
+    and :3818-3819@2.39), so a NUL in either ends the comparison as C
+    strings do (backlog 13.39). None where the test reads cur[lenmb] past
+    that stored NUL: C leaves what it finds there undefined."""
+    n, size = len(arg), len(cur)
+    for i in range(n):
+        c = cur[i] if i < size else 0
+        if arg[i] != c:
+            return False
+        if c == 0:
+            break
+    if n < size:
+        return cur[n] == 0
+    if n == size:
+        return True
+    return None
 
 
 # A `<U....>` name inside a weight string: insert_weights reads the names
@@ -2136,11 +2187,31 @@ class _Runner(object):
             self.statement(lr, t, sec, store)
             t = lr.token()
 
+    def taken_for(self, lr, line, name, first):
+        """For each name in `defined`, most recent first, whether glibc's
+        test takes `name` for it (_c_name_match). With `first`, as the
+        ifdef loop does, nothing after the first name taken is tested
+        (:3880-3887@2.39). A test whose answer C leaves undefined makes
+        the place unsettled and counts as not taken."""
+        out = []
+        for cur in self.defined:
+            if out and first and out[-1]:
+                out.append(False)
+                continue
+            m = _c_name_match(name, cur)
+            if m is None:
+                self.unsettled(lr, line, 'a name compared past the end of '
+                               'a defined one, where glibc reads outside it')
+            out.append(bool(m))
+        return out
+
     def conditional(self, lr, t, sec, coll):
         """define, undef, ifdef, ifndef, elifdef, elifndef, else and endif
         in an LC_COLLATE read for its content (ld-collate.c:3804-3978@2.39,
-        the same at 2.28 and 2.34). Returns the next token to dispatch, or
-        None when the section ended (on END or at the end of the file)."""
+        the same at 2.28 and 2.34). ifndef is not in the keyword table
+        (locfile-kw.gperf:75-81), so its branch runs only after elifndef.
+        Returns the next token to dispatch, or None when the section ended
+        (on END or at the end of the file)."""
         kw = t.kwtok
         if kw in ('tok_define', 'tok_undef'):
             arg = lr.token()
@@ -2148,7 +2219,10 @@ class _Runner(object):
                 if kw == 'tok_define':
                     self.defined.insert(0, arg.val)
                 else:
-                    self.defined = [d for d in self.defined if d != arg.val]
+                    # "Remove _all_ occurrences of the symbol" (:3837)
+                    self.defined = [
+                        d for d, taken in zip(self.defined, self.taken_for(
+                            lr, t.line, arg.val, False)) if not taken]
             coll.statements.append((lr.fname, t.line, [t, arg]))
             lr.ignore_rest()
             self.instruction(lr, coll, t.line)
@@ -2186,7 +2260,7 @@ class _Runner(object):
                 # nested: not supported
                 stop = self.skip_to(lr, True, coll)
                 return self.after_skip(lr, stop, sec, coll)
-            hit = arg.val in self.defined
+            hit = any(self.taken_for(lr, at, arg.val, True))
             if (kw == 'tok_ifdef') == hit:
                 coll.else_action = 'ignore'
                 return lr.token()

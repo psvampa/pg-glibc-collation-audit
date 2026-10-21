@@ -616,22 +616,25 @@ def across(ids, load, b0, b1, cache_dir=None):
     bytes} of the same files: it is called only when no answer is kept,
     so a kept one costs no file read.
 
-    Two builds read a file differently only where they differ: before
-    glibc 2.36 lr_getc reads 0x1A, and 0xFF through a signed char, as the
-    end of the file (linereader.h:138@2.34), and from 2.36 a token that
-    opens with a byte above 0x7F is a UTF-8 character (Build.utf8); and a
-    word one keyword table has and the other has not, or gives another
-    token (codepoint_collation from 2.35). Every run records whether it
-    met such a byte (Run.met) and which words it looked up (Run.words), so
-    the runs of the tree with b0 -- kept already, as steps 1 to 4 read them
-    -- say which can differ; a run that met nothing either way is read the
-    same with b1, step by step. Each of the others is computed whole with
-    both Builds (same_run: every token of every LC_COLLATE statement) and
-    listed when the two differ. A run this reader did not settle is listed
-    whenever the two builds differ at all: glibc may read on where the
+    As this reader models them, two builds read a file differently only
+    where they differ: before glibc 2.36 lr_getc reads 0x1A, and 0xFF
+    through a signed char, as the end of the file (linereader.h:138@2.34),
+    and from 2.36 a token that opens with a byte above 0x7F is a UTF-8
+    character (Build.utf8); and a word one keyword table has and the other
+    has not, or gives another token (codepoint_collation from 2.35). Every
+    run records whether it met such a byte (Run.met) and which words it
+    looked up (Run.words), so the runs of the tree with b0 -- kept
+    already, as steps 1 to 4 read them -- say which can differ; a run that
+    met nothing either way is read the same with b1, step by step. Each of
+    the others is computed whole with both Builds (same_run: every token
+    of every LC_COLLATE statement) and listed when the two differ. A run
+    this reader did not settle is listed whenever the two builds' byte
+    reading or keyword tables differ at all: glibc may read on where the
     reader stopped, and meet what they read differently in a spelling no
     search of the bytes would find (a word continued by the escape, round
-    3 of the 15.2 B3 review).
+    3 of the 15.2 B3 review). Where glibc reads outside an object
+    (glibc_reader.GlibcUndefined) two binaries can differ even with the
+    same tables; such a run is unsettled with each, and stays unresolved.
 
     Kept next to the reader's answers, under the reader's version, both
     builds, this file's hash and the tree's blob ids; an entry that cannot

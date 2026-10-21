@@ -311,6 +311,33 @@ def _cases():
     add('t29', T, HEAD + b'codepoint_collation\n' + cp,
         'control for t27 and t28: the keyword on one line')
 
+    # get_ident keeps a NUL byte in a word, and gperf's lookup takes a
+    # keyword, a NUL and a tail that hashes to the keyword's slot up to its
+    # last test, s[len] == '\0', which reads past the keyword's literal
+    # (locfile-kw.h:614@2.39, :620@2.28): what it reads is the binary's.
+    # ifdef<NUL>xxdm and undef<NUL>xxdm reach that test at 2.28, 2.34 and
+    # 2.39 (the reader leaves them unsettled; backlog 13.39).
+    add('t30', T, HEAD + D('t') + D('v') + ORDER_HEAD
+        + b'ifdef\x00xxdm RD_NOPE\n' + O('t') + b'else\n' + O('v')
+        + b'endif\n' + ORDER_TAIL + END,
+        'ifdef, a NUL and a tail hashed to ifdef\'s slot')
+    add('t31', T, HEAD + D('t') + b'define RD_X\nundef\x00xxdm RD_X\n'
+        + D('v') + ORDER_HEAD + b'ifdef RD_X\n' + O('t') + b'else\n'
+        + O('v') + b'endif\n' + ORDER_TAIL + END,
+        'undef, a NUL and a tail hashed to undef\'s slot')
+    # The same with tails whose s[len] is the NUL after the next literal in
+    # the three fixtures' localedef (read in the binaries, then measured):
+    # glibc reads ifdef and elifdef there. t30 and t31 are their controls.
+    add('t32', T, HEAD + D('t') + D('v') + ORDER_HEAD
+        + b'ifdef\x00xxixxxxxxxxxxo RD_NOPE\n' + O('t') + b'else\n'
+        + O('v') + b'endif\n' + ORDER_TAIL + END,
+        'ifdef, a NUL and a tail the fixtures take for ifdef')
+    add('t33', T, HEAD + D('t') + b'define RD_Y\n' + D('u') + D('v')
+        + ORDER_HEAD + b'ifdef RD_NOPE\n' + O('t')
+        + b'elifdef\x00ixxxxxxxxxxxxo RD_Y\n' + O('u') + b'else\n'
+        + O('v') + b'endif\n' + ORDER_TAIL + END,
+        'elifdef, a NUL and a tail the fixtures take for elifdef')
+
     # -- sections: where each category ends (locfile.c, ld-*.c) ------------
     S = 'sections'
     add('s01', S, NUMERIC + IDENT + TIME7 + coll('a'), 'control: three sections')
@@ -901,6 +928,102 @@ def _cases():
         add(cid, O_, HEAD + b'collating-element <mk-e> from ' + string + b'\n'
             + ORDER_HEAD + O('e') + ORDER_TAIL + END, note,
             markers={'e': text}, charmap=charmap)
+
+    # define, undef, ifdef, elifdef and elifndef (ld-collate.c:3804-3978
+    # @2.39, the same text at 2.28 and 2.34; the prologue's define at
+    # :2592-2614). glibc keeps a name with its NUL bytes and one NUL after
+    # it, and takes a name for a defined one when strncmp (arg, cur,
+    # lenmb) == 0 && cur[lenmb] == '\0' (:3841-3843, :3882-3884): C
+    # strings, so a NUL ends the comparison (backlog 13.39). Where
+    # cur[lenmb] is past that NUL, C leaves the answer undefined. ifndef
+    # is not in the keyword table (locfile-kw.gperf:75-81), so glibc runs
+    # its branch only through elifndef (backlog 13.43 b).
+    def tv(kw, name):
+        return (kw + b' ' + name + b'\n' + O('t') + b'else\n' + O('v')
+                + b'endif\n')
+
+    def tuv(second, name, first=b'ifdef RD_NOPE'):
+        return (first + b'\n' + O('t') + second + b' ' + name + b'\n'
+                + O('u') + b'else\n' + O('v') + b'endif\n')
+
+    def pro(pre, mid, ms='tv'):
+        # pre right after LC_COLLATE: the prologue's define loop
+        return (HEAD + pre + b''.join(D(m) for m in ms) + ORDER_HEAD + mid
+                + ORDER_TAIL + END)
+
+    def bod(pre, mid, ms='tv'):
+        # pre after the first collating-element: read by the body
+        return (HEAD + D(ms[0]) + pre + b''.join(D(m) for m in ms[1:])
+                + ORDER_HEAD + mid + ORDER_TAIL + END)
+
+    N = b'\x00'
+    for cid, files, note in (
+            ('o59', pro(b'define A' + N + b'B\n', tv(b'ifdef', b'A')),
+             'prologue define A<NUL>B, ifdef A'),
+            ('o60', pro(b'define A' + N + b'B\n',
+                        tv(b'ifdef', b'A' + N + b'C')),
+             'prologue define A<NUL>B, ifdef A<NUL>C'),
+            ('o61', pro(b'define A' + N + b'BX\n',
+                        tv(b'ifdef', b'A' + N + b'C')),
+             'control for o60: define A<NUL>BX, ifdef A<NUL>C'),
+            ('o62', pro(b'define A' + N + b'B\nundef A\n',
+                        tv(b'ifdef', b'A' + N + b'B')),
+             'define A<NUL>B, undef A, ifdef A<NUL>B'),
+            ('o63', bod(b'define A' + N + b'B\n', tv(b'ifdef', b'A')),
+             'body define A<NUL>B, ifdef A'),
+            ('o64', bod(b'define A' + N + b'BC\nundef A' + N + b'Q' + N
+                        + b'\n', tv(b'ifdef', b'A' + N + b'BC')),
+             'undef A<NUL>Q<NUL> removes A<NUL>BC'),
+            ('o65', bod(b'define A' + N + b'B\n', tuv(b'elifdef', b'A'),
+                        'tuv'),
+             'elifdef A after define A<NUL>B'),
+            ('o66', bod(b'define A' + N + b'B\n', tuv(b'elifndef', b'A'),
+                        'tuv'),
+             'elifndef A after define A<NUL>B'),
+            ('o67', {'@': HEAD + b'define A' + N + b'B\ncopy "@-t"\n' + END,
+                     '@-t': HEAD + D('t') + D('v') + ORDER_HEAD
+                     + tv(b'ifdef', b'A') + ORDER_TAIL + END},
+             'define A<NUL>B before the opening copy, ifdef A in the copy'),
+            ('o68', bod(b'define ' + N + b'A\n', tv(b'ifdef', N + b'B')),
+             'a name opening with NUL: define <NUL>A, ifdef <NUL>B'),
+            ('o69', bod(b'define A' + N + b'B\n', tv(b'ifdef', b'A' + N)),
+             'control: ifdef A<NUL> after define A<NUL>B'),
+            ('o70', bod(b'define X\nundef X' + N + b'\n', tv(b'ifdef', b'X')),
+             'undef X<NUL> after define X: past the stored NUL'),
+            ('o71', bod(b'define X\n', tv(b'ifdef', b'X' + N)),
+             'ifdef X<NUL> after define X: past the stored NUL'),
+            ('o72', bod(b'define X\ndefine X' + N + N + b'\n',
+                        tv(b'ifdef', b'X' + N)),
+             'ifdef X<NUL>: the newer X<NUL><NUL> matches first'),
+            ('o73', bod(b'', tv(b'ifndef', b'RD_X')),
+             'ifndef is not a keyword'),
+            ('o74', bod(b'define RD_Y\n', tuv(b'elifdef', b'RD_Y'), 'tuv'),
+             'elifdef taken'),
+            ('o75', bod(b'', tuv(b'elifdef', b'RD_Y'), 'tuv'),
+             'elifdef not taken'),
+            ('o76', bod(b'', tuv(b'elifndef', b'RD_Y'), 'tuv'),
+             'elifndef taken'),
+            ('o77', bod(b'define RD_Y\n', tuv(b'elifndef', b'RD_Y'), 'tuv'),
+             'elifndef not taken'),
+            ('o78', bod(b'define RD_X\nundef RD_X\n', tv(b'ifdef', b'RD_X')),
+             'undef removes a define'),
+            ('o79', bod(b'define RD_X\ndefine RD_X\nundef RD_X\n',
+                        tv(b'ifdef', b'RD_X')),
+             'undef removes every copy'),
+            ('o80', bod(b'define RD_X\n',
+                        tuv(b'elifdef', b'RD_X', b'ifdef RD_X'), 'tuv'),
+             'elifdef after a taken ifdef is skipped'),
+            ('o81', bod(b'define RD_X\ndefine RD_Y\n',
+                        b'ifdef RD_NOPE\n' + O('t') + b'elifndef RD_X\n'
+                        + O('u') + b'elifdef RD_Y\n' + O('w') + b'else\n'
+                        + O('v') + b'endif\n', 'tuvw'),
+             'elifndef not taken, then elifdef taken'),
+            ('o82', bod(b'define RD_X\nifdef RD_NOPE\nundef RD_X\nendif\n',
+                        tv(b'ifdef', b'RD_X')),
+             'an undef in a skipped branch'),
+            ('o83', bod(b'define RD_X\n', tv(b'ifdef', b'RD_X')),
+             'control: ifdef of a defined name')):
+        add(cid, O_, files, note)
     return out
 
 

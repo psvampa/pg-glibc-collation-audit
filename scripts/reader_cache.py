@@ -157,7 +157,7 @@ def _summary(r):
                (tok, val) or None
     unsettled  (file, line, why), in order
     collate    None when Run.collate is (no LC_COLLATE stored, a fatal
-               run, or one stopped where glibc reads outside its buffer),
+               run, or one stopped where glibc reads outside an object),
                else (counts, ranges, codepoint, instructions):
                  counts     (file, how many statements it gave), sorted
                  ranges     (file, line) of every token .., ... or ....
