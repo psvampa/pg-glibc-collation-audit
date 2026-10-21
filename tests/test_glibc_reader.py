@@ -85,9 +85,13 @@ ORACLE_BUILDS = {'rhel8': ('2.28', '.el8'), 'rhel9': ('2.34', '.el9'),
 # 2.36, s50, where the loop is glibc's own, are a hang, measured.
 _LATER = {'s18', 's27', 's30', 's31', 'c34', 'c44', 'c45', 'c46', 'c50',
           's41', 's43', 's45', 's46'}
-# For good: glibc reads outside its buffer there (GlibcUndefined), t16 at
-# the start of the file and s52 at the start of a continued line.
-_UNDEFINED = {'t16', 's52'}
+# For good: glibc reads outside an object there. t16 at the start of the
+# file and s52 at the start of a continued line read before the buffer
+# (GlibcUndefined); t30 to t33 are a keyword, a NUL and a tail, where
+# gperf reads past the keyword's text (GlibcUndefined; t32 and t33 are
+# read as the keyword on the three fixtures, t30 and t31 are not); o70 and
+# o71 compare a name past the end of a defined one (_c_name_match).
+_UNDEFINED = {'t16', 's52', 't30', 't31', 't32', 't33', 'o70', 'o71'}
 # An 0xFF inside a statement: what each handler reads after it is the
 # statement grammars', which the reader does not read; it says so
 # (false-negative-reviewer, round 3 of 15.2 B2).
@@ -596,6 +600,61 @@ class ReaderFailureModes(unittest.TestCase):
                          t=b'LC_COLLATE\nEND LC_COLLATE\n')
         self.assertIn('glibc reads outside its buffer here',
                       [w for _, _, w in r.unsettled])
+
+    def test_names_are_compared_as_glibc_compares_them(self):
+        # strncmp (arg, cur, len (arg)) == 0 && cur[len (arg)] == '\0',
+        # cur stored with one NUL after it (backlog 13.39).
+        m = gr._c_name_match
+        self.assertIs(True, m(b'A', b'A'))
+        self.assertIs(False, m(b'A', b'AB'))
+        self.assertIs(False, m(b'AB', b'A'))     # 'B' against the stored NUL
+        self.assertIs(True, m(b'A', b'A\0B'))     # cur[1] is the NUL
+        self.assertIs(True, m(b'A\0C', b'A\0B'))  # cur[3] is the stored NUL
+        self.assertIs(False, m(b'A\0C', b'A\0BX'))  # cur[3] is X
+        self.assertIs(False, m(b'A\0', b'A\0B'))  # cur[2] is B
+        self.assertIs(True, m(b'\0B', b'\0A'))
+        self.assertIsNone(m(b'X\0', b'X'))        # cur[2] past the stored NUL
+        self.assertIs(False, m(b'Y\0', b'X'))     # strncmp differs first
+
+    def test_a_name_compared_past_a_defined_one_is_unsettled(self):
+        why = 'a name compared past the end of a defined one, where glibc ' \
+              'reads outside it'
+        tail = b'<U0041>\nelse\n<U0042>\nendif\norder_end\nEND LC_COLLATE\n'
+        for text in (b'LC_COLLATE\ndefine X\nundef X\0\norder_start forward\n'
+                     b'ifdef X\n',
+                     b'LC_COLLATE\ndefine X\norder_start forward\n'
+                     b'ifdef X\0\n'):
+            r = self.run_one(text + tail)
+            self.assertEqual([why], [w for _, _, w in r.unsettled], text)
+        # ifdef stops at the first name it takes: the older X, which it
+        # would read past, is never tested.
+        r = self.run_one(b'LC_COLLATE\ndefine X\ndefine X\0\0\n'
+                         b'order_start forward\nifdef X\0\n' + tail)
+        self.assertEqual([], r.unsettled)
+        # undef tests every name: the one it reads past is the place.
+        r = self.run_one(b'LC_COLLATE\ndefine X\0\0\ndefine X\nundef X\0\n'
+                         b'order_start forward\nifdef Y\n' + tail)
+        self.assertEqual([('m', 4, why)], r.unsettled)
+
+    def test_a_keyword_up_to_a_nul_is_unsettled(self):
+        tail = b'<U0041>\nelse\n<U0042>\nendif\norder_end\nEND LC_COLLATE\n'
+        # The keyword is the word up to its FIRST NUL: gperf's strncmp
+        # stops there, and a second NUL past it is a byte like any other.
+        for word in (b'ifdef\0xxixxxxxxxxxxo', b'ifdef\0xxxxxxxxxxxxxx',
+                     b'order_start\0x', b'ifdef\0\0xixxxxxxxxxxo'):
+            r = self.run_one(b'LC_COLLATE\norder_start forward\n' + word
+                             + b' RD_NOPE\n' + tail)
+            self.assertEqual([gr._PAST_KEYWORD],
+                             [w for _, _, w in r.unsettled], word)
+            self.assertIsNone(r.collate)
+        # A NUL after a word that is not a keyword is an ordinary byte.
+        r = self.run_one(b'LC_COLLATE\norder_start forward\nifde\0f RD\n'
+                         + tail)
+        self.assertNotIn(gr._PAST_KEYWORD, [w for _, _, w in r.unsettled])
+        # The charmap table has no keyword gperf reads past (GlibcUndefined).
+        lr = gr.LR(b'CHARMAP\0x WIDTH\0y\n', 'cm', self.b39, table='charmap')
+        self.assertEqual([('ident', b'CHARMAP\0x'), ('ident', b'WIDTH\0y')],
+                         [(t.tok, t.val) for t in (lr.token(), lr.token())])
 
 
 def _tok(t):
@@ -3157,6 +3216,25 @@ class AcrossTheTwoReaders(unittest.TestCase):
         self.assertEqual(['zz_K', 'zz_U'], self.gt.across(
             self.ids, lambda: dict(self.FILES), self.b1, self.b0,
             cache_dir=os.path.join(self.tmp, 'rev')))
+
+    def test_a_keyword_up_to_a_nul_is_compared_both_ways(self):
+        """codepoint_collation, a NUL and a tail: 2.34's table has no such
+        keyword and reads a plain word, while with 2.39's the reader
+        leaves the place unsettled, as for every keyword up to a NUL
+        (GlibcUndefined). With 2.34's first, the run records the word up
+        to the NUL as looked up, so the file is compared; with 2.39's
+        first, the run is unsettled and listed as such (false-negative-
+        reviewer and doc-sweep, 7b)."""
+        files = dict(self.FILES)
+        files[b'zz_Z'] = (b'LC_COLLATE\norder_start forward\n<U0061>\n'
+                          b'codepoint_collation\0abcdefgh\n<U0062>\n'
+                          b'order_end\nEND LC_COLLATE\n')
+        ids = {k.decode(): rc.blob_id(v) for k, v in files.items()}
+        for b0, b1, where in ((self.b0, self.b1, 'nul-fwd'),
+                              (self.b1, self.b0, 'nul-rev')):
+            got = self.gt.across(ids, lambda: dict(files), b0, b1,
+                                 cache_dir=os.path.join(self.tmp, where))
+            self.assertIn('zz_Z', got, where)
 
     def test_a_0x1a_inside_a_name_is_met(self):
         """The fast path for <names> reads the buffer without lr_getc: a
