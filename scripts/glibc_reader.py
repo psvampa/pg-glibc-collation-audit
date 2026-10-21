@@ -2566,7 +2566,11 @@ class _Runner(object):
             self.unsettled(lr, t.line, 'a translit include whose '
                            'repertoire name holds a character above U+007F')
         if name.tok == 'ident':
-            target = name.val
+            # A word keeps its NUL bytes in the token, and glibc uses it as
+            # a C string (locale_name = now->val.str.startmb,
+            # ld-ctype.c:2680@2.39), so the name ends at its first NUL, as
+            # in copy_name (backlog 13.44; cases c52, c54).
+            target = name.val.split(b'\0', 1)[0]
         else:
             target = self.copy_name(lr, name, t.line)
         lr.ignore_rest()

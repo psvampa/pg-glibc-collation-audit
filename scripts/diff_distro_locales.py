@@ -55,6 +55,20 @@ import glibc_locale_data as g
 # this decision for the same reason.
 SAFE_NAME = re.compile(r'^[A-Za-z0-9_@.+-]+$')
 
+
+def shown(name):
+    """`name` as a message or a list line can carry it: bare when it is a
+    plain file name (SAFE_NAME, the characters a locale file name is made
+    of), else ascii(), quoted with every character outside printable ASCII
+    escaped. Defined by what is safe to print rather than by what is not:
+    the empty name (cases c17 and c54), a blank, a comma, a newline, a
+    control character, a character that draws as nothing visible
+    (U+3164) and a combining mark all fall outside it
+    (false-negative-reviewer, rounds 1 to 3 of 13.44). fullmatch, not
+    SAFE_NAME.match: `$` also matches before a final newline, so "zz\\n"
+    passed the check and was written as two lines."""
+    return name if SAFE_NAME.fullmatch(name) else ascii(name)
+
 # Several hundred files ship in glibc-locale-source. A floor well below that
 # still catches a `docker cp` that landed three files, or a node without the
 # package at all. Used where there is no upstream side to take

@@ -540,6 +540,22 @@ def _cases():
         'a translit include whose repertoire name is not in the charmap')
     add('c51', P, {'@': tl % b'include "@-gone";"<U0041>"' + coll('a')},
         'control for c50')
+    # An include name read as a word keeps its NUL bytes in the token, and
+    # glibc uses it as a C string (locale_name = now->val.str.startmb,
+    # ld-ctype.c:2680@2.39; add_to_readlist's strcmp, localedef.c:617;
+    # lr_open's fopen): it opens the file named up to the first NUL
+    # (backlog 13.44). c54's name is empty to glibc; c55 is c52's name in
+    # a string.
+    ct = b'LC_CTYPE\nEND LC_CTYPE\n'
+    add('c52', P, {'@': tl % b'include @-x\x00zz;""' + coll('a'), '@-x': ct},
+        'a translit include name, a word, with a NUL inside')
+    add('c53', P, {'@': tl % b'include @-x;""' + coll('a'), '@-x': ct},
+        'control for c52: the word without the NUL')
+    add('c54', P, {'@': tl % b'include \x00@-x;""' + coll('a'), '@-x': ct},
+        'a translit include name, a word, that opens with a NUL')
+    add('c55', P, {'@': tl % b'include "@-x\x00zz";""' + coll('a'),
+                   '@-x': ct},
+        'control for c52: the name in a string')
     qt = b'LC_TIME\ncopy "@-x"\nEND LC_TIME\n' + coll('a')
     add('s32', S, {'@': qt, '@-x': b'LC_CTYPE\ncharclass foo\nEND LC_CTYPE\n'
                    + TIME7}, 'charclass in a file read for LC_TIME')
