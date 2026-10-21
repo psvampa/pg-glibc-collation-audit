@@ -25,10 +25,16 @@ test that reddened when it was reverted; `test_a_shard_that_dies_before_its
 _summary_is_red` is that test.
 
 No glibc clone needed: the shard results are fabricated, and the cases that
-run a real process use a module written into a temporary directory or the
-fastest module in the suite.
+run a real process use a module written into a temporary directory, the
+fastest module in the suite, or a one-line `python3 -c`.
+
+The suite also loses something quietly when a test writes where a real audit
+reads: `TheSuiteDoesNotWriteWhereARealAuditReads` guards the folder of its
+own each test process gets and the runner's check on the default one.
 """
 import ast
+import contextlib
+import io
 import os
 import re
 import shutil
@@ -36,11 +42,13 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from unittest import mock
 
 import run_parallel as rp
-from _harness import TESTS_DIR
+from _harness import (DEFAULT_OUT_DIR, REPO_ROOT, SCRIPTS_DIR, SUITE_OUT_DIR,
+                      TESTS_DIR)
 
 
 def shard(name, ran=1, status='OK', extra='', rc=0, body='', stdout=''):
@@ -514,6 +522,316 @@ class TheRunnerRunsWhatItSaysItRan(unittest.TestCase):
             cwd=TESTS_DIR, capture_output=True, text=True)
         self.assertNotEqual(p.returncode, 0, p.stdout)
         self.assertRegex(p.stdout, r'(?m)^FAILED \(')
+
+
+class TheSuiteDoesNotWriteWhereARealAuditReads(unittest.TestCase):
+    """Backlog 13.37 and 2.5. Tests that launched a step without `out_dir=`
+    wrote its lists to the folder a real audit.sh reads them back from
+    between its steps; one full run on main, measured on 2026-10-18,
+    rewrote 25 files there, the step 2 list of both published pairs among
+    them. An audit.sh running at the same time could read the test's list
+    instead of its own. `_harness` now gives every test process a folder of
+    its own, and the runner fails a run that changes the default one. The
+    last tests also hold main()'s call to the reader fill, which that check
+    watches: once, before the classes, and said when it did not finish."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-audit-watch-')
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_a_test_process_sends_the_steps_to_a_folder_of_its_own(self):
+        out = os.environ.get('PG_GLIBC_AUDIT_OUT')
+        self.assertEqual(out, SUITE_OUT_DIR)
+        self.assertTrue(os.path.isdir(out), out)
+        self.assertNotEqual(os.path.realpath(out),
+                            os.path.realpath(DEFAULT_OUT_DIR))
+
+    def test_a_folder_inherited_from_the_shell_is_replaced_too(self):
+        """Whoever runs the suite may have exported PG_GLIBC_AUDIT_OUT for
+        their own audits, so keeping a value already set would send the
+        suite back to a real audit's folder."""
+        p = subprocess.run(
+            [sys.executable, '-c',
+             'import _harness, os; print(os.environ["PG_GLIBC_AUDIT_OUT"])'],
+            cwd=TESTS_DIR, capture_output=True, text=True,
+            env=dict(os.environ, PG_GLIBC_AUDIT_OUT=DEFAULT_OUT_DIR))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        got = p.stdout.strip()
+        self.assertTrue(got, p.stderr)
+        self.assertNotEqual(os.path.realpath(got),
+                            os.path.realpath(DEFAULT_OUT_DIR))
+
+    def test_a_step_launched_with_no_out_dir_writes_in_that_folder(self):
+        """The call site, the way the three writers measured on 2026-10-18
+        launched their steps: a plain subprocess that inherits the
+        environment, no folder named."""
+        name = 'suite-out-dir-probe.%d.txt' % os.getpid()
+        p = subprocess.run(
+            [sys.executable, '-c',
+             'import glibc_locale_data as g; print(g.write_list(%r, ["x"]))'
+             % name],
+            cwd=SCRIPTS_DIR, capture_output=True, text=True)
+        stray = os.path.join(DEFAULT_OUT_DIR, name)
+        if os.path.lexists(stray):
+            # Only the file this test named, so a red run leaves the folder
+            # of a real audit as it found it.
+            os.remove(stray)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        written = p.stdout.strip()
+        self.assertEqual(os.path.dirname(written), SUITE_OUT_DIR, written)
+        self.assertTrue(os.path.isfile(written), written)
+
+    def test_every_default_in_the_tool_is_the_folder_the_runner_watches(self):
+        """The runner watches DEFAULT_OUT_DIR. If the tool's default moved
+        and this name did not, the check would watch a folder nothing writes
+        to and pass for ever. Every mention of the variable has to be a
+        read whose default this test can see, or an export of the folder
+        the file settled on; anything else is refused, because a second
+        read in a shape the patterns skip would be the one that wins."""
+        shapes = (re.compile(r'\$\{PG_GLIBC_AUDIT_OUT:-([^}]*)\}'),
+                  re.compile(r"environ\.get\(\s*'PG_GLIBC_AUDIT_OUT',\s*"
+                             r"'([^']*)'\s*\)"))
+        export = re.compile(r'export PG_GLIBC_AUDIT_OUT="\$OUT_DIR"')
+        readers = {}
+        candidates = [os.path.join(REPO_ROOT, 'audit.sh')] + [
+            os.path.join(SCRIPTS_DIR, n) for n in sorted(os.listdir(SCRIPTS_DIR))
+            if n.endswith(('.py', '.sh'))]
+        for path in candidates:
+            with open(path, encoding='utf-8') as fh:
+                text = fh.read()
+            if 'PG_GLIBC_AUDIT_OUT' not in text:
+                continue
+            name = os.path.relpath(path, REPO_ROOT)
+            reads = [m for shape in shapes for m in shape.finditer(text)]
+            known = [m.span() for m in reads + list(export.finditer(text))]
+            for use in re.finditer('PG_GLIBC_AUDIT_OUT', text):
+                self.assertTrue(
+                    any(a <= use.start() < b for a, b in known),
+                    '%s:%d mentions PG_GLIBC_AUDIT_OUT in a shape this '
+                    'test cannot read'
+                    % (name, text.count('\n', 0, use.start()) + 1))
+            self.assertTrue(reads, '%s reads PG_GLIBC_AUDIT_OUT and no '
+                                   'default could be read from it' % name)
+            readers[name] = {m.group(1) for m in reads}
+        self.assertEqual(sorted(readers), ['audit.sh',
+                                           'scripts/audit-locale-diff.sh',
+                                           'scripts/glibc_locale_data.py'])
+        for name, defaults in readers.items():
+            self.assertEqual(defaults, {DEFAULT_OUT_DIR}, name)
+        # The spelling is not the folder: code after the read can still move
+        # it. The Python reader is asked for the folder it settled on, with
+        # the variable unset (importing it writes nothing), and each shell
+        # reader may set OUT_DIR on the read line only.
+        env = dict(os.environ)
+        env.pop('PG_GLIBC_AUDIT_OUT')
+        p = subprocess.run(
+            [sys.executable, '-c',
+             'import glibc_locale_data as g; print(g.OUT_DIR)'],
+            cwd=SCRIPTS_DIR, env=env, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), DEFAULT_OUT_DIR)
+        for name in ('audit.sh', 'scripts/audit-locale-diff.sh'):
+            with open(os.path.join(REPO_ROOT, name), encoding='utf-8') as fh:
+                sets = [line for line in fh
+                        if re.search(r'\bOUT_DIR=', line)]
+            self.assertEqual(len(sets), 1, '%s sets OUT_DIR on %d lines: %s'
+                             % (name, len(sets), sets))
+            self.assertIn('${PG_GLIBC_AUDIT_OUT:-', sets[0], name)
+
+    def test_a_watched_folder_names_what_was_added_rewritten_or_removed(self):
+        keep, gone = (os.path.join(self.tmp, n) for n in ('keep', 'gone'))
+        for path in (keep, gone):
+            with open(path, 'w') as fh:
+                fh.write('x\n')
+        before = rp.watch(self.tmp)
+        st = os.stat(keep)
+        os.utime(keep, ns=(st.st_atime_ns, st.st_mtime_ns + 10 ** 9))
+        os.remove(gone)
+        with open(os.path.join(self.tmp, 'new'), 'w') as fh:
+            fh.write('x\n')
+        self.assertEqual(rp.changed(before, rp.watch(self.tmp)),
+                         ['.', 'gone', 'keep', 'new'])
+
+    def test_a_file_come_and_gone_behind_a_linked_folder_is_a_change(self):
+        target = os.path.join(self.tmp, 'target')
+        os.mkdir(target)
+        link = os.path.join(self.tmp, 'link')
+        os.symlink(target, link)
+        before = rp.watch(link)
+        st = os.stat(target)
+        tmp = os.path.join(target, 'brief')
+        with open(tmp, 'w') as fh:
+            fh.write('x\n')
+        os.remove(tmp)
+        os.utime(target, ns=(st.st_atime_ns, st.st_mtime_ns + 10 ** 9))
+        self.assertEqual(rp.changed(before, rp.watch(link)), ['.'])
+
+    def test_an_absent_folder_that_appears_is_a_change(self):
+        root = os.path.join(self.tmp, 'out')
+        before = rp.watch(root)
+        self.assertEqual(before, {})
+        os.mkdir(root)
+        self.assertEqual(rp.changed(before, rp.watch(root)), ['.'])
+
+    def test_a_folder_that_cannot_be_read_raises(self):
+        sub = os.path.join(self.tmp, 'sub')
+        os.mkdir(sub)
+        os.chmod(sub, 0)
+        self.addCleanup(os.chmod, sub, 0o700)
+        with self.assertRaises(PermissionError):
+            rp.watch(self.tmp)
+
+    def test_a_change_is_red_and_names_the_path_and_both_causes(self):
+        code, lines = rp.aggregate([shard('a', ran=4)], {'a': 4}, 1.0, 2,
+                                   touched=['step2_changed_collate.x..y.txt'])
+        text = '\n'.join(lines)
+        self.assertEqual(code, 1, text)
+        self.assertIn('    step2_changed_collate.x..y.txt', text)
+        self.assertIn('either a test wrote there or an audit.sh ran at the '
+                      'same time', ' '.join(text.split()))
+        self.assertRegex(text.split('\n')[-1],
+                         r'^FAILED \(default output folder changed=1\)$')
+
+    def test_a_folder_that_could_not_be_read_is_red(self):
+        code, lines = rp.aggregate([shard('a', ran=4)], {'a': 4}, 1.0, 2,
+                                   unwatched='before the run: denied')
+        text = '\n'.join(lines)
+        self.assertEqual(code, 1, text)
+        self.assertIn('before the run: denied', text)
+        self.assertRegex(text.split('\n')[-1],
+                         r'^FAILED \(default output folder unreadable=1\)$')
+
+    def _main(self, run_unit, watch=rp.watch, folder=None, fill=lambda: None,
+              units=(('k', 1),)):
+        # main([]) is a run of the whole suite, so it fills the reader's
+        # answers first; the real fill_reader computes them for the suite,
+        # work no test here is about. main() also sets PG_GLIBC_READER_JOBS
+        # for its shards, and the tests after these must not inherit it.
+        out = io.StringIO()
+        with mock.patch.object(rp, 'DEFAULT_OUT_DIR', folder or self.tmp), \
+                mock.patch.object(rp, 'discover_units',
+                                  lambda names=None: list(units)), \
+                mock.patch.object(rp, 'run_unit', run_unit), \
+                mock.patch.object(rp, 'watch', watch), \
+                mock.patch.object(rp, 'fill_reader', fill), \
+                mock.patch.dict(os.environ), \
+                contextlib.redirect_stdout(out):
+            code = rp.main([])
+        return code, out.getvalue()
+
+    def test_main_fails_a_run_whose_shard_wrote_in_the_watched_folder(self):
+        def writes(name):
+            with open(os.path.join(self.tmp, 'step2_list.txt'), 'w') as fh:
+                fh.write('x\n')
+            return shard(name)
+        code, text = self._main(writes)
+        self.assertEqual(code, 1, text)
+        self.assertIn('    step2_list.txt', text)
+        self.assertRegex(text, r'(?m)^FAILED \(default output folder '
+                               r'changed=2\)$')
+
+    def test_main_fails_a_run_that_created_the_folder(self):
+        """The case every CI run is: a fresh runner has no default folder
+        before the suite, so "before" is {} and still has to be compared."""
+        folder = os.path.join(self.tmp, 'out')
+
+        def creates(name):
+            os.mkdir(folder)
+            with open(os.path.join(folder, 'step2_list.txt'), 'w') as fh:
+                fh.write('x\n')
+            return shard(name)
+        code, text = self._main(creates, folder=folder)
+        self.assertEqual(code, 1, text)
+        self.assertIn('    step2_list.txt', text)
+        self.assertRegex(text, r'(?m)^FAILED \(default output folder '
+                               r'changed=2\)$')
+
+    def test_main_fails_a_run_when_the_folder_cannot_be_read(self):
+        def denied(root):
+            raise PermissionError(13, 'denied', root)
+        code, text = self._main(shard, watch=denied)
+        self.assertEqual(code, 1, text)
+        self.assertIn('before the run:', text)
+        self.assertIn('after the run:', text)
+        self.assertRegex(text, r'(?m)^FAILED \(default output folder '
+                               r'unreadable=1\)$')
+
+    def test_main_fails_a_run_when_the_folder_turns_unreadable(self):
+        calls, real_watch = [], rp.watch
+
+        def readable_once(root):
+            calls.append(root)
+            if len(calls) > 1:
+                raise PermissionError(13, 'denied', root)
+            return real_watch(root)
+        code, text = self._main(shard, watch=readable_once)
+        self.assertEqual(code, 1, text)
+        self.assertNotIn('before the run:', text)
+        self.assertIn('after the run:', text)
+        self.assertRegex(text, r'(?m)^FAILED \(default output folder '
+                               r'unreadable=1\)$')
+
+    def test_main_passes_a_run_that_left_the_folder_alone(self):
+        """The control for the three above: a runner that failed every run
+        would pass all of them."""
+        code, text = self._main(shard)
+        self.assertEqual(code, 0, text)
+        self.assertEqual(text.strip().split('\n')[-1], 'OK')
+
+    def test_main_fills_the_reader_once_before_the_classes(self):
+        """Two classes, so once per run and once per class differ; and a fill
+        that takes a moment, so one started beside the classes ends after
+        one of them has begun."""
+        order = []
+
+        def fill():
+            order.append('fill')
+            time.sleep(0.05)
+            order.append('filled')
+
+        def runs(name):
+            order.append(name)
+            return shard(name)
+        code, text = self._main(runs, fill=fill, units=(('a', 1), ('b', 1)))
+        self.assertEqual(code, 0, text)
+        self.assertEqual(order[:2], ['fill', 'filled'], order)
+        self.assertEqual(sorted(order[2:]), ['a', 'b'], order)
+
+    def test_main_says_so_when_the_fill_did_not_finish_and_runs_on(self):
+        """The fill changes how long the run takes, never an answer, so a
+        fill that failed is said above the verdict and the run goes on."""
+        code, text = self._main(shard, fill=lambda: 'exit 3: boom')
+        self.assertEqual(code, 0, text)
+        self.assertIn("note: the reader's answers were not filled before the "
+                      "classes started (exit 3: boom); each class computes "
+                      "what it needs.", ' '.join(text.split()))
+        self.assertEqual(text.strip().split('\n')[-1], 'OK')
+
+    def test_main_fails_a_run_whose_fill_wrote_in_the_watched_folder(self):
+        """The folder's first snapshot is taken before the fill, so the fill
+        is watched like the classes are."""
+        def fill():
+            with open(os.path.join(self.tmp, 'filled.txt'), 'w') as fh:
+                fh.write('x\n')
+        code, text = self._main(shard, fill=fill)
+        self.assertEqual(code, 1, text)
+        self.assertIn('    filled.txt', text)
+        self.assertRegex(text, r'(?m)^FAILED \(default output folder '
+                               r'changed=2\)$')
+
+    def test_a_fill_that_failed_does_not_stop_the_watch(self):
+        """Both of the fill's signals in one run: the note, and the red of
+        what it wrote before it failed."""
+        def fill():
+            with open(os.path.join(self.tmp, 'filled.txt'), 'w') as fh:
+                fh.write('x\n')
+            return 'exit 3: boom'
+        code, text = self._main(shard, fill=fill)
+        self.assertEqual(code, 1, text)
+        self.assertIn('(exit 3: boom)', text)
+        self.assertIn('    filled.txt', text)
+        self.assertRegex(text, r'(?m)^FAILED \(default output folder '
+                               r'changed=2\)$')
 
 
 class AGreenRunIsStillGreen(unittest.TestCase):

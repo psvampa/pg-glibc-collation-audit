@@ -460,7 +460,7 @@ def main(argv):
                                       "neither copy holds.")
     ap.add_argument('--new-tag', help="the upstream tag for the new side")
     ap.add_argument('--allow-reverse', action='store_true',
-                    help="run a pair whose new tag is the OLDER commit. Refused by default: reversed, every step still prints a plausible clean result. Prints a `!!` block saying the direction is reversed.")
+                    help="run a pair whose new tag is the OLDER commit. Refused by default. Prints a `!!` block saying the direction is reversed.")
     ap.add_argument('--expect-files', type=int,
                     help="abort unless exactly this many files are compared")
     ap.add_argument('--min-files', type=int, default=dd.DEFAULT_MIN_FILES,

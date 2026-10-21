@@ -28,7 +28,10 @@ does not [clear](limitations.md#step-5-reports-it-does-not-decide), whether or
 not it showed up in steps 1 to 3. When step 5 does not clear the code, add the
 locales step 4 leaves out as built in byte order, which the summary names. With
 command 1.b, add every locale steps 6 to 8 list, every locale step 11 reports
-as changed, and every one it reports as not known to be unchanged.
+as changed, every one it reports as not known to be unchanged, and every one it
+names in a line that begins "!! Not measured in" or "!! NOT checked in". The
+lines that begin with `upper()` or `!! upper()`, and those on the decimals of
+`money`, are not about sort order, and the template does not confirm them.
 
 Steps 9 and 10, in command 1.b, run step 4 again on each machine's own files,
 so the same rule holds for every locale they flag. They list `C.UTF-8` by its
@@ -55,8 +58,8 @@ it lists because a collating element, a combination of letters sorted as one,
 is built differently out of a transliteration, it names the file that defines
 the element and the characters transliterated. The strings must contain the
 whole element: step 11 does not measure combinations of letters. Step 11, in
-command 1.b, names the characters that moved, when there are few enough to
-list.
+command 1.b, names every character and pair it found, in the file its summary
+names.
 
 Step 2's list is where to start, not proof that every character on it moved. A
 rule that was rewritten names everything it touches, weights included, so

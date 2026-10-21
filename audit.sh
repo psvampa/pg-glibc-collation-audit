@@ -354,10 +354,13 @@ rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
 # included.
 ORDER_LOG="$OUT_DIR/measured_order.$PAIR.log"
 ORDER_SUMMARY="$OUT_DIR/measured_order_summary.$PAIR.txt"
-rm -f "$ORDER_LOG" "$ORDER_SUMMARY"
+# Every character and pair step 11 found; its report and summary name it.
+ORDER_CHARACTERS="$OUT_DIR/measured_order_characters.$PAIR.tsv"
+rm -f "$ORDER_LOG" "$ORDER_SUMMARY" "$ORDER_CHARACTERS"
 if [ -n "$OLD_ORDER" ]; then
   if ! python3 "$SCRIPTS/locale_order.py" --compare "$OLD_ORDER" "$NEW_ORDER" \
-       --tags "$OLD" "$NEW" --summary-to "$ORDER_SUMMARY" > "$ORDER_LOG" 2>&1; then
+       --tags "$OLD" "$NEW" --summary-to "$ORDER_SUMMARY" \
+       --characters-to "$ORDER_CHARACTERS" > "$ORDER_LOG" 2>&1; then
     cat "$ORDER_LOG" >&2
     if [ -n "$OLD_NODE" ]; then
       # The message above names the measurement as laid out; the reader
@@ -397,8 +400,8 @@ run_step 1 "$SCRIPTS/audit-locale-diff.sh" "$OLD" "$NEW"
 # adding one more copy of their `!!` block. Two questions in one answer:
 #
 #   reversed -- step 1 has already exited 2 and this script stopped with it.
-#               Reversed, all five steps run to the end and print a plausible
-#               clean result; the direction was never compared at all.
+#               Reversed, all five steps run to the end; the direction was
+#               never compared at all.
 #   same     -- one commit, however each side is spelt. This used to be
 #               `[ "$OLD" = "$NEW" ]`, a comparison of TEXT, so
 #               `./audit.sh glibc-2.39 ef321e23...` -- the sha this run's own
@@ -859,7 +862,7 @@ fi
 
 # What each machine's own glibc says, beside what the tags say. Below Removed,
 # not above it: that section sits directly under Reindex on purpose, and this
-# block runs to some forty lines. Step 11 reads no locale source: over RHEL8 ->
+# block is long. Step 11 reads no locale source: over RHEL8 ->
 # RHEL9 it names ko_KR.utf8, whose file is byte-identical in both tags, and
 # eight Swedish locales in which no character moves. Absent is not empty:
 # without the two files this says NOT RUN.
@@ -881,7 +884,10 @@ else
   echo "     option, or --old-order and --new-order, each written by"
   echo "     scripts/locale_order.py on that machine. Without them nothing above"
   echo "     asked either machine's glibc how it sorts, and a locale whose files"
-  echo "     did not change can still sort differently."
+  echo "     did not change can still sort differently. Nor did anything compare"
+  echo "     the decimals of money, check which C library PostgreSQL runs on"
+  echo "     either machine, or check that each machine accepts every locale and"
+  echo "     converts its text."
 fi
 
 echo

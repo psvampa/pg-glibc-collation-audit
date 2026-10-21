@@ -29,7 +29,7 @@ import glibc_locale_data as g
 import locale_order as lom
 from _harness import GLIBC_CLONE, swap_alpha_beta, tag_charmaps
 from test_locale_order import (CHANGED_8_TO_9, RHEL8, RHEL9, RHEL10,
-                               parse_summary)
+                               changes_in, parse_characters, parse_summary)
 
 
 def pair_slug(old, new):
@@ -121,7 +121,10 @@ MEASURED_NOT_RUN_BODY = [
     'option, or --old-order and --new-order, each written by',
     'scripts/locale_order.py on that machine. Without them nothing above',
     "asked either machine's glibc how it sorts, and a locale whose files",
-    'did not change can still sort differently.',
+    'did not change can still sort differently. Nor did anything compare',
+    'the decimals of money, check which C library PostgreSQL runs on',
+    'either machine, or check that each machine accepts every locale and',
+    'converts its text.',
 ]
 MEASURED_FOOTER = '     Full report: step 11 above.'
 # audit.sh's last word when step 11 exits non-zero: a refusal or a crash.
@@ -833,7 +836,7 @@ class WrapperRefusesBadInput(unittest.TestCase):
 
     def test_a_reversed_pair_is_refused_before_any_summary(self):
         """"Nothing stopped a reversed pair." Reversed, all five steps run to
-        the end and print a plausible clean result: step 4 scans the older
+        the end: step 4 scans the older
         tag, so the locales added in the newer one -- ckb_IQ and mnw_MM, both
         `copy "iso14651_t1"` -- leave the exposed set, and step 2 reports a
         locale DELETED in the real upgrade as an addition it did not analyse.
@@ -940,9 +943,17 @@ class WrapperRefusesBadInput(unittest.TestCase):
         stale = os.path.join(self.out_dir, 'step3_affected_locales.txt')
         with open(stale, 'w', encoding='utf-8') as fh:
             fh.write('no_SUCH_locale\n')
+        # And step 11's list of characters, which a run given no measurements
+        # never writes: only audit.sh's removal up front clears it, since
+        # locale_order.py, which removes it too, does not run.
+        listed = os.path.join(self.out_dir, 'measured_order_characters.'
+                              + pair_slug(NEW, NEW) + '.tsv')
+        with open(listed, 'w', encoding='utf-8') as fh:
+            fh.write('left by an earlier run\n')
         rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir)
         self.assertEqual(rc, 0, out)
         self.assertNotIn('no_SUCH_locale', out)
+        self.assertFalse(os.path.exists(listed))
 
 
 @needs_clone
@@ -2184,10 +2195,21 @@ class WrapperMeasuredOrder(unittest.TestCase):
         self.assertEqual(summary['not_on_new'],
                          ['en_US.utf8@ampm', 'en_US@ampm'])
 
+    def test_the_summary_names_this_runs_characters_file(self):
+        """Every character and pair step 11 found, in a file named for the
+        pair in this run's output folder, holding all fourteen locales."""
+        path = os.path.join(self.out_dir, 'measured_order_characters.'
+                            + pair_slug(OLD, MID) + '.tsv')
+        self.assertEqual(parse_summary(measured_block(self.out))['characters_file'],
+                         path)
+        with open(path, encoding='utf-8') as f:
+            names = set().union(*map(set, changes_in(parse_characters(f.read()))))
+        self.assertEqual(names, CHANGED_8_TO_9)
+
     def test_the_block_sits_under_removed(self):
         """Removed stays directly under Reindex, where it was put so that a
-        locale the upgrade deletes is on the first screen: this block is some
-        forty lines long, and above Removed it pushed that section down."""
+        locale the upgrade deletes is on the first screen: this block is long,
+        and above Removed it pushed that section down."""
         summary = self.out.split('AUDIT SUMMARY')[1]
         self.assertLess(summary.index('-- Reindex:'), summary.index(REMOVED))
         self.assertLess(summary.index(REMOVED), summary.index(MEASURED))
@@ -2267,14 +2289,21 @@ class WrapperMeasuredOrderRefused(unittest.TestCase):
         self.assertIn(COULD_NOT_COMPARE, out)
 
     def test_a_file_cut_short(self):
+        """And a characters file an earlier run left is gone: a refused run
+        leaves nothing that reads as its list."""
         cut = os.path.join(self.out_dir, 'cut.out')
         with open(RHEL9, encoding='utf-8') as f, \
                 open(cut, 'w', encoding='utf-8') as g_:
             g_.write(f.read()[:1000000])
+        stale = os.path.join(self.out_dir, 'measured_order_characters.'
+                             + pair_slug(OLD, MID) + '.tsv')
+        with open(stale, 'w', encoding='utf-8') as f:
+            f.write('left by an earlier run\n')
         out = self.assertRefusedBeforeStep1('--old-order', RHEL8,
                                             '--new-order', cut)
         self.assertIn('locale_order.py: ', out)
         self.assertIn(COULD_NOT_COMPARE, out)
+        self.assertFalse(os.path.exists(stale))
 
 
 @needs_clone

@@ -26,17 +26,36 @@ Two things are measured for each locale that `locale -a` lists:
      keep its place and change how it is told apart from its neighbour, and
      then only strings of more than one letter sort differently.
 
-Each is kept whole, compressed, once for all the locales that share it, so
-that the comparison can name the characters that moved without a second run
-on the machines. The file was 2.6 MB on each of glibc 2.28, 2.34 and 2.39.
+Beside the order, the file holds each locale's decimals of money (frac_digits
+of its LC_MONETARY, the one number there that changes what a stored money
+value means); which PostgreSQL processes of the machine run another C
+library than the one measured, because a glibc update replaced it on disk or
+because they run another file, as in a container (root can see that, and so
+can the user PostgreSQL runs as where /proc does not hide other users'
+processes; otherwise the file says it was not checked); and how PostgreSQL
+can use each locale: whether setlocale accepts it for LC_COLLATE and for
+LC_CTYPE, without which a database that uses it does not open, and whether
+glibc converts a character of its encoding to a wide character, without which
+upper(), lower() and ILIKE stop with an error (postgres_use). A file written
+before these were measured still compares, and the comparison says they were
+not checked there. The comparison also names what PostgreSQL stores in
+EUC-JP, EUC-KR and TIS-620, converting from UTF-8, that no order measured
+here places (POSTGRES_ONLY). C and POSIX, which glibc sorts in byte order in
+every version, are the control: a machine where they measured otherwise did
+not measure what this means to.
+
+Each order and told-apart record is kept whole, compressed, once for all the
+locales that share it, so that the comparison can name the characters that
+moved without a second run on the machines. The file was 2.7 MB on each of
+glibc 2.28, 2.34 and 2.39.
 
 Not measured: a rule that applies only to a particular combination of letters,
 such as a contraction ("ch" sorted as one letter). Two machines that agree on
 both can still sort some longer strings differently. Where a character counts
 for nothing at some level (glibc ignores it there), how it is told apart from
-its neighbour is read less reliably, so a change there may go unseen. Only sort
-order is measured: upper(), lower() and the other character rules of LC_CTYPE
-are not.
+its neighbour is read less reliably, so a change there may go unseen. Of
+LC_CTYPE, only whether text converts is measured, not what upper(), lower()
+and its other character rules do with it.
 
 Usage:
   python3 locale_order.py > old.out          # on each machine
@@ -50,9 +69,12 @@ there and is Python 3.6:
 Measuring needs Python 3.6 or newer and the language packs of the locales to
 be measured (on RHEL, glibc-all-langpacks or glibc-langpack-*). It needs no
 PostgreSQL and no root, runs at low priority, and takes about 0.3 GB of
-memory per process. Comparing needs only Python.
+memory per process; to see PostgreSQL's processes it runs as root, or as their
+user where /proc does not hide other users' processes. Comparing needs only
+Python.
 """
 import argparse
+import array
 import base64
 import bisect
 import codecs
@@ -62,6 +84,8 @@ import ctypes.util
 import gzip
 import hashlib
 import io
+import itertools
+import operator
 import json
 import locale
 import multiprocessing
@@ -80,7 +104,20 @@ import zlib
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
-FORMAT = 'locale_order/1'
+FORMAT = 'locale_order/3'
+
+# The parts a file of each format holds, as its 'parts' says. A file of an
+# earlier format lacks the parts added since, and the comparison says each
+# was not checked and why, rather than refuse a file that is whole; a file
+# that lacks a part its format holds is refused. The corpus digest starts
+# with the first format's name, not with FORMAT, because a file of that
+# format measured the same strings and still compares.
+PARTS = {'locale_order/1': ('order',),
+         'locale_order/2': ('order', 'money', 'postgres_libc'),
+         'locale_order/3': ('order', 'money', 'postgres_libc', 'postgres_use')}
+# The parts beside the order, each checked whole by load().
+SIDE_PARTS = ('money', 'postgres_libc', 'postgres_use')
+CORPUS_VERSION = 'locale_order/1'
 
 # The file --extract writes holds the measurement, the machine's locale sources
 # and charmaps, and its glibc build. The sources and the charmaps are what
@@ -127,9 +164,13 @@ LIBC = None         # glibc, loaded only to measure
 UTF8_BYTES = None   # CODEPOINTS in UTF-8; built once, before the workers fork
 CORPORA = {}        # per encoding, what corpus_for() built, kept per process
 
-# Characters or pairs listed by name under a changed locale; past this many,
-# only the count is printed.
+# Characters or pairs named one by one under a changed locale. Past this
+# many, characters are listed as runs of code points while the runs are no
+# more than this, and only counted after that; pairs are only counted.
 LIST_LIMIT = 20
+
+# The levels of a told-apart record, as the report names them.
+LEVEL_NAMES = ('letters', 'accents', 'case')
 
 
 def die(msg):
@@ -143,8 +184,8 @@ def corpus_digest():
     Taken from the data rather than from a description of it, so a copy of
     this script with a different corpus cannot pass for the same one.
     """
-    h = hashlib.sha256(FORMAT.encode())
-    h.update(''.join(chr(c) for c in CODEPOINTS).encode('utf-8'))
+    h = hashlib.sha256(CORPUS_VERSION.encode())
+    h.update(''.join(map(chr, CODEPOINTS)).encode('utf-8'))
     h.update('|'.join(','.join(p + q for p, q in level)
                       for level in CANDIDATES).encode('utf-8'))
     return h.hexdigest()
@@ -195,19 +236,49 @@ def content_digest(data):
     return hashlib.sha256(text.encode('ascii')).hexdigest()
 
 
+# A one-byte step of pack_order, decoded.
+ONE_BYTE_STEP = [z // 2 if not z & 1 else -(z + 1) // 2 for z in range(0x80)]
+# bytes.translate tables: 1 for a byte with the high bit; 1 for any byte but 0.
+HIGH_BIT = bytes(0x80) + bytes([1]) * 0x80
+NONZERO = bytes(1) + bytes([1]) * 255
+ONE = bytes([1])
+# A locale name in the characters file, which is tab-separated and lists the
+# names of one change separated by commas.
+TSV_ESCAPES = {9: '\\t', 10: '\\n', 13: '\\r', 44: '\\x2c', 92: '\\\\'}
+# Free text in one cell of it, such as why a locale was not measured.
+TEXT_ESCAPES = {9: '\\t', 10: '\\n', 13: '\\r', 92: '\\\\'}
+# A run of one byte other than 0, repeated.
+SAME_BYTE_RUNS = re.compile(rb'([^\x00])\1*', re.DOTALL)
+# An array type of four bytes, and the codec that reads it as text.
+CODE_POINT = 'I' if array.array('I').itemsize == 4 else 'L'
+UTF32 = 'utf-32-le' if sys.byteorder == 'little' else 'utf-32-be'
+
+
 def unpack_order(raw):
-    """pack_order's input back, or None when the bytes end mid-number."""
-    seq = []
-    prev = z = shift = 0
-    for b in raw:
-        z |= (b & 0x7F) << shift
-        if b & 0x80:
-            shift += 7
-            continue
-        prev += z // 2 if not z & 1 else -(z + 1) // 2
-        seq.append(prev)
+    """pack_order's input back, or None when the bytes end mid-number.
+
+    Most steps take one byte, and are decoded through a table between the
+    bytes that carry the high bit, which are read one by one."""
+    steps = []
+    marks = raw.translate(HIGH_BIT)
+    start = 0
+    while True:
+        end = marks.find(1, start)
+        if end < 0:
+            steps.extend(map(ONE_BYTE_STEP.__getitem__, raw[start:]))
+            break
+        steps.extend(map(ONE_BYTE_STEP.__getitem__, raw[start:end]))
         z = shift = 0
-    return None if shift else seq
+        while end < len(raw) and raw[end] & 0x80:
+            z |= (raw[end] & 0x7F) << shift
+            shift += 7
+            end += 1
+        if end == len(raw):
+            return None
+        z |= raw[end] << shift
+        steps.append(z // 2 if not z & 1 else -(z + 1) // 2)
+        start = end + 1
+    return list(itertools.accumulate(steps))
 
 
 def measure_one(name):
@@ -245,10 +316,9 @@ def libc():
     Python's locale.strxfrm and locale.strcoll are wcsxfrm and wcscoll, which
     compare wide characters through tables of their own. PostgreSQL calls
     strcoll on the bytes of the database's encoding. Measured on glibc 2.34
-    the two orders differ: by U+0001 in every UTF-8 locale tried, and by 482
-    of 17,175 characters in ko_KR (EUC-KR). The argument types are declared,
-    so that a str passed by mistake fails instead of reaching C as wide
-    characters.
+    the two orders differ, by U+0001 in every UTF-8 locale tried. The
+    argument types are declared, so that a str passed by mistake fails
+    instead of reaching C as wide characters.
     """
     global LIBC
     if LIBC is None:
@@ -257,8 +327,318 @@ def libc():
         lib.strxfrm.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t]
         lib.strcoll.restype = ctypes.c_int
         lib.strcoll.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+        lib.mbstowcs.restype = ctypes.c_size_t
+        lib.mbstowcs.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
         LIBC = lib
     return LIBC
+
+
+class Lconv(ctypes.Structure):
+    """The head of glibc's struct lconv, up to frac_digits: ten strings, then
+    int_frac_digits and frac_digits, each a char (locale/locale.h, in this
+    order in 2.28, 2.34 and 2.39). Read as signed, as PostgreSQL reads it on
+    x86_64; where char is unsigned a value past 127 differs, and cash.c
+    takes every value outside 0 to 10 as 2 either way."""
+    _fields_ = [(n, ctypes.c_char_p) for n in (
+        'decimal_point', 'thousands_sep', 'grouping', 'int_curr_symbol',
+        'currency_symbol', 'mon_decimal_point', 'mon_thousands_sep',
+        'mon_grouping', 'positive_sign', 'negative_sign')] + [
+        ('int_frac_digits', ctypes.c_byte), ('frac_digits', ctypes.c_byte)]
+
+
+def money_digits(names):
+    """{name: frac_digits, or why there is none}: the decimals PostgreSQL's
+    money type keeps in each locale.
+
+    cash.c reads frac_digits of the locale's LC_MONETARY: through
+    setlocale and localeconv() up to PostgreSQL 17 (pg_locale.c), through
+    nl_langinfo_l in 18 (pg_localeconv_r.c), the same data. glibc's
+    localeconv() is called directly: Python's own decodes every string of
+    the struct first, and failed in 86 locales on glibc 2.34 and 2.39
+    (measured). What changes a stored value is this number alone.
+    """
+    lib = libc()
+    lib.localeconv.restype = ctypes.POINTER(Lconv)
+    lib.localeconv.argtypes = []
+    saved = locale.setlocale(locale.LC_MONETARY)
+    out = {}
+    try:
+        for name in names:
+            try:
+                locale.setlocale(locale.LC_MONETARY, name)
+            except (locale.Error, ValueError) as e:
+                out[name] = f'cannot be selected: {e}'
+                continue
+            out[name] = lib.localeconv().contents.frac_digits
+    finally:
+        locale.setlocale(locale.LC_MONETARY, saved)
+    return out
+
+
+def money_scale(digits):
+    """The decimals cash.c keeps for frac_digits: outside 0 to 10 it takes 2
+    (cash.c:201-202 in REL_13_23, :217-218 in REL_18_6; the same from 13 to
+    18). C, POSIX and C.utf8 give 127, glibc's CHAR_MAX, and keep 2."""
+    return digits if 0 <= digits <= 10 else 2
+
+
+# What postgres_use() says of one category, and of the text it converts.
+CATEGORY_STATES = ('accepted', 'refused', 'unknown')
+TEXT_STATES = ('converts', 'fails', 'one byte', 'not checked')
+NO_CONVERTER = ('Python has no converter for their encoding, so no character '
+                'of it could be built')
+NO_CODESET = 'their encoding could not be read'
+NO_CTYPE = 'LC_CTYPE could not be set to it'
+# (size_t)-1, what mbstowcs returns for bytes it cannot convert.
+NOT_CONVERTED = ctypes.c_size_t(-1).value
+
+
+def postgres_use(name):
+    """What PostgreSQL does with a locale on this machine, as the calls it
+    makes: {'collate', 'ctype', 'codeset', 'text'}.
+
+    A database opens only when setlocale accepts its LC_COLLATE and its
+    LC_CTYPE (CheckMyDatabase, postinit.c, REL_13_23 to REL_18_6; refused,
+    it stops with "database locale is incompatible with operating system").
+    Each is asked, the second whatever the first answered, as [state,
+    why]: accepted, refused (glibc said no), or unknown (Python cannot pass
+    the name to C at all, so glibc was not asked).
+
+    Then the one thing PostgreSQL asks of LC_CTYPE that can fail outright:
+    turning the database's bytes into wide characters (char2wchar, the only
+    caller of mbstowcs, under upper(), lower(), initcap(), ILIKE and
+    full-text search, and only in a database whose encoding has characters
+    of more than one byte). glibc that cannot load the encoding's converter
+    falls back to ASCII and fails on every other byte (__wcsmbs_load_conv,
+    wcsmbsload.c, 2.28 to 2.39), so one character is enough: the first of
+    more than one byte in the locale's corpus, in byte order, the bytes
+    measured() sorts. 'text' is [converts or fails, [code point, bytes in
+    hex]], ['one byte', None] when the encoding has no such character, or
+    ['not checked', why]. Nothing here raises: a check that could not run
+    says so. LC_COLLATE and LC_CTYPE are put back as they were.
+    """
+    out = {}
+    for key, category in (('collate', locale.LC_COLLATE),
+                          ('ctype', locale.LC_CTYPE)):
+        saved = locale.setlocale(category)
+        try:
+            locale.setlocale(category, name)
+            out[key] = ['accepted', None]
+        except locale.Error as e:
+            out[key] = ['refused', str(e) or 'refused']
+        except ValueError as e:
+            # A name `locale -a` printed in bytes Python cannot hand to C.
+            out[key] = ['unknown', f'Python cannot pass the name to the C '
+                                   f'library ({e})']
+        finally:
+            locale.setlocale(category, saved)
+    out['codeset'] = None
+    if out['ctype'][0] != 'accepted':
+        out['text'] = ['not checked', NO_CTYPE]
+        return out
+    saved = locale.setlocale(locale.LC_CTYPE)
+    try:
+        locale.setlocale(locale.LC_CTYPE, name)
+        out['codeset'] = locale.nl_langinfo(locale.CODESET) or None
+        corpus = corpus_for(out['codeset']) if out['codeset'] else None
+        if out['codeset'] is None:
+            out['text'] = ['not checked', NO_CODESET]
+        elif corpus is None:
+            out['text'] = ['not checked', NO_CONVERTER]
+        else:
+            hit = next(((c, b) for c, b in zip(corpus[0], corpus[1])
+                        if len(b) > 1), None)
+            if hit is None:
+                out['text'] = ['one byte', None]
+            else:
+                buf = (ctypes.c_wchar * (len(hit[1]) + 1))()
+                r = libc().mbstowcs(buf, hit[1], len(hit[1]) + 1)
+                out['text'] = ['fails' if r == NOT_CONVERTED else 'converts',
+                               [hit[0], hit[1].hex()]]
+    except Exception as e:
+        out['text'] = ['not checked', f'checking failed: {e!r}']
+    finally:
+        locale.setlocale(locale.LC_CTYPE, saved)
+    return out
+
+
+def measure_locale(name):
+    """(name, result, data, use): measure_one's answer, then postgres_use's,
+    in the same measuring process, where the locale's corpus is built."""
+    name, result, data = measure_one(name)
+    return name, result, data, postgres_use(name)
+
+
+# The names a PostgreSQL process has in /proc/PID/comm: the program's, which
+# PostgreSQL never changes (its one prctl is PR_SET_PDEATHSIG; pmsignal.c),
+# and postmaster, the link PostgreSQL 15 and earlier install beside it.
+POSTGRES_NAMES = (b'postgres', b'postmaster')
+# The C library in a line of /proc/PID/maps: libc.so.6 on glibc 2.34 and
+# later, libc-2.28.so on 2.28 (measured on the three fixtures). The kernel
+# ends the path with " (deleted)" once the file was replaced, as a glibc
+# update replaces it; what comes before that must end the libc's name, or
+# libc.so.6.old or libcrypto would count.
+LIBC_PATH = re.compile(rb'/libc(?:-[0-9.]+)?\.so(?:\.[0-9]+)*$')
+DELETED = b' (deleted)'
+
+
+def hidden_processes(proc='/proc', mounts='/proc/mounts'):
+    """Why /proc may hide other users' processes from this one, or None.
+
+    Under hidepid an ordinary user lists none of them: measured on Rocky 9,
+    a user saw no postgres process at all, where without it the same user
+    sees every one and cannot read their maps. Seeing none would then read
+    as "no PostgreSQL runs here".
+    """
+    try:
+        with open(mounts, 'rb') as f:
+            lines = f.read().split(b'\n')
+    except OSError as e:
+        return (f'{mounts} could not be read ({e.strerror}), so whether /proc '
+                'hides other users\' processes is not known')
+    found = None
+    for line in lines:
+        fields = line.split()
+        if (len(fields) > 3 and fields[2] == b'proc'
+                and fields[1] == proc.encode()):
+            found = fields[3]     # the last mount over /proc is the one seen
+    if found is None:
+        return f'{mounts} lists no proc file system mounted on {proc}'
+    hide = [o for o in found.split(b',') if o.startswith(b'hidepid=')
+            and o not in (b'hidepid=0', b'hidepid=off')]
+    if hide:
+        return (f'{proc} is mounted with {hide[-1].decode("ascii", "replace")}, '
+                'which hides other users\' processes')
+    return None
+
+
+def libc_lines(maps):
+    """[(path, device, inode, deleted)] of the C library lines of a
+    /proc/PID/maps text: libc.so.6 on glibc 2.34 and later, libc-2.28.so on
+    2.28. The kernel ends the path with " (deleted)" once the file was
+    replaced, as a glibc update replaces it."""
+    out = []
+    for line in maps.split(b'\n'):
+        fields = line.split(None, 5)
+        if len(fields) != 6:
+            continue
+        name, deleted = fields[5], fields[5].endswith(DELETED)
+        if deleted:
+            name = name[:-len(DELETED)]
+        if LIBC_PATH.search(name):
+            out.append((fields[5].decode('utf-8', 'surrogateescape'),
+                        fields[3], fields[4], deleted))
+    return out
+
+
+def postgres_libc(proc='/proc', mounts='/proc/mounts', euid=None):
+    """Which PostgreSQL processes of this machine do not run the C library
+    this process measured with.
+
+    Two ways, both measured. A glibc update replaces the file, and a process
+    started before it keeps the old one, as does every process it forks
+    (Rocky 9, glibc 2.34-83 to 2.34-283 with the postmaster running: every
+    postgres process mapped "libc.so.6 (deleted)" until the restart). And a
+    PostgreSQL in a container runs the container's C library, another file
+    that was never deleted (false-negative-reviewer, round 1, measured on a
+    host whose containers mapped twelve such files). So a process is clean
+    only when it maps the very file this process does, by device and inode
+    in /proc/PID/maps.
+
+    Only root and the user PostgreSQL runs as can read a postgres process's
+    maps. Every way of not knowing is said: a process whose maps could not
+    be read or show no C library, a process whose name could not be read,
+    this process's own C library not found, and a /proc that hides other
+    users' processes. None of them reads as "none", and finding no postgres
+    process at all is said too, by the outputs. This process's own C library
+    deleted means glibc was replaced while it measured ('replaced'), which
+    the outputs say voids what was measured (measured on Rocky 9: a process
+    loaded before an update). A process whose maps read empty runs no code,
+    a zombie or one exiting (measured: 0 bytes), and is passed over.
+    """
+    out = {'looked_for': [n.decode('ascii') for n in POSTGRES_NAMES],
+           'processes': 0, 'stale': [], 'other': [], 'unreadable': 0,
+           'no_libc': 0, 'unnamed': 0, 'not_checked': None,
+           'replaced': False}
+    try:
+        pids = sorted(int(p) for p in os.listdir(proc) if p.isdigit())
+    except OSError as e:
+        out['not_checked'] = f'{proc} could not be read ({e.strerror})'
+        return out
+    why = []
+    # This process's own C library, the one strcoll ran from, deleted or
+    # not: a glibc update while it measured deletes it, and a process that
+    # maps that very file runs what was measured.
+    try:
+        with open(f'{proc}/self/maps', 'rb') as f:
+            mine = libc_lines(f.read())
+    except OSError:
+        mine = []
+    own = {(dev, ino) for _, dev, ino, _ in mine}
+    out['replaced'] = any(deleted for _, _, _, deleted in mine)
+    if not own:
+        why.append(f'the C library this process measured with is not in '
+                   f'{proc}/self/maps')
+    if (os.geteuid() if euid is None else euid) != 0:
+        hidden = hidden_processes(proc, mounts)
+        if hidden:
+            why.append(hidden)
+    out['not_checked'] = '; '.join(why) or None
+    for pid in pids:
+        try:
+            with open(f'{proc}/{pid}/comm', 'rb') as f:
+                comm = f.read().rstrip(b'\n')
+        except (FileNotFoundError, ProcessLookupError):
+            continue        # it ended between the listing and now
+        except OSError:
+            out['unnamed'] += 1
+            continue
+        if comm not in POSTGRES_NAMES:
+            continue
+        try:
+            with open(f'{proc}/{pid}/maps', 'rb') as f:
+                maps = f.read()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except OSError:
+            out['processes'] += 1
+            out['unreadable'] += 1
+            continue
+        if not maps:
+            continue        # no memory left to map: a zombie, or exiting
+        out['processes'] += 1
+        found = libc_lines(maps)
+        gone = [p for p, dev, ino, deleted in found
+                if deleted and (dev, ino) not in own]
+        elsewhere = [p for p, dev, ino, deleted in found
+                     if not deleted and own and (dev, ino) not in own]
+        if not found:
+            out['no_libc'] += 1
+        elif gone:
+            out['stale'].append([pid, gone[0]])
+        elif elsewhere:
+            out['other'].append([pid, elsewhere[0]])
+    return out
+
+
+def control_fingerprint():
+    """What C and POSIX measure on every glibc: (order, pairs, probes).
+
+    Both are the locale glibc carries inside itself (findlocale.c, from
+    2.12 to 2.39), with no rules, so strcoll is strcmp (strcoll_l.c, the
+    same versions): every character in byte order, every neighbour told
+    apart as a different letter, the first pair of letters as the letters'
+    pair and none for accents or case, which the C locale's 127 characters
+    cannot spell. A machine whose C differs did not measure what this
+    script means to measure, and nothing it measured can be trusted.
+    """
+    seq = list(range(1, 0x80))
+    a, b = CANDIDATES[0][0]
+    probes = f'{ord(a):X}.{ord(b):X}> ? ?'
+    told = bytes([3 << 3 | 3 << 5]) * (len(seq) - 1)
+    return (hashlib.sha256(''.join(map(chr, seq)).encode('utf-8')).hexdigest(),
+            hashlib.sha256(probes.encode('utf-8') + b'\n' + told).hexdigest(),
+            probes)
 
 
 def corpus_for(codeset):
@@ -269,10 +649,13 @@ def corpus_for(codeset):
     a strcoll tie by the bytes, so equal characters end up in PostgreSQL's
     order. A character the encoding cannot hold is left out: no database in
     that encoding can contain it. A character Python's codec cannot encode is
-    left out as well, which is a limit: against glibc 2.34's charmaps, EUC-KR
-    loses U+327E and EUC-JP loses U+FF5E, both of which PostgreSQL accepts,
-    besides the lone bytes 0x80-0x9F, which it does not (pg_euckr_verifychar
-    and pg_eucjp_verifychar in its src/common/wchar.c). The digest covers each
+    left out as well, which is a limit, and so are the bytes PostgreSQL stores
+    for a character where they are not Python's: the byte sequences it stores,
+    converting from UTF-8, that no corpus here holds are in POSTGRES_ONLY,
+    worked out against PostgreSQL's own conversions, and the comparison names
+    them (EUC-KR's U+327E, A2 E8, is one). The lone bytes 0x80-0x9F of EUC-KR
+    and EUC-JP PostgreSQL does not accept (pg_euckr_verifychar and
+    pg_eucjp_verifychar in its src/common/wchar.c). The digest covers each
     character and the bytes it was measured as, so that two machines whose
     converters differ, in what they encode or in how, are not compared as if
     they measured the same thing.
@@ -805,16 +1188,17 @@ def measure(jobs):
     sys.stderr.flush()
     start = time.time()
     UTF8_BYTES = [chr(c).encode('utf-8') for c in CODEPOINTS]
-    results, order_data, pair_data = {}, {}, {}
+    results, order_data, pair_data, uses = {}, {}, {}, {}
     try:
         with fork_pool(jobs) as pool:
-            measured = pool.map(measure_one, names)
-            for done, (name, result, data) in enumerate(measured, 1):
+            measured = pool.map(measure_locale, names)
+            for done, (name, result, data, use) in enumerate(measured, 1):
                 line = progress(done, len(names), time.time() - start)
                 if line:
                     sys.stderr.write(line)
                     sys.stderr.flush()
                 results[name] = result
+                uses[name] = use
                 if data:
                     order_data.setdefault(result['order'], data['order'])
                     pair_data.setdefault(result['pairs'], data['pairs'])
@@ -825,6 +1209,7 @@ def measure(jobs):
             'for lack of memory; run again with a smaller --jobs')
     out = {
         'format': FORMAT,
+        'parts': list(PARTS[FORMAT]),
         'corpus': corpus_digest(),
         'glibc_version': version,
         'glibc_build': build,
@@ -833,6 +1218,11 @@ def measure(jobs):
         'locales': results,
         'order_data': order_data,
         'pair_data': pair_data,
+        # After the measuring processes, which each select a locale of
+        # their own: this one's LC_MONETARY is put back as it was.
+        'money': money_digits(names),
+        'postgres_libc': postgres_libc(),
+        'postgres_use': uses,
     }
     out['content'] = content_digest(out)
     text = json.dumps(out, sort_keys=True) + '\n'
@@ -865,7 +1255,71 @@ def finished(out, seconds, size):
                      f'{size / 1e6:.1f} MB written.\n')
     for n in failed:
         sys.stderr.write(f'  {shown(n)}: {results[n]["error"]}\n')
+    for line in machine_libc_lines(out['postgres_libc']):
+        sys.stderr.write(line + '\n')
     return 1 if failed else 0
+
+
+def machine_libc_lines(p):
+    """What the machine's own run says about its PostgreSQL processes, so
+    that a check that could not look is fixed there and then."""
+    out = []
+    if p['replaced']:
+        out.append(filled(
+            '!! glibc was replaced on disk while this measured: what was '
+            'measured may not be what this machine runs now; measure it '
+            'again.'))
+    if p['stale']:
+        out.append(filled(
+            f'!! {len(p["stale"])} PostgreSQL process(es) still run the glibc '
+            'that was replaced on disk: what this machine measured is not '
+            'what that PostgreSQL sorts with until it is restarted.'))
+    if p['other']:
+        out.append(filled(
+            f'!! {len(p["other"])} PostgreSQL process(es) run another C '
+            'library than the one measured here, as when PostgreSQL runs in '
+            'a container: what this machine measured is not what that '
+            'PostgreSQL sorts with.'))
+    why = libc_why(p)
+    if why:
+        out.append(filled(
+            f'!! PostgreSQL processes NOT checked: {why}. To check, run this '
+            f'{ADVICE} (README, command 1.b).'))
+    if not out and not p['processes']:
+        out.append(filled(
+            f'!! No process named {" or ".join(p["looked_for"])} was found, '
+            'so nothing checked which C library PostgreSQL runs here.'))
+    if not out:
+        out.append(f'PostgreSQL processes: {libc_clean(p)}.')
+    return out
+
+
+def libc_why(p):
+    """Why the PostgreSQL processes of a machine were not all checked, or
+    None when every one was."""
+    why = [p['not_checked']] if p['not_checked'] else []
+    if p['unreadable']:
+        why.append(f'{p["unreadable"]} of {p["processes"]} process(es) named '
+                   f'{" or ".join(p["looked_for"])} could not be read')
+    if p['no_libc']:
+        why.append(f'{p["no_libc"]} of {p["processes"]} process(es) named '
+                   f'{" or ".join(p["looked_for"])} show no C library')
+    if p['unnamed']:
+        why.append(f'the name of {p["unnamed"]} other process(es) could not '
+                   'be read')
+    return '; '.join(why) or None
+
+
+def libc_clean(p):
+    """The line for a machine whose PostgreSQL processes were all read and
+    all run the C library measured there."""
+    return (f'{p["processes"]} process(es) named '
+            f'{" or ".join(p["looked_for"])}, all running the C library '
+            'measured there')
+
+
+ADVICE = ('as root, or as the user PostgreSQL runs as where /proc does not '
+          'hide other users\' processes')
 
 
 def source_entries(directory):
@@ -1259,8 +1713,19 @@ def load(path, digest):
     except ValueError:
         die(f'{path} is not a complete output of locale_order.py. A run that '
             'was cut short leaves exactly such a file; measure again.')
-    if not isinstance(data, dict) or data.get('format') != FORMAT:
+    if not isinstance(data, dict) or data.get('format') not in PARTS:
         die(f'{path} is not an output of this version of locale_order.py')
+    held = PARTS[data['format']]
+    # A file of the first format has no list; one of a later format lists
+    # what its format holds, and holds each of it.
+    if 'parts' in data or len(held) > 1:
+        if data.get('parts') != list(held):
+            die(f'{path} does not list the parts its format holds; it is not a '
+                'whole measurement')
+    for part in SIDE_PARTS:
+        if (part in data) != (part in held):
+            die(f'{path} lacks a part its format holds, or holds one it does '
+                'not; it is not a whole measurement')
     if data.get('corpus') != digest:
         die(f'{path} was measured over a different set of strings than this '
             'script uses; measure both machines with the same copy of it')
@@ -1299,11 +1764,61 @@ def load(path, digest):
                 and isinstance(pair_data.get(r['pairs']), str)):
             die(f'{path}: what was measured for {shown(name)} is missing; it '
                 'is not a whole measurement')
+    if 'money' in held and not (
+            isinstance(data['money'], dict) and set(data['money']) == set(locales)
+            and all((type(v) is int and -128 <= v <= 127)
+                    or (isinstance(v, str) and v) for v in data['money'].values())):
+        die(f'{path}: the decimals of money are not one per locale; it is not '
+            'a whole measurement')
+    if 'postgres_libc' in held and not libc_part_whole(data['postgres_libc']):
+        die(f'{path}: what it says of the PostgreSQL processes is malformed; '
+            'it is not a whole measurement')
+    if 'postgres_use' in held and not use_part_whole(data['postgres_use'],
+                                                     locales):
+        die(f'{path}: what it says of how PostgreSQL uses each locale is '
+            'malformed; it is not a whole measurement')
     if 'content' not in data:
         die(f'{path} is not an output of this version of locale_order.py')
     if data['content'] != content_digest(data):
         die(f'{path} does not match the digest its machine wrote into it; the '
             'file was damaged after it was written')
+    if 'postgres_use' in held:
+        # measure_one selects LC_COLLATE and then LC_CTYPE (codeset_of), and
+        # postgres_use reads the same nl_langinfo right after it in the same
+        # process: a locale either refused, or one Python could not hand to
+        # C, has no order of its own, and both read one encoding. A file
+        # that says otherwise was measured by two glibcs.
+        for name, r in data['postgres_use'].items():
+            # measure_one keeps no encoding after either refusal (it returns
+            # before codeset_of, or codeset_of gave None).
+            if ('accepted' != r['collate'][0] or 'accepted' != r['ctype'][0]) \
+                    and ('error' not in locales[name] or 'codeset' in locales[name]):
+                # A name Python cannot pass to C stops measure_one with the
+                # same ValueError, whatever glibc: no second glibc explains it.
+                if 'unknown' in (r['collate'][0], r['ctype'][0]):
+                    die(f'{path}: the entry for {shown(name)} says Python could '
+                        'not pass its name to the C library, and holds the order '
+                        'or the encoding measured for it; the file contradicts '
+                        'itself, so measure that machine again')
+                die(f'{path}: the entry for {shown(name)} says glibc refused '
+                    'it, and holds the order or the encoding measured for it; '
+                    'glibc changed while that machine was measured, so measure '
+                    'it again')
+            # Both accepted: codeset_of and postgres_use read nl_langinfo under
+            # the same LC_CTYPE, one right after the other, so they read the
+            # same encoding, or neither read one.
+            order_codeset = locales[name].get('codeset')
+            if ('accepted' == r['collate'][0] == r['ctype'][0]
+                    and r['codeset'] != order_codeset):
+                first = (f'reads its encoding as {order_codeset} for the order'
+                         if order_codeset else
+                         'could not read its encoding for the order')
+                second = ('could not read it' if not r['codeset'] else
+                          f'as {r["codeset"]}' if order_codeset else
+                          f'read it as {r["codeset"]}')
+                die(f'{path}: the entry for {shown(name)} {first} and {second} '
+                    'for how PostgreSQL uses it; glibc changed while that '
+                    'machine was measured, so measure it again')
     if version_tuple(data.get('glibc_version')) is None:
         die(f'{path} does not say which glibc it was measured on')
     parts = build_parts(data.get('glibc_build'))
@@ -1312,7 +1827,76 @@ def load(path, digest):
             f'the build {data["glibc_build"]}; a measurement is bound to one '
             'build, so measure that machine again')
     data['path'] = path
+    data['held'] = held
     return data, raw
+
+
+def use_part_whole(use, locales):
+    """Is what a file says of how PostgreSQL uses each locale one entry per
+    locale, each of the shape postgres_use() writes? A category accepted
+    has no reason and one not accepted has one; an encoding is read only
+    under an LC_CTYPE that was set, and a character is tried only with an
+    encoding; a character is a code point and the bytes of more than one
+    byte it was measured as, in lower-case hex."""
+    def category(c):
+        return (isinstance(c, list) and len(c) == 2 and c[0] in CATEGORY_STATES
+                and ((c[0] == 'accepted' and c[1] is None)
+                     or (c[0] != 'accepted' and isinstance(c[1], str) and c[1])))
+
+    def text(t, codeset):
+        if not (isinstance(t, list) and len(t) == 2 and t[0] in TEXT_STATES):
+            return False
+        state, detail = t
+        if state == 'not checked':
+            return isinstance(detail, str) and bool(detail)
+        if codeset is None:
+            return False
+        if state == 'one byte':
+            return detail is None
+        return (isinstance(detail, list) and len(detail) == 2
+                and type(detail[0]) is int
+                and 0 < detail[0] < 0x110000 and not 0xD800 <= detail[0] <= 0xDFFF
+                and isinstance(detail[1], str)
+                and re.fullmatch(r'(?:[0-9a-f]{2}){2,}', detail[1]) is not None)
+
+    def entry(r):
+        return (isinstance(r, dict)
+                and set(r) == {'collate', 'ctype', 'codeset', 'text'}
+                and category(r['collate']) and category(r['ctype'])
+                and (r['codeset'] is None
+                     or (isinstance(r['codeset'], str) and r['codeset']))
+                and (r['ctype'][0] == 'accepted' or r['codeset'] is None)
+                and text(r['text'], r['codeset']))
+    return (isinstance(use, dict) and set(use) == set(locales)
+            and all(entry(r) for r in use.values()))
+
+
+def libc_part_whole(p):
+    """Is what a file says of its machine's PostgreSQL processes of the shape
+    postgres_libc() writes, with counts that add up?"""
+    counts = ('processes', 'unreadable', 'no_libc', 'unnamed')
+    return (isinstance(p, dict)
+            and set(p) == {'looked_for', 'stale', 'other',
+                           'not_checked', 'replaced'} | set(counts)
+            and type(p['replaced']) is bool
+            and all(type(p[k]) is int and p[k] >= 0 for k in counts)
+            and isinstance(p['looked_for'], list) and p['looked_for']
+            and all(isinstance(n, str) and n for n in p['looked_for'])
+            and (p['not_checked'] is None
+                 or (isinstance(p['not_checked'], str) and p['not_checked']))
+            and all(isinstance(p[k], list)
+                    and all(isinstance(s, list) and len(s) == 2
+                            and type(s[0]) is int and isinstance(s[1], str)
+                            for s in p[k]) for k in ('stale', 'other'))
+            and len(p['stale']) + len(p['other']) + p['unreadable']
+            + p['no_libc'] <= p['processes'])
+
+
+def order_text(seq):
+    """The characters of an order as one string, built in C as UTF-32: three
+    times faster than joining chr() of each. A number that is no character
+    raises ValueError or OverflowError either way."""
+    return array.array(CODE_POINT, seq).tobytes().decode(UTF32)
 
 
 def unpacked(data, kind, digest, count=None, probes=None):
@@ -1332,7 +1916,7 @@ def unpacked(data, kind, digest, count=None, probes=None):
         else:
             seq = unpack_order(raw)
             if (seq is not None and len(seq) == count
-                    and hashlib.sha256(''.join(map(chr, seq)).encode('utf-8'))
+                    and hashlib.sha256(order_text(seq).encode('utf-8'))
                     .hexdigest() == digest):
                 return seq
     except (ValueError, OverflowError, zlib.error):
@@ -1343,64 +1927,344 @@ def unpacked(data, kind, digest, count=None, probes=None):
         'the file was damaged after it was written')
 
 
+def new_positions(old_seq, new_seq):
+    """Where each character of the old order stands in the new one."""
+    position = [0] * 0x110000
+    for i, c in enumerate(new_seq):
+        position[c] = i
+    return [position[c] for c in old_seq]
+
+
+def reordering(old_seq, new_seq):
+    """(positions, old_at, steps, apart) of two orders of the same
+    characters: where each character of the old order stands in the new one;
+    where in the old order each place of the new one was; the step from each
+    character's new place to the next one's; and 1 where that step is not 1,
+    that is, where two neighbours of the old order are not neighbours, in
+    that order, in the new one. Worked out once for every use."""
+    positions = new_positions(old_seq, new_seq)
+    old_at = [0] * len(positions)
+    for i, p in enumerate(positions):
+        old_at[p] = i
+    steps = list(map(operator.sub, positions[1:], positions))
+    return positions, old_at, steps, bytes(map((1).__ne__, steps))
+
+
+def kept_in_order(positions, apart=None):
+    """1 for each character of the old order that is among the most that
+    kept their relative order: the longest increasing subsequence of their
+    new positions.
+
+    Patience sorting, with two shortcuts that leave the answer as it was:
+    once a character goes on the end, the rest of its run of consecutive
+    positions goes on after it, in one step; and the subsequence is read
+    back a run at a time.
+    """
+    n = len(positions)
+    tail_positions, tail_indexes = [], []
+    previous = [-1] * n
+    # 1 for an index appended right after the index before it, as part of a
+    # run; its previous is that index.
+    batched = bytearray(n)
+    if apart is None:
+        apart = bytes(map((1).__ne__, map(operator.sub, positions[1:], positions)))
+    ends = apart + ONE
+    last = -1           # tail_positions[-1]
+    i = 0
+    while i < n:
+        p = positions[i]
+        if p > last:
+            k = len(tail_positions)
+            j = ends.find(1, i) + 1
+            tail_positions.extend(positions[i:j])
+            tail_indexes.extend(range(i, j))
+            previous[i] = tail_indexes[k - 1] if k else -1
+            batched[i + 1:j] = ONE * (j - i - 1)
+            last = positions[j - 1]
+            i = j
+            continue
+        k = bisect.bisect_left(tail_positions, p)
+        tail_positions[k] = p
+        tail_indexes[k] = i
+        if k == len(tail_positions) - 1:
+            last = p
+        previous[i] = tail_indexes[k - 1] if k else -1
+        i += 1
+    kept = bytearray(n)
+    i = tail_indexes[-1] if tail_indexes else -1
+    while i >= 0:
+        if batched[i]:
+            start = batched.rfind(0, 0, i)
+            kept[start:i + 1] = ONE * (i - start + 1)
+            i = previous[start]
+        else:
+            kept[i] = 1
+            i = previous[i]
+    return kept
+
+
 def moved_characters(old_seq, new_seq):
     """The characters that moved: all but the most that kept their order.
 
     The characters that kept their relative order are the longest increasing
     subsequence of the new positions read in the old order; every other
-    character is one that moved. A swap of two characters counts one of them.
+    character is one that moved. A swap of two characters counts one of them,
+    so where more than one subsequence is longest, which characters are
+    called moved is a choice; in_a_reversed_pair() is not.
     """
-    position = [0] * 0x110000
-    for i, c in enumerate(new_seq):
-        position[c] = i
-    tail_positions, tail_indexes = [], []
-    previous = [-1] * len(old_seq)
-    for i, c in enumerate(old_seq):
-        p = position[c]
-        k = bisect.bisect_left(tail_positions, p)
-        if k == len(tail_positions):
-            tail_positions.append(p)
-            tail_indexes.append(i)
-        else:
-            tail_positions[k] = p
-            tail_indexes[k] = i
-        previous[i] = tail_indexes[k - 1] if k else -1
-    kept = bytearray(len(old_seq))
-    i = tail_indexes[-1] if tail_indexes else -1
+    kept = kept_in_order(new_positions(old_seq, new_seq))
+    return sorted(c for c, k in zip(old_seq, kept) if not k)
+
+
+def in_a_reversed_pair(positions):
+    """1 for each character of the old order that the two orders put on
+    different sides of at least one other character, ties broken by the
+    bytes as PostgreSQL breaks them.
+
+    Unlike the moved characters, this does not depend on a choice: in ko_KR
+    one character moved, and it and the 4,888 it moved past are each in such
+    a pair. A character is in none exactly when every character before it in
+    one order is before it in the other, which is what the two passes check:
+    the largest new position before it, and the smallest after it.
+    """
+    n = len(positions)
+    flag = bytearray(n)
+    largest = -1
+    for i, p in enumerate(positions):
+        if largest > p:
+            flag[i] = 1
+        elif p > largest:
+            largest = p
+    smallest = n
+    for i in range(n - 1, -1, -1):
+        p = positions[i]
+        if smallest < p:
+            flag[i] = 1
+        elif p < smallest:
+            smallest = p
+    return flag
+
+
+def witnesses(old_seq, new_seq, moves, kept):
+    """For each character that moved, one that kept its place and that the
+    two orders put on the other side of it: the nearest such in the new
+    order. There is always one, or the longest subsequence would not be the
+    longest: a moved character that no kept character crossed could join
+    it."""
+    positions, old_at = moves[:2]
+    kept_new = [p for p, k in zip(positions, kept) if k]   # increasing
+    out = {}
+    i = kept.find(0)
     while i >= 0:
-        kept[i] = 1
-        i = previous[i]
-    return sorted(c for i, c in enumerate(old_seq) if not kept[i])
+        p = positions[i]
+        j = bisect.bisect_left(kept_new, p)
+        if j and old_at[kept_new[j - 1]] > i:
+            out[old_seq[i]] = (new_seq[kept_new[j - 1]], '<')
+        elif j < len(kept_new) and old_at[kept_new[j]] < i:
+            out[old_seq[i]] = (new_seq[kept_new[j]], '>')
+        else:
+            raise ValueError(f'no kept character crosses U+{old_seq[i]:04X}')
+        i = kept.find(0, i + 1)
+    return out
 
 
-def pair_changes(old_seq, old_told, new_seq, new_told):
-    """Neighbours in both orders whose told-apart record differs.
+def uncompared_levels(old_probes, new_probes):
+    """The levels a told-apart record cannot be compared at: no pair measured
+    them on one machine ('?'), or the pairs differ. A level shown not to exist
+    on both ('none') is not one."""
+    a, b = old_probes.split(' '), new_probes.split(' ')
+    return tuple(k for k in range(3)
+                 if a[k] != b[k] or '?' in (a[k], b[k]))
 
-    (x, y, old record, new record) for each. A pair that is next to each other
-    in only one of the orders is left to moved_characters.
+
+def comparable_levels(old_probes, new_probes):
+    """The levels (0 letters, 1 accent, 2 case) measured with the same pair on
+    both machines. Only there does a told-apart record mean the same thing on
+    both sides; where the pairs differ, that is reported on its own."""
+    a, b = old_probes.split(' '), new_probes.split(' ')
+    return tuple(k for k in range(3)
+                 if a[k] == b[k] and a[k] not in ('?', 'none'))
+
+
+def relation_tables(levels):
+    """Two bytes.translate tables over told-apart records. The first gives
+    the relation over the levels compared: bit 0 when strcoll does not call
+    the two equal, bit 1 + k when they differ at least as strongly as the
+    pair of level k. The second gives 1 where that pair compared equal,
+    which says nothing about the level, or where the record says the level
+    had no pair, which a level compared on both machines had: either way two
+    records that differ there are a pair the comparison cannot decide, never
+    one it can drop."""
+    rel, unsure = bytearray(256), bytearray(256)
+    for v in range(256):
+        r = 0 if v & 1 else 1
+        for k in levels:
+            f = (v >> (1 + 2 * k)) & 3
+            if f == 0:
+                r |= 2 << k
+            elif f != 2:
+                unsure[v] = 1
+        rel[v] = r
+    return bytes(rel), bytes(unsure)
+
+
+def strength(rel):
+    """0 tied, 1 told apart by less than every level compared, 2 + (2 - k)
+    told apart at least as strongly as level k: higher is stronger."""
+    if not rel & 1:
+        return 0
+    for k in range(3):
+        if rel >> (1 + k) & 1:
+            return 4 - k
+    return 1
+
+
+class Between:
+    """How two characters of one order that are not neighbours are told
+    apart, worked out from the neighbours between them: they tie only if
+    every neighbour between them ties, and they differ at least as strongly
+    as a level if some neighbour between them does.
+
+    That holds for characters glibc weighs at every level, and is only
+    trusted in one direction (level_changes): where glibc ignores a character
+    at some level, a two-letter string compares the probe letter with the
+    other character instead, and a strong neighbour between two characters
+    does not make them differ strongly. Measured with strcoll on the three
+    fixtures, 2026-10-18: a weaker relation worked out this way held for
+    3,405 pairs of 3,405, a stronger one failed for 395 of 23,591.
     """
-    successor = [-1] * 0x110000
-    record = bytearray(0x110000)
-    for i in range(len(new_seq) - 1):
-        successor[new_seq[i]] = new_seq[i + 1]
-        record[new_seq[i]] = new_told[i]
-    changes = []
-    for i in range(len(old_seq) - 1):
-        x, y = old_seq[i], old_seq[i + 1]
-        if successor[x] == y and record[x] != old_told[i]:
-            changes.append((x, y, old_told[i], record[x]))
-    return changes
+
+    def __init__(self, rel, unsure, bits):
+        self.rel, self.unsure, self.bits = rel, unsure, bits
+        self.counts = None
+
+    def relation(self, i, j):
+        """(relation, unsure) of the characters at positions i < j."""
+        if j - i <= 64:
+            r = 0
+            for v in self.rel[i:j]:
+                r |= v
+            return r, 1 in self.unsure[i:j]
+        if self.counts is None:
+            self.counts = {}
+            for b in self.bits:
+                column = bytes((v >> b) & 1 for v in range(256))
+                self.counts[b] = [0] + list(itertools.accumulate(
+                    self.rel.translate(column)))
+            self.counts['unsure'] = [0] + list(itertools.accumulate(self.unsure))
+        r = 0
+        for b in self.bits:
+            if self.counts[b][j] - self.counts[b][i]:
+                r |= 1 << b
+        return r, self.counts['unsure'][j] - self.counts['unsure'][i] > 0
 
 
-def told_apart_words(v):
-    """What a told-apart record says, in words."""
-    if v & 1:
-        return 'not at all (the bytes decide)'
-    for k, words in enumerate(('as different letters', 'like an accent',
-                               'by case')):
-        if (v >> (1 + 2 * k)) & 3 == 0:
-            return words
-    return 'by less than case'
+def level_changes(old_seq, old_told, new_seq, new_told, levels, moves=None):
+    """Pairs told apart at a different level on the two machines.
+
+    ([(side, first, last, old relation, new relation)], [(x, y)]): the
+    changes, as runs of pairs that follow one another in one order (pair i
+    is the i-th character of that order and the one after it; side 'both'
+    and 'old' count in the old order, 'new' in the new one) and change alike;
+    then the pairs whose change the measurement cannot decide. moves is
+    reordering() of the two orders, or None when they are the same.
+
+    A pair of neighbours in both orders is compared record to record, over
+    the levels compared. A pair of neighbours in one order only, kept in the
+    same order by the other, is compared with what the characters between
+    them say there (Between); that is a change only when the other machine
+    tells them apart more weakly, the one direction that reading can be
+    trusted in. The other direction goes to the second list. So the ten Oriya
+    digits of or_IN, RHEL 8 -> RHEL 9, are named: each was a neighbour of its
+    ASCII digit, told apart like an accent, and on RHEL 9 seven zeros of other
+    scripts stand between them, each told apart from the next by less than
+    case ("0A" against U+0B66 "a" turns round; strcoll on the fixtures).
+    """
+    rel_table, unsure_table = relation_tables(levels)
+    old_rel, old_unsure = old_told.translate(rel_table), old_told.translate(unsure_table)
+    new_rel, new_unsure = new_told.translate(rel_table), new_told.translate(unsure_table)
+    bits = (0,) + tuple(1 + k for k in levels)
+    runs, undecided = [], []
+
+    def change(side, i, before, now):
+        last = runs[-1] if runs else None
+        if (last and last[0] == side and last[2] == i - 1
+                and last[3] == before and last[4] == now):
+            last[2] = i
+        else:
+            runs.append([side, i, i, before, now])
+
+    def weigh(seq, i, mine, mine_unsure, theirs, theirs_unsure, side):
+        # theirs & ~1: a level worked out between, which only says "at least
+        # this strongly" when every character between is weighed at it; the
+        # real relation can be weaker, a change. Measured with strcoll on the
+        # fixtures: 23 of 1,977 such equal readings were changes.
+        if mine_unsure or theirs_unsure:
+            undecided.append((seq[i], seq[i + 1]))
+        elif strength(theirs) < strength(mine):
+            change(side, i, *((mine, theirs) if side == 'old' else (theirs, mine)))
+        elif theirs != mine or theirs & ~1:
+            undecided.append((seq[i], seq[i + 1]))
+
+    if moves is None:
+        aligned, aligned_rel, aligned_unsure = new_told, new_rel, new_unsure
+        positions = old_at = steps = None
+        moved_apart = bytes(len(old_rel))
+    else:
+        positions, old_at, steps, moved_apart = moves
+        # The new record from each character to the one after it there; the
+        # last character has none, and its pair is never a neighbour pair.
+        aligned = bytes(map((new_told + bytes(1)).__getitem__, positions[:-1]))
+        aligned_rel = aligned.translate(rel_table)
+        aligned_unsure = aligned.translate(unsure_table)
+    # Pairs of neighbours in both orders whose record differs, and neither
+    # record holds an equal answer, are found as runs: each byte the two
+    # records side by side, or 0, and a run of one same byte is one row.
+    size = len(old_rel)
+    old_n, aligned_n = int.from_bytes(old_rel, 'big'), int.from_bytes(aligned_rel, 'big')
+    unsure_n = int.from_bytes(old_unsure, 'big') | int.from_bytes(aligned_unsure, 'big')
+    changed_n = int.from_bytes((old_n ^ aligned_n).to_bytes(size, 'big').translate(NONZERO), 'big')
+    apart_n = int.from_bytes(moved_apart, 'big')
+    both_n = changed_n & ~apart_n & ~unsure_n
+    # Every record is below 16, so shifting the whole by four bits moves each
+    # byte into its own upper half; a byte of 0 or 1 times 255 is 0 or 255.
+    key = (((old_n << 4) | aligned_n) & (both_n * 255)).to_bytes(size, 'big')
+    for m in SAME_BYTE_RUNS.finditer(key):
+        runs.append(['both', m.start(), m.end() - 1, key[m.start()] >> 4,
+                     key[m.start()] & 15])
+    # The rest are looked at one by one: pairs that stopped being neighbours,
+    # and neighbours whose records differ at all, the raw bytes, while one
+    # holds an answer that cannot be compared. The relation of two such
+    # records can read the same where the bytes do not; they are undecided.
+    raw_n = int.from_bytes(old_told, 'big') ^ int.from_bytes(aligned, 'big')
+    raw_changed_n = int.from_bytes(raw_n.to_bytes(size, 'big').translate(NONZERO), 'big')
+    mark = (apart_n | (raw_changed_n & unsure_n)).to_bytes(size, 'big')
+    new_between = old_between = None
+    i = mark.find(1)
+    while i >= 0:
+        if steps is None or steps[i] == 1:
+            undecided.append((old_seq[i], old_seq[i + 1]))
+        elif steps[i] > 0:
+            if new_between is None:
+                new_between = Between(new_rel, new_unsure, bits)
+            a = positions[i]
+            theirs, theirs_unsure = new_between.relation(a, a + steps[i])
+            weigh(old_seq, i, old_rel[i], old_unsure[i], theirs, theirs_unsure,
+                  'old')
+        i = mark.find(1, i + 1)
+    runs.sort(key=lambda r: r[1])
+    if steps is not None:
+        apart = bytes(map((1).__lt__, map(operator.sub, old_at[1:], old_at)))
+        j = apart.find(1)
+        while j >= 0:
+            if old_between is None:
+                old_between = Between(old_rel, old_unsure, bits)
+            a, b = old_at[j], old_at[j + 1]
+            theirs, theirs_unsure = old_between.relation(a, b)
+            weigh(new_seq, j, new_rel[j], new_unsure[j], theirs, theirs_unsure,
+                  'new')
+            j = apart.find(1, j + 1)
+    return runs, undecided
 
 
 def glyph(cp):
@@ -1509,7 +2373,7 @@ def also_known_as(names, pg_names, locales):
     if spellings:
         word = 'database locale' if len(spellings) == 1 else 'database locales'
         parts.append(f'{word} {", ".join(spellings)}')
-    return 'also, in PostgreSQL: ' + '; '.join(parts) if parts else None
+    return ALSO + '; '.join(parts) if parts else None
 
 
 def readable_probes(spec):
@@ -1528,69 +2392,1417 @@ def readable_probes(spec):
     return ', '.join(words)
 
 
-def describe_change(old, new, o, n):
-    """(lines, phrase): the lines that say what changed between two
-    measurements of a locale, and the same in one phrase for a summary."""
+def code_point_runs(cps):
+    """[(first, last)] of runs of consecutive code points, in order."""
+    runs = []
+    for c in cps:
+        if runs and c == runs[-1][1] + 1:
+            runs[-1][1] = c
+        else:
+            runs.append([c, c])
+    return runs
+
+
+def flagged_runs(seq, flags):
+    """code_point_runs of the characters of seq whose flag is 1, without
+    sorting them: marked in a table by code point and read back in runs."""
+    table = bytearray(0x110000)
+    for c in itertools.compress(seq, flags):
+        table[c] = 1
+    runs, start = [], table.find(1)
+    while start >= 0:
+        end = table.find(0, start)
+        if end < 0:
+            end = len(table)
+        runs.append([start, end - 1])
+        start = table.find(1, end)
+    return runs
+
+
+def report_lines(text, indent):
+    """A line of a change, cut to fit the report beside its four spaces."""
+    return textwrap.wrap(text, width=74, initial_indent=indent,
+                         subsequent_indent=indent + '  ',
+                         break_on_hyphens=False, break_long_words=False)
+
+
+def runs_text(runs):
+    return ', '.join(f'U+{a:04X}' if a == b else f'U+{a:04X}..U+{b:04X}'
+                     for a, b in runs)
+
+
+def relation_words(rel, levels):
+    """How two characters are told apart, over the levels compared."""
+    if not rel & 1:
+        return 'not at all (the bytes decide)'
+    stronger = -1       # the strongest level compared that does not tell them apart
+    for k in range(3):
+        if k in levels:
+            if rel >> (1 + k) & 1:
+                # Somewhere between that level and this one; a level whose
+                # pair differs on the two machines cannot narrow it.
+                return ' or '.join(('as different letters', 'like an accent',
+                                    'by case')[stronger + 1:k + 1])
+            stronger = k
+    return ('by less than ' + ('a letter', 'an accent', 'case')[stronger]
+            if levels else 'told apart')
+
+
+def test_pair(x, y, before, now, probes, levels):
+    """(string a, string b, sign before, sign now) that shows a level change
+    between x and y, or None when no level compared shows it."""
+    for k in levels:
+        if (before ^ now) >> (1 + k) & 1:
+            token = probes.split(' ')[k]
+            lo_, hi_ = (int(h, 16) for h in token[:-1].split('.'))
+            if token[-1] == '<':
+                a, b = (hi_, x), (lo_, y)
+            else:
+                a, b = (x, hi_), (y, lo_)
+            return (a, b, '<' if before >> (1 + k) & 1 else '>',
+                    '<' if now >> (1 + k) & 1 else '>')
+    return None
+
+
+def run_characters(seq, first, last):
+    """The characters of pairs first..last of an order, as code point runs;
+    most such runs are consecutive code points, which is checked whole."""
+    chars = seq[first:last + 2]
+    if chars == list(range(chars[0], chars[0] + len(chars))):
+        return [[chars[0], chars[-1]]]
+    return code_point_runs(chars)
+
+
+MEASURED = {'both': 'on both machines',
+            'old': 'on the old machine; the new one by the characters between',
+            'new': 'on the new machine; the old one by the characters between'}
+
+
+# --- what a comparison found, and how each output prints it -------------------
+#
+# A comparison's answer is one list of findings, each a (kind, data): for
+# every changed locale what changed in it (locale_findings), and for the run
+# what is not known to be unchanged and what a reader must be warned of
+# (run_findings). The report, the summary and the characters file are all
+# drawn from that list through the two tables below, LOCALE_KINDS and
+# RUN_KINDS, which give for each kind what each of the three prints. A kind
+# with no entry, or a finding one of the three never printed, raises before
+# anything is written: the file and the summary are not second accounts of
+# the comparison that could say less than the report.
+
+
+def locale_findings(old, new, o, n):
+    """[(kind, data)]: what changed between two measurements of a locale, in
+    the order the report prints it.
+
+    What moved and how many characters sort differently against another are
+    found when the order changed; how pairs of characters are told apart,
+    when the records or the order changed. A pair the measurement cannot
+    decide is a finding of its own, never dropped: the locale changed either
+    way, and a reader of the list must know it is not the whole of what may
+    differ.
+    """
     old_seq = unpacked(old, 'order', o['order'], o['chars'])
-    new_seq = (old_seq if n['order'] == o['order']
-               else unpacked(new, 'order', n['order'], n['chars']))
-    lines, brief = [], []
-    moved = [] if new_seq is old_seq else moved_characters(old_seq, new_seq)
-    if not moved:
-        lines.append('no character moved')
-        brief.append('no character moved')
-    elif len(moved) > LIST_LIMIT:
-        lines.append(f'{len(moved):,} characters moved, too many to list here')
-        brief.append(f'{len(moved):,} characters moved')
+    same_order = n['order'] == o['order']
+    new_seq = old_seq if same_order else unpacked(new, 'order', n['order'], n['chars'])
+    found = []
+    if same_order:
+        moved, moves = [], None
+        found.append(('moved', {'moved': moved, 'runs': [], 'partner': {}}))
     else:
-        lines.append(f'{len(moved)} character(s) moved:')
-        lines.extend(f'  {character(c)}' for c in moved)
-        brief.append(f'{len(moved)} character(s) moved: '
-                     + ', '.join(short_character(c) for c in moved))
-    if o['pairs'] != n['pairs'] and o['probes'] != n['probes']:
-        # Records taken with different pairs do not compare position by
-        # position; that the pairs had to change is the finding.
-        lines.append('the pairs that tell letters, accents and case apart here '
-                     'are told apart differently themselves:')
-        lines.append(f'  before: {readable_probes(o["probes"])}')
-        lines.append(f'  now:    {readable_probes(n["probes"])}')
-        brief.append('the pairs that tell letters, accents and case apart are '
-                     'told apart differently themselves')
-    elif o['pairs'] != n['pairs']:
-        changes = pair_changes(
-            old_seq, unpacked(old, 'pair', o['pairs'], probes=o['probes']),
-            new_seq, unpacked(new, 'pair', n['pairs'], probes=n['probes']))
-        if len(changes) > LIST_LIMIT and len(moved) > LIST_LIMIT:
-            pass   # a rewrite: the count of moved characters already says it
-        elif len(changes) > LIST_LIMIT:
-            lines.append(f'{len(changes):,} pairs of neighbouring characters '
-                         'told apart differently, too many to list here')
-            brief.append(f'{len(changes):,} pairs of neighbouring characters '
-                         'told apart differently')
-        elif changes:
-            lines.append(f'{len(changes)} pair(s) of neighbouring characters '
-                         'told apart differently:')
-            for x, y, ov, nv in changes:
-                lines.append(f'  {short_character(x)} and {short_character(y)}: '
-                             f'before {told_apart_words(ov)}, now '
-                             f'{told_apart_words(nv)}')
-            brief.append(f'{len(changes)} pair(s) of neighbouring characters '
-                         'told apart differently: ' + ', '.join(
-                             f'{short_character(x)} and {short_character(y)}'
-                             for x, y, ov, nv in changes))
-    return lines, '; '.join(brief)
+        moves = reordering(old_seq, new_seq)
+        positions, old_at = moves[:2]
+        kept = kept_in_order(positions, moves[3])
+        moved = sorted(c for c, k in zip(old_seq, kept) if not k)
+        found.append(('moved', {
+            'moved': moved, 'runs': code_point_runs(moved),
+            'partner': witnesses(old_seq, new_seq, moves, kept)}))
+    if moved:
+        flags = in_a_reversed_pair(positions)
+        count = flags.count(1)
+        found.append(('reversed', {'count': count, 'all': count == len(old_seq),
+                                   'runs': flagged_runs(old_seq, flags)}))
+    probes_differ = o['probes'] != n['probes']
+    if probes_differ:
+        found.append(('probes changed', {'before': o['probes'],
+                                         'now': n['probes']}))
+    if o['pairs'] != n['pairs'] or not same_order:
+        levels = comparable_levels(o['probes'], n['probes'])
+        old_told = unpacked(old, 'pair', o['pairs'], probes=o['probes'])
+        new_told = unpacked(new, 'pair', n['pairs'], probes=n['probes'])
+        changes, undecided = level_changes(old_seq, old_told, new_seq,
+                                           new_told, levels, moves)
+        # What the pairs are compared by, when not by every level: a level
+        # whose pair differs is the finding above; one no pair measured is
+        # said here. Either way it is not compared, and says so.
+        left_out = uncompared_levels(o['probes'], n['probes'])
+        if left_out:
+            found.append(('left out', {'levels': levels, 'left_out': left_out,
+                                       'probes_differ': probes_differ}))
+        count = sum(last - first + 1 for side, first, last, b_, n_ in changes)
+        if count:
+            chains = []
+            for side, first, last, before, now in changes:
+                seq = new_seq if side == 'new' else old_seq
+                chains.append((run_characters(seq, first, last), before, now,
+                               test_pair(seq[first], seq[first + 1], before,
+                                         now, o['probes'], levels), side))
+            pairs = None
+            if count <= LIST_LIMIT:
+                pairs = [(seq[i], seq[i + 1], before, now)
+                         for side, first, last, before, now in changes
+                         for seq in [new_seq if side == 'new' else old_seq]
+                         for i in range(first, last + 1)]
+            found.append(('told apart', {'count': count, 'pairs': pairs,
+                                         'chains': chains, 'levels': levels}))
+            if moved:
+                # The characters these pairs name that did not move, marked by
+                # their place in the old order.
+                named = bytearray(len(old_seq))
+                for side, first, last, b_, n_ in changes:
+                    if side == 'new':
+                        for i in range(first, last + 2):
+                            named[old_at[i]] = 1
+                    else:
+                        named[first:last + 2] = ONE * (last - first + 2)
+                still = flagged_runs(old_seq, bytes(map(operator.and_, named, kept)))
+                if still:
+                    found.append(('did not move', {'runs': still}))
+        if undecided:
+            found.append(('undecided', {'pairs': undecided}))
+    return found
 
 
-# Printed under every report and every summary: what two machines that agree
-# here can still disagree on.
+def moved_lines(d):
+    moved, runs = d['moved'], d['runs']
+    if not moved:
+        return ['no character moved']
+    if len(moved) <= LIST_LIMIT:
+        return ([f'{len(moved)} character(s) moved:']
+                + [f'  {character(c)}' for c in moved])
+    if len(runs) <= LIST_LIMIT:
+        return report_lines(f'{len(moved):,} characters moved: '
+                            f'{runs_text(runs)}', '')
+    return [f'{len(moved):,} characters moved, too many to list here']
+
+
+def moved_brief(d):
+    moved = d['moved']
+    if not moved:
+        return ['no character moved']
+    if len(moved) <= LIST_LIMIT:
+        return [f'{len(moved)} character(s) moved: '
+                + ', '.join(short_character(c) for c in moved)]
+    return [f'{len(moved):,} characters moved']
+
+
+def moved_rows(d):
+    """A run of moved characters and its test pair: the first of the run and
+    a character that kept its place, which the two orders put on opposite
+    sides of it."""
+    rows = []
+    for a, b in d['runs']:
+        w, sign = d['partner'][a]
+        rows.append(('moved', runs_text([(a, b)]), '-', f'U+{a:04X} / U+{w:04X}',
+                     sign, '>' if sign == '<' else '<', MEASURED['both']))
+    return rows
+
+
+def reversed_lines(d):
+    everyone = 'all ' if d['all'] else ''
+    return [f'{everyone}{d["count"]:,} character(s) sort differently against '
+            'at least one other']
+
+
+def reversed_brief(d):
+    return [f'{d["count"]:,} sort differently against another']
+
+
+def reversed_rows(d):
+    return [('sorts differently', runs_text([(a, b)]), '-', '-', '-', '-',
+             MEASURED['both']) for a, b in d['runs']]
+
+
+PROBES_CHANGED = ('the pairs that tell letters, accents and case apart here '
+                  'are told apart differently themselves')
+
+
+def probes_lines(d):
+    return [PROBES_CHANGED + ':',
+            f'  before: {readable_probes(d["before"])}',
+            f'  now:    {readable_probes(d["now"])}']
+
+
+def probes_brief(d):
+    return [PROBES_CHANGED.replace(' here ', ' ')]
+
+
+def probes_rows(d):
+    return [('pairs changed', '-',
+             (f'before: {readable_probes(d["before"])}; '
+              f'now: {readable_probes(d["now"])}').translate(TEXT_ESCAPES),
+             '-', '-', '-', '-')]
+
+
+def compared_by(d):
+    return ' and '.join(LEVEL_NAMES[k] for k in d['levels'])
+
+
+def left_out_lines(d):
+    named = compared_by(d)
+    if d['probes_differ']:
+        # Under the changed pairs, whose lines say why.
+        return [f'  so pairs are compared only by {named}' if d['levels']
+                else '  so no pair can be compared']
+    return [(f'pairs are compared only by {named}' if d['levels']
+             else 'no pair can be compared') + ': no pair measured '
+            + ' and '.join(LEVEL_NAMES[k] for k in d['left_out'])]
+
+
+def left_out_brief(d):
+    return [f'pairs compared only by {compared_by(d)}' if d['levels']
+            else 'no pair compared']
+
+
+def left_out_rows(d):
+    return [('not compared', '-',
+             ' and '.join(LEVEL_NAMES[k] for k in d['left_out']),
+             '-', '-', '-', '-')]
+
+
+def told_apart_lines(d):
+    if d['pairs'] is None:
+        return [f'{d["count"]:,} pairs of characters told apart differently, '
+                'too many to list here']
+    return ([f'{d["count"]} pair(s) of characters told apart differently:']
+            + [f'  {short_character(x)} and {short_character(y)}: before '
+               f'{relation_words(before, d["levels"])}, now '
+               f'{relation_words(now, d["levels"])}'
+               for x, y, before, now in d['pairs']])
+
+
+def told_apart_brief(d):
+    if d['pairs'] is None:
+        return [f'{d["count"]:,} pairs of characters told apart differently']
+    return [f'{d["count"]} pair(s) of characters told apart differently: '
+            + ', '.join(f'{short_character(x)} and {short_character(y)}'
+                        for x, y, b_, n_ in d['pairs'])]
+
+
+def told_apart_rows(d):
+    """A chain of neighbours told apart differently, with the test pair of
+    its first two characters where a level compared shows the change."""
+    rows = []
+    for runs, before, now, t, side in d['chains']:
+        rows.append(('told apart differently', runs_text(runs),
+                     f'{relation_words(before, d["levels"])} -> '
+                     f'{relation_words(now, d["levels"])}',
+                     ' / '.join(' '.join(f'U+{c:04X}' for c in s_) for s_ in t[:2])
+                     if t else '-', t[2] if t else '-', t[3] if t else '-',
+                     MEASURED[side]))
+    return rows
+
+
+def among(d):
+    count = sum(b - a + 1 for a, b in d['runs'])
+    return f'among them {count:,} character(s) that did not move'
+
+
+def still_lines(d):
+    if len(d['runs']) <= LIST_LIMIT:
+        return report_lines(f'{among(d)}: {runs_text(d["runs"])}', '  ')
+    return [f'  {among(d)}, too many to list here']
+
+
+def still_brief(d):
+    if len(d['runs']) <= LIST_LIMIT:
+        return [f'{among(d)}: {runs_text(d["runs"])}']
+    return [among(d)]
+
+
+def still_rows(d):
+    # No rows of their own: they are the characters of the told-apart rows
+    # that no moved row names, each in the chain that shows how it changed.
+    return []
+
+
+def undecided_lines(d):
+    return [f'{len(d["pairs"]):,} more pair(s) may be told apart differently; '
+            'what was measured cannot decide']
+
+
+def undecided_brief(d):
+    return [f'{len(d["pairs"]):,} more pair(s) the measurement cannot decide']
+
+
+def undecided_rows(d):
+    return [('not decided', f'U+{x:04X} U+{y:04X}', '-', '-', '-', '-', '-')
+            for x, y in d['pairs']]
+
+
+# kind: (lines of the report, phrases of the summary, rows of the file), each
+# from the finding's data.
+LOCALE_KINDS = {
+    'moved': (moved_lines, moved_brief, moved_rows),
+    'reversed': (reversed_lines, reversed_brief, reversed_rows),
+    'probes changed': (probes_lines, probes_brief, probes_rows),
+    'left out': (left_out_lines, left_out_brief, left_out_rows),
+    'told apart': (told_apart_lines, told_apart_brief, told_apart_rows),
+    'did not move': (still_lines, still_brief, still_rows),
+    'undecided': (undecided_lines, undecided_brief, undecided_rows),
+}
+REPORT, SUMMARY, FILE = 0, 1, 2
+
+
+def printer(table, kind, part):
+    """What prints a kind of finding in one of the three outputs; a kind the
+    table lacks raises, rather than be left out of an output."""
+    if kind not in table:
+        raise LookupError(f'no way to print a finding of kind {kind!r}')
+    return table[kind][part]
+
+
+def describe_change(old, new, o, n):
+    """(lines, phrase, rows): what changed between two measurements of a
+    locale, drawn from its findings for the report, the summary and the
+    characters file, in which nothing is cut short."""
+    lines, brief, rows = [], [], []
+    for kind, d in locale_findings(old, new, o, n):
+        lines += printer(LOCALE_KINDS, kind, REPORT)(d)
+        brief += printer(LOCALE_KINDS, kind, SUMMARY)(d)
+        rows += printer(LOCALE_KINDS, kind, FILE)(d)
+    return lines, '; '.join(brief), rows
+
+
+# Printed under every report and every summary, and at the end of the
+# characters file: what two machines that agree here can still disagree on.
 CLOSING = ('!! Not measured: a rule that applies only to a particular '
            'combination of letters, such as a contraction ("ch" sorted as one '
            'letter), so two machines that agree here can still sort some longer '
            'strings apart. Where a character counts for nothing at some level '
            '(glibc ignores it there), how it is told apart from its neighbour is '
-           'read less reliably, so a change there may go unseen. Only sort order '
-           'is measured: upper(), lower() and the other character rules of '
-           'LC_CTYPE are not.')
+           'read less reliably, so a change there may go unseen. Of '
+           'LC_CTYPE, only whether text converts is measured, not what '
+           'upper(), lower() and its other character rules do with it.')
+
+
+EARLIER = ('written by an earlier version of locale_order.py, which did not '
+           'measure this; run it again on {}')
+
+
+def which_machines(sides):
+    """'the OLD machine', 'the NEW machine' or 'both machines'."""
+    return 'both machines' if len(sides) == 2 else f'the {sides[0]} machine'
+
+
+def control_texts(old, new):
+    """[(text, is a warning)]: C and POSIX on each machine against
+    control_fingerprint(). A file of any format holds them, so this needs
+    nothing a file of an earlier format lacks."""
+    order, pairs, probes = control_fingerprint()
+    held, broken, unknown = [], [], []
+    for side, data in zip(('OLD', 'NEW'), (old, new)):
+        for name in ('C', 'POSIX'):
+            r = data['locales'].get(name)
+            if r is None:
+                unknown.append(f'{name} is not in the {side} file')
+            elif 'error' in r:
+                unknown.append(f'{name} could not be measured on the {side} '
+                               f'machine ({r["error"]})')
+            elif (r['order'], r['pairs'], r['probes'], r['chars'],
+                  r['partly']) != (order, pairs, probes, 0x7F, 0):
+                broken.append((side, name))
+            else:
+                held.append(side)
+    out = []
+    for side in ('OLD', 'NEW'):
+        names = [name for s, name in broken if s == side]
+        if names:
+            out.append((f'!! Control FAILED on the {side} machine: '
+                        f'{" and ".join(names)} did not measure as byte order, '
+                        'which is how glibc sorts C and POSIX in every '
+                        'version. This '
+                        'script did not measure there what it means to, and '
+                        'nothing it measured on that machine can be trusted; '
+                        'measure it again with this checkout\'s '
+                        'scripts/locale_order.py.', True))
+    if unknown:
+        out.append(('!! Control NOT checked: ' + '; '.join(unknown) + '.', True))
+    if not broken and not unknown:
+        out.append(('Control: C and POSIX measured as byte order on both '
+                    'machines, which is how glibc sorts them in every version.',
+                    False))
+    return out
+
+
+def money_texts(old, new, both):
+    """[(text, is a warning)]: the decimals of money of each locale on both
+    machines, as cash.c keeps them."""
+    earlier = [side for side, data in zip(('OLD', 'NEW'), (old, new))
+               if 'money' not in data['held']]
+    if earlier:
+        files = ('the OLD and NEW files were' if len(earlier) == 2
+                 else f'the {earlier[0]} file was')
+        return [(f'!! Decimals of money NOT checked: {files} '
+                 + EARLIER.format(which_machines(earlier)) + '.', True)]
+    changed, unknown = [], []
+    for name in both:
+        a, b = old['money'][name], new['money'][name]
+        if isinstance(a, str) or isinstance(b, str):
+            unknown.append('; '.join(
+                f'{shown(name)} ({side} machine): {v}' for side, v
+                in (('old', a), ('new', b)) if isinstance(v, str)))
+        elif money_scale(a) != money_scale(b):
+            changed.append(f'{shown(name)} ({money_scale(a)} -> '
+                           f'{money_scale(b)})')
+    out = []
+    if changed:
+        out.append((f'!! Decimals of money CHANGE in {len(changed)} locale(s): '
+                    'a money value stored with lc_monetary set to one of them '
+                    'reads with another number of decimals on the new machine, '
+                    'as a number 10 or more times larger or smaller: '
+                    + ', '.join(changed) + '.', True))
+    if unknown:
+        out.append((f'!! Decimals of money NOT checked in {len(unknown)} '
+                    'locale(s): ' + '; '.join(unknown) + '.', True))
+    compared = len(both) - len(unknown)
+    if not changed:
+        out.append((f'Decimals of money: the same in the {compared} locale(s) '
+                    'measured on both machines.', False))
+    return out
+
+
+def libc_texts(old, new):
+    """[(text, is a warning, above)]: each machine's PostgreSQL processes
+    against the C library measured there, and what that does not look at.
+    above marks what voids the comparison, drawn above the list of changes
+    as the control is: the OLD machine's PostgreSQL on a replaced or another
+    C library (its indexes were not built with what was measured there), the
+    NEW machine's on another (it will not sort with what was measured there
+    even after a restart), and a side whose glibc was replaced while it was
+    measured. The NEW machine's PostgreSQL still on the replaced glibc is
+    not above: the list is what changes when it restarts."""
+    out = []
+    earlier = [side for side, data in zip(('OLD', 'NEW'), (old, new))
+               if 'postgres_libc' not in data['held']]
+    if earlier:
+        files = ('the OLD and NEW files were' if len(earlier) == 2
+                 else f'the {earlier[0]} file was')
+        out.append((f'!! PostgreSQL processes NOT checked on '
+                    f'{which_machines(earlier)}: {files} '
+                    + EARLIER.format(which_machines(earlier)) + '.', True,
+                    False))
+    for side, data in zip(('OLD', 'NEW'), (old, new)):
+        if side in earlier:
+            continue
+        p = data['postgres_libc']
+        if p['replaced']:
+            out.append((f'!! The glibc of the {side} machine was replaced on '
+                        'disk while it was measured, so what was measured may '
+                        'not be what that machine runs now; measure it again.',
+                        True, True))
+        if p['stale']:
+            out.append((f'!! PostgreSQL on the {side} machine: '
+                        f'{len(p["stale"])} process(es) still run the glibc '
+                        'that was replaced on disk, so they do not sort with '
+                        'the glibc measured there until PostgreSQL is '
+                        'restarted.', True, side == 'OLD'))
+        if p['other']:
+            out.append((f'!! PostgreSQL on the {side} machine: '
+                        f'{len(p["other"])} process(es) run another C library '
+                        'than the one measured there, as when PostgreSQL runs '
+                        'in a container, so they do not sort with the glibc '
+                        'measured there.', True, True))
+        why = libc_why(p)
+        if why:
+            out.append((f'!! PostgreSQL processes NOT checked on the {side} '
+                        f'machine: {why}. Run locale_order.py there {ADVICE}.',
+                        True, False))
+        if not (p['stale'] or p['other'] or why or p['replaced']):
+            if p['processes']:
+                out.append((f'PostgreSQL on the {side} machine: '
+                            f'{libc_clean(p)}.', False, False))
+            else:
+                out.append((f'!! PostgreSQL on the {side} machine: no process '
+                            f'named {" or ".join(p["looked_for"])} was found, '
+                            'so nothing checked which C library PostgreSQL '
+                            'runs there.', True, False))
+    if len(earlier) < 2:
+        out.append(('This looks at the C library PostgreSQL runs, not at its '
+                    'locale data: a PostgreSQL that was not restarted can '
+                    'already use locales installed after it started.', False,
+                    False))
+    return out
+
+
+FN = 'upper(), lower() and ILIKE'
+GCONV = ('On RHEL this is what a machine without glibc-gconv-extra does; '
+         'install it and measure that machine again.')
+CATEGORY_NAMES = (('collate', 'LC_COLLATE'), ('ctype', 'LC_CTYPE'))
+REFUSED = ('!! Refused by glibc, so a database that uses one does not open: '
+           '{} locale(s). locale -a lists them, but setlocale() does not '
+           'accept them: PostgreSQL stops a database created with one with '
+           '"FATAL: database locale is incompatible with operating system", '
+           'and CREATE DATABASE refuses it. Their sort order is not measured '
+           'either. On RHEL this is what glibc does with the language packs '
+           'installed as folders (glibc-langpack-*) and glibc-gconv-extra not '
+           'installed; install it and measure that machine again.')
+
+
+def refused_by_glibc(old, new, names):
+    """{name: {side: [category]}}: the categories each side's glibc refused
+    for a locale of names, from each file that holds how PostgreSQL uses
+    them. A database whose LC_COLLATE or LC_CTYPE setlocale refuses does
+    not open, so such a locale is named as that, never as unchanged nor
+    only as not measured. A name glibc was never asked about ('unknown') is
+    not refused."""
+    out = {}
+    for side, data in (('old', old), ('new', new)):
+        if 'postgres_use' not in data['held']:
+            continue
+        for name in names:
+            r = data['postgres_use'][name]
+            cats = [cat for key, cat in CATEGORY_NAMES if r[key][0] == 'refused']
+            if cats:
+                out.setdefault(name, {})[side] = cats
+    return out
+
+
+def refused_sides(d):
+    """[(where, categories)] of one refused locale: both machines when they
+    refused the same, else each side that refused."""
+    sides = d['sides']
+    if len(sides) == 2 and sides['old'] == sides['new']:
+        return [('both machines', sides['old'])]
+    return [(f'{side} machine', sides[side]) for side in ('old', 'new')
+            if side in sides]
+
+
+def refused_lines(items, ctx):
+    out = [textwrap.fill(REFUSED.format(len(items)), width=78,
+                         subsequent_indent='   ', break_on_hyphens=False)]
+    for d in items:
+        for where, cats in refused_sides(d):
+            out.append(f'  {shown(d["name"])} ({where}): '
+                       f'{" and ".join(cats)} refused')
+        also = also_known_as([d['name']], ctx['pg_names'], ctx['o'])
+        if also:
+            out.append(filled(also, 4, 6))
+    return out
+
+
+def refused_summary(items, ctx):
+    groups = {}
+    for d in items:
+        where = ('both machines' if len(d['sides']) == 2
+                 else f'the {next(iter(d["sides"]))} machine')
+        groups.setdefault(where, []).append(d['name'])
+    out = []
+    for where in ('both machines', 'the old machine', 'the new machine'):
+        if where in groups:
+            out += wrapped(f'refused by glibc on {where}, so a database that '
+                           'uses one does not open there: '
+                           + ', '.join(map(shown, groups[where])), 7, 9)
+            also = also_known_as(groups[where], ctx['pg_names'], ctx['o'])
+            if also:
+                out += wrapped(also, 9, 11)
+    return out
+
+
+def refused_rows(items):
+    return [([d['name']], [
+        ('refused by glibc', '-', f'{side} machine: setlocale() does not '
+         f'accept {" and ".join(d["sides"][side])}', '-', '-', '-', '-')
+        for side in ('old', 'new') if side in d['sides']]) for d in items]
+
+
+def spaced(data):
+    """Bytes as 'AD E2'."""
+    return ' '.join(f'{b:02X}' for b in data)
+
+
+def by_codeset(names, codesets):
+    """'EUC-JP: ja_JP, ja_JP.eucjp; EUC-KR: ko_KR', by encoding."""
+    groups = {}
+    for name in sorted(names):
+        groups.setdefault(codesets.get(name) or 'unknown', []).append(shown(name))
+    return '; '.join(f'{cs}: {", ".join(group)}'
+                     for cs, group in sorted(groups.items()))
+
+
+def postgres_codesets():
+    """(the encodings PostgreSQL allows only on the client, every encoding it
+    knows, those of a database of more than one byte per character), in
+    upper case, as collation_keys keeps them; the comparison runs beside
+    it, in scripts/."""
+    try:
+        import collation_keys
+    except ImportError as e:
+        die(f'cannot read which encodings PostgreSQL knows ({e}); run the '
+            'comparison from this checkout\'s scripts/')
+    return (collation_keys.CLIENT_ONLY_CODESETS, collation_keys.POSTGRES_CODESETS,
+            collation_keys.MULTIBYTE_CODESETS)
+
+
+def error_row(cp, hexed, before, now, measured):
+    return ('upper/lower/ILIKE error', f'U+{cp:04X}',
+            f'bytes {spaced(bytes.fromhex(hexed))}, converted to a wide '
+            'character as PostgreSQL does', '-', before, now, measured)
+
+
+def use_view(data, name, side, refused):
+    """What one machine says of a locale, as use_texts needs it: (state,
+    encoding, text, why, side). state is 'refused' (glibc refused
+    LC_COLLATE or LC_CTYPE), 'unread' (nothing was tried: a file of an
+    earlier format, or a name Python could not pass to C), or 'accepted';
+    use_texts adds 'absent', a machine that does not have the locale.
+    The encoding is the one glibc gave the locale's LC_CTYPE; in a file of
+    an earlier format,
+    the one its order read; None where none was read. text is
+    postgres_use's ['converts' | 'fails' | 'one byte' | 'not checked',
+    detail], None where nothing was tried; why says why nothing is known."""
+    if side in refused.get(name, {}):
+        return 'refused', None, None, None, side
+    if 'postgres_use' not in data['held']:
+        return ('unread', data['locales'][name].get('codeset'), None,
+                (f'the {side.upper()} file was written by an earlier version of '
+                 'locale_order.py', None), side)
+    r = data['postgres_use'][name]
+    if 'accepted' != r['collate'][0] or 'accepted' != r['ctype'][0]:
+        # Not refused, so a category was never asked (refused_by_glibc).
+        return 'unread', None, None, (r['text'][1], side), side
+    return 'accepted', r['codeset'], r['text'], (
+        (r['text'][1], side) if r['text'][0] == 'not checked' else None), side
+
+
+def use_kinds(view, client_only, known):
+    """The databases a locale can serve, made on the machine view describes
+    (PostgreSQL 13 to 18): none if glibc refuses it there (CREATE DATABASE
+    refuses it, check_locale) or the machine does not have it; ('enc', X) for an encoding X PostgreSQL
+    allows in a database (check_encoding_locale_matches, dbcommands.c);
+    none for one it allows only on the client, where the database can only
+    be SQL_ASCII, of one byte, which never converts; ('any',) for one it
+    does not know, which a database of any encoding may use; ('unread',
+    why) where the encoding is not known."""
+    state, enc, _, why, _ = view
+    if state in ('refused', 'absent'):
+        return []
+    if enc is None:
+        return [('unread', why)]
+    if enc.upper() not in known:
+        return [('any',)]
+    if enc.upper() in client_only:
+        return []
+    return [('enc', enc)]
+
+
+def use_on(view, kind, multibyte, change):
+    """What one machine does with a database of kind, as (state, why, text):
+    state 'closed' (glibc refuses the locale: the database does not open),
+    'works', 'one byte' (PostgreSQL never converts), 'error', 'unknown'
+    or 'elsewhere' (an encoding PostgreSQL does not know, named in the line
+    on a database of another encoding), with why as (text, the machine it
+    is about, or None). A database of an encoding PostgreSQL keeps in one
+    byte per character never converts (multibyte, from pg_wchar_table). A
+    database of the locale's encoding on that machine gets what was
+    measured there. One of
+    another encoding gets an error where that machine's glibc could not
+    convert the locale's own encoding: glibc then falls back to ASCII for
+    the whole LC_CTYPE and fails on every byte past 0x7F, whatever the
+    encoding (wcsmbsload.c, gconv_simple.c, 2.28 and 2.34)."""
+    state, enc, text, why, side = view
+    if state == 'refused':
+        return 'closed', None, None
+    if kind[0] == 'enc' and kind[1].upper() not in multibyte:
+        return 'one byte', None, None
+    if state == 'unread':
+        return 'unknown', why, None
+    s, detail = text
+    if s == 'not checked' and (enc is None or kind == ('enc', enc)):
+        return 'unknown', why, None
+    if kind == ('enc', enc):
+        # 'one byte' of an encoding of more: no character of it failed.
+        return {'converts': 'works', 'fails': 'error',
+                'one byte': 'works'}[s], None, text
+    if s == 'fails':
+        return 'error', None, text
+    if kind[0] == 'any':
+        return 'elsewhere', ('its encoding is one PostgreSQL does not know, so '
+                             'a database of any encoding can use it', None), None
+    if kind[0] == 'unread':
+        return 'unknown', kind[1], None
+    return 'unknown', (change, None), None
+
+
+USE_BEFORE = {'works': 'converts', 'error': 'error'}
+
+
+def use_texts(old, new, names, refused, only_new=()):
+    """([(text, is a warning)], [file rows]): what upper(), lower(),
+    initcap(), ILIKE and full-text search do with each locale of names. In
+    a database of more than one byte per character they turn its text into
+    wide characters through glibc (char2wchar, PostgreSQL 13 to 18), and
+    stop with an error where glibc cannot.
+
+    It follows the databases, not the machines. A database keeps the
+    encoding it was made with, and PostgreSQL checks that encoding against
+    the locale only when the database is made (createdb); on the new
+    machine it opens through setlocale alone (postinit.c). So, for each
+    locale: which databases can exist with it (use_kinds), made on the old
+    machine and carried over, or made on the new one; what each machine
+    does with each (use_on); and the locale goes in one line, that of its
+    worst database: an error, then what is not known, then an encoding
+    PostgreSQL does not know, then what works. C and POSIX never reach
+    glibc (asc_tolower). A locale glibc refuses on a side is named on its
+    own, and here only beside an error of the other side, or, when the old
+    machine refused it, beside a NOT checked of the new one; a locale only
+    on the new machine (only_new) only where its databases made there give
+    an error, were not checked, or are of an encoding PostgreSQL does not
+    know."""
+    earlier = [side for side, data in zip(('OLD', 'NEW'), (old, new))
+               if 'postgres_use' not in data['held']]
+    out = []
+    if earlier:
+        files = ('the OLD and NEW files were' if len(earlier) == 2
+                 else f'the {earlier[0]} file was')
+        out.append((f'!! {FN} NOT checked: {files} '
+                    + EARLIER.format(which_machines(earlier)) + '.', True))
+        if len(earlier) == 2:
+            return out, []
+    client_only, known, multibyte = postgres_codesets()
+    groups = {k: [] for k in ('changed', 'back', 'both', 'converts', 'one byte',
+                              'left out', 'elsewhere')}
+    unknown, one_side, moved, anydb, rows, codesets = {}, {}, {}, {}, [], {}
+
+    def error(name, label, before, after, text, apart=None):
+        # One row of the character measured; where the two machines
+        # measured characters of two encodings (apart: (old's, new's)),
+        # one row each, of each error.
+        codesets[name] = label
+        if apart:
+            rows.append({'names': [name], 'rows': [
+                error_row(*t[1], *states, f'on the {side} machine')
+                for side, s, t, states in (
+                    ('old', before, apart[0], (before, 'not measured')),
+                    ('new', after, apart[1], ('not measured', after)))
+                if s == 'error']})
+            return
+        measured = ('on both machines' if before in USE_BEFORE and after in USE_BEFORE
+                    else 'on the new machine' if after in USE_BEFORE
+                    else 'on the old machine')
+        rows.append({'names': [name], 'rows': [error_row(
+            *text[1], USE_BEFORE.get(before, 'not measured'),
+            USE_BEFORE.get(after, 'not measured'), measured)]})
+
+    # A locale only on the new machine is checked only where it holds
+    # what postgres_use said, and glibc did not refuse it there: no database
+    # with it was made on the old machine, and where glibc refuses it on the
+    # new one, none opens there.
+    added = [name for name in only_new if 'postgres_use' in new['held']
+             and all(new['postgres_use'][name][k][0] != 'refused'
+                     for k in ('collate', 'ctype'))]
+    for name in list(names) + added:
+        if name in ('C', 'POSIX'):
+            groups['one byte'].append(name)
+            continue
+        vo = (('absent', None, None, None, 'old') if name in added
+              else use_view(old, name, 'old', refused))
+        vn = use_view(new, name, 'new', refused)
+        if vo[0] == vn[0] == 'refused':
+            continue
+        change = (f'its encoding changed from {vo[1]} on the old machine to '
+                  f'{vn[1]} on the new one')
+        carried = use_kinds(vo, client_only, known)
+        made = [k for k in use_kinds(vn, client_only, known) if k not in carried]
+        found = ([(k, use_on(vo, k, multibyte, change),
+                   use_on(vn, k, multibyte, change)) for k in carried]
+                 + [(k, ('none', None, None), use_on(vn, k, multibyte, change))
+                    for k in made])
+        if not found:
+            # Every database it can serve is of one byte (SQL_ASCII), or
+            # none can be made: named as refused, left out, or among those
+            # only on the new machine.
+            if name not in refused and name not in added:
+                codesets[name] = vn[1] or vo[1]
+                groups['left out'].append(name)
+            continue
+
+        def rank(f):
+            states = (f[1][0], f[2][0])
+            return (0 if 'error' in states else 1 if 'unknown' in states
+                    else 2 if 'elsewhere' in states else 3)
+        kind, (b, bwhy, btext), (a, awhy, atext) = min(found, key=rank)
+        label = kind[1] if kind[0] == 'enc' else (atext and vn[1]) or vo[1] or vn[1]
+        if 'error' in (b, a):
+            text = atext if a == 'error' else btext
+            if a == 'closed':
+                one_side.setdefault(('old', 'refused', ''), []).append(name)
+                error(name, label, b, a, text)
+            elif b == 'none' and vo[0] == 'refused':
+                one_side.setdefault(('new', 'refused', ''), []).append(name)
+                error(name, label, b, a, text)
+            elif b == 'none' and vo[0] == 'absent':
+                one_side.setdefault(('new', 'absent', ''), []).append(name)
+                error(name, label, b, a, text)
+            elif b == 'none':
+                one_side.setdefault(('new', 'unknown', change), []).append(name)
+                error(name, label, b, a, text)
+            elif kind[0] != 'enc':
+                # The databases' encoding is not known, and glibc that
+                # cannot convert the locale's own falls back to ASCII for
+                # every one of them.
+                where = ('both machines' if a == b == 'error' else
+                         'the new machine' if a == 'error' else 'the old machine')
+                why = (kind[1] if kind[0] == 'unread' else
+                       ('its encoding is one PostgreSQL does not know, so a '
+                        'database of any encoding can use it', None))
+                anydb.setdefault((where, why[0] + (f' (on the {why[1]} machine)'
+                                                   if why[1] else '')),
+                                 []).append(name)
+                error(name, label, b, a, text, apart=(btext, atext))
+            elif kind[0] == 'enc' and vn[0] == 'accepted' and vn[1] != kind[1] \
+                    and a == 'error':
+                # A database of the old encoding under the new one, whose
+                # converter the new machine's glibc lacks.
+                where = 'both machines' if b == 'error' else 'the new machine'
+                moved.setdefault((where, vo[1], vn[1], bwhy[0] if b == 'unknown'
+                                  else ''), []).append(name)
+                error(name, label, b, a, text, apart=(btext, atext))
+            elif a == 'error' and b == 'error':
+                groups['both'].append(name)
+                error(name, label, b, a, atext)
+            elif a == 'error' and b == 'works':
+                groups['changed'].append(name)
+                error(name, label, b, a, atext)
+            elif b == 'error' and a == 'works':
+                groups['back'].append(name)
+                error(name, label, b, a, btext)
+            elif a == 'error':
+                one_side.setdefault(('new', 'unknown', bwhy[0]), []).append(name)
+                error(name, label, b, a, atext)
+            else:
+                one_side.setdefault(('old', 'unknown', awhy[0]), []).append(name)
+                error(name, label, b, a, btext)
+            continue
+        # A database that does not open on the new machine says nothing
+        # more than its refusal.
+        if 'unknown' in (b, a) and a != 'closed':
+            # Each reason once, with the machine it is about; one both
+            # machines gave alike is said once, with neither.
+            whys = []
+            for s, w in ((b, bwhy), (a, awhy)):
+                if s == 'unknown' and w not in whys:
+                    whys.append(w)
+            if (len(whys) == 2 and whys[0][0] == whys[1][0]
+                    and None not in (whys[0][1], whys[1][1])):
+                whys = [(whys[0][0], None)]
+            why = ' and '.join(w + (f' (on the {m} machine)' if m else '')
+                               for w, m in whys)
+            why = why[:1].upper() + why[1:] if why.startswith('its encoding') else why
+            codesets[name] = label
+            unknown.setdefault(why, []).append(name)
+            rows.append({'names': [name], 'rows': [(
+                'upper/lower/ILIKE not checked', '-', why.translate(TEXT_ESCAPES),
+                '-', '-', '-', '-')]})
+        elif name in refused or (name in added and 'elsewhere' not in (b, a)):
+            # Named as refused, or among those only on the new machine; one
+            # of an encoding PostgreSQL does not know is in that line too.
+            continue
+        elif 'elsewhere' in (b, a):
+            groups['elsewhere'].append(name)
+        elif b in ('one byte', 'none') and a == 'one byte':
+            groups['one byte'].append(name)
+        else:
+            groups['converts'].append(name)
+    if groups['changed']:
+        out.append((f'!! {FN} give an ERROR on the new machine in '
+                    f'{len(groups["changed"])} locale(s) where they work on the '
+                    'old one. In a database of the locale\'s own encoding, any '
+                    'text that is not ASCII stops them with "ERROR: invalid '
+                    'multibyte character for locale", and initcap() and '
+                    'full-text search too, because the new machine\'s glibc '
+                    'cannot convert that encoding. ' + GCONV + ' '
+                    + by_codeset(groups['changed'], codesets) + '.', True))
+    if groups['back']:
+        out.append((f'{FN} work on the new machine in {len(groups["back"])} '
+                    'locale(s) where they gave an error on the old one: '
+                    + by_codeset(groups['back'], codesets) + '.', False))
+    if groups['both']:
+        out.append((f'!! {FN} give an ERROR on both machines in '
+                    f'{len(groups["both"])} locale(s), as before the upgrade: in '
+                    'a database of the locale\'s own encoding, any text that is '
+                    'not ASCII stops them with "ERROR: invalid multibyte '
+                    'character for locale". ' + GCONV + ' '
+                    + by_codeset(groups['both'], codesets) + '.', True))
+    for (where, x, y, why), group in sorted(moved.items()):
+        before = (f'; what they do on the old machine is not known ({why})'
+                  if why else '')
+        out.append((f'!! {FN} give an ERROR on {where} in {len(group)} '
+                    f'locale(s) whose encoding changed from {x} on the old '
+                    f'machine to {y} on the new one: a database of {x} made on '
+                    f'the old machine opens there under {y}, and a glibc that '
+                    f'cannot convert {y} converts no text that is not ASCII '
+                    f'("ERROR: invalid multibyte character for locale"){before}. '
+                    + GCONV + ' ' + by_codeset(group, codesets) + '.', True))
+    for (where, why), group in sorted(anydb.items()):
+        out.append((f'!! {FN} give an ERROR on {where} in {len(group)} '
+                    f'locale(s) that databases of an encoding not known here '
+                    f'may use ({why}): whatever that encoding, a glibc that '
+                    'cannot convert the locale\'s own converts no text that is '
+                    'not ASCII ("ERROR: invalid multibyte character for '
+                    'locale"). ' + GCONV + ' ' + by_codeset(group, codesets) + '.',
+                    True))
+    for (side, kind, why), group in sorted(one_side.items()):
+        other = 'old' if side == 'new' else 'new'
+        if kind == 'refused':
+            said = (f' that glibc refused on the {other} machine, where no '
+                    'database could use them')
+        elif kind == 'absent':
+            said = ' that the old machine does not have'
+        else:
+            said = (f', where it is not known what they do on the {other} '
+                    f'machine ({why})')
+        out.append((f'!! {FN} give an ERROR on the {side} machine in '
+                    f'{len(group)} locale(s){said}. In a database of the '
+                    'locale\'s own encoding, any text that is not ASCII stops '
+                    'them there with "ERROR: invalid multibyte character for '
+                    'locale". ' + GCONV + ' ' + by_codeset(group, codesets) + '.',
+                    True))
+    if earlier:
+        return out, rows
+    if unknown:
+        out.append((f'!! {FN} NOT checked in '
+                    f'{sum(map(len, unknown.values()))} locale(s): '
+                    + ' '.join(f'{why}: {by_codeset(group, codesets)}.'
+                               for why, group in sorted(unknown.items())), True))
+    line = (f'{FN}: text that is not ASCII converts on both machines in '
+            f'{len(groups["converts"])} locale(s); in the '
+            f'{len(groups["one byte"])} of an encoding of one byte PostgreSQL '
+            'never converts it in a database of that encoding.')
+    if groups['left out']:
+        line += (f' Left out: {len(groups["left out"])} locale(s) of an '
+                 'encoding PostgreSQL allows only on the client, so no '
+                 'database converts text with them ('
+                 + by_codeset(groups['left out'], codesets) + ').')
+    if groups['elsewhere']:
+        line += (f' The {len(groups["elsewhere"])} locale(s) of an encoding '
+                 'PostgreSQL does not know are in the line on a database of '
+                 'another encoding.')
+    out.append((line, False))
+    return out, rows
+
+
+def other_encoding_text(names, o, n):
+    """The line that names the locales of names whose encoding PostgreSQL
+    does not know, or None: a database of any encoding can use one, and
+    nothing here measured what it does there. C and POSIX are accepted with
+    every encoding and convert nothing."""
+    _, known, _ = postgres_codesets()
+    codesets = {}
+    for name in names:
+        if name in ('C', 'POSIX'):
+            continue
+        # Either machine's: a locale whose encoding PostgreSQL does not know
+        # on one side can serve a database of another encoding there.
+        for codeset in (o.get(name, {}).get('codeset'), n[name].get('codeset')):
+            if codeset and codeset.upper() not in known:
+                codesets[name] = codeset
+                break
+    if not codesets:
+        return None
+    return (f'!! Not measured in a database of another encoding: '
+            f'{len(codesets)} locale(s) whose encoding PostgreSQL does not '
+            'know, so that CREATE DATABASE lets a database of any encoding use '
+            'one, with only a WARNING ("could not determine encoding for '
+            'locale"). In such a database, a UTF8 one say, PostgreSQL hands the '
+            'locale the database\'s bytes, not the ones measured here, so '
+            'neither its order nor whether upper(), lower() and ILIKE give an '
+            'error there is known. ' + by_codeset(codesets, codesets) + '.')
+
+
+# The byte sequences PostgreSQL stores in a database of a locale's encoding,
+# converting from UTF-8, that corpus_for() does not hold, so that no order
+# measured here places them: {codeset: (PostgreSQL's encoding, the corpus
+# digest they were worked out against, 'code point:bytes ...')}. Measured
+# with convert_to() of every code point on PostgreSQL 13.23, 14.24, 15.19,
+# 16.15, 17.11 and 18.6 (the same bytes in all six), and read in its source
+# for 10 to 12: its utf8_to_*.map tables change only in comments from
+# REL_10_0 to REL_18_6, and pg_mb_radix_conv not at all. The 17 other
+# server encodings the three test machines' locales use hold nothing more
+# than their corpus. EUC_JP's are NEC row 13 (lead byte AD) and IBM
+# extensions (8F F3, 8F F4); U+2116 is among them because PostgreSQL stores
+# it as AD E2 and Python as 8F A2 F1.
+POSTGRES_ONLY = {
+    'EUC-JP': (
+        'EUC_JP',
+        '50349d2c24ac0020d2c8abed3fc5be911c8b8ef7c659ef04dac808952844f27d',
+        '2170:8FF3F3 2171:8FF3F4 2172:8FF3F5 2173:8FF3F6 2174:8FF3F7 2175:8FF3F8 '
+        '2176:8FF3F9 2177:8FF3FA 2178:8FF3FB 2179:8FF3FC FF07:8FF4A9 FF02:8FF4AA '
+        '70BB:8FF4AE 4EFC:8FF4AF 50F4:8FF4B0 51EC:8FF4B1 5307:8FF4B2 5324:8FF4B3 '
+        'FA0E:8FF4B4 548A:8FF4B5 5759:8FF4B6 FA0F:8FF4B7 FA10:8FF4B8 589E:8FF4B9 '
+        '5BEC:8FF4BA 5CF5:8FF4BB 5D53:8FF4BC FA11:8FF4BD 5FB7:8FF4BE 6085:8FF4BF '
+        '6120:8FF4C0 654E:8FF4C1 663B:8FF4C2 6665:8FF4C3 FA12:8FF4C4 F929:8FF4C5 '
+        '6801:8FF4C6 FA13:8FF4C7 FA14:8FF4C8 6A6B:8FF4C9 6AE2:8FF4CA 6DF8:8FF4CB '
+        '6DF2:8FF4CC 7028:8FF4CD FA15:8FF4CE FA16:8FF4CF 7501:8FF4D0 7682:8FF4D1 '
+        '769E:8FF4D2 FA17:8FF4D3 7930:8FF4D4 FA18:8FF4D5 FA19:8FF4D6 FA1A:8FF4D7 '
+        'FA1B:8FF4D8 7AE7:8FF4D9 FA1C:8FF4DA FA1D:8FF4DB 7DA0:8FF4DC 7DD6:8FF4DD '
+        'FA1E:8FF4DE 8362:8FF4DF FA1F:8FF4E0 85B0:8FF4E1 FA20:8FF4E2 FA21:8FF4E3 '
+        '8807:8FF4E4 FA22:8FF4E5 8B7F:8FF4E6 8CF4:8FF4E7 8D76:8FF4E8 FA23:8FF4E9 '
+        'FA24:8FF4EA FA25:8FF4EB 90DE:8FF4EC FA26:8FF4ED 9115:8FF4EE FA27:8FF4EF '
+        'FA28:8FF4F0 9592:8FF4F1 F9DC:8FF4F2 FA29:8FF4F3 973B:8FF4F4 974D:8FF4F5 '
+        '9751:8FF4F6 FA2A:8FF4F7 FA2B:8FF4F8 FA2C:8FF4F9 999E:8FF4FA 9AD9:8FF4FB '
+        '9B72:8FF4FC FA2D:8FF4FD 9ED1:8FF4FE 2460:ADA1 2461:ADA2 2462:ADA3 '
+        '2463:ADA4 2464:ADA5 2465:ADA6 2466:ADA7 2467:ADA8 2468:ADA9 2469:ADAA '
+        '246A:ADAB 246B:ADAC 246C:ADAD 246D:ADAE 246E:ADAF 246F:ADB0 2470:ADB1 '
+        '2471:ADB2 2472:ADB3 2473:ADB4 2160:ADB5 2161:ADB6 2162:ADB7 2163:ADB8 '
+        '2164:ADB9 2165:ADBA 2166:ADBB 2167:ADBC 2168:ADBD 2169:ADBE 3349:ADC0 '
+        '3314:ADC1 3322:ADC2 334D:ADC3 3318:ADC4 3327:ADC5 3303:ADC6 3336:ADC7 '
+        '3351:ADC8 3357:ADC9 330D:ADCA 3326:ADCB 3323:ADCC 332B:ADCD 334A:ADCE '
+        '333B:ADCF 339C:ADD0 339D:ADD1 339E:ADD2 338E:ADD3 338F:ADD4 33C4:ADD5 '
+        '33A1:ADD6 337B:ADDF 301D:ADE0 301F:ADE1 2116:ADE2 33CD:ADE3 2121:ADE4 '
+        '32A4:ADE5 32A5:ADE6 32A6:ADE7 32A7:ADE8 32A8:ADE9 3231:ADEA 3232:ADEB '
+        '3239:ADEC 337E:ADED 337D:ADEE 337C:ADEF 222E:ADF3 2211:ADF4 221F:ADF8 '
+        '22BF:ADF9'),
+    'EUC-KR': (
+        'EUC_KR',
+        'eeaf009011911d66acfaf7dd75494a83510ab07cc2e1d7653b8918aaef960b5c',
+        '327E:A2E8'),
+    'TIS-620': (
+        'WIN874',
+        '97fb5ae48fceaac5076172ee8f22ca7b8a0a0a0b895c0c75ad81727d269fcee3',
+        '00A0:A0'),
+}
+STORED_SOURCE = ('These are PostgreSQL\'s own conversions, measured on '
+                 'PostgreSQL 13 to 18 and read in its source for 10 to 12, '
+                 'where they are the same.')
+
+
+def postgres_only(codeset):
+    """POSTGRES_ONLY's sequences of an encoding as [(code point, bytes)], in
+    byte order."""
+    return [(int(cp, 16), bytes.fromhex(b)) for cp, b in
+            (entry.split(':') for entry in POSTGRES_ONLY[codeset][2].split())]
+
+
+def stored_texts(o, codesets_of):
+    """[(text, codeset or None, names)]: for each encoding of POSTGRES_ONLY
+    with a locale in codesets_of ({name: (codeset, corpus digest)}), what
+    PostgreSQL stores there, converting from UTF-8, that no measured order
+    places. A locale
+    measured over other strings than the list was worked out against is
+    NOT checked, since the list may not be what its order lacks."""
+    out = []
+    for codeset in sorted(POSTGRES_ONLY):
+        encoding, digest, _ = POSTGRES_ONLY[codeset]
+        names = sorted(n for n, (cs, _) in codesets_of.items() if cs == codeset)
+        fit = [n for n in names if codesets_of[n][1] == digest]
+        other = [n for n in names if codesets_of[n][1] != digest]
+        stored = postgres_only(codeset)
+        listed = ', '.join(map(shown, fit))
+        if fit and codeset == 'EUC-JP':
+            jp = dict(stored)
+            out.append((
+                f'!! Not measured in EUC-JP ({listed}): {len(stored)} byte '
+                'sequences that PostgreSQL stores in an EUC_JP database, for '
+                'characters it converts from UTF-8, are not among the strings '
+                'measured here, so where they sort is not known, nor whether '
+                f'that changed. Among them {chr(0x2116)} (U+2116), which '
+                f'PostgreSQL stores as {spaced(jp[0x2116])} rather than the 8F '
+                f'A2 F1 measured here, and {chr(0x2460)} (U+2460), '
+                f'{spaced(jp[0x2460])}.', codeset, fit))
+        elif fit and codeset == 'EUC-KR':
+            (cp, data), = stored
+            out.append((
+                f'!! Not measured in EUC-KR ({listed}): {spaced(data)}, which '
+                f'PostgreSQL stores in an EUC_KR database for {chr(cp)} '
+                f'(U+{cp:04X}), is not among the strings measured here, so '
+                'where it sorts is not known.', codeset, fit))
+        elif fit:
+            (cp, data), = stored
+            out.append((
+                f'!! Not measured in TIS-620 ({listed}): {spaced(data)}, which '
+                f'PostgreSQL stores in a WIN874 database for the no-break '
+                f'space (U+{cp:04X}), is not among the strings measured here. '
+                'PostgreSQL lets a TIS-620 locale serve a database of any '
+                'encoding, and in one other than WIN874 the bytes it compares '
+                'are not the ones measured here at all.', codeset, fit))
+        if other:
+            out.append((
+                f'!! NOT checked in {codeset} ({", ".join(map(shown, other))}): '
+                'which byte sequences PostgreSQL stores that were not measured '
+                'here, since these locales were measured over other strings '
+                'than the ones that list was made from.', None, other))
+    return out
+
+
+def stored_text_of(d, where):
+    return d['text'] if 'text' in d else f'{where} {STORED_SOURCE}'
+
+
+def stored_where(ctx):
+    return (f'Every such byte sequence is in {ctx["characters_to"]}.'
+            if ctx['characters_to'] else
+            'Pass --characters-to FILE for every such byte sequence.')
+
+
+def whole_words(text, indent, more):
+    """wrapped(), but a word longer than the line, such as the path of the
+    characters file audit.sh names, stays whole on a line of its own: cut,
+    it could not be copied."""
+    return textwrap.wrap(text, width=78, initial_indent=' ' * indent,
+                         subsequent_indent=' ' * more, break_on_hyphens=False,
+                         break_long_words=False)
+
+
+def stored_lines(items, ctx):
+    return ['\n'.join(whole_words(stored_text_of(d, stored_where(ctx)), 0, 3))
+            for d in items]
+
+
+def stored_summary(items, ctx):
+    return [line for d in items
+            for line in whole_words(stored_text_of(d, stored_where(ctx)), 5, 8)]
+
+
+def stored_notes(items):
+    return ['# ' + stored_text_of(d, 'Every such byte sequence is a row of '
+                                     'this file.').translate(TEXT_ESCAPES)
+            for d in items]
+
+
+def stored_rows(items):
+    out = []
+    for d in items:
+        encoding = POSTGRES_ONLY[d['codeset']][0]
+        article = 'an' if encoding[0] in 'AEIOU' else 'a'
+        out.append((d['names'], [
+            ('stored by PostgreSQL, not measured', f'U+{cp:04X}',
+             f'PostgreSQL stores {spaced(data)} in {article} {encoding} '
+             'database; the strings measured here do not hold it',
+             '-', '-', '-', '-') for cp, data in postgres_only(d['codeset'])]))
+    return out
+
+
+def nothing(items, ctx):
+    """What an output that takes a kind's findings elsewhere prints of it."""
+    return []
+
+
+def rows_of(items):
+    return [(d['names'], d['rows']) for d in items]
+
+
+def run_findings(o, n, warnings, partly, unmeasured, only_old,
+                 checks=(), refused=None, beside=()):
+    """[(kind, data)]: what the run says beside the changed locales -- its
+    warnings, the locales NOT known to be unchanged (glibc refused them, they
+    could not be measured, or they are not on the new machine) and those
+    unchanged only as far as measured, the checks of each machine beside the
+    order (control, money, PostgreSQL processes, how PostgreSQL uses each
+    locale), what the order does not place (beside), and what no comparison
+    measures."""
+    found = [('warning', {'text': text, 'wrap': wrap}) for text, wrap in warnings]
+    found += [(kind, {'text': text, 'warning': warning})
+              for kind, texts in checks for text, warning in texts]
+    found += [('partly', {'name': name,
+                          'count': max(o[name]['partly'], n[name]['partly'])})
+              for name in partly]
+    found += [('refused', {'name': name, 'sides': sides})
+              for name, sides in sorted((refused or {}).items())]
+    found += [('not measured', {'name': name, 'old': o[name], 'new': n[name]})
+              for name in unmeasured]
+    found += [('not on the new machine', {'name': name}) for name in only_old]
+    found += list(beside)
+    found.append(('closing', {'text': CLOSING}))
+    return found
+
+
+def wrapped(text, indent, more):
+    return textwrap.wrap(text, width=78, initial_indent=' ' * indent,
+                         subsequent_indent=' ' * more, break_on_hyphens=False)
+
+
+def filled(text, indent=0, more=3):
+    return textwrap.fill(text, width=78, initial_indent=' ' * indent,
+                         subsequent_indent=' ' * more, break_on_hyphens=False)
+
+
+def warning_lines(items, ctx):
+    return [textwrap.fill(d['text'], width=78, subsequent_indent='   ')
+            if d['wrap'] else d['text'] for d in items]
+
+
+def warning_summary(items, ctx):
+    return [line for d in items for line in wrapped(d['text'], 5, 8)]
+
+
+def notes(items):
+    return ['# ' + d['text'].translate(TEXT_ESCAPES) for d in items]
+
+
+def partly_lines(items, ctx):
+    return [textwrap.fill(
+        f'!! Unchanged only as far as measured: {len(items)} of them. In '
+        'each, the pairs of neighbouring characters counted in brackets '
+        'differ by less than a letter, and no pair could be found there to '
+        'tell whether by an accent or by case; a change from one to the '
+        'other would not show:', width=78, subsequent_indent='   '),
+        filled(', '.join(f'{shown(d["name"])} ({d["count"]})' for d in items),
+               2, 2)]
+
+
+def partly_summary(items, ctx):
+    return wrapped('!! Unchanged only as far as measured, because a change '
+                   'between an accent and case would not show in them: '
+                   + ', '.join(shown(d['name']) for d in items), 5, 8)
+
+
+def partly_rows(items):
+    return [([d['name']], [('unchanged only as far as measured', '-',
+                            f'{d["count"]} pair(s) of neighbours differ by less '
+                            'than a letter, and no pair could tell whether by '
+                            'an accent or by case', '-', '-', '-', '-')])
+            for d in items]
+
+
+def unmeasured_lines(items, ctx):
+    out = [f'!! Could not be measured, so NOT known to be unchanged: '
+           f'{len(items)} locale(s):']
+    for d in items:
+        name, o_, n_ = d['name'], d['old'], d['new']
+        before, now = o_.get('error'), n_.get('error')
+        if not before and not now:
+            out.append(f'  {shown(name)}: measured over different characters on '
+                       f'the two machines ({o_["chars"]:,} as {o_["codeset"]}, '
+                       f'then {n_["chars"]:,} as {n_["codeset"]}), so the '
+                       'orders cannot be compared')
+        elif before == now:
+            out.append(f'  {shown(name)} (both machines): {before}')
+        else:
+            for side, error in (('old', before), ('new', now)):
+                if error:
+                    out.append(f'  {shown(name)} ({side} machine): {error}')
+        also = also_known_as([name], ctx['pg_names'], ctx['o'])
+        if also:
+            out.append(filled(also, 4, 6))
+    return out
+
+
+def unmeasured_summary(items, ctx):
+    names = [d['name'] for d in items]
+    out = wrapped('could not be measured: ' + ', '.join(map(shown, names)), 7, 9)
+    also = also_known_as(names, ctx['pg_names'], ctx['o'])
+    if also:
+        out += wrapped(also, 9, 11)
+    return out
+
+
+def unmeasured_rows(items):
+    out = []
+    for d in items:
+        before, now = d['old'].get('error'), d['new'].get('error')
+        if not before and not now:
+            why = 'measured over different characters on the two machines'
+        elif before == now:
+            why = f'both machines: {before}'
+        else:
+            why = '; '.join(f'{side} machine: {error}' for side, error
+                            in (('old', before), ('new', now)) if error)
+        out.append(([d['name']], [('not measured', '-',
+                                   why.translate(TEXT_ESCAPES), '-', '-', '-',
+                                   '-')]))
+    return out
+
+
+def only_old_lines(items, ctx):
+    # Not measured on the new machine is not measured: a machine missing
+    # its language packs would otherwise look like a clean upgrade.
+    return [textwrap.fill(
+        f'!! Not on the new machine, so NOT known to be unchanged: '
+        f'{len(items)} locale(s). Either the upgrade removes them or '
+        'their language pack is not installed there; a database or '
+        'collation that uses one cannot use it on the new machine. If a '
+        'language pack is missing, install it and measure the new machine '
+        'again.', width=78, subsequent_indent='   ')] + [
+        f'  {shown(d["name"])}' for d in items]
+
+
+def only_old_summary(items, ctx):
+    return wrapped('not on the new machine, so a database or collation that '
+                   'uses one cannot use it there: '
+                   + ', '.join(shown(d['name']) for d in items), 7, 9)
+
+
+def only_old_rows(items):
+    return [([d['name']], [('not on the new machine', '-', '-', '-', '-', '-',
+                            '-')]) for d in items]
+
+
+def check_lines(items, ctx):
+    return [filled(d['text']) for d in items]
+
+
+def check_summary(items, ctx):
+    return [line for d in items for line in wrapped(d['text'], 5, 8)]
+
+
+def closing_lines(items, ctx):
+    return [textwrap.fill(d['text'], width=78, subsequent_indent='   ')
+            for d in items]
+
+
+def closing_summary(items, ctx):
+    return [line for d in items for line in wrapped(d['text'], 5, 8)]
+
+
+# kind: (lines of the report, lines of the summary, what the file gets), each
+# from every finding of the kind at once. The file gets ([locale], rows)
+# for a locale, which are sorted with the changes, or a note: a line under
+# the rows, starting "# ".
+RUN_KINDS = {
+    'warning': (warning_lines, warning_summary, notes),
+    'partly': (partly_lines, partly_summary, partly_rows),
+    'not measured': (unmeasured_lines, unmeasured_summary, unmeasured_rows),
+    'not on the new machine': (only_old_lines, only_old_summary, only_old_rows),
+    'control': (check_lines, check_summary, notes),
+    'postgres libc above': (check_lines, check_summary, notes),
+    'money': (check_lines, check_summary, notes),
+    'postgres libc': (check_lines, check_summary, notes),
+    'refused': (refused_lines, refused_summary, refused_rows),
+    'postgres use': (check_lines, check_summary, notes),
+    'postgres use rows': (nothing, nothing, rows_of),
+    'unmeasured bytes': (stored_lines, stored_summary, stored_notes),
+    'unmeasured bytes rows': (nothing, nothing, stored_rows),
+    'closing': (closing_lines, closing_summary, notes),
+}
+
+
+class Drawn:
+    """One output's view of the run's findings, taken a kind at a time in
+    the order the output prints them. done() raises if a kind present was
+    never taken, so a finding cannot drop out of one output unseen."""
+
+    def __init__(self, found, part, ctx=None):
+        self.part, self.ctx, self.by_kind = part, ctx, {}
+        for kind, d in found:
+            printer(RUN_KINDS, kind, part)
+            self.by_kind.setdefault(kind, []).append(d)
+        self.left = set(self.by_kind)
+
+    def count(self, kind):
+        return len(self.by_kind.get(kind, ()))
+
+    def __call__(self, kind):
+        self.left.discard(kind)
+        items = self.by_kind.get(kind)
+        if not items:
+            return []
+        how = printer(RUN_KINDS, kind, self.part)
+        return how(items) if self.part == FILE else how(items, self.ctx)
+
+    def done(self):
+        if self.left:
+            raise LookupError(f'findings never printed: {sorted(self.left)}')
 
 
 def machine_label(d):
@@ -1606,25 +3818,34 @@ def tag_version(tag):
     return (int(m[1]), int(m[2])) if m else None
 
 
-def wrapped(text, indent, more):
-    return textwrap.wrap(text, width=78, initial_indent=' ' * indent,
-                         subsequent_indent=' ' * more, break_on_hyphens=False)
+ALSO = 'also, in PostgreSQL: '
 
 
-def summary_lines(old, new, groups, pg_names, unmeasured, only_old, partly,
-                  totals, warnings):
+def also_rows(names, pg_names, locales):
+    """The file's row of the other names PostgreSQL knows a group by, the
+    text the report prints under its heading; none when there is none."""
+    also = also_known_as(names, pg_names, locales)
+    if not also:
+        return []
+    return [('also in PostgreSQL', '-', also[len(ALSO):].translate(TEXT_ESCAPES),
+             '-', '-', '-', '-')]
+
+
+def summary_lines(old, new, groups, run, totals, characters_to=None):
     """The report in brief, for the summary audit.sh prints at the end.
 
     Every locale is named, and so are the names PostgreSQL knows it by: a
     reader looks a locale up by the name the database uses, and "ko_KR" in a
     UTF-8 database is ko_KR.utf8. What moved is said in one phrase; the
-    characters' names and how each pair is told apart are in the report. The
-    report's warnings are here whole, so the summary needs no other copy.
+    characters' names and how each pair is told apart are in the report,
+    and every one of them in the characters file, named under the changes.
+    The report's warnings are here whole, so the summary needs no other copy.
     """
     o, n = old['locales'], new['locales']
     out = [f'   ({machine_label(old)} -> {machine_label(new)})']
-    for text in warnings:
-        out += wrapped(text, 5, 8)
+    out += run('warning')
+    out += run('control')
+    out += run('postgres libc above')
     count = sum(len(names) for names, brief in groups)
     if groups:
         out.append(f'     {count} locale(s) sort differently -- reindex what '
@@ -1634,34 +3855,45 @@ def summary_lines(old, new, groups, pg_names, unmeasured, only_old, partly,
             # names end and what moved begins is plain.
             out += wrapped(heading(names, o, n), 7, 7)
             out += wrapped(brief, 9, 11)
-            also = also_known_as(names, pg_names, o)
+            also = also_known_as(names, run.ctx['pg_names'], o)
             if also:
                 out += wrapped(also, 9, 11)
+        if characters_to:
+            # On a line of its own, whole, like every other list audit.sh names.
+            out.append('       every character and pair:')
+            out.append('         ' + characters_to)
     else:
         out.append('     no locale measured on both machines sorts differently')
-    if unmeasured or only_old:
-        out.append(f'     NOT known to be unchanged: '
-                   f'{len(unmeasured) + len(only_old)} locale(s)')
-        if unmeasured:
-            out += wrapped('could not be measured: '
-                           + ', '.join(shown(x) for x in unmeasured), 7, 9)
-            also = also_known_as(unmeasured, pg_names, o)
-            if also:
-                out += wrapped(also, 9, 11)
-        if only_old:
-            out += wrapped('not on the new machine, so a database or collation '
-                           'that uses one cannot use it there: '
-                           + ', '.join(shown(x) for x in only_old), 7, 9)
-    if partly:
-        out += wrapped('!! Unchanged only as far as measured, because a change '
-                       'between an accent and case would not show in them: '
-                       + ', '.join(shown(x) for x in partly), 5, 8)
+    unknown = (run.count('refused') + run.count('not measured')
+               + run.count('not on the new machine'))
+    if unknown:
+        out.append(f'     NOT known to be unchanged: {unknown} locale(s)')
+    out += run('refused')
+    out += run('not measured')
+    out += run('not on the new machine')
+    out += run('partly')
     out += wrapped(totals, 5, 7)
-    out += wrapped(CLOSING, 5, 8)
+    out += run('money')
+    out += run('postgres libc')
+    out += run('postgres use')
+    out += run('postgres use rows')
+    out += run('unmeasured bytes')
+    out += run('unmeasured bytes rows')
+    out += run('closing')
+    run.done()
     return out
 
 
-def compare(old_path, new_path, tags=None, summary_to=None):
+def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None):
+    if characters_to:
+        # An earlier run's list under this name would read as this run's
+        # answer if this one is refused or gives up: it goes first.
+        try:
+            os.remove(characters_to)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            die(f'cannot write {characters_to}: {e}')
     digest = corpus_digest()
     old, old_raw = load(old_path, digest)
     new, new_raw = load(new_path, digest)
@@ -1709,8 +3941,13 @@ def compare(old_path, new_path, tags=None, summary_to=None):
 
     o, n = old['locales'], new['locales']
     both = sorted(set(o) & set(n))
+    # A locale glibc refuses on either side is named as that, ahead of what
+    # its order says: a database that uses it does not open there.
+    refused = refused_by_glibc(old, new, both)
     changed, same, unmeasured = [], [], []
     for name in both:
+        if name in refused:
+            continue
         if 'error' in o[name] or 'error' in n[name]:
             unmeasured.append(name)
         elif o[name]['corpus'] != n[name]['corpus']:
@@ -1727,18 +3964,20 @@ def compare(old_path, new_path, tags=None, summary_to=None):
 
     # Locales whose measurements are the same on both sides changed the same
     # way, so each change is worked out once; then every locale whose change
-    # reads the same is printed under one heading. All of it is worked out
-    # before the first line is printed, so a record that turns out damaged
-    # stops the run before any part of a report is on the screen.
+    # reads the same is printed under one heading, and every locale measured
+    # alike gets the file's rows under one label. All three outputs are
+    # worked out before anything is written, so a record that turns out
+    # damaged stops the run before any part of a report is on the screen.
     measured_alike = {}
     for name in changed:
         key = (o[name]['order'], o[name]['pairs'], n[name]['order'], n[name]['pairs'])
         measured_alike.setdefault(key, []).append(name)
-    reads_alike, briefs = {}, {}
+    reads_alike, briefs, rows = {}, {}, []
     for names in measured_alike.values():
-        lines, brief = describe_change(old, new, o[names[0]], n[names[0]])
+        lines, brief, found = describe_change(old, new, o[names[0]], n[names[0]])
         reads_alike.setdefault(tuple(lines), []).extend(names)
         briefs[tuple(lines)] = brief
+        rows.append((sorted(names), found))
     groups = sorted(reads_alike.items(), key=lambda item: sorted(item[1]))
     # The names PostgreSQL gives the locales, taken from the old machine: a
     # cluster being upgraded had its collations created there. A locale that
@@ -1750,9 +3989,10 @@ def compare(old_path, new_path, tags=None, summary_to=None):
     # accent and case among them would not show.
     partly = [name for name in same if o[name]['partly'] or n[name]['partly']]
     in_part = f' ({len(partly)} of them only as far as measured)' if partly else ''
+    in_refused = f'{len(refused)} refused by glibc, ' if refused else ''
     totals = (f'Of the {len(o)} locale(s) on the old machine: {len(changed)} '
               f'changed, {len(same)} unchanged{in_part}, {len(unmeasured)} not '
-              f'measured, {len(only_old)} not on the new machine.')
+              f'measured, {in_refused}{len(only_old)} not on the new machine.')
     warnings = []   # (text, wrapped in the report)
     if build_order == 0 or (old['glibc_build'] and old['glibc_build'] == new['glibc_build']):
         warnings.append(('!! Both machines run the same glibc build. This '
@@ -1765,90 +4005,163 @@ def compare(old_path, new_path, tags=None, summary_to=None):
             'first. This may also compare two machines rather than an upgrade.',
             True))
     warnings += [(text, True) for text in unchecked]
+    libc = libc_texts(old, new)
+    checks = (('control', control_texts(old, new)),
+              ('postgres libc above',
+               [(text, warning) for text, warning, above in libc if above]),
+              ('money', money_texts(old, new, both)),
+              ('postgres libc',
+               [(text, warning) for text, warning, above in libc if not above]))
+    use, use_rows = use_texts(old, new, both, refused, only_new)
+    checks += (('postgres use', use),)
+    # What PostgreSQL stores in the locales measured on both machines that
+    # their order does not place. It needs only the order part, so a file
+    # of any format gets it.
+    stored = stored_texts(o, {name: (o[name]['codeset'], o[name]['corpus'])
+                              for name in same + changed})
+    beside = [('postgres use rows', d) for d in use_rows]
+    # A locale refused on both sides keeps no encoding in its order on
+    # either (load() refuses one that does), so it is never named here; nor
+    # is one only on the new machine that glibc refuses there. One only on
+    # the new machine serves the databases made there.
+    other = other_encoding_text(both + only_new, o, n)
+    if other:
+        beside.append(('unmeasured bytes', {'text': other}))
+    beside += [('unmeasured bytes', {'text': text}) for text, _, _ in stored]
+    if any(codeset for _, codeset, _ in stored):
+        beside.append(('unmeasured bytes', {'note': True}))
+    beside += [('unmeasured bytes rows', {'names': names, 'codeset': codeset})
+               for _, codeset, names in stored if codeset]
+    found = run_findings(o, n, warnings, partly, unmeasured, only_old, checks,
+                         refused, beside)
+    ctx = {'pg_names': pg_names, 'o': o, 'characters_to': characters_to}
+
+    report = [f'Old machine: {machine_label(old)}, {len(old["locales"])} locale(s)',
+              f'New machine: {machine_label(new)}, {len(new["locales"])} locale(s)']
+    run = Drawn(found, REPORT, ctx)
+    report += run('warning')
+    report += run('control')
+    report += run('postgres libc above')
+    report += ['', f'Sort order CHANGED in {len(changed)} locale(s):']
+    for lines, names in groups:
+        report += ['', filled(heading(names, o, n), 2, 2)]
+        also = also_known_as(names, pg_names, o)
+        if also:
+            report.append(filled(also, 4, 6))
+        report += [f'    {line}' for line in lines]
+    if changed:
+        # The lists above stop at LIST_LIMIT; say where all of it is.
+        report.append('')
+        if characters_to:
+            report += ['Every character and pair found, by locale:',
+                       f'  {characters_to}']
+        else:
+            report.append('Pass --characters-to FILE for every character and '
+                          'pair found.')
+    report += ['', f'Unchanged: {len(same)} locale(s).']
+    report += run('partly')
+    report += run('refused')
+    report += run('not measured')
+    report += run('not on the new machine')
+    report.append(f'Only on the new machine: {len(only_new)} locale(s).')
+    report += [f'  {shown(name)}' for name in only_new]
+    report += ['', totals]
+    report += run('money')
+    report += run('postgres libc')
+    report += run('postgres use')
+    report += run('postgres use rows')
+    report += run('unmeasured bytes')
+    report += run('unmeasured bytes rows')
+    report += run('closing')
+    run.done()
+    brief = None
+    if summary_to:
+        brief = summary_lines(
+            old, new, [(names, briefs[lines]) for lines, names in groups],
+            Drawn(found, SUMMARY, ctx), totals, characters_to)
+    file_notes = []
+    if characters_to:
+        # The locales NOT known to be unchanged, and those unchanged only as
+        # far as measured, have rows of their own, so that the file does not
+        # read them as unchanged; the warnings and what is not measured are
+        # notes under the rows, as in the report.
+        run = Drawn(found, FILE)
+        for kind in ('partly', 'refused', 'not measured',
+                     'not on the new machine', 'postgres use rows',
+                     'unmeasured bytes rows'):
+            rows += run(kind)
+        file_notes = (run('warning') + run('control')
+                      + run('postgres libc above') + run('money')
+                      + run('postgres libc') + run('postgres use')
+                      + run('unmeasured bytes') + run('closing'))
+        run.done()
+        # One group per set of names: a locale can have rows of several
+        # findings (unchanged only as far as measured, and an error of
+        # upper() beside it), and they are read as one group.
+        merged = {}
+        for names, found_rows in rows:
+            merged.setdefault(tuple(names), []).extend(found_rows)
+        # Each group closes with the names PostgreSQL gives it, as the report
+        # prints them under its heading: a reader looks a locale up by the
+        # name the database uses.
+        rows = [(list(names), found_rows + also_rows(list(names), pg_names, o))
+                for names, found_rows in merged.items()]
+
+    partial = characters_to + '.partial' if characters_to else None
+    written = []    # what this run wrote, removed again if it gives up
+
+    def give_up(msg):
+        # A list half written, or whole beside a summary that is not, is not
+        # this run's answer: nothing is left under either name, nor a summary
+        # that names a list that is not there.
+        for path in [partial] + written:
+            if path:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+        die(msg)
+
+    if characters_to:
+        # Every character and pair, nothing cut at LIST_LIMIT: the report and
+        # the summary say how many and name this file. Written first, like
+        # the summary, so that a list that cannot be written stops the run
+        # before anything points at it; written under another name, and given
+        # its own only once the summary is written too. The last line counts
+        # what is above it, so that a file cut short says so by itself.
+        try:
+            with open(partial, 'w', encoding='utf-8') as f:
+                f.write(f'# Step 11, {machine_label(old)} -> {machine_label(new)}: '
+                        'every character and pair found, by locale.\n')
+                f.write('locales\tfinding\tcharacters\thow\ttest\tbefore\tnow\tmeasured\n')
+                count = 0
+                for names, found_rows in sorted(rows):
+                    label = ','.join(shown(x).translate(TSV_ESCAPES) for x in names)
+                    for row in found_rows:
+                        f.write(label + '\t' + '\t'.join(row) + '\n')
+                        count += 1
+                for note in file_notes:
+                    f.write(note + '\n')
+                f.write(f'# end: {len(rows)} locale group(s), {count} row(s)\n')
+        except OSError as e:
+            give_up(f'cannot write {characters_to}: {e}')
     if summary_to:
         # Written before the report, so that a summary that cannot be written
         # stops the run with no report on the screen, like damage does.
-        brief = summary_lines(
-            old, new, [(names, briefs[lines]) for lines, names in groups],
-            pg_names, unmeasured, only_old, partly, totals,
-            [text for text, wrap in warnings])
         try:
             with open(summary_to, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(brief) + '\n')
         except OSError as e:
-            die(f'cannot write {summary_to}: {e}')
+            give_up(f'cannot write {summary_to}: {e}')
+        written.append(summary_to)
+    if characters_to:
+        try:
+            os.replace(partial, characters_to)
+        except OSError as e:
+            give_up(f'cannot write {characters_to}: {e}')
 
-    print(f'Old machine: {machine_label(old)}, {len(old["locales"])} locale(s)')
-    print(f'New machine: {machine_label(new)}, {len(new["locales"])} locale(s)')
-    for text, wrap in warnings:
-        print(textwrap.fill(text, width=78, subsequent_indent='   ')
-              if wrap else text)
-    print()
-    print(f'Sort order CHANGED in {len(changed)} locale(s):')
-    for lines, names in groups:
-        print()
-        print(textwrap.fill(heading(names, o, n), width=78, initial_indent='  ',
-                            subsequent_indent='  ', break_on_hyphens=False))
-        also = also_known_as(names, pg_names, o)
-        if also:
-            print(textwrap.fill(also, width=78, initial_indent='    ',
-                                subsequent_indent='      ',
-                                break_on_hyphens=False))
-        for line in lines:
-            print(f'    {line}')
-    print()
-    print(f'Unchanged: {len(same)} locale(s).')
-    if partly:
-        print(textwrap.fill(
-            f'!! Unchanged only as far as measured: {len(partly)} of them. In '
-            'each, the pairs of neighbouring characters counted in brackets '
-            'differ by less than a letter, and no pair could be found there to '
-            'tell whether by an accent or by case; a change from one to the '
-            'other would not show:', width=78, subsequent_indent='   '))
-        print(textwrap.fill(
-            ', '.join(f'{shown(name)} ({max(o[name]["partly"], n[name]["partly"])})'
-                      for name in partly),
-            width=78, initial_indent='  ', subsequent_indent='  ',
-            break_on_hyphens=False))
-    if unmeasured:
-        print(f'!! Could not be measured, so NOT known to be unchanged: '
-              f'{len(unmeasured)} locale(s):')
-        for name in unmeasured:
-            before, now = o[name].get('error'), n[name].get('error')
-            if not before and not now:
-                print(f'  {shown(name)}: measured over different characters on '
-                      f'the two machines ({o[name]["chars"]:,} as '
-                      f'{o[name]["codeset"]}, then {n[name]["chars"]:,} as '
-                      f'{n[name]["codeset"]}), so the orders cannot be compared')
-            elif before == now:
-                print(f'  {shown(name)} (both machines): {before}')
-            else:
-                for side, error in (('old', before), ('new', now)):
-                    if error:
-                        print(f'  {shown(name)} ({side} machine): {error}')
-            also = also_known_as([name], pg_names, o)
-            if also:
-                print(textwrap.fill(also, width=78, initial_indent='    ',
-                                    subsequent_indent='      ',
-                                    break_on_hyphens=False))
-    if only_old:
-        # Not measured on the new machine is not measured: a machine missing
-        # its language packs would otherwise look like a clean upgrade.
-        print(textwrap.fill(
-            f'!! Not on the new machine, so NOT known to be unchanged: '
-            f'{len(only_old)} locale(s). Either the upgrade removes them or '
-            'their language pack is not installed there; a database or '
-            'collation that uses one cannot use it on the new machine. If a '
-            'language pack is missing, install it and measure the new machine '
-            'again.', width=78, subsequent_indent='   '))
-        for name in only_old:
-            print(f'  {shown(name)}')
-    print(f'Only on the new machine: {len(only_new)} locale(s).')
-    for name in only_new:
-        print(f'  {shown(name)}')
-    print()
-    print(totals)
-    print(textwrap.fill(CLOSING, width=78, subsequent_indent='   '))
+    for line in report:
+        print(line)
     return 0
 
 
@@ -1870,6 +4183,9 @@ def main():
     ap.add_argument('--summary-to', metavar='FILE',
                     help='with --compare: also write the report in brief to '
                          'FILE, for the summary audit.sh prints')
+    ap.add_argument('--characters-to', metavar='FILE',
+                    help='with --compare: also write every character and pair '
+                         'found, by locale, to FILE (tab-separated)')
     ap.add_argument('--jobs', type=int,
                     help='processes to measure with (default: one per CPU, '
                          'fewer when half the free memory does not hold them '
@@ -1882,8 +4198,8 @@ def main():
                     help='check a file --extract wrote and lay it out in DIR, '
                          'which must not exist, for audit.sh')
     args = ap.parse_args()
-    if (args.tags or args.summary_to) and not args.compare:
-        die('--tags and --summary-to go with --compare')
+    if (args.tags or args.summary_to or args.characters_to) and not args.compare:
+        die('--tags, --summary-to and --characters-to go with --compare')
     if sum(map(bool, (args.extract, args.compare, args.unpack))) > 1:
         die('--extract, --compare and --unpack are three different runs; '
             'give one')
@@ -1891,7 +4207,8 @@ def main():
         return unpack(*args.unpack)
     if args.compare:
         return compare(*args.compare, tags=args.tags,
-                       summary_to=args.summary_to)
+                       summary_to=args.summary_to,
+                       characters_to=args.characters_to)
     if args.jobs is not None and args.jobs < 1:
         die('--jobs must be at least 1')
     jobs = args.jobs or default_jobs()

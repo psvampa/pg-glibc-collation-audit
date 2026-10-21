@@ -8,8 +8,7 @@ B-tree indexes on `text`/`varchar`/`char`/`citext` columns need a `REINDEX`
 after an OS upgrade or a physical migration?
 
 **PostgreSQL will not tell you.** `pg_collation.collversion` stores glibc's
-version string, so it warns on *any* version bump whether or not your data
-would sort differently, and stays silent when a distro patches collation data
+version string, so it stays silent when a distro patches collation data
 without moving that string. It is a version comparison, not a check of the
 real sort rules
 ([background](https://wiki.postgresql.org/wiki/Locale_data_changes)).
@@ -36,13 +35,14 @@ which sorts real strings on real nodes, and there are others.
 
 **On the machine that runs `audit.sh`** — yours, or any other:
 
-- `git`, `python3` (standard library only) and `bash`
+- `git`, `python3` 3.7 or newer (standard library only) and `bash`
 - network the first time, to clone glibc (about 370 MB)
 - `gpg`, optional, to check the signature of each glibc tag
 
 **On each server, for the extended run of command 1:**
 
-- `ssh` access, and `sudo` for one package install
+- `ssh` access, and `sudo` for one package install and to run the
+  measurement as the user PostgreSQL runs as
 - Python 3.6 or newer (on RHEL8, `/usr/libexec/platform-python`)
 - `glibc-locale-source`, of the exact glibc build the server runs
 - the language packs of the locales your databases use
@@ -68,8 +68,7 @@ cd pg-glibc-collation-audit
 
 Run `ldd --version` on the old and the new node. Those two numbers are the
 tags you pass, written as `glibc-<version>`. **Old first, new second** — a
-reversed pair is refused rather than answered, because backwards every step
-still prints a plausible clean result.
+reversed pair is refused rather than answered.
 
 Any two versions are allowed, however far apart, and nothing in the tool looks
 at the distance between them. That is the answer for a direct upgrade. If you
@@ -137,9 +136,12 @@ ssh -t el9 'sudo dnf install -y glibc-locale-source-$(rpm -q --qf "%{VERSION}-%{
 
 # 2. measure each machine and pack the result into one file: the script
 #    travels over the connection and the file comes back the same way.
+#    It runs as postgres, so that it can see which C library PostgreSQL
+#    runs unless /proc hides other users' processes; sudo cannot ask for a
+#    password here, and -n makes sure it never waits for one.
 #    On RHEL8 python3 may be missing; platform-python is always there
-ssh el8 /usr/libexec/platform-python - --extract < scripts/locale_order.py > old.tar
-ssh el9 python3 - --extract < scripts/locale_order.py > new.tar
+ssh el8 sudo -n -u postgres /usr/libexec/platform-python - --extract < scripts/locale_order.py > old.tar
+ssh el9 sudo -n -u postgres python3 - --extract < scripts/locale_order.py > new.tar
 
 # 3. compare, wherever this checkout is
 ./audit.sh glibc-2.28 glibc-2.34 --old-node old.tar --new-node new.tar
@@ -148,6 +150,10 @@ ssh el9 python3 - --extract < scripts/locale_order.py > new.tar
 - `el8` and `el9` are placeholders for your two machines, the old one and the
   new one. Replace them, in every line above, with the names you reach those
   machines by over ssh, such as `user@host` or a name from `~/.ssh/config`.
+- If `sudo` says a password is required, or that the user postgres is
+  unknown, run the same line without `sudo -n -u postgres`. The measurement
+  is the same; the summary then says PostgreSQL's processes were not checked
+  on that machine.
 - You can also copy `scripts/locale_order.py` to the machine, run
   `python3 locale_order.py --extract > old.tar` there and bring the file back.
 - If the repository no longer has the sources of that exact build, dnf says
@@ -214,9 +220,9 @@ A worked example for each pair is in
 |---|---|---|---|
 | `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | 🟢 No difference | steps 1–3 — `sv_FI` only via `copy`; the second pair is cleared by step 11's measurement |
 | `or_IN` | 🔴 **Changed** | 🟢 No difference | steps 1–3; the second pair is cleared by step 11's measurement |
-| `ko_KR` | 🔴 **Changed** | 🟢 No difference | **step 5** — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement |
+| `ko_KR` | 🔴 **Changed** | 🟢 No difference | step 4 flags it and **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement, as far as it can measure |
 | `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | **step 2 warns** and cannot settle it <sup>†</sup> — the node-to-node check settles the data, step 11 or `sql/c_utf8_probe.sql` the order |
-| `th_TH` | 🟢 No difference | 🔴 **Changed** | steps 1–3; the first pair is cleared by step 11's measurement |
+| `th_TH` | 🟢 No difference | 🔴 **Changed** | steps 1–3; the first pair is cleared by step 11's measurement, as far as it can measure |
 | `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap; the first pair is cleared by step 11's measurement |
 | CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>the base table a locale inherits unless it<br>defines its own order | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
 | `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | step 4 flagged them via `iso14651_t1_common`; cleared by measurement |
@@ -244,11 +250,14 @@ evidence is in
 
 ## Scope
 
-Sort order (`LC_COLLATE`) only, and in PostgreSQL terms the **`libc` provider**
-only. Nothing about `LC_CTYPE` (`upper()`, `lower()`, pattern matching), ICU,
-or the `builtin` provider — and the two pairs named above. `LC_CTYPE` is the
-exclusion that can still cost you an index, and no step of this tool audits
-it.
+Sort order (`LC_COLLATE`) only, besides the decimals of the `money` type that
+step 11 compares, and in PostgreSQL terms the **`libc` provider** only. Of
+`LC_CTYPE`, only whether each machine can convert a locale's text, which
+`upper()`, `lower()` and `ILIKE` need in a database whose encoding has
+characters of more than one byte; nothing about what they return, ICU, or the
+`builtin` provider — and the two pairs named above. What `LC_CTYPE`
+returns is the exclusion that can still cost you an index, and no step of
+this tool audits it.
 
 Full scope, including the `builtin` provider as a mitigation:
 [docs/scope.md](docs/scope.md). The seven things to know before acting on a
@@ -264,7 +273,7 @@ short version:
 - [docs/results.md](docs/results.md) — the evidence behind each verdict, both worked examples, tested-on
 - [docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md) — the empirical check
 - [docs/limitations.md](docs/limitations.md) — the seven things to know before acting on a clean result
-- [docs/scope.md](docs/scope.md) — what it audits, and the `builtin` provider as a way out
+- [docs/scope.md](docs/scope.md) — what it audits, and the `builtin` provider as a mitigation
 - [docs/requirements.md](docs/requirements.md) — what each run needs, on your machine and on each server, and the three setup traps
 - [docs/glossary.md](docs/glossary.md) — `copy` graph, blast radius, hunk, tier, ellipsis range, role swap, build id, measured order, level, contraction
 - [examples/](examples/README.md) — real output of every command, and which file is which
