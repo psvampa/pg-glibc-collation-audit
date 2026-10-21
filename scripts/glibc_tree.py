@@ -30,6 +30,7 @@ import operator
 import os
 import re
 
+import diff_distro_locales as dd
 import glibc_locale_data as g
 import glibc_reader as gr
 import reader_cache as rc
@@ -226,17 +227,18 @@ class Tree(object):
             if fatal is not None:
                 kind, what = fatal[0], fatal[1]
                 if kind == 'missing':
-                    out[name] = (f"localedef cannot open "
-                                 f"{_name(what) if what else '?'}")
+                    file = '?' if what is None else dd.shown(_name(what))
+                    out[name] = f"localedef cannot open {file}"
                 else:
                     out[name] = f"localedef stops ({kind})"
             elif unsettled:
                 f, line, why = unsettled[0]
-                out[name] = f"{f}:{line}: {why}"
+                out[name] = f"{dd.shown(f)}:{line}: {why}"
             elif cut:
                 f, line = cut[0]
-                out[name] = (f"localedef stops reading {_name(f)} at line "
-                             f"{line}, before the end of the file")
+                out[name] = (f"localedef stops reading "
+                             f"{dd.shown(_name(f))} at line {line}, before "
+                             f"the end of the file")
             elif collate is None and self.defines(name):
                 out[name] = "localedef stores no LC_COLLATE for it"
         self._unresolved = out

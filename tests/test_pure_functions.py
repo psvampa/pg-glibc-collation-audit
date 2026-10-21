@@ -1623,8 +1623,10 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
 class StepFourWithoutRanges(unittest.TestCase):
     """The path of step 4 where nothing uses an ellipsis range writes its list
     too, and says what the other path says: the reading rule, and which
-    aliases it leaves out because their name is not ASCII (backlog 13.1).
-    Driven directly, because no pinned tag reaches it with such an alias."""
+    aliases it leaves out because their name is not ASCII (backlog 13.1);
+    and how flag_algorithmic_ranges.py names a file it could not open, in
+    step 4 and in steps 9 and 10. Driven directly, because no pinned tag
+    reaches either."""
 
     class _Tree(object):
         """What glibc_tree.Tree answers for three locales: nb_NO copies a
@@ -1651,6 +1653,45 @@ class StepFourWithoutRanges(unittest.TestCase):
 
         def roots(self, name, roots):
             raise AssertionError('no range, so no closure to walk')
+
+    def test_a_file_name_that_is_not_one_plain_word_is_quoted(self):
+        """The empty name (cases c17 and c54), a blank, a newline, a
+        control character, a comma, a character that draws as nothing
+        visible and a combining mark, named quoted (dd.shown) in both
+        places flag_algorithmic_ranges.py names a missing `copy` or
+        `include` target:
+        step 4's `!!` list, and C's line in steps 9 and 10. Not as
+        nothing, not as two names, and not on a second line, which ends
+        what audit.sh relays from either (false-negative-reviewer,
+        rounds 1 to 3 of 13.44)."""
+        tree = self._Tree()
+        tree.unresolved = lambda: {'nb_NO': "localedef cannot open ''"}
+        names = ['', ' ', 'a\nb', 'c\x01', 'x,y', 'plain', '\u3164',
+                 'e\u0301']
+        tree.missing = lambda: {'nb_NO': names}
+        out = io.StringIO()
+        with mock.patch.object(g, 'write_list', return_value='/x'), \
+                contextlib.redirect_stdout(out):
+            fa.report(tree, {}, 'fake', 'list.txt', [])
+        self.assertIn("so what they carry was never read:\n"
+                      "     '', ' ', 'a\\nb', 'c\\x01', 'e\\u0301', "
+                      "plain, 'x,y', '\\u3164'\n"
+                      "   1 locale(s) reach one.", out.getvalue())
+
+        class Backported(object):
+            names = ['C']
+
+            def style(self, name):
+                return 'copy-only'
+
+            def missing(self):
+                return {'C': names}
+        with contextlib.redirect_stdout(io.StringIO()):
+            found = fa.report_backported(Backported())
+        self.assertIn("it copies '', ' ', 'a\\nb', 'c\\x01', 'e\\u0301', "
+                      "plain, 'x,y', '\\u3164', which is NOT in this "
+                      "corpus", flat(found['C']))
+        self.assertNotIn('\n', found['C'])
 
     def test_it_states_the_rule_and_the_aliases_it_leaves_out(self):
         aliases = {'norwegian': 'nb_NO.ISO-8859-1',

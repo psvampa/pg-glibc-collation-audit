@@ -472,6 +472,18 @@ class ReaderFailureModes(unittest.TestCase):
         r = self.run_one(b'LC_TIME\ncopy "gone"\nEND LC_TIME\n')
         self.assertEqual(('missing', b'gone'), (r.fatal.kind, r.fatal.name))
 
+    def test_a_translit_include_name_ends_at_its_first_nul(self):
+        # A word as the name, as glibc reads it: a C string (backlog 13.44,
+        # cases c52 and c54 measured). Two NULs, so the cut is the first.
+        tl = (b'LC_CTYPE\ntranslit_start\ninclude %s;""\ntranslit_end\n'
+              b'END LC_CTYPE\n')
+        ct = b'LC_CTYPE\nEND LC_CTYPE\n'
+        r = self.run_one(tl % b'x\0y\0z', x=ct, **{'x\0y': ct})
+        self.assertIsNone(r.fatal)
+        self.assertEqual([b'm', b'x'], [fr.name for fr in r.reads])
+        r = self.run_one(tl % b'\0x', x=ct)
+        self.assertEqual(('missing', b''), (r.fatal.kind, r.fatal.name))
+
     def test_a_copied_file_without_the_category_ends_the_section_early(self):
         text = b'LC_COLLATE\ncopy "t"\nEND LC_COLLATE\n'
         r = self.run_one(text, t=b'LC_TIME\nEND LC_TIME\n')
@@ -1349,19 +1361,46 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
             'zz_NOC': _HEAD + b'LC_CTYPE\nEND LC_CTYPE\n',
             'zz_RS': _HEAD + (b'LC_COLLATE\ncopy "iso14651_t1"\n'
                               b'reorder-sections-after <LATIN> <X>\n'
-                              b'END LC_COLLATE\n')})
+                              b'END LC_COLLATE\n'),
+            # A translit include whose name opens with a NUL: the empty
+            # name, which localedef cannot open (case c54), named quoted.
+            'zz_EM': _HEAD + (b'LC_CTYPE\ntranslit_start\ninclude '
+                              b'\0zz_NOC;""\ntranslit_end\nEND LC_CTYPE\n'
+                              b'LC_COLLATE\ncopy "iso14651_t1"\n'
+                              b'END LC_COLLATE\n'),
+            # A blank, and a newline the translated string makes, named
+            # quoted: one prints as nothing visible, the other would end
+            # the line audit.sh relays from a `!!` block (dd.shown).
+            'zz_BL': _HEAD + b'LC_COLLATE\ncopy " "\nEND LC_COLLATE\n',
+            'zz_NL': _HEAD + b'LC_COLLATE\ncopy "a<U000A>b"\nEND LC_COLLATE\n',
+            # The same in the two other messages that name a file: a place
+            # not settled, and a read cut by a line holding only the escape
+            # (case b14), each in a file whose name holds a blank.
+            'zz U': _HEAD + (b'LC_COLLATE\ncopy "iso14651_t1"\n'
+                             b'reorder-sections-after <LATIN> <X>\n'
+                             b'END LC_COLLATE\n'),
+            'zz C': b'\\\nLC_COLLATE\norder_start forward\n<U0041>\n'
+                    b'order_end\nEND LC_COLLATE\n'})
         why = tree.unresolved()
+        self.assertEqual("localedef cannot open ''", why['zz_EM'])
+        self.assertEqual("localedef cannot open ' '", why['zz_BL'])
+        self.assertEqual("localedef cannot open 'a\\nb'", why['zz_NL'])
+        self.assertTrue(why['zz U'].startswith("'zz U':5: "), why['zz U'])
+        self.assertTrue(why['zz C'].startswith(
+            "localedef stops reading 'zz C' at line"), why['zz C'])
         self.assertEqual('localedef stops (circular)', why['zz_CA'])
         self.assertEqual('localedef stops (circular)', why['zz_CB'])
         self.assertEqual('localedef cannot open zz_NONE', why['zz_MI'])
-        self.assertEqual({'zz_MI': ['zz_NONE']}, tree.missing())
+        self.assertEqual({'zz_MI': ['zz_NONE'], 'zz_EM': [''],
+                          'zz_BL': [' '], 'zz_NL': ['a\nb']}, tree.missing())
         self.assertEqual('localedef stores no LC_COLLATE for it',
                          why['zz_NR'])
         self.assertIn('reorder-sections-after in LC_COLLATE', why['zz_RS'])
         for name in why:
             self.assertEqual('unread', tree.style(name))
-        self.assertEqual({'zz_CA', 'zz_CB', 'zz_MI', 'zz_NR', 'zz_RS'},
-                         set(why), 'every tag file reads clean')
+        self.assertEqual({'zz_CA', 'zz_CB', 'zz_MI', 'zz_NR', 'zz_RS',
+                          'zz_EM', 'zz_BL', 'zz_NL', 'zz U', 'zz C'}, set(why),
+                         'every tag file reads clean')
 
     def test_byte_order_follows_the_build(self):
         """codepoint_collation is a keyword from glibc 2.35 and on RHEL 9

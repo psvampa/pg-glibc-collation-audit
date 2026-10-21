@@ -271,8 +271,9 @@ def report_backported(tree, inherited=None, unresolved=None,
                            "localedef's default weight -- so this locale IS "
                            "exposed")
             if name in missing:
-                status += (f"; and it copies "
-                           f"{', '.join(sorted(missing[name]))}, which is "
+                gone = ', '.join(dd.shown(n)
+                                 for n in sorted(missing[name]))
+                status += (f"; and it copies {gone}, which is "
                            f"NOT in this corpus -- what that carries was never "
                            f"read, so this locale is NOT cleared")
             elif name in unresolved:
@@ -369,7 +370,8 @@ def report(tree, supported, label, out_name, next_hint,
     if dangling:
         print(f"\n!! {len(dangling)} `copy` target(s) are absent from this "
               f"corpus, so what they carry was never read:")
-        print(f"     {', '.join(sorted(dangling))}")
+        print(f"     "
+              f"{', '.join(dd.shown(n) for n in sorted(dangling))}")
         # Named, not only counted: "N locale(s) reach one" is a verdict
         # computed and never attached to a name.
         reaching = sorted(missing)
