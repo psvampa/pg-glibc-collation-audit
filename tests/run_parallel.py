@@ -39,9 +39,9 @@ different facts. So it is red whenever it cannot show that the suite ran:
 
 It is also red when anything changed during the run in the folder a real
 audit.sh writes to, naming each path, and when that folder cannot be read.
-Each test process writes to a folder of its own (`_harness.SUITE_OUT_DIR`),
-so a change there is a test writing where a real audit reads, or an audit.sh
-run at the same time, and the report says both.
+Each test process sends the steps' output to a folder of its own
+(`_harness.SUITE_OUT_DIR`), so a change there is a test writing where a real
+audit reads, or an audit.sh run at the same time, and the report says both.
 
 A run of the whole suite first computes, with every processor, the
 reader's answers most classes ask for (_harness.fill_reader_cache, backlog
