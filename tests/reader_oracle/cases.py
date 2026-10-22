@@ -556,6 +556,99 @@ def _cases():
     add('c55', P, {'@': tl % b'include "@-x\x00zz";""' + coll('a'),
                    '@-x': ct},
         'control for c52: the name in a string')
+    # An untranslated string loses a single escape character at its end,
+    # the escape in force, and keeps two (get_string, linereader.c:800-806
+    # @2.39): a copy in the middle of LC_COLLATE, read with translate_strings
+    # 0, opens the name without it, an empty one when the escape was all of
+    # it (c60, as c17) (backlog 13.43 a, step 7c; c06 is the control).
+    mid = (HEAD + D('a') + b'copy "@-t%s"\n' + ORDER_HEAD + O('a')
+           + ORDER_TAIL + END)
+    add('c56', P, {'@': mid % b'\\', '@-t': coll('t')},
+        'a copy name in the middle ending in the escape')
+    add('c57', P, {'@': mid % b'\\\\', '@-t': coll('t')},
+        'a copy name in the middle ending in two escapes')
+    add('c58', P, {'@': b'escape_char /\n' + mid % b'/', '@-t': coll('t')},
+        'a copy name in the middle ending in a declared escape')
+    add('c59', P, {'@': b'escape_char /\n' + mid % b'\\', '@-t': coll('t')},
+        'a backslash that is not the escape, at the end of a copy name')
+    add('c60', P, {'@': HEAD + D('a') + b'copy "\\"\n' + ORDER_HEAD + O('a')
+                   + ORDER_TAIL + END, '@-t': coll('t')},
+        'a copy name in the middle that is only the escape')
+    # Part of one family: how a string becomes the name glibc opens. Review
+    # found members of its trailing-escape rule one at a time (three
+    # escapes, no closing quote, a declared escape as the next-to-last
+    # byte, a high escape byte, a NUL before the escape, a 0x1A end), so
+    # the g cases cross these inputs of it (backlog 13.43 a, step 7c):
+    #   - where the string is: a copy opening LC_COLLATE in a file that
+    #     read no LC_COLLATE before it, read translated (translate_strings
+    #     is 1 from lr_create, linereader.c:81@2.39); a copy in the middle,
+    #     read untranslated (collate_startup, ld-collate.c:1524@2.39): the
+    #     two branches of get_string; and a translit include string, read
+    #     translated after translit_start (ld-ctype.c:2652@2.39);
+    #   - the escape in force: `\`, or `/` or the byte 0xA7 declared with
+    #     escape_char. From 2.36 that directive refuses 0xA7 ("bad
+    #     argument": lr_token reads it as UTF-8), so on el10 those cases put
+    #     a high byte in the string under `\` (d17 measures the refusal);
+    #   - the last one to three bytes of the string, each the escape, the
+    #     other of `\` and `/` (`\` when the escape is 0xA7), a letter or a
+    #     NUL: the untranslated branch drops the last byte when it is the
+    #     escape and the one before is not (linereader.c:800-806@2.39), and
+    #     the name ends at its first NUL after that, as a C string;
+    #   - what ends the string: its quote, the end of the file, or a 0x1A
+    #     or an 0xFF before the quote: before 2.36 lr_getc reads 0x1A, and
+    #     0xFF through a signed char, as the end of the file
+    #     (linereader.h:138@2.34). A translated string not ended by its
+    #     quote gives no name at all (linereader.c:977-991@2.39). A newline
+    #     cannot end a string with the escape last: an escape before a
+    #     newline joins the next line (lr_next, linereader.c:162@2.39).
+    # A string ended by the end of the file is the file's last line: in the
+    # middle after order_end, an include after LC_COLLATE and
+    # translit_start. The inputs of the family not crossed here are step
+    # 7c-bis of the roadmap.
+    PLACES = {'opening': 'a copy opening LC_COLLATE',
+              'middle': 'a copy in the middle of LC_COLLATE',
+              'translit': 'a translit include in LC_CTYPE'}
+    escapes = ((b'\\', b''), (b'/', b'escape_char /\n'),
+               (b'\xa7', b'escape_char \xa7\n'))
+    ends = ((b'"', 'its quote'), (b'', 'the end of the file'),
+            (b'\x1a"', '0x1A then its quote'),
+            (b'\xff"', '0xFF then its quote'))
+    n = 1
+    for esc, directive in escapes:
+        other = b'/' if esc == b'\\' else b'\\'
+        alphabet = (esc, other, b'x', b'\x00')
+        for size in (1, 2, 3):
+            for i in range(4 ** size):
+                tail = bytes(alphabet[(i >> 2 * k) & 3][0]
+                             for k in range(size))
+                for close, how in ends:
+                    line = b'copy "@-t' + tail + close
+                    inc = b'include "@-t' + tail + close
+                    for where in ('opening', 'middle', 'translit'):
+                        target = coll('t')
+                        if where == 'opening':
+                            text = HEAD + line + (b'\n' + END if close
+                                                  else b'')
+                        elif where == 'middle' and close:
+                            text = (HEAD + D('a') + line + b'\n' + ORDER_HEAD
+                                    + O('a') + ORDER_TAIL + END)
+                        elif where == 'middle':
+                            text = (HEAD + D('a') + ORDER_HEAD + O('a')
+                                    + ORDER_TAIL + line)
+                        elif close:
+                            text = tl % (inc + b';""') + coll('a')
+                            target = ct
+                        else:
+                            text = (coll('a') + b'LC_CTYPE\ntranslit_start\n'
+                                    + inc)
+                            target = ct
+                        add('g%04d' % n, P,
+                            {'@': directive + text, '@-t': target},
+                            '%s, %s, the string ending in %r, ended by %s'
+                            % (PLACES[where], 'escape_char %r declared'
+                               % esc if directive else 'the default escape',
+                               tail, how))
+                        n += 1
     qt = b'LC_TIME\ncopy "@-x"\nEND LC_TIME\n' + coll('a')
     add('s32', S, {'@': qt, '@-x': b'LC_CTYPE\ncharclass foo\nEND LC_CTYPE\n'
                    + TIME7}, 'charclass in a file read for LC_TIME')
@@ -710,6 +803,21 @@ def _cases():
         'order_end below it')
     add('s74', S, joined.replace(b'<mk-a> /\n', b'<mk-a>\n'),
         'control for s73: no escape')
+    # Each category keyword toggles its bit of not_here, and every bit
+    # left set is marked available (locfile.c:175-252, :270@2.39): a file
+    # read for LC_CTYPE that holds LC_COLLATE twice has it available
+    # without having read it, so a later copy of its LC_COLLATE reads
+    # nothing; three times, it does not (backlog 13.43 a, step 7c).
+    both = (b'LC_CTYPE\ncopy "@-t"\nEND LC_CTYPE\n' + HEAD + b'copy "@-t"\n'
+            + END)
+    ctype = b'LC_CTYPE\nEND LC_CTYPE\n'
+    add('s75', S, {'@': both, '@-t': ctype + coll('t') + coll('u')},
+        'LC_COLLATE twice in a file read first for LC_CTYPE')
+    add('s76', S, {'@': both, '@-t': ctype + coll('t')},
+        'control for s75: LC_COLLATE once')
+    add('s77', S, {'@': both, '@-t': ctype + coll('t') + coll('u')
+                   + coll('v')},
+        'LC_COLLATE three times in a file read first for LC_CTYPE')
     cond =(HEAD + D('t') + D('v') + ORDER_HEAD + b'ifdef YES\n' + O('t')
             + b'else\n' + O('v') + b'endif\n' + ORDER_TAIL + END)
     add('c31', P, {'@': HEAD + b'define YES\ncopy "@-t"\n' + END,

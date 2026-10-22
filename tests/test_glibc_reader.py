@@ -180,8 +180,13 @@ def predict(case, build):
         return {'outcome': 'unsettled'}
     if r.fatal is not None:
         if r.fatal.kind == 'missing':
+            # Decoded as measure.py decodes localedef's message, which
+            # prints the name's bytes (backlog 13.43 e): the bytes above
+            # 0x7F the corpus puts in a name (0xA7, 0xFF) compare as U+FFFD
+            # on both sides, so their place is checked and their value is
+            # not (step 7c-bis).
             return {'outcome': 'missing',
-                    'name': r.fatal.name.decode('latin-1')}
+                    'name': r.fatal.name.decode('utf-8', 'replace')}
         return {'outcome': r.fatal.kind}
     if r.collate is None:
         return {'outcome': 'absent'}
@@ -1706,6 +1711,20 @@ class ReaderNamesTheCharactersOfEachLine(unittest.TestCase):
         self.assertEqual({2: '%B', 3: 'ch', 5: 'AE', 6: 'FGH', 7: 'I',
                           11: 'K'}, got)
 
+    def test_a_from_string_names_each_code_point_written(self):
+        """A <U....> or <U........> name in a translated string gives the
+        code point written, at any of the four UTF-8 lengths (get_string:
+        strtoul of its hex digits, linereader.c:903-916@2.39), and step 2
+        names it on the collating-element's line. Real files hold such
+        lines above U+007F (fi_FI, hr_HR); a reader that moved those code
+        points by one kept the suite green (backlog 13.43 a, step 7c)."""
+        body = (b'collating-element <x> from '
+                b'"<U0063><U00E9><U0E40><U0001F600>"\n')
+        for tag, build in ((NEW, self.b39), (MID, self.b34)):
+            with self.subTest(tag):
+                self.assertEqual({1: 'c\u00e9\u0e40\U0001f600'},
+                                 self.names(body, build))
+
     def test_a_from_string_is_read_translated_only_after_its_name(self):
         """glibc sets translate_strings for the token after `<name> from`
         (ld-collate.c:2786-2793@2.34). With no name before `from`, or
@@ -2610,6 +2629,12 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
                                   b'END LC_COLLATE\n')
         files['zz_DF'] = _HEAD + (b'LC_COLLATE\ndefine ZZ_ON\n'
                                   b'copy "zz_BR"\nEND LC_COLLATE\n')
+        # A `copy` with no string: skip_category reads to the END, lines
+        # 3-5, and leaves the word after it to the top level
+        # (ld-collate.c:2621-2643@2.39).
+        files['zz_SK'] = _HEAD + (b'LC_COLLATE\ncopy\nEND LC_COLLATE\n'
+                                  b'LC_IDENTIFICATION\ntitle "t"\n'
+                                  b'END LC_IDENTIFICATION\n')
         files.update(_RETURNS)
         cls.repo, cls.ref = _harness.glibc_commit(NEW, files, cls.tmp)
         cls.paths, cls.ids = g.list_tree_ids(cls.repo, cls.ref, [])
@@ -2648,6 +2673,17 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
     def test_an_indented_section_is_a_section(self):
         self.assertEqual([(3, 8, 0x25, 0x2f, 'zz_IN')],
                          self.facts['zz_IN'].collate)
+
+    def test_a_section_skipped_to_its_end_ends_there(self):
+        """skip_category stops at the first END and returns without reading
+        the word after it (ld-collate.c:2621-2643@2.39): the section is
+        lines 3-5, and the top level reads that `LC_COLLATE` as a second
+        section, which the END of line 8 closes. A reader that lost the
+        first END line read the first section to the end of the file, and
+        the suite stayed green (backlog 13.43 a, step 7c)."""
+        self.assertEqual([(3, 5, 0x25, 0x2f, 'zz_SK'),
+                          (5, 8, 0x25, 0x2f, 'zz_SK')],
+                         self.facts['zz_SK'].collate)
 
     def test_a_directive_spelt_across_the_escape_reads_the_section(self):
         """get_ident drops the escape inside a word: line 6 is
