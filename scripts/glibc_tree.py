@@ -160,9 +160,9 @@ class Tree(object):
         fatal, reads, unsettled, collate, _, _ = self._runs[name]
         out = []
         for fr in reads:
-            for sec in fr[3]:
+            for sec in fr[2]:
                 category, fname, content, copy, mid = (
-                    sec[0], sec[1], sec[5], sec[6], sec[10])
+                    sec[0], sec[1], sec[4], sec[5], sec[6])
                 if category != 'LC_COLLATE' or not content:
                     continue
                 cps = []
@@ -223,7 +223,7 @@ class Tree(object):
         out = {}
         for name in self.names:
             fatal, reads, unsettled, collate, _, _ = self._runs[name]
-            cut = [(fr[0], fr[5]) for fr in reads if fr[5] is not None]
+            cut = [(fr[0], fr[3]) for fr in reads if fr[3] is not None]
             if fatal is not None:
                 kind, what = fatal[0], fatal[1]
                 if kind == 'missing':
@@ -457,11 +457,11 @@ def _facts(tree, load):
     for name in tree.names:
         run = tree._runs[name]
         for fr in run[1]:
-            for sec in fr[3]:
+            for sec in fr[2]:
                 f = _name(sec[1])
-                if sec[0] == 'LC_COLLATE' and sec[5] and f in collate:
+                if sec[0] == 'LC_COLLATE' and sec[4] and f in collate:
                     collate[f].add((sec[2], sec[3])
-                                   + chars_before(fr[2], sec[2]) + (name,))
+                                   + chars_before(fr[1], sec[2]) + (name,))
         for f, flat in (run[3][3] if run[3] is not None else ()):
             if f in steer:
                 steer[f].update(zip(flat[0::2], flat[1::2]))

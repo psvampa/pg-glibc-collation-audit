@@ -491,12 +491,20 @@ class ReaderFailureModes(unittest.TestCase):
 
     def test_a_copied_file_without_the_category_ends_the_section_early(self):
         text = b'LC_COLLATE\ncopy "t"\nEND LC_COLLATE\n'
+        # glibc returns at the copy (ld-collate.c:2657-2658@2.39), so the END
+        # is read at the top level (case c04: its line 3, the END, is "not
+        # inside a locale definition section"), and so is a copy before it,
+        # which glibc never loads.
         r = self.run_one(text, t=b'LC_TIME\nEND LC_TIME\n')
-        self.assertTrue(r.sections('LC_COLLATE', b'm')[0].returned)
         self.assertIsNone(r.collate)
+        self.assertIsNone(r.sections('LC_COLLATE', b'm')[0].end)
+        r = self.run_one(text.replace(b'END', b'copy "x"\nEND'),
+                         t=b'LC_TIME\nEND LC_TIME\n', x=b'LC_COLLATE\n'
+                         b'END LC_COLLATE\n')
+        self.assertEqual([b'm', b't'], [fr.name for fr in r.reads])
         r = self.run_one(text, t=b'LC_COLLATE\nEND LC_COLLATE\n')
-        self.assertFalse(r.sections('LC_COLLATE', b'm')[0].returned)
         self.assertIsNotNone(r.collate)
+        self.assertEqual(3, r.sections('LC_COLLATE', b'm')[0].end)
 
     def test_an_unclosed_name_at_the_end_is_a_hang_not_an_answer(self):
         r = self.run_one(b'LC_COLLATE\n<U0061')
@@ -1250,7 +1258,7 @@ class ReaderAgreesOnEveryRealFile(unittest.TestCase):
                 bad.append((name, 'fatal', fatal))
             for _, _, why in uns:
                 unsettled[why] = unsettled.get(why, 0) + 1
-            secs = [s for fr in reads for s in fr[3]
+            secs = [s for fr in reads for s in fr[2]
                     if s[0] == 'LC_COLLATE' and s[1] == name]
             mine = (secs[0][2], secs[0][3]) if secs else None
             text = g.decoded(data[name])
@@ -1259,9 +1267,9 @@ class ReaderAgreesOnEveryRealFile(unittest.TestCase):
                 bad.append((name, 'bounds', mine, theirs))
             cps = []
             for s in secs[:1]:
-                if s[6]:
-                    cps.append(s[6][0])
-                cps += [n for n, _ in s[10]]
+                if s[5]:
+                    cps.append(s[5][0])
+                cps += [n for n, _ in s[6]]
             cps = [c.decode('utf-8', 'replace') if c is not None else None
                    for c in cps]
             if cps != g.copy_targets(text):
