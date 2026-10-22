@@ -113,7 +113,8 @@ _SKIP_NO_FLOOR_TAGS = (
 def fill_reader_cache():
     """Compute, with every processor, the localedef runs most of the suite
     asks scripts/reader_cache.py for: every locale of the five tags, and of
-    MID read as RHEL 9 reads it (codepoint_collation is a keyword there).
+    OLD and MID read as RHEL 9 reads them (codepoint_collation is a keyword
+    there).
     Most trees the tests build are one of these with a file or two changed,
     so after this they find nearly every run kept. Without it, the classes
     that run at once each computed nearly the same tree on their own, one
@@ -152,6 +153,13 @@ def fill_reader_cache():
         paths, ids = g.list_tree_ids(GLIBC_CLONE, old, [])
         f.read_across(GLIBC_CLONE, old, (builds[old], builds[new]), paths,
                       ids)
+    # OLD as RHEL 9 reads it: the tree test_wrapper.WrapperNodesOnOneBuild
+    # reads, with its own C (two machines on one el9 build). Left to that
+    # class, one processor, it ran past the 600 s limit on GitHub (PR #117).
+    if has_tags(OLD):
+        old9 = glibc_tree.build_at(GLIBC_CLONE, OLD, '.el9')
+        if not kept(OLD, old9):
+            glibc_tree.Tree.at_tag(GLIBC_CLONE, OLD, old9)
     if has_tags(MID):
         rhel9 = glibc_tree.build_at(GLIBC_CLONE, MID, '.el9')
         if kept(MID, rhel9):

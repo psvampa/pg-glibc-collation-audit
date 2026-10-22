@@ -973,18 +973,9 @@ class Section(object):
 
     start      line of the category keyword
     end        line of the `END` that closed it, or None when the file ended
-    end_word   the token read after that END (None at EOF)
     content    False when the file was read for other categories only
                (ignore_content), so nothing of it was stored
     copy       (name, line) of a `copy` that opens the section
-    copy_kind  'load' (LC_CTYPE, LC_COLLATE), 'queue' (the other ten), or
-               None
-    skipped    the opening `copy` had no string: glibc skipped to the
-               first END token and left the word after it to the top level
-               (ld-collate.c:2621-2643@2.39, ld-ctype.c:2103-2125)
-    returned   the opening `copy` named a file without this category: glibc
-               returned there, leaving the rest of the section to the top
-               level (ld-collate.c:2657-2658@2.39, ld-ctype.c:2139-2140)
     mid_copies [(name, line)] of `copy` statements inside LC_COLLATE
     """
 
@@ -993,12 +984,8 @@ class Section(object):
         self.fname = fname
         self.start = start
         self.end = None
-        self.end_word = None
         self.content = content
         self.copy = None
-        self.copy_kind = None
-        self.skipped = False
-        self.returned = False
         self.mid_copies = []
 
     def __repr__(self):
@@ -1007,20 +994,17 @@ class Section(object):
 
 
 class FileRead(object):
-    """One call of locfile_read: the file, the categories it was read for,
-    the directives it obeyed, its sections, the lines its top level
-    dropped as syntax errors, and `cut`: the line where lr_getc gave the top
+    """One call of locfile_read: the file, the directives it obeyed, its
+    sections, and `cut`: the line where lr_getc gave the top
     level an EOF with the file not read to its end, or None. glibc reads
     nothing of the file after it (locfile.c:115@2.34). Three bytes do it: a
     line holding only the escape character (cases b14, b15, every build),
     and before 2.36 a 0x1A (b02) or an 0xFF through a signed char (b03)."""
 
-    def __init__(self, name, mask):
+    def __init__(self, name):
         self.name = name
-        self.mask = frozenset(mask)
         self.directives = []      # (line, 'comment_char'|'escape_char', byte)
         self.sections = []
-        self.stray = []           # lines the top level dropped
         self.cut = None
 
 
@@ -1585,7 +1569,7 @@ class _Runner(object):
 
     def _locfile_read(self, lr, entry):
         mask = entry.needed - entry.avail
-        fr = FileRead(entry.name, mask)
+        fr = FileRead(entry.name)
         self.out.reads.append(fr)
         not_here = set(CATEGORIES)
         while True:
@@ -1600,8 +1584,7 @@ class _Runner(object):
             if kw in ('tok_escape_char', 'tok_comment_char'):
                 arg = lr.token()
                 if arg.tok != 'ident':
-                    fr.stray.append(t.line)       # "bad argument"
-                    lr.ignore_rest()
+                    lr.ignore_rest()              # "bad argument"
                     continue
                 if len(arg.val) != 1:
                     lr.ignore_rest()
@@ -1635,7 +1618,6 @@ class _Runner(object):
                 continue
             else:
                 # "syntax error: not inside a locale definition section"
-                fr.stray.append(t.line)
                 lr.ignore_rest()
                 continue
             lr.ignore_rest()
@@ -1681,7 +1663,6 @@ class _Runner(object):
         reads one more token, and unless that is EOF too drops the rest of
         its line: after an EOF lr_getc consumed (an 0xFF before 2.36) that
         is the line after it (cases s55, s57)."""
-        sec.skipped = True
         seen = set()
         while True:
             t = lr.token()
@@ -2018,7 +1999,6 @@ class _Runner(object):
             sec.end = t.line
             return True
         sec.end = t.line
-        sec.end_word = arg
         lr.ignore_rest()
         return True
 
@@ -2080,7 +2060,6 @@ class _Runner(object):
         copy_locale = None
         if _kw(t, 'tok_copy'):
             s = lr.token()
-            sec.copy_kind = 'load'
             if s.tok != 'string':
                 lr.ignore_rest()
                 self.skip_category(lr, sec, 'tok_lc_collate')
@@ -2097,7 +2076,6 @@ class _Runner(object):
                     self.skip_category(lr, sec, 'tok_lc_collate')
                     return
                 if copy_locale.data.get('LC_COLLATE') is None:
-                    sec.returned = True
                     return
             lr.ignore_rest()
             ahead.append((lr.fname, t.line, lr.lineno))
@@ -2327,7 +2305,6 @@ class _Runner(object):
         copy_locale = None
         if _kw(t, 'tok_copy'):
             s = lr.token()
-            sec.copy_kind = 'load'
             if s.tok != 'string':
                 lr.ignore_rest()
                 self.skip_category(lr, sec, 'tok_lc_ctype')
@@ -2344,7 +2321,6 @@ class _Runner(object):
                     self.skip_category(lr, sec, 'tok_lc_ctype')
                     return
                 if copy_locale.data.get('LC_CTYPE') is None:
-                    sec.returned = True
                     return
             lr.ignore_rest()
             t = lr.token()
@@ -2376,7 +2352,6 @@ class _Runner(object):
         self.body(lr, t, sec, entry)
 
     def handle_copy(self, lr, entry, sec, ignore):
-        sec.copy_kind = 'queue'
         s = lr.token()
         line = s.line
         if s.tok == 'string':
@@ -2397,9 +2372,7 @@ class _Runner(object):
         # line whatever it is, an EOF included (locfile.c:997-1010@2.34):
         # no statement loop to go back to.
         sec.end = t.line
-        arg = lr.token()
-        if arg.tok != 'eof':
-            sec.end_word = arg
+        lr.token()
         lr.ignore_rest()
 
     def body(self, lr, t, sec, entry):

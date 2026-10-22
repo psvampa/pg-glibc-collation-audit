@@ -149,12 +149,9 @@ def _summary(r):
     summary is (fatal, reads, unsettled, collate, meets, named).
 
     fatal      None, or (kind, name, where, detail)
-    reads      one (name, mask, directives, sections, stray, cut) per file
-               read, in order; mask is sorted; cut is FileRead.cut; each
-               section is
-               (category, fname, start, end, end_word, content, copy,
-                copy_kind, skipped, returned, mid_copies), end_word being
-               (tok, val) or None
+    reads      one (name, directives, sections, cut) per file read, in
+               order; cut is FileRead.cut; each section is
+               (category, fname, start, end, content, copy, mid_copies)
     unsettled  (file, line, why), in order
     collate    None when Run.collate is (no LC_COLLATE stored, a fatal
                run, or one stopped where glibc reads outside an object),
@@ -189,14 +186,10 @@ def _summary(r):
     reads = []
     for fr in r.reads:
         secs = tuple(
-            (s.category, s.fname, s.start, s.end,
-             None if s.end_word is None else (s.end_word.tok,
-                                              s.end_word.val),
-             s.content, s.copy, s.copy_kind, s.skipped, s.returned,
+            (s.category, s.fname, s.start, s.end, s.content, s.copy,
              tuple(s.mid_copies))
             for s in fr.sections)
-        reads.append((fr.name, tuple(sorted(fr.mask)),
-                      tuple(fr.directives), secs, tuple(fr.stray), fr.cut))
+        reads.append((fr.name, tuple(fr.directives), secs, fr.cut))
     files, rest = r.named_lines()
     collate, maps = None, _maps(files)
     if r.collate is not None:
@@ -492,11 +485,11 @@ def _check(s):
                                   and len(fatal) == 4):
         raise ValueError('bad fatal')
     if not isinstance(reads, tuple) or not all(
-            isinstance(fr, tuple) and len(fr) == 6
-            and isinstance(fr[0], bytes) and isinstance(fr[3], tuple)
-            and (fr[5] is None or isinstance(fr[5], int))
-            and all(isinstance(sec, tuple) and len(sec) == 11
-                    for sec in fr[3])
+            isinstance(fr, tuple) and len(fr) == 4
+            and isinstance(fr[0], bytes) and isinstance(fr[2], tuple)
+            and (fr[3] is None or isinstance(fr[3], int))
+            and all(isinstance(sec, tuple) and len(sec) == 7
+                    for sec in fr[2])
             for fr in reads):
         raise ValueError('bad reads')
     if not isinstance(unsettled, tuple) or not all(
