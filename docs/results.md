@@ -105,7 +105,6 @@ locales this tool finds for that pair.
 
 ### `C.UTF-8` — from the nodes' own files, because no tag has them
 
-Every other 🔴 row on this page was reached by steps 1-5. This one cannot be:
 `localedata/locales/C` exists upstream only from glibc 2.35, so for a
 `2.28..2.34` comparison it is in neither tag. RHEL8 and RHEL9 both ship one,
 so it is on both **nodes** — and comparing the nodes to each other is what
