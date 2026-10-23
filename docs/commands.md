@@ -143,8 +143,7 @@ glibc` gives the build id, with or without the architecture (`...x86_64`).
 A copy taken this way carries no checksum, so the checks below are yours to
 make.
 
-The build ids are required, because a result is bound to the build it was
-taken on and nothing in a directory of locale files carries a version.
+The build ids are required.
 
 **Check each copy against the machine it came from** — compare the names,
 `ls el8-locales` against `ls /usr/share/i18n/locales/` run there, not only the
