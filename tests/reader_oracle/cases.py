@@ -5,9 +5,8 @@ case names another, on a small locale built for one question about how
 glibc reads a file: its bytes, its comment and escape directives, its
 tokens, where its sections end, what its `copy` and `include` statements
 load and with which repertoire map, and how collate_read reads LC_COLLATE
-statements. measure.py runs every case on a
-RHEL machine and records what localedef did; tests/test_glibc_reader.py
-holds the reader to it.
+statements. measure.py runs every case on a RHEL machine and records what
+localedef did; tests/test_glibc_reader.py holds the reader to it.
 
 What a case observes: the exit status, whether the time limit stopped
 localedef, the messages that name an outcome (a file it cannot open, a
@@ -78,8 +77,9 @@ TRANSLIT = b'LC_CTYPE\ntranslit_start\n%s\ntranslit_end\nEND LC_CTYPE\n'
 
 def vis(cat):
     """A target whose opening shows: read for `cat`, it copies @-u, which no
-    case that uses this target has, so localedef stops naming rd-<id>-u. A target that opens
-    without a trace would answer the same whether glibc opened it or not."""
+    case that uses this target has, so localedef stops naming rd-<id>-u. A
+    target that opens without a trace would answer the same whether glibc
+    opened it or not."""
     return b'%s\ncopy "@-u"\nEND %s\n' % (cat, cat)
 
 
@@ -1370,7 +1370,7 @@ def _name_cases(add):
     # for a section glibc ignores (ld-collate.c:1524, called at :2668); 1
     # in the startup of the ten categories handle_copy serves, when they
     # have no copy (ld-identification.c:89, ld-numeric.c:59, ld-time.c:126
-    # and the others), and at translit_start (ld-ctype.c:2652). Neither
+    # @2.39 and the others), and at translit_start (ld-ctype.c:2652). Neither
     # ctype_startup, nor a copy of those ten (it returns before the
     # startup), nor an LC_COLLATE copying a file without one (it returns
     # before, ld-collate.c:2657) changes it. With no name, a copy opening
@@ -1456,9 +1456,10 @@ def _name_cases(add):
     # The same state in a file reached by a copy, read for the category of
     # the place that opens a file, after sections its run ignores. Every
     # file starts translated (lr_create, linereader.c:81, through
-    # locfile.c:62). An ignored section of the ten still sets 1, its
-    # startup being called whatever ignore_content is
-    # (ld-identification.c:275, :87-91); an ignored LC_CTYPE leaves
+    # locfile.c:62). An ignored section of the ten that has no copy still
+    # sets 1, its startup being called whatever ignore_content is
+    # (ld-identification.c:275, :87-91; one with a copy returns before
+    # it, :266-271); an ignored LC_CTYPE leaves
     # translit_start before setting it (ld-ctype.c:2628-2643); an ignored
     # LC_COLLATE that opens with a copy skips the copy and its startup sets
     # 0 (ld-collate.c:2645-2668); one whose copy is not a string returns
@@ -1547,11 +1548,14 @@ def _name_cases(add):
     # 2084-2085, ld-time.c:681-682 and the three others), and every section
     # passes the name to each entry its copies create (ld-collate.c:
     # 2648-2649, :2702, ld-ctype.c:2130-2131, locfile.c:973-974, which all
-    # ten handle_copy callers reach). Only an LC_COLLATE read and stored with
-    # the map changes what is written: a name the map defines cannot be a
-    # collating-element (check_duplicate, :433-438). The map is looked for
-    # in the current directory first (repertoire.c:72), where measure.py
-    # puts the case's files.
+    # ten handle_copy callers reach). Of what the reader answers, only an
+    # LC_COLLATE read and stored with the map changes: a name the map
+    # defines cannot be a collating-element (check_duplicate, :433-438),
+    # and a symbol the charmap lacks is looked up in it (:968). (LC_CTYPE
+    # reads its translit entries' symbolic names through the map too,
+    # ld-ctype.c:1793-1803, :2777, which the reader does not answer
+    # about.) The map is looked for in the current directory first
+    # (repertoire.c:72@2.39), where measure.py puts the case's files.
     target = b'LC_CTYPE\nEND LC_CTYPE\n' + coll('r')
     inc = tl % b'include "@-t";"@-m"'
     inc_copy = inc + HEAD + b'copy "@-t"\n' + END

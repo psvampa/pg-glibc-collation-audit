@@ -63,10 +63,10 @@ later step of block 15; until then, where the reader sees an answer depend
 on whether the charmap has a character, it reports that place unsettled.
 Repertoire maps are not read either: a `repertoiremap` line that names a
 map, and an LC_COLLATE read with the map a translit include named, are
-reported unsettled. glibc keeps that map with the file the include queues, when the
-include is what creates its entry, and hands it on to every file that
-file's copies create, and theirs in turn (an include passes its own); the
-reader follows it the same way (_Entry.repertoire).
+reported unsettled. glibc keeps that map with the file the include queues,
+when the include is what creates its entry, and hands it on to every file
+that file's copies create, and theirs in turn (an include passes its own);
+the reader follows it the same way (_Entry.repertoire).
 
 Written for Python 3.6, the oldest the fixtures run, with the standard
 library only.
@@ -864,8 +864,9 @@ class Fatal(object):
     (localedef never returns: GlibcHang, or a cycle of `copy` names), or
     'crash' (a NULL dereference or a failed assertion). Each is measured on
     the RHEL 8, 9 and 10 builds by a case in tests/reader_oracle/ (the
-    translit include with a NULL name by y009 and the y cases after it),
-    except get_symname's GlibcHang, whose loop was measured against glibc's
+    translit include with a NULL name by y009, y012 and the other y cases
+    at that place that exit -11), except get_symname's GlibcHang, whose
+    loop was measured against glibc's
     compiled line reader (backlog 15.0), not against localedef; the
     skip_category one is measured against localedef (s47, s48, s50).
     `name` is the file the message names, `where` the file and line being
@@ -1020,10 +1021,10 @@ class _Entry(object):
     def __init__(self, name, repertoire=None):
         self.name = name
         # The repertoire map's name the entry was created with
-        # (add_to_readlist, localedef.c:628-629@2.39), or None: a translit
+        # (add_to_readlist, localedef.c:628-629@2.39): a translit
         # include's, or that of the file whose copy created it, which
-        # glibc takes at each read of the file (locfile.c:52, :58-59) and
-        # passes to every entry that file's sections create.
+        # glibc takes at each read of the file (locfile.c:52, :58-59@2.39)
+        # and passes to every entry that file's copies create; or None.
         self.repertoire = repertoire
         self.needed = set()
         self.avail = set()
