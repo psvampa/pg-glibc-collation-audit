@@ -61,6 +61,12 @@ get_string try to transliterate it, which can load the file's own LC_CTYPE
 in the middle of the run (linereader.c:640-660@2.39). Charmaps are read in a
 later step of block 15; until then, where the reader sees an answer depend
 on whether the charmap has a character, it reports that place unsettled.
+Repertoire maps are not read either: a `repertoiremap` line that names a
+map, and an LC_COLLATE read with the map a translit include named, are
+reported unsettled. glibc keeps that map with the file the include queues,
+when the include is what creates its entry, and hands it on to every file
+that file's copies create, and theirs in turn (an include passes its own);
+the reader follows it the same way (_Entry.repertoire).
 
 Written for Python 3.6, the oldest the fixtures run, with the standard
 library only.
@@ -857,9 +863,10 @@ class Fatal(object):
     it cannot open, exit 4), 'circular' or 'duplicate' (exit 5), 'hang'
     (localedef never returns: GlibcHang, or a cycle of `copy` names), or
     'crash' (a NULL dereference or a failed assertion). Each is measured on
-    the RHEL 8, 9 and 10 builds by a case in tests/reader_oracle/, except
-    the translit include with a NULL name, read from the source, and
-    get_symname's GlibcHang, whose loop was measured against glibc's
+    the RHEL 8, 9 and 10 builds by a case in tests/reader_oracle/ (the
+    translit include with a NULL name by y009, y012 and the other y cases
+    at that place that exit -11), except get_symname's GlibcHang, whose
+    loop was measured against glibc's
     compiled line reader (backlog 15.0), not against localedef; the
     skip_category one is measured against localedef (s47, s48, s50).
     `name` is the file the message names, `where` the file and line being
@@ -1011,8 +1018,14 @@ class FileRead(object):
 class _Entry(object):
     """localedef's `struct localedef_t`: one file in the read list."""
 
-    def __init__(self, name):
+    def __init__(self, name, repertoire=None):
         self.name = name
+        # The repertoire map's name the entry was created with
+        # (add_to_readlist, localedef.c:628-629@2.39): a translit
+        # include's, or that of the file whose copy created it, which
+        # glibc takes at each read of the file (locfile.c:52, :58-59@2.39)
+        # and passes to every entry that file's copies create; or None.
+        self.repertoire = repertoire
         self.needed = set()
         self.avail = set()
         self.data = {}            # category -> stored data (categories[])
@@ -1486,8 +1499,10 @@ class _Runner(object):
 
     # -- localedef.c ------------------------------------------------------
 
-    def add_to_readlist(self, category, name, generate, copy_locale=None):
-        """localedef.c:612-662@2.39."""
+    def add_to_readlist(self, category, name, generate, copy_locale=None,
+                        repertoire=None):
+        """localedef.c:612-662@2.39. An entry keeps the repertoire it was
+        created with; a later caller's is not looked at."""
         runp = None
         for e in self.entries:
             if e.name == name:
@@ -1495,7 +1510,7 @@ class _Runner(object):
                 break
         if runp is None:
             assert generate
-            runp = _Entry(name)
+            runp = _Entry(name, repertoire)
             self.entries.append(runp)
         if generate and category in runp.needed \
                 and category not in runp.avail:
@@ -1507,9 +1522,11 @@ class _Runner(object):
         runp.needed.add(category)
         return runp
 
-    def load_locale(self, category, name, copy_locale=None):
+    def load_locale(self, category, name, copy_locale=None,
+                    repertoire=None):
         """localedef.c:685-701@2.39: queue and read now."""
-        result = self.add_to_readlist(category, name, True, copy_locale)
+        result = self.add_to_readlist(category, name, True, copy_locale,
+                                      repertoire)
         if category not in result.avail and self.locfile_read(result) != 0:
             raise _Stop(Fatal('missing', name))
         return result
@@ -2041,6 +2058,17 @@ class _Runner(object):
 
     def _collate_read(self, lr, entry, sec):
         ignore = not sec.content
+        if not ignore and entry.repertoire is not None:
+            # glibc reads the map named first (ld-collate.c:2577-2578
+            # @2.39). A name it defines is refused as a collating-element
+            # or collating-symbol ("already defined in repertoire",
+            # check_duplicate, :433-438), and a symbol the charmap lacks is
+            # looked up in it (:968): measured, case p001. This reader
+            # reads no repertoire map, and the one named can be on the
+            # machine's own path (repertoire.c:104-115). The entry can
+            # have it from a copy, not only from an include: p017, p019.
+            self.unsettled(lr, sec.start, 'an LC_COLLATE read with the '
+                           'repertoire map a translit include named')
         lr.ignore_rest()
         # The lines before the first statement read into the struct, which
         # does not exist yet: the defines and the opening copy.
@@ -2070,7 +2098,12 @@ class _Runner(object):
                 if name is None:
                     raise _Stop(Fatal('crash', None, (lr.fname, t.line),
                                       'load_locale with a NULL name'))
-                copy_locale = self.load_locale('LC_COLLATE', name)
+                # The reading file's map goes to the entry this creates
+                # (ld-collate.c:2648-2649@2.39), as at :2702 and in the
+                # copies of LC_CTYPE (ld-ctype.c:2130-2131) and of the
+                # other categories (handle_copy, locfile.c:973-974).
+                copy_locale = self.load_locale('LC_COLLATE', name,
+                                               repertoire=entry.repertoire)
                 if 'LC_COLLATE' not in copy_locale.avail \
                         and self.locfile_read(copy_locale) != 0:
                     self.skip_category(lr, sec, 'tok_lc_collate')
@@ -2114,7 +2147,8 @@ class _Runner(object):
                             raise _Stop(Fatal('crash', None,
                                               (lr.fname, t.line),
                                               'load_locale with a NULL name'))
-                        self.load_locale('LC_COLLATE', name, entry)
+                        self.load_locale('LC_COLLATE', name, entry,
+                                         entry.repertoire)
                     lr.ignore_rest()
                 self.instruction(lr, store, t.line)
                 t = lr.token()
@@ -2315,7 +2349,8 @@ class _Runner(object):
                 if name is None:
                     raise _Stop(Fatal('crash', None, (lr.fname, t.line),
                                       'load_locale with a NULL name'))
-                copy_locale = self.load_locale('LC_CTYPE', name)
+                copy_locale = self.load_locale('LC_CTYPE', name,
+                                               repertoire=entry.repertoire)
                 if 'LC_CTYPE' not in copy_locale.avail \
                         and self.locfile_read(copy_locale) != 0:
                     self.skip_category(lr, sec, 'tok_lc_ctype')
@@ -2358,7 +2393,8 @@ class _Runner(object):
             name = self.copy_name(lr, s, line, not ignore)
             sec.copy = (name, line)
             if not ignore and name is not None:
-                self.add_to_readlist(sec.category, name, True)
+                self.add_to_readlist(sec.category, name, True,
+                                     repertoire=entry.repertoire)
                 entry.copy_name[sec.category] = name
         lr.ignore_rest()
         while True:
@@ -2548,7 +2584,13 @@ class _Runner(object):
             target = self.copy_name(lr, name, t.line)
         lr.ignore_rest()
         if target is None:
-            # add_to_readlist would strcmp a NULL name (INFERRED crash).
+            # add_to_readlist strcmps a NULL name: a crash, measured (y009).
             raise _Stop(Fatal('crash', None, (lr.fname, t.line),
                               'translit include with a NULL name'))
-        self.add_to_readlist('LC_CTYPE', target, True)
+        # The repertoire name is a C string too, and an empty one is none
+        # (ld-ctype.c:2692-2695@2.39). An include passes its own, not the
+        # reading file's: the entry it creates keeps it (_Entry).
+        rep = rep_.val if rep_.tok == 'ident' \
+            else self.copy_name(lr, rep_, t.line, False)
+        rep = rep.split(b'\0', 1)[0] or None
+        self.add_to_readlist('LC_CTYPE', target, True, repertoire=rep)

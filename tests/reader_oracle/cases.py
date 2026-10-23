@@ -3,10 +3,10 @@
 Each case is one `localedef -i <main> -f <charmap>` run, UTF-8 unless the
 case names another, on a small locale built for one question about how
 glibc reads a file: its bytes, its comment and escape directives, its
-tokens, where its sections end, what its `copy` statements load, and how
-collate_read reads LC_COLLATE statements. measure.py runs every case on a
-RHEL machine and records what localedef did; tests/test_glibc_reader.py
-holds the reader to it.
+tokens, where its sections end, what its `copy` and `include` statements
+load and with which repertoire map, and how collate_read reads LC_COLLATE
+statements. measure.py runs every case on a RHEL machine and records what
+localedef did; tests/test_glibc_reader.py holds the reader to it.
 
 What a case observes: the exit status, whether the time limit stopped
 localedef, the messages that name an outcome (a file it cannot open, a
@@ -72,6 +72,27 @@ def coll(*ms):
 IDENT = b'LC_IDENTIFICATION\ntitle "t"\nEND LC_IDENTIFICATION\n'
 NUMERIC = b'LC_NUMERIC\ndecimal_point "."\nEND LC_NUMERIC\n'
 TIME7 = b'LC_TIME\nabday "1";"2";"3";"4";"5";"6";"7"\nEND LC_TIME\n'
+TRANSLIT = b'LC_CTYPE\ntranslit_start\n%s\ntranslit_end\nEND LC_CTYPE\n'
+
+
+def vis(cat):
+    """A target whose opening shows: read for `cat`, it copies @-u, which no
+    case that uses this target has, so localedef stops naming rd-<id>-u. A
+    target that opens without a trace would answer the same whether glibc
+    opened it or not."""
+    return b'%s\ncopy "@-u"\nEND %s\n' % (cat, cat)
+
+
+def tails(alphabet, sizes):
+    """Every string of each length in `sizes` over `alphabet`, the first
+    byte varying fastest."""
+    out = []
+    for size in sizes:
+        n = len(alphabet)
+        for i in range(n ** size):
+            out.append(b''.join(alphabet[(i // n ** k) % n]
+                                for k in range(size)))
+    return out
 
 
 class Case(object):
@@ -603,8 +624,10 @@ def _cases():
     #     newline joins the next line (lr_next, linereader.c:162@2.39).
     # A string ended by the end of the file is the file's last line: in the
     # middle after order_end, an include after LC_COLLATE and
-    # translit_start. The inputs of the family not crossed here are step
-    # 7c-bis of the roadmap.
+    # translit_start. An include's target is vis(b'LC_CTYPE'): an empty
+    # LC_CTYPE opens without a trace, so a reader that opened no file
+    # would agree with localedef on it. The inputs of the family this grid
+    # does not cross are in _name_cases() (step 7c-bis).
     PLACES = {'opening': 'a copy opening LC_COLLATE',
               'middle': 'a copy in the middle of LC_COLLATE',
               'translit': 'a translit include in LC_CTYPE'}
@@ -637,11 +660,11 @@ def _cases():
                                     + ORDER_TAIL + line)
                         elif close:
                             text = tl % (inc + b';""') + coll('a')
-                            target = ct
+                            target = vis(b'LC_CTYPE')
                         else:
                             text = (coll('a') + b'LC_CTYPE\ntranslit_start\n'
                                     + inc)
-                            target = ct
+                            target = vis(b'LC_CTYPE')
                         add('g%04d' % n, P,
                             {'@': directive + text, '@-t': target},
                             '%s, %s, the string ending in %r, ended by %s'
@@ -649,6 +672,7 @@ def _cases():
                                % esc if directive else 'the default escape',
                                tail, how))
                         n += 1
+    _name_cases(lambda cid, files, note: add(cid, P, files, note))
     qt = b'LC_TIME\ncopy "@-x"\nEND LC_TIME\n' + coll('a')
     add('s32', S, {'@': qt, '@-x': b'LC_CTYPE\ncharclass foo\nEND LC_CTYPE\n'
                    + TIME7}, 'charclass in a file read for LC_TIME')
@@ -1149,6 +1173,504 @@ def _cases():
              'control: ifdef of a defined name')):
         add(cid, O_, files, note)
     return out
+
+
+def _ends_at_lt(tail, esc):
+    """Whether `tail`, read as an include word, leaves a `<` unescaped
+    before any quote."""
+    i = 0
+    while i < len(tail):
+        c = tail[i:i + 1]
+        if c == esc:
+            i += 2
+            continue
+        if c == b'"':
+            return False
+        if c == b'<':
+            return True
+        i += 1
+    return False
+
+
+def _name_cases(add):
+    """How a string in a locale file becomes the name of the file glibc
+    opens: the inputs of that function the g grid does not cross (backlog
+    13.43 a and 13.48, step 7c-bis). Six places open a locale file by a
+    name (load_locale, add_to_readlist): a copy opening LC_COLLATE and one
+    in its middle (ld-collate.c:2648, :2702@2.39), a copy opening LC_CTYPE
+    (ld-ctype.c:2130), a copy of the other categories (handle_copy,
+    locfile.c:955-1010@2.39, queued at :973), a translit include
+    (ld-ctype.c:2713), and the file itself read again for LC_CTYPE when a
+    translated name holds a character the charmap lacks
+    (translate_unicode_codepoint, linereader.c:651@2.39; inline in
+    get_string at 2.28, its load_locale at :753; the reader reads no
+    charmap and leaves those unsettled). A repertoire map is opened by a
+    name too (repertoire_read, repertoire.c:55-120@2.39): the one a
+    translit include names, kept with the file it queues and with every
+    file that file's copies create, and read with their sections (p), and
+    the one a `repertoiremap` line names, which the reader leaves
+    unsettled. Line numbers are glibc 2.39's
+    unless another tag is named; each was found by its text in 2.28, 2.34
+    and 2.39."""
+    tl = TRANSLIT
+    vct, vtime = vis(b'LC_CTYPE'), vis(b'LC_TIME')
+
+    def place(where, string_line, closed=True):
+        """A file with string_line (`copy "...` or `include "...`, no
+        newline) at `where`, and the target it names."""
+        if where == 'opening':
+            return (HEAD + string_line + (b'\n' + END if closed else b''),
+                    coll('t'))
+        if where == 'middle':
+            if closed:
+                return (HEAD + D('a') + string_line + b'\n' + ORDER_HEAD
+                        + O('a') + ORDER_TAIL + END, coll('t'))
+            return (HEAD + D('a') + ORDER_HEAD + O('a') + ORDER_TAIL
+                    + string_line, coll('t'))
+        if closed:
+            return tl % (string_line + b';""') + coll('a'), vct
+        return coll('a') + b'LC_CTYPE\ntranslit_start\n' + string_line, vct
+
+    def word(where):
+        return b'include' if where == 'translit' else b'copy'
+
+    places = ('opening', 'middle', 'translit')
+
+    # j: a newline inside the name. A line that ends in the escape in force
+    # is joined to the next one, losing only that escape (lr_next,
+    # linereader.c:162); otherwise the newline ends the string. The next
+    # line opens with the comment character: a comment when the newline
+    # ended the string, part of the name when the lines were joined.
+    n = 0
+    for esc, directive in ((b'\\', b''), (b'/', b'escape_char /\n')):
+        other = b'/' if esc == b'\\' else b'\\'
+        for x in tails((esc, other, b'x', b'\x00'), (1, 2)):
+            for y in (b'#x', b'#' + esc + b'x', b'#'):
+                for where in places:
+                    n += 1
+                    line = word(where) + b' "@-t' + x + b'\n' + y + b'"'
+                    text, target = place(where, line)
+                    add('j%04d' % n, {'@': directive + text, '@-t': target},
+                        'a newline inside the name: %r, newline, %r, at %s'
+                        % (x, y, where))
+
+    # y: a symbolic name in the string. Only a translated string reads it
+    # (get_string, linereader.c:886-991); one the charmap lacks gives no
+    # string (:940, :808@2.28), and so does `<>` (:895-900, :689-694@2.28)
+    # or a string not closed by its quote (:987, :855@2.28).
+    forms = [b'<U0074>', b'<U00000074>', b'<u0074>', b'<U074>', b'<U00E9>',
+             b'<U0378>', b'<>', b'<U0074"x>', b'<U00\\74>', b'<U0074\\>>',
+             b'<U0000>', b'<rd>']
+    n = 0
+    for f in forms:
+        for where in places:
+            n += 1
+            text, target = place(where, word(where) + b' "@-' + f + b'"')
+            add('y%03d' % n, {'@': text, '@-t': target},
+                'the symbolic form %r for the last letter, at %s' % (f, where))
+    for f in (b'<U00/74>', b'<U0074/>>'):
+        for where in places:
+            n += 1
+            text, target = place(where, word(where) + b' "@-' + f + b'"')
+            add('y%03d' % n, {'@': b'escape_char /\n' + text, '@-t': target},
+                'the symbolic form %r under escape_char /, at %s'
+                % (f, where))
+
+    # u: bytes above 0x7F after the name. Before 2.36 they are copied as
+    # they are; from 2.36 a translated string decodes them as UTF-8 and
+    # looks the character up in the charmap, and an invalid sequence, or
+    # the escape before a byte above 0x7F, gives no string (linereader.c
+    # :857, :841). An untranslated string keeps the bytes (:797, with a
+    # warning at :795-796).
+    highs = [b'\xc3\xa9', b'\xc3', b'\xe2\x82', b'\xa7', b'\xff',
+             b'\xf4\x90\x80\x80', b'\xc0\x80', b'\xed\xa0\x80', b'\\\xa7',
+             b'\\\xc3\xa9', b'\xa7\xa8', b'\xa8\xa7']
+    n = 0
+    for h in highs:
+        for where in places:
+            n += 1
+            text, target = place(where, word(where) + b' "@-t' + h + b'"')
+            add('u%03d' % n, {'@': text, '@-t': target},
+                'the bytes %r after the name, at %s' % (h, where))
+
+    # e: escape_char takes any word of one byte (locfile.c:123-146): a NUL
+    # in every build, and 0x1A from 2.36, before which lr_getc reads it as
+    # the end of the file (linereader.h:138@2.34). Tails over an alphabet
+    # holding that escape, `\`, a letter and a NUL, by every way the string
+    # ends. A translated string not ended by its quote gives no string
+    # whatever its tail (linereader.c:987), so the end of the file and an
+    # 0xFF meet only one-byte tails there.
+    ends = ((b'"', 'q'), (b'', 'eof'), (b'\x1a"', '1a'), (b'\xff"', 'ff'))
+    n = 0
+    for esc, alphabet in ((b'\x00', (b'\x00', b'\\', b'x')),
+                          (b'\x1a', (b'\x1a', b'\\', b'x', b'\x00'))):
+        for tail in tails(alphabet, (1, 2, 3)):
+            for close, how in ends:
+                for where in places:
+                    if where != 'middle' and how in ('eof', 'ff') \
+                            and len(tail) > 1:
+                        continue
+                    n += 1
+                    line = word(where) + b' "@-t' + tail + close
+                    text, target = place(where, line, bool(close))
+                    add('e%04d' % n, {'@': b'escape_char ' + esc + b'\n'
+                                      + text, '@-t': target},
+                        'escape_char %r, the name ending in %r, ended by %s,'
+                        ' at %s' % (esc, tail, how, where))
+
+    # w: an include name written as a word (ld-ctype.c:2673; get_ident,
+    # linereader.c:570-595, :539@2.28). The escape keeps the next byte,
+    # even a `;`, a quote or a blank; the word ends at a blank, a quote, a
+    # `;`, a `<`, a `,` or the end of the file (:581, :553@2.28). What the
+    # word opens with is read by lr_token first: the escape, a digit, `<`,
+    # `(`, `-1` or (from 2.36) a byte above 0x7F make another token
+    # (:238-239, :285-332); a `.` that opens no ellipsis is the word's
+    # (:242-281), and a `-` without a `1` too, after lr_ungetn(lr, 2) has
+    # put the byte before it into the word (:322-329; measured, w0722
+    # opens ` -rd-w0722-t`). A word that leaves a `<` unescaped outside a
+    # string and reaches the end of the file hangs localedef, whatever came
+    # before it: one case is kept for each end (the number moves on for a
+    # dropped one, so the ids do not depend on the cut).
+    n = 0
+    rests = ((b';""\n', 'semicolon'), (b'', 'eof'), (b'\n#;""\n', 'newline'),
+             (b'\x1a;""\n', '1a'), (b'\xff;""\n', 'ff'))
+    kept = set()
+    for esc, directive in ((b'\\', b''), (b'/', b'escape_char /\n')):
+        alphabet = (esc, b';', b'"', b' ', b'<', b',', b'\x00', b'x')
+        for tail in tails(alphabet, (1, 2)):
+            for rest, how in rests:
+                n += 1
+                if how in ('eof', '1a', 'ff') and _ends_at_lt(tail, esc):
+                    if how in kept:
+                        continue
+                    kept.add(how)
+                inc = b'include @-t' + tail + rest
+                if rest:
+                    text = tl % inc.rstrip(b'\n') + coll('a')
+                else:
+                    text = coll('a') + b'LC_CTYPE\ntranslit_start\n' + inc
+                add('w%04d' % n, {'@': directive + text, '@-t': vct},
+                    'an include word ending in %r, then %s, escape %r'
+                    % (tail, how, esc))
+    for first in (b'1', b'-', b'.', b'<', b'\\', b'\xc3\xa9', b'\xa7', b'(',
+                  b'-1'):
+        n += 1
+        add('w%04d' % n, {'@': tl % (b'include ' + first + b'@-t;""')
+                          + coll('a'), '@-t': vct},
+            'an include word that starts with %r' % first)
+    for kw in (b'copy', b'LC_CTYPE', b'translit_end', b'include'):
+        n += 1
+        add('w%04d' % n, {'@': tl % (b'include ' + kw + b';""') + coll('a'),
+                          '@-t': vct}, 'an include word that is %r' % kw)
+
+    # h: each place that opens a file, the state the file's earlier
+    # sections leave, and the kind of name. Whether a string is read
+    # translated is the file's translate_strings (backlog 13.48): 1 from
+    # lr_create (linereader.c:81); 0 in every collate_startup, called even
+    # for a section glibc ignores (ld-collate.c:1524, called at :2668); 1
+    # in the startup of the ten categories handle_copy serves, when they
+    # have no copy (ld-identification.c:89, ld-numeric.c:59, ld-time.c:126
+    # @2.39 and the others), and at translit_start (ld-ctype.c:2652). Neither
+    # ctype_startup, nor a copy of those ten (it returns before the
+    # startup), nor an LC_COLLATE copying a file without one (it returns
+    # before, ld-collate.c:2657) changes it. With no name, a copy opening
+    # LC_COLLATE or LC_CTYPE and an include crash localedef, and handle_copy
+    # warns that the name "should consist only of portable characters"
+    # (locfile.c:970) and queues nothing; the copy in the middle is read
+    # untranslated and always has one.
+    probes = ((b'@-t', 'plain'), (b'@-t\\', 'escape last'),
+              (b'@-<U0074>', 'symbolic'), (b'@-missing', 'missing'),
+              (b'', 'empty'), (b'@-t\x00zz', 'NUL inside'))
+
+    def consumer(kind, s):
+        if kind == 'CO':
+            return HEAD + b'copy "' + s + b'"\n' + END, coll('t')
+        if kind == 'CM':
+            return (HEAD + D('a') + b'copy "' + s + b'"\n' + ORDER_HEAD
+                    + O('a') + ORDER_TAIL + END, coll('t'))
+        if kind == 'TO':
+            return b'LC_CTYPE\ncopy "' + s + b'"\nEND LC_CTYPE\n', vct
+        if kind == 'HC':
+            return b'LC_TIME\ncopy "' + s + b'"\nEND LC_TIME\n', vtime
+        if kind == 'TI':
+            return tl % (b'include "' + s + b'";""'), vct
+        raise ValueError(kind)
+
+    histories = (
+        (b'', 'nothing before'),
+        (coll('b'), 'an LC_COLLATE'),
+        (coll('b') + IDENT, 'an LC_COLLATE, then LC_IDENTIFICATION'),
+        (coll('b') + b'LC_CTYPE\ntranslit_start\ntranslit_end\nEND LC_CTYPE\n',
+         'an LC_COLLATE, then an LC_CTYPE with translit_start'),
+        (coll('b') + b'LC_CTYPE\nEND LC_CTYPE\n',
+         'an LC_COLLATE, then an LC_CTYPE without translit_start'),
+        (coll('b') + b'LC_NUMERIC\ncopy "@-n"\nEND LC_NUMERIC\n',
+         'an LC_COLLATE, then an LC_NUMERIC that copies'),
+        (HEAD + b'copy "@-c"\nEND LC_COLLATE\n',
+         'an LC_COLLATE copying a file without LC_COLLATE'),
+        (coll('b') + b'escape_char /\n', 'an LC_COLLATE, then escape_char /'),
+    )
+    n = 0
+    for kind in ('CO', 'TO', 'HC'):
+        for hist, hnote in histories:
+            for s, snote in probes:
+                n += 1
+                sec, target = consumer(kind, s)
+                main = hist + sec + (b'' if kind == 'CO' else coll('a'))
+                add('h%03d' % n, {'@': main, '@-t': target, '@-n': NUMERIC,
+                                  '@-c': IDENT},
+                    '%s, name %s, after %s' % (kind, snote, hnote))
+    # In a file reached by a copy, after an LC_COLLATE that file's run
+    # ignores: collate_startup still sets translate_strings to 0. No
+    # collating-element there: the reader's look-ahead of one token reads
+    # the line after it with the state that line's own reading sets, which
+    # would hide the startup's 0.
+    for ign, inote in ((HEAD + END, 'an empty'),
+                       (HEAD + ORDER_HEAD + ORDER_TAIL + END,
+                        'an order-only')):
+        for kind, cat in (('TO', b'LC_CTYPE'), ('HC', b'LC_TIME')):
+            for s, snote in probes:
+                n += 1
+                sec, target = consumer(kind, s)
+                add('h%03d' % n, {'@': b'%s\ncopy "@-q"\nEND %s\n' % (cat, cat)
+                                  + coll('a'), '@-q': ign + sec,
+                                  '@-t': target},
+                    '%s in a copied file after %s LC_COLLATE it ignores, '
+                    'name %s' % (kind, inote, snote))
+    for kind in ('CM', 'TI'):
+        for s, snote in probes:
+            n += 1
+            sec, target = consumer(kind, s)
+            add('h%03d' % n, {'@': sec + (b'' if kind == 'CM' else coll('a')),
+                              '@-t': target}, '%s, name %s' % (kind, snote))
+    # Read for another category: the name is read, nothing is opened.
+    for kind in ('CO', 'CM', 'TO', 'HC', 'TI'):
+        for s, snote in probes:
+            n += 1
+            sec, target = consumer(kind, s)
+            add('h%03d' % n, {'@': b'LC_IDENTIFICATION\ncopy "@-q"\n'
+                              b'END LC_IDENTIFICATION\n' + coll('a'),
+                              '@-q': sec + IDENT, '@-t': target},
+                '%s in a file read for LC_IDENTIFICATION, name %s'
+                % (kind, snote))
+    # The same state in a file reached by a copy, read for the category of
+    # the place that opens a file, after sections its run ignores. Every
+    # file starts translated (lr_create, linereader.c:81, through
+    # locfile.c:62). An ignored section of the ten that has no copy still
+    # sets 1, its startup being called whatever ignore_content is
+    # (ld-identification.c:275, :87-91; one with a copy returns before
+    # it, :266-271); an ignored LC_CTYPE leaves
+    # translit_start before setting it (ld-ctype.c:2628-2643); an ignored
+    # LC_COLLATE that opens with a copy skips the copy and its startup sets
+    # 0 (ld-collate.c:2645-2668); one whose copy is not a string returns
+    # before its startup (:2620-2642), and an `END` with no category
+    # after it makes glibc read the next word as a section, where an
+    # `END LC_COLLATE` does not. The last two also in the -i file.
+    oo = HEAD + ORDER_HEAD + ORDER_TAIL + END
+    copied = (
+        (b'', 'nothing before'),
+        (oo, 'an order-only LC_COLLATE'),
+        (oo + IDENT, 'an order-only LC_COLLATE, then LC_IDENTIFICATION'),
+        (oo + NUMERIC, 'an order-only LC_COLLATE, then LC_NUMERIC'),
+        (oo + b'LC_CTYPE\ntranslit_start\ntranslit_end\nEND LC_CTYPE\n',
+         'an order-only LC_COLLATE, then an LC_CTYPE with translit_start'),
+        (oo + b'LC_CTYPE\nEND LC_CTYPE\n',
+         'an order-only LC_COLLATE, then an LC_CTYPE'),
+        (oo + b'LC_NUMERIC\ncopy "@-n"\nEND LC_NUMERIC\n',
+         'an order-only LC_COLLATE, then an LC_NUMERIC that copies'),
+        (HEAD + b'copy "@-x"\n' + END, 'an LC_COLLATE that copies'),
+        (HEAD + b'copy 1\nEND\n',
+         'an LC_COLLATE whose copy is not a string, a bare END'),
+        (HEAD + b'copy 1\n' + END,
+         'an LC_COLLATE whose copy is not a string'),
+        (oo + b'escape_char /\n',
+         'an order-only LC_COLLATE, then escape_char /'),
+    )
+    cats = {'CO': b'LC_COLLATE', 'TO': b'LC_CTYPE', 'HC': b'LC_TIME',
+            'TI': b'LC_CTYPE'}
+    for kind in ('CO', 'TO', 'HC', 'TI'):
+        cat = cats[kind]
+        for hist, hnote in copied:
+            for s, snote in probes:
+                n += 1
+                sec, target = consumer(kind, s)
+                main = b'%s\ncopy "@-q"\nEND %s\n' % (cat, cat)
+                if kind != 'CO':
+                    main += coll('a')
+                add('h%03d' % n, {'@': main, '@-q': hist + sec,
+                                  '@-t': target, '@-n': NUMERIC,
+                                  '@-x': coll('x')},
+                    '%s in a file copied for %s after %s, name %s'
+                    % (kind, cat.decode(), hnote, snote))
+    for hist, hnote in copied[8:10]:
+        for kind in ('CO', 'TO', 'HC', 'TI'):
+            for s, snote in probes:
+                n += 1
+                sec, target = consumer(kind, s)
+                add('h%03d' % n, {'@': hist + sec + coll('a'), '@-t': target},
+                    '%s, name %s, after %s' % (kind, snote, hnote))
+
+    # x: the byte after the escape in a name. The translated branch keeps
+    # it, whatever it is, where a quote ends the string and a `<` opens a
+    # symbolic name (linereader.c:824-845); the untranslated one keeps both
+    # bytes (:793-798). Every byte the readers of a name branch on, by
+    # every place it is read at, followed by the closing quote or by a
+    # letter.
+    n = 0
+    for esc, directive in ((b'\\', b''), (b'/', b'escape_char /\n')):
+        other = b'/' if esc == b'\\' else b'\\'
+        for b in (b'"', b'<', b'>', b';', b' ', b',', b'#', b'\x00', esc,
+                  other, b'x', b'\x1a'):
+            for suffix in (b'', b'x'):
+                for where in ('opening', 'middle', 'translit', 'HC'):
+                    n += 1
+                    name = b'@-t' + esc + b + suffix
+                    if where == 'opening':
+                        text, target = (HEAD + b'copy "' + name + b'"\n'
+                                        + END), coll('t')
+                    elif where == 'middle':
+                        text, target = consumer('CM', name)
+                    elif where == 'translit':
+                        text, target = consumer('TI', name)
+                        text += coll('a')
+                    else:
+                        text, target = consumer('HC', name)
+                        text += coll('a')
+                    add('x%03d' % n, {'@': directive + text, '@-t': target},
+                        'the name ending in the escape %r, then %r%s, at %s'
+                        % (esc, b, ' and a letter' if suffix else '', where))
+
+    # p: the repertoire map a translit include names (ld-ctype.c:2687-2695,
+    # :2713). The entry the include creates keeps its name
+    # (add_to_readlist, localedef.c:628-629). The sections of LC_COLLATE,
+    # LC_CTYPE, LC_MESSAGES, LC_MONETARY, LC_NUMERIC and LC_TIME of that
+    # file read the map first (ld-collate.c:2577-2578, ld-ctype.c:
+    # 2084-2085, ld-time.c:681-682 and the three others), and every section
+    # passes the name to each entry its copies create (ld-collate.c:
+    # 2648-2649, :2702, ld-ctype.c:2130-2131, locfile.c:973-974, which all
+    # ten handle_copy callers reach). Of what the reader answers, only an
+    # LC_COLLATE read and stored with the map changes: a name the map
+    # defines cannot be a collating-element (check_duplicate, :433-438),
+    # and a symbol the charmap lacks is looked up in it (:968). (LC_CTYPE
+    # reads its translit entries' symbolic names through the map too,
+    # ld-ctype.c:1793-1803, :2777, which the reader does not answer
+    # about.) The map is looked for in the current directory first
+    # (repertoire.c:72@2.39), where measure.py puts the case's files.
+    target = b'LC_CTYPE\nEND LC_CTYPE\n' + coll('r')
+    inc = tl % b'include "@-t";"@-m"'
+    inc_copy = inc + HEAD + b'copy "@-t"\n' + END
+    rmap = b'<mk-r> <U0062>\n'
+    n = 0
+    for files, note in (
+            ({'@': inc_copy, '@-t': target, '@-m': rmap},
+             'a map defining the element name, the include before a copy of '
+             'the same file for LC_COLLATE'),
+            ({'@': inc_copy, '@-t': target, '@-m': b'<zz> <U0062>\n'},
+             'control for p001: the map defines another name'),
+            ({'@': HEAD + b'copy "@-t"\n' + END + inc, '@-t': target,
+              '@-m': rmap}, 'p001 with the copy before the include'),
+            ({'@': inc_copy, '@-t': target,
+              '@-m': b'CHARIDS\n' + rmap + b'END CHARIDS\n'},
+             'p001 with CHARIDS around the map'),
+            ({'@': inc_copy, '@-t': target}, 'p001 with no map file'),
+            ({'@': inc + HEAD + b'copy "@-v"\n' + END,
+              '@-t': b'LC_CTYPE\nEND LC_CTYPE\n',
+              '@-v': HEAD + b'copy "@-w"\n' + END, '@-w': target,
+              '@-m': rmap},
+             'a present map, LC_COLLATE copied from files the include did '
+             'not queue'),
+            ({'@': inc_copy, '@-t': target, '@-m': coll('z')},
+             'the map is a locale file'),
+            ({'@': inc_copy, '@-t': target, '@-m': b''}, 'the map is empty'),
+            ({'@': inc_copy.replace(b'"@-m"', b'"@-t"'), '@-t': target},
+             'the map named is the included file'),
+            ({'@': inc_copy.replace(b'"@-m"', b'@-m'), '@-t': target,
+              '@-m': rmap}, 'p001 with the map named by a word'),
+            ({'@': tl % b'include "@-v";"@-m"' + HEAD + b'copy "@-v"\n'
+              + END, '@-v': b'LC_CTYPE\nEND LC_CTYPE\n' + HEAD
+              + b'copy "@-w"\n' + END, '@-w': coll('r'), '@-m': rmap},
+             'p001 one copy further: the included file copies LC_COLLATE '
+             'from the file that defines the element'),
+            # An LC_COLLATE the run does not store changes nothing; an
+            # empty name, or one that opens with a NUL, is no map
+            # (ld-ctype.c:2693-2695); and an entry keeps the repertoire
+            # it was created with (localedef.c:620-629).
+            ({'@': inc + coll('a'), '@-t': target, '@-m': rmap},
+             'a map defining the element name, the included file read for '
+             'LC_CTYPE only'),
+            ({'@': tl % b'include "@-t";""' + HEAD + b'copy "@-t"\n' + END,
+              '@-t': target, '@-m': rmap},
+             'p001 with an empty repertoire name'),
+            ({'@': tl % b'include "@-t";\x00@-m' + HEAD + b'copy "@-t"\n'
+              + END, '@-t': target, '@-m': rmap},
+             'p001 with a repertoire word that opens with a NUL'),
+            ({'@': b'LC_TIME\ncopy "@-t"\nEND LC_TIME\n' + inc_copy,
+              '@-t': target + TIME7, '@-m': rmap},
+             'p001 with an LC_TIME copy of the included file first'),
+            ({'@': inc + b'LC_TIME\ncopy "@-t"\nEND LC_TIME\n' + HEAD
+              + b'copy "@-t"\n' + END, '@-t': target + TIME7, '@-m': rmap},
+             'p015 with the include first'),
+            # The map handed on by a copy in a file with no LC_COLLATE:
+            # a copy in the middle reads the included file now, for
+            # LC_COLLATE and the LC_CTYPE queued, and its LC_CTYPE copy
+            # (or its LC_TIME copy) creates the next entry with the map;
+            # the next copy in the middle reads that one's LC_COLLATE with
+            # it (false-negative-reviewer, round 2 of 7c-bis).
+            ({'@': inc + HEAD + D('a') + b'copy "@-t"\ncopy "@-u"\n' + END,
+              '@-t': b'LC_CTYPE\ncopy "@-u"\nEND LC_CTYPE\n',
+              '@-u': b'LC_CTYPE\nEND LC_CTYPE\n' + coll('r'), '@-m': rmap},
+             'the map handed on by an LC_CTYPE copy of the included file'),
+            ({'@': inc + HEAD + D('a') + b'copy "@-t"\ncopy "@-u"\n' + END,
+              '@-t': b'LC_CTYPE\ncopy "@-u"\nEND LC_CTYPE\n',
+              '@-u': b'LC_CTYPE\nEND LC_CTYPE\n' + coll('r'),
+              '@-m': b'<zz> <U0062>\n'}, 'control for p017'),
+            ({'@': inc + b'LC_TIME\ncopy "@-t"\nEND LC_TIME\n' + HEAD + D('a')
+              + b'copy "@-t"\ncopy "@-u"\n' + END,
+              '@-t': b'LC_CTYPE\nEND LC_CTYPE\nLC_TIME\ncopy "@-u"\n'
+              b'END LC_TIME\n', '@-u': TIME7 + coll('r'), '@-m': rmap},
+             'the map handed on by an LC_TIME copy of the included file'),
+            ({'@': inc + b'LC_TIME\ncopy "@-t"\nEND LC_TIME\n' + HEAD + D('a')
+              + b'copy "@-t"\ncopy "@-u"\n' + END,
+              '@-t': b'LC_CTYPE\nEND LC_CTYPE\nLC_TIME\ncopy "@-u"\n'
+              b'END LC_TIME\n', '@-u': TIME7 + coll('r'),
+              '@-m': b'<zz> <U0062>\n'}, 'control for p019')):
+        n += 1
+        add('p%03d' % n, files, note)
+
+    # r: the repertoire name after an include, as the gate it is: a string
+    # glibc cannot read is a syntax error and nothing is queued
+    # (ld-ctype.c:2690). The map it names is p's.
+    reps = (b'""', b'"<U0041>"', b'"x"', b'"<U0378>"', b'"<rd>"', b'"<>"',
+            b'"x', b'x', b'<U0041>', b'1', b'', b'"\xc3\xa9"', b'"\xa7"',
+            b'"x\\"', b'x\\;y')
+    n = 0
+    for form in (b'"@-t"', b'@-t'):
+        for rep in reps:
+            n += 1
+            add('r%03d' % n, {'@': tl % (b'include ' + form + b';' + rep)
+                              + coll('a'), '@-t': vct},
+                'include %r with the repertoire %r' % (form, rep))
+
+    # k: what follows `copy` or `include` is not a string, and opens
+    # nothing: a copy opening LC_COLLATE or LC_CTYPE is a syntax error that
+    # skips the category (ld-collate.c:2620-2627, ld-ctype.c:2102-2108),
+    # one in the middle goes to
+    # err_label (:2698-2699), handle_copy says "expecting string argument"
+    # (locfile.c:965), and an include takes a string or a word only
+    # (ld-ctype.c:2673).
+    kinds = (b'@-t', b'1', b'<U0041>', b';', b'', b'\xc3\xa9', b'\\x41')
+    n = 0
+    for k in kinds:
+        for kind in ('CO', 'CM', 'TO', 'HC', 'TI'):
+            n += 1
+            sec, target = consumer(kind, b'@-t')
+            sec = sec.replace(b'"@-t"', k, 1)
+            add('k%03d' % n, {'@': sec + (b'' if kind in ('CO', 'CM')
+                                          else coll('a')), '@-t': target},
+                '%s followed by %r' % (kind, k))
+    n += 1
+    add('k%03d' % n, {'@': coll('a') + HEAD + b'copy', '@-t': coll('t')},
+        'copy, then the end of the file')
 
 
 def generate():

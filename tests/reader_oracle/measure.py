@@ -110,10 +110,13 @@ def _one(case, src, out, force):
         p.kill()
         text = p.communicate()[0]
         timed_out = True
+    # surrogateescape keeps each byte that is not UTF-8 apart from every
+    # other: localedef prints a file name's bytes as they are, and 'replace'
+    # made 0xA7 and 0xFF one U+FFFD, backslashreplace made the byte 0xA7 and
+    # the four letters `\xa7` one text.
+    text = text.decode('utf-8', 'surrogateescape')
     obs = {'rc': p.returncode, 'timed_out': timed_out,
-           'messages': [m[:300] for m in
-                        text.decode('utf-8', 'replace').split('\n')[:40]
-                        if m]}
+           'messages': [m[:300] for m in text.split('\n')[:40] if m]}
     lc = os.path.join(out, 'LC_COLLATE')
     if os.path.isfile(lc):
         with open(lc, 'rb') as f:
