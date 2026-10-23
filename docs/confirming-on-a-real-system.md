@@ -120,14 +120,9 @@ runtime from `pg_database`. In a typical database that is most text columns,
 and in a container it is usually all of them, because `initdb` inherits the
 locale from the environment and minimal images ship `LANG=C.UTF-8`.
 
-The template asks `pg_database` first and says plainly whether the database is
-exposed, then treats default-collated columns as in scope when it is.
-
 `C.UTF-8` under the `libc` provider **is** exposed. PostgreSQL special-cases
 only the literal strings `C` and `POSIX` to byte comparison, so libc `C.UTF-8`
-goes through `strcoll` like any other locale. The `builtin` provider's
-`C.UTF-8` (PG 17+) is a different implementation and is not exposed — see
-[scope.md](scope.md).
+goes through `strcoll` like any other locale.
 
 ## The `C.UTF-8` probe
 

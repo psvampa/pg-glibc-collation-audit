@@ -5,7 +5,8 @@ saying so.
 
 ## For the source audit (steps 1 to 5)
 
-`git`, `python3` (stdlib only), `bash`. Nothing else, and no PostgreSQL.
+`git`, `python3` 3.7 or newer (stdlib only), `bash`. Nothing else, and no
+PostgreSQL.
 
 Step 1 clones glibc from `github.com/bminor/glibc`, so it needs outbound
 network the first time. The clone is `--filter=blob:none --no-checkout` and
@@ -77,8 +78,8 @@ access to the machines. Comparing on a RHEL8 machine itself is not tested:
 
 ## The test suite
 
-Running it needs the same as the source audit. What it covers, and what it
-does not, is in [tests/README.md](../tests/README.md).
+What it covers, and what it does not, is in
+[tests/README.md](../tests/README.md).
 
 ## For the confirmation step
 
