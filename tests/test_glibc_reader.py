@@ -124,13 +124,28 @@ _STATEMENTS = {'o14', 'o15', 'o16', 'o20', 'o21', 'o22', 'o23', 'o24', 'o25',
 # directions or inside a weight, with more on the line (o55, o56); from
 # 2.36 it is a byte and the reader follows glibc.
 _EOF_MID_LINE = {'o55', 'o56'}
+# A translated copy or include name, or an include's repertoire name, that
+# holds a character above U+007F: whether the charmap has it decides
+# whether glibc reads the name, refuses it, or reads the file again for
+# LC_CTYPE (translate_unicode_codepoint, linereader.c:651@2.39), and the
+# reader reads no charmap (15.6). Symbolic in y and r on every build; from
+# 2.36 also raw bytes, which glibc decodes as UTF-8 there (u, r012, r027).
+_CHARMAP_NAMES = {'y013', 'y015', 'y016', 'y018', 'r004', 'r019'}
+# An LC_COLLATE read with the repertoire map a translit include named, or
+# that a copy handed on, which glibc reads first and the reader does not
+# (p001, p017 and p019 measure what it changes). p003, p006 and p012 to
+# p015, where no LC_COLLATE is read with a map, are settled.
+_REPERTOIRE = {'p001', 'p002', 'p004', 'p005', 'p007', 'p008', 'p009',
+               'p010', 'p011', 'p016', 'p017', 'p018', 'p019', 'p020'}
 EXPECTED_UNSETTLED = {
     'rhel8': {'b18', 'b19', 's51'} | _LATER | _UNDEFINED | _MID_STATEMENT
-    | _STATEMENTS | _EOF_MID_LINE,
+    | _STATEMENTS | _EOF_MID_LINE | _CHARMAP_NAMES | _REPERTOIRE,
     'rhel9': {'b18', 'b19', 's42', 's51'} | _LATER | _UNDEFINED
-    | _MID_STATEMENT | _STATEMENTS | _EOF_MID_LINE,
-    'rhel10': {'s42', 's67', 's68'} | _LATER | _UNDEFINED | _MID_STATEMENT
-    | _STATEMENTS,
+    | _MID_STATEMENT | _STATEMENTS | _EOF_MID_LINE | _CHARMAP_NAMES
+    | _REPERTOIRE,
+    'rhel10': {'s42', 's67', 's68', 'u001', 'u003', 'u016', 'u018', 'u022',
+               'u024', 'r012', 'r027'} | _LATER | _UNDEFINED
+    | _MID_STATEMENT | _STATEMENTS | _CHARMAP_NAMES | _REPERTOIRE,
 }
 # Cases run under another charmap than UTF-8, the only one the reader
 # models (run()); they wait for the charmap reader (15.6) and are compared
@@ -181,12 +196,12 @@ def predict(case, build):
     if r.fatal is not None:
         if r.fatal.kind == 'missing':
             # Decoded as measure.py decodes localedef's message, which
-            # prints the name's bytes (backlog 13.43 e): the bytes above
-            # 0x7F the corpus puts in a name (0xA7, 0xFF) compare as U+FFFD
-            # on both sides, so their place is checked and their value is
-            # not (step 7c-bis).
+            # prints the name's bytes (backlog 13.43 e), with
+            # surrogateescape: a byte above 0x7F that is not UTF-8 keeps
+            # its value on both sides, so the name's bytes are compared,
+            # not only their place (step 7c-bis).
             return {'outcome': 'missing',
-                    'name': r.fatal.name.decode('utf-8', 'replace')}
+                    'name': r.fatal.name.decode('utf-8', 'surrogateescape')}
         return {'outcome': r.fatal.kind}
     if r.collate is None:
         return {'outcome': 'absent'}
