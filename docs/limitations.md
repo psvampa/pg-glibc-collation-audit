@@ -117,8 +117,9 @@ see:
   the strings measured do not hold. The run names them under the locales of
   those encodings, and its characters file lists every one;
 - a locale whose encoding PostgreSQL does not know, in a database of another
-  encoding, which PostgreSQL allows. The bytes it sorts and converts there are
-  not the ones measured, and the run names those locales;
+  encoding, which PostgreSQL allows. The bytes it sorts there are not the
+  ones measured, and the run names those locales, with what it measured of
+  how they convert;
 - the bytes a database holds that PostgreSQL did not convert from UTF-8, as
   from a client of the database's own encoding, and the bytes of a SQL_ASCII
   database, which a superuser can create with any locale. PostgreSQL stores

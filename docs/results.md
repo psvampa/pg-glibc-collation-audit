@@ -93,7 +93,7 @@ under `en_US` and `zh_TW` on glibc 2.28 and 2.34.
 Step 11 swept every character of `zh_TW.utf8`, `zh_HK.utf8` and
 `zh_SG.utf8` on the three test machines and found no change in either pair.
 What it cannot see is a rule for a combination of characters, and
-`zh_TW.euctw`, whose encoding it cannot measure.
+`zh_TW.euctw`, whose order it cannot measure.
 
 ardentperf reports a `glibc` engine and an `icu` engine, and only the first
 bears on a `libc` collation. Between RHEL8 and RHEL9 every locale changes
@@ -226,11 +226,14 @@ and `en_US.utf8` among them, though a few only as far as they could be
 measured. The comparison names those, and also the few it could not measure
 or that are missing from the new machine.
 
-On those machines glibc also stops converting the text of the EUC-JP,
-EUC-KR and GB2312 locales on RHEL9, which it converts on RHEL8, so in a
-database of their own encoding `upper()`, `lower()` and `ILIKE` stop with an
-error there. The RHEL9 machine has no `glibc-gconv-extra`, which the RHEL8
-one has, and without it glibc converts only ASCII in those encodings.
+On those machines glibc also stops converting the text of the locales whose
+encoding needs a converter from `glibc-gconv-extra`, the EUC ones and TIS-620
+among them, on RHEL9, so in a database that converts that text `upper()`,
+`lower()` and `ILIKE` stop with an error there. The RHEL9 machine has no
+`glibc-gconv-extra`, which the RHEL8 one has, and without it glibc converts
+only ASCII in those encodings. Even on RHEL8, which has it, most of those
+converters leave some byte sequences such a database holds unconverted, and
+the comparison counts them.
 Measured on fresh Rocky Linux machines, installing `glibc-all-langpacks`
 brings it in on 8 and not on 9 or 10.
 
@@ -239,7 +242,7 @@ brings it in on 8 and not on 9 or 10.
 sorts the same, `ber_DZ`, `kab_DZ` and `C.utf8` among them, though a few only as far
 as they could be measured, `ko_KR.utf8` among those. The comparison names
 them, and also the few it could not measure or that are missing from the new
-machine. The same EUC-JP, EUC-KR and GB2312 locales stop `upper()`,
+machine. The same locales that need `glibc-gconv-extra` stop `upper()`,
 `lower()` and `ILIKE` with an error on both machines, for the same reason.
 
 No published verdict moved. What step 11 does not see is in
