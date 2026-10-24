@@ -36,9 +36,12 @@ processes; otherwise the file says it was not checked); and how PostgreSQL
 can use each locale: whether setlocale accepts it for LC_COLLATE and for
 LC_CTYPE, without which a database that uses it does not open, and whether
 glibc converts a character of its encoding to a wide character, without which
-upper(), lower() and ILIKE stop with an error (postgres_use). A file written
-before these were measured still compares, and the comparison says they were
-not checked there. The comparison also names what PostgreSQL stores in
+upper(), lower() and ILIKE stop with an error (postgres_use). A file
+written before these were measured still compares, and the comparison says
+they were not checked there. The file also holds what glibc's character
+rules (LC_CTYPE) answer for every character and every byte, once for each
+distinct LC_CTYPE glibc loads (ctype_tables), which this version does not
+compare. The comparison also names what PostgreSQL stores in
 EUC-JP, EUC-KR and TIS-620, converting from UTF-8, that no order measured
 here places (POSTGRES_ONLY). C and POSIX, which glibc sorts in byte order in
 every version, are the control: a machine where they measured otherwise did
@@ -46,16 +49,13 @@ not measure what this means to.
 
 Each order and told-apart record is kept whole, compressed, once for all the
 locales that share it, so that the comparison can name the characters that
-moved without a second run on the machines. The file was 2.7 MB on each of
-glibc 2.28, 2.34 and 2.39.
+moved without a second run on the machines.
 
 Not measured: a rule that applies only to a particular combination of letters,
 such as a contraction ("ch" sorted as one letter). Two machines that agree on
 both can still sort some longer strings differently. Where a character counts
 for nothing at some level (glibc ignores it there), how it is told apart from
-its neighbour is read less reliably, so a change there may go unseen. Of
-LC_CTYPE, only whether text converts is measured, not what upper(), lower()
-and its other character rules do with it.
+its neighbour is read less reliably, so a change there may go unseen.
 
 Usage:
   python3 locale_order.py > old.out          # on each machine
@@ -104,19 +104,22 @@ import zlib
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
-FORMAT = 'locale_order/3'
+FORMAT = 'locale_order/4'
 
 # The parts a file of each format holds, as its 'parts' says. A file of an
 # earlier format lacks the parts added since, and the comparison says each
-# was not checked and why, rather than refuse a file that is whole; a file
+# part it reads was not checked and why, rather than refuse a file that is
+# whole (it does not read 'ctype' yet); a file
 # that lacks a part its format holds is refused. The corpus digest starts
 # with the first format's name, not with FORMAT, because a file of that
 # format measured the same strings and still compares.
 PARTS = {'locale_order/1': ('order',),
          'locale_order/2': ('order', 'money', 'postgres_libc'),
-         'locale_order/3': ('order', 'money', 'postgres_libc', 'postgres_use')}
+         'locale_order/3': ('order', 'money', 'postgres_libc', 'postgres_use'),
+         'locale_order/4': ('order', 'money', 'postgres_libc', 'postgres_use',
+                            'ctype')}
 # The parts beside the order, each checked whole by load().
-SIDE_PARTS = ('money', 'postgres_libc', 'postgres_use')
+SIDE_PARTS = ('money', 'postgres_libc', 'postgres_use', 'ctype')
 CORPUS_VERSION = 'locale_order/1'
 
 # The file --extract writes holds the measurement, the machine's locale sources
@@ -463,10 +466,200 @@ def postgres_use(name):
 
 
 def measure_locale(name):
-    """(name, result, data, use): measure_one's answer, then postgres_use's,
-    in the same measuring process, where the locale's corpus is built."""
+    """(name, result, data, use, ctype): measure_one's answer, then
+    postgres_use's, then ctype_identity's, in the same measuring process,
+    where the locale's corpus is built."""
     name, result, data = measure_one(name)
-    return name, result, data, postgres_use(name)
+    use = postgres_use(name)
+    return name, result, data, use, ctype_identity(name, use)
+
+
+# The character classes PostgreSQL asks glibc about, isw<class> of a wide
+# character and is<class> of a byte, under upper(), lower(), initcap(),
+# ILIKE, regular expressions and full-text search: nine as isw<class> by
+# name, and xdigit through the full-text parser's p_iswhat, as isxdigit of a
+# byte and iswxdigit of a wide character (wparser_def.c:461-469 in
+# REL_13_23, :454-462 in REL_18_6). iswcntrl and
+# iswblank appear nowhere in it (REL_13_23 and REL_18_6); its regular
+# expressions fix [:cntrl:] and [:blank:] themselves (regc_locale.c).
+CTYPE_CLASSES = ('alpha', 'upper', 'lower', 'digit', 'space', 'punct',
+                 'alnum', 'print', 'graph', 'xdigit')
+# 1 << LC_CTYPE, which is 0 in glibc.
+LC_CTYPE_MASK = 1
+# The first four bytes of a compiled LC_CTYPE: LIMAGIC (LC_CTYPE),
+# locale/localeinfo.h:33-38 in 2.28, 2.34 and 2.39.
+CTYPE_MAGIC = 0x20090720
+# toupper, tolower and the classes, one byte each for each of the 256 bytes.
+CTYPE_BYTES = (2 + len(CTYPE_CLASSES)) * 256
+# What a locale's entry in the ctype part says, beside the table it uses:
+# glibc refused it, Python could not pass it (both as postgres_use said), or
+# its data could not be read.
+CTYPE_STATES = ('table', 'refused', 'unknown', 'not checked')
+CTYPE_UNREAD = ('glibc did not give its LC_CTYPE data the way glibc 2.28 to '
+                '2.39 lay it out')
+CTYPE_MOVED = ('its LC_CTYPE data changed while this machine was measured; '
+               'measure it again')
+# The identity of a compiled LC_CTYPE: its sha256, or glibc's own.
+CTYPE_IDENTITY = re.compile(r'[0-9a-f]{64}|builtin')
+CTYPE_FUNCTIONS = None   # glibc's LC_CTYPE functions, loaded once per process
+
+
+def ctype_libc():
+    """glibc with newlocale, freelocale and the functions of LC_CTYPE that
+    PostgreSQL calls, their argument types declared: towupper, towlower and
+    isw<class> take a wint_t, toupper, tolower and is<class> an int."""
+    global CTYPE_FUNCTIONS
+    if CTYPE_FUNCTIONS is None:
+        lib = ctypes.CDLL(ctypes.util.find_library('c') or 'libc.so.6',
+                          use_errno=True)
+        lib.newlocale.restype = ctypes.c_void_p
+        lib.newlocale.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p]
+        lib.freelocale.restype = None
+        lib.freelocale.argtypes = [ctypes.c_void_p]
+        for n in ['towupper', 'towlower'] + ['isw' + c for c in CTYPE_CLASSES]:
+            f = getattr(lib, n)
+            f.argtypes = [ctypes.c_uint32]
+            f.restype = ctypes.c_uint32 if n.startswith('tow') else ctypes.c_int
+        for n in ['toupper', 'tolower'] + ['is' + c for c in CTYPE_CLASSES]:
+            f = getattr(lib, n)
+            f.argtypes = [ctypes.c_int]
+            f.restype = ctypes.c_int
+        CTYPE_FUNCTIONS = lib
+    return CTYPE_FUNCTIONS
+
+
+def ctype_identity(name, use):
+    """[state, detail]: which LC_CTYPE data glibc loads for the locale.
+
+    ['table', the sha256 of the data] for a compiled LC_CTYPE, whether glibc
+    took it from the locale archive or from a folder, or ['table',
+    'builtin'] for the one glibc carries inside itself (C and POSIX: no file,
+    C-ctype.c). Two names with the same data answer every call of LC_CTYPE
+    alike, so one table measured stands for both (ctype_tables). The data is
+    what newlocale() loaded, read through the head of struct __locale_data
+    (name, filedata, filesize; localeinfo.h:49-53 in 2.28, 2.34 and 2.39),
+    the first entry of a locale_t (__locale_t.h); a compiled file starts with
+    CTYPE_MAGIC, and anything else is not read as data.
+
+    Whether glibc accepts the name is postgres_use's answer, copied for a
+    name setlocale did not accept. newlocale is asked only about a name it
+    did, and finds a locale by the same path (_nl_find_locale, setlocale.c:414
+    and newlocale.c:169 in 2.39), but can still give none: for want of
+    memory, or for a name holding ';', which it reads as a list of
+    categories (newlocale.c:121-158 in 2.39). Its LC_CTYPE is then not
+    checked, with the reason errno holds then (errno is not cleared first,
+    so a failure that sets none may show an earlier one), and the run says
+    so when it ends."""
+    if use['ctype'][0] != 'accepted':
+        return list(use['ctype'])
+    if ctypes.sizeof(ctypes.c_void_p) != 8 or ctypes.sizeof(ctypes.c_long) != 8:
+        return ['not checked', 'this machine is not 64-bit, and only the '
+                               'layout of a 64-bit glibc is read']
+    lib = ctype_libc()
+    loc = lib.newlocale(LC_CTYPE_MASK, name.encode('utf-8', 'surrogateescape'),
+                        None)
+    if not loc:
+        errno = ctypes.get_errno()
+        return ['not checked', 'newlocale gave no locale for it: '
+                + (os.strerror(errno) if errno else 'no reason given')]
+    try:
+        data = ctypes.c_void_p.from_address(loc).value
+        if not data:
+            return ['not checked', CTYPE_UNREAD]
+        filedata = ctypes.c_void_p.from_address(data + 8).value
+        size = ctypes.c_int64.from_address(data + 16).value
+        if filedata is None:
+            return ['table', 'builtin'] if size == 0 else ['not checked', CTYPE_UNREAD]
+        if size < 4:
+            return ['not checked', CTYPE_UNREAD]
+        raw = ctypes.string_at(filedata, size)
+        if int.from_bytes(raw[:4], sys.byteorder) != CTYPE_MAGIC:
+            return ['not checked', CTYPE_UNREAD]
+        return ['table', hashlib.sha256(raw).hexdigest()]
+    except Exception as e:
+        return ['not checked', f'reading it failed: {e!r}']
+    finally:
+        lib.freelocale(loc)
+
+
+def ctype_tables(name):
+    """(name, wide, bytes, why, identity): what glibc's LC_CTYPE functions
+    answer under the locale, for every code point and for every byte, or why
+    it could not be measured; and ctype_identity of the data they answered
+    from, taken in this process right after setlocale loaded it (newlocale
+    finds the data setlocale cached, by the same _nl_find_locale), so that
+    ctype_part files the table under that data and no other.
+
+    wide is canonical JSON: 'upper' and 'lower', the [code point, what
+    towupper or towlower gives] of each code point it changes, and
+    'classes', the runs of code points in each class of CTYPE_CLASSES. bytes
+    is toupper, tolower and is<class> of the 256 bytes, one byte each. Both
+    are what a database hands glibc: upper(), lower() and full-text search
+    turn the text of a database of more than one byte per character into
+    wide characters and ask of each byte in one of one byte (formatting.c up
+    to PostgreSQL 17, pg_locale_libc.c in 18; wparser_def.c); regular
+    expressions use wide characters only in UTF-8, and bytes in every other
+    encoding (regc_pg_locale.c). LC_CTYPE is put back as it was."""
+    saved = locale.setlocale(locale.LC_CTYPE)
+    try:
+        locale.setlocale(locale.LC_CTYPE, name)
+        identity = ctype_identity(name, {'ctype': ['accepted', None]})
+        lib = ctype_libc()
+        up = array.array(CODE_POINT, map(lib.towupper, CODEPOINTS))
+        lo = array.array(CODE_POINT, map(lib.towlower, CODEPOINTS))
+        # code_point_runs splits a run where CODEPOINTS skips the
+        # surrogates, as the code points either side are not consecutive.
+        wide = {'upper': [[c, u] for c, u in zip(CODEPOINTS, up) if u != c],
+                'lower': [[c, u] for c, u in zip(CODEPOINTS, lo) if u != c],
+                'classes': {k: code_point_runs(
+                    [c for c, yes in zip(CODEPOINTS, map(
+                        getattr(lib, 'isw' + k), CODEPOINTS)) if yes])
+                    for k in CTYPE_CLASSES}}
+        rows = [bytes(map(lib.toupper, range(256))),
+                bytes(map(lib.tolower, range(256)))]
+        rows += [bytes(map(bool, map(getattr(lib, 'is' + k), range(256))))
+                 for k in CTYPE_CLASSES]
+        return (name, json.dumps(wide, sort_keys=True,
+                                 separators=(',', ':')).encode('ascii'),
+                b''.join(rows), None, identity)
+    except Exception as e:
+        return name, None, None, f'measuring it failed: {e!r}', None
+    finally:
+        locale.setlocale(locale.LC_CTYPE, saved)
+
+
+def ctype_part(identities, measure_tables):
+    """The ctype part of a measurement: {'locales': each name's
+    ctype_identity, 'tables': for each identity its [wide key, bytes key] or
+    ['not checked', why], 'wide' and 'bytes': each table, packed, under the
+    sha256 of its raw bytes (never of the packed text: zlib-ng packs the
+    same bytes otherwise). measure_tables maps ctype_tables over the names
+    given, one per identity, the first of its locales by name. A table
+    measured on other data than its identity names (the locale changed on
+    disk between the two passes) is not checked: filed under the old data,
+    it would stand for rules nobody measured there."""
+    members = collections.defaultdict(list)
+    for name, entry in identities.items():
+        if entry[0] == 'table':
+            members[entry[1]].append(name)
+    keys = sorted(members)
+    tables, wide, byte = {}, {}, {}
+    for key, (_, w, b, why, identity) in zip(keys, measure_tables(
+            [min(members[k]) for k in keys])):
+        if why is not None:
+            tables[key] = ['not checked', why]
+            continue
+        if identity != ['table', key]:
+            tables[key] = ['not checked', CTYPE_MOVED if identity[0] == 'table'
+                           else f'its LC_CTYPE data could not be read again: '
+                                f'{identity[1]}']
+            continue
+        wk, bk = hashlib.sha256(w).hexdigest(), hashlib.sha256(b).hexdigest()
+        tables[key] = [wk, bk]
+        wide.setdefault(wk, pack(w))
+        byte.setdefault(bk, pack(b))
+    return {'locales': dict(identities), 'tables': tables, 'wide': wide,
+            'bytes': byte}
 
 
 # The names a PostgreSQL process has in /proc/PID/comm: the program's, which
@@ -1188,20 +1381,37 @@ def measure(jobs):
     sys.stderr.flush()
     start = time.time()
     UTF8_BYTES = [chr(c).encode('utf-8') for c in CODEPOINTS]
-    results, order_data, pair_data, uses = {}, {}, {}, {}
+    results, order_data, pair_data, uses, identities = {}, {}, {}, {}, {}
     try:
         with fork_pool(jobs) as pool:
             measured = pool.map(measure_locale, names)
-            for done, (name, result, data, use) in enumerate(measured, 1):
+            for done, (name, result, data, use, ident) in enumerate(measured, 1):
                 line = progress(done, len(names), time.time() - start)
                 if line:
                     sys.stderr.write(line)
                     sys.stderr.flush()
                 results[name] = result
                 uses[name] = use
+                identities[name] = ident
                 if data:
                     order_data.setdefault(result['order'], data['order'])
                     pair_data.setdefault(result['pairs'], data['pairs'])
+
+            def measure_tables(reps):
+                sys.stderr.write(f'Measuring the character rules (LC_CTYPE) of '
+                                 f'one locale for each of the {len(reps)} '
+                                 f'distinct LC_CTYPE glibc loaded...\n')
+                sys.stderr.flush()
+                tables, begun = [], time.time()
+                for done, r in enumerate(pool.map(ctype_tables, reps), 1):
+                    line = progress(done, len(reps), time.time() - begun,
+                                    'LC_CTYPE')
+                    if line:
+                        sys.stderr.write(line)
+                        sys.stderr.flush()
+                    tables.append(r)
+                return tables
+            ctype = ctype_part(identities, measure_tables)
     except BrokenProcessPool:
         # A process killed from outside, most often for want of memory. The
         # pool reports it rather than waiting forever for its answer.
@@ -1223,30 +1433,32 @@ def measure(jobs):
         'money': money_digits(names),
         'postgres_libc': postgres_libc(),
         'postgres_use': uses,
+        'ctype': ctype,
     }
     out['content'] = content_digest(out)
     text = json.dumps(out, sort_keys=True) + '\n'
     return text, out, time.time() - start
 
 
-def progress(done, total, seconds):
+def progress(done, total, seconds, what='locale(s)'):
     """The line that says how far a measurement has got, or None when this
-    locale starts no new tenth.
+    item starts no new tenth: a locale, or what says what else.
 
-    One line a tenth, not one a locale: a machine with every language pack
-    lists some 870. None for the last locale as well, whose line finished()
-    writes with more in it. "Done", not "measured": a locale that could not
-    be measured is done too, and only finished() says how many were.
+    One line a tenth, not one an item: a machine with every language pack
+    lists some 870 locales, and some 80 distinct LC_CTYPE. None for the last
+    item as well: the last line is finished()'s, written once both are done.
+    "Done", not "measured": a locale that could not be measured is done
+    too, and only finished() says how many were.
     """
     if done >= total or done * 10 // total == (done - 1) * 10 // total:
         return None
-    return (f'  {done} of {total} locale(s) done '
+    return (f'  {done} of {total} {what} done '
             f'({done * 100 // total}%), {seconds:.0f} s so far\n')
 
 
 def finished(out, seconds, size):
     """Report a measurement on stderr, once written; the exit status, 1 when
-    some locale could not be measured."""
+    some locale could not be measured, its order or its LC_CTYPE."""
     results = out['locales']
     failed = sorted(n for n, r in results.items() if 'error' in r)
     sys.stderr.write(f'Done in {seconds:.0f} s: '
@@ -1255,9 +1467,27 @@ def finished(out, seconds, size):
                      f'{size / 1e6:.1f} MB written.\n')
     for n in failed:
         sys.stderr.write(f'  {shown(n)}: {results[n]["error"]}\n')
+    unread = ctype_not_checked(out['ctype'])
+    if unread:
+        sys.stderr.write(f'!! The character rules (LC_CTYPE) of {len(unread)} '
+                         f'locale(s) could not be measured:\n')
+        for n in sorted(unread):
+            sys.stderr.write(f'  {shown(n)}: {unread[n]}\n')
     for line in machine_libc_lines(out['postgres_libc']):
         sys.stderr.write(line + '\n')
-    return 1 if failed else 0
+    return 1 if failed or unread else 0
+
+
+def ctype_not_checked(part):
+    """{name: why} of the locales glibc accepted whose LC_CTYPE was not
+    measured: their data was not read, or their table could not be."""
+    out = {}
+    for name, entry in part['locales'].items():
+        if entry[0] == 'not checked':
+            out[name] = entry[1]
+        elif entry[0] == 'table' and part['tables'][entry[1]][0] == 'not checked':
+            out[name] = part['tables'][entry[1]][1]
+    return out
 
 
 def machine_libc_lines(p):
@@ -1777,6 +2007,9 @@ def load(path, digest):
                                                      locales):
         die(f'{path}: what it says of how PostgreSQL uses each locale is '
             'malformed; it is not a whole measurement')
+    if 'ctype' in held and not ctype_part_whole(data['ctype'], locales):
+        die(f'{path}: what it says of the character rules (LC_CTYPE) of each '
+            'locale is malformed; it is not a whole measurement')
     if 'content' not in data:
         die(f'{path} is not an output of this version of locale_order.py')
     if data['content'] != content_digest(data):
@@ -1819,6 +2052,16 @@ def load(path, digest):
                 die(f'{path}: the entry for {shown(name)} {first} and {second} '
                     'for how PostgreSQL uses it; glibc changed while that '
                     'machine was measured, so measure it again')
+    if 'ctype' in held:
+        # ctype_identity copies postgres_use's answer for a name setlocale
+        # did not accept: the two say the same, in the same process.
+        for name, r in data['postgres_use'].items():
+            entry = data['ctype']['locales'][name]
+            if r['ctype'][0] != 'accepted' and entry != r['ctype']:
+                die(f'{path}: the entry for {shown(name)} says glibc did not '
+                    'accept it for LC_CTYPE, and its character rules say '
+                    'otherwise; the file contradicts itself, so measure that '
+                    'machine again')
     if version_tuple(data.get('glibc_version')) is None:
         die(f'{path} does not say which glibc it was measured on')
     parts = build_parts(data.get('glibc_build'))
@@ -1869,6 +2112,110 @@ def use_part_whole(use, locales):
                 and text(r['text'], r['codeset']))
     return (isinstance(use, dict) and set(use) == set(locales)
             and all(entry(r) for r in use.values()))
+
+
+def ctype_part_whole(part, locales):
+    """Is the ctype part of a file of the shape ctype_part() writes: one
+    entry per locale, every table an entry names present, every table
+    present named, and each one unpacking to data of its shape whose sha256
+    is its key? A table that does not match its key is damage, never "the
+    same"; content_digest catches damage too, but only of a file whose
+    digest was not rewritten with it."""
+    if not (isinstance(part, dict)
+            and set(part) == {'locales', 'tables', 'wide', 'bytes'}
+            and all(isinstance(part[k], dict) for k in part)
+            and set(part['locales']) == set(locales)):
+        return False
+    named = set()
+    for name, entry in part['locales'].items():
+        if not (isinstance(entry, list) and len(entry) == 2
+                and entry[0] in CTYPE_STATES and isinstance(entry[1], str)
+                and entry[1]):
+            return False
+        if entry[0] == 'table':
+            # glibc gives its own LC_CTYPE to the names C and POSIX and to no
+            # other (_nl_find_locale, findlocale.c:131-137 in 2.39), and
+            # loads data for every other name.
+            if not (CTYPE_IDENTITY.fullmatch(entry[1])
+                    and (entry[1] == 'builtin') == (name in ('C', 'POSIX'))):
+                return False
+            named.add(entry[1])
+    # Every table an entry names is present, and every one present is named.
+    if set(part['tables']) != named:
+        return False
+    wide, byte = set(), set()
+    for t in part['tables'].values():
+        if not (isinstance(t, list) and len(t) == 2
+                and all(isinstance(x, str) and x for x in t)):
+            return False
+        if t[0] == 'not checked':
+            continue
+        wide.add(t[0])
+        byte.add(t[1])
+    # Every table named is present, and every one present is named.
+    if set(part['wide']) != wide or set(part['bytes']) != byte:
+        return False
+    return (all(ctype_unpacked(part['wide'], k, wide_whole) is not None
+                for k in wide)
+            and all(ctype_unpacked(part['bytes'], k, bytes_whole) is not None
+                    for k in byte))
+
+
+def ctype_unpacked(tables, key, whole):
+    """The raw bytes of tables[key], when they unpack, their sha256 is the
+    key and whole() says they are of their kind's shape; else None."""
+    packed = tables[key]
+    if not isinstance(packed, str):
+        return None
+    try:
+        raw = zlib.decompress(base64.b64decode(packed.encode('ascii'),
+                                               validate=True))
+    except (ValueError, zlib.error, UnicodeError):
+        return None
+    if hashlib.sha256(raw).hexdigest() != key or not whole(raw):
+        return None
+    return raw
+
+
+def bytes_whole(raw):
+    """toupper, tolower and one row of 0 and 1 per class, 256 bytes each."""
+    return (len(raw) == CTYPE_BYTES
+            and raw[512:].translate(None, b'\x00\x01') == b'')
+
+
+def wide_whole(raw):
+    """ctype_tables' JSON: each map a list of [code point, another value it
+    maps to], ascending by code point, and each class of CTYPE_CLASSES a list
+    of runs [first, last] of code points, ascending and apart. Every value
+    is a code point of CODEPOINTS, which is what was measured, and no run
+    holds a surrogate."""
+    try:
+        w = json.loads(raw.decode('ascii'))
+    except ValueError:
+        return False
+
+    def point(c):
+        return type(c) is int and 0 < c < 0x110000 and not 0xD800 <= c <= 0xDFFF
+
+    def mapping(pairs):
+        return (isinstance(pairs, list)
+                and all(isinstance(p, list) and len(p) == 2 and point(p[0])
+                        and point(p[1]) and p[0] != p[1] for p in pairs)
+                and all(a[0] < b[0] for a, b in zip(pairs, pairs[1:])))
+
+    def runs(rs):
+        # A run never holds the surrogates: CODEPOINTS skips them, and
+        # code_point_runs ends a run at the gap.
+        return (isinstance(rs, list)
+                and all(isinstance(r, list) and len(r) == 2 and point(r[0])
+                        and point(r[1]) and r[0] <= r[1]
+                        and not r[0] < 0xD800 < r[1] for r in rs)
+                and all(a[1] + 1 < b[0] for a, b in zip(rs, rs[1:])))
+    return (isinstance(w, dict) and set(w) == {'upper', 'lower', 'classes'}
+            and mapping(w['upper']) and mapping(w['lower'])
+            and isinstance(w['classes'], dict)
+            and set(w['classes']) == set(CTYPE_CLASSES)
+            and all(runs(w['classes'][k]) for k in CTYPE_CLASSES))
 
 
 def libc_part_whole(p):

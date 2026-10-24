@@ -28,6 +28,7 @@ right to, and its docstring says which.
 import base64
 import contextlib
 import copy
+import ctypes
 import gzip
 import hashlib
 import io
@@ -3876,11 +3877,44 @@ class ProgressOnTheScreen(unittest.TestCase):
         self.assertIn('Measuring 20 locale(s)', seen[0])
         self.assertEqual(
             len(re.findall(r'locale\(s\) done \(', screen.getvalue())), 9)
-        # The Measuring line and nine of progress, none written while an
-        # earlier one was still held; the last is checked just below.
-        self.assertEqual(len(screen.held), 10)
-        self.assertEqual(screen.held, [False] * 10, 'a line was held back')
+        # The Measuring line, nine of progress and the one that starts the
+        # tables of LC_CTYPE, none written while an earlier one was still
+        # held; the last is checked just below.
+        self.assertIn('Measuring the character rules (LC_CTYPE) of one locale '
+                      'for each of the 0 distinct LC_CTYPE glibc loaded',
+                      flat(screen.getvalue()))
+        self.assertEqual(len(screen.held), 11)
+        self.assertEqual(screen.held, [False] * 11, 'a line was held back')
         self.assertEqual(screen.shown, screen.getvalue(), 'held back')
+
+
+    def test_the_tables_of_lc_ctype_say_how_far_they_got(self):
+        """The second pass, one table per distinct LC_CTYPE, says how far it
+        has got every tenth of the way too: with one process it takes some
+        eight minutes (6 s a table on collaudit8, 81 tables)."""
+        screen = Screen()
+        names = [f'l{i}' for i in range(20)]
+        with unittest.mock.patch.multiple(
+                m, libc_version=lambda: 'glibc 2.34',
+                list_locales=lambda: names,
+                glibc_build=lambda: 'glibc-2.34-1.el9.x86_64',
+                measure_one=lambda name: (name, {'error': 'x'}, None),
+                postgres_use=lambda name: use_of('one byte', 'X'),
+                ctype_identity=lambda name, use: ['table', name],
+                ctype_tables=lambda name: (name, SMALL_WIDE, SMALL_BYTES, None,
+                                           ['table', name]),
+                UTF8_BYTES=None, fork_pool=lambda jobs: ThreadPoolExecutor(1),
+                money_digits=lambda names: {n: 3 for n in names},
+                postgres_libc=lambda: dict(CLEAN_LIBC)), \
+                unittest.mock.patch.object(m.os, 'nice'), \
+                unittest.mock.patch.object(m.sys, 'stderr', screen):
+            m.measure(1)
+        text = screen.getvalue()
+        self.assertEqual(len(re.findall(r'of 20 LC_CTYPE done \(', text)), 9)
+        self.assertLess(text.index('distinct LC_CTYPE glibc loaded'),
+                        text.index('of 20 LC_CTYPE done ('))
+        self.assertEqual(screen.held, [False] * len(screen.held),
+                         'a line was held back')
 
 
 class UnpackRefusesWhatItCannotTrust(unittest.TestCase):
@@ -4407,12 +4441,13 @@ DEFAULT_USE = {'ANSI_X3.4-1968': ('one byte', None),
                'UTF-8': ('converts', (0x80, 'c280'))}
 
 
-def with_parts(money=None, libc=None, use=None, form=m.FORMAT):
+def with_parts(money=None, libc=None, use=None, form=m.FORMAT, ctype=None):
     """An edit that makes a file of the first format one of a later format
     (this one unless form): the list of its parts, the decimals of money (2
     in every locale, but those in money), its PostgreSQL processes
-    (CLEAN_LIBC, but what libc changes) and how PostgreSQL uses each locale
-    (DEFAULT_USE by its encoding, but those in use). The order part is the
+    (CLEAN_LIBC, but what libc changes), how PostgreSQL uses each locale
+    (DEFAULT_USE by its encoding, but those in use) and the character rules
+    of each (ctype_of, but the entries in ctype). The order part is the
     machine's own, untouched."""
     def edit(d):
         d['format'] = form
@@ -4427,7 +4462,37 @@ def with_parts(money=None, libc=None, use=None, form=m.FORMAT):
                     text, char = DEFAULT_USE[r['codeset']]
                     d['postgres_use'][name] = use_of(text, r['codeset'], char)
             d['postgres_use'].update(use or {})
+        if 'ctype' in m.PARTS[form]:
+            d['ctype'] = ctype_of(d['postgres_use'], ctype)
     return edit
+
+
+# A table of LC_CTYPE as ctype_tables() writes one, kept small: the tests
+# of the part read its shape, not glibc's rules.
+SMALL_WIDE = json.dumps(
+    {'upper': [[0x61, 0x41]], 'lower': [[0x41, 0x61]],
+     'classes': {k: [[0x41, 0x41]] for k in m.CTYPE_CLASSES}},
+    sort_keys=True, separators=(',', ':')).encode('ascii')
+SMALL_BYTES = bytes(range(256)) * 2 + bytes(256) * len(m.CTYPE_CLASSES)
+# The identity of the compiled LC_CTYPE every locale of ctype_of() uses.
+SOME_DATA = 'd' * 64
+
+
+def ctype_of(use, entries=None):
+    """The ctype part of a machine whose postgres_use is use: each locale
+    setlocale accepted for LC_CTYPE on one table (C and POSIX on glibc's
+    builtin one, every other on SOME_DATA), each other one as postgres_use
+    said, and entries in place; every table named is SMALL_WIDE and
+    SMALL_BYTES."""
+    locales = {name: (['table', 'builtin' if name in ('C', 'POSIX') else SOME_DATA]
+                      if r['ctype'][0] == 'accepted' else list(r['ctype']))
+               for name, r in use.items()}
+    locales.update(entries or {})
+    wk = hashlib.sha256(SMALL_WIDE).hexdigest()
+    bk = hashlib.sha256(SMALL_BYTES).hexdigest()
+    return {'locales': locales,
+            'tables': {e[1]: [wk, bk] for e in locales.values() if e[0] == 'table'},
+            'wide': {wk: m.pack(SMALL_WIDE)}, 'bytes': {bk: m.pack(SMALL_BYTES)}}
 
 
 # What the whole files of RHEL9 and RHEL10 say PostgreSQL stores and their
@@ -5161,7 +5226,8 @@ class PostgresProcessesRead(unittest.TestCase):
         about PostgreSQL, so a check that could not look is fixed there."""
         screen = Screen()
         out = {'locales': {}, 'locales_listed': 0,
-               'postgres_libc': dict(CLEAN_LIBC, stale=[[1, 'x']])}
+               'postgres_libc': dict(CLEAN_LIBC, stale=[[1, 'x']]),
+               'ctype': {'locales': {}, 'tables': {}, 'wide': {}, 'bytes': {}}}
         with unittest.mock.patch.object(m.sys, 'stderr', screen):
             m.finished(out, 1, 10)
         self.assertIn('!! 1 PostgreSQL process(es) still run the glibc',
@@ -5295,13 +5361,16 @@ class PostgresUseOnTheMachine(unittest.TestCase):
         self.assertEqual(got['text'], ['not checked', "checking failed: OSError('x')"])
 
     def test_the_measuring_process_runs_it(self):
-        """The call site: measure_locale gives measure_one's answer and
-        postgres_use's of the same name."""
+        """The call site: measure_locale gives measure_one's answer,
+        postgres_use's of the same name, and ctype_identity's of that name
+        given that answer."""
         with unittest.mock.patch.multiple(
                 m, measure_one=lambda name: (name, {'error': 'e'}, None),
-                postgres_use=lambda name: {'for': name}):
+                postgres_use=lambda name: {'for': name},
+                ctype_identity=lambda name, use: ['of', name, use]):
             self.assertEqual(m.measure_locale('x'), ('x', {'error': 'e'}, None,
-                                                     {'for': 'x'}))
+                                                     {'for': 'x'},
+                                                     ['of', 'x', {'for': 'x'}]))
 
     def test_measure_keeps_the_part_whole(self):
         """The call site: measure() writes one entry per locale, each what
@@ -5471,6 +5540,532 @@ class PostgresUseRead(Checks):
                         self.assertRaises(SystemExit):
                     m.load(new, m.corpus_digest())
                 self.assertIn(phrase, flat(err.getvalue()))
+
+
+# --- the character rules (LC_CTYPE) of each locale --------------------------
+
+
+class FakeLocale:
+    """A locale_t as newlocale() hands one back, laid out in memory the way
+    glibc 2.28 to 2.39 lay it: a pointer to its LC_CTYPE's struct
+    __locale_data first, whose head is name, filedata and filesize.
+    filedata is the payload's address, or NULL when payload is None; data
+    False leaves the pointer to the struct NULL."""
+
+    def __init__(self, payload, size=None, data=True):
+        self.raw = (ctypes.create_string_buffer(payload, len(payload))
+                    if payload is not None else None)
+        self.head = (ctypes.c_uint64 * 3)(
+            0, ctypes.addressof(self.raw) if self.raw is not None else 0,
+            len(payload) if size is None else size)
+        self.loc = (ctypes.c_uint64 * 13)(
+            ctypes.addressof(self.head) if data else 0)
+        self.address = ctypes.addressof(self.loc)
+
+
+class CtypeOnTheMachine(unittest.TestCase):
+    """ctype_identity(), ctype_tables() and ctype_part(): which LC_CTYPE
+    data glibc loads for each locale, what its functions answer, and the
+    part they make. glibc is a double here, since this machine need not be
+    Linux: newlocale hands back a FakeLocale, and the functions of LC_CTYPE
+    answer under the locale the double of setlocale holds. Freezes data
+    not of a compiled LC_CTYPE read as one, a refusal read as a table, a
+    table measured on another locale than its own, and a measurement that
+    failed read as one that worked."""
+
+    PAYLOAD = m.CTYPE_MAGIC.to_bytes(4, sys.byteorder) + b'rules of a locale'
+
+    def identity(self, fake, use=None, name='de_DE.utf8'):
+        """ctype_identity of name, newlocale handing back fake (None for a
+        refusal), with every call to the double recorded."""
+        self.calls = []
+
+        def newlocale(mask, raw, base):
+            self.calls.append(('newlocale', mask, raw, base))
+            return None if fake is None else fake.address
+
+        lib = unittest.mock.Mock(newlocale=newlocale, freelocale=lambda loc:
+                                 self.calls.append(('freelocale', loc)))
+        with unittest.mock.patch.object(m, 'ctype_libc', lambda: lib):
+            return m.ctype_identity(name, use or use_of('converts', 'UTF-8',
+                                                         (0x80, 'c280')))
+
+    def test_the_data_glibc_loaded(self):
+        fake = FakeLocale(self.PAYLOAD)
+        self.assertEqual(self.identity(fake),
+                         ['table', hashlib.sha256(self.PAYLOAD).hexdigest()])
+        self.assertEqual(self.calls, [('newlocale', 1, b'de_DE.utf8', None),
+                                      ('freelocale', fake.address)])
+
+    def test_two_names_of_the_same_data_are_one_table(self):
+        self.assertEqual(self.identity(FakeLocale(self.PAYLOAD)),
+                         self.identity(FakeLocale(self.PAYLOAD), name='de_AT.utf8'))
+        self.assertNotEqual(self.identity(FakeLocale(self.PAYLOAD)),
+                            self.identity(FakeLocale(self.PAYLOAD + b'!')))
+
+    def test_glibc_s_own(self):
+        """C and POSIX: no file, and glibc's builtin table."""
+        self.assertEqual(self.identity(FakeLocale(None, size=0)),
+                         ['table', 'builtin'])
+
+    def test_what_is_not_a_compiled_lc_ctype_is_not_read(self):
+        for case, fake in (
+                ('another magic', FakeLocale(b'\x00' * 4 + b'rules')),
+                ('the magic of LC_COLLATE',
+                 FakeLocale((0x20051014 ^ 3).to_bytes(4, sys.byteorder) + b'x')),
+                ('shorter than the magic', FakeLocale(self.PAYLOAD[:3])),
+                # string_at reads a negative size up to the first NUL.
+                ('a negative size', FakeLocale(self.PAYLOAD, size=-1)),
+                ('no file but a size', FakeLocale(None, size=5)),
+                ('no data at all', FakeLocale(self.PAYLOAD, data=False))):
+            with self.subTest(case=case):
+                self.assertEqual(self.identity(fake), ['not checked', m.CTYPE_UNREAD])
+                self.assertEqual(self.calls[-1][0], 'freelocale')
+
+    def test_a_refusal_is_postgres_use_s(self):
+        """Whether glibc accepts the name is asked once, by postgres_use;
+        newlocale is not asked about a name setlocale did not accept."""
+        for state in ('refused', 'unknown'):
+            with self.subTest(state=state):
+                use = use_of('not checked', None, m.NO_CTYPE, ctype=state,
+                             why='why ' + state)
+                self.assertEqual(self.identity(FakeLocale(self.PAYLOAD), use),
+                                 [state, 'why ' + state])
+                self.assertEqual(self.calls, [])
+
+    def test_newlocale_refusing_what_setlocale_accepted(self):
+        """For want of memory, or a name holding ';': LC_CTYPE not checked,
+        with the reason errno holds, or one saying there was none (errno 0
+        reads "Success"), never a refusal the comparison would read as glibc
+        changing (review round 2)."""
+        with unittest.mock.patch.object(m.ctypes, 'get_errno', lambda: 12):
+            self.assertEqual(self.identity(None), [
+                'not checked', 'newlocale gave no locale for it: ' + os.strerror(12)])
+        self.assertEqual([c[0] for c in self.calls], ['newlocale'])
+        with unittest.mock.patch.object(m.ctypes, 'get_errno', lambda: 0):
+            self.assertEqual(self.identity(None), [
+                'not checked', 'newlocale gave no locale for it: no reason given'])
+
+    def test_a_name_in_bytes_python_cannot_decode(self):
+        name = 'de_DE.' + b'\xff'.decode('utf-8', 'surrogateescape')
+        self.identity(FakeLocale(self.PAYLOAD), name=name)
+        self.assertEqual(self.calls[0][2], b'de_DE.\xff')
+
+    def test_a_machine_not_of_64_bits(self):
+        """The layout read is a 64-bit glibc's: elsewhere nothing is read,
+        and the reason says why."""
+        size = ctypes.sizeof
+        with unittest.mock.patch.object(m.ctypes, 'sizeof', lambda t: 4 if t in (
+                ctypes.c_void_p, ctypes.c_long) else size(t)):
+            got = self.identity(FakeLocale(self.PAYLOAD))
+        self.assertEqual(got[0], 'not checked')
+        self.assertIn('not 64-bit', got[1])
+        self.assertEqual(self.calls, [])
+
+    def test_a_reading_that_fails_says_so(self):
+        fake = FakeLocale(self.PAYLOAD)
+        with unittest.mock.patch.object(m.ctypes, 'string_at',
+                                        unittest.mock.Mock(side_effect=OSError('x'))):
+            self.assertEqual(self.identity(fake),
+                             ['not checked', "reading it failed: OSError('x')"])
+        self.assertEqual(self.calls[-1], ('freelocale', fake.address))
+
+    def tables(self, codepoints=(0x41, 0x61, 0xD7FF, 0xE000, 0xE001), upper=None,
+               boom=None):
+        """ctype_tables('xx_XX') with every function answering only under
+        xx_XX, as the double of setlocale holds it: towupper and toupper
+        map a to A, towlower and tolower A to a, and a code point is alpha
+        when it is not 0x41's neighbour 0x42; LC_CTYPE checked put back."""
+        state = {m.locale.LC_CTYPE: 'C'}
+
+        def setlocale(category, name=None):
+            self.assertEqual(category, m.locale.LC_CTYPE)
+            if name is not None:
+                state[category] = name
+            return state[category]
+
+        def under(f):
+            def g(c):
+                self.assertEqual(state[m.locale.LC_CTYPE], 'xx_XX')
+                if boom is not None:
+                    raise boom
+                return f(c)
+            return g
+        functions = {
+            'towupper': under(lambda c: 0x41 if c == 0x61 else c),
+            'towlower': under(lambda c: 0x61 if c == 0x41 else c),
+            'toupper': under(upper or (lambda c: 0x41 if c == 0x61 else c)),
+            'tolower': under(lambda c: 0x61 if c == 0x41 else c)}
+        # glibc's is<class>, and isw<class> of an ASCII character, answer
+        # the class's bit of the table, not 1 (ctype.h, _ISbit: 1024 for
+        # alpha on little-endian); isw<class> above ASCII answers 0 or 1
+        # (wcfuncs.c, wchar-lookup.h).
+        for k in m.CTYPE_CLASSES:
+            functions['isw' + k] = under(
+                lambda c, k=k: 1024 if k == 'alpha' and c != 0x42 else 0)
+            functions['is' + k] = under(
+                lambda c, k=k: 2048 if k == 'digit' and c == 0x30 else 0)
+        lib = unittest.mock.Mock(**functions)
+
+        def identity(name, use):
+            self.assertEqual((name, use, state[m.locale.LC_CTYPE]),
+                             ('xx_XX', {'ctype': ['accepted', None]}, 'xx_XX'))
+            return ['table', 'f' * 64]
+        with unittest.mock.patch.object(m.locale, 'setlocale', setlocale), \
+                unittest.mock.patch.object(m, 'ctype_libc', lambda: lib), \
+                unittest.mock.patch.object(m, 'ctype_identity', identity), \
+                unittest.mock.patch.object(m, 'CODEPOINTS', list(codepoints)):
+            got = m.ctype_tables('xx_XX')
+        self.assertEqual(state, {m.locale.LC_CTYPE: 'C'}, 'LC_CTYPE not put back')
+        return got
+
+    def test_the_tables_of_a_locale(self):
+        name, wide, byte, why, identity = self.tables()
+        self.assertEqual((name, why, identity), ('xx_XX', None, ['table', 'f' * 64]))
+        self.assertEqual(json.loads(wide), {
+            'upper': [[0x61, 0x41]], 'lower': [[0x41, 0x61]],
+            'classes': dict({k: [] for k in m.CTYPE_CLASSES},
+                            alpha=[[0x41, 0x41], [0x61, 0x61], [0xD7FF, 0xD7FF],
+                                   [0xE000, 0xE001]])})
+        self.assertTrue(m.wide_whole(wide))
+        self.assertEqual(len(byte), m.CTYPE_BYTES)
+        self.assertEqual((byte[0x61], byte[256 + 0x41]), (0x41, 0x61))
+        rows = {k: byte[512 + 256 * i:768 + 256 * i]
+                for i, k in enumerate(m.CTYPE_CLASSES)}
+        self.assertEqual(rows['digit'], bytes(0x30) + b'\x01' + bytes(0xCF))
+        self.assertEqual(rows['alpha'], bytes(256))
+        self.assertTrue(m.bytes_whole(byte))
+
+    def test_a_run_stops_at_the_surrogates(self):
+        """0xD7FF and 0xE000 are neighbours in CODEPOINTS, never a run."""
+        wide = json.loads(self.tables()[1])
+        self.assertIn([0xD7FF, 0xD7FF], wide['classes']['alpha'])
+        self.assertNotIn([0xD7FF, 0xE001], wide['classes']['alpha'])
+
+    def test_a_measurement_that_fails_says_so(self):
+        self.assertEqual(self.tables(boom=OSError('x')),
+                         ('xx_XX', None, None, "measuring it failed: OSError('x')",
+                          None))
+
+    def test_a_case_past_a_byte_is_a_failure(self):
+        name, wide, byte, why, _ = self.tables(upper=lambda c: 0x1E9E if c == 0xDF else c)
+        self.assertEqual((wide, byte), (None, None))
+        self.assertIn('measuring it failed', why)
+
+    def part(self, identities, answers):
+        """ctype_part over identities, measure_tables answering answers
+        {name: (wide, bytes, why)}, the names it was asked about kept."""
+        self.asked = []
+
+        def measure_tables(names):
+            self.asked.append(list(names))
+            return [(n,) + answers[n] for n in names]
+        return m.ctype_part(identities, measure_tables)
+
+    def own(self, key):
+        """What ctype_tables says it measured, for a table of key."""
+        return ['table', key]
+
+    def test_one_table_measured_per_data_on_its_first_locale(self):
+        a, b = 'a' * 64, 'b' * 64
+        part = self.part(
+            {'de_DE.utf8': ['table', a], 'de_AT.utf8': ['table', a],
+             'C': ['table', 'builtin'], 'xx_XX': ['refused', 'no'],
+             'yy_YY': ['not checked', 'unread'], 'tr_TR.utf8': ['table', b]},
+            {'de_AT.utf8': (SMALL_WIDE, SMALL_BYTES, None, self.own(a)),
+             'C': (SMALL_WIDE, SMALL_BYTES, None, self.own('builtin')),
+             'tr_TR.utf8': (None, None, 'measuring it failed: x', None)})
+        self.assertEqual(self.asked, [['de_AT.utf8', 'tr_TR.utf8', 'C']])
+        wk, bk = (hashlib.sha256(SMALL_WIDE).hexdigest(),
+                  hashlib.sha256(SMALL_BYTES).hexdigest())
+        self.assertEqual(part['tables'], {a: [wk, bk], 'builtin': [wk, bk],
+                                          b: ['not checked', 'measuring it failed: x']})
+        self.assertEqual(part['locales']['xx_XX'], ['refused', 'no'])
+        self.assertEqual((part['wide'], part['bytes']),
+                         ({wk: m.pack(SMALL_WIDE)}, {bk: m.pack(SMALL_BYTES)}))
+
+    def test_the_key_is_of_the_data_not_of_how_it_was_packed(self):
+        """zlib-ng packs the same bytes otherwise (RHEL10): the key of a
+        table is the digest of what was measured."""
+        args = ({'C': ['table', 'builtin']},
+                {'C': (SMALL_WIDE, SMALL_BYTES, None, self.own('builtin'))})
+        once = self.part(*args)
+        with unittest.mock.patch.object(m, 'pack', lambda raw: base64.b64encode(
+                zlib.compress(raw, 1)).decode('ascii')):
+            again = self.part(*args)
+        self.assertEqual(once['tables'], again['tables'])
+        self.assertNotEqual(once['wide'], again['wide'])
+
+    def test_a_table_measured_on_other_data(self):
+        """The locale's LC_CTYPE changed on disk between the two passes:
+        the table was measured on data its identity does not name, and is
+        not checked, never filed under the old data (review round 1)."""
+        a = 'a' * 64
+        for got, why in ((['table', 'b' * 64], m.CTYPE_MOVED),
+                         (['not checked', 'x'],
+                          'its LC_CTYPE data could not be read again: x')):
+            with self.subTest(got=got):
+                part = self.part({'de_DE.utf8': ['table', a]},
+                                 {'de_DE.utf8': (SMALL_WIDE, SMALL_BYTES, None, got)})
+                self.assertEqual(part['tables'], {a: ['not checked', why]})
+                self.assertEqual((part['wide'], part['bytes']), ({}, {}))
+
+    def test_the_classes_are_those_postgresql_asks_about(self):
+        """isw<class> and is<class> as PostgreSQL 13 to 18 call them:
+        alnum, alpha, digit, graph, lower, print, punct, space and upper by
+        name, xdigit by name (isxdigit) and through the full-text parser's
+        isw##type
+        (wparser_def.c:461-469 in REL_13_23, :454-462 in REL_18_6); never
+        iswcntrl or iswblank (review round 1: nothing held the list)."""
+        self.assertEqual(sorted(m.CTYPE_CLASSES), sorted([
+            'alnum', 'alpha', 'digit', 'graph', 'lower', 'print', 'punct',
+            'space', 'upper', 'xdigit']))
+
+    def test_the_run_says_when_lc_ctype_was_not_measured(self):
+        """finished(): a locale whose data was not read and one whose table
+        could not be measured are named, with why, and the exit status is 1,
+        as for a locale whose order could not be measured (review round 1)."""
+        out = {'locales': {}, 'locales_listed': 3, 'postgres_libc': dict(CLEAN_LIBC),
+               'ctype': {'locales': {'a': ['not checked', 'unread'],
+                                     'b': ['table', 'b' * 64],
+                                     'c': ['table', 'c' * 64],
+                                     'd': ['refused', 'no']},
+                         'tables': {'b' * 64: ['not checked', 'failed'],
+                                    'c' * 64: ['w', 'b']},
+                         'wide': {}, 'bytes': {}}}
+        screen = Screen()
+        with unittest.mock.patch.object(m.sys, 'stderr', screen):
+            rc = m.finished(out, 1, 10)
+        self.assertEqual(rc, 1)
+        text = screen.getvalue()
+        self.assertIn('!! The character rules (LC_CTYPE) of 2 locale(s) could '
+                      'not be measured:\n  a: unread\n  b: failed\n', text)
+        out['ctype']['locales'] = {'c': ['table', 'c' * 64], 'd': ['refused', 'no']}
+        screen = Screen()
+        with unittest.mock.patch.object(m.sys, 'stderr', screen):
+            self.assertEqual(m.finished(out, 1, 10), 0)
+        self.assertNotIn('LC_CTYPE', screen.getvalue())
+
+    def test_measure_writes_the_part(self):
+        """The call site: measure() keeps each locale's identity, measures
+        a table once per identity in its pool, and writes the part under
+        the parts its format lists."""
+        a = 'a' * 64
+        with unittest.mock.patch.multiple(
+                m, libc_version=lambda: 'glibc 2.34',
+                list_locales=lambda: ['a', 'b', 'c'],
+                glibc_build=lambda: 'glibc-2.34-1.el9.x86_64',
+                measure_one=lambda name: (name, {'error': 'x'}, None),
+                postgres_use=lambda name: use_of('one byte', 'X'),
+                ctype_identity=lambda name, use: (
+                    ['refused', 'no'] if name == 'c' else ['table', a]),
+                ctype_tables=lambda name: (name, SMALL_WIDE, SMALL_BYTES, None,
+                                           ['table', a]),
+                UTF8_BYTES=None,
+                fork_pool=lambda jobs: ThreadPoolExecutor(1),
+                money_digits=lambda names: {n: 3 for n in names},
+                postgres_libc=lambda: dict(CLEAN_LIBC)), \
+                unittest.mock.patch.object(m.os, 'nice'), \
+                unittest.mock.patch.object(m.sys, 'stderr', Screen()):
+            text, out, _ = m.measure(1)
+        data = json.loads(text)
+        self.assertIn('ctype', data['parts'])
+        self.assertEqual(data['ctype']['locales'], {
+            'a': ['table', a], 'b': ['table', a], 'c': ['refused', 'no']})
+        self.assertEqual(list(data['ctype']['tables']), [a])
+        self.assertTrue(m.ctype_part_whole(data['ctype'], data['locales']))
+
+
+class CtypeRead(Checks):
+    """A file of this format whose part about the character rules of each
+    locale is missing, malformed, or says otherwise than its postgres_use
+    is refused: read as missing it would say "not checked" where the
+    machine did check, and a table that does not unpack to what its key
+    names would compare as rules nobody measured."""
+
+    def refused(self, phrase, *edits, form=m.FORMAT, use=None):
+        new = self.made(RHEL10, 'new', with_parts(form=form, use=use), *edits)
+        err = io.StringIO()
+        with unittest.mock.patch.object(m.sys, 'stderr', err), \
+                self.assertRaises(SystemExit) as stop:
+            m.load(new, m.corpus_digest())
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn(phrase, flat(err.getvalue()))
+
+    MALFORMED = ('what it says of the character rules (LC_CTYPE) of each '
+                 'locale is malformed')
+
+    def test_without_the_part(self):
+        self.refused('lacks a part its format holds', lambda d: d.pop('ctype'))
+
+    def test_a_third_format_file_with_the_part(self):
+        self.refused('holds one it does not',
+                     lambda d: d.update(ctype={}), form='locale_order/3')
+
+    def test_malformed(self):
+        wk = hashlib.sha256(SMALL_WIDE).hexdigest()
+        bk = hashlib.sha256(SMALL_BYTES).hexdigest()
+
+        def part(f):
+            return lambda d: f(d['ctype'])
+
+        def wide(raw):
+            """The wide table replaced by raw, keyed and named as its own."""
+            key = hashlib.sha256(raw).hexdigest()
+
+            def edit(c):
+                c['wide'] = {key: m.pack(raw)}
+                for t in c['tables'].values():
+                    t[0] = key
+            return part(edit)
+
+        def bytes_(raw):
+            key = hashlib.sha256(raw).hexdigest()
+
+            def edit(c):
+                c['bytes'] = {key: m.pack(raw)}
+                for t in c['tables'].values():
+                    t[1] = key
+            return part(edit)
+
+        def shaped(**k):
+            w = json.loads(SMALL_WIDE)
+            w.update(k)
+            return json.dumps(w).encode('ascii')
+
+        def classes(**k):
+            w = json.loads(SMALL_WIDE)
+            w['classes'].update(k)
+            return json.dumps(w).encode('ascii')
+        for case, edit in (
+                ('not a map', lambda d: d.update(ctype=[])),
+                ('a key missing', part(lambda c: c.pop('bytes'))),
+                ('a key more', part(lambda c: c.update(more={}))),
+                ('a locale missing', part(lambda c: c['locales'].pop('C'))),
+                ('a name more', part(lambda c: c['locales'].update(xx_XX=['table', 'builtin']))),
+                ('an entry not a list', part(lambda c: c['locales'].update(C='builtin'))),
+                ('an unknown state', part(lambda c: c['locales'].update(C=['maybe', 'x']))),
+                ('a state of three items', part(lambda c: c['locales'].update(C=['table', 'builtin', 1]))),
+                ('an empty reason', part(lambda c: c['locales'].update(C=['not checked', '']))),
+                ('a table no entry has', part(lambda c: c['locales'].update(C=['table', 'e' * 64]))),
+                ('a table nobody names', part(lambda c: c['tables'].update(x=[wk, bk]))),
+                ('a table of one item', part(lambda c: c['tables'].update(builtin=[wk]))),
+                ('a table with no reason', part(lambda c: c['tables'].update(builtin=['not checked', '']))),
+                ('a wide table missing', part(lambda c: c['tables'].update(builtin=['f' * 64, bk]))),
+                ('a byte table missing', part(lambda c: c['tables'].update(builtin=[wk, 'f' * 64]))),
+                ('a wide table nobody names', part(lambda c: c['wide'].update({'f' * 64: m.pack(SMALL_WIDE)}))),
+                ('a byte table nobody names', part(lambda c: c['bytes'].update({'f' * 64: m.pack(SMALL_BYTES)}))),
+                ('a table that is not base64', part(lambda c: c['wide'].update({wk: '!!'}))),
+                ('a table that is not text', part(lambda c: c['wide'].update({wk: 5}))),
+                ('a table that is not zlib', part(lambda c: c['wide'].update({wk: base64.b64encode(b'x').decode()}))),
+                ('a table that is not its key', part(lambda c: c['wide'].update({wk: m.pack(SMALL_WIDE + b' ')}))),
+                ('a byte table that is not its key', part(lambda c: c['bytes'].update({bk: m.pack(SMALL_BYTES[:-1] + b'\x02')}))),
+                ('a key not of sha256', wide_key_upper()),
+                ('wide: not JSON', wide(b'{')),
+                ('wide: a key missing', wide(json.dumps({'upper': [], 'lower': []}).encode())),
+                ('wide: a class missing', wide(shaped(classes={'alpha': []}))),
+                ('wide: a class more', wide(classes(cntrl=[]))),
+                ('wide: a map out of order', wide(shaped(upper=[[0x62, 0x42], [0x61, 0x41]]))),
+                ('wide: a code point twice', wide(shaped(upper=[[0x61, 0x41], [0x61, 0x41]]))),
+                ('wide: a map onto itself', wide(shaped(upper=[[0x61, 0x61]]))),
+                ('wide: a map onto a surrogate', wide(shaped(upper=[[0x61, 0xD800]]))),
+                ('wide: a map onto NUL', wide(shaped(lower=[[0x41, 0]]))),
+                ('wide: a map past Unicode', wide(shaped(lower=[[0x41, 0x110000]]))),
+                ('wide: a code point as a boolean', wide(shaped(upper=[[True, 0x41]]))),
+                ('wide: a pair of three', wide(shaped(upper=[[0x61, 0x41, 0]]))),
+                ('wide: a run reversed', wide(classes(alpha=[[0x42, 0x41]]))),
+                ('wide: runs that touch', wide(classes(alpha=[[0x41, 0x41], [0x42, 0x42]]))),
+                ('wide: runs that overlap', wide(classes(alpha=[[0x41, 0x43], [0x42, 0x44]]))),
+                ('wide: a run on a surrogate', wide(classes(alpha=[[0xD800, 0xD800]]))),
+                ('wide: a run across the surrogates', wide(classes(alpha=[[0xD000, 0xE100]]))),
+                ('an identity not of sha256', identity_renamed('zz')),
+                ('an identity in capitals', identity_renamed('D' * 64)),
+                ('glibc\'s own for another name',
+                 part(lambda c: c['locales'].update({'de_DE.utf8': ['table', 'builtin']}))),
+                ('data for C', part(lambda c: (c['locales'].update(C=['table', SOME_DATA]),
+                                               c['locales'].update(POSIX=['table', SOME_DATA]),
+                                               c['tables'].pop('builtin')))),
+                ('bytes: one short', bytes_(SMALL_BYTES[:-1])),
+                ('bytes: one more', bytes_(SMALL_BYTES + b'\x00')),
+                ('bytes: a class of 2', bytes_(SMALL_BYTES[:-1] + b'\x02'))):
+            with self.subTest(case=case):
+                self.refused(self.MALFORMED, edit)
+
+    def test_each_form_ctype_part_writes_is_read(self):
+        """The control: a table, glibc's own, a locale glibc refused or that
+        Python could not pass, as postgres_use said, data not read, and a
+        table that could not be measured, are whole."""
+        use = {'en_US.utf8': use_of('not checked', None, m.NO_CTYPE,
+                                    collate='refused', ctype='refused'),
+               'ja_JP.utf8': use_of('not checked', None, m.NO_CTYPE,
+                                    collate='unknown', ctype='unknown')}
+
+        def edit(d):
+            c = d['ctype']
+            c['locales']['de_DE.utf8'] = ['not checked', m.CTYPE_UNREAD]
+            c['locales']['sv_SE.utf8'] = ['table', 'e' * 64]
+            c['tables']['e' * 64] = ['not checked', 'measuring it failed: x']
+            # No locale of FEW is left on SOME_DATA.
+            del c['tables'][SOME_DATA]
+        new = self.made(RHEL10, 'new', with_parts(use=use),
+                        selected_not('en_US.utf8', 'ja_JP.utf8'), edit)
+        c = m.load(new, m.corpus_digest())[0]['ctype']
+        self.assertEqual((c['locales']['C'], c['locales']['en_US.utf8'][0],
+                          c['locales']['ja_JP.utf8'][0]),
+                         (['table', 'builtin'], 'refused', 'unknown'))
+
+    def test_a_locale_newlocale_refused_is_read_and_named(self):
+        """The call sites: the file loads, and ctype_not_checked, which the
+        run prints when it ends and which makes its exit 1, names the
+        locale (review round 2: it loaded as "glibc changed", and the run
+        ended clean)."""
+        refused = ['not checked', 'newlocale gave no locale for it: x']
+        new = self.made(RHEL10, 'new', with_parts(ctype={'de_DE.utf8': refused}))
+        part = m.load(new, m.corpus_digest())[0]['ctype']
+        self.assertEqual(part['locales']['de_DE.utf8'], refused)
+        self.assertEqual(m.ctype_not_checked(part),
+                         {'de_DE.utf8': 'newlocale gave no locale for it: x'})
+
+    def test_what_setlocale_and_newlocale_said_disagrees(self):
+        """ctype_identity copies postgres_use's answer for a name setlocale
+        did not accept: a file where the two differ contradicts itself."""
+        refused = {'de_DE.utf8': use_of('not checked', None, m.NO_CTYPE,
+                                        collate='refused', ctype='refused')}
+        contradicts = ('says glibc did not accept it for LC_CTYPE, and its '
+                       'character rules say otherwise')
+        for case, use, entry, phrase in (
+                ('a table of a refused locale', refused, ['table', SOME_DATA], contradicts),
+                ('not read of a refused locale', refused, ['not checked', 'x'], contradicts),
+                ('refused for another reason', refused, ['refused', 'another'], contradicts),
+                ('unknown where setlocale refused', refused,
+                 ['unknown', 'unsupported locale setting'], contradicts)):
+            with self.subTest(case=case):
+                self.refused(phrase, selected_not('de_DE.utf8'),
+                             lambda d, e=entry: d['ctype']['locales'].update(
+                                 {'de_DE.utf8': e}),
+                             use=use)
+
+
+def identity_renamed(new):
+    """An edit that files every locale on SOME_DATA under the identity new."""
+    def edit(d):
+        c = d['ctype']
+        for e in c['locales'].values():
+            if e == ['table', SOME_DATA]:
+                e[1] = new
+        c['tables'][new] = c['tables'].pop(SOME_DATA)
+    return edit
+
+
+def wide_key_upper():
+    """An edit that names the wide table by its key in capitals."""
+    def edit(d):
+        c = d['ctype']
+        (key, packed), = c['wide'].items()
+        c['wide'] = {key.upper(): packed}
+        for t in c['tables'].values():
+            t[0] = key.upper()
+    return edit
 
 
 # Measured on 2026-10-19 with the standalone probe of T4 step 3, which makes
@@ -5721,6 +6316,7 @@ class PostgresUseCompared(Checks):
         def dropped(d):
             for part in ('locales', 'money', 'postgres_use'):
                 d[part].pop('ja_JP.eucjp')
+            d['ctype']['locales'].pop('ja_JP.eucjp')
             d['locales_listed'] = len(d['locales'])
         found = self.use(*self.pair(measured_use(8), measured_use(9),
                                     old_edits=[dropped]))
@@ -5745,6 +6341,7 @@ class PostgresUseCompared(Checks):
             for name in ('th_TH.tis620', 'hy_AM.armscii8'):
                 for part in ('locales', 'money', 'postgres_use'):
                     d[part].pop(name)
+                d['ctype']['locales'].pop(name)
             d['locales_listed'] = len(d['locales'])
         checks = self.checks(*self.pair(measured_use(8), measured_use(9),
                                         old_edits=[gone]))
