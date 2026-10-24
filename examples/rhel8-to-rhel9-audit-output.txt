@@ -1064,6 +1064,67 @@ upper(), lower() and ILIKE: text that is not ASCII converts on both machines
    GB18030: zh_CN.gb18030; GBK: zh_CN.gbk, zh_SG.gbk). The 10 locale(s) of an
    encoding PostgreSQL does not know are in the line on a database of another
    encoding.
+!! Character rules (LC_CTYPE) CHANGE for 6525 character(s) in the 486
+   locale(s) compared on both machines that a UTF8 database can use: each gets
+   another upper case, lower case or class. upper(), lower(), initcap(),
+   ILIKE, regular expressions and full-text search read these rules in a UTF8
+   database, so they can give other results there for text that holds one. 40
+   of them the old machine already classified:
+     ʂ (U+0282 LATIN SMALL LETTER S WITH HOOK): gains the capital Ʂ (U+A7C5);
+     U+1063 MYANMAR TONE MARK SGAW KAREN HATHI: punctuation -> letter;
+     U+1064 MYANMAR TONE MARK SGAW KAREN KE PHO: punctuation -> letter;
+     U+1069 MYANMAR SIGN WESTERN PWO KAREN TONE-1: punctuation -> letter;
+     U+106A MYANMAR SIGN WESTERN PWO KAREN TONE-2: punctuation -> letter;
+     U+106B MYANMAR SIGN WESTERN PWO KAREN TONE-3: punctuation -> letter;
+     U+106C MYANMAR SIGN WESTERN PWO KAREN TONE-4: punctuation -> letter;
+     U+106D MYANMAR SIGN WESTERN PWO KAREN TONE-5: punctuation -> letter;
+     U+1087 MYANMAR SIGN SHAN TONE-2: punctuation -> letter;
+     U+1088 MYANMAR SIGN SHAN TONE-3: punctuation -> letter;
+     U+1089 MYANMAR SIGN SHAN TONE-5: punctuation -> letter;
+     U+108A MYANMAR SIGN SHAN TONE-6: punctuation -> letter;
+     U+108B MYANMAR SIGN SHAN COUNCIL TONE-2: punctuation -> letter;
+     U+108C MYANMAR SIGN SHAN COUNCIL TONE-3: punctuation -> letter;
+     U+108D MYANMAR SIGN SHAN COUNCIL EMPHATIC TONE: punctuation -> letter;
+     U+108F MYANMAR SIGN RUMAI PALAUNG TONE-5: punctuation -> letter;
+     U+109A MYANMAR SIGN KHAMTI TONE-1: punctuation -> letter;
+     U+109B MYANMAR SIGN KHAMTI TONE-3: punctuation -> letter;
+     U+135F ETHIOPIC COMBINING GEMINATION MARK: letter -> punctuation;
+     U+1C36 LEPCHA SIGN RAN: punctuation -> letter;
+     ᶎ (U+1D8E LATIN SMALL LETTER Z WITH PALATAL HOOK): gains the capital Ᶎ
+       (U+A7C6);
+     ꞔ (U+A794 LATIN SMALL LETTER C WITH PALATAL HOOK): gains the capital Ꞔ
+       (U+A7C4);
+     U+A802 SYLOTI NAGRI SIGN DVISVARA: punctuation -> letter;
+     U+A80B SYLOTI NAGRI SIGN ANUSVARA: punctuation -> letter;
+     U+A8FF DEVANAGARI VOWEL SIGN AY: punctuation -> letter;
+     U+A9E5 MYANMAR SIGN SHAN SAW: punctuation -> letter;
+     U+AA7B MYANMAR SIGN PAO KAREN TONE: punctuation -> letter;
+     U+AA7C MYANMAR SIGN TAI LAING TONE-2: punctuation -> letter;
+     U+AA7D MYANMAR SIGN TAI LAING TONE-5: punctuation -> letter;
+     U+16B30 PAHAWH HMONG MARK CIM TUB: letter -> punctuation;
+     U+16B31 PAHAWH HMONG MARK CIM SO: letter -> punctuation;
+     U+16B32 PAHAWH HMONG MARK CIM KES: letter -> punctuation;
+     U+16B33 PAHAWH HMONG MARK CIM KHAV: letter -> punctuation;
+     U+16B34 PAHAWH HMONG MARK CIM SUAM: letter -> punctuation;
+     U+16B35 PAHAWH HMONG MARK CIM HOM: letter -> punctuation;
+     U+16B36 PAHAWH HMONG MARK CIM TAUM: letter -> punctuation;
+     U+16F8F MIAO TONE RIGHT: punctuation -> letter;
+     U+16F90 MIAO TONE TOP RIGHT: punctuation -> letter;
+     U+16F91 MIAO TONE ABOVE: punctuation -> letter;
+     U+16F92 MIAO TONE BELOW: punctuation -> letter.
+   The other 6485 it did not classify; a UTF8 database can hold them too, and
+   they change those results as well.
+Every such character is in
+   /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.28..glibc-2.34.tsv.
+Character rules (LC_CTYPE) of each character: not compared in 377 locale(s) of
+   an encoding no UTF8 database can use; a database that can use them reads
+   their rules byte by byte, or, in EUC, as the line on EUC says.
+Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
+   compared on both machines.
+!! Character rules (LC_CTYPE) in an EUC_JP, EUC_KR, EUC_CN or EUC_TW database:
+   NOT checked here, 14 locale(s). EUC-JP: ja_JP, ja_JP.eucjp, ja_JP.ujis,
+   japanese, japanese.euc; EUC-KR: ko_KR, ko_KR.euckr, korean, korean.euc;
+   EUC-TW: zh_TW.euctw; GB2312: zh_CN, zh_CN.gb2312, zh_SG, zh_SG.gb2312.
 !! Not measured in a database of another encoding: 10 locale(s) whose encoding
    PostgreSQL does not know, so that CREATE DATABASE lets a database of any
    encoding use one, with only a WARNING ("could not determine encoding for
@@ -1095,8 +1156,7 @@ Every such byte sequence is in
    that agree here can still sort some longer strings apart. Where a character
    counts for nothing at some level (glibc ignores it there), how it is told
    apart from its neighbour is read less reliably, so a change there may go
-   unseen. Of LC_CTYPE, only whether text converts is measured, not what
-   upper(), lower() and its other character rules do with it.
+   unseen.
 
 ================================================================
 == AUDIT SUMMARY  glibc-2.28 -> glibc-2.34
@@ -1207,6 +1267,71 @@ Every such byte sequence is in
         zh_HK, zh_HK.big5hkscs; GB18030: zh_CN.gb18030; GBK: zh_CN.gbk,
         zh_SG.gbk). The 10 locale(s) of an encoding PostgreSQL does not know
         are in the line on a database of another encoding.
+     !! Character rules (LC_CTYPE) CHANGE for 6525 character(s) in the 486
+        locale(s) compared on both machines that a UTF8 database can use: each
+        gets another upper case, lower case or class. upper(), lower(),
+        initcap(), ILIKE, regular expressions and full-text search read these
+        rules in a UTF8 database, so they can give other results there for
+        text that holds one. 40 of them the old machine already classified:
+          ʂ (U+0282 LATIN SMALL LETTER S WITH HOOK): gains the capital Ʂ
+            (U+A7C5);
+          U+1063 MYANMAR TONE MARK SGAW KAREN HATHI: punctuation -> letter;
+          U+1064 MYANMAR TONE MARK SGAW KAREN KE PHO: punctuation -> letter;
+          U+1069 MYANMAR SIGN WESTERN PWO KAREN TONE-1: punctuation -> letter;
+          U+106A MYANMAR SIGN WESTERN PWO KAREN TONE-2: punctuation -> letter;
+          U+106B MYANMAR SIGN WESTERN PWO KAREN TONE-3: punctuation -> letter;
+          U+106C MYANMAR SIGN WESTERN PWO KAREN TONE-4: punctuation -> letter;
+          U+106D MYANMAR SIGN WESTERN PWO KAREN TONE-5: punctuation -> letter;
+          U+1087 MYANMAR SIGN SHAN TONE-2: punctuation -> letter;
+          U+1088 MYANMAR SIGN SHAN TONE-3: punctuation -> letter;
+          U+1089 MYANMAR SIGN SHAN TONE-5: punctuation -> letter;
+          U+108A MYANMAR SIGN SHAN TONE-6: punctuation -> letter;
+          U+108B MYANMAR SIGN SHAN COUNCIL TONE-2: punctuation -> letter;
+          U+108C MYANMAR SIGN SHAN COUNCIL TONE-3: punctuation -> letter;
+          U+108D MYANMAR SIGN SHAN COUNCIL EMPHATIC TONE: punctuation ->
+            letter;
+          U+108F MYANMAR SIGN RUMAI PALAUNG TONE-5: punctuation -> letter;
+          U+109A MYANMAR SIGN KHAMTI TONE-1: punctuation -> letter;
+          U+109B MYANMAR SIGN KHAMTI TONE-3: punctuation -> letter;
+          U+135F ETHIOPIC COMBINING GEMINATION MARK: letter -> punctuation;
+          U+1C36 LEPCHA SIGN RAN: punctuation -> letter;
+          ᶎ (U+1D8E LATIN SMALL LETTER Z WITH PALATAL HOOK): gains the capital
+            Ᶎ (U+A7C6);
+          ꞔ (U+A794 LATIN SMALL LETTER C WITH PALATAL HOOK): gains the capital
+            Ꞔ (U+A7C4);
+          U+A802 SYLOTI NAGRI SIGN DVISVARA: punctuation -> letter;
+          U+A80B SYLOTI NAGRI SIGN ANUSVARA: punctuation -> letter;
+          U+A8FF DEVANAGARI VOWEL SIGN AY: punctuation -> letter;
+          U+A9E5 MYANMAR SIGN SHAN SAW: punctuation -> letter;
+          U+AA7B MYANMAR SIGN PAO KAREN TONE: punctuation -> letter;
+          U+AA7C MYANMAR SIGN TAI LAING TONE-2: punctuation -> letter;
+          U+AA7D MYANMAR SIGN TAI LAING TONE-5: punctuation -> letter;
+          U+16B30 PAHAWH HMONG MARK CIM TUB: letter -> punctuation;
+          U+16B31 PAHAWH HMONG MARK CIM SO: letter -> punctuation;
+          U+16B32 PAHAWH HMONG MARK CIM KES: letter -> punctuation;
+          U+16B33 PAHAWH HMONG MARK CIM KHAV: letter -> punctuation;
+          U+16B34 PAHAWH HMONG MARK CIM SUAM: letter -> punctuation;
+          U+16B35 PAHAWH HMONG MARK CIM HOM: letter -> punctuation;
+          U+16B36 PAHAWH HMONG MARK CIM TAUM: letter -> punctuation;
+          U+16F8F MIAO TONE RIGHT: punctuation -> letter;
+          U+16F90 MIAO TONE TOP RIGHT: punctuation -> letter;
+          U+16F91 MIAO TONE ABOVE: punctuation -> letter;
+          U+16F92 MIAO TONE BELOW: punctuation -> letter.
+        The other 6485 it did not classify; a UTF8 database can hold them too,
+        and they change those results as well.
+     Every such character is in
+        /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.28..glibc-2.34.tsv.
+     Character rules (LC_CTYPE) of each character: not compared in 377
+        locale(s) of an encoding no UTF8 database can use; a database that can
+        use them reads their rules byte by byte, or, in EUC, as the line on
+        EUC says.
+     Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
+        compared on both machines.
+     !! Character rules (LC_CTYPE) in an EUC_JP, EUC_KR, EUC_CN or EUC_TW
+        database: NOT checked here, 14 locale(s). EUC-JP: ja_JP, ja_JP.eucjp,
+        ja_JP.ujis, japanese, japanese.euc; EUC-KR: ko_KR, ko_KR.euckr,
+        korean, korean.euc; EUC-TW: zh_TW.euctw; GB2312: zh_CN, zh_CN.gb2312,
+        zh_SG, zh_SG.gb2312.
      !! Not measured in a database of another encoding: 10 locale(s) whose
         encoding PostgreSQL does not know, so that CREATE DATABASE lets a
         database of any encoding use one, with only a WARNING ("could not
@@ -1239,9 +1364,7 @@ Every such byte sequence is in
         machines that agree here can still sort some longer strings apart.
         Where a character counts for nothing at some level (glibc ignores it
         there), how it is told apart from its neighbour is read less reliably,
-        so a change there may go unseen. Of LC_CTYPE, only whether text
-        converts is measured, not what upper(), lower() and its other
-        character rules do with it.
+        so a change there may go unseen.
      Full report: step 11 above.
 
 -- Needs an empirical test: step 5 found 29 substantive hunk(s),

@@ -296,10 +296,201 @@ def check_kind(text):
                 'locale data: a PostgreSQL that was not restarted can already '
                 'use locales installed after it started.'):
         return 'libc', {'note': True}
-    found = use_kind(text) or bytes_kind(text)
+    found = use_kind(text) or ctype_kind(text) or bytes_kind(text)
     if found:
         return found
     raise ReportShapeError(f'unknown check line: {text!r}')
+
+
+CTYPE = r'Character rules \(LC_CTYPE\)'
+NAMES = r'(\S+(?:, \S+)*)'
+# One item of a list of characters the old machine classified, as
+# character() writes it, then what changed: 'ʂ (U+0282 LATIN ... HOOK): x'
+# or 'U+1063 MYANMAR ...: x'. Unicode names hold capitals, digits, spaces
+# and hyphens only.
+CTYPE_ITEM = (r'(?:(\S) \()?U\+([0-9A-F]{4,6})(?: ([A-Z0-9][A-Z0-9 -]*))?(\))?: '
+              r'(.+?)')
+CTYPE_NEXT = r'(?=; (?:\S \()?U\+[0-9A-F]{4,6}[ :)]|$)'
+CTYPE_WORDS = (r'(?:(?:letter|digit|punctuation|space|another printable '
+               r'character|no class) -> (?:letter|digit|punctuation|space|'
+               r'another printable character|no class)|gains the (?:capital|small '
+               r'letter) \S+(?: \(U\+[0-9A-F]{4,6}\))?|loses the (?:capital|small '
+               r'letter) \S+(?: \(U\+[0-9A-F]{4,6}\))?|(?:capital|small letter) '
+               r'\S+(?: \(U\+[0-9A-F]{4,6}\))? -> \S+(?: \(U\+[0-9A-F]{4,6}\))?|'
+               r'(?:joins|leaves) \[\[:[a-z]+:\]\])')
+
+
+def ctype_words(text):
+    """What changed of one character or byte, refused unless every part is
+    one the comparison writes."""
+    for part in text.split(', '):
+        if not re.fullmatch(CTYPE_WORDS, part):
+            raise ReportShapeError(f'unknown change of rules: {text!r}')
+    return text
+
+
+def ctype_items(text):
+    """'U+1063 ...: punctuation -> letter; ...' as {code point: words},
+    refused unless the items rebuild the text."""
+    out, rebuilt = {}, []
+    for mt in re.finditer(CTYPE_ITEM + CTYPE_NEXT, text):
+        glyph, code, name, paren, words = mt.groups()
+        if bool(glyph) != bool(paren):
+            raise ReportShapeError(f'unknown character: {mt[0]!r}')
+        cp = int(code, 16)
+        if cp in out:
+            raise ReportShapeError(f'U+{code} named twice: {text!r}')
+        out[cp] = ctype_words(words)
+        rebuilt.append(mt[0])
+    if '; '.join(rebuilt) != text:
+        raise ReportShapeError(f'unknown list of characters: {text!r}')
+    return out
+
+
+def ctype_group(text):
+    """{'all': N} for the locales compared, or {'names': [...]}."""
+    mt = re.fullmatch(r'the (\d+) locale\(s\) compared on both machines'
+                      r'( that a UTF8 database can use)?', text)
+    if mt:
+        return {'all': int(mt[1]), 'utf8': bool(mt[2])}
+    mt = re.fullmatch(r'(\d+) locale\(s\): ' + NAMES, text)
+    if not mt:
+        raise ReportShapeError(f'unknown group of locales: {text!r}')
+    names = mt[2].split(', ')
+    if len(names) != int(mt[1]) or len(set(names)) != len(names):
+        raise ReportShapeError(f'says {mt[1]} and names {len(names)}: {text!r}')
+    return {'names': names}
+
+
+def ctype_kind(text):
+    """('ctype', data) of a line about the character rules; None when the
+    line is not about them. Each output gives the line as one text, a list
+    joined with '; ' (ctype_paragraph reads the report's and the summary's
+    lines into it)."""
+    mt = re.fullmatch(r'!! ' + CTYPE + r' NOT checked: ' + EARLIER_FILES, text)
+    if mt:
+        return 'ctype', {'earlier': earlier_sides(mt, 1, None, 3)}
+    mt = re.fullmatch(CTYPE + r' of each (character|byte): the same in the '
+                      r'(other )?(\d+) locale\(s\) compared on both machines'
+                      r'( that a UTF8 database can use)?\.', text)
+    if mt:
+        if bool(mt[4]) != (mt[1] == 'character'):
+            raise ReportShapeError(f'which locales, unsaid or wrong: {text!r}')
+        return 'ctype', {'same': mt[1], 'count': int(mt[3]), 'other': bool(mt[2]),
+                         'utf8': bool(mt[4])}
+    mt = re.fullmatch(CTYPE + r' of each character: not compared in (\d+) '
+                      r'locale\(s\) of an encoding no UTF8 database can use; a '
+                      r'database that can use them reads their rules byte '
+                      r'by byte'
+                      r'(, or, in EUC, as the line on EUC says)?\.', text)
+    if mt:
+        return 'ctype', {'elsewhere': int(mt[1]), 'with euc': bool(mt[2])}
+    mt = re.fullmatch(r'!! ' + CTYPE + r' CHANGE for (\d+) character\(s\) in (.+?): '
+                      r'each gets another upper case, lower case or class\. '
+                      r'upper\(\), lower\(\), initcap\(\), ILIKE, regular '
+                      r'expressions and full-text search read these rules in a '
+                      r'UTF8 database, so they can give other results there for '
+                      r'text that holds one\. (\d+) of them the old machine '
+                      r'already classified(?:\.|: (.+?)\.)(?: The other (\d+) it '
+                      r'did not classify; a UTF8 database can hold them too, and '
+                      r'they change those results as well\.)?', text)
+    if mt:
+        known = ctype_items(mt[4]) if mt[4] else {}
+        other = int(mt[5]) if mt[5] else 0
+        if (len(known) != int(mt[3]) or int(mt[3]) + other != int(mt[1])
+                or (mt[5] is not None and other == 0)):
+            raise ReportShapeError(f'counts disagree: {text!r}')
+        group = ctype_group(mt[2])
+        if group.pop('utf8', True) is not True:
+            raise ReportShapeError(f'which locales, unsaid: {text!r}')
+        return 'ctype', dict(group, change='character',
+                             count=int(mt[1]), classified=known, other=other)
+    mt = re.fullmatch(r'!! ' + CTYPE + r' CHANGE for (\d+) byte\(s\) in (.+?)\. A '
+                      r'database of one byte per character, SQL_ASCII too, reads '
+                      r'them in upper\(\), lower\(\), initcap\(\), ILIKE, regular '
+                      r'expressions and full-text search, and a database of any '
+                      r'other encoding but UTF8 in regular expressions: (.+)\.',
+                      text)
+    if mt:
+        found = {}
+        for item in mt[3].split('; '):
+            it = re.fullmatch(r'byte ([0-9A-F]{2}): (.+)', item)
+            if not it or int(it[1], 16) in found:
+                raise ReportShapeError(f'unknown byte: {item!r}')
+            found[int(it[1], 16)] = ctype_words(it[2])
+        if len(found) != int(mt[1]):
+            raise ReportShapeError(f'says {mt[1]} and lists {len(found)}: {text!r}')
+        group = ctype_group(mt[2])
+        if group.pop('utf8', False) is not False:
+            raise ReportShapeError(f'bytes said of UTF8 alone: {text!r}')
+        return 'ctype', dict(group, change='byte', count=int(mt[1]),
+                             bytes=found)
+    mt = re.fullmatch(r'(?:Every such (character|byte|character and byte) is '
+                      r'(?:in (\S.*)|(a row of this file))|Pass --characters-to '
+                      r'FILE for every such (character|byte|character and byte))'
+                      r'\.', text)
+    if mt:
+        # Which file, and whether one was named, the report, the summary and
+        # the file itself say each in its own words.
+        return 'ctype', {'where': mt[1] or mt[4]}
+    mt = re.fullmatch(r'!! ' + CTYPE + r' NOT checked in (\d+) locale\(s\): '
+                      r'(.+)\.', text)
+    if mt:
+        unknown = {}
+        for item in mt[2].split('; '):
+            it = re.fullmatch(r'(\S+) \((old machine|new machine|both '
+                              r'machines)\): (.+)', item)
+            if not it or it[2] in unknown.get(it[1], {}) or (
+                    'both machines' in unknown.get(it[1], {})) or (
+                    it[2] == 'both machines' and it[1] in unknown):
+                raise ReportShapeError(f'unknown LC_CTYPE item: {item!r}')
+            unknown.setdefault(it[1], {})[it[2]] = it[3]
+        if len(unknown) != int(mt[1]):
+            raise ReportShapeError(f'says {mt[1]} and lists {len(unknown)}')
+        return 'ctype', {'unknown': unknown}
+    mt = re.fullmatch(r'!! ' + CTYPE + r' in an EUC_JP, EUC_KR, EUC_CN or EUC_TW '
+                      rf'database: NOT checked here, (\d+) locale\(s\)\. ({GROUPS})\.',
+                      text)
+    if mt:
+        euc = by_codeset(mt[2], mt[1])
+        if not set(euc.values()) <= {'EUC-JP', 'EUC-KR', 'GB2312', 'EUC-TW'}:
+            raise ReportShapeError(f'not an EUC encoding: {text!r}')
+        return 'ctype', {'euc': euc}
+    if 'LC_CTYPE' in text.split(':')[0] or re.match(
+            r'(?:Every such|Pass --characters-to FILE for every such) '
+            r'(?:character|byte(?! sequence))', text):
+        raise ReportShapeError(f'unknown line about LC_CTYPE: {text!r}')
+    return None
+
+
+def ctype_listed(take_line, peek, indent, more, item, item_more):
+    """The report's or the summary's lines of a finding with a list (a head
+    at indent and more, one item per line at item and item_more, ending ';'
+    but the last, '.', and a tail at more) as the one text ctype_kind reads;
+    None when the next line is not such a finding."""
+    if not re.fullmatch(' ' * indent + r'!! Character rules \(LC_CTYPE\) CHANGE for '
+                        r'.*', peek()):
+        return None
+
+    def run(at):
+        out = []
+        while re.fullmatch(' ' * at + r'\S.*', peek()):
+            out.append(take_line())
+        return out
+    head = [take_line()] + run(more)
+    items = []
+    while re.fullmatch(' ' * item + r'\S.*', peek()):
+        items.append(flat(' '.join([take_line()] + run(item_more))))
+    tail = run(more)
+    if items and (not items[-1].endswith('.') or any(
+            not i.endswith(';') for i in items[:-1])):
+        raise ReportShapeError(f'a list that does not end where it says: {items!r}')
+    text = flat(' '.join(head))
+    if items:
+        text += ' ' + '; '.join(i[:-1] for i in items) + '.'
+    if tail:
+        text += ' ' + flat(' '.join(tail))
+    return text
 
 
 FN = r'upper\(\), lower\(\) and ILIKE'
@@ -518,7 +709,7 @@ def rank(kind, d):
         return 0
     if voids(kind, d):
         return 1
-    return {'money': 2, 'libc': 3, 'use': 4, 'bytes': 5}[kind]
+    return {'money': 2, 'libc': 3, 'use': 4, 'ctype': 5, 'bytes': 6}[kind]
 
 
 def after_totals(found, where):
@@ -688,8 +879,12 @@ def parse_summary(text):
     s['totals'] = item(5, 7)
     if not (s['totals'] or '').startswith('Of the '):
         fail('expected the totals')
+    def take():
+        at[0] += 1
+        return lines[at[0] - 1]
     while re.fullmatch(r'     \S.*', line()) and not line().startswith('     !! Not measured: '):
-        s['checks'].append(after_totals(check_kind(item(5, 8)), 'summary'))
+        text = ctype_listed(take, line, 5, 8, 10, 12) or item(5, 8)
+        s['checks'].append(after_totals(check_kind(text), 'summary'))
     checks_in_order(s['checks'], 'summary')
     s['closing'] = item(5, 8)
     if not (s['closing'] or '').startswith('!! Not measured: '):
@@ -829,14 +1024,16 @@ def parse_report(text):
     if line().startswith('!! Refused by glibc'):
         mt = re.fullmatch(
             r'!! Refused by glibc, so a database that uses one does not open: '
-            r'(\d+) locale\(s\)\. locale -a lists them, but setlocale\(\) does '
-            r'not accept them: PostgreSQL stops a database created with one '
-            r'with "FATAL: database locale is incompatible with operating '
-            r'system", and CREATE DATABASE refuses it\. Their sort order is not '
-            r'measured either\. On RHEL this is what glibc does with the '
-            r'language packs installed as folders \(glibc-langpack-\*\) and '
-            r'glibc-gconv-extra not installed; install it and measure that '
-            r'machine again\.', paragraph())
+            r'(\d+) locale\(s\)\. locale -a lists them, but setlocale\(\) did '
+            r'not accept them when that machine was measured: PostgreSQL stops '
+            r'a database created with one with "FATAL: database locale is '
+            r'incompatible with operating system", and CREATE DATABASE refuses '
+            r'it\. Their sort order is not measured either\. glibc does not say '
+            r'why\. On RHEL this is what it does with the language packs '
+            r'installed as folders \(glibc-langpack-\*\) and glibc-gconv-extra '
+            r'not installed, and a machine short of memory gets the same answer; '
+            r'install it, or free memory, and measure that machine again\.',
+            paragraph())
         if not mt:
             fail('unknown refused paragraph')
         while re.fullmatch(r'  \S.*', line()):
@@ -896,8 +1093,12 @@ def parse_report(text):
     if r['totals']['refused'] != len(r['refused']):
         fail(f'the totals count {r["totals"]["refused"]} refused and the '
              f'report lists {len(r["refused"])}')
+    def take():
+        at[0] += 1
+        return lines[at[0] - 1]
     while re.fullmatch(r'\S.*', line()) and not line().startswith('!! Not measured: '):
-        r['checks'].append(after_totals(check_kind(paragraph()), 'report'))
+        text = ctype_listed(take, line, 0, 3, 5, 7) or paragraph()
+        r['checks'].append(after_totals(check_kind(text), 'report'))
     checks_in_order(r['checks'], 'report')
     if not line().startswith('!! Not measured: '):
         fail('expected the closing "!! Not measured" paragraph')
@@ -1278,7 +1479,8 @@ FINDINGS = ('moved', 'sorts differently', 'pairs changed', 'not compared',
             'told apart differently', 'not decided', 'not measured',
             'not on the new machine', 'unchanged only as far as measured',
             'also in PostgreSQL', 'refused by glibc', 'upper/lower/ILIKE error',
-            'upper/lower/ILIKE not checked', 'stored by PostgreSQL, not measured')
+            'upper/lower/ILIKE not checked', 'stored by PostgreSQL, not measured',
+            'LC_CTYPE group', 'LC_CTYPE changed', 'LC_CTYPE not checked')
 # The rows of a locale NOT known to be unchanged, beside the changes.
 NOT_KNOWN = ('not measured', 'not on the new machine')
 # And of a locale unchanged as far as measured: none of the three changed.
@@ -1287,7 +1489,8 @@ NOT_CHANGED = NOT_KNOWN + ('unchanged only as far as measured', 'refused by glib
 # order changed.
 BESIDE_THE_ORDER = ('also in PostgreSQL', 'upper/lower/ILIKE error',
                     'upper/lower/ILIKE not checked',
-                    'stored by PostgreSQL, not measured')
+                    'stored by PostgreSQL, not measured', 'LC_CTYPE group',
+                    'LC_CTYPE changed', 'LC_CTYPE not checked')
 SPACED_BYTES = r'((?:[0-9A-F]{2} )*[0-9A-F]{2})'
 PARTLY_ROW = (r'(\d+) pair\(s\) of neighbours differ by less than a letter, '
               r'and no pair could tell whether by an accent or by case')
@@ -1357,12 +1560,14 @@ def parse_characters(text):
     if not notes or not notes[-1].startswith('!! Not measured: '):
         raise ReportShapeError('the characters file has no closing note')
     out = CharactersFile()
+    out.ctype_groups = {}
     out.closing = notes.pop()
     at = 0
     while at < len(notes) and not re.match(
             r'(Control: |!! Control |Decimals of money|!! Decimals of money|'
             r'PostgreSQL on |!! PostgreSQL|!! The glibc of |This looks at |'
-            r'(!! )?upper\(\), lower\(\)|!! Not measured in |!! NOT checked in |'
+            r'(!! )?upper\(\), lower\(\)|(!! )?Character rules |'
+            r'!! Not measured in |!! NOT checked in |'
             r'Every such byte sequence|Pass --characters-to FILE for every such)',
             notes[at]):
         at += 1
@@ -1416,6 +1621,41 @@ def parse_characters(text):
                 raise ReportShapeError(f'characters line {n}: {line!r}')
             row.update(chars=[int(chars[2:], 16)], bytes=mt[1], before=before,
                        now=now, measured=measured)
+            out.setdefault((names,), []).append(row)
+            continue
+        if finding == 'LC_CTYPE group':
+            mt = re.fullmatch(r'(LC_CTYPE_group_\d+): the (character|byte)\(s\) '
+                              r'whose rules change in these locale\(s\), each a '
+                              r'row under that name', how)
+            if (chars, test, before, now, measured) != ('-',) * 5 or not mt or (
+                    mt[1] in out.ctype_groups):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row.update(label=mt[1], what=mt[2])
+            out.ctype_groups[mt[1]] = (tuple(names.split(',')), mt[2])
+            out.setdefault(tuple(names.split(',')), []).append(row)
+            continue
+        if finding == 'LC_CTYPE not checked':
+            if ((chars, test, before, now, measured) != ('-',) * 5
+                    or not re.fullmatch(r'(old machine|new machine|both '
+                                        r'machines): .+', how)
+                    or ',' in names):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row['why'] = how
+            out.setdefault((names,), []).append(row)
+            continue
+        if finding == 'LC_CTYPE changed':
+            wide = chars.startswith('U+')
+            part = r'(?:upper|lower): (?:itself|{0}) -> (?:itself|{0})'.format(
+                CODE if wide else '[0-9A-F]{2}')
+            classes = r'classes: (?:none|[a-z]+(?: [a-z]+)*) -> (?:none|[a-z]+(?: [a-z]+)*)'
+            if (not re.fullmatch(r'LC_CTYPE_group_\d+', names)
+                    or not re.fullmatch(CODE if wide else r'byte [0-9A-F]{2}', chars)
+                    or not re.fullmatch(rf'(?:{part}|{classes})(?:; (?:{part}|{classes}))*', how)
+                    or (test, now, measured) != ('-', '-', 'on both machines')
+                    or before not in (('classified', 'not classified') if wide
+                                      else ('-',))):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row.update(chars=chars, how=how, before=before)
             out.setdefault((names,), []).append(row)
             continue
         if finding == 'stored by PostgreSQL, not measured':
@@ -1492,6 +1732,17 @@ def parse_characters(text):
     if len(out) != int(end[1]):
         raise ReportShapeError(f'the end line counts {end[1]} groups and the '
                                f'file holds {len(out)}')
+    # Every group of characters is named by one row of its locales, and every
+    # such row has characters under it, of the kind it says.
+    labels = {names[0] for names, rows in out.items()
+              if any(r['finding'] == 'LC_CTYPE changed' for r in rows)}
+    if labels != set(out.ctype_groups):
+        raise ReportShapeError(f'LC_CTYPE groups named {sorted(out.ctype_groups)} '
+                               f'and with rows {sorted(labels)}')
+    for label, (_, what) in out.ctype_groups.items():
+        if any(r['chars'].startswith('U+') != (what == 'character')
+               for r in out[(label,)]):
+            raise ReportShapeError(f'{label} holds rows of another kind')
     return out
 
 
@@ -3322,6 +3573,7 @@ class FindingKinds(unittest.TestCase):
                                             'postgres libc above', 'money',
                                             'postgres libc', 'refused',
                                             'postgres use', 'postgres use rows',
+                                            'ctype', 'ctype rows',
                                             'unmeasured bytes',
                                             'unmeasured bytes rows', 'closing'})
         for table in (m.LOCALE_KINDS, m.RUN_KINDS):
@@ -4417,7 +4669,8 @@ CLEAN_LIBC = {'looked_for': ['postgres', 'postmaster'], 'processes': 2,
               'unnamed': 0, 'not_checked': None, 'replaced': False}
 EARLIER_BOTH = [('money', {'earlier': ['OLD', 'NEW']}),
                 ('libc', {'earlier': ['OLD', 'NEW']}),
-                ('use', {'earlier': ['OLD', 'NEW']})]
+                ('use', {'earlier': ['OLD', 'NEW']}),
+                ('ctype', {'earlier': ['OLD', 'NEW']})]
 
 
 def use_of(text, codeset, char=None, collate='accepted', ctype='accepted',
@@ -4514,6 +4767,11 @@ STORED_9_TO_10 = [
 
 # The clean line of FEW: four UTF-8 locales, and C and POSIX of one byte.
 USE_FEW = ('use', {'converts': 4, 'one byte': 2, 'left out': {}})
+# And of their character rules: the four besides C and POSIX on one table.
+CTYPE_FEW = [('ctype', {'same': 'character', 'count': 4, 'other': False,
+                        'utf8': True}),
+             ('ctype', {'same': 'byte', 'count': 4, 'other': False,
+                        'utf8': False})]
 
 
 # Kept of each machine by the classes below, as the machines measured them:
@@ -4620,14 +4878,14 @@ class FilesOfEachFormat(Checks):
         self.assertEqual(self.checks(self.made(RHEL9, 'old'), new), self.HELD + [
             ('money', {'earlier': ['OLD']}), ('libc', {'earlier': ['OLD']}),
             ('libc', {'side': 'NEW', 'clean': 2}), ('libc', {'note': True}),
-            ('use', {'earlier': ['OLD']})])
+            ('use', {'earlier': ['OLD']}), ('ctype', {'earlier': ['OLD']})])
 
     def test_the_first_format_on_the_new_side(self):
         old = self.made(RHEL9, 'old', with_parts())
         self.assertEqual(self.checks(old, self.made(RHEL10, 'new')), self.HELD + [
             ('money', {'earlier': ['NEW']}), ('libc', {'earlier': ['NEW']}),
             ('libc', {'side': 'OLD', 'clean': 2}), ('libc', {'note': True}),
-            ('use', {'earlier': ['NEW']})])
+            ('use', {'earlier': ['NEW']}), ('ctype', {'earlier': ['NEW']})])
 
     def test_two_files_of_this_format(self):
         old = self.made(RHEL9, 'old', with_parts())
@@ -4636,7 +4894,7 @@ class FilesOfEachFormat(Checks):
             ('money', {'same': len(self.common(RHEL9, RHEL10))}),
             ('libc', {'side': 'OLD', 'clean': 2}),
             ('libc', {'side': 'NEW', 'clean': 2}), ('libc', {'note': True}),
-            USE_FEW])
+            USE_FEW] + CTYPE_FEW)
 
     def test_two_files_of_the_second_format(self):
         """Written by step 2's version: money and the processes checked,
@@ -4647,12 +4905,14 @@ class FilesOfEachFormat(Checks):
             ('money', {'same': len(self.common(RHEL9, RHEL10))}),
             ('libc', {'side': 'OLD', 'clean': 2}),
             ('libc', {'side': 'NEW', 'clean': 2}), ('libc', {'note': True}),
-            ('use', {'earlier': ['OLD', 'NEW']})])
+            ('use', {'earlier': ['OLD', 'NEW']}),
+            ('ctype', {'earlier': ['OLD', 'NEW']})])
 
     def test_the_second_format_beside_this_one(self):
         old = self.made(RHEL9, 'old', with_parts(form='locale_order/2'))
         new = self.made(RHEL10, 'new', with_parts())
-        self.assertEqual(self.checks(old, new)[-1], ('use', {'earlier': ['OLD']}))
+        self.assertEqual(self.checks(old, new)[-2:], [
+            ('use', {'earlier': ['OLD']}), ('ctype', {'earlier': ['OLD']})])
 
     def test_the_corpus_digest_did_not_move_with_the_format(self):
         """The recorded files are of the first format; their corpus digest
@@ -4959,7 +5219,7 @@ class PostgresProcessesCompared(Checks):
         self.assertEqual(self.where(old={'stale': [[7, 'x (deleted)']]}), [
             ('control', {'held': True}), ('libc', {'side': 'OLD', 'stale': 1}),
             same, ('libc', {'side': 'NEW', 'clean': 2}), ('libc', {'note': True}),
-            USE_FEW])
+            USE_FEW] + CTYPE_FEW)
 
     def test_the_new_side_on_the_replaced_glibc_stands_below(self):
         same = ('money', {'same': len(self.common(RHEL9, RHEL10))})
@@ -4967,7 +5227,7 @@ class PostgresProcessesCompared(Checks):
             ('control', {'held': True}), same,
             ('libc', {'side': 'OLD', 'clean': 2}),
             ('libc', {'side': 'NEW', 'stale': 1}), ('libc', {'note': True}),
-            USE_FEW])
+            USE_FEW] + CTYPE_FEW)
 
     def test_replaced_while_measured_stands_above(self):
         same = ('money', {'same': len(self.common(RHEL9, RHEL10))})
@@ -4975,7 +5235,7 @@ class PostgresProcessesCompared(Checks):
             ('control', {'held': True}),
             ('libc', {'side': 'NEW', 'replaced': True}), same,
             ('libc', {'side': 'OLD', 'clean': 2}), ('libc', {'note': True}),
-            USE_FEW])
+            USE_FEW] + CTYPE_FEW)
 
     def test_no_c_library_is_not_known(self):
         self.assertEqual(self.libc(new={'no_libc': 1}), [
@@ -6811,6 +7071,724 @@ class PostgresUseCompared(Checks):
         self.assertEqual(m.postgres_only('EUC-KR'), [(0x327E, b'\xa2\xe8')])
         self.assertEqual(m.postgres_only('TIS-620'), [(0xA0, b'\xa0')])
 
+
+# A wide table of LC_CTYPE built from the classes of each code point, as
+# ctype_tables() writes one: ASCII letters, digits and space as glibc
+# classes them, U+0282 a small letter with no capital, U+1063 and U+1064
+# punctuation, and nothing else.
+def rules(upper=None, lower=None, add=None, drop=None):
+    """The wide table of BASE_CLASSES with the maps upper and lower (pairs
+    added to the base's) and the code points of add joined to and of drop
+    taken from the classes named ({class: [code point]})."""
+    classes = {k: set(v) for k, v in BASE_CLASSES.items()}
+    for k, cps in (add or {}).items():
+        classes[k] |= set(cps)
+    for k, cps in (drop or {}).items():
+        classes[k] -= set(cps)
+    up = dict(BASE_UPPER)
+    up.update(upper or {})
+    lo = dict(BASE_LOWER)
+    lo.update(lower or {})
+    return json.dumps(
+        {'upper': sorted([c, u] for c, u in up.items() if c != u),
+         'lower': sorted([c, u] for c, u in lo.items() if c != u),
+         'classes': {k: m.code_point_runs(sorted(classes[k]))
+                     for k in m.CTYPE_CLASSES}},
+        sort_keys=True, separators=(',', ':')).encode('ascii')
+
+
+LETTERS = set(range(0x41, 0x5B)) | set(range(0x61, 0x7B)) | {0x282}
+DIGITS = set(range(0x30, 0x3A))
+BASE_CLASSES = {
+    'alpha': LETTERS, 'upper': set(range(0x41, 0x5B)),
+    'lower': set(range(0x61, 0x7B)) | {0x282}, 'digit': DIGITS,
+    'space': {0x20}, 'punct': {0x1063, 0x1064}, 'alnum': LETTERS | DIGITS,
+    'print': LETTERS | DIGITS | {0x20, 0x1063, 0x1064},
+    'graph': LETTERS | DIGITS | {0x1063, 0x1064},
+    'xdigit': DIGITS | set(range(0x41, 0x47)) | set(range(0x61, 0x67))}
+BASE_UPPER = {c: c - 0x20 for c in range(0x61, 0x7B)}
+BASE_LOWER = {c: c + 0x20 for c in range(0x41, 0x5B)}
+BASE = rules()
+# U+1063 and U+1064 as glibc 2.34 has them: letters, no longer punctuation.
+LETTER_CLASSES = ('alpha', 'alnum')
+
+
+def as_letters(*cps):
+    return rules(add={k: cps for k in LETTER_CLASSES}, drop={'punct': cps})
+
+
+def unclassified(*cps):
+    """BASE with code points it did not classify made letters."""
+    return rules(add={k: cps for k in LETTER_CLASSES + ('print', 'graph')})
+
+
+def byte_rules(edits=None):
+    """SMALL_BYTES with edits {(row, byte): value} in place, rows as
+    CTYPE_BYTE_ROWS names them."""
+    raw = bytearray(SMALL_BYTES)
+    for (row, b), v in (edits or {}).items():
+        raw[m.CTYPE_BYTE_ROWS.index(row) * 256 + b] = v
+    return bytes(raw)
+
+
+def retabled(assign):
+    """An edit that puts each locale of assign on the tables it names,
+    (wide, bytes), every other locale on a table staying on SMALL_WIDE and
+    SMALL_BYTES: identities, tables and the packed tables rebuilt, as
+    ctype_part() writes them."""
+    def edit(d):
+        c = d['ctype']
+        tables, wide, byte = {}, {}, {}
+        for name, entry in c['locales'].items():
+            if entry[0] != 'table':
+                continue
+            w, b = assign.get(name, (SMALL_WIDE, SMALL_BYTES))
+            if entry[1] != 'builtin':
+                entry[1] = hashlib.sha256(w + b'/' + b).hexdigest()
+            wk, bk = hashlib.sha256(w).hexdigest(), hashlib.sha256(b).hexdigest()
+            tables[entry[1]] = [wk, bk]
+            wide[wk], byte[bk] = m.pack(w), m.pack(b)
+        c.update(tables=tables, wide=wide, bytes=byte)
+    return edit
+
+
+def table_not_checked(name, why):
+    """An edit that marks the table of name as one that could not be
+    measured, its packed tables dropped when nothing else names them."""
+    def edit(d):
+        c = d['ctype']
+        c['tables'][c['locales'][name][1]] = ['not checked', why]
+        named = [t for t in c['tables'].values() if t[0] != 'not checked']
+        c['wide'] = {k: v for k, v in c['wide'].items() if k in {t[0] for t in named}}
+        c['bytes'] = {k: v for k, v in c['bytes'].items() if k in {t[1] for t in named}}
+    return edit
+
+
+def entry_set(name, entry):
+    def edit(d):
+        d['ctype']['locales'][name] = list(entry)
+    return edit
+
+
+FOUR = ['de_DE.utf8', 'en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8']
+
+
+class CtypeCompared(Checks):
+    """What the comparison says of the character rules (LC_CTYPE), on RHEL9
+    and RHEL10 cut to FEW, each locale on the tables a test gives it.
+
+    Freezes: a change read as none; a character the old machine classified
+    left unnamed, or one it did not named or dropped from the count; a class
+    or a map left out of the comparison; locales of two pairs of tables
+    under one line, or one change twice; a locale not checked on either side
+    read as the same, or dropped; a file of an earlier format read as the
+    same; the three outputs naming different characters or locales; the
+    characters file naming a group's locales on every row (61 MB for
+    2.28 -> 2.34)."""
+
+    def pair(self, old=None, new=None, old_edits=(), new_edits=(), old_use=None,
+             new_use=None):
+        """Two files of this format, the locales of old and new ({name:
+        (wide, bytes)}) on those tables, every other on SMALL_WIDE; the
+        edits after."""
+        return (self.made(RHEL9, 'old', with_parts(use=old_use),
+                          retabled(old or {}), *old_edits),
+                self.made(RHEL10, 'new', with_parts(use=new_use),
+                          retabled(new or {}), *new_edits))
+
+    def ctype(self, *files):
+        return [d for kind, d in self.checks(*files) if kind == 'ctype']
+
+    def outputs(self, old, new):
+        """(report, summary, file) of the run, each read whole; checks()
+        first, which holds the three to naming the same checks."""
+        self.checks(old, new)
+        tag = self.id().rsplit('.', 1)[-1]
+        summary = os.path.join(self.tmp, f'{tag}.sum')
+        chars = os.path.join(self.tmp, f'{tag}.tsv')
+        with open(summary, encoding='utf-8') as f, \
+                open(chars, encoding='utf-8') as g:
+            report = self.report_text(old, new, summary, chars)
+            return parse_report(report), parse_summary(f.read()), \
+                parse_characters(g.read())
+
+    def report_text(self, old, new, summary, chars):
+        stdout = io.StringIO()
+        with unittest.mock.patch.object(m.sys, 'argv', [
+                SCRIPT, '--compare', old, new, '--summary-to', summary,
+                '--characters-to', chars]), contextlib.redirect_stdout(stdout):
+            self.assertEqual(m.main(), 0)
+        return stdout.getvalue()
+
+    def every(self, table, byte=SMALL_BYTES):
+        return {name: (table, byte) for name in FOUR}
+
+    SAME = [{'same': 'character', 'count': 4, 'other': False, 'utf8': True},
+            {'same': 'byte', 'count': 4, 'other': False, 'utf8': False}]
+
+    def test_the_same_rules(self):
+        self.assertEqual(self.ctype(*self.pair(self.every(BASE), self.every(BASE))),
+                         self.SAME)
+
+    def test_a_classified_character_changes_class(self):
+        found = self.ctype(*self.pair(self.every(BASE),
+                                      self.every(as_letters(0x1063))))
+        self.assertEqual(found, [
+            {'all': 4, 'change': 'character', 'count': 1,
+             'classified': {0x1063: 'punctuation -> letter'}, 'other': 0},
+            {'where': 'character'},
+            {'same': 'byte', 'count': 4, 'other': False, 'utf8': False}])
+
+    def test_an_unclassified_character_is_counted_not_named(self):
+        """U+AB69, which glibc 2.28 does not classify: regular expressions,
+        initcap() and full-text search read it otherwise on 2.34 all the
+        same (measured on PostgreSQL), so it counts."""
+        found = self.ctype(*self.pair(self.every(BASE),
+                                      self.every(unclassified(0xAB69))))
+        self.assertEqual(found[0], {'all': 4, 'change': 'character', 'count': 1,
+                                    'classified': {}, 'other': 1})
+
+    def test_two_of_each_in_the_three_outputs(self):
+        new = rules(add={'alpha': [0x1063, 0x1064, 0xAB69, 0xAB6A],
+                         'alnum': [0x1063, 0x1064, 0xAB69, 0xAB6A],
+                         'print': [0xAB69, 0xAB6A], 'graph': [0xAB69, 0xAB6A]},
+                    drop={'punct': [0x1063, 0x1064]})
+        report, summary, rows = self.outputs(*self.pair(self.every(BASE),
+                                                        self.every(new)))
+        found = [d for kind, d in report['checks'] if kind == 'ctype']
+        self.assertEqual(found[0]['classified'], {0x1063: 'punctuation -> letter',
+                                                  0x1064: 'punctuation -> letter'})
+        self.assertEqual(found[0]['other'], 2)
+        self.assertEqual(report['checks'], summary['checks'])
+        self.assertEqual(rows.ctype_groups, {'LC_CTYPE_group_1': (tuple(FOUR), 'character')})
+        self.assertEqual([(r['chars'], r['before'], r['how'])
+                          for r in rows[('LC_CTYPE_group_1',)]], [
+            ('U+1063', 'classified',
+             'classes: punct print graph -> alpha alnum print graph'),
+            ('U+1064', 'classified',
+             'classes: punct print graph -> alpha alnum print graph'),
+            ('U+AB69', 'not classified', 'classes: none -> alpha alnum print graph'),
+            ('U+AB6A', 'not classified', 'classes: none -> alpha alnum print graph')])
+
+    def test_each_locale_is_named_once_in_the_file(self):
+        """Its group's row names it; the rows of the characters and bytes
+        stand under the group's label."""
+        changed = byte_rules({('alpha', 0xB5): 1})
+        report, summary, rows = self.outputs(*self.pair(
+            self.every(BASE), self.every(as_letters(0x1063), changed)))
+        self.assertEqual(rows.ctype_groups, {
+            'LC_CTYPE_group_1': (tuple(FOUR), 'character'),
+            'LC_CTYPE_group_2': (tuple(FOUR), 'byte')})
+        for name in FOUR:
+            self.assertEqual(sum(name in names for names, group in rows.items()
+                                 if any(r['finding'].startswith('LC_CTYPE')
+                                        for r in group)), 1)
+        self.assertEqual([r['chars'] for r in rows[('LC_CTYPE_group_2',)]], ['byte B5'])
+
+    def test_the_upper_and_lower_case(self):
+        """U+0282 gains a capital in glibc 2.34 (U+A7C5), and U+A7C5, which
+        2.28 did not classify, the small letter."""
+        new = rules(upper={0x282: 0xA7C5}, lower={0xA7C5: 0x282})
+        report, summary, rows = self.outputs(*self.pair(self.every(BASE),
+                                                        self.every(new)))
+        found = [d for kind, d in report['checks'] if kind == 'ctype']
+        self.assertEqual(found[0]['classified'], {0x282: 'gains the capital U+A7C5'})
+        self.assertEqual(found[0]['other'], 1)
+        self.assertEqual([r['how'] for r in rows[('LC_CTYPE_group_1',)]],
+                         ['upper: itself -> U+A7C5', 'lower: itself -> U+0282'])
+        found = self.ctype(*self.pair(self.every(BASE),
+                                      self.every(rules(upper={0x61: 0x61}))))
+        # A capital this terminal can print is shown as itself.
+        self.assertEqual(found[0]['classified'], {0x61: 'loses the capital A (U+0041)'})
+        # Mapped and in no class on the old machine: classified all the same.
+        found = self.ctype(*self.pair(self.every(rules(upper={0x345: 0x399})),
+                                      self.every(BASE)))
+        self.assertEqual((found[0]['classified'], found[0]['other']),
+                         ({0x345: 'loses the capital U+0399'}, 0))
+
+    def test_each_class_on_its_own(self):
+        for k in m.CTYPE_CLASSES:
+            with self.subTest(cls=k):
+                found = self.ctype(*self.pair(
+                    self.every(BASE), self.every(rules(add={k: [0xAB69]}))))
+                self.assertEqual((found[0]['count'], found[0]['other']), (1, 1))
+
+    def test_what_each_change_reads(self):
+        """ctype_how: the kind a class makes, the case maps, and a class
+        the kind does not account for, in the report's words and the file's."""
+        def how(maps, was, now, cp=0x61):
+            return m.ctype_how(cp, maps, was, now, lambda c: f'<{c:X}>',
+                               lambda c: f'[{c:X}]')
+        same = ((0x61, 0x61), (0x61, 0x61))
+        for case, args, words, exact in (
+                ('a kind', (same, ['punct', 'print'], ['alpha', 'print']),
+                 'punctuation -> letter', 'classes: punct print -> alpha print'),
+                ('a kind and the lower class',
+                 (same, ['punct'], ['alpha', 'lower']),
+                 'punctuation -> letter, joins [[:lower:]]',
+                 'classes: punct -> alpha lower'),
+                ('one class, the kind the same',
+                 (same, ['alpha', 'print'], ['alpha', 'print', 'graph']),
+                 'joins [[:graph:]]', 'classes: alpha print -> alpha print graph'),
+                ('no class', (same, ['print'], []),
+                 'another printable character -> no class', 'classes: print -> none'),
+                ('gains a capital', (((0x61, 0x41), (0x61, 0x61)), [], []),
+                 'gains the capital <41>', 'upper: itself -> [41]'),
+                ('loses a small letter', (((0x61, 0x61), (0x62, 0x61)), [], []),
+                 'loses the small letter <62>', 'lower: [62] -> itself'),
+                ('another capital', (((0x41, 0x42), (0x61, 0x61)), [], []),
+                 'capital <41> -> <42>', 'upper: [41] -> [42]')):
+            with self.subTest(case=case):
+                self.assertEqual(how(*args), (words, exact))
+
+    def test_locales_on_two_tables(self):
+        new = {'de_DE.utf8': (as_letters(0x1063), SMALL_BYTES),
+               'en_US.utf8': (as_letters(0x1063), SMALL_BYTES),
+               'ja_JP.utf8': (as_letters(0x1064), SMALL_BYTES),
+               'sv_SE.utf8': (as_letters(0x1064), SMALL_BYTES)}
+        found = self.ctype(*self.pair(self.every(BASE), new))
+        self.assertEqual([(d['names'], list(d['classified'])) for d in found[:2]],
+                         [(['de_DE.utf8', 'en_US.utf8'], [0x1063]),
+                          (['ja_JP.utf8', 'sv_SE.utf8'], [0x1064])])
+
+    def test_two_pairs_of_tables_that_change_alike(self):
+        """The Turkish and Ethiopic tables differ from the common one, and
+        change alike from glibc 2.28 to 2.34: one line for all of them."""
+        turkish = rules(upper={0x69: 0x130})
+        turkish_new = rules(upper={0x69: 0x130},
+                            add={k: [0x1063] for k in LETTER_CLASSES},
+                            drop={'punct': [0x1063]})
+        old = {'de_DE.utf8': (BASE, SMALL_BYTES), 'en_US.utf8': (BASE, SMALL_BYTES),
+               'ja_JP.utf8': (turkish, SMALL_BYTES), 'sv_SE.utf8': (turkish, SMALL_BYTES)}
+        new = {'de_DE.utf8': (as_letters(0x1063), SMALL_BYTES),
+               'en_US.utf8': (as_letters(0x1063), SMALL_BYTES),
+               'ja_JP.utf8': (turkish_new, SMALL_BYTES),
+               'sv_SE.utf8': (turkish_new, SMALL_BYTES)}
+        found = self.ctype(*self.pair(old, new))
+        self.assertEqual([d.get('all') for d in found if 'change' in d], [4])
+
+    def test_one_locale_changes(self):
+        found = self.ctype(*self.pair(
+            self.every(BASE), dict(self.every(BASE), **{
+                'sv_SE.utf8': (as_letters(0x1063), SMALL_BYTES)})))
+        self.assertEqual([found[0]['names'], found[1:]], [['sv_SE.utf8'], [
+            {'where': 'character'},
+            {'same': 'character', 'count': 3, 'other': True, 'utf8': True},
+            {'same': 'byte', 'count': 4, 'other': False, 'utf8': False}]])
+
+    def test_bytes(self):
+        """A database of one byte per character reads the byte tables; a
+        change there is named apart from the wide table's."""
+        changed = byte_rules({('toupper', 0xB5): 0xCC, ('alpha', 0xB5): 1})
+        report, summary, rows = self.outputs(*self.pair(
+            self.every(BASE), self.every(BASE, changed)))
+        found = [d for kind, d in report['checks'] if kind == 'ctype']
+        self.assertEqual(found, [
+            {'all': 4, 'change': 'byte', 'count': 1,
+             'bytes': {0xB5: 'no class -> letter, gains the capital 0xCC'}},
+            {'where': 'byte'},
+            {'same': 'character', 'count': 4, 'other': False, 'utf8': True}])
+        self.assertEqual([(r['chars'], r['how']) for r in rows[('LC_CTYPE_group_1',)]],
+                         [('byte B5', 'upper: itself -> CC; classes: none -> alpha')])
+
+    def test_every_byte_row_counts(self):
+        """Each of the 12 rows of a byte table on its own: toupper, tolower
+        and the ten classes."""
+        for row in m.CTYPE_BYTE_ROWS:
+            with self.subTest(row=row):
+                changed = byte_rules({(row, 0xB5): 0xB6 if row.startswith('to') else 1})
+                found = self.ctype(*self.pair(self.every(BASE),
+                                              self.every(BASE, changed)))
+                self.assertEqual(list(found[0]['bytes']), [0xB5])
+
+    def test_files_of_earlier_formats(self):
+        old3 = self.made(RHEL9, 'old3', with_parts(form='locale_order/3'))
+        new3 = self.made(RHEL10, 'new3', with_parts(form='locale_order/3'))
+        old, new = self.pair(self.every(BASE), self.every(as_letters(0x1063)))
+        for case, files, sides in (('old', (old3, new), ['OLD']),
+                                   ('new', (old, new3), ['NEW']),
+                                   ('both', (old3, new3), ['OLD', 'NEW'])):
+            with self.subTest(case=case):
+                self.assertEqual(self.ctype(*files), [{'earlier': sides}])
+
+    def test_a_locale_not_checked_on_one_side(self):
+        """Not checked on either side is its own state: never the same,
+        never dropped, and the others are still compared."""
+        why = ['not checked', 'newlocale gave no locale for it: x']
+        for side in ('old', 'new'):
+            with self.subTest(side=side):
+                edits = [entry_set('de_DE.utf8', why), retabled(
+                    self.every(BASE) if side == 'old'
+                    else self.every(as_letters(0x1063)))]
+                found = self.ctype(*self.pair(
+                    self.every(BASE), self.every(as_letters(0x1063)),
+                    **{f'{side}_edits': edits}))
+                self.assertEqual(found[0]['all'], 3)
+                self.assertIn({'unknown': {'de_DE.utf8': {f'{side} machine': why[1]}}},
+                              found)
+
+    def test_not_checked_on_both_sides(self):
+        why = ['not checked', 'x']
+        found = self.ctype(*self.pair(
+            self.every(BASE), self.every(BASE),
+            old_edits=[entry_set('de_DE.utf8', why), retabled(self.every(BASE))],
+            new_edits=[entry_set('de_DE.utf8', why), retabled(self.every(BASE))]))
+        self.assertEqual(found, [
+            {'same': 'character', 'count': 3, 'other': False, 'utf8': True},
+            {'same': 'byte', 'count': 3, 'other': False, 'utf8': False},
+            {'unknown': {'de_DE.utf8': {'both machines': 'x'}}}])
+        found = self.ctype(*self.pair(
+            self.every(BASE), self.every(BASE),
+            old_edits=[entry_set('de_DE.utf8', why), retabled(self.every(BASE))],
+            new_edits=[entry_set('de_DE.utf8', ['not checked', 'y']),
+                       retabled(self.every(BASE))]))
+        self.assertEqual(found[-1], {'unknown': {'de_DE.utf8': {
+            'old machine': 'x', 'new machine': 'y'}}})
+
+    def test_a_table_not_checked(self):
+        for side in ('old', 'new'):
+            with self.subTest(side=side):
+                edit = table_not_checked('de_DE.utf8', 'measuring it failed: x')
+                old, new = self.pair(
+                    dict(self.every(BASE), **{'de_DE.utf8': (unclassified(0xAB6A),
+                                                            SMALL_BYTES)}),
+                    dict(self.every(as_letters(0x1063)), **{
+                        'de_DE.utf8': (unclassified(0xAB69), SMALL_BYTES)}),
+                    **{f'{side}_edits': [edit]})
+                found = self.ctype(old, new)
+                self.assertEqual(found[0]['all'], 3)
+                self.assertIn({'unknown': {'de_DE.utf8': {
+                    f'{side} machine': 'measuring it failed: x'}}}, found)
+
+    def test_a_locale_python_could_not_pass(self):
+        use = {'de_DE.utf8': use_of('not checked', None, m.NO_CTYPE,
+                                    collate='unknown', ctype='unknown')}
+        old, new = self.pair(self.every(BASE), self.every(BASE), old_use=use,
+                             old_edits=[selected_not('de_DE.utf8'),
+                                        retabled(self.every(BASE))])
+        self.assertEqual(self.ctype(old, new), [
+            {'same': 'character', 'count': 3, 'other': False, 'utf8': True},
+            {'same': 'byte', 'count': 3, 'other': False, 'utf8': False},
+            {'unknown': {'de_DE.utf8': {'old machine': 'unsupported locale setting'}}}])
+
+    def test_a_refused_locale_is_named_as_refused(self):
+        """Refused on one side: named as refused, not compared, not counted
+        as the same."""
+        use = {'de_DE.utf8': use_of('not checked', None, m.NO_CTYPE,
+                                    collate='refused', ctype='refused')}
+        for side in ('old', 'new'):
+            with self.subTest(side=side):
+                report, summary, rows = self.outputs(*self.pair(
+                    self.every(BASE), self.every(as_letters(0x1063)),
+                    **{f'{side}_use': use,
+                       f'{side}_edits': [selected_not('de_DE.utf8'), retabled(
+                           self.every(BASE) if side == 'old'
+                           else self.every(as_letters(0x1063)))]}))
+                self.assertIn('de_DE.utf8', report['refused'])
+                found = [d for kind, d in report['checks'] if kind == 'ctype']
+                self.assertEqual(found[0]['all'], 3)
+                self.assertNotIn('unknown', [k for d in found for k in d])
+
+    def test_c_and_posix_are_not_compared(self):
+        """PostgreSQL handles them itself: four compared of FEW's six."""
+        found = self.ctype(*self.pair(self.every(BASE), self.every(BASE)))
+        self.assertEqual([d['count'] for d in found], [4, 4])
+
+    def test_a_locale_on_one_machine_only(self):
+        def dropped(d):
+            for part in ('locales', 'money', 'postgres_use'):
+                d[part].pop('de_DE.utf8')
+            d['ctype']['locales'].pop('de_DE.utf8')
+            d['locales_listed'] = len(d['locales'])
+        for side in ('old', 'new'):
+            with self.subTest(side=side):
+                edits = [dropped, retabled(self.every(BASE) if side == 'old'
+                                           else self.every(as_letters(0x1063)))]
+                found = self.ctype(*self.pair(self.every(BASE),
+                                              self.every(as_letters(0x1063)),
+                                              **{f'{side}_edits': edits}))
+                self.assertEqual(found[0]['all'], 3)
+
+    def test_the_order_of_the_lines(self):
+        new = {'de_DE.utf8': (as_letters(0x1063), SMALL_BYTES),
+               'en_US.utf8': (BASE, byte_rules({('alpha', 0xB5): 1})),
+               'ja_JP.utf8': (BASE, SMALL_BYTES), 'sv_SE.utf8': (BASE, SMALL_BYTES)}
+        found = self.ctype(*self.pair(
+            self.every(BASE), new,
+            new_edits=[entry_set('sv_SE.utf8', ['not checked', 'x']), retabled(new)]))
+        self.assertEqual(found, [
+            {'names': ['de_DE.utf8'], 'change': 'character', 'count': 1,
+             'classified': {0x1063: 'punctuation -> letter'}, 'other': 0},
+            {'names': ['en_US.utf8'], 'change': 'byte', 'count': 1,
+             'bytes': {0xB5: 'no class -> letter'}},
+            {'where': 'character and byte'},
+            {'same': 'character', 'count': 2, 'other': True, 'utf8': True},
+            {'same': 'byte', 'count': 2, 'other': True, 'utf8': False},
+            {'unknown': {'sv_SE.utf8': {'new machine': 'x'}}}])
+
+    def test_where_the_characters_are(self):
+        """The path of the characters file whole on a line, never cut; and
+        without the file, how to get it."""
+        old, new = self.pair(self.every(BASE), self.every(as_letters(0x1063)))
+        deep = os.path.join(self.tmp, 'd' * 90)
+        os.mkdir(deep)
+        chars = os.path.join(deep, 'characters.tsv')
+        text = self.report_text(old, new, os.path.join(self.tmp, 'w.sum'), chars)
+        self.assertIn('\n   ' + chars + '.\n', text)
+        stdout = io.StringIO()
+        with unittest.mock.patch.object(m.sys, 'argv', [SCRIPT, '--compare', old, new]), \
+                contextlib.redirect_stdout(stdout):
+            m.main()
+        self.assertIn('Pass --characters-to FILE for every such character.',
+                      stdout.getvalue())
+
+
+# USE_NAMES and zh_TW.euctw, which Python cannot convert: a locale of each
+# EUC encoding, of one byte, of encodings PostgreSQL does not know and of
+# encodings only its clients use.
+EUC_NAMES = USE_NAMES + ('zh_TW.euctw',)
+EUC_TW_USE = {'zh_TW.euctw': use_of('not checked', 'EUC-TW', m.NO_CONVERTER)}
+
+
+class CtypeComparedInEuc(Checks):
+    """The locales of other encodings than UTF-8, on RHEL8 and RHEL9 cut to
+    EUC_NAMES: the line on EUC databases, with each of EUC-JP, EUC-KR,
+    GB2312 (EUC_CN) and EUC-TW; and the characters, compared only in the
+    locales a UTF8 database can use, those of UTF-8 or of an encoding
+    PostgreSQL does not know (check_encoding_locale_matches)."""
+
+    @classmethod
+    def setUpClass(cls):
+        super(Checks, cls).setUpClass()
+        for path in (RHEL8, RHEL9):
+            cls.texts[path] = trimmed(cls.texts[path], EUC_NAMES)
+
+    def pair(self, old_edits=(), new_edits=(), new_tables=None):
+        old = self.made(RHEL8, 'old', with_parts(use=measured_use(8, **EUC_TW_USE)),
+                        *old_edits)
+        new = self.made(RHEL9, 'new', with_parts(use=measured_use(9, **EUC_TW_USE)),
+                        retabled(new_tables or {}), *new_edits)
+        return old, new
+
+    def euc(self, *old_edits):
+        return [d['euc'] for kind, d in self.checks(*self.pair(old_edits))
+                if kind == 'ctype' and 'euc' in d]
+
+    def test_the_euc_locales_are_named(self):
+        self.assertEqual(self.euc(), [{
+            'ja_JP': 'EUC-JP', 'ja_JP.eucjp': 'EUC-JP', 'ko_KR': 'EUC-KR',
+            'ko_KR.euckr': 'EUC-KR', 'zh_CN': 'GB2312', 'zh_TW.euctw': 'EUC-TW'}])
+
+    def test_characters_only_where_a_utf8_database_can_use_the_locale(self):
+        """Every locale's wide table changes: the line names those of
+        UTF-8 and of an encoding PostgreSQL does not know (ARMSCII-8,
+        TIS-620), and counts the rest apart; the bytes are compared in all."""
+        names = [n for n in EUC_NAMES if n not in ('C', 'POSIX', 'th_TH.tis620')]
+        changed = {n: (as_letters(0x1063), SMALL_BYTES) for n in names}
+        found = [d for kind, d in self.checks(*self.pair(new_tables=changed))
+                 if kind == 'ctype']
+        self.assertEqual(found[0]['names'], ['de_DE.utf8', 'hy_AM.armscii8'])
+        self.assertIn({'same': 'character', 'count': 1, 'other': True,
+                       'utf8': True}, found)
+        self.assertIn({'elsewhere': 9, 'with euc': True}, found)
+        self.assertIn({'same': 'byte', 'count': 12, 'other': False, 'utf8': False},
+                      found)
+
+    def test_an_encoding_not_read(self):
+        """Neither the order nor how PostgreSQL uses the locale read its
+        encoding: it may be one a UTF8 database can use, so its characters
+        are compared."""
+        def unread(d):
+            d['locales']['de_DE'] = {'error': 'cannot be measured: its encoding '
+                                              'could not be read'}
+            d['postgres_use']['de_DE'] = use_of('not checked', None, m.NO_CODESET)
+        names = [n for n in EUC_NAMES if n not in ('C', 'POSIX', 'th_TH.tis620')]
+        changed = {n: (as_letters(0x1063), SMALL_BYTES) for n in names}
+        found = [d for kind, d in self.checks(*self.pair(
+            old_edits=[unread], new_edits=[unread], new_tables=changed))
+            if kind == 'ctype']
+        self.assertEqual(found[0]['names'], ['de_DE', 'de_DE.utf8', 'hy_AM.armscii8'])
+
+    def test_utf8_on_one_machine(self):
+        """A database made in UTF8 on the old machine opens on the new one
+        whatever the new machine calls the locale's encoding, and one made
+        on the new machine is of the new machine's."""
+        def utf8(d):
+            d['locales']['de_DE']['codeset'] = 'UTF-8'
+            d['postgres_use']['de_DE'] = use_of('converts', 'UTF-8', (0x80, 'c280'))
+        names = [n for n in EUC_NAMES if n not in ('C', 'POSIX')]
+        changed = {n: (as_letters(0x1063), SMALL_BYTES) for n in names}
+        for side in ('old', 'new'):
+            with self.subTest(side=side):
+                found = [d for kind, d in self.checks(*self.pair(
+                    new_tables=changed, **{f'{side}_edits': [utf8]}))
+                    if kind == 'ctype']
+                self.assertEqual(found[0]['all'], 4)
+
+    def test_us_ascii(self):
+        """PostgreSQL reads US-ASCII as SQL_ASCII, which any database
+        accepts (chklocale.c:185): a UTF8 database can use such a locale."""
+        def ascii_(d):
+            d['locales']['de_DE']['codeset'] = 'US-ASCII'
+            d['postgres_use']['de_DE'] = use_of('one byte', 'US-ASCII')
+        names = [n for n in EUC_NAMES if n not in ('C', 'POSIX')]
+        changed = {n: (as_letters(0x1063), SMALL_BYTES) for n in names}
+        found = [d for kind, d in self.checks(*self.pair(
+            old_edits=[ascii_], new_edits=[ascii_], new_tables=changed))
+            if kind == 'ctype']
+        self.assertEqual(found[0]['all'], 4)
+
+    def test_the_euc_clause_only_for_euc_locales_left_out(self):
+        """EUC locales on the new machine only are named on the EUC line,
+        and the line of the locales left out says nothing of EUC when none
+        of them is."""
+        def no_euc(d):
+            for name in [n for n, r in d['locales'].items()
+                         if r.get('codeset') in m.CTYPE_EUC]:
+                for part in ('locales', 'money', 'postgres_use'):
+                    d[part].pop(name)
+                d['ctype']['locales'].pop(name)
+            d['locales_listed'] = len(d['locales'])
+        found = [d for kind, d in self.checks(*self.pair(old_edits=[no_euc]))
+                 if kind == 'ctype']
+        self.assertIn({'elsewhere': 3, 'with euc': False}, found)
+        self.assertEqual(len([d for d in found if 'euc' in d]), 1)
+
+    def test_one_on_the_new_machine_only(self):
+        def dropped(d):
+            for part in ('locales', 'money', 'postgres_use'):
+                d[part].pop('ja_JP.eucjp')
+            d['ctype']['locales'].pop('ja_JP.eucjp')
+            d['locales_listed'] = len(d['locales'])
+        self.assertIn('ja_JP.eucjp', self.euc(dropped)[0])
+
+    def test_each_euc_encoding_on_its_own(self):
+        """Each member of CTYPE_EUC, with the locales of the others gone:
+        still named."""
+        for codeset in m.CTYPE_EUC:
+            with self.subTest(codeset=codeset):
+                def others(d, keep=codeset):
+                    for name in [n for n, r in d['locales'].items()
+                                 if r.get('codeset') in m.CTYPE_EUC
+                                 and r['codeset'] != keep]:
+                        for part in ('locales', 'money', 'postgres_use'):
+                            d[part].pop(name)
+                        d['ctype']['locales'].pop(name)
+                    d['locales_listed'] = len(d['locales'])
+                got = [d['euc'] for kind, d in self.checks(*self.pair(
+                    [others], [others])) if kind == 'ctype' and 'euc' in d]
+                self.assertEqual(set(got[0].values()), {codeset})
+
+
+class CtypeErrnoAndRestore(unittest.TestCase):
+    """13.62 to 13.64 on the machine: the reason newlocale gives is its own,
+    never an earlier call's; a category that cannot be put back stops the
+    run with why, never a traceback nor a file measured under another
+    locale."""
+
+    def test_errno_is_cleared_before_newlocale(self):
+        store = {'errno': 22}
+        lib = unittest.mock.Mock(newlocale=lambda mask, raw, base: None,
+                                 freelocale=lambda loc: None)
+        with unittest.mock.patch.object(m, 'ctype_libc', lambda: lib), \
+                unittest.mock.patch.object(m.ctypes, 'get_errno',
+                                           lambda: store['errno']), \
+                unittest.mock.patch.object(m.ctypes, 'set_errno',
+                                           lambda v: store.update(errno=v)):
+            got = m.ctype_identity('de_DE.utf8',
+                                   use_of('converts', 'UTF-8', (0x80, 'c280')))
+        self.assertEqual(got, ['not checked', 'newlocale gave no locale for it: '
+                                              'no reason given'])
+
+    def failing_put_back(self, call, category=None, nth=1):
+        """call() with setlocale accepting every name but failing to set a
+        category back to the name it had: any category, or the nth time
+        category is set back."""
+        state, backs = {}, {}
+
+        def setlocale(cat, name=None):
+            if name is None:
+                return state.get(cat, 'C.UTF-8')
+            if name == 'C.UTF-8' and state.get(cat) not in (None, 'C.UTF-8'):
+                backs[cat] = backs.get(cat, 0) + 1
+                if category is None or (cat == category and backs[cat] == nth):
+                    raise m.locale.Error('unsupported locale setting')
+            state[cat] = name
+            return name
+        with unittest.mock.patch.object(m.locale, 'setlocale', setlocale), \
+                self.assertRaises(m.NotPutBack) as stop:
+            call()
+        return str(stop.exception)
+
+    def test_each_place_that_puts_a_category_back(self):
+        lib = unittest.mock.Mock()
+        lib.localeconv.return_value.contents.frac_digits = 2
+        for case, call, category in (
+                ('postgres_use', lambda: m.postgres_use('de_DE.utf8'), 'LC_COLLATE'),
+                # Its second LC_CTYPE, once the encoding was read.
+                ('postgres_use after the encoding',
+                 lambda: self.failing_put_back(
+                     lambda: m.postgres_use('de_DE.utf8'), m.locale.LC_CTYPE, 2),
+                 'LC_CTYPE'),
+                ('ctype_tables', lambda: m.ctype_tables('de_DE.utf8'), 'LC_CTYPE'),
+                ('codeset_of', lambda: m.codeset_of('de_DE.utf8'), 'LC_CTYPE'),
+                ('money_digits', lambda: m.money_digits(['de_DE.utf8']),
+                 'LC_MONETARY')):
+            # CORPORA too: postgres_use builds the corpus of the encoding over
+            # CODEPOINTS, and a corpus of one code point kept in this process
+            # would stand for UTF-8 in every class after this one.
+            with self.subTest(case=case), \
+                    unittest.mock.patch.object(m, 'libc', lambda: lib), \
+                    unittest.mock.patch.object(m, 'ctype_libc', lambda: lib), \
+                    unittest.mock.patch.object(m, 'CODEPOINTS', [0x41]), \
+                    unittest.mock.patch.object(m, 'CORPORA', {}):
+                got = (call() if case.endswith('encoding')
+                       else self.failing_put_back(call))
+                self.assertEqual(got,
+                                 f"glibc could not set {category} back to "
+                                 f"'C.UTF-8' (unsupported locale setting), as "
+                                 f"when the machine runs short of memory")
+
+    def test_measure_stops_with_why(self):
+        def measure_locale(name):
+            raise m.NotPutBack('glibc could not set LC_CTYPE back to x')
+        err = io.StringIO()
+        with unittest.mock.patch.multiple(
+                m, libc_version=lambda: 'glibc 2.34', list_locales=lambda: ['a'],
+                glibc_build=lambda: 'glibc-2.34-1.el9.x86_64',
+                measure_locale=measure_locale, UTF8_BYTES=None,
+                fork_pool=lambda jobs: ThreadPoolExecutor(1)), \
+                unittest.mock.patch.object(m.os, 'nice'), \
+                unittest.mock.patch.object(m.sys, 'stderr', err), \
+                self.assertRaises(SystemExit) as stop:
+            m.measure(1)
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn('glibc could not set LC_CTYPE back to x; nothing was '
+                      'written: run again with a smaller --jobs', err.getvalue())
+
+    def test_measure_stops_with_why_after_the_pool(self):
+        """The decimals of money are read in this process, after the
+        pool: a category money_digits cannot set back stops the run the
+        same way."""
+        def money_digits(names):
+            raise m.NotPutBack('glibc could not set LC_MONETARY back to x')
+        err = io.StringIO()
+        with unittest.mock.patch.multiple(
+                m, libc_version=lambda: 'glibc 2.34', list_locales=lambda: ['a'],
+                glibc_build=lambda: 'glibc-2.34-1.el9.x86_64',
+                measure_locale=lambda name: (name, {'error': 'x'}, None,
+                                             use_of('one byte', 'X'),
+                                             ['table', 'builtin']),
+                ctype_part=lambda identities, measure_tables: {},
+                money_digits=money_digits, UTF8_BYTES=None,
+                fork_pool=lambda jobs: ThreadPoolExecutor(1)), \
+                unittest.mock.patch.object(m.os, 'nice'), \
+                unittest.mock.patch.object(m.sys, 'stderr', err), \
+                self.assertRaises(SystemExit) as stop:
+            m.measure(1)
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn('glibc could not set LC_MONETARY back to x; nothing was '
+                      'written', err.getvalue())
 
 if __name__ == '__main__':
     unittest.main()

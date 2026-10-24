@@ -30,8 +30,9 @@ locales step 4 leaves out as built in byte order, which the summary names. With
 command 1.b, add every locale steps 6 to 8 list, every locale step 11 reports
 as changed, every one it reports as not known to be unchanged, and every one it
 names in a line that begins "!! Not measured in" or "!! NOT checked in". The
-lines that begin with `upper()` or `!! upper()`, and those on the decimals of
-`money`, are not about sort order, and the template does not confirm them.
+lines that begin with `upper()`, `!! upper()`, `Character rules` or `!!
+Character rules`, and those on the decimals of `money`, are not about sort
+order, and the template does not confirm them.
 
 Steps 9 and 10, in command 1.b, run step 4 again on each machine's own files,
 so the same rule holds for every locale they flag. They list `C.UTF-8` by its

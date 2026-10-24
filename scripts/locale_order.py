@@ -28,24 +28,24 @@ Two things are measured for each locale that `locale -a` lists:
 
 Beside the order, the file holds each locale's decimals of money (frac_digits
 of its LC_MONETARY, the one number there that changes what a stored money
-value means); which PostgreSQL processes of the machine run another C
-library than the one measured, because a glibc update replaced it on disk or
-because they run another file, as in a container (root can see that, and so
-can the user PostgreSQL runs as where /proc does not hide other users'
-processes; otherwise the file says it was not checked); and how PostgreSQL
-can use each locale: whether setlocale accepts it for LC_COLLATE and for
-LC_CTYPE, without which a database that uses it does not open, and whether
-glibc converts a character of its encoding to a wide character, without which
-upper(), lower() and ILIKE stop with an error (postgres_use). A file
-written before these were measured still compares, and the comparison says
-they were not checked there. The file also holds what glibc's character
-rules (LC_CTYPE) answer for every character and every byte, once for each
-distinct LC_CTYPE glibc loads (ctype_tables), which this version does not
-compare. The comparison also names what PostgreSQL stores in
-EUC-JP, EUC-KR and TIS-620, converting from UTF-8, that no order measured
-here places (POSTGRES_ONLY). C and POSIX, which glibc sorts in byte order in
-every version, are the control: a machine where they measured otherwise did
-not measure what this means to.
+value means); which PostgreSQL processes of the machine run another C library
+than the one measured, because a glibc update replaced it on disk or because
+they run another file, as in a container (root can see that, and so can the
+user PostgreSQL runs as where /proc does not hide other users' processes;
+otherwise the file says it was not checked); and how PostgreSQL can use each
+locale: whether setlocale accepts it for LC_COLLATE and for LC_CTYPE, without
+which a database that uses it does not open, and whether glibc converts a
+character of its encoding to a wide character, without which upper(), lower()
+and ILIKE stop with an error (postgres_use). A file written before these were
+measured still compares, and the comparison says they were not checked there.
+The file also holds what glibc's character rules (LC_CTYPE) answer for every
+character and every byte, once for each distinct LC_CTYPE glibc loads
+(ctype_tables), and the comparison reports the characters and bytes whose
+rules change (ctype_texts). It also names what PostgreSQL stores in EUC-JP,
+EUC-KR and TIS-620, converting from UTF-8, that no order measured here places
+(POSTGRES_ONLY). C and POSIX, which glibc sorts in byte order in every
+version, are the control: a machine where they measured otherwise did not
+measure what this means to.
 
 Each order and told-apart record is kept whole, compressed, once for all the
 locales that share it, so that the comparison can name the characters that
@@ -374,7 +374,7 @@ def money_digits(names):
                 continue
             out[name] = lib.localeconv().contents.frac_digits
     finally:
-        locale.setlocale(locale.LC_MONETARY, saved)
+        put_back(locale.LC_MONETARY, saved)
     return out
 
 
@@ -396,6 +396,27 @@ NO_CTYPE = 'LC_CTYPE could not be set to it'
 NOT_CONVERTED = ctypes.c_size_t(-1).value
 
 
+class NotPutBack(Exception):
+    """A category of this process could not be put back as it was: what
+    the process measures after that would be measured under another locale,
+    so the run stops (measure())."""
+
+
+def put_back(category, saved):
+    """setlocale(category, saved), or NotPutBack saying why. glibc gives no
+    locale back when it runs short of memory as well as when it refuses a
+    name (setlocale.c, findlocale.c, 2.28 to 2.39), and saved is a name it
+    accepted, so a failure here is most likely memory."""
+    try:
+        locale.setlocale(category, saved)
+    except (locale.Error, ValueError) as e:
+        names = {locale.LC_COLLATE: 'LC_COLLATE', locale.LC_CTYPE: 'LC_CTYPE',
+                 locale.LC_MONETARY: 'LC_MONETARY'}
+        raise NotPutBack(f'glibc could not set {names.get(category, category)} '
+                         f'back to {saved!r} ({e}), as when the machine runs '
+                         'short of memory') from None
+
+
 def postgres_use(name):
     """What PostgreSQL does with a locale on this machine, as the calls it
     makes: {'collate', 'ctype', 'codeset', 'text'}.
@@ -404,8 +425,12 @@ def postgres_use(name):
     LC_CTYPE (CheckMyDatabase, postinit.c, REL_13_23 to REL_18_6; refused,
     it stops with "database locale is incompatible with operating system").
     Each is asked, the second whatever the first answered, as [state,
-    why]: accepted, refused (glibc said no), or unknown (Python cannot pass
-    the name to C at all, so glibc was not asked).
+    why]: accepted, refused (setlocale gave no locale: glibc refuses the
+    name, or ran short of memory, and does not say which, since a failed
+    mmap of the locale archive ends in the same search of the folders as a
+    name it does not have, findlocale.c and loadarchive.c in 2.39), or
+    unknown (Python cannot pass the name to C at all, so glibc was not
+    asked).
 
     Then the one thing PostgreSQL asks of LC_CTYPE that can fail outright:
     turning the database's bytes into wide characters (char2wchar, the only
@@ -434,7 +459,7 @@ def postgres_use(name):
             out[key] = ['unknown', f'Python cannot pass the name to the C '
                                    f'library ({e})']
         finally:
-            locale.setlocale(category, saved)
+            put_back(category, saved)
     out['codeset'] = None
     if out['ctype'][0] != 'accepted':
         out['text'] = ['not checked', NO_CTYPE]
@@ -461,7 +486,7 @@ def postgres_use(name):
     except Exception as e:
         out['text'] = ['not checked', f'checking failed: {e!r}']
     finally:
-        locale.setlocale(locale.LC_CTYPE, saved)
+        put_back(locale.LC_CTYPE, saved)
     return out
 
 
@@ -547,15 +572,15 @@ def ctype_identity(name, use):
     and newlocale.c:169 in 2.39), but can still give none: for want of
     memory, or for a name holding ';', which it reads as a list of
     categories (newlocale.c:121-158 in 2.39). Its LC_CTYPE is then not
-    checked, with the reason errno holds then (errno is not cleared first,
-    so a failure that sets none may show an earlier one), and the run says
-    so when it ends."""
+    checked, with the reason errno holds then, cleared before the call,
+    and the run says so when it ends."""
     if use['ctype'][0] != 'accepted':
         return list(use['ctype'])
     if ctypes.sizeof(ctypes.c_void_p) != 8 or ctypes.sizeof(ctypes.c_long) != 8:
         return ['not checked', 'this machine is not 64-bit, and only the '
                                'layout of a 64-bit glibc is read']
     lib = ctype_libc()
+    ctypes.set_errno(0)
     loc = lib.newlocale(LC_CTYPE_MASK, name.encode('utf-8', 'surrogateescape'),
                         None)
     if not loc:
@@ -625,7 +650,7 @@ def ctype_tables(name):
     except Exception as e:
         return name, None, None, f'measuring it failed: {e!r}', None
     finally:
-        locale.setlocale(locale.LC_CTYPE, saved)
+        put_back(locale.LC_CTYPE, saved)
 
 
 def ctype_part(identities, measure_tables):
@@ -911,13 +936,14 @@ def codeset_of(name):
     postgres_names). So the encoding decides what is measured and which of a
     reader's names a change applies to. None means it could not be read.
     """
+    saved = locale.setlocale(locale.LC_CTYPE)
     try:
-        saved = locale.setlocale(locale.LC_CTYPE)
         locale.setlocale(locale.LC_CTYPE, name)
         codeset = locale.nl_langinfo(locale.CODESET) or None
-        locale.setlocale(locale.LC_CTYPE, saved)
     except (locale.Error, ValueError, AttributeError):
         return None
+    finally:
+        put_back(locale.LC_CTYPE, saved)
     return codeset
 
 
@@ -1412,6 +1438,9 @@ def measure(jobs):
                     tables.append(r)
                 return tables
             ctype = ctype_part(identities, measure_tables)
+        money = money_digits(names)
+    except NotPutBack as e:
+        die(f'{e}; nothing was written: run again with a smaller --jobs')
     except BrokenProcessPool:
         # A process killed from outside, most often for want of memory. The
         # pool reports it rather than waiting forever for its answer.
@@ -1430,7 +1459,7 @@ def measure(jobs):
         'pair_data': pair_data,
         # After the measuring processes, which each select a locale of
         # their own: this one's LC_MONETARY is put back as it was.
-        'money': money_digits(names),
+        'money': money,
         'postgres_libc': postgres_libc(),
         'postgres_use': uses,
         'ctype': ctype,
@@ -3128,9 +3157,7 @@ CLOSING = ('!! Not measured: a rule that applies only to a particular '
            'letter), so two machines that agree here can still sort some longer '
            'strings apart. Where a character counts for nothing at some level '
            '(glibc ignores it there), how it is told apart from its neighbour is '
-           'read less reliably, so a change there may go unseen. Of '
-           'LC_CTYPE, only whether text converts is measured, not what '
-           'upper(), lower() and its other character rules do with it.')
+           'read less reliably, so a change there may go unseen.')
 
 
 EARLIER = ('written by an earlier version of locale_order.py, which did not '
@@ -3287,13 +3314,15 @@ GCONV = ('On RHEL this is what a machine without glibc-gconv-extra does; '
          'install it and measure that machine again.')
 CATEGORY_NAMES = (('collate', 'LC_COLLATE'), ('ctype', 'LC_CTYPE'))
 REFUSED = ('!! Refused by glibc, so a database that uses one does not open: '
-           '{} locale(s). locale -a lists them, but setlocale() does not '
-           'accept them: PostgreSQL stops a database created with one with '
-           '"FATAL: database locale is incompatible with operating system", '
-           'and CREATE DATABASE refuses it. Their sort order is not measured '
-           'either. On RHEL this is what glibc does with the language packs '
+           '{} locale(s). locale -a lists them, but setlocale() did not '
+           'accept them when that machine was measured: PostgreSQL stops a '
+           'database created with one with "FATAL: database locale is '
+           'incompatible with operating system", and CREATE DATABASE refuses '
+           'it. Their sort order is not measured either. glibc does not say '
+           'why. On RHEL this is what it does with the language packs '
            'installed as folders (glibc-langpack-*) and glibc-gconv-extra not '
-           'installed; install it and measure that machine again.')
+           'installed, and a machine short of memory gets the same answer; '
+           'install it, or free memory, and measure that machine again.')
 
 
 def refused_by_glibc(old, new, names):
@@ -3739,6 +3768,361 @@ def use_texts(old, new, names, refused, only_new=()):
     return out, rows
 
 
+CTYPE_LINE = 'Character rules (LC_CTYPE)'
+# The encodings of the databases whose character rules are not checked:
+# EUC_JP, EUC_KR, EUC_CN and EUC_TW, as glibc names the locales' encodings
+# (PostgreSQL reads GB2312 as EUC_CN, chklocale.c).
+CTYPE_EUC = ('EUC-JP', 'EUC-KR', 'GB2312', 'EUC-TW')
+CTYPE_BYTE_ROWS = ('toupper', 'tolower') + CTYPE_CLASSES
+# What a reader calls the class a character is in, by the first class of
+# these it is in.
+CTYPE_KINDS = (('alpha', 'letter'), ('digit', 'digit'),
+               ('punct', 'punctuation'), ('space', 'space'),
+               ('print', 'another printable character'))
+# The classes a change of kind accounts for; a change of any other is named.
+CTYPE_NAMED = ('upper', 'lower', 'xdigit')
+
+
+def ctype_wide_of(part, key):
+    """(towupper, towlower, classes) of a wide table: two maps, and each
+    class as its runs."""
+    w = json.loads(ctype_unpacked(part['wide'], key, wide_whole).decode('ascii'))
+    return dict(map(tuple, w['upper'])), dict(map(tuple, w['lower'])), w['classes']
+
+
+def in_runs(runs, starts, c):
+    """Is c in one of runs, whose first code points are starts?"""
+    i = bisect.bisect_right(starts, c) - 1
+    return i >= 0 and c <= runs[i][1]
+
+
+def runs_differ(a, b):
+    """The code points in one of two lists of runs and not in the other.
+    Between two neighbouring edges of either list, a code point is in both,
+    in one or in neither alike, so one look per stretch tells."""
+    edges = sorted({x for r in a + b for x in (r[0], r[1] + 1)})
+    sa, sb = [r[0] for r in a], [r[0] for r in b]
+    out = []
+    for lo, hi in zip(edges, edges[1:]):
+        if in_runs(a, sa, lo) != in_runs(b, sb, lo):
+            out.extend(range(lo, hi))
+    return out
+
+
+def ctype_kind(classes):
+    return next((word for k, word in CTYPE_KINDS if k in classes), 'no class')
+
+
+def ctype_how(cp, maps, was, now, shown_as, exact_as):
+    """(what the report says, what the file says) of a character or byte
+    whose rules changed: maps are ((old upper, new upper), (old lower, new
+    lower)), was and now its classes on each machine; shown_as and exact_as
+    write a value for the report and for the file."""
+    words, exact = [], []
+    for (x, y), name in zip(maps, ('capital', 'small letter')):
+        if x == y:
+            continue
+        if x == cp:
+            words.append(f'gains the {name} {shown_as(y)}')
+        elif y == cp:
+            words.append(f'loses the {name} {shown_as(x)}')
+        else:
+            words.append(f'{name} {shown_as(x)} -> {shown_as(y)}')
+        exact.append(f'{"upper" if name == "capital" else "lower"}: '
+                     f'{"itself" if x == cp else exact_as(x)} -> '
+                     f'{"itself" if y == cp else exact_as(y)}')
+    if was != now:
+        exact.append(f'classes: {" ".join(was) or "none"} -> '
+                     f'{" ".join(now) or "none"}')
+        before, after = ctype_kind(was), ctype_kind(now)
+        if before != after:
+            words.insert(0, f'{before} -> {after}')
+        for k in CTYPE_CLASSES if before == after else CTYPE_NAMED:
+            if (k in was) != (k in now):
+                words.append(f'{"joins" if k in now else "leaves"} [[:{k}:]]')
+    return ', '.join(words), '; '.join(exact)
+
+
+def ctype_wide_changes(old_part, ok, new_part, nk):
+    """[(code point, classified on the old machine, report's words, file's
+    words)] of every code point whose towupper, towlower or class differs
+    between two wide tables. Classified: the old table maps it or puts it
+    in a class."""
+    a, b = ctype_wide_of(old_part, ok), ctype_wide_of(new_part, nk)
+    changed = set()
+    for i in (0, 1):
+        changed |= {c for c in set(a[i]) | set(b[i]) if a[i].get(c, c) != b[i].get(c, c)}
+    starts = {}
+    for k in CTYPE_CLASSES:
+        changed.update(runs_differ(a[2][k], b[2][k]))
+        starts[k] = ([r[0] for r in a[2][k]], [r[0] for r in b[2][k]])
+    out = []
+    for cp in sorted(changed):
+        was = [k for k in CTYPE_CLASSES if in_runs(a[2][k], starts[k][0], cp)]
+        now = [k for k in CTYPE_CLASSES if in_runs(b[2][k], starts[k][1], cp)]
+        maps = tuple((a[i].get(cp, cp), b[i].get(cp, cp)) for i in (0, 1))
+        words, exact = ctype_how(cp, maps, was, now, short_character,
+                                 lambda c: f'U+{c:04X}')
+        out.append((cp, bool(was) or cp in a[0] or cp in a[1], words, exact))
+    return out
+
+
+def ctype_byte_changes(old_part, ok, new_part, nk):
+    """[(byte, report's words, file's words)] of every byte whose toupper,
+    tolower or class differs between two byte tables."""
+    A = ctype_unpacked(old_part['bytes'], ok, bytes_whole)
+    B = ctype_unpacked(new_part['bytes'], nk, bytes_whole)
+    out = []
+    for i in range(256):
+        if all(A[r * 256 + i] == B[r * 256 + i] for r in range(len(CTYPE_BYTE_ROWS))):
+            continue
+        maps = tuple((A[r * 256 + i], B[r * 256 + i]) for r in (0, 1))
+        was = [k for r, k in enumerate(CTYPE_CLASSES, 2) if A[r * 256 + i]]
+        now = [k for r, k in enumerate(CTYPE_CLASSES, 2) if B[r * 256 + i]]
+        words, exact = ctype_how(i, maps, was, now, lambda c: f'0x{c:02X}',
+                                 lambda c: f'{c:02X}')
+        out.append((i, words, exact))
+    return out
+
+
+UTF8_USE = ' that a UTF8 database can use'
+
+
+def ctype_group(members, compared, which=''):
+    """How a line names its locales: all those compared (which says of
+    which kind), or each."""
+    if len(members) == compared:
+        return f'the {compared} locale(s) compared on both machines{which}'
+    return f'{len(members)} locale(s): {", ".join(map(shown, members))}'
+
+
+def ctype_texts(old, new, names, refused, only_new=()):
+    """([finding], [file rows]): what glibc's character rules (LC_CTYPE)
+    answer differently on the two machines, for the locales of names.
+
+    PostgreSQL picks glibc's functions by the database's encoding, never the
+    locale's: in UTF8, towupper, towlower and isw<class> of each character
+    (upper(), lower(), initcap(), ILIKE, regular expressions, full-text
+    search); in an encoding of one byte per character, SQL_ASCII too, toupper,
+    tolower and is<class> of each byte; in every other, the byte functions for
+    regular expressions and the wide ones for the rest, on the characters
+    glibc's converter makes of the text (regc_pg_locale.c, formatting.c,
+    ts_locale.c, REL_13_23; pg_locale_libc.c in REL_18_6). So the locales are
+    compared by the pair of tables they use on the two machines, which are a
+    handful, and every locale of a pair changes alike. A character the old
+    table did not classify counts as much as one it did: regular expressions,
+    initcap() and full-text search read it otherwise all the same (measured on
+    PostgreSQL 17 and 18). The characters are compared only in the locales a
+    UTF8 database can use, the bytes in all.
+
+    C and POSIX are not compared: PostgreSQL handles them itself. A locale
+    glibc refused on either side is named as that, by refused_by_glibc; one
+    whose rules either side could not measure is named with why, never
+    counted as the same; one on the new machine only has nothing to be
+    compared with. EUC_JP, EUC_KR, EUC_CN and EUC_TW are not checked here:
+    which characters such a database hands glibc is a question of glibc's
+    converters."""
+    earlier = [side for side, data in zip(('OLD', 'NEW'), (old, new))
+               if 'ctype' not in data['held']]
+    if earlier:
+        files = ('the OLD and NEW files were' if len(earlier) == 2
+                 else f'the {earlier[0]} file was')
+        return [{'text': f'!! {CTYPE_LINE} NOT checked: {files} '
+                         + EARLIER.format(which_machines(earlier)) + '.'}], []
+    _, known, _ = postgres_codesets()
+    euc = {}
+    for name in list(names) + list(only_new):
+        for data in (old, new):
+            r = data['locales'].get(name)
+            if r and r.get('codeset') in CTYPE_EUC:
+                euc[name] = r['codeset']
+                break
+    wide_pairs, byte_pairs, unknown, elsewhere = {}, {}, {}, []
+    for name in names:
+        if name in refused or name in ('C', 'POSIX'):
+            continue
+        keys, why = [], []
+        for side, data in (('old', old), ('new', new)):
+            entry = data['ctype']['locales'][name]
+            table = data['ctype']['tables'].get(entry[1]) if entry[0] == 'table' else None
+            if table is None or table[0] == 'not checked':
+                why.append((side, (table or entry)[1]))
+            else:
+                keys.append(table)
+        if why:
+            # Each side's reason on its own, as the decimals of money say
+            # theirs; one reason for both, once.
+            unknown[name] = ([('both', why[0][1])] if len(why) == 2
+                             and why[0][1] == why[1][1] else why)
+            continue
+        # A database or collation of UTF8 opens with a locale of UTF-8, of
+        # US-ASCII (SQL_ASCII to PostgreSQL, chklocale.c:185) or of an
+        # encoding PostgreSQL does not know, and with no other
+        # (check_encoding_locale_matches); one made on either machine opens
+        # on the new one. An encoding not read counts as one that could.
+        if any(cs is None or cs.upper() in ('UTF-8', 'UTF8', 'US-ASCII')
+               or cs.upper() not in known
+               for cs in (data['postgres_use'][name]['codeset']
+                          or data['locales'][name].get('codeset')
+                          for data in (old, new))):
+            wide_pairs.setdefault((keys[0][0], keys[1][0]), []).append(name)
+        else:
+            elsewhere.append(name)
+        byte_pairs.setdefault((keys[0][1], keys[1][1]), []).append(name)
+    found, rows, sames = [], [], []
+    for what, pairs, changes in (
+            ('character', wide_pairs, ctype_wide_changes),
+            ('byte', byte_pairs, ctype_byte_changes)):
+        compared = sum(map(len, pairs.values()))
+        groups = {}
+        for (ok, nk), members in pairs.items():
+            got = tuple(changes(old['ctype'], ok, new['ctype'], nk))
+            if got:
+                groups.setdefault(got, []).extend(members)
+        for got, members in sorted(groups.items(), key=lambda g: sorted(g[1])):
+            members = sorted(members)
+            # The rows of each character stand under the group's label, its
+            # locales named once: under every locale of a group of 863, the
+            # file of 2.28 -> 2.34 was 61 MB (measured).
+            label = f'LC_CTYPE_group_{sum(1 for r in rows if "label" in r) + 1}'
+            rows.append({'names': members, 'label': label, 'rows': [
+                ('LC_CTYPE group', '-', f'{label}: the {what}(s) whose rules '
+                 'change in these locale(s), each a row under that name',
+                 '-', '-', '-', '-')]})
+            if what == 'character':
+                found.append(ctype_character_finding(
+                    got, ctype_group(members, compared, UTF8_USE)))
+                rows.append({'names': [label], 'rows': [
+                    ('LC_CTYPE changed', f'U+{cp:04X}', exact, '-',
+                     'classified' if known else 'not classified', '-',
+                     'on both machines') for cp, known, _, exact in got]})
+            else:
+                found.append(ctype_byte_finding(got, ctype_group(members, compared)))
+                rows.append({'names': [label], 'rows': [
+                    ('LC_CTYPE changed', f'byte {b:02X}', exact, '-', '-',
+                     '-', 'on both machines') for b, _, exact in got]})
+        same = compared - sum(map(len, groups.values()))
+        if same:
+            sames.append({'text': f'{CTYPE_LINE} of each {what}: the same in the '
+                                  f'{"other " if groups else ""}{same} '
+                                  'locale(s) compared on both machines'
+                                  f'{UTF8_USE if what == "character" else ""}.'})
+        if what == 'character' and elsewhere:
+            sames.append({'text': f'{CTYPE_LINE} of each character: not compared '
+                                  f'in {len(elsewhere)} locale(s) of an encoding '
+                                  'no UTF8 database can use; a database that can '
+                                  'use them reads their rules byte by byte'
+                                  + (', or, in EUC, as the line on EUC says'
+                                     if set(elsewhere) & set(euc) else '') + '.'})
+    # Right after the changes it points at, ahead of what stayed the same.
+    kinds = [what for what in ('character', 'byte')
+             if any(r['rows'][0][1].startswith('U+' if what == 'character'
+                                               else 'byte')
+                    for r in rows if 'label' not in r)]
+    if kinds:
+        found.append({'where': ' and '.join(kinds)})
+    found += sames
+    if unknown:
+        where = {'both': 'both machines', 'old': 'old machine',
+                 'new': 'new machine'}
+        found.append({'text': f'!! {CTYPE_LINE} NOT checked in {len(unknown)} '
+                              'locale(s): ' + '; '.join(
+                                  f'{shown(n)} ({where[side]}): {why}'
+                                  for n, sides in sorted(unknown.items())
+                                  for side, why in sides) + '.'})
+        rows += [{'names': [n], 'rows': [
+            ('LC_CTYPE not checked', '-', f'{where[side]}: {why}'.translate(
+                TEXT_ESCAPES), '-', '-', '-', '-') for side, why in sides]}
+                 for n, sides in sorted(unknown.items())]
+    if euc:
+        found.append({'text': f'!! {CTYPE_LINE} in an EUC_JP, EUC_KR, EUC_CN or '
+                              f'EUC_TW database: NOT checked here, '
+                              f'{len(euc)} locale(s). '
+                              + by_codeset(euc, euc) + '.'})
+    return found, rows
+
+
+def ctype_character_finding(got, group):
+    """The finding of a group of locales whose wide tables change alike:
+    a head, one item per character the old machine classified, a tail."""
+    known = [(cp, words) for cp, k, words, _ in got if k]
+    head = (f'!! {CTYPE_LINE} CHANGE for {len(got)} character(s) in '
+            f'{group}: each gets another upper case, '
+            'lower case or class. upper(), lower(), initcap(), ILIKE, regular '
+            'expressions and full-text search read these rules in a UTF8 '
+            'database, so they can give other results there for text that '
+            f'holds one. {len(known)} of them the old machine already '
+            f'classified{":" if known else "."}')
+    other = len(got) - len(known)
+    tail = (f'The other {other} it did not classify; a UTF8 database can hold '
+            'them too, and they change those results as well.' if other else '')
+    return {'head': head, 'items': [f'{character(cp)}: {words}'
+                                    for cp, words in known], 'tail': tail}
+
+
+def ctype_byte_finding(got, group):
+    head = (f'!! {CTYPE_LINE} CHANGE for {len(got)} byte(s) in '
+            f'{group}. A database of one byte per '
+            'character, SQL_ASCII too, reads them in upper(), lower(), '
+            'initcap(), ILIKE, regular expressions and full-text search, and '
+            'a database of any other encoding but UTF8 in regular '
+            'expressions:')
+    return {'head': head, 'items': [f'byte {b:02X}: {words}' for b, words, _ in got],
+            'tail': ''}
+
+
+def ctype_text(d, where):
+    """A finding of the character rules as one text: the file's note, and
+    what the tests read."""
+    if 'where' in d:
+        return where(d)
+    if 'items' not in d:
+        return d['text']
+    return ' '.join(x for x in (d['head'], '; '.join(d['items'])
+                                + ('.' if d['items'] else ''), d['tail']) if x)
+
+
+def ctype_where(d, ctx):
+    return (f'Every such {d["where"]} is in {ctx["characters_to"]}.'
+            if ctx['characters_to'] else
+            f'Pass --characters-to FILE for every such {d["where"]}.')
+
+
+def ctype_lines(items, ctx):
+    out = []
+    for d in items:
+        if 'items' not in d:
+            out.append('\n'.join(whole_words(
+                ctype_text(d, lambda d: ctype_where(d, ctx)), 0, 3)))
+            continue
+        out += wrapped(d['head'], 0, 3)
+        for i, item in enumerate(d['items']):
+            out += wrapped(item + (';' if i + 1 < len(d['items']) else '.'), 5, 7)
+        if d['tail']:
+            out += wrapped(d['tail'], 3, 3)
+    return out
+
+
+def ctype_summary(items, ctx):
+    out = []
+    for d in items:
+        if 'items' not in d:
+            out += whole_words(ctype_text(d, lambda d: ctype_where(d, ctx)), 5, 8)
+            continue
+        out += wrapped(d['head'], 5, 8)
+        for i, item in enumerate(d['items']):
+            out += wrapped(item + (';' if i + 1 < len(d['items']) else '.'), 10, 12)
+        if d['tail']:
+            out += wrapped(d['tail'], 8, 8)
+    return out
+
+
+def ctype_notes(items):
+    return ['# ' + ctype_text(d, lambda d: f'Every such {d["where"]} is a row '
+                                           'of this file.').translate(TEXT_ESCAPES)
+            for d in items]
+
+
 def other_encoding_text(names, o, n):
     """The line that names the locales of names whose encoding PostgreSQL
     does not know, or None: a database of any encoding can use one, and
@@ -4118,6 +4502,8 @@ RUN_KINDS = {
     'refused': (refused_lines, refused_summary, refused_rows),
     'postgres use': (check_lines, check_summary, notes),
     'postgres use rows': (nothing, nothing, rows_of),
+    'ctype': (ctype_lines, ctype_summary, ctype_notes),
+    'ctype rows': (nothing, nothing, rows_of),
     'unmeasured bytes': (stored_lines, stored_summary, stored_notes),
     'unmeasured bytes rows': (nothing, nothing, stored_rows),
     'closing': (closing_lines, closing_summary, notes),
@@ -4224,6 +4610,8 @@ def summary_lines(old, new, groups, run, totals, characters_to=None):
     out += run('postgres libc')
     out += run('postgres use')
     out += run('postgres use rows')
+    out += run('ctype')
+    out += run('ctype rows')
     out += run('unmeasured bytes')
     out += run('unmeasured bytes rows')
     out += run('closing')
@@ -4361,12 +4749,15 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None):
                [(text, warning) for text, warning, above in libc if not above]))
     use, use_rows = use_texts(old, new, both, refused, only_new)
     checks += (('postgres use', use),)
+    ctype, ctype_rows = ctype_texts(old, new, both, refused, only_new)
     # What PostgreSQL stores in the locales measured on both machines that
     # their order does not place. It needs only the order part, so a file
     # of any format gets it.
     stored = stored_texts(o, {name: (o[name]['codeset'], o[name]['corpus'])
                               for name in same + changed})
     beside = [('postgres use rows', d) for d in use_rows]
+    beside += [('ctype', d) for d in ctype]
+    beside += [('ctype rows', d) for d in ctype_rows]
     # A locale refused on both sides keeps no encoding in its order on
     # either (load() refuses one that does), so it is never named here; nor
     # is one only on the new machine that glibc refuses there. One only on
@@ -4417,6 +4808,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None):
     report += run('postgres libc')
     report += run('postgres use')
     report += run('postgres use rows')
+    report += run('ctype')
+    report += run('ctype rows')
     report += run('unmeasured bytes')
     report += run('unmeasured bytes rows')
     report += run('closing')
@@ -4435,12 +4828,13 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None):
         run = Drawn(found, FILE)
         for kind in ('partly', 'refused', 'not measured',
                      'not on the new machine', 'postgres use rows',
-                     'unmeasured bytes rows'):
+                     'ctype rows', 'unmeasured bytes rows'):
             rows += run(kind)
         file_notes = (run('warning') + run('control')
                       + run('postgres libc above') + run('money')
                       + run('postgres libc') + run('postgres use')
-                      + run('unmeasured bytes') + run('closing'))
+                      + run('ctype') + run('unmeasured bytes')
+                      + run('closing'))
         run.done()
         # One group per set of names: a locale can have rows of several
         # findings (unchanged only as far as measured, and an error of
@@ -4522,7 +4916,8 @@ def main():
     ap.add_argument('--compare', nargs=2, metavar=('OLD', 'NEW'),
                     help='compare the outputs of two machines, the one you '
                          'upgrade from first, and name the characters that '
-                         'moved')
+                         'moved and those whose character rules (LC_CTYPE) '
+                         'change')
     ap.add_argument('--tags', nargs=2, metavar=('OLD_TAG', 'NEW_TAG'),
                     help='with --compare: the glibc tags of the pair audited, '
                          'as audit.sh passes them; a file measured on another '

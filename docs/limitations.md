@@ -9,7 +9,7 @@ something it cannot see has changed.
 4. [A copied folder's character sets are not compared](#a-copied-folders-character-sets-are-not-compared)
 5. [Step 5 reports, it does not decide](#step-5-reports-it-does-not-decide)
 6. [Step 11 measures one character at a time](#step-11-measures-one-character-at-a-time)
-7. [What `LC_CTYPE` returns is not audited](#what-lc_ctype-returns-is-not-audited)
+7. [`LC_CTYPE` is compared by step 11 alone](#lc_ctype-is-compared-by-step-11-alone)
 
 ## `C.UTF-8` is invisible to a tag diff
 
@@ -134,10 +134,10 @@ letters when the strings contain it.
 Not tried yet, so a failure there would be new: Python 3.14 on a real
 machine, where only a simulation was run, a machine on cgroup v1, and ARM.
 
-## What `LC_CTYPE` returns is not audited
+## `LC_CTYPE` is compared by step 11 alone
 
 The other six sections are ways a sort-order change can be missed. This one
-is a whole category nothing here audits, but for one check.
+is a whole category only one step compares.
 
 `LC_COLLATE` decides sort order. `LC_CTYPE` decides `upper()`, `lower()`,
 `initcap()`, character classification and pattern matching, and under the
@@ -151,19 +151,21 @@ PostgreSQL warns less here than it does for collation, not more. There is no
 ctype version to compare, so a ctype change leaves no trail at all and there
 is no mismatch for anything to detect.
 
-No step of this tool audits what those functions return, and no verdict
-this project publishes says anything about it in either direction, including
-"unchanged". Step 11 checks only whether each machine can convert a locale's
-text at all, and names the locales where it found that `upper()`, `lower()`
-and `ILIKE` stop with an error, those glibc refused, and those it could not
-check. Steps 2 and 6 to 8 read its transliterations only for the collating
-elements they build, which are sort order. A 🟢 on the
-results table is a statement about sort order and nothing else. If a
-`lower()`-based index matters to you, confirm it the way this project confirms
-collation — on both machines, naming the builds.
+Step 11, given both machines' files, compares what glibc's character rules
+answer and names the characters and bytes whose rules change. It says where it
+could not look: a locale whose rules a machine could not measure, and a
+database of `EUC_JP`, `EUC_KR`, `EUC_CN` or `EUC_TW`, which it does not check.
+Nothing else here compares them, neither a run without the two files nor steps
+2 and 6 to 8, which read the transliterations of `LC_CTYPE` only for the
+collating elements they build, which are sort order. No verdict this project
+publishes says anything about them in either direction, including "unchanged".
+A 🟢 on the results table is a statement about sort order and nothing else. If
+a `lower()`-based index matters to you, run step 11 with both machines' files,
+and confirm it the way this project confirms collation — on both machines,
+naming the builds.
 
 The remaining categories (`LC_NUMERIC`, `LC_TIME`, `LC_MONETARY`,
-`LC_MESSAGES`) are out of scope as well. They move `to_char()` output and
+`LC_MESSAGES`) are out of scope. They move `to_char()` output and
 message text rather than index order. The one exception is the number of
 decimals of the `money` type, from `LC_MONETARY`, which changes what a stored
 value means: step 11 compares it on both machines.
