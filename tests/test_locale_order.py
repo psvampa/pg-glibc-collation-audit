@@ -4694,14 +4694,16 @@ DEFAULT_USE = {'ANSI_X3.4-1968': ('one byte', None),
                'UTF-8': ('converts', (0x80, 'c280'))}
 
 
-def with_parts(money=None, libc=None, use=None, form=m.FORMAT, ctype=None):
+def with_parts(money=None, libc=None, use=None, form=m.FORMAT, ctype=None,
+               converter=None):
     """An edit that makes a file of the first format one of a later format
     (this one unless form): the list of its parts, the decimals of money (2
     in every locale, but those in money), its PostgreSQL processes
     (CLEAN_LIBC, but what libc changes), how PostgreSQL uses each locale
-    (DEFAULT_USE by its encoding, but those in use) and the character rules
-    of each (ctype_of, but the entries in ctype). The order part is the
-    machine's own, untouched."""
+    (DEFAULT_USE by its encoding, but those in use), the character rules
+    of each (ctype_of, but the entries in ctype) and the converter of each
+    encoding (converter_of_use, but the entries in converter). The order
+    part is the machine's own, untouched."""
     def edit(d):
         d['format'] = form
         d['parts'] = list(m.PARTS[form])
@@ -4717,6 +4719,8 @@ def with_parts(money=None, libc=None, use=None, form=m.FORMAT, ctype=None):
             d['postgres_use'].update(use or {})
         if 'ctype' in m.PARTS[form]:
             d['ctype'] = ctype_of(d['postgres_use'], ctype)
+        if 'converter' in m.PARTS[form]:
+            d['converter'] = converter_of_use(d['postgres_use'], converter)
     return edit
 
 
@@ -5487,7 +5491,8 @@ class PostgresProcessesRead(unittest.TestCase):
         screen = Screen()
         out = {'locales': {}, 'locales_listed': 0,
                'postgres_libc': dict(CLEAN_LIBC, stale=[[1, 'x']]),
-               'ctype': {'locales': {}, 'tables': {}, 'wide': {}, 'bytes': {}}}
+               'ctype': {'locales': {}, 'tables': {}, 'wide': {}, 'bytes': {}},
+               'converter': NO_CONVERTER_LOCALES}
         with unittest.mock.patch.object(m.sys, 'stderr', screen):
             m.finished(out, 1, 10)
         self.assertIn('!! 1 PostgreSQL process(es) still run the glibc',
@@ -6092,7 +6097,8 @@ class CtypeOnTheMachine(unittest.TestCase):
                                      'd': ['refused', 'no']},
                          'tables': {'b' * 64: ['not checked', 'failed'],
                                     'c' * 64: ['w', 'b']},
-                         'wide': {}, 'bytes': {}}}
+                         'wide': {}, 'bytes': {}},
+               'converter': NO_CONVERTER_LOCALES}
         screen = Screen()
         with unittest.mock.patch.object(m.sys, 'stderr', screen):
             rc = m.finished(out, 1, 10)
@@ -6578,6 +6584,7 @@ class PostgresUseCompared(Checks):
                 d[part].pop('ja_JP.eucjp')
             d['ctype']['locales'].pop('ja_JP.eucjp')
             d['locales_listed'] = len(d['locales'])
+            d['converter'] = converter_of_use(d['postgres_use'])
         found = self.use(*self.pair(measured_use(8), measured_use(9),
                                     old_edits=[dropped]))
         self.assertIn({'one side': 'new', 'absent': True,
@@ -6603,6 +6610,7 @@ class PostgresUseCompared(Checks):
                     d[part].pop(name)
                 d['ctype']['locales'].pop(name)
             d['locales_listed'] = len(d['locales'])
+            d['converter'] = converter_of_use(d['postgres_use'])
         checks = self.checks(*self.pair(measured_use(8), measured_use(9),
                                         old_edits=[gone]))
         self.assertEqual([d for kind, d in checks if kind == 'use'][-1]['elsewhere'], 2)
@@ -7500,6 +7508,7 @@ class CtypeCompared(Checks):
                 d[part].pop('de_DE.utf8')
             d['ctype']['locales'].pop('de_DE.utf8')
             d['locales_listed'] = len(d['locales'])
+            d['converter'] = converter_of_use(d['postgres_use'])
         for side in ('old', 'new'):
             with self.subTest(side=side):
                 edits = [dropped, retabled(self.every(BASE) if side == 'old'
@@ -7649,6 +7658,7 @@ class CtypeComparedInEuc(Checks):
                     d[part].pop(name)
                 d['ctype']['locales'].pop(name)
             d['locales_listed'] = len(d['locales'])
+            d['converter'] = converter_of_use(d['postgres_use'])
         found = [d for kind, d in self.checks(*self.pair(old_edits=[no_euc]))
                  if kind == 'ctype']
         self.assertIn({'elsewhere': 3, 'with euc': False}, found)
@@ -7660,6 +7670,7 @@ class CtypeComparedInEuc(Checks):
                 d[part].pop('ja_JP.eucjp')
             d['ctype']['locales'].pop('ja_JP.eucjp')
             d['locales_listed'] = len(d['locales'])
+            d['converter'] = converter_of_use(d['postgres_use'])
         self.assertIn('ja_JP.eucjp', self.euc(dropped)[0])
 
     def test_each_euc_encoding_on_its_own(self):
@@ -7675,6 +7686,7 @@ class CtypeComparedInEuc(Checks):
                             d[part].pop(name)
                         d['ctype']['locales'].pop(name)
                     d['locales_listed'] = len(d['locales'])
+                    d['converter'] = converter_of_use(d['postgres_use'])
                 got = [d['euc'] for kind, d in self.checks(*self.pair(
                     [others], [others])) if kind == 'ctype' and 'euc' in d]
                 self.assertEqual(set(got[0].values()), {codeset})
@@ -7789,6 +7801,472 @@ class CtypeErrnoAndRestore(unittest.TestCase):
         self.assertEqual(stop.exception.code, 2)
         self.assertIn('glibc could not set LC_MONETARY back to x; nothing was '
                       'written', err.getvalue())
+
+
+# --- what glibc's converter of each encoding gives -----------------------------
+
+
+CONVERTER_DEFAULTS = {}   # per codeset, what converter_values() packed
+
+
+def converter_values(codeset):
+    """A list as converter_of() packs one, one value per accepted sequence:
+    ASCII as itself, then what Python's codec reads, where it has one, else
+    a stand-in code point; 0 where the codec reads no one character.
+    Packed once per process; the tests read its shape."""
+    if codeset not in CONVERTER_DEFAULTS:
+        codec = {'EUC-JP': 'euc_jp', 'EUC-KR': 'euc_kr', 'GB2312': 'gb2312',
+                 'TIS-620': 'tis_620', 'KOI8-T': 'koi8_t',
+                 'PT154': 'ptcp154'}.get(codeset)
+        got = []
+        for i, s in enumerate(m.accepted_sequences(codeset)):
+            if len(s) == 1 and s[0] < 0x80:
+                got.append(s[0])
+                continue
+            if codec is None:
+                got.append(0x4E00 + i % 0x5000)
+                continue
+            try:
+                text = s.decode(codec)
+            except UnicodeError:
+                got.append(0)
+                continue
+            got.append(ord(text) if len(text) == 1 else 0)
+        CONVERTER_DEFAULTS[codeset] = m.pack_order(got)
+    return CONVERTER_DEFAULTS[codeset]
+
+
+def sequences_of(codeset):
+    """The digest a measured entry keeps of its sequences: sha256 of each
+    in lower-case hex on a line of its own, worked out here."""
+    return hashlib.sha256(''.join(
+        s.hex() + '\n' for s in m.accepted_sequences(codeset)).encode()).hexdigest()
+
+
+def converter_of_use(use, entries=None):
+    """The converter part of a machine whose postgres_use is use: each
+    encoding measured under its first locale by name, with the converter
+    installed, or no locale of it; entries in place. Worked out here, not
+    with the script's first_locales, so that a fault there is not
+    repeated in what the tests read."""
+    first = {}
+    for name in sorted(use):
+        first.setdefault(use[name]['codeset'], name)
+    part = {cs: (['measured', ['opens', None], first[cs], converter_values(cs),
+                  sequences_of(cs)]
+                 if cs in first else ['no locale', ['opens', None], None, None, None])
+            for cs in m.CONVERTER_CODESETS}
+    part.update(entries or {})
+    return part
+
+
+# The converter part of a machine with no locale of any of the nine.
+NO_CONVERTER_LOCALES = {cs: ['no locale', ['opens', None], None, None, None]
+                        for cs in m.CONVERTER_CODESETS}
+
+
+class FakeConverter:
+    """glibc's iconv_open and mbrtowc as a double. chars maps the bytes of a
+    character to its code point. mbrtowc puts the bytes its state holds
+    before the ones it is handed, as glibc does with the bytes of a
+    character it has not seen whole (iconv/loop.c, SINGLE); it returns -2
+    for the start of a longer character and keeps the bytes, and -1 for
+    anything else, leaving them in the state too, which POSIX allows: the
+    state is undefined after an error. opens is the errno iconv_open fails
+    with, or 0 when it opens. Every call is recorded with the LC_CTYPE then
+    held."""
+
+    def __init__(self, chars, opens=0, ctype=lambda: None):
+        self.chars, self.opens, self.ctype, self.calls = chars, opens, ctype, []
+
+    def iconv_open(self, to, frm):
+        self.calls.append(('iconv_open', to, frm))
+        if self.opens:
+            m.ctypes.set_errno(self.opens)
+            return m.NO_ICONV
+        return 1234
+
+    def iconv_close(self, h):
+        self.calls.append(('iconv_close', h))
+        return 0
+
+    def mbrtowc(self, pwc, s, n, state):
+        b = state.raw[1:1 + state.raw[0]] + s[:n]
+        self.calls.append(('mbrtowc', b, self.ctype()))
+        if b in self.chars:
+            m.ctypes.memset(state, 0, len(state))
+            pwc._obj.value = self.chars[b]
+            return n
+        state.raw = bytes([len(b)]) + b + bytes(len(state) - 1 - len(b))
+        if any(k.startswith(b) for k in self.chars):
+            return m.ctypes.c_size_t(-2).value
+        return m.ctypes.c_size_t(-1).value
+
+
+class ConverterOnTheMachine(unittest.TestCase):
+    """converter_of(), converter_part() and what the run says when it ends:
+    what glibc's converter of each encoding gives, asked once per
+    encoding. glibc is a double here, since this machine need not be
+    Linux, and the sequences are cut to a few. Freezes a converter that
+    could not be opened read as one that was, a sequence glibc reads in
+    part or as the start of another read as converted or as an error, a
+    state left by the sequence before, and a measurement that failed read
+    as one that worked, or left out of the end of the run."""
+
+    SEQS = [b'A', b'\xa1\xa1', b'\xa1\xa2', b'\x8f\xa1\xa1', b'\x8f\xa2\xa2']
+    CHARS = {b'A': 0x41, b'\xa1\xa1': 0x3000, b'\xa1\xa2': 0x3001,
+             b'\x8f\xa2\xa2': 0x2D8}
+
+    def measure(self, chars=None, opens=0, name='ja_JP.eucjp', refuse=False,
+                fake=FakeConverter):
+        """converter_of(('EUC-JP', name)) over SEQS, with LC_CTYPE checked
+        put back."""
+        state = {m.locale.LC_CTYPE: 'C'}
+
+        def setlocale(category, n=None):
+            if n is None:
+                return state[category]
+            if refuse and n == name:
+                raise m.locale.Error('unsupported locale setting')
+            state[category] = n
+            return n
+        self.fake = fake(self.CHARS if chars is None else chars, opens,
+                         lambda: state[m.locale.LC_CTYPE])
+        with unittest.mock.patch.object(m.locale, 'setlocale', setlocale), \
+                unittest.mock.patch.object(m, 'converter_libc', lambda: self.fake), \
+                unittest.mock.patch.dict(m.SEQUENCES, {'EUC-JP': self.SEQS}), \
+                unittest.mock.patch.dict(m.SEQUENCE_DIGESTS, clear=True):
+            got = m.converter_of(('EUC-JP', name))
+        self.assertEqual(state, {m.locale.LC_CTYPE: 'C'}, 'LC_CTYPE not put back')
+        return got
+
+    def values(self, entry):
+        with unittest.mock.patch.dict(m.SEQUENCES, {'EUC-JP': self.SEQS}):
+            return m.converter_unpacked(entry[3], 'EUC-JP')
+
+    def test_each_sequence_under_the_locale(self):
+        cs, entry = self.measure()
+        self.assertEqual((cs, entry[:3]), ('EUC-JP', ['measured', ['opens', None],
+                                                      'ja_JP.eucjp']))
+        with unittest.mock.patch.dict(m.SEQUENCES, {'EUC-JP': self.SEQS}), \
+                unittest.mock.patch.dict(m.SEQUENCE_DIGESTS, clear=True):
+            self.assertEqual(entry[4], sequences_of('EUC-JP'))
+        self.assertEqual(self.values(entry), [0x41, 0x3000, 0x3001, 0, 0x2D8])
+        self.assertEqual(self.fake.calls[:2], [('iconv_open', b'WCHAR_T', b'EUC-JP'),
+                                               ('iconv_close', 1234)])
+        self.assertEqual([c[1:] for c in self.fake.calls if c[0] == 'mbrtowc'],
+                         [(s, 'ja_JP.eucjp') for s in self.SEQS])
+
+    def test_a_state_left_by_the_sequence_before_is_cleared(self):
+        """8F A1 A1 is refused and its bytes stay in the state: read after
+        them, 8F A2 A2 would be refused too."""
+        cs, entry = self.measure()
+        self.assertEqual(self.values(entry)[3:], [0, 0x2D8])
+
+    def test_a_sequence_read_whole_without_a_character(self):
+        """glibc's mbrtowc gives the bytes read even where the converter
+        wrote nothing (mbrtowc.c, 2.28): the value left from the sequence
+        before would read as this one's, so the encoding is not checked.
+        No converter of the nine does it in 2.28 or 2.39."""
+        class Silent(FakeConverter):
+            def mbrtowc(self, pwc, s, n, state):
+                if s == b'\xa1\xa2':
+                    return n
+                return super().mbrtowc(pwc, s, n, state)
+        cs, entry = self.measure(fake=Silent)
+        self.assertEqual(entry, ['not checked', ['opens', None], 'ja_JP.eucjp',
+                                 'glibc read the bytes A1 A2 as one character '
+                                 'but wrote none', None])
+
+    def test_a_sequence_read_neither_whole_nor_refused(self):
+        """In part (mbrtowc gives fewer bytes than it was handed) or as the
+        start of a longer character (-2): no value says what PostgreSQL
+        does with it, so the encoding is not checked, naming the bytes,
+        never read as converted or as an error. Measured on collaudit8:
+        glibc 2.28 gives every accepted sequence of the nine whole or
+        refuses it."""
+        class Short(FakeConverter):
+            def mbrtowc(self, pwc, s, n, state):
+                r = super().mbrtowc(pwc, s, n, state)
+                return 1 if s == b'\xa1\xa2' else r
+        for case, kw, why in (
+                ('in part', {'fake': Short},
+                 'glibc read the bytes A1 A2 neither as one character nor as '
+                 'an error (mbrtowc gave 1)'),
+                ('the start of another',
+                 {'chars': {**self.CHARS, b'\x8f\xa1\xa1\xa1': 0x2E00}},
+                 'glibc read the bytes 8F A1 A1 neither as one character nor as '
+                 'an error (mbrtowc gave -2)')):
+            with self.subTest(case=case):
+                cs, entry = self.measure(**kw)
+                self.assertEqual(entry, ['not checked', ['opens', None],
+                                         'ja_JP.eucjp', why, None])
+
+    def test_a_converter_that_does_not_open(self):
+        """Without glibc-gconv-extra: iconv_open fails, and what glibc
+        converts is still measured (ASCII alone, measured on collaudit9)."""
+        cs, entry = self.measure(opens=22, chars={b'A': 0x41})
+        self.assertEqual(entry[:3], ['measured', ['fails', os.strerror(22)],
+                                     'ja_JP.eucjp'])
+        self.assertEqual(self.values(entry), [0x41, 0, 0, 0, 0])
+
+    def test_no_locale_of_the_encoding(self):
+        cs, entry = self.measure(name=None)
+        self.assertEqual(entry, ['no locale', ['opens', None], None, None, None])
+        self.assertEqual([c[0] for c in self.fake.calls], ['iconv_open', 'iconv_close'])
+
+    def test_a_measurement_that_fails_says_so(self):
+        cs, entry = self.measure(refuse=True)
+        self.assertEqual(entry, ['not checked', ['opens', None], 'ja_JP.eucjp',
+                                 "measuring it failed: Error('unsupported "
+                                 "locale setting')", None])
+
+    def test_glibc_that_cannot_be_asked(self):
+        """A C library without iconv_open (this Mac's): not checked, with
+        why, and nothing asked under the locale, whether there is one or
+        not."""
+        for name in ('ko_KR', None):
+            with self.subTest(locale=name), unittest.mock.patch.object(
+                    m, 'converter_libc', unittest.mock.Mock(
+                        side_effect=AttributeError('iconv_open'))):
+                cs, entry = m.converter_of(('EUC-KR', name))
+                self.assertEqual(entry, [
+                    'not checked', ['not asked', None], name,
+                    "asking glibc failed: AttributeError('iconv_open')", None])
+
+    def test_the_run_says_when_a_converter_was_not_measured(self):
+        """finished(): each encoding whose converter was not measured is
+        named, with why, in the order of CONVERTER_CODESETS, and the exit
+        status is 1; one measured, with no locale, or whose converter does
+        not open, is not a failure of the run."""
+        part = dict(NO_CONVERTER_LOCALES)
+        part['GB2312'] = ['not checked', ['opens', None], 'zh_CN', 'why cn', None]
+        part['EUC-JP'] = ['not checked', ['not asked', None], None, 'why jp', None]
+        part['EUC-KR'] = ['measured', ['fails', 'Invalid argument'], 'ko_KR', 'x', 'd']
+        out = {'locales': {}, 'locales_listed': 0, 'postgres_libc': dict(CLEAN_LIBC),
+               'ctype': {'locales': {}, 'tables': {}, 'wide': {}, 'bytes': {}},
+               'converter': part}
+        screen = Screen()
+        with unittest.mock.patch.object(m.sys, 'stderr', screen):
+            self.assertEqual(m.finished(out, 1, 10), 1)
+        self.assertIn("!! What glibc's converter gives could not be measured for "
+                      "2 encoding(s):\n  EUC-JP: why jp\n  GB2312: why cn\n",
+                      screen.getvalue())
+        del part['GB2312'], part['EUC-JP']
+        part.update(GB2312=NO_CONVERTER_LOCALES['GB2312'],
+                    **{'EUC-JP': NO_CONVERTER_LOCALES['EUC-JP']})
+        screen = Screen()
+        with unittest.mock.patch.object(m.sys, 'stderr', screen):
+            self.assertEqual(m.finished(out, 1, 10), 0)
+        self.assertNotIn('converter', screen.getvalue())
+
+    def test_the_first_locale_of_each_encoding(self):
+        use = {'ja_JP': use_of('converts', 'EUC-JP', (0xFF61, '8ea1')),
+               'ja_JP.eucjp': use_of('converts', 'EUC-JP', (0xFF61, '8ea1')),
+               'C': use_of('one byte', 'ANSI_X3.4-1968')}
+        jobs = []
+        m.converter_part(use, lambda f, js: (jobs.extend(js), [(cs, n) for cs, n in js])[1])
+        self.assertEqual(dict(jobs), dict({cs: None for cs in m.CONVERTER_CODESETS},
+                                          **{'EUC-JP': 'ja_JP'}))
+
+    def test_the_accepted_sequences(self):
+        """What PostgreSQL's verifiers accept, counted, and the edges each
+        refuses (wchar.c, REL_13_23 and REL_18_6)."""
+        counts = {cs: len(m.accepted_sequences(cs)) for cs in m.CONVERTER_CODESETS}
+        self.assertEqual(counts, {'EUC-JP': 127 + 94 * 94 + 63 + 94 * 94,
+                                  'EUC-KR': 127 + 94 * 94, 'GB2312': 127 + 94 * 94,
+                                  'EUC-TW': 127 + 7 * 94 * 94 + 126 * 94,
+                                  'TIS-620': 255, 'KOI8-T': 255, 'PT154': 255,
+                                  'ARMSCII-8': 255, 'GEORGIAN-PS': 255})
+        for cs, inside, outside in (
+                ('EUC-JP', [b'\x8e\xdf', b'\x8f\xfe\xfe'], [b'\x8e\xe0', b'\xa1\xa0', b'\x80']),
+                ('EUC-KR', [b'\xfe\xfe'], [b'\x8e\xa1', b'\xa1\xff']),
+                ('EUC-TW', [b'\x80\xa1', b'\x8e\xa7\xa1\xa1', b'\xff\xfe'],
+                 [b'\x8e\xa8\xa1\xa1', b'\x8f\xa1', b'\x8e\xa1'])):
+            seqs = set(m.accepted_sequences(cs))
+            with self.subTest(codeset=cs):
+                self.assertTrue(set(inside) <= seqs)
+                self.assertFalse(set(outside) & seqs)
+        for cs in m.CONVERTER_CODESETS:
+            self.assertEqual(m.accepted_sequences(cs), sorted(m.accepted_sequences(cs)))
+
+    def test_measure_writes_the_part(self):
+        """The call site: measure() writes the part converter_part makes
+        from the answers of postgres_use, under the parts its format lists."""
+        with unittest.mock.patch.multiple(
+                m, libc_version=lambda: 'glibc 2.34',
+                list_locales=lambda: ['a', 'b'],
+                glibc_build=lambda: 'glibc-2.34-1.el9.x86_64',
+                measure_one=lambda name: (name, {'error': 'x'}, None),
+                postgres_use=lambda name: use_of('converts', 'EUC-KR', (0x3000, 'a1a1')),
+                ctype_identity=lambda name, use: ['table', 'd' * 64],
+                ctype_part=lambda ids, f: {},
+                converter_of=lambda job: (job[0], ['asked', job[1]]),
+                UTF8_BYTES=None,
+                fork_pool=lambda jobs: ThreadPoolExecutor(1),
+                money_digits=lambda names: {n: 3 for n in names},
+                postgres_libc=lambda: dict(CLEAN_LIBC)), \
+                unittest.mock.patch.object(m.os, 'nice'), \
+                unittest.mock.patch.object(m.sys, 'stderr', Screen()):
+            text, out, _ = m.measure(1)
+        data = json.loads(text)
+        self.assertIn('converter', data['parts'])
+        self.assertEqual(data['converter']['EUC-KR'], ['asked', 'a'])
+        self.assertEqual(data['converter']['EUC-JP'], ['asked', None])
+
+
+class ConverterRead(Checks):
+    """A file of this format whose converter part is missing or malformed is
+    refused: read as missing it would say "not checked" where the machine
+    did check, and a list of another length would pair characters with the
+    wrong sequences."""
+
+    MALFORMED = 'what it says of the converter of each encoding is malformed'
+
+    @classmethod
+    def setUpClass(cls):
+        super(Checks, cls).setUpClass()
+        for path in (RHEL8, RHEL9):
+            cls.texts[path] = trimmed(cls.texts[path], USE_NAMES)
+
+    def refused(self, phrase, *edits, form=m.FORMAT):
+        new = self.made(RHEL9, 'new', with_parts(form=form, use=measured_use(9)),
+                        *edits)
+        err = io.StringIO()
+        with unittest.mock.patch.object(m.sys, 'stderr', err), \
+                self.assertRaises(SystemExit) as stop:
+            m.load(new, m.corpus_digest())
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn(phrase, flat(err.getvalue()))
+
+    def test_without_the_part(self):
+        self.refused('lacks a part its format holds', lambda d: d.pop('converter'))
+
+    def test_a_fourth_format_file_with_the_part(self):
+        self.refused('holds one it does not', lambda d: d.update(converter={}),
+                     form='locale_order/4')
+
+    def test_malformed(self):
+        cut = lambda n: m.pack_order(m.unpack_order(zlib.decompress(
+            base64.b64decode(converter_values('EUC-KR'))))[:n])
+        whole = len(m.accepted_sequences('EUC-KR'))
+        values = m.unpack_order(zlib.decompress(base64.b64decode(
+            converter_values('EUC-KR'))))
+
+        def entry(cs='EUC-KR', **k):
+            def edit(d):
+                e = d['converter'][cs]
+                for i, v in k.items():
+                    e[int(i[1:])] = v
+            return edit
+        for case, edit in (
+                ('not a map', lambda d: d.update(converter=[])),
+                ('an encoding missing', lambda d: d['converter'].pop('EUC-TW')),
+                ('an encoding more', lambda d: d['converter'].update(BIG5=['no locale', ['opens', None], None, None])),
+                ('an entry not a list', lambda d: d['converter'].update({'EUC-KR': 'x'})),
+                ('an entry of six items', lambda d: d['converter']['EUC-KR'].append(None)),
+                ('an entry of four items', lambda d: d['converter']['EUC-KR'].pop()),
+                ('an unknown state', entry(e0='maybe')),
+                ('iconv_open unknown', entry(e1=['maybe', None])),
+                ('iconv_open of three items', entry(e1=['opens', None, None])),
+                ('opens with a reason', entry(e1=['opens', 'x'])),
+                ('fails with no reason', entry(e1=['fails', ''])),
+                ('fails with None', entry(e1=['fails', None])),
+                ('not asked with a reason', entry(e0='not checked', e1=['not asked', 'x'], e3='y')),
+                ('not asked beside a measurement', entry(e1=['not asked', None])),
+                ('not the first locale', entry(e2='ko_KR.euckr')),
+                ('a locale of another encoding', entry(e2='ja_JP')),
+                ('a locale where the machine has none', entry('EUC-TW', e2='ko_KR')),
+                ('no locale with a list', entry('EUC-TW', e3=converter_values('EUC-TW'))),
+                ('no locale with a digest', entry('EUC-TW', e4=sequences_of('EUC-TW'))),
+                ('no locale where there is one', entry(e0='no locale', e3=None, e4=None)),
+                ('not checked with no reason', entry(e0='not checked', e3='', e4=None)),
+                ('not checked with None', entry(e0='not checked', e3=None, e4=None)),
+                ('not checked with a digest', entry(e0='not checked', e3='x')),
+                ('not checked with no locale, glibc asked',
+                 entry('EUC-TW', e0='not checked', e3='x')),
+                ('measured with no locale', entry('EUC-TW', e0='measured',
+                                                  e3=converter_values('EUC-TW'),
+                                                  e4=sequences_of('EUC-TW'))),
+                ('measured with no digest', entry(e4=None)),
+                ('a digest in capitals', entry(e4=sequences_of('EUC-KR').upper())),
+                ('one value short', entry(e3=cut(whole - 1))),
+                ('one value more', entry(e3=m.pack_order(values + [0x41]))),
+                ('past a wchar_t of glibc', entry(e3=m.pack_order([0x80000000] + values[1:]))),
+                ('below zero', entry(e3=m.pack_order([-1] + values[1:]))),
+                ('not base64', entry(e3='!!')),
+                ('not zlib', entry(e3=base64.b64encode(b'x').decode())),
+                ('cut mid-number', entry(e3=m.pack(b'\x80'))),
+                ('not text', entry(e3=5))):
+            with self.subTest(case=case):
+                self.refused(self.MALFORMED, edit)
+
+    def test_each_form_converter_part_writes_is_read(self):
+        """The control: measured, no locale, not checked, glibc not asked,
+        a converter that does not open and converts nothing, and values at
+        both ends of a wchar_t of glibc."""
+        values = m.unpack_order(zlib.decompress(base64.b64decode(
+            converter_values('EUC-KR'))))
+        values[-2:] = [0, 0x7FFFFFFF]
+
+        def edit(d):
+            c = d['converter']
+            c['EUC-KR'][1:4] = [['fails', 'Invalid argument'], 'ko_KR',
+                                m.pack_order([0] * len(values))]
+            c['GB2312'] = ['not checked', ['opens', None], 'zh_CN',
+                           'measuring it failed: x', None]
+            c['EUC-JP'] = ['not checked', ['not asked', None], 'ja_JP', 'y', None]
+            c['EUC-TW'] = ['not checked', ['not asked', None], None, 'z', None]
+            c['TIS-620'][3] = m.pack_order(values[:255])
+        new = self.made(RHEL9, 'new', with_parts(use=measured_use(9)), edit)
+        c = m.load(new, m.corpus_digest())[0]['converter']
+        self.assertEqual([c[cs][0] for cs in m.CONVERTER_CODESETS],
+                         ['not checked', 'measured', 'not checked', 'not checked',
+                          'measured', 'no locale', 'no locale', 'measured',
+                          'no locale'])
+
+    def test_measured_over_other_sequences(self):
+        """A file measured by a copy of this script whose list of
+        sequences differs, of the same length or not, is refused by the
+        copy that compares, naming the encodings: its values would pair
+        with other bytes (review round 2: one more sequence was refused as
+        a damaged file)."""
+        new = self.made(RHEL9, 'new', with_parts(use=measured_use(9)))
+        kr, cn = m.accepted_sequences('EUC-KR'), m.accepted_sequences('GB2312')
+        for case, lists in (
+                ('one more', {'EUC-KR': kr + [b'\xff'], 'GB2312': cn + [b'\xff']}),
+                ('one fewer', {'EUC-KR': kr[:-1], 'GB2312': cn}),
+                ('one swapped', {'EUC-KR': kr[:-1] + [b'\xff'], 'GB2312': cn})):
+            with self.subTest(case=case):
+                err = io.StringIO()
+                with unittest.mock.patch.dict(m.SEQUENCES, lists), \
+                        unittest.mock.patch.dict(m.SEQUENCE_DIGESTS, clear=True), \
+                        unittest.mock.patch.object(m.sys, 'stderr', err), \
+                        self.assertRaises(SystemExit):
+                    m.load(new, m.corpus_digest())
+                named = 'EUC-KR, GB2312' if case == 'one more' else 'EUC-KR'
+                self.assertIn(f'measured the converter of {named} over other '
+                              'byte sequences than this script uses',
+                              flat(err.getvalue()))
+
+    def test_the_fourth_format_compares_as_before(self):
+        """A file of the format before this one is whole, and none of the
+        checks the comparison names reads the converter part yet: a pair
+        with one names the same checks as a pair of two files of this
+        format."""
+        pairs = []
+        for form in ('locale_order/4', m.FORMAT):
+            data = json.loads(self.texts[RHEL8])
+            with_parts(form=form, use=measured_use(8))(data)
+            data['content'] = m.content_digest(data)
+            path = os.path.join(self.tmp, f'fourth-{form[-1]}.out')
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(json.dumps(data, sort_keys=True) + '\n')
+            pairs.append(self.checks(path, self.made(RHEL9, 'new', with_parts(
+                use=measured_use(9)))))
+        self.assertEqual(pairs[0], pairs[1])
+
+
 
 if __name__ == '__main__':
     unittest.main()
