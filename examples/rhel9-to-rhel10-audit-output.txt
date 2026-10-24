@@ -1797,6 +1797,32 @@ upper(), lower() and ILIKE: text that is not ASCII converts on both machines
    GB18030: zh_CN.gb18030; GBK: zh_CN.gbk, zh_SG.gbk). The 10 locale(s) of an
    encoding PostgreSQL does not know are in the line on a database of another
    encoding.
+!! Character rules (LC_CTYPE) CHANGE for 5961 character(s) in the 488
+   locale(s) compared on both machines that a UTF8 database can use: each gets
+   another upper case, lower case or class. upper(), lower(), initcap(),
+   ILIKE, regular expressions and full-text search read these rules in a UTF8
+   database, so they can give other results there for text that holds one. 7
+   of them the old machine already classified:
+     U+0C04 TELUGU SIGN COMBINING ANUSVARA ABOVE: punctuation -> letter;
+     U+0F82 TIBETAN SIGN NYI ZLA NAA DA: punctuation -> letter;
+     U+0F83 TIBETAN SIGN SNA LDAN: punctuation -> letter;
+     ჼ (U+10FC MODIFIER LETTER GEORGIAN NAR): joins [[:lower:]];
+     ꭩ (U+AB69 MODIFIER LETTER SMALL TURNED W): joins [[:lower:]];
+     U+11080 KAITHI SIGN CANDRABINDU: punctuation -> letter;
+     U+11081 KAITHI SIGN ANUSVARA: punctuation -> letter.
+   The other 5954 it did not classify; a UTF8 database can hold them too, and
+   they change those results as well.
+Every such character is in
+   /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.34..glibc-2.39.tsv.
+Character rules (LC_CTYPE) of each character: not compared in 377 locale(s) of
+   an encoding no UTF8 database can use; a database that can use them reads
+   their rules byte by byte, or, in EUC, as the line on EUC says.
+Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
+   compared on both machines.
+!! Character rules (LC_CTYPE) in an EUC_JP, EUC_KR, EUC_CN or EUC_TW database:
+   NOT checked here, 14 locale(s). EUC-JP: ja_JP, ja_JP.eucjp, ja_JP.ujis,
+   japanese, japanese.euc; EUC-KR: ko_KR, ko_KR.euckr, korean, korean.euc;
+   EUC-TW: zh_TW.euctw; GB2312: zh_CN, zh_CN.gb2312, zh_SG, zh_SG.gb2312.
 !! Not measured in a database of another encoding: 10 locale(s) whose encoding
    PostgreSQL does not know, so that CREATE DATABASE lets a database of any
    encoding use one, with only a WARNING ("could not determine encoding for
@@ -1828,8 +1854,7 @@ Every such byte sequence is in
    that agree here can still sort some longer strings apart. Where a character
    counts for nothing at some level (glibc ignores it there), how it is told
    apart from its neighbour is read less reliably, so a change there may go
-   unseen. Of LC_CTYPE, only whether text converts is measured, not what
-   upper(), lower() and its other character rules do with it.
+   unseen.
 
 ================================================================
 == AUDIT SUMMARY  glibc-2.34 -> glibc-2.39
@@ -1920,6 +1945,34 @@ Every such byte sequence is in
         zh_HK, zh_HK.big5hkscs; GB18030: zh_CN.gb18030; GBK: zh_CN.gbk,
         zh_SG.gbk). The 10 locale(s) of an encoding PostgreSQL does not know
         are in the line on a database of another encoding.
+     !! Character rules (LC_CTYPE) CHANGE for 5961 character(s) in the 488
+        locale(s) compared on both machines that a UTF8 database can use: each
+        gets another upper case, lower case or class. upper(), lower(),
+        initcap(), ILIKE, regular expressions and full-text search read these
+        rules in a UTF8 database, so they can give other results there for
+        text that holds one. 7 of them the old machine already classified:
+          U+0C04 TELUGU SIGN COMBINING ANUSVARA ABOVE: punctuation -> letter;
+          U+0F82 TIBETAN SIGN NYI ZLA NAA DA: punctuation -> letter;
+          U+0F83 TIBETAN SIGN SNA LDAN: punctuation -> letter;
+          ჼ (U+10FC MODIFIER LETTER GEORGIAN NAR): joins [[:lower:]];
+          ꭩ (U+AB69 MODIFIER LETTER SMALL TURNED W): joins [[:lower:]];
+          U+11080 KAITHI SIGN CANDRABINDU: punctuation -> letter;
+          U+11081 KAITHI SIGN ANUSVARA: punctuation -> letter.
+        The other 5954 it did not classify; a UTF8 database can hold them too,
+        and they change those results as well.
+     Every such character is in
+        /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.34..glibc-2.39.tsv.
+     Character rules (LC_CTYPE) of each character: not compared in 377
+        locale(s) of an encoding no UTF8 database can use; a database that can
+        use them reads their rules byte by byte, or, in EUC, as the line on
+        EUC says.
+     Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
+        compared on both machines.
+     !! Character rules (LC_CTYPE) in an EUC_JP, EUC_KR, EUC_CN or EUC_TW
+        database: NOT checked here, 14 locale(s). EUC-JP: ja_JP, ja_JP.eucjp,
+        ja_JP.ujis, japanese, japanese.euc; EUC-KR: ko_KR, ko_KR.euckr,
+        korean, korean.euc; EUC-TW: zh_TW.euctw; GB2312: zh_CN, zh_CN.gb2312,
+        zh_SG, zh_SG.gb2312.
      !! Not measured in a database of another encoding: 10 locale(s) whose
         encoding PostgreSQL does not know, so that CREATE DATABASE lets a
         database of any encoding use one, with only a WARNING ("could not
@@ -1952,9 +2005,7 @@ Every such byte sequence is in
         machines that agree here can still sort some longer strings apart.
         Where a character counts for nothing at some level (glibc ignores it
         there), how it is told apart from its neighbour is read less reliably,
-        so a change there may go unseen. Of LC_CTYPE, only whether text
-        converts is measured, not what upper(), lower() and its other
-        character rules do with it.
+        so a change there may go unseen.
      Full report: step 11 above.
 
 -- Needs an empirical test: step 5 found 55 substantive hunk(s),

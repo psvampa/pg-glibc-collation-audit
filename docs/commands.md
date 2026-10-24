@@ -93,13 +93,16 @@ when it is none the list says why.
 
 Beside every locale's order, the measurement holds the decimals each locale
 gives the `money` type, whether glibc accepts the locale and can convert its
-text, and which PostgreSQL processes on the machine run another C library
-than the one measured, because an update replaced it on disk or because they
-run another file, as in a container. Step 11 compares the decimals and those
-two answers between the two machines, and checks each machine's processes
-against what was measured there. A file written before they were measured
-still compares, and step 11 says they were not checked on that machine; a
-locale glibc refused there reads as one that could not be measured.
+text, what glibc's character rules (`LC_CTYPE`) answer for every character and
+every byte, and which PostgreSQL processes on the machine run another C
+library than the one measured, because an update replaced it on disk or
+because they run another file, as in a container. Step 11 compares the
+decimals, those two answers and the character rules between the two machines,
+except the character rules in an `EUC_JP`, `EUC_KR`, `EUC_CN` or `EUC_TW`
+database, which it does not check, and checks each machine's processes against
+what was measured there. A file written before they were measured still
+compares, and step 11 says they were not checked on that machine; a locale
+glibc refused there reads as one that could not be measured.
 
 The README's install line names the exact glibc build the machine runs, so
 `dnf` installs the sources of that build and nothing else. A plain `dnf

@@ -221,7 +221,7 @@ table: `C.utf8`, `ko_KR.utf8`, `or_IN` and `or_IN.utf8`, and the Swedish
 locales, in UTF-8 and in the legacy encodings. In `ko_KR.utf8` only one
 character moved, 힣 (U+D7A3), the last Hangul syllable
 ([the mechanism above](#the-ko_kr-mechanism-and-its-minimal-test-case)).
-Every other locale it measured is unchanged, `ber_DZ`, `kab_DZ`, `zh_CN.utf8`
+Every other locale it measured sorts the same, `ber_DZ`, `kab_DZ`, `zh_CN.utf8`
 and `en_US.utf8` among them, though a few only as far as they could be
 measured. The comparison names those, and also the few it could not measure
 or that are missing from the new machine.
@@ -235,8 +235,8 @@ Measured on fresh Rocky Linux machines, installing `glibc-all-langpacks`
 brings it in on 8 and not on 9 or 10.
 
 **RHEL9 to RHEL10.** Only `th_TH` sorts differently, in TIS-620 (`th_TH`,
-`th_TH.tis620`, `thai`) and in `th_TH.utf8`. Every other locale it measured is
-unchanged, `ber_DZ`, `kab_DZ` and `C.utf8` among them, though a few only as far
+`th_TH.tis620`, `thai`) and in `th_TH.utf8`. Every other locale it measured
+sorts the same, `ber_DZ`, `kab_DZ` and `C.utf8` among them, though a few only as far
 as they could be measured, `ko_KR.utf8` among those. The comparison names
 them, and also the few it could not measure or that are missing from the new
 machine. The same EUC-JP, EUC-KR and GB2312 locales stop `upper()`,
