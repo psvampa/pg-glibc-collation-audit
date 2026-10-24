@@ -41,11 +41,14 @@ measured still compares, and the comparison says they were not checked there.
 The file also holds what glibc's character rules (LC_CTYPE) answer for every
 character and every byte, once for each distinct LC_CTYPE glibc loads
 (ctype_tables), and the comparison reports the characters and bytes whose
-rules change (ctype_texts). It also names what PostgreSQL stores in EUC-JP,
-EUC-KR and TIS-620, converting from UTF-8, that no order measured here places
-(POSTGRES_ONLY). C and POSIX, which glibc sorts in byte order in every
-version, are the control: a machine where they measured otherwise did not
-measure what this means to.
+rules change (ctype_texts). It holds too, for each encoding of
+CONVERTER_CODESETS, what glibc's converter gives for every byte sequence
+PostgreSQL can hand it under a locale of that encoding (converter_part),
+which the comparison does not read yet. It also names what PostgreSQL
+stores in EUC-JP, EUC-KR and TIS-620, converting from UTF-8, that no order
+measured here places (POSTGRES_ONLY). C and POSIX, which glibc sorts in
+byte order in every version, are the control: a machine where they measured
+otherwise did not measure what this means to.
 
 Each order and told-apart record is kept whole, compressed, once for all the
 locales that share it, so that the comparison can name the characters that
@@ -104,12 +107,12 @@ import zlib
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
-FORMAT = 'locale_order/4'
+FORMAT = 'locale_order/5'
 
 # The parts a file of each format holds, as its 'parts' says. A file of an
 # earlier format lacks the parts added since, and the comparison says each
 # part it reads was not checked and why, rather than refuse a file that is
-# whole (it does not read 'ctype' yet); a file
+# whole (it does not read 'converter' yet); a file
 # that lacks a part its format holds is refused. The corpus digest starts
 # with the first format's name, not with FORMAT, because a file of that
 # format measured the same strings and still compares.
@@ -117,9 +120,11 @@ PARTS = {'locale_order/1': ('order',),
          'locale_order/2': ('order', 'money', 'postgres_libc'),
          'locale_order/3': ('order', 'money', 'postgres_libc', 'postgres_use'),
          'locale_order/4': ('order', 'money', 'postgres_libc', 'postgres_use',
-                            'ctype')}
+                            'ctype'),
+         'locale_order/5': ('order', 'money', 'postgres_libc', 'postgres_use',
+                            'ctype', 'converter')}
 # The parts beside the order, each checked whole by load().
-SIDE_PARTS = ('money', 'postgres_libc', 'postgres_use', 'ctype')
+SIDE_PARTS = ('money', 'postgres_libc', 'postgres_use', 'ctype', 'converter')
 CORPUS_VERSION = 'locale_order/1'
 
 # The file --extract writes holds the measurement, the machine's locale sources
@@ -685,6 +690,189 @@ def ctype_part(identities, measure_tables):
         byte.setdefault(bk, pack(b))
     return {'locales': dict(identities), 'tables': tables, 'wide': wide,
             'bytes': byte}
+
+
+# The encodings whose bytes PostgreSQL hands to a converter glibc loads
+# from a module of its own (gconv), which RHEL ships apart, in
+# glibc-gconv-extra: the four EUC a database can be in (EUC_JP, EUC_KR,
+# EUC_CN, EUC_TW), and the five of one byte PostgreSQL does not know, whose
+# locales a database of any encoding may use (check_encoding_locale_matches,
+# dbcommands.c, and chklocale.c, REL_13_23 and REL_18_6). Every other
+# encoding of a glibc locale is UTF-8, of one byte in PostgreSQL (never
+# converted), or one PostgreSQL allows only on the client (no database).
+CONVERTER_CODESETS = ('EUC-JP', 'EUC-KR', 'GB2312', 'EUC-TW', 'TIS-620',
+                      'KOI8-T', 'PT154', 'ARMSCII-8', 'GEORGIAN-PS')
+# What the converter part says of an encoding: measured under one of its
+# locales, no locale of it on the machine, or not checked, with why.
+CONVERTER_STATES = ('measured', 'no locale', 'not checked')
+# A sha256 in hex, as sequence_digest() gives it.
+SHA256 = re.compile(r'[0-9a-f]{64}')
+# What iconv_open said of the converter: it opens, it fails (errno), or it
+# could not be asked.
+ICONV_STATES = ('opens', 'fails', 'not asked')
+EUC_BYTE = range(0xA1, 0xFF)
+SEQUENCES = {}            # per encoding, accepted_sequences(), kept per process
+SEQUENCE_DIGESTS = {}     # per encoding, sequence_digest(), kept per process
+CONVERTER_FUNCTIONS = None   # glibc's iconv_open and mbrtowc, loaded once
+# What iconv_open returns for a converter it cannot open, (iconv_t)-1.
+NO_ICONV = ctypes.c_void_p(-1).value
+# Written into the wide character before each mbrtowc: no wchar_t of glibc.
+UNWRITTEN = 0xFFFFFFFF
+
+
+def accepted_sequences(codeset):
+    """Every character a database can hold in the encoding, as the bytes
+    PostgreSQL stores, in byte order: ASCII but NUL, and what
+    pg_eucjp_verifychar, pg_euckr_verifychar (EUC_CN's too) and
+    pg_euctw_verifychar accept (wchar.c:1133-1267 in REL_13_23, where they
+    are pg_*_verifier, and :1104-1320 in REL_18_6). For an encoding of one
+    byte, every byte but NUL: a database of more than one byte per character
+    hands glibc its own bytes, which the locale's converter reads one by
+    one."""
+    if codeset not in SEQUENCES:
+        low = [bytes([b]) for b in range(1, 0x80)]
+        two = [bytes([a, b]) for a in EUC_BYTE for b in EUC_BYTE]
+        if codeset in ('EUC-KR', 'GB2312'):
+            out = low + two
+        elif codeset == 'EUC-JP':
+            out = (low + two + [bytes([0x8E, b]) for b in range(0xA1, 0xE0)]
+                   + [bytes([0x8F, a, b]) for a in EUC_BYTE for b in EUC_BYTE])
+        elif codeset == 'EUC-TW':
+            out = (low + [bytes([0x8E, p, a, b]) for p in range(0xA1, 0xA8)
+                          for a in EUC_BYTE for b in EUC_BYTE]
+                   + [bytes([a, b]) for a in range(0x80, 0x100)
+                      if a not in (0x8E, 0x8F) for b in EUC_BYTE])
+        else:
+            out = [bytes([b]) for b in range(1, 0x100)]
+        SEQUENCES[codeset] = sorted(out)
+    return SEQUENCES[codeset]
+
+
+def sequence_digest(codeset):
+    """The sha256 of accepted_sequences(codeset), each in hex on a line of
+    its own: a measured entry keeps it, so that a copy of this script with
+    another list of sequences of the same length does not pair each value
+    with another sequence's bytes."""
+    if codeset not in SEQUENCE_DIGESTS:
+        SEQUENCE_DIGESTS[codeset] = hashlib.sha256(b''.join(
+            s.hex().encode('ascii') + b'\n'
+            for s in accepted_sequences(codeset))).hexdigest()
+    return SEQUENCE_DIGESTS[codeset]
+
+
+def converter_libc():
+    """glibc with iconv_open, iconv_close and mbrtowc, their argument types
+    declared."""
+    global CONVERTER_FUNCTIONS
+    if CONVERTER_FUNCTIONS is None:
+        lib = ctypes.CDLL(ctypes.util.find_library('c') or 'libc.so.6',
+                          use_errno=True)
+        lib.mbrtowc.restype = ctypes.c_size_t
+        lib.mbrtowc.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
+                                ctypes.c_size_t, ctypes.c_void_p]
+        lib.iconv_open.restype = ctypes.c_void_p
+        lib.iconv_open.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+        lib.iconv_close.restype = ctypes.c_int
+        lib.iconv_close.argtypes = [ctypes.c_void_p]
+        CONVERTER_FUNCTIONS = lib
+    return CONVERTER_FUNCTIONS
+
+
+def converter_of(job):
+    """(codeset, entry): what glibc's converter of codeset gives on this
+    machine, job being (codeset, the locale to ask under, or None when the
+    machine lists none of that encoding).
+
+    entry is [state, iconv_open's answer, the locale, detail, the
+    sequence_digest of what was measured, or None]. iconv_open
+    (WCHAR_T, codeset) says whether glibc can load the converter, ['opens',
+    None] or ['fails', strerror of errno, or 'no reason given' where errno
+    was left 0]: without glibc-gconv-extra it fails, and
+    glibc then converts every LC_CTYPE of that encoding as ASCII
+    (__wcsmbs_load_conv finds the converter by the same
+    __gconv_find_transform, wcsmbsload.c 2.28 to 2.39). Then, under the
+    locale, mbrtowc of each of accepted_sequences, from a cleared state
+    (glibc keeps the bytes of a character it has not seen whole in it,
+    iconv/loop.c): detail is, packed, the code point of each whole, or 0
+    where glibc refuses it (EILSEQ), what makes PostgreSQL stop with
+    "invalid multibyte character for locale". Measured on collaudit8, glibc
+    gives each of them whole or refuses it; where it reads one otherwise
+    (in part, or as the start of a longer one), the encoding is not
+    checked, with the first such sequence, as no value here says what
+    PostgreSQL then does; so is one glibc reads whole without writing a
+    character, which none of the nine converters does in 2.28 or 2.39
+    (their BODY), as the value left from the sequence before would read as
+    its own. ['no locale', answer, None, None, None] when there is no
+    locale to ask under; ['not checked', answer, the locale, why, None]
+    when a step failed. Nothing here raises but put_back's NotPutBack,
+    which stops the run (measure()): LC_CTYPE is put back as it was."""
+    codeset, name = job
+    try:
+        lib = converter_libc()
+        ctypes.set_errno(0)
+        handle = lib.iconv_open(b'WCHAR_T', codeset.encode('ascii'))
+        if handle in (None, NO_ICONV):
+            errno = ctypes.get_errno()
+            opens = ['fails', os.strerror(errno) if errno else 'no reason given']
+        else:
+            lib.iconv_close(handle)
+            opens = ['opens', None]
+    except Exception as e:
+        return codeset, ['not checked', ['not asked', None], name,
+                         f'asking glibc failed: {e!r}', None]
+    if name is None:
+        return codeset, ['no locale', opens, None, None, None]
+    saved = locale.setlocale(locale.LC_CTYPE)
+    try:
+        locale.setlocale(locale.LC_CTYPE, name)
+        wc = ctypes.c_uint32()
+        state = ctypes.create_string_buffer(16)
+        refused = ctypes.c_size_t(-1).value
+        got = []
+        for s in accepted_sequences(codeset):
+            ctypes.memset(state, 0, len(state))
+            # glibc's wchar_t holds 31 bits: a value left as written here
+            # was not written by mbrtowc.
+            wc.value = UNWRITTEN
+            r = lib.mbrtowc(ctypes.byref(wc), s, len(s), state)
+            if r == len(s) and wc.value != UNWRITTEN:
+                got.append(wc.value)
+            elif r == refused:
+                got.append(0)
+            else:
+                how = ('as one character but wrote none' if r == len(s) else
+                       f'neither as one character nor as an error (mbrtowc '
+                       f'gave {ctypes.c_ssize_t(r).value})')
+                return codeset, ['not checked', opens, name,
+                                 f'glibc read the bytes {spaced(s)} {how}', None]
+        return codeset, ['measured', opens, name, pack_order(got),
+                         sequence_digest(codeset)]
+    except Exception as e:
+        return codeset, ['not checked', opens, name,
+                         f'measuring it failed: {e!r}', None]
+    finally:
+        put_back(locale.LC_CTYPE, saved)
+
+
+def first_locales(use):
+    """{codeset: the first locale by name whose encoding postgres_use read
+    as it}."""
+    first = {}
+    for name in sorted(use):
+        first.setdefault(use[name]['codeset'], name)
+    return first
+
+
+def converter_part(uses, mapper):
+    """The converter part of a measurement: {codeset: converter_of's entry}
+    for each of CONVERTER_CODESETS, asked under the first of its locales by
+    name. One locale is enough: glibc picks the converter by the encoding's
+    name alone, and every locale of each of the nine converted alike on
+    glibc 2.28, 2.34 and 2.39 (measured, 2026-10-24). mapper maps
+    converter_of over the jobs, as the pool's map does."""
+    first = first_locales(uses)
+    return dict(mapper(converter_of, [(cs, first.get(cs))
+                                      for cs in CONVERTER_CODESETS]))
 
 
 # The names a PostgreSQL process has in /proc/PID/comm: the program's, which
@@ -1438,6 +1626,7 @@ def measure(jobs):
                     tables.append(r)
                 return tables
             ctype = ctype_part(identities, measure_tables)
+            converter = converter_part(uses, pool.map)
         money = money_digits(names)
     except NotPutBack as e:
         die(f'{e}; nothing was written: run again with a smaller --jobs')
@@ -1463,6 +1652,7 @@ def measure(jobs):
         'postgres_libc': postgres_libc(),
         'postgres_use': uses,
         'ctype': ctype,
+        'converter': converter,
     }
     out['content'] = content_digest(out)
     text = json.dumps(out, sort_keys=True) + '\n'
@@ -1487,7 +1677,8 @@ def progress(done, total, seconds, what='locale(s)'):
 
 def finished(out, seconds, size):
     """Report a measurement on stderr, once written; the exit status, 1 when
-    some locale could not be measured, its order or its LC_CTYPE."""
+    some locale could not be measured, its order or its LC_CTYPE, or the
+    converter of some encoding."""
     results = out['locales']
     failed = sorted(n for n, r in results.items() if 'error' in r)
     sys.stderr.write(f'Done in {seconds:.0f} s: '
@@ -1502,9 +1693,16 @@ def finished(out, seconds, size):
                          f'locale(s) could not be measured:\n')
         for n in sorted(unread):
             sys.stderr.write(f'  {shown(n)}: {unread[n]}\n')
+    unconverted = [cs for cs in CONVERTER_CODESETS
+                   if out['converter'][cs][0] == 'not checked']
+    if unconverted:
+        sys.stderr.write(f'!! What glibc\'s converter gives could not be '
+                         f'measured for {len(unconverted)} encoding(s):\n')
+        for cs in unconverted:
+            sys.stderr.write(f'  {cs}: {out["converter"][cs][3]}\n')
     for line in machine_libc_lines(out['postgres_libc']):
         sys.stderr.write(line + '\n')
-    return 1 if failed or unread else 0
+    return 1 if failed or unread or unconverted else 0
 
 
 def ctype_not_checked(part):
@@ -2039,6 +2237,18 @@ def load(path, digest):
     if 'ctype' in held and not ctype_part_whole(data['ctype'], locales):
         die(f'{path}: what it says of the character rules (LC_CTYPE) of each '
             'locale is malformed; it is not a whole measurement')
+    if 'converter' in held and not converter_part_whole(data['converter'],
+                                                        data['postgres_use']):
+        die(f'{path}: what it says of the converter of each encoding is '
+            'malformed; it is not a whole measurement')
+    if 'converter' in held:
+        other = [cs for cs in CONVERTER_CODESETS
+                 if data['converter'][cs][0] == 'measured'
+                 and data['converter'][cs][4] != sequence_digest(cs)]
+        if other:
+            die(f'{path} measured the converter of {", ".join(other)} over '
+                'other byte sequences than this script uses; measure both '
+                'machines with the same copy of it')
     if 'content' not in data:
         die(f'{path} is not an output of this version of locale_order.py')
     if data['content'] != content_digest(data):
@@ -2204,6 +2414,67 @@ def ctype_unpacked(tables, key, whole):
     if hashlib.sha256(raw).hexdigest() != key or not whole(raw):
         return None
     return raw
+
+
+def converter_part_whole(part, use):
+    """Is the converter part of the shape converter_part() writes: one
+    entry per encoding of CONVERTER_CODESETS, each asked under the first of
+    its locales by name in postgres_use, or under none where there is none;
+    iconv_open's answer of one of its forms; and each measured list one
+    value per accepted sequence?"""
+    if not (isinstance(part, dict) and set(part) == set(CONVERTER_CODESETS)):
+        return False
+    first = first_locales(use)
+    for cs, e in part.items():
+        if not (isinstance(e, list) and len(e) == 5 and e[0] in CONVERTER_STATES
+                and isinstance(e[1], list) and len(e[1]) == 2
+                and e[1][0] in ICONV_STATES
+                and ((isinstance(e[1][1], str) and bool(e[1][1]))
+                     if e[1][0] == 'fails' else e[1][1] is None)):
+            return False
+        # converter_of asks under the locale it was handed, and is handed
+        # none only where the machine lists none of the encoding; with none,
+        # it measures nothing, and says not checked only when glibc could
+        # not be asked.
+        if e[2] != first.get(cs):
+            return False
+        if e[0] == 'no locale' and e[2] is not None:
+            return False
+        if e[2] is None and not (e[0] == 'no locale' or e[1][0] == 'not asked'):
+            return False
+        if e[1][0] == 'not asked' and e[0] != 'not checked':
+            return False
+        if e[0] == 'no locale':
+            if e[3] is not None or e[4] is not None:
+                return False
+        elif e[0] == 'not checked':
+            if not (isinstance(e[3], str) and e[3] and e[4] is None):
+                return False
+        # Values measured over other sequences are not read here: load()
+        # refuses them as such, whatever their number.
+        elif not (isinstance(e[4], str) and SHA256.fullmatch(e[4])
+                  and (e[4] != sequence_digest(cs)
+                       or converter_unpacked(e[3], cs) is not None)):
+            return False
+    return True
+
+
+def converter_unpacked(packed, codeset):
+    """The values of a measured entry, one per accepted sequence of the
+    encoding, each 0 or what mbrtowc wrote into a wchar_t (glibc's are
+    of 31 bits); None when they do not unpack to that."""
+    if not isinstance(packed, str):
+        return None
+    try:
+        raw = zlib.decompress(base64.b64decode(packed.encode('ascii'),
+                                               validate=True))
+    except (ValueError, zlib.error, UnicodeError):
+        return None
+    got = unpack_order(raw)
+    if (got is None or len(got) != len(accepted_sequences(codeset))
+            or not all(0 <= c < 0x80000000 for c in got)):
+        return None
+    return got
 
 
 def bytes_whole(raw):
