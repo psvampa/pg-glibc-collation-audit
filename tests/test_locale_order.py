@@ -3815,6 +3815,22 @@ class Pieces(unittest.TestCase):
                             m.corpus_id([(b'\x41', 0x41), (b'\x80', 0x20AC)]))
         self.assertEqual(m.corpus_id(euro), m.corpus_id(euro[::-1]))
 
+    def test_the_corpus_digest_kept_is_of_the_lists_in_force(self):
+        """corpus_digest() keeps its answer, and gives another one for
+        another list of characters, other pairs or another version, and the
+        first again once they are put back."""
+        first = m.corpus_digest()
+        with unittest.mock.patch.object(m.hashlib, 'sha256',
+                                        side_effect=AssertionError('taken again')):
+            self.assertEqual(m.corpus_digest(), first)
+        for name, other in (('CODEPOINTS', m.CODEPOINTS[:-1]),
+                            ('CANDIDATES', m.CANDIDATES[:-1]),
+                            ('CORPUS_VERSION', 'locale_order/0')):
+            with self.subTest(changed=name):
+                with unittest.mock.patch.object(m, name, other):
+                    self.assertNotEqual(m.corpus_digest(), first)
+                self.assertEqual(m.corpus_digest(), first)
+
     def test_postgres_names_for_one_encoding_each(self):
         names = m.postgres_names({
             'ko_KR': {'codeset': 'EUC-KR'}, 'ko_KR.utf8': {'codeset': 'UTF-8'},

@@ -195,13 +195,26 @@ def corpus_digest():
     """What both machines must have measured for their results to compare.
 
     Taken from the data rather than from a description of it, so a copy of
-    this script with a different corpus cannot pass for the same one.
+    this script with a different corpus cannot pass for the same one. Kept
+    while CODEPOINTS and CANDIDATES are the very lists it was taken from
+    and CORPUS_VERSION the same text (CORPUS_DIGEST): a comparison asks
+    once, the tests some 500 times, at 28 ms each.
     """
-    h = hashlib.sha256(CORPUS_VERSION.encode())
-    h.update(''.join(map(chr, CODEPOINTS)).encode('utf-8'))
-    h.update('|'.join(','.join(p + q for p, q in level)
-                      for level in CANDIDATES).encode('utf-8'))
-    return h.hexdigest()
+    global CORPUS_DIGEST
+    if (CORPUS_DIGEST is None or CORPUS_DIGEST[0] is not CODEPOINTS
+            or CORPUS_DIGEST[1] is not CANDIDATES
+            or CORPUS_DIGEST[2] != CORPUS_VERSION):
+        h = hashlib.sha256(CORPUS_VERSION.encode())
+        h.update(''.join(map(chr, CODEPOINTS)).encode('utf-8'))
+        h.update('|'.join(','.join(p + q for p, q in level)
+                          for level in CANDIDATES).encode('utf-8'))
+        CORPUS_DIGEST = (CODEPOINTS, CANDIDATES, CORPUS_VERSION, h.hexdigest())
+    return CORPUS_DIGEST[3]
+
+
+# What corpus_digest() last took: (CODEPOINTS, CANDIDATES, CORPUS_VERSION,
+# the digest), or None.
+CORPUS_DIGEST = None
 
 
 def sign(r):
