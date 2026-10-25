@@ -110,6 +110,7 @@ import sys
 import tarfile
 import textwrap
 import time
+import types
 import unicodedata
 import zlib
 from concurrent.futures import ProcessPoolExecutor
@@ -999,7 +1000,10 @@ def back_of(job):
     (measured). detail is, packed, each character whose answer is not
     back_reference's, with its answer. A count of bytes past MB_LEN_MAX,
     which glibc does not give, leaves the encoding not checked, naming
-    the character."""
+    the character. On 2.28 wcrtomb stops at the locale's MB_CUR_MAX and
+    gives what it wrote, which glibc's own comment says a character never
+    passes (wcsmbs/wcrtomb.c); the longest answers measured on the three
+    fixtures are of their charmap's mb_cur_max."""
     codeset, name = job
     try:
         lib = converter_libc()
@@ -2784,12 +2788,14 @@ def back_unpacked(packed, codeset):
     each a character of BACK_POINTS, of at most MB_LEN_MAX bytes; None when
     the table does not unpack to that. Kept per process by the very text
     it read, so that the tests, which load the same table hundreds of
-    times, read it once; whoever reads the answer leaves it as it is."""
+    times, read it once, and handed out read-only: two machines with the
+    same table get the same answer."""
     if not isinstance(packed, str):
         return None
     key = (codeset, packed)
     if key not in BACK_TABLES:
-        BACK_TABLES[key] = back_read(packed, codeset)
+        got = back_read(packed, codeset)
+        BACK_TABLES[key] = None if got is None else types.MappingProxyType(got)
     return BACK_TABLES[key]
 
 

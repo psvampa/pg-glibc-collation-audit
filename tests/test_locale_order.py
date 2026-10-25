@@ -4979,7 +4979,7 @@ DEFAULT_USE = {'ANSI_X3.4-1968': ('one byte', None),
 
 
 def with_parts(money=None, libc=None, use=None, form=m.FORMAT, ctype=None,
-               converter=None, forward=None, back=None):
+               converter=None):
     """An edit that makes a file of the first format one of a later format
     (this one unless form): the list of its parts, the decimals of money (2
     in every locale, but those in money), its PostgreSQL processes
@@ -5010,7 +5010,7 @@ def with_parts(money=None, libc=None, use=None, form=m.FORMAT, ctype=None,
                     r['text'] = ['converter', None]
         if 'back' in m.PARTS[form]:
             d['utf8_forward'], d['back'] = round_trip_of_use(
-                d['postgres_use'], d['converter'], forward, back)
+                d['postgres_use'], d['converter'])
     return edit
 
 
@@ -9599,21 +9599,19 @@ def back_values(codeset, opens=True):
     return BACK_DEFAULTS[key]
 
 
-def round_trip_of_use(use, converter, forward=None, back=None):
+def round_trip_of_use(use, converter):
     """UTF-8's forward entry and the back part of a machine whose
     postgres_use is use and whose converter part is converter: each asked
     under the first locale of its encoding by name, or no locale of it; the
     back of each of the nine opens and converts as its converter part says
     (ASCII alone where iconv_open failed); UTF-8 converts as standard both
-    ways. forward replaces UTF-8's forward entry, back's entries those
-    of the back part."""
+    ways."""
     first = {}
     for name in sorted(use):
         first.setdefault(use[name]['codeset'], name)
-    if forward is None:
-        forward = (['measured', ['opens', None], first['UTF-8'], forward_table({}),
-                    points_of()] if 'UTF-8' in first else
-                   ['no locale', ['opens', None], None, None, None])
+    forward = (['measured', ['opens', None], first['UTF-8'], forward_table({}),
+                points_of()] if 'UTF-8' in first else
+               ['no locale', ['opens', None], None, None, None])
     part = {}
     for cs in ('UTF-8',) + m.CONVERTER_CODESETS:
         opens = cs == 'UTF-8' or converter[cs][1][0] == 'opens'
@@ -9625,7 +9623,6 @@ def round_trip_of_use(use, converter, forward=None, back=None):
         else:
             part[cs] = ['measured', answer, first[cs], back_values(cs, opens),
                         points_of()]
-    part.update(back or {})
     return forward, part
 
 
@@ -9814,17 +9811,19 @@ class BackOnTheMachine(unittest.TestCase):
                'en_US.utf8': use_of('converts', 'UTF-8', (0x80, 'c280')),
                'C.utf8': use_of('converts', 'UTF-8', (0x80, 'c280')),
                'C': use_of('one byte', 'ANSI_X3.4-1968')}
-        jobs = []
-        forward, back = m.round_trip_parts(
-            use, lambda f, js: (jobs.extend(js),
-                                [('forward', 'f') if j[0] == 'forward' else (j[1], j)
-                                 for j in js])[1])
+        asked = []
+        with unittest.mock.patch.multiple(
+                m, utf8_forward_of=lambda name: asked.append(('forward', name)) or 'f',
+                back_of=lambda job: asked.append(('back',) + job) or (job[0], job[1])):
+            forward, back = m.round_trip_parts(use, lambda f, js: [f(j) for j in js])
         self.assertEqual(forward, 'f')
-        self.assertEqual(sorted(jobs), sorted(
-            [('forward', 'UTF-8', 'C.utf8'), ('back', 'UTF-8', 'C.utf8'),
+        self.assertEqual(sorted(asked, key=repr), sorted(
+            [('forward', 'C.utf8'), ('back', 'UTF-8', 'C.utf8'),
              ('back', 'EUC-JP', 'ja_JP')]
-            + [('back', cs, None) for cs in m.CONVERTER_CODESETS if cs != 'EUC-JP']))
-        self.assertEqual(set(back), {'UTF-8'} | set(m.CONVERTER_CODESETS))
+            + [('back', cs, None) for cs in m.CONVERTER_CODESETS if cs != 'EUC-JP'],
+            key=repr))
+        self.assertEqual(back, dict({cs: None for cs in m.CONVERTER_CODESETS},
+                                    **{'UTF-8': 'C.utf8', 'EUC-JP': 'ja_JP'}))
 
     def test_the_run_says_when_a_conversion_was_not_measured(self):
         """finished(): UTF-8's forward not measured, and each encoding whose
@@ -9975,6 +9974,16 @@ class BackRead(Checks):
                 ('UTF-8 with a refusal of no bytes confused', u8({0xE0001: b'\xf3\xa0\x80\x81'}))):
             with self.subTest(case=case):
                 self.refused(self.BACK, edit)
+
+    def test_a_table_read_cannot_be_changed(self):
+        """back_unpacked keeps what it read and hands the same answer to
+        every reader, two machines with the same table among them: a reader
+        cannot change it under the other."""
+        got = m.back_unpacked(back_table({0x41: b'A'}), 'EUC-KR')
+        with self.assertRaises(TypeError):
+            got[0x41] = None
+        self.assertEqual(dict(m.back_unpacked(back_table({0x41: b'A'}), 'EUC-KR')),
+                         {0x41: b'A'})
 
     def test_one_table_read_for_each_encoding(self):
         """The same packed table is whole for one of the nine and not for
