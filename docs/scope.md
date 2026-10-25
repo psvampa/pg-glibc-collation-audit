@@ -8,10 +8,9 @@ locale's text at all. Without that, in a database whose encoding has
 characters of more than one byte, `upper()`, `lower()`, `initcap()`, `ILIKE`
 and full-text search stop with an error on any text that is not ASCII. It also
 compares what glibc's character rules answer, which those functions, character
-classification and pattern matching read, except in an `EUC_JP`, `EUC_KR`,
-`EUC_CN` or `EUC_TW` database, which it does not check. `LC_NUMERIC`,
-`LC_TIME`, `LC_MONETARY` and `LC_MESSAGES` are not audited, except the
-decimals of the `money` type, which step 11 compares too.
+classification and pattern matching read. `LC_NUMERIC`, `LC_TIME`,
+`LC_MONETARY` and `LC_MESSAGES` are not audited, except the decimals of the
+`money` type, which step 11 compares too.
 
 What `LC_CTYPE` returns can still cost you an index: a functional index on
 `lower(email)` breaks on a glibc upgrade the same way a `COLLATE` index does,

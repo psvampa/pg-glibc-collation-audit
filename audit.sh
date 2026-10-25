@@ -344,9 +344,10 @@ rm -f "$STEP2_LIST" "$STEP2_REMOVED" "$STEP2_KEYED" "$STEP3_LIST" "$STEP4_LIST" 
 rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
 
 # Step 11 is worked out before step 1, so that a measurement the comparison
-# refuses -- cut short, damaged, or taken on another glibc than its tag --
-# stops the run here instead of after the five steps. Its report is printed
-# where step 11 stands, below, and its summary at the end.
+# refuses -- cut short, damaged, measured by another copy of locale_order.py
+# over other strings, or taken on another glibc than its tag -- stops the run
+# here instead of after the five steps. Its report is printed where step 11
+# stands, below, and its summary at the end.
 #
 # Its log is not named step11.*.log on purpose: the warnings block at the end
 # globs those to repeat their `!!` notices, and would repeat step 11's with

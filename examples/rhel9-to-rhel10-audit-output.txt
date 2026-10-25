@@ -1779,24 +1779,30 @@ PostgreSQL on the NEW machine: 10 process(es) named postgres or postmaster,
 This looks at the C library PostgreSQL runs, not at its locale data: a
    PostgreSQL that was not restarted can already use locales installed after
    it started.
-!! upper(), lower() and ILIKE give an ERROR on both machines in 13 locale(s),
+!! upper(), lower() and ILIKE give an ERROR on both machines in 14 locale(s),
    as before the upgrade: in a database of the locale's own encoding, any text
    that is not ASCII stops them with "ERROR: invalid multibyte character for
    locale". On RHEL this is what a machine without glibc-gconv-extra does;
    install it and measure that machine again. EUC-JP: ja_JP, ja_JP.eucjp,
    ja_JP.ujis, japanese, japanese.euc; EUC-KR: ko_KR, ko_KR.euckr, korean,
-   korean.euc; GB2312: zh_CN, zh_CN.gb2312, zh_SG, zh_SG.gb2312.
-!! upper(), lower() and ILIKE NOT checked in 1 locale(s): Python has no
-   converter for their encoding, so no character of it could be built: EUC-TW:
-   zh_TW.euctw.
+   korean.euc; EUC-TW: zh_TW.euctw; GB2312: zh_CN, zh_CN.gb2312, zh_SG,
+   zh_SG.gb2312.
+!! upper(), lower() and ILIKE give an ERROR on both machines in 10 locale(s)
+   that databases of an encoding not known here may use (its encoding is one
+   PostgreSQL does not know, so a database of any encoding can use it): in
+   such a database of more than one byte per character, a glibc that cannot
+   convert the locale's own converts no text that is not ASCII ("ERROR:
+   invalid multibyte character for locale"). On RHEL this is what a machine
+   without glibc-gconv-extra does; install it and measure that machine again.
+   ARMSCII-8: hy_AM.armscii8; GEORGIAN-PS: ka_GE, ka_GE.georgianps; KOI8-T:
+   tg_TJ, tg_TJ.koi8t; PT154: kk_KZ, kk_KZ.pt154; TIS-620: th_TH,
+   th_TH.tis620, thai.
 upper(), lower() and ILIKE: text that is not ASCII converts on both machines
    in 478 locale(s); in the 358 of an encoding of one byte PostgreSQL never
    converts it in a database of that encoding. Left out: 7 locale(s) of an
    encoding PostgreSQL allows only on the client, so no database converts text
    with them (BIG5: zh_TW, zh_TW.big5; BIG5-HKSCS: zh_HK, zh_HK.big5hkscs;
-   GB18030: zh_CN.gb18030; GBK: zh_CN.gbk, zh_SG.gbk). The 10 locale(s) of an
-   encoding PostgreSQL does not know are in the line on a database of another
-   encoding.
+   GB18030: zh_CN.gb18030; GBK: zh_CN.gbk, zh_SG.gbk).
 !! Character rules (LC_CTYPE) CHANGE for 5961 character(s) in the 488
    locale(s) compared on both machines that a UTF8 database can use: each gets
    another upper case, lower case or class. upper(), lower(), initcap(),
@@ -1820,17 +1826,21 @@ Character rules (LC_CTYPE) of each character: not compared in 377 locale(s) of
 Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
    compared on both machines.
 !! Character rules (LC_CTYPE) in an EUC_JP, EUC_KR, EUC_CN or EUC_TW database:
-   NOT checked here, 14 locale(s). EUC-JP: ja_JP, ja_JP.eucjp, ja_JP.ujis,
-   japanese, japanese.euc; EUC-KR: ko_KR, ko_KR.euckr, korean, korean.euc;
-   EUC-TW: zh_TW.euctw; GB2312: zh_CN, zh_CN.gb2312, zh_SG, zh_SG.gb2312.
+   the same for ASCII, the only text compared, in 14 locale(s), since neither
+   machine's glibc can convert their encoding; the line on upper(), lower()
+   and ILIKE above says what that does to the rest of the text. The conversion
+   back to the database's bytes is not compared. EUC-JP: ja_JP, ja_JP.eucjp,
+   ja_JP.ujis, japanese, japanese.euc; EUC-KR: ko_KR, ko_KR.euckr, korean,
+   korean.euc; EUC-TW: zh_TW.euctw; GB2312: zh_CN, zh_CN.gb2312, zh_SG,
+   zh_SG.gb2312.
 !! Not measured in a database of another encoding: 10 locale(s) whose encoding
    PostgreSQL does not know, so that CREATE DATABASE lets a database of any
    encoding use one, with only a WARNING ("could not determine encoding for
    locale"). In such a database, a UTF8 one say, PostgreSQL hands the locale
-   the database's bytes, not the ones measured here, so neither its order nor
-   whether upper(), lower() and ILIKE give an error there is known. ARMSCII-8:
-   hy_AM.armscii8; GEORGIAN-PS: ka_GE, ka_GE.georgianps; KOI8-T: tg_TJ,
-   tg_TJ.koi8t; PT154: kk_KZ, kk_KZ.pt154; TIS-620: th_TH, th_TH.tis620, thai.
+   the database's bytes, not the ones measured here, so its order there is not
+   known. ARMSCII-8: hy_AM.armscii8; GEORGIAN-PS: ka_GE, ka_GE.georgianps;
+   KOI8-T: tg_TJ, tg_TJ.koi8t; PT154: kk_KZ, kk_KZ.pt154; TIS-620: th_TH,
+   th_TH.tis620, thai.
 !! Not measured in EUC-JP (ja_JP, ja_JP.eucjp, ja_JP.ujis, japanese,
    japanese.euc): 167 byte sequences that PostgreSQL stores in an EUC_JP
    database, for characters it converts from UTF-8, are not among the strings
@@ -1926,25 +1936,32 @@ Every such byte sequence is in
      This looks at the C library PostgreSQL runs, not at its locale data: a
         PostgreSQL that was not restarted can already use locales installed
         after it started.
-     !! upper(), lower() and ILIKE give an ERROR on both machines in 13
+     !! upper(), lower() and ILIKE give an ERROR on both machines in 14
         locale(s), as before the upgrade: in a database of the locale's own
         encoding, any text that is not ASCII stops them with "ERROR: invalid
         multibyte character for locale". On RHEL this is what a machine
         without glibc-gconv-extra does; install it and measure that machine
         again. EUC-JP: ja_JP, ja_JP.eucjp, ja_JP.ujis, japanese, japanese.euc;
-        EUC-KR: ko_KR, ko_KR.euckr, korean, korean.euc; GB2312: zh_CN,
-        zh_CN.gb2312, zh_SG, zh_SG.gb2312.
-     !! upper(), lower() and ILIKE NOT checked in 1 locale(s): Python has no
-        converter for their encoding, so no character of it could be built:
-        EUC-TW: zh_TW.euctw.
+        EUC-KR: ko_KR, ko_KR.euckr, korean, korean.euc; EUC-TW: zh_TW.euctw;
+        GB2312: zh_CN, zh_CN.gb2312, zh_SG, zh_SG.gb2312.
+     !! upper(), lower() and ILIKE give an ERROR on both machines in 10
+        locale(s) that databases of an encoding not known here may use (its
+        encoding is one PostgreSQL does not know, so a database of any
+        encoding can use it): in such a database of more than one byte per
+        character, a glibc that cannot convert the locale's own converts no
+        text that is not ASCII ("ERROR: invalid multibyte character for
+        locale"). On RHEL this is what a machine without glibc-gconv-extra
+        does; install it and measure that machine again. ARMSCII-8:
+        hy_AM.armscii8; GEORGIAN-PS: ka_GE, ka_GE.georgianps; KOI8-T: tg_TJ,
+        tg_TJ.koi8t; PT154: kk_KZ, kk_KZ.pt154; TIS-620: th_TH, th_TH.tis620,
+        thai.
      upper(), lower() and ILIKE: text that is not ASCII converts on both
         machines in 478 locale(s); in the 358 of an encoding of one byte
         PostgreSQL never converts it in a database of that encoding. Left out:
         7 locale(s) of an encoding PostgreSQL allows only on the client, so no
         database converts text with them (BIG5: zh_TW, zh_TW.big5; BIG5-HKSCS:
         zh_HK, zh_HK.big5hkscs; GB18030: zh_CN.gb18030; GBK: zh_CN.gbk,
-        zh_SG.gbk). The 10 locale(s) of an encoding PostgreSQL does not know
-        are in the line on a database of another encoding.
+        zh_SG.gbk).
      !! Character rules (LC_CTYPE) CHANGE for 5961 character(s) in the 488
         locale(s) compared on both machines that a UTF8 database can use: each
         gets another upper case, lower case or class. upper(), lower(),
@@ -1969,19 +1986,22 @@ Every such byte sequence is in
      Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
         compared on both machines.
      !! Character rules (LC_CTYPE) in an EUC_JP, EUC_KR, EUC_CN or EUC_TW
-        database: NOT checked here, 14 locale(s). EUC-JP: ja_JP, ja_JP.eucjp,
-        ja_JP.ujis, japanese, japanese.euc; EUC-KR: ko_KR, ko_KR.euckr,
-        korean, korean.euc; EUC-TW: zh_TW.euctw; GB2312: zh_CN, zh_CN.gb2312,
-        zh_SG, zh_SG.gb2312.
+        database: the same for ASCII, the only text compared, in 14 locale(s),
+        since neither machine's glibc can convert their encoding; the line on
+        upper(), lower() and ILIKE above says what that does to the rest of
+        the text. The conversion back to the database's bytes is not compared.
+        EUC-JP: ja_JP, ja_JP.eucjp, ja_JP.ujis, japanese, japanese.euc;
+        EUC-KR: ko_KR, ko_KR.euckr, korean, korean.euc; EUC-TW: zh_TW.euctw;
+        GB2312: zh_CN, zh_CN.gb2312, zh_SG, zh_SG.gb2312.
      !! Not measured in a database of another encoding: 10 locale(s) whose
         encoding PostgreSQL does not know, so that CREATE DATABASE lets a
         database of any encoding use one, with only a WARNING ("could not
         determine encoding for locale"). In such a database, a UTF8 one say,
         PostgreSQL hands the locale the database's bytes, not the ones
-        measured here, so neither its order nor whether upper(), lower() and
-        ILIKE give an error there is known. ARMSCII-8: hy_AM.armscii8;
-        GEORGIAN-PS: ka_GE, ka_GE.georgianps; KOI8-T: tg_TJ, tg_TJ.koi8t;
-        PT154: kk_KZ, kk_KZ.pt154; TIS-620: th_TH, th_TH.tis620, thai.
+        measured here, so its order there is not known. ARMSCII-8:
+        hy_AM.armscii8; GEORGIAN-PS: ka_GE, ka_GE.georgianps; KOI8-T: tg_TJ,
+        tg_TJ.koi8t; PT154: kk_KZ, kk_KZ.pt154; TIS-620: th_TH, th_TH.tis620,
+        thai.
      !! Not measured in EUC-JP (ja_JP, ja_JP.eucjp, ja_JP.ujis, japanese,
         japanese.euc): 167 byte sequences that PostgreSQL stores in an EUC_JP
         database, for characters it converts from UTF-8, are not among the
