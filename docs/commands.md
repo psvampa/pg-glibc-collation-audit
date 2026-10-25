@@ -98,8 +98,7 @@ every byte, and which PostgreSQL processes on the machine run another C
 library than the one measured, because an update replaced it on disk or
 because they run another file, as in a container. Step 11 compares the
 decimals, those two answers and the character rules between the two machines,
-except the character rules in an `EUC_JP`, `EUC_KR`, `EUC_CN` or `EUC_TW`
-database, which it does not check, and checks each machine's processes against
+and checks each machine's processes against
 what was measured there. A file written before they were measured still
 compares, and step 11 says they were not checked on that machine; a locale
 glibc refused there reads as one that could not be measured.
@@ -117,11 +116,13 @@ the reason, on a file that:
 - is not whole: a run cut short, text the machine printed ahead of it such as
   a login message, or a second file appended to the first;
 - was written in a format this checkout's `--extract` does not write;
+- was measured by another copy of `scripts/locale_order.py`, over other
+  strings or other byte sequences than this checkout's;
 - holds an entry other than the one its list describes, such as an edited file
   or a name that would land outside the copy;
 - names no glibc build, because `rpm -q glibc` printed none on that machine.
 
-For the first three, extract again with this checkout's
+For the first four, extract again with this checkout's
 `scripts/locale_order.py`. Once the copy is laid out, what was written is read
 back against the list, so a disk that renames or drops a file stops the run as
 well.

@@ -36,7 +36,8 @@ otherwise the file says it was not checked); and how PostgreSQL can use each
 locale: whether setlocale accepts it for LC_COLLATE and for LC_CTYPE, without
 which a database that uses it does not open, and whether glibc converts a
 character of its encoding to a wide character, without which upper(), lower()
-and ILIKE stop with an error (postgres_use; for the encodings of
+and ILIKE stop with an error in a database of more than one byte per character
+(postgres_use; for the encodings of
 CONVERTER_CODESETS the converter part below holds it instead). A file written
 before these were measured still compares, and the comparison says they were
 not checked there.
@@ -3882,6 +3883,69 @@ def named_on_the_other(view, other):
     return view
 
 
+def sequence_state(view, data, hexed):
+    """What one machine does with the bytes hexed, as a row of the
+    characters file says it: 'converts' or 'error', from its converter part,
+    of the encoding glibc gives the locale there, which is what converts a
+    database's bytes under that locale whatever the database's encoding;
+    'error' for every byte past ASCII where the converter does not open
+    (glibc then converts nothing past ASCII, whatever the bytes); 'not
+    measured' where the part does not say, or the bytes are not a sequence
+    a database of that encoding holds."""
+    seq = bytes.fromhex(hexed)
+    enc = view[1]
+    if view[0] != 'accepted' or enc not in CONVERTER_CODESETS:
+        return 'not measured'
+    got = converter_answer(data, enc)
+    if got is None:
+        return 'not measured'
+    if got == 'fails':
+        return 'converts' if seq[0] < 0x80 else 'error'
+    if seq not in accepted_sequences(enc):
+        return 'not measured'
+    # Untested: the bytes asked of here are this machine's own conversions
+    # (named_on_the_other), or a character a file of the format before
+    # tried, which every converter measured converts; none it refuses.
+    return 'error' if seq in got[0] else 'converts'
+
+
+def refused_rows_of(partial, views, old, new):
+    """The characters file's rows of the line on part of the text: each
+    sequence a machine's converter refuses (partial, from refused_in_own),
+    a row each with what each machine does with it, under a label per
+    encoding and per what each machine refuses, its locales named once (a
+    locale named on each row would make the file many times larger)."""
+    groups = {}
+    for name, sides in partial.items():
+        for enc in sorted({e for e, _ in sides.values()}):
+            states = []
+            for view, data in zip(views[name], (old, new)):
+                got = (converter_answer(data, enc)
+                       if view[0] == 'accepted' and view[1] == enc else None)
+                states.append(got if got in (None, 'fails') else frozenset(got[0]))
+            groups.setdefault((enc, tuple(states)), []).append(name)
+    out = []
+    for (enc, states), names in sorted(groups.items(), key=lambda g: sorted(g[1])):
+        label = f'upper_lower_ILIKE_group_{len(out) // 2 + 1}'
+        out.append({'names': sorted(names), 'label': label, 'rows': [(
+            'upper/lower/ILIKE group', '-', f'{label}: the byte sequence(s) a '
+            f"database of these locale(s) accepts and glibc's converter of {enc} "
+            'does not convert on a machine, each a row under that name',
+            '-', '-', '-', '-')]})
+        refused = sorted(set().union(*(s for s in states
+                                       if s not in (None, 'fails'))))
+        said = [('not measured' if s is None else 'error' if s == 'fails'
+                 else None) for s in states]
+        measured = ('on both machines' if None not in states else
+                    'on the old machine' if states[1] is None else
+                    'on the new machine')
+        out.append({'names': [label], 'rows': [error_row(
+            None, seq.hex(),
+            *(x or ('error' if seq in s else 'converts') for x, s in zip(said, states)),
+            measured) for seq in refused]})
+    return out
+
+
 def use_texts(old, new, names, refused, only_new=()):
     """([(text, is a warning)], [file rows]): what upper(), lower(),
     initcap(), ILIKE and full-text search do with each locale of names. In
@@ -3900,7 +3964,9 @@ def use_texts(old, new, names, refused, only_new=()):
     PostgreSQL does not know, then what works. A locale whose converter
     refuses some sequences a database of its encoding accepts
     (refused_in_own) is also named in the line on part of the text, which
-    takes its place in the line on what works. C and POSIX never reach
+    takes its place in the line on what works; so is one a file of the
+    format before the converter part tested with one character that
+    converted (untold), in a line of its own. C and POSIX never reach
     glibc (asc_tolower). A locale glibc refuses on a side is named on its
     own, and here only beside an error of the other side, or, when the old
     machine refused it, beside a NOT checked of the new one; a locale only
@@ -3923,19 +3989,29 @@ def use_texts(old, new, names, refused, only_new=()):
     unknown, one_side, moved, anydb, rows, codesets = {}, {}, {}, {}, [], {}
     partial = {}   # {name: {side: (encoding, the sequences glibc refuses)}}
     unsaid = {}    # {name: the sides whose file says nothing of those}
+    views = {}     # {name: (old view, new view)}
 
     def error(name, label, before, after, text, apart=None):
         # One row of the character measured; where the two machines
         # measured characters of two encodings (apart: (old's, new's)),
-        # one row each, of each error.
+        # one row each, of each error, with what the other machine's
+        # converter does with those bytes where it measured that encoding.
         codesets[name] = label
         if apart:
-            rows.append({'names': [name], 'rows': [
-                error_row(*t[1], *states, f'on the {side} machine')
-                for side, s, t, states in (
-                    ('old', before, apart[0], (before, 'not measured')),
-                    ('new', after, apart[1], ('not measured', after)))
-                if s == 'error']})
+            vo, vn = views[name]
+            out = []
+            for side, s, t in (('old', before, apart[0]), ('new', after, apart[1])):
+                if s != 'error':
+                    continue
+                other = (sequence_state(vn, new, t[1][1]) if side == 'old'
+                         else sequence_state(vo, old, t[1][1]))
+                states = ('error', other) if side == 'old' else (other, 'error')
+                row = error_row(*t[1], *states, 'on both machines'
+                                if other != 'not measured' else f'on the {side} machine')
+                # Each machine's row, once where both say the same.
+                if row not in out:
+                    out.append(row)
+            rows.append({'names': [name], 'rows': out})
             return
         measured = ('on both machines' if before in USE_BEFORE and after in USE_BEFORE
                     else 'on the new machine' if after in USE_BEFORE
@@ -3961,14 +4037,17 @@ def use_texts(old, new, names, refused, only_new=()):
         if vo[0] == vn[0] == 'refused':
             continue
         vo, vn = named_on_the_other(vo, vn), named_on_the_other(vn, vo)
+        views[name] = (vo, vn)
         for view, data in ((vo, old), (vn, new)):
             got = refused_in_own(view, data, known)
             if got:
                 partial.setdefault(name, {})[view[4]] = got
             elif (view[0] == 'accepted' and view[1] in CONVERTER_CODESETS
-                  and 'converter' not in data['held']):
+                  and 'converter' not in data['held']
+                  and not (view[2] and view[2][0] == 'fails')):
                 # A file before the part tried one character, which says
-                # nothing of the sequences the converter refuses.
+                # nothing of the sequences the converter refuses, unless it
+                # failed: then glibc converts nothing past ASCII there.
                 unsaid.setdefault(name, set()).add(view[4])
         change = (f'its encoding changed from {vo[1]} on the old machine to '
                   f'{vn[1]} on the new one')
@@ -4150,9 +4229,36 @@ def use_texts(old, new, names, refused, only_new=()):
                     'does not convert stops them with "ERROR: invalid multibyte '
                     'character for locale". '
                     + '; '.join(f'{text} ({", ".join(map(shown, sorted(group)))})'
-                                for text, group in sorted(said.items())) + '.', True))
+                                for text, group in sorted(said.items())) + '.',
+                    True, 'byte sequence'))
+        rows += refused_rows_of(partial, views, old, new)
         # Counted there, never as converting.
         groups['converts'] = [n for n in groups['converts'] if n not in partial]
+    # A file of the format before the converter part tried one character,
+    # which says nothing of the sequences glibc refuses: a locale that the
+    # line above does not name is not known to convert all its text on a
+    # machine whose file is of that format.
+    untold = {}
+    for name in groups['converts'] + groups['back']:
+        if name in unsaid and name not in partial:
+            untold.setdefault(where_text(unsaid[name]), {})[name] = (
+                views[name][1][1] or views[name][0][1])
+    if untold:
+        out.append((f'!! {FN}: whether they give an ERROR on part of the text is '
+                    f'NOT known in {sum(map(len, untold.values()))} locale(s): a '
+                    'file written by an earlier version of locale_order.py tried '
+                    'one character of their encoding, and glibc\'s converter can '
+                    'refuse others. '
+                    + ' '.join(f'{where[:1].upper() + where[1:]}: '
+                               f'{by_codeset(group, group)}.'
+                               for where, group in sorted(untold.items())), True))
+        rows += [{'names': [n], 'rows': [(
+            'upper/lower/ILIKE not checked', '-',
+            f'whether part of the text gives an error: not known {where}',
+            '-', '-', '-', '-')]} for where, group in sorted(untold.items())
+                 for n in sorted(group)]
+        groups['converts'] = [n for n in groups['converts']
+                              if not any(n in g for g in untold.values())]
     if earlier:
         return out, rows
     if unknown:
@@ -4178,9 +4284,10 @@ def use_texts(old, new, names, refused, only_new=()):
 
 
 CTYPE_LINE = 'Character rules (LC_CTYPE)'
-# The encodings of the databases whose character rules are not checked:
-# EUC_JP, EUC_KR, EUC_CN and EUC_TW, as glibc names the locales' encodings
-# (PostgreSQL reads GB2312 as EUC_CN, chklocale.c).
+# The encodings of the databases whose character rules are read through
+# glibc's converter (euc_texts): EUC_JP, EUC_KR, EUC_CN and EUC_TW, as glibc
+# names the locales' encodings (PostgreSQL reads GB2312 as EUC_CN,
+# chklocale.c).
 CTYPE_EUC = ('EUC-JP', 'EUC-KR', 'GB2312', 'EUC-TW')
 CTYPE_BYTE_ROWS = ('toupper', 'tolower') + CTYPE_CLASSES
 # What a reader calls the class a character is in, by the first class of
@@ -4328,9 +4435,10 @@ def ctype_texts(old, new, names, refused, only_new=()):
     glibc refused on either side is named as that, by refused_by_glibc; one
     whose rules either side could not measure is named with why, never
     counted as the same; one on the new machine only has nothing to be
-    compared with. EUC_JP, EUC_KR, EUC_CN and EUC_TW are not checked here:
-    which characters such a database hands glibc is a question of glibc's
-    converters."""
+    compared with. A database of EUC_JP, EUC_KR, EUC_CN or EUC_TW hands
+    glibc the characters glibc's converter makes of its text, so its
+    locales are compared on those, from each machine's converter part
+    (euc_texts)."""
     earlier = [side for side, data in zip(('OLD', 'NEW'), (old, new))
                if 'ctype' not in data['held']]
     if earlier:
@@ -4340,13 +4448,13 @@ def ctype_texts(old, new, names, refused, only_new=()):
                          + EARLIER.format(which_machines(earlier)) + '.'}], []
     _, known, _ = postgres_codesets()
     euc = {}
-    for name in list(names) + list(only_new):
+    for name in names:
         for data in (old, new):
             r = data['locales'].get(name)
             if r and r.get('codeset') in CTYPE_EUC:
                 euc[name] = r['codeset']
                 break
-    wide_pairs, byte_pairs, unknown, elsewhere = {}, {}, {}, []
+    wide_pairs, byte_pairs, unknown, elsewhere, wide_of = {}, {}, {}, [], {}
     for name in names:
         if name in refused or name in ('C', 'POSIX'):
             continue
@@ -4364,6 +4472,7 @@ def ctype_texts(old, new, names, refused, only_new=()):
             unknown[name] = ([('both', why[0][1])] if len(why) == 2
                              and why[0][1] == why[1][1] else why)
             continue
+        wide_of[name] = (keys[0][0], keys[1][0])
         # A database or collation of UTF8 opens with a locale of UTF-8, of
         # US-ASCII (SQL_ASCII to PostgreSQL, chklocale.c:185) or of an
         # encoding PostgreSQL does not know, and with no other
@@ -4423,10 +4532,13 @@ def ctype_texts(old, new, names, refused, only_new=()):
                                   'use them reads their rules byte by byte'
                                   + (', or, in EUC, as the line on EUC says'
                                      if set(elsewhere) & set(euc) else '') + '.'})
+    euc_found, euc_tail = euc_texts(old, new, {n: c for n, c in euc.items()
+                                               if n in wide_of}, wide_of, rows)
+    found += euc_found
     # Right after the changes it points at, ahead of what stayed the same.
-    kinds = [what for what in ('character', 'byte')
-             if any(r['rows'][0][1].startswith('U+' if what == 'character'
-                                               else 'byte')
+    kinds = [what for what, start in (('character', 'U+'), ('byte', 'byte '),
+                                      ('byte sequence', 'bytes '))
+             if any(r['rows'][0][1].startswith(start)
                     for r in rows if 'label' not in r)]
     if kinds:
         found.append({'where': ' and '.join(kinds)})
@@ -4443,12 +4555,189 @@ def ctype_texts(old, new, names, refused, only_new=()):
             ('LC_CTYPE not checked', '-', f'{where[side]}: {why}'.translate(
                 TEXT_ESCAPES), '-', '-', '-', '-') for side, why in sides]}
                  for n, sides in sorted(unknown.items())]
-    if euc:
-        found.append({'text': f'!! {CTYPE_LINE} in an EUC_JP, EUC_KR, EUC_CN or '
-                              f'EUC_TW database: NOT checked here, '
-                              f'{len(euc)} locale(s). '
-                              + by_codeset(euc, euc) + '.'})
+    found += euc_tail
     return found, rows
+
+
+EUC_LINE = f'{CTYPE_LINE} in an EUC_JP, EUC_KR, EUC_CN or EUC_TW database'
+CONVERTED = {}   # per (encoding, packed values), converted_values' answer
+
+
+def converted_values(data, codeset, side):
+    """(the value glibc gave each accepted sequence of codeset on one
+    machine, whether its converter does not open there), or (None, why)
+    where the file does not say: of a format before the converter part, or
+    not checked there (converter_text says why). A converter that does not
+    open converts ASCII alone (converter_text)."""
+    if 'converter' not in data['held']:
+        return None, (f'the {side.upper()} file was written by an earlier '
+                      'version of locale_order.py, which did not measure '
+                      "glibc's converter")
+    entry = data['converter'][codeset]
+    verdict, detail = converter_text(entry, codeset)
+    if verdict == 'not checked':
+        return None, detail
+    key = (codeset, entry[3])
+    if key not in CONVERTED:
+        CONVERTED[key] = tuple(converter_unpacked(entry[3], codeset))
+    return CONVERTED[key], verdict == 'fails'
+
+
+def sentence(why):
+    """A reason as the start of a sentence: capitalized, but for the
+    names glibc and iconv_open, which are written as they are."""
+    return why if why.startswith(('glibc', 'iconv_open')) else why[:1].upper() + why[1:]
+
+
+def euc_texts(old, new, euc, wide_of, rows):
+    """([finding of a change], [finding after what stayed the same]): what
+    the character rules answer differently in a database of EUC_JP,
+    EUC_KR, EUC_CN or EUC_TW, for the locales of euc ({name: encoding})
+    whose tables both machines measured (wide_of: {name: (old wide key,
+    new wide key)}); rows gets the characters file's rows.
+
+    Such a database hands glibc's wide functions the characters glibc's
+    converter makes of its text (char2wchar, formatting.c REL_13_23,
+    pg_locale_libc.c REL_18_6); its regular expressions read the byte
+    functions only below 256, ASCII alone in such text (regc_pg_locale.c),
+    which the byte tables answer (ctype_byte_changes). So, per locale, from
+    each machine's converter part: the sequences a database accepts that
+    the two machines convert to two characters, and the rules that change
+    of the characters both convert to alike. A sequence glibc refuses on a
+    machine stops upper() there and is named by use_texts. A machine whose
+    converter does not open converts ASCII alone, so only ASCII is
+    compared; one that does not say is named with why, never read as the
+    same."""
+    changes_of, by, unknown, ascii_only = {}, {}, {}, {}
+    for name, codeset in sorted(euc.items()):
+        cs = [d['postgres_use'][name]['codeset'] for d in (old, new)]
+        if cs[0] != cs[1]:
+            unknown[name] = [('both', f'its encoding changed from {cs[0]} on the '
+                                      f'old machine to {cs[1]} on the new one')]
+            continue
+        # The same on both sides, and so the one of euc: load() refuses a
+        # file whose order and postgres_use read two encodings.
+        codeset = cs[0]
+        got = [converted_values(d, codeset, side)
+               for side, d in (('old', old), ('new', new))]
+        why = [(side, g[1]) for side, g in zip(('old', 'new'), got) if g[0] is None]
+        if why:
+            unknown[name] = why
+            continue
+        (vo, fo), (vn, fn) = got
+        if fo or fn:
+            ascii_only.setdefault('both' if fo and fn else 'old' if fo else 'new',
+                                  []).append(name)
+        key = (codeset, vo, vn, wide_of[name])
+        if key not in changes_of:
+            if wide_of[name] not in changes_of:
+                changes_of[wide_of[name]] = ctype_wide_changes(
+                    old['ctype'], wide_of[name][0], new['ctype'], wide_of[name][1])
+            other = tuple((s, a, b) for s, a, b in zip(accepted_sequences(codeset),
+                                                        vo, vn)
+                          if a and b and a != b)
+            alike = {a for a, b in zip(vo, vn) if a and a == b}
+            changes_of[key] = (other, tuple(c for c in changes_of[wide_of[name]]
+                                            if c[0] in alike))
+        by.setdefault(changes_of[key], {})[name] = codeset
+    found, tail = [], []
+    same = {}
+    apart = {n for group in ascii_only.values() for n in group}
+    for (other, changed), group in sorted(by.items(), key=lambda g: sorted(g[1])):
+        if not other and not changed:
+            # Where a machine converts ASCII alone, the line on that says
+            # what was compared.
+            same.update((n, c) for n, c in group.items() if n not in apart)
+            continue
+        listed = f'{len(group)} locale(s) ({by_codeset(group, group)})'
+        if other:
+            label = f'LC_CTYPE_group_{sum(1 for r in rows if "label" in r) + 1}'
+            rows.append({'names': sorted(group), 'label': label, 'rows': [
+                ('LC_CTYPE group', '-', f'{label}: the byte sequence(s) glibc '
+                 'converts to another character in these locale(s), each a row '
+                 'under that name', '-', '-', '-', '-')]})
+            rows.append({'names': [label], 'rows': [
+                ('LC_CTYPE converted', f'bytes {spaced(s)}', f'U+{a:04X} -> U+{b:04X}',
+                 '-', '-', '-', 'on both machines') for s, a, b in other]})
+            found.append({
+                'head': f'!! {EUC_LINE}: CHANGE for {len(other)} byte sequence(s) '
+                        f'in {listed}: glibc converts each to another character '
+                        'on the new machine than on the old one, so upper(), '
+                        'lower(), initcap(), ILIKE and full-text search can give '
+                        'other results for text that holds one:',
+                'items': [f'{spaced(s)}: {character(a)} -> {character(b)}'
+                          for s, a, b in other], 'tail': ''})
+        if changed:
+            label = f'LC_CTYPE_group_{sum(1 for r in rows if "label" in r) + 1}'
+            rows.append({'names': sorted(group), 'label': label, 'rows': [
+                ('LC_CTYPE group', '-', f'{label}: the character(s) whose rules '
+                 'change in these locale(s), each a row under that name',
+                 '-', '-', '-', '-')]})
+            rows.append({'names': [label], 'rows': [
+                ('LC_CTYPE changed', f'U+{cp:04X}', exact, '-',
+                 'classified' if k else 'not classified', '-',
+                 'on both machines') for cp, k, _, exact in changed]})
+            known = [(cp, words) for cp, k, words, _ in changed if k]
+            other_count = len(changed) - len(known)
+            found.append({
+                'head': f'!! {EUC_LINE}: CHANGE for {len(changed)} character(s) in '
+                        f'{listed}: each gets another upper case, lower case or '
+                        'class, and glibc converts the text of such a database to '
+                        'it alike on both machines. upper(), lower(), initcap(), '
+                        'ILIKE and full-text search read these rules there, so '
+                        'they can give other results for text that holds one. '
+                        f'{len(known)} of them the old machine already '
+                        f'classified{":" if known else "."}',
+                'items': [f'{character(cp)}: {words}' for cp, words in known],
+                'tail': (f'The other {other_count} it did not classify.'
+                         if other_count else '')})
+    if same:
+        tail.append({'text': f'!! {EUC_LINE}: the same in the '
+                             f'{"other " if found else ""}'
+                             f'{len(same)} locale(s) compared on both machines: '
+                             'each byte sequence such a database accepts that '
+                             'glibc converts on both machines it converts to the '
+                             'same character on both, and none of those '
+                             "characters' rules change; the conversion back to "
+                             "the database's bytes is not compared. "
+                             + by_codeset(same, same) + '.'})
+    changed_names = {n for (o, c), group in by.items() if o or c for n in group}
+    for where, group in sorted(ascii_only.items()):
+        machine = {'both': "neither machine's glibc can",
+                   'old': "the old machine's glibc could not",
+                   'new': "the new machine's glibc cannot"}[where]
+        for names, how in (([n for n in group if n not in changed_names],
+                            'the same for ASCII, the only text compared,'),
+                           ([n for n in group if n in changed_names],
+                            'compared for ASCII alone')):
+            if names:
+                back = (" The conversion back to the database's bytes is not "
+                        'compared.' if how.startswith('the same') else '')
+                tail.append({'text': f'{"!! " if back else ""}{EUC_LINE}: '
+                                     f'{how} in {len(names)} '
+                                     f'locale(s), since {machine} convert their '
+                                     'encoding; the line on upper(), lower() and '
+                                     'ILIKE above says what that does to the rest '
+                                     f'of the text.{back} '
+                                     + by_codeset(names, euc) + '.'})
+    if unknown:
+        where = {'both': 'both machines', 'old': 'old machine', 'new': 'new machine'}
+        # Each reason once, with the machine it is about and its locales.
+        whys = {}
+        for n, sides in unknown.items():
+            for side, why in sides:
+                whys.setdefault((why, side), {})[n] = euc[n]
+        tail.append({'text': f'!! {EUC_LINE}: NOT checked in {len(unknown)} '
+                             'locale(s). ' + ' '.join(
+                                 f'{sentence(why)} (on '
+                                 f'{"both machines" if side == "both" else f"the {side} machine"}'
+                                 f'): {by_codeset(group, group)}.'
+                                 for (why, side), group in sorted(whys.items()))})
+        rows += [{'names': [n], 'rows': [
+            ('LC_CTYPE not checked', '-', f'{where[side]}: {why}'.translate(
+                TEXT_ESCAPES), '-', '-', '-', '-') for side, why in sides]}
+                 for n, sides in sorted(unknown.items())]
+    return found, tail
 
 
 def ctype_character_finding(got, group):
@@ -4872,8 +5161,11 @@ def run_findings(o, n, warnings, partly, unmeasured, only_old,
     locale), what the order does not place (beside), and what no comparison
     measures."""
     found = [('warning', {'text': text, 'wrap': wrap}) for text, wrap in warnings]
-    found += [(kind, {'text': text, 'warning': warning})
-              for kind, texts in checks for text, warning in texts]
+    # A third member names the rows of the characters file the text
+    # points at (use_texts).
+    found += [(kind, dict({'text': t[0], 'warning': t[1]},
+                          **({'where': t[2]} if len(t) > 2 else {})))
+              for kind, texts in checks for t in texts]
     found += [('partly', {'name': name,
                           'count': max(o[name]['partly'], n[name]['partly'])})
               for name in partly]
@@ -5016,6 +5308,30 @@ def check_summary(items, ctx):
     return [line for d in items for line in wrapped(d['text'], 5, 8)]
 
 
+def use_where(d, ctx):
+    """A line on upper() and its pointer to the rows of the characters
+    file, if it has rows there: the file's path whole, never cut."""
+    if 'where' not in d:
+        return d['text']
+    return d['text'] + ' ' + (f'Every such {d["where"]} is in {ctx["characters_to"]}.'
+                              if ctx['characters_to'] else
+                              f'Pass --characters-to FILE for every such {d["where"]}.')
+
+
+def use_lines(items, ctx):
+    return ['\n'.join(whole_words(use_where(d, ctx), 0, 3)) for d in items]
+
+
+def use_summary(items, ctx):
+    return [line for d in items for line in whole_words(use_where(d, ctx), 5, 8)]
+
+
+def use_notes(items):
+    return ['# ' + (d['text'] + (f' Every such {d["where"]} is a row of this file.'
+                                 if 'where' in d else '')).translate(TEXT_ESCAPES)
+            for d in items]
+
+
 def closing_lines(items, ctx):
     return [textwrap.fill(d['text'], width=78, subsequent_indent='   ')
             for d in items]
@@ -5039,7 +5355,7 @@ RUN_KINDS = {
     'money': (check_lines, check_summary, notes),
     'postgres libc': (check_lines, check_summary, notes),
     'refused': (refused_lines, refused_summary, refused_rows),
-    'postgres use': (check_lines, check_summary, notes),
+    'postgres use': (use_lines, use_summary, use_notes),
     'postgres use rows': (nothing, nothing, rows_of),
     'ctype': (ctype_lines, ctype_summary, ctype_notes),
     'ctype rows': (nothing, nothing, rows_of),

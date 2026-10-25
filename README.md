@@ -254,8 +254,7 @@ Sort order (`LC_COLLATE`) only, besides what step 11 compares on both
 machines: the decimals of the `money` type and, of `LC_CTYPE`, whether each
 machine can convert a locale's text and what glibc's character rules answer,
 which `upper()`, `lower()`, `initcap()`, `ILIKE`, regular expressions and
-full-text search read, except in an `EUC_JP`, `EUC_KR`, `EUC_CN` or `EUC_TW`
-database, which it does not check. In PostgreSQL terms the
+full-text search read. In PostgreSQL terms the
 **`libc` provider** only, not ICU or the `builtin` provider — and the two
 pairs named above.
 

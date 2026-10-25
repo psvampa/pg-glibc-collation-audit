@@ -154,12 +154,13 @@ is no mismatch for anything to detect.
 
 Step 11, given both machines' files, compares what glibc's character rules
 answer and names the characters and bytes whose rules change. It says where it
-could not look: a locale whose rules a machine could not measure, and a
-database of `EUC_JP`, `EUC_KR`, `EUC_CN` or `EUC_TW`, which it does not check.
-Nothing else here compares them, neither a run without the two files nor steps
-2 and 6 to 8, which read the transliterations of `LC_CTYPE` only for the
-collating elements they build, which are sort order. No verdict this project
-publishes says anything about them in either direction, including "unchanged".
+could not look. In an `EUC_JP`, `EUC_KR`, `EUC_CN` or `EUC_TW` database it does
+not compare the conversion of a result back to the database's bytes.
+Nothing else here compares the character rules, neither a run without the two
+files nor steps 2 and 6 to 8, which read the transliterations of `LC_CTYPE`
+only for the collating elements they build, which are sort order. No verdict
+this project publishes says anything about them in either direction, including
+"unchanged".
 A 🟢 on the results table is a statement about sort order and nothing else. If
 a `lower()`-based index matters to you, run step 11 with both machines' files,
 and confirm it the way this project confirms collation — on both machines,
