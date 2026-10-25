@@ -48,7 +48,11 @@ rules change (ctype_texts). It holds too, for each encoding of
 CONVERTER_CODESETS, what glibc's converter gives for every byte sequence
 PostgreSQL can hand it under a locale of that encoding (converter_part),
 which the comparison reads for those encodings in place of a test of one
-character. It also names what PostgreSQL
+character; and, for UTF-8 and those nine, what glibc gives converting each
+character back to the encoding's bytes (back_of), the way PostgreSQL turns
+what upper() and lower() give back into the database's text, and for
+UTF-8 what its converter gives for every character (utf8_forward_of). The
+comparison does not read these two yet. It also names what PostgreSQL
 stores in EUC-JP, EUC-KR and TIS-620, converting from UTF-8, that no order
 measured here places (POSTGRES_ONLY). C and POSIX, which glibc sorts in
 byte order in every version, are the control: a machine where they measured
@@ -106,18 +110,20 @@ import sys
 import tarfile
 import textwrap
 import time
+import types
 import unicodedata
 import zlib
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
-FORMAT = 'locale_order/5'
+FORMAT = 'locale_order/6'
 
 # The parts a file of each format holds, as its 'parts' says. A file of an
 # earlier format lacks the parts added since, and the comparison says each
 # part it reads was not checked and why, rather than refuse a file that is
 # whole (one without 'converter' is read through the test of one
-# character its 'postgres_use' holds for every encoding); a file
+# character its 'postgres_use' holds for every encoding; 'utf8_forward'
+# and 'back' are not read yet); a file
 # that lacks a part its format holds is refused. The corpus digest starts
 # with the first format's name, not with FORMAT, because a file of that
 # format measured the same strings and still compares.
@@ -127,9 +133,12 @@ PARTS = {'locale_order/1': ('order',),
          'locale_order/4': ('order', 'money', 'postgres_libc', 'postgres_use',
                             'ctype'),
          'locale_order/5': ('order', 'money', 'postgres_libc', 'postgres_use',
-                            'ctype', 'converter')}
+                            'ctype', 'converter'),
+         'locale_order/6': ('order', 'money', 'postgres_libc', 'postgres_use',
+                            'ctype', 'converter', 'utf8_forward', 'back')}
 # The parts beside the order, each checked whole by load().
-SIDE_PARTS = ('money', 'postgres_libc', 'postgres_use', 'ctype', 'converter')
+SIDE_PARTS = ('money', 'postgres_libc', 'postgres_use', 'ctype', 'converter',
+              'utf8_forward', 'back')
 CORPUS_VERSION = 'locale_order/1'
 
 # The file --extract writes holds the measurement, the machine's locale sources
@@ -195,13 +204,26 @@ def corpus_digest():
     """What both machines must have measured for their results to compare.
 
     Taken from the data rather than from a description of it, so a copy of
-    this script with a different corpus cannot pass for the same one.
+    this script with a different corpus cannot pass for the same one. Kept
+    while CODEPOINTS and CANDIDATES are the very lists it was taken from
+    and CORPUS_VERSION the same text (CORPUS_DIGEST): a comparison asks
+    once, the tests some 500 times, at 28 ms each.
     """
-    h = hashlib.sha256(CORPUS_VERSION.encode())
-    h.update(''.join(map(chr, CODEPOINTS)).encode('utf-8'))
-    h.update('|'.join(','.join(p + q for p, q in level)
-                      for level in CANDIDATES).encode('utf-8'))
-    return h.hexdigest()
+    global CORPUS_DIGEST
+    if (CORPUS_DIGEST is None or CORPUS_DIGEST[0] is not CODEPOINTS
+            or CORPUS_DIGEST[1] is not CANDIDATES
+            or CORPUS_DIGEST[2] != CORPUS_VERSION):
+        h = hashlib.sha256(CORPUS_VERSION.encode())
+        h.update(''.join(map(chr, CODEPOINTS)).encode('utf-8'))
+        h.update('|'.join(','.join(p + q for p, q in level)
+                          for level in CANDIDATES).encode('utf-8'))
+        CORPUS_DIGEST = (CODEPOINTS, CANDIDATES, CORPUS_VERSION, h.hexdigest())
+    return CORPUS_DIGEST[3]
+
+
+# What corpus_digest() last took: (CODEPOINTS, CANDIDATES, CORPUS_VERSION,
+# the digest), or None.
+CORPUS_DIGEST = None
 
 
 def sign(r):
@@ -776,8 +798,8 @@ def sequence_digest(codeset):
 
 
 def converter_libc():
-    """glibc with iconv_open, iconv_close and mbrtowc, their argument types
-    declared."""
+    """glibc with iconv_open, iconv_close, mbrtowc and wcrtomb, their
+    argument types declared."""
     global CONVERTER_FUNCTIONS
     if CONVERTER_FUNCTIONS is None:
         lib = ctypes.CDLL(ctypes.util.find_library('c') or 'libc.so.6',
@@ -785,6 +807,9 @@ def converter_libc():
         lib.mbrtowc.restype = ctypes.c_size_t
         lib.mbrtowc.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
                                 ctypes.c_size_t, ctypes.c_void_p]
+        lib.wcrtomb.restype = ctypes.c_size_t
+        lib.wcrtomb.argtypes = [ctypes.c_void_p, ctypes.c_uint32,
+                                ctypes.c_void_p]
         lib.iconv_open.restype = ctypes.c_void_p
         lib.iconv_open.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
         lib.iconv_close.restype = ctypes.c_int
@@ -824,14 +849,7 @@ def converter_of(job):
     codeset, name = job
     try:
         lib = converter_libc()
-        ctypes.set_errno(0)
-        handle = lib.iconv_open(b'WCHAR_T', codeset.encode('ascii'))
-        if handle in (None, NO_ICONV):
-            errno = ctypes.get_errno()
-            opens = ['fails', os.strerror(errno) if errno else 'no reason given']
-        else:
-            lib.iconv_close(handle)
-            opens = ['opens', None]
+        opens = iconv_answer(lib, b'WCHAR_T', codeset.encode('ascii'))
     except Exception as e:
         return codeset, ['not checked', ['not asked', None], name,
                          f'asking glibc failed: {e!r}', None]
@@ -840,26 +858,13 @@ def converter_of(job):
     saved = locale.setlocale(locale.LC_CTYPE)
     try:
         locale.setlocale(locale.LC_CTYPE, name)
-        wc = ctypes.c_uint32()
-        state = ctypes.create_string_buffer(16)
-        refused = ctypes.c_size_t(-1).value
+        read = WideReader(lib)
         got = []
         for s in accepted_sequences(codeset):
-            ctypes.memset(state, 0, len(state))
-            # glibc's wchar_t holds 31 bits: a value left as written here
-            # was not written by mbrtowc.
-            wc.value = UNWRITTEN
-            r = lib.mbrtowc(ctypes.byref(wc), s, len(s), state)
-            if r == len(s) and wc.value != UNWRITTEN:
-                got.append(wc.value)
-            elif r == refused:
-                got.append(0)
-            else:
-                how = ('as one character but wrote none' if r == len(s) else
-                       f'neither as one character nor as an error (mbrtowc '
-                       f'gave {ctypes.c_ssize_t(r).value})')
-                return codeset, ['not checked', opens, name,
-                                 f'glibc read the bytes {spaced(s)} {how}', None]
+            v = read(s)
+            if isinstance(v, str):
+                return codeset, ['not checked', opens, name, v, None]
+            got.append(v)
         return codeset, ['measured', opens, name, pack_order(got),
                          sequence_digest(codeset)]
     except Exception as e:
@@ -867,6 +872,47 @@ def converter_of(job):
                          f'measuring it failed: {e!r}', None]
     finally:
         put_back(locale.LC_CTYPE, saved)
+
+
+def iconv_answer(lib, to, frm):
+    """What iconv_open(to, frm) says: ['opens', None], or ['fails',
+    strerror of errno, or 'no reason given' where errno was left 0]."""
+    ctypes.set_errno(0)
+    handle = lib.iconv_open(to, frm)
+    if handle in (None, NO_ICONV):
+        errno = ctypes.get_errno()
+        return ['fails', os.strerror(errno) if errno else 'no reason given']
+    lib.iconv_close(handle)
+    return ['opens', None]
+
+
+class WideReader:
+    """mbrtowc of one sequence under the LC_CTYPE in force, from a cleared
+    state (glibc keeps the bytes of a character it has not seen whole in
+    it, iconv/loop.c): the code point of a sequence read whole, 0 for one
+    glibc refuses (EILSEQ), or, as text, how glibc read it otherwise (in
+    part, as the start of a longer one, or whole without writing a
+    character), which no value says."""
+
+    def __init__(self, lib):
+        self.lib = lib
+        self.wc = ctypes.c_uint32()
+        self.state = ctypes.create_string_buffer(16)
+
+    def __call__(self, s):
+        ctypes.memset(self.state, 0, len(self.state))
+        # glibc's wchar_t holds 31 bits: a value left as written here
+        # was not written by mbrtowc.
+        self.wc.value = UNWRITTEN
+        r = self.lib.mbrtowc(ctypes.byref(self.wc), s, len(s), self.state)
+        if r == len(s) and self.wc.value != UNWRITTEN:
+            return self.wc.value
+        if r == NOT_CONVERTED:
+            return 0
+        how = ('as one character but wrote none' if r == len(s) else
+               f'neither as one character nor as an error (mbrtowc '
+               f'gave {ctypes.c_ssize_t(r).value})')
+        return f'glibc read the bytes {spaced(s)} {how}'
 
 
 def first_locales(use):
@@ -888,6 +934,177 @@ def converter_part(uses, mapper):
     first = first_locales(uses)
     return dict(mapper(converter_of, [(cs, first.get(cs))
                                       for cs in CONVERTER_CODESETS]))
+
+
+# The encodings whose conversion back from wide characters to bytes is
+# measured (back_of): UTF-8 and the nine. PostgreSQL turns the wide
+# characters upper(), lower() and initcap() give back into the database's
+# bytes with wcstombs, or wcstombs_l, under the locale's converter
+# (wchar2char: pg_locale.c:2002 in REL_13_23, :3082 in REL_17_6,
+# pg_locale_libc.c:888 in REL_18_6).
+BACK_CODESETS = ('UTF-8',) + CONVERTER_CODESETS
+# The characters converted back, each on its own: every one a UTF-8
+# database can hold, which covers every one the nine converters give.
+BACK_POINTS = CODEPOINTS
+POINT_DIGESTS = {}     # sha256 of BACK_POINTS, kept per process
+# The most bytes a character is given here. glibc's MB_LEN_MAX
+# (include/limits.h:32, 2.28 and 2.39): wcrtomb writes at most the
+# locale's MB_CUR_MAX on 2.28, 6 at most in its charmaps, and at most
+# MB_LEN_MAX on 2.39 (wcsmbs/wcrtomb.c).
+MB_LEN_MAX = 16
+# In a packed back table, the length that marks a character wcrtomb refused.
+REFUSED_MARK = 0xFF
+
+
+def points_digest():
+    """The sha256 of BACK_POINTS in UTF-8: a measured entry of the back part
+    or of UTF-8's forward part keeps it, so that a copy of this script with
+    another list of characters does not pair a value with another
+    character."""
+    if 'points' not in POINT_DIGESTS:
+        POINT_DIGESTS['points'] = hashlib.sha256(
+            ''.join(map(chr, BACK_POINTS)).encode('utf-8')).hexdigest()
+    return POINT_DIGESTS['points']
+
+
+def varint(out, n):
+    """n >= 0 appended to out, seven bits a byte, the high bit set on all
+    but the last."""
+    while n > 0x7F:
+        out.append(n & 0x7F | 0x80)
+        n >>= 7
+    out.append(n)
+
+
+def back_reference(codeset, c):
+    """What a converter of codeset that needs no record gives for c: its
+    UTF-8 for UTF-8, a refusal (None) for the nine. A packed back table
+    holds only the characters that differ from it."""
+    return chr(c).encode('utf-8') if codeset == 'UTF-8' else None
+
+
+def back_of(job):
+    """(codeset, entry): what glibc gives converting each character of
+    BACK_POINTS back to the bytes of codeset on this machine, job being
+    (codeset, the locale to ask under, or None when the machine lists none
+    of that encoding).
+
+    entry is [state, iconv_open's answer, the locale, detail, the
+    points_digest of what was measured, or None], as converter_of's, with
+    iconv_open asked the other way, (codeset, WCHAR_T). Under the locale,
+    wcrtomb of each character from a cleared state gives its bytes, no
+    bytes without an error, or a refusal (EILSEQ). No bytes is not a
+    refusal: glibc's converters drop the 128 tag characters, U+E0000 to
+    U+E007F (iconv/loop.c:267-274 in 2.28, :196-203 in 2.39), and the nine
+    gave none for them on 2.28-251.el8_10.40, 2.34-283 and 2.39-145
+    (measured). detail is, packed, each character whose answer is not
+    back_reference's, with its answer. A count of bytes past MB_LEN_MAX,
+    which glibc does not give, leaves the encoding not checked, naming
+    the character. On 2.28 wcrtomb stops at the locale's MB_CUR_MAX and
+    gives what it wrote, which glibc's own comment says a character never
+    passes (wcsmbs/wcrtomb.c); the longest answers measured on the three
+    fixtures are of their charmap's mb_cur_max."""
+    codeset, name = job
+    try:
+        lib = converter_libc()
+        opens = iconv_answer(lib, codeset.encode('ascii'), b'WCHAR_T')
+    except Exception as e:
+        return codeset, ['not checked', ['not asked', None], name,
+                         f'asking glibc failed: {e!r}', None]
+    if name is None:
+        return codeset, ['no locale', opens, None, None, None]
+    saved = locale.setlocale(locale.LC_CTYPE)
+    try:
+        locale.setlocale(locale.LC_CTYPE, name)
+        buf = ctypes.create_string_buffer(MB_LEN_MAX)
+        state = ctypes.create_string_buffer(16)
+        out, prev = bytearray(), 0
+        for c in BACK_POINTS:
+            ctypes.memset(state, 0, len(state))
+            r = lib.wcrtomb(buf, c, state)
+            if r == NOT_CONVERTED:
+                got = None
+            elif r <= MB_LEN_MAX:
+                got = buf.raw[:r]
+            else:
+                return codeset, ['not checked', opens, name,
+                                 f'glibc gave {r} bytes for U+{c:04X}, more '
+                                 f'than a character can have', None]
+            if got != back_reference(codeset, c):
+                varint(out, c - prev)
+                prev = c
+                if got is None:
+                    out.append(REFUSED_MARK)
+                else:
+                    out.append(len(got))
+                    out += got
+        return codeset, ['measured', opens, name, pack(bytes(out)),
+                         points_digest()]
+    except Exception as e:
+        return codeset, ['not checked', opens, name,
+                         f'measuring it failed: {e!r}', None]
+    finally:
+        put_back(locale.LC_CTYPE, saved)
+
+
+def utf8_forward_of(name):
+    """What glibc's converter of UTF-8 gives for the UTF-8 of each
+    character of BACK_POINTS, under the locale name (None when the machine
+    lists no UTF-8 locale): an entry as converter_of's, iconv_open asked as
+    (WCHAR_T, UTF-8), and detail, packed, each character mbrtowc does not
+    read as itself, with what it gave (0 for a refusal). The nine are read
+    over every sequence a database holds (converter_of); a UTF8 database
+    holds the UTF-8 of a character of BACK_POINTS and nothing else
+    (pg_utf8_islegal refuses the surrogates, what follows U+10FFFF and any
+    longer form, wchar.c:1478-1530 in REL_13_23, and a text value holds no
+    NUL)."""
+    try:
+        lib = converter_libc()
+        opens = iconv_answer(lib, b'WCHAR_T', b'UTF-8')
+    except Exception as e:
+        return ['not checked', ['not asked', None], name,
+                f'asking glibc failed: {e!r}', None]
+    if name is None:
+        return ['no locale', opens, None, None, None]
+    saved = locale.setlocale(locale.LC_CTYPE)
+    try:
+        locale.setlocale(locale.LC_CTYPE, name)
+        read = WideReader(lib)
+        out, prev = bytearray(), 0
+        for c in BACK_POINTS:
+            v = read(chr(c).encode('utf-8'))
+            if isinstance(v, str):
+                return ['not checked', opens, name, v, None]
+            if v != c:
+                varint(out, c - prev)
+                prev = c
+                varint(out, v)
+        return ['measured', opens, name, pack(bytes(out)), points_digest()]
+    except Exception as e:
+        return ['not checked', opens, name, f'measuring it failed: {e!r}', None]
+    finally:
+        put_back(locale.LC_CTYPE, saved)
+
+
+def round_trip_of(job):
+    """back_of(job[1:]), or utf8_forward_of(job[2]) for job[0] 'forward':
+    one function, so that the pool runs the eleven at once."""
+    if job[0] == 'forward':
+        return 'forward', utf8_forward_of(job[2])
+    return back_of(job[1:])
+
+
+def round_trip_parts(uses, mapper):
+    """(UTF-8's forward part, the back part {codeset: back_of's entry} for
+    each of BACK_CODESETS), each asked under the first locale of its
+    encoding by name, as converter_part. mapper maps round_trip_of over the
+    jobs, as the pool's map does."""
+    first = first_locales(uses)
+    jobs = [('forward', 'UTF-8', first.get('UTF-8'))] + [
+        ('back', cs, first.get(cs)) for cs in BACK_CODESETS]
+    got = dict(mapper(round_trip_of, jobs))
+    forward = got.pop('forward')
+    return forward, got
 
 
 # The names a PostgreSQL process has in /proc/PID/comm: the program's, which
@@ -1642,6 +1859,7 @@ def measure(jobs):
                 return tables
             ctype = ctype_part(identities, measure_tables)
             converter = converter_part(uses, pool.map)
+            forward, back = round_trip_parts(uses, pool.map)
         money = money_digits(names)
     except NotPutBack as e:
         die(f'{e}; nothing was written: run again with a smaller --jobs')
@@ -1668,6 +1886,8 @@ def measure(jobs):
         'postgres_use': uses,
         'ctype': ctype,
         'converter': converter,
+        'utf8_forward': forward,
+        'back': back,
     }
     out['content'] = content_digest(out)
     text = json.dumps(out, sort_keys=True) + '\n'
@@ -1693,7 +1913,7 @@ def progress(done, total, seconds, what='locale(s)'):
 def finished(out, seconds, size):
     """Report a measurement on stderr, once written; the exit status, 1 when
     some locale could not be measured, its order or its LC_CTYPE, or the
-    converter of some encoding."""
+    converter of some encoding, either way."""
     results = out['locales']
     failed = sorted(n for n, r in results.items() if 'error' in r)
     sys.stderr.write(f'Done in {seconds:.0f} s: '
@@ -1715,9 +1935,21 @@ def finished(out, seconds, size):
                          f'measured for {len(unconverted)} encoding(s):\n')
         for cs in unconverted:
             sys.stderr.write(f'  {cs}: {out["converter"][cs][3]}\n')
+    unturned = out['utf8_forward'][0] == 'not checked'
+    if unturned:
+        sys.stderr.write('!! What glibc\'s converter of UTF-8 gives for each '
+                         'character could not be measured:\n')
+        sys.stderr.write(f'  UTF-8: {out["utf8_forward"][3]}\n')
+    unback = [cs for cs in BACK_CODESETS if out['back'][cs][0] == 'not checked']
+    if unback:
+        sys.stderr.write(f'!! What glibc gives converting characters back to '
+                         f'bytes could not be measured for {len(unback)} '
+                         f'encoding(s):\n')
+        for cs in unback:
+            sys.stderr.write(f'  {cs}: {out["back"][cs][3]}\n')
     for line in machine_libc_lines(out['postgres_libc']):
         sys.stderr.write(line + '\n')
-    return 1 if failed or unread or unconverted else 0
+    return 1 if failed or unread or unconverted or unturned or unback else 0
 
 
 def ctype_not_checked(part):
@@ -2264,6 +2496,27 @@ def load(path, digest):
             die(f'{path} measured the converter of {", ".join(other)} over '
                 'other byte sequences than this script uses; measure both '
                 'machines with the same copy of it')
+    if 'utf8_forward' in held and not entry_whole(
+            data['utf8_forward'], 'UTF-8', first_locales(data['postgres_use']),
+            lambda e, cs: (e[4] != points_digest()
+                           or forward_unpacked(e[3]) is not None)):
+        die(f'{path}: what it says of the converter of UTF-8 is malformed; it '
+            'is not a whole measurement')
+    if 'back' in held and not back_part_whole(data['back'], data['postgres_use']):
+        die(f'{path}: what it says of the conversion of characters back to '
+            'bytes is malformed; it is not a whole measurement')
+    if 'utf8_forward' in held or 'back' in held:
+        asked = ([('UTF-8 to wide characters', data['utf8_forward'])]
+                 if 'utf8_forward' in held else [])
+        if 'back' in held:
+            asked += [(f'{cs} back to bytes', data['back'][cs])
+                      for cs in BACK_CODESETS]
+        other = [what for what, e in asked
+                 if e[0] == 'measured' and e[4] != points_digest()]
+        if other:
+            die(f'{path} measured the conversion of {", ".join(other)} over '
+                'other characters than this script uses; measure both '
+                'machines with the same copy of it')
     if 'content' not in data:
         die(f'{path} is not an output of this version of locale_order.py')
     if data['content'] != content_digest(data):
@@ -2446,38 +2699,155 @@ def converter_part_whole(part, use):
     if not (isinstance(part, dict) and set(part) == set(CONVERTER_CODESETS)):
         return False
     first = first_locales(use)
-    for cs, e in part.items():
-        if not (isinstance(e, list) and len(e) == 5 and e[0] in CONVERTER_STATES
-                and isinstance(e[1], list) and len(e[1]) == 2
-                and e[1][0] in ICONV_STATES
-                and ((isinstance(e[1][1], str) and bool(e[1][1]))
-                     if e[1][0] == 'fails' else e[1][1] is None)):
-            return False
-        # converter_of asks under the locale it was handed, and is handed
-        # none only where the machine lists none of the encoding; with none,
-        # it measures nothing, and says not checked only when glibc could
-        # not be asked.
-        if e[2] != first.get(cs):
-            return False
-        if e[0] == 'no locale' and e[2] is not None:
-            return False
-        if e[2] is None and not (e[0] == 'no locale' or e[1][0] == 'not asked'):
-            return False
-        if e[1][0] == 'not asked' and e[0] != 'not checked':
-            return False
-        if e[0] == 'no locale':
-            if e[3] is not None or e[4] is not None:
-                return False
-        elif e[0] == 'not checked':
-            if not (isinstance(e[3], str) and e[3] and e[4] is None):
-                return False
-        # Values measured over other sequences are not read here: load()
-        # refuses them as such, whatever their number.
-        elif not (isinstance(e[4], str) and SHA256.fullmatch(e[4])
-                  and (e[4] != sequence_digest(cs)
-                       or converter_unpacked(e[3], cs) is not None)):
-            return False
-    return True
+    # Values measured over other sequences are not read here: load()
+    # refuses them as such, whatever their number.
+    return all(entry_whole(e, cs, first, lambda e, cs: (
+        e[4] != sequence_digest(cs) or converter_unpacked(e[3], cs) is not None))
+        for cs, e in part.items())
+
+
+def entry_whole(e, cs, first, values):
+    """Is e an entry of the shape converter_of(), back_of() and
+    utf8_forward_of() write for the encoding cs: [state, iconv_open's
+    answer of one of its forms, the first locale of cs by name in
+    postgres_use (first) or None, detail, digest], and, measured, a sha256
+    and values(e, cs) true?"""
+    if not (isinstance(e, list) and len(e) == 5 and e[0] in CONVERTER_STATES
+            and isinstance(e[1], list) and len(e[1]) == 2
+            and e[1][0] in ICONV_STATES
+            and ((isinstance(e[1][1], str) and bool(e[1][1]))
+                 if e[1][0] == 'fails' else e[1][1] is None)):
+        return False
+    # Each asks under the locale it was handed, and is handed none only
+    # where the machine lists none of the encoding; with none, it measures
+    # nothing, and says not checked only when glibc could not be asked.
+    if e[2] != first.get(cs):
+        return False
+    if e[0] == 'no locale' and e[2] is not None:
+        return False
+    if e[2] is None and not (e[0] == 'no locale' or e[1][0] == 'not asked'):
+        return False
+    if e[1][0] == 'not asked' and e[0] != 'not checked':
+        return False
+    if e[0] == 'no locale':
+        return e[3] is None and e[4] is None
+    if e[0] == 'not checked':
+        return isinstance(e[3], str) and bool(e[3]) and e[4] is None
+    return isinstance(e[4], str) and SHA256.fullmatch(e[4]) is not None \
+        and bool(values(e, cs))
+
+
+def back_part_whole(part, use):
+    """Is the back part of the shape round_trip_parts() writes: one entry
+    per encoding of BACK_CODESETS, each of entry_whole's shape, and each
+    measured table one back_unpacked reads?"""
+    if not (isinstance(part, dict) and set(part) == set(BACK_CODESETS)):
+        return False
+    first = first_locales(use)
+    return all(entry_whole(e, cs, first, lambda e, cs: (
+        e[4] != points_digest() or back_unpacked(e[3], cs) is not None))
+        for cs, e in part.items())
+
+
+def unpacked_raw(packed):
+    """The bytes pack() packed, or None."""
+    if not isinstance(packed, str):
+        return None
+    try:
+        return zlib.decompress(base64.b64decode(packed.encode('ascii'),
+                                                validate=True))
+    except (ValueError, zlib.error, UnicodeError):
+        return None
+
+
+def read_varint(raw, i):
+    """(the number varint() wrote at raw[i], the index past it), or None
+    when raw ends inside it."""
+    n = shift = 0
+    while i < len(raw):
+        b = raw[i]
+        n |= (b & 0x7F) << shift
+        i += 1
+        if not b & 0x80:
+            return n, i
+        shift += 7
+    return None
+
+
+def is_back_point(c):
+    """Is c a character of BACK_POINTS: a Unicode scalar value but NUL?"""
+    return 0 < c < 0x110000 and not 0xD800 <= c <= 0xDFFF
+
+
+BACK_TABLES = {}   # back_unpacked's answers, by encoding and packed text
+
+
+def back_unpacked(packed, codeset):
+    """{code point: its bytes, or None for a refusal} of a measured back
+    table: the characters whose answer is not back_reference's, ascending,
+    each a character of BACK_POINTS, of at most MB_LEN_MAX bytes; None when
+    the table does not unpack to that. Kept per process by the very text
+    it read, so that the tests, which load the same table hundreds of
+    times, read it once, and handed out read-only: two machines with the
+    same table get the same answer."""
+    if not isinstance(packed, str):
+        return None
+    key = (codeset, packed)
+    if key not in BACK_TABLES:
+        got = back_read(packed, codeset)
+        BACK_TABLES[key] = None if got is None else types.MappingProxyType(got)
+    return BACK_TABLES[key]
+
+
+def back_read(packed, codeset):
+    """back_unpacked's answer, read each time."""
+    raw = unpacked_raw(packed)
+    if raw is None:
+        return None
+    out, i, prev = {}, 0, 0
+    while i < len(raw):
+        step = read_varint(raw, i)
+        if step is None or step[0] == 0:
+            return None
+        c, i = prev + step[0], step[1]
+        if not is_back_point(c) or i >= len(raw):
+            return None
+        k = raw[i]
+        i += 1
+        if k == REFUSED_MARK:
+            got = None
+        elif k <= MB_LEN_MAX and i + k <= len(raw):
+            got = raw[i:i + k]
+            i += k
+        else:
+            return None
+        if got == back_reference(codeset, c):
+            return None
+        out[c] = got
+        prev = c
+    return out
+
+
+def forward_unpacked(packed):
+    """{code point: what mbrtowc gave for its UTF-8, 0 for a refusal} of
+    UTF-8's measured forward table: the characters not read as themselves,
+    ascending, each of BACK_POINTS, each value below 2**31 (glibc's wchar_t
+    holds 31 bits); None when the table does not unpack to that."""
+    raw = unpacked_raw(packed)
+    if raw is None:
+        return None
+    out, i, prev = {}, 0, 0
+    while i < len(raw):
+        step = read_varint(raw, i)
+        if step is None or step[0] == 0:
+            return None
+        c = prev + step[0]
+        value = read_varint(raw, step[1])
+        if (value is None or not is_back_point(c) or value[0] == c
+                or value[0] >= 0x80000000):
+            return None
+        out[c], i, prev = value[0], value[1], c
+    return out
 
 
 def converter_unpacked(packed, codeset):
