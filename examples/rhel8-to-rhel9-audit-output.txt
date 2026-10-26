@@ -1074,6 +1074,26 @@ This looks at the C library PostgreSQL runs, not at its locale data: a
    the old machine (zh_CN, zh_CN.gb2312, zh_SG, zh_SG.gb2312). Every such byte
    sequence is in
    /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.28..glibc-2.34.tsv.
+!! upper(), lower() and ILIKE give a wrong result on part of the text in 15
+   locale(s): in a database of more than one byte per character, glibc's
+   converter of the locale's encoding does not turn back into the database's
+   bytes the upper case glibc gives some characters, which upper() and
+   initcap() read, or their lower case, which lower(), initcap(), ILIKE,
+   full-text search and pg_trgm read. upper(), lower() and initcap() do not
+   check that conversion: PostgreSQL 13 to 17 return empty text or other
+   bytes, which ILIKE then compares, while full-text search and pg_trgm stop
+   with "ERROR: conversion from wchar_t to server encoding failed"; on
+   PostgreSQL 18 none checks it, and the result is not defined (measured: the
+   server process crashed, "ERROR: pfree called with invalid pointer", or the
+   text came back unchanged or as other bytes). EUC-JP: 3 character(s) on the
+   old machine, 1 of them through lower() (ja_JP, ja_JP.eucjp, ja_JP.ujis,
+   japanese, japanese.euc); EUC-KR: 28 character(s) on the old machine, 1 of
+   them through lower() (ko_KR, ko_KR.euckr, korean, korean.euc); GB2312: 38
+   character(s) on the old machine, 12 of them through lower() (zh_CN,
+   zh_CN.gb2312, zh_SG, zh_SG.gb2312); GEORGIAN-PS: 64 character(s) on the old
+   machine, none through lower() (ka_GE, ka_GE.georgianps). Every such
+   character is in
+   /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.28..glibc-2.34.tsv.
 upper(), lower() and ILIKE: text that is not ASCII converts on both machines
    in 476 locale(s); in the 358 of an encoding of one byte PostgreSQL never
    converts it in a database of that encoding. Left out: 7 locale(s) of an
@@ -1140,11 +1160,10 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
 !! Character rules (LC_CTYPE) in an EUC_JP, EUC_KR, EUC_CN or EUC_TW database:
    the same for ASCII, the only text compared, in 14 locale(s), since the new
    machine's glibc cannot convert their encoding; the line on upper(), lower()
-   and ILIKE above says what that does to the rest of the text. The conversion
-   back to the database's bytes is not compared. EUC-JP: ja_JP, ja_JP.eucjp,
-   ja_JP.ujis, japanese, japanese.euc; EUC-KR: ko_KR, ko_KR.euckr, korean,
-   korean.euc; EUC-TW: zh_TW.euctw; GB2312: zh_CN, zh_CN.gb2312, zh_SG,
-   zh_SG.gb2312.
+   and ILIKE above says what that does to the rest of the text. EUC-JP: ja_JP,
+   ja_JP.eucjp, ja_JP.ujis, japanese, japanese.euc; EUC-KR: ko_KR,
+   ko_KR.euckr, korean, korean.euc; EUC-TW: zh_TW.euctw; GB2312: zh_CN,
+   zh_CN.gb2312, zh_SG, zh_SG.gb2312.
 !! Not measured in a database of another encoding: 10 locale(s) whose encoding
    PostgreSQL does not know, so that CREATE DATABASE lets a database of any
    encoding use one, with only a WARNING ("could not determine encoding for
@@ -1306,6 +1325,27 @@ Every such byte sequence is in
         (zh_TW.euctw); GB2312: 1391 sequence(s) on the old machine (zh_CN,
         zh_CN.gb2312, zh_SG, zh_SG.gb2312). Every such byte sequence is in
         /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.28..glibc-2.34.tsv.
+     !! upper(), lower() and ILIKE give a wrong result on part of the text in
+        15 locale(s): in a database of more than one byte per character,
+        glibc's converter of the locale's encoding does not turn back into the
+        database's bytes the upper case glibc gives some characters, which
+        upper() and initcap() read, or their lower case, which lower(),
+        initcap(), ILIKE, full-text search and pg_trgm read. upper(), lower()
+        and initcap() do not check that conversion: PostgreSQL 13 to 17 return
+        empty text or other bytes, which ILIKE then compares, while full-text
+        search and pg_trgm stop with "ERROR: conversion from wchar_t to server
+        encoding failed"; on PostgreSQL 18 none checks it, and the result is
+        not defined (measured: the server process crashed, "ERROR: pfree
+        called with invalid pointer", or the text came back unchanged or as
+        other bytes). EUC-JP: 3 character(s) on the old machine, 1 of them
+        through lower() (ja_JP, ja_JP.eucjp, ja_JP.ujis, japanese,
+        japanese.euc); EUC-KR: 28 character(s) on the old machine, 1 of them
+        through lower() (ko_KR, ko_KR.euckr, korean, korean.euc); GB2312: 38
+        character(s) on the old machine, 12 of them through lower() (zh_CN,
+        zh_CN.gb2312, zh_SG, zh_SG.gb2312); GEORGIAN-PS: 64 character(s) on
+        the old machine, none through lower() (ka_GE, ka_GE.georgianps). Every
+        such character is in
+        /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.28..glibc-2.34.tsv.
      upper(), lower() and ILIKE: text that is not ASCII converts on both
         machines in 476 locale(s); in the 358 of an encoding of one byte
         PostgreSQL never converts it in a database of that encoding. Left out:
@@ -1377,10 +1417,9 @@ Every such byte sequence is in
         database: the same for ASCII, the only text compared, in 14 locale(s),
         since the new machine's glibc cannot convert their encoding; the line
         on upper(), lower() and ILIKE above says what that does to the rest of
-        the text. The conversion back to the database's bytes is not compared.
-        EUC-JP: ja_JP, ja_JP.eucjp, ja_JP.ujis, japanese, japanese.euc;
-        EUC-KR: ko_KR, ko_KR.euckr, korean, korean.euc; EUC-TW: zh_TW.euctw;
-        GB2312: zh_CN, zh_CN.gb2312, zh_SG, zh_SG.gb2312.
+        the text. EUC-JP: ja_JP, ja_JP.eucjp, ja_JP.ujis, japanese,
+        japanese.euc; EUC-KR: ko_KR, ko_KR.euckr, korean, korean.euc; EUC-TW:
+        zh_TW.euctw; GB2312: zh_CN, zh_CN.gb2312, zh_SG, zh_SG.gb2312.
      !! Not measured in a database of another encoding: 10 locale(s) whose
         encoding PostgreSQL does not know, so that CREATE DATABASE lets a
         database of any encoding use one, with only a WARNING ("could not
