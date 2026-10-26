@@ -32,6 +32,7 @@ import ctypes
 import gzip
 import hashlib
 import io
+import itertools
 import json
 import os
 import random
@@ -713,7 +714,12 @@ def use_kind(text):
                           rf'({GROUPS})\.(?: |$)', rest)
             if not it or it[1] in untold:
                 raise ReportShapeError(f'unknown machines: {rest!r}')
-            untold[it[1]] = by_codeset(it[2])
+            group = by_codeset(it[2])
+            # One machine per locale: a name under two says two things.
+            twice = set(group) & {n for g in untold.values() for n in g}
+            if twice:
+                raise ReportShapeError(f'{sorted(twice)} under two machines: {text!r}')
+            untold[it[1]] = group
             rest = rest[it.end():]
         if sum(map(len, untold.values())) != int(mt[1]):
             raise ReportShapeError(f'says {mt[1]}: {text!r}')
@@ -6912,7 +6918,10 @@ class PostgresUseCompared(Checks):
         when PostgreSQL keeps it so (pg_wchar_table), whatever a probe
         said. A database of ISO-8859-1 never converts, even beside an
         error in BIG5; one of EUC-JP does, and the new machine's error is
-        named though the old machine's file said 'one byte'."""
+        named though the old machine's file said 'one byte'. That file
+        tried no character of more than one byte, so what the old machine
+        does with the rest of the text is not known there (16.18 c), never
+        "converts"."""
         found = self.use(*self.pair(
             measured_use(8, de_DE=use_of('not checked', 'ISO-8859-1', 'checking failed: x')),
             measured_use(9, de_DE=use_of('fails', 'BIG5', (0x3000, 'a140'))),
@@ -6923,7 +6932,9 @@ class PostgresUseCompared(Checks):
         found = self.use(*self.pair(
             measured_use(9, ja_JP=use_of('one byte', 'EUC-JP')), measured_use(9),
             form='locale_order/4'))
-        self.assertEqual(found[0], {'changed': {'ja_JP': 'EUC-JP'}})
+        self.assertIn({'one side': 'new', 'why': m.UNSAID,
+                       'names': {'ja_JP': 'EUC-JP'}}, found)
+        self.assertFalse([d for d in found if 'changed' in d])
 
     def test_a_locale_only_on_the_new_machine(self):
         """Review round 7, finding 1: a locale the old machine does not
@@ -7040,7 +7051,11 @@ class PostgresUseCompared(Checks):
         self.assertEqual([(r['bytes'], r['before'], r['now'], r['measured'])
                           for r in rows[('ja_JP',)]
                           if r['finding'] == 'upper/lower/ILIKE error'],
-                         [('8E A1', 'error', 'not measured', 'on the old machine'),
+                         # The new machine's test of one BIG5 character
+                         # failed, which use_on reads as glibc falling back
+                         # to ASCII: it refuses every byte past ASCII there
+                         # too, as the line on that error says (16.19 d).
+                         [('8E A1', 'error', 'error', 'on both machines'),
                           # The old machine's glibc cannot convert EUC-JP, so it
                           # refuses every byte past ASCII (review of PR 3).
                           ('A1 40', 'error', 'error', 'on both machines')])
@@ -8368,7 +8383,13 @@ class ConverterCompared(PostgresUseCompared):
         # character; the new machine's error is named beside that.
         self.assertIn({'one side': 'new', 'why': m.NO_CONVERTER,
                        'names': {'zh_TW.euctw': 'EUC-TW'}}, found)
-        self.assertEqual(found[0]['changed']['ja_JP'], 'EUC-JP')
+        # It tried one character of the others, which converted: the rest
+        # of their text is not known there (16.18 c), so the new machine's
+        # error is named beside that, never as "the old one converts".
+        self.assertIn({'one side': 'new', 'why': m.UNSAID, 'names': {
+            'ja_JP': 'EUC-JP', 'ja_JP.eucjp': 'EUC-JP', 'ko_KR': 'EUC-KR',
+            'ko_KR.euckr': 'EUC-KR', 'zh_CN': 'GB2312'}}, found)
+        self.assertFalse([d for d in found if 'changed' in d])
 
     def entry(self, cs, name, drop=(), other=(), opens=True):
         """A converter entry of cs measured under name: converter_values,
@@ -8761,8 +8782,11 @@ class ConverterCompared(PostgresUseCompared):
 
     def test_refused_rows_of_a_locale_whose_encoding_changed(self):
         """ja_JP is of EUC-JP on the old machine and of EUC-KR on the new:
+        a database of EUC-JP carried over opens there under ja_JP, and glibc
+        reads its bytes with the converter of EUC-KR, which converts AD A1;
         the new machine's converter of EUC-JP, measured under another
-        locale, says nothing of a database that uses ja_JP there."""
+        locale, is not what reads them. The rows say what the rows of an
+        error say of the same bytes (sequence_state, 16.19 c)."""
         def kr(d):
             d['postgres_use']['ja_JP']['codeset'] = 'EUC-KR'
             d['locales']['ja_JP']['codeset'] = 'EUC-KR'
@@ -8772,8 +8796,8 @@ class ConverterCompared(PostgresUseCompared):
                                                          (b'\xad\xa1',)),
                                 new_edits=[kr])
         self.assertEqual(sorted(got.values()), [
-            (('ja_JP',), 'EUC-JP', [('AD A1', 'error', 'not measured',
-                                     'on the old machine')]),
+            (('ja_JP',), 'EUC-JP', [('AD A1', 'error', 'converts',
+                                     'on both machines')]),
             (('ja_JP.eucjp',), 'EUC-JP', [('AD A1', 'error', 'error',
                                            'on both machines')])])
 
@@ -8853,7 +8877,7 @@ class ConverterText(unittest.TestCase):
         opens = ['measured', ['opens', None], 'ko_KR', converter_values(cs), seq]
         fails = ['measured', ['fails', 'x'], 'ko_KR', converter_values(cs), seq]
         for order in ((opens, fails), (fails, opens)):
-            with unittest.mock.patch.dict(m.CONVERTER_TEXTS, clear=True):
+            with unittest.mock.patch.dict(m.CONVERTERS, clear=True):
                 got = [m.converter_text(e, cs)[0] for e in order]
             self.assertEqual(got, ['converts', 'not checked'] if order[0] is opens
                              else ['not checked', 'converts'])
@@ -9514,6 +9538,16 @@ class ConverterRead(Checks):
             [('ctype', {'euc unknown': {n: {'old machine': why} for n in names}})],
             [('ctype', {'euc ascii': 'new', 'same': True,
                         'names': {n: EUC_OF[n] for n in names}})]])
+        # The old file tried one character of each EUC encoding: where the
+        # pair of this format says the old machine converts, the other
+        # says the rest of the text is not known there (16.18 c).
+        changed = [pairs[1].pop(i) for i, (kind, d) in enumerate(pairs[1])
+                   if kind == 'use' and 'changed' in d]
+        unsaid = [pairs[0].pop(i) for i, (kind, d) in enumerate(pairs[0])
+                  if kind == 'use' and d.get('why') == m.UNSAID]
+        self.assertEqual(changed, [('use', {'changed': {n: EUC_OF[n] for n in names}})])
+        self.assertEqual(unsaid, [('use', {'one side': 'new', 'why': m.UNSAID,
+                                           'names': {n: EUC_OF[n] for n in names}})])
         self.assertEqual(pairs[0], pairs[1])
 
 
@@ -10084,6 +10118,575 @@ class BackRead(Checks):
             pairs.append(self.checks(old, self.made(RHEL9, 'new', with_parts(
                 use=measured_use(9)))))
         self.assertEqual(pairs[0], pairs[1])
+
+
+# --- the one model of a database's text on a machine (16.19) ---------------
+
+
+class TextModelEdges(ConverterCompared):
+    """The edges the model closed (backlog 16.18 a and g, 16.19 b, the row
+    of US-ASCII), each on its own and read in the three outputs; 16.18 c,
+    16.19 c and d are in the tests of the classes above that they changed."""
+
+    # The tests of the classes above run there; here, only these.
+    for name in [n for n in vars(ConverterCompared) if n.startswith('test_')]:
+        locals()[name] = None
+    del name
+
+    def test_not_checked_is_not_known_in_any_database(self):
+        """16.18 a: a locale of an encoding PostgreSQL does not know whose
+        converter was not checked is NOT checked in a database of any
+        encoding, never "in the line on a database of another encoding"
+        alone."""
+        found = self.use(*self.pair(form='locale_order/4'))
+        self.assertIn({'unknown': {'hy_AM.armscii8': m.NO_CONVERTER,
+                                   'zh_TW.euctw': m.NO_CONVERTER}}, found)
+        # th_TH.tis620 converts its character: that one is elsewhere.
+        self.assertEqual(found[-1]['elsewhere'], 1)
+
+    def test_the_other_machine_s_bytes_only_under_one_encoding(self):
+        """16.18 g: ja_JP is of EUC-JP on the old machine, whose glibc
+        cannot convert it, and of EUC-KR on the new one: the old machine's
+        row names a sequence of EUC-JP, never EUC-KR's bytes the new
+        machine converts."""
+        def kr(d):
+            d['postgres_use']['ja_JP']['codeset'] = 'EUC-KR'
+            d['locales']['ja_JP']['codeset'] = 'EUC-KR'
+            refirst(d)
+        report, summary, rows = self.outputs(*self.pair(
+            measured_use(9, **EUC_TW_USE), measured_use(8, **EUC_TW_USE),
+            new_edits=[kr]))
+        self.assertEqual([(r['bytes'], r['before'], r['now'], r['measured'])
+                          for r in rows[('ja_JP',)]
+                          if r['finding'] == 'upper/lower/ILIKE error'],
+                         [('8E A1', 'error', 'not measured', 'on the old machine')])
+
+    def test_a_failure_of_one_character_is_an_error_in_the_rows(self):
+        """16.19 b: the old file tried one character of EUC-JP, which
+        failed: glibc converts nothing past ASCII there, so the row of a
+        sequence the new machine's converter refuses says error on both,
+        as the line does, never "not measured" on the old one."""
+        old = self.made(RHEL8, 'old', with_parts(use=measured_use(9, **EUC_TW_USE),
+                                                 form='locale_order/4'))
+        new = self.made(RHEL9, 'new', with_parts(
+            use=measured_use(8, **EUC_TW_USE),
+            converter=self.entry('EUC-JP', 'ja_JP', (b'\xad\xa1',))))
+        report, summary, rows = self.outputs(old, new)
+        (label, (names, cs)), = rows.use_groups.items()
+        self.assertEqual((names, cs), (('ja_JP', 'ja_JP.eucjp'), 'EUC-JP'))
+        self.assertEqual([(r['bytes'], r['before'], r['now'], r['measured'])
+                          for r in rows[(label,)]],
+                         [('AD A1', 'error', 'error', 'on both machines')])
+
+    def test_bytes_of_another_encoding_are_not_measured(self):
+        """ja_JP is of EUC-JP on the old machine, which converts it, and of
+        BIG5 on the new one, whose test of one character failed: the new
+        machine's row is of A1 40, which no database of EUC-JP holds, so
+        what the old machine's converter of EUC-JP does with it is not
+        measured, never "converts"."""
+        report, summary, rows = self.outputs(*self.pair(
+            measured_use(8, **EUC_TW_USE),
+            measured_use(9, ja_JP=use_of('fails', 'BIG5', (0x3000, 'a140')), **EUC_TW_USE),
+            new_edits=[lambda d: d['locales']['ja_JP'].update(codeset='BIG5')]))
+        self.assertIn({'from': 'EUC-JP', 'moved': 'new', 'names': {'ja_JP': 'EUC-JP'},
+                       'to': 'BIG5'},
+                      [d for kind, d in report['checks'] if kind == 'use'])
+        self.assertEqual([(r['bytes'], r['before'], r['now'], r['measured'])
+                          for r in rows[('ja_JP',)]
+                          if r['finding'] == 'upper/lower/ILIKE error'],
+                         [('A1 40', 'not measured', 'error', 'on the new machine')])
+
+    def test_an_euc_encoding_on_the_new_machine_only(self):
+        """ja_JP is of ISO-8859-1 on the old machine and of EUC-JP on the
+        new: the line on EUC names it as NOT checked, its encoding changed,
+        whichever machine read the EUC encoding."""
+        def iso(d):
+            d['postgres_use']['ja_JP'] = use_of('one byte', 'ISO-8859-1')
+            d['locales']['ja_JP']['codeset'] = 'ISO-8859-1'
+            refirst(d)
+        found = [d for kind, d in self.checks(*self.pair(old_edits=[iso]))
+                 if kind == 'ctype']
+        self.assertIn({'euc unknown': {'ja_JP': {
+            'both machines': 'its encoding changed from ISO-8859-1 on the old '
+                             'machine to EUC-JP on the new one'}}}, found)
+
+    def test_the_other_encoding_line_beside_a_converter_not_checked(self):
+        """The new machine could not measure the converter of TIS-620: the
+        line on a database of another encoding says that machine is not
+        known, beside what the old one measured, never as a converter that
+        does not open."""
+        entry = {'TIS-620': ['not checked', ['opens', None], 'th_TH.tis620',
+                             'measuring it failed: x', None]}
+        self.assertEqual(self.other(*self.pair(measured_use(8, **EUC_TW_USE),
+                                               measured_use(8, **EUC_TW_USE),
+                                               new_converter=entry)), [
+            {'other encoding': {'hy_AM.armscii8': 'ARMSCII-8', 'th_TH.tis620': 'TIS-620'},
+             'upper unknown': {'on the new machine': {'th_TH.tis620': 'TIS-620'}},
+             'lacking': {}, 'whole': {'ARMSCII-8': 'on both machines',
+                                      'TIS-620': 'on the old machine'}}])
+
+    def test_us_ascii_serves_a_database_of_any_encoding(self):
+        """The row of US-ASCII: PostgreSQL reads it as SQL_ASCII and lets a
+        database of any encoding use it (chklocale.c:185), so it is NOT
+        checked, never "an encoding of one byte" that never converts."""
+        def ascii_(d):
+            d['locales']['de_DE']['codeset'] = 'US-ASCII'
+            d['postgres_use']['de_DE'] = use_of('one byte', 'US-ASCII')
+        found = self.use(*self.pair(old_edits=[ascii_], new_edits=[ascii_]))
+        self.assertIn({'unknown': {'de_DE': m.ASCII_ANY[:1].upper() + m.ASCII_ANY[1:]}},
+                      found)
+        self.assertEqual(found[-1]['one byte'], 2)
+
+    def test_a_name_under_two_machines_is_refused(self):
+        """16.19 f: the line on what is not known of part of the text names
+        each locale under one machine; the reader refuses one under two."""
+        head = (f'!! {m.FN}: whether they give an ERROR on part of the text is '
+                'NOT known in 2 locale(s): a file written by an earlier version '
+                'of locale_order.py tried one character of their encoding, and '
+                "glibc's converter can refuse others. ")
+        self.assertEqual(use_kind(head + 'On the new machine: EUC-JP: ja_JP. On the '
+                                  'old machine: EUC-JP: ja_JP.eucjp.'),
+                         ('use', {'untold': {
+                             'the new machine': {'ja_JP': 'EUC-JP'},
+                             'the old machine': {'ja_JP.eucjp': 'EUC-JP'}}}))
+        with self.assertRaises(ReportShapeError):
+            use_kind(head + 'On the new machine: EUC-JP: ja_JP. On the old '
+                            'machine: EUC-JP: ja_JP.')
+
+
+class TextModelBack(ConverterCompared):
+    """The back leg the model answers (wcstombs of what upper(), lower() and
+    initcap() give, under the locale's converter), which no line prints
+    yet: per database a locale can serve, how many characters each machine
+    reaches and refuses, what each machine's file cannot say, and how many
+    characters both reach and convert otherwise."""
+
+    for name in [n for n in vars(ConverterCompared) if n.startswith('test_')]:
+        locals()[name] = None
+    del name
+
+    def backs(self, old, new):
+        """{name: {kind: back_state}} of the model of the pair of files."""
+        digest = m.corpus_digest()
+        o, n = m.load(old, digest)[0], m.load(new, digest)[0]
+        both = sorted(set(o['locales']) & set(n['locales']))
+        model = m.TextModel(o, n, both, sorted(set(n['locales']) - set(o['locales'])))
+        return {r['name']: r['back'] for r in model.use_records() if 'back' in r}
+
+    def back_edit(self, codeset, answers):
+        """An edit that gives the back part's entry of codeset the table of
+        answers."""
+        def edit(d):
+            d['back'][codeset][3] = back_table(answers)
+        return edit
+
+    def test_measured_alike(self):
+        """Both machines measured, nothing refused: no error, nothing not
+        known, nothing converted otherwise; a database of one byte never
+        converts back."""
+        got = self.backs(*self.pair())
+        nothing = {'error': {}, 'unknown': {}, 'changes': 0}
+        self.assertEqual(got['de_DE.utf8'], {('enc', 'UTF-8'): nothing})
+        self.assertEqual(got['ja_JP'], {('enc', 'EUC-JP'): nothing})
+        self.assertEqual(got['de_DE'], {('enc', 'ISO-8859-1'): None})
+        # A locale of an encoding PostgreSQL does not know, of one byte, in
+        # a database of any encoding: glibc's converter reads that
+        # database's bytes one by one, as it measured them.
+        self.assertEqual(got['th_TH.tis620'], {('any',): nothing})
+
+    def test_what_upper_gives_is_reached(self):
+        """The character upper() gives for one EUC-JP reads, which the
+        converter itself never gives, is refused back: an error there."""
+        raw = json.dumps(
+            {'upper': [[0x61, 0x41], [0x3000, 0x1E9E]], 'lower': [[0x41, 0x61]],
+             'classes': {k: [[0x41, 0x41]] for k in m.CTYPE_CLASSES}},
+            sort_keys=True, separators=(',', ':')).encode('ascii')
+        key = hashlib.sha256(raw).hexdigest()
+
+        def wide(d):
+            for t in d['ctype']['tables'].values():
+                t[0] = key
+            d['ctype']['wide'] = {key: m.pack(raw)}
+        got = self.backs(*self.pair(old_edits=[wide]))
+        self.assertEqual(got['ja_JP'][('enc', 'EUC-JP')]['error'], {'old': 1})
+
+    def test_a_database_whose_encoding_changed(self):
+        """ja_JP.eucjp is of EUC-KR on the old machine and of EUC-JP on the
+        new; ja_JP, of EUC-JP on both and of the same rules, is read first.
+        A database of EUC-KR made on the old machine opens on the new one,
+        whose converter of EUC-JP reads its bytes: not known there, never
+        "nothing refused". One of EUC-JP made on the new machine does not
+        exist on the old one, so the two are not compared (review round 1,
+        A1 to A3)."""
+        def kr(d):
+            d['postgres_use']['ja_JP.eucjp']['codeset'] = 'EUC-KR'
+            d['locales']['ja_JP.eucjp']['codeset'] = 'EUC-KR'
+            refirst(d)
+        got = self.backs(*self.pair(measured_use(8, **EUC_TW_USE),
+                                    measured_use(8, **EUC_TW_USE), old_edits=[kr]))
+        self.assertEqual(got['ja_JP'][('enc', 'EUC-JP')],
+                         {'error': {}, 'unknown': {}, 'changes': 0})
+        self.assertEqual(got['ja_JP.eucjp'], {
+            ('enc', 'EUC-KR'): {'error': {}, 'changes': None, 'unknown': {
+                'new': 'a database of another encoding read by the converter '
+                       'of EUC-JP is not measured'}},
+            ('enc', 'EUC-JP'): {'error': {}, 'unknown': {}, 'changes': None}})
+
+    def test_a_database_of_another_encoding_under_utf8(self):
+        """ko_KR is of EUC-KR on the old machine and of UTF-8 on the new:
+        the database of EUC-KR carried over is read there by the converter
+        of UTF-8, which nothing measured on such bytes."""
+        def utf8(d):
+            d['postgres_use']['ko_KR'] = use_of('converts', 'UTF-8', (0x80, 'c280'))
+            d['locales']['ko_KR']['codeset'] = 'UTF-8'
+            refirst(d)
+        got = self.backs(*self.pair(measured_use(8, **EUC_TW_USE),
+                                    measured_use(8, **EUC_TW_USE), new_edits=[utf8]))
+        self.assertEqual(got['ko_KR'][('enc', 'EUC-KR')]['unknown'], {
+            'new': 'a database of another encoding than UTF8 read by the '
+                   'converter of UTF-8 is not measured'})
+
+    def test_utf8_s_converter_not_checked(self):
+        """UTF-8's forward part not checked on the new machine: not known
+        there, with why."""
+        def forward(d):
+            e = d['utf8_forward']
+            d['utf8_forward'] = ['not checked', e[1], e[2], 'measuring it failed: x', None]
+        got = self.backs(*self.pair(new_edits=[forward]))
+        self.assertEqual(got['de_DE.utf8'][('enc', 'UTF-8')]['unknown'], {
+            'new': "glibc's converter of UTF-8 could not be measured: measuring "
+                   'it failed: x'})
+
+    def test_a_file_that_says_nothing_of_postgresql_s_use(self):
+        """A file of the second format: what the old machine does is not
+        known, for why its file says nothing at all."""
+        old = self.made(RHEL8, 'old', with_parts(form='locale_order/2'))
+        new = self.made(RHEL9, 'new', with_parts(use=measured_use(9, **EUC_TW_USE)))
+        got = self.backs(old, new)
+        self.assertEqual(got['de_DE.utf8'][('enc', 'UTF-8')]['unknown'], {
+            'old': 'the OLD file was written by an earlier version of locale_order.py'})
+
+    def test_a_character_refused_back_is_an_error_of_its_machine(self):
+        """UTF-8 on the new machine refuses A back: every UTF-8 locale gives
+        an error there, of one character, reached by upper() of a; EUC-JP on
+        the old machine gives back ASCII but A: what its converter reads past
+        ASCII, and A, are refused."""
+        got = self.backs(*self.pair(new_edits=[self.back_edit('UTF-8', {0x41: None})]))
+        self.assertEqual(got['de_DE.utf8'][('enc', 'UTF-8')]['error'], {'new': 1})
+        values = m.unpack_order(zlib.decompress(base64.b64decode(converter_values('EUC-JP'))))
+        reached = {v for v in values if v} | {0x41, 0x61}
+        ascii_back = {c: bytes([c]) for c in range(1, 0x80) if c != 0x41}
+        got = self.backs(*self.pair(old_edits=[self.back_edit('EUC-JP', ascii_back)]))
+        self.assertEqual(got['ja_JP'][('enc', 'EUC-JP')]['error'],
+                         {'old': len(reached - set(ascii_back))})
+
+    def test_no_bytes_is_not_a_refusal(self):
+        """A tag character glibc gives no bytes for converts back without an
+        error."""
+        got = self.backs(*self.pair(new_edits=[self.back_edit('UTF-8', {0xE0041: b''})]))
+        self.assertEqual(got['de_DE.utf8'][('enc', 'UTF-8')]['error'], {})
+
+    def test_what_utf8_does_not_read_is_not_reached(self):
+        """UTF-8's converter on the new machine: a character it refuses
+        never reaches the conversion back there, nor one it reads as
+        another; A, which it refuses, still does, as upper() of a; a
+        character it gives for another is reached."""
+        def forward(answers):
+            def edit(d):
+                d['utf8_forward'][3] = forward_table(answers)
+            return edit
+        cases = (
+            ('refused, no case', {0x100: 0}, {0x100: None}, {}),
+            ('read as another', {0x100: 0x101}, {0x100: None}, {}),
+            ('given for another', {0x100: 0x101}, {0x101: None}, {'new': 1}),
+            ('refused, reached by upper()', {0x41: 0}, {0x41: None}, {'new': 1}))
+        for case, read, back, want in cases:
+            with self.subTest(case=case):
+                got = self.backs(*self.pair(new_edits=[forward(read),
+                                                       self.back_edit('UTF-8', back)]))
+                self.assertEqual(got['de_DE.utf8'][('enc', 'UTF-8')]['error'], want)
+
+    def test_reached_on_one_machine_only(self):
+        """A character the old machine's UTF-8 converter refuses, given
+        other bytes back on the new one, is not counted: the old machine
+        never reaches it."""
+        def forward(d):
+            d['utf8_forward'][3] = forward_table({0x100: 0})
+        got = self.backs(*self.pair(old_edits=[forward],
+                                    new_edits=[self.back_edit('UTF-8', {0x100: b'\xc4'})]))
+        self.assertEqual(got['de_DE.utf8'][('enc', 'UTF-8')]['changes'], 0)
+        got = self.backs(*self.pair(new_edits=[self.back_edit('UTF-8', {0x100: b'\xc4'})]))
+        self.assertEqual(got['de_DE.utf8'][('enc', 'UTF-8')]['changes'], 1)
+
+    def test_converted_otherwise(self):
+        """A character both machines reach, given other bytes on the new
+        one, is counted; one only the old machine reaches is not."""
+        got = self.backs(*self.pair(new_edits=[self.back_edit('UTF-8', {0x41: b'\x41\x41'})]))
+        self.assertEqual(got['de_DE.utf8'][('enc', 'UTF-8')],
+                         {'error': {}, 'unknown': {}, 'changes': 1})
+        # The new machine's EUC-JP converter does not open: it reads ASCII
+        # alone, and the old machine's other bytes for a character past
+        # ASCII are not reached there.
+        values = m.unpack_order(zlib.decompress(base64.b64decode(converter_values('EUC-JP'))))
+        past = next(v for v in values if v > 0x7F)
+        table = m.back_unpacked(back_values('EUC-JP'), 'EUC-JP')
+        moved = dict(table)
+        moved[past] = b'\xa1\xa1'
+        got = self.backs(*self.pair(measured_use(8, **EUC_TW_USE),
+                                    measured_use(9, **EUC_TW_USE),
+                                    old_edits=[self.back_edit('EUC-JP', moved)]))
+        self.assertEqual(got['ja_JP'][('enc', 'EUC-JP')]['changes'], 0)
+
+    def test_a_file_without_the_part_is_not_known(self):
+        """A file of the format before says nothing of the way back: not
+        known there, with why, and never "the same"."""
+        old = self.made(RHEL8, 'old', with_parts(use=measured_use(8, **EUC_TW_USE),
+                                                 form='locale_order/5'))
+        new = self.made(RHEL9, 'new', with_parts(use=measured_use(9, **EUC_TW_USE)))
+        got = self.backs(old, new)
+        why = ('the OLD file was written by an earlier version of '
+               'locale_order.py, which did not measure the conversion back to bytes')
+        for name, kind in (('de_DE.utf8', ('enc', 'UTF-8')), ('ja_JP', ('enc', 'EUC-JP'))):
+            with self.subTest(name=name):
+                self.assertEqual(got[name][kind], {'error': {}, 'unknown': {'old': why},
+                                                   'changes': None})
+
+
+# --- the model against the table, every combination -------------------------
+
+# One locale's name, and each encoding of a row of the approved table, as
+# the test spells them (backlog 16.19, handoff paso4b-pr4/pr2/plan-aprobado.md):
+# UTF-8; an EUC encoding; one PostgreSQL does not know, of one byte (one of
+# the nine converters); one of one byte it knows; one it allows only on the
+# client; US-ASCII; and none read.
+ORACLE_NAME = 'xx_XX'
+ORACLE_ENCODINGS = ('UTF-8', 'EUC-JP', 'TIS-620', 'ISO-8859-1', 'BIG5', 'US-ASCII', None)
+# What a file of the format before the converter part can say of each, as
+# postgres_use's test of one character; a character each, as it writes one.
+ORACLE_EVIDENCE = {'UTF-8': ('converts', 'fails', 'not checked'),
+                   'EUC-JP': ('converts', 'fails', 'not checked'),
+                   'TIS-620': ('one byte', 'not checked'),
+                   'ISO-8859-1': ('one byte', 'not checked'),
+                   'BIG5': ('converts', 'fails', 'not checked'),
+                   'US-ASCII': ('one byte',), None: ('not checked',)}
+ORACLE_CHAR = {'UTF-8': (0x80, 'c280'), 'EUC-JP': (0xFF61, '8ea1'),
+               'BIG5': (0x3000, 'a140')}
+# And what the converter part says of one of the nine.
+ORACLE_CONVERTER = ('converts', 'fails', 'not checked', 'refuses')
+# An old machine that does not have the locale.
+ORACLE_ABSENT = ('absent', None, None, None)
+# The sequence a converter that refuses one refuses.
+ORACLE_REFUSED = {'EUC-JP': b'\xad\xa1', 'TIS-620': b'\xdb'}
+
+
+def oracle_specs():
+    """Each machine the oracle compares: (format, category, encoding, what
+    was measured), the category 'refused' (glibc refused LC_COLLATE),
+    'unknown' (Python could not pass the name) or 'accepted'."""
+    out = [('locale_order/2', 'accepted', enc, None) for enc in ORACLE_ENCODINGS]
+    for form in ('locale_order/3', m.FORMAT):
+        out += [(form, 'refused', 'UTF-8', 'converts'),
+                (form, 'unknown', None, 'not checked')]
+        for enc in ORACLE_ENCODINGS:
+            nine = enc in m.CONVERTER_CODESETS and 'converter' in m.PARTS[form]
+            for ev in ORACLE_CONVERTER if nine else ORACLE_EVIDENCE[enc]:
+                out.append((form, 'accepted', enc, ev))
+    return out
+
+
+def oracle_machine(spec):
+    """A machine's measurement of ORACLE_NAME as TextModel reads it, built
+    from spec, with the parts its format holds."""
+    form, cat, enc, ev = spec
+    held = m.PARTS[form]
+    d = {'held': held, 'locales': {ORACLE_NAME: (
+        {'codeset': enc} if enc and cat == 'accepted' else {})}}
+    if 'postgres_use' not in held:
+        return d
+    converter = enc in m.CONVERTER_CODESETS and 'converter' in held
+    if cat == 'unknown':
+        r = use_of('not checked', None, m.NO_CTYPE, collate='unknown', ctype='unknown')
+    elif converter:
+        # Its text is the converter part's, set below.
+        r = use_of('one byte', enc)
+    elif enc is None:
+        r = use_of('not checked', None, m.NO_CODESET)
+    elif ev == 'not checked':
+        r = use_of('not checked', enc, 'checking failed: x')
+    elif ev == 'one byte':
+        r = use_of('one byte', enc)
+    else:
+        r = use_of(ev, enc, ORACLE_CHAR.get(enc))
+    if cat == 'refused':
+        r['collate'] = ['refused', 'unsupported locale setting']
+    d['postgres_use'] = {ORACLE_NAME: r}
+    if 'ctype' in held:
+        d['ctype'] = ctype_of(d['postgres_use'])
+    if 'converter' in held:
+        part = {cs: ['no locale', ['opens', None], None, None, None]
+                for cs in m.CONVERTER_CODESETS}
+        if converter and cat != 'unknown':
+            r['text'] = ['converter', None]
+            if ev == 'not checked':
+                part[enc] = ['not checked', ['opens', None], ORACLE_NAME,
+                             'measuring it failed: x', None]
+            elif ev == 'fails':
+                part[enc] = ['measured', ['fails', 'x'], ORACLE_NAME,
+                             ascii_only(enc), sequences_of(enc)]
+            else:
+                values = m.unpack_order(zlib.decompress(base64.b64decode(
+                    converter_values(enc))))
+                if ev == 'refuses':
+                    values[m.accepted_sequences(enc).index(ORACLE_REFUSED[enc])] = 0
+                part[enc] = ['measured', ['opens', None], ORACLE_NAME,
+                             m.pack_order(values), sequences_of(enc)]
+        d['converter'] = part
+        d['utf8_forward'], d['back'] = round_trip_of_use(d['postgres_use'], part)
+    return d
+
+
+def oracle_answer(old, new):
+    """What the approved table says of ORACLE_NAME on the pair of machines
+    old and new (specs): (line, the machines whose error the line names,
+    the machines whose converter refuses part of the text, the machines
+    whose file tried one character of one of the nine). Written from the
+    table, not from the code: which databases a locale serves; what each
+    machine does with each, leg by leg; the locale's line is that of its
+    worst database, an error, then what is not known, then a database of
+    any encoding, then what works. An old machine ORACLE_ABSENT does not
+    have the locale: only the databases made on the new one exist, and the
+    locale is named only where they give an error, are not known, or are of
+    any encoding, and not at all where the new machine refuses it or its
+    file says nothing of how PostgreSQL uses it."""
+    if old == ORACLE_ABSENT and (
+            'postgres_use' not in m.PARTS[new[0]] or new[1] == 'refused'):
+        return None, set(), set(), set()
+
+    def view(spec):
+        if spec == ORACLE_ABSENT:
+            return 'absent', None, None
+        form, cat, enc, ev = spec
+        if 'postgres_use' not in m.PARTS[form]:
+            return 'unread', enc if cat == 'accepted' else None, None
+        if cat == 'refused':
+            return 'refused', None, None
+        if cat == 'unknown':
+            return 'unread', None, None
+        if enc is None:
+            return 'accepted', None, 'not checked'
+        return 'accepted', enc, ev
+
+    def databases(spec):
+        state, enc, _ = view(spec)
+        if state in ('refused', 'absent'):
+            return []
+        if enc is None:
+            return ['unread']
+        return {'US-ASCII': ['ascii'], 'TIS-620': ['any'], 'BIG5': []}.get(enc, [enc])
+
+    def forward(spec, db):
+        state, enc, ev = view(spec)
+        if state == 'refused':
+            return 'closed'
+        if db == 'ISO-8859-1':
+            return 'one byte'
+        if state == 'unread' or db == 'ascii':
+            return 'unknown'
+        if db == enc:
+            return {'converts': 'works', 'refuses': 'works', 'one byte': 'works',
+                    'fails': 'error', 'not checked': 'unknown'}[ev]
+        if ev == 'fails':
+            return 'error'
+        if ev == 'not checked':
+            return 'unknown'
+        return 'elsewhere' if db == 'any' else 'unknown'
+
+    so, sn = view(old), view(new)
+    if so[0] == sn[0] == 'refused':
+        return None, set(), set(), set()
+    refused = 'refused' in (so[0], sn[0])
+    partial = {side for side, spec, v in (('old', old, so), ('new', new, sn))
+               if v[0] == 'accepted' and v[1] == 'EUC-JP' and v[2] == 'refuses'}
+    unsaid = {side for side, spec, v in (('old', old, so), ('new', new, sn))
+              if v[0] == 'accepted' and v[1] in m.CONVERTER_CODESETS
+              and 'converter' not in m.PARTS[spec[0]] and v[2] != 'fails'}
+    absent = old == ORACLE_ABSENT
+    carried = databases(old)
+    dbs = carried + [db for db in databases(new) if db not in carried]
+    if not dbs:
+        return (None if refused or absent else 'left out'), set(), partial, unsaid
+    found = [(forward(old, db) if db in carried else 'none', forward(new, db))
+             for db in dbs]
+    rank = {'error': 0, 'unknown': 1, 'elsewhere': 2}
+    b, a = min(found, key=lambda f: min(rank.get(s, 3) for s in f))
+    if 'error' in (b, a):
+        return 'error', {s for s, x in (('old', b), ('new', a)) if x == 'error'}, \
+            partial, unsaid
+    if 'unknown' in (b, a) and a != 'closed':
+        return 'unknown', set(), partial, unsaid
+    if refused:
+        return None, set(), partial, unsaid
+    if 'elsewhere' in (b, a):
+        return 'elsewhere', set(), partial, unsaid
+    if absent:
+        return None, set(), partial, unsaid
+    if b in ('one byte', 'none') and a == 'one byte':
+        return 'one byte', set(), partial, unsaid
+    return 'converts', set(), partial, unsaid
+
+
+class TextModelAgainstTheTable(unittest.TestCase):
+    """The model against the approved table, every pair of machines of
+    oracle_specs(): each format, each category, each row of the table and
+    each thing a machine can say of it, on both sides. A rule of the model
+    that disagrees with the table, in any one combination, is named."""
+
+    def test_every_combination(self):
+        specs = oracle_specs()
+        machines = {spec: oracle_machine(spec) for spec in specs}
+        machines[ORACLE_ABSENT] = {'held': (), 'locales': {}}
+        wrong, count = [], 0
+        for old, new in itertools.product(specs + [ORACLE_ABSENT], specs):
+            if old == ORACLE_ABSENT:
+                model = m.TextModel(machines[old], machines[new], [], [ORACLE_NAME])
+            else:
+                model = m.TextModel(machines[old], machines[new], [ORACLE_NAME])
+            recs = model.use_records()
+            # A locale only on the new machine that it refuses, or of a file
+            # that says nothing of PostgreSQL's use, has no record at all.
+            rec = recs[0] if recs else {'line': None}
+            line = rec['line']
+            sides = ({s for s, x in (('old', rec['b']), ('new', rec['a'])) if x == 'error'}
+                     if line == 'error' else set())
+            got = (line, sides, set(rec.get('partial', {})), rec.get('unsaid', set()))
+            want = oracle_answer(old, new)
+            count += 1
+            if got != want:
+                wrong.append((old, new, got, want))
+        self.assertEqual(count, (len(specs) + 1) * len(specs))
+        self.assertEqual(wrong, [], f'{len(wrong)} of {count} combinations differ, '
+                                    f'the first: {wrong[:1]}')
+
+    def test_each_line_and_side_is_reached(self):
+        """The combinations reach every line the model writes, an error on
+        each machine and on both, and a refusal of part of the text and a
+        file of one character on each side: an oracle whose cases never
+        reach one compares nothing there."""
+        answers = [oracle_answer(o, n) for o, n in itertools.product(oracle_specs(), repeat=2)]
+        self.assertEqual({a[0] for a in answers},
+                         {None, 'left out', 'error', 'unknown', 'elsewhere',
+                          'one byte', 'converts'})
+        # And a locale only on the new machine: an error there, not known,
+        # of any encoding, or named nowhere else.
+        absent = [oracle_answer(ORACLE_ABSENT, n) for n in oracle_specs()]
+        self.assertEqual({(a[0], frozenset(a[1])) for a in absent},
+                         {(None, frozenset()), ('error', frozenset({'new'})),
+                          ('unknown', frozenset()), ('elsewhere', frozenset())})
+        self.assertEqual({frozenset(a[1]) for a in answers if a[0] == 'error'},
+                         {frozenset({'old'}), frozenset({'new'}),
+                          frozenset({'old', 'new'})})
+        self.assertEqual(set().union(*(a[2] for a in answers)), {'old', 'new'})
+        self.assertEqual(set().union(*(a[3] for a in answers)), {'old', 'new'})
 
 
 if __name__ == '__main__':
