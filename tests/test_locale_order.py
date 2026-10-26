@@ -410,9 +410,12 @@ def ctype_kind(text):
     mt = re.fullmatch(r'!! ' + CTYPE + r' CHANGE for (\d+) byte\(s\) in (.+?)\. A '
                       r'database of one byte per character, SQL_ASCII too, reads '
                       r'them in upper\(\), lower\(\), initcap\(\), ILIKE, regular '
-                      r'expressions and full-text search, and a database of any '
-                      r'other encoding but UTF8 in regular expressions: (.+)\.',
-                      text)
+                      r'expressions and full-text search\. A database of any other '
+                      r'encoding, UTF8 too, reads every byte in fuzzystrmatch and, '
+                      r'on PostgreSQL 13 to 17, in ltree\'s labels, and reads the '
+                      r'ASCII bytes in the character tests of full-text search, '
+                      r'ltree and pg_trgm and, except in UTF8, in regular '
+                      r'expressions: (.+)\.', text)
     if mt:
         found = {}
         for item in mt[3].split('; '):
@@ -427,6 +430,44 @@ def ctype_kind(text):
             raise ReportShapeError(f'bytes said of UTF8 alone: {text!r}')
         return 'ctype', dict(group, change='byte', count=int(mt[1]),
                              bytes=found)
+    mt = re.fullmatch(rf'!! {CTYPE} in a UTF8 database: on the (old|new) machine '
+                      r'glibc reads (\d+) byte sequence\(s\) as another character '
+                      r'than the one they encode, in (\d+) locale\(s\) of UTF-8, so '
+                      r'upper\(\), lower\(\), initcap\(\), ILIKE and full-text '
+                      r'search can give other results for text that holds one; (the (?:OLD|NEW) file did not measure this|the '
+                      r'(?:old|new) machine could not measure this \(.+\)), so '
+                      r'whether it changed is not known: (.+)\.', text)
+    if mt:
+        found = {}
+        for item in mt[5].split('; '):
+            it = re.fullmatch(rf'{SPACED_BYTES}: (?:\S \()?{CODE}(?: [A-Z0-9][A-Z0-9 -]*)?'
+                              rf'\)? -> (?:\S \()?{CODE}(?: [A-Z0-9][A-Z0-9 -]*)?\)?',
+                              item)
+            if not it or it[1] in found or it[2] == it[3]:
+                raise ReportShapeError(f'unknown sequence: {item!r}')
+            found[it[1]] = (int(it[2], 16), int(it[3], 16))
+        if len(found) != int(mt[2]):
+            raise ReportShapeError(f'says {mt[2]} and lists {len(found)}: {text!r}')
+        return 'ctype', {'utf8 read': found, 'side': mt[1], 'count': int(mt[3]),
+                         'why': mt[4]}
+    mt = re.fullmatch(rf'!! {CTYPE} in a UTF8 database: CHANGE for (\d+) byte '
+                      r'sequence\(s\) in (\d+) locale\(s\) of UTF-8: glibc converts '
+                      r'each to another character on the new machine than on the '
+                      r'old one, so upper\(\), lower\(\), initcap\(\), ILIKE and '
+                      r'full-text search can give other results for text that '
+                      r'holds one: (.+)\.', text)
+    if mt:
+        found = {}
+        for item in mt[3].split('; '):
+            it = re.fullmatch(rf'{SPACED_BYTES}: (?:\S \()?{CODE}(?: [A-Z0-9][A-Z0-9 -]*)?'
+                              rf'\)? -> (?:\S \()?{CODE}(?: [A-Z0-9][A-Z0-9 -]*)?\)?',
+                              item)
+            if not it or it[1] in found or it[2] == it[3]:
+                raise ReportShapeError(f'unknown sequence: {item!r}')
+            found[it[1]] = (int(it[2], 16), int(it[3], 16))
+        if len(found) != int(mt[1]):
+            raise ReportShapeError(f'says {mt[1]} and lists {len(found)}: {text!r}')
+        return 'ctype', {'utf8 converted': found, 'count': int(mt[2])}
     mt = re.fullmatch(rf'!! {EUC}: CHANGE for (\d+) byte sequence\(s\) in (\d+) '
                       rf'locale\(s\) \(({GROUPS})\): glibc converts each to another '
                       r'character on the new machine than on the old one, so '
@@ -466,8 +507,7 @@ def ctype_kind(text):
                       r'compared on both machines: each byte sequence such a '
                       r'database accepts that glibc converts on both machines it '
                       r'converts to the same character on both, and none of those '
-                      r'characters\' rules change; the conversion back to the '
-                      rf'database\'s bytes is not compared\. ({GROUPS})\.', text)
+                      rf'characters\' rules change\. ({GROUPS})\.', text)
     if mt:
         return 'ctype', {'euc same': by_codeset(mt[3], mt[2]), 'other': bool(mt[1])}
     mt = re.fullmatch(rf'(!! )?{EUC}: (the same for ASCII, the only text compared,|'
@@ -475,16 +515,15 @@ def ctype_kind(text):
                       r'(neither machine\'s glibc can|the old machine\'s glibc '
                       r'could not|the new machine\'s glibc cannot) convert their '
                       r'encoding; the line on upper\(\), lower\(\) and ILIKE above '
-                      r'says what that does to the rest of the text\.'
-                      r'( The conversion back to the database\'s bytes is not '
-                      rf'compared\.)? ({GROUPS})\.', text)
+                      rf'says what that does to the rest of the text\. ({GROUPS})\.',
+                      text)
     if mt:
-        if not bool(mt[5]) == bool(mt[1]) == mt[2].startswith('the same'):
+        if not bool(mt[1]) == mt[2].startswith('the same'):
             raise ReportShapeError(f'what was not compared, unsaid: {text!r}')
         return 'ctype', {'euc ascii': {'neither': 'both'}.get(mt[4].split()[0],
                                                               mt[4].split()[1]),
                          'same': mt[2].startswith('the same'),
-                         'names': by_codeset(mt[6], mt[3])}
+                         'names': by_codeset(mt[5], mt[3])}
     mt = re.fullmatch(rf'!! {EUC}: NOT checked in (\d+) locale\(s\)\. (.+)', text)
     if mt:
         unknown, rest = {}, mt[2]
@@ -544,7 +583,7 @@ def ctype_listed(take_line, peek, indent, more, item, item_more):
     but the last, '.', and a tail at more) as the one text ctype_kind reads;
     None when the next line is not such a finding."""
     if not re.fullmatch(' ' * indent + r'!! Character rules \(LC_CTYPE\) (?:CHANGE '
-                        r'for|in an EUC_JP).*', peek()):
+                        r'for|in an EUC_JP|in a UTF8 database).*', peek()):
         return None
 
     def run(at):
@@ -702,6 +741,76 @@ def use_kind(text):
         if len(partly) != int(mt[1]):
             raise ReportShapeError(f'says {mt[1]} and names {len(partly)}')
         return 'use', {'partly': partly}
+    where = lambda what: (rf'(?:Every such {what} is (?:in \S.*|a row of this '
+                          rf'file)|Pass --characters-to FILE for every such {what})\.')
+    mt = re.fullmatch(rf'!! {FN} give a wrong result on part of the text in (\d+) '
+                      r'locale\(s\): in a database of more than one byte per '
+                      r'character, glibc\'s converter of the locale\'s encoding '
+                      r'does not turn back into the database\'s bytes the upper '
+                      r'case glibc gives some characters, which upper\(\) and '
+                      r'initcap\(\) read, or their lower case, which lower\(\), '
+                      r'initcap\(\), ILIKE, full-text search and pg_trgm read\. '
+                      r'upper\(\), lower\(\) and '
+                      r'initcap\(\) do not check that conversion: PostgreSQL 13 '
+                      r'to 17 return empty text or other bytes, which ILIKE then '
+                      r'compares, while full-text search and pg_trgm stop with '
+                      r'"ERROR: conversion from wchar_t to server encoding '
+                      r'failed"; on PostgreSQL 18 none checks it, and the result '
+                      r'is not defined \(measured: the server process crashed, '
+                      r'"ERROR: pfree called with invalid pointer", or the text '
+                      r'came back unchanged or as other bytes\)\. (.+?)\. '
+                      + where('character'), text)
+    if mt:
+        back = {}
+        for item in mt[2].split('; '):
+            it = re.fullmatch(r'(.+?), (none through lower\(\)|(\d+) of them through '
+                              r'lower\(\)|through lower\(\): (\d+) on the old machine '
+                              r'and (\d+) on the new machine) \((\S+(?:, \S+)*)\)', item)
+            if not it:
+                raise ReportShapeError(f'unknown back error: {item!r}')
+            said = dict(lacking_item(x, 'character(s)')
+                        for x in re.split(r' and (?=\S+: )', it[1]))
+            said['lower'] = ({'old': int(it[4]), 'new': int(it[5])} if it[4] else
+                             int(it[3]) if it[3] else 0)
+            for name in it[6].split(', '):
+                if name in back:
+                    raise ReportShapeError(f'{name} twice: {text!r}')
+                back[name] = said
+        if len(back) != int(mt[1]):
+            raise ReportShapeError(f'says {mt[1]} and names {len(back)}')
+        return 'use', {'back error': back}
+    mt = re.fullmatch(rf'!! {FN} CHANGE on part of the text in (\d+) locale\(s\): '
+                      r'glibc\'s converter of the locale\'s encoding turns some '
+                      r'characters their result can hold back into other bytes on '
+                      r'the new machine than on the old one\. (.+?)\. '
+                      + where('character'), text)
+    if mt:
+        back = {}
+        for item in mt[2].split('; '):
+            it = re.fullmatch(r'(\S+): (\d+) character\(s\) \((\S+(?:, \S+)*)\)', item)
+            if not it:
+                raise ReportShapeError(f'unknown back change: {item!r}')
+            for name in it[3].split(', '):
+                if name in back:
+                    raise ReportShapeError(f'{name} twice: {text!r}')
+                back[name] = (it[1], int(it[2]))
+        if len(back) != int(mt[1]):
+            raise ReportShapeError(f'says {mt[1]} and names {len(back)}')
+        return 'use', {'back change': back}
+    mt = re.fullmatch(rf'!! {FN}: whether their result converts back to the '
+                      r'database\'s bytes is NOT checked in (\d+) locale\(s\)'
+                      r'(?:, nor, in (\d+) of UTF-8, whether glibc reads all '
+                      r'their text as it is)?: ' + EARLIER_FILES[:-2] + r'\. (\S+: \d+ locale\(s\)'
+                      r'(?:; \S+: \d+ locale\(s\))*)\. ' + where('locale'), text)
+    if mt:
+        counts = dict((k, int(v)) for k, v in re.findall(r'(\S+): (\d+) locale', mt[6]))
+        if sum(counts.values()) != int(mt[1]) or (
+                mt[2] and int(mt[2]) > counts.get('UTF-8', 0)):
+            raise ReportShapeError(f'says {mt[1]}: {text!r}')
+        out = {'back earlier': earlier_sides(mt, 3, None, 5), 'counts': counts}
+        if mt[2]:
+            out['utf8'] = int(mt[2])
+        return 'use', out
     mt = re.fullmatch(rf'!! {FN}: whether they give an ERROR on part of the text '
                       r'is NOT known in (\d+) locale\(s\): a file written by an '
                       r'earlier version of locale_order\.py tried one character of '
@@ -1711,7 +1820,9 @@ FINDINGS = ('moved', 'sorts differently', 'pairs changed', 'not compared',
             'also in PostgreSQL', 'refused by glibc', 'upper/lower/ILIKE error',
             'upper/lower/ILIKE not checked', 'stored by PostgreSQL, not measured',
             'LC_CTYPE group', 'LC_CTYPE changed', 'LC_CTYPE not checked',
-            'upper/lower/ILIKE group', 'LC_CTYPE converted')
+            'upper/lower/ILIKE group', 'LC_CTYPE converted',
+            'upper/lower back not checked', 'upper/lower back group',
+            'upper/lower back error', 'upper/lower back changed')
 # The rows of a locale NOT known to be unchanged, beside the changes.
 NOT_KNOWN = ('not measured', 'not on the new machine')
 # And of a locale unchanged as far as measured: none of the three changed.
@@ -1722,7 +1833,9 @@ BESIDE_THE_ORDER = ('also in PostgreSQL', 'upper/lower/ILIKE error',
                     'upper/lower/ILIKE not checked',
                     'stored by PostgreSQL, not measured', 'LC_CTYPE group',
                     'LC_CTYPE changed', 'LC_CTYPE not checked',
-                    'upper/lower/ILIKE group', 'LC_CTYPE converted')
+                    'upper/lower/ILIKE group', 'LC_CTYPE converted',
+                    'upper/lower back not checked', 'upper/lower back group',
+                    'upper/lower back error', 'upper/lower back changed')
 SPACED_BYTES = r'((?:[0-9A-F]{2} )*[0-9A-F]{2})'
 PARTLY_ROW = (r'(\d+) pair\(s\) of neighbours differ by less than a letter, '
               r'and no pair could tell whether by an accent or by case')
@@ -1794,6 +1907,7 @@ def parse_characters(text):
     out = CharactersFile()
     out.ctype_groups = {}
     out.use_groups = {}
+    out.back_groups = {}
     out.closing = notes.pop()
     at = 0
     while at < len(notes) and not re.match(
@@ -1871,13 +1985,64 @@ def parse_characters(text):
             out.use_groups[mt[1]] = (tuple(names.split(',')), mt[2])
             out.setdefault(tuple(names.split(',')), []).append(row)
             continue
+        if finding == 'upper/lower back not checked':
+            if ((chars, test, before, now, measured) != ('-',) * 5 or ',' in names
+                    or not re.fullmatch(r'(?:whether glibc reads all the text as '
+                                        r'it is, and )?'
+                                        r'whether the result converts back to '
+                                        r'bytes: not known on (both machines|the '
+                                        r'old machine|the new machine)', how)):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row['why'] = how
+            out.setdefault((names,), []).append(row)
+            continue
+        if finding == 'upper/lower back group':
+            mt = re.fullmatch(r'(upper_lower_back_group_\d+): the character\(s\) a '
+                              r'database of these locale\(s\) holds whose upper or '
+                              r'lower case glibc\'s converter of (\S+) '
+                              r'does not turn back into bytes on a machine, each a '
+                              r'row under that name', how)
+            if (chars, test, before, now, measured) != ('-',) * 5 or not mt or (
+                    mt[1] in out.back_groups):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row.update(label=mt[1], encoding=mt[2])
+            out.back_groups[mt[1]] = (tuple(names.split(',')), mt[2])
+            out.setdefault(tuple(names.split(',')), []).append(row)
+            continue
+        if finding == 'upper/lower back error':
+            fn = (r'(?:upper|lower)\(\): U\+[0-9A-F]{4,6}(?: \(itself\))?, which '
+                  r'glibc\'s converter of \S+ does not turn back into bytes')
+            states = ('not turned back', 'turned back', 'not read', 'not measured')
+            if (not re.fullmatch(r'upper_lower_back_group_\d+', names)
+                    or not re.fullmatch(CODE, chars) or test != '-'
+                    or not re.fullmatch(rf'{fn}(?:; {fn})*', how)
+                    or before not in states or now not in states
+                    or 'not turned back' not in (before, now)
+                    or measured not in ('on both machines', 'on the old machine',
+                                        'on the new machine')):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row.update(chars=[int(chars[2:], 16)], how=how, before=before, now=now,
+                       measured=measured)
+            out.setdefault((names,), []).append(row)
+            continue
+        if finding == 'upper/lower back changed':
+            side = rf'(?:{SPACED_BYTES[1:-1]}|refused|no bytes)'
+            if (',' in names or not re.fullmatch(CODE, chars)
+                    or not re.fullmatch(rf'bytes {side} -> {side}', how)
+                    or (test, before, now, measured) != ('-', '-', '-',
+                                                         'on both machines')):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row.update(chars=[int(chars[2:], 16)], how=how, measured=measured)
+            out.setdefault((names,), []).append(row)
+            continue
         if finding == 'LC_CTYPE converted':
             mt = re.fullmatch(rf'{CODE} -> {CODE}', how)
             if (not re.fullmatch(r'LC_CTYPE_group_\d+', names)
                     or not re.fullmatch(rf'bytes {SPACED_BYTES}', chars)
                     or not mt or mt[1] == mt[2]
-                    or (test, before, now, measured) != ('-', '-', '-',
-                                                         'on both machines')):
+                    or (test, before, now) != ('-', '-', '-')
+                    or measured not in ('on both machines', 'on the old machine',
+                                        'on the new machine')):
                 raise ReportShapeError(f'characters line {n}: {line!r}')
             row.update(chars=chars, how=how, measured=measured)
             out.setdefault((names,), []).append(row)
@@ -2017,6 +2182,13 @@ def parse_characters(text):
             for label in labels for r in out[(label,)]):
         raise ReportShapeError(f'groups of upper() named {sorted(out.use_groups)} '
                                f'and with rows {sorted(labels)}')
+    labels = {names[0] for names in out if names[0] in out.back_groups
+              or names[0].startswith('upper_lower_back_group_')}
+    if labels != set(out.back_groups) or any(
+            r['finding'] != 'upper/lower back error'
+            for label in labels for r in out[(label,)]):
+        raise ReportShapeError(f'groups of the conversion back named '
+                               f'{sorted(out.back_groups)} and with rows {sorted(labels)}')
     return out
 
 
@@ -8749,8 +8921,14 @@ class ConverterCompared(PostgresUseCompared):
                 report, summary, rows = self.outputs(*files)
                 use = [d for kind, d in report['checks'] if kind == 'use']
                 self.assertIn({'untold': {where: names}}, use)
-                # de_DE.utf8 alone, of UTF-8.
-                self.assertEqual(use[-1]['converts'], 1)
+                # de_DE.utf8 alone, of UTF-8, which such a file did not
+                # measure back, nor past one character: counted in the line
+                # on that file, never as converting.
+                self.assertEqual(use[-1]['converts'], 0)
+                early, = [d for d in use if 'back earlier' in d]
+                self.assertEqual(early['back earlier'], {
+                    'both': ['OLD', 'NEW'], 'old': ['OLD'], 'new': ['NEW']}[case])
+                self.assertEqual(early['utf8'], 1)
                 self.assertEqual([r['why'] for r in rows[('ja_JP',)]
                                   if r['finding'] == 'upper/lower/ILIKE not checked'],
                                  [f'whether part of the text gives an error: not '
@@ -9415,7 +9593,10 @@ class ConverterRead(Checks):
         for case, edit in (
                 ('not a map', lambda d: d.update(converter=[])),
                 ('an encoding missing', lambda d: d['converter'].pop('EUC-TW')),
-                ('an encoding more', lambda d: d['converter'].update(BIG5=['no locale', ['opens', None], None, None])),
+                # Well formed, of an encoding no locale has: refused for
+                # being one more, not for its shape (16.23).
+                ('an encoding more', lambda d: d['converter'].update(
+                    {'KOI8-X': ['no locale', ['opens', None], None, None, None]})),
                 ('an entry not a list', lambda d: d['converter'].update({'EUC-KR': 'x'})),
                 ('an entry of six items', lambda d: d['converter']['EUC-KR'].append(None)),
                 ('an entry of four items', lambda d: d['converter']['EUC-KR'].pop()),
@@ -9548,6 +9729,22 @@ class ConverterRead(Checks):
         self.assertEqual(changed, [('use', {'changed': {n: EUC_OF[n] for n in names}})])
         self.assertEqual(unsaid, [('use', {'one side': 'new', 'why': m.UNSAID,
                                            'names': {n: EUC_OF[n] for n in names}})])
+        # Nor did it measure the conversion back, nor UTF-8 past one
+        # character: every locale whose text it reads past ASCII is counted
+        # in the line on that, de_DE.utf8 among them, never as converting;
+        # th_TH.tis620 is not, as the line on another encoding says that
+        # machine is not known there.
+        early = [pairs[0].pop(i) for i, (kind, d) in enumerate(pairs[0])
+                 if kind == 'use' and 'back earlier' in d]
+        self.assertEqual(early, [('use', {
+            'back earlier': ['OLD'], 'utf8': 1, 'counts': {
+                'EUC-JP': 2, 'EUC-KR': 2, 'GB2312': 1, 'UTF-8': 1}})])
+        self.assertEqual([d['converts'] for found in pairs for kind, d in found
+                          if kind == 'use' and 'converts' in d], [0, 1])
+        for kind, d in pairs[0]:
+            d.pop('converts', None)
+        for kind, d in pairs[1]:
+            d.pop('converts', None)
         self.assertEqual(pairs[0], pairs[1])
 
 
@@ -10109,14 +10306,26 @@ class BackRead(Checks):
         self.assertEqual(d['utf8_forward'][0], 'measured')
 
     def test_the_fifth_format_compares_as_before(self):
-        """Nothing reads the two parts yet: a pair with a file of the format
-        before names the same checks as a pair of two files of this one."""
+        """A pair with a file of the format before names the same checks as
+        a pair of two files of this one, but the line on what that file did
+        not measure (the conversion back, and UTF-8 past one character),
+        where it counts every locale whose text the old machine reads past
+        ASCII, those in a line of their own on the new machine's error
+        too, and none as converting."""
         pairs = []
         for form in ('locale_order/5', m.FORMAT):
             old = self.made(RHEL8, f'old{form[-1]}', with_parts(form=form,
                                                                 use=measured_use(8)))
             pairs.append(self.checks(old, self.made(RHEL9, 'new', with_parts(
                 use=measured_use(9)))))
+        early = [pairs[0].pop(i) for i, (kind, d) in enumerate(pairs[0])
+                 if kind == 'use' and 'back earlier' in d]
+        self.assertEqual(early, [('use', {
+            'back earlier': ['OLD'], 'utf8': 1, 'counts': {
+                'ARMSCII-8': 1, 'EUC-JP': 2, 'EUC-KR': 2, 'GB2312': 1, 'TIS-620': 1,
+                'UTF-8': 1}})])
+        self.assertEqual([d.pop('converts') for found in pairs for kind, d in found
+                          if kind == 'use' and 'converts' in d], [0, 1])
         self.assertEqual(pairs[0], pairs[1])
 
 
@@ -10256,10 +10465,11 @@ class TextModelEdges(ConverterCompared):
 
 class TextModelBack(ConverterCompared):
     """The back leg the model answers (wcstombs of what upper(), lower() and
-    initcap() give, under the locale's converter), which no line prints
-    yet: per database a locale can serve, how many characters each machine
-    reaches and refuses, what each machine's file cannot say, and how many
-    characters both reach and convert otherwise."""
+    initcap() give, under the locale's converter), as the model says it
+    (the lines are BackPrinted's): per database a locale can serve, how
+    many characters a database holds whose upper or lower case each
+    machine does not turn back, what each machine's file cannot say, and
+    how many characters both reach and turn back into other bytes."""
 
     for name in [n for n in vars(ConverterCompared) if n.startswith('test_')]:
         locals()[name] = None
@@ -10368,17 +10578,17 @@ class TextModelBack(ConverterCompared):
 
     def test_a_character_refused_back_is_an_error_of_its_machine(self):
         """UTF-8 on the new machine refuses A back: every UTF-8 locale gives
-        an error there, of one character, reached by upper() of a; EUC-JP on
-        the old machine gives back ASCII but A: what its converter reads past
-        ASCII, and A, are refused."""
+        an error there, counted by the characters a database holds: A
+        itself, and a, whose upper() is A. EUC-JP on the old machine gives
+        back ASCII but A: what its converter reads past ASCII, A and a."""
         got = self.backs(*self.pair(new_edits=[self.back_edit('UTF-8', {0x41: None})]))
-        self.assertEqual(got['de_DE.utf8'][('enc', 'UTF-8')]['error'], {'new': 1})
+        self.assertEqual(got['de_DE.utf8'][('enc', 'UTF-8')]['error'], {'new': 2})
         values = m.unpack_order(zlib.decompress(base64.b64decode(converter_values('EUC-JP'))))
-        reached = {v for v in values if v} | {0x41, 0x61}
+        read = {v for v in values if v}
         ascii_back = {c: bytes([c]) for c in range(1, 0x80) if c != 0x41}
         got = self.backs(*self.pair(old_edits=[self.back_edit('EUC-JP', ascii_back)]))
         self.assertEqual(got['ja_JP'][('enc', 'EUC-JP')]['error'],
-                         {'old': len(reached - set(ascii_back))})
+                         {'old': len((read - set(ascii_back)) | {0x61})})
 
     def test_no_bytes_is_not_a_refusal(self):
         """A tag character glibc gives no bytes for converts back without an
@@ -10452,6 +10662,551 @@ class TextModelBack(ConverterCompared):
                                                    'changes': None})
 
 
+class BackPrinted(ConverterCompared):
+    """What step 11 prints of the back leg (PR 3 of backlog 16.19), on
+    RHEL8 and RHEL9 cut to EUC_NAMES, read in its three outputs: the
+    characters a machine does not turn back, with the rows of each; those
+    the two machines turn back otherwise; a file of a format before the
+    back part, counted, those in an error line too; a reason a machine
+    cannot say, beside an error and without one; the edges of the forward
+    leg the same PR closes (16.24, UTF-8's converter on every character).
+
+    Freezes: a measured refusal of the conversion back left out of every
+    line, or counted as converting; a count that does not say which
+    functions read it; a file that did not measure the back leg read as
+    one that did, or the locale of an error line left out of that count;
+    UTF-8's converter refusing or reading otherwise a character, said
+    nowhere."""
+
+    for name in [n for n in vars(ConverterCompared) if n.startswith('test_')]:
+        locals()[name] = None
+    del name
+
+    @staticmethod
+    def back(codeset, opens=True, **answers):
+        """An edit that gives codeset's back table on a machine whose
+        converter opens (or not) the answers ({'U+0041': None, ...}) over
+        what back_values gives: a refusal of the nine is a character the
+        table does not hold (back_reference)."""
+        table = dict(m.back_unpacked(back_values(codeset, opens), codeset))
+        for k, v in answers.items():
+            if v is None and codeset != 'UTF-8':
+                table.pop(int(k[2:], 16))
+            else:
+                table[int(k[2:], 16)] = v
+
+        def edit(d):
+            d['back'][codeset][3] = back_table(table)
+        return edit
+
+    @staticmethod
+    def first_read(codeset):
+        """The first character past ASCII converter_values reads."""
+        values = m.unpack_order(zlib.decompress(base64.b64decode(converter_values(codeset))))
+        return next(v for v in values if v >= 0x80)
+
+    def both8(self, old_edits=(), new_edits=(), **k):
+        return self.pair(measured_use(8, **EUC_TW_USE), measured_use(8, **EUC_TW_USE),
+                         old_edits=old_edits, new_edits=new_edits, **k)
+
+    def back_rows(self, rows):
+        """{(names, encoding): [(character, how, before, now, measured)]}."""
+        return {rows.back_groups[label]: [
+            (r['chars'][0], r['how'], r['before'], r['now'], r['measured'])
+            for r in rows[(label,)]] for label in rows.back_groups}
+
+    def test_one_machine_does_not_turn_a_character_back(self):
+        """EUC-JP on the old machine refuses A back: A, whose upper() is
+        itself, and a, whose upper() is A, are named, neither through
+        lower(), each a row; the two locales leave the count of those that
+        convert."""
+        report, summary, rows = self.outputs(*self.both8(
+            old_edits=[self.back('EUC-JP', **{'U+0041': None})]))
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        said = {'EUC-JP': {'old': 2}, 'lower': 0}
+        self.assertIn({'back error': {'ja_JP': said, 'ja_JP.eucjp': said}}, use)
+        # A refused on one machine and turned back on the other is that
+        # machine's error, never also a change.
+        self.assertFalse([d for d in use if 'back change' in d])
+        self.assertEqual(use[-1]['converts'], 5)
+        self.assertEqual(self.back_rows(rows), {(('ja_JP', 'ja_JP.eucjp'), 'EUC-JP'): [
+            (0x41, "upper(): U+0041 (itself), which glibc's converter of EUC-JP does "
+                   'not turn back into bytes',
+             'not turned back', 'turned back', 'on both machines'),
+            (0x61, "upper(): U+0041, which glibc's converter of EUC-JP does not "
+                   'turn back into bytes',
+             'not turned back', 'turned back', 'on both machines')]})
+
+    def test_both_machines_alike(self):
+        """Both machines refuse a back: a itself and A, whose lower() is
+        a, on both, both through lower()."""
+        refuse = self.back('EUC-JP', **{'U+0061': None})
+        report, summary, rows = self.outputs(*self.both8(old_edits=[refuse],
+                                                         new_edits=[refuse]))
+        said = {'EUC-JP': {'both': 2}, 'lower': 2}
+        self.assertIn(('use', {'back error': {'ja_JP': said, 'ja_JP.eucjp': said}}),
+                      report['checks'])
+        self.assertEqual({(r[2], r[3]) for g in self.back_rows(rows).values() for r in g},
+                         {('not turned back', 'not turned back')})
+
+    def test_each_machine_its_own(self):
+        """The old machine refuses A (so A and a, through upper() alone),
+        the new one B (through both): two sets, each counted on its
+        machine, and through lower() each on its own."""
+        report, summary, rows = self.outputs(*self.both8(
+            old_edits=[self.back('EUC-JP', **{'U+0041': None})],
+            new_edits=[self.back('EUC-JP', **{'U+0042': None})]))
+        said = {'EUC-JP': {'old': 2, 'new': 1, 'mixed': True},
+                'lower': {'old': 0, 'new': 1}}
+        self.assertIn(('use', {'back error': {'ja_JP': said, 'ja_JP.eucjp': said}}),
+                      report['checks'])
+        (got,) = self.back_rows(rows).values()
+        self.assertEqual([(c, b, a) for c, _, b, a, _ in got], [
+            (0x41, 'not turned back', 'turned back'),
+            (0x42, 'turned back', 'not turned back'),
+            (0x61, 'not turned back', 'turned back')])
+
+    def test_beside_an_error_of_the_other_machine(self):
+        """The new machine cannot convert EUC-JP at all (an error line);
+        what the old one does not turn back is named all the same, and the
+        new machine does not read the character."""
+        c = self.first_read('EUC-JP')
+        report, summary, rows = self.outputs(*self.pair(
+            measured_use(8, **EUC_TW_USE), measured_use(9, **EUC_TW_USE),
+            old_edits=[self.back('EUC-JP', **{f'U+{c:04X}': None})]))
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertIn('ja_JP', use[0]['changed'])
+        said = {'EUC-JP': {'old': 1}, 'lower': 1}
+        self.assertIn({'back error': {'ja_JP': said, 'ja_JP.eucjp': said}}, use)
+        (got,) = self.back_rows(rows).values()
+        self.assertEqual([(x, b, a, w) for x, _, b, a, w in got],
+                         [(c, 'not turned back', 'not read', 'on both machines')])
+
+    def test_turned_back_otherwise(self):
+        """The new machine turns A back into other bytes: a CHANGE, a row
+        with both machines' bytes, never counted as converting."""
+        report, summary, rows = self.outputs(*self.both8(
+            new_edits=[self.back('EUC-JP', **{'U+0041': b'\xa3\xc1'})]))
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertIn({'back change': {'ja_JP': ('EUC-JP', 1),
+                                       'ja_JP.eucjp': ('EUC-JP', 1)}}, use)
+        self.assertEqual(use[-1]['converts'], 5)
+        self.assertEqual([(r['chars'], r['how']) for r in rows[('ja_JP',)]
+                          if r['finding'] == 'upper/lower back changed'],
+                         [([0x41], 'bytes 41 -> A3 C1')])
+
+    def test_a_file_before_the_back_part_on_each_side(self):
+        """Counted on the machine whose file it is, each locale a row; de_DE.utf8
+        is also not known past one character of UTF-8 there."""
+        five = lambda base, tag: self.made(base, tag, with_parts(
+            use=measured_use(8, **EUC_TW_USE), form='locale_order/5'))
+        six = lambda base, tag: self.made(base, tag, with_parts(
+            use=measured_use(8, **EUC_TW_USE)))
+        counts = {'ARMSCII-8': 1, 'EUC-JP': 2, 'EUC-KR': 2, 'EUC-TW': 1,
+                  'GB2312': 1, 'TIS-620': 1, 'UTF-8': 1}
+        for case, files, sides, where in (
+                ('old', (five(RHEL8, 'o5'), six(RHEL9, 'n6')), ['OLD'], 'the old machine'),
+                ('new', (six(RHEL8, 'o6'), five(RHEL9, 'n5')), ['NEW'], 'the new machine'),
+                ('both', (five(RHEL8, 'o5'), five(RHEL9, 'n5')), ['OLD', 'NEW'],
+                 'both machines')):
+            with self.subTest(case=case):
+                report, summary, rows = self.outputs(*files)
+                use = [d for kind, d in report['checks'] if kind == 'use']
+                self.assertIn({'back earlier': sides, 'counts': counts, 'utf8': 1}, use)
+                self.assertEqual(use[-1]['converts'], 0)
+                self.assertEqual([r['why'] for r in rows[('de_DE.utf8',)]
+                                  if r['finding'] == 'upper/lower back not checked'],
+                                 ['whether glibc reads all the text as it is, and '
+                                  'whether the result converts back to bytes: not '
+                                  f'known on {where}'])
+                self.assertEqual([r['why'] for r in rows[('ja_JP',)]
+                                  if r['finding'] == 'upper/lower back not checked'],
+                                 ['whether the result converts back to bytes: not '
+                                  f'known on {where}'])
+
+    def test_a_file_before_the_back_part_beside_an_error(self):
+        """The old machine cannot convert EUC-JP, the new one can, both of
+        the fifth format: the EUC locales, in the line on what the new
+        machine converts and the old one could not, are counted on the new
+        machine, which did not measure the conversion back (review of the
+        preview, F1)."""
+        five = lambda base, tag, n: self.made(base, tag, with_parts(
+            use=measured_use(n, **EUC_TW_USE), form='locale_order/5'))
+        report, summary, rows = self.outputs(five(RHEL8, 'o5', 9), five(RHEL9, 'n5', 8))
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertIn('ja_JP', use[0]['back'])
+        early, = [d for d in use if 'back earlier' in d]
+        self.assertEqual({k: early['counts'][k] for k in ('EUC-JP', 'EUC-KR', 'GB2312')},
+                         {'EUC-JP': 2, 'EUC-KR': 2, 'GB2312': 1})
+        # On the new machine alone: the old one converts nothing past ASCII.
+        self.assertEqual([r['why'] for r in rows[('ja_JP',)]
+                          if r['finding'] == 'upper/lower back not checked'],
+                         ['whether the result converts back to bytes: not known '
+                          'on the new machine'])
+
+    def test_a_back_part_not_measured(self):
+        """The old machine's conversion back to EUC-JP could not be
+        measured: beside the new machine's error and without one, the
+        locales are NOT checked with why, on the old machine."""
+        entry = lambda d: d['back'].update({'EUC-JP': [
+            'not checked', ['opens', None], 'ja_JP', 'measuring it failed: x', None]})
+        why = ("whether their result converts back to the database's bytes is "
+               "not known: glibc's conversion back to EUC-JP could not be "
+               'measured: measuring it failed: x (on the old machine)')
+        for case, new_use in (('beside an error', measured_use(9, **EUC_TW_USE)),
+                              ('alone', measured_use(8, **EUC_TW_USE))):
+            with self.subTest(case=case):
+                use = self.use(*self.pair(measured_use(8, **EUC_TW_USE), new_use,
+                                          old_edits=[entry]))
+                self.assertIn({'unknown': {'ja_JP': why, 'ja_JP.eucjp': why}}, use)
+                if case == 'alone':
+                    self.assertEqual(use[-1]['converts'], 5)
+
+    def test_one_database_each_kind(self):
+        """ja_JP is of EUC-JP on the old machine, of the sixth format, and
+        of EUC-KR on the new one, of the fifth: a database of EUC-KR made on
+        the new machine converts there, which did not measure the
+        conversion back, so ja_JP is counted on the new machine, whatever
+        a database carried from the old one does there (review of the
+        preview, N3)."""
+        def kr(d):
+            d['postgres_use']['ja_JP']['codeset'] = 'EUC-KR'
+            d['locales']['ja_JP']['codeset'] = 'EUC-KR'
+            refirst(d)
+        report, summary, rows = self.outputs(
+            self.made(RHEL8, 'o6', with_parts(use=measured_use(8, **EUC_TW_USE))),
+            self.made(RHEL9, 'n5', with_parts(use=measured_use(8, **EUC_TW_USE),
+                                              form='locale_order/5'), kr))
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        early, = [d for d in use if 'back earlier' in d]
+        self.assertEqual(early['back earlier'], ['NEW'])
+        self.assertEqual(early['counts']['EUC-KR'], 3)
+        self.assertEqual([r['why'] for r in rows[('ja_JP',)]
+                          if r['finding'] == 'upper/lower back not checked'],
+                         ['whether the result converts back to bytes: not known '
+                          'on the new machine'])
+
+    def test_the_rest_not_known_of_a_locale_in_no_line(self):
+        """16.24: ja_JP.eucjp refused by glibc on the old machine, or only
+        on the new one, whose file of the fourth format tried one character
+        of EUC-JP that converted: named in the line on what is not known of
+        part of the text, as ja_JP is."""
+        old_use = measured_use(8, **EUC_TW_USE)
+        old_use['ja_JP.eucjp'] = refused_use('ja_JP.eucjp', 8, ctype='accepted')
+
+        def drop(d):
+            d['locales'].pop('ja_JP.eucjp')
+            d['locales_listed'] -= 1
+        olds = {'refused on the old machine': self.made(
+                    RHEL8, 'o-refused', with_parts(use=old_use),
+                    selected_not('ja_JP.eucjp')),
+                'only on the new machine': self.made(
+                    RHEL8, 'o-absent', drop, with_parts(
+                        use={k: v for k, v in measured_use(8, **EUC_TW_USE).items()
+                             if k != 'ja_JP.eucjp'}))}
+        new = self.made(RHEL9, 'n4', with_parts(use=measured_use(8, **EUC_TW_USE),
+                                                form='locale_order/4'))
+        for case, old in olds.items():
+            with self.subTest(case=case):
+                untold, = [d['untold'] for d in self.use(old, new) if 'untold' in d]
+                self.assertEqual(untold['the new machine']['ja_JP.eucjp'], 'EUC-JP')
+                self.assertEqual(untold['the new machine']['ja_JP'], 'EUC-JP')
+
+    def test_utf8_refuses_a_character(self):
+        """The new machine's converter of UTF-8 refuses U+00E9: de_DE.utf8 gives
+        an error on part of the text there, its row converts on the old
+        machine and is an error on the new one."""
+        def refuse(d):
+            d['utf8_forward'][3] = forward_table({0xE9: 0})
+        report, summary, rows = self.outputs(*self.both8(new_edits=[refuse]))
+        use = [d for kind, d in report['checks'] if kind == 'use']
+        self.assertIn({'partly': {'de_DE.utf8': {'UTF-8': {'new': 1}}}}, use)
+        self.assertEqual(use[-1]['converts'], 6)
+        (label, (names, cs)), = rows.use_groups.items()
+        self.assertEqual((names, cs), (('de_DE.utf8',), 'UTF-8'))
+        self.assertEqual([(r['bytes'], r['before'], r['now'], r['measured'])
+                          for r in rows[(label,)]],
+                         [('C3 A9', 'converts', 'error', 'on both machines')])
+
+    def test_utf8_reads_a_character_otherwise(self):
+        """The new machine's converter of UTF-8 reads U+00E9 as U+00EA: a CHANGE in a
+        UTF8 database, a row with both characters; read so on both, none."""
+        def otherwise(d):
+            d['utf8_forward'][3] = forward_table({0xE9: 0xEA})
+        found = [d for kind, d in self.checks(*self.both8(new_edits=[otherwise]))
+                 if kind == 'ctype' and 'utf8 converted' in d]
+        self.assertEqual(found, [{'utf8 converted': {'C3 A9': (0xE9, 0xEA)}, 'count': 1}])
+        found = [d for kind, d in self.checks(*self.both8(
+            old_edits=[otherwise], new_edits=[otherwise]))
+                 if kind == 'ctype' and 'utf8 converted' in d]
+        self.assertEqual(found, [])
+
+    def test_utf8_refused_on_one_machine_is_no_change(self):
+        """Both machines measured UTF-8's converter, and one refuses U+00E9,
+        which the other reads as itself: an error on part of the text on
+        that machine, never also a CHANGE to U+0000; on each side (final
+        read, N4)."""
+        def refuse(d):
+            d['utf8_forward'][3] = forward_table({0xE9: 0})
+        six = lambda base, tag, *e: self.made(base, tag, with_parts(
+            use=measured_use(8, **EUC_TW_USE)), *e)
+        for side in ('old', 'new'):
+            with self.subTest(side=side):
+                checks = self.checks(
+                    six(RHEL8, f'o-{side}', *([refuse] if side == 'old' else [])),
+                    six(RHEL9, f'n-{side}', *([refuse] if side == 'new' else [])))
+                self.assertEqual([d for kind, d in checks
+                                  if kind == 'ctype' and 'utf8 converted' in d], [])
+                self.assertIn(('use', {'partly': {'de_DE.utf8': {'UTF-8': {side: 1}}}}),
+                              checks)
+
+
+    def test_the_rest_not_known_beside_a_machine_that_cannot_say(self):
+        """16.24 whatever the other machine says (review round 1, A1 and
+        A3): the old file is of this format and could not measure EUC-JP's
+        conversion back, or its converter; the new one, of the fourth,
+        tried one character of EUC-JP, which converted: ja_JP is named on
+        the new machine in the line on what is not known of part of the
+        text, beside whatever the old machine's reason says."""
+        for case, entry in (
+                ('back not measured', lambda d: d['back'].update({'EUC-JP': [
+                    'not checked', ['opens', None], 'ja_JP', 'measuring it failed: x',
+                    None]})),
+                ('converter not measured', lambda d: d['converter'].update({'EUC-JP': [
+                    'not checked', ['opens', None], 'ja_JP', 'measuring it failed: x',
+                    None]}))):
+            with self.subTest(case=case):
+                old = self.made(RHEL8, 'o6', with_parts(use=measured_use(8, **EUC_TW_USE)),
+                                entry)
+                new = self.made(RHEL9, 'n4', with_parts(use=measured_use(8, **EUC_TW_USE),
+                                                        form='locale_order/4'))
+                untold, = [d['untold'] for d in self.use(old, new) if 'untold' in d]
+                self.assertEqual(untold['the new machine']['ja_JP'], 'EUC-JP')
+
+    def test_a_row_measured_on_one_machine(self):
+        """The new file is of the fifth format: the rows of what the old
+        machine does not turn back say the new one is not measured, and
+        that they were measured on the old machine (review round 1, A2)."""
+        c = self.first_read('EUC-JP')
+        report, summary, rows = self.outputs(
+            self.made(RHEL8, 'o6', with_parts(use=measured_use(8, **EUC_TW_USE)),
+                      self.back('EUC-JP', **{f'U+{c:04X}': None})),
+            self.made(RHEL9, 'n5', with_parts(use=measured_use(8, **EUC_TW_USE),
+                                              form='locale_order/5')))
+        (got,) = self.back_rows(rows).values()
+        self.assertEqual([(x, b, a, w) for x, _, b, a, w in got],
+                         [(c, 'not turned back', 'not measured', 'on the old machine')])
+
+    def test_rules_not_measured_beside_another_encoding(self):
+        """hy_AM.armscii8, of an encoding PostgreSQL does not know: the new
+        machine could not measure its character rules, so what comes back
+        there is not known, and the line on upper() says so; the line on a
+        database of another encoding does not (review round 1, A4)."""
+        def unread(d):
+            d['ctype']['locales']['hy_AM.armscii8'] = ['not checked', m.CTYPE_UNREAD]
+        use = self.use(*self.both8(new_edits=[unread]))
+        unknown, = [d['unknown'] for d in use if 'unknown' in d]
+        self.assertIn("whether their result converts back to the database's bytes is "
+                      'not known', unknown['hy_AM.armscii8'])
+        self.assertIn('(on the new machine)', unknown['hy_AM.armscii8'])
+
+    def test_a_row_of_a_machine_under_another_encoding(self):
+        """ja_JP is of EUC-JP on the old machine, which refuses A back, and
+        of UTF-8 on the new one: the new machine was never measured for an
+        EUC-JP database, so its column says not measured, never "turned
+        back" from its UTF-8 converter (review round 1, A5)."""
+        def utf8(d):
+            d['postgres_use']['ja_JP'] = use_of('converts', 'UTF-8', (0x80, 'c280'))
+            d['locales']['ja_JP']['codeset'] = 'UTF-8'
+            refirst(d)
+        report, summary, rows = self.outputs(*self.both8(
+            old_edits=[self.back('EUC-JP', **{'U+0041': None})], new_edits=[utf8]))
+        got = self.back_rows(rows)
+        self.assertEqual({(names, cs): [(x, b, a) for x, _, b, a, _ in r]
+                          for (names, cs), r in got.items() if 'ja_JP' in names},
+                         {(('ja_JP',), 'EUC-JP'): [
+                             (0x41, 'not turned back', 'not measured'),
+                             (0x61, 'not turned back', 'not measured')]})
+
+
+    def test_the_rest_not_known_of_a_database_made_on_the_new_machine(self):
+        """ja_JP is of EUC-JP on the old machine and of EUC-KR on the new
+        one, whose file of the fourth format tried one character of EUC-KR,
+        which converted: a database of EUC-KR made there converts, so ja_JP
+        is named on the new machine in the line on what is not known of
+        part of the text, whatever a database carried from the old machine
+        does there (review round 1, A3)."""
+        def kr(d):
+            d['postgres_use']['ja_JP']['codeset'] = 'EUC-KR'
+            d['postgres_use']['ja_JP']['text'] = ['converts', [0x3000, 'a1a1']]
+            d['locales']['ja_JP']['codeset'] = 'EUC-KR'
+        old = self.made(RHEL8, 'o6', with_parts(use=measured_use(8, **EUC_TW_USE)))
+        new = self.made(RHEL9, 'n4', with_parts(use=measured_use(8, **EUC_TW_USE),
+                                                form='locale_order/4'), kr)
+        untold, = [d['untold'] for d in self.use(old, new) if 'untold' in d]
+        self.assertEqual(untold['the new machine']['ja_JP'], 'EUC-KR')
+
+
+    def test_the_rest_not_said_where_the_database_does_not_open(self):
+        """ja_JP.eucjp is refused by glibc on the new machine; the old file,
+        of the fourth format, tried one character of EUC-JP there: a
+        database that uses it does not open after the upgrade, which its
+        refusal says, and nothing more is said of the old machine."""
+        new_use = measured_use(8, **EUC_TW_USE)
+        new_use['ja_JP.eucjp'] = refused_use('ja_JP.eucjp', 8, ctype='accepted')
+        old = self.made(RHEL8, 'o4', with_parts(use=measured_use(8, **EUC_TW_USE),
+                                                form='locale_order/4'))
+        new = self.made(RHEL9, 'n6', with_parts(use=new_use), selected_not('ja_JP.eucjp'))
+        untold, = [d['untold'] for d in self.use(old, new) if 'untold' in d]
+        self.assertIn('ja_JP', untold['the old machine'])
+        self.assertNotIn('ja_JP.eucjp', {n for g in untold.values() for n in g})
+
+    def test_a_file_before_the_back_part_beside_a_locale_the_new_machine_refuses(self):
+        """The old file is of the fifth format; glibc refuses ja_JP.eucjp and
+        de_DE.utf8 on the new machine, where no database that uses them
+        opens: neither is counted in the line on a file before the back
+        part, nor gets a row of it, as untold leaves them out (final read,
+        3)."""
+        new_use = measured_use(8, **EUC_TW_USE)
+        for name in ('ja_JP.eucjp', 'de_DE.utf8'):
+            new_use[name] = refused_use(name, 8, ctype='accepted')
+        old = self.made(RHEL8, 'o5', with_parts(use=measured_use(8, **EUC_TW_USE),
+                                                form='locale_order/5'))
+        new = self.made(RHEL9, 'n6', with_parts(use=new_use),
+                        selected_not('ja_JP.eucjp', 'de_DE.utf8'))
+        report, summary, rows = self.outputs(old, new)
+        early, = [d for kind, d in report['checks'] if kind == 'use' and 'back earlier' in d]
+        self.assertEqual(early, {'back earlier': ['OLD'], 'counts': {
+            'ARMSCII-8': 1, 'EUC-JP': 1, 'EUC-KR': 2, 'EUC-TW': 1, 'GB2312': 1,
+            'TIS-620': 1}})
+        self.assertEqual([r for n in ('ja_JP.eucjp', 'de_DE.utf8') for r in rows.get((n,), [])
+                          if r['finding'] == 'upper/lower back not checked'], [])
+
+
+    @staticmethod
+    def utf8_unmeasured(d):
+        d['utf8_forward'] = ['not checked', ['opens', None], 'de_DE.utf8',
+                             'measuring it failed: x', None]
+
+    def test_utf8_not_measured_on_one_machine(self):
+        """A machine could not measure UTF-8's converter: de_DE.utf8 is NOT
+        checked there, with why and that machine, as a locale of the nine
+        whose converter could not be measured; on each side (review round
+        2, A1; final check, X1)."""
+        for side in ('old', 'new'):
+            with self.subTest(side=side):
+                use = self.use(*self.both8(**{f'{side}_edits': [self.utf8_unmeasured]}))
+                unknown, = [d['unknown'] for d in use if 'unknown' in d]
+                self.assertEqual(unknown['de_DE.utf8'],
+                                 "glibc's converter of UTF-8 could not be measured: "
+                                 f'measuring it failed: x (on the {side} machine)')
+
+    def one_side(self, old, new):
+        """(the line on what one machine's UTF-8 converter reads otherwise,
+        its rows as (bytes, how, measured))."""
+        report, summary, rows = self.outputs(old, new)
+        found = [d for kind, d in report['checks'] if kind == 'ctype' and 'utf8 read' in d]
+        labels = [lb for lb, v in rows.ctype_groups.items() if v[1] == 'byte sequence']
+        return found, [(r['chars'], r['how'], r['measured'])
+                       for lb in labels for r in rows[(lb,)]]
+
+    def test_utf8_read_otherwise_on_one_machine_only(self):
+        """One machine's file did not measure UTF-8's converter (a file of
+        the fifth format, or one that could not); the other machine's reads
+        U+00E9 as U+00EA: said as that machine's, the other not known, a
+        row measured on that machine; on each side (review round 2, A2;
+        final check, X2 and X3)."""
+        def otherwise(d):
+            d['utf8_forward'][3] = forward_table({0xE9: 0xEA})
+        five = lambda base, tag: self.made(base, tag, with_parts(
+            use=measured_use(8, **EUC_TW_USE), form='locale_order/5'))
+        six = lambda base, tag, *e: self.made(base, tag, with_parts(
+            use=measured_use(8, **EUC_TW_USE)), *e)
+        for case, files, side, why in (
+                ('new measured', (five(RHEL8, 'o5'), six(RHEL9, 'n6', otherwise)),
+                 'new', 'the OLD file did not measure this'),
+                ('old measured', (six(RHEL8, 'o6', otherwise), five(RHEL9, 'n5')),
+                 'old', 'the NEW file did not measure this'),
+                ('old not checked', (six(RHEL8, 'o6-unmeasured', self.utf8_unmeasured),
+                                     six(RHEL9, 'n6-otherwise', otherwise)),
+                 'new', "the old machine could not measure this (glibc's converter "
+                        'of UTF-8 could not be measured: measuring it failed: x)')):
+            with self.subTest(case=case):
+                found, rows = self.one_side(*files)
+                self.assertEqual(found, [{'utf8 read': {'C3 A9': (0xE9, 0xEA)},
+                                          'side': side, 'count': 1, 'why': why}])
+                self.assertEqual(rows, [('bytes C3 A9', 'U+00E9 -> U+00EA',
+                                         f'on the {side} machine')])
+
+    def test_utf8_refused_on_one_machine_only(self):
+        """The new machine refuses U+00E9 and the old file is of the fifth
+        format: an error on part of the text on the new machine, not known
+        on the old one, which tried one character of UTF-8, and never "read
+        as another character" (final check, X7; review of the alternative,
+        M11)."""
+        def refuse(d):
+            d['utf8_forward'][3] = forward_table({0xE9: 0})
+        old = self.made(RHEL8, 'o5', with_parts(use=measured_use(8, **EUC_TW_USE),
+                                                form='locale_order/5'))
+        new = self.made(RHEL9, 'n6', with_parts(use=measured_use(8, **EUC_TW_USE)),
+                        refuse)
+        self.assertEqual(self.one_side(old, new), ([], []))
+        self.assertIn({'partly': {'de_DE.utf8': {'UTF-8': {'new': 1},
+                                                 'not known': ['old']}}},
+                      self.use(old, new))
+
+    def test_utf8_read_otherwise_beside_a_file_without_rules(self):
+        """The old file is of the third format, which measured no character
+        rules, or of the second, which did not say how PostgreSQL uses a
+        locale either: the new machine's UTF-8 converter reading U+00E9 as
+        U+00EA is said all the same, and where its rows are (final check,
+        A-1; last check, 1 and 2)."""
+        def otherwise(d):
+            d['utf8_forward'][3] = forward_table({0xE9: 0xEA})
+        new = self.made(RHEL9, 'n6', with_parts(use=measured_use(8, **EUC_TW_USE)),
+                        otherwise)
+        for form in ('locale_order/3', 'locale_order/2'):
+            with self.subTest(form=form):
+                old = self.made(RHEL8, f'o{form[-1]}', with_parts(
+                    use=measured_use(8, **EUC_TW_USE), form=form))
+                found, rows = self.one_side(old, new)
+                self.assertEqual(found, [{'utf8 read': {'C3 A9': (0xE9, 0xEA)},
+                                          'side': 'new', 'count': 1,
+                                          'why': 'the OLD file did not measure this'}])
+                self.assertEqual(rows, [('bytes C3 A9', 'U+00E9 -> U+00EA',
+                                         'on the new machine')])
+                self.assertIn(('ctype', {'where': 'byte sequence'}), self.checks(old, new))
+
+    def test_the_back_line_beside_a_file_too_old_for_the_rest(self):
+        """The old file is of the second format, whose upper() lines say
+        only NOT checked; the new one, of the fifth, did not measure the
+        conversion back either: the line on that is printed all the same
+        (review round 2, A3)."""
+        old = self.made(RHEL8, 'o2', with_parts(form='locale_order/2'))
+        new = self.made(RHEL9, 'n5', with_parts(use=measured_use(8, **EUC_TW_USE),
+                                                form='locale_order/5'))
+        use = self.use(old, new)
+        self.assertTrue([d for d in use if 'earlier' in d])
+        early, = [d for d in use if 'back earlier' in d]
+        self.assertEqual(early['back earlier'], ['NEW'])
+
+    def test_a_row_of_another_encoding_on_a_utf8_machine(self):
+        """ja_JP is of EUC-JP on the old machine, whose converter refuses
+        AD A1, and of UTF-8 on the new one: AD A1 is no UTF-8 a database
+        holds, so the new machine's column is not measured, never "converts"
+        (review round 2, N1)."""
+        def utf8(d):
+            d['postgres_use']['ja_JP'] = use_of('converts', 'UTF-8', (0x80, 'c280'))
+            d['locales']['ja_JP']['codeset'] = 'UTF-8'
+            refirst(d)
+        report, summary, rows = self.outputs(*self.both8(
+            old_converter=self.entry('EUC-JP', 'ja_JP', (b'\xad\xa1',)),
+            new_edits=[utf8]))
+        got = {names: [(r['bytes'], r['before'], r['now']) for r in rows[(label,)]]
+               for label, (names, cs) in rows.use_groups.items()}
+        self.assertEqual(got[('ja_JP',)], [('AD A1', 'error', 'not measured')])
+
+
 # --- the model against the table, every combination -------------------------
 
 # One locale's name, and each encoding of a row of the approved table, as
@@ -10491,6 +11246,11 @@ def oracle_specs():
             nine = enc in m.CONVERTER_CODESETS and 'converter' in m.PARTS[form]
             for ev in ORACLE_CONVERTER if nine else ORACLE_EVIDENCE[enc]:
                 out.append((form, 'accepted', enc, ev))
+        if 'utf8_forward' in m.PARTS[form]:
+            # UTF-8's converter measured on every character, which could
+            # not be measured: not known, whatever the test of one
+            # character said.
+            out.append((form, 'accepted', 'UTF-8', 'unmeasured'))
     return out
 
 
@@ -10515,6 +11275,8 @@ def oracle_machine(spec):
         r = use_of('not checked', enc, 'checking failed: x')
     elif ev == 'one byte':
         r = use_of('one byte', enc)
+    elif ev == 'unmeasured':
+        r = use_of('converts', enc, ORACLE_CHAR.get(enc))
     else:
         r = use_of(ev, enc, ORACLE_CHAR.get(enc))
     if cat == 'refused':
@@ -10542,6 +11304,9 @@ def oracle_machine(spec):
                              m.pack_order(values), sequences_of(enc)]
         d['converter'] = part
         d['utf8_forward'], d['back'] = round_trip_of_use(d['postgres_use'], part)
+        if ev == 'unmeasured':
+            d['utf8_forward'] = ['not checked', ['opens', None], ORACLE_NAME,
+                                 'measuring it failed: x', None]
     return d
 
 
@@ -10557,7 +11322,9 @@ def oracle_answer(old, new):
     have the locale: only the databases made on the new one exist, and the
     locale is named only where they give an error, are not known, or are of
     any encoding, and not at all where the new machine refuses it or its
-    file says nothing of how PostgreSQL uses it."""
+    file says nothing of how PostgreSQL uses it. A locale that converts,
+    but on a machine whose file is of a format before the back leg, is
+    'back unknown'."""
     if old == ORACLE_ABSENT and (
             'postgres_use' not in m.PARTS[new[0]] or new[1] == 'refused'):
         return None, set(), set(), set()
@@ -10574,7 +11341,8 @@ def oracle_answer(old, new):
             return 'unread', None, None
         if enc is None:
             return 'accepted', None, 'not checked'
-        return 'accepted', enc, ev
+        # What the whole measurement could not say outweighs one character.
+        return 'accepted', enc, 'not checked' if ev == 'unmeasured' else ev
 
     def databases(spec):
         state, enc, _ = view(spec)
@@ -10607,9 +11375,13 @@ def oracle_answer(old, new):
     refused = 'refused' in (so[0], sn[0])
     partial = {side for side, spec, v in (('old', old, so), ('new', new, sn))
                if v[0] == 'accepted' and v[1] == 'EUC-JP' and v[2] == 'refuses'}
+    # A file before the part that measures an encoding's converter tried one
+    # character of it: the converter part for the nine, utf8_forward for
+    # UTF-8.
     unsaid = {side for side, spec, v in (('old', old, so), ('new', new, sn))
-              if v[0] == 'accepted' and v[1] in m.CONVERTER_CODESETS
-              and 'converter' not in m.PARTS[spec[0]] and v[2] != 'fails'}
+              if v[0] == 'accepted' and v[2] != 'fails' and (
+                  (v[1] in m.CONVERTER_CODESETS and 'converter' not in m.PARTS[spec[0]])
+                  or (v[1] == 'UTF-8' and 'utf8_forward' not in m.PARTS[spec[0]]))}
     absent = old == ORACLE_ABSENT
     carried = databases(old)
     dbs = carried + [db for db in databases(new) if db not in carried]
@@ -10632,6 +11404,11 @@ def oracle_answer(old, new):
         return None, set(), partial, unsaid
     if b in ('one byte', 'none') and a == 'one byte':
         return 'one byte', set(), partial, unsaid
+    # The back leg: measured from the sixth format; a machine whose
+    # database converts text there, of a format before, cannot say it.
+    if any(x == 'works' and 'back' not in m.PARTS[spec[0]]
+           for f in found for x, spec in zip(f, (old, new))):
+        return 'back unknown', set(), partial, unsaid
     return 'converts', set(), partial, unsaid
 
 
@@ -10675,7 +11452,7 @@ class TextModelAgainstTheTable(unittest.TestCase):
         answers = [oracle_answer(o, n) for o, n in itertools.product(oracle_specs(), repeat=2)]
         self.assertEqual({a[0] for a in answers},
                          {None, 'left out', 'error', 'unknown', 'elsewhere',
-                          'one byte', 'converts'})
+                          'one byte', 'converts', 'back unknown'})
         # And a locale only on the new machine: an error there, not known,
         # of any encoding, or named nowhere else.
         absent = [oracle_answer(ORACLE_ABSENT, n) for n in oracle_specs()]
