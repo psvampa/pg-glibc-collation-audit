@@ -5,16 +5,36 @@ it concluded it FROM. The audit reads a third-party mirror
 (github.com/bminor/glibc) and addresses it by tag, and a tag is a mutable
 pointer -- nothing else here notices if it moves.
 
-Ordering matters: if these fail, every number in test_known_answers.py is
-suspect, and reading a count mismatch there as a code regression would be wrong.
+Ordering matters: if a tag no longer resolves to its pinned commit, every
+number in test_known_answers.py is suspect, and reading a count mismatch
+there as a code regression would be wrong.
+
+One class is about the suite instead: HasTagsAnswersTheQuestionAsked holds
+the harness's answer to which tags the clone has, which decides whether
+every clone-gated class of the suite runs or skips.
 """
 import subprocess
 import unittest
 
 from _harness import (EXPECTED_SHA, FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID,
-                       NEW, OLD, needs_clone)
+                       NEW, OLD, has_tags, needs_clone)
 
 import glibc_locale_data as g
+
+
+@needs_clone
+class HasTagsAnswersTheQuestionAsked(unittest.TestCase):
+    """has_tags remembers its answers for the life of a process. A
+    remembered answer must be the one to the question asked: a tag the
+    clone lacks is missing after a tag it has was asked about, alone and
+    beside it, or a class whose tags are gone runs instead of skipping."""
+
+    def test_a_missing_tag_stays_missing_after_a_present_one(self):
+        missing = 'glibc-0.0-no-such-tag'
+        self.assertTrue(has_tags(OLD))
+        self.assertFalse(has_tags(missing))
+        self.assertFalse(has_tags(OLD, missing))
+        self.assertTrue(has_tags(OLD))
 
 
 @needs_clone
