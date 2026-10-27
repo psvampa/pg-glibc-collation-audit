@@ -5,6 +5,7 @@ glibc clone SKIPS with a reason instead of failing, and so that running the
 suite never writes into the shared /tmp output directory the scripts default to.
 """
 import atexit
+import functools
 import gzip
 import io
 import os
@@ -76,11 +77,24 @@ EXPECTED_SHA = {
 }
 
 
+@functools.lru_cache(maxsize=None)
 def have_clone():
     """Is there a usable glibc clone to run the git-backed layers against?
 
     Asked of git, not of the filesystem: audit-locale-diff.sh clones with
     --no-checkout, so localedata/locales never appears on disk.
+
+    Asked once per process. Every decorated class of a module asks when the
+    module is imported, and run_parallel imports each module once per class,
+    so unremembered the answer cost thousands of git calls a run. A process
+    imports its test modules before its tests run, so a test that changes
+    the clone (one fetches tags into it) cannot change an answer a decorator
+    was given. One test imports them while it runs:
+    test_parallel_runner's test_it_counts_what_unittest_discover_counts,
+    which reads only how many tests each module holds, and a skip does not
+    change that. A test that needs the clone to look absent replaces this
+    function, which the decorators below look up each time they run
+    (test_published_claims, tests_without_a_clone).
     """
     if not os.path.isdir(GLIBC_CLONE):
         return False
@@ -88,8 +102,12 @@ def have_clone():
     return g._is_glibc_clone(GLIBC_CLONE)
 
 
+@functools.lru_cache(maxsize=None)
 def has_tags(*tags):
-    """Are these tags present locally? A shallow or fresh clone may lack them."""
+    """Are these tags present locally? A shallow or fresh clone may lack them.
+
+    Asked once per process for each list of tags, in the order given, as
+    have_clone is."""
     for tag in tags:
         p = subprocess.run(['git', 'rev-parse', '--verify', '--quiet',
                             f'{tag}^{{commit}}'],
@@ -293,7 +311,11 @@ def tag_charmaps(tag, dest, edit=None):
                 if edit and name in edit:
                     data = edit[name](data.decode('latin-1')).encode('latin-1')
                 with open(os.path.join(dest, name + '.gz'), 'wb') as fh:
-                    fh.write(gzip.compress(data, mtime=0))
+                    # Level 6, gzip's own default: nothing that reads these
+                    # depends on the level, and
+                    # gzip.compress's default of 9 took several times as
+                    # long per tag.
+                    fh.write(gzip.compress(data, compresslevel=6, mtime=0))
     return dest
 
 
