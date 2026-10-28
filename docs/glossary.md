@@ -105,7 +105,8 @@ with `--old-node` and `--new-node`. What it holds is in
 
 **measured order** (step 11) — how a machine's own glibc sorts, asked of the
 machine rather than read from source. For every locale `locale -a` lists, it
-records where each character the locale can hold sorts, and how each two
+records where each character, and each lone byte, a database of the locale
+can hold sorts, and how each two
 neighbours in that order are told apart. It uses the call PostgreSQL makes
 under a `libc` collation, so it sees what a source comparison cannot, such as
 `ko_KR` between glibc 2.28 and 2.34.

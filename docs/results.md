@@ -92,8 +92,8 @@ under `en_US` and `zh_TW` on glibc 2.28 and 2.34.
 
 Step 11 swept every character of `zh_TW.utf8`, `zh_HK.utf8` and
 `zh_SG.utf8` on the three test machines and found no change in either pair.
-What it cannot see is a rule for a combination of characters, and
-`zh_TW.euctw`, whose order it cannot measure.
+What it cannot see is a rule for a combination of characters. It measures
+`zh_TW.euctw` too, by its bytes, and finds no change there either.
 
 ardentperf reports a `glibc` engine and an `icu` engine, and only the first
 bears on a `libc` collation. Between RHEL8 and RHEL9 every locale changes
@@ -223,8 +223,8 @@ character moved, 힣 (U+D7A3), the last Hangul syllable
 ([the mechanism above](#the-ko_kr-mechanism-and-its-minimal-test-case)).
 Every other locale it measured sorts the same, `ber_DZ`, `kab_DZ`, `zh_CN.utf8`
 and `en_US.utf8` among them, though a few only as far as they could be
-measured. The comparison names those, and also the few it could not measure
-or that are missing from the new machine.
+measured. The comparison names those, and also those missing from the new
+machine.
 
 On those machines glibc also stops converting the text of the locales whose
 encoding needs a converter from `glibc-gconv-extra`, the EUC ones and TIS-620
@@ -241,8 +241,7 @@ brings it in on 8 and not on 9 or 10.
 `th_TH.tis620`, `thai`) and in `th_TH.utf8`. Every other locale it measured
 sorts the same, `ber_DZ`, `kab_DZ` and `C.utf8` among them, though a few only as far
 as they could be measured, `ko_KR.utf8` among those. The comparison names
-them, and also the few it could not measure or that are missing from the new
-machine. The same locales that need `glibc-gconv-extra` stop `upper()`,
+them, and also those missing from the new machine. The same locales that need `glibc-gconv-extra` stop `upper()`,
 `lower()` and `ILIKE` with an error on both machines, for the same reason.
 
 No published verdict moved. What step 11 does not see is in
