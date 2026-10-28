@@ -115,10 +115,14 @@ see:
 - how two neighbours are told apart at a level where no pair could be found
   to measure it. The run names those locales as unchanged only as far as
   measured;
-- a locale whose encoding PostgreSQL does not know, in a database of another
-  encoding, which PostgreSQL allows. The bytes it sorts there are not the
-  ones measured, and the run names those locales, with what it measured of
-  how they convert;
+- a locale whose encoding PostgreSQL does not know, such as Thai in TIS-620
+  (`th_TH`, `th_TH.tis620`) or Georgian in GEORGIAN-PS (`ka_GE`), used in a
+  database of another encoding. PostgreSQL allows it with only a WARNING
+  ("could not determine encoding for locale"), and then sorts that
+  database's own bytes with that locale, not the ones measured here. The
+  run does not measure that order, and command 3 does not confirm it
+  either. The run names each such locale, with what it measured of how its
+  bytes convert;
 - a sequence of bytes that no character set of glibc 2.28, 2.34 or 2.39
   gives a character, such as one a later glibc or a distro's patch adds. The
   sequences those three releases give a character, and that are not UTF-8,
