@@ -46,7 +46,7 @@ more.
 | 6 and 7 | do the distro's patches on that machine touch sort order? One step per side |
 | 8 | does one machine's collation data differ from the other's? |
 | 9 and 10 | the question of step 4, asked of that machine's own data. One step per side |
-| 11 | how does each machine's own glibc sort the locales installed on it, and which characters moved between the two? |
+| 11 | how does each machine's own glibc sort the locales installed on it, and which characters and other strings moved between the two? |
 
 Three of those answer questions the upstream comparison cannot reach at all:
 
@@ -57,7 +57,8 @@ Three of those answer questions the upstream comparison cannot reach at all:
   and it needs both machines. `C.UTF-8` is that locale on RHEL8 and RHEL9, and
   in a container it is usually the database collation.
 - **How each machine really sorts.** Step 11 reads no source. It asks each
-  machine's glibc to order every character the locale can hold, with the call
+  machine's glibc to order every character, and every lone byte, a database of
+  the locale's encoding can hold, with the call
   PostgreSQL makes under a `libc` collation, and compares the two machines.
   That is how it sees `ko_KR`, whose file is identical at 2.28 and 2.34 while
   its order changed. What it does not measure, it prints beside its result.
@@ -71,9 +72,9 @@ A file without the locale sources still holds the measurement and the build,
 because the extraction notes why the sources are missing and goes on. Step 11
 runs. Every summary block that needed those sources says `NOT RUN`, or `NOT
 CHECKED`, with the file's reason, such as `/usr/share/i18n/locales is empty`.
-A file without the charmaps, or one written before `--extract` packed them,
-is read the same way, and steps 6 to 8 say `NOT RUN` for the character sets,
-with the reason.
+A file without the charmaps is read the same way. Steps 6 to 8 say `NOT RUN`
+for the character sets, and step 11 says it did not check the strings it
+measured against them, each with the reason.
 
 **Steps 6 to 10 settle data, not order.** The weights are computed when the
 locale is built, so two machines can hold byte-identical files
@@ -99,9 +100,7 @@ library than the one measured, because an update replaced it on disk or
 because they run another file, as in a container. Step 11 compares the
 decimals, those two answers and the character rules between the two machines,
 and checks each machine's processes against
-what was measured there. A file written before they were measured still
-compares, and step 11 says they were not checked on that machine; a locale
-glibc refused there reads as one that could not be measured.
+what was measured there.
 
 The README's install line names the exact glibc build the machine runs, so
 `dnf` installs the sources of that build and nothing else. A plain `dnf
@@ -137,9 +136,9 @@ them already, such as a copy of the locale folder taken from an image:
 `--old-locales-dir` and `--new-locales-dir`, each with its `--old-build-id` or
 `--new-build-id`, and `--old-order` and `--new-order`, each the output of a
 plain `python3 scripts/locale_order.py > old.out` on that machine. One check
-is not among them. Steps 6 to 8 compare the machines' character sets only
-from a node file, because no piece carries the charmaps, and from the pieces
-they say so. Take a
+is not among them. Steps 6 to 8 compare the machines' character sets, and
+step 11 checks the strings it measured against them, only from a node file,
+because no piece carries the charmaps, and from the pieces they say so. Take a
 folder with `tar` over `ssh`, never `docker cp`, whose target `/tmp` in a
 container is a separate mount, so the copy silently does nothing. `rpm -q
 glibc` gives the build id, with or without the architecture (`...x86_64`).

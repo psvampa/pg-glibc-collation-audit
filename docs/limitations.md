@@ -100,7 +100,11 @@ anyway.
 ## Step 11 measures one character at a time
 
 Step 11 asks each machine's glibc where every character a locale can hold
-sorts, and how each two neighbours in that order are told apart. It does not
+sorts, and how each two neighbours in that order are told apart. With the
+characters it measures every lone byte, and every other sequence of bytes
+that glibc's character set for the locale or PostgreSQL reads as one
+character, so text stored through `COPY ... ENCODING 'SQL_ASCII'`, or in a
+SQL_ASCII database, is in the order too, one string at a time. It does not
 see:
 
 - a rule for a particular combination of letters, such as a contraction (`ch`
@@ -108,27 +112,29 @@ see:
   sort some longer strings apart;
 - a change in how a character is told apart from its neighbour where glibc
   ignores that character at some level, which it reads less reliably;
-- a locale whose encoding Python cannot convert, since the bytes PostgreSQL
-  would compare cannot be built. On the three test machines that was four
-  locales each, `hy_AM.armscii8`, `ka_GE`, `ka_GE.georgianps` and
-  `zh_TW.euctw`, and the run names them as not known to be unchanged;
-- the few byte sequences that PostgreSQL stores, for characters it converts
-  from UTF-8, in a database of an EUC-JP, EUC-KR or TIS-620 locale, and that
-  the strings measured do not hold. The run names them under the locales of
-  those encodings, and its characters file lists every one;
+- how two neighbours are told apart at a level where no pair could be found
+  to measure it. The run names those locales as unchanged only as far as
+  measured;
 - a locale whose encoding PostgreSQL does not know, in a database of another
   encoding, which PostgreSQL allows. The bytes it sorts there are not the
   ones measured, and the run names those locales, with what it measured of
   how they convert;
-- the bytes a database holds that PostgreSQL did not convert from UTF-8, as
-  from a client of the database's own encoding, and the bytes of a SQL_ASCII
-  database, which a superuser can create with any locale. PostgreSQL stores
-  them as the client sent them, and the run does not name them;
+- a sequence of bytes that no character set of glibc 2.28, 2.34 or 2.39
+  gives a character, such as one a later glibc or a distro's patch adds. The
+  sequences those three releases give a character, and that are not UTF-8,
+  that PostgreSQL does not accept in EUC-TW, or that Python does not read in
+  another encoding of more than one byte, are measured from a list made from
+  them, and a locale of an encoding of more than one byte the list does not
+  cover is named as not measured. Given each machine's file from `--extract`,
+  the run compares the list with the machine's own character sets, and names
+  a locale whose character set gives a character to a sequence the list
+  lacks as measured in part; without that file it says it did not check;
 - a locale that is not installed, because it measures what `locale -a` lists
   and nothing else.
 
-The run prints the first two beside its result every time, and the fourth
-and fifth whenever it measured a locale they apply to. Command 3 sorts
+The run prints the first two beside its result every time, the third and
+the fourth whenever it measured a locale they apply to, and the fifth
+whenever it finds such a sequence or could not look for one. Command 3 sorts
 strings you choose inside PostgreSQL, and reaches a rule for a combination of
 letters when the strings contain it.
 

@@ -39,14 +39,16 @@
 # The --*-order options are optional too, and go together. Each is what
 # scripts/locale_order.py wrote on that machine: how its own glibc sorts every
 # locale. Step 11 compares the two, so it answers from each machine's glibc
-# rather than from locale sources, and names the characters that moved.
+# rather than from locale sources, and names the characters and other
+# strings that moved.
 #
 # The --*-node options go together and stand for all of the above. Each is the
 # one file `scripts/locale_order.py --extract` wrote on that machine, holding
 # its measurement, its locale sources, its charmaps and its glibc build. A
 # file without the sources or the charmaps says why, and the summary repeats
 # it where their checks would have answered. Only a node file carries the
-# charmaps, so only with these options do steps 6 to 8 compare them.
+# charmaps, so only with these options do steps 6 to 8 compare them and step
+# 11 check what it measured against them.
 #
 # Example (the tags are examples -- run `ldd --version` on each node):
 #   ./audit.sh glibc-2.28 glibc-2.34
@@ -224,11 +226,13 @@ NEW_DISTRO_KEYED="$OUT_DIR/distro_keyed_locales.$(slug "$NEW" new).txt"
 # for the pair, like every other file this run reads.
 #
 # The charmaps go to steps 6 to 8 with the measurement, which names the
-# locales the machine builds with them; a file without them says why, and the
-# steps print that reason under their NOT RUN. A copied folder
+# locales the machine builds with them, and to step 11, which checks the
+# strings it measured against them; a file without them says why, and the
+# steps print that reason under their NOT RUN or NOT checked. A copied folder
 # (--*-locales-dir) has neither, and the steps keep their notice that the
 # character sets are not compared.
 OLD_NO_SOURCES=""; NEW_NO_SOURCES=""; OLD_CM=(); NEW_CM=(); NODE_CM=()
+ORDER_CM=()
 OLD_CM_WHY=""; NEW_CM_WHY=""; reasons=""; NOCM=()
 if [ -n "$OLD_NODE" ]; then
   mkdir -p "$OUT_DIR"
@@ -257,6 +261,7 @@ if [ -n "$OLD_NODE" ]; then
       cm=(--charmaps-dir "$dir/charmaps" --measurement "$dir/locale_order.out")
       NODE_CM+=("--$side-charmaps-dir" "$dir/charmaps"
                 "--$side-measurement" "$dir/locale_order.out")
+      ORDER_CM+=("--$side-charmaps" "$dir/charmaps")
     elif [ -s "$dir/charmaps-not-included" ]; then
       cmreason=$(cat "$dir/charmaps-not-included")
       if [ -z "$cmreason" ]; then
@@ -265,6 +270,7 @@ if [ -n "$OLD_NODE" ]; then
         cmreason="the file gives no reason that can be printed"
       fi
       cm=(--no-charmaps "$file holds no charmaps, because $cmreason")
+      ORDER_CM+=("--$side-no-charmaps" "$file holds no charmaps, because $cmreason")
     else
       # Unreachable as --unpack stands: it lays out one of the two or fails.
       echo "error: the $side node's file laid out neither its charmaps nor" >&2
@@ -355,13 +361,16 @@ rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
 # included.
 ORDER_LOG="$OUT_DIR/measured_order.$PAIR.log"
 ORDER_SUMMARY="$OUT_DIR/measured_order_summary.$PAIR.txt"
-# Every character and pair step 11 found; its report and summary name it.
+# Every character, other string and pair step 11 found; its report and
+# summary name it.
 ORDER_CHARACTERS="$OUT_DIR/measured_order_characters.$PAIR.tsv"
 rm -f "$ORDER_LOG" "$ORDER_SUMMARY" "$ORDER_CHARACTERS"
 if [ -n "$OLD_ORDER" ]; then
+  # From the --*-order options there are no charmaps, and step 11 says so.
   if ! python3 "$SCRIPTS/locale_order.py" --compare "$OLD_ORDER" "$NEW_ORDER" \
        --tags "$OLD" "$NEW" --summary-to "$ORDER_SUMMARY" \
-       --characters-to "$ORDER_CHARACTERS" > "$ORDER_LOG" 2>&1; then
+       --characters-to "$ORDER_CHARACTERS" ${ORDER_CM[@]+"${ORDER_CM[@]}"} \
+       > "$ORDER_LOG" 2>&1; then
     cat "$ORDER_LOG" >&2
     if [ -n "$OLD_NODE" ]; then
       # The message above names the measurement as laid out; the reader

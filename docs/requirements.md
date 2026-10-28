@@ -29,7 +29,8 @@ and the run continues.
   `audit.sh` refuses a file that names none, so the machine has to be one
   that installs glibc from RPM.
 - **`glibc-locale-source` at the exact build the machine runs**, for steps 6
-  to 10 (trap 3, below). Without it the machine still gives a file, with the
+  to 10, and for step 11's check of what it measured against the machine's
+  character sets (trap 3, below). Without it the machine still gives a file, with the
   measurement and the build, and the summary says which checks did not run
   and why.
 - **The language packs of the locales you care about.** The measurement
@@ -148,8 +149,9 @@ sources against the upstream version its distro started from, and steps 9 and
 10 scan them; step 8 holds the two machines' against each other, and it is the
 only check that compares a backported locale such as `C` *between* the two
 builds. A machine without the package still gives a file, and those checks
-then say `NOT RUN` with the reason. Step 11 needs the package on neither
-machine.
+then say `NOT RUN` with the reason. Step 11 runs without it, and then says
+it did not check the strings it measured against that machine's character
+sets.
 
 `sql/c_utf8_probe.sql` needs neither langpacks nor that package — `C.utf8`
 exists on every node regardless — and it refuses to run if the collation is
