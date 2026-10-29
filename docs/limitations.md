@@ -115,10 +115,20 @@ see:
 - how two neighbours are told apart at a level where no pair could be found
   to measure it. The run names those locales as unchanged only as far as
   measured;
-- a locale whose encoding PostgreSQL does not know, in a database of another
-  encoding, which PostgreSQL allows. The bytes it sorts there are not the
-  ones measured, and the run names those locales, with what it measured of
-  how they convert;
+- a locale whose encoding PostgreSQL does not know, in a database of
+  another encoding, which PostgreSQL allows with only a WARNING ("could not
+  determine encoding for locale"). On the RHEL 8, 9 and 10 machines this
+  project measured, these are ten: `th_TH`, `th_TH.tis620` and `thai`
+  (TIS-620), `ka_GE` and `ka_GE.georgianps` (GEORGIAN-PS), `kk_KZ` and
+  `kk_KZ.pt154` (PT154), `tg_TJ` and `tg_TJ.koi8t` (KOI8-T), and
+  `hy_AM.armscii8` (ARMSCII-8). Step 11 measures their order over every
+  byte, as for any locale of one byte per character, and reports one whose
+  order changed as changed. In a database of another encoding, a UTF8 one
+  say, PostgreSQL hands the locale that database's bytes, not the ones
+  measured. The run does not identify which strings sort differently there,
+  and a locale it reports unchanged is not shown to sort the same there.
+  Command 3 does not confirm that order either. The run names each such
+  locale, with what it measured of how its bytes convert;
 - a sequence of bytes that no character set of glibc 2.28, 2.34 or 2.39
   gives a character, such as one a later glibc or a distro's patch adds. The
   sequences those three releases give a character, and that are not UTF-8,
