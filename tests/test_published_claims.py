@@ -1682,5 +1682,120 @@ class ThePrivateRulesStayPrivate(unittest.TestCase):
                          f'private working files are tracked: {tracked}')
 
 
+class TheLimitationNamesTheLocalesStep11Names(unittest.TestCase):
+    """docs/limitations.md names, by encoding, every locale whose encoding
+    PostgreSQL does not know on the RHEL 8, 9 and 10 machines measured. A
+    list of locales goes stale with the measurements, so it is held to the
+    other copies of it, which must agree with it and with each other: what
+    step 11's own other_encoding_text names for each recorded file alone
+    (every locale of each machine, one on RHEL 8 only among them) and for
+    the two pairs, and the line both examples print, each copy of which
+    must also be the one step 11 names for that example's pair."""
+
+    LIMITATIONS = os.path.join(REPO_ROOT, 'docs', 'limitations.md')
+    PAIRS = (('rhel8', 'rhel9'), ('rhel9', 'rhel10'))
+    LINE = '!! Not measured in a database of another encoding: '
+    WORDS = dict(enumerate('zero one two three four five six seven eight '
+                           'nine ten eleven twelve'.split()))
+
+    def named(self, old, new, label):
+        """{locale: encoding} other_encoding_text names for old -> new, as
+        the comparison asks it, taken from the by_codeset it calls and held
+        to the text it returns."""
+        import unittest.mock
+        import locale_order as m
+        o, n = old['locales'], new['locales']
+        both = sorted(set(o) & set(n))
+        only_new = sorted(set(n) - set(o))
+        seen = []
+        real = m.by_codeset
+
+        def spy(names, codesets):
+            seen.append(dict(codesets))
+            return real(names, codesets)
+        with unittest.mock.patch.object(m, 'by_codeset', spy):
+            text = m.other_encoding_text(
+                both + only_new, m.TextModel(old, new, both, only_new))
+        self.assertIsNotNone(text, f'{label}: no line')
+        self.assertTrue(seen, f'{label}: by_codeset was not called')
+        self.assertIn(' ' + real(seen[0], seen[0]) + '.', text,
+                      f'{label}: the list captured is not the one printed')
+        return seen[0]
+
+    def printed(self):
+        """[(label, {locale: encoding})] step 11 names for each recorded
+        file against itself and for each pair."""
+        import locale_order as m
+        data = os.path.join(REPO_ROOT, 'tests', 'locale_order')
+        digest = m.corpus_digest()
+        files = {n: m.load(os.path.join(data, n + '.out'), digest)[0]
+                 for n in ('rhel8', 'rhel9', 'rhel10')}
+        out = [(n, self.named(d, d, n)) for n, d in files.items()]
+        for a, b in self.PAIRS:
+            out.append((f'{a}-to-{b}', self.named(files[a], files[b], f'{a} -> {b}')))
+        return out
+
+    def in_examples(self):
+        """[(pair, label, {locale: encoding})] of the two copies of the line
+        in each example, the report's and the summary's."""
+        out = []
+        for a, b in self.PAIRS:
+            path = os.path.join(REPO_ROOT, 'examples', f'{a}-to-{b}-audit-output.txt')
+            text = ' '.join(read(path).split())
+            parts = text.split(self.LINE)[1:]
+            self.assertEqual(len(parts), 2, f'{path}: the line is not in the '
+                             'report and the summary, once each')
+            for i, part in enumerate(parts, 1):
+                mt = re.match(r'(\d+) locale\(s\) .*? is (?:not )?known\. ', part)
+                self.assertIsNotNone(mt, f'{path}: copy {i} unread')
+                groups = part[mt.end():].split('. ')[0].rstrip('.')
+                listed = {}
+                for group in groups.split('; '):
+                    codeset, _, names = group.partition(': ')
+                    self.assertRegex(codeset, r'^[A-Z0-9-]+$', f'{path}: {group!r}')
+                    for name in names.split(', '):
+                        listed[name] = codeset
+                self.assertEqual(len(listed), int(mt[1]),
+                                 f'{path}: copy {i} counts another number')
+                out.append((f'{a}-to-{b}', f'{os.path.basename(path)} copy {i}',
+                            listed))
+        return out
+
+    def documented(self):
+        """(N, {locale: encoding}) of the sentence "these are N: `a` and
+        `b` (ENC), ..." up to "Step 11 measures", or a loud failure."""
+        text = ' '.join(read(self.LIMITATIONS).split())
+        found = re.findall(r'these are (\w+): (.*?)Step 11 measures', text)
+        self.assertEqual(len(found), 1, 'docs/limitations.md: the sentence '
+                         f'"these are N: ..." appears {len(found)} time(s)')
+        word, names = found[0]
+        out = {}
+        for group, codeset in re.findall(r'((?:`[^`]+`(?:, |,? and )?)+) '
+                                         r'\(([A-Z0-9-]+)\)', names):
+            for name in re.findall(r'`([^`]+)`', group):
+                self.assertNotIn(name, out, f'{name} listed twice')
+                out[name] = codeset
+        self.assertEqual(len(re.findall(r'`[^`]+`', names)), len(out),
+                         f'a locale outside the "(ENCODING)" groups: {names}')
+        return word, out
+
+    def test_the_list_is_the_one_step_11_prints(self):
+        word, listed = self.documented()
+        printed = self.printed()
+        examples = self.in_examples()
+        by_pair = dict(printed)
+        for pair, label, named in examples:
+            self.assertEqual(named, by_pair[pair], f'{label} is not what step '
+                             f'11 names for the recorded {pair} files')
+        union = {}
+        for label, named in printed + [(label, named) for _, label, named in examples]:
+            for name, codeset in named.items():
+                self.assertEqual(union.setdefault(name, codeset), codeset,
+                                 f'{name}: {codeset} in {label}, '
+                                 f'{union[name]} before')
+        self.assertEqual(listed, union)
+        self.assertEqual(word, self.WORDS.get(len(union), str(len(union))))
+
+
 if __name__ == '__main__':
     unittest.main()
