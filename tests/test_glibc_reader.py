@@ -2568,6 +2568,11 @@ class StepTwoReadsWhereLocaledefReads(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    def setUp(self):
+        # Every test here reads the text of one run: a run that printed its
+        # list and then stopped is no run to read it from.
+        self.assertEqual(0, self.rc, self.text)
+
     def test_every_change_counts(self):
         self.assertEqual(0, self.rc, self.text)
         self.assertIn('Of the 3 content-changed file(s): 3 touch LC_COLLATE, '
@@ -2619,6 +2624,58 @@ class StepTwoReadsWhereLocaledefReads(unittest.TestCase):
         ej = _STEP2['zz_EJ'][0].decode('ascii')
         self.assertEqual((1, 6), g.collate_bounds(ej))
         self.assertIsNone(g.collate_bounds(_STEP2['zz_IN'][0].decode('ascii')))
+
+
+class TheFactsKeyNamesTheCodeThatMakesThem(unittest.TestCase):
+    """glibc_tree keeps what _facts computes as text, the reasons
+    Tree.unresolved writes with diff_distro_locales.shown among it, under
+    _SELF. A change to any file that makes that text has to start it from
+    nothing, here and in CI's cache; keyed on glibc_tree.py alone, a
+    change to shown() reached no full cache (review of the whole of block
+    15, 2026-10-30)."""
+
+    @staticmethod
+    def self_hash(scripts):
+        p = subprocess.run(
+            [sys.executable, '-c', 'import sys; sys.path.insert(0, %r); '
+             'import glibc_tree; print(glibc_tree._SELF)' % scripts],
+            capture_output=True, timeout=120, check=True)
+        return p.stdout.decode('ascii').strip()
+
+    def test_a_change_to_each_source_changes_the_key(self):
+        import glibc_tree as gt
+        names = sorted(os.path.basename(p) for p in gt._SELF_SOURCES)
+        self.assertEqual(['diff_distro_locales.py', 'glibc_tree.py'], names)
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-self-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        for name in os.listdir(_harness.SCRIPTS_DIR):
+            if name.endswith('.py'):
+                shutil.copy(os.path.join(_harness.SCRIPTS_DIR, name), tmp)
+        base = self.self_hash(tmp)
+        self.assertEqual(gt._SELF, base)
+        for name in names:
+            with self.subTest(name):
+                path = os.path.join(tmp, name)
+                with open(path, 'rb') as fh:
+                    was = fh.read()
+                with open(path, 'ab') as fh:
+                    fh.write(b'\n# a change\n')
+                try:
+                    self.assertNotEqual(base, self.self_hash(tmp))
+                finally:
+                    with open(path, 'wb') as fh:
+                        fh.write(was)
+
+    def test_ci_keys_its_cache_on_the_same_files(self):
+        import glibc_tree as gt
+        with open(os.path.join(os.path.dirname(_harness.TESTS_DIR),
+                               '.github', 'workflows', 'tests.yml'),
+                  encoding='utf-8') as fh:
+            keys = [ln for ln in fh
+                    if ln.strip().startswith('key: glibc-reader-')]
+        self.assertEqual(1, len(keys), keys)
+        for path in gt._SELF_SOURCES:
+            self.assertIn("'scripts/%s'" % os.path.basename(path), keys[0])
 
 
 @needs_clone
@@ -2867,8 +2924,9 @@ class FileFactsReadLikeGlibc(unittest.TestCase):
             os.unlink(path)
 
     def test_a_change_to_glibc_tree_starts_from_nothing(self):
-        """The entry is named after glibc_tree.py's own hash: what _facts
-        computes changes with that file, as runs change with the reader."""
+        """The entry is named after _SELF: what _facts computes changes with
+        the code that computes it, as runs change with the reader
+        (TheFactsKeyNamesTheCodeThatMakesThem)."""
         path = self.gt._facts_path(self.paths, self.ids, self.build,
                                    self.cache)
         self.assertIn(self.gt._SELF, os.path.basename(path))
@@ -3098,6 +3156,11 @@ class _StepTwoNames(object):
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        # As StepTwoReadsWhereLocaledefReads: no test reads a run that
+        # stopped.
+        self.assertEqual(0, self.rc, self.text)
 
     def listed(self, name):
         """The characters printed under `name`, as code points, or None

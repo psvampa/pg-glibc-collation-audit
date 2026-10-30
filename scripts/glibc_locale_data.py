@@ -1889,10 +1889,9 @@ def supported_map(repo, tag):
     localedata/SUPPORTED, in the spelling localedef gives them (sv_FI.utf8).
 
     Step 2 prints these names for the locales a tag adds; steps 3 and 4 read
-    the map to say which locales are not built by default, and step 4 also
-    takes an empty map for a run with no tag. They are not every name a
-    locale takes: the archive and RHEL add others (sv_SE.iso885915), and
-    locale.alias adds swedish (backlog 13.1).
+    the map to say which locales are not built by default. They are not
+    every name a locale takes: the archive and RHEL add others
+    (sv_SE.iso885915), and locale.alias adds swedish (backlog 13.1).
     """
     contents, _ = read_blobs(repo, tag, [SUPPORTED])
     return parse_supported(contents.get(SUPPORTED), tag)

@@ -128,6 +128,7 @@ _SKIP_NO_FLOOR_TAGS = (
     f"run `git -C scripts/glibc fetch --tags`.")
 
 
+
 def fill_reader_cache():
     """Compute, with every processor, the localedef runs most of the suite
     asks scripts/reader_cache.py for: every locale of the five tags, and of
@@ -244,7 +245,16 @@ def glibc_shaped(root, base=MID):
     0.06 s against 0.4 s for a --shared clone that checks out and deletes
     the tag's 355 locale files (backlog 15.2 B3, measured on the Mac). The
     fixture's commits carry its own identity, as before. `root` may hold
-    the fixture's files already; the caller adds and commits them."""
+    the fixture's files already; the caller adds and commits them.
+
+    A class that calls it needs the clone, and says so with @needs_clone,
+    so that it skips without one and test_published_claims counts it.
+    One that does not fails here, saying which mark it lacks, rather than
+    with a FileNotFoundError (review of the whole of block 15)."""
+    if not have_clone():
+        raise RuntimeError('glibc_shaped needs the glibc clone; mark the '
+                           'calling class @needs_clone')
+
     def git_(*args):
         return subprocess.run(['git', '-C', root] + list(args), check=True,
                               stdout=subprocess.PIPE).stdout.decode().strip()

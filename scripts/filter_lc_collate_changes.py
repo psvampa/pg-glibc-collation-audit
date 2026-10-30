@@ -996,7 +996,12 @@ def check_charmaps(reads, repo, side_old, side_new, sup, names, new_tree):
         # Step 3's own rule (resolve_copy_closure), on the same tree: the
         # names step 2 passes it, every locale whose run at the new tag
         # reaches one of them through `copy`, and every locale whose run
-        # is not settled.
+        # is not settled. Only when step 2 passes it a name: audit.sh runs
+        # step 3 only then, or when this check lists one, so with no name
+        # a locale whose run is not settled is listed here, never taken as
+        # listed by a step that does not run.
+        if not names:
+            return set()
         tree, roots = new_tree(), set(names)
         return (roots | {n for n in tree.names if tree.roots(n, roots)}
                 | set(tree.unresolved()))

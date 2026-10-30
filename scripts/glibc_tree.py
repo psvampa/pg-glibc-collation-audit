@@ -471,10 +471,21 @@ def _facts(tree, load):
             for n in tree.names}
 
 
-with open(os.path.abspath(__file__), 'rb') as _fh:
-    # What _facts computes is kept under this file's own hash too, so a
-    # change here starts it from nothing as a change to the reader does.
-    _SELF = hashlib.sha1(_fh.read()).hexdigest()[:12]
+def _sources_hash(paths):
+    h = hashlib.sha1()
+    for path in paths:
+        with open(path, 'rb') as fh:
+            h.update(fh.read())
+    return h.hexdigest()[:12]
+
+
+# What _facts computes is kept under the hash of the code that computes it,
+# so a change to that code starts it from nothing as a change to the reader
+# does: this file, and diff_distro_locales.py, whose shown() writes the
+# names in the reasons Tree.unresolved gives and _facts keeps as text.
+# .github/workflows/tests.yml keys its cache on the same files.
+_SELF_SOURCES = [os.path.abspath(__file__), os.path.abspath(dd.__file__)]
+_SELF = _sources_hash(_SELF_SOURCES)
 
 
 def _facts_path(paths, ids, build, cache_dir):
@@ -529,10 +540,10 @@ def file_facts(repo, tag, paths, ids, build, cache_dir=None):
     tree's runs for two tags cost each run of step 2 about 0.5 s (backlog
     15.2 B3, measured). The answer
     is derived from those runs and nothing else, kept next to them under
-    the reader's version, the build and this file's hash; an entry that
-    cannot be read, reads as another shape or other names, or names a
-    character map that is not kept (reader_cache.maps_kept), is computed
-    again from the runs, which then compute that map again."""
+    the reader's version, the build and _SELF (the hash of _SELF_SOURCES);
+    an entry that cannot be read, reads as another shape or other names,
+    or names a character map that is not kept (reader_cache.maps_kept), is
+    computed again from the runs, which then compute that map again."""
     path = _facts_path(paths, ids, build, cache_dir)
     names = {os.path.basename(p) for p in paths}
     if len(names) != len(paths):
@@ -569,7 +580,8 @@ def same_run(files, name, b0, b1):
     the same with Build b0 and with Build b1? run()'s summary, and every
     token of every LC_COLLATE statement, every field of each (Tok's
     slots): reader_cache keeps the summary alone, which holds how many
-    statements each file gave and not what they say. Computed, never kept,
+    statements each file gave, the words met and the characters each line
+    names, and not every token of a statement. Computed, never kept,
     and compared token by token, stopping at the first difference: making a
     value of each run cost about 3.5 s a run where reading it costs 0.25 s
     (backlog 15.2 B3, measured on the Mac)."""
@@ -639,8 +651,8 @@ def across(ids, load, b0, b1, cache_dir=None):
     same tables; such a run is unsettled with each, and stays unresolved.
 
     Kept next to the reader's answers, under the reader's version, both
-    builds, this file's hash and the tree's blob ids; an entry that cannot
-    be read or holds another shape is computed again."""
+    builds, _SELF and the tree's blob ids; an entry that cannot be read or
+    holds another shape is computed again."""
     path = _across_path(ids, b0, b1, cache_dir)
     names = set(ids)
     got = _kept_across(path, names)

@@ -866,12 +866,16 @@ class BelowTheOldVersionFloor(StepRun):
         finding (false-negative-reviewer, 15.2 B3)."""
         out_dir = tempfile.mkdtemp(prefix='pg-glibc-floor-tree-')
         self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        # The spy takes every argument at_tag takes, and names its caller:
+        # glibc_tree.file_facts reads trees through at_tag too when its
+        # facts are not kept, and only new_tree's read is step 3's tree.
         code = ("import sys; sys.path.insert(0, %r)\n"
                 "import glibc_tree\n"
                 "real = glibc_tree.Tree.at_tag.__func__\n"
-                "def spy(cls, repo, tag, build=None):\n"
-                "    print('TREE', tag, build.label if build else None)\n"
-                "    return real(cls, repo, tag, build)\n"
+                "def spy(cls, repo, tag, build=None, *a, **k):\n"
+                "    print('TREE', sys._getframe(1).f_code.co_name, tag,\n"
+                "          build.label if build else None)\n"
+                "    return real(cls, repo, tag, build, *a, **k)\n"
                 "glibc_tree.Tree.at_tag = classmethod(spy)\n"
                 "import filter_lc_collate_changes as f\n"
                 "sys.exit(f.main([%r, %r]))\n"
@@ -881,9 +885,12 @@ class BelowTheOldVersionFloor(StepRun):
                            env=dict(os.environ, PG_GLIBC_AUDIT_OUT=out_dir))
         out = (p.stdout + p.stderr).decode('utf-8', 'replace')
         self.assertEqual(0, p.returncode, out[-2000:])
-        trees = re.findall(r'^TREE (\S+) (\S+)$', out, re.M)
-        self.assertIn((FLOOR_NEW, FLOOR_NEW), trees, out[-2000:])
-        self.assertEqual([], [t for t in trees if t[0] != t[1]])
+        # The label last and whole: an RHEL build's has blanks in it.
+        trees = re.findall(r'^TREE (\S+) (\S+) (.+)$', out, re.M)
+        self.assertEqual([(FLOOR_NEW, FLOOR_NEW)],
+                         [(t, b) for c, t, b in trees if c == 'new_tree'],
+                         out[-2000:])
+        self.assertEqual([], [t for t in trees if t[1] != t[2]])
 
     def test_step_2_finds_seven_locales_touching_lc_collate(self):
         """Six whose rules changed, and wal_ET, whose change glibc_reader

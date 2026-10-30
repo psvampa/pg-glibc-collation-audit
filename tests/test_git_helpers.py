@@ -1525,6 +1525,7 @@ class TheRealReleaseBranchIsOrderedCorrectly(unittest.TestCase):
                                  'forward')
 
 
+@needs_clone
 class TheStepsRefuseAReversedPair(unittest.TestCase):
     """The call site, not only the classifier: what each state DOES is a
     different mistake from what each state IS. Step 2 on the fabricated
@@ -1714,12 +1715,14 @@ class Step1RefusesAReversedPairBeforeReportingAnything(unittest.TestCase):
         self.assertIn("unknown argument '--nonsense'", out)
 
 
+@needs_clone
 class TagModeCorpusFloor(unittest.TestCase):
     """"No corpus floor in tag mode": a tag whose tree holds a handful of
     locale files -- or none -- made step 2 print "0 changed", step 4 print
     "No locale uses ellipsis ranges here", and both exit 0. The node modes had
-    refused such a directory from the start. No clone needed: the repository
-    is fabricated, because no pinned tag is small enough to show it."""
+    refused such a directory from the start. The repository is fabricated,
+    because no pinned tag is small enough to show it, and sits on a real tag
+    (glibc_shaped), so the clone is needed."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix='pg-glibc-tiny-repo-')
@@ -1760,6 +1763,7 @@ class TagModeCorpusFloor(unittest.TestCase):
         self.assertEqual(rc, 0, out)
 
 
+@needs_clone
 class RenamedFileGainsABlock(unittest.TestCase):
     """"Step 2 aborted on a rename without an old LC_COLLATE block", end to end
     on a fabricated repository: `x` (no block) becomes `y` (with one). The old
@@ -1800,6 +1804,7 @@ class RenamedFileGainsABlock(unittest.TestCase):
                       '(1): A (U+0041)', flat(out))
 
 
+@needs_clone
 class APureRenamePassesTheNoHunkCheck(unittest.TestCase):
     """A file git reports as renamed with no change has no hunk, and step 2
     now refuses a changed file with no hunk unless both tags hold the same
@@ -1824,6 +1829,7 @@ class APureRenamePassesTheNoHunkCheck(unittest.TestCase):
         self.assertIn('renamed: 1', out)
 
 
+@needs_clone
 class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
     """Step 2 end to end on a fabricated repository, for what no locale
     file at glibc-2.12..2.42 does: a line above LC_COLLATE that stops glibc
@@ -2251,6 +2257,7 @@ def read_list(path):
         return [ln.rstrip('\n') for ln in fh if ln.strip()]
 
 
+@needs_clone
 class Step2ListsWhatTheTagsRemove(unittest.TestCase):
     """With no node read, step 2 is the only step that knows a
     locale file is gone at the new tag, and it said so only in its own output.
@@ -2314,6 +2321,7 @@ class Step2RemovalListOnThePublishedPairs(unittest.TestCase):
                          [f'# locale files at {OLD} and not at {MID}'])
 
 
+@needs_clone
 class AGainedBlockThatNamesNoCharacter(unittest.TestCase):
     """The case the attempt before it got wrong: a file
     that gains a block naming no character -- a bare `copy` -- was reported as
@@ -2347,6 +2355,7 @@ class AGainedBlockThatNamesNoCharacter(unittest.TestCase):
         self.assertNotIn('characters in the changed rules', flat(out))
 
 
+@needs_clone
 class AChangedCommentCharIsARulesChange(unittest.TestCase):
     """Backlog 13.7, end to end on a fabricated repository. `loc_000` keeps
     the text of its LC_COLLATE block from t2 to t3 and is read with another
@@ -3003,6 +3012,7 @@ def make_translit_repo(root):
     return root
 
 
+@needs_clone
 class StepTwoComparesTransliterations(unittest.TestCase):
     """Step 2's transliteration check end to end on a repository built for
     it: the element uz_XX builds out of a transliteration, at both tags,
@@ -3109,6 +3119,7 @@ class StepTwoComparesTransliterations(unittest.TestCase):
         self.assertNotIn('built differently', flat(out))
 
 
+@needs_clone
 class StepTwoNamesWhatItDidNotCompare(unittest.TestCase):
     """make_glibc_shaped_repo's SUPPORTED names x and y at both tags, and
     the rename leaves each source at one tag only: nothing is compared, and
@@ -3132,6 +3143,7 @@ class StepTwoNamesWhatItDidNotCompare(unittest.TestCase):
                       blocks)
 
 
+@needs_clone
 class StepTwoComparesCharmaps(unittest.TestCase):
     """Step 2 end to end on a repository built for it: what goes to step 3
     in step2_keyed_locales.<pair>.txt, what it counts as listed anyway, and
@@ -3247,6 +3259,87 @@ class StepTwoComparesCharmaps(unittest.TestCase):
         self.assertIn('Character sets and transliterations: not compared, the '
                       'two tags are one commit.', out)
         self.assertEqual(listed, [])
+
+
+def make_unsettled_charmap_repo(root):
+    """loc_a names U+00E9 and reaches reorder-sections-after, which
+    glibc_reader does not settle. u2 changes UTF-8 alone (it gains
+    U+00E9); u3 makes the same change and changes loc_b's rules."""
+    env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+               GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+    for d_ in ('localedata/locales', 'localedata/charmaps'):
+        os.makedirs(os.path.join(root, *d_.split('/')))
+
+    def put(path, text):
+        with open(os.path.join(root, path), 'w', encoding='utf-8') as fh:
+            fh.write(text)
+
+    for i in range(g.MIN_LOCALE_FILES):
+        put(f'localedata/locales/filler_{i:03d}', 'LC_CTYPE\nEND LC_CTYPE\n')
+    put('localedata/locales/loc_a',
+        'comment_char %\nescape_char /\nLC_COLLATE\norder_start forward\n'
+        '<U00E9>\n<U0041>\norder_end\nreorder-sections-after <U0041>\n'
+        'reorder-sections-end\nEND LC_COLLATE\n')
+    put('localedata/locales/loc_b', _rules('<U0041>'))
+    put('localedata/SUPPORTED', 'SUPPORTED-LOCALES=\\\nloc_a.UTF-8/UTF-8 \\\n'
+                                'loc_b.UTF-8/UTF-8 \\\n')
+    put('localedata/charmaps/UTF-8', _cm('UTF-8'))
+    glibc_shaped(root)
+    git(root, 'config', 'user.name', 't', env=env)
+    git(root, 'config', 'user.email', 't@t', env=env)
+
+    def commit(tag):
+        git(root, 'add', '-A', '.', env=env)
+        git(root, 'commit', '-q', '-m', tag, env=env)
+        git(root, 'tag', tag, env=env)
+
+    commit('u1')
+    put('localedata/charmaps/UTF-8', _cm('UTF-8', '<U00E9> /xc3/xa9'))
+    commit('u2')
+    git(root, 'checkout', '-q', 'u1', env=env)
+    put('localedata/charmaps/UTF-8', _cm('UTF-8', '<U00E9> /xc3/xa9'))
+    put('localedata/locales/loc_b', _rules('<U0042>'))
+    commit('u3')
+    return root
+
+
+@needs_clone
+class StepTwoListsWhatStepThreeWillNotRead(unittest.TestCase):
+    """A locale glibc_reader cannot settle is one step 3 lists, but step 3
+    runs only when step 2 gives it a name (audit.sh). With no name of its
+    own, step 2 counted loc_a as listed by step 3 anyway, wrote no list,
+    step 3 did not run, and the summary said "Reindex: none" over a
+    locale whose character set changed (review of the whole of block 15,
+    2026-10-30)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='pg-glibc-unsettled-charmaps-')
+        cls.repo = make_unsettled_charmap_repo(os.path.join(cls.tmp, 'repo'))
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    step2 = StepTwoComparesCharmaps.step2
+
+    def test_with_no_name_of_its_own_step_2_lists_it(self):
+        rc, out, listed = self.step2('u1', 'u2')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('Files with changes inside LC_COLLATE: 0', out)
+        self.assertEqual(listed, ['loc_a'])
+        self.assertNotIn('step 3 lists anyway', flat(out))
+
+    def test_with_a_name_step_3_lists_it_anyway(self):
+        """Control: with loc_b's change, step 3 runs and lists every
+        locale whose run is not settled, loc_a among them."""
+        rc, out, listed = self.step2('u1', 'u3')
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(listed, [])
+        self.assertRegex(flat(out), r'step 3 lists anyway, whose LC_COLLATE '
+                                    r'names one of those characters or '
+                                    r'could not be compared \(1\): '
+                                    r'loc_a\.UTF-8 \(UTF-8\)')
 
 
 if __name__ == '__main__':

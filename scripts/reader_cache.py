@@ -6,7 +6,7 @@ locale reaches iso14651_t1_common, the largest file of the tree. Steps 1
 to 4, 9 and 10 ask it about every locale of a tag or of a node's directory
 (glibc_tree), step 2 of both tags, and the
 test suite runs them many times over the same trees, so the answers are kept
-on disk, in scripts/glibc-reader-cache/ next to the glibc clone, outside git
+on disk, in scripts/glibc-reader-cache/ next to this file, outside git
 (backlog 15.2). Nothing here reads a locale file differently: a kept answer
 is a run() answer, and it is used only where run() would give the same one.
 
