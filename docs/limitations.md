@@ -9,7 +9,7 @@ something it cannot see has changed.
 4. [A copied folder's character sets are not compared](#a-copied-folders-character-sets-are-not-compared)
 5. [Step 5 reports, it does not decide](#step-5-reports-it-does-not-decide)
 6. [Step 11 measures one character at a time](#step-11-measures-one-character-at-a-time)
-7. [What `LC_CTYPE` returns is not audited](#what-lc_ctype-returns-is-not-audited)
+7. [`LC_CTYPE` is compared by step 11 alone](#lc_ctype-is-compared-by-step-11-alone)
 
 ## `C.UTF-8` is invisible to a tag diff
 
@@ -99,7 +99,11 @@ anyway.
 ## Step 11 measures one character at a time
 
 Step 11 asks each machine's glibc where every character a locale can hold
-sorts, and how each two neighbours in that order are told apart. It does not
+sorts, and how each two neighbours in that order are told apart. With the
+characters it measures every lone byte, and every other sequence of bytes
+that glibc's character set for the locale or PostgreSQL reads as one
+character, so text stored through `COPY ... ENCODING 'SQL_ASCII'`, or in a
+SQL_ASCII database, is in the order too, one string at a time. It does not
 see:
 
 - a rule for a particular combination of letters, such as a contraction (`ch`
@@ -107,36 +111,49 @@ see:
   sort some longer strings apart;
 - a change in how a character is told apart from its neighbour where glibc
   ignores that character at some level, which it reads less reliably;
-- a locale whose encoding Python cannot convert, since the bytes PostgreSQL
-  would compare cannot be built. On the three test machines that was four
-  locales each, `hy_AM.armscii8`, `ka_GE`, `ka_GE.georgianps` and
-  `zh_TW.euctw`, and the run names them as not known to be unchanged;
-- the few byte sequences that PostgreSQL stores, for characters it converts
-  from UTF-8, in a database of an EUC-JP, EUC-KR or TIS-620 locale, and that
-  the strings measured do not hold. The run names them under the locales of
-  those encodings, and its characters file lists every one;
-- a locale whose encoding PostgreSQL does not know, in a database of another
-  encoding, which PostgreSQL allows. The bytes it sorts and converts there are
-  not the ones measured, and the run names those locales;
-- the bytes a database holds that PostgreSQL did not convert from UTF-8, as
-  from a client of the database's own encoding, and the bytes of a SQL_ASCII
-  database, which a superuser can create with any locale. PostgreSQL stores
-  them as the client sent them, and the run does not name them;
+- how two neighbours are told apart at a level where no pair could be found
+  to measure it. The run names those locales as unchanged only as far as
+  measured;
+- a locale whose encoding PostgreSQL does not know, in a database of
+  another encoding, which PostgreSQL allows with only a WARNING ("could not
+  determine encoding for locale"). On the RHEL 8, 9 and 10 machines this
+  project measured, these are ten: `th_TH`, `th_TH.tis620` and `thai`
+  (TIS-620), `ka_GE` and `ka_GE.georgianps` (GEORGIAN-PS), `kk_KZ` and
+  `kk_KZ.pt154` (PT154), `tg_TJ` and `tg_TJ.koi8t` (KOI8-T), and
+  `hy_AM.armscii8` (ARMSCII-8). Step 11 measures their order over every
+  byte, as for any locale of one byte per character, and reports one whose
+  order changed as changed. In a database of another encoding, a UTF8 one
+  say, PostgreSQL hands the locale that database's bytes, not the ones
+  measured. The run does not identify which strings sort differently there,
+  and a locale it reports unchanged is not shown to sort the same there.
+  Command 3 does not confirm that order either. The run names each such
+  locale, with what it measured of how its bytes convert;
+- a sequence of bytes that no character set of glibc 2.28, 2.34 or 2.39
+  gives a character, such as one a later glibc or a distro's patch adds. The
+  sequences those three releases give a character, and that are not UTF-8,
+  that PostgreSQL does not accept in EUC-TW, or that Python does not read in
+  another encoding of more than one byte, are measured from a list made from
+  them, and a locale of an encoding of more than one byte the list does not
+  cover is named as not measured. Given each machine's file from `--extract`,
+  the run compares the list with the machine's own character sets, and names
+  a locale whose character set gives a character to a sequence the list
+  lacks as measured in part; without that file it says it did not check;
 - a locale that is not installed, because it measures what `locale -a` lists
   and nothing else.
 
-The run prints the first two beside its result every time, and the fourth
-and fifth whenever it measured a locale they apply to. Command 3 sorts
+The run prints the first two beside its result every time, the third and
+the fourth whenever it measured a locale they apply to, and the fifth
+whenever it finds such a sequence or could not look for one. Command 3 sorts
 strings you choose inside PostgreSQL, and reaches a rule for a combination of
 letters when the strings contain it.
 
 Not tried yet, so a failure there would be new: Python 3.14 on a real
 machine, where only a simulation was run, a machine on cgroup v1, and ARM.
 
-## What `LC_CTYPE` returns is not audited
+## `LC_CTYPE` is compared by step 11 alone
 
 The other six sections are ways a sort-order change can be missed. This one
-is a whole category nothing here audits, but for one check.
+is a whole category only one step compares.
 
 `LC_COLLATE` decides sort order. `LC_CTYPE` decides `upper()`, `lower()`,
 `initcap()`, character classification and pattern matching, and under the
@@ -150,19 +167,21 @@ PostgreSQL warns less here than it does for collation, not more. There is no
 ctype version to compare, so a ctype change leaves no trail at all and there
 is no mismatch for anything to detect.
 
-No step of this tool audits what those functions return, and no verdict
-this project publishes says anything about it in either direction, including
-"unchanged". Step 11 checks only whether each machine can convert a locale's
-text at all, and names the locales where it found that `upper()`, `lower()`
-and `ILIKE` stop with an error, those glibc refused, and those it could not
-check. Steps 2 and 6 to 8 read its transliterations only for the collating
-elements they build, which are sort order. A 🟢 on the
-results table is a statement about sort order and nothing else. If a
-`lower()`-based index matters to you, confirm it the way this project confirms
-collation — on both machines, naming the builds.
+Step 11, given both machines' files, compares what glibc's character rules
+answer and names the characters and bytes whose rules change. It says where it
+could not look.
+Nothing else here compares the character rules, neither a run without the two
+files nor steps 2 and 6 to 8, which read the transliterations of `LC_CTYPE`
+only for the collating elements they build, which are sort order. No verdict
+this project publishes says anything about them in either direction, including
+"unchanged".
+A 🟢 on the results table is a statement about sort order and nothing else. If
+a `lower()`-based index matters to you, run step 11 with both machines' files,
+and confirm it the way this project confirms collation — on both machines,
+naming the builds.
 
 The remaining categories (`LC_NUMERIC`, `LC_TIME`, `LC_MONETARY`,
-`LC_MESSAGES`) are out of scope as well. They move `to_char()` output and
+`LC_MESSAGES`) are out of scope. They move `to_char()` output and
 message text rather than index order. The one exception is the number of
 decimals of the `money` type, from `LC_MONETARY`, which changes what a stored
 value means: step 11 compares it on both machines.

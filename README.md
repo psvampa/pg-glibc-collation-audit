@@ -236,7 +236,7 @@ move.
 
 Step 11 measured the same on three test machines (Rocky Linux 8.9, 9.3 and
 10.1): the locales marked 🔴 are the ones that sort differently, and every
-other locale it could measure came out unchanged, one character at a time
+other locale it could measure sorts the same, one character at a time
 ([what that leaves out](docs/limitations.md#step-11-measures-one-character-at-a-time)).
 
 <sup>†</sup> `C.UTF-8`'s source file is in neither tag for the first pair, so
@@ -250,14 +250,13 @@ evidence is in
 
 ## Scope
 
-Sort order (`LC_COLLATE`) only, besides the decimals of the `money` type that
-step 11 compares, and in PostgreSQL terms the **`libc` provider** only. Of
-`LC_CTYPE`, only whether each machine can convert a locale's text, which
-`upper()`, `lower()` and `ILIKE` need in a database whose encoding has
-characters of more than one byte; nothing about what they return, ICU, or the
-`builtin` provider — and the two pairs named above. What `LC_CTYPE`
-returns is the exclusion that can still cost you an index, and no step of
-this tool audits it.
+Sort order (`LC_COLLATE`) only, besides what step 11 compares on both
+machines: the decimals of the `money` type and, of `LC_CTYPE`, whether each
+machine can convert a locale's text and what glibc's character rules answer,
+which `upper()`, `lower()`, `initcap()`, `ILIKE`, regular expressions and
+full-text search read. In PostgreSQL terms the
+**`libc` provider** only, not ICU or the `builtin` provider — and the two
+pairs named above.
 
 Full scope, including the `builtin` provider as a mitigation:
 [docs/scope.md](docs/scope.md). The seven things to know before acting on a

@@ -427,6 +427,18 @@ def _check_tail(lines, cc, ec, name):
         raise Unsettled(f"charmap {name}: the file ends inside {section}")
 
 
+def sequences(cm):
+    """Every byte sequence the charmap gives a character, as bytes: each
+    single line's, and each member of each range, counted up big-endian
+    from its first bytes as key() reads a range."""
+    out = {bytes(int(h, 16) for h in k.split('/x')[1:])
+           for k in cm.singles.values()}
+    for lo, hi, first, size in cm.ranges:
+        out.update((first + k).to_bytes(size, 'big')
+                   for k in range(hi - lo + 1))
+    return out
+
+
 def key(cm, cp):
     """The bytes glibc gives code point `cp` in this charmap, as
     '/xhh...', or None when the charmap does not define it."""

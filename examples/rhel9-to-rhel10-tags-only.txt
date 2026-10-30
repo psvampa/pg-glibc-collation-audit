@@ -1377,8 +1377,9 @@ every locale it names as built in byte order.
      asked either machine's glibc how it sorts, and a locale whose files
      did not change can still sort differently. Nor did anything compare
      the decimals of money, check which C library PostgreSQL runs on
-     either machine, or check that each machine accepts every locale and
-     converts its text.
+     either machine, check that each machine accepts every locale and
+     converts its text, or compare what each machine's character rules
+     (LC_CTYPE) answer.
 
 -- Needs an empirical test: step 5 found 55 substantive hunk(s),
    so a clean data diff CANNOT clear the locales step 4 flagged

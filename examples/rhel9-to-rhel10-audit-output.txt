@@ -1708,12 +1708,13 @@ Sort order CHANGED in 4 locale(s):
     88 characters moved: U+0002..U+0020, U+0023..U+0027, U+002C..U+002F,
       U+003A..U+003B, U+003F..U+0060, U+007B, U+007D..U+007F, U+0E2F, U+0E3A,
       U+0E3F, U+0E46, U+0E4C, U+0E4F, U+0E5A..U+0E5B
-    245 character(s) sort differently against at least one other
+    245 character(s) and 9 other string(s) sort differently against at least
+      one other
     the pairs that tell letters, accents and case apart here are told apart differently themselves:
-      before: letters a/b, accent U+009F/_, case A/a
-      now:    letters a/b, accent ๏/U+0E4E from the end, case a/A
+      before: letters a/b, accent bytes FF/_, case A/a
+      now:    letters a/b, accent U+0E4E/U+0E47, case a/A
       so pairs are compared only by letters
-    31 pairs of characters told apart differently, too many to list here
+    31 pairs told apart differently, too many to list here
       among them 1 character(s) that did not move: U+0030
     60 more pair(s) may be told apart differently; what was measured cannot decide
 
@@ -1721,35 +1722,32 @@ Sort order CHANGED in 4 locale(s):
     also, in PostgreSQL: collation "th_TH" where the database encoding is
       UTF-8; database locale th_TH.UTF-8
     50,584 characters moved, too many to list here
-    1,112,062 character(s) sort differently against at least one other
+    1,112,062 character(s) and 10,111 other string(s) sort differently against
+      at least one other
     the pairs that tell letters, accents and case apart here are told apart differently themselves:
-      before: letters a/b, accent á/a from the end, case A/a
+      before: letters a/b, accent U+10FFFF/_, case A/a
       now:    letters a/b, accent a/á, case a/A
       so pairs are compared only by letters
-    45,693 pairs of characters told apart differently, too many to list here
+    45,693 pairs told apart differently, too many to list here
       among them 1 character(s) that did not move: U+0030
     8,364 more pair(s) may be told apart differently; what was measured cannot decide
 
-Every character and pair found, by locale:
+Every character, other string and pair found, by locale:
   /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.34..glibc-2.39.tsv
+In the sort orders, a string that this comparison cannot name as a character
+of the locale's encoding is named by its bytes in hexadecimal: bytes 80 is the
+single byte 80, and bytes 80..FF every string of that length from the first to
+the last.
 
-Unchanged: 859 locale(s).
-!! Unchanged only as far as measured: 6 of them. In each, the pairs of
-   neighbouring characters counted in brackets differ by less than a letter,
-   and no pair could be found there to tell whether by an accent or by case; a
-   change from one to the other would not show:
-  ja_JP.utf8 (3), ko_KR (1), ko_KR.euckr (1), ko_KR.utf8 (3), korean (1),
+Unchanged: 863 locale(s).
+!! Unchanged only as far as measured: 11 of them. In each, the pairs of
+   neighbours counted in brackets were not measured at every level, so a
+   change in how they are told apart would not show: they differ by less than
+   a letter, and no pair could be found there to tell whether by an accent or
+   by case:
+  ja_JP (2), ja_JP.eucjp (2), ja_JP.ujis (2), ja_JP.utf8 (3), japanese (2),
+  japanese.euc (2), ko_KR (1), ko_KR.euckr (1), ko_KR.utf8 (3), korean (1),
   korean.euc (1)
-!! Could not be measured, so NOT known to be unchanged: 4 locale(s):
-  hy_AM.armscii8 (both machines): cannot be measured: Python has no converter for ARMSCII-8, the encoding of this locale, so the bytes PostgreSQL would compare cannot be built
-    also, in PostgreSQL: collation "hy_AM" where the database encoding is
-      ARMSCII-8; database locale hy_AM.ARMSCII-8
-  ka_GE (both machines): cannot be measured: Python has no converter for GEORGIAN-PS, the encoding of this locale, so the bytes PostgreSQL would compare cannot be built
-  ka_GE.georgianps (both machines): cannot be measured: Python has no converter for GEORGIAN-PS, the encoding of this locale, so the bytes PostgreSQL would compare cannot be built
-    also, in PostgreSQL: database locale ka_GE.GEORGIAN-PS
-  zh_TW.euctw (both machines): cannot be measured: Python has no converter for EUC-TW, the encoding of this locale, so the bytes PostgreSQL would compare cannot be built
-    also, in PostgreSQL: collation "zh_TW" where the database encoding is
-      EUC-TW; database locale zh_TW.EUC-TW
 !! Not on the new machine, so NOT known to be unchanged: 2 locale(s). Either
    the upgrade removes them or their language pack is not installed there; a
    database or collation that uses one cannot use it on the new machine. If a
@@ -1776,8 +1774,10 @@ Only on the new machine: 18 locale(s).
   zgh_MA
   zgh_MA.utf8
 
-Of the 869 locale(s) on the old machine: 4 changed, 859 unchanged (6 of them only as far as measured), 4 not measured, 2 not on the new machine.
+Of the 869 locale(s) on the old machine: 4 changed, 863 unchanged (11 of them only as far as measured), 0 not measured, 2 not on the new machine.
 Decimals of money: the same in the 867 locale(s) measured on both machines.
+Character sets: every byte sequence that each machine's charmaps give a
+   character, in the 865 locale(s) compared, is among the strings measured.
 PostgreSQL on the OLD machine: 10 process(es) named postgres or postmaster,
    all running the C library measured there.
 PostgreSQL on the NEW machine: 10 process(es) named postgres or postmaster,
@@ -1785,57 +1785,73 @@ PostgreSQL on the NEW machine: 10 process(es) named postgres or postmaster,
 This looks at the C library PostgreSQL runs, not at its locale data: a
    PostgreSQL that was not restarted can already use locales installed after
    it started.
-!! upper(), lower() and ILIKE give an ERROR on both machines in 13 locale(s),
+!! upper(), lower() and ILIKE give an ERROR on both machines in 14 locale(s),
    as before the upgrade: in a database of the locale's own encoding, any text
    that is not ASCII stops them with "ERROR: invalid multibyte character for
    locale". On RHEL this is what a machine without glibc-gconv-extra does;
    install it and measure that machine again. EUC-JP: ja_JP, ja_JP.eucjp,
    ja_JP.ujis, japanese, japanese.euc; EUC-KR: ko_KR, ko_KR.euckr, korean,
-   korean.euc; GB2312: zh_CN, zh_CN.gb2312, zh_SG, zh_SG.gb2312.
-!! upper(), lower() and ILIKE NOT checked in 1 locale(s): Python has no
-   converter for their encoding, so no character of it could be built: EUC-TW:
-   zh_TW.euctw.
+   korean.euc; EUC-TW: zh_TW.euctw; GB2312: zh_CN, zh_CN.gb2312, zh_SG,
+   zh_SG.gb2312.
+!! upper(), lower() and ILIKE give an ERROR on both machines in 10 locale(s)
+   that databases of an encoding not known here may use (its encoding is one
+   PostgreSQL does not know, so a database of any encoding can use it): in
+   such a database of more than one byte per character, a glibc that cannot
+   convert the locale's own converts no text that is not ASCII ("ERROR:
+   invalid multibyte character for locale"). On RHEL this is what a machine
+   without glibc-gconv-extra does; install it and measure that machine again.
+   ARMSCII-8: hy_AM.armscii8; GEORGIAN-PS: ka_GE, ka_GE.georgianps; KOI8-T:
+   tg_TJ, tg_TJ.koi8t; PT154: kk_KZ, kk_KZ.pt154; TIS-620: th_TH,
+   th_TH.tis620, thai.
 upper(), lower() and ILIKE: text that is not ASCII converts on both machines
    in 478 locale(s); in the 358 of an encoding of one byte PostgreSQL never
    converts it in a database of that encoding. Left out: 7 locale(s) of an
    encoding PostgreSQL allows only on the client, so no database converts text
    with them (BIG5: zh_TW, zh_TW.big5; BIG5-HKSCS: zh_HK, zh_HK.big5hkscs;
-   GB18030: zh_CN.gb18030; GBK: zh_CN.gbk, zh_SG.gbk). The 10 locale(s) of an
-   encoding PostgreSQL does not know are in the line on a database of another
-   encoding.
+   GB18030: zh_CN.gb18030; GBK: zh_CN.gbk, zh_SG.gbk).
+!! Character rules (LC_CTYPE) CHANGE for 5961 character(s) in the 488
+   locale(s) compared on both machines that a UTF8 database can use: each gets
+   another upper case, lower case or class. upper(), lower(), initcap(),
+   ILIKE, regular expressions and full-text search read these rules in a UTF8
+   database, so they can give other results there for text that holds one. 7
+   of them the old machine already classified:
+     U+0C04 TELUGU SIGN COMBINING ANUSVARA ABOVE: punctuation -> letter;
+     U+0F82 TIBETAN SIGN NYI ZLA NAA DA: punctuation -> letter;
+     U+0F83 TIBETAN SIGN SNA LDAN: punctuation -> letter;
+     ჼ (U+10FC MODIFIER LETTER GEORGIAN NAR): joins [[:lower:]];
+     ꭩ (U+AB69 MODIFIER LETTER SMALL TURNED W): joins [[:lower:]];
+     U+11080 KAITHI SIGN CANDRABINDU: punctuation -> letter;
+     U+11081 KAITHI SIGN ANUSVARA: punctuation -> letter.
+   The other 5954 it did not classify; a UTF8 database can hold them too, and
+   they change those results as well.
+Every such character is in
+   /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.34..glibc-2.39.tsv.
+Character rules (LC_CTYPE) of each character: not compared in 377 locale(s) of
+   an encoding no UTF8 database can use; a database that can use them reads
+   their rules byte by byte, or, in EUC, as the line on EUC says.
+Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
+   compared on both machines.
+!! Character rules (LC_CTYPE) in an EUC_JP, EUC_KR, EUC_CN or EUC_TW database:
+   the same for ASCII, the only text compared, in 14 locale(s), since neither
+   machine's glibc can convert their encoding; the line on upper(), lower()
+   and ILIKE above says what that does to the rest of the text. EUC-JP: ja_JP,
+   ja_JP.eucjp, ja_JP.ujis, japanese, japanese.euc; EUC-KR: ko_KR,
+   ko_KR.euckr, korean, korean.euc; EUC-TW: zh_TW.euctw; GB2312: zh_CN,
+   zh_CN.gb2312, zh_SG, zh_SG.gb2312.
 !! Not measured in a database of another encoding: 10 locale(s) whose encoding
    PostgreSQL does not know, so that CREATE DATABASE lets a database of any
    encoding use one, with only a WARNING ("could not determine encoding for
    locale"). In such a database, a UTF8 one say, PostgreSQL hands the locale
-   the database's bytes, not the ones measured here, so neither its order nor
-   whether upper(), lower() and ILIKE give an error there is known. ARMSCII-8:
-   hy_AM.armscii8; GEORGIAN-PS: ka_GE, ka_GE.georgianps; KOI8-T: tg_TJ,
-   tg_TJ.koi8t; PT154: kk_KZ, kk_KZ.pt154; TIS-620: th_TH, th_TH.tis620, thai.
-!! Not measured in EUC-JP (ja_JP, ja_JP.eucjp, ja_JP.ujis, japanese,
-   japanese.euc): 167 byte sequences that PostgreSQL stores in an EUC_JP
-   database, for characters it converts from UTF-8, are not among the strings
-   measured here, so where they sort is not known, nor whether that changed.
-   Among them № (U+2116), which PostgreSQL stores as AD E2 rather than the 8F
-   A2 F1 measured here, and ① (U+2460), AD A1.
-!! Not measured in EUC-KR (ko_KR, ko_KR.euckr, korean, korean.euc): A2 E8,
-   which PostgreSQL stores in an EUC_KR database for ㉾ (U+327E), is not among
-   the strings measured here, so where it sorts is not known.
-!! Not measured in TIS-620 (th_TH, th_TH.tis620, thai): A0, which PostgreSQL
-   stores in a WIN874 database for the no-break space (U+00A0), is not among
-   the strings measured here. PostgreSQL lets a TIS-620 locale serve a
-   database of any encoding, and in one other than WIN874 the bytes it
-   compares are not the ones measured here at all.
-Every such byte sequence is in
-   /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.34..glibc-2.39.tsv.
-   These are PostgreSQL's own conversions, measured on PostgreSQL 13 to 18 and
-   read in its source for 10 to 12, where they are the same.
+   the database's bytes, not the ones measured here, so its order there is not
+   known. ARMSCII-8: hy_AM.armscii8; GEORGIAN-PS: ka_GE, ka_GE.georgianps;
+   KOI8-T: tg_TJ, tg_TJ.koi8t; PT154: kk_KZ, kk_KZ.pt154; TIS-620: th_TH,
+   th_TH.tis620, thai.
 !! Not measured: a rule that applies only to a particular combination of
    letters, such as a contraction ("ch" sorted as one letter), so two machines
    that agree here can still sort some longer strings apart. Where a character
    counts for nothing at some level (glibc ignores it there), how it is told
    apart from its neighbour is read less reliably, so a change there may go
-   unseen. Of LC_CTYPE, only whether text converts is measured, not what
-   upper(), lower() and its other character rules do with it.
+   unseen.
 
 ================================================================
 == AUDIT SUMMARY  glibc-2.34 -> glibc-2.39
@@ -1867,39 +1883,41 @@ Every such byte sequence is in
         how glibc sorts them in every version.
      4 locale(s) sort differently -- reindex what uses them:
        th_TH, th_TH.tis620, thai (TIS-620)
-         88 characters moved; 245 sort differently against another; the pairs
+         88 characters moved; 254 sort differently against another; the pairs
            that tell letters, accents and case apart are told apart
-           differently themselves; pairs compared only by letters; 31 pairs of
-           characters told apart differently; among them 1 character(s) that
-           did not move: U+0030; 60 more pair(s) the measurement cannot decide
+           differently themselves; pairs compared only by letters; 31 pairs
+           told apart differently; among them 1 character(s) that did not
+           move: U+0030; 60 more pair(s) the measurement cannot decide
          also, in PostgreSQL: database locale th_TH.TIS-620
        th_TH.utf8 (UTF-8)
-         50,584 characters moved; 1,112,062 sort differently against another;
+         50,584 characters moved; 1,122,173 sort differently against another;
            the pairs that tell letters, accents and case apart are told apart
            differently themselves; pairs compared only by letters; 45,693
-           pairs of characters told apart differently; among them 1
-           character(s) that did not move: U+0030; 8,364 more pair(s) the
-           measurement cannot decide
+           pairs told apart differently; among them 1 character(s) that did
+           not move: U+0030; 8,364 more pair(s) the measurement cannot decide
          also, in PostgreSQL: collation "th_TH" where the database encoding is
            UTF-8; database locale th_TH.UTF-8
-       every character and pair:
+       every character, other string and pair:
          /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.34..glibc-2.39.tsv
-     NOT known to be unchanged: 6 locale(s)
-       could not be measured: hy_AM.armscii8, ka_GE, ka_GE.georgianps,
-         zh_TW.euctw
-         also, in PostgreSQL: collation "hy_AM" where the database encoding is
-           ARMSCII-8; collation "zh_TW" where the database encoding is EUC-TW;
-           database locales hy_AM.ARMSCII-8, ka_GE.GEORGIAN-PS, zh_TW.EUC-TW
+       In the sort orders, a string that this comparison cannot name as a
+       character of the locale's encoding is named by its bytes in
+       hexadecimal: bytes 80 is the single byte 80, and bytes 80..FF every
+       string of that length from the first to the last.
+     NOT known to be unchanged: 2 locale(s)
        not on the new machine, so a database or collation that uses one cannot
          use it there: aa_ER.utf8@saaho, aa_ER@saaho
-     !! Unchanged only as far as measured, because a change between an accent
-        and case would not show in them: ja_JP.utf8, ko_KR, ko_KR.euckr,
-        ko_KR.utf8, korean, korean.euc
-     Of the 869 locale(s) on the old machine: 4 changed, 859 unchanged (6 of
-       them only as far as measured), 4 not measured, 2 not on the new
+     !! Unchanged only as far as measured, because how some of their
+        neighbours are told apart was not measured at every level: ja_JP,
+        ja_JP.eucjp, ja_JP.ujis, ja_JP.utf8, japanese, japanese.euc, ko_KR,
+        ko_KR.euckr, ko_KR.utf8, korean, korean.euc
+     Of the 869 locale(s) on the old machine: 4 changed, 863 unchanged (11 of
+       them only as far as measured), 0 not measured, 2 not on the new
        machine.
      Decimals of money: the same in the 867 locale(s) measured on both
         machines.
+     Character sets: every byte sequence that each machine's charmaps give a
+        character, in the 865 locale(s) compared, is among the strings
+        measured.
      PostgreSQL on the OLD machine: 10 process(es) named postgres or
         postmaster, all running the C library measured there.
      PostgreSQL on the NEW machine: 10 process(es) named postgres or
@@ -1907,60 +1925,77 @@ Every such byte sequence is in
      This looks at the C library PostgreSQL runs, not at its locale data: a
         PostgreSQL that was not restarted can already use locales installed
         after it started.
-     !! upper(), lower() and ILIKE give an ERROR on both machines in 13
+     !! upper(), lower() and ILIKE give an ERROR on both machines in 14
         locale(s), as before the upgrade: in a database of the locale's own
         encoding, any text that is not ASCII stops them with "ERROR: invalid
         multibyte character for locale". On RHEL this is what a machine
         without glibc-gconv-extra does; install it and measure that machine
         again. EUC-JP: ja_JP, ja_JP.eucjp, ja_JP.ujis, japanese, japanese.euc;
-        EUC-KR: ko_KR, ko_KR.euckr, korean, korean.euc; GB2312: zh_CN,
-        zh_CN.gb2312, zh_SG, zh_SG.gb2312.
-     !! upper(), lower() and ILIKE NOT checked in 1 locale(s): Python has no
-        converter for their encoding, so no character of it could be built:
-        EUC-TW: zh_TW.euctw.
+        EUC-KR: ko_KR, ko_KR.euckr, korean, korean.euc; EUC-TW: zh_TW.euctw;
+        GB2312: zh_CN, zh_CN.gb2312, zh_SG, zh_SG.gb2312.
+     !! upper(), lower() and ILIKE give an ERROR on both machines in 10
+        locale(s) that databases of an encoding not known here may use (its
+        encoding is one PostgreSQL does not know, so a database of any
+        encoding can use it): in such a database of more than one byte per
+        character, a glibc that cannot convert the locale's own converts no
+        text that is not ASCII ("ERROR: invalid multibyte character for
+        locale"). On RHEL this is what a machine without glibc-gconv-extra
+        does; install it and measure that machine again. ARMSCII-8:
+        hy_AM.armscii8; GEORGIAN-PS: ka_GE, ka_GE.georgianps; KOI8-T: tg_TJ,
+        tg_TJ.koi8t; PT154: kk_KZ, kk_KZ.pt154; TIS-620: th_TH, th_TH.tis620,
+        thai.
      upper(), lower() and ILIKE: text that is not ASCII converts on both
         machines in 478 locale(s); in the 358 of an encoding of one byte
         PostgreSQL never converts it in a database of that encoding. Left out:
         7 locale(s) of an encoding PostgreSQL allows only on the client, so no
         database converts text with them (BIG5: zh_TW, zh_TW.big5; BIG5-HKSCS:
         zh_HK, zh_HK.big5hkscs; GB18030: zh_CN.gb18030; GBK: zh_CN.gbk,
-        zh_SG.gbk). The 10 locale(s) of an encoding PostgreSQL does not know
-        are in the line on a database of another encoding.
+        zh_SG.gbk).
+     !! Character rules (LC_CTYPE) CHANGE for 5961 character(s) in the 488
+        locale(s) compared on both machines that a UTF8 database can use: each
+        gets another upper case, lower case or class. upper(), lower(),
+        initcap(), ILIKE, regular expressions and full-text search read these
+        rules in a UTF8 database, so they can give other results there for
+        text that holds one. 7 of them the old machine already classified:
+          U+0C04 TELUGU SIGN COMBINING ANUSVARA ABOVE: punctuation -> letter;
+          U+0F82 TIBETAN SIGN NYI ZLA NAA DA: punctuation -> letter;
+          U+0F83 TIBETAN SIGN SNA LDAN: punctuation -> letter;
+          ჼ (U+10FC MODIFIER LETTER GEORGIAN NAR): joins [[:lower:]];
+          ꭩ (U+AB69 MODIFIER LETTER SMALL TURNED W): joins [[:lower:]];
+          U+11080 KAITHI SIGN CANDRABINDU: punctuation -> letter;
+          U+11081 KAITHI SIGN ANUSVARA: punctuation -> letter.
+        The other 5954 it did not classify; a UTF8 database can hold them too,
+        and they change those results as well.
+     Every such character is in
+        /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.34..glibc-2.39.tsv.
+     Character rules (LC_CTYPE) of each character: not compared in 377
+        locale(s) of an encoding no UTF8 database can use; a database that can
+        use them reads their rules byte by byte, or, in EUC, as the line on
+        EUC says.
+     Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
+        compared on both machines.
+     !! Character rules (LC_CTYPE) in an EUC_JP, EUC_KR, EUC_CN or EUC_TW
+        database: the same for ASCII, the only text compared, in 14 locale(s),
+        since neither machine's glibc can convert their encoding; the line on
+        upper(), lower() and ILIKE above says what that does to the rest of
+        the text. EUC-JP: ja_JP, ja_JP.eucjp, ja_JP.ujis, japanese,
+        japanese.euc; EUC-KR: ko_KR, ko_KR.euckr, korean, korean.euc; EUC-TW:
+        zh_TW.euctw; GB2312: zh_CN, zh_CN.gb2312, zh_SG, zh_SG.gb2312.
      !! Not measured in a database of another encoding: 10 locale(s) whose
         encoding PostgreSQL does not know, so that CREATE DATABASE lets a
         database of any encoding use one, with only a WARNING ("could not
         determine encoding for locale"). In such a database, a UTF8 one say,
         PostgreSQL hands the locale the database's bytes, not the ones
-        measured here, so neither its order nor whether upper(), lower() and
-        ILIKE give an error there is known. ARMSCII-8: hy_AM.armscii8;
-        GEORGIAN-PS: ka_GE, ka_GE.georgianps; KOI8-T: tg_TJ, tg_TJ.koi8t;
-        PT154: kk_KZ, kk_KZ.pt154; TIS-620: th_TH, th_TH.tis620, thai.
-     !! Not measured in EUC-JP (ja_JP, ja_JP.eucjp, ja_JP.ujis, japanese,
-        japanese.euc): 167 byte sequences that PostgreSQL stores in an EUC_JP
-        database, for characters it converts from UTF-8, are not among the
-        strings measured here, so where they sort is not known, nor whether
-        that changed. Among them № (U+2116), which PostgreSQL stores as AD E2
-        rather than the 8F A2 F1 measured here, and ① (U+2460), AD A1.
-     !! Not measured in EUC-KR (ko_KR, ko_KR.euckr, korean, korean.euc): A2
-        E8, which PostgreSQL stores in an EUC_KR database for ㉾ (U+327E), is
-        not among the strings measured here, so where it sorts is not known.
-     !! Not measured in TIS-620 (th_TH, th_TH.tis620, thai): A0, which
-        PostgreSQL stores in a WIN874 database for the no-break space
-        (U+00A0), is not among the strings measured here. PostgreSQL lets a
-        TIS-620 locale serve a database of any encoding, and in one other than
-        WIN874 the bytes it compares are not the ones measured here at all.
-     Every such byte sequence is in
-        /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.34..glibc-2.39.tsv.
-        These are PostgreSQL's own conversions, measured on PostgreSQL 13 to
-        18 and read in its source for 10 to 12, where they are the same.
+        measured here, so its order there is not known. ARMSCII-8:
+        hy_AM.armscii8; GEORGIAN-PS: ka_GE, ka_GE.georgianps; KOI8-T: tg_TJ,
+        tg_TJ.koi8t; PT154: kk_KZ, kk_KZ.pt154; TIS-620: th_TH, th_TH.tis620,
+        thai.
      !! Not measured: a rule that applies only to a particular combination of
         letters, such as a contraction ("ch" sorted as one letter), so two
         machines that agree here can still sort some longer strings apart.
         Where a character counts for nothing at some level (glibc ignores it
         there), how it is told apart from its neighbour is read less reliably,
-        so a change there may go unseen. Of LC_CTYPE, only whether text
-        converts is measured, not what upper(), lower() and its other
-        character rules do with it.
+        so a change there may go unseen.
      Full report: step 11 above.
 
 -- Needs an empirical test: step 5 found 55 substantive hunk(s),

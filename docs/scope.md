@@ -2,20 +2,21 @@
 
 ## What it audits
 
-**Sort order (`LC_COLLATE`) only.** Of `LC_CTYPE` behavior, step 11 checks
-one thing, whether each machine can convert a locale's text at all.
-Without that, in a database whose encoding has characters of more than one
-byte, `upper()`, `lower()`, `initcap()`, `ILIKE` and full-text search stop
-with an error on any text that is not ASCII. What those functions return,
-character classification and pattern matching are not audited, nor
-`LC_NUMERIC`, `LC_TIME`, `LC_MONETARY` or `LC_MESSAGES`, except the decimals
-of the `money` type, which step 11 compares given each machine's file.
+**Sort order (`LC_COLLATE`), and of `LC_CTYPE` what step 11 compares.** Given
+each machine's file, step 11 checks whether each machine can convert a
+locale's text at all. Without that, in a database whose encoding has
+characters of more than one byte, `upper()`, `lower()`, `initcap()`, `ILIKE`
+and full-text search stop with an error on any text that is not ASCII. It also
+compares what glibc's character rules answer, which those functions, character
+classification and pattern matching read. `LC_NUMERIC`, `LC_TIME`,
+`LC_MONETARY` and `LC_MESSAGES` are not audited, except the decimals of the
+`money` type, which step 11 compares too.
 
-What `LC_CTYPE` returns is the exclusion that can still cost you an index: a
-functional index on `lower(email)` breaks on a glibc upgrade the same way a
-`COLLATE` index does, and PostgreSQL has no `collversion` equivalent for
-ctype to warn you. No step audits it — see
-[limitations.md](limitations.md#what-lc_ctype-returns-is-not-audited).
+What `LC_CTYPE` returns can still cost you an index: a functional index on
+`lower(email)` breaks on a glibc upgrade the same way a `COLLATE` index does,
+and PostgreSQL has no `collversion` equivalent for ctype to warn you. Only
+step 11 compares it — see
+[limitations.md](limitations.md#lc_ctype-is-compared-by-step-11-alone).
 
 **The `libc` provider only.** It is about glibc, so in PostgreSQL terms that
 is the only provider it applies to. ICU collations version their CLDR data

@@ -92,8 +92,8 @@ under `en_US` and `zh_TW` on glibc 2.28 and 2.34.
 
 Step 11 swept every character of `zh_TW.utf8`, `zh_HK.utf8` and
 `zh_SG.utf8` on the three test machines and found no change in either pair.
-What it cannot see is a rule for a combination of characters, and
-`zh_TW.euctw`, whose encoding it cannot measure.
+What it cannot see is a rule for a combination of characters. It measures
+`zh_TW.euctw` too, by its bytes, and finds no change there either.
 
 ardentperf reports a `glibc` engine and an `icu` engine, and only the first
 bears on a `libc` collation. Between RHEL8 and RHEL9 every locale changes
@@ -105,7 +105,6 @@ locales this tool finds for that pair.
 
 ### `C.UTF-8` — from the nodes' own files, because no tag has them
 
-Every other 🔴 row on this page was reached by steps 1-5. This one cannot be:
 `localedata/locales/C` exists upstream only from glibc 2.35, so for a
 `2.28..2.34` comparison it is in neither tag. RHEL8 and RHEL9 both ship one,
 so it is on both **nodes** — and comparing the nodes to each other is what
@@ -222,25 +221,27 @@ table: `C.utf8`, `ko_KR.utf8`, `or_IN` and `or_IN.utf8`, and the Swedish
 locales, in UTF-8 and in the legacy encodings. In `ko_KR.utf8` only one
 character moved, 힣 (U+D7A3), the last Hangul syllable
 ([the mechanism above](#the-ko_kr-mechanism-and-its-minimal-test-case)).
-Every other locale it measured is unchanged, `ber_DZ`, `kab_DZ`, `zh_CN.utf8`
+Every other locale it measured sorts the same, `ber_DZ`, `kab_DZ`, `zh_CN.utf8`
 and `en_US.utf8` among them, though a few only as far as they could be
-measured. The comparison names those, and also the few it could not measure
-or that are missing from the new machine.
+measured. The comparison names those, and also those missing from the new
+machine.
 
-On those machines glibc also stops converting the text of the EUC-JP,
-EUC-KR and GB2312 locales on RHEL9, which it converts on RHEL8, so in a
-database of their own encoding `upper()`, `lower()` and `ILIKE` stop with an
-error there. The RHEL9 machine has no `glibc-gconv-extra`, which the RHEL8
-one has, and without it glibc converts only ASCII in those encodings.
+On those machines glibc also stops converting the text of the locales whose
+encoding needs a converter from `glibc-gconv-extra`, the EUC ones and TIS-620
+among them, on RHEL9, so in a database that converts that text `upper()`,
+`lower()` and `ILIKE` stop with an error there. The RHEL9 machine has no
+`glibc-gconv-extra`, which the RHEL8 one has, and without it glibc converts
+only ASCII in those encodings. Even on RHEL8, which has it, most of those
+converters leave some byte sequences such a database holds unconverted, and
+the comparison counts them.
 Measured on fresh Rocky Linux machines, installing `glibc-all-langpacks`
 brings it in on 8 and not on 9 or 10.
 
 **RHEL9 to RHEL10.** Only `th_TH` sorts differently, in TIS-620 (`th_TH`,
-`th_TH.tis620`, `thai`) and in `th_TH.utf8`. Every other locale it measured is
-unchanged, `ber_DZ`, `kab_DZ` and `C.utf8` among them, though a few only as far
+`th_TH.tis620`, `thai`) and in `th_TH.utf8`. Every other locale it measured
+sorts the same, `ber_DZ`, `kab_DZ` and `C.utf8` among them, though a few only as far
 as they could be measured, `ko_KR.utf8` among those. The comparison names
-them, and also the few it could not measure or that are missing from the new
-machine. The same EUC-JP, EUC-KR and GB2312 locales stop `upper()`,
+them, and also those missing from the new machine. The same locales that need `glibc-gconv-extra` stop `upper()`,
 `lower()` and `ILIKE` with an error on both machines, for the same reason.
 
 No published verdict moved. What step 11 does not see is in

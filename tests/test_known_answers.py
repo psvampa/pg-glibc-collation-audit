@@ -9,11 +9,13 @@ somebody has to look.
 Run as subprocesses: the contract these tools offer is their printed output and
 their exit status.
 """
+import io
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 
@@ -1340,6 +1342,147 @@ class SkippingAReleaseReportsTheUnion(StepRun):
             'a locale added on the way is now also changed inside LC_COLLATE '
             'by the end; the union tests above will fail, and this is why')
 
+
+
+@needs_clone
+class CharmapOnlyIsTheCharmaps(unittest.TestCase):
+    """CHARMAP_ONLY is what glibc's charmaps define at the pinned tags.
+
+    Freezes the list of backlog 16.34 against its source: every sequence of
+    more than one byte that the charmap of an encoding gives a character at
+    glibc-2.28, 2.34 or 2.39, read by collation_keys.read_charmap (the
+    repository's model of charmap.c: a range counted up big-endian from its
+    first bytes), that the encoding's own list lacks: for UTF-8 those that
+    are not UTF-8, for the four EUC encodings those outside
+    accepted_sequences, for every other charmap of more than one byte that
+    Python has a codec for every one. A list kept by hand that drifts from the charmaps, or a reader
+    that walks a range otherwise, fails here.
+    """
+
+    TAGS = (OLD, MID, NEW)
+    ENCODINGS = ('UTF-8', 'EUC-JP', 'EUC-KR', 'GB2312', 'EUC-TW', 'BIG5',
+                 'BIG5-HKSCS', 'CP949', 'EUC-JISX0213', 'GB18030', 'GBK',
+                 'JOHAB', 'SHIFT_JIS', 'SHIFT_JISX0213', 'WINDOWS-31J')
+
+    def charmaps(self, name):
+        import collation_keys as ck
+        for tag in self.TAGS:
+            text = subprocess.run(
+                ['git', 'show', f'{tag}:localedata/charmaps/{name}'],
+                cwd=GLIBC_CLONE, capture_output=True, check=True).stdout
+            yield ck.read_charmap(text.decode('latin-1'), name)
+
+    def test_every_multibyte_charmap_with_a_codec_has_a_list(self):
+        """Every charmap glibc ships at the three tags with sequences of more
+        than one byte that Python has a codec for is UTF-8, one of the four
+        EUC whose lists are their own, or in ENCODINGS, under its
+        <code_set_name>. A charmap is read when it declares <mb_cur_max>
+        over 1 or Python has a codec of its name; one collation_keys cannot
+        read must have no codec (ANSI_X3.110-1983, EBCDIC-PT), or it would be
+        a member nobody checked."""
+        import collation_keys as ck
+        multi, unread = set(), set()
+        for tag in self.TAGS:
+            arc = subprocess.run(['git', 'archive', tag, 'localedata/charmaps'],
+                                 cwd=GLIBC_CLONE, capture_output=True,
+                                 check=True).stdout
+            with tarfile.open(fileobj=io.BytesIO(arc)) as tf:
+                files = {os.path.basename(i.name): tf.extractfile(i).read()
+                         for i in tf.getmembers() if i.isfile()}
+            self.assertGreater(len(files), 150)
+            for name, raw in sorted(files.items()):
+                body = raw.decode('latin-1')
+                declared = re.search(r'^<mb_cur_max>\s+(\d+)', body, re.M)
+                try:
+                    tlo.m.codecs.lookup(name)
+                    codec = True
+                except LookupError:
+                    codec = False
+                if not codec and not (declared and int(declared[1]) > 1):
+                    continue
+                try:
+                    cm = ck.read_charmap(body, name)
+                except ck.Unsettled:
+                    unread.add(name)
+                    continue
+                if (any(len(h.split('/x')) > 2 for h in cm.singles.values())
+                        or any(size > 1 for *_, size in cm.ranges)):
+                    multi.add(cm.code_set_name)
+        self.assertFalse({n for n in unread if self.has_codec(n)})
+        with_codec = {n for n in multi if self.has_codec(n)}
+        # EUC-TW has no codec, and its own list (accepted_sequences).
+        self.assertEqual(with_codec, set(self.ENCODINGS) - {'EUC-TW'})
+        self.assertEqual(set(self.ENCODINGS) - {'EUC-JP', 'EUC-KR', 'GB2312'},
+                         set(tlo.m.CHARMAP_ONLY))
+
+    @staticmethod
+    def has_codec(name):
+        try:
+            tlo.m.codecs.lookup(name)
+            return True
+        except LookupError:
+            return False
+
+    def test_ascii_below_80_where_named_so(self):
+        """The encodings Python has no codec for that the comparison names
+        bytes 01 to 7F of as ASCII: glibc's charmaps give each of those
+        bytes its own code point, at the three tags."""
+        for name in sorted(tlo.m.ASCII_BELOW_80):
+            with self.subTest(charmap=name):
+                with self.assertRaises(LookupError):
+                    tlo.m.codecs.lookup(name)
+                for cm in self.charmaps(name):
+                    one = {}
+                    for cp, hexed in cm.singles.items():
+                        b = bytes(int(h, 16) for h in hexed.split('/x')[1:])
+                        if len(b) == 1:
+                            one.setdefault(b[0], set()).add(cp)
+                    for lo, hi, first, size in cm.ranges:
+                        if size == 1:
+                            for k in range(hi - lo + 1):
+                                one.setdefault(first + k, set()).add(lo + k)
+                    self.assertEqual([one.get(v) for v in range(1, 0x80)],
+                                     [{v} for v in range(1, 0x80)])
+
+    def sequences(self, name):
+        import collation_keys as ck
+        out = set()
+        for tag in self.TAGS:
+            text = subprocess.run(
+                ['git', 'show', f'{tag}:localedata/charmaps/{name}'],
+                cwd=GLIBC_CLONE, capture_output=True, check=True).stdout
+            out |= ck.sequences(ck.read_charmap(text.decode('latin-1'),
+                                                name))
+        return {s for s in out if len(s) > 1}
+
+    def test_the_list_is_rebuilt_from_the_charmaps(self):
+        def utf8(s):
+            try:
+                s.decode('utf-8')
+                return True
+            except UnicodeDecodeError:
+                return False
+        counts = {}
+        for name in self.ENCODINGS:
+            with self.subTest(encoding=name):
+                found = self.sequences(name)
+                if name == 'UTF-8':
+                    lacking = {s for s in found if not utf8(s)}
+                elif name in tlo.m.EUC_CODESETS:
+                    lacking = found - set(tlo.m.accepted_sequences(name))
+                else:
+                    lacking = found
+                self.assertEqual(set(tlo.m.charmap_only(name)), lacking)
+                self.assertEqual(tlo.m.charmap_only(name), sorted(lacking))
+                counts[name] = len(lacking)
+        # The counts the backlog item names, so that an empty list on both
+        # sides cannot pass for a rebuilt one.
+        self.assertEqual({k: v for k, v in counts.items() if v},
+                         {'UTF-8': 9983, 'EUC-TW': 6721, 'BIG5': 13901,
+                          'BIG5-HKSCS': 18451, 'CP949': 17048,
+                          'EUC-JISX0213': 11271, 'GB18030': 244913, 'GBK': 21791,
+                          'JOHAB': 17049, 'SHIFT_JIS': 6879,
+                          'SHIFT_JISX0213': 11208, 'WINDOWS-31J': 9206})
 
 
 if __name__ == '__main__':

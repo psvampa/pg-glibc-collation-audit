@@ -29,9 +29,14 @@ not it showed up in steps 1 to 3. When step 5 does not clear the code, add the
 locales step 4 leaves out as built in byte order, which the summary names. With
 command 1.b, add every locale steps 6 to 8 list, every locale step 11 reports
 as changed, every one it reports as not known to be unchanged, and every one it
-names in a line that begins "!! Not measured in" or "!! NOT checked in". The
-lines that begin with `upper()` or `!! upper()`, and those on the decimals of
-`money`, are not about sort order, and the template does not confirm them.
+names in a line that begins "!! NOT checked whether" or "!! Measured in
+part". The lines that begin with `upper()`, `!! upper()`, `Character rules` or
+`!! Character rules`, and those on the decimals of `money`, are not about sort
+order, and the template does not confirm them. Nor does it confirm the order
+of the locales named in the line that begins "!! Not measured in a database of
+another encoding", even when step 11 reports them as changed
+([why](limitations.md#step-11-measures-one-character-at-a-time)). Their UTF-8
+forms, such as `th_TH.utf8`, still go through it as above.
 
 Steps 9 and 10, in command 1.b, run step 4 again on each machine's own files,
 so the same rule holds for every locale they flag. They list `C.UTF-8` by its
@@ -58,8 +63,8 @@ it lists because a collating element, a combination of letters sorted as one,
 is built differently out of a transliteration, it names the file that defines
 the element and the characters transliterated. The strings must contain the
 whole element: step 11 does not measure combinations of letters. Step 11, in
-command 1.b, names every character and pair it found, in the file its summary
-names.
+command 1.b, names every character, other string and pair it found, in the
+file its summary names.
 
 Step 2's list is where to start, not proof that every character on it moved. A
 rule that was rewritten names everything it touches, weights included, so
@@ -123,14 +128,9 @@ runtime from `pg_database`. In a typical database that is most text columns,
 and in a container it is usually all of them, because `initdb` inherits the
 locale from the environment and minimal images ship `LANG=C.UTF-8`.
 
-The template asks `pg_database` first and says plainly whether the database is
-exposed, then treats default-collated columns as in scope when it is.
-
 `C.UTF-8` under the `libc` provider **is** exposed. PostgreSQL special-cases
 only the literal strings `C` and `POSIX` to byte comparison, so libc `C.UTF-8`
-goes through `strcoll` like any other locale. The `builtin` provider's
-`C.UTF-8` (PG 17+) is a different implementation and is not exposed — see
-[scope.md](scope.md).
+goes through `strcoll` like any other locale.
 
 ## The `C.UTF-8` probe
 

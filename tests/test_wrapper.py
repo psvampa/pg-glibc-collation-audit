@@ -123,8 +123,9 @@ MEASURED_NOT_RUN_BODY = [
     "asked either machine's glibc how it sorts, and a locale whose files",
     'did not change can still sort differently. Nor did anything compare',
     'the decimals of money, check which C library PostgreSQL runs on',
-    'either machine, or check that each machine accepts every locale and',
-    'converts its text.',
+    'either machine, check that each machine accepts every locale and',
+    "converts its text, or compare what each machine's character rules",
+    '(LC_CTYPE) answer.',
 ]
 MEASURED_FOOTER = '     Full report: step 11 above.'
 # audit.sh's last word when step 11 exits non-zero: a refusal or a crash.
@@ -2195,9 +2196,17 @@ class WrapperMeasuredOrder(unittest.TestCase):
         self.assertEqual(summary['not_on_new'],
                          ['en_US.utf8@ampm', 'en_US@ampm'])
 
+    def test_the_charmaps_are_said_not_checked(self):
+        """The --*-order options carry no charmaps: the summary says once
+        that neither machine's were checked, and why."""
+        summary = parse_summary(measured_block(self.out))
+        self.assertEqual(summary['charmaps_unchecked'],
+                         [('either machine', lom.ALONE_BOTH, None)])
+
     def test_the_summary_names_this_runs_characters_file(self):
-        """Every character and pair step 11 found, in a file named for the
-        pair in this run's output folder, holding all fourteen locales."""
+        """Every character, other string and pair step 11 found, in a file
+        named for the pair in this run's output folder, holding all fourteen
+        locales."""
         path = os.path.join(self.out_dir, 'measured_order_characters.'
                             + pair_slug(OLD, MID) + '.tsv')
         self.assertEqual(parse_summary(measured_block(self.out))['characters_file'],
@@ -2341,6 +2350,9 @@ NO_SOURCES_DIR = '/nonexistent-pg-glibc-audit/locales'
 # notice a run without it prints instead.
 CHARMAPS_NOTICE = "!! A machine's own localedata/charmaps/ is NOT compared"
 KEYED_HEAD = '     Character sets and transliterations, '
+# Step 11's line when neither machine's charmaps are given (charmap_check).
+STEP_11_NOT_CHECKED = ('!! NOT checked whether the character sets of either '
+                       'machine')
 BEFORE_CHARMAPS = ("The file was written by an --extract that did not pack "
                    "the machine's charmaps (/usr/share/i18n/charmaps); extract "
                    "it again with this checkout's scripts/locale_order.py.")
@@ -2367,8 +2379,10 @@ def _cut_blocks(lines, starts, indent):
 def without_the_charmap_check(out):
     """(out without what a node file's character set check adds, the count
     of each kind taken out): each step's lines, from the names measured to
-    the list written and the blank after it; the summary's lines; and the
-    `!!` blocks those steps printed, as the summary repeats them."""
+    the list written and the blank after it; the summary's lines; the
+    `!!` blocks those steps printed, as the summary repeats them; and step
+    11's line that both machines' charmaps were checked and nothing found,
+    in its report and its summary."""
     lines, kept, regions, bangs, i = out.split('\n'), [], 0, set(), 0
     while i < len(lines):
         if lines[i].startswith('Locale names measured on '):
@@ -2393,18 +2407,33 @@ def without_the_charmap_check(out):
             kept.append(line)
     kept, warned = _cut_blocks([x for x in kept if x is not None], bangs,
                                '     ')
-    return '\n'.join(kept), (regions, keyed, warned)
+    first = {x for x in kept if x.startswith(STEP_11_CHECKED)}
+    kept, in_report = _cut_blocks(kept, first, '')
+    brief = {x for x in kept if x.startswith('     ' + STEP_11_CHECKED)}
+    kept, in_brief = _cut_blocks(kept, brief, '     ')
+    return '\n'.join(kept), (regions, keyed, warned, in_report, in_brief)
+
+
+# Step 11's line when both machines' charmaps were checked and nothing found.
+STEP_11_CHECKED = "Character sets: every byte sequence that each machine's"
 
 
 def without_the_charmaps_notice(out):
     """(out without the notice a run with copied folders prints in steps 6
-    to 8 and repeats once in its summary, how many came out)."""
+    to 8 and repeats once in its summary, and without step 11's line that
+    neither machine's charmaps were checked, in its report and its summary;
+    how many of each came out)."""
     lines = out.split('\n')
     starts = {x for x in lines if x.startswith(CHARMAPS_NOTICE)}
     lines, in_steps = _cut_blocks(lines, starts, '')
     lines, in_summary = _cut_blocks(lines, {'     ' + x for x in starts},
                                     '     ')
-    return '\n'.join(lines), (in_steps, in_summary)
+    first = {x for x in lines if x.startswith(STEP_11_NOT_CHECKED)}
+    lines, in_report = _cut_blocks(lines, first, '')
+    # The summary wraps it at another width: its own first line.
+    brief = {x for x in lines if x.startswith('     ' + STEP_11_NOT_CHECKED)}
+    lines, in_brief = _cut_blocks(lines, brief, '     ')
+    return '\n'.join(lines), (in_steps, in_summary, in_report, in_brief)
 NO_SOURCES_REASON = (f'{NO_SOURCES_DIR} does not exist; it comes with the '
                      'package glibc-locale-source.')
 _NODE_FILES = {}
@@ -2588,12 +2617,14 @@ class WrapperNodeFiles(unittest.TestCase):
         """The same run, plus the one check only a node file carries: the
         machines' character sets (13.7 PR D). Steps 6, 7 and 8 each add their
         lines, the summary its three, and the notice that they are not
-        compared, printed three times and repeated once, goes."""
+        compared, printed three times and repeated once, goes. Step 11
+        says once in its report and once in its summary that both machines'
+        charmaps were checked and nothing found."""
         self.assertEqual((self.rc, self.classic_rc), (0, 0), self.out[-2000:])
         node, added = without_the_charmap_check(self.out)
         classic, notices = without_the_charmaps_notice(self.classic)
-        self.assertEqual(added, (3, 3, 3))
-        self.assertEqual(notices, (3, 1))
+        self.assertEqual(added, (3, 3, 3, 1, 1))
+        self.assertEqual(notices, (3, 1, 1, 1))
         self.assertEqual(node.splitlines(), classic.splitlines())
 
     def test_every_section_ran(self):
@@ -2909,6 +2940,43 @@ class NodeFileCharmaps:
                 'machines: NOT RUN -- step 8 compared nothing (its warning '
                 'is below). Do not read this as nothing found.'))
         self.assertFalse(os.path.exists(self.keyed['node']))
+
+    def test_step_11_is_handed_each_side_s_charmaps(self):
+        """Step 11 checks the strings it measured against a side's charmaps
+        when the file holds them ('greek': the tag's, whose sequences the
+        list holds, so nothing is said), and otherwise says, in its report
+        and in the summary, which side was not checked and why."""
+        text = flat(self.out)
+        for side, path in (('old', self.old), ('new', self.new)):
+            with self.subTest(side=side, kind=self.KINDS[side]):
+                head = (f'!! NOT checked whether the character sets of the '
+                        f'{side} machine give a character to byte sequences '
+                        f'that are not among the strings measured, because ')
+                said = [x.split(' Where one does,')[0][len(head):]
+                        for x in re.findall(re.escape(head) + r'.+? Where one '
+                                            r'does,', text)]
+                kind = self.KINDS[side]
+                if kind == 'greek':
+                    self.assertEqual(said, [])
+                elif kind == 'before':
+                    # The path whole: a cut one could not be copied.
+                    self.assertEqual(said, [f'{path} holds no charmaps, '
+                                            f'because the file was written by '
+                                            f'an --extract that did not pack '
+                                            f'the machine\'s charmaps '
+                                            f'(/usr/share/i18n/charmaps); '
+                                            f'extract it again with this '
+                                            f'checkout\'s '
+                                            f'scripts/locale_order.py.'] * 2)
+                else:
+                    self.assertEqual(len(said), 2)
+                    self.assertTrue(said[0].startswith(
+                        'its charmaps cannot be read: '), said)
+                    self.assertIn('LINKED.gz is not a file', said[0])
+        self.assertNotIn('either machine', text)
+        self.assertNotIn('!! Measured in part', text)
+        # One side is not checked whole, so nothing says both were.
+        self.assertNotIn('Character sets: every byte sequence', text)
 
 
 @needs_clone

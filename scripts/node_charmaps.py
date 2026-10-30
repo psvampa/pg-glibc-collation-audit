@@ -5,7 +5,8 @@ with, and of the collating elements they build out of transliterations
 (backlog 13.7): collation_keys, the check step 2 makes between two tags, over
 a machine's own /usr/share/i18n/charmaps/ and locale sources. Steps 6 and 7
 compare a machine with the tag its glibc is built from, step 8 the two
-machines.
+machines. Step 11 reads the same folder through CharmapsDir to check the
+strings it measured against it (locale_order.charmap_check).
 
 A distro can change a charmap without changing a locale file: Red Hat gives
 RHEL 8 and RHEL 9 the GB18030 of glibc 2.39, and RHEL 8 seven IBM charmaps of
