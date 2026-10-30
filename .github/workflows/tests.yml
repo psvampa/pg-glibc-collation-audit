@@ -28,7 +28,12 @@ on:
 jobs:
   suite:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 45, not 20 or 30: the first run after a change to the reader computes
+    # its answers from nothing, and a run that times out saves no cache, so
+    # every run after it would start from nothing too. The first run of
+    # #103 was cancelled at 20 minutes; with step 2 reading through the
+    # reader, three such runs took 20 to 26 minutes (backlog 15.2 B3).
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -47,12 +52,62 @@ jobs:
             https://github.com/bminor/glibc.git scripts/glibc
           git -C scripts/glibc fetch --tags --quiet
 
+      - name: Fetch the files the reader reads, in one request
+        # On this partial clone git fetches each blob it is asked for one at
+        # a time. The comparison of run() with every locale file of the five
+        # tags reads about 1,400 of them, and that took 98 to 259 s per tag
+        # (measured from the Mac, #102), against 2 s for this one request. A
+        # whole clone answers too, but cost 58 s against 7 s here. The tags
+        # are the suite's own; the paths are what glibc_reader reads, and
+        # what steps 2 to 4 read besides (SUPPORTED; the charmaps, step 2;
+        # locale.alias, steps 3 and 4): a repository
+        # _harness.glibc_commit makes on top of a tag shares
+        # this clone's objects and cannot fetch one this clone lacks, so a
+        # test of step 2 there read them only if an earlier class had.
+        run: |
+          tags=$(cd tests && python3 -c "import _harness as h; print(h.FLOOR_OLD, h.FLOOR_NEW, h.OLD, h.MID, h.NEW)")
+          oids=$(for t in $tags; do git -C scripts/glibc ls-tree -r "$t" localedata/locales locale/programs/locfile-kw.gperf locale/programs/charmap-kw.gperf localedata/SUPPORTED localedata/charmaps intl/locale.alias; done | awk '{print $3}' | sort -u)
+          git -C scripts/glibc -c fetch.negotiationAlgorithm=noop fetch --quiet --no-tags --no-write-fetch-head origin $oids
+
       - name: Report tag provenance
         # Printed before anything else, and kept in the log: these are the
         # commit ids the run actually read. An invalid signature aborts here.
         run: |
           python3 scripts/glibc_locale_data.py provenance \
             glibc-2.28 glibc-2.34 glibc-2.39 glibc-2.12 glibc-2.17
+
+      - name: Keep the reader's answers between runs
+        # scripts/reader_cache.py keeps the localedef runs that
+        # glibc_reader.py emulates for it, about 0.2 s of work per locale.
+        # Unlike the clone above, what is kept here cannot answer for
+        # anything but what it was computed from: each run is used only for
+        # the same bytes of every file it read, and the directory names a
+        # hash of the reader's own source, so a changed reader finds nothing
+        # and starts over. The key below says the same, so a run after such
+        # a change restores nothing instead of a cache it would throw away.
+        # What glibc_tree.py derives from the runs is kept under the hash of
+        # that file and of diff_distro_locales.py, whose shown() writes the
+        # names it keeps; the key names them too, and falls back to the runs
+        # of the same reader, so after a change to those files alone one run
+        # computes it again and saves it, instead of every run computing it
+        # and none saving it (backlog 15.2 B3).
+        uses: actions/cache@v4
+        with:
+          path: scripts/glibc-reader-cache
+          key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}-${{ hashFiles('scripts/glibc_tree.py', 'scripts/diff_distro_locales.py') }}
+          restore-keys: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}
+
+      - name: Fill the reader's answers before the suite
+        # tests/run_parallel.py does the same before its classes, under its
+        # 600 s limit per process. Here, after a change to the reader, it
+        # ran past that (#103's first run), and the classes then computed
+        # the trees one processor each. As a step of its own it has no such
+        # limit and all four processors; with the cache full it takes about
+        # a second, and the runner then finds every tree kept.
+        run: |
+          cd tests
+          PG_GLIBC_READER_JOBS=$(nproc) python3 -c \
+            "import _harness; _harness.fill_reader_cache()"
 
       - name: Say so if the documentation layer is switched off
         # Renaming that file out of `test*.py` removes its tests from the run
@@ -71,13 +126,18 @@ jobs:
         # broken clone step would otherwise leave this job green with only the
         # clone-free layers (test_pure_functions, test_parallel_runner,
         # test_locale_order, and test_published_claims when it is enabled) and
-        # the classes of test_git_helpers and test_provenance that need no
-        # clone having actually run.
+        # the classes of test_git_helpers, test_glibc_reader and
+        # test_provenance that need no clone having actually run.
         #
         # Spread over four processes, one per processor of this runner, by
         # tests/run_parallel.py, on a pull request and on main alike. They are
         # the same tests in the same files, so spreading them changes how long
-        # the run takes, not what it checks.
+        # the run takes, not what it checks. The step above has computed
+        # the reader's answers for the five tags already, so the runner's own
+        # fill (_harness.fill_reader_cache) finds them kept: after a change
+        # to the reader, classes that each computed nearly the same tree at
+        # once, one processor each, took this job past 20 minutes (measured
+        # on 2026-10-14, backlog 15.2).
         run: |
           set -o pipefail
           python3 tests/run_parallel.py -j 4 2>&1 | tee /tmp/out.txt

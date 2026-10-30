@@ -978,7 +978,7 @@ class WrapperNodeToNode(unittest.TestCase):
         cls.rc, cls.out = run_wrapper(
             OLD, MID,
             '--old-locales-dir', cls.old_root, '--old-build-id', 'build-old',
-            '--new-locales-dir', cls.new_root, '--new-build-id', 'build-new',
+            '--new-locales-dir', cls.new_root, '--new-build-id', 'build-new.el9',
             out_dir=cls.out_dir)
 
     @classmethod
@@ -1000,7 +1000,7 @@ class WrapperNodeToNode(unittest.TestCase):
         self.assertIn('Step 9 finds no locale built in byte order on '
                       'build-old.', body)
         self.assertIn('Step 10 finds locale(s) built in byte order on '
-                      'build-new, which changed code can move too: C', body)
+                      'build-new.el9, which changed code can move too: C', body)
         self.assertIn('Here C means C.UTF-8', body)
 
     def test_it_runs_and_logs_as_step_8(self):
@@ -1010,7 +1010,7 @@ class WrapperNodeToNode(unittest.TestCase):
             self.out_dir, f'step8.{pair_slug(OLD, MID)}.log')), self.out)
 
     def test_the_distro_patch_block_reads_each_side_clean(self):
-        for n, build, tag in ((6, 'build-old', OLD), (7, 'build-new', MID)):
+        for n, build, tag in ((6, 'build-old', OLD), (7, 'build-new.el9', MID)):
             with self.subTest(step=n):
                 self.assertEqual(summary_block(
                     self.out, f'-- Distro patches, step {n} ({build} '
@@ -1024,14 +1024,14 @@ class WrapperNodeToNode(unittest.TestCase):
         and 7 read its file, and over 2.34..2.39 the new tag holds it."""
         block = summary_block(
             self.out.replace(self.out_dir, '<out>'),
-            '-- Node-to-node locale data (build-old -> build-new)')
+            '-- Node-to-node locale data (build-old -> build-new.el9)')
         self.assertEqual(block, [
             '3 locale(s) differ inside LC_COLLATE between the two',
             "nodes' OWN sources; full list: "
-            '<out>/node_collate_diffs.build-old..build-new.txt',
+            '<out>/node_collate_diffs.build-old..build-new.el9.txt',
             "plus 2 locale(s) that inherit one of those files'",
-            'LC_COLLATE via copy on build-new; full list: '
-            '<out>/node_collate_inherited.build-old..build-new.txt',
+            'LC_COLLATE via copy on build-new.el9; full list: '
+            '<out>/node_collate_inherited.build-old..build-new.el9.txt',
             'C (C.UTF-8): DIFFERS  <- LC_COLLATE is not the same on the two '
             'nodes',
         ])
@@ -1043,7 +1043,7 @@ class WrapperNodeToNode(unittest.TestCase):
         summary = self.out.split('AUDIT SUMMARY')[1]
         self.assertIn("-- Node's own locale data, ellipsis scan (build-old)",
                       summary)
-        self.assertIn("-- Node's own locale data, ellipsis scan (build-new)",
+        self.assertIn("-- Node's own locale data, ellipsis scan (build-new.el9)",
                       summary)
         self.assertEqual(summary.count('ellipsis-based locale(s):'), 2)
         flat = ' '.join(summary.split())
@@ -1061,10 +1061,10 @@ class WrapperNodeToNode(unittest.TestCase):
         """
         flat = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
         m = re.search(r"plus (\d+) locale\(s\) that inherit one of those "
-                      r"files' LC_COLLATE via copy on build-new", flat)
+                      r"files' LC_COLLATE via copy on build-new.el9", flat)
         self.assertIsNotNone(m, flat)
         path = os.path.join(self.out_dir,
-                            'node_collate_inherited.build-old..build-new.txt')
+                            'node_collate_inherited.build-old..build-new.el9.txt')
         with open(path, encoding='utf-8') as fh:
             names = [ln.strip() for ln in fh if ln.strip()
                      and not ln.startswith('#')]
@@ -1075,7 +1075,7 @@ class WrapperNodeToNode(unittest.TestCase):
         """count_lines would have counted the leading `#` line, reporting one
         finding where there are none."""
         path = os.path.join(self.out_dir,
-                            'node_collate_diffs.build-old..build-new.txt')
+                            'node_collate_diffs.build-old..build-new.el9.txt')
         with open(path, encoding='utf-8') as fh:
             names = [ln for ln in fh if ln.strip()
                      and not ln.startswith('#')]
@@ -1121,8 +1121,8 @@ class WrapperNodesOnOneBuild(unittest.TestCase):
                 fh.write(body)
         cls.rc, cls.out = run_wrapper(
             OLD, MID,
-            '--old-locales-dir', cls.old_root, '--old-build-id', 'same-build',
-            '--new-locales-dir', cls.new_root, '--new-build-id', 'same-build',
+            '--old-locales-dir', cls.old_root, '--old-build-id', 'same-build.el9',
+            '--new-locales-dir', cls.new_root, '--new-build-id', 'same-build.el9',
             out_dir=cls.out_dir)
 
     @classmethod
@@ -1136,9 +1136,9 @@ class WrapperNodesOnOneBuild(unittest.TestCase):
                                                 'step 5 found 29 substantive '
                                                 'hunk(s),'))
         self.assertIn('Step 9 finds locale(s) built in byte order on '
-                      'same-build, which changed code can move too: C', body)
+                      'same-build.el9, which changed code can move too: C', body)
         self.assertIn('Step 10 finds no locale built in byte order on '
-                      'same-build.', body)
+                      'same-build.el9.', body)
 
     def test_the_two_sides_write_two_files(self):
         """Step 9's full list was overwritten the same way, before this
@@ -1149,7 +1149,7 @@ class WrapperNodesOnOneBuild(unittest.TestCase):
                 with self.subTest(kind=kind, side=side):
                     self.assertTrue(os.path.isfile(os.path.join(
                         self.out_dir,
-                        f'step4_{kind}_locales.same-build..{side}.txt')))
+                        f'step4_{kind}_locales.same-build.el9..{side}.txt')))
 
 
 @needs_clone
@@ -1576,7 +1576,25 @@ class WrapperSideLostFiles:
         cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-losttree-')
         root = dd.materialise_tag(GLIBC_CLONE, cls.TAG,
                                   os.path.join(cls.nodes, 'n'))
-        cls.lost = sorted(os.listdir(root))[300:]
+        # Of the files after the 300th, those no remaining file copies or
+        # includes: their loss changes no other locale's run, so the
+        # reader's kept answers for the tag still serve. Losing the
+        # translit_* files that nearly every locale includes made the class
+        # read the whole tree again on one processor, about 104 s against
+        # 7 s after a cold fill (review of the whole of block 15).
+        lost = set(sorted(os.listdir(root))[300:])
+        named = {}
+        for name in os.listdir(root):
+            with open(os.path.join(root, name), 'rb') as fh:
+                named[name] = set(re.findall(rb'(?:copy|include)\s+"([^"]*)"',
+                                             fh.read()))
+        while True:
+            used = set().union(*(named[n] for n in named if n not in lost))
+            still = {n for n in lost if n.encode() not in used}
+            if still == lost:
+                break
+            lost = still
+        cls.lost = sorted(lost)
         for name in cls.lost:
             os.remove(os.path.join(root, name))
         with open(os.path.join(root, 'C'), 'w', encoding='utf-8') as fh:
@@ -1613,6 +1631,10 @@ class WrapperSideLostFiles:
         self.assertEqual(heads, [(str(len(self.lost)), self.TAG)], warnings)
         # The whole list, not each name: a name that prefixes another
         # (tt_RU, tt_RU@iqtelif) passed a per-name check with itself dropped.
+        # The fixture has to hold such a pair for that to be tested.
+        self.assertIn(('tt_RU', 'tt_RU@iqtelif'),
+                      [(a, b) for a in self.lost for b in self.lost
+                       if a != b and b.startswith(a)])
         names = re.search(r'are missing from \S+: (.*?)\. ',
                           flat(warnings)).group(1).split(', ')
         self.assertEqual(names, self.lost)
@@ -1621,7 +1643,7 @@ class WrapperSideLostFiles:
         """The new copy alone: what it lacks may be what
         the new machine does not ship, so the section says it cannot decide
         those rather than ending on the tags' "none" -- measured printing
-        "none" above step 7's `!!` for exactly this fixture. The old copy
+        "none" above step 7's `!!`. The old copy
         alone: what it lacks is not a removal, and nothing is added."""
         lines = removed_lines(self.out)
         if self.SIDE == 'old':
@@ -2110,12 +2132,14 @@ class WrapperNodeCNamesTheKeywordNotAlone(unittest.TestCase):
     def setUpClass(cls):
         cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-cmixed-')
         cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-cmixedtree-')
-        root = dd.materialise_tag(GLIBC_CLONE, OLD, os.path.join(cls.nodes, 'a'))
+        # A RHEL 9 machine: codepoint_collation is a keyword only where Red
+        # Hat's patch adds it, which the build id names (glibc_tree).
+        root = dd.materialise_tag(GLIBC_CLONE, MID, os.path.join(cls.nodes, 'a'))
         with open(os.path.join(root, 'C'), 'w', encoding='utf-8') as fh:
             fh.write(locale_file('copy "iso14651_t1"', 'codepoint_collation'))
         cls.rc, cls.out = run_wrapper(
-            OLD, MID, '--old-locales-dir', root, '--old-build-id', 'build-old',
-            out_dir=cls.out_dir)
+            OLD, MID, '--new-locales-dir', root,
+            '--new-build-id', 'build-new.el9', out_dir=cls.out_dir)
 
     @classmethod
     def tearDownClass(cls):

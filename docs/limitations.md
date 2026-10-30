@@ -54,9 +54,8 @@ for the order inside PostgreSQL, do not skip
 
 ## Below glibc 2.24 the method rests on one measured pair
 
-Exactly one pair older than glibc 2.24 has been run end to end. Nothing about
-the method is known to break there and there is no version guard, but one pair
-is not every pair.
+Exactly one pair older than glibc 2.24 has been run end to end, and there is
+no version guard. One pair is not every pair.
 
 If both your versions are that old, read the result as thinner evidence than
 the two RHEL pairs carry, and confirm it on the machines.

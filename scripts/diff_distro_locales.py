@@ -55,6 +55,20 @@ import glibc_locale_data as g
 # this decision for the same reason.
 SAFE_NAME = re.compile(r'^[A-Za-z0-9_@.+-]+$')
 
+
+def shown(name):
+    """`name` as a message or a list line can carry it: bare when it is a
+    plain file name (SAFE_NAME, the characters a locale file name is made
+    of), else ascii(), quoted with every character outside printable ASCII
+    escaped. Defined by what is safe to print rather than by what is not:
+    the empty name (cases c17 and c54), a blank, a comma, a newline, a
+    control character, a character that draws as nothing visible
+    (U+3164) and a combining mark all fall outside it
+    (false-negative-reviewer, rounds 1 to 3 of 13.44). fullmatch, not
+    SAFE_NAME.match: `$` also matches before a final newline, so "zz\\n"
+    passed the check and was written as two lines."""
+    return name if SAFE_NAME.fullmatch(name) else ascii(name)
+
 # Several hundred files ship in glibc-locale-source. A floor well below that
 # still catches a `docker cp` that landed three files, or a node without the
 # package at all. Used where there is no upstream side to take
@@ -198,8 +212,9 @@ def inherited_via_copy(texts, roots):
     """{locale: [roots]} for every locale that is NOT one of `roots` and whose
     LC_COLLATE reaches one of them through `copy`.
 
-    Pure: the same closure step 3 and step 4 take, applied to a node's own
-    files. A backport that edits iso14651_t1 changes the order of the
+    Pure: glibc_locale_data.inherited_from's rule over each file read
+    alone, applied to a node's own files (steps 3 and 4 walk what localedef
+    reads for each locale instead, glibc_tree, backlog 15.2). A backport that edits iso14651_t1 changes the order of the
     hundreds of locales that copy it, and until this existed the
     node-reading checks reported "1 locale(s) differ inside LC_COLLATE" for
     exactly that case -- the one check that can see a backport at all lost

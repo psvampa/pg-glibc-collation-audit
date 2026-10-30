@@ -42,6 +42,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from unittest import mock
 
@@ -450,6 +451,43 @@ class AHungShardIsKilledAndCounted(unittest.TestCase):
         self.assertEqual(code, 1, text)
 
 
+
+class TheReaderFillSaysWhenItDidNotFinish(unittest.TestCase):
+    """run_parallel.fill_reader computes the reader's answers before the
+    classes start (backlog 15.2). It changes how long the run takes, never
+    an answer, so a fill that fails or runs out of time is said and the
+    run goes on; it is never read as done."""
+
+    def harness(self, body):
+        d = tempfile.mkdtemp(prefix='pg-glibc-fill-')
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        with open(os.path.join(d, '_harness.py'), 'w') as fh:
+            fh.write('import os, sys, time\n'
+                     'def fill_reader_cache():\n    ' + body + '\n')
+        return d
+
+    def test_a_fill_that_finishes_is_none(self):
+        self.assertIsNone(rp.fill_reader(self.harness('pass')))
+
+    def test_a_fill_that_fails_says_how(self):
+        why = rp.fill_reader(self.harness(
+            "sys.stderr.write('boom\\n'); sys.exit(3)"))
+        self.assertEqual('exit 3: boom', why)
+
+    def test_a_fill_that_runs_out_of_time_says_so(self):
+        why = rp.fill_reader(self.harness('time.sleep(30)'), timeout=1)
+        self.assertEqual('it ran past 1 s', why)
+
+    def test_the_fill_gets_every_processor_unless_told_otherwise(self):
+        d = self.harness("print(os.environ['PG_GLIBC_READER_JOBS']); "
+                         "sys.exit(1)")
+        with mock.patch.dict(os.environ):
+            os.environ.pop('PG_GLIBC_READER_JOBS', None)
+            self.assertEqual('exit 1: %d' % (os.cpu_count() or 1),
+                             rp.fill_reader(d))
+            os.environ['PG_GLIBC_READER_JOBS'] = '2'
+            self.assertEqual('exit 1: 2', rp.fill_reader(d))
+
 class TheRunnerRunsWhatItSaysItRan(unittest.TestCase):
     """End to end against the serial command on the same module: same tests,
     same count, both green. The fabricated shards cannot catch a runner that
@@ -493,7 +531,9 @@ class TheSuiteDoesNotWriteWhereARealAuditReads(unittest.TestCase):
     rewrote 25 files there, the step 2 list of both published pairs among
     them. An audit.sh running at the same time could read the test's list
     instead of its own. `_harness` now gives every test process a folder of
-    its own, and the runner fails a run that changes the default one."""
+    its own, and the runner fails a run that changes the default one. The
+    last tests also hold main()'s call to the reader fill, which that check
+    watches: once, before the classes, and said when it did not finish."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix='pg-glibc-audit-watch-')
@@ -661,13 +701,20 @@ class TheSuiteDoesNotWriteWhereARealAuditReads(unittest.TestCase):
         self.assertRegex(text.split('\n')[-1],
                          r'^FAILED \(default output folder unreadable=1\)$')
 
-    def _main(self, run_unit, watch=rp.watch, folder=None):
+    def _main(self, run_unit, watch=rp.watch, folder=None, fill=lambda: None,
+              units=(('k', 1),)):
+        # main([]) is a run of the whole suite, so it fills the reader's
+        # answers first; the real fill_reader computes them for the suite,
+        # work no test here is about. main() also sets PG_GLIBC_READER_JOBS
+        # for its shards, and the tests after these must not inherit it.
         out = io.StringIO()
         with mock.patch.object(rp, 'DEFAULT_OUT_DIR', folder or self.tmp), \
                 mock.patch.object(rp, 'discover_units',
-                                  lambda names=None: [('k', 1)]), \
+                                  lambda names=None: list(units)), \
                 mock.patch.object(rp, 'run_unit', run_unit), \
                 mock.patch.object(rp, 'watch', watch), \
+                mock.patch.object(rp, 'fill_reader', fill), \
+                mock.patch.dict(os.environ), \
                 contextlib.redirect_stdout(out):
             code = rp.main([])
         return code, out.getvalue()
@@ -730,6 +777,61 @@ class TheSuiteDoesNotWriteWhereARealAuditReads(unittest.TestCase):
         code, text = self._main(shard)
         self.assertEqual(code, 0, text)
         self.assertEqual(text.strip().split('\n')[-1], 'OK')
+
+    def test_main_fills_the_reader_once_before_the_classes(self):
+        """Two classes, so once per run and once per class differ; and a fill
+        that takes a moment, so one started beside the classes ends after
+        one of them has begun."""
+        order = []
+
+        def fill():
+            order.append('fill')
+            time.sleep(0.05)
+            order.append('filled')
+
+        def runs(name):
+            order.append(name)
+            return shard(name)
+        code, text = self._main(runs, fill=fill, units=(('a', 1), ('b', 1)))
+        self.assertEqual(code, 0, text)
+        self.assertEqual(order[:2], ['fill', 'filled'], order)
+        self.assertEqual(sorted(order[2:]), ['a', 'b'], order)
+
+    def test_main_says_so_when_the_fill_did_not_finish_and_runs_on(self):
+        """The fill changes how long the run takes, never an answer, so a
+        fill that failed is said above the verdict and the run goes on."""
+        code, text = self._main(shard, fill=lambda: 'exit 3: boom')
+        self.assertEqual(code, 0, text)
+        self.assertIn("note: the reader's answers were not filled before the "
+                      "classes started (exit 3: boom); each class computes "
+                      "what it needs.", ' '.join(text.split()))
+        self.assertEqual(text.strip().split('\n')[-1], 'OK')
+
+    def test_main_fails_a_run_whose_fill_wrote_in_the_watched_folder(self):
+        """The folder's first snapshot is taken before the fill, so the fill
+        is watched like the classes are."""
+        def fill():
+            with open(os.path.join(self.tmp, 'filled.txt'), 'w') as fh:
+                fh.write('x\n')
+        code, text = self._main(shard, fill=fill)
+        self.assertEqual(code, 1, text)
+        self.assertIn('    filled.txt', text)
+        self.assertRegex(text, r'(?m)^FAILED \(default output folder '
+                               r'changed=2\)$')
+
+    def test_a_fill_that_failed_does_not_stop_the_watch(self):
+        """Both of the fill's signals in one run: the note, and the red of
+        what it wrote before it failed."""
+        def fill():
+            with open(os.path.join(self.tmp, 'filled.txt'), 'w') as fh:
+                fh.write('x\n')
+            return 'exit 3: boom'
+        code, text = self._main(shard, fill=fill)
+        self.assertEqual(code, 1, text)
+        self.assertIn('(exit 3: boom)', text)
+        self.assertIn('    filled.txt', text)
+        self.assertRegex(text, r'(?m)^FAILED \(default output folder '
+                               r'changed=2\)$')
 
 
 class AGreenRunIsStillGreen(unittest.TestCase):

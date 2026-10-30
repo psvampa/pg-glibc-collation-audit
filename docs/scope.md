@@ -26,7 +26,7 @@ independently of the OS.
 project audits and publishes results for. RHEL7 is out of scope — it is years
 past end of life, and documenting it bought nothing.
 
-The method itself works on any pair of upstream tags. The extended
+The extended
 run, 1.b, has been measured on RHEL only, and it reads the glibc build with
 `rpm -q glibc`. On a machine without RPM, such as Debian or Ubuntu, `audit.sh`
 refuses that machine's file and says why. The two pairs

@@ -855,7 +855,7 @@ class DirectoryModeStepFour(NodeCase):
                        '--locales-dir', self.node(MID, 'n',
                                                   extra={'C': backported_c()}),
                        '--build-id', 'glibc-2.28-251.el8_10.40',
-                       out_dir=self.out)
+                       '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 0, text)
         self.assertIn('ranges: 5', text)
         with open(os.path.join(
@@ -870,7 +870,8 @@ class DirectoryModeStepFour(NodeCase):
         rc, text = run('flag_algorithmic_ranges.py',
                        '--locales-dir', self.node(MID, 'n',
                                                   extra={'C': upstream_c()}),
-                       '--build-id', 'fake', out_dir=self.out)
+                       '--build-id', 'fake.el9',
+                       '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 0, text)
         self.assertIn('Declare codepoint_collation', text)
         self.assertIn('ranges: 4', text)
@@ -887,8 +888,10 @@ class DirectoryModeStepFour(NodeCase):
         keep = sorted(os.listdir(_tree(MID)))[:3]
         rc, text = run('flag_algorithmic_ranges.py',
                        '--locales-dir', self.node(MID, 'n', keep=keep),
-                       '--build-id', 'truncated', out_dir=self.out)
+                       '--build-id', 'truncated', '--supported-tag', MID,
+                       out_dir=self.out)
         self.assertEqual(rc, 2, text)
+        self.assertIn('below the floor of', flat(text))
         self.assertNotIn('No locale uses ellipsis ranges', text)
 
     def lost_in_transit(self, tag, keep_count):
@@ -946,16 +949,17 @@ class DirectoryModeStepFour(NodeCase):
         self.assertNotIn('are missing from', flat(text))
         self.assertNotIn('not checked against any tag', flat(text))
 
-    def test_without_a_tag_it_says_the_copy_was_not_checked(self):
-        """Absent is not empty: with nothing to compare against, the scan
-        says so rather than reading like one that looked."""
+    def test_without_a_tag_it_refuses_to_read_the_directory(self):
+        """The files are read the way glibc at --supported-tag reads them
+        (glibc_tree): without one there is no telling how localedef reads
+        them, and no list to notice a copy that lost files against. Refused,
+        by name, before anything is read (backlog 15.2)."""
         rc, text = run('flag_algorithmic_ranges.py',
                        '--locales-dir', self.lost_in_transit(MID, 250),
                        '--build-id', 'lost', out_dir=self.out)
-        self.assertEqual(rc, 0, text)
-        self.assertIn('were not checked against any tag\'s list, so a copy '
-                      'that lost files is not detected here', flat(text))
-        self.assertRegex(text, r'(?m)^!! The files in\s')
+        self.assertEqual(rc, 2, text)
+        self.assertIn('--locales-dir requires --supported-tag', flat(text))
+        self.assertNotIn('Files at', text)
 
     def test_the_directory_run_does_not_clobber_the_tag_list(self):
         tag_list = os.path.join(self.out, 'step4_exposed_locales.txt')
@@ -965,7 +969,8 @@ class DirectoryModeStepFour(NodeCase):
             before = fh.read()
         rc, text = run('flag_algorithmic_ranges.py',
                        '--locales-dir', self.node(OLD, 'n'),
-                       '--build-id', 'fake', out_dir=self.out)
+                       '--build-id', 'fake', '--supported-tag', OLD,
+                       out_dir=self.out)
         self.assertEqual(rc, 0, text)
         with open(tag_list, encoding='utf-8') as fh:
             self.assertEqual(fh.read(), before)
@@ -1063,7 +1068,8 @@ class DirectoryModeStepFour(NodeCase):
                 rc, text = run('flag_algorithmic_ranges.py',
                                '--locales-dir',
                                self.node(MID, f'declared{i}', extra=extra),
-                               '--build-id', 'fake', out_dir=self.out)
+                               '--build-id', 'fake.el9',
+                               '--supported-tag', MID, out_dir=self.out)
                 self.assertEqual(rc, 0, text)
                 self.assertIn(expected, text)
 
@@ -1089,7 +1095,8 @@ class DirectoryModeStepFour(NodeCase):
                 rc, text = run('flag_algorithmic_ranges.py',
                                '--locales-dir',
                                self.node(MID, f'explicit-{name}', extra=extra),
-                               '--build-id', 'fake', out_dir=self.out)
+                               '--build-id', 'fake.el9',
+                               '--supported-tag', MID, out_dir=self.out)
                 self.assertEqual(rc, 0, text)
                 line = re.search(r'^  C \(C\.UTF-8\): (.*)$', text, re.M)
                 self.assertIsNotNone(line, text)
@@ -1113,11 +1120,12 @@ class DirectoryModeStepFour(NodeCase):
                        '--locales-dir',
                        self.node(MID, 'copyc',
                                  extra={'C': locale_file('copy "iso14651_t1"')}),
-                       '--build-id', 'fake', out_dir=self.out)
+                       '--build-id', 'fake.el9',
+                       '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 0, text)
         self.assertIn('so this locale IS exposed', flat(text))
         with open(os.path.join(self.out,
-                               'step4_exposed_locales.fake.txt'),
+                               'step4_exposed_locales.fake.el9.txt'),
                   encoding='utf-8') as fh:
             self.assertIn('C', [ln.strip() for ln in fh])
 
@@ -1137,14 +1145,15 @@ class DirectoryModeStepFour(NodeCase):
         rc, text = run('flag_algorithmic_ranges.py',
                        '--locales-dir',
                        self.node(MID, 'cpc', extra={'C': body}),
-                       '--build-id', 'fake', out_dir=self.out)
+                       '--build-id', 'fake.el9',
+                       '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 0, text)
         self.assertIn('C (C.UTF-8): names codepoint_collation, but could '
                       'not be read as the keyword alone', flat(text))
         self.assertIn('so this locale IS exposed', flat(text))
         self.assertNotIn('C (C.UTF-8): codepoint_collation', flat(text))
         self.assertNotIn('Declare codepoint_collation', flat(text))
-        with open(os.path.join(self.out, 'step4_exposed_locales.fake.txt'),
+        with open(os.path.join(self.out, 'step4_exposed_locales.fake.el9.txt'),
                   encoding='utf-8') as fh:
             self.assertIn('C', [ln.strip() for ln in fh])
 
@@ -1163,14 +1172,15 @@ class DirectoryModeStepFour(NodeCase):
         rc, text = run('flag_algorithmic_ranges.py',
                        '--locales-dir',
                        self.node(MID, 'copyofc', extra=extra),
-                       '--build-id', 'fake', out_dir=self.out)
+                       '--build-id', 'fake.el9',
+                       '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 0, text)
         self.assertIn('Declare codepoint_collation, so no expansion change '
                       'can move them: C', flat(text))
         self.assertIn('Copy a byte-order locale and nothing else, so glibc '
                       'builds them in byte order too: xx_XX (copies C)',
                       flat(text))
-        with open(os.path.join(self.out, 'step4_exposed_locales.fake.txt'),
+        with open(os.path.join(self.out, 'step4_exposed_locales.fake.el9.txt'),
                   encoding='utf-8') as fh:
             written = [ln.strip() for ln in fh]
         self.assertNotIn('xx_XX', written)
@@ -1204,14 +1214,15 @@ class DirectoryModeStepFour(NodeCase):
                                self.node(MID, f'ccopy-{slug}',
                                          extra={'C': locale_file('copy "zz_ZZ"'),
                                                 'zz_ZZ': target, **more}),
-                               '--build-id', 'fake', out_dir=out)
+                               '--build-id', 'fake.el9',
+                               '--supported-tag', MID, out_dir=out)
                 self.assertEqual(rc, 0, text)
                 self.assertEqual(
                     'C (C.UTF-8): copy-only <- its order is whatever it '
                     'inherits; follow the copy chain; and it copies zz_ZZ and '
                     'nothing else, which glibc builds in byte order -- so '
                     'this locale is byte order too' in flat(text), byte_order)
-                with open(os.path.join(out, 'step4_exposed_locales.fake.txt'),
+                with open(os.path.join(out, 'step4_exposed_locales.fake.el9.txt'),
                           encoding='utf-8') as fh:
                     self.assertEqual('C' in [ln.strip() for ln in fh],
                                      not byte_order)
@@ -1323,7 +1334,9 @@ class DirectoryModeStepFour(NodeCase):
                        out_dir=self.out)
         self.assertEqual(rc, 0, text)
         self.assertNotIn('steps 1-3 are sufficient', flat(text))
-        self.assertIn('leave 342 locale(s) unresolved: steps 1-3 are NOT '
+        self.assertIn('Nothing that could be READ here uses an ellipsis range, '
+                      'but the 342 locale(s) named above under `!!` were not '
+                      'read the way localedef reads them: steps 1-3 are NOT '
                       'sufficient for those', flat(text))
         self.assertNotIn('default weight', text)
 
@@ -1337,12 +1350,80 @@ class DirectoryModeStepFour(NodeCase):
         rc, text = run('flag_algorithmic_ranges.py',
                        '--locales-dir',
                        self.node(MID, 'cpdangle', extra={'C': body}),
-                       '--build-id', 'fake', out_dir=self.out)
+                       '--build-id', 'fake.el9',
+                       '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 0, text)
-        self.assertIn('C (C.UTF-8): names codepoint_collation, but could '
-                      'not be read as the keyword alone', flat(text))
+        # glibc stops at the copy and never reads the keyword, so neither
+        # the keyword nor "copy-only" describes what was read (backlog 15.2).
+        self.assertIn('C (C.UTF-8): not read to the end the way localedef '
+                      'reads it <- NOT cleared; and it copies no_such_locale, '
+                      'which is NOT in this corpus', flat(text))
         self.assertIn('so this locale is NOT cleared', flat(text))
-        with open(os.path.join(self.out, 'step4_exposed_locales.fake.txt'),
+        with open(os.path.join(self.out, 'step4_exposed_locales.fake.el9.txt'),
+                  encoding='utf-8') as fh:
+            self.assertIn('C', [ln.strip() for ln in fh])
+
+    def test_a_C_the_reader_cannot_settle_is_not_cleared(self):
+        """A run this reader cannot settle is not read as clean: C's status
+        says so and C is on the list (backlog 15.2). reorder-sections-after
+        is one such statement."""
+        body = locale_file('copy "iso14651_t1"',
+                           'reorder-sections-after <LATIN> <X>')
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir',
+                       self.node(MID, 'unsettled', extra={'C': body}),
+                       '--build-id', 'fake.el9',
+                       '--supported-tag', MID, out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertIn('C (C.UTF-8): not read to the end the way localedef '
+                      'reads it <- NOT cleared;', flat(text))
+        self.assertIn('; and how localedef reads it could not be settled '
+                      '(C:6: reorder-sections-after in LC_COLLATE) -- so this '
+                      'locale is NOT cleared', flat(text))
+        self.assertRegex(text, r'(?m)^!! 1 locale\(s\) could not be read the '
+                               r'way localedef reads them')
+        self.assertRegex(text, r'(?m)^     C: C:\d+: reorder-sections-after '
+                               r'in LC_COLLATE$')
+        with open(os.path.join(self.out, 'step4_exposed_locales.fake.el9.txt'),
+                  encoding='utf-8') as fh:
+            self.assertIn('C', [ln.strip() for ln in fh])
+
+    def test_a_C_the_reader_cannot_settle_is_listed_without_a_copy(self):
+        """The case above inherits a range too, so it is listed either way.
+        Without a copy, only the reader's `!!` puts C on the list
+        (false-negative-reviewer, round 1 of B2)."""
+        body = locale_file('order_start forward', '<U0041>', 'order_end',
+                           'reorder-sections-after <LATIN> <X>')
+        rc, text = run('flag_algorithmic_ranges.py',
+                       '--locales-dir',
+                       self.node(MID, 'unsettled2', extra={'C': body}),
+                       '--build-id', 'fake.el9',
+                       '--supported-tag', MID, out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertRegex(text, r'(?m)^     C: C:\d+: reorder-sections-after '
+                               r'in LC_COLLATE$')
+        with open(os.path.join(self.out, 'step4_exposed_locales.fake.el9.txt'),
+                  encoding='utf-8') as fh:
+            self.assertIn('C', [ln.strip() for ln in fh])
+
+    def test_a_C_glibc_stops_reading_before_its_LC_COLLATE_is_listed(self):
+        """A 0x1A alone on a line above LC_COLLATE: before 2.36 localedef
+        reads nothing past it (case b02, el8 and el9). C must not read as
+        "defines no LC_COLLATE" and drop from every list (false-negative-
+        reviewer, round 1 of B2)."""
+        root = self.node(MID, 'cut')
+        with open(os.path.join(root, 'C'), 'wb') as fh:
+            fh.write(b'\x1a\n' + upstream_c().encode('utf-8'))
+        rc, text = run('flag_algorithmic_ranges.py', '--locales-dir', root,
+                       '--build-id', 'fake.el9', '--supported-tag', MID,
+                       out_dir=self.out)
+        self.assertEqual(rc, 0, text)
+        self.assertIn('C (C.UTF-8): not read to the end the way localedef '
+                      'reads it <- NOT cleared', flat(text))
+        self.assertIn('C: localedef stops reading C at line 1, before the '
+                      'end of the file', flat(text))
+        self.assertNotIn('defines no LC_COLLATE block', text)
+        with open(os.path.join(self.out, 'step4_exposed_locales.fake.el9.txt'),
                   encoding='utf-8') as fh:
             self.assertIn('C', [ln.strip() for ln in fh])
 
@@ -1358,7 +1439,8 @@ class DirectoryModeStepFour(NodeCase):
                      for name in os.listdir(tree)}
         rc, text = run('flag_algorithmic_ranges.py',
                        '--locales-dir', self.node(MID, 'noblocks', extra=blockless),
-                       '--build-id', 'fake', out_dir=self.out)
+                       '--build-id', 'fake.el9',
+                       '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 2, text)
         self.assertNotIn('No locale uses ellipsis ranges', text)
         self.assertIn('not one defines LC_COLLATE', flat(text))
@@ -1381,7 +1463,8 @@ class DirectoryModeStepFour(NodeCase):
         extra['C'] = upstream_c()
         rc, text = run('flag_algorithmic_ranges.py',
                        '--locales-dir', self.node(MID, 'flat', extra=extra),
-                       '--build-id', 'fake', out_dir=self.out)
+                       '--build-id', 'fake.el9',
+                       '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 0, text)
         self.assertNotIn('steps 1-3 are sufficient', flat(text))
         default = default_weight_section(text)[0]
@@ -1411,7 +1494,8 @@ class DirectoryModeStepFour(NodeCase):
         self.assertEqual(len(extra), 343)
         rc, text = run('flag_algorithmic_ranges.py',
                        '--locales-dir', self.node(MID, 'allcp', extra=extra),
-                       '--build-id', 'fake', out_dir=self.out)
+                       '--build-id', 'fake.el9',
+                       '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 0, text)
         self.assertIn('No locale uses ellipsis ranges here; steps 1-3 are '
                       'sufficient.', text)

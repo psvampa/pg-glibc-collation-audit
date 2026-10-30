@@ -229,12 +229,8 @@ def removal_verdicts(old, new, only_old, old_tag, old_tag_names):
     return removed, undetermined
 
 
-def shown(name):
-    """`name` as a list line can carry it: bare when it is a plain file name,
-    quoted otherwise. fullmatch, not SAFE_NAME.match: `$` also matches before
-    a final newline, so "zz\\n" passed the check and was written as two lines
-    (false-negative-reviewer, round 2)."""
-    return name if dd.SAFE_NAME.fullmatch(name) else repr(name)
+# `name` as a list line can carry it.
+shown = dd.shown
 
 
 def report_undetermined(undetermined):

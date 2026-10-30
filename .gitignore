@@ -1,4 +1,5 @@
 scripts/glibc/
+scripts/glibc-reader-cache/
 /tmp/
 __pycache__/
 .claude/

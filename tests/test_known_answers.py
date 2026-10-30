@@ -14,13 +14,14 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
 
 from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
-                       REPO_ROOT, default_weight_section, flat, needs_clone,
-                       needs_floor_pair, run_step)
+                       REPO_ROOT, SCRIPTS_DIR, default_weight_section, flat,
+                       needs_clone, needs_floor_pair, run_step)
 
 import glibc_locale_data as g
 import test_locale_order as tlo
@@ -37,14 +38,35 @@ WARNING = ('could not identify which characters changed, but this locale '
            'must be considered suspicious')
 
 
+# The line under a file that says its changed lines are not all that can
+# move (step 2, filter_lc_collate_changes.main), after the characters or
+# on its own.
+EVERY_RULE = re.compile(r'(those are the changed lines; )?(.+), so (any|every) '
+                        r'rule in it can (change|read differently)')
+
+
 def step2_characters(out):
     """{locale: [code point, ...]} from step 2's LC_COLLATE list, or None for
-    a locale that got the could-not-identify warning.
+    a locale whose changed lines name no character it could identify: the
+    could-not-identify warning, or a line that every rule in it can change
+    with no list above it (step2_every_rule names those).
 
     Refuses rather than guesses: the files it finds must number what the
-    header says, every line under a file must be part of one of the two forms,
+    header says, every line under a file must be part of one of the forms,
     and a list must print as many entries as it says it has.
     """
+    return {name: points for name, (points, _) in _step2_entries(out).items()}
+
+
+def step2_every_rule(out):
+    """The locales under which step 2 says every (or any) rule in the file
+    can change, sorted: its changed lines are not all that moves."""
+    return sorted(name for name, (_, every) in _step2_entries(out).items()
+                  if every)
+
+
+def _step2_entries(out):
+    """{locale: (points or None, the every-rule line or None)}."""
     count = one_int(r'Files with changes inside LC_COLLATE: (\d+)', out,
                     'the step 2 count')
     block = out.split('Files with changes inside LC_COLLATE:')[1]
@@ -65,10 +87,28 @@ def step2_characters(out):
     for name, lines in chunks.items():
         text = flat('\n'.join(lines))
         if text == WARNING:
-            found[name] = None
+            found[name] = (None, None)
+            continue
+        listed, sep, every = text.partition(' those are the changed lines; ')
+        if sep:
+            every = 'those are the changed lines; ' + every
+        elif not listed.startswith('characters in the changed rules'):
+            listed, every = None, listed
+        else:
+            every = None
+        if every is not None and not EVERY_RULE.fullmatch(every):
+            raise AssertionError(f'{name}: neither a character list, the '
+                                 f'warning nor an every-rule line: {text!r}')
+        if every is not None and (listed is None) == every.startswith(
+                'those are the changed lines; '):
+            raise AssertionError(f'{name}: "those are the changed lines" '
+                                 f'with no list, or a list without it: '
+                                 f'{text!r}')
+        if listed is None:
+            found[name] = (None, every)
             continue
         m = re.fullmatch(r'characters in the changed rules \((\d+)\): (.+)',
-                         text)
+                         listed)
         if not m:
             raise AssertionError(f'{name}: neither a character list nor the '
                                  f'warning: {text!r}')
@@ -77,7 +117,7 @@ def step2_characters(out):
         if len(points) != int(m.group(1)):
             raise AssertionError(f'{name}: says {m.group(1)} characters and '
                                  f'prints {len(points)}')
-        found[name] = points
+        found[name] = (points, every)
     return found
 
 
@@ -400,6 +440,19 @@ class Step2NamesTheCharacters(StepRun):
             self.step('filter_lc_collate_changes.py', MID, NEW))
         self.assertLessEqual(set(range(0x0E40, 0x0E45)), set(chars['th_TH']))
 
+    def test_an_edited_instruction_says_every_rule_can_change(self):
+        """Backlog 13.36: a changed reorder-after, collating-symbol,
+        order_start or conditional inside LC_COLLATE moves rules on lines
+        that did not change. Measured by the false-negative-reviewer of
+        15.2 B3 on these pairs, from the diff: or_IN over 2.28..2.34, and
+        ber_DZ, kab_DZ and th_TH over 2.34..2.39; until then none of them
+        said it. The others name only rules."""
+        for old, new, want in ((OLD, MID, ['or_IN']),
+                               (MID, NEW, ['ber_DZ', 'kab_DZ', 'th_TH'])):
+            with self.subTest(pair=f'{old}..{new}'):
+                self.assertEqual(want, step2_every_rule(
+                    self.step('filter_lc_collate_changes.py', old, new)))
+
     def test_every_locale_flagged_on_the_audited_pairs_gets_characters(self):
         """Measured: all five name at least one, so on these two pairs the
         warning is a regression rather than a finding."""
@@ -520,9 +573,10 @@ class Step4AlgorithmicRanges(StepRun):
             self.assertIn(name, out)
 
     def test_the_exposed_total_is_unchanged(self):
-        """342 at MID, as the examples print it. Pinned here because scan_ellipsis
-        switched from collate_block to collate_text, which changes which files
-        count as defining LC_COLLATE for files that open with it."""
+        """342 at MID, as the examples print it. Pinned here because what
+        decides which files define LC_COLLATE has changed twice (collate_block
+        to collate_text, then glibc_tree), and the two readers first differed
+        on files that open with it."""
         out = self.step('flag_algorithmic_ranges.py', MID)
         self.assertIn('Full set needing empirical confirmation: 342 locale(s)',
                       out)
@@ -795,30 +849,90 @@ class BelowTheOldVersionFloor(StepRun):
         """The root cause, asserted directly rather than through a count.
         These three are the highest fan-in files in the corpus; dropping them
         is what collapsed the closure."""
-        graph = g.build_copy_graph(GLIBC_CLONE, FLOOR_NEW)
+        import glibc_tree
+        tree = glibc_tree.Tree.at_tag(GLIBC_CLONE, FLOOR_NEW)
         for tmpl in ('iso14651_t1', 'iso14651_t1_common',
                      'iso14651_t1_pinyin'):
-            self.assertIn(tmpl, graph,
-                          f'{tmpl} is not a node of the {FLOOR_NEW} copy '
-                          f'graph; collate_block has regressed to a form that '
-                          f'cannot read a block at byte 0')
+            self.assertTrue(tree.defines(tmpl),
+                            f'{tmpl} defines no LC_COLLATE at {FLOOR_NEW} '
+                            f'to the copy chains steps 1 and 3 walk; a block '
+                            f'at byte 0 is not read any more')
 
-    def test_step_2_finds_six_locales_touching_lc_collate(self):
+    def test_the_list_step_3_will_give_is_read_at_the_new_tag(self):
+        """The character set check skips what step 3 lists anyway, and
+        works that out on step 3's own tree: the new tag's files read with
+        the new tag's localedef. Read with the old tag's, the list could be
+        other than step 3's, and a list larger than step 3's hides a
+        finding (false-negative-reviewer, 15.2 B3)."""
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-floor-tree-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        # The spy takes every argument at_tag takes, and names its caller:
+        # glibc_tree.file_facts reads trees through at_tag too when its
+        # facts are not kept, and only new_tree's read is step 3's tree.
+        code = ("import sys; sys.path.insert(0, %r)\n"
+                "import glibc_tree\n"
+                "real = glibc_tree.Tree.at_tag.__func__\n"
+                "def spy(cls, repo, tag, build=None, *a, **k):\n"
+                "    print('TREE', sys._getframe(1).f_code.co_name, tag,\n"
+                "          build.label if build else None)\n"
+                "    return real(cls, repo, tag, build, *a, **k)\n"
+                "glibc_tree.Tree.at_tag = classmethod(spy)\n"
+                "import filter_lc_collate_changes as f\n"
+                "sys.exit(f.main([%r, %r]))\n"
+                % (SCRIPTS_DIR, FLOOR_OLD, FLOOR_NEW))
+        p = subprocess.run([sys.executable, '-c', code], cwd=SCRIPTS_DIR,
+                           capture_output=True, timeout=600,
+                           env=dict(os.environ, PG_GLIBC_AUDIT_OUT=out_dir))
+        out = (p.stdout + p.stderr).decode('utf-8', 'replace')
+        self.assertEqual(0, p.returncode, out[-2000:])
+        # The label last and whole: an RHEL build's has blanks in it.
+        trees = re.findall(r'^TREE (\S+) (\S+) (.+)$', out, re.M)
+        self.assertEqual([(FLOOR_NEW, FLOOR_NEW)],
+                         [(t, b) for c, t, b in trees if c == 'new_tree'],
+                         out[-2000:])
+        self.assertEqual([], [t for t in trees if t[1] != t[2]])
+
+    def test_step_2_finds_seven_locales_touching_lc_collate(self):
+        """Six whose rules changed, and wal_ET, whose change glibc_reader
+        cannot place: it copies am_ET, which uses reorder-sections-after,
+        a statement the reader does not settle. Before step
+        2 read with the reader (15.2 B3) wal_ET was cleared as "does not
+        touch LC_COLLATE"; one it cannot settle is never cleared."""
         out = self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW)
         self.assertEqual(
             one_int(r'Files with changes inside LC_COLLATE: (\d+)', out,
                     'the step 2 count'),
-            6)
+            7)
+        self.assertIn('!! 1 file(s) could not be read the way localedef '
+                      'reads them', flat(out))
+        for tag in (FLOOR_OLD, FLOOR_NEW):
+            self.assertIn(f'localedata/locales/wal_ET at {tag}: am_ET:584: '
+                          f'reorder-sections-after in LC_COLLATE',
+                          flat(out).replace('- ', '-'))
 
-    def test_hu_HU_gets_the_warning_and_the_other_five_their_characters(self):
-        """The real case of a change whose lines name no character. It must
-        read as "could not identify", never as an empty list, which would look
-        like nothing to test."""
-        chars = step2_characters(
-            self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW))
-        self.assertIsNone(chars['hu_HU'])
-        for name in set(chars) - {'hu_HU'}:
-            self.assertTrue(chars[name], f'{name} got the warning')
+    def test_the_floor_pair_names_characters_only_where_the_reader_is_sure(
+            self):
+        """The real case of a change whose lines name no character, one
+        whose reading is not settled, and files the reader cannot name.
+        None may read as an empty list, which would look like nothing to
+        test: wal_ET gets "could not identify", and hu_HU, whose changed
+        lines are instructions, that every rule in it can change (backlog
+        13.36). At glibc-2.12 and 2.17 the seventeen runs of am_ET, ber_MA
+        and the locales that copy them are unsettled at a
+        reorder-sections-after, after which glibc may read any file
+        through a `copy` (15.3 C2, round 3 of its review): dz_BT, fi_FI,
+        se_NO and ug_CN, which those runs do not begin, print no list,
+        each still with the sentence that every rule in it can change.
+        iso14651_t1_common is read to its end by their opening copies
+        before that place, and keeps its list."""
+        out = self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW)
+        chars = step2_characters(out)
+        self.assertEqual({'iso14651_t1_common'},
+                         {name for name, got in chars.items() if got})
+        self.assertEqual({'dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
+                          'se_NO', 'ug_CN', 'wal_ET'}, set(chars))
+        self.assertEqual(['dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
+                          'se_NO', 'ug_CN'], step2_every_rule(out))
 
     def test_zh_CN_GB18030_names_206_characters_GB18030_changed(self):
         """Backlog 13.7, PR B: the one pinned pair where a charmap change
@@ -852,6 +966,35 @@ class BelowTheOldVersionFloor(StepRun):
         self.assertEqual(
             one_int(r'Full affected set \((\d+) locale', out, 'the set'),
             280)
+
+    def test_steps_1_and_3_name_the_17_runs_the_reader_cannot_settle(self):
+        """reorder-sections-after, which the reader does not settle, is
+        reached from am_ET and ber_MA by 17 locales at
+        glibc-2.17. Step 3 cannot tell whether those inherit from what
+        changed, so it lists them under a `!!` of their own; step 1 says its
+        counts may miss them (backlog 15.2)."""
+        out = self.step('resolve_copy_closure.py', FLOOR_NEW, 'sv_SE')
+        self.assertEqual(
+            one_int(r'(?m)^!! Could not be read the way localedef reads '
+                    r'them, so they are listed: (\d+)', out, 'the count'),
+            17)
+        full = re.search(r'^Full affected set \(\d+ locale source file\(s\)'
+                         r'\): (.+)$', out, re.M)
+        self.assertIsNotNone(full, out)
+        for name in ('am_ET', 'ber_MA', 'om_ET', 'sid_ET'):
+            self.assertIn(name, full.group(1).split(', '))
+        # Indented past audit.sh's relay of `!!` blocks, which keeps the
+        # lines under one that start with three spaces: the names reach the
+        # summary, not only the count.
+        self.assertRegex(out, r'(?m)^     am_ET: am_ET:584: '
+                              r'reorder-sections-after in LC_COLLATE$')
+        rc, fan = run_step('glibc_locale_data.py', 'fanin', FLOOR_NEW)
+        self.assertEqual(rc, 0, fan)
+        self.assertEqual(
+            one_int(r'(?m)^!! (\d+) locale\(s\) could not be read the way '
+                    r'localedef reads them, so the counts above may miss',
+                    fan, 'the count'),
+            17)
 
     def test_step_3_writes_its_280_files_and_24_aliases(self):
         """The written list is the affected set and the aliases step 3 prints,
@@ -894,24 +1037,38 @@ class BelowTheOldVersionFloor(StepRun):
             one_int(r'(\d+) substantive hunk\(s\) found', out, 'the total'),
             68)
 
-    def test_step_4_reaches_281_not_279(self):
+    def test_step_4_reaches_278_and_22(self):
         """277 was the figure before the collate_block fix and 279 after it;
-        281 adds ky_KG and uk_UA, which copy iso14651_t1 spelled in symbolic
+        281 added ky_KG and uk_UA, which copy iso14651_t1 spelled in symbolic
         notation. The 2 docs/limitations.md used to publish was older still,
         and already wrong when it was quoted.
 
-        281 is the ellipsis scan plus the copy walk. Since backlog 1.6 the
-        total adds the 19 locales only the default weight exposes, and it does
-        not move when the walk loses a locale to that section, so the 281 is
-        read from its two parts."""
+        278 since step 4 reads what localedef reads (backlog 15.2, 13.8):
+        glibc's default comment character is `#`, and at 2.12 and 2.17
+        iso14651_t1_common's only ranges are inside `#` comments, so it no
+        longer counts as a range, and iso14651_t1_pinyin and zh_CN, which
+        reached a range only through it, move to the default-weight section,
+        19 -> 22 (measured with the fix alone on 2026-10-06: 281/19 ->
+        278/22). The total stays 300.
+
+        The sum is the ellipsis scan plus the copy walk. Since backlog 1.6
+        the total adds the locales only the default weight exposes, and it
+        does not move when the walk loses a locale to that section, so it is
+        read from its two parts. The 17 locales whose reading meets
+        reorder-sections-after at am_ET and ber_MA, which the reader does
+        not settle, are named under their own `!!`."""
         out = self.step('flag_algorithmic_ranges.py', FLOOR_NEW)
         self.assertEqual(
             one_int(r'ellipsis \(algorithmic\) ranges: (\d+)', out,
                     'the ellipsis count')
             + one_int(r'exposed via `copy` inheritance: (\d+)', out,
                       'the copy count'),
-            281)
-        self.assertEqual(default_weight_section(out)[0], 19)
+            278)
+        self.assertEqual(default_weight_section(out)[0], 22)
+        self.assertEqual(
+            one_int(r'(?m)^!! (\d+) locale\(s\) could not be read the way '
+                    r'localedef reads them', out, 'the unsettled count'),
+            17)
         self.assertEqual(
             one_int(r'Full set needing empirical confirmation: (\d+) locale',
                     out, 'the exposed set'),

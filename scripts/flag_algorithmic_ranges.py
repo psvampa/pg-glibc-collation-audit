@@ -31,7 +31,7 @@ says, and so does every locale it names as built in byte order.
 
 Every other locale is printed too, except one glibc builds in byte order:
 codepoint_collation alone, or only a copy of a byte-order locale
-(glibc_locale_data.byte_order_locales). A character a locale does not list
+(glibc_tree.Tree.byte_order). A character a locale does not list
 takes a default weight that a rule in localedef's code picks, not the file,
 so even a locale with no range depends on localedef (backlog 1.6).
 
@@ -49,13 +49,13 @@ docs/results.md.
 Usage:
   python3 flag_algorithmic_ranges.py <tag> [--repo <path>]
   python3 flag_algorithmic_ranges.py --locales-dir <path> --build-id <nvr>
-          [--supported-tag <tag>] [--node-label <side>] [--expect-files N]
+          --supported-tag <tag> [--node-label <side>] [--expect-files N]
           [--min-files N]
 
 Example:
   python3 flag_algorithmic_ranges.py glibc-2.34
   python3 flag_algorithmic_ranges.py --locales-dir ./el8-locales \
-      --build-id glibc-2.28-251.el8_10.40
+      --build-id glibc-2.28-251.el8_10.40 --supported-tag glibc-2.28
 """
 import argparse
 import os
@@ -63,25 +63,23 @@ import sys
 
 import diff_distro_locales as dd
 import glibc_locale_data as g
+import glibc_tree
 from filter_lc_collate_changes import KNOWN_BACKPORTED
 
 TAG_OUT = 'step4_exposed_locales.txt'
 
 
 def load_from_tag(repo, tag):
-    """(texts, supported, label, out_name) for every locale file at `tag`."""
+    """(tree, supported, label, out_name) for every locale file at `tag`."""
     g.check_refs(repo, tag)
-    paths = g.list_locale_files(repo, tag)
-    contents, missing = g.read_blobs(repo, tag, paths)
-    if missing:
-        g.die(f"{len(missing)} file(s) listed at {tag} could not be read: "
-              f"{', '.join(sorted(missing)[:5])}")
-    texts = {os.path.basename(path): text for path, text in contents.items()}
-    return texts, g.supported_map(repo, tag), tag, TAG_OUT
+    tree = glibc_tree.Tree.at_tag(repo, tag)
+    return tree, g.supported_map(repo, tag), tag, TAG_OUT
 
 
-def load_from_dir(opts, repo):
-    """(texts, supported, label, out_name) for a directory of locale sources.
+def load_from_dir(opts):
+    """(tree, supported, label, out_name, repo) for a directory of locale
+    sources. The clone is looked for after the directory passed its floor,
+    so a truncated copy is refused for what it is wherever it is read.
 
     The truncation guard is more load-bearing here than anywhere else in the
     tool. A node without glibc-locale-source installed presents an EMPTY
@@ -103,33 +101,21 @@ def load_from_dir(opts, repo):
                                 floor=opts.min_files)
     if problem:
         g.die(problem)
-    texts = {}
-    for name in names:
-        with open(os.path.join(root, name), 'rb') as fh:
-            # surrogateescape, not errors='replace': a lossy decode can make
-            # two different files look identical, the reason
-            # classify_distro_diff compares bytes.
-            texts[name] = fh.read().decode('utf-8', 'surrogateescape')
-    supported = {}
-    if opts.supported_tag:
-        g.check_refs(repo, opts.supported_tag)
-        supported = g.supported_map(repo, opts.supported_tag)
-        # The floor above lets a copy that lost a third of its files through
-        # with a clean scan (backlog 1.19: 250 of glibc-2.34's 355, exit 0, no
-        # `!!`). The tag is the only reference this mode has.
-        tag_names = [os.path.basename(p)
-                     for p in g.list_locale_files(repo, opts.supported_tag)]
-        if g.report_missing_from_copy(names, tag_names, opts.supported_tag,
-                                      root, skipped):
-            print()
-    else:
-        # Absent is not empty: without a tag nothing here can notice a copy
-        # that lost files, and a scan that did not look must not read like
-        # one that looked and found everything.
-        g.warn(f"The files in {root} were not checked against any tag's "
-               f"list, so a copy that lost files is not detected here. Pass "
-               f"--supported-tag to check it.", split_words=False)
+    repo = g.find_repo(opts.repo)
+    g.check_refs(repo, opts.supported_tag)
+    supported = g.supported_map(repo, opts.supported_tag)
+    # The floor above lets a copy that lost a third of its files through
+    # with a clean scan (backlog 1.19: 250 of glibc-2.34's 355, exit 0, no
+    # `!!`). The tag is the only reference this mode has.
+    tag_names = [os.path.basename(p)
+                 for p in g.list_locale_files(repo, opts.supported_tag)]
+    if g.report_missing_from_copy(names, tag_names, opts.supported_tag,
+                                  root, skipped):
         print()
+    # Read as glibc at the tag reads them, with what Red Hat's patches add
+    # when the build id names a RHEL major (glibc_tree.build_at).
+    tree = glibc_tree.Tree.at_dir(root, names, repo, opts.supported_tag,
+                                  opts.build_id)
     # With the side in the name, the two sides of one audit cannot write one
     # file: both machines may run the same build, which step 8 accepts as a
     # control, and the new side's lists then replaced the old side's, so the
@@ -138,11 +124,11 @@ def load_from_dir(opts, repo):
         slug = g.pair_slug(opts.build_id, opts.node_label)
     else:
         slug = g.pair_slug(opts.build_id, opts.build_id).split('..')[0]
-    return (texts, supported, f'{opts.build_id} ({root})',
-            f'step4_exposed_locales.{slug}.txt')
+    return (tree, supported, f'{opts.build_id} ({root})',
+            f'step4_exposed_locales.{slug}.txt', repo)
 
 
-def report_codepoint(texts):
+def report_codepoint(tree):
     """Name the locales that cannot be moved by an expansion change at all.
 
     Reported rather than left unnamed: since backlog 1.6 these are the only
@@ -156,12 +142,12 @@ def report_codepoint(texts):
     cleared locale from an unexamined one.
 
     The keyword beside anything else is not here: glibc does not build byte
-    order from it, or this code cannot tell that it does
-    (glibc_locale_data.declares_byte_order), so such a locale stays listed.
+    order from it, or this reader cannot settle that it does
+    (glibc_tree.Tree.byte_order), so such a locale stays listed.
 
     Returns (every name above, {name: the locale it copies}).
     """
-    declared, by_copy = g.byte_order_locales(texts)
+    declared, by_copy = tree.byte_order()
     if declared:
         print(f"\nDeclare codepoint_collation, so no expansion change can "
               f"move them: {', '.join(sorted(declared))}")
@@ -197,7 +183,7 @@ def listed_names(names, aliases):
     return set(names) | set(g.aliases_of(set(names), aliases))
 
 
-def report_backported(texts, inherited=None, unresolved=None,
+def report_backported(tree, inherited=None, unresolved=None,
                       default_only=(), by_copy=None):
     """Declare, one by one, what this scan found for each locale the distros
     are known to BACKPORT. Returns {name: status}.
@@ -207,25 +193,27 @@ def report_backported(texts, inherited=None, unresolved=None,
     and its style alone is then true of the FILE and false of the ORDER. The
     closure is already computed where this is called from; not passing it is
     a verdict computed and thrown away.
-    `unresolved` is the other half of the same question: {name: copy targets
-    this corpus does not contain}. A copy the walk could not follow is a locale
-    whose order was never read, and saying only "copy-only, its order is
-    whatever it inherits" makes that indistinguishable from a copy resolved to
-    a file with nothing in it.
+    `unresolved` is the other half of the same question: {name: why}, from
+    glibc_tree.Tree.unresolved -- a file localedef cannot open on the way, or
+    a reading this reader could not settle. Either is a locale whose order
+    was never read, and saying only "copy-only, its order is whatever it
+    inherits" makes that indistinguishable from a copy resolved to a file
+    with nothing in it.
     `default_only` is the third: the locales no range reaches, which this step
     lists for localedef's default weight (backlog 1.6). Without it an explicit
     C read "no ellipsis range for localedef to expand" in the summary while the
     step's own list named it.
 
-    `codepoint_collation` is byte order only alone
-    (glibc_locale_data.declares_byte_order), and a file holding it alone
-    copies nothing, so none of the three notes can reach it. Beside anything
-    else this code does not call it byte order. Beside a copied template
-    glibc gives none (`copy "iso14651_t1"` plus the keyword compiles into
-    broken tables on RHEL9 and RHEL10, glibc study E5), and the other shapes
-    are ones this code cannot read with certainty. The style is then
-    'codepoint-not-alone', or 'ellipsis' when a range sits beside the
-    keyword, and the notes apply to it as to any other file.
+    `codepoint_collation` is byte order only alone, the one statement of
+    the LC_COLLATE localedef builds (glibc_tree.Tree.byte_order), and a file
+    holding it alone copies nothing, so none of the three notes can reach
+    it. Beside anything else this code does not call it byte order. Beside a
+    copied template glibc gives none (`copy "iso14651_t1"` plus the keyword
+    compiles into broken tables on RHEL9 and RHEL10, glibc study E5). The
+    style is then 'codepoint-not-alone', or 'ellipsis' when a range sits
+    beside the keyword, and the notes apply to it as to any other file. A
+    run the reader could not settle, or that localedef does not finish, is
+    'unread': what was not read has no shape to report.
     `by_copy` is the fourth, and the one that clears: {name: the locale it
     copies}, for a locale whose LC_COLLATE copies a byte-order locale and
     nothing else (backlog 6.9). Its style says "copy-only", which is true of
@@ -258,21 +246,22 @@ def report_backported(texts, inherited=None, unresolved=None,
         'copy-only': 'copy-only  <- its order is whatever it inherits; follow '
                      'the copy chain',
         'none': 'present, but defines no LC_COLLATE block',
+        'unread': 'not read to the end the way localedef reads it  <- NOT '
+                  'cleared',
     }
     inherited = inherited or {}
     unresolved = unresolved or {}
     by_copy = by_copy or {}
+    missing = tree.missing()
     found = {}
     print("\nDistro-backported locales, declared one by one -- absent, "
           "cleared and")
     print("unexamined are three different answers:")
     for name in sorted(KNOWN_BACKPORTED):
-        text = texts.get(name)
-        if text is None:
+        if name not in tree.names:
             status = 'ABSENT from this directory  <- not examined here'
         else:
-            style = g.classify_collation_style(text)
-            status = styles[style]
+            status = styles[tree.style(name)]
             if name in inherited:
                 status += (f"; and it copies "
                            f"{', '.join(sorted(inherited[name]))}, which this "
@@ -281,11 +270,16 @@ def report_backported(texts, inherited=None, unresolved=None,
                 status += ("; and every character it does not list takes "
                            "localedef's default weight -- so this locale IS "
                            "exposed")
-            if name in unresolved:
-                status += (f"; and it copies "
-                           f"{', '.join(sorted(unresolved[name]))}, which is "
+            if name in missing:
+                gone = ', '.join(dd.shown(n)
+                                 for n in sorted(missing[name]))
+                status += (f"; and it copies {gone}, which is "
                            f"NOT in this corpus -- what that carries was never "
                            f"read, so this locale is NOT cleared")
+            elif name in unresolved:
+                status += (f"; and how localedef reads it could not be "
+                           f"settled ({unresolved[name]}) -- so this locale "
+                           f"is NOT cleared")
             if name in by_copy:
                 status += (f"; and it copies {by_copy[name]} and nothing "
                            f"else, which glibc builds in byte order -- so "
@@ -317,12 +311,20 @@ def report_default_weight(names):
               "localedef's code, not by the file.")
 
 
-def report(texts, supported, label, out_name, next_hint,
+def report(tree, supported, label, out_name, next_hint,
            supported_tag=None, node_dir=False, aliases=None):
     aliases = aliases or {}
-    flagged, with_collate = g.scan_ellipsis(texts)
+    # What localedef reads to build each locale (glibc_tree): the ranges its
+    # own file gives, which no comment, skipped branch or escape can fake or
+    # hide (backlog 13.8, 2.21).
+    flagged = {}
+    for name in tree.names:
+        hits = [text for _, text in tree.ranges(name)]
+        if hits:
+            flagged[name] = hits
+    with_collate = sum(1 for name in tree.names if tree.defines(name))
 
-    print(f"Files at {label}: {len(texts)}, of which {with_collate} define "
+    print(f"Files at {label}: {len(tree.names)}, of which {with_collate} define "
           f"LC_COLLATE")
     # The file-count floor asks whether enough files were read; this asks
     # whether any of them turned out to be a locale. Not one collation block
@@ -331,7 +333,7 @@ def report(texts, supported, label, out_name, next_hint,
     # result this step has. Measured at the five pinned tags: 274 of 286, 300
     # of 312, 340 of 353, 342 of 355 and 352 of 366.
     if not with_collate:
-        g.die(f"{len(texts)} file(s) were read at {label} and not one defines "
+        g.die(f"{len(tree.names)} file(s) were read at {label} and not one defines "
               f"LC_COLLATE. That is a reader or a corpus problem, not a "
               f"collation result: refusing to report 'no locale uses ellipsis "
               f"ranges' over it.")
@@ -344,7 +346,7 @@ def report(texts, supported, label, out_name, next_hint,
         if len(flagged[name]) > 3:
             print(f"      ... and {len(flagged[name]) - 3} more")
 
-    immune, by_copy = report_codepoint(texts)
+    immune, by_copy = report_codepoint(tree)
     # Written on every run, empty or not, beside the full list and named like
     # it: the locales this step leaves out because glibc builds them in byte
     # order. No expansion or default weight reaches them, but a change to the
@@ -353,24 +355,26 @@ def report(texts, supported, label, out_name, next_hint,
     g.write_list(byte_order_list_name(out_name),
                  sorted(listed_names(set(immune), aliases)))
 
-    # Built before anything can return, because a `copy` target this corpus
-    # does not contain is a locale whose order was NOT read, and
-    # `inherited_from` treats an unknown target as a leaf -- so "resolved, and
-    # what it copies is clear" and "could not resolve it at all" reach the
-    # reader as the same sentence. Measured 0 dangling targets at glibc-2.28,
-    # 2.34 and 2.39 and on the three RHEL fixtures (47/47/48 distinct targets),
-    # so this fires only on a directory that is not the closed source a node
-    # built from -- which is the input the ABSENT wording already contemplates.
-    graph = g.copy_graph_from_texts(texts)
-    dangling = {t for ts in graph.values() for t in ts} - set(graph)
-    unresolved = g.inherited_from(graph, dangling) if dangling else {}
+    # Built before anything can return, because a file localedef cannot open
+    # on the way is a locale whose order was NOT read, and so is one this
+    # reader could not settle; "resolved, and what it copies is clear" and
+    # "could not resolve it at all" must not reach the reader as the same
+    # sentence. Measured 0 dangling targets at glibc-2.28, 2.34 and 2.39 and
+    # on the three RHEL fixtures, so the first
+    # block fires only on a directory that is not the closed source a node
+    # built from -- which is the input the ABSENT wording already
+    # contemplates.
+    unresolved = tree.unresolved()
+    missing = tree.missing()
+    dangling = {t for ts in missing.values() for t in ts}
     if dangling:
         print(f"\n!! {len(dangling)} `copy` target(s) are absent from this "
               f"corpus, so what they carry was never read:")
-        print(f"     {', '.join(sorted(dangling))}")
+        print(f"     "
+              f"{', '.join(dd.shown(n) for n in sorted(dangling))}")
         # Named, not only counted: "N locale(s) reach one" is a verdict
         # computed and never attached to a name.
-        reaching = sorted(unresolved)
+        reaching = sorted(missing)
         # "in the list below" was written for a reader looking at this step.
         # audit.sh relays `!!` blocks into the summary, where there is no
         # below, so the block names the file the step writes instead.
@@ -378,18 +382,33 @@ def report(texts, supported, label, out_name, next_hint,
               f"and they are in this step's full list, named at the end of it:")
         print(f"     {', '.join(reaching[:12])}"
               f"{', ...' if len(reaching) > 12 else ''}")
+    unsettled = sorted(set(unresolved) - set(missing))
+    if unsettled:
+        print(f"\n!! {len(unsettled)} locale(s) could not be read the way "
+              f"localedef reads them. They are NOT cleared, and they are in "
+              f"this step's full list, named at the end of it:")
+        for name in unsettled[:12]:
+            print(f"     {name}: {unresolved[name]}")
+        if len(unsettled) > 12:
+            print(f"     ... and {len(unsettled) - 12} more")
 
     # A flagged template is only actionable together with everything that
     # inherits it: iso14651_t1 carries the Han range and is copied, directly or
     # transitively, by most of the corpus.
-    inherited = g.inherited_from(graph, set(flagged)) if flagged else {}
+    inherited = {}
+    if flagged:
+        for name in tree.names:
+            roots = tree.roots(name, set(flagged))
+            if roots:
+                inherited[name] = roots
     # What neither an ellipsis nor a copy of one reaches still sorts every
     # character it does not list by localedef's default weight, so it is
     # exposed too. Only a locale glibc builds in byte order is free of it
     # (`immune`: codepoint_collation alone, or a copy of one and nothing
     # else), and a locale whose copy target is absent is already named in the
     # `!!` block above.
-    default_only = sorted(set(graph) - set(flagged) - set(inherited)
+    defines = {name for name in tree.names if tree.defines(name)}
+    default_only = sorted(defines - set(flagged) - set(inherited)
                           - set(immune) - set(unresolved))
 
     if not flagged:
@@ -400,9 +419,9 @@ def report(texts, supported, label, out_name, next_hint,
                   "NOT cleared by steps 1-3.")
         elif unresolved:
             print("\nNothing that could be READ here uses an ellipsis range, "
-                  "but the absent copy\ntargets above leave "
-                  f"{len(unresolved)} locale(s) unresolved: steps 1-3 are NOT "
-                  f"sufficient for those.")
+                  f"but the {len(unresolved)} locale(s)\nnamed above under "
+                  "`!!` were not read the way localedef reads them: steps 1-3 "
+                  "are NOT\nsufficient for those.")
         else:
             print("\nNo locale uses ellipsis ranges here; steps 1-3 are "
                   "sufficient.")
@@ -429,7 +448,7 @@ def report(texts, supported, label, out_name, next_hint,
         # C is -- returning here without a status made the wrapper print
         # "NOT DECLARED" over a scan that had looked and found an answer.
         if node_dir:
-            report_backported(texts, {}, unresolved, default_only, by_copy)
+            report_backported(tree, {}, unresolved, default_only, by_copy)
         return 0
 
     print(f"\nAdditionally exposed via `copy` inheritance: {len(inherited)}")
@@ -513,7 +532,7 @@ def report(texts, supported, label, out_name, next_hint,
     # directly above it, where a reader takes C for one of "these" and tests a
     # locale glibc settled by construction. Noise is a cost like any other.
     if node_dir:
-        report_backported(texts, inherited, unresolved, default_only,
+        report_backported(tree, inherited, unresolved, default_only,
                           by_copy)
     return 0
 
@@ -536,7 +555,9 @@ def main(argv):
                     help="with --locales-dir: the node's glibc build, from "
                          "`rpm -q glibc`. Required, because a result is bound "
                          "to the build it was taken on and nothing in the "
-                         "directory carries a version.")
+                         "directory carries a version. A RHEL build "
+                         "(.el8, .el9, .el10) also decides how the files are "
+                         "read: RHEL 9 adds codepoint_collation.")
     ap.add_argument('--supported-tag',
                     help="with --locales-dir: a tag whose localedata/SUPPORTED "
                          "says which locales are built by default and whose "
@@ -547,7 +568,10 @@ def main(argv):
                          "installs none -- so both are the tag's, and the "
                          "tag does not know what the node built. Also the "
                          "list the directory is checked against: every file "
-                         "of the tag it lacks is named under a `!!`.")
+                         "of the tag it lacks is named under a `!!`. Required: "
+                         "the files are read the way glibc at this tag reads "
+                         "them, with what Red Hat adds when --build-id names "
+                         "a RHEL major (.el8, .el9, .el10).")
     ap.add_argument('--node-label',
                     help="with --locales-dir: which side of the audit this "
                          "node is, such as old or new. It goes into the names "
@@ -570,10 +594,14 @@ def main(argv):
     if opts.locales_dir and not opts.build_id:
         ap.error("--locales-dir requires --build-id: a result that does not "
                  "say which build it was taken on cannot be cited")
+    if opts.locales_dir and not opts.supported_tag:
+        ap.error("--locales-dir requires --supported-tag: the files are read "
+                 "the way glibc at that tag reads them, and without it there "
+                 "is no telling how localedef reads them")
 
     if opts.tag:
         repo = g.find_repo(opts.repo)
-        texts, supported, label, out_name = load_from_tag(repo, opts.tag)
+        tree, supported, label, out_name = load_from_tag(repo, opts.tag)
         if g.wrapped():
             hint = ["Step 5 below decides whether that matters for this pair."]
         else:
@@ -587,8 +615,7 @@ def main(argv):
                     f"flagged' result from",
                     f"steps 1-3."]
     else:
-        repo = g.find_repo(opts.repo) if opts.supported_tag else None
-        texts, supported, label, out_name = load_from_dir(opts, repo)
+        tree, supported, label, out_name, repo = load_from_dir(opts)
         hint = ["This is one node's own data. Whether the WEIGHTS localedef "
                 "computes for these",
                 "differ between two nodes is a question about localedef, not "
@@ -600,7 +627,7 @@ def main(argv):
 
     alias_tag = opts.tag or opts.supported_tag
     aliases = g.locale_aliases(repo, alias_tag) if alias_tag else {}
-    return report(texts, supported, label, out_name, hint,
+    return report(tree, supported, label, out_name, hint,
                   supported_tag=opts.supported_tag or opts.tag,
                   node_dir=bool(opts.locales_dir), aliases=aliases)
 

@@ -12,6 +12,12 @@ Step 1 clones glibc from `github.com/bminor/glibc`, so it needs outbound
 network the first time. The clone is `--filter=blob:none --no-checkout` and
 still comes to roughly **370 MB** on disk. Later runs reuse it.
 
+Steps 1 to 4, and steps 9 and 10 of the extended run, work out how
+`localedef` reads every locale file of the versions they look at; step 2 looks
+at both. The first run for a version does that with one process per
+processor. `PG_GLIBC_READER_JOBS=1` keeps it to one process. The answers are
+kept in `scripts/glibc-reader-cache/`, and later runs read them instead.
+
 Step 1 also prints the commit id and GPG signature state behind each tag
 before diffing anything, and an invalid signature aborts the run. Without
 `gpg`, or without the signer's key, the signature is reported as not checked

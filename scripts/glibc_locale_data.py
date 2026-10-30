@@ -2,7 +2,7 @@
 """
 Shared helpers for reading glibc locale data out of a git clone.
 
-Every script in this directory needs the same handful of primitives: locate the
+The scripts in this directory need the same handful of primitives: locate the
 glibc clone, read blobs at a tag, find the LC_COLLATE block, and walk the
 `copy` graph. They used to each spawn one `git show` per locale file (~350
 subprocesses) with a 30s timeout and an ignored return code, so a slow blob
@@ -788,7 +788,7 @@ def report_tag_provenance(repo, *tags):
               "(sourceware.org/git/glibc.git) if it matters.")
 
 
-def read_blobs(repo, tag, paths):
+def read_blobs(repo, tag, paths, raw=False):
     """Read many blobs at `tag` in one pass.
 
     Returns (contents, missing): a {path: text} map and the set of paths that
@@ -803,8 +803,11 @@ def read_blobs(repo, tag, paths):
     that does not exist. A caller whose paths came from that tag's own tree
     treats `missing` as a read that failed, as read_blobs_strict and
     require_read do.
+
+    raw=True gives each blob's bytes as they are, for glibc_reader, which
+    reads bytes the way glibc does and never a decoded text.
     """
-    return read_blobs_at(repo, [(tag, paths)])[0]
+    return read_blobs_at(repo, [(tag, paths)], raw=raw)[0]
 
 
 # The texts read_blobs_at decoded from bytes that held 0xFF. errors='replace'
@@ -827,10 +830,11 @@ def decoded(raw):
     return text
 
 
-def read_blobs_at(repo, groups):
+def read_blobs_at(repo, groups, raw=False):
     """read_blobs for several (tag, paths) groups in ONE `git cat-file
     --batch`, so a step that reads at two tags starts one git, not one per
-    read. Returns [(contents, missing), ...], one pair per group, in order.
+    read. Returns [(contents, missing), ...], one pair per group, in order;
+    with raw=True the contents are the blobs' bytes, not decoded().
     """
     groups = [(tag, list(paths)) for tag, paths in groups]
     results = [({}, set()) for _ in groups]
@@ -870,7 +874,8 @@ def read_blobs_at(repo, groups):
         if out[pos + size:pos + size + 1] != b'\n':
             die(f"truncated `git cat-file --batch` output inside {tag}:{path}: "
                 f"its header promised {size} bytes")
-        contents[path] = decoded(out[pos:pos + size])
+        body = out[pos:pos + size]
+        contents[path] = body if raw else decoded(body)
         pos += size + 1  # body plus its trailing newline
     if pos != len(out):
         die(f"`git cat-file --batch` printed {len(out) - pos} byte(s) more "
@@ -980,9 +985,8 @@ def collate_block(text):
     That was the whole of the glibc 2.24 version floor: on glibc-2.12..2.17
     step 3 reported 11 affected locales where there are 280.
 
-    collate_text worked around the same regex, and scan_ellipsis then worked
-    around collate_block. Fixing the function means the next caller inherits
-    the fix instead of having to know about the trap.
+    collate_text worked around the same regex. Fixing the function means the
+    next caller inherits the fix instead of having to know about the trap.
 
     Returns the body WITHOUT the LC_COLLATE and END LC_COLLATE lines;
     collate_text returns the block with them, and callers depend on that.
@@ -1356,9 +1360,10 @@ def _sections_above(lines, comments, escapes):
     comment character is dropped whole, continued or not (lr_token,
     :221-229). When they are not settled, `comments` and `escapes` hold
     both of each, and such a line that ends in an escape is joined: the
-    answer is then a guess in either direction, which step 2 never relies
-    on to list a file: classify_change asks reading_changed first, and every
-    file unread_above asks about is listed already.
+    answer is then a guess in either direction. Step 2 asks it after
+    glibc_reader has placed the file's sections and characters
+    (filter_lc_collate_changes.classify_change), and every file
+    unread_above asks about is listed already.
     A word built with an escape (get_ident keeps the character after one,
     :580-589) is not read here: it is a reason too.
     """
@@ -1451,8 +1456,12 @@ def lc_collate_unread(text, early):
     "cannot tell", which counts as yes. It is asked only for a text with
     one of those bytes.
 
-    None for a text with no LC_COLLATE line is not a clean answer: the
-    caller has already filed that text as having no block, or gaining one.
+    None for a text with no LC_COLLATE line, which this line search reads
+    only at the start of a line, is not a clean answer. Step 2 places the
+    sections with glibc_reader first (glibc_tree.Facts): a file with none
+    at either tag is filed as having no block or gaining one, one whose new
+    side has none is 'unread', and one with another number of sections is
+    'collate', whatever this returns.
     """
     bounds = collate_bounds(text)
     if bounds is None:
@@ -1552,8 +1561,10 @@ def _content(text):
     block. That reader takes `%` as the comment character when a file
     declares none, and glibc takes `#` (backlog 13.8), so a `#` comment
     holding `..` is a range to one and a comment to the other. Where they
-    disagree the range wins: a locale is never both listed by step 4 and
-    called byte order beside it.
+    disagree the range wins: a locale is never both listed by this
+    module's ellipsis reader and called byte order beside it (step 8 reads
+    through both; steps 4, 9 and 10 read through glibc_tree since backlog
+    15.2).
 
     byte_order_locales asks this several times of each file, through
     declares_byte_order, classify_collation_style and _sole_copy_target, so
@@ -1731,29 +1742,11 @@ def classify_collation_style(text):
     return 'explicit'
 
 
-def scan_ellipsis(texts):
-    """({name: [hit lines]}, how many of `texts` define LC_COLLATE).
-
-    Pure and shared, so a scan of a git tag and a scan of a node's
-    /usr/share/i18n/locales/ cannot drift on comment_char handling.
-    """
-    flagged, with_collate = {}, 0
-    for name, text in texts.items():
-        block = collate_text(text)
-        if block is None:
-            continue
-        with_collate += 1
-        hits = ellipsis_hits(block, comment_char(text))
-        if hits:
-            flagged[name] = hits
-    return flagged, with_collate
-
-
 def copy_graph_from_texts(texts):
     """{name: [copy targets]} for every entry of `texts` defining LC_COLLATE.
 
-    Pure, so the graph can be built from a git tag (build_copy_graph) or from a
-    directory of locale sources with one implementation. Keys are used
+    Pure, so the graph can be built from a directory of locale sources
+    (steps 6 to 8) with one implementation. Keys are used
     verbatim: pass the names the caller wants to see, not paths.
 
     Locales with no `copy` map to an empty list, so the graph doubles as the set
@@ -1765,14 +1758,6 @@ def copy_graph_from_texts(texts):
             continue
         graph[name] = copy_targets(text)
     return graph
-
-
-def build_copy_graph(repo, tag):
-    """copy_graph_from_texts over every locale file at `tag`."""
-    paths = list_locale_files(repo, tag)
-    contents = read_blobs_strict(repo, tag, paths, 'the LC_COLLATE copy graph')
-    return copy_graph_from_texts(
-        {os.path.basename(path): text for path, text in contents.items()})
 
 
 def inherited_from(graph, roots):
@@ -1801,11 +1786,6 @@ def inherited_from(graph, roots):
         if hits:
             result[name] = sorted(hits)
     return result
-
-
-def fan_in(graph):
-    """{locale: number of other locales that inherit its LC_COLLATE}."""
-    return {name: len(inherited_from(graph, {name})) for name in graph}
 
 
 _CODESET_RE = re.compile(r'\.([^.@]+)(?=@|$)')
@@ -1909,10 +1889,9 @@ def supported_map(repo, tag):
     localedata/SUPPORTED, in the spelling localedef gives them (sv_FI.utf8).
 
     Step 2 prints these names for the locales a tag adds; steps 3 and 4 read
-    the map to say which locales are not built by default, and step 4 also
-    takes an empty map for a run with no tag. They are not every name a
-    locale takes: the archive and RHEL add others (sv_SE.iso885915), and
-    locale.alias adds swedish (backlog 13.1).
+    the map to say which locales are not built by default. They are not
+    every name a locale takes: the archive and RHEL add others
+    (sv_SE.iso885915), and locale.alias adds swedish (backlog 13.1).
     """
     contents, _ = read_blobs(repo, tag, [SUPPORTED])
     return parse_supported(contents.get(SUPPORTED), tag)
@@ -2036,8 +2015,18 @@ def _main(argv):
         repo = find_repo()
         tag = argv[1]
         check_refs(repo, tag)
-        graph = build_copy_graph(repo, tag)
-        counts = fan_in(graph)
+        # Imported here: glibc_tree imports this module.
+        import glibc_tree
+        # Who inherits what, from what localedef reads to build each locale
+        # (glibc_tree), every `copy` followed the way glibc follows it.
+        tree = glibc_tree.Tree.at_tag(repo, tag)
+        # Every locale with an LC_COLLATE of its own first, in name order,
+        # so that equal counts print in the order they always have.
+        counts = {name: 0 for name in tree.names if tree.defines(name)}
+        for name in tree.names:
+            for f in tree.reach(name):
+                counts[f] = counts.get(f, 0) + 1
+        unresolved = tree.unresolved()
         changed = None
         if len(argv) >= 3:
             with open(argv[2], encoding='utf-8') as fh:
@@ -2052,6 +2041,11 @@ def _main(argv):
             if changed is not None and name in changed:
                 mark = '  <== has some change in this version pair'
             print(f"  {n:4d} locales inherit from {name}{mark}")
+        if unresolved:
+            print(f"!! {len(unresolved)} locale(s) could not be read the way "
+                  f"localedef reads them, so the counts above may miss what "
+                  f"they inherit: {', '.join(sorted(unresolved)[:12])}"
+                  f"{', ...' if len(unresolved) > 12 else ''}")
         if changed is not None:
             hot = sorted(((counts.get(c, 0), c) for c in changed
                           if counts.get(c, 0) > 0), reverse=True)

@@ -40,6 +40,7 @@ import os
 import sys
 
 import glibc_locale_data as g
+import glibc_tree
 
 
 def main(argv):
@@ -66,21 +67,35 @@ def main(argv):
     if not changed and not keyed:
         ap.error("no locale given: pass the changed locales, --keyed ones, "
                  "or both")
-    graph = g.build_copy_graph(repo, opts.tag)
+    # What localedef reads to build each locale at the tag, every `copy`
+    # followed the way glibc follows it (glibc_tree).
+    tree = glibc_tree.Tree.at_tag(repo, opts.tag)
 
-    known = {os.path.basename(p) for p in g.list_locale_files(repo, opts.tag)}
+    known = set(tree.names)
     unknown = sorted((changed | keyed) - known)
     if unknown:
         g.die(f"not locale file(s) at {opts.tag}: {', '.join(unknown)}\n"
               f"       (a typo here would otherwise look like "
               f"'nothing else is affected')")
-    no_collate = sorted(changed - set(graph))
+    # Only what was read to the end: a run that stops before its own
+    # LC_COLLATE reads as having none, and is named under the `!!` below.
+    no_collate = sorted(n for n in changed if not tree.defines(n)
+                        and n not in tree.unresolved())
     if no_collate:
         print(f"note: {', '.join(no_collate)} have no LC_COLLATE block at "
               f"{opts.tag}; nothing can inherit collation from them.",
               file=sys.stderr)
 
-    inherited = g.inherited_from(graph, changed)
+    inherited = {}
+    for name in tree.names:
+        roots = tree.roots(name, changed)
+        if roots:
+            inherited[name] = roots
+    # A locale whose run localedef does not finish, or this reader could not
+    # settle, may inherit from a changed file through what was not read: it
+    # is listed, never left out.
+    unresolved = {n: why for n, why in tree.unresolved().items()
+                  if n not in inherited}
     supported = g.supported_map(repo, opts.tag)
 
     # Which tag's copy graph this is. audit.sh must pass the NEW tag: the old
@@ -94,10 +109,18 @@ def main(argv):
               f"{', '.join(sorted(keyed))}")
     print(f"Additionally affected via copy-chain inheritance: {len(inherited)}")
     for loc, roots in sorted(inherited.items()):
-        shown = ', '.join(f'copy "{t}"' for t in graph.get(loc, [])) or '?'
+        shown = ', '.join(f'copy "{t}"' for t in tree.copies(loc)) or '?'
         print(f"  {loc}: {shown} -> reaches {', '.join(roots)}")
+    if unresolved:
+        print(f"!! Could not be read the way localedef reads them, so they "
+              f"are listed: {len(unresolved)}")
+        # Five spaces, as step 4's: audit.sh relays a `!!` block with the
+        # lines under it that start with three, so the names reach the
+        # summary and not only the count.
+        for loc, why in sorted(unresolved.items()):
+            print(f"     {loc}: {why}")
 
-    affected = sorted(changed | set(inherited) | keyed)
+    affected = sorted(changed | set(inherited) | keyed | set(unresolved))
     print()
     print(f"Full affected set ({len(affected)} locale source file(s)): "
           f"{', '.join(affected)}")

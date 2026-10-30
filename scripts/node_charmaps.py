@@ -601,11 +601,11 @@ def listed(result):
     whose builds it could not compare, and the names it could not trace to a
     build, so that the summary never says there is nothing to add over a
     locale nobody looked at. A name that is not a plain locale name is
-    written quoted, as diff_node_locales.shown writes it, so that none
-    reads as the list's header. None when the check did not run, or
-    compared no build and has nothing to name: its NOT RUN is printed
-    above, and the step then writes no list. A machine whose every build
-    uses a charmap its tag lacks compares none and names them all."""
+    written quoted (repr()), so that none reads as the list's header. None
+    when the check did not run, or compared no build and has nothing to
+    name: its NOT RUN is printed above, and the step then writes no list.
+    A machine whose every build uses a charmap its tag lacks compares none
+    and names them all."""
     r = result.report
     if r.not_run:
         return None
