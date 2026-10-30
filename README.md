@@ -239,6 +239,11 @@ Step 11 measured the same on three test machines (Rocky Linux 8.9, 9.3 and
 other locale it could measure sorts the same, one character at a time
 ([what that leaves out](docs/limitations.md#step-11-measures-one-character-at-a-time)).
 
+A green cell does not cover a locale of an encoding PostgreSQL does not know,
+such as `th_TH` in TIS-620. A database or a collation of any encoding can use
+one, and its order there is not measured. Step 11 names them in its line
+beginning "!! Not measured in a database of another encoding".
+
 <sup>†</sup> `C.UTF-8`'s source file is in neither tag for the first pair, so
 both verdicts come from the machines themselves
 ([docs/results.md](docs/results.md#cutf-8--from-the-nodes-own-files-because-no-tag-has-them)).

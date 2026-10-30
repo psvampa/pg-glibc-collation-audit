@@ -33,6 +33,11 @@ The sections below are the evidence behind each row.
 - 🟢 **No difference** — the audit flagged it, but a targeted test or a
   mechanism argument shows the order does not move.
 
+A green cell does not cover a locale of an encoding PostgreSQL does not know,
+such as `th_TH` in TIS-620. A database or a collation of any encoding can use
+one, and its order there is not measured. Step 11 names them in its line
+beginning "!! Not measured in a database of another encoding".
+
 ## Worked example: RHEL8 to RHEL9 (glibc 2.28 to 2.34)
 
 Full output and the PostgreSQL confirmation script for this pair:
