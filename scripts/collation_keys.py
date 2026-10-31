@@ -97,10 +97,11 @@ CHARMAPS_DIR = 'localedata/charmaps'
 # The code_set_names PostgreSQL maps to an encoding it allows only on the
 # client: SJIS, BIG5, GBK, UHC, JOHAB, GB18030 and SHIFT_JIS_2004
 # (encoding_match_list in src/port/chklocale.c, compared with
-# pg_strcasecmp, REL_13_23 and REL_18_6). CREATE COLLATION imports none of
-# them (collationcmds.c:612-613@REL_13_23, :720-723@REL_18_6). A database
-# in SQL_ASCII created by a superuser accepts any locale
-# (check_encoding_locale_matches, dbcommands.c), which is why a build
+# pg_strcasecmp, REL_13_23 and REL_18_6). pg_import_system_collations
+# imports none of them (collationcmds.c:612-613@REL_13_23,
+# :720-723@REL_18_6). A database in SQL_ASCII, made by initdb or by a
+# superuser, accepts any locale (check_locale_encoding, initdb.c;
+# check_encoding_locale_matches, dbcommands.c), which is why a build
 # SUPPORTED lists in one of these is still compared; only the search for
 # builds a distro could add (point 5 above) leaves these charmaps out.
 CLIENT_ONLY_CODESETS = frozenset(name.upper() for name in (

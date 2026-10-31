@@ -916,7 +916,8 @@ def ctype_part(identities, measure_tables):
 # locales a database of any encoding may use (check_encoding_locale_matches,
 # dbcommands.c, and chklocale.c, REL_13_23 and REL_18_6). Every other
 # encoding of a glibc locale is UTF-8, of one byte in PostgreSQL (never
-# converted), or one PostgreSQL allows only on the client (no database).
+# converted), or one PostgreSQL allows only on the client (only a SQL_ASCII
+# database, which never converts).
 CONVERTER_CODESETS = ('EUC-JP', 'EUC-KR', 'GB2312', 'EUC-TW', 'TIS-620',
                       'KOI8-T', 'PT154', 'ARMSCII-8', 'GEORGIAN-PS')
 # What the converter part says of an encoding: measured under one of its
@@ -1660,8 +1661,9 @@ def codeset_of(name, with_width=False):
     With with_width, (encoding, MB_CUR_MAX), the most bytes glibc reads as
     one character under it, either None where it could not be read.
 
-    PostgreSQL uses a locale only in a database of that encoding, compares
-    the bytes of that encoding, and gives the locale other names too (see
+    PostgreSQL compares a database's bytes, most often in the locale's own
+    encoding (where else it may use the locale: postgres_reach), and gives
+    the locale other names too (see
     postgres_names). So the encoding decides what is measured and which of a
     reader's names a change applies to. None means it could not be read.
     """
@@ -3806,9 +3808,10 @@ def postgres_names(locales):
     locale names and the first wins. So in a UTF-8 database "ko_KR" is
     ko_KR.utf8, while `locale -a` gives the name ko_KR to a different,
     EUC-KR locale, and in a LATIN9 database "sv_SE" is sv_SE.iso885915.
-    PostgreSQL skips a locale whose encoding it cannot hold (TIS-620, BIG5);
-    the alias computed for one names a database that cannot exist, which
-    misleads nobody.
+    PostgreSQL imports no locale whose encoding it does not know (TIS-620),
+    allows only on the client (BIG5) or reads as SQL_ASCII (US-ASCII)
+    (pg_import_system_collations, collationcmds.c:606-615@REL_13_23,
+    :715-729@REL_18_6), so none of those gets an alias.
 
     A database's own locale is written as initdb was given it, most often
     with the encoding spelled as glibc prints it (ko_KR.UTF-8); glibc reads
@@ -3822,10 +3825,11 @@ def postgres_names(locales):
             by_codeset.setdefault(r['codeset'], []).append(n)
     names = {}
     for codeset, group in by_codeset.items():
+        imported = postgres_reach(codeset) == 'imported'
         taken = set(group) | {'C', 'POSIX', 'default'}
         for n in sorted(group):
             alias = without_codeset(n)
-            if alias != n and alias not in taken:
+            if imported and alias != n and alias not in taken:
                 taken.add(alias)
             else:
                 alias = None
@@ -3850,16 +3854,54 @@ def heading(names, o, n):
                      for label, group in sorted(by_codeset.items()))
 
 
+def postgres_reach(codeset):
+    """Where PostgreSQL 13 to 18 lets a locale of codeset be used:
+    'imported' for an encoding a database can have, other than SQL_ASCII
+    (pg_import_system_collations makes a collation of it, and a database or
+    CREATE COLLATION of that encoding may use it); 'anywhere' for one it does
+    not know or reads as SQL_ASCII (US-ASCII), which it never imports and
+    which check_encoding_locale_matches lets a database, or CREATE
+    COLLATION, of any encoding use; 'superuser' for one it allows only on
+    the client, which it never imports and lets a database, or CREATE
+    COLLATION, use only in SQL_ASCII, set there by initdb or by a superuser
+    running the command, whoever then uses it
+    (initdb.c:2264-2278, dbcommands.c:1596-1634, collationcmds.c:346-347
+    and :715-729@REL_18_6; dbcommands.c:766-804, collationcmds.c:232-233 and
+    :606-615@REL_13_23)."""
+    client_only, known, _ = postgres_codesets()
+    enc = codeset.upper()
+    if enc not in known or enc == 'US-ASCII':
+        return 'anywhere'
+    if enc in client_only:
+        return 'superuser'
+    return 'imported'
+
+
 def also_known_as(names, pg_names, locales):
-    """What else a PostgreSQL user may call the locales of one change."""
+    """What else a PostgreSQL user may call the locales of one change, and,
+    for those PostgreSQL never imports, where a database or CREATE COLLATION
+    can use them."""
     aliases, spellings = {}, []
+    elsewhere = {'anywhere': ([], []), 'superuser': ([], [])}
     for name in sorted(names):
+        # An encoding that was not read keeps the line as it was: the names
+        # come from the alias and spelling alone.
+        # C and POSIX are collations of every encoding already, whatever
+        # glibc calls their encoding (ANSI_X3.4-1968).
+        codeset = locales.get(name, {}).get('codeset')
+        reach = ('imported' if not codeset or name in ('C', 'POSIX')
+                 else postgres_reach(codeset))
         if name in pg_names:
             alias, spelling = pg_names[name]
             if alias:
-                aliases.setdefault(locales[name]['codeset'], []).append(f'"{alias}"')
-            if spelling and spelling not in names and spelling not in spellings:
+                aliases.setdefault(codeset, []).append(f'"{alias}"')
+            if reach == 'superuser':
+                if spelling and spelling not in names:
+                    elsewhere[reach][1].append(spelling)
+            elif spelling and spelling not in names and spelling not in spellings:
                 spellings.append(spelling)
+        if reach != 'imported':
+            elsewhere[reach][0].append(name)
     parts = []
     for codeset, group in sorted(aliases.items()):
         word = 'collation' if len(group) == 1 else 'collations'
@@ -3868,6 +3910,21 @@ def also_known_as(names, pg_names, locales):
     if spellings:
         word = 'database locale' if len(spellings) == 1 else 'database locales'
         parts.append(f'{word} {", ".join(spellings)}')
+    for reach, (group, spelt) in elsewhere.items():
+        if not group:
+            continue
+        if len(group) < len(names):
+            which = ', '.join(shown(n) for n in group)
+        else:
+            which = 'this name' if len(group) == 1 else 'these names'
+        if reach == 'anywhere':
+            parts.append(f'{which} in a database of any encoding, as its '
+                         'locale or in CREATE COLLATION')
+        else:
+            also = (f', also spelt {", ".join(spelt)},' if spelt else '')
+            parts.append(f'{which}{also} only in a SQL_ASCII database, as its '
+                         'locale or in CREATE COLLATION, which only initdb or '
+                         'a superuser can set')
     return ALSO + '; '.join(parts) if parts else None
 
 
@@ -7480,8 +7537,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     groups = sorted(reads_alike.items(), key=lambda item: sorted(item[1]))
     # The names PostgreSQL gives the locales, taken from the old machine: a
     # cluster being upgraded had its collations created there. A locale that
-    # could not be measured takes part as well, since PostgreSQL imported it
-    # all the same.
+    # could not be measured takes part as well: whether PostgreSQL imported
+    # it does not depend on the measurement.
     pg_names = postgres_names(o)
     # Unchanged only as far as it was measured: some neighbours were not
     # measured at every level (unclassified), so a change in how they are

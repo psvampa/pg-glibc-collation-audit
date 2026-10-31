@@ -1704,7 +1704,8 @@ Control: C and POSIX measured as byte order on both machines, which is how
 Sort order CHANGED in 4 locale(s):
 
   th_TH, th_TH.tis620, thai (TIS-620)
-    also, in PostgreSQL: database locale th_TH.TIS-620
+    also, in PostgreSQL: database locale th_TH.TIS-620; these names in a
+      database of any encoding, as its locale or in CREATE COLLATION
     88 characters moved: U+0002..U+0020, U+0023..U+0027, U+002C..U+002F,
       U+003A..U+003B, U+003F..U+0060, U+007B, U+007D..U+007F, U+0E2F, U+0E3A,
       U+0E3F, U+0E46, U+0E4C, U+0E4F, U+0E5A..U+0E5B
@@ -1888,7 +1889,8 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
            differently themselves; pairs compared only by letters; 31 pairs
            told apart differently; among them 1 character(s) that did not
            move: U+0030; 60 more pair(s) the measurement cannot decide
-         also, in PostgreSQL: database locale th_TH.TIS-620
+         also, in PostgreSQL: database locale th_TH.TIS-620; these names in a
+           database of any encoding, as its locale or in CREATE COLLATION
        th_TH.utf8 (UTF-8)
          50,584 characters moved; 1,122,173 sort differently against another;
            the pairs that tell letters, accents and case apart are told apart
