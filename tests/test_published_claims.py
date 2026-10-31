@@ -1796,6 +1796,29 @@ class TheLimitationNamesTheLocalesStep11Names(unittest.TestCase):
         self.assertEqual(listed, union)
         self.assertEqual(word, self.WORDS.get(len(union), str(len(union))))
 
+    def test_the_docs_quote_the_line_step_11_prints(self):
+        """README.md and docs/results.md send the reader of a green cell to
+        this line by its opening words, and docs/confirming-on-a-real-
+        system.md the reader of the template. Reworded in the code and not
+        there, the reader looks for a line no run prints and reads its
+        absence as "none"."""
+        import locale_order as m
+        data = os.path.join(REPO_ROOT, 'tests', 'locale_order')
+        digest = m.corpus_digest()
+        old, new = (m.load(os.path.join(data, n + '.out'), digest)[0]
+                    for n in self.PAIRS[1])
+        both = sorted(set(old['locales']) & set(new['locales']))
+        only_new = sorted(set(new['locales']) - set(old['locales']))
+        text = m.other_encoding_text(both + only_new,
+                                     m.TextModel(old, new, both, only_new))
+        self.assertIsNotNone(text)
+        self.assertTrue(text.startswith(self.LINE), text[:80])
+        quote = f'"{self.LINE[:-2]}"'
+        for doc in ('README.md', os.path.join('docs', 'results.md'),
+                    os.path.join('docs', 'confirming-on-a-real-system.md')):
+            with self.subTest(doc=doc):
+                self.assertIn(quote, flat(read(os.path.join(REPO_ROOT, doc))))
+
 
 if __name__ == '__main__':
     unittest.main()
