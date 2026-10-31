@@ -178,9 +178,26 @@ def parse_run(part):
 
 def parse_also(text):
     """An 'also, in PostgreSQL: ...' line as {'aliases': {encoding: [name]},
-    'spellings': [database locale]}."""
-    aliases, spellings = {}, []
+    'spellings': [database locale]}, plus, where the line names them,
+    'anywhere': [who] (the names PostgreSQL never imports, usable in a
+    database of any encoding) and 'superuser': [(who, [spelling])] (those
+    usable only in SQL_ASCII, set there by initdb or a superuser); who is
+    'this name', 'these names' or the names listed."""
+    aliases, spellings, out = {}, [], {}
     for part in text[len('also, in PostgreSQL: '):].split('; '):
+        mt = re.fullmatch(r'(.+?) in a database of any encoding, as its '
+                          r'locale or in CREATE COLLATION', part)
+        if mt:
+            out.setdefault('anywhere', []).append(mt[1])
+            continue
+        mt = re.fullmatch(r'(.+?)(?:, also spelt (\S+(?:, \S+)*),)? only in a '
+                          r'SQL_ASCII database, as its locale or in CREATE '
+                          r'COLLATION, which only initdb or a superuser can set',
+                          part)
+        if mt:
+            out.setdefault('superuser', []).append(
+                (mt[1], mt[2].split(', ') if mt[2] else []))
+            continue
         mt = re.fullmatch(r'collations? ((?:"[^"]+", )*"[^"]+") where the '
                           r'database encoding is (\S+)', part)
         if mt:
@@ -191,7 +208,7 @@ def parse_also(text):
             spellings.extend(mt[1].split(', '))
             continue
         raise ReportShapeError(f'unknown part of an "also" line: {part!r}')
-    return {'aliases': aliases, 'spellings': spellings}
+    return {'aliases': aliases, 'spellings': spellings, **out}
 
 
 def parse_runs(text):
@@ -2501,14 +2518,27 @@ def assert_named_alike(test, report, brief, rows):
 
 
 def also_of(alsos):
-    """parse_also answers merged, as ({encoding: {collation}}, {spelling})."""
-    aliases, spellings = {}, set()
-    for also in alsos:
+    """parse_also answers, each given as (the names it is printed under,
+    answer), merged as ({encoding: {collation}}, {spelling}, {(where, name)}
+    for the names PostgreSQL never imports, plus ('superuser spelt',
+    spelling) for the spellings given with them; 'this name' and 'these
+    names' are read as the names printed above, so groups merged
+    differently compare alike)."""
+    aliases, spellings, elsewhere = {}, set(), set()
+    for group, also in alsos:
         if also:
             for encoding, names in also['aliases'].items():
                 aliases.setdefault(encoding, set()).update(names)
             spellings.update(also['spellings'])
-    return aliases, spellings
+            parts = [('anywhere', who) for who in also.get('anywhere', ())]
+            for who, spelt in also.get('superuser', ()):
+                parts.append(('superuser', who))
+                elsewhere.update(('superuser spelt', s) for s in spelt)
+            for where, who in parts:
+                named = (group if who in ('this name', 'these names')
+                         else who.split(', '))
+                elsewhere.update((where, n) for n in named)
+    return aliases, spellings, elsewhere
 
 
 def file_of(rows, label='x', warnings=(), closing=m.CLOSING):
@@ -2964,15 +2994,15 @@ class SummaryForTheAudit(unittest.TestCase):
                 # locale not measured, as the report gives them.
                 for change in report['changes']:
                     self.assertEqual(also_of(
-                        r['also'] for names, rows in files.items()
+                        (names, r['also']) for names, rows in files.items()
                         if set(names) <= set(change['names']) for r in rows
                         if r['finding'] == 'also in PostgreSQL'),
-                        also_of([change['also']]))
+                        also_of([(change['names'], change['also'])]))
                 for name, entry in report['unmeasured'].items():
                     self.assertEqual(also_of(
-                        r['also'] for r in files[(name,)]
+                        ((name,), r['also']) for r in files[(name,)]
                         if r['finding'] == 'also in PostgreSQL'),
-                        also_of([entry['also']]))
+                        also_of([((name,), entry['also'])]))
             with self.subTest(pair=key, kind='run'):
                 by_kind = {}
                 for names, rows in files.items():
@@ -4387,6 +4417,112 @@ class PostgresNames(unittest.TestCase):
                                 for e in encodings.get(locales[coll]['codeset'], ())),
                             f'predicted {alias} -> {coll}, not in PostgreSQL')
                 self.assertEqual(checked, 156)
+
+
+class WherePostgresUsesALocale(unittest.TestCase):
+    """Where the 'also, in PostgreSQL' line sends a reader for a locale
+    PostgreSQL never imports (backlog 16.42 b and 16.49).
+
+    Freezes two wrong lines: a collation alias for a locale of an encoding
+    PostgreSQL does not know (TIS-620), allows only on the client (GBK) or
+    reads as SQL_ASCII (US-ASCII), which pg_import_system_collations never
+    makes; and a line that sends a reader only to databases, when CREATE
+    COLLATION brings such a locale into a database of any encoding (or, for
+    a client-only one, into SQL_ASCII by a superuser)."""
+
+    LOCALES = {
+        'th_TH': {'codeset': 'TIS-620'}, 'th_TH.tis620': {'codeset': 'TIS-620'},
+        'thai': {'codeset': 'TIS-620'}, 'th_TH.utf8': {'codeset': 'UTF-8'},
+        'zh_CN.gbk': {'codeset': 'GBK'}, 'zh_CN': {'codeset': 'GB2312'},
+        'zh_TW': {'codeset': 'BIG5'}, 'zh_TW.big5': {'codeset': 'BIG5'},
+        'xx_YY.ascii': {'codeset': 'US-ASCII'}, 'ko_KR.utf8': {'codeset': 'UTF-8'},
+        'C': {'codeset': 'ANSI_X3.4-1968'}, 'yy_ZZ': {}}
+
+    def also(self, names):
+        return m.also_known_as(names, m.postgres_names(self.LOCALES),
+                               self.LOCALES)
+
+    def test_the_reach_of_each_kind_of_encoding(self):
+        for codeset, reach in (
+                ('UTF-8', 'imported'), ('EUC-KR', 'imported'),
+                ('ISO-8859-15', 'imported'), ('GB2312', 'imported'),
+                ('TIS-620', 'anywhere'), ('ARMSCII-8', 'anywhere'),
+                ('GEORGIAN-PS', 'anywhere'), ('KOI8-T', 'anywhere'),
+                ('PT154', 'anywhere'), ('US-ASCII', 'anywhere'),
+                ('BIG5', 'superuser'), ('BIG5-HKSCS', 'superuser'),
+                ('big5-hkscs', 'superuser'), ('GBK', 'superuser'),
+                ('GB18030', 'superuser')):
+            with self.subTest(codeset=codeset):
+                self.assertEqual(m.postgres_reach(codeset), reach)
+
+    def test_no_alias_for_a_locale_postgres_never_imports(self):
+        names = m.postgres_names(self.LOCALES)
+        for name in ('th_TH.tis620', 'zh_CN.gbk', 'zh_TW.big5', 'xx_YY.ascii'):
+            with self.subTest(name=name):
+                self.assertIsNone(names[name][0])
+        self.assertEqual(names['ko_KR.utf8'], ('ko_KR', 'ko_KR.UTF-8'))
+        self.assertEqual(names['th_TH.utf8'], ('th_TH', 'th_TH.UTF-8'))
+
+    def test_the_catalogs_hold_none_of_them(self):
+        """On the three machines' catalogs, after the import: no collation
+        of a locale the line calls never imported, and every locale it
+        calls imported that has an alias is there."""
+        for machine, path in MACHINES:
+            with self.subTest(machine=machine):
+                locales = {k: v for k, v in read_json(path)['locales'].items()
+                           if v.get('codeset')}
+                with open(os.path.join(DATA, f'{machine}.pg_collation.txt'),
+                          encoding='utf-8') as f:
+                    made = {row.split('|')[2] for row in f.read().splitlines()}
+                never = {n for n, v in locales.items() if n not in ('C', 'POSIX')
+                         and m.postgres_reach(v['codeset']) != 'imported'}
+                # TIS-620 (3), ARMSCII-8, GEORGIAN-PS (2), KOI8-T (2),
+                # PT154 (2), BIG5 (2), BIG5-HKSCS (2), GBK (2), GB18030
+                self.assertEqual(len(never), 17)
+                self.assertEqual(never & made, set())
+                predicted = m.postgres_names(locales)
+                self.assertEqual({n for n in never if predicted[n][0]}, set())
+                imported = {n for n, (alias, _) in predicted.items() if alias}
+                self.assertTrue(imported)
+                self.assertLessEqual(imported, made)
+
+    def test_the_line_for_each_kind(self):
+        for names, text in (
+                (['th_TH', 'th_TH.tis620', 'thai'],
+                 'database locale th_TH.TIS-620; these names in a database of '
+                 'any encoding, as its locale or in CREATE COLLATION'),
+                (['zh_CN.gbk'],
+                 'this name, also spelt zh_CN.GBK, only in a SQL_ASCII database, '
+                 'as its locale or in CREATE COLLATION, which only initdb or a '
+                 'superuser can set'),
+                (['zh_TW', 'zh_TW.big5'],
+                 'these names, also spelt zh_TW.BIG5, only in a SQL_ASCII '
+                 'database, as its locale or in CREATE COLLATION, which only '
+                 'initdb or a superuser can set'),
+                (['zh_TW'],
+                 'this name only in a SQL_ASCII database, as its locale or in '
+                 'CREATE COLLATION, which only initdb or a superuser can set'),
+                (['xx_YY.ascii'],
+                 'database locale xx_YY.US-ASCII; this name in a database of any '
+                 'encoding, as its locale or in CREATE COLLATION'),
+                (['th_TH.tis620', 'th_TH.utf8'],
+                 'collation "th_TH" where the database encoding is UTF-8; '
+                 'database locales th_TH.TIS-620, th_TH.UTF-8; th_TH.tis620 in '
+                 'a database of any encoding, as its locale or in CREATE '
+                 'COLLATION'),
+                (['ko_KR.utf8'],
+                 'collation "ko_KR" where the database encoding is UTF-8; '
+                 'database locale ko_KR.UTF-8')):
+            with self.subTest(names=names):
+                line = self.also(names)
+                self.assertEqual(line, m.ALSO + text)
+                parse_also(line)
+
+    def test_no_line_where_postgres_has_nothing_more(self):
+        """C is a collation of every encoding already; a locale whose
+        encoding was not read gets what its names alone give."""
+        self.assertIsNone(self.also(['C']))
+        self.assertIsNone(self.also(['yy_ZZ']))
 
 
 class RpmOrder(unittest.TestCase):
