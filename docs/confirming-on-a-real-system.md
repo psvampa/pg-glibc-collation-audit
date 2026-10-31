@@ -116,9 +116,13 @@ resolves those tied lines by input order. Two machines given
 differently-ordered input can differ for reasons that have nothing to do with
 glibc.
 
-PostgreSQL is not exposed to this. `ORDER BY` on a libc collation breaks the
-same ties with a byte comparison, so it is always a total, plan-independent
-order.
+PostgreSQL is not exposed to this when the table and its index are built
+under the glibc that runs the query, as the template does. `ORDER BY` on a libc
+collation breaks the same ties with a byte comparison, so its order is total
+and the plan does not change it. A machine that keeps an index built under the
+other glibc, such as a physical replica, a cluster carried over by
+`pg_upgrade` or an OS upgraded in place, is different. There `ORDER BY` can
+read the index and return the old order, where a sort returns the new one.
 
 ### The database default is a separate question
 
