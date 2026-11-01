@@ -1753,7 +1753,8 @@ Every character, other string and pair found, by locale:
 In the sort orders, a string that this comparison cannot name as a character
 of the locale's encoding is named by its bytes in hexadecimal: bytes 80 is the
 single byte 80, and bytes 80..FF every string of that length from the first to
-the last.
+the last. A name of several code points, such as U+0063 U+0068 (ch), is one
+string of those characters, in that order.
 
 Unchanged: 863 locale(s).
 !! Not on the new machine, so NOT known to be unchanged: 2 locale(s). Either
@@ -1861,8 +1862,8 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
    both machines: hy_AM.armscii8, ka_GE, ka_GE.georgianps, kk_KZ, kk_KZ.pt154,
    tg_TJ, tg_TJ.koi8t.
 !! Not measured: whether the two machines compare strings with the same glibc
-   code. Every locale found unchanged has the same sort table on both, and
-   that table is what glibc's comparison code reads.
+   code. Every locale found unchanged either has the same sort table on both,
+   which is what glibc's comparison code reads, or compares bytes on both.
 
 ================================================================
 == AUDIT SUMMARY  glibc-2.34 -> glibc-2.39
@@ -1929,7 +1930,9 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
        In the sort orders, a string that this comparison cannot name as a
        character of the locale's encoding is named by its bytes in
        hexadecimal: bytes 80 is the single byte 80, and bytes 80..FF every
-       string of that length from the first to the last.
+       string of that length from the first to the last. A name of several
+       code points, such as U+0063 U+0068 (ch), is one string of those
+       characters, in that order.
      NOT known to be unchanged: 2 locale(s)
        not on the new machine, so a database or collation that uses one cannot
          use it there: aa_ER.utf8@saaho, aa_ER@saaho
@@ -2018,8 +2021,9 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
         hy_AM.armscii8, ka_GE, ka_GE.georgianps, kk_KZ, kk_KZ.pt154, tg_TJ,
         tg_TJ.koi8t.
      !! Not measured: whether the two machines compare strings with the same
-        glibc code. Every locale found unchanged has the same sort table on
-        both, and that table is what glibc's comparison code reads.
+        glibc code. Every locale found unchanged either has the same sort
+        table on both, which is what glibc's comparison code reads, or
+        compares bytes on both.
      Full report: step 11 above.
 
 -- Needs an empirical test: step 5 found 55 substantive hunk(s),

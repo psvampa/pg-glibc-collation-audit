@@ -92,8 +92,12 @@ FILE_LINE = 'Every character, other string and pair found, by locale:'
 SUMMARY_FILE_LINE = '       every character, other string and pair:'
 NO_FILE_LINE = ('Pass --characters-to FILE for every character, other '
                 'string and pair found.')
-# How a string that is not a character is named, under the changes.
+# How a string that is not a character is named, under the changes, and a
+# name of several characters: the note opens with one or the other.
 OTHERS_NOTE = 'In the sort orders, a string that'
+SEVERAL_NOTE = 'A name of several code points'
+NOTES = (m.OTHER_STRINGS, m.SEVERAL_CHARACTERS,
+         m.OTHER_STRINGS + ' ' + m.SEVERAL_CHARACTERS)
 
 
 def run_compare(old, new, *more):
@@ -1432,10 +1436,11 @@ def parse_summary(text):
             if line() == SUMMARY_FILE_LINE:
                 at[0] += 1
                 s['characters_file'] = take(r'         (\S.*)')[1]
-            if line().startswith('       ' + OTHERS_NOTE):
+            if line().startswith(('       ' + OTHERS_NOTE,
+                                  '       ' + SEVERAL_NOTE)):
                 s['others_note'] = item(7, 7)
-                if s['others_note'] != m.OTHER_STRINGS:
-                    fail('unknown note on strings that are not characters')
+                if s['others_note'] not in NOTES:
+                    fail('unknown note on how names read')
                 break
             if s['characters_file'] is not None:
                 break
@@ -1645,10 +1650,10 @@ def parse_report(text):
             else:
                 at[0] += 1
             r['others_note'] = None
-            if line().startswith(OTHERS_NOTE):
+            if line().startswith((OTHERS_NOTE, SEVERAL_NOTE)):
                 r['others_note'] = flat(' '.join(indented(r'\S.*')))
-                if r['others_note'] != m.OTHER_STRINGS:
-                    fail('unknown note on strings that are not characters')
+                if r['others_note'] not in NOTES:
+                    fail('unknown note on how names read')
             take('')
             if not line().startswith('Unchanged: '):
                 fail('expected the unchanged count after the characters file')
@@ -2378,7 +2383,7 @@ def parse_characters(text):
     lines.pop()
     first = re.fullmatch(r'# Step 11, .+ -> .+: every character, other string '
                          r'and pair found, by locale\.(?: (.+))?', lines[0])
-    if not first or first[1] not in (None, m.OTHER_STRINGS):
+    if not first or first[1] not in (None,) + NOTES:
         raise ReportShapeError(f'unknown first line: {lines[0]!r}')
     if lines[1] != 'locales\tfinding\tcharacters\thow\ttest\tbefore\tnow\tmeasured':
         raise ReportShapeError(f'unknown column line: {lines[1]!r}')
@@ -2659,6 +2664,13 @@ def parse_characters(text):
             row['chars'] = parse_chain(chars)
             if len(row['chars']) < 2:
                 raise ReportShapeError(f'characters line {n}: {line!r}')
+        elif finding == 'not decided':
+            # Two strings by ", ": "U+x U+y" would be one string of two
+            # characters.
+            pair = [tokens(half) for half in chars.split(', ')]
+            if [len(x) for x in pair] != [1, 1] or pair[0] == pair[1]:
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row['chars'] = [x[0] for x in pair]
         else:
             row['chars'] = tokens(chars)
             if len(row['chars']) != 2 or row['chars'][0] == row['chars'][1]:
@@ -5084,7 +5096,7 @@ class Pieces(unittest.TestCase):
                              measured_as(new, told, probes))
         self.assertEqual(o['pairs'], n['pairs'])
         rows = m.describe_change(old, nw, o, n)[2]
-        self.assertIn(('not decided', 'U+0030 U+0031', '-', '-', '-', '-', '-'),
+        self.assertIn(('not decided', 'U+0030, U+0031', '-', '-', '-', '-', '-'),
                       rows)
 
     def test_a_run_keeps_where_it_was_measured(self):
@@ -13526,19 +13538,34 @@ class SortTablesOnTheMachine(unittest.TestCase):
         self.assertEqual(m.ct_pack_all(dict(reversed(list(records.items())))),
                          packed)
         self.assertEqual(m.ct_unpack_all(packed), records)
+        self.assertEqual(packed[:6], m.CT_XZ_MAGIC)
+
+    def test_tables_packed_without_lzma(self):
+        """A Python built without lzma packs them with zlib, and they come
+        back as they went, read by their first bytes (pending item 3 of the
+        6.6 PR 2)."""
+        records = {'a' * 64: b'one', 'b' * 64: b'two' * 100}
+        with unittest.mock.patch.dict(sys.modules, {'lzma': None}):
+            packed = m.ct_pack_all(records)
+            self.assertEqual(m.ct_unpack_all(packed), records)
+        self.assertEqual(packed[:1], b'\x78')
+        self.assertEqual(m.ct_unpack_all(packed, {'a' * 64}),
+                         {'a' * 64: b'one'})
+        with self.assertRaisesRegex(ValueError, 'neither an xz nor a zlib'):
+            m.ct_unpack_all(b'\x00' + packed)
 
     def test_tables_that_cannot_be_packed(self):
-        """A Python without lzma: the part says why, and holds no tables
-        rather than an empty set of them."""
+        """A Python that cannot pack them at all: the part says why, and
+        holds no tables rather than an empty set of them."""
         def fail(records):
-            raise ModuleNotFoundError("No module named '_lzma'")
+            raise MemoryError()
         with unittest.mock.patch.object(m, 'ct_pack_all', fail):
             part = m.collate_part({'de': {'state': 'builtin'}}, {}, {},
                                   lambda f, jobs: [f(j) for j in jobs])
         self.assertEqual(part, {
             'byteorder': sys.byteorder, 'locales': {'de': {'state': 'builtin'}},
             'checks': {}, 'tables': None,
-            'tables_why': 'ModuleNotFoundError("No module named \'_lzma\'")'})
+            'tables_why': 'MemoryError()'})
 
     def measured(self, names, one, check):
         screen = Screen()
@@ -13982,6 +14009,18 @@ class SortTablesCompared(Checks):
         self.firm(self.outputs([read_tables(), unpacked],
                                [read_tables(), unpacked]))
 
+    def test_no_rules_beside_a_locale_not_compared(self):
+        """Locales of 0 rules unchanged beside one not compared: they
+        compare bytes and read no table, so the closing is the one on
+        contractions alone, with no sentence on the code (review round 4)."""
+        none = {n: {'nrules': 0, 'table': 'none'}
+                for n in ('en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8')}
+        checks = {'de_DE.utf8': {'error': 'MemoryError()'}}
+        r, s, f = self.outputs([read_tables(none, checks)],
+                               [read_tables(none, checks)])
+        for closing in (r['closing'], s['closing'], f.closing):
+            self.assertEqual(closing, m.CLOSING)
+
     def test_no_rules_on_either_machine(self):
         """A file of 0 rules compares bytes, like C, and needs no check:
         the guard read the rule count from the file itself."""
@@ -14047,6 +14086,19 @@ class SortTablesCompared(Checks):
         self.assertEqual(r['totals']['partly'], 3)
         self.assertEqual(r['partly'], {'ja_JP.utf8': 3})
         self.assertEqual(r['closing'], m.CLOSING)
+
+    def test_only_c_and_posix_unchanged(self):
+        """Every locale with a sort table changed on the new machine (a
+        machine with only the minimal language pack holds C, POSIX and
+        C.utf8): the two left unchanged compare bytes, and the closing says
+        so rather than that they have a sort table."""
+        changed = {n: {'fingerprint': 'f' * 64}
+                   for n in ('de_DE.utf8', 'en_US.utf8', 'ja_JP.utf8',
+                             'sv_SE.utf8')}
+        outs = self.outputs([read_tables()], [read_tables(changed)])
+        self.firm(outs, changed=list(changed))
+        self.assertEqual(outs[0]['unchanged'], 2)
+        self.assertIn('or compares bytes on both', m.CLOSING_TABLES)
 
     def test_step_11_could_not_measure_a_locale_whose_table_is_the_same(self):
         def unmeasured(d):
@@ -14466,12 +14518,34 @@ class SortTablesNamed(Checks):
                          [('U+0062..U+0064', 'marked'), ('U+0067', 'marked'),
                           ('U+0063 U+0068', 'old'), ('U+007A', 'new'),
                           ('bytes 80', 'new'), ('U+0065..U+0066', 'flip')])
-        # A name in bytes: the report says how to read one.
-        self.assertEqual(r['others_note'], m.OTHER_STRINGS)
-        self.assertEqual(s['others_note'], m.OTHER_STRINGS)
+        # A name in bytes and one of several characters: the three
+        # outputs say how to read both.
+        for note in (r['others_note'], s['others_note'], f.others_note):
+            self.assertEqual(note, m.OTHER_STRINGS + ' '
+                             + m.SEVERAL_CHARACTERS)
         self.assertEqual(by_name(r)['de_DE.utf8']['table'],
                          (None, 'step 11 saw no change in the strings it '
                                 'measured'))
+
+    def test_named_from_tables_packed_without_lzma(self):
+        """Both machines' Python without lzma: the tables are packed with
+        zlib and the comparison, without lzma either, names the same as
+        from xz."""
+        old = one_level([b'a', b'c', b'e', b'g'])
+        new = one_level([b'a', b'e', b'c', b'g'])
+        xz = self.named(old, new)[0]
+        with unittest.mock.patch.dict(sys.modules, {'lzma': None}):
+            self.assertEqual(self.named(old, new)[0], xz)
+
+    def test_a_name_of_several_characters_alone(self):
+        """A string of several characters only in the old table and no
+        name in bytes: the three outputs say how to read it, and nothing
+        on bytes."""
+        named, r, s, f = self.named(one_level([b'a', b'c', b'ch', b'd']),
+                                    one_level([b'a', b'c', b'd']))
+        self.assertIn('U+0063 U+0068', named['items'])
+        for note in (r['others_note'], s['others_note'], f.others_note):
+            self.assertEqual(note, m.SEVERAL_CHARACTERS)
 
     def test_one_character_alone_by_its_glyph(self):
         """Characters that are no run: by their glyph in the report, by

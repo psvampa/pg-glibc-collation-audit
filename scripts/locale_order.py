@@ -761,7 +761,7 @@ def collate_part(entries, records, reps, mapper):
                 sys.stderr.flush()
     try:
         tables = base64.b64encode(ct_pack_all(records)).decode('ascii')
-    except Exception as e:   # a Python without lzma, most likely
+    except Exception as e:   # lzma, zlib or memory failing, say
         tables = None
         why = repr(e)
     part = {'byteorder': sys.byteorder, 'locales': entries,
@@ -1185,26 +1185,42 @@ def ct_record(T):
     return bytes(out)
 
 
+# How an xz stream begins; a zlib stream begins with 78 (ct_unpack_all).
+CT_XZ_MAGIC = b'\xfd7zXZ\x00'
+
+
 def ct_pack_all(records):
-    """Every record, under its digest, in one xz stream, preset 6: the
-    preset the cost was measured with (16.41). lzma is imported here: a
-    Python built without it measures all the same, and the run says the
-    tables could not be packed (collate_not_read)."""
-    import lzma
+    """Every record, under its digest, in one stream: xz, preset 6, the
+    preset the cost was measured with (16.41), or zlib, level 6, where the
+    Python measuring was built without lzma (imported here), which
+    ct_unpack_all tells apart by its first bytes. Where packing fails all
+    the same, the run says the tables could not be packed
+    (collate_not_read)."""
     out = bytearray()
     for d in sorted(records):
         out += bytes.fromhex(d)
         ct_varint(out, len(records[d]))
         out += records[d]
+    try:
+        import lzma
+    except ImportError:
+        return zlib.compress(bytes(out), 6)
     return lzma.compress(bytes(out), preset=6)
 
 
 def ct_unpack_all(raw, keep=None):
     """{digest: record} of what ct_pack_all packed; only the digests in KEEP
     where it is given, so that a comparison holds the records it names and
-    no others."""
-    import lzma
-    b = lzma.decompress(raw)
+    no others. The stream is xz or zlib, as ct_pack_all wrote it; an xz
+    one needs lzma here too."""
+    if raw[:len(CT_XZ_MAGIC)] == CT_XZ_MAGIC:
+        import lzma
+        b = lzma.decompress(raw)
+    elif raw[:1] == b'\x78':
+        b = zlib.decompress(raw)
+    else:
+        raise ValueError('the packed tables are neither an xz nor a zlib '
+                         'stream')
     out, i = {}, 0
     while i < len(b):
         d = b[i:i + 32].hex()
@@ -5429,7 +5445,9 @@ def undecided_brief(d):
 
 def undecided_rows(d):
     nm = d['naming']
-    return [('not decided', f'{nm.token(x)} {nm.token(y)}', '-', '-', '-', '-', '-')
+    # Two strings, by ", " as a chain of them is: "U+x U+y" is one string
+    # of several characters (SEVERAL_CHARACTERS).
+    return [('not decided', f'{nm.token(x)}, {nm.token(y)}', '-', '-', '-', '-', '-')
             for x, y in d['pairs']]
 
 
@@ -5479,13 +5497,24 @@ OTHER_STRINGS = ('In the sort orders, a string that this comparison cannot '
                  'its bytes in hexadecimal: bytes 80 is the single byte 80, '
                  'and bytes 80..FF every string of that length from the '
                  'first to the last.')
+# After OTHER_STRINGS, or alone, where a sort table names a string of
+# several characters.
+SEVERAL_CHARACTERS = ('A name of several code points, such as U+0063 U+0068 '
+                      '(ch), is one string of those characters, in that '
+                      'order.')
+
+
+def names_note(in_bytes, several):
+    """The note under the changes on how their names read, or None."""
+    return ' '.join(([OTHER_STRINGS] if in_bytes else [])
+                    + ([SEVERAL_CHARACTERS] if several else [])) or None
 
 
 # Printed under the report, the summary and the characters file while a
-# locale found unchanged was not compared by its sort table and none but C and
-# POSIX was found unchanged by it (CLOSING_MIXED when one was, CLOSING_TABLES
-# when every one was): what two machines that agree here can still disagree
-# on.
+# locale found unchanged was not compared by its sort table and none was found
+# unchanged by an identical one (CLOSING_MIXED when one was, CLOSING_TABLES
+# when every one was by its table or compares bytes): what two machines that
+# agree here can still disagree on.
 CLOSING = ('!! Not measured: a rule that applies only to a particular '
            'combination of letters, such as a contraction ("ch" sorted as one '
            'letter), so two machines that agree here can still sort some longer '
@@ -8518,13 +8547,15 @@ def tables_only_notes(items):
 
 
 # Printed instead of CLOSING when every unchanged locale was compared by its
-# sort table, which holds the contractions and what glibc ignores.
+# sort table, which holds the contractions and what glibc ignores; C and
+# POSIX, and a locale of no sort rules, compare bytes on both.
 CLOSING_TABLES = ('!! Not measured: whether the two machines compare strings '
-                  'with the same glibc code. Every locale found unchanged has '
-                  'the same sort table on both, and that table is what '
-                  'glibc\'s comparison code reads.')
-# Printed instead of both when some unchanged locales other than C and POSIX
-# were found so by their sort tables and others were not compared by them.
+                  'with the same glibc code. Every locale found unchanged '
+                  'either has the same sort table on both, which is what '
+                  'glibc\'s comparison code reads, or compares bytes on both.')
+# Printed instead of both when some unchanged locales were found so by an
+# identical sort table and others were not compared by theirs. One of no
+# sort rules, C and POSIX among them, compares bytes and reads no table.
 CLOSING_MIXED = ('!! Not measured: whether the two machines compare strings '
                  'with the same glibc code. Each locale found unchanged by its '
                  'sort table is so only if they do, since that table is what '
@@ -8896,7 +8927,7 @@ def also_rows(names, pg_names, locales):
 
 
 def summary_lines(old, new, groups, run, totals, characters_to=None,
-                  others=False):
+                  note=None):
     """The report in brief, for the summary audit.sh prints at the end.
 
     Every locale is named, and so are the names PostgreSQL knows it by: a
@@ -8928,8 +8959,8 @@ def summary_lines(old, new, groups, run, totals, characters_to=None,
             # On a line of its own, whole, like every other list audit.sh names.
             out.append('       every character, other string and pair:')
             out.append('         ' + characters_to)
-        if others:
-            out += wrapped(OTHER_STRINGS, 7, 7)
+        if note:
+            out += wrapped(note, 7, 7)
     else:
         out.append('     no locale measured on both machines sorts differently')
     unknown = (run.count('refused') + run.count('not measured')
@@ -9207,6 +9238,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
         measured_alike.setdefault(key, []).append(name)
     reads_alike, briefs, rows = {}, {}, []
     others = False   # whether a string is named by its bytes
+    several = False  # whether a sort table names a string of several characters
     for names in measured_alike.values():
         table = by_table.get(names[0])
         if table and table[1] != 'changed':
@@ -9229,11 +9261,15 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
             # A name in bytes from the table needs the report's explanation
             # of bytes names, as one from step 11 does.
             named = named or bool(table[2] and table[2][3])
+            several = several or any(
+                chars.startswith('U+') and ' ' in chars
+                for chars, how in (table[2][2] if table[2] else ()))
         others = others or named
         reads_alike.setdefault(tuple(lines), []).extend(names)
         briefs[tuple(lines)] = brief
         rows.append((sorted(names), found))
     groups = sorted(reads_alike.items(), key=lambda item: sorted(item[1]))
+    note = names_note(others, several)
     # The names PostgreSQL gives the locales, taken from the old machine: a
     # cluster being upgraded had its collations created there. A locale that
     # could not be measured takes part as well: whether PostgreSQL imported
@@ -9292,9 +9328,12 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     if other:
         beside.append(('other encoding', {'text': other}))
     # The sentence on contractions stays while an unchanged locale was not
-    # compared by its table, and the one on the code while a locale other
-    # than C and POSIX is unchanged by its table alone.
-    by_tables = any(x not in ('C', 'POSIX') for x in firm)
+    # compared by its table; beside it, the one on the code only while
+    # another is unchanged by an identical table, which glibc's code reads
+    # (one of no sort rules, 'bytes', C and POSIX among them, reads none).
+    # Where every unchanged locale is firm, CLOSING_TABLES says both kinds.
+    by_tables = any(table_route(old, new, x)[0] == 'identical'
+                    for x in firm if x not in ('C', 'POSIX'))
     found = run_findings(o, n, warnings, partly, unmeasured, only_old, checks,
                          refused, beside,
                          CLOSING_TABLES if all(x in firm for x in same)
@@ -9324,8 +9363,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
         else:
             report.append('Pass --characters-to FILE for every character, '
                           'other string and pair found.')
-        if others:
-            report += wrapped(OTHER_STRINGS, 0, 0)
+        if note:
+            report += wrapped(note, 0, 0)
     report += ['', f'Unchanged: {len(same)} locale(s).']
     report += run('tables only')
     report += run('tables not compared')
@@ -9352,7 +9391,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     if summary_to:
         brief = summary_lines(
             old, new, [(names, briefs[lines]) for lines, names in groups],
-            Drawn(found, SUMMARY, ctx), totals, characters_to, others)
+            Drawn(found, SUMMARY, ctx), totals, characters_to, note)
     file_notes = []
     if characters_to:
         # The locales NOT known to be unchanged, and those unchanged only as
@@ -9410,7 +9449,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
             with open(partial, 'w', encoding='utf-8') as f:
                 f.write(f'# Step 11, {machine_label(old)} -> {machine_label(new)}: '
                         'every character, other string and pair found, by '
-                        'locale.' + (' ' + OTHER_STRINGS if others else '')
+                        'locale.' + (' ' + note if note else '')
                         + '\n')
                 f.write('locales\tfinding\tcharacters\thow\ttest\tbefore\tnow\tmeasured\n')
                 count = 0
