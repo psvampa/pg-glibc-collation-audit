@@ -96,8 +96,8 @@ CREATE INDEX ON kab_test (w);
 -- ---------------------------------------------------------------- ko_KR ----
 -- Step 4 flags ko_KR on this pair too, because its LC_COLLATE relies on
 -- ellipsis ranges that localedef expands at build time. Step 11 found its
--- order unchanged on the RHEL9 and RHEL10 test machines, as far as it could
--- measure it, so this is a control: it should be identical. The strings are
+-- order unchanged on the RHEL9 and RHEL10 test machines, so this is a
+-- control: it should be identical. The strings are
 -- the Hangul block boundary, which is where the 2.28->2.34 bug lived -- see
 -- ../docs/results.md.
 DROP TABLE IF EXISTS ko_test;

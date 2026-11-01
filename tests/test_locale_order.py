@@ -38,6 +38,7 @@ import hashlib
 import io
 import itertools
 import json
+import lzma
 import os
 import random
 import re
@@ -91,8 +92,12 @@ FILE_LINE = 'Every character, other string and pair found, by locale:'
 SUMMARY_FILE_LINE = '       every character, other string and pair:'
 NO_FILE_LINE = ('Pass --characters-to FILE for every character, other '
                 'string and pair found.')
-# How a string that is not a character is named, under the changes.
+# How a string that is not a character is named, under the changes, and a
+# name of several characters: the note opens with one or the other.
 OTHERS_NOTE = 'In the sort orders, a string that'
+SEVERAL_NOTE = 'A name of several code points'
+NOTES = (m.OTHER_STRINGS, m.SEVERAL_CHARACTERS,
+         m.OTHER_STRINGS + ' ' + m.SEVERAL_CHARACTERS)
 
 
 def run_compare(old, new, *more):
@@ -336,6 +341,18 @@ def check_kind(text):
                       text)
     if mt:
         return 'charmaps', {'checked': int(mt[1])}
+    mt = re.fullmatch(r"Character sets: every byte sequence that each "
+                      r"machine's charmaps give a character is among the strings "
+                      r"measured, in the (\d+) locale\(s\) checked\. The (\d+) "
+                      r"locale\(s\) unchanged by their sort tables need no such "
+                      r"check: the table decides for every string\.", text)
+    if mt:
+        return 'charmaps', {'checked': int(mt[1]), 'by_table': int(mt[2])}
+    mt = re.fullmatch(r"Character sets: not checked, and not needed: the (\d+) "
+                      r"locale\(s\) found unchanged were found so by their sort "
+                      r"tables, which decide for every string\.", text)
+    if mt:
+        return 'charmaps', {'checked': 0, 'by_table': int(mt[1])}
     mt = re.fullmatch(r'PostgreSQL on the ' + SIDE + r' machine: (\d+) '
                       r'process\(es\) named postgres or postmaster, all running '
                       r'the C library measured there\.', text)
@@ -1040,30 +1057,58 @@ def other_tail(rest, names):
     return out
 
 
+# The line on databases of another encoding, up to where its forms part.
+OTHER_HEAD = (r'!! Not measured in a database of another encoding: '
+              r'(\d+) locale\(s\) whose encoding PostgreSQL does not know, so '
+              r'that CREATE DATABASE and CREATE COLLATION let a database of any '
+              r'encoding use one, with only a WARNING \("could not determine '
+              r'encoding for locale"\)\. In such a database, a UTF8 one say, '
+              r'PostgreSQL hands the locale the database\'s bytes, not the '
+              r'ones measured here')
+NOT_TOLD = (' Whether upper(), lower() and ILIKE give an error there is not '
+            'known.')
+
+
 def bytes_kind(text):
     """('bytes', data) of the line on databases of another encoding than
-    the locale's; None when the line is not about it."""
-    mt = re.fullmatch(r'!! Not measured in a database of another encoding: '
-                      r'(\d+) locale\(s\) whose encoding PostgreSQL does not '
-                      r'know, so that CREATE DATABASE lets a database of any '
-                      r'encoding use one, with only a WARNING \("could not '
-                      r'determine encoding for locale"\)\. In such a database, a '
-                      r'UTF8 one say, PostgreSQL hands the locale the '
-                      r'database\'s bytes, not the ones measured here, so neither '
-                      r'its order nor whether upper\(\), lower\(\) and ILIKE give '
-                      rf'an error there is known\. ({GROUPS})\.', text)
+    the locale's; None when the line is not about it. data['same table']
+    lists the locales whose order there the line gives as the same on both
+    machines, by their sort tables; absent where it gives none."""
+    mt = re.fullmatch(OTHER_HEAD + r', so neither its order nor whether '
+                      r'upper\(\), lower\(\) and ILIKE give an error there is '
+                      rf'known\. ({GROUPS})\.', text)
     if mt:
         return 'bytes', {'other encoding': by_codeset(mt[2], mt[1])}
-    mt = re.match(r'!! Not measured in a database of another encoding: '
-                  r'(\d+) locale\(s\) whose encoding PostgreSQL does not '
-                  r'know, so that CREATE DATABASE lets a database of any '
-                  r'encoding use one, with only a WARNING \("could not '
-                  r'determine encoding for locale"\)\. In such a database, a '
-                  r'UTF8 one say, PostgreSQL hands the locale the '
-                  r'database\'s bytes, not the ones measured here, so its '
-                  rf'order there is not known\. ({GROUPS})\.(?= |$)', text)
+    mt = re.match(OTHER_HEAD + r', so its order there is not known\. '
+                  rf'({GROUPS})\.(?= |$)', text)
     if mt:
         return 'bytes', other_tail(text[mt.end():], by_codeset(mt[2], mt[1]))
+    every = re.match(OTHER_HEAD + r'\. Each one\'s compiled sort table is the '
+                     r'same on both machines, and glibc orders any bytes by '
+                     r'that table, so its order there is the same on both '
+                     rf'machines\. ({GROUPS})\.(?= |$)', text)
+    some = re.match(OTHER_HEAD + r'\. Its order there is the same on both '
+                    r'machines in the (\d+) whose compiled sort table is the '
+                    r'same on both, since glibc orders any bytes by that table; '
+                    r'in the other (\d+) it is not known\. '
+                    rf'({GROUPS})\. The same sort table on both machines: '
+                    r'(\S+(?:, \S+)*?)\.(?= |$)', text)
+    if every or some:
+        mt = every or some
+        names = by_codeset(mt[2] if every else mt[4], mt[1])
+        same = sorted(names) if every else mt[5].split(', ')
+        if some and (int(mt[2]) != len(same) or int(mt[2]) + int(mt[3])
+                     != int(mt[1]) or not 0 < len(same) < len(names)):
+            raise ReportShapeError(f'the counts do not add up: {text!r}')
+        if (same != sorted(set(same)) or not set(same) <= set(names)):
+            raise ReportShapeError(f'the same tables are not among the '
+                                   f'names, once each, sorted: {text!r}')
+        rest = text[mt.end():]
+        if rest == NOT_TOLD:
+            return 'bytes', {'other encoding': names, 'same table': same}
+        out = other_tail(rest, names)
+        out['same table'] = same
+        return 'bytes', out
     if text.startswith(('!! Not measured in ', '!! NOT checked in ',
                         '!! Not measured in a database of another',
                         'Every such byte', 'Pass --characters-to FILE for every such')):
@@ -1143,10 +1188,143 @@ NOT_CHECKED_WHOLE = (r"!! NOT checked whether the character sets of (either "
                      r"machine|the (?:old|new) machine) give a character to byte "
                      r"sequences that are not among the strings measured, "
                      r"because (.+)\. Where one does, a locale of that encoding "
-                     r"is unchanged only as far as measured\.")
+                     r"is unchanged only as far as measured(, unless its sort "
+                     r"table found it unchanged)?\.")
 NOT_CHECKED_SOME = (r"!! NOT checked whether their character set gives a "
                     r"character to byte sequences that are not among the strings "
                     r"measured, for (\d+) locale\(s\) of the (old|new) machine:")
+# A name the table gives inside a changed locale (table_naming): a character
+# with its glyph, a code point, a run, several code points, or bytes.
+TABLE_ITEM = (r'(?:\S+ \(U\+[0-9A-F]{4,6}\)|U\+[0-9A-F]{4,6}(?:\.\.U\+[0-9A-F]'
+              r'{4,6}|(?: U\+[0-9A-F]{4,6})+)?|bytes [0-9A-F]{2}(?: [0-9A-F]{2})*)')
+# Why a side's table cannot be named (TableNaming.record), joined by '; '.
+TABLE_REASON = (r'(?:on the (?:old|new) machine, |the (?:OLD|NEW) file holds |the '
+                r'packed tables of the (?:OLD|NEW) file |the record (?:of|stored '
+                r'for) its table )[^;]*')
+# The lines of the verdict by the sort tables (table_verdicts, TableNaming).
+TABLE_PHRASE = (
+    r'its compiled sort table changed(?:'
+    r': (sort rules on one machine only)'
+    r'|: ((?:it marks|[\d,]+ appear only)[^;]*)'
+    r'(?:; among them: (' + TABLE_ITEM + r'(?:, ' + TABLE_ITEM + r')*)'
+    r'(?:, and ([\d,]+) more)?)?'
+    r'|( only in its numbering): every sequence keeps its order against every '
+    r'other, so none is named'
+    r'|( in bytes its record of the sequences does not keep), so none is named'
+    r'|: the number of levels changed \((\d+) to (\d+)\), so its sequences are '
+    r'not compared one by one'
+    r'|; its sequences cannot be named: (' + TABLE_REASON + r'(?:; '
+    + TABLE_REASON + r')*)'
+    r')?(?:; (step 11 saw no change in the strings it measured|'
+    r'step 11 could not measure it))?')
+NAMED_HOW = {'marked by the table as changed': 'marked',
+             'only in the old machine\'s table': 'old',
+             'only in the new machine\'s table': 'new',
+             'compares differently against one marked as changed': 'flip'}
+
+
+def table_phrase(mt, among):
+    """((why, step 11's word), named) of a TABLE_PHRASE match. named is None
+    where the line has no word of what the table names, else {'counts':
+    {kind: n} or None, 'items': [...], 'more': n, 'unnamed': why the
+    table names nothing or None}. AMONG: whether the names must follow the
+    counts (the report and the summary) or must not (the characters file,
+    whose rows hold them)."""
+    why, said = mt[1], mt[10]
+    named = None
+    if mt[2]:
+        if bool(mt[3]) != among:
+            raise ReportShapeError(f'names where none belong, or none where '
+                                   f'they do: {mt[0]!r}')
+        counts = {}
+        for kind, pat in (('marked', r'it marks ([\d,]+) sequence\(s\) as '
+                                     r'changed'),
+                          ('new', r'([\d,]+) appear only in the new '
+                                  r'machine\'s table'),
+                          ('old', r'([\d,]+) (?:appear )?only in the old '
+                                  r'machine\'s'),
+                          ('flip', r'([\d,]+) more compare differently '
+                                   r'against one marked as changed')):
+            got = re.search(pat, mt[2])
+            counts[kind] = number(got[1]) if got else 0
+        if mt[2] != named_head(counts):
+            raise ReportShapeError(f'unknown counts of a sort table: {mt[2]!r}')
+        items = re.findall(TABLE_ITEM, mt[3]) if mt[3] else []
+        named = {'counts': counts, 'items': items,
+                 'more': number(mt[4]) if mt[4] else 0, 'unnamed': None}
+    elif mt[5] or mt[6] or mt[7] or mt[9]:
+        named = {'counts': None, 'items': [], 'more': 0,
+                 'unnamed': ('numbering' if mt[5] else 'record' if mt[6] else
+                             (int(mt[7]), int(mt[8])) if mt[7] else mt[9])}
+    if not (why or said or named):
+        raise ReportShapeError(f'unknown sort table phrase: {mt[0]!r}')
+    return (why, said), named
+
+
+def named_head(counts):
+    """What table_naming writes for these counts, spelled here on its own."""
+    parts = []
+    if counts['marked']:
+        parts.append(f'it marks {counts["marked"]:,} sequence(s) as changed')
+    if counts['new']:
+        parts.append(f'{counts["new"]:,} appear only in the new machine\'s '
+                     'table')
+    if counts['old']:
+        parts.append(f'{counts["old"]:,} ' + (
+            'only in the old machine\'s' if counts['new']
+            else 'appear only in the old machine\'s table'))
+    if counts['flip']:
+        parts.append(f'{counts["flip"]:,} more compare differently against '
+                     'one marked as changed')
+    return (', '.join(parts[:-1]) + ' and ' + parts[-1] if len(parts) > 1
+            else parts[0] if parts else '')
+DISAGREE = (r'!! Step 11 found a change in (\d+) locale\(s\) whose sort tables '
+            r'find no change of order\. With the same glibc code that cannot '
+            r'happen, so the two machines compare with different code, and no '
+            r'locale is taken as unchanged by its sort table alone; they are '
+            r'listed as changed:')
+DISAGREE_BRIEF = ('!! Step 11 found a change where the sort tables find no '
+                  'change of order, '
+                  'so the two machines compare with different glibc code and '
+                  'no locale is unchanged by its table alone: ')
+TABLES_ONLY = (r'Unchanged by their sort tables although step 11 could not '
+               r'measure them: (\d+) locale\(s\)\. Nothing in this run checks '
+               r'that the two machines compare them with the same glibc code:')
+TABLES_ONLY_BRIEF = ('unchanged by their sort tables, which step 11 could not '
+                     'cross-check: ')
+NOT_COMPARED = (r"!! Not compared by their sort tables: (\d+) locale\(s\)\. Each "
+                r"keeps step 11's verdict, and an unchanged one is unchanged "
+                r"only as far as step 11 measured:")
+NOT_COMPARED_BRIEF = (r"!! Not compared by their sort tables: (\d+) "
+                      r"locale\(s\); each keeps step 11's verdict, and an "
+                      r"unchanged one is unchanged only as far as step 11 "
+                      r"measured:")
+# 'why: count: names', the names cut at LIST_LIMIT with ', and N more'.
+NOT_COMPARED_ITEM = r'(.+): (\d+): (\S+(?:, \S+)*?)(?:, and (\d+) more)?'
+
+
+def more_names(text):
+    """'a, b, and 3 more' as (['a', 'b'], 5); refused when a name holds a
+    blank."""
+    mt = re.fullmatch(r'(\S+(?:, \S+)*?)(?:, and (\d+) more)?', text)
+    if not mt:
+        raise ReportShapeError(f'unknown list of names: {text!r}')
+    names = mt[1].split(', ')
+    return names, len(names) + int(mt[2] or 0)
+
+
+def not_compared_item(text):
+    """(why, names shown, how many) of one reason a locale was not compared
+    by its sort table; refused unless the count agrees with the names."""
+    mt = re.fullmatch(NOT_COMPARED_ITEM, text)
+    if not mt:
+        raise ReportShapeError(f'unknown not-compared line: {text!r}')
+    names = mt[3].split(', ')
+    if len(names) + int(mt[4] or 0) != int(mt[2]) or (
+            mt[4] is None) != (int(mt[2]) <= m.LIST_LIMIT) or (
+            mt[4] is not None and len(names) != m.LIST_LIMIT):
+        raise ReportShapeError(f'not compared counts {mt[2]}: {text!r}')
+    return mt[1], names, int(mt[2])
 
 
 def charmaps_unchecked(text, names=None):
@@ -1159,7 +1337,10 @@ def charmaps_unchecked(text, names=None):
     if whole:
         if names:
             raise ReportShapeError(f'names under a whole machine: {text!r}')
-        return (whole[1], whole[2], None)
+        # The third member says when the sentence spares the locales the
+        # sort tables decided.
+        return (whole[1], whole[2], 'unless the same table' if whole[3]
+                else None)
     some = re.match(NOT_CHECKED_SOME, text)
     if not some:
         raise ReportShapeError(f'unknown charmaps line: {text!r}')
@@ -1229,8 +1410,16 @@ def parse_summary(text):
     s['machines'] = (mt[1], mt[2])
     s['warnings'] = []
     while (line().startswith('     !! ') and not line().startswith('     !! Not measured: ')
+           and not line().startswith('     ' + DISAGREE_BRIEF[:20])
            and not line().startswith(tuple('     ' + p for p in ('Control: ', '!! Control ', '!! PostgreSQL on the ', '!! The glibc of the ')))):
         s['warnings'].append(warning_kind(item(5, 8)))
+    s['disagree'] = []
+    if line().startswith('     ' + DISAGREE_BRIEF[:20]):
+        text = item(5, 8)
+        if not text.startswith(DISAGREE_BRIEF):
+            fail('unknown line on step 11 against the sort tables')
+        s['disagree'], count = more_names(text[len(DISAGREE_BRIEF):])
+        s['disagree_count'] = count
     s['checks'] = []
     while line().startswith(tuple('     ' + p for p in ('Control: ', '!! Control ', '!! PostgreSQL on the ', '!! The glibc of the '))):
         s['checks'].append(above_the_list(check_kind(item(5, 8)), 'summary'))
@@ -1247,10 +1436,11 @@ def parse_summary(text):
             if line() == SUMMARY_FILE_LINE:
                 at[0] += 1
                 s['characters_file'] = take(r'         (\S.*)')[1]
-            if line().startswith('       ' + OTHERS_NOTE):
+            if line().startswith(('       ' + OTHERS_NOTE,
+                                  '       ' + SEVERAL_NOTE)):
                 s['others_note'] = item(7, 7)
-                if s['others_note'] != m.OTHER_STRINGS:
-                    fail('unknown note on strings that are not characters')
+                if s['others_note'] not in NOTES:
+                    fail('unknown note on how names read')
                 break
             if s['characters_file'] is not None:
                 break
@@ -1316,6 +1506,23 @@ def parse_summary(text):
         if (len(s['unmeasured']) + len(s['not_on_new'])
                 + len(s['refused'])) != int(mt[1]):
             fail(f'NOT known says {mt[1]}')
+    s['not_compared'], s['tables_only'] = {}, []
+    if line().startswith('     !! Not compared by their sort tables'):
+        mt = re.fullmatch(NOT_COMPARED_BRIEF, item(5, 8))
+        if not mt:
+            fail('unknown not-compared line')
+        while re.fullmatch(r'       \S.*', line()):
+            why, names, count = not_compared_item(item(7, 9))
+            if why in s['not_compared']:
+                fail(f'{why!r} twice')
+            s['not_compared'][why] = (names, count)
+        if sum(c for _, c in s['not_compared'].values()) != int(mt[1]):
+            fail(f'not compared says {mt[1]}')
+    if line().startswith('     ' + TABLES_ONLY_BRIEF[:20]):
+        text = item(5, 8)
+        if not text.startswith(TABLES_ONLY_BRIEF):
+            fail('unknown line on the tables alone')
+        s['tables_only'], _ = more_names(text[len(TABLES_ONLY_BRIEF):])
     partly = item(5, 8) if line().startswith('     !! Unchanged only') else None
     if partly is not None and not partly.startswith(PARTLY):
         raise ReportShapeError(f'unknown partly-measured line: {partly!r}')
@@ -1408,8 +1615,16 @@ def parse_report(text):
     mt = take(r'New machine: (.+), (\d+) locale\(s\)')
     r['new'] = (mt[1], int(mt[2]))
     r['warnings'] = []
-    while line().startswith('!! ') and not line().startswith(('Control: ', '!! Control ', '!! PostgreSQL on the ', '!! The glibc of the ')):
+    while line().startswith('!! ') and not line().startswith(('Control: ', '!! Control ', '!! PostgreSQL on the ', '!! The glibc of the ', '!! Step 11 found a change in ')):
         r['warnings'].append(warning_kind(paragraph()))
+    r['disagree'] = []
+    if line().startswith('!! Step 11 found a change in '):
+        mt = re.fullmatch(DISAGREE, paragraph())
+        if not mt:
+            fail('unknown line on step 11 against the sort tables')
+        r['disagree'], count = more_names(' '.join(indented(r'  \S.*')))
+        if count != int(mt[1]):
+            fail(f'step 11 against the tables says {mt[1]}')
     r['checks'] = []
     while line().startswith(('Control: ', '!! Control ', '!! PostgreSQL on the ', '!! The glibc of the ')):
         r['checks'].append(above_the_list(check_kind(paragraph()), 'report'))
@@ -1435,10 +1650,10 @@ def parse_report(text):
             else:
                 at[0] += 1
             r['others_note'] = None
-            if line().startswith(OTHERS_NOTE):
+            if line().startswith((OTHERS_NOTE, SEVERAL_NOTE)):
                 r['others_note'] = flat(' '.join(indented(r'\S.*')))
-                if r['others_note'] != m.OTHER_STRINGS:
-                    fail('unknown note on strings that are not characters')
+                if r['others_note'] not in NOTES:
+                    fail('unknown note on how names read')
             take('')
             if not line().startswith('Unchanged: '):
                 fail('expected the unchanged count after the characters file')
@@ -1465,6 +1680,29 @@ def parse_report(text):
         fail(f'CHANGED says {changed} and the changes name {len(names)}')
 
     r['unchanged'] = int(take(r'Unchanged: (\d+) locale\(s\)\.')[1])
+    r['tables_only'] = []
+    if line().startswith('Unchanged by their sort tables'):
+        mt = re.fullmatch(TABLES_ONLY, paragraph())
+        if not mt:
+            fail('unknown line on the tables alone')
+        r['tables_only'], count = more_names(' '.join(indented(r'  \S.*')))
+        if count != int(mt[1]):
+            fail(f'the tables alone says {mt[1]}')
+    r['not_compared'] = {}
+    if line().startswith('!! Not compared by their sort tables'):
+        mt = re.fullmatch(NOT_COMPARED, paragraph())
+        if not mt:
+            fail('unknown not-compared paragraph')
+        while re.fullmatch(r'  \S.*', line()):
+            first = line()
+            at[0] += 1
+            why, names, count = not_compared_item(
+                flat(' '.join([first] + indented(r'    \S.*'))))
+            if why in r['not_compared']:
+                fail(f'{why!r} twice')
+            r['not_compared'][why] = (names, count)
+        if sum(c for _, c in r['not_compared'].values()) != int(mt[1]):
+            fail(f'not compared says {mt[1]}')
     r['partly'] = {}
     if line().startswith('!! Unchanged only as far as measured: '):
         count = int(re.match(r'!! Unchanged only as far as measured: (\d+) of',
@@ -1633,10 +1871,26 @@ def parse_details(details):
            'reversed': None, 'all_reversed': False, 'pairs': None,
            'pairs_count': None, 'probes': None, 'compared': None,
            'not_measured': None, 'still': None, 'still_count': None,
-           'undecided': 0}
+           'undecided': 0, 'table': None}
     if not details:
         raise ReportShapeError('a change with no detail lines')
     rest = list(details)
+    if rest[0].startswith('its compiled sort table changed'):
+        text = rest.pop(0)
+        while rest and re.fullmatch(r'  \S.*', rest[0]):
+            text += ' ' + rest.pop(0).strip()
+        mt = re.fullmatch(TABLE_PHRASE + r'\.', text)
+        if not mt:
+            raise ReportShapeError(f'unknown sort table line: {text!r}')
+        out['table'], out['named'] = table_phrase(mt, among=True)
+        if not rest:
+            if mt[10] is None:
+                raise ReportShapeError(f'a change step 11 found, with no '
+                                       f'lines of it: {text!r}')
+            return out
+        if mt[10] is not None:
+            raise ReportShapeError(f'lines of step 11 under a change it did '
+                                   f'not find: {rest!r}')
 
     def wrapped_runs(text, indent):
         """Runs that wrap onto lines indented by indent."""
@@ -1762,7 +2016,20 @@ def parse_brief(text):
     gives the report's lines, so that the two can be compared one to one."""
     out = {'moved': None, 'moved_count': None, 'reversed': None,
            'pairs': None, 'pairs_count': None, 'probes': False, 'still': None,
-           'still_count': None, 'compared': None, 'undecided': 0}
+           'still_count': None, 'compared': None, 'undecided': 0,
+           'table': None}
+    mt = re.match(TABLE_PHRASE + r'(?=; |$)', text)
+    if mt and mt[0]:
+        out['table'], out['named'] = table_phrase(mt, among=True)
+        text = text[mt.end() + 2:]
+        if not text:
+            if mt[10] is None:
+                raise ReportShapeError(f'a change step 11 found, with no '
+                                       f'phrase of it: {mt[0]!r}')
+            return out
+        if mt[10] is not None:
+            raise ReportShapeError(f'a phrase of step 11 under a change it did '
+                                   f'not find: {text!r}')
     first, *rest = text.split('; ')
     many = re.fullmatch(COUNTED.format('characters') + r' moved', first)
     listed = re.fullmatch(COUNTED.format(r'character\(s\)') + r' moved: (.+)',
@@ -1860,14 +2127,22 @@ class Rhel8ToRhel9(unittest.TestCase):
         separate numbers, and they add up to the old machine's locales."""
         t = self.report['totals']
         self.assertEqual(t, {'old': 867, 'changed': 14, 'unchanged': 851,
-                             'partly': 10, 'not measured': 0, 'refused': 0,
+                             'partly': 849, 'not measured': 0,
+                             'refused': 0,
                              'not on new': 2})
         self.assertEqual(t['changed'] + t['unchanged'] + t['not measured']
                          + t['refused'] + t['not on new'], t['old'])
         self.assertEqual(t['unchanged'], self.report['unchanged'])
-        self.assertEqual(t['partly'], len(self.report['partly']))
+        self.assertEqual(t['partly'], t['unchanged'] - 2)
         self.assertEqual(t['not measured'], len(self.report['unmeasured']))
         self.assertEqual(t['not on new'], len(self.report['not_on_new']))
+        # Every locale on both machines but C and POSIX, changed or not, is
+        # not compared by its table, for the one reason that the file is of
+        # an earlier format.
+        (why, (names, count)), = self.report['not_compared'].items()
+        self.assertIn('which did not read the sort tables', why)
+        self.assertEqual(count, t['changed'] + t['unchanged'] - 2)
+        self.assertNotIn('C', names)
 
     def test_ko_KR_utf8_moves_one_character(self):
         """U+D7A3 moved while ko_KR's source did not change: localedef did.
@@ -1979,14 +2254,22 @@ class Rhel9ToRhel10(unittest.TestCase):
     def test_every_locale_of_the_old_machine_is_counted_once(self):
         t = self.report['totals']
         self.assertEqual(t, {'old': 869, 'changed': 4, 'unchanged': 863,
-                             'partly': 11, 'not measured': 0, 'refused': 0,
+                             'partly': 861, 'not measured': 0,
+                             'refused': 0,
                              'not on new': 2})
         self.assertEqual(t['changed'] + t['unchanged'] + t['not measured']
                          + t['refused'] + t['not on new'], t['old'])
         self.assertEqual(t['unchanged'], self.report['unchanged'])
-        self.assertEqual(t['partly'], len(self.report['partly']))
+        self.assertEqual(t['partly'], t['unchanged'] - 2)
         self.assertEqual(t['not measured'], len(self.report['unmeasured']))
         self.assertEqual(t['not on new'], len(self.report['not_on_new']))
+        # Every locale on both machines but C and POSIX, changed or not, is
+        # not compared by its table, for the one reason that the file is of
+        # an earlier format.
+        (why, (names, count)), = self.report['not_compared'].items()
+        self.assertIn('which did not read the sort tables', why)
+        self.assertEqual(count, t['changed'] + t['unchanged'] - 2)
+        self.assertNotIn('C', names)
 
     def test_thai_moves(self):
         tis = self.changes['th_TH']
@@ -2028,7 +2311,7 @@ FINDINGS = ('moved', 'sorts differently', 'pairs changed', 'not compared',
             'upper/lower/ILIKE group', 'LC_CTYPE converted',
             'upper/lower back not checked', 'upper/lower back group',
             'upper/lower back error', 'upper/lower back changed',
-            'measured in part')
+            'measured in part', 'sort table changed')
 # The rows of a locale NOT known to be unchanged, beside the changes.
 NOT_KNOWN = ('not measured', 'not on the new machine')
 # And of a locale unchanged as far as measured: none of the three changed.
@@ -2100,7 +2383,7 @@ def parse_characters(text):
     lines.pop()
     first = re.fullmatch(r'# Step 11, .+ -> .+: every character, other string '
                          r'and pair found, by locale\.(?: (.+))?', lines[0])
-    if not first or first[1] not in (None, m.OTHER_STRINGS):
+    if not first or first[1] not in (None,) + NOTES:
         raise ReportShapeError(f'unknown first line: {lines[0]!r}')
     if lines[1] != 'locales\tfinding\tcharacters\thow\ttest\tbefore\tnow\tmeasured':
         raise ReportShapeError(f'unknown column line: {lines[1]!r}')
@@ -2124,6 +2407,20 @@ def parse_characters(text):
     # The charmaps not checked, after the warnings and the control.
     out.charmaps_unchecked = [charmaps_unchecked(note) for note in notes
                               if note.startswith('!! NOT checked whether ')]
+    # What the sort tables say beside the rows (table_verdicts).
+    out.disagree, out.tables_only = [], []
+    for note in [x for x in notes if x.startswith(('!! step 11 found a change',
+                                                   'unchanged by their sort'))]:
+        head = ('!! step 11 found a change where the sort tables find no '
+                'change of order: ')
+        tail = 'unchanged by their sort tables, which step 11 could not cross-check: '
+        if note.startswith(head) and not out.disagree:
+            out.disagree = note[len(head):].split(',')
+        elif note.startswith(tail) and not out.tables_only:
+            out.tables_only = note[len(tail):].split(',')
+        else:
+            raise ReportShapeError(f'unknown note on the sort tables: {note!r}')
+        notes.remove(note)
     notes = [note for note in notes
              if not note.startswith('!! NOT checked whether ')]
     at = 0
@@ -2313,15 +2610,37 @@ def parse_characters(text):
                        seqs=[bytes.fromhex(s) for s in mt[4].split(', ')])
             out.setdefault((names,), []).append(row)
             continue
+        if finding == 'sort table changed' and chars != '-':
+            # A name the table gives, under the row of its counts.
+            if (how not in NAMED_HOW or (test, before, now) != ('-',) * 3
+                    or measured != 'compiled table'
+                    or not re.fullmatch(TABLE_ITEM, chars)
+                    or not out.get(tuple(names.split(',')))
+                    or not ('table' in out[tuple(names.split(','))][-1]
+                            or 'kind' in out[tuple(names.split(','))][-1])):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row.update(chars=chars, kind=NAMED_HOW[how])
+            out[tuple(names.split(','))].append(row)
+            continue
+        if finding == 'sort table changed':
+            mt = re.fullmatch(TABLE_PHRASE, how)
+            if (chars, test, before, now, measured) != ('-',) * 5 or not mt:
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row['table'], row['named'] = table_phrase(mt, among=False)
+            out.setdefault(tuple(names.split(',')), []).append(row)
+            continue
         if finding in ('pairs changed', 'unchanged only as far as measured'):
             mt = (re.fullmatch(r'before: (.+); now: (.+)', how)
-                  if finding == 'pairs changed' else re.fullmatch(PARTLY_ROW, how))
+                  if finding == 'pairs changed' else re.fullmatch(
+                      PARTLY_ROW + r'|not compared by its sort table: (.+)', how))
             if (chars, test, before, now, measured) != ('-',) * 5 or not mt:
                 raise ReportShapeError(f'characters line {n}: {line!r}')
             if finding == 'pairs changed':
                 row['probes'] = (mt[1], mt[2])
-            else:
+            elif mt[1]:
                 row['count'] = int(mt[1])
+            else:
+                row['not_compared'] = mt[2]
             out.setdefault(tuple(names.split(',')), []).append(row)
             continue
         if finding in NOT_KNOWN:
@@ -2345,6 +2664,13 @@ def parse_characters(text):
             row['chars'] = parse_chain(chars)
             if len(row['chars']) < 2:
                 raise ReportShapeError(f'characters line {n}: {line!r}')
+        elif finding == 'not decided':
+            # Two strings by ", ": "U+x U+y" would be one string of two
+            # characters.
+            pair = [tokens(half) for half in chars.split(', ')]
+            if [len(x) for x in pair] != [1, 1] or pair[0] == pair[1]:
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row['chars'] = [x[0] for x in pair]
         else:
             row['chars'] = tokens(chars)
             if len(row['chars']) != 2 or row['chars'][0] == row['chars'][1]:
@@ -3009,7 +3335,11 @@ class SummaryForTheAudit(unittest.TestCase):
                     for row in rows:
                         if row['finding'] in NOT_CHANGED:
                             self.assertEqual(len(names), 1)
-                            by_kind.setdefault(row['finding'], {})[names[0]] = row
+                            # A locale not compared by its table has a row
+                            # of that, beside its partly row if it has one.
+                            kind = row['finding'] + (
+                                ' (table)' if 'not_compared' in row else '')
+                            by_kind.setdefault(kind, {})[names[0]] = row
                 self.assertEqual(set(by_kind.get('not measured', ())),
                                  set(report['unmeasured']))
                 self.assertEqual(sorted(by_kind.get('not measured', ())),
@@ -3480,7 +3810,10 @@ class Reports(Variants):
             d['locales']['en_US']['partly'] = 5
         r = self.report(RHEL9, self.variant(edit, reseal=True))
         self.assertEqual(r['partly'].get('en_US'), 5)
-        self.assertEqual(r['totals']['partly'], len(r['partly']))
+        # Not compared by their tables (a file of the first format), every
+        # unchanged locale but C and POSIX is unchanged only as far as
+        # measured, the partly ones among them.
+        self.assertEqual(r['totals']['partly'], r['unchanged'] - 2)
 
     def test_the_probe_pairs_changed(self):
         def edit(d):
@@ -3587,7 +3920,7 @@ class Reports(Variants):
                                  'pairs': None, 'pairs_count': len(changed),
                                  'probes': False, 'still': None,
                                  'still_count': None, 'compared': None,
-                                 'undecided': 0})
+                                 'undecided': 0, 'table': None})
 
     def test_a_locale_name_with_a_comma_and_a_tab(self):
         """The file is tab-separated and lists the names of a change with
@@ -4763,7 +5096,7 @@ class Pieces(unittest.TestCase):
                              measured_as(new, told, probes))
         self.assertEqual(o['pairs'], n['pairs'])
         rows = m.describe_change(old, nw, o, n)[2]
-        self.assertIn(('not decided', 'U+0030 U+0031', '-', '-', '-', '-', '-'),
+        self.assertIn(('not decided', 'U+0030, U+0031', '-', '-', '-', '-', '-'),
                       rows)
 
     def test_a_run_keeps_where_it_was_measured(self):
@@ -5053,7 +5386,9 @@ class FindingKinds(unittest.TestCase):
                                             'ctype', 'ctype rows',
                                             'other encoding', 'closing',
                                             'in part', 'charmaps not checked',
-                                            'charmaps checked'})
+                                            'charmaps checked',
+                                            'tables not compared',
+                                            'tables disagree', 'tables only'})
         for table in (m.LOCALE_KINDS, m.RUN_KINDS):
             for kind, how in table.items():
                 with self.subTest(kind=kind):
@@ -6177,9 +6512,10 @@ def with_parts(money=None, libc=None, use=None, form=m.FORMAT, ctype=None,
     in every locale, but those in money), its PostgreSQL processes
     (CLEAN_LIBC, but what libc changes), how PostgreSQL uses each locale
     (DEFAULT_USE by its encoding, but those in use), the character rules
-    of each (ctype_of, but the entries in ctype) and the converter of each
-    encoding (converter_of_use, but the entries in converter). The order
-    part is the machine's own, untouched."""
+    of each (ctype_of, but the entries in ctype), the converter of each
+    encoding (converter_of_use, but the entries in converter) and the sort
+    table of each, every one not read (NO_TABLES). The order part is the
+    machine's own, untouched."""
     def edit(d):
         d['format'] = form
         d['parts'] = list(m.PARTS[form])
@@ -6203,7 +6539,17 @@ def with_parts(money=None, libc=None, use=None, form=m.FORMAT, ctype=None,
         if 'back' in m.PARTS[form]:
             d['utf8_forward'], d['back'] = round_trip_of_use(
                 d['postgres_use'], d['converter'])
+        if 'collate' in m.PARTS[form]:
+            d['collate'] = dict(copy.deepcopy(NO_TABLES), locales={
+                name: {'state': 'not read', 'why': 'built by a test'}
+                for name in d['locales']})
     return edit
+
+
+# The 'collate' part of a file with no table read, packed once: xz at
+# preset 6 sets up its dictionary on every call.
+NO_TABLES = {'byteorder': 'little', 'checks': {},
+             'tables': m.base64.b64encode(m.ct_pack_all({})).decode('ascii')}
 
 
 # A table of LC_CTYPE as ctype_tables() writes one, kept small: the tests
@@ -7308,7 +7654,8 @@ class PostgresProcessesRead(unittest.TestCase):
         out = {'locales': {}, 'locales_listed': 0,
                'postgres_libc': dict(CLEAN_LIBC, stale=[[1, 'x']]),
                'ctype': {'locales': {}, 'tables': {}, 'wide': {}, 'bytes': {}},
-               'converter': NO_CONVERTER_LOCALES, **NO_ROUND_TRIP}
+               'converter': NO_CONVERTER_LOCALES, **NO_ROUND_TRIP,
+               'collate': dict(copy.deepcopy(NO_TABLES), locales={})}
         with unittest.mock.patch.object(m.sys, 'stderr', screen):
             m.finished(out, 1, 10)
         self.assertIn('!! 1 PostgreSQL process(es) still run the glibc',
@@ -7954,7 +8301,8 @@ class CtypeOnTheMachine(unittest.TestCase):
                          'tables': {'b' * 64: ['not checked', 'failed'],
                                     'c' * 64: ['w', 'b']},
                          'wide': {}, 'bytes': {}},
-               'converter': NO_CONVERTER_LOCALES, **NO_ROUND_TRIP}
+               'converter': NO_CONVERTER_LOCALES, **NO_ROUND_TRIP,
+               'collate': dict(copy.deepcopy(NO_TABLES), locales={})}
         screen = Screen()
         with unittest.mock.patch.object(m.sys, 'stderr', screen):
             rc = m.finished(out, 1, 10)
@@ -8465,6 +8813,8 @@ class PostgresUseCompared(Checks):
             for part in ('locales', 'money', 'postgres_use'):
                 d[part].pop('ja_JP.eucjp')
             d['ctype']['locales'].pop('ja_JP.eucjp')
+            if 'collate' in d:
+                d['collate']['locales'].pop('ja_JP.eucjp', None)
             d['locales_listed'] = len(d['locales'])
             refirst(d)
         found = self.use(*self.pair(measured_use(8), measured_use(9),
@@ -8492,6 +8842,8 @@ class PostgresUseCompared(Checks):
                 for part in ('locales', 'money', 'postgres_use'):
                     d[part].pop(name)
                 d['ctype']['locales'].pop(name)
+                if 'collate' in d:
+                    d['collate']['locales'].pop(name, None)
             d['locales_listed'] = len(d['locales'])
             refirst(d)
         checks = self.checks(*self.pair(measured_use(8), measured_use(8),
@@ -9386,6 +9738,8 @@ class CtypeCompared(Checks):
             for part in ('locales', 'money', 'postgres_use'):
                 d[part].pop('de_DE.utf8')
             d['ctype']['locales'].pop('de_DE.utf8')
+            if 'collate' in d:
+                d['collate']['locales'].pop('de_DE.utf8', None)
             d['locales_listed'] = len(d['locales'])
             refirst(d)
         for side in ('old', 'new'):
@@ -9718,6 +10072,8 @@ class CtypeComparedInEuc(Checks):
                 for part in ('locales', 'money', 'postgres_use'):
                     d[part].pop(name)
                 d['ctype']['locales'].pop(name)
+                if 'collate' in d:
+                    d['collate']['locales'].pop(name, None)
             d['locales_listed'] = len(d['locales'])
             refirst(d)
         found = [d for kind, d in self.checks(*self.pair(old_edits=[no_euc]))
@@ -9732,6 +10088,8 @@ class CtypeComparedInEuc(Checks):
             for part in ('locales', 'money', 'postgres_use'):
                 d[part].pop('ja_JP.eucjp')
             d['ctype']['locales'].pop('ja_JP.eucjp')
+            if 'collate' in d:
+                d['collate']['locales'].pop('ja_JP.eucjp', None)
             d['locales_listed'] = len(d['locales'])
             refirst(d)
         self.assertEqual(self.euc(*self.pair([dropped])), [
@@ -9751,6 +10109,8 @@ class CtypeComparedInEuc(Checks):
                             for part in ('locales', 'money', 'postgres_use'):
                                 d[part].pop(name)
                             d['ctype']['locales'].pop(name)
+                            if 'collate' in d:
+                                d['collate']['locales'].pop(name, None)
                         d['locales_listed'] = len(d['locales'])
                         refirst(d)
                     got, = self.euc(*self.pair([others], [others], old_use=uses[0],
@@ -10015,6 +10375,8 @@ class ConverterCompared(PostgresUseCompared):
             for part in ('locales', 'money', 'postgres_use'):
                 d[part].pop('th_TH.tis620')
             d['ctype']['locales'].pop('th_TH.tis620')
+            if 'collate' in d:
+                d['collate']['locales'].pop('th_TH.tis620', None)
             d['locales_listed'] = len(d['locales'])
             refirst(d)
         line = self.lacking(old_edits=[gone], new_converter=self.tis(0x80))
@@ -10796,7 +11158,8 @@ class ConverterOnTheMachine(unittest.TestCase):
         part['EUC-KR'] = ['measured', ['fails', 'Invalid argument'], 'ko_KR', 'x', 'd']
         out = {'locales': {}, 'locales_listed': 0, 'postgres_libc': dict(CLEAN_LIBC),
                'ctype': {'locales': {}, 'tables': {}, 'wide': {}, 'bytes': {}},
-               'converter': part, **NO_ROUND_TRIP}
+               'converter': part, **NO_ROUND_TRIP,
+               'collate': dict(copy.deepcopy(NO_TABLES), locales={})}
         screen = Screen()
         with unittest.mock.patch.object(m.sys, 'stderr', screen):
             self.assertEqual(m.finished(out, 1, 10), 1)
@@ -11390,7 +11753,8 @@ class BackOnTheMachine(unittest.TestCase):
                'converter': dict(NO_CONVERTER_LOCALES),
                'utf8_forward': ['not checked', ['opens', None], 'C.utf8', 'why f',
                                 None],
-               'back': part}
+               'back': part,
+               'collate': dict(copy.deepcopy(NO_TABLES), locales={})}
         screen = Screen()
         with unittest.mock.patch.object(m.sys, 'stderr', screen):
             self.assertEqual(m.finished(out, 1, 10), 1)
@@ -11440,7 +11804,7 @@ class BackOnTheMachine(unittest.TestCase):
                 unittest.mock.patch.object(m.sys, 'stderr', Screen()):
             text, out, _ = m.measure(1)
         data = json.loads(text)
-        self.assertEqual(data['parts'][-2:], ['utf8_forward', 'back'])
+        self.assertEqual(data['parts'][-3:], ['utf8_forward', 'back', 'collate'])
         self.assertEqual(data['utf8_forward'], ['asked', 'a'])
         self.assertEqual(data['back']['UTF-8'], ['asked', 'a'])
         self.assertEqual(data['back']['EUC-JP'], ['asked', None])
@@ -12784,6 +13148,1723 @@ class TextModelAgainstTheTable(unittest.TestCase):
                           frozenset({'old', 'new'})})
         self.assertEqual(set().union(*(a[2] for a in answers)), {'old', 'new'})
         self.assertEqual(set().union(*(a[3] for a in answers)), {'old', 'new'})
+
+
+# LIMAGIC (LC_COLLATE), loadlocale.c:80@2.28; glibc checks it, not the tool.
+COLLATE_MAGIC = 0x20051014 ^ 3
+# Items 0 to 5 of a small compiled LC_COLLATE, and item 6, which strcoll
+# does not read.
+COLLATE_ITEMS = [m.struct.pack('=I', 2), b'\x01\x02\x00\x00', b'T' * 8,
+                 b'W' * 4, b'E' * 4, b'I' * 4, b'Z' * 4]
+
+
+def collate_file(items=COLLATE_ITEMS, nstrings=19):
+    """(bytes, string index) of a compiled LC_COLLATE holding ITEMS as its
+    first items, the rest empty."""
+    off = 8 + 4 * nstrings
+    index, body = [], b''
+    for item in items:
+        index.append(off + len(body))
+        body += item
+    index += [off + len(body)] * (nstrings - len(items))
+    return (m.struct.pack('=II', COLLATE_MAGIC, nstrings)
+            + m.struct.pack('=%dI' % nstrings, *index) + body, index)
+
+
+def collate_record(nrules, rules, seqs):
+    """A record as ct_record writes one: RULES the rule sets, nrules bytes
+    each; SEQS {sequence: (rule set, [order numbers of each level])}."""
+    out = bytearray()
+    m.ct_varint(out, nrules)
+    m.ct_varint(out, len(rules))
+    out += rules
+    m.ct_varint(out, len(seqs))
+    for s, (r, levels) in sorted(seqs.items()):
+        m.ct_varint(out, len(s))
+        out += s
+        out += rules[r * nrules:(r + 1) * nrules]
+        for level in levels:
+            m.ct_varint(out, len(level))
+            for x in level:
+                m.ct_varint(out, x)
+    return bytes(out)
+
+
+# A table of two levels, the second read backward as French accents are:
+# what glibc holds on the machine of the tests of controls 2 to 4.
+TRUE_RULES = bytes([m.CT_SORT_FORWARD, m.CT_SORT_BACKWARD])
+TRUE_SEQS = {b'a': (0, [[3], [3]]), b'b': (0, [[4], [5]]),
+             b'c': (0, [[5], [4]])}
+
+
+def true_key(t, buf=None):
+    """glibc's strxfrm of T on that machine: every byte one sequence."""
+    p = m.ct_parse(collate_record(2, TRUE_RULES, TRUE_SEQS))
+    many = m._CollateMany(2, [p['map'][bytes([b])] for b in t])
+    starts = {i: ((i << 24) | many.offs[i], i + 1) for i in range(len(t))}
+    return m.CollateTables.strxfrm(many, t, starts.__getitem__)
+
+
+class SortTablesOnTheMachine(unittest.TestCase):
+    """The compiled sort table (LC_COLLATE) of each locale, read where it is
+    measured: the fingerprint of the six items strcoll reads and the checks
+    that come before it, what collate_of answers, the part measure()
+    writes, and what the run says when it ends. glibc is a double, the
+    file a small one built here.
+
+    Freezes items read out of order, from a pointer glibc does not give,
+    or with a rule count read from the wrong half of glibc's union, read as
+    a table; a locale not read, a table that failed its check or tables
+    not packed left out of the end of the run or of its exit status; a
+    table checked once for two encodings; a planted error in a record that
+    controls 2 to 4 do not see, or a sequence they never check; and a
+    reader that misses a sequence glibc's findidx can return."""
+
+    def fingerprint(self, blob, index, pointers=None, nrules=2):
+        return m.collate_fingerprint(lambda off, n: blob[off:off + n],
+                                     pointers or index[1:6], nrules)
+
+    def test_the_six_items_and_nothing_else(self):
+        """The fingerprint covers items 0 to 5, and where each ends: one
+        byte of item 3 changed changes it, so does a byte moved from item 3
+        to item 4, and item 6 does not."""
+        blob, index = collate_file()
+        fp, nrules = self.fingerprint(blob, index)
+        self.assertEqual(nrules, 2)
+        h = hashlib.sha256()
+        for item in COLLATE_ITEMS[:6]:
+            h.update(m.struct.pack('>Q', len(item)) + item)
+        self.assertEqual(fp, h.hexdigest())
+        for items in ([*COLLATE_ITEMS[:3], b'W' * 3 + b'X', *COLLATE_ITEMS[4:]],
+                      [*COLLATE_ITEMS[:3], b'W' * 3, b'W' + b'E' * 4,
+                       *COLLATE_ITEMS[5:]]):
+            other = self.fingerprint(*collate_file(items))[0]
+            self.assertNotEqual(other, fp)
+        same = self.fingerprint(*collate_file(COLLATE_ITEMS[:6] + [b'Y' * 9]))
+        self.assertEqual(same[0], fp)
+
+    def test_items_out_of_order(self):
+        """Guard c: an item whose offset is below the one before has no
+        length; localedef writes them in order and glibc does not check."""
+        blob, index = collate_file()
+        for k in range(1, 7):
+            with self.subTest(item=k):
+                bad = list(index)
+                bad[k] = index[k - 1] - 1
+                raw = blob[:8] + m.struct.pack('=19I', *bad) + blob[84:]
+                with self.assertRaises(m.CollateUnread) as e:
+                    self.fingerprint(raw, bad, pointers=index[1:6])
+                self.assertEqual(str(e.exception), 'the items strcoll reads '
+                                 'are not in order in its file')
+
+    def test_a_pointer_glibc_gives_elsewhere(self):
+        """Guard d, for each of items 1 to 5."""
+        blob, index = collate_file()
+        for k in range(1, 6):
+            with self.subTest(item=k):
+                pointers = list(index[1:6])
+                pointers[k - 1] += 4
+                with self.assertRaises(m.CollateUnread) as e:
+                    self.fingerprint(blob, index, pointers=pointers)
+                self.assertEqual(str(e.exception),
+                                 f'glibc gives item {k} at offset '
+                                 f'{index[k] + 4}, the file\'s index at '
+                                 f'{index[k]}')
+
+    def test_a_rule_count_that_is_not_the_files(self):
+        """Guard e: the file holds 2 rules, the reader read 0 or 3."""
+        blob, index = collate_file()
+        for read in (0, 3):
+            with self.subTest(read=read):
+                with self.assertRaises(m.CollateUnread) as e:
+                    self.fingerprint(blob, index, nrules=read)
+                self.assertEqual(str(e.exception), f'the reader read {read} '
+                                 'rule(s) and the file holds 2')
+
+    def test_the_word_of_the_union_on_either_byte_order(self):
+        """glibc writes NRULES into the first 4 bytes of an 8-byte union
+        (loadlocale.c:157@2.28), and nl_langinfo_l hands back all 8: the
+        low half on a little-endian machine, the high half on a big-endian
+        one (s390x), the other half bytes nobody wrote."""
+        for order, value in (('little', 0xDEADBEEF00000003),
+                             ('big', 0x00000003DEADBEEF)):
+            with self.subTest(order=order), \
+                    unittest.mock.patch.object(m.sys, 'byteorder', order):
+                self.assertEqual(m.ct_word(value), 3)
+
+    def in_memory(self, indirect=(999, 4, 6, 8)):
+        """(items 1 to 5 as ctypes buffers, their addresses): a compiled
+        table of one level, laid out as glibc's findidx reads it
+        (weight.h@2.39). Every byte is a direct entry of weight 3 but b,
+        whose list holds bc, then the range bx to bz through INDIRECTMB,
+        then the closing entry for b alone."""
+        pack = m.struct.pack
+        weights = bytes([1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8])
+        table = [0] * 256
+        table[ord('b')] = -4
+        extra = (b'\0' * 4
+                 + pack('=iB', 2, 1) + b'c' + b'\0' * 2
+                 + pack('=iB', -1, 1) + b'xz' + b'\0'
+                 + pack('=iB', 10, 0) + b'\0' * 3)
+        bufs = [ctypes.create_string_buffer(bytes([m.CT_SORT_FORWARD])),
+                ctypes.create_string_buffer(pack('=256i', *table)),
+                ctypes.create_string_buffer(weights),
+                ctypes.create_string_buffer(extra),
+                ctypes.create_string_buffer(pack('=4i', *indirect))]
+        return bufs, [ctypes.addressof(b) for b in bufs]
+
+    def read_in_memory(self, **k):
+        bufs, addrs = self.in_memory(**k)
+        item = lambda n, loc: 1 if n == 0 else addrs[n - 1]
+        with unittest.mock.patch.object(m, 'ct_item', item):
+            T = m.CollateTables(77)
+        return T, bufs
+
+    def test_the_reader_finds_every_sequence(self):
+        """CollateTables and ct_record over a table that holds a direct
+        entry, a list, a range and a closing entry: every sequence glibc's
+        findidx can return, each with its weight, and the INDIRECTMB a
+        range reads in the table's digest."""
+        T, bufs = self.read_in_memory()
+        els, dup = m.ct_elements(T)
+        expected = {bytes([c]): 0 for c in range(1, 256) if c != ord('b')}
+        expected.update({b'bc': 2, b'bx': 4, b'by': 6, b'bz': 8, b'b': 10})
+        self.assertEqual((els, dup), (expected, 0))
+        mapped = m.ct_parse(m.ct_record(T))['map']
+        self.assertEqual(
+            {s: mapped[s] for s in (b'a', b'b', b'bc', b'bx', b'by', b'bz')},
+            {b'a': (b'\x01', [[3]]), b'b': (b'\x01', [[8]]),
+             b'bc': (b'\x01', [[4]]), b'bx': (b'\x01', [[5]]),
+             b'by': (b'\x01', [[6]]), b'bz': (b'\x01', [[7]])})
+        self.assertEqual(len(mapped), 259)
+        other, _ = self.read_in_memory(indirect=(999, 4, 8, 6))
+        self.assertNotEqual(other.digest, T.digest)
+
+    def test_collate_view_reads_glibc_structs(self):
+        """__locales[LC_COLLATE] three pointers into a locale_t
+        (bits/types/__locale_t.h), filedata one pointer into __locale_data
+        (localeinfo.h:49-53), alike in 2.28, 2.34 and 2.39; a C with no file
+        reads as filedata 0."""
+        P = ctypes.sizeof(ctypes.c_void_p)
+        filedata = ctypes.create_string_buffer(64)
+        fd = ctypes.addressof(filedata)
+        for given, want in ((fd, fd), (None, 0)):
+            with self.subTest(filedata=given):
+                data = (ctypes.c_void_p * 3)(0, given, 64)
+                loc = (ctypes.c_void_p * 13)()
+                loc[m.CT_LC_COLLATE] = ctypes.addressof(data)
+                item = lambda n, l: 2 if n == 0 else want + 8 * n
+                with unittest.mock.patch.object(m, 'ct_item', item):
+                    got = m.collate_view(ctypes.addressof(loc))
+                self.assertEqual(got, (want, 2, [8, 16, 24, 32, 40]))
+        self.assertEqual(P, 8)
+
+    def test_a_sequence_no_case_checks(self):
+        """b and e are the references every sequence is put before, one per
+        rule vector; cb and ce are sequences of their own, so glibc would
+        read c followed by either as one sequence, and c is never checked
+        beside another (two cases skipped, one sequence unchecked). Through
+        collate_check, against a strxfrm that reads the longest sequence
+        first, as glibc's findidx does: nothing mismatches, and the table
+        does not pass."""
+        seqs = {b'b': (0, [[3]]), b'c': (0, [[4]]), b'cb': (0, [[5]]),
+                b'e': (1, [[6]]), b'ce': (0, [[7]])}
+        rec = collate_record(1, bytes([m.CT_SORT_FORWARD, m.CT_SORT_FORWARD
+                                       | m.CT_SORT_POSITION]), seqs)
+        p = m.ct_parse(rec)
+
+        def key(t, buf=None):
+            parts, i = [], 0
+            while i < len(t):
+                s = max((s for s in p['map'] if t.startswith(s, i)), key=len)
+                parts.append(s)
+                i += len(s)
+            many = m._CollateMany(1, [p['map'][s] for s in parts])
+            ends = list(itertools.accumulate(len(s) for s in parts))
+            starts = {e - len(s): ((n << 24) | many.offs[n], e)
+                      for n, (s, e) in enumerate(zip(parts, ends))}
+            return m.CollateTables.strxfrm(many, t, starts.__getitem__)
+        got = self.checked(rec, key=key)
+        self.assertEqual((got['record_mismatch'], got['pair_mismatch'],
+                          got['pair_skipped'], got['pair_unchecked']),
+                         (0, 0, 2, 1))
+        self.assertEqual(m.collate_check_ok(got),
+                         '1 sequence(s) of its table could not be checked '
+                         'beside others against glibc\'s strxfrm')
+
+    def of(self, blob=None, nrules=2, pointers=None, loaded=True,
+           tables=None, sizeof=8):
+        """collate_of('xx') with glibc's newlocale a double, the file BLOB
+        in memory (none: glibc's own C), TABLES the reader's answer or the
+        exception it raises."""
+        buf = ctypes.create_string_buffer(blob) if blob is not None else None
+        addr = ctypes.addressof(buf) if buf is not None else 0
+        self.freed, made = [], []
+        lib = types.SimpleNamespace(
+            newlocale=lambda mask, name, base: (
+                made.append((mask, name)) or 77) if loaded else None,
+            freelocale=self.freed.append)
+
+        def tables_of(loc):
+            if isinstance(tables, Exception):
+                raise tables
+            self.assertEqual(loc, 77)
+            return types.SimpleNamespace(digest='f' * 64)
+        real = ctypes.sizeof
+        with unittest.mock.patch.multiple(
+                m, _ct_lib=lambda: lib, CollateTables=tables_of,
+                ct_record=lambda T: b'rec ' + T.digest.encode(),
+                collate_view=lambda loc: (addr, nrules, pointers)), \
+                unittest.mock.patch.object(
+                    m.ctypes, 'sizeof',
+                    lambda t: sizeof if t is ctypes.c_void_p else real(t)):
+            got = m.collate_of('xx')
+        if loaded and sizeof == 8:
+            self.assertEqual(made, [(1 << 3, b'xx')])
+            self.assertEqual(self.freed, [77])
+        return got
+
+    def test_what_collate_of_answers(self):
+        blob, index = collate_file()
+        fp = self.fingerprint(blob, index)[0]
+        self.assertEqual(self.of(blob, pointers=index[1:6]),
+                         ({'state': 'file', 'fingerprint': fp, 'nrules': 2,
+                           'table': 'f' * 64}, b'rec ' + b'f' * 64))
+        zero, zindex = collate_file([m.struct.pack('=I', 0)]
+                                    + COLLATE_ITEMS[1:])
+        self.assertEqual(self.of(zero, nrules=0, pointers=zindex[1:6],
+                                 tables=AssertionError('read')),
+                         ({'state': 'file',
+                           'fingerprint': self.fingerprint(
+                               zero, zindex, nrules=0)[0],
+                           'nrules': 0, 'table': 'none'}, None))
+        self.assertEqual(self.of(None, nrules=0), ({'state': 'builtin'}, None))
+        for case, kwargs, why in (
+                ('a C with rules', dict(nrules=3),
+                 'it has no file and 3 rule(s)'),
+                ('not loaded', dict(loaded=False), 'newlocale did not load it'),
+                ('a guard', dict(blob=blob, pointers=[index[1] + 1]
+                                 + index[2:6]),
+                 f'glibc gives item 1 at offset {index[1] + 1}, the file\'s '
+                 f'index at {index[1]}'),
+                ('the reader failing', dict(blob=blob, pointers=index[1:6],
+                                            tables=ValueError('nrules 40')),
+                 "reading failed: ValueError('nrules 40')"),
+                ('32 bits', dict(sizeof=4), 'not a 64-bit Python')):
+            with self.subTest(case=case):
+                self.assertEqual(self.of(**kwargs),
+                                 ({'state': 'not read', 'why': why}, None))
+
+    def checked(self, rec, stored=None, loaded=True, key=true_key):
+        """collate_check of a locale whose reader gives REC, the record
+        STORED (REC unless given), against KEY, glibc's strxfrm."""
+        lib = types.SimpleNamespace(
+            newlocale=lambda mask, name, base: 77 if loaded else None,
+            freelocale=lambda loc: None)
+        selected = []
+
+        class Reader:
+            """The reader of the locale, which gives REC; the controls
+            borrow its strxfrm."""
+            strxfrm = m.CollateTables.strxfrm
+
+            def __new__(cls, loc):
+                return rec
+        with unittest.mock.patch.multiple(
+                m, _ct_lib=lambda: lib, CollateTables=Reader,
+                ct_record=lambda T: T, ct_real_key=key), \
+                unittest.mock.patch.object(
+                    m.locale, 'setlocale',
+                    lambda c, n=None: selected.append(n) or n):
+            got = m.collate_check(
+                ('fr_FR', hashlib.sha256(stored or rec).hexdigest()))
+        self.assertEqual(selected, ['fr_FR'])
+        return got
+
+    def test_controls_see_a_planted_error(self):
+        """Controls 2 to 4 on a record that is right, then on one wrong
+        order number (seen alone), one level stored forward where glibc
+        reads it backward (seen only beside other sequences), and a record
+        other than the one stored."""
+        right = collate_record(2, TRUE_RULES, TRUE_SEQS)
+        got = self.checked(right)
+        self.assertEqual((got['locale'], got['record_seqs'],
+                          got['record_mismatch'], got['pair_mismatch'],
+                          got['pair_unchecked']),
+                         ('fr_FR', 3, 0, 0, 0))
+        self.assertGreater(got['pairs'], 0)
+        self.assertIsNone(m.collate_check_ok(got))
+        number = collate_record(2, TRUE_RULES,
+                                {**TRUE_SEQS, b'b': (0, [[6], [5]])})
+        got = self.checked(number)
+        self.assertEqual((got['record_mismatch'], got['record_examples']),
+                         (1, ['62']))
+        forward = collate_record(
+            2, TRUE_RULES + bytes([m.CT_SORT_FORWARD] * 2),
+            {**TRUE_SEQS, b'b': (1, [[4], [5]])})
+        got = self.checked(forward)
+        self.assertEqual(got['record_mismatch'], 0)
+        self.assertGreater(got['pair_mismatch'], 0)
+        self.assertEqual(self.checked(right, stored=number),
+                         {'locale': 'fr_FR', 'error': 'the record checked is '
+                          'not the one stored'})
+        self.assertEqual(self.checked(right, loaded=False),
+                         {'locale': 'fr_FR',
+                          'error': 'newlocale did not load it'})
+
+    def test_what_a_check_says(self):
+        ok = {'locale': 'x', 'record_mismatch': 0, 'pair_mismatch': 0,
+              'pair_unchecked': 0}
+        for check, why in (
+                (ok, None),
+                (None, 'its table was not checked'),
+                ({'locale': 'x', 'error': 'boom'},
+                 'the check of its table failed: boom'),
+                (dict(ok, record_mismatch=2), 'its table does not match '
+                 'glibc\'s strxfrm (2 sequence(s) alone, 0 with others)'),
+                (dict(ok, pair_mismatch=3), 'its table does not match '
+                 'glibc\'s strxfrm (0 sequence(s) alone, 3 with others)'),
+                (dict(ok, pair_unchecked=2), '2 sequence(s) of its table '
+                 'could not be checked beside others against glibc\'s '
+                 'strxfrm')):
+            with self.subTest(check=check):
+                self.assertEqual(m.collate_check_ok(check), why)
+
+    def test_tables_packed_alike(self):
+        """The same records give the same bytes, whatever order they were
+        met in, and come back as they went."""
+        records = {'a' * 64: b'one', 'b' * 64: b'two' * 100}
+        packed = m.ct_pack_all(records)
+        self.assertEqual(m.ct_pack_all(dict(reversed(list(records.items())))),
+                         packed)
+        self.assertEqual(m.ct_unpack_all(packed), records)
+        self.assertEqual(packed[:6], m.CT_XZ_MAGIC)
+
+    def test_tables_packed_without_lzma(self):
+        """A Python built without lzma packs them with zlib, and they come
+        back as they went, read by their first bytes (pending item 3 of the
+        6.6 PR 2)."""
+        records = {'a' * 64: b'one', 'b' * 64: b'two' * 100}
+        with unittest.mock.patch.dict(sys.modules, {'lzma': None}):
+            packed = m.ct_pack_all(records)
+            self.assertEqual(m.ct_unpack_all(packed), records)
+        self.assertEqual(packed[:1], b'\x78')
+        self.assertEqual(m.ct_unpack_all(packed, {'a' * 64}),
+                         {'a' * 64: b'one'})
+        with self.assertRaisesRegex(ValueError, 'neither an xz nor a zlib'):
+            m.ct_unpack_all(b'\x00' + packed)
+
+    def test_tables_that_cannot_be_packed(self):
+        """A Python that cannot pack them at all: the part says why, and
+        holds no tables rather than an empty set of them."""
+        def fail(records):
+            raise MemoryError()
+        with unittest.mock.patch.object(m, 'ct_pack_all', fail):
+            part = m.collate_part({'de': {'state': 'builtin'}}, {}, {},
+                                  lambda f, jobs: [f(j) for j in jobs])
+        self.assertEqual(part, {
+            'byteorder': sys.byteorder, 'locales': {'de': {'state': 'builtin'}},
+            'checks': {}, 'tables': None,
+            'tables_why': 'MemoryError()'})
+
+    def measured(self, names, one, check):
+        screen = Screen()
+        with unittest.mock.patch.multiple(
+                m, libc_version=lambda: 'glibc 2.34',
+                list_locales=lambda: names,
+                glibc_build=lambda: 'glibc-2.34-1.el9.x86_64',
+                measure_one=one, collate_check=check,
+                postgres_use=lambda name: use_of('converts', 'UTF-8',
+                                                 (0x80, 'c280')),
+                ctype_identity=lambda name, use: ['table', 'd' * 64],
+                ctype_part=lambda ids, f: {},
+                converter_of=lambda job: (job[0], ['asked', job[1]]),
+                round_trip_of=lambda job: (
+                    job[0] if job[0] == 'forward' else job[1],
+                    ['asked', job[2]]),
+                UTF8_BYTES=None,
+                fork_pool=lambda jobs: ThreadPoolExecutor(1),
+                money_digits=lambda names: {n: 3 for n in names},
+                postgres_libc=lambda: dict(CLEAN_LIBC)), \
+                unittest.mock.patch.object(m.os, 'nice'), \
+                unittest.mock.patch.object(m.sys, 'stderr', screen):
+            text, out, _ = m.measure(1)
+        return json.loads(text), screen
+
+    def test_measure_writes_the_part(self):
+        """The call site: each locale's entry, out of its result; one check
+        per table and encoding, so a table two encodings share is checked
+        under each; a table of no rules not checked; a locale glibc refused
+        not read, with why; the records packed."""
+        t = hashlib.sha256(b'rec').hexdigest()
+        file_ = {'state': 'file', 'fingerprint': '1' * 64, 'nrules': 2,
+                 'table': t}
+        none = {'state': 'file', 'fingerprint': '2' * 64, 'nrules': 0,
+                'table': 'none'}
+        said = {'a': ('UTF-8', (file_, b'rec')),
+                'b': ('UTF-8', (file_, b'rec')),
+                'c': ('ISO-8859-1', (file_, b'rec')),
+                'd': ('UTF-8', (none, None))}
+
+        def one(name):
+            if name == 'e':
+                return name, {'error': 'cannot be selected: no'}, None
+            codeset, coll = said[name]
+            return name, {'order': 'o', 'pairs': 'p', 'codeset': codeset,
+                          '_collate': copy.deepcopy(coll)}, None
+        data, screen = self.measured(
+            ['a', 'b', 'c', 'd', 'e'], one,
+            lambda job: {'locale': job[0], 'sha': job[1]})
+        part = data['collate']
+        sha = hashlib.sha256(b'rec').hexdigest()
+        self.assertEqual(part['checks'],
+                         {f'{t} ISO-8859-1': {'locale': 'c', 'sha': sha},
+                          f'{t} UTF-8': {'locale': 'a', 'sha': sha}})
+        self.assertEqual(part['locales'], {
+            'a': file_, 'b': file_, 'c': file_, 'd': none,
+            'e': {'state': 'not read', 'why': 'cannot be selected: no'}})
+        self.assertEqual(m.ct_unpack_all(base64.b64decode(part['tables'])),
+                         {t: b'rec'})
+        self.assertEqual(part['byteorder'], sys.byteorder)
+        self.assertNotIn('_collate', json.dumps(data['locales']))
+        self.assertIn('Checking the sort tables (LC_COLLATE) against glibc\'s '
+                      'strxfrm: one locale for each of the 2 distinct pairs of '
+                      'table and encoding...', flat(screen.getvalue()))
+
+    def test_the_checks_say_how_far_they_got(self):
+        """A line a tenth, each shown when written."""
+        names = [f'l{i:02}' for i in range(20)]
+
+        def one(name):
+            return name, {'order': 'o', 'pairs': 'p', 'codeset': 'UTF-8',
+                          '_collate': ({'state': 'file',
+                                        'fingerprint': '1' * 64, 'nrules': 2,
+                                        'table': hashlib.sha256(
+                                            name.encode()).hexdigest()},
+                                       name.encode())}, None
+        data, screen = self.measured(names, one,
+                                     lambda job: {'locale': job[0]})
+        lines = re.findall(r'  (\d+) of 20 sort table\(s\) done',
+                           screen.getvalue())
+        self.assertEqual([int(x) for x in lines], list(range(2, 20, 2)))
+        self.assertEqual(len(data['collate']['checks']), 20)
+        self.assertEqual(len(m.ct_unpack_all(base64.b64decode(
+            data['collate']['tables']))), 20)
+        self.assertEqual(screen.shown, screen.getvalue(), 'held back')
+        self.assertFalse(any(screen.held), 'a line was held back')
+
+    def ended(self, results, entries, checks=None, tables='x', why=None):
+        """(rc, what finished() wrote between the line that ends the
+        measurement, with its failed locales, and the one on PostgreSQL's
+        processes) over a measurement whose only other content is clean."""
+        part = {'byteorder': 'little', 'locales': entries,
+                'checks': checks or {}, 'tables': tables}
+        if why:
+            part['tables_why'] = why
+        out = {'locales': results, 'locales_listed': len(results),
+               'postgres_libc': dict(CLEAN_LIBC),
+               'ctype': {'locales': {}, 'tables': {}, 'wide': {},
+                         'bytes': {}},
+               'converter': NO_CONVERTER_LOCALES, **NO_ROUND_TRIP,
+               'collate': part}
+        screen = Screen()
+        with unittest.mock.patch.object(m.sys, 'stderr', screen):
+            rc = m.finished(out, 1, 10)
+        text = screen.getvalue()
+        start, end = text.index('MB written.\n'), text.index('PostgreSQL processes:')
+        return rc, text[start + len('MB written.\n'):end]
+
+    def test_the_run_says_what_was_not_read(self):
+        """By reason, the larger first, past LIST_LIMIT counted; a locale
+        whose measurement failed is named once, under that failure; the
+        exit status is 1."""
+        utf8 = {'codeset': 'UTF-8', 'order': 'o', 'pairs': 'p'}
+        names = [f'l{i:02}' for i in range(m.LIST_LIMIT + 2)]
+        results = {n: dict(utf8) for n in names + ['z']}
+        results['x'] = {'error': 'cannot be selected: no'}
+        entries = {n: {'state': 'not read', 'why': 'not a 64-bit Python'}
+                   for n in names}
+        entries['z'] = {'state': 'not read', 'why': 'newlocale did not load it'}
+        entries['x'] = {'state': 'not read', 'why': 'cannot be selected: no'}
+        rc, text = self.ended(results, entries)
+        self.assertEqual(rc, 1)
+        self.assertEqual(flat(text), flat(
+            'x: cannot be selected: no '
+            f'!! The sort tables (LC_COLLATE) of {m.LIST_LIMIT + 3} locale(s) '
+            'could not be read, so the comparison cannot compare them by '
+            'their tables: '
+            f'not a 64-bit Python: {m.LIST_LIMIT + 2}: '
+            + ', '.join(names[:m.LIST_LIMIT]) + ', and 2 more '
+            'newlocale did not load it: 1: z'))
+
+    def test_the_run_says_which_tables_failed(self):
+        """Each by the locale checked and how many more use the table and
+        encoding it was checked for, and one with no check at all by the
+        first locale that uses it; a table that fails under two encodings
+        is one table; the exit status is 1."""
+        t, u, v = 't' * 64, 'u' * 64, 'v' * 64
+        results = {n: {'codeset': cs, 'order': 'o', 'pairs': 'p'}
+                   for n, cs in (('de', 'UTF-8'), ('de2', 'UTF-8'),
+                                 ('de3', 'UTF-8'), ('de1', 'ISO-8859-1'),
+                                 ('fr', 'UTF-8'), ('it', 'UTF-8'))}
+        entries = {n: {'state': 'file', 'fingerprint': '1' * 64, 'nrules': 2,
+                       'table': {'fr': u, 'it': v}.get(n, t)}
+                   for n in results}
+        good = {'locale': 'de1', 'record_mismatch': 0, 'pair_mismatch': 0,
+                'pair_unchecked': 0}
+        checks = {f'{t} UTF-8': dict(good, locale='de', pair_mismatch=4),
+                  f'{t} ISO-8859-1': dict(good, record_mismatch=1),
+                  f'{u} UTF-8': {'locale': 'fr', 'error': 'boom'}}
+        rc, text = self.ended(results, entries, checks)
+        self.assertEqual(rc, 1)
+        self.assertEqual(flat(text), flat(
+            '!! 3 sort table(s) (LC_COLLATE) did not pass their check against '
+            'glibc\'s strxfrm, so the comparison cannot compare by their '
+            'tables the 6 locale(s) that use them: '
+            'de and 2 more: its table does not match glibc\'s strxfrm (0 '
+            'sequence(s) alone, 4 with others) '
+            'de1: its table does not match glibc\'s strxfrm (1 sequence(s) '
+            'alone, 0 with others) '
+            'fr: the check of its table failed: boom '
+            'it: its table was not checked'))
+
+    def test_the_run_says_the_tables_were_not_packed(self):
+        results = {'de': {'codeset': 'UTF-8', 'order': 'o', 'pairs': 'p'}}
+        entries = {'de': {'state': 'builtin'}}
+        rc, text = self.ended(results, entries, tables=None,
+                              why="ModuleNotFoundError('lzma')")
+        self.assertEqual(rc, 1)
+        self.assertEqual(flat(text), flat(
+            '!! The sort tables (LC_COLLATE) could not be packed into the '
+            'file (ModuleNotFoundError(\'lzma\')): the comparison can still '
+            'tell whether each one changed, but cannot name what changed in '
+            'it.'))
+        self.assertEqual(self.ended(results, entries), (0, ''))
+
+
+class SortTablesRead(Checks):
+    """A file of this format whose sort tables part is missing or malformed
+    is refused, and one of the format before is read without it."""
+
+    MALFORMED = 'what it says of the sort table of each locale is malformed'
+
+    @classmethod
+    def setUpClass(cls):
+        super(Checks, cls).setUpClass()
+        cls.texts[RHEL9] = trimmed(cls.texts[RHEL9], USE_NAMES)
+
+    def file_of(self, *edits, form=m.FORMAT):
+        return self.made(RHEL9, 'new', with_parts(form=form,
+                                                  use=measured_use(9)), *edits)
+
+    def loads(self, *edits, form=m.FORMAT):
+        with unittest.mock.patch.object(m.sys, 'stderr', io.StringIO()):
+            return m.load(self.file_of(*edits, form=form), m.corpus_digest())
+
+    def refused(self, phrase, *edits, form=m.FORMAT):
+        err = io.StringIO()
+        with unittest.mock.patch.object(m.sys, 'stderr', err), \
+                self.assertRaises(SystemExit) as stop:
+            m.load(self.file_of(*edits, form=form), m.corpus_digest())
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn(phrase, flat(err.getvalue()))
+
+    @staticmethod
+    def tables(d):
+        """Every locale read: a file, a C, one of no rules; one check."""
+        names = sorted(d['locales'])
+        for i, n in enumerate(names):
+            d['collate']['locales'][n] = (
+                {'state': 'builtin'} if i == 0 else
+                {'state': 'file', 'fingerprint': '0' * 64, 'nrules': 0,
+                 'table': 'none'} if i == 1 else
+                {'state': 'file', 'fingerprint': '1' * 64, 'nrules': 2,
+                 'table': 't' * 64})
+        d['collate']['checks'] = {f'{"t" * 64} UTF-8': {'locale': names[2]}}
+
+    def test_whole_files_load(self):
+        self.assertIn('collate', self.loads(self.tables)[0])
+        self.assertIn('collate', self.loads()[0])
+        self.assertNotIn('collate', self.loads(form='locale_order/6')[0])
+
+    def test_without_the_part_or_with_it_too_early(self):
+        self.refused('lacks a part its format holds',
+                     lambda d: d.pop('collate'))
+        self.refused('holds one it does not',
+                     lambda d: d.update(collate=copy.deepcopy(NO_TABLES)),
+                     form='locale_order/6')
+
+    def test_the_part_malformed(self):
+        def first(**k):
+            def edit(d):
+                e = d['collate']['locales'][sorted(d['locales'])[2]]
+                e.update(k)
+                for key in [x for x, v in k.items() if v is None]:
+                    e.pop(key)
+            return edit
+        for case, edit in (
+                ('byte order', lambda d: d['collate'].update(byteorder='pdp')),
+                ('a locale missing', lambda d: d['collate']['locales'].pop(
+                    sorted(d['locales'])[0])),
+                ('a state', first(state='read')),
+                ('a fingerprint', first(fingerprint='1' * 63)),
+                ('rules and no table', first(nrules=0)),
+                ('not read without why', lambda d: d['collate']['locales'][
+                    sorted(d['locales'])[2]].update(state='not read')),
+                ('tables neither packed nor why', lambda d: d['collate'].update(
+                    tables=None)),
+                ('a check without its locale', lambda d: d['collate'][
+                    'checks'].update(x={}))):
+            with self.subTest(case=case):
+                self.refused(self.MALFORMED, self.tables, edit)
+
+
+# A check of controls 2 to 4 that passed, as collate_check writes one.
+CHECK_PASSED = {'record_seqs': 3, 'record_mismatch': 0, 'record_examples': [],
+                'pairs': 2, 'triples': 1, 'pair_mismatch': 0, 'pair_skipped': 0,
+                'pair_unchecked': 0, 'pair_examples': []}
+
+
+def read_tables(entries=None, checks=None, byteorder='little',
+                elsewhere=()):
+    """An edit that gives a file of this format the sort table of each
+    locale as a machine that read them all writes it: C and POSIX built in,
+    every other locale a file of 4 rules whose fingerprint and table are
+    its name's, so two machines given the same edit hold the same tables;
+    each (table, encoding) a check that passed. ENTRIES replace a locale's
+    entry ({} keeps it), CHECKS replace or (None) drop the check of a
+    locale's own pair; a locale in ELSEWHERE has its check under another
+    encoding than its own, as for a table another locale uses."""
+    def edit(d):
+        part = d['collate']
+        part['byteorder'] = byteorder
+        part['checks'] = {}
+        for name, r in sorted(d['locales'].items()):
+            if name in ('C', 'POSIX'):
+                part['locales'][name] = {'state': 'builtin'}
+                continue
+            digest = hashlib.sha256(name.encode()).hexdigest()
+            e = {'state': 'file', 'fingerprint': digest, 'nrules': 4,
+                 'table': digest}
+            e = dict(e, **(entries or {}).get(name, {}))
+            e = {k: v for k, v in e.items() if v is not None}
+            part['locales'][name] = e
+            if e['state'] == 'file' and e['table'] != 'none':
+                key = f'{e["table"]} {r["codeset"]}'
+                if name in elsewhere:
+                    key = f'{e["table"]} ISO-8859-1'
+                part['checks'][key] = dict(CHECK_PASSED, locale=name)
+                if name in (checks or {}):
+                    if checks[name] is None:
+                        part['checks'].pop(key)
+                    else:
+                        part['checks'][key] = dict(checks[name], locale=name)
+    return edit
+
+
+def file_changed(e_name='de_DE.utf8'):
+    """An edit that makes step 11 find a change in a locale with nothing
+    moved: its probe pairs, sealed as measured() seals them (Reports)."""
+    def edit(d):
+        e = d['locales'][e_name]
+        blob = d['pair_data'][e['pairs']]
+        e['probes'] = e['probes'].replace('>', '<', 1)
+        e['pairs'] = hashlib.sha256(
+            e['probes'].encode('utf-8') + b'\n'
+            + zlib.decompress(base64.b64decode(blob))).hexdigest()
+        d['pair_data'][e['pairs']] = blob
+    return edit
+
+
+class SortTablesCompared(Checks):
+    """Each locale's verdict from its compiled sort table, beside step 11's
+    (table_verdicts), one route at a time, on RHEL9 and RHEL10 cut to FEW:
+    four UTF-8 locales step 11 finds unchanged, one of them (ja_JP.utf8)
+    only as far as measured, and C and POSIX.
+
+    Freezes: a locale whose table was not compared read as unchanged for
+    any text, or its step 11 caveats dropped; a pair with no control read
+    as one that passed; a changed table read as unchanged because step 11
+    saw nothing; a change step 11 finds dropped because the tables agree;
+    C and POSIX counted among the locales not compared; the three outputs
+    naming different locales."""
+
+    def outputs(self, old_edits=(), new_edits=(), form=(m.FORMAT, m.FORMAT),
+                charmaps=None, parts=None, old_parts=None):
+        """(report, summary, file) of RHEL9 -> RHEL10 with the edits, given
+        CHARMAPS (a folder) as both machines' charmaps and PARTS (with_parts'
+        arguments) to both machines' parts, OLD_PARTS instead to the old
+        machine's."""
+        tag = self.id().rsplit('.', 1)[-1]
+        old = self.made(RHEL9, 'old', with_parts(
+            form=form[0], **((parts if old_parts is None else old_parts) or {})),
+                        *old_edits)
+        new = self.made(RHEL10, 'new', with_parts(form=form[1], **(parts or {})),
+                        *new_edits)
+        summary = os.path.join(self.tmp, f'{tag}.sum')
+        chars = os.path.join(self.tmp, f'{tag}.tsv')
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.object(m.sys, 'argv', [
+                SCRIPT, '--compare', old, new, '--summary-to', summary,
+                '--characters-to', chars] + (
+                    ['--old-charmaps', charmaps, '--new-charmaps', charmaps]
+                    if charmaps else [])), \
+                contextlib.redirect_stdout(stdout), \
+                contextlib.redirect_stderr(stderr):
+            self.assertEqual(m.main(), 0)
+        self.assertEqual(stderr.getvalue(), '')
+        self.printed = stdout.getvalue()
+        with open(summary, encoding='utf-8') as f, \
+                open(chars, encoding='utf-8') as g:
+            return (parse_report(stdout.getvalue()), parse_summary(f.read()),
+                    parse_characters(g.read()))
+
+    def not_compared(self, outs):
+        """{why: [names]} the three outputs agree on, the file's rows giving
+        the unchanged ones."""
+        r, s, f = outs
+        self.assertEqual(s['not_compared'], r['not_compared'])
+        out = {why: names for why, (names, count) in r['not_compared'].items()}
+        for why, (names, count) in r['not_compared'].items():
+            self.assertEqual(len(names), count)
+        rows = {}
+        for names, group in f.items():
+            for row in group:
+                if 'not_compared' in row:
+                    rows.setdefault(row['not_compared'], []).extend(names)
+        unchanged = {why: [n for n in names if n not in by_name(r)]
+                     for why, names in out.items()}
+        self.assertEqual({w: sorted(n) for w, n in rows.items()},
+                         {w: n for w, n in unchanged.items() if n})
+        return out
+
+    def firm(self, outs, changed=()):
+        """The run compared every locale by its table: no locale not
+        compared, none unchanged only as far as measured, and the closing
+        that says only what is still not measured."""
+        r, s, f = outs
+        self.assertEqual(sorted(by_name(r)), sorted(changed))
+        self.assertEqual(sorted(s['changes']), sorted(changed))
+        self.assertEqual(r['not_compared'], {})
+        self.assertEqual(r['partly'], {})
+        self.assertEqual(s['partly'], [])
+        self.assertEqual(r['totals']['partly'], 0)
+        self.assertEqual(r['closing'], m.CLOSING_TABLES)
+        self.assertEqual(s['closing'], m.CLOSING_TABLES)
+        self.assertEqual(f.closing, m.CLOSING_TABLES)
+
+    def test_the_same_tables_decide_for_every_text(self):
+        outs = self.outputs([read_tables()], [read_tables()])
+        self.firm(outs)
+        r, s, f = outs
+        self.assertEqual(r['unchanged'], 6)
+        # No locale needs its charmaps checked, and the line says why.
+        self.assertIn(('charmaps', {'checked': 0, 'by_table': 4}),
+                      r['checks'])
+        self.assertIn(('charmaps', {'checked': 0, 'by_table': 4}),
+                      s['checks'])
+
+    def test_the_character_sets_where_the_tables_decide_some(self):
+        """Given charmaps, the check runs on the locale its table did not
+        find unchanged, and the line counts the three the tables decided."""
+        root = os.path.join(self.tmp, 'charmaps-of-both')
+        os.mkdir(root)
+        with open(os.path.join(root, 'UTF-8'), 'w', encoding='latin-1') as f:
+            f.write(CharmapsCheckedInTheComparison.UTF8.format(extra=''))
+        other = {'de_DE.utf8': {'fingerprint': 'f' * 64}}
+        r, s, f = self.outputs([read_tables()], [read_tables(other)],
+                               charmaps=root)
+        self.assertEqual(set(by_name(r)), {'de_DE.utf8'})
+        for out in (r['checks'], s['checks'], f.checks):
+            self.assertIn(('charmaps', {'checked': 1, 'by_table': 3}), out)
+        self.assertEqual(r['charmaps_unchecked'], [])
+
+    def test_no_locale_decided_and_none_to_check(self):
+        """Every locale but C and POSIX unmeasured and not compared: no
+        line says the check was not needed, and the charmaps not given are
+        said as such."""
+        unread = {n: {'state': 'not read', 'why': 'no file',
+                      'fingerprint': None, 'nrules': None, 'table': None}
+                  for n in ('de_DE.utf8', 'en_US.utf8', 'ja_JP.utf8',
+                            'sv_SE.utf8')}
+
+        def unmeasured(d):
+            for n in unread:
+                d['locales'][n] = {'error': 'measuring failed: MemoryError()',
+                                   'codeset': 'UTF-8'}
+        r, s, f = self.outputs([read_tables(unread), unmeasured],
+                               [read_tables()])
+        self.assertEqual(sorted(r['unmeasured']), sorted(unread))
+        self.assertFalse([d for kind, d in r['checks']
+                          if kind == 'charmaps' and 'by_table' in d])
+        self.assertEqual([x[::2] for x in r['charmaps_unchecked']],
+                         [('either machine', None)])
+
+    def test_tables_not_packed_still_decide(self):
+        """The packed records are what names a change (TableNaming, and
+        SortTablesNamed); whether a table changed is its fingerprint, in the
+        file either way."""
+        def unpacked(d):
+            d['collate'].update(tables=None, tables_why='no lzma')
+        self.firm(self.outputs([read_tables(), unpacked],
+                               [read_tables(), unpacked]))
+
+    def test_no_rules_beside_a_locale_not_compared(self):
+        """Locales of 0 rules unchanged beside one not compared: they
+        compare bytes and read no table, so the closing is the one on
+        contractions alone, with no sentence on the code (review round 4)."""
+        none = {n: {'nrules': 0, 'table': 'none'}
+                for n in ('en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8')}
+        checks = {'de_DE.utf8': {'error': 'MemoryError()'}}
+        r, s, f = self.outputs([read_tables(none, checks)],
+                               [read_tables(none, checks)])
+        for closing in (r['closing'], s['closing'], f.closing):
+            self.assertEqual(closing, m.CLOSING)
+
+    def test_no_rules_on_either_machine(self):
+        """A file of 0 rules compares bytes, like C, and needs no check:
+        the guard read the rule count from the file itself."""
+        none = {'de_DE.utf8': {'nrules': 0, 'table': 'none'}}
+        self.firm(self.outputs([read_tables(none)], [read_tables(none)]))
+
+    def test_a_changed_table_step_11_did_not_see(self):
+        other = {'de_DE.utf8': {'fingerprint': 'f' * 64}}
+        r, s, f = self.outputs([read_tables()], [read_tables(other)])
+        self.assertEqual(set(by_name(r)), {'de_DE.utf8'})
+        change = by_name(r)['de_DE.utf8']
+        self.assertEqual(change['table'],
+                         (None, 'step 11 saw no change in the strings it '
+                                'measured'))
+        self.assertIsNone(change['moved'])
+        # The same digest under other items: the same record, which these
+        # files do not even pack (SortTablesNamed has the other routes).
+        self.assertEqual(change['named']['unnamed'], 'record')
+        self.assertEqual(s['changes']['de_DE.utf8']['brief'],
+                         'its compiled sort table changed in bytes its record '
+                         'of the sequences does not keep, so none is named; '
+                         'step 11 saw no change in the strings it measured')
+        self.assertEqual([row['table'] for row in f[('de_DE.utf8',)]
+                          if row['finding'] == 'sort table changed'],
+                         [change['table']])
+        self.assertEqual(r['totals']['changed'], 1)
+        self.assertEqual(r['totals']['partly'], 0)
+        self.assertEqual(r['partly'], {})
+        # The charmaps were not given: what that leaves is the changed one,
+        # whose table does not decide it unchanged.
+        self.assertEqual([x[::2] for x in r['charmaps_unchecked']],
+                         [('either machine', 'unless the same table')])
+        self.assertEqual(s['charmaps_unchecked'], r['charmaps_unchecked'])
+        self.assertEqual(r['closing'], m.CLOSING_TABLES)
+
+    def test_sort_rules_on_one_machine_only(self):
+        for side in ('old', 'new'):
+            with self.subTest(side=side):
+                none = read_tables({'de_DE.utf8': {'nrules': 0,
+                                                   'table': 'none'}})
+                edits = ([none], [read_tables()])
+                r, s, f = self.outputs(*(edits if side == 'old'
+                                         else edits[::-1]))
+                self.assertEqual(by_name(r)['de_DE.utf8']['table'],
+                                 ('sort rules on one machine only',
+                                  'step 11 saw no change in the strings it '
+                                  'measured'))
+                self.assertEqual(set(s['changes']), {'de_DE.utf8'})
+
+    def test_step_11_finds_a_change_the_tables_do_not(self):
+        outs = self.outputs([read_tables()], [read_tables(),
+                                              file_changed()])
+        r, s, f = outs
+        self.assertEqual(set(by_name(r)), {'de_DE.utf8'})
+        self.assertIsNone(by_name(r)['de_DE.utf8']['table'])
+        self.assertEqual(r['disagree'], ['de_DE.utf8'])
+        self.assertEqual(s['disagree'], ['de_DE.utf8'])
+        self.assertEqual(f.disagree, ['de_DE.utf8'])
+        # The same table proves nothing on these machines: every other
+        # locale but C and POSIX keeps step 11's verdict.
+        self.assertEqual(self.not_compared(outs), {
+            m.TABLE_CODE_DIFFERS: ['en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8']})
+        self.assertEqual(r['totals']['partly'], 3)
+        self.assertEqual(r['partly'], {'ja_JP.utf8': 3})
+        self.assertEqual(r['closing'], m.CLOSING)
+
+    def test_only_c_and_posix_unchanged(self):
+        """Every locale with a sort table changed on the new machine (a
+        machine with only the minimal language pack holds C, POSIX and
+        C.utf8): the two left unchanged compare bytes, and the closing says
+        so rather than that they have a sort table."""
+        changed = {n: {'fingerprint': 'f' * 64}
+                   for n in ('de_DE.utf8', 'en_US.utf8', 'ja_JP.utf8',
+                             'sv_SE.utf8')}
+        outs = self.outputs([read_tables()], [read_tables(changed)])
+        self.firm(outs, changed=list(changed))
+        self.assertEqual(outs[0]['unchanged'], 2)
+        self.assertIn('or compares bytes on both', m.CLOSING_TABLES)
+
+    def test_step_11_could_not_measure_a_locale_whose_table_is_the_same(self):
+        def unmeasured(d):
+            d['locales']['de_DE.utf8'] = {
+                'error': 'measuring failed: MemoryError()', 'codeset': 'UTF-8'}
+        r, s, f = self.outputs([read_tables(), unmeasured], [read_tables()])
+        self.firm((r, s, f))
+        self.assertEqual(r['unmeasured'], {})
+        self.assertEqual(r['tables_only'], ['de_DE.utf8'])
+        self.assertEqual(s['tables_only'], ['de_DE.utf8'])
+        self.assertEqual(f.tables_only, ['de_DE.utf8'])
+
+    def assert_not_compared(self, outs, why, names):
+        """Every name not compared, for why alone, each keeping step 11's
+        verdict: unchanged only as far as measured, ja_JP.utf8 with its
+        pairs not measured at every level, and the closing on contractions,
+        which also says the code assumption while another locale of FEW is
+        unchanged by its table alone."""
+        r, s, f = outs
+        self.assertEqual(self.not_compared(outs), {why: names})
+        self.assertEqual(by_name(r), {})
+        self.assertEqual(r['totals']['partly'], len(names))
+        self.assertEqual(r['partly'], ({'ja_JP.utf8': 3}
+                                       if 'ja_JP.utf8' in names else {}))
+        closing = m.CLOSING_MIXED if len(names) < len(FEW) - 2 else m.CLOSING
+        self.assertEqual(r['closing'], closing)
+        self.assertEqual(s['closing'], closing)
+        self.assertEqual(f.closing, closing)
+
+    def test_a_table_not_read_on_one_machine(self):
+        unread = {'de_DE.utf8': {'state': 'not read', 'why': 'no file',
+                                 'fingerprint': None, 'nrules': None,
+                                 'table': None}}
+        for side in ('old', 'new'):
+            with self.subTest(side=side):
+                edits = ([read_tables(unread)], [read_tables()])
+                outs = self.outputs(*(edits if side == 'old' else edits[::-1]))
+                self.assert_not_compared(
+                    outs, f'not read on the {side} machine: no file',
+                    ['de_DE.utf8'])
+        with self.subTest(side='old, the new one not checked'):
+            self.assert_not_compared(
+                self.outputs([read_tables(unread)],
+                             [read_tables(checks={'de_DE.utf8': None})]),
+                'not read on the old machine: no file; on the new machine, '
+                'its table was not checked', ['de_DE.utf8'])
+        with self.subTest(side='both'):
+            other = {'de_DE.utf8': dict(unread['de_DE.utf8'], why='gone')}
+            self.assert_not_compared(
+                self.outputs([read_tables(unread)], [read_tables(other)]),
+                'not read on the old machine: no file; not read on the new '
+                'machine: gone', ['de_DE.utf8'])
+
+    def test_a_check_that_failed_or_never_ran(self):
+        bad = dict(CHECK_PASSED, record_mismatch=2)
+        for case, check, why in (
+                ('failed', bad, "its table does not match glibc's strxfrm (2 "
+                                "sequence(s) alone, 0 with others)"),
+                ('error', {'error': 'boom'}, 'the check of its table failed: '
+                                             'boom'),
+                ('unchecked', dict(CHECK_PASSED, pair_unchecked=1),
+                 "1 sequence(s) of its table could not be checked beside "
+                 "others against glibc's strxfrm"),
+                ('absent', None, 'its table was not checked')):
+            for side in ('old', 'new'):
+                with self.subTest(case=case, side=side):
+                    edits = ([read_tables(checks={'ja_JP.utf8': check})],
+                             [read_tables()])
+                    outs = self.outputs(*(edits if side == 'old'
+                                          else edits[::-1]))
+                    self.assert_not_compared(
+                        outs, f'on the {side} machine, {why}', ['ja_JP.utf8'])
+        with self.subTest(case='both'):
+            self.assert_not_compared(
+                self.outputs([read_tables(checks={'ja_JP.utf8': bad})],
+                             [read_tables(checks={'ja_JP.utf8': None})]),
+                "on the old machine, its table does not match glibc's strxfrm "
+                "(2 sequence(s) alone, 0 with others); on the new machine, its "
+                "table was not checked", ['ja_JP.utf8'])
+        with self.subTest(case='the charmaps sentence spares none of them'):
+            outs = self.outputs([read_tables(checks={'ja_JP.utf8': bad})],
+                                [read_tables()])
+            self.assertEqual([x[::2] for x in outs[0]['charmaps_unchecked']],
+                             [('either machine', 'unless the same table')])
+            self.assertIn('ja_JP.utf8', [n for names in self.not_compared(
+                outs).values() for n in names])
+        with self.subTest(case='a check of another encoding'):
+            self.assert_not_compared(
+                self.outputs([read_tables(elsewhere=('ja_JP.utf8',))],
+                             [read_tables()]),
+                'on the old machine, its table was not checked',
+                ['ja_JP.utf8'])
+
+    def test_the_same_items_read_as_two_tables(self):
+        other = {'de_DE.utf8': {'table': 'e' * 64}}
+        self.assert_not_compared(
+            self.outputs([read_tables()], [read_tables(other)]),
+            'the same compiled items gave two different readings of the '
+            'table', ['de_DE.utf8'])
+        with self.subTest(case='and a control that failed'):
+            self.assert_not_compared(
+                self.outputs([read_tables(checks={'de_DE.utf8': None})],
+                             [read_tables(other)]),
+                'the same compiled items gave two different readings of the '
+                'table; on the old machine, its table was not checked',
+                ['de_DE.utf8'])
+
+    def test_machines_of_another_byte_order(self):
+        self.assert_not_compared(
+            self.outputs([read_tables()], [read_tables(byteorder='big')]),
+            'the two machines store numbers in a different byte order '
+            '(little-endian, then big-endian), so their compiled tables '
+            'cannot be compared byte for byte',
+            ['de_DE.utf8', 'en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8'])
+
+    def test_a_file_of_the_format_before(self):
+        """C and POSIX are glibc's own locale on any machine, compared by
+        that, never counted among the locales not compared."""
+        for side, form in (('OLD', ('locale_order/6', m.FORMAT)),
+                           ('NEW', (m.FORMAT, 'locale_order/6'))):
+            with self.subTest(side=side):
+                tables = [read_tables()]
+                outs = self.outputs(*(([], tables) if side == 'OLD'
+                                      else (tables, [])), form=form)
+                self.assert_not_compared(
+                    outs, f'the {side} file was {m.TABLE_EARLIER} '
+                          f'(locale_order/6); run --extract again on the '
+                          f'{side.lower()} machine',
+                    ['de_DE.utf8', 'en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8'])
+                # No table decided a locale: the charmaps sentence spares none.
+                self.assertEqual([x[::2] for x in outs[0]['charmaps_unchecked']],
+                                 [('either machine', None)])
+
+    def test_two_not_compared_beside_a_firm_one(self):
+        """Two reasons, each with its own names, the largest first; the
+        totals count what was not compared, never the firm ones."""
+        # The larger reason sorts after the other by its words.
+        unread = {'de_DE.utf8': {'state': 'not read', 'why': 'no file',
+                                 'fingerprint': None, 'nrules': None,
+                                 'table': None}}
+        outs = self.outputs([read_tables(unread, {'ja_JP.utf8': None,
+                                                  'sv_SE.utf8': None})],
+                            [read_tables()])
+        r, s, f = outs
+        self.assertEqual(self.not_compared(outs), {
+            'not read on the old machine: no file': ['de_DE.utf8'],
+            'on the old machine, its table was not checked': ['ja_JP.utf8',
+                                                              'sv_SE.utf8']})
+        for out in (r, s):
+            self.assertEqual(list(out['not_compared']), [
+                'on the old machine, its table was not checked',
+                'not read on the old machine: no file'])
+        self.assertEqual(r['totals']['partly'], 3)
+        self.assertEqual(r['totals']['unchanged'], 6)
+
+    def test_not_compared_and_changed_by_step_11(self):
+        """Step 11's change stands, with no row that reads it as unchanged;
+        and, its table not read, whether the two machines compare with the
+        same code is not known, so no other locale is unchanged by its
+        table alone (TABLE_CODE_OPEN)."""
+        unread = {'de_DE.utf8': {'state': 'not read', 'why': 'no file',
+                                 'fingerprint': None, 'nrules': None,
+                                 'table': None}}
+        outs = self.outputs([read_tables(unread)],
+                            [read_tables(), file_changed()])
+        r, s, f = outs
+        self.assertEqual(set(by_name(r)), {'de_DE.utf8'})
+        self.assertIsNone(by_name(r)['de_DE.utf8']['table'])
+        self.assertEqual(self.not_compared(outs), {
+            'not read on the old machine: no file': ['de_DE.utf8'],
+            m.TABLE_CODE_OPEN: ['en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8']})
+        self.assertEqual(r['totals']['partly'], 3)
+        self.assertEqual(r['disagree'], [])
+        self.assertEqual(r['closing'], m.CLOSING)
+
+
+def table_record(levels):
+    """A record as ct_record writes one, of {sequence: [weights of each
+    level]}, every level forward, or {sequence: (rule vector, weights)}:
+    small tables that the tests can read."""
+    nrules = len(weights_of(next(iter(levels.values()))))
+    out = bytearray()
+    m.ct_varint(out, nrules)
+    m.ct_varint(out, nrules)
+    out += bytes([m.CT_SORT_FORWARD]) * nrules
+    m.ct_varint(out, len(levels))
+    for s, v in sorted(levels.items()):
+        rv, weights = v if isinstance(v, tuple) else (
+            bytes([m.CT_SORT_FORWARD]) * nrules, v)
+        m.ct_varint(out, len(s))
+        out += s + rv
+        for level in weights:
+            m.ct_varint(out, len(level))
+            for x in level:
+                m.ct_varint(out, x)
+    return bytes(out)
+
+
+def packed_tables(tables):
+    """An edit, after read_tables(), that gives each locale in TABLES the
+    record of its {sequence: weights} with a check that passed, and packs
+    them."""
+    def edit(d):
+        part, packed = d['collate'], {}
+        for name, levels in tables.items():
+            rec = table_record(levels)
+            digest = hashlib.sha256(rec).hexdigest()
+            part['locales'][name] = {
+                'state': 'file',
+                'nrules': len(weights_of(next(iter(levels.values())))),
+                'fingerprint': hashlib.sha256(b'items ' + rec).hexdigest(),
+                'table': digest}
+            part['checks'][f'{digest} UTF-8'] = dict(CHECK_PASSED,
+                                                     locale=name)
+            packed[digest] = rec
+        part['tables'] = m.base64.b64encode(m.ct_pack_all(
+            packed)).decode('ascii')
+    return edit
+
+
+def weights_of(v):
+    return v[1] if isinstance(v, tuple) else v
+
+
+def dict_of(*ds):
+    return {k: v for d in ds for k, v in d.items()}
+
+
+def one_level(order):
+    """{sequence: [[weight]]} of sequences in the order given."""
+    return {s: [[i + 1]] for i, s in enumerate(order)}
+
+
+class OtherEncodingByTheTables(Checks):
+    """The line on a database of another encoding, where the sort tables
+    decide: RHEL9 and RHEL10 cut to FEW and two locales of encodings
+    PostgreSQL does not know, ka_GE (GEORGIAN-PS) and kk_KZ (PT154), whose
+    order step 11 finds unchanged.
+
+    Freezes: a locale whose table is the same on both machines said to
+    have an order not known there, or one whose table changed said to have
+    the same; the line's list of locales changing with the tables; the
+    locales of the same table left unnamed where only some are."""
+
+    NAMES = FEW + ('ka_GE', 'kk_KZ')
+    USE = {'ka_GE': use_of('one byte', 'GEORGIAN-PS'),
+           'kk_KZ': use_of('one byte', 'PT154')}
+
+    def outputs(self, old_edits=(), new_edits=(), converter=None,
+                old_use=None):
+        """SortTablesCompared.outputs, the two locales used as the
+        machines measured them (OLD_USE instead on the old one), and
+        CONVERTER in place on both."""
+        parts = {'use': self.USE, 'converter': converter}
+        return SortTablesCompared.outputs(
+            self, old_edits, new_edits, parts=parts,
+            old_parts=None if old_use is None else dict(parts, use=old_use))
+
+    @classmethod
+    def setUpClass(cls):
+        super(Checks, cls).setUpClass()
+        for path in (RHEL9, RHEL10):
+            cls.texts[path] = trimmed(cls.texts[path], cls.NAMES)
+
+    def line(self, outs):
+        """The line's data, the same in the report and the summary."""
+        r, s, f = outs
+        got = [d for kind, d in r['checks'] if kind == 'bytes']
+        self.assertEqual(got, [d for kind, d in s['checks'] if kind == 'bytes'])
+        self.assertEqual(len(got), 1, r['checks'])
+        self.assertEqual(got[0]['other encoding'],
+                         {'ka_GE': 'GEORGIAN-PS', 'kk_KZ': 'PT154'})
+        return got[0]
+
+    def test_every_table_the_same(self):
+        self.assertEqual(self.line(self.outputs([read_tables()],
+                                                [read_tables()]))['same table'],
+                         ['ka_GE', 'kk_KZ'])
+
+    def test_one_table_changed(self):
+        other = {'kk_KZ': {'fingerprint': 'f' * 64}}
+        outs = self.outputs([read_tables()], [read_tables(other)])
+        self.assertEqual(sorted(by_name(outs[0])), ['kk_KZ'])
+        self.assertEqual(self.line(outs)['same table'], ['ka_GE'])
+
+    def test_no_table_compared(self):
+        self.assertNotIn('same table', self.line(self.outputs()))
+
+    def test_a_check_failed_beside_the_same_tables(self):
+        """One locale not compared, its control failed on both machines:
+        the others are unchanged by their tables, and the closing says what
+        that assumes beside what the one not compared leaves unseen."""
+        checks = {'de_DE.utf8': {'error': 'MemoryError()'}}
+        r, s, f = self.outputs([read_tables(checks=checks)],
+                               [read_tables(checks=checks)])
+        self.assertEqual(self.line((r, s, f))['same table'],
+                         ['ka_GE', 'kk_KZ'])
+        for closing in (r['closing'], s['closing'], f.closing):
+            self.assertEqual(closing, m.CLOSING_MIXED)
+
+    def test_the_names_of_the_same_table_shown_as_the_others(self):
+        """The names after "The same sort table on both machines" go through
+        shown(), as every other name of the line (review, verification
+        round): a name shown otherwise, here ka_GE quoted, is quoted there
+        too."""
+        real = m.shown
+        quoted = lambda x: '"ka_GE"' if x == 'ka_GE' else real(x)
+        other = {'kk_KZ': {'fingerprint': 'f' * 64}}
+        with unittest.mock.patch.object(m, 'shown', quoted):
+            self.outputs([read_tables()], [read_tables(other)])
+        self.assertIn('The same sort table on both machines: "ka_GE".',
+                      flat(self.printed))
+
+    def test_a_locale_only_on_the_new_machine(self):
+        """kk_KZ on the new machine only: no table of the old one, so its
+        order there is not known (review round 1, A3)."""
+        whole = self.texts[RHEL9]
+        self.addCleanup(self.texts.__setitem__, RHEL9, whole)
+        self.texts[RHEL9] = trimmed(whole, [x for x in self.NAMES
+                                            if x != 'kk_KZ'])
+        r, s, f = self.outputs([read_tables()], [read_tables()],
+                               old_use={'ka_GE': self.USE['ka_GE']})
+        self.assertEqual(self.line((r, s, f))['same table'], ['ka_GE'])
+
+    def test_the_same_tables_and_no_converter_checked(self):
+        """Neither machine says whether upper() gives an error there: the
+        line says so after the locales of the same table."""
+        converter = {cs: ['not checked', ['opens', None], name, 'a test', None]
+                     for cs, name in (('GEORGIAN-PS', 'ka_GE'),
+                                      ('PT154', 'kk_KZ'))}
+        got = self.line(self.outputs([read_tables()], [read_tables()],
+                                     converter=converter))
+        self.assertEqual(got, {'other encoding': got['other encoding'],
+                               'same table': ['ka_GE', 'kk_KZ']})
+        self.assertIn(NOT_TOLD, flat(self.printed))
+
+
+class SortTablesNamed(Checks):
+    """What the packed tables name inside a locale whose six items differ
+    (TableNaming, table_naming), one route at a time, on RHEL9 -> RHEL10 cut
+    to FEW, de_DE.utf8 the locale whose table changed.
+
+    Freezes: the sequences marked, those on one machine only and those that
+    compare differently against a marked one, each counted and named in the
+    report, the summary and the characters file, alike; the first
+    LIST_LIMIT names "among them" and every one in the file; a table that
+    cannot be named read as one where nothing changed, or a record that did
+    not pass its check used to name; the locale's verdict moved by what
+    can or cannot be named; a record that keeps every order, or one that
+    could not be read, beside a change step 11 found leaving the other
+    locales unchanged by their table alone."""
+
+    outputs = SortTablesCompared.outputs
+    # c, d swapped behind e, f: the longest run kept is a, b, e, f, so c
+    # and d are marked, and e and f sort the other way against them; b is
+    # marked by its rule, g by its number of weights; 'ch' only on the old
+    # machine, z and a byte UTF-8 has no character for only on the new one.
+    OLD = dict_of(one_level([b'a', b'b', b'c', b'd', b'e', b'f', b'g']),
+                  {b'ch': [[8]]})
+    NEW = dict_of(one_level([b'a', b'b', b'e', b'f', b'c', b'd', b'g']),
+                  {b'b': (bytes([m.CT_SORT_BACKWARD]), [[2]]),
+                   b'g': [[7, 1]], b'\x80': [[8]], b'z': [[9]]})
+
+    def named(self, old, new, old_edits=(), new_edits=()):
+        """(named, report, summary, file) of de_DE.utf8, its tables OLD and
+        NEW ({sequence: weights}) and the edits after them, checked to say
+        the same in the three outputs and to stay changed."""
+        r, s, f = self.outputs(
+            [read_tables(), packed_tables({'de_DE.utf8': old})] + list(old_edits),
+            [read_tables(), packed_tables({'de_DE.utf8': new})] + list(new_edits))
+        self.assertEqual(sorted(by_name(r)), ['de_DE.utf8'])
+        self.assertEqual(sorted(s['changes']), ['de_DE.utf8'])
+        change = by_name(r)['de_DE.utf8']
+        brief = parse_brief(s['changes']['de_DE.utf8']['brief'])
+        self.assertEqual(brief['named'], change['named'])
+        self.assertEqual(brief['table'], change['table'])
+        heads = [row for row in f[('de_DE.utf8',)] if 'table' in row]
+        rows = [row for row in f[('de_DE.utf8',)] if 'kind' in row]
+        self.assertEqual([h['table'] for h in heads], [change['table']])
+        named = change['named']
+        self.assertIsNotNone(named)
+        self.assertEqual(heads[0]['named'],
+                         dict(named, items=[], more=0) if named else named)
+        if named and named['counts']:
+            # The file holds every name; the report the first LIST_LIMIT of
+            # them, each as the file spells it once its glyph is dropped.
+            tokens = [re.sub(r'^\S+ \((U\+[0-9A-F]+)\)$', r'\1', x)
+                      for x in named['items']]
+            self.assertEqual([x['chars'] for x in rows][:m.LIST_LIMIT], tokens)
+            self.assertEqual(len(rows), len(named['items']) + named['more'])
+            self.assertLessEqual(len(named['items']), m.LIST_LIMIT)
+            # Each kind's count is the sequences of its rows, a run counted
+            # whole.
+            counts = collections.Counter()
+            for x in rows:
+                run = re.fullmatch(r'U\+([0-9A-F]+)\.\.U\+([0-9A-F]+)',
+                                   x['chars'])
+                counts[x['kind']] += (int(run[2], 16) - int(run[1], 16) + 1
+                                      if run else 1)
+            self.assertEqual({k: v for k, v in named['counts'].items() if v},
+                             dict(counts))
+        else:
+            self.assertEqual(rows, [])
+        self.assertEqual(r['totals']['changed'], 1)
+        return named, r, s, f
+
+    def test_the_marked_the_one_sided_and_those_that_sort_the_other_way(self):
+        named, r, s, f = self.named(self.OLD, self.NEW)
+        self.assertEqual(named['counts'],
+                         {'marked': 4, 'new': 2, 'old': 1, 'flip': 2})
+        self.assertEqual(named['items'], [
+            'U+0062..U+0064', 'g (U+0067)', 'U+0063 U+0068', 'z (U+007A)',
+            'bytes 80', 'U+0065..U+0066'])
+        self.assertEqual(named['more'], 0)
+        self.assertEqual([(x['chars'], x['kind']) for x in f[('de_DE.utf8',)]
+                          if 'kind' in x],
+                         [('U+0062..U+0064', 'marked'), ('U+0067', 'marked'),
+                          ('U+0063 U+0068', 'old'), ('U+007A', 'new'),
+                          ('bytes 80', 'new'), ('U+0065..U+0066', 'flip')])
+        # A name in bytes and one of several characters: the three
+        # outputs say how to read both.
+        for note in (r['others_note'], s['others_note'], f.others_note):
+            self.assertEqual(note, m.OTHER_STRINGS + ' '
+                             + m.SEVERAL_CHARACTERS)
+        self.assertEqual(by_name(r)['de_DE.utf8']['table'],
+                         (None, 'step 11 saw no change in the strings it '
+                                'measured'))
+
+    def test_named_from_tables_packed_without_lzma(self):
+        """Both machines' Python without lzma: the tables are packed with
+        zlib and the comparison, without lzma either, names the same as
+        from xz."""
+        old = one_level([b'a', b'c', b'e', b'g'])
+        new = one_level([b'a', b'e', b'c', b'g'])
+        xz = self.named(old, new)[0]
+        with unittest.mock.patch.dict(sys.modules, {'lzma': None}):
+            self.assertEqual(self.named(old, new)[0], xz)
+
+    def test_a_name_of_several_characters_alone(self):
+        """A string of several characters only in the old table and no
+        name in bytes: the three outputs say how to read it, and nothing
+        on bytes."""
+        named, r, s, f = self.named(one_level([b'a', b'c', b'ch', b'd']),
+                                    one_level([b'a', b'c', b'd']))
+        self.assertIn('U+0063 U+0068', named['items'])
+        for note in (r['others_note'], s['others_note'], f.others_note):
+            self.assertEqual(note, m.SEVERAL_CHARACTERS)
+
+    def test_one_character_alone_by_its_glyph(self):
+        """Characters that are no run: by their glyph in the report, by
+        their code point in the file; no bytes, nothing to explain."""
+        old = one_level([b'a', b'c', b'e', b'g'])
+        new = one_level([b'a', b'e', b'c', b'g'])
+        named, r, s, f = self.named(old, new)
+        self.assertEqual(named['counts'],
+                         {'marked': 1, 'new': 0, 'old': 0, 'flip': 1})
+        self.assertEqual(len(named['items']), 2)
+        self.assertTrue(all(re.fullmatch(r'\S \(U\+00(63|65)\)', x)
+                            for x in named['items']), named['items'])
+        self.assertIsNone(r['others_note'])
+
+    def test_more_than_the_report_lists(self):
+        """Thirty sequences in the reverse order: the report names the first
+        LIST_LIMIT and how many more, the file every one."""
+        seqs = [bytes([0x41 + 2 * i]) for i in range(30)]
+        named, r, s, f = self.named(one_level(seqs), one_level(seqs[::-1]))
+        self.assertEqual(sum(named['counts'].values()), 30)
+        self.assertEqual(len(named['items']), m.LIST_LIMIT)
+        self.assertEqual(named['more'], 30 - m.LIST_LIMIT)
+
+    def test_a_name_of_several_characters_stays_on_one_line(self):
+        """The report never breaks a line inside a name: cut, 'U+0061' and
+        'U+0041' at the ends of two lines read as two names."""
+        seqs = [b'a' + bytes([0x41 + i]) for i in range(20)]
+        named, r, s, f = self.named(one_level(seqs), one_level(seqs[::-1]))
+        several = [x for x in named['items'] if ' ' in x]
+        self.assertEqual(len(several), m.LIST_LIMIT)
+        lines = self.printed.split('\n')
+        self.assertEqual([x for x in several
+                          if not any(x in line for line in lines)], [])
+
+    def test_named_beside_what_step_11_found(self):
+        """The route of every real case: step 11 found the change too, and
+        the table's names stand beside its lines."""
+        named, r, s, f = self.named(self.OLD, self.NEW, [], [file_changed()])
+        self.assertEqual(named['counts'],
+                         {'marked': 4, 'new': 2, 'old': 1, 'flip': 2})
+        change = by_name(r)['de_DE.utf8']
+        self.assertEqual(change['table'], (None, None))
+        # Step 11's own lines under the table's.
+        self.assertIsNotNone(change['probes'])
+        self.assertEqual(r['disagree'], [])
+
+    def test_renumbered_names_nothing_and_stays_changed(self):
+        old = one_level([b'a', b'b', b'c'])
+        new = {s: [[2 * w[0][0]]] for s, w in old.items()}
+        named, r, s, f = self.named(old, new)
+        self.assertEqual(named['unnamed'], 'numbering')
+
+    def test_the_same_record_under_another_digest(self):
+        """A digest hashes bytes of the table the record does not keep: the
+        same record under two digests is the same record, not a
+        renumbering."""
+        rec = table_record(self.OLD)
+
+        def elsewhere(d):
+            part = d['collate']
+            part['locales']['de_DE.utf8'].update(table='e' * 64,
+                                                 fingerprint='f' * 64)
+            part['checks'] = {f'{"e" * 64} UTF-8': dict(
+                CHECK_PASSED, locale='de_DE.utf8')}
+            part['tables'] = m.base64.b64encode(m.ct_pack_all(
+                {'e' * 64: rec})).decode('ascii')
+        named, r, s, f = self.named(self.OLD, self.OLD, [], [elsewhere])
+        self.assertEqual(named['unnamed'], 'record')
+
+    def test_the_same_record_with_a_check_that_failed(self):
+        """The same record does not spare the controls: a failed one is
+        said, and nothing is taken from that record."""
+        digest = hashlib.sha256(table_record(self.OLD)).hexdigest()
+
+        def other(d):
+            d['collate']['locales']['de_DE.utf8']['fingerprint'] = 'f' * 64
+
+        def failed(d):
+            d['collate']['checks'][f'{digest} UTF-8']['record_mismatch'] = 5
+        named, r, s, f = self.named(self.OLD, self.OLD, [failed], [other])
+        self.assertTrue(named['unnamed'].startswith(
+            'on the old machine, its table does not match glibc\'s '
+            'strxfrm'), named['unnamed'])
+
+    def test_an_order_kept_beside_a_change_step_11_found(self):
+        """A record that keeps every order (renumbered, or the same record
+        under other items) and a change step 11 measured say the two
+        machines compare with different code, as the same table does: the
+        locale is listed among those, and no other is unchanged by its
+        table alone."""
+        old = one_level([b'a', b'b', b'c'])
+        renumbered = {s: [[2 * w[0][0]]] for s, w in old.items()}
+
+        def other(d):
+            d['collate']['locales']['de_DE.utf8']['fingerprint'] = 'f' * 64
+        for case, new, edits, unnamed in (
+                ('renumbered', renumbered, [], 'numbering'),
+                ('the same record', old, [other], 'record')):
+            with self.subTest(case=case):
+                named, r, s, f = self.named(old, new, [],
+                                            edits + [file_changed()])
+                self.assertEqual(named['unnamed'], unnamed)
+                self.assertEqual(r['disagree'], ['de_DE.utf8'])
+                self.assertEqual(s['disagree'], ['de_DE.utf8'])
+                self.assertEqual(sorted(x for names in r['not_compared'].values()
+                                        for x in names[0]),
+                                 ['en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8'])
+                self.assertEqual(list(r['not_compared']),
+                                 [m.TABLE_CODE_DIFFERS])
+
+    def test_another_number_of_levels(self):
+        old = one_level([b'a', b'b', b'c'])
+        new = {s: w + [[1]] for s, w in old.items()}
+        named, r, s, f = self.named(old, new)
+        self.assertEqual(named['unnamed'], (1, 2))
+
+    def test_a_table_that_cannot_be_named_says_why(self):
+        """Every way a side's record cannot be had says so, beside the
+        other side's, and the locale stays changed: never 'nothing'."""
+        digest = hashlib.sha256(table_record(self.OLD)).hexdigest()
+
+        def tables(**k):
+            return lambda d: d['collate'].update(**k)
+
+        def check(**k):
+            return lambda d: d['collate']['checks'].update(
+                {f'{digest} UTF-8': dict(k, locale='de_DE.utf8')})
+
+        def levels(n):
+            return lambda d: d['collate']['locales']['de_DE.utf8'].update(
+                nrules=n)
+        cases = (
+            ('not packed', [tables(tables=None, tables_why='no lzma')],
+             'the OLD file holds no packed tables (no lzma)'),
+            ('not xz', [tables(tables=m.base64.b64encode(b'xx').decode())],
+             'the packed tables of the OLD file cannot be opened ('),
+            ('not base64', [tables(tables='%%%')],
+             'the packed tables of the OLD file cannot be opened ('),
+            ('no record', [tables(tables=m.base64.b64encode(m.ct_pack_all(
+                {})).decode())], 'the OLD file holds no record of its table'),
+            ('a record past the end', [tables(tables=m.base64.b64encode(
+                lzma.compress(bytes.fromhex(digest) + bytes([100]) + b'xx'))
+                .decode())],
+             'the packed tables of the OLD file cannot be opened (ValueError('
+             "'a record runs past the end of the tables'))"),
+            ('a record cut short', [tables(tables=m.base64.b64encode(
+                m.ct_pack_all({digest: table_record(self.OLD)[:-1]})).decode())],
+             'the record of its table in the OLD file cannot be read ('),
+            ('another number of levels', [levels(2)],
+             'the record stored for its table in the OLD file has 1 level(s), '
+             'its table 2'),
+            ('a check that failed', [check(error='boom')],
+             'on the old machine, the check of its table failed: boom'),
+            ('a check that did not match', [check(**dict(
+                CHECK_PASSED, record_mismatch=1))],
+             'on the old machine, its table does not match glibc\'s strxfrm'),
+            ('no check', [lambda d: d['collate']['checks'].pop(
+                f'{digest} UTF-8')],
+             'on the old machine, its table was not checked'))
+        for case, edits, why in cases:
+            with self.subTest(case=case):
+                named, r, s, f = self.named(self.OLD, self.NEW, edits)
+                self.assertIsNone(named['counts'])
+                self.assertTrue(named['unnamed'].startswith(why),
+                                named['unnamed'])
+        with self.subTest(case='both sides'):
+            new_digest = hashlib.sha256(table_record(self.NEW)).hexdigest()
+            named, r, s, f = self.named(
+                self.OLD, self.NEW, [check(error='boom')],
+                [lambda d: d['collate']['checks'].pop(f'{new_digest} UTF-8')])
+            self.assertEqual(named['unnamed'],
+                             'on the old machine, the check of its table '
+                             'failed: boom; on the new machine, its table was '
+                             'not checked')
+
+    def test_each_side_checked_under_its_own_encoding(self):
+        """The check a side's record needs is its own (table, encoding): one
+        under another encoding is a table not checked for this locale."""
+        def elsewhere(d):
+            checks = d['collate']['checks']
+            for key in [k for k in checks if k.endswith(' UTF-8')]:
+                checks[key.replace(' UTF-8', ' ISO-8859-1')] = checks.pop(key)
+        named, r, s, f = self.named(self.OLD, self.NEW, [], [elsewhere])
+        self.assertEqual(named['unnamed'],
+                         'on the new machine, its table was not checked')
+        # A locale whose encoding is not the same on the two machines, given
+        # to TableNaming as table_verdicts gives it the two files: the new side's
+        # check is under the new side's encoding, and passes.
+        sides = []
+        for levels, codeset in ((self.OLD, 'UTF-8'), (self.NEW, 'ISO-8859-1')):
+            rec = table_record(levels)
+            digest = hashlib.sha256(rec).hexdigest()
+            sides.append({
+                'locales': {'x': {'codeset': codeset}},
+                'collate': {
+                    'locales': {'x': {'state': 'file', 'nrules': 1,
+                                      'fingerprint': '0' * 64,
+                                      'table': digest}},
+                    'checks': {f'{digest} {codeset}': dict(CHECK_PASSED,
+                                                           locale='x')},
+                    'tables': m.base64.b64encode(m.ct_pack_all(
+                        {digest: rec})).decode('ascii')}})
+        head = m.TableNaming(*sides, ['x'])('x')[0]
+        self.assertTrue(head.startswith(': it marks'), head)
+
+    def test_the_code_question_left_open_or_proved(self):
+        """Beside a change step 11 found: a changed table that could not be
+        read, or not read on one machine, or of another number of levels,
+        leaves open whether the code differs; the same six items prove it
+        differs whatever their control said, and so does the same digest
+        under other items, without the records; no other locale is then
+        unchanged by its table alone. A table that could not be read beside
+        no change step 11 found leaves nothing open."""
+        old = one_level([b'a', b'b', b'c'])
+        renumbered = {s: [[2 * w[0][0]]] for s, w in old.items()}
+        digest = hashlib.sha256(table_record(renumbered)).hexdigest()
+
+        def unpacked(d):
+            d['collate'].update(tables=None, tables_why='no lzma')
+
+        def unchecked(d):
+            d['collate']['checks'][f'{digest} UTF-8']['pair_unchecked'] = 2
+
+        def other(d):
+            d['collate']['locales']['de_DE.utf8']['fingerprint'] = 'f' * 64
+        def unread(d):
+            d['collate']['locales']['de_DE.utf8'] = {
+                'state': 'not read', 'why': "reading failed: ValueError('x')"}
+        cases = (
+            ('not packed', renumbered, [unpacked], m.TABLE_CODE_OPEN),
+            ('another number of levels', {s: w + [[1]] for s, w in old.items()},
+             [], m.TABLE_CODE_OPEN),
+            ('a control that did not pass', renumbered, [unchecked],
+             m.TABLE_CODE_OPEN),
+            ('the same digest, not packed', old, [other, unpacked],
+             m.TABLE_CODE_DIFFERS))
+        for case, new, edits, why in cases:
+            with self.subTest(case=case):
+                named, r, s, f = self.named(old, new, [],
+                                            edits + [file_changed()])
+                others = {why: sorted(names) for why, (names, count)
+                          in r['not_compared'].items()}
+                self.assertEqual(others.pop(why), ['en_US.utf8', 'ja_JP.utf8',
+                                                   'sv_SE.utf8'])
+                # de_DE.utf8 itself, not compared under its own reason, or
+                # changed by its table.
+                self.assertIn(list(others.values()), ([], [['de_DE.utf8']]))
+                self.assertNotEqual(r['closing'], m.CLOSING_TABLES)
+        with self.subTest(case='not read on one machine'):
+            r, s, f = self.outputs(
+                [read_tables()], [read_tables(), unread, file_changed()])
+            self.assertEqual(sorted(r['not_compared'][m.TABLE_CODE_OPEN][0]),
+                             ['en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8'])
+            self.assertEqual(r['disagree'], [])
+        with self.subTest(case='not packed, and no change step 11 found'):
+            named, r, s, f = self.named(old, renumbered, [], [unpacked])
+            self.assertEqual(r['not_compared'], {})
+            self.assertEqual(r['closing'], m.CLOSING_TABLES)
+        with self.subTest(case='the same items, a control that did not pass'):
+            r, s, f = self.outputs(
+                [read_tables()],
+                [read_tables(checks={'de_DE.utf8': dict(
+                    CHECK_PASSED, pair_unchecked=2)}), file_changed()])
+            self.assertEqual(sorted(r['not_compared']), sorted([
+                m.TABLE_CODE_DIFFERS,
+                'on the new machine, 2 sequence(s) of its table could not be '
+                'checked beside others against glibc\'s strxfrm']))
+            self.assertEqual(sorted(r['not_compared'][m.TABLE_CODE_DIFFERS][0]),
+                             ['en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8'])
+            # The locale that proves it is named in the warning.
+            self.assertEqual(r['disagree'], ['de_DE.utf8'])
+            self.assertEqual(s['disagree'], ['de_DE.utf8'])
+
+    def test_flips_found_as_the_definition_says(self):
+        """table_flips() against the definition, pair by pair, on random
+        tables of three levels: a sequence flips when, at the first level
+        where either machine tells it from a marked one, the two machines
+        do not order them alike."""
+        rnd = random.Random(66)
+
+        def first(a, b):
+            for lvl, (x, y) in enumerate(zip(a, b)):
+                if x != y:
+                    return lvl, (x > y) - (x < y)
+            return None, 0
+        for case in range(200):
+            seqs = [bytes([0x41 + i]) for i in range(rnd.randint(2, 9))]
+            o = {s: [[rnd.randint(1, 3)] for _ in range(3)] for s in seqs}
+            n = {s: [list(w) for w in o[s]] for s in seqs}
+            for s in rnd.sample(seqs, rnd.randint(1, len(seqs))):
+                n[s][rnd.randrange(3)] = [rnd.randint(1, 3)]
+            po, pn = (m.ct_parse(table_record(t)) for t in (o, n))
+            marked, _, _ = m.table_marked(po, pn)
+            flips = set(m.table_flips(po, pn, marked))
+            # Every pair whose order changed has a member named: the marking
+            # misses none, and nothing marked means no order changed.
+            for s, t in itertools.combinations(seqs, 2):
+                lo, so = first([w[0] for w in o[s]], [w[0] for w in o[t]])
+                ln, sn = first([w[0] for w in n[s]], [w[0] for w in n[t]])
+                if lo is None and ln is None:
+                    continue
+                lvl = min(x for x in (lo, ln) if x is not None)
+                if (so if lo == lvl else 0) != (sn if ln == lvl else 0):
+                    with self.subTest(case=case, pair=(s, t)):
+                        self.assertTrue({s, t} & (set(marked) | flips))
+            want = set()
+            for t in seqs:
+                if t in marked:
+                    continue
+                for s in marked:
+                    lo, so = first([w[0] for w in o[s]], [w[0] for w in o[t]])
+                    ln, sn = first([w[0] for w in n[s]], [w[0] for w in n[t]])
+                    if lo is None and ln is None:
+                        continue
+                    lvl = min(x for x in (lo, ln) if x is not None)
+                    if (so if lo == lvl else 0) != (sn if ln == lvl else 0):
+                        want.add(t)
+            with self.subTest(case=case):
+                self.assertEqual(flips, want)
 
 
 if __name__ == '__main__':

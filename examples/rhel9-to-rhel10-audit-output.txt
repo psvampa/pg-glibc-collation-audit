@@ -1587,9 +1587,9 @@ Full result written to /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.
    their data leaves localedef nothing to compute; whether changed code moves
    their order is step 5's question. Run sql/c_utf8_probe.sql anyway if
    C.UTF-8 is your database collation: it measures the order these builds
-   actually produce inside PostgreSQL, as step 11 does one character at a time
-   through glibc when the run has both machines' measurements, and PostgreSQL
-   reports collversion as NULL for every C.* name.
+   actually produce inside PostgreSQL, as step 11 does through glibc when the
+   run has both machines' measurements, and PostgreSQL reports collversion as
+   NULL for every C.* name.
 
 ================================================================
 == STEP 9  NODE ELLIPSIS  does glibc-2.34-275.el9_8.x86_64's own locale data use ellipsis ranges?
@@ -1706,6 +1706,13 @@ Sort order CHANGED in 4 locale(s):
   th_TH, th_TH.tis620, thai (TIS-620)
     also, in PostgreSQL: database locale th_TH.TIS-620; these names in a
       database of any encoding, as its locale or in CREATE COLLATION
+    its compiled sort table changed: it marks 475 sequence(s) as changed and
+      14 appear only in the new machine's table; among them: U+0001..U+009F,
+      U+0E01..U+0E3A, U+0E3F..U+0E40, U+0E40 U+0E01, U+0E40 U+0E02,
+      U+0E40 U+0E03, U+0E40 U+0E04, U+0E40 U+0E05, U+0E40 U+0E06,
+      U+0E40 U+0E07, U+0E40 U+0E08, U+0E40 U+0E09, U+0E40 U+0E0A,
+      U+0E40 U+0E0B, U+0E40 U+0E0C, U+0E40 U+0E0D, U+0E40 U+0E0E,
+      U+0E40 U+0E0F, U+0E40 U+0E10, U+0E40 U+0E11, and 231 more.
     88 characters moved: U+0002..U+0020, U+0023..U+0027, U+002C..U+002F,
       U+003A..U+003B, U+003F..U+0060, U+007B, U+007D..U+007F, U+0E2F, U+0E3A,
       U+0E3F, U+0E46, U+0E4C, U+0E4F, U+0E5A..U+0E5B
@@ -1722,6 +1729,14 @@ Sort order CHANGED in 4 locale(s):
   th_TH.utf8 (UTF-8)
     also, in PostgreSQL: collation "th_TH" where the database encoding is
       UTF-8; database locale th_TH.UTF-8
+    its compiled sort table changed: it marks 562 sequence(s) as changed and
+      51,147 appear only in the new machine's table; among them:
+      U+0001..U+007F, U+0E01..U+0E3A, U+0E3F..U+0E40, U+0E40 U+0E01,
+      U+0E40 U+0E02, U+0E40 U+0E03, U+0E40 U+0E04, U+0E40 U+0E05,
+      U+0E40 U+0E06, U+0E40 U+0E07, U+0E40 U+0E08, U+0E40 U+0E09,
+      U+0E40 U+0E0A, U+0E40 U+0E0B, U+0E40 U+0E0C, U+0E40 U+0E0D,
+      U+0E40 U+0E0E, U+0E40 U+0E0F, U+0E40 U+0E10, U+0E40 U+0E11, and 1,666
+      more.
     50,584 characters moved, too many to list here
     1,112,062 character(s) and 10,111 other string(s) sort differently against
       at least one other
@@ -1738,17 +1753,10 @@ Every character, other string and pair found, by locale:
 In the sort orders, a string that this comparison cannot name as a character
 of the locale's encoding is named by its bytes in hexadecimal: bytes 80 is the
 single byte 80, and bytes 80..FF every string of that length from the first to
-the last.
+the last. A name of several code points, such as U+0063 U+0068 (ch), is one
+string of those characters, in that order.
 
 Unchanged: 863 locale(s).
-!! Unchanged only as far as measured: 11 of them. In each, the pairs of
-   neighbours counted in brackets were not measured at every level, so a
-   change in how they are told apart would not show: they differ by less than
-   a letter, and no pair could be found there to tell whether by an accent or
-   by case:
-  ja_JP (2), ja_JP.eucjp (2), ja_JP.ujis (2), ja_JP.utf8 (3), japanese (2),
-  japanese.euc (2), ko_KR (1), ko_KR.euckr (1), ko_KR.utf8 (3), korean (1),
-  korean.euc (1)
 !! Not on the new machine, so NOT known to be unchanged: 2 locale(s). Either
    the upgrade removes them or their language pack is not installed there; a
    database or collation that uses one cannot use it on the new machine. If a
@@ -1775,10 +1783,12 @@ Only on the new machine: 18 locale(s).
   zgh_MA
   zgh_MA.utf8
 
-Of the 869 locale(s) on the old machine: 4 changed, 863 unchanged (11 of them only as far as measured), 0 not measured, 2 not on the new machine.
+Of the 869 locale(s) on the old machine: 4 changed, 863 unchanged, 0 not measured, 2 not on the new machine.
 Decimals of money: the same in the 867 locale(s) measured on both machines.
 Character sets: every byte sequence that each machine's charmaps give a
-   character, in the 865 locale(s) compared, is among the strings measured.
+   character is among the strings measured, in the 4 locale(s) checked. The
+   861 locale(s) unchanged by their sort tables need no such check: the table
+   decides for every string.
 PostgreSQL on the OLD machine: 10 process(es) named postgres or postmaster,
    all running the C library measured there.
 PostgreSQL on the NEW machine: 10 process(es) named postgres or postmaster,
@@ -1840,19 +1850,20 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
    ko_KR.euckr, korean, korean.euc; EUC-TW: zh_TW.euctw; GB2312: zh_CN,
    zh_CN.gb2312, zh_SG, zh_SG.gb2312.
 !! Not measured in a database of another encoding: 10 locale(s) whose encoding
-   PostgreSQL does not know, so that CREATE DATABASE lets a database of any
-   encoding use one, with only a WARNING ("could not determine encoding for
-   locale"). In such a database, a UTF8 one say, PostgreSQL hands the locale
-   the database's bytes, not the ones measured here, so its order there is not
-   known. ARMSCII-8: hy_AM.armscii8; GEORGIAN-PS: ka_GE, ka_GE.georgianps;
-   KOI8-T: tg_TJ, tg_TJ.koi8t; PT154: kk_KZ, kk_KZ.pt154; TIS-620: th_TH,
-   th_TH.tis620, thai.
-!! Not measured: a rule that applies only to a particular combination of
-   letters, such as a contraction ("ch" sorted as one letter), so two machines
-   that agree here can still sort some longer strings apart. Where a character
-   counts for nothing at some level (glibc ignores it there), how it is told
-   apart from its neighbour is read less reliably, so a change there may go
-   unseen.
+   PostgreSQL does not know, so that CREATE DATABASE and CREATE COLLATION let
+   a database of any encoding use one, with only a WARNING ("could not
+   determine encoding for locale"). In such a database, a UTF8 one say,
+   PostgreSQL hands the locale the database's bytes, not the ones measured
+   here. Its order there is the same on both machines in the 7 whose compiled
+   sort table is the same on both, since glibc orders any bytes by that table;
+   in the other 3 it is not known. ARMSCII-8: hy_AM.armscii8; GEORGIAN-PS:
+   ka_GE, ka_GE.georgianps; KOI8-T: tg_TJ, tg_TJ.koi8t; PT154: kk_KZ,
+   kk_KZ.pt154; TIS-620: th_TH, th_TH.tis620, thai. The same sort table on
+   both machines: hy_AM.armscii8, ka_GE, ka_GE.georgianps, kk_KZ, kk_KZ.pt154,
+   tg_TJ, tg_TJ.koi8t.
+!! Not measured: whether the two machines compare strings with the same glibc
+   code. Every locale found unchanged either has the same sort table on both,
+   which is what glibc's comparison code reads, or compares bytes on both.
 
 ================================================================
 == AUDIT SUMMARY  glibc-2.34 -> glibc-2.39
@@ -1884,19 +1895,34 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
         how glibc sorts them in every version.
      4 locale(s) sort differently -- reindex what uses them:
        th_TH, th_TH.tis620, thai (TIS-620)
-         88 characters moved; 254 sort differently against another; the pairs
-           that tell letters, accents and case apart are told apart
+         its compiled sort table changed: it marks 475 sequence(s) as changed
+           and 14 appear only in the new machine's table; among them:
+           U+0001..U+009F, U+0E01..U+0E3A, U+0E3F..U+0E40, U+0E40 U+0E01,
+           U+0E40 U+0E02, U+0E40 U+0E03, U+0E40 U+0E04, U+0E40 U+0E05,
+           U+0E40 U+0E06, U+0E40 U+0E07, U+0E40 U+0E08, U+0E40 U+0E09,
+           U+0E40 U+0E0A, U+0E40 U+0E0B, U+0E40 U+0E0C, U+0E40 U+0E0D,
+           U+0E40 U+0E0E, U+0E40 U+0E0F, U+0E40 U+0E10, U+0E40 U+0E11, and 231
+           more; 88 characters moved; 254 sort differently against another;
+           the pairs that tell letters, accents and case apart are told apart
            differently themselves; pairs compared only by letters; 31 pairs
            told apart differently; among them 1 character(s) that did not
            move: U+0030; 60 more pair(s) the measurement cannot decide
          also, in PostgreSQL: database locale th_TH.TIS-620; these names in a
            database of any encoding, as its locale or in CREATE COLLATION
        th_TH.utf8 (UTF-8)
-         50,584 characters moved; 1,122,173 sort differently against another;
-           the pairs that tell letters, accents and case apart are told apart
-           differently themselves; pairs compared only by letters; 45,693
-           pairs told apart differently; among them 1 character(s) that did
-           not move: U+0030; 8,364 more pair(s) the measurement cannot decide
+         its compiled sort table changed: it marks 562 sequence(s) as changed
+           and 51,147 appear only in the new machine's table; among them:
+           U+0001..U+007F, U+0E01..U+0E3A, U+0E3F..U+0E40, U+0E40 U+0E01,
+           U+0E40 U+0E02, U+0E40 U+0E03, U+0E40 U+0E04, U+0E40 U+0E05,
+           U+0E40 U+0E06, U+0E40 U+0E07, U+0E40 U+0E08, U+0E40 U+0E09,
+           U+0E40 U+0E0A, U+0E40 U+0E0B, U+0E40 U+0E0C, U+0E40 U+0E0D,
+           U+0E40 U+0E0E, U+0E40 U+0E0F, U+0E40 U+0E10, U+0E40 U+0E11, and
+           1,666 more; 50,584 characters moved; 1,122,173 sort differently
+           against another; the pairs that tell letters, accents and case
+           apart are told apart differently themselves; pairs compared only by
+           letters; 45,693 pairs told apart differently; among them 1
+           character(s) that did not move: U+0030; 8,364 more pair(s) the
+           measurement cannot decide
          also, in PostgreSQL: collation "th_TH" where the database encoding is
            UTF-8; database locale th_TH.UTF-8
        every character, other string and pair:
@@ -1904,22 +1930,20 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
        In the sort orders, a string that this comparison cannot name as a
        character of the locale's encoding is named by its bytes in
        hexadecimal: bytes 80 is the single byte 80, and bytes 80..FF every
-       string of that length from the first to the last.
+       string of that length from the first to the last. A name of several
+       code points, such as U+0063 U+0068 (ch), is one string of those
+       characters, in that order.
      NOT known to be unchanged: 2 locale(s)
        not on the new machine, so a database or collation that uses one cannot
          use it there: aa_ER.utf8@saaho, aa_ER@saaho
-     !! Unchanged only as far as measured, because how some of their
-        neighbours are told apart was not measured at every level: ja_JP,
-        ja_JP.eucjp, ja_JP.ujis, ja_JP.utf8, japanese, japanese.euc, ko_KR,
-        ko_KR.euckr, ko_KR.utf8, korean, korean.euc
-     Of the 869 locale(s) on the old machine: 4 changed, 863 unchanged (11 of
-       them only as far as measured), 0 not measured, 2 not on the new
-       machine.
+     Of the 869 locale(s) on the old machine: 4 changed, 863 unchanged, 0 not
+       measured, 2 not on the new machine.
      Decimals of money: the same in the 867 locale(s) measured on both
         machines.
      Character sets: every byte sequence that each machine's charmaps give a
-        character, in the 865 locale(s) compared, is among the strings
-        measured.
+        character is among the strings measured, in the 4 locale(s) checked.
+        The 861 locale(s) unchanged by their sort tables need no such check:
+        the table decides for every string.
      PostgreSQL on the OLD machine: 10 process(es) named postgres or
         postmaster, all running the C library measured there.
      PostgreSQL on the NEW machine: 10 process(es) named postgres or
@@ -1984,20 +2008,22 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
         japanese.euc; EUC-KR: ko_KR, ko_KR.euckr, korean, korean.euc; EUC-TW:
         zh_TW.euctw; GB2312: zh_CN, zh_CN.gb2312, zh_SG, zh_SG.gb2312.
      !! Not measured in a database of another encoding: 10 locale(s) whose
-        encoding PostgreSQL does not know, so that CREATE DATABASE lets a
-        database of any encoding use one, with only a WARNING ("could not
-        determine encoding for locale"). In such a database, a UTF8 one say,
-        PostgreSQL hands the locale the database's bytes, not the ones
-        measured here, so its order there is not known. ARMSCII-8:
-        hy_AM.armscii8; GEORGIAN-PS: ka_GE, ka_GE.georgianps; KOI8-T: tg_TJ,
-        tg_TJ.koi8t; PT154: kk_KZ, kk_KZ.pt154; TIS-620: th_TH, th_TH.tis620,
-        thai.
-     !! Not measured: a rule that applies only to a particular combination of
-        letters, such as a contraction ("ch" sorted as one letter), so two
-        machines that agree here can still sort some longer strings apart.
-        Where a character counts for nothing at some level (glibc ignores it
-        there), how it is told apart from its neighbour is read less reliably,
-        so a change there may go unseen.
+        encoding PostgreSQL does not know, so that CREATE DATABASE and CREATE
+        COLLATION let a database of any encoding use one, with only a WARNING
+        ("could not determine encoding for locale"). In such a database, a
+        UTF8 one say, PostgreSQL hands the locale the database's bytes, not
+        the ones measured here. Its order there is the same on both machines
+        in the 7 whose compiled sort table is the same on both, since glibc
+        orders any bytes by that table; in the other 3 it is not known.
+        ARMSCII-8: hy_AM.armscii8; GEORGIAN-PS: ka_GE, ka_GE.georgianps;
+        KOI8-T: tg_TJ, tg_TJ.koi8t; PT154: kk_KZ, kk_KZ.pt154; TIS-620: th_TH,
+        th_TH.tis620, thai. The same sort table on both machines:
+        hy_AM.armscii8, ka_GE, ka_GE.georgianps, kk_KZ, kk_KZ.pt154, tg_TJ,
+        tg_TJ.koi8t.
+     !! Not measured: whether the two machines compare strings with the same
+        glibc code. Every locale found unchanged either has the same sort
+        table on both, which is what glibc's comparison code reads, or
+        compares bytes on both.
      Full report: step 11 above.
 
 -- Needs an empirical test: step 5 found 55 substantive hunk(s),
@@ -2075,9 +2101,9 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
         their data leaves localedef nothing to compute; whether changed code moves
         their order is step 5's question. Run sql/c_utf8_probe.sql anyway if
         C.UTF-8 is your database collation: it measures the order these builds
-        actually produce inside PostgreSQL, as step 11 does one character at a time
-        through glibc when the run has both machines' measurements, and PostgreSQL
-        reports collversion as NULL for every C.* name.
+        actually produce inside PostgreSQL, as step 11 does through glibc when the
+        run has both machines' measurements, and PostgreSQL reports collversion as
+        NULL for every C.* name.
      (see docs/limitations.md)
 
 -- Not decided for you

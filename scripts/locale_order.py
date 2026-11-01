@@ -54,27 +54,40 @@ which the comparison reads for those encodings in place of a test of one
 character; and, for UTF-8 and those nine, what glibc gives converting each
 character back to the encoding's bytes (back_of), the way PostgreSQL turns
 what upper() and lower() give back into the database's text, and for
-UTF-8 what its converter gives for every character (utf8_forward_of). C
-and POSIX, which glibc sorts in byte order in every version, are the
-control: a machine where they measured otherwise did not measure what this
-means to.
+UTF-8 what its converter gives for every character (utf8_forward_of). And
+it holds each locale's compiled sort table (LC_COLLATE) as glibc loaded
+it, or why it could not be read: a fingerprint of the six items strcoll
+reads, and a record of the table, checked once per table and encoding
+against glibc's own strxfrm (collate_of, collate_check). C and POSIX,
+which glibc sorts in byte order in every version, are the control: a
+machine where they measured otherwise did not measure what this means to.
 
 Each order and told-apart record is kept whole, compressed, once for all the
 locales that share it, and so is each list of strings an order numbers, so
 that the comparison can name the strings that moved without a second run on
 the machines.
 
-Given each machine's charmaps (--old-charmaps and --new-charmaps; audit.sh
-passes those of a file --extract wrote), the comparison checks that every
-sequence they give a character is among the strings measured, and names a
-locale whose charmap gives one that is not as measured in part
-(charmap_check).
+The comparison decides each locale by its sort table where both machines'
+tables could be compared: the same six items sort any text alike, given the
+same comparison code, and different ones are a change whatever the strings
+showed (table_verdicts). A change the measured order finds under the same
+table, or under one that keeps every order, still counts, and then no table
+is trusted alone; under a table that could not be compared it leaves open
+whether the code differs, and no table is trusted alone either. Where the
+tables could not be compared, the measured order decides, as far as it was
+measured. For every locale its table does not find unchanged, given each
+machine's charmaps (--old-charmaps and --new-charmaps; audit.sh passes those
+of a file --extract wrote), the comparison checks that every sequence they
+give a character is among the strings measured, and names a locale whose
+charmap gives one that is not as measured in part (charmap_check).
 
-Not measured: a rule that applies only to a particular combination of letters,
-such as a contraction ("ch" sorted as one letter). Two machines that agree on
-both can still sort some longer strings differently. Where a character counts
-for nothing at some level (glibc ignores it there), how it is told apart from
-its neighbour is read less reliably, so a change there may go unseen.
+Not compared, in a locale whose table was not compared: a rule that applies
+only to a particular combination of letters, such as a contraction ("ch"
+sorted as one letter). The strings measured hold one character at a time, so
+two machines whose measurements agree can still sort some longer strings
+differently. Where a character counts for nothing at some level (glibc
+ignores it there), how it is told apart from its neighbour is read less
+reliably, so a change there may go unseen.
 
 Usage:
   python3 locale_order.py > old.out          # on each machine
@@ -114,6 +127,7 @@ import platform
 import re
 import stat
 import string
+import struct
 import subprocess
 import sys
 import tarfile
@@ -125,7 +139,7 @@ import zlib
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
-FORMAT = 'locale_order/6'
+FORMAT = 'locale_order/7'
 
 # The parts a file of each format holds, as its 'parts' says. A file of an
 # earlier format lacks the parts added since, and the comparison says each
@@ -143,10 +157,13 @@ PARTS = {'locale_order/1': ('order',),
          'locale_order/5': ('order', 'money', 'postgres_libc', 'postgres_use',
                             'ctype', 'converter'),
          'locale_order/6': ('order', 'money', 'postgres_libc', 'postgres_use',
-                            'ctype', 'converter', 'utf8_forward', 'back')}
+                            'ctype', 'converter', 'utf8_forward', 'back'),
+         'locale_order/7': ('order', 'money', 'postgres_libc', 'postgres_use',
+                            'ctype', 'converter', 'utf8_forward', 'back',
+                            'collate')}
 # The parts beside the order, each checked whole by load().
 SIDE_PARTS = ('money', 'postgres_libc', 'postgres_use', 'ctype', 'converter',
-              'utf8_forward', 'back')
+              'utf8_forward', 'back', 'collate')
 # 'locale_order/1' measured the characters Python could encode, each order
 # a list of code points; this one measures stored_strings(), each order a
 # list of places in that list (T4 step 4c). It names how two neighbours are
@@ -503,10 +520,13 @@ def unpack_order(raw):
 def measure_one(name):
     """(name, result, data) for one locale.
 
-    result holds two digests or an error, and data the two things measured,
-    packed, or None. An error is returned, never raised and never turned into
-    an empty result. A locale that could not be measured has to reach the
-    comparison as exactly that, and not as a locale that did not change.
+    result holds two digests or an error, the locale's encoding once it was
+    read, and its sort table once glibc accepted it and its encoding was
+    read (collate_of; measure() takes it out of the result); data holds the
+    two things measured, packed, or None. An error is returned, never raised
+    and never turned into an empty result. A locale that could not be
+    measured has to reach the comparison as exactly that, and not as a
+    locale that did not change.
     """
     try:
         locale.setlocale(locale.LC_COLLATE, name)
@@ -519,6 +539,11 @@ def measure_one(name):
         return name, {'error': 'cannot be measured: its encoding could not be '
                                'read, so neither could the bytes PostgreSQL '
                                'would compare'}, None
+    # The compiled sort table, read before the strings, so that a locale
+    # whose strings cannot be measured still has one. It travels in the
+    # result, which measure() takes it out of before the file is written. A
+    # locale that stopped above has none: its error says why.
+    collate = collate_of(name)
     try:
         result, data = measured(codeset, mb_cur_max)
     except Exception as e:
@@ -526,7 +551,924 @@ def measure_one(name):
     # Kept for a locale that could not be measured too: the names PostgreSQL
     # gives it depend on it, and a reader looks it up by those names.
     result['codeset'] = codeset
+    result['_collate'] = collate
     return name, result, data
+
+
+# ---------------------------------------------------------------------------
+# The compiled sort table of each locale (16.41 A').
+#
+# What strcoll_l reads of LC_COLLATE is six items: NRULES, RULESETS,
+# TABLEMB, WEIGHTMB, EXTRAMB and INDIRECTMB, items 0 to 5 (strcoll_l.c:
+# 257-284@2.39; langinfo.h:317-322, alike in 2.28, 2.34 and 2.39). Two
+# machines whose six items are the same bytes give the same strcoll for any
+# text, given the same comparison code. Each locale gets:
+#   - a fingerprint: sha256 of the six items as the compiled file holds
+#     them, cut by the file's own string index (collate_fingerprint);
+#   - the reader's digest and record of the same tables (CollateTables,
+#     ct_record), from which a changed table names its sequences, and
+#     which controls 2 to 4 check against this machine's strxfrm
+#     (collate_check).
+#
+# The file is the one glibc loaded, and glibc refused it already, before
+# anything here reads it, if its magic number is not LC_COLLATE's, if it
+# holds fewer items than glibc knows or MORE (CATTEST), if an item's offset
+# lies past its end, or if NRULES is not an aligned word (loadlocale.c:
+# 80-157@2.28 and 2.34, 134-219@2.39; the locale-archive goes through the
+# same function, loadarchive.c:477). What glibc does not check is checked
+# here: that the six items come in order, so each has a length, that the
+# items glibc hands out are those of the file, and that the rule count the
+# reader read is the file's.
+
+COLLATE_NARROW = 6        # items 0 to 5, what strcoll_l reads
+COLLATE_STATES = ('file', 'builtin', 'not read')
+
+
+class CollateUnread(Exception):
+    """Why a locale's compiled table was not read; that locale is not
+    compared by its table."""
+
+
+def collate_fingerprint(read, pointers, nrules_read):
+    """(fingerprint, nrules in the file) of a compiled LC_COLLATE that glibc
+    loaded, or raises CollateUnread with the reason. Pure: READ(offset, n)
+    returns n bytes of the file at offset; POINTERS are the offsets
+    nl_langinfo_l gave items 1 to 5 (pointer minus filedata), NRULES_READ
+    the rule count the reader read (ct_word).
+
+    Checked, each a reason of its own:
+      c. the file's offsets of items 0 to 6 never go back, so that each of
+         the six items has a length;
+      d. each pointer nl_langinfo_l gave for items 1 to 5 is the file's own
+         offset for it, exactly;
+      e. the rule count the reader read is the uint32 the file holds as
+         item 0, which a big-endian machine read from the wrong half of
+         glibc's union would not be (ct_word).
+    Integers are read in this machine's byte order, as glibc reads them.
+    """
+    index = struct.unpack('=%dI' % (COLLATE_NARROW + 1),
+                          read(8, 4 * (COLLATE_NARROW + 1)))
+    if any(index[k] > index[k + 1] for k in range(COLLATE_NARROW)):
+        raise CollateUnread('the items strcoll reads are not in order in its '
+                            'file')
+    for k in range(1, COLLATE_NARROW):
+        if pointers[k - 1] != index[k]:
+            raise CollateUnread(f'glibc gives item {k} at offset '
+                                f'{pointers[k - 1]}, the file\'s index at '
+                                f'{index[k]}')
+    nrules_file = struct.unpack('=I', read(index[0], 4))[0]
+    if nrules_file != nrules_read:
+        raise CollateUnread(f'the reader read {nrules_read} rule(s) and the '
+                            f'file holds {nrules_file}')
+    h = hashlib.sha256()
+    for k in range(COLLATE_NARROW):
+        n = index[k + 1] - index[k]
+        h.update(struct.pack('>Q', n))
+        h.update(read(index[k], n))
+    return h.hexdigest(), nrules_file
+
+
+def collate_view(loc):
+    """(filedata, NRULES as read, offsets of items 1 to 5) of the LC_COLLATE
+    of LOC, a newlocale object; filedata 0 for glibc's own C and POSIX.
+
+    The struct offsets (__locales[LC_COLLATE] at 3 pointers into a
+    locale_t, bits/types/__locale_t.h:28-31@2.28, :27-30@2.39; filedata at
+    1 pointer into __locale_data, localeinfo.h:49-53) are the same in 2.28,
+    2.34 and 2.39. Nothing at filedata is read
+    here: collate_fingerprint compares the offsets with the file's index
+    before it reads an item.
+    """
+    P = ctypes.sizeof(ctypes.c_void_p)
+    data = ctypes.c_void_p.from_address(loc + CT_LC_COLLATE * P).value
+    filedata = ctypes.c_void_p.from_address(data + P).value or 0
+    nrules = ct_word(ct_item(0, loc))
+    return filedata, nrules, [ct_item(k, loc) - filedata
+                              for k in range(1, COLLATE_NARROW)]
+
+
+def collate_of(name):
+    """({'state', ...}, record or None) of NAME's LC_COLLATE.
+
+    'builtin' for glibc's own C and POSIX (no file; 0 rules, strcmp:
+    C-collate.c:108-111@2.28, :31-34@2.39). 'file' with the fingerprint,
+    the rule count and the reader's digest ('none' for 0 rules, which needs
+    no record). 'not read' with the reason. Never raises: a locale that was
+    not read reaches the comparison as exactly that.
+    """
+    if ctypes.sizeof(ctypes.c_void_p) != 8:
+        return {'state': 'not read', 'why': 'not a 64-bit Python'}, None
+    loc = None
+    try:
+        lib = _ct_lib()
+        loc = lib.newlocale(1 << CT_LC_COLLATE,
+                            name.encode('utf-8', 'surrogateescape'), None)
+        if not loc:
+            raise CollateUnread('newlocale did not load it')
+        filedata, nrules, pointers = collate_view(loc)
+        if not filedata:
+            if nrules != 0:
+                raise CollateUnread(f'it has no file and {nrules} rule(s)')
+            return {'state': 'builtin'}, None
+        fingerprint, nrules_file = collate_fingerprint(
+            lambda off, n: ctypes.string_at(filedata + off, n), pointers,
+            nrules)
+        if nrules == 0:
+            table, record = 'none', None
+        else:
+            T = CollateTables(loc)
+            table, record = T.digest, ct_record(T)
+        return ({'state': 'file', 'fingerprint': fingerprint,
+                 'nrules': nrules_file, 'table': table}, record)
+    except CollateUnread as e:
+        return {'state': 'not read', 'why': str(e)}, None
+    except Exception as e:
+        return {'state': 'not read', 'why': f'reading failed: {e!r}'}, None
+    finally:
+        if loc:
+            _ct_lib().freelocale(loc)
+
+
+def collate_check(job):
+    """Controls 2 to 4 of one (table, encoding): its record rebuilt from a
+    locale that uses it, each sequence alone and with its references,
+    against this machine's strxfrm; and that record is the one stored.
+    JOB is (locale name, sha256 of the stored record). Never raises."""
+    name, stored_sha = job
+    loc = None
+    try:
+        locale.setlocale(locale.LC_COLLATE, name)
+        lib = _ct_lib()
+        loc = lib.newlocale(1 << CT_LC_COLLATE,
+                            name.encode('utf-8', 'surrogateescape'), None)
+        if not loc:
+            return {'locale': name, 'error': 'newlocale did not load it'}
+        rec = ct_record(CollateTables(loc))
+        if hashlib.sha256(rec).hexdigest() != stored_sha:
+            return {'locale': name,
+                    'error': 'the record checked is not the one stored'}
+        seqs, rbad, rex = ct_record_check(rec)
+        pairs, triples, pbad, pskip, punchecked, pex = ct_pair_check(rec)
+        return {'locale': name, 'record_seqs': seqs, 'record_mismatch': rbad,
+                'record_examples': rex, 'pairs': pairs, 'triples': triples,
+                'pair_mismatch': pbad, 'pair_skipped': pskip,
+                'pair_unchecked': punchecked, 'pair_examples': pex}
+    except Exception as e:
+        return {'locale': name, 'error': repr(e)}
+    finally:
+        if loc:
+            _ct_lib().freelocale(loc)
+
+
+def collate_check_ok(check):
+    """None when a control result passed, else why not."""
+    if check is None:
+        return 'its table was not checked'
+    if 'error' in check:
+        return f'the check of its table failed: {check["error"]}'
+    if check.get('record_mismatch') != 0 or check.get('pair_mismatch') != 0:
+        return (f'its table does not match glibc\'s strxfrm '
+                f'({check.get("record_mismatch")} sequence(s) alone, '
+                f'{check.get("pair_mismatch")} with others)')
+    if check.get('pair_unchecked') != 0:
+        return (f'{check.get("pair_unchecked")} sequence(s) of its table '
+                'could not be checked beside others against glibc\'s strxfrm')
+    return None
+
+
+def collate_part(entries, records, reps, mapper):
+    """The 'collate' part of a measurement: ENTRIES by locale, the RECORDS
+    packed, and controls 2 to 4 of one locale per (table, encoding), with a
+    line of progress a tenth. REPS is {(table, codeset): name}."""
+    checks = {}
+    jobs = sorted(reps.items())
+    if jobs:
+        sys.stderr.write(f'Checking the sort tables (LC_COLLATE) against '
+                         f'glibc\'s strxfrm: one locale for each of the '
+                         f'{len(jobs)} distinct pairs of table and '
+                         f'encoding...\n')
+        sys.stderr.flush()
+        started = time.time()
+        results = mapper(collate_check,
+                         [(n, hashlib.sha256(records[d]).hexdigest())
+                          for (d, cs), n in jobs])
+        for done, (((d, cs), _), r) in enumerate(zip(jobs, results), 1):
+            checks[f'{d} {cs}'] = r
+            line = progress(done, len(jobs), time.time() - started,
+                            'sort table(s)')
+            if line:
+                sys.stderr.write(line)
+                sys.stderr.flush()
+    try:
+        tables = base64.b64encode(ct_pack_all(records)).decode('ascii')
+    except Exception as e:   # lzma, zlib or memory failing, say
+        tables = None
+        why = repr(e)
+    part = {'byteorder': sys.byteorder, 'locales': entries,
+            'checks': checks, 'tables': tables}
+    if tables is None:
+        part['tables_why'] = why
+    return part
+
+
+def collate_part_whole(part, locales):
+    """Whether a file's 'collate' part has the shape measure writes."""
+    if not isinstance(part, dict) or part.get('byteorder') not in ('little',
+                                                                    'big'):
+        return False
+    entries, checks = part.get('locales'), part.get('checks')
+    if not isinstance(entries, dict) or set(entries) != set(locales) \
+            or not isinstance(checks, dict):
+        return False
+    if part.get('tables') is None and not isinstance(part.get('tables_why'),
+                                                     str):
+        return False
+    if part.get('tables') is not None and not isinstance(part['tables'], str):
+        return False
+    for e in entries.values():
+        if not isinstance(e, dict) or e.get('state') not in COLLATE_STATES:
+            return False
+        if e['state'] == 'file' and not (
+                isinstance(e.get('fingerprint'), str)
+                and re.fullmatch(r'[0-9a-f]{64}', e['fingerprint'])
+                and type(e.get('nrules')) is int
+                and isinstance(e.get('table'), str)
+                and (e['nrules'] == 0) == (e['table'] == 'none')):
+            return False
+        if e['state'] == 'not read' and not (isinstance(e.get('why'), str)
+                                             and e['why']):
+            return False
+    return all(isinstance(r, dict) and isinstance(r.get('locale'), str)
+               for r in checks.values())
+
+
+def collate_not_read(out):
+    """The lines finished() writes on the sort tables, none when there is
+    nothing to say: the locales measured whose table was not read, by
+    reason (one that could not be measured is named under its own error);
+    the tables whose controls did not pass or did not run, counted as
+    tables, and named per encoding they were checked for by the locale
+    checked, or the first that uses it when none was, and how many share
+    it; and tables that could not be packed."""
+    part, results = out['collate'], out['locales']
+    lines = []
+    unread = collections.defaultdict(list)
+    for n, e in sorted(part['locales'].items()):
+        if e['state'] == 'not read' and 'error' not in results[n]:
+            unread[e['why']].append(n)
+    if unread:
+        total = sum(len(v) for v in unread.values())
+        lines.append(filled(f'!! The sort tables (LC_COLLATE) of {total} '
+                            'locale(s) could not be read, so the comparison '
+                            'cannot compare them by their tables:'))
+        for why, names in sorted(unread.items(), key=lambda kv: -len(kv[1])):
+            listed = (', '.join(shown(x) for x in names[:LIST_LIMIT])
+                      + (f', and {len(names) - LIST_LIMIT} more'
+                         if len(names) > LIST_LIMIT else ''))
+            lines.append(filled(f'{why}: {len(names)}: {listed}', 2, 4))
+    # Every (table, encoding) a locale uses, as measure() keys its check:
+    # one with no check is a table not checked, not a table that passed.
+    users = collections.defaultdict(list)
+    for n, e in sorted(part['locales'].items()):
+        if e['state'] == 'file' and e['table'] != 'none':
+            users[f'{e["table"]} {results[n].get("codeset")}'].append(n)
+    bad = {k: collate_check_ok(part['checks'].get(k)) for k in users}
+    bad = {k: why for k, why in bad.items() if why}
+
+    def checked(k):
+        return part['checks'].get(k, {}).get('locale') or users[k][0]
+    if bad:
+        tables = {k.split(' ', 1)[0] for k in bad}
+        lines.append(filled(
+            f'!! {len(tables)} sort table(s) (LC_COLLATE) did not pass their '
+            'check against glibc\'s strxfrm, so the comparison cannot compare '
+            f'by their tables the {sum(len(users[k]) for k in bad)} locale(s) '
+            'that use them:'))
+        for k in sorted(bad, key=checked):
+            more = len(users[k]) - 1
+            who = shown(checked(k)) + (f' and {more} more' if more > 0 else '')
+            lines.append(filled(f'{who}: {bad[k]}', 2, 4))
+    if part['tables'] is None:
+        lines.append(filled(
+            '!! The sort tables (LC_COLLATE) could not be packed into the '
+            f'file ({part["tables_why"]}): the comparison can still tell '
+            'whether each one changed, but cannot name what changed in it.'))
+    return lines
+
+
+CT_MAXU = (1 << 64) - 1
+CT_LC_COLLATE = 3
+CT_SORT_FORWARD, CT_SORT_BACKWARD, CT_SORT_POSITION = 1, 2, 4
+
+_CT_LIBC = None
+
+
+def _ct_lib():
+    global _CT_LIBC
+    if _CT_LIBC is None:
+        lib = ctypes.CDLL('libc.so.6')
+        lib.nl_langinfo_l.restype = ctypes.c_void_p
+        lib.nl_langinfo_l.argtypes = [ctypes.c_int, ctypes.c_void_p]
+        lib.newlocale.restype = ctypes.c_void_p
+        lib.newlocale.argtypes = [ctypes.c_int, ctypes.c_char_p,
+                                  ctypes.c_void_p]
+        lib.freelocale.argtypes = [ctypes.c_void_p]
+        lib.strxfrm.restype = ctypes.c_size_t
+        lib.strxfrm.argtypes = [ctypes.c_char_p, ctypes.c_char_p,
+                                ctypes.c_size_t]
+        _CT_LIBC = lib
+    return _CT_LIBC
+
+
+def ct_item(k, loc):
+    """nl_langinfo_l of item k of LC_COLLATE: the 8-byte union value
+    (locale_data_value, localeinfo.h:81-86@2.28, :76-81@2.39) as an int."""
+    return _ct_lib().nl_langinfo_l((CT_LC_COLLATE << 16) | k, loc) or 0
+
+
+def ct_word(value):
+    """The `unsigned int word` member of the union nl_langinfo_l returned
+    whole: its first 4 bytes in memory, read in this machine's byte order.
+    On a little-endian machine that is the low half of the value; on a
+    big-endian one (s390x) the high half, where glibc wrote it
+    (loadlocale.c:157-158@2.28, :219-220@2.39); the other half is malloc'd
+    bytes nobody wrote."""
+    raw = value.to_bytes(ctypes.sizeof(ctypes.c_void_p), sys.byteorder)
+    return int.from_bytes(raw[:4], sys.byteorder)
+
+
+def ct_u8(addr):
+    return ctypes.c_uint8.from_address(addr).value
+
+
+def ct_i32(addr):
+    return ctypes.c_int32.from_address(addr).value
+
+
+def ct_utf8_encode(val):
+    """ld-collate.c:282-310 @2.39."""
+    if val < 0x80:
+        return bytes([val])
+    for step in range(2, 6):
+        if (val & ((0xFFFFFFFF << (5 * step + 1)) & 0xFFFFFFFF)) == 0:
+            break
+    buf = [0] * step
+    buf[0] = (~0xff >> step) & 0xFF
+    s = step - 1
+    while True:
+        buf[s] = 0x80 | (val & 0x3f)
+        val >>= 6
+        s -= 1
+        if s <= 0:
+            break
+    buf[0] |= val
+    return bytes(buf)
+
+
+def ct_numbers(b):
+    """The order numbers a level's weight bytes encode (inverse of
+    ct_utf8_encode); raises on bytes ct_utf8_encode cannot produce."""
+    out = []
+    i = 0
+    while i < len(b):
+        c = b[i]
+        if c < 0x80:
+            out.append(c)
+            i += 1
+            continue
+        n = 0
+        while n < 7 and c & (0x80 >> n):
+            n += 1
+        if n < 2 or n > 6 or i + n > len(b):
+            raise ValueError('bad weight bytes %s' % b.hex())
+        v = c & (0xff >> (n + 1))
+        for k in range(1, n):
+            if b[i + k] & 0xC0 != 0x80:
+                raise ValueError('bad weight bytes %s' % b.hex())
+            v = (v << 6) | (b[i + k] & 0x3f)
+        if ct_utf8_encode(v) != b[i:i + n]:
+            raise ValueError('non-canonical weight bytes %s' % b.hex())
+        out.append(v)
+        i += n
+    return out
+
+
+class CollateTables:
+    """The narrow tables of the LC_COLLATE of LOC (a newlocale object)."""
+
+    def __init__(self, loc):
+        self.nrules = ct_word(ct_item(0, loc))
+        if self.nrules == 0:
+            return
+        if self.nrules > 32:
+            raise ValueError('nrules %d' % self.nrules)
+        self.p_rules, self.p_table, self.p_weights, self.p_extra, \
+            self.p_indirect = [ct_item(k, loc) for k in range(1, 6)]
+        self.table = [ct_i32(self.p_table + 4 * c) for c in range(256)]
+        # HEAD[ch]: an int (direct) or the list of entries, in table order.
+        self.head = [None] * 256
+        extra_end = 4
+        ind_max = 0
+        values = set()
+        nentries = 0
+        for ch in range(1, 256):
+            t = self.table[ch]
+            if t >= 0:
+                self.head[ch] = t
+                values.add(t)
+                continue
+            off = -t
+            entries = []
+            while True:
+                i = ct_i32(self.p_extra + off)
+                off += 4
+                n = ct_u8(self.p_extra + off)
+                off += 1
+                nentries += 1
+                if nentries > 5000000:
+                    raise ValueError('extra list does not end')
+                if i >= 0:
+                    seq = ctypes.string_at(self.p_extra + off, n)
+                    off += n
+                    if (1 + n) % 4:
+                        off += 4 - (1 + n) % 4
+                    if 0 in seq:
+                        raise ValueError('NUL in a sequence')
+                    entries.append((0, i, seq, n))
+                    values.add(i)
+                    if n == 0:
+                        break
+                else:
+                    frm = ctypes.string_at(self.p_extra + off, n)
+                    to = ctypes.string_at(self.p_extra + off + n, n)
+                    off += 2 * n
+                    if (1 + 2 * n) % 4:
+                        off += 4 - (1 + 2 * n) % 4
+                    if n == 0 or frm[:-1] != to[:-1] or frm[-1] > to[-1] \
+                            or 0 in frm or 0 in to:
+                        raise ValueError('range shape %r %r' % (frm, to))
+                    vals = [ct_i32(self.p_indirect + 4 * (-i + k))
+                            for k in range(to[-1] - frm[-1] + 1)]
+                    ind_max = max(ind_max, -i + len(vals))
+                    values.update(vals)
+                    entries.append((1, i, frm, to, n, vals))
+            extra_end = max(extra_end, off)
+            self.head[ch] = entries
+        self.nsets = max(v >> 24 for v in values) + 1
+        self.rulesets = ctypes.string_at(self.p_rules,
+                                         self.nsets * self.nrules)
+        # The weights reachable from any value, read level by level.
+        wend = 0
+        for v in values:
+            p = v & 0xFFFFFF
+            for _ in range(self.nrules):
+                p += 1 + ct_u8(self.p_weights + p)
+            wend = max(wend, p)
+        self.W = ctypes.string_at(self.p_weights, wend)
+        h = hashlib.sha256()
+        h.update(b'%d\n' % self.nrules)
+        h.update(self.rulesets)
+        h.update(ctypes.string_at(self.p_table, 1024))
+        h.update(ctypes.string_at(self.p_extra, extra_end))
+        h.update(ctypes.string_at(self.p_indirect, 4 * ind_max))
+        h.update(self.W)
+        self.digest = h.hexdigest()
+
+    def levels(self, v):
+        """The weight bytes of value v, one bytes per level."""
+        W = self.W
+        p = v & 0xFFFFFF
+        out = []
+        for _ in range(self.nrules):
+            n = W[p]
+            out.append(W[p + 1:p + 1 + n])
+            p += 1 + n
+        return out
+
+    def rulevec(self, v):
+        r = v >> 24
+        return self.rulesets[r * self.nrules:(r + 1) * self.nrules]
+
+    # --- strxfrm cached path (strxfrm_l.c:403-664, 716-738 @2.39)
+    def strxfrm(self, s, fi):
+        if self.nrules == 0:
+            return s
+        if not s:
+            return b''
+        W, nrules, rulesets = self.W, self.nrules, self.rulesets
+        idxarr, rulearr = [], []
+        p = 0
+        while True:
+            tmp, p = fi(p)
+            rulearr.append(tmp >> 24)
+            idxarr.append(tmp & 0xFFFFFF)
+            if p >= len(s):
+                break
+        if len(idxarr) >= 4095:
+            raise ValueError('uncached path')
+        rulearr.append(0)
+        idxmax = len(idxarr)
+        dest = bytearray()
+        last_needed = 0
+
+        def take(k, withval, val):
+            ln = W[idxarr[k]]
+            idxarr[k] += 1
+            if withval:
+                if ln != 0:
+                    dest.extend(ct_utf8_encode(val))
+                    dest.extend(W[idxarr[k]:idxarr[k] + ln])
+                    idxarr[k] += ln
+                    return 1
+                return val + 1
+            dest.extend(W[idxarr[k]:idxarr[k] + ln])
+            idxarr[k] += ln
+            return val
+
+        for pass_ in range(nrules):
+            backw_stop = CT_MAXU
+            rule = rulesets[rulearr[0] * nrules + pass_]
+            position = rule & CT_SORT_POSITION
+            last_needed = len(dest)
+            val = 1
+            for idxcnt in range(idxmax):
+                if rule & CT_SORT_FORWARD:
+                    if backw_stop != CT_MAXU:
+                        backw = idxcnt
+                        while backw > backw_stop:
+                            backw -= 1
+                            val = take(backw, position, val)
+                        backw_stop = CT_MAXU
+                    val = take(idxcnt, position, val)
+                elif backw_stop == CT_MAXU:
+                    backw_stop = idxcnt
+                rule = rulesets[rulearr[idxcnt + 1] * nrules + pass_]
+            if backw_stop != CT_MAXU:
+                backw = idxmax - 1 if position else idxmax
+                while backw > backw_stop:
+                    backw -= 1
+                    val = take(backw, position, val)
+            dest.append(1 if pass_ + 1 < nrules else 0)
+        needed = len(dest)
+        if needed > 2 and needed == last_needed + 1:
+            return bytes(dest[:last_needed - 1])
+        return bytes(dest[:needed - 1])
+
+
+
+def ct_elements(T):
+    """Every byte sequence findidx can return a value for, with the value:
+    the direct entries, each list entry, each range expanded (ranges vary in
+    the last byte only, checked in CollateTables), and each list's closing
+    entry, which matches the lead byte alone."""
+    out = {}
+    dup = 0
+    for ch in range(1, 256):
+        h = T.head[ch]
+        if h.__class__ is int:
+            out[bytes([ch])] = h
+            continue
+        for e in h:
+            if e[0] == 0:
+                seqs = [(bytes([ch]) + e[2], e[1])]
+            else:
+                _, i, frm, to, n, vals = e
+                seqs = [(bytes([ch]) + frm[:-1] + bytes([b]),
+                         vals[b - frm[-1]])
+                        for b in range(frm[-1], to[-1] + 1)]
+            for s, v in seqs:
+                if s in out:
+                    dup += 1
+                else:
+                    out[s] = v
+    return out, dup
+
+
+# ------------------------------------------------- the record of a table
+def ct_varint(out, n):
+    while n >= 0x80:
+        out.append((n & 0x7F) | 0x80)
+        n >>= 7
+    out.append(n)
+
+
+def ct_read_varint(b, i):
+    n = shift = 0
+    while True:
+        c = b[i]
+        i += 1
+        n |= (c & 0x7F) << shift
+        if c < 0x80:
+            return n, i
+        shift += 7
+
+
+def ct_record(T):
+    """The compact binary record of one table: nrules, rulesets, then every
+    sequence glibc's findidx knows, sorted, with its rule vector and its order
+    numbers per level."""
+    els, _ = ct_elements(T)
+    out = bytearray()
+    ct_varint(out, T.nrules)
+    ct_varint(out, len(T.rulesets))
+    out += T.rulesets
+    ct_varint(out, len(els))
+    for s, v in sorted(els.items()):
+        ct_varint(out, len(s))
+        out += s
+        out += T.rulevec(v)
+        for level in T.levels(v):
+            nums = ct_numbers(level)
+            ct_varint(out, len(nums))
+            for x in nums:
+                ct_varint(out, x)
+    return bytes(out)
+
+
+# How an xz stream begins; a zlib stream begins with 78 (ct_unpack_all).
+CT_XZ_MAGIC = b'\xfd7zXZ\x00'
+
+
+def ct_pack_all(records):
+    """Every record, under its digest, in one stream: xz, preset 6, the
+    preset the cost was measured with (16.41), or zlib, level 6, where the
+    Python measuring was built without lzma (imported here), which
+    ct_unpack_all tells apart by its first bytes. Where packing fails all
+    the same, the run says the tables could not be packed
+    (collate_not_read)."""
+    out = bytearray()
+    for d in sorted(records):
+        out += bytes.fromhex(d)
+        ct_varint(out, len(records[d]))
+        out += records[d]
+    try:
+        import lzma
+    except ImportError:
+        return zlib.compress(bytes(out), 6)
+    return lzma.compress(bytes(out), preset=6)
+
+
+def ct_unpack_all(raw, keep=None):
+    """{digest: record} of what ct_pack_all packed; only the digests in KEEP
+    where it is given, so that a comparison holds the records it names and
+    no others. The stream is xz or zlib, as ct_pack_all wrote it; an xz
+    one needs lzma here too."""
+    if raw[:len(CT_XZ_MAGIC)] == CT_XZ_MAGIC:
+        import lzma
+        b = lzma.decompress(raw)
+    elif raw[:1] == b'\x78':
+        b = zlib.decompress(raw)
+    else:
+        raise ValueError('the packed tables are neither an xz nor a zlib '
+                         'stream')
+    out, i = {}, 0
+    while i < len(b):
+        d = b[i:i + 32].hex()
+        n, i = ct_read_varint(b, i + 32)
+        if i + n > len(b):
+            raise ValueError('a record runs past the end of the tables')
+        if keep is None or d in keep:
+            out[d] = b[i:i + n]
+        i += n
+    return out
+
+
+def ct_parse(rec):
+    nrules, i = ct_read_varint(rec, 0)
+    nr, i = ct_read_varint(rec, i)
+    rulesets = rec[i:i + nr]
+    i += nr
+    count, i = ct_read_varint(rec, i)
+    m = {}
+    for _ in range(count):
+        n, i = ct_read_varint(rec, i)
+        s = rec[i:i + n]
+        i += n
+        rv = rec[i:i + nrules]
+        i += nrules
+        lv = []
+        for _ in range(nrules):
+            k, i = ct_read_varint(rec, i)
+            nums = []
+            for _ in range(k):
+                x, i = ct_read_varint(rec, i)
+                nums.append(x)
+            lv.append(nums)
+        m[s] = (rv, lv)
+    if i != len(rec):
+        raise ValueError('record has trailing bytes')
+    return {'nrules': nrules, 'rulesets': rulesets, 'map': m}
+
+
+# ------------------- controls 2 to 4: the record against glibc's strxfrm
+def ct_real_key(b, buf=None):
+    lib = _ct_lib()
+    if buf is None:
+        buf = ctypes.create_string_buffer(512)
+    n = lib.strxfrm(buf, b, 512)
+    if n < 512:
+        return ctypes.string_at(buf, n)
+    big = ctypes.create_string_buffer(n + 1)
+    lib.strxfrm(big, b, n + 1)
+    return ctypes.string_at(big, n)
+
+
+class _CollateOne:
+    """One element's weights, laid out as CollateTables.strxfrm reads them."""
+
+    def __init__(self, nrules, rv, nums):
+        W = bytearray()
+        for level in nums:
+            wb = b''.join(ct_utf8_encode(x) for x in level)
+            W.append(len(wb))
+            W += wb
+        self.nrules, self.W, self.rulesets = nrules, bytes(W), bytes(rv)
+
+
+def ct_record_check(rec):
+    """The record as stored: for every sequence in it, the key strxfrm would
+    give that sequence alone, built from the stored rule vector and order
+    numbers, against glibc's own strxfrm of the sequence. Returns (sequences
+    checked, mismatches, up to 5 examples)."""
+    p = ct_parse(rec)
+    buf = ctypes.create_string_buffer(512)
+    bad, ex = 0, []
+    for s, (rv, nums) in p['map'].items():
+        mine = CollateTables.strxfrm(_CollateOne(p['nrules'], rv, nums), s,
+                              lambda q, n=len(s): (0, n))
+        if mine != ct_real_key(s, buf):
+            bad += 1
+            if len(ex) < 5:
+                ex.append(s.hex())
+    return len(p['map']), bad, ex
+
+
+class _CollateMany:
+    """Several elements' weights and rule vectors, as CollateTables.strxfrm
+    reads them: element i at offset self.offs[i] with rule set i."""
+
+    def __init__(self, nrules, elems):
+        self.nrules, self.offs = nrules, []
+        W = b''
+        for rv, nums in elems:
+            self.offs.append(len(W))
+            W += _CollateOne(nrules, rv, nums).W
+        self.W = W
+        self.rulesets = b''.join(bytes(rv) for rv, _ in elems)
+
+
+def _ct_preferred(s):
+    return (not (len(s) == 1 and 0x20 < s[0] < 0x7f), len(s), s)
+
+
+def _ct_wbytes(nums):
+    return b''.join(ct_utf8_encode(x) for x in nums)
+
+
+def _ct_commute(a, b):
+    """Whether two weights give the same bytes in either order: then no
+    reversal of the two can change a key."""
+    x, y = _ct_wbytes(a), _ct_wbytes(b)
+    return x + y == y + x
+
+
+def _ct_backward_pair(p, k):
+    """Two sequences read backward at level k whose weights there are not
+    empty and give other bytes in the other order (None for the second when
+    the record has no such pair; (None, None) when nothing is read backward
+    there). If every weight read backward at k commutes with the first one,
+    they are all powers of one byte string, and reversing any run of them
+    changes no key."""
+    m = p['map']
+    back = [s for s in sorted(m, key=_ct_preferred)
+            if m[s][0][k] & CT_SORT_BACKWARD and m[s][1][k]]
+    if not back:
+        return None, None
+    za = back[0]
+    zb = next((z for z in back
+               if not _ct_commute(m[z][1][k], m[za][1][k])), None)
+    return za, zb
+
+
+def ct_references(p):
+    """The elements put after each sequence: for every rule vector the
+    record holds, one sequence (weights at every level if any has them;
+    one-byte ASCII first, then the shortest); and for every level some rule
+    vector reads backward, the two of _ct_backward_pair. Whatever weight s has
+    at that level, unless it is empty or a power of the same byte string as
+    every backward weight there, one of those two gives other bytes in the
+    other order, so s followed by it shows the direction stored for s."""
+    m = p['map']
+    byrv = collections.defaultdict(list)
+    for s in sorted(m, key=_ct_preferred):
+        byrv[m[s][0]].append(s)
+    out = []
+    for rv in sorted(byrv):
+        cands = byrv[rv]
+        out.append(next((z for z in cands if all(m[z][1])), cands[0]))
+    for k in range(p['nrules']):
+        for z in _ct_backward_pair(p, k):
+            if z is not None and z not in out:
+                out.append(z)
+    return out
+
+
+def ct_surrounds(p):
+    """The pairs put around each sequence: for every level some rule vector
+    reads backward, the two of _ct_backward_pair, when there are two, in both
+    orders (one order can be read as other sequences, as a lone lead byte
+    followed by the next byte). A sequence whose weight there is empty
+    shows the direction stored for it only between two such."""
+    out = []
+    for k in range(p['nrules']):
+        za, zb = _ct_backward_pair(p, k)
+        if zb is not None:
+            out += [(za, zb), (zb, za)]
+    return out
+
+
+def _ct_segments_as(m, parts):
+    """Whether glibc, which reads the longest sequence first, would read the
+    bytes of PARTS as exactly those parts."""
+    for i in range(len(parts)):
+        rest = b''.join(parts[i:])
+        if any(rest[:k] in m for k in range(len(parts[i]) + 1, len(rest) + 1)):
+            return False
+    return True
+
+
+def ct_seq_check(m, nrules, s, stored, refs, surr, buf, flip=0):
+    """For one sequence s whose stored (rule vector, order numbers) are
+    STORED: s followed by each reference and s between each surrounding
+    pair, the key built from stored values only, against glibc's strxfrm.
+    Returns (pairs checked, triples checked, mismatches, skipped, the bytes
+    of the first mismatch or None)."""
+    def el(x, st=None):
+        rv, nums = st if st is not None else m[x]
+        return bytes(b ^ flip for b in rv), nums
+    npair = ntrip = bad = skip = 0
+    first = None
+    cases = [((s, z), (el(s, stored), el(z))) for z in refs]
+    cases += [((za, s, zb), (el(za), el(s, stored), el(zb)))
+              for za, zb in surr]
+    for parts, elems in cases:
+        if not _ct_segments_as(m, parts):
+            skip += 1
+            continue
+        t = b''.join(parts)
+        many = _CollateMany(nrules, elems)
+        bounds = []
+        pos = 0
+        for i, part in enumerate(parts):
+            pos += len(part)
+            bounds.append(((i << 24) | many.offs[i], pos))
+        starts = {0: bounds[0]}
+        pos = 0
+        for i, part in enumerate(parts[:-1]):
+            pos += len(part)
+            starts[pos] = bounds[i + 1]
+        mine = CollateTables.strxfrm(many, t, starts.__getitem__)
+        if len(parts) == 2:
+            npair += 1
+        else:
+            ntrip += 1
+        if mine != ct_real_key(t, buf):
+            bad += 1
+            if first is None:
+                first = t
+    return npair, ntrip, bad, skip, first
+
+
+def ct_pair_check(rec, flip=0):
+    """The record as stored, a few elements at a time: every sequence s
+    followed by every reference (ct_references) and between every
+    surrounding pair (ct_surrounds), each key built from the stored rule
+    vectors and order numbers only, against glibc's strxfrm of the same
+    bytes. One element alone cannot show whether a level is read forward
+    or backward; these can. A case glibc would read as other sequences is
+    skipped, and a sequence whose every case was skipped is counted apart:
+    nothing checked how it is read beside others. FLIP xors every stored
+    rule byte (a self-test).
+    Returns (pairs, triples, mismatches, skipped, sequences no case
+    checked, up to 5 examples)."""
+    p = ct_parse(rec)
+    m = p['map']
+    refs, surr = ct_references(p), ct_surrounds(p)
+    buf = ctypes.create_string_buffer(512)
+    npair = ntrip = bad = skip = unchecked = 0
+    ex = []
+    for s, stored in m.items():
+        a, b, c, d, first = ct_seq_check(m, p['nrules'], s, stored, refs, surr,
+                                      buf, flip)
+        npair += a
+        ntrip += b
+        bad += c
+        skip += d
+        if not a + b:
+            unchecked += 1
+        if first is not None and len(ex) < 5:
+            ex.append(first.hex())
+    return npair, ntrip, bad, skip, unchecked, ex
 
 
 def libc():
@@ -1832,8 +2774,7 @@ def measured(codeset, mb_cur_max):
     # strxfrm is a shortcut to the sort; PostgreSQL compares with strcoll.
     # Every neighbour is checked with strcoll, and since strcoll is a
     # transitive order, neighbours that agree mean the whole order is
-    # strcoll's. Where some do not (strxfrm's key and strcoll part on the
-    # th_TH of glibc 2.39, measured), the strings are sorted with strcoll
+    # strcoll's. Where some do not, the strings are sorted with strcoll
     # itself, its ties broken by the bytes as PostgreSQL breaks them, and
     # checked again.
     told_apart, disagree = told_records(data, order, plan, strcoll)
@@ -2258,6 +3199,7 @@ def measure(jobs):
     UTF8_BYTES = [chr(c).encode('utf-8') for c in CODEPOINTS]
     results, order_data, pair_data, uses, identities = {}, {}, {}, {}, {}
     strings_data = {}
+    collate_entries, collate_records, collate_reps = {}, {}, {}
     try:
         with fork_pool(jobs) as pool:
             measured = pool.map(measure_locale, names)
@@ -2266,6 +3208,20 @@ def measure(jobs):
                 if line:
                     sys.stderr.write(line)
                     sys.stderr.flush()
+                # measure_one read the sort table of every locale glibc
+                # accepted whose encoding it read; one it stopped at before
+                # has none, and its entry gives the locale's own error.
+                coll = result.pop('_collate', None)
+                if coll is None:
+                    entry = {'state': 'not read',
+                             'why': result.get('error') or 'not read'}
+                else:
+                    entry, rec = coll
+                    if rec is not None:
+                        collate_records.setdefault(entry['table'], rec)
+                        collate_reps.setdefault(
+                            (entry['table'], result['codeset']), name)
+                collate_entries[name] = entry
                 results[name] = result
                 uses[name] = use
                 identities[name] = ident
@@ -2291,6 +3247,8 @@ def measure(jobs):
             ctype = ctype_part(identities, measure_tables)
             converter = converter_part(uses, pool.map)
             forward, back = round_trip_parts(uses, pool.map)
+            collate = collate_part(collate_entries, collate_records,
+                                   collate_reps, pool.map)
         money = money_digits(names)
     except NotPutBack as e:
         die(f'{e}; nothing was written: run again with a smaller --jobs')
@@ -2322,6 +3280,7 @@ def measure(jobs):
         'converter': converter,
         'utf8_forward': forward,
         'back': back,
+        'collate': collate,
     }
     out['content'] = content_digest(out)
     text = json.dumps(out, sort_keys=True) + '\n'
@@ -2346,8 +3305,9 @@ def progress(done, total, seconds, what='locale(s)'):
 
 def finished(out, seconds, size):
     """Report a measurement on stderr, once written; the exit status, 1 when
-    some locale could not be measured, its order or its LC_CTYPE, or the
-    converter of some encoding, either way."""
+    some locale could not be measured, its order, its LC_CTYPE or its sort
+    table, or the converter of some encoding, either way, or when the sort
+    tables could not be packed."""
     results = out['locales']
     failed = sorted(n for n, r in results.items() if 'error' in r)
     sys.stderr.write(f'Done in {seconds:.0f} s: '
@@ -2381,9 +3341,13 @@ def finished(out, seconds, size):
                          f'encoding(s):\n')
         for cs in unback:
             sys.stderr.write(f'  {cs}: {out["back"][cs][3]}\n')
+    unsorted = collate_not_read(out)
+    for line in unsorted:
+        sys.stderr.write(line + '\n')
     for line in machine_libc_lines(out['postgres_libc']):
         sys.stderr.write(line + '\n')
-    return 1 if failed or unread or unconverted or unturned or unback else 0
+    return 1 if (failed or unread or unconverted or unturned or unback
+                 or unsorted) else 0
 
 
 def ctype_not_checked(part):
@@ -2941,6 +3905,9 @@ def load(path, digest):
                            or forward_unpacked(e[3]) is not None)):
         die(f'{path}: what it says of the converter of UTF-8 is malformed; it '
             'is not a whole measurement')
+    if 'collate' in held and not collate_part_whole(data['collate'], locales):
+        die(f'{path}: what it says of the sort table of each locale is '
+            'malformed; it is not a whole measurement')
     if 'back' in held and not back_part_whole(data['back'], data['postgres_use']):
         die(f'{path}: what it says of the conversion of characters back to '
             'bytes is malformed; it is not a whole measurement')
@@ -4478,7 +5445,9 @@ def undecided_brief(d):
 
 def undecided_rows(d):
     nm = d['naming']
-    return [('not decided', f'{nm.token(x)} {nm.token(y)}', '-', '-', '-', '-', '-')
+    # Two strings, by ", " as a chain of them is: "U+x U+y" is one string
+    # of several characters (SEVERAL_CHARACTERS).
+    return [('not decided', f'{nm.token(x)}, {nm.token(y)}', '-', '-', '-', '-', '-')
             for x, y in d['pairs']]
 
 
@@ -4528,10 +5497,24 @@ OTHER_STRINGS = ('In the sort orders, a string that this comparison cannot '
                  'its bytes in hexadecimal: bytes 80 is the single byte 80, '
                  'and bytes 80..FF every string of that length from the '
                  'first to the last.')
+# After OTHER_STRINGS, or alone, where a sort table names a string of
+# several characters.
+SEVERAL_CHARACTERS = ('A name of several code points, such as U+0063 U+0068 '
+                      '(ch), is one string of those characters, in that '
+                      'order.')
 
 
-# Printed under every report and every summary, and at the end of the
-# characters file: what two machines that agree here can still disagree on.
+def names_note(in_bytes, several):
+    """The note under the changes on how their names read, or None."""
+    return ' '.join(([OTHER_STRINGS] if in_bytes else [])
+                    + ([SEVERAL_CHARACTERS] if several else [])) or None
+
+
+# Printed under the report, the summary and the characters file while a
+# locale found unchanged was not compared by its sort table and none was found
+# unchanged by an identical one (CLOSING_MIXED when one was, CLOSING_TABLES
+# when every one was by its table or compares bytes): what two machines that
+# agree here can still disagree on.
 CLOSING = ('!! Not measured: a rule that applies only to a particular '
            'combination of letters, such as a contraction ("ch" sorted as one '
            'letter), so two machines that agree here can still sort some longer '
@@ -6756,7 +7739,7 @@ def lacking_text(codeset, got, unit='byte(s)'):
             ', not all the same' if mixed else '')
 
 
-def other_encoding_text(names, model):
+def other_encoding_text(names, model, firm):
     """The line that names the locales of names whose encoding PostgreSQL
     does not know, or None: a database of any encoding can use one, and
     nothing here measured its order there. What upper(), lower() and ILIKE
@@ -6775,7 +7758,12 @@ def other_encoding_text(names, model):
     16.16; a file of a format before the part; a converter not checked;
     the locale of another encoding there) is named as not known there,
     beside what the other machine measured. C and POSIX are accepted with
-    every encoding and convert nothing."""
+    every encoding and convert nothing.
+    FIRM are the locales unchanged by their sort tables: glibc orders any
+    bytes by the table, so the order of such a locale in a database of
+    another encoding is the same on both machines too, under the same
+    assumption the table's verdict rests on (CLOSING_TABLES or
+    CLOSING_MIXED)."""
     known = model.known
     codesets, unmeasured, lacking, told = {}, {}, {}, False
     for name in names:
@@ -6814,15 +7802,33 @@ def other_encoding_text(names, model):
         return None
     text = (f'!! Not measured in a database of another encoding: '
             f'{len(codesets)} locale(s) whose encoding PostgreSQL does not '
-            'know, so that CREATE DATABASE lets a database of any encoding use '
-            'one, with only a WARNING ("could not determine encoding for '
-            'locale"). In such a database, a UTF8 one say, PostgreSQL hands the '
-            'locale the database\'s bytes, not the ones measured here, so ')
-    if not told:
-        return (text + 'neither its order nor whether upper(), lower() and '
-                'ILIKE give an error there is known. '
-                + by_codeset(codesets, codesets) + '.')
-    text += 'its order there is not known. ' + by_codeset(codesets, codesets) + '.'
+            'know, so that CREATE DATABASE and CREATE COLLATION let a database '
+            'of any encoding use one, with only a WARNING ("could not '
+            'determine encoding for locale"). In such a database, a UTF8 one '
+            'say, PostgreSQL hands the locale the database\'s bytes, not the '
+            'ones measured here')
+    listed = by_codeset(codesets, codesets) + '.'
+    same = sorted(x for x in codesets if x in firm)
+    if not same:
+        if not told:
+            return (text + ', so neither its order nor whether upper(), '
+                    'lower() and ILIKE give an error there is known. ' + listed)
+        text += ', so its order there is not known. ' + listed
+    else:
+        if len(same) == len(codesets):
+            text += ('. Each one\'s compiled sort table is the same on both '
+                     'machines, and glibc orders any bytes by that table, so '
+                     'its order there is the same on both machines. ' + listed)
+        else:
+            text += (f'. Its order there is the same on both machines in the '
+                     f'{len(same)} whose compiled sort table is the same on '
+                     'both, since glibc orders any bytes by that table; in the '
+                     f'other {len(codesets) - len(same)} it is not known. '
+                     + listed + ' The same sort table on both machines: '
+                     + ', '.join(shown(x) for x in same) + '.')
+        if not told:
+            return (text + ' Whether upper(), lower() and ILIKE give an error '
+                    'there is not known.')
     if unmeasured:
         groups = {}
         for name, sides in unmeasured.items():
@@ -6897,8 +7903,674 @@ def rows_of(items):
     return [(d['names'], d['rows']) for d in items]
 
 
+# ---------------------------------------------------------------------------
+# Each locale's verdict from its compiled sort table (16.41 A'), beside step
+# 11's. Two machines whose six items strcoll_l reads are the same bytes sort
+# any text alike, given the same comparison code; step 11 measures a sample
+# of strings, so where both answer, the table decides and step 11 is the
+# cross-check of that code: a change step 11 finds under the same table, or
+# under a table that keeps every order, says the code differs, and then no
+# table decides alone; under a changed table that could not be read, it
+# leaves the question open, and no table decides alone either.
+
+TABLE_EARLIER = ('written by an earlier version of locale_order.py, which did '
+                 'not read the sort tables')
+TABLE_CODE_DIFFERS = ('step 11 found a change in another locale whose sort '
+                      'table keeps every order on both machines, so the two '
+                      'machines compare with different code and the same '
+                      'table does not prove the same order')
+TABLE_CODE_OPEN = ('step 11 found a change in another locale whose sort table '
+                   'could not be compared, so whether the two machines '
+                   'compare with the same code is not known')
+
+
+def table_sides_why_not(old, new):
+    """Why no locale of this pair can be compared by its sort table, or
+    None: a file of an earlier format, or two machines that store numbers
+    in a different byte order, whose compiled tables differ in bytes for
+    the same rules."""
+    parts = [d.get('collate') for d in (old, new)]
+    for side, part, d in zip(('OLD', 'NEW'), parts, (old, new)):
+        if part is None:
+            return (f'the {side} file was {TABLE_EARLIER} ({d["format"]}); '
+                    f'run --extract again on the {side.lower()} machine')
+    if parts[0]['byteorder'] != parts[1]['byteorder']:
+        return ('the two machines store numbers in a different byte order '
+                f'({parts[0]["byteorder"]}-endian, then '
+                f'{parts[1]["byteorder"]}-endian), so their compiled tables '
+                'cannot be compared byte for byte')
+    return None
+
+
+def table_same_items(old, new, name):
+    """Whether both machines read NAME's six items and found them the same
+    bytes, whatever their controls said."""
+    a, b = (d['collate']['locales'].get(name) for d in (old, new))
+    return bool(a and b and a['state'] == b['state'] == 'file'
+                and a['nrules'] and b['nrules']
+                and a['fingerprint'] == b['fingerprint'])
+
+
+def table_route(old, new, name):
+    """(route, why) of one locale measured on both machines, by its sort
+    table alone, where table_sides_why_not() is None:
+      ('bytes', why)        both machines compare bytes: unchanged;
+      ('identical', None)   the six items are the same bytes, read as the
+                            same table, whose controls passed on both
+                            machines;
+      ('changed', why)      the six items differ (why None), or one machine
+                            compares bytes and the other has sort rules;
+      ('not compared', why).
+    The controls are looked up by the locale's own (table, encoding), as
+    measure() keys them: a pair with no control is a table not checked,
+    never one that passed."""
+    entries = [d['collate']['locales'].get(name) for d in (old, new)]
+    # Every side's reason: a side that cannot answer never hides what the
+    # other one said, nor a table it read whose control failed.
+    unread = [f'not read on the {side} machine: '
+              + (e['why'] if e else 'no entry')
+              for side, e in zip(('old', 'new'), entries)
+              if e is None or e['state'] == 'not read']
+    failed = []
+    for side, d, e in zip(('old', 'new'), (old, new), entries):
+        if e and e['state'] == 'file' and e['table'] != 'none':
+            why = collate_check_ok(d['collate']['checks'].get(
+                f'{e["table"]} {d["locales"][name].get("codeset")}'))
+            if why:
+                failed.append(f'on the {side} machine, {why}')
+    if unread:
+        return 'not compared', '; '.join(unread + failed)
+    a, b = entries
+    zero = [e['state'] == 'builtin' or e['nrules'] == 0 for e in entries]
+    if all(zero):
+        return 'bytes', 'no sort rules on either machine'
+    if any(zero):
+        return 'changed', 'sort rules on one machine only'
+    if a['fingerprint'] != b['fingerprint']:
+        return 'changed', None
+    if a['table'] != b['table']:
+        # The reader reads its record from the very items the fingerprint
+        # is taken of: the same items and two records is the reader's
+        # fault, and neither can be trusted.
+        return 'not compared', '; '.join(
+            ['the same compiled items gave two different readings of the '
+             'table'] + failed)
+    if failed:
+        return 'not compared', '; '.join(failed)
+    return 'identical', None
+
+
+def table_verdicts(old, new, both, refused, changed, same, unmeasured):
+    """compare()'s lists after the sort tables: (changed, same, unmeasured,
+    firm, by_table, findings).
+
+    firm: the unchanged locales whose table says so, for any text.
+    by_table: {locale: (why, what step 11 said, named)} of the changed
+    locales whose table changed, why None or the reason a line names, named
+    what TableNaming names in it where why is None. A change step 11 finds
+    under the same table, or under a table whose record keeps every order
+    (NAMED_RECORD, NAMED_NUMBERING), or the same six items on a route not
+    compared, stands, and makes every other locale its table alone would
+    clear 'not compared' (TABLE_CODE_DIFFERS); one under a table that could
+    not be compared leaves the code question open, and those locales are
+    not compared either (TABLE_CODE_OPEN).
+    findings: the run's findings
+    'tables not compared', 'tables disagree' and 'tables only'.
+
+    C and POSIX are glibc's own locale whatever a machine holds
+    (findlocale.c:131-136@2.39, :133-138@2.28), which has no rules and
+    compares bytes (C-collate.c:108-111@2.28, :31-34@2.39), so they are
+    compared by that, never 'not compared'. A locale not compared keeps
+    step 11's verdict, and an unchanged one is unchanged only as far as
+    step 11 measured."""
+    whole = table_sides_why_not(old, new)
+    step11 = dict.fromkeys(changed, 'changed')
+    step11.update(dict.fromkeys(same, 'same'))
+    step11.update(dict.fromkeys(unmeasured, 'unmeasured'))
+    lists = {'changed': [], 'same': [], 'unmeasured': []}
+    firm, by_table = set(), {}
+    not_compared = collections.defaultdict(list)
+    disagree, only = [], []
+    routes = {}
+    for name in both:
+        if name in refused:
+            continue
+        if name in ('C', 'POSIX'):
+            routes[name] = 'bytes', 'built into glibc'
+        elif whole:
+            routes[name] = 'not compared', whole
+        else:
+            routes[name] = table_route(old, new, name)
+    naming = TableNaming(old, new, [
+        name for name, (route, why) in routes.items()
+        if route == 'changed' and why is None])
+    named = {name: naming(name) for name, (route, why) in routes.items()
+             if route == 'changed' and why is None}
+    # The same table, or a record that keeps every order, and a change step
+    # 11 measured: the two machines compare with different code, so the
+    # same table proves nothing on them, and every other locale its table
+    # alone would clear keeps step 11's verdict. Comparing bytes (0 rules)
+    # is strcmp, which reads no table.
+    # The same six items on a route not compared prove it as well: the
+    # fingerprint is taken of the file's items, not of the reader's record.
+    # A table that could not be compared leaves it open: one machine did not
+    # read it, its records could not be had, or its number of levels
+    # changed, so whether it keeps every order is not known. One machine
+    # comparing bytes and the other with rules is a change of order, which
+    # step 11's change does not contradict.
+    alike = {name for name, got in named.items()
+             if got[0] in (NAMED_RECORD, NAMED_NUMBERING)}
+    same_items = {name for name, (route, why) in routes.items()
+                  if route == 'not compared' and not whole
+                  and table_same_items(old, new, name)}
+    unknown = {name for name, got in named.items()
+               if got[0].startswith((NAMED_UNREAD, NAMED_LEVELS))} | {
+        name for name, (route, why) in routes.items()
+        if route == 'not compared' and not whole and name not in same_items}
+    differs = any((route == 'identical' or name in alike
+                   or name in same_items) and step11[name] == 'changed'
+                  for name, (route, why) in routes.items())
+    unsure = not differs and any(name in unknown and step11[name] == 'changed'
+                                 for name in routes)
+    for name, (route, why) in routes.items():
+        s11 = step11[name]
+        if (differs or unsure) and route == 'identical' and s11 != 'changed':
+            route, why = 'not compared', (TABLE_CODE_DIFFERS if differs
+                                          else TABLE_CODE_OPEN)
+        if route in ('identical', 'bytes'):
+            if s11 == 'changed':
+                lists['changed'].append(name)
+                disagree.append(name)
+            else:
+                lists['same'].append(name)
+                firm.add(name)
+                if s11 == 'unmeasured':
+                    only.append(name)
+        elif route == 'changed':
+            lists['changed'].append(name)
+            by_table[name] = (why, s11, named.get(name))
+            if name in alike and s11 == 'changed':
+                disagree.append(name)
+        else:
+            not_compared[why].append((name, s11))
+            lists[s11].append(name)
+            if name in same_items and s11 == 'changed':
+                disagree.append(name)
+    findings = [('tables not compared', {
+        'why': why, 'names': [x for x, s in names],
+        'unchanged': [x for x, s in names if s == 'same']})
+        for why, names in sorted(not_compared.items(),
+                                 key=lambda kv: (-len(kv[1]), kv[0]))]
+    if disagree:
+        findings.append(('tables disagree', {'names': disagree}))
+    if only:
+        findings.append(('tables only', {'names': only}))
+    return (lists['changed'], lists['same'], lists['unmeasured'], firm,
+            by_table, findings)
+
+
+def table_change_lines(why, s11, named=None):
+    """(lines, phrase, counted) a changed locale gets from its table: WHY,
+    or NAMED, TableNaming's answer where the six items differ (what the
+    table names in it, or why it names nothing). phrase is the line for
+    the summary, with the names; counted the one for the characters file,
+    whose rows hold the names."""
+    said = {'changed': None, 'same': 'step 11 saw no change in the strings '
+            'it measured', 'unmeasured': 'step 11 could not measure it'}[s11]
+    head, shown_ = (named[0], named[1]) if named else ('', '')
+    text = 'its compiled sort table changed' + (f': {why}' if why else head)
+    counted = text + (f'; {said}' if said else '')
+    text += shown_ + (f'; {said}' if said else '')
+    # Printed four columns in, like the lines of the change under it; a name
+    # of several words keeps its words on one line (NUL, as runs_text).
+    return ([line.replace('\0', ' ') for line in textwrap.wrap(
+        text + '.', width=74, subsequent_indent='  ', break_on_hyphens=False,
+        break_long_words=False)], text, counted.replace('\0', ' '))
+
+
+# Why a changed table names nothing: both machines hold the same record
+# (the same digest, or the same bytes once both are opened), or records
+# that keep every order.
+NAMED_RECORD = (' in bytes its record of the sequences does not keep, so '
+                'none is named')
+NAMED_NUMBERING = (' only in its numbering: every sequence keeps its order '
+                   'against every other, so none is named')
+# Why a changed table names nothing: a record could not be had, or the two
+# do not have the same number of levels.
+NAMED_UNREAD = '; its sequences cannot be named: '
+NAMED_LEVELS = ': the number of levels changed ('
+
+# How a sequence the table names came to be named, in the characters file.
+NAMED_HOW = {'marked': 'marked by the table as changed',
+             'old': 'only in the old machine\'s table',
+             'new': 'only in the new machine\'s table',
+             'flip': 'compares differently against one marked as changed'}
+
+
+def table_marked(o, n):
+    """(marked, only_old, only_new) of two parsed records with the same
+    number of rules: the sequences whose rule vector, number of weights or
+    place among the others changed at some level, and those in one record
+    only. A place changed is a weight that does not keep its order against
+    the others: per level, the new weight that each old one most often
+    goes to, kept along the longest run that keeps their order (the
+    study's cmpw.py, 16.41). Nothing marked: every sequence keeps its order
+    against every other, and only the numbers differ."""
+    om, nm = o['map'], n['map']
+    common = sorted(set(om) & set(nm))
+    marked = {s for s in common if om[s][0] != nm[s][0]}
+    for lvl in range(o['nrules']):
+        pairs = collections.defaultdict(collections.Counter)
+        users = collections.defaultdict(list)
+        for s in common:
+            a, b = om[s][1][lvl], nm[s][1][lvl]
+            if len(a) != len(b):
+                marked.add(s)
+                continue
+            for x, y in zip(a, b):
+                pairs[x][y] += 1
+                users[(x, y)].append(s)
+        olds = sorted(pairs)
+        best = [pairs[x].most_common(1)[0][0] for x in olds]
+        keep = increasing_run(best)
+        for i, x in enumerate(olds):
+            for y in pairs[x]:
+                if i not in keep or y != best[i]:
+                    marked.update(users[(x, y)])
+    return (sorted(marked), sorted(set(om) - set(nm)),
+            sorted(set(nm) - set(om)))
+
+
+def increasing_run(seq):
+    """The places of a longest strictly increasing run of SEQ."""
+    tails, places, prev = [], [], [None] * len(seq)
+    for i, x in enumerate(seq):
+        j = bisect.bisect_left(tails, x)
+        if j == len(tails):
+            tails.append(x)
+            places.append(i)
+        else:
+            tails[j] = x
+            places[j] = i
+        prev[i] = places[j - 1] if j else None
+    out, i = set(), places[-1] if places else None
+    while i is not None:
+        out.add(i)
+        i = prev[i]
+    return out
+
+
+def table_flips(o, n, marked):
+    """The sequences in both records, not marked, whose order against some
+    marked one is not the same on both machines: at the first level where
+    either machine tells the two apart, a tie that becomes an order counts.
+    A level is looked at only among the sequences that tie at every
+    earlier level on both machines: elsewhere an earlier level decides."""
+    om, nm = o['map'], n['map']
+    mset = set(marked)
+    flips = set()
+    classes = [sorted(set(om) & set(nm))]
+    for lvl in range(o['nrules']):
+        nxt = []
+        for cls in classes:
+            ms = [s for s in cls if s in mset]
+            if not ms:
+                continue
+            ko = {s: tuple(om[s][1][lvl]) for s in cls}
+            kn = {s: tuple(nm[s][1][lvl]) for s in cls}
+            rest = [s for s in cls if s not in mset and s not in flips]
+            if rest:
+                flips.update(flipped(ms, rest, dense_rank(ko),
+                                     dense_rank(kn)))
+            ties = {}
+            for s in cls:
+                ties.setdefault((ko[s], kn[s]), []).append(s)
+            nxt += [g for g in ties.values() if len(g) > 1]
+        classes = nxt
+    return sorted(flips)
+
+
+def dense_rank(keys):
+    order = {k: i for i, k in enumerate(sorted(set(keys.values())))}
+    return {s: order[k] for s, k in keys.items()}
+
+
+def flipped(marked, rest, ro, rn):
+    """The members of REST whose order against some of MARKED differs
+    between the old ranks RO and the new RN."""
+    mk = sorted((ro[s], rn[s]) for s in marked)
+    mro = [a for a, _ in mk]
+    k = len(mk)
+    before = [-1] * (k + 1)          # the highest new rank over mk[:i]
+    for i in range(k):
+        before[i + 1] = max(before[i], mk[i][1])
+    after = [float('inf')] * (k + 1)  # the lowest new rank over mk[i:]
+    for i in range(k - 1, -1, -1):
+        after[i] = min(after[i + 1], mk[i][1])
+    out = []
+    for t in rest:
+        a, b = ro[t], rn[t]
+        lo = bisect.bisect_left(mro, a)
+        hi = bisect.bisect_right(mro, a)
+        if before[lo] >= b or after[hi] <= b \
+                or any(mk[i][1] != b for i in range(lo, hi)):
+            out.append(t)
+    return out
+
+
+class TableNaming:
+    """What the packed records of the two machines name inside a locale
+    whose six items differ (table_naming). Each side's records are opened
+    once, when a locale first needs them, keeping only those of the locales
+    asked for; a side that cannot be opened gives its reason, and the locale
+    names nothing but stays changed. What a locale gets depends only on its
+    two entries and encodings, so locales that share them share it."""
+
+    def __init__(self, old, new, names):
+        """NAMES: every locale that will be asked for."""
+        self.sides = (old, new)
+        self.records = [None, None]
+        self.parsed = {}
+        self.named = {}
+        self.wanted = [{d['collate']['locales'][n]['table'] for n in names}
+                       for d in self.sides]
+
+    def check(self, side, name):
+        """Why the control of NAME's own (table, encoding) on SIDE did not
+        pass, or None."""
+        d = self.sides[side]
+        e = d['collate']['locales'][name]
+        bad = collate_check_ok(d['collate']['checks'].get(
+            f'{e["table"]} {d["locales"][name].get("codeset")}'))
+        return bad and f'on the {("old", "new")[side]} machine, {bad}'
+
+    def record(self, side, name):
+        """The parsed record of NAME's table on SIDE (0, 1), after the
+        control that checked it, or CollateUnread with why not."""
+        d = self.sides[side]
+        which = ('OLD', 'NEW')[side]
+        part, e = d['collate'], d['collate']['locales'][name]
+        bad = self.check(side, name)
+        if bad:
+            raise CollateUnread(bad)
+        if self.records[side] is None:
+            if part['tables'] is None:
+                self.records[side] = (f'the {which} file holds no packed '
+                                      f'tables ({part["tables_why"]})')
+            else:
+                try:
+                    self.records[side] = ct_unpack_all(
+                        base64.b64decode(part['tables'], validate=True),
+                        self.wanted[side])
+                except Exception as x:
+                    self.records[side] = (f'the packed tables of the {which} '
+                                          f'file cannot be opened ({x!r})')
+        recs = self.records[side]
+        if isinstance(recs, str):
+            raise CollateUnread(recs)
+        if e['table'] not in recs:
+            raise CollateUnread(f'the {which} file holds no record of its '
+                                'table')
+        if (side, e['table']) not in self.parsed:
+            try:
+                self.parsed[side, e['table']] = ct_parse(recs[e['table']])
+            except Exception as x:
+                self.parsed[side, e['table']] = CollateUnread(
+                    f'the record of its table in the {which} file cannot be '
+                    f'read ({x!r})')
+        p = self.parsed[side, e['table']]
+        if isinstance(p, CollateUnread):
+            raise p
+        if p['nrules'] != e['nrules']:
+            raise CollateUnread(
+                f'the record stored for its table in the {which} file has '
+                f'{p["nrules"]} level(s), its table {e["nrules"]}')
+        return p
+
+    def __call__(self, name):
+        a, b = (d['collate']['locales'][name] for d in self.sides)
+        codesets = tuple(d['locales'][name].get('codeset')
+                         for d in self.sides)
+        key = (a['table'], a['nrules'], b['table'], b['nrules'], codesets)
+        if key not in self.named:
+            self.named[key] = self.naming(name, a, b, codesets[0])
+        return self.named[key]
+
+    def naming(self, name, a, b, codeset):
+        # The same digest is the same record (the reader's digest hashes the
+        # tables the record is built from): no record needs opening for it,
+        # only the controls.
+        checks = [self.check(side, name) for side in (0, 1)]
+        if a['table'] == b['table'] and not any(checks):
+            return NAMED_RECORD, '', (), False
+        reasons, parsed = [], []
+        for side in (0, 1):
+            try:
+                parsed.append(self.record(side, name))
+            except CollateUnread as x:
+                reasons.append(str(x))
+        if reasons:
+            return (NAMED_UNREAD + '; '.join(reasons), '', (), False)
+        # The same record under two digests too: the digest hashes bytes
+        # of the table the record does not keep.
+        if self.records[0][a['table']] == self.records[1][b['table']]:
+            return NAMED_RECORD, '', (), False
+        o, n = parsed
+        if o['nrules'] != n['nrules']:
+            return (f'{NAMED_LEVELS}{o["nrules"]} to {n["nrules"]}), so its '
+                    'sequences are not compared one by one', '', (), False)
+        return table_naming(o, n, codeset)
+
+
+def table_naming(o, n, codeset):
+    """(head, shown, rows, others) of two parsed records of the same number
+    of rules: the counts, the first LIST_LIMIT names "among them", every
+    name as (characters, how) for the characters file, and whether a name
+    is bytes. Characters of consecutive code points are one run, as step
+    11 writes them; a string of several characters is named by its code
+    points, and one the encoding reads as no character by its bytes
+    (Names)."""
+    marked, only_old, only_new = table_marked(o, n)
+    if not (marked or only_old or only_new):
+        return NAMED_NUMBERING, '', (), False
+    flips = table_flips(o, n, marked) if marked else []
+    names = Names([], codeset)
+    items, others = [], False
+    for kind, seqs in (('marked', marked), ('old', only_old),
+                       ('new', only_new), ('flip', flips)):
+        # By code points where the encoding reads them, then the others by
+        # their bytes; a run is single characters only.
+        read = []
+        for s in seqs:
+            c = names.code_point(s)
+            read.append(((c,) if c is not None else sequence_points(s, names),
+                         s))
+        read.sort(key=lambda x: (x[0] is None, x[0] or (), len(x[1]), x[1]))
+        singles = []
+
+        def flush():
+            for first, last in table_runs(singles, lambda a, b: b == a + 1):
+                if first == last:
+                    items.append((kind, short_character(first),
+                                  f'U+{first:04X}'))
+                else:
+                    run = f'U+{first:04X}..U+{last:04X}'
+                    items.append((kind, run, run))
+            singles.clear()
+        for cps, s in read:
+            if cps is not None and len(cps) == 1:
+                singles.append(cps[0])
+                continue
+            flush()
+            if cps is None:
+                others = True
+                text = f'bytes {spaced(s)}'
+            else:
+                text = ' '.join(f'U+{c:04X}' for c in cps)
+            items.append((kind, text.replace(' ', '\0'), text))
+        flush()
+    parts = []
+    if marked:
+        parts.append(f'it marks {len(marked):,} sequence(s) as changed')
+    if only_new:
+        parts.append(f'{len(only_new):,} appear only in the new machine\'s '
+                     'table')
+    if only_old:
+        parts.append(f'{len(only_old):,} only in the old machine\'s'
+                     if only_new else
+                     f'{len(only_old):,} appear only in the old machine\'s '
+                     'table')
+    if flips:
+        parts.append(f'{len(flips):,} more compare differently against one '
+                     'marked as changed')
+    head = ': ' + (', '.join(parts[:-1]) + ' and ' + parts[-1]
+                   if len(parts) > 1 else parts[0])
+    shown_ = ('; among them: '
+              + ', '.join(x[1] for x in items[:LIST_LIMIT])
+              + (f', and {len(items) - LIST_LIMIT:,} more'
+                 if len(items) > LIST_LIMIT else ''))
+    rows = tuple((tok.translate(TSV_ESCAPES), NAMED_HOW[kind])
+                 for kind, _, tok in items)
+    return head, shown_, rows, others
+
+
+def table_runs(xs, follows):
+    """[(first, last)] of the runs of the sorted XS where follows(a, b)."""
+    out = []
+    for x in xs:
+        if out and follows(out[-1][1], x):
+            out[-1][1] = x
+        else:
+            out.append([x, x])
+    return [tuple(r) for r in out]
+
+
+def sequence_points(s, names):
+    """The code points of a sequence of several characters, where the
+    locale's encoding decodes it whole and back; None where it does not,
+    and it is named by its bytes."""
+    if names.codec is None:
+        return None
+    try:
+        text = s.decode(names.codec)
+    except UnicodeDecodeError:
+        return None
+    if names.codec != 'utf-8' and text.encode(names.codec) != s:
+        return None
+    return tuple(map(ord, text)) or None
+
+
+def listed_names(names):
+    return (', '.join(shown(x) for x in names[:LIST_LIMIT])
+            + (f', and {len(names) - LIST_LIMIT} more'
+               if len(names) > LIST_LIMIT else ''))
+
+
+def tables_not_compared_lines(items, ctx):
+    total = sum(len(d['names']) for d in items)
+    out = [textwrap.fill(
+        f'!! Not compared by their sort tables: {total} locale(s). Each keeps '
+        'step 11\'s verdict, and an unchanged one is unchanged only as far as '
+        'step 11 measured:', width=78, subsequent_indent='   ')]
+    for d in items:
+        out.append(filled(f'{d["why"]}: {len(d["names"])}: '
+                          f'{listed_names(d["names"])}', 2, 4))
+    return out
+
+
+def tables_not_compared_summary(items, ctx):
+    total = sum(len(d['names']) for d in items)
+    out = wrapped(f'!! Not compared by their sort tables: {total} locale(s); '
+                  'each keeps step 11\'s verdict, and an unchanged one is '
+                  'unchanged only as far as step 11 measured:', 5, 8)
+    for d in items:
+        out += wrapped(f'{d["why"]}: {len(d["names"])}: '
+                       f'{listed_names(d["names"])}', 7, 9)
+    return out
+
+
+def tables_not_compared_rows(items):
+    # Only the unchanged ones: a changed one has the rows of its change, and
+    # an unmeasured one those of 'not measured'.
+    return [([name], [('unchanged only as far as measured', '-',
+                       'not compared by its sort table: '
+                       + d['why'].translate(TEXT_ESCAPES), '-', '-', '-', '-')])
+            for d in items for name in d['unchanged']]
+
+
+def tables_disagree_lines(items, ctx):
+    names = [x for d in items for x in d['names']]
+    return [textwrap.fill(
+        f'!! Step 11 found a change in {len(names)} locale(s) whose sort tables '
+        'find no change of order. With the same glibc code that cannot happen, so '
+        'the two machines compare with different code, and no locale is taken '
+        'as unchanged by its sort table alone; they are listed as changed:',
+        width=78,
+        subsequent_indent='   '), filled(listed_names(names), 2, 2)]
+
+
+def tables_disagree_summary(items, ctx):
+    names = [x for d in items for x in d['names']]
+    return wrapped('!! Step 11 found a change where the sort tables find no '
+                   'change of order, '
+                   'so the two machines compare with different glibc code and '
+                   'no locale is unchanged by its table alone: '
+                   f'{listed_names(names)}', 5, 8)
+
+
+def tables_disagree_notes(items):
+    return ['# !! step 11 found a change where the sort tables find no change '
+            'of order: '
+            + ','.join(shown(x).translate(TEXT_ESCAPES)
+                                          for d in items for x in d['names'])]
+
+
+def tables_only_lines(items, ctx):
+    names = [x for d in items for x in d['names']]
+    return [textwrap.fill(
+        f'Unchanged by their sort tables although step 11 could not measure '
+        f'them: {len(names)} locale(s). Nothing in this run checks that the '
+        'two machines compare them with the same glibc code:', width=78,
+        subsequent_indent='   '), filled(listed_names(names), 2, 2)]
+
+
+def tables_only_summary(items, ctx):
+    names = [x for d in items for x in d['names']]
+    return wrapped('unchanged by their sort tables, which step 11 could not '
+                   f'cross-check: {listed_names(names)}', 5, 8)
+
+
+def tables_only_notes(items):
+    return ['# unchanged by their sort tables, which step 11 could not '
+            'cross-check: ' + ','.join(shown(x).translate(TEXT_ESCAPES)
+                                        for d in items for x in d['names'])]
+
+
+# Printed instead of CLOSING when every unchanged locale was compared by its
+# sort table, which holds the contractions and what glibc ignores; C and
+# POSIX, and a locale of no sort rules, compare bytes on both.
+CLOSING_TABLES = ('!! Not measured: whether the two machines compare strings '
+                  'with the same glibc code. Every locale found unchanged '
+                  'either has the same sort table on both, which is what '
+                  'glibc\'s comparison code reads, or compares bytes on both.')
+# Printed instead of both when some unchanged locales were found so by an
+# identical sort table and others were not compared by theirs. One of no
+# sort rules, C and POSIX among them, compares bytes and reads no table.
+CLOSING_MIXED = ('!! Not measured: whether the two machines compare strings '
+                 'with the same glibc code. Each locale found unchanged by its '
+                 'sort table is so only if they do, since that table is what '
+                 'glibc\'s comparison code reads. Nor, in the locales not '
+                 'compared by their sort tables, a rule that applies only to '
+                 'a particular combination of letters, such as a contraction '
+                 '("ch" sorted as one letter), so two machines that agree there '
+                 'can still sort some longer strings apart; and where a '
+                 'character counts for nothing at some level (glibc ignores it '
+                 'there), how it is told apart from its neighbour is read less '
+                 'reliably, so a change there may go unseen.')
+
+
 def run_findings(o, n, warnings, partly, unmeasured, only_old,
-                 checks=(), refused=None, beside=()):
+                 checks=(), refused=None, beside=(), closing=CLOSING):
     """[(kind, data)]: what the run says beside the changed locales -- its
     warnings, the locales NOT known to be unchanged (glibc refused them, they
     could not be measured, or they are not on the new machine) and those
@@ -6921,7 +8593,7 @@ def run_findings(o, n, warnings, partly, unmeasured, only_old,
               for name in unmeasured]
     found += [('not on the new machine', {'name': name}) for name in only_old]
     found += list(beside)
-    found.append(('closing', {'text': CLOSING}))
+    found.append(('closing', {'text': closing}))
     return found
 
 
@@ -7191,6 +8863,12 @@ RUN_KINDS = {
     'other encoding': (other_encoding_lines, other_encoding_summary,
                        other_encoding_notes),
     'closing': (closing_lines, closing_summary, notes),
+    'tables not compared': (tables_not_compared_lines,
+                            tables_not_compared_summary,
+                            tables_not_compared_rows),
+    'tables disagree': (tables_disagree_lines, tables_disagree_summary,
+                        tables_disagree_notes),
+    'tables only': (tables_only_lines, tables_only_summary, tables_only_notes),
 }
 
 
@@ -7249,7 +8927,7 @@ def also_rows(names, pg_names, locales):
 
 
 def summary_lines(old, new, groups, run, totals, characters_to=None,
-                  others=False):
+                  note=None):
     """The report in brief, for the summary audit.sh prints at the end.
 
     Every locale is named, and so are the names PostgreSQL knows it by: a
@@ -7262,6 +8940,7 @@ def summary_lines(old, new, groups, run, totals, characters_to=None,
     o, n = old['locales'], new['locales']
     out = [f'   ({machine_label(old)} -> {machine_label(new)})']
     out += run('warning')
+    out += run('tables disagree')
     out += run('control')
     out += run('postgres libc above')
     count = sum(len(names) for names, brief in groups)
@@ -7280,8 +8959,8 @@ def summary_lines(old, new, groups, run, totals, characters_to=None,
             # On a line of its own, whole, like every other list audit.sh names.
             out.append('       every character, other string and pair:')
             out.append('         ' + characters_to)
-        if others:
-            out += wrapped(OTHER_STRINGS, 7, 7)
+        if note:
+            out += wrapped(note, 7, 7)
     else:
         out.append('     no locale measured on both machines sorts differently')
     unknown = (run.count('refused') + run.count('not measured')
@@ -7291,6 +8970,8 @@ def summary_lines(old, new, groups, run, totals, characters_to=None,
     out += run('refused')
     out += run('not measured')
     out += run('not on the new machine')
+    out += run('tables not compared')
+    out += run('tables only')
     out += run('partly')
     out += run('in part')
     out += run('charmaps not checked')
@@ -7379,7 +9060,7 @@ def charmap_check(data, charmaps):
     return lacking, unchecked, None
 
 
-def charmap_findings(old, new, charmaps, compared):
+def charmap_findings(old, new, charmaps, compared, firm=()):
     """({locale: [(side, charmap, [sequence])]}, [(kind, data)]): what
     charmap_check finds on each machine for the locales compared, as the
     findings 'in part' and 'charmaps not checked'. A machine not checked at
@@ -7387,7 +9068,19 @@ def charmap_findings(old, new, charmaps, compared):
     its charmaps. Where both machines were checked whole and neither gives a
     character to a sequence the strings lack, 'charmaps checked' says so,
     with how many locales it covers, as the money line does: a check that
-    finds nothing is not a check that did not run."""
+    finds nothing is not a check that did not run. FIRM are the locales
+    unchanged by their sort tables, which need no such check: the table
+    decides for every string, and the 'charmaps checked' line, when there
+    is one, says how many those are, C and POSIX aside (no charmap builds
+    them)."""
+    import node_charmaps as nc
+    other = sum(1 for name in firm if name not in nc.BUILTIN)
+    if not compared and other:
+        return {}, [('charmaps checked', {
+            'text': 'Character sets: not checked, and not needed: the '
+                    f'{other} locale(s) found unchanged were found so by their '
+                    'sort tables, which decide for every string.',
+            'warning': False})]
     lacking, found, whole = {}, [], []
     for side, data, how in (('old', old, charmaps[0]), ('new', new, charmaps[1])):
         lacks, cannot, why = charmap_check(data, how)
@@ -7416,18 +9109,25 @@ def charmap_findings(old, new, charmaps, compared):
                 + ' give a character to byte sequences that are not among the '
                 f'strings measured, because {why.rstrip(".")}. Where one does, '
                 'a locale of that encoding is unchanged only as far as '
-                'measured.',
+                'measured' + (', unless its sort table found it unchanged.'
+                              if other else '.'),
         'names': []}) for side, why in whole]
     found += [('in part', {'name': name, 'sides': lacking[name]})
               for name in sorted(lacking)]
     if not found:
-        import node_charmaps as nc
         checked = sum(1 for name in compared if name not in nc.BUILTIN)
-        found.append(('charmaps checked', {
-            'text': 'Character sets: every byte sequence that each machine\'s '
+        if other:
+            text = ('Character sets: every byte sequence that each machine\'s '
+                    'charmaps give a character is among the strings measured, '
+                    f'in the {checked} locale(s) checked. The {other} '
+                    'locale(s) unchanged by their sort tables need no such '
+                    'check: the table decides for every string.')
+        else:
+            text = ('Character sets: every byte sequence that each machine\'s '
                     'charmaps give a character, in the '
                     f'{checked} locale(s) compared, is among the strings '
-                    'measured.', 'warning': False}))
+                    'measured.')
+        found.append(('charmaps checked', {'text': text, 'warning': False}))
     return lacking, found
 
 
@@ -7511,6 +9211,12 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
         else:
             same.append(name)
     only_old = sorted(set(o) - set(n))
+    # Each locale's sort table decides where both machines' tables could be
+    # compared (table_verdicts); step 11's verdict stays where they could
+    # not.
+    measured11 = set(changed) | set(same)
+    changed, same, unmeasured, firm, by_table, table_found = table_verdicts(
+        old, new, both, refused, changed, same, unmeasured)
 
     # Locales whose measurements are the same on both sides changed the same
     # way, so each change is worked out once; then every locale whose change
@@ -7521,20 +9227,49 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     measured_alike = {}
     for name in changed:
         # The encoding too: the same bytes in the same order are other
-        # characters under another encoding, and are named under it.
-        key = (o[name]['order'], o[name]['pairs'], n[name]['order'],
-               n[name]['pairs'], o[name]['codeset'])
+        # characters under another encoding, and are named under it. A
+        # locale changed by its table alone has nothing of step 11 to read.
+        table = by_table.get(name)
+        if table and table[1] != 'changed':
+            key = ('table', o[name].get('codeset'), table)
+        else:
+            key = (o[name]['order'], o[name]['pairs'], n[name]['order'],
+                   n[name]['pairs'], o[name]['codeset'], table)
         measured_alike.setdefault(key, []).append(name)
     reads_alike, briefs, rows = {}, {}, []
-    others = False   # whether a string that is not a character is named
+    others = False   # whether a string is named by its bytes
+    several = False  # whether a sort table names a string of several characters
     for names in measured_alike.values():
-        lines, brief, found, named = describe_change(old, new, o[names[0]],
-                                                     n[names[0]])
+        table = by_table.get(names[0])
+        if table and table[1] != 'changed':
+            lines, brief, found, named = [], '', [], False
+        else:
+            lines, brief, found, named = describe_change(old, new, o[names[0]],
+                                                         n[names[0]])
+        if table:
+            more, phrase, counted = table_change_lines(*table)
+            lines = more + lines
+            if phrase:
+                brief = '; '.join(x for x in (phrase, brief) if x)
+                found = [('sort table changed', '-',
+                          counted.translate(TEXT_ESCAPES), '-', '-', '-',
+                          '-')] + [
+                    ('sort table changed', chars, how, '-', '-', '-',
+                     'compiled table')
+                    for chars, how in (table[2][2] if table[2] else ())
+                ] + found
+            # A name in bytes from the table needs the report's explanation
+            # of bytes names, as one from step 11 does.
+            named = named or bool(table[2] and table[2][3])
+            several = several or any(
+                chars.startswith('U+') and ' ' in chars
+                for chars, how in (table[2][2] if table[2] else ()))
         others = others or named
         reads_alike.setdefault(tuple(lines), []).extend(names)
         briefs[tuple(lines)] = brief
         rows.append((sorted(names), found))
     groups = sorted(reads_alike.items(), key=lambda item: sorted(item[1]))
+    note = names_note(others, several)
     # The names PostgreSQL gives the locales, taken from the old machine: a
     # cluster being upgraded had its collations created there. A locale that
     # could not be measured takes part as well: whether PostgreSQL imported
@@ -7543,12 +9278,17 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     # Unchanged only as far as it was measured: some neighbours were not
     # measured at every level (unclassified), so a change in how they are
     # told apart would not show.
-    partly = [name for name in same if o[name]['partly'] or n[name]['partly']]
+    partly = [name for name in same if name not in firm
+              and (o[name]['partly'] or n[name]['partly'])]
     # Measured in part: a machine's charmap gives a character to sequences
     # its list of strings lacks. An unchanged one is unchanged only as far
     # as measured too.
-    lacking, beside = charmap_findings(old, new, charmaps, changed + same)
-    far = len(set(partly) | {name for name in same if name in lacking})
+    lacking, beside = charmap_findings(
+        old, new, charmaps,
+        [x for x in changed + same if x in measured11 and x not in firm], firm)
+    # Every unchanged locale its table did not decide: step 11 measured a
+    # sample, and the partly and in-part ones are among these.
+    far = len([name for name in same if name not in firm])
     in_part = f' ({far} of them only as far as measured)' if far else ''
     in_refused = f'{len(refused)} refused by glibc, ' if refused else ''
     totals = (f'Of the {len(o)} locale(s) on the old machine: {len(changed)} '
@@ -7579,21 +9319,32 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     beside += [('postgres use rows', d) for d in use_rows]
     beside += [('ctype', d) for d in ctype]
     beside += [('ctype rows', d) for d in ctype_rows]
+    beside += table_found
     # A side that glibc refuses has no encoding in the model's views, so it
     # never names a locale here: one refused on both sides is never named,
     # nor one only on the new machine that glibc refuses there. One only on
     # the new machine serves the databases made there.
-    other = other_encoding_text(both + only_new, model)
+    other = other_encoding_text(both + only_new, model, firm)
     if other:
         beside.append(('other encoding', {'text': other}))
+    # The sentence on contractions stays while an unchanged locale was not
+    # compared by its table; beside it, the one on the code only while
+    # another is unchanged by an identical table, which glibc's code reads
+    # (one of no sort rules, 'bytes', C and POSIX among them, reads none).
+    # Where every unchanged locale is firm, CLOSING_TABLES says both kinds.
+    by_tables = any(table_route(old, new, x)[0] == 'identical'
+                    for x in firm if x not in ('C', 'POSIX'))
     found = run_findings(o, n, warnings, partly, unmeasured, only_old, checks,
-                         refused, beside)
+                         refused, beside,
+                         CLOSING_TABLES if all(x in firm for x in same)
+                         else CLOSING_MIXED if by_tables else CLOSING)
     ctx = {'pg_names': pg_names, 'o': o, 'characters_to': characters_to}
 
     report = [f'Old machine: {machine_label(old)}, {len(old["locales"])} locale(s)',
               f'New machine: {machine_label(new)}, {len(new["locales"])} locale(s)']
     run = Drawn(found, REPORT, ctx)
     report += run('warning')
+    report += run('tables disagree')
     report += run('control')
     report += run('postgres libc above')
     report += ['', f'Sort order CHANGED in {len(changed)} locale(s):']
@@ -7612,9 +9363,11 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
         else:
             report.append('Pass --characters-to FILE for every character, '
                           'other string and pair found.')
-        if others:
-            report += wrapped(OTHER_STRINGS, 0, 0)
+        if note:
+            report += wrapped(note, 0, 0)
     report += ['', f'Unchanged: {len(same)} locale(s).']
+    report += run('tables only')
+    report += run('tables not compared')
     report += run('partly')
     report += run('in part')
     report += run('charmaps not checked')
@@ -7638,7 +9391,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     if summary_to:
         brief = summary_lines(
             old, new, [(names, briefs[lines]) for lines, names in groups],
-            Drawn(found, SUMMARY, ctx), totals, characters_to, others)
+            Drawn(found, SUMMARY, ctx), totals, characters_to, note)
     file_notes = []
     if characters_to:
         # The locales NOT known to be unchanged, and those unchanged only as
@@ -7646,11 +9399,12 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
         # read them as unchanged; the warnings and what is not measured are
         # notes under the rows, as in the report.
         run = Drawn(found, FILE)
-        for kind in ('partly', 'in part', 'refused', 'not measured',
-                     'not on the new machine', 'postgres use rows',
-                     'ctype rows'):
+        for kind in ('partly', 'in part', 'tables not compared', 'refused',
+                     'not measured', 'not on the new machine',
+                     'postgres use rows', 'ctype rows'):
             rows += run(kind)
-        file_notes = (run('warning') + run('control')
+        file_notes = (run('warning') + run('tables disagree')
+                      + run('tables only') + run('control')
                       + run('charmaps not checked')
                       + run('postgres libc above') + run('money')
                       + run('charmaps checked') + run('postgres libc') + run('postgres use')
@@ -7695,7 +9449,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
             with open(partial, 'w', encoding='utf-8') as f:
                 f.write(f'# Step 11, {machine_label(old)} -> {machine_label(new)}: '
                         'every character, other string and pair found, by '
-                        'locale.' + (' ' + OTHER_STRINGS if others else '')
+                        'locale.' + (' ' + note if note else '')
                         + '\n')
                 f.write('locales\tfinding\tcharacters\thow\ttest\tbefore\tnow\tmeasured\n')
                 count = 0
@@ -7738,9 +9492,10 @@ def main():
         epilog=note, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--compare', nargs=2, metavar=('OLD', 'NEW'),
                     help='compare the outputs of two machines, the one you '
-                         'upgrade from first, and name the characters and '
-                         'other strings that moved and those whose character '
-                         'rules (LC_CTYPE) change')
+                         'upgrade from first, decide each locale by its '
+                         'compiled sort table where both files hold one, and '
+                         'name the characters and other strings that moved '
+                         'and those whose character rules (LC_CTYPE) change')
     ap.add_argument('--tags', nargs=2, metavar=('OLD_TAG', 'NEW_TAG'),
                     help='with --compare: the glibc tags of the pair audited, '
                          'as audit.sh passes them; a file measured on another '

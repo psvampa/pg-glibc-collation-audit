@@ -157,7 +157,7 @@ only check that compares a backported locale such as `C` *between* the two
 builds. A machine without the package still gives a file, and those checks
 then say `NOT RUN` with the reason. Step 11 runs without it, and then says
 it did not check the strings it measured against that machine's character
-sets.
+sets, which a locale its sort table decides does not need.
 
 `sql/c_utf8_probe.sql` needs neither langpacks nor that package — `C.utf8`
 exists on every node regardless — and it refuses to run if the collation is

@@ -46,7 +46,7 @@ more.
 | 6 and 7 | do the distro's patches on that machine touch sort order? One step per side |
 | 8 | does one machine's collation data differ from the other's? |
 | 9 and 10 | the question of step 4, asked of that machine's own data. One step per side |
-| 11 | how does each machine's own glibc sort the locales installed on it, and which characters and other strings moved between the two? |
+| 11 | how does each machine's own glibc sort the locales installed on it, is each one's compiled sort table the same on both, and which characters and other strings moved between the two? |
 
 Three of those answer questions the upstream comparison cannot reach at all:
 
@@ -61,7 +61,10 @@ Three of those answer questions the upstream comparison cannot reach at all:
   the locale's encoding can hold, with the call
   PostgreSQL makes under a `libc` collation, and compares the two machines.
   That is how it sees `ko_KR`, whose file is identical at 2.28 and 2.34 while
-  its order changed. What it does not measure, it prints beside its result.
+  its order changed. It also compares each locale's compiled sort table: one
+  that is the same on both machines settles the locale for any text, given
+  the same glibc code on both. What it does not see, it prints beside its
+  result.
 
 Leave the files out and the summary says `NOT RUN` for steps 6 and 7, step
 8, steps 9 and 10 and step 11, and `NOT CHECKED` for what the distro adds or
@@ -78,8 +81,21 @@ measured against them, each with the reason.
 
 **Steps 6 to 10 settle data, not order.** The weights are computed when the
 locale is built, so two machines can hold byte-identical files
-and still sort differently. That is what step 11 measures, one character at a
-time, and commands 2 and 3 measure inside PostgreSQL.
+and still sort differently. That is what step 11 measures, and commands 2 and
+3 measure inside PostgreSQL.
+
+**What step 11 names in a locale whose sort table changed.** Beside what it
+measured, the locale's line counts the sequences the table marks as changed,
+those in one machine's table only, and those that compare differently against
+a marked one, and names the first of them, "among them", never as a complete
+list. A name is a character (`W (U+0057)`), a run of consecutive characters
+(`U+0E01..U+0E3A`), a string of several (`U+0E40 U+0E01`), or, where the
+locale's encoding reads no character, its bytes. "And N more" counts names, so
+a run counts as one. Where the line names nothing, it says why: sort rules on
+one machine only, a change in bytes its record of the sequences does not keep
+or only in their numbering, a different number of levels, or sequences that
+could not be read.
+The file the summary names holds every name, with how it was named.
 
 #### The file from each machine
 
@@ -197,8 +213,7 @@ is inverted. That, and how the probe differs from the template, are in
 ## Command 3 — confirming the order on your own builds
 
 `sql/collation_confirmation_template.sql`, edited first, run on both machines.
-Optional. This sorts strings you choose inside PostgreSQL, which also reaches a
-rule for a combination of letters that step 11 cannot see.
+Optional. This sorts strings you choose inside PostgreSQL.
 
 It does two separate jobs.
 
