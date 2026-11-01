@@ -71,7 +71,10 @@ The comparison decides each locale by its sort table where both machines'
 tables could be compared: the same six items sort any text alike, given the
 same comparison code, and different ones are a change whatever the strings
 showed (table_verdicts). A change the measured order finds under the same
-table still counts, and then no table is trusted alone. Where the tables
+table, or under one that keeps every order, still counts, and then no table
+is trusted alone; under a table that could not be compared it leaves open
+whether the code differs, and no table is trusted alone either. Where the
+tables
 could not be compared, the measured order decides, as far as it was
 measured. For those locales, given each machine's
 charmaps (--old-charmaps and --new-charmaps; audit.sh passes those of a file
@@ -1197,14 +1200,20 @@ def ct_pack_all(records):
     return lzma.compress(bytes(out), preset=6)
 
 
-def ct_unpack_all(raw):
+def ct_unpack_all(raw, keep=None):
+    """{digest: record} of what ct_pack_all packed; only the digests in KEEP
+    where it is given, so that a comparison holds the records it names and
+    no others."""
     import lzma
     b = lzma.decompress(raw)
     out, i = {}, 0
     while i < len(b):
         d = b[i:i + 32].hex()
         n, i = ct_read_varint(b, i + 32)
-        out[d] = b[i:i + n]
+        if i + n > len(b):
+            raise ValueError('a record runs past the end of the tables')
+        if keep is None or d in keep:
+            out[d] = b[i:i + n]
         i += n
     return out
 
@@ -7847,15 +7856,20 @@ def rows_of(items):
 # 11's. Two machines whose six items strcoll_l reads are the same bytes sort
 # any text alike, given the same comparison code; step 11 measures a sample
 # of strings, so where both answer, the table decides and step 11 is the
-# cross-check of that code: a change step 11 finds under the same table
-# says the code differs, and then no table decides alone.
+# cross-check of that code: a change step 11 finds under the same table, or
+# under a table that keeps every order, says the code differs, and then no
+# table decides alone; under a changed table that could not be read, it
+# leaves the question open, and no table decides alone either.
 
 TABLE_EARLIER = ('written by an earlier version of locale_order.py, which did '
                  'not read the sort tables')
-TABLE_CODE_DIFFERS = ('step 11 found a change under the same sort table in '
-                      'another locale, so the two machines compare with '
-                      'different code and the same table does not prove the '
-                      'same order')
+TABLE_CODE_DIFFERS = ('step 11 found a change in another locale whose sort '
+                      'table keeps every order on both machines, so the two '
+                      'machines compare with different code and the same '
+                      'table does not prove the same order')
+TABLE_CODE_OPEN = ('step 11 found a change in another locale whose sort table '
+                   'could not be compared, so whether the two machines '
+                   'compare with the same code is not known')
 
 
 def table_sides_why_not(old, new):
@@ -7873,6 +7887,15 @@ def table_sides_why_not(old, new):
                 f'{parts[1]["byteorder"]}-endian), so their compiled tables '
                 'cannot be compared byte for byte')
     return None
+
+
+def table_same_items(old, new, name):
+    """Whether both machines read NAME's six items and found them the same
+    bytes, whatever their controls said."""
+    a, b = (d['collate']['locales'].get(name) for d in (old, new))
+    return bool(a and b and a['state'] == b['state'] == 'file'
+                and a['nrules'] and b['nrules']
+                and a['fingerprint'] == b['fingerprint'])
 
 
 def table_route(old, new, name):
@@ -7929,10 +7952,16 @@ def table_verdicts(old, new, both, refused, changed, same, unmeasured):
     firm, by_table, findings).
 
     firm: the unchanged locales whose table says so, for any text.
-    by_table: {locale: (why, what step 11 said)} of the changed locales
-    whose table changed, why None or the reason a line names. A change step
-    11 finds under the same table stands, and makes every other locale its
-    table alone would clear 'not compared' (TABLE_CODE_DIFFERS). findings: the run's findings
+    by_table: {locale: (why, what step 11 said, named)} of the changed
+    locales whose table changed, why None or the reason a line names, named
+    what TableNaming names in it where why is None. A change step 11 finds
+    under the same table, or under a table whose record keeps every order
+    (NAMED_RECORD, NAMED_NUMBERING), or the same six items on a route not
+    compared, stands, and makes every other locale its table alone would
+    clear 'not compared' (TABLE_CODE_DIFFERS); one under a table that could
+    not be compared leaves the code question open, and those locales are
+    not compared either (TABLE_CODE_OPEN).
+    findings: the run's findings
     'tables not compared', 'tables disagree' and 'tables only'.
 
     C and POSIX are glibc's own locale whatever a machine holds
@@ -7959,16 +7988,42 @@ def table_verdicts(old, new, both, refused, changed, same, unmeasured):
             routes[name] = 'not compared', whole
         else:
             routes[name] = table_route(old, new, name)
-    # The same table and a change step 11 measured: the two machines compare
-    # with different code, so the same table proves nothing on them, and
-    # every other locale its table alone would clear keeps step 11's
-    # verdict. Comparing bytes (0 rules) is strcmp, which reads no table.
-    differs = any(route == 'identical' and step11[name] == 'changed'
+    naming = TableNaming(old, new, [
+        name for name, (route, why) in routes.items()
+        if route == 'changed' and why is None])
+    named = {name: naming(name) for name, (route, why) in routes.items()
+             if route == 'changed' and why is None}
+    # The same table, or a record that keeps every order, and a change step
+    # 11 measured: the two machines compare with different code, so the
+    # same table proves nothing on them, and every other locale its table
+    # alone would clear keeps step 11's verdict. Comparing bytes (0 rules)
+    # is strcmp, which reads no table.
+    # The same six items on a route not compared prove it as well: the
+    # fingerprint is taken of the file's items, not of the reader's record.
+    # A table that could not be compared leaves it open: one machine did not
+    # read it, its records could not be had, or its number of levels
+    # changed, so whether it keeps every order is not known. One machine
+    # comparing bytes and the other with rules is a change of order, which
+    # step 11's change does not contradict.
+    alike = {name for name, got in named.items()
+             if got[0] in (NAMED_RECORD, NAMED_NUMBERING)}
+    same_items = {name for name, (route, why) in routes.items()
+                  if route == 'not compared' and not whole
+                  and table_same_items(old, new, name)}
+    unknown = {name for name, got in named.items()
+               if got[0].startswith((NAMED_UNREAD, NAMED_LEVELS))} | {
+        name for name, (route, why) in routes.items()
+        if route == 'not compared' and not whole and name not in same_items}
+    differs = any((route == 'identical' or name in alike
+                   or name in same_items) and step11[name] == 'changed'
                   for name, (route, why) in routes.items())
+    unsure = not differs and any(name in unknown and step11[name] == 'changed'
+                                 for name in routes)
     for name, (route, why) in routes.items():
         s11 = step11[name]
-        if differs and route == 'identical' and s11 != 'changed':
-            route, why = 'not compared', TABLE_CODE_DIFFERS
+        if (differs or unsure) and route == 'identical' and s11 != 'changed':
+            route, why = 'not compared', (TABLE_CODE_DIFFERS if differs
+                                          else TABLE_CODE_OPEN)
         if route in ('identical', 'bytes'):
             if s11 == 'changed':
                 lists['changed'].append(name)
@@ -7980,10 +8035,14 @@ def table_verdicts(old, new, both, refused, changed, same, unmeasured):
                     only.append(name)
         elif route == 'changed':
             lists['changed'].append(name)
-            by_table[name] = (why, s11)
+            by_table[name] = (why, s11, named.get(name))
+            if name in alike and s11 == 'changed':
+                disagree.append(name)
         else:
             not_compared[why].append((name, s11))
             lists[s11].append(name)
+            if name in same_items and s11 == 'changed':
+                disagree.append(name)
     findings = [('tables not compared', {
         'why': why, 'names': [x for x, s in names],
         'unchanged': [x for x, s in names if s == 'same']})
@@ -7997,19 +8056,355 @@ def table_verdicts(old, new, both, refused, changed, same, unmeasured):
             by_table, findings)
 
 
-def table_change_lines(why, s11):
-    """The lines a changed locale gets from its table: none where step 11
-    found the change and the table adds no reason of its own."""
+def table_change_lines(why, s11, named=None):
+    """(lines, phrase, counted) a changed locale gets from its table: WHY,
+    or NAMED, TableNaming's answer where the six items differ (what the
+    table names in it, or why it names nothing). phrase is the line for
+    the summary, with the names; counted the one for the characters file,
+    whose rows hold the names."""
     said = {'changed': None, 'same': 'step 11 saw no change in the strings '
             'it measured', 'unmeasured': 'step 11 could not measure it'}[s11]
-    if why is None and said is None:
-        return [], None
-    text = 'its compiled sort table changed' + (f': {why}' if why else '')
-    if said:
-        text += f'; {said}'
-    # Printed four columns in, like the lines of the change under it.
-    return textwrap.wrap(text + '.', width=74, subsequent_indent='  ',
-                         break_on_hyphens=False), text
+    head, shown_ = (named[0], named[1]) if named else ('', '')
+    text = 'its compiled sort table changed' + (f': {why}' if why else head)
+    counted = text + (f'; {said}' if said else '')
+    text += shown_ + (f'; {said}' if said else '')
+    # Printed four columns in, like the lines of the change under it; a name
+    # of several words keeps its words on one line (NUL, as runs_text).
+    return ([line.replace('\0', ' ') for line in textwrap.wrap(
+        text + '.', width=74, subsequent_indent='  ', break_on_hyphens=False,
+        break_long_words=False)], text, counted.replace('\0', ' '))
+
+
+# Why a changed table names nothing: both machines hold the same record
+# (the same digest, or the same bytes once both are opened), or records
+# that keep every order.
+NAMED_RECORD = (' in bytes its record of the sequences does not keep, so '
+                'none is named')
+NAMED_NUMBERING = (' only in its numbering: every sequence keeps its order '
+                   'against every other, so none is named')
+# Why a changed table names nothing: a record could not be had, or the two
+# do not have the same number of levels.
+NAMED_UNREAD = '; its sequences cannot be named: '
+NAMED_LEVELS = ': the number of levels changed ('
+
+# How a sequence the table names came to be named, in the characters file.
+NAMED_HOW = {'marked': 'marked by the table as changed',
+             'old': 'only in the old machine\'s table',
+             'new': 'only in the new machine\'s table',
+             'flip': 'compares differently against one marked as changed'}
+
+
+def table_marked(o, n):
+    """(marked, only_old, only_new) of two parsed records with the same
+    number of rules: the sequences whose rule vector, number of weights or
+    place among the others changed at some level, and those in one record
+    only. A place changed is a weight that does not keep its order against
+    the others: per level, the new weight that each old one most often
+    goes to, kept along the longest run that keeps their order (the
+    study's cmpw.py, 16.41). Nothing marked: every sequence keeps its order
+    against every other, and only the numbers differ."""
+    om, nm = o['map'], n['map']
+    common = sorted(set(om) & set(nm))
+    marked = {s for s in common if om[s][0] != nm[s][0]}
+    for lvl in range(o['nrules']):
+        pairs = collections.defaultdict(collections.Counter)
+        users = collections.defaultdict(list)
+        for s in common:
+            a, b = om[s][1][lvl], nm[s][1][lvl]
+            if len(a) != len(b):
+                marked.add(s)
+                continue
+            for x, y in zip(a, b):
+                pairs[x][y] += 1
+                users[(x, y)].append(s)
+        olds = sorted(pairs)
+        best = [pairs[x].most_common(1)[0][0] for x in olds]
+        keep = increasing_run(best)
+        for i, x in enumerate(olds):
+            for y in pairs[x]:
+                if i not in keep or y != best[i]:
+                    marked.update(users[(x, y)])
+    return (sorted(marked), sorted(set(om) - set(nm)),
+            sorted(set(nm) - set(om)))
+
+
+def increasing_run(seq):
+    """The places of a longest strictly increasing run of SEQ."""
+    tails, places, prev = [], [], [None] * len(seq)
+    for i, x in enumerate(seq):
+        j = bisect.bisect_left(tails, x)
+        if j == len(tails):
+            tails.append(x)
+            places.append(i)
+        else:
+            tails[j] = x
+            places[j] = i
+        prev[i] = places[j - 1] if j else None
+    out, i = set(), places[-1] if places else None
+    while i is not None:
+        out.add(i)
+        i = prev[i]
+    return out
+
+
+def table_flips(o, n, marked):
+    """The sequences in both records, not marked, whose order against some
+    marked one is not the same on both machines: at the first level where
+    either machine tells the two apart, a tie that becomes an order counts.
+    A level is looked at only among the sequences that tie at every
+    earlier level on both machines: elsewhere an earlier level decides."""
+    om, nm = o['map'], n['map']
+    mset = set(marked)
+    flips = set()
+    classes = [sorted(set(om) & set(nm))]
+    for lvl in range(o['nrules']):
+        nxt = []
+        for cls in classes:
+            ms = [s for s in cls if s in mset]
+            if not ms:
+                continue
+            ko = {s: tuple(om[s][1][lvl]) for s in cls}
+            kn = {s: tuple(nm[s][1][lvl]) for s in cls}
+            rest = [s for s in cls if s not in mset and s not in flips]
+            if rest:
+                flips.update(flipped(ms, rest, dense_rank(ko),
+                                     dense_rank(kn)))
+            ties = {}
+            for s in cls:
+                ties.setdefault((ko[s], kn[s]), []).append(s)
+            nxt += [g for g in ties.values() if len(g) > 1]
+        classes = nxt
+    return sorted(flips)
+
+
+def dense_rank(keys):
+    order = {k: i for i, k in enumerate(sorted(set(keys.values())))}
+    return {s: order[k] for s, k in keys.items()}
+
+
+def flipped(marked, rest, ro, rn):
+    """The members of REST whose order against some of MARKED differs
+    between the old ranks RO and the new RN."""
+    mk = sorted((ro[s], rn[s]) for s in marked)
+    mro = [a for a, _ in mk]
+    k = len(mk)
+    before = [-1] * (k + 1)          # the highest new rank over mk[:i]
+    for i in range(k):
+        before[i + 1] = max(before[i], mk[i][1])
+    after = [float('inf')] * (k + 1)  # the lowest new rank over mk[i:]
+    for i in range(k - 1, -1, -1):
+        after[i] = min(after[i + 1], mk[i][1])
+    out = []
+    for t in rest:
+        a, b = ro[t], rn[t]
+        lo = bisect.bisect_left(mro, a)
+        hi = bisect.bisect_right(mro, a)
+        if before[lo] >= b or after[hi] <= b \
+                or any(mk[i][1] != b for i in range(lo, hi)):
+            out.append(t)
+    return out
+
+
+class TableNaming:
+    """What the packed records of the two machines name inside a locale
+    whose six items differ (table_naming). Each side's records are opened
+    once, when a locale first needs them, keeping only those of the locales
+    asked for; a side that cannot be opened gives its reason, and the locale
+    names nothing but stays changed. What a locale gets depends only on its
+    two entries and encodings, so locales that share them share it."""
+
+    def __init__(self, old, new, names):
+        """NAMES: every locale that will be asked for."""
+        self.sides = (old, new)
+        self.records = [None, None]
+        self.parsed = {}
+        self.named = {}
+        self.wanted = [{d['collate']['locales'][n]['table'] for n in names}
+                       for d in self.sides]
+
+    def check(self, side, name):
+        """Why the control of NAME's own (table, encoding) on SIDE did not
+        pass, or None."""
+        d = self.sides[side]
+        e = d['collate']['locales'][name]
+        bad = collate_check_ok(d['collate']['checks'].get(
+            f'{e["table"]} {d["locales"][name].get("codeset")}'))
+        return bad and f'on the {("old", "new")[side]} machine, {bad}'
+
+    def record(self, side, name):
+        """The parsed record of NAME's table on SIDE (0, 1), after the
+        control that checked it, or CollateUnread with why not."""
+        d = self.sides[side]
+        which = ('OLD', 'NEW')[side]
+        part, e = d['collate'], d['collate']['locales'][name]
+        bad = self.check(side, name)
+        if bad:
+            raise CollateUnread(bad)
+        if self.records[side] is None:
+            if part['tables'] is None:
+                self.records[side] = (f'the {which} file holds no packed '
+                                      f'tables ({part["tables_why"]})')
+            else:
+                try:
+                    self.records[side] = ct_unpack_all(
+                        base64.b64decode(part['tables'], validate=True),
+                        self.wanted[side])
+                except Exception as x:
+                    self.records[side] = (f'the packed tables of the {which} '
+                                          f'file cannot be opened ({x!r})')
+        recs = self.records[side]
+        if isinstance(recs, str):
+            raise CollateUnread(recs)
+        if e['table'] not in recs:
+            raise CollateUnread(f'the {which} file holds no record of its '
+                                'table')
+        if (side, e['table']) not in self.parsed:
+            try:
+                self.parsed[side, e['table']] = ct_parse(recs[e['table']])
+            except Exception as x:
+                self.parsed[side, e['table']] = CollateUnread(
+                    f'the record of its table in the {which} file cannot be '
+                    f'read ({x!r})')
+        p = self.parsed[side, e['table']]
+        if isinstance(p, CollateUnread):
+            raise p
+        if p['nrules'] != e['nrules']:
+            raise CollateUnread(
+                f'the record stored for its table in the {which} file has '
+                f'{p["nrules"]} level(s), its table {e["nrules"]}')
+        return p
+
+    def __call__(self, name):
+        a, b = (d['collate']['locales'][name] for d in self.sides)
+        codesets = tuple(d['locales'][name].get('codeset')
+                         for d in self.sides)
+        key = (a['table'], a['nrules'], b['table'], b['nrules'], codesets)
+        if key not in self.named:
+            self.named[key] = self.naming(name, a, b, codesets[0])
+        return self.named[key]
+
+    def naming(self, name, a, b, codeset):
+        # The same digest is the same record (the reader's digest hashes the
+        # tables the record is built from): no record needs opening for it,
+        # only the controls.
+        checks = [self.check(side, name) for side in (0, 1)]
+        if a['table'] == b['table'] and not any(checks):
+            return NAMED_RECORD, '', (), False
+        reasons, parsed = [], []
+        for side in (0, 1):
+            try:
+                parsed.append(self.record(side, name))
+            except CollateUnread as x:
+                reasons.append(str(x))
+        if reasons:
+            return (NAMED_UNREAD + '; '.join(reasons), '', (), False)
+        # The same record under two digests too: the digest hashes bytes
+        # of the table the record does not keep.
+        if self.records[0][a['table']] == self.records[1][b['table']]:
+            return NAMED_RECORD, '', (), False
+        o, n = parsed
+        if o['nrules'] != n['nrules']:
+            return (f'{NAMED_LEVELS}{o["nrules"]} to {n["nrules"]}), so its '
+                    'sequences are not compared one by one', '', (), False)
+        return table_naming(o, n, codeset)
+
+
+def table_naming(o, n, codeset):
+    """(head, shown, rows, others) of two parsed records of the same number
+    of rules: the counts, the first LIST_LIMIT names "among them", every
+    name as (characters, how) for the characters file, and whether a name
+    is bytes. Characters of consecutive code points are one run, as step
+    11 writes them; a string of several characters is named by its code
+    points, and one the encoding reads as no character by its bytes
+    (Names)."""
+    marked, only_old, only_new = table_marked(o, n)
+    if not (marked or only_old or only_new):
+        return NAMED_NUMBERING, '', (), False
+    flips = table_flips(o, n, marked) if marked else []
+    names = Names([], codeset)
+    items, others = [], False
+    for kind, seqs in (('marked', marked), ('old', only_old),
+                       ('new', only_new), ('flip', flips)):
+        # By code points where the encoding reads them, then the others by
+        # their bytes; a run is single characters only.
+        read = []
+        for s in seqs:
+            c = names.code_point(s)
+            read.append(((c,) if c is not None else sequence_points(s, names),
+                         s))
+        read.sort(key=lambda x: (x[0] is None, x[0] or (), len(x[1]), x[1]))
+        singles = []
+
+        def flush():
+            for first, last in table_runs(singles, lambda a, b: b == a + 1):
+                if first == last:
+                    items.append((kind, short_character(first),
+                                  f'U+{first:04X}'))
+                else:
+                    run = f'U+{first:04X}..U+{last:04X}'
+                    items.append((kind, run, run))
+            singles.clear()
+        for cps, s in read:
+            if cps is not None and len(cps) == 1:
+                singles.append(cps[0])
+                continue
+            flush()
+            if cps is None:
+                others = True
+                text = f'bytes {spaced(s)}'
+            else:
+                text = ' '.join(f'U+{c:04X}' for c in cps)
+            items.append((kind, text.replace(' ', '\0'), text))
+        flush()
+    parts = []
+    if marked:
+        parts.append(f'it marks {len(marked):,} sequence(s) as changed')
+    if only_new:
+        parts.append(f'{len(only_new):,} appear only in the new machine\'s '
+                     'table')
+    if only_old:
+        parts.append(f'{len(only_old):,} only in the old machine\'s'
+                     if only_new else
+                     f'{len(only_old):,} appear only in the old machine\'s '
+                     'table')
+    if flips:
+        parts.append(f'{len(flips):,} more compare differently against one '
+                     'marked as changed')
+    head = ': ' + (', '.join(parts[:-1]) + ' and ' + parts[-1]
+                   if len(parts) > 1 else parts[0])
+    shown_ = ('; among them: '
+              + ', '.join(x[1] for x in items[:LIST_LIMIT])
+              + (f', and {len(items) - LIST_LIMIT:,} more'
+                 if len(items) > LIST_LIMIT else ''))
+    rows = tuple((tok.translate(TSV_ESCAPES), NAMED_HOW[kind])
+                 for kind, _, tok in items)
+    return head, shown_, rows, others
+
+
+def table_runs(xs, follows):
+    """[(first, last)] of the runs of the sorted XS where follows(a, b)."""
+    out = []
+    for x in xs:
+        if out and follows(out[-1][1], x):
+            out[-1][1] = x
+        else:
+            out.append([x, x])
+    return [tuple(r) for r in out]
+
+
+def sequence_points(s, names):
+    """The code points of a sequence of several characters, where the
+    locale's encoding decodes it whole and back; None where it does not,
+    and it is named by its bytes."""
+    if names.codec is None:
+        return None
+    try:
+        text = s.decode(names.codec)
+    except UnicodeDecodeError:
+        return None
+    if names.codec != 'utf-8' and text.encode(names.codec) != s:
+        return None
+    return tuple(map(ord, text)) or None
 
 
 def listed_names(names):
@@ -8054,7 +8449,7 @@ def tables_disagree_lines(items, ctx):
     names = [x for d in items for x in d['names']]
     return [textwrap.fill(
         f'!! Step 11 found a change in {len(names)} locale(s) whose sort tables '
-        'find them unchanged. With the same glibc code that cannot happen, so '
+        'find no change of order. With the same glibc code that cannot happen, so '
         'the two machines compare with different code, and no locale is taken '
         'as unchanged by its sort table alone; they are listed as changed:',
         width=78,
@@ -8063,14 +8458,16 @@ def tables_disagree_lines(items, ctx):
 
 def tables_disagree_summary(items, ctx):
     names = [x for d in items for x in d['names']]
-    return wrapped('!! Step 11 found a change where the sort tables find none, '
+    return wrapped('!! Step 11 found a change where the sort tables find no '
+                   'change of order, '
                    'so the two machines compare with different glibc code and '
                    'no locale is unchanged by its table alone: '
                    f'{listed_names(names)}', 5, 8)
 
 
 def tables_disagree_notes(items):
-    return ['# !! step 11 found a change where the sort tables find none: '
+    return ['# !! step 11 found a change where the sort tables find no change '
+            'of order: '
             + ','.join(shown(x).translate(TEXT_ESCAPES)
                                           for d in items for x in d['names'])]
 
@@ -8772,7 +9169,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
                    n[name]['pairs'], o[name]['codeset'], table)
         measured_alike.setdefault(key, []).append(name)
     reads_alike, briefs, rows = {}, {}, []
-    others = False   # whether a string that is not a character is named
+    others = False   # whether a string is named by its bytes
     for names in measured_alike.values():
         table = by_table.get(names[0])
         if table and table[1] != 'changed':
@@ -8781,13 +9178,20 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
             lines, brief, found, named = describe_change(old, new, o[names[0]],
                                                          n[names[0]])
         if table:
-            more, phrase = table_change_lines(*table)
+            more, phrase, counted = table_change_lines(*table)
             lines = more + lines
             if phrase:
                 brief = '; '.join(x for x in (phrase, brief) if x)
                 found = [('sort table changed', '-',
-                          phrase.translate(TEXT_ESCAPES), '-', '-', '-',
-                          '-')] + found
+                          counted.translate(TEXT_ESCAPES), '-', '-', '-',
+                          '-')] + [
+                    ('sort table changed', chars, how, '-', '-', '-',
+                     'compiled table')
+                    for chars, how in (table[2][2] if table[2] else ())
+                ] + found
+            # A name in bytes from the table needs the report's explanation
+            # of bytes names, as one from step 11 does.
+            named = named or bool(table[2] and table[2][3])
         others = others or named
         reads_alike.setdefault(tuple(lines), []).extend(names)
         briefs[tuple(lines)] = brief

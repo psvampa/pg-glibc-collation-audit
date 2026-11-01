@@ -38,6 +38,7 @@ import hashlib
 import io
 import itertools
 import json
+import lzma
 import os
 import random
 import re
@@ -1160,16 +1161,98 @@ NOT_CHECKED_WHOLE = (r"!! NOT checked whether the character sets of (either "
 NOT_CHECKED_SOME = (r"!! NOT checked whether their character set gives a "
                     r"character to byte sequences that are not among the strings "
                     r"measured, for (\d+) locale\(s\) of the (old|new) machine:")
-# The lines of the verdict by the sort tables (table_verdicts).
-TABLE_PHRASE = (r'its compiled sort table changed(?:: (sort rules on one machine '
-                r'only))?(?:; (step 11 saw no change in the strings it measured|'
-                r'step 11 could not measure it))?')
+# A name the table gives inside a changed locale (table_naming): a character
+# with its glyph, a code point, a run, several code points, or bytes.
+TABLE_ITEM = (r'(?:\S+ \(U\+[0-9A-F]{4,6}\)|U\+[0-9A-F]{4,6}(?:\.\.U\+[0-9A-F]'
+              r'{4,6}|(?: U\+[0-9A-F]{4,6})+)?|bytes [0-9A-F]{2}(?: [0-9A-F]{2})*)')
+# Why a side's table cannot be named (TableNaming.record), joined by '; '.
+TABLE_REASON = (r'(?:on the (?:old|new) machine, |the (?:OLD|NEW) file holds |the '
+                r'packed tables of the (?:OLD|NEW) file |the record (?:of|stored '
+                r'for) its table )[^;]*')
+# The lines of the verdict by the sort tables (table_verdicts, TableNaming).
+TABLE_PHRASE = (
+    r'its compiled sort table changed(?:'
+    r': (sort rules on one machine only)'
+    r'|: ((?:it marks|[\d,]+ appear only)[^;]*)'
+    r'(?:; among them: (' + TABLE_ITEM + r'(?:, ' + TABLE_ITEM + r')*)'
+    r'(?:, and ([\d,]+) more)?)?'
+    r'|( only in its numbering): every sequence keeps its order against every '
+    r'other, so none is named'
+    r'|( in bytes its record of the sequences does not keep), so none is named'
+    r'|: the number of levels changed \((\d+) to (\d+)\), so its sequences are '
+    r'not compared one by one'
+    r'|; its sequences cannot be named: (' + TABLE_REASON + r'(?:; '
+    + TABLE_REASON + r')*)'
+    r')?(?:; (step 11 saw no change in the strings it measured|'
+    r'step 11 could not measure it))?')
+NAMED_HOW = {'marked by the table as changed': 'marked',
+             'only in the old machine\'s table': 'old',
+             'only in the new machine\'s table': 'new',
+             'compares differently against one marked as changed': 'flip'}
+
+
+def table_phrase(mt, among):
+    """((why, step 11's word), named) of a TABLE_PHRASE match. named is None
+    where the line has no word of what the table names, else {'counts':
+    {kind: n} or None, 'items': [...], 'more': n, 'unnamed': why the
+    table names nothing or None}. AMONG: whether the names must follow the
+    counts (the report and the summary) or must not (the characters file,
+    whose rows hold them)."""
+    why, said = mt[1], mt[10]
+    named = None
+    if mt[2]:
+        if bool(mt[3]) != among:
+            raise ReportShapeError(f'names where none belong, or none where '
+                                   f'they do: {mt[0]!r}')
+        counts = {}
+        for kind, pat in (('marked', r'it marks ([\d,]+) sequence\(s\) as '
+                                     r'changed'),
+                          ('new', r'([\d,]+) appear only in the new '
+                                  r'machine\'s table'),
+                          ('old', r'([\d,]+) (?:appear )?only in the old '
+                                  r'machine\'s'),
+                          ('flip', r'([\d,]+) more compare differently '
+                                   r'against one marked as changed')):
+            got = re.search(pat, mt[2])
+            counts[kind] = number(got[1]) if got else 0
+        if mt[2] != named_head(counts):
+            raise ReportShapeError(f'unknown counts of a sort table: {mt[2]!r}')
+        items = re.findall(TABLE_ITEM, mt[3]) if mt[3] else []
+        named = {'counts': counts, 'items': items,
+                 'more': number(mt[4]) if mt[4] else 0, 'unnamed': None}
+    elif mt[5] or mt[6] or mt[7] or mt[9]:
+        named = {'counts': None, 'items': [], 'more': 0,
+                 'unnamed': ('numbering' if mt[5] else 'record' if mt[6] else
+                             (int(mt[7]), int(mt[8])) if mt[7] else mt[9])}
+    if not (why or said or named):
+        raise ReportShapeError(f'unknown sort table phrase: {mt[0]!r}')
+    return (why, said), named
+
+
+def named_head(counts):
+    """What table_naming writes for these counts, spelled here on its own."""
+    parts = []
+    if counts['marked']:
+        parts.append(f'it marks {counts["marked"]:,} sequence(s) as changed')
+    if counts['new']:
+        parts.append(f'{counts["new"]:,} appear only in the new machine\'s '
+                     'table')
+    if counts['old']:
+        parts.append(f'{counts["old"]:,} ' + (
+            'only in the old machine\'s' if counts['new']
+            else 'appear only in the old machine\'s table'))
+    if counts['flip']:
+        parts.append(f'{counts["flip"]:,} more compare differently against '
+                     'one marked as changed')
+    return (', '.join(parts[:-1]) + ' and ' + parts[-1] if len(parts) > 1
+            else parts[0] if parts else '')
 DISAGREE = (r'!! Step 11 found a change in (\d+) locale\(s\) whose sort tables '
-            r'find them unchanged\. With the same glibc code that cannot '
+            r'find no change of order\. With the same glibc code that cannot '
             r'happen, so the two machines compare with different code, and no '
             r'locale is taken as unchanged by its sort table alone; they are '
             r'listed as changed:')
-DISAGREE_BRIEF = ('!! Step 11 found a change where the sort tables find none, '
+DISAGREE_BRIEF = ('!! Step 11 found a change where the sort tables find no '
+                  'change of order, '
                   'so the two machines compare with different glibc code and '
                   'no locale is unchanged by its table alone: ')
 TABLES_ONLY = (r'Unchanged by their sort tables although step 11 could not '
@@ -1764,15 +1847,15 @@ def parse_details(details):
         while rest and re.fullmatch(r'  \S.*', rest[0]):
             text += ' ' + rest.pop(0).strip()
         mt = re.fullmatch(TABLE_PHRASE + r'\.', text)
-        if not mt or not (mt[1] or mt[2]):
+        if not mt:
             raise ReportShapeError(f'unknown sort table line: {text!r}')
-        out['table'] = (mt[1], mt[2])
+        out['table'], out['named'] = table_phrase(mt, among=True)
         if not rest:
-            if mt[2] is None:
+            if mt[10] is None:
                 raise ReportShapeError(f'a change step 11 found, with no '
                                        f'lines of it: {text!r}')
             return out
-        if mt[2] is not None:
+        if mt[10] is not None:
             raise ReportShapeError(f'lines of step 11 under a change it did '
                                    f'not find: {rest!r}')
 
@@ -1904,16 +1987,14 @@ def parse_brief(text):
            'table': None}
     mt = re.match(TABLE_PHRASE + r'(?=; |$)', text)
     if mt and mt[0]:
-        if not (mt[1] or mt[2]):
-            raise ReportShapeError(f'unknown sort table phrase: {text!r}')
-        out['table'] = (mt[1], mt[2])
+        out['table'], out['named'] = table_phrase(mt, among=True)
         text = text[mt.end() + 2:]
         if not text:
-            if mt[2] is None:
+            if mt[10] is None:
                 raise ReportShapeError(f'a change step 11 found, with no '
                                        f'phrase of it: {mt[0]!r}')
             return out
-        if mt[2] is not None:
+        if mt[10] is not None:
             raise ReportShapeError(f'a phrase of step 11 under a change it did '
                                    f'not find: {text!r}')
     first, *rest = text.split('; ')
@@ -2297,7 +2378,8 @@ def parse_characters(text):
     out.disagree, out.tables_only = [], []
     for note in [x for x in notes if x.startswith(('!! step 11 found a change',
                                                    'unchanged by their sort'))]:
-        head = '!! step 11 found a change where the sort tables find none: '
+        head = ('!! step 11 found a change where the sort tables find no '
+                'change of order: ')
         tail = 'unchanged by their sort tables, which step 11 could not cross-check: '
         if note.startswith(head) and not out.disagree:
             out.disagree = note[len(head):].split(',')
@@ -2495,12 +2577,23 @@ def parse_characters(text):
                        seqs=[bytes.fromhex(s) for s in mt[4].split(', ')])
             out.setdefault((names,), []).append(row)
             continue
+        if finding == 'sort table changed' and chars != '-':
+            # A name the table gives, under the row of its counts.
+            if (how not in NAMED_HOW or (test, before, now) != ('-',) * 3
+                    or measured != 'compiled table'
+                    or not re.fullmatch(TABLE_ITEM, chars)
+                    or not out.get(tuple(names.split(',')))
+                    or not ('table' in out[tuple(names.split(','))][-1]
+                            or 'kind' in out[tuple(names.split(','))][-1])):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row.update(chars=chars, kind=NAMED_HOW[how])
+            out[tuple(names.split(','))].append(row)
+            continue
         if finding == 'sort table changed':
             mt = re.fullmatch(TABLE_PHRASE, how)
-            if (chars, test, before, now, measured) != ('-',) * 5 or not mt or (
-                    not (mt[1] or mt[2])):
+            if (chars, test, before, now, measured) != ('-',) * 5 or not mt:
                 raise ReportShapeError(f'characters line {n}: {line!r}')
-            row['table'] = (mt[1], mt[2])
+            row['table'], row['named'] = table_phrase(mt, among=False)
             out.setdefault(tuple(names.split(',')), []).append(row)
             continue
         if finding in ('pairs changed', 'unchanged only as far as measured'):
@@ -13760,6 +13853,7 @@ class SortTablesCompared(Checks):
                 contextlib.redirect_stderr(stderr):
             self.assertEqual(m.main(), 0)
         self.assertEqual(stderr.getvalue(), '')
+        self.printed = stdout.getvalue()
         with open(summary, encoding='utf-8') as f, \
                 open(chars, encoding='utf-8') as g:
             return (parse_report(stdout.getvalue()), parse_summary(f.read()),
@@ -13847,8 +13941,9 @@ class SortTablesCompared(Checks):
                          [('either machine', None)])
 
     def test_tables_not_packed_still_decide(self):
-        """The packed records are what names a change (the next step);
-        whether a table changed is its fingerprint, in the file either way."""
+        """The packed records are what names a change (TableNaming, and
+        SortTablesNamed); whether a table changed is its fingerprint, in the
+        file either way."""
         def unpacked(d):
             d['collate'].update(tables=None, tables_why='no lzma')
         self.firm(self.outputs([read_tables(), unpacked],
@@ -13869,9 +13964,13 @@ class SortTablesCompared(Checks):
                          (None, 'step 11 saw no change in the strings it '
                                 'measured'))
         self.assertIsNone(change['moved'])
+        # The same digest under other items: the same record, which these
+        # files do not even pack (SortTablesNamed has the other routes).
+        self.assertEqual(change['named']['unnamed'], 'record')
         self.assertEqual(s['changes']['de_DE.utf8']['brief'],
-                         'its compiled sort table changed; step 11 saw no '
-                         'change in the strings it measured')
+                         'its compiled sort table changed in bytes its record '
+                         'of the sequences does not keep, so none is named; '
+                         'step 11 saw no change in the strings it measured')
         self.assertEqual([row['table'] for row in f[('de_DE.utf8',)]
                           if row['finding'] == 'sort table changed'],
                          [change['table']])
@@ -14068,7 +14167,10 @@ class SortTablesCompared(Checks):
         self.assertEqual(r['totals']['unchanged'], 6)
 
     def test_not_compared_and_changed_by_step_11(self):
-        """Step 11's change stands, with no row that reads it as unchanged."""
+        """Step 11's change stands, with no row that reads it as unchanged;
+        and, its table not read, whether the two machines compare with the
+        same code is not known, so no other locale is unchanged by its
+        table alone (TABLE_CODE_OPEN)."""
         unread = {'de_DE.utf8': {'state': 'not read', 'why': 'no file',
                                  'fingerprint': None, 'nrules': None,
                                  'table': None}}
@@ -14078,10 +14180,477 @@ class SortTablesCompared(Checks):
         self.assertEqual(set(by_name(r)), {'de_DE.utf8'})
         self.assertIsNone(by_name(r)['de_DE.utf8']['table'])
         self.assertEqual(self.not_compared(outs), {
-            'not read on the old machine: no file': ['de_DE.utf8']})
-        self.assertEqual(r['totals']['partly'], 0)
+            'not read on the old machine: no file': ['de_DE.utf8'],
+            m.TABLE_CODE_OPEN: ['en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8']})
+        self.assertEqual(r['totals']['partly'], 3)
         self.assertEqual(r['disagree'], [])
-        self.assertEqual(r['closing'], m.CLOSING_TABLES)
+        self.assertEqual(r['closing'], m.CLOSING)
+
+
+def table_record(levels):
+    """A record as ct_record writes one, of {sequence: [weights of each
+    level]}, every level forward, or {sequence: (rule vector, weights)}:
+    small tables that the tests can read."""
+    nrules = len(weights_of(next(iter(levels.values()))))
+    out = bytearray()
+    m.ct_varint(out, nrules)
+    m.ct_varint(out, nrules)
+    out += bytes([m.CT_SORT_FORWARD]) * nrules
+    m.ct_varint(out, len(levels))
+    for s, v in sorted(levels.items()):
+        rv, weights = v if isinstance(v, tuple) else (
+            bytes([m.CT_SORT_FORWARD]) * nrules, v)
+        m.ct_varint(out, len(s))
+        out += s + rv
+        for level in weights:
+            m.ct_varint(out, len(level))
+            for x in level:
+                m.ct_varint(out, x)
+    return bytes(out)
+
+
+def packed_tables(tables):
+    """An edit, after read_tables(), that gives each locale in TABLES the
+    record of its {sequence: weights} with a check that passed, and packs
+    them."""
+    def edit(d):
+        part, packed = d['collate'], {}
+        for name, levels in tables.items():
+            rec = table_record(levels)
+            digest = hashlib.sha256(rec).hexdigest()
+            part['locales'][name] = {
+                'state': 'file',
+                'nrules': len(weights_of(next(iter(levels.values())))),
+                'fingerprint': hashlib.sha256(b'items ' + rec).hexdigest(),
+                'table': digest}
+            part['checks'][f'{digest} UTF-8'] = dict(CHECK_PASSED,
+                                                     locale=name)
+            packed[digest] = rec
+        part['tables'] = m.base64.b64encode(m.ct_pack_all(
+            packed)).decode('ascii')
+    return edit
+
+
+def weights_of(v):
+    return v[1] if isinstance(v, tuple) else v
+
+
+def dict_of(*ds):
+    return {k: v for d in ds for k, v in d.items()}
+
+
+def one_level(order):
+    """{sequence: [[weight]]} of sequences in the order given."""
+    return {s: [[i + 1]] for i, s in enumerate(order)}
+
+
+class SortTablesNamed(Checks):
+    """What the packed tables name inside a locale whose six items differ
+    (TableNaming, table_naming), one route at a time, on RHEL9 -> RHEL10 cut
+    to FEW, de_DE.utf8 the locale whose table changed.
+
+    Freezes: the sequences marked, those on one machine only and those that
+    compare differently against a marked one, each counted and named in the
+    report, the summary and the characters file, alike; the first
+    LIST_LIMIT names "among them" and every one in the file; a table that
+    cannot be named read as one where nothing changed, or a record that did
+    not pass its check used to name; the locale's verdict moved by what
+    can or cannot be named; a record that keeps every order, or one that
+    could not be read, beside a change step 11 found leaving the other
+    locales unchanged by their table alone."""
+
+    outputs = SortTablesCompared.outputs
+    # c, d swapped behind e, f: the longest run kept is a, b, e, f, so c
+    # and d are marked, and e and f sort the other way against them; b is
+    # marked by its rule, g by its number of weights; 'ch' only on the old
+    # machine, z and a byte UTF-8 has no character for only on the new one.
+    OLD = dict_of(one_level([b'a', b'b', b'c', b'd', b'e', b'f', b'g']),
+                  {b'ch': [[8]]})
+    NEW = dict_of(one_level([b'a', b'b', b'e', b'f', b'c', b'd', b'g']),
+                  {b'b': (bytes([m.CT_SORT_BACKWARD]), [[2]]),
+                   b'g': [[7, 1]], b'\x80': [[8]], b'z': [[9]]})
+
+    def named(self, old, new, old_edits=(), new_edits=()):
+        """(named, report, summary, file) of de_DE.utf8, its tables OLD and
+        NEW ({sequence: weights}) and the edits after them, checked to say
+        the same in the three outputs and to stay changed."""
+        r, s, f = self.outputs(
+            [read_tables(), packed_tables({'de_DE.utf8': old})] + list(old_edits),
+            [read_tables(), packed_tables({'de_DE.utf8': new})] + list(new_edits))
+        self.assertEqual(sorted(by_name(r)), ['de_DE.utf8'])
+        self.assertEqual(sorted(s['changes']), ['de_DE.utf8'])
+        change = by_name(r)['de_DE.utf8']
+        brief = parse_brief(s['changes']['de_DE.utf8']['brief'])
+        self.assertEqual(brief['named'], change['named'])
+        self.assertEqual(brief['table'], change['table'])
+        heads = [row for row in f[('de_DE.utf8',)] if 'table' in row]
+        rows = [row for row in f[('de_DE.utf8',)] if 'kind' in row]
+        self.assertEqual([h['table'] for h in heads], [change['table']])
+        named = change['named']
+        self.assertIsNotNone(named)
+        self.assertEqual(heads[0]['named'],
+                         dict(named, items=[], more=0) if named else named)
+        if named and named['counts']:
+            # The file holds every name; the report the first LIST_LIMIT of
+            # them, each as the file spells it once its glyph is dropped.
+            tokens = [re.sub(r'^\S+ \((U\+[0-9A-F]+)\)$', r'\1', x)
+                      for x in named['items']]
+            self.assertEqual([x['chars'] for x in rows][:m.LIST_LIMIT], tokens)
+            self.assertEqual(len(rows), len(named['items']) + named['more'])
+            self.assertLessEqual(len(named['items']), m.LIST_LIMIT)
+            # Each kind's count is the sequences of its rows, a run counted
+            # whole.
+            counts = collections.Counter()
+            for x in rows:
+                run = re.fullmatch(r'U\+([0-9A-F]+)\.\.U\+([0-9A-F]+)',
+                                   x['chars'])
+                counts[x['kind']] += (int(run[2], 16) - int(run[1], 16) + 1
+                                      if run else 1)
+            self.assertEqual({k: v for k, v in named['counts'].items() if v},
+                             dict(counts))
+        else:
+            self.assertEqual(rows, [])
+        self.assertEqual(r['totals']['changed'], 1)
+        return named, r, s, f
+
+    def test_the_marked_the_one_sided_and_those_that_sort_the_other_way(self):
+        named, r, s, f = self.named(self.OLD, self.NEW)
+        self.assertEqual(named['counts'],
+                         {'marked': 4, 'new': 2, 'old': 1, 'flip': 2})
+        self.assertEqual(named['items'], [
+            'U+0062..U+0064', 'g (U+0067)', 'U+0063 U+0068', 'z (U+007A)',
+            'bytes 80', 'U+0065..U+0066'])
+        self.assertEqual(named['more'], 0)
+        self.assertEqual([(x['chars'], x['kind']) for x in f[('de_DE.utf8',)]
+                          if 'kind' in x],
+                         [('U+0062..U+0064', 'marked'), ('U+0067', 'marked'),
+                          ('U+0063 U+0068', 'old'), ('U+007A', 'new'),
+                          ('bytes 80', 'new'), ('U+0065..U+0066', 'flip')])
+        # A name in bytes: the report says how to read one.
+        self.assertEqual(r['others_note'], m.OTHER_STRINGS)
+        self.assertEqual(s['others_note'], m.OTHER_STRINGS)
+        self.assertEqual(by_name(r)['de_DE.utf8']['table'],
+                         (None, 'step 11 saw no change in the strings it '
+                                'measured'))
+
+    def test_one_character_alone_by_its_glyph(self):
+        """Characters that are no run: by their glyph in the report, by
+        their code point in the file; no bytes, nothing to explain."""
+        old = one_level([b'a', b'c', b'e', b'g'])
+        new = one_level([b'a', b'e', b'c', b'g'])
+        named, r, s, f = self.named(old, new)
+        self.assertEqual(named['counts'],
+                         {'marked': 1, 'new': 0, 'old': 0, 'flip': 1})
+        self.assertEqual(len(named['items']), 2)
+        self.assertTrue(all(re.fullmatch(r'\S \(U\+00(63|65)\)', x)
+                            for x in named['items']), named['items'])
+        self.assertIsNone(r['others_note'])
+
+    def test_more_than_the_report_lists(self):
+        """Thirty sequences in the reverse order: the report names the first
+        LIST_LIMIT and how many more, the file every one."""
+        seqs = [bytes([0x41 + 2 * i]) for i in range(30)]
+        named, r, s, f = self.named(one_level(seqs), one_level(seqs[::-1]))
+        self.assertEqual(sum(named['counts'].values()), 30)
+        self.assertEqual(len(named['items']), m.LIST_LIMIT)
+        self.assertEqual(named['more'], 30 - m.LIST_LIMIT)
+
+    def test_a_name_of_several_characters_stays_on_one_line(self):
+        """The report never breaks a line inside a name: cut, 'U+0061' and
+        'U+0041' at the ends of two lines read as two names."""
+        seqs = [b'a' + bytes([0x41 + i]) for i in range(20)]
+        named, r, s, f = self.named(one_level(seqs), one_level(seqs[::-1]))
+        several = [x for x in named['items'] if ' ' in x]
+        self.assertEqual(len(several), m.LIST_LIMIT)
+        lines = self.printed.split('\n')
+        self.assertEqual([x for x in several
+                          if not any(x in line for line in lines)], [])
+
+    def test_named_beside_what_step_11_found(self):
+        """The route of every real case: step 11 found the change too, and
+        the table's names stand beside its lines."""
+        named, r, s, f = self.named(self.OLD, self.NEW, [], [file_changed()])
+        self.assertEqual(named['counts'],
+                         {'marked': 4, 'new': 2, 'old': 1, 'flip': 2})
+        change = by_name(r)['de_DE.utf8']
+        self.assertEqual(change['table'], (None, None))
+        # Step 11's own lines under the table's.
+        self.assertIsNotNone(change['probes'])
+        self.assertEqual(r['disagree'], [])
+
+    def test_renumbered_names_nothing_and_stays_changed(self):
+        old = one_level([b'a', b'b', b'c'])
+        new = {s: [[2 * w[0][0]]] for s, w in old.items()}
+        named, r, s, f = self.named(old, new)
+        self.assertEqual(named['unnamed'], 'numbering')
+
+    def test_the_same_record_under_another_digest(self):
+        """A digest hashes bytes of the table the record does not keep: the
+        same record under two digests is the same record, not a
+        renumbering."""
+        rec = table_record(self.OLD)
+
+        def elsewhere(d):
+            part = d['collate']
+            part['locales']['de_DE.utf8'].update(table='e' * 64,
+                                                 fingerprint='f' * 64)
+            part['checks'] = {f'{"e" * 64} UTF-8': dict(
+                CHECK_PASSED, locale='de_DE.utf8')}
+            part['tables'] = m.base64.b64encode(m.ct_pack_all(
+                {'e' * 64: rec})).decode('ascii')
+        named, r, s, f = self.named(self.OLD, self.OLD, [], [elsewhere])
+        self.assertEqual(named['unnamed'], 'record')
+
+    def test_the_same_record_with_a_check_that_failed(self):
+        """The same record does not spare the controls: a failed one is
+        said, and nothing is taken from that record."""
+        digest = hashlib.sha256(table_record(self.OLD)).hexdigest()
+
+        def other(d):
+            d['collate']['locales']['de_DE.utf8']['fingerprint'] = 'f' * 64
+
+        def failed(d):
+            d['collate']['checks'][f'{digest} UTF-8']['record_mismatch'] = 5
+        named, r, s, f = self.named(self.OLD, self.OLD, [failed], [other])
+        self.assertTrue(named['unnamed'].startswith(
+            'on the old machine, its table does not match glibc\'s '
+            'strxfrm'), named['unnamed'])
+
+    def test_an_order_kept_beside_a_change_step_11_found(self):
+        """A record that keeps every order (renumbered, or the same record
+        under other items) and a change step 11 measured say the two
+        machines compare with different code, as the same table does: the
+        locale is listed among those, and no other is unchanged by its
+        table alone."""
+        old = one_level([b'a', b'b', b'c'])
+        renumbered = {s: [[2 * w[0][0]]] for s, w in old.items()}
+
+        def other(d):
+            d['collate']['locales']['de_DE.utf8']['fingerprint'] = 'f' * 64
+        for case, new, edits, unnamed in (
+                ('renumbered', renumbered, [], 'numbering'),
+                ('the same record', old, [other], 'record')):
+            with self.subTest(case=case):
+                named, r, s, f = self.named(old, new, [],
+                                            edits + [file_changed()])
+                self.assertEqual(named['unnamed'], unnamed)
+                self.assertEqual(r['disagree'], ['de_DE.utf8'])
+                self.assertEqual(s['disagree'], ['de_DE.utf8'])
+                self.assertEqual(sorted(x for names in r['not_compared'].values()
+                                        for x in names[0]),
+                                 ['en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8'])
+                self.assertEqual(list(r['not_compared']),
+                                 [m.TABLE_CODE_DIFFERS])
+
+    def test_another_number_of_levels(self):
+        old = one_level([b'a', b'b', b'c'])
+        new = {s: w + [[1]] for s, w in old.items()}
+        named, r, s, f = self.named(old, new)
+        self.assertEqual(named['unnamed'], (1, 2))
+
+    def test_a_table_that_cannot_be_named_says_why(self):
+        """Every way a side's record cannot be had says so, beside the
+        other side's, and the locale stays changed: never 'nothing'."""
+        digest = hashlib.sha256(table_record(self.OLD)).hexdigest()
+
+        def tables(**k):
+            return lambda d: d['collate'].update(**k)
+
+        def check(**k):
+            return lambda d: d['collate']['checks'].update(
+                {f'{digest} UTF-8': dict(k, locale='de_DE.utf8')})
+
+        def levels(n):
+            return lambda d: d['collate']['locales']['de_DE.utf8'].update(
+                nrules=n)
+        cases = (
+            ('not packed', [tables(tables=None, tables_why='no lzma')],
+             'the OLD file holds no packed tables (no lzma)'),
+            ('not xz', [tables(tables=m.base64.b64encode(b'xx').decode())],
+             'the packed tables of the OLD file cannot be opened ('),
+            ('not base64', [tables(tables='%%%')],
+             'the packed tables of the OLD file cannot be opened ('),
+            ('no record', [tables(tables=m.base64.b64encode(m.ct_pack_all(
+                {})).decode())], 'the OLD file holds no record of its table'),
+            ('a record past the end', [tables(tables=m.base64.b64encode(
+                lzma.compress(bytes.fromhex(digest) + bytes([100]) + b'xx'))
+                .decode())],
+             'the packed tables of the OLD file cannot be opened (ValueError('
+             "'a record runs past the end of the tables'))"),
+            ('a record cut short', [tables(tables=m.base64.b64encode(
+                m.ct_pack_all({digest: table_record(self.OLD)[:-1]})).decode())],
+             'the record of its table in the OLD file cannot be read ('),
+            ('another number of levels', [levels(2)],
+             'the record stored for its table in the OLD file has 1 level(s), '
+             'its table 2'),
+            ('a check that failed', [check(error='boom')],
+             'on the old machine, the check of its table failed: boom'),
+            ('a check that did not match', [check(**dict(
+                CHECK_PASSED, record_mismatch=1))],
+             'on the old machine, its table does not match glibc\'s strxfrm'),
+            ('no check', [lambda d: d['collate']['checks'].pop(
+                f'{digest} UTF-8')],
+             'on the old machine, its table was not checked'))
+        for case, edits, why in cases:
+            with self.subTest(case=case):
+                named, r, s, f = self.named(self.OLD, self.NEW, edits)
+                self.assertIsNone(named['counts'])
+                self.assertTrue(named['unnamed'].startswith(why),
+                                named['unnamed'])
+        with self.subTest(case='both sides'):
+            new_digest = hashlib.sha256(table_record(self.NEW)).hexdigest()
+            named, r, s, f = self.named(
+                self.OLD, self.NEW, [check(error='boom')],
+                [lambda d: d['collate']['checks'].pop(f'{new_digest} UTF-8')])
+            self.assertEqual(named['unnamed'],
+                             'on the old machine, the check of its table '
+                             'failed: boom; on the new machine, its table was '
+                             'not checked')
+
+    def test_each_side_checked_under_its_own_encoding(self):
+        """The check a side's record needs is its own (table, encoding): one
+        under another encoding is a table not checked for this locale."""
+        def elsewhere(d):
+            checks = d['collate']['checks']
+            for key in [k for k in checks if k.endswith(' UTF-8')]:
+                checks[key.replace(' UTF-8', ' ISO-8859-1')] = checks.pop(key)
+        named, r, s, f = self.named(self.OLD, self.NEW, [], [elsewhere])
+        self.assertEqual(named['unnamed'],
+                         'on the new machine, its table was not checked')
+        # A locale whose encoding is not the same on the two machines, given
+        # to TableNaming as table_verdicts gives it the two files: the new side's
+        # check is under the new side's encoding, and passes.
+        sides = []
+        for levels, codeset in ((self.OLD, 'UTF-8'), (self.NEW, 'ISO-8859-1')):
+            rec = table_record(levels)
+            digest = hashlib.sha256(rec).hexdigest()
+            sides.append({
+                'locales': {'x': {'codeset': codeset}},
+                'collate': {
+                    'locales': {'x': {'state': 'file', 'nrules': 1,
+                                      'fingerprint': '0' * 64,
+                                      'table': digest}},
+                    'checks': {f'{digest} {codeset}': dict(CHECK_PASSED,
+                                                           locale='x')},
+                    'tables': m.base64.b64encode(m.ct_pack_all(
+                        {digest: rec})).decode('ascii')}})
+        head = m.TableNaming(*sides, ['x'])('x')[0]
+        self.assertTrue(head.startswith(': it marks'), head)
+
+    def test_the_code_question_left_open_or_proved(self):
+        """Beside a change step 11 found: a changed table that could not be
+        read, or not read on one machine, or of another number of levels,
+        leaves open whether the code differs; the same six items prove it
+        differs whatever their control said, and so does the same digest
+        under other items, without the records; no other locale is then
+        unchanged by its table alone. A table that could not be read beside
+        no change step 11 found leaves nothing open."""
+        old = one_level([b'a', b'b', b'c'])
+        renumbered = {s: [[2 * w[0][0]]] for s, w in old.items()}
+        digest = hashlib.sha256(table_record(renumbered)).hexdigest()
+
+        def unpacked(d):
+            d['collate'].update(tables=None, tables_why='no lzma')
+
+        def unchecked(d):
+            d['collate']['checks'][f'{digest} UTF-8']['pair_unchecked'] = 2
+
+        def other(d):
+            d['collate']['locales']['de_DE.utf8']['fingerprint'] = 'f' * 64
+        def unread(d):
+            d['collate']['locales']['de_DE.utf8'] = {
+                'state': 'not read', 'why': "reading failed: ValueError('x')"}
+        cases = (
+            ('not packed', renumbered, [unpacked], m.TABLE_CODE_OPEN),
+            ('another number of levels', {s: w + [[1]] for s, w in old.items()},
+             [], m.TABLE_CODE_OPEN),
+            ('a control that did not pass', renumbered, [unchecked],
+             m.TABLE_CODE_OPEN),
+            ('the same digest, not packed', old, [other, unpacked],
+             m.TABLE_CODE_DIFFERS))
+        for case, new, edits, why in cases:
+            with self.subTest(case=case):
+                named, r, s, f = self.named(old, new, [],
+                                            edits + [file_changed()])
+                others = {why: sorted(names) for why, (names, count)
+                          in r['not_compared'].items()}
+                self.assertEqual(others.pop(why), ['en_US.utf8', 'ja_JP.utf8',
+                                                   'sv_SE.utf8'])
+                # de_DE.utf8 itself, not compared under its own reason, or
+                # changed by its table.
+                self.assertIn(list(others.values()), ([], [['de_DE.utf8']]))
+                self.assertNotEqual(r['closing'], m.CLOSING_TABLES)
+        with self.subTest(case='not read on one machine'):
+            r, s, f = self.outputs(
+                [read_tables()], [read_tables(), unread, file_changed()])
+            self.assertEqual(sorted(r['not_compared'][m.TABLE_CODE_OPEN][0]),
+                             ['en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8'])
+            self.assertEqual(r['disagree'], [])
+        with self.subTest(case='not packed, and no change step 11 found'):
+            named, r, s, f = self.named(old, renumbered, [], [unpacked])
+            self.assertEqual(r['not_compared'], {})
+            self.assertEqual(r['closing'], m.CLOSING_TABLES)
+        with self.subTest(case='the same items, a control that did not pass'):
+            r, s, f = self.outputs(
+                [read_tables()],
+                [read_tables(checks={'de_DE.utf8': dict(
+                    CHECK_PASSED, pair_unchecked=2)}), file_changed()])
+            self.assertEqual(sorted(r['not_compared']), sorted([
+                m.TABLE_CODE_DIFFERS,
+                'on the new machine, 2 sequence(s) of its table could not be '
+                'checked beside others against glibc\'s strxfrm']))
+            self.assertEqual(sorted(r['not_compared'][m.TABLE_CODE_DIFFERS][0]),
+                             ['en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8'])
+            # The locale that proves it is named in the warning.
+            self.assertEqual(r['disagree'], ['de_DE.utf8'])
+            self.assertEqual(s['disagree'], ['de_DE.utf8'])
+
+    def test_flips_found_as_the_definition_says(self):
+        """table_flips() against the definition, pair by pair, on random
+        tables of three levels: a sequence flips when, at the first level
+        where either machine tells it from a marked one, the two machines
+        do not order them alike."""
+        rnd = random.Random(66)
+
+        def first(a, b):
+            for lvl, (x, y) in enumerate(zip(a, b)):
+                if x != y:
+                    return lvl, (x > y) - (x < y)
+            return None, 0
+        for case in range(200):
+            seqs = [bytes([0x41 + i]) for i in range(rnd.randint(2, 9))]
+            o = {s: [[rnd.randint(1, 3)] for _ in range(3)] for s in seqs}
+            n = {s: [list(w) for w in o[s]] for s in seqs}
+            for s in rnd.sample(seqs, rnd.randint(1, len(seqs))):
+                n[s][rnd.randrange(3)] = [rnd.randint(1, 3)]
+            po, pn = (m.ct_parse(table_record(t)) for t in (o, n))
+            marked, _, _ = m.table_marked(po, pn)
+            flips = set(m.table_flips(po, pn, marked))
+            # Every pair whose order changed has a member named: the marking
+            # misses none, and nothing marked means no order changed.
+            for s, t in itertools.combinations(seqs, 2):
+                lo, so = first([w[0] for w in o[s]], [w[0] for w in o[t]])
+                ln, sn = first([w[0] for w in n[s]], [w[0] for w in n[t]])
+                if lo is None and ln is None:
+                    continue
+                lvl = min(x for x in (lo, ln) if x is not None)
+                if (so if lo == lvl else 0) != (sn if ln == lvl else 0):
+                    with self.subTest(case=case, pair=(s, t)):
+                        self.assertTrue({s, t} & (set(marked) | flips))
+            want = set()
+            for t in seqs:
+                if t in marked:
+                    continue
+                for s in marked:
+                    lo, so = first([w[0] for w in o[s]], [w[0] for w in o[t]])
+                    ln, sn = first([w[0] for w in n[s]], [w[0] for w in n[t]])
+                    if lo is None and ln is None:
+                        continue
+                    lvl = min(x for x in (lo, ln) if x is not None)
+                    if (so if lo == lvl else 0) != (sn if ln == lvl else 0):
+                        want.add(t)
+            with self.subTest(case=case):
+                self.assertEqual(flips, want)
 
 
 if __name__ == '__main__':
