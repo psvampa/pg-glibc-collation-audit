@@ -336,6 +336,18 @@ def check_kind(text):
                       text)
     if mt:
         return 'charmaps', {'checked': int(mt[1])}
+    mt = re.fullmatch(r"Character sets: every byte sequence that each "
+                      r"machine's charmaps give a character is among the strings "
+                      r"measured, in the (\d+) locale\(s\) checked\. The (\d+) "
+                      r"locale\(s\) unchanged by their sort tables need no such "
+                      r"check: the table decides for every string\.", text)
+    if mt:
+        return 'charmaps', {'checked': int(mt[1]), 'by_table': int(mt[2])}
+    mt = re.fullmatch(r"Character sets: not checked, and not needed: the (\d+) "
+                      r"locale\(s\) found unchanged were found so by their sort "
+                      r"tables, which decide for every string\.", text)
+    if mt:
+        return 'charmaps', {'checked': 0, 'by_table': int(mt[1])}
     mt = re.fullmatch(r'PostgreSQL on the ' + SIDE + r' machine: (\d+) '
                       r'process\(es\) named postgres or postmaster, all running '
                       r'the C library measured there\.', text)
@@ -1143,10 +1155,61 @@ NOT_CHECKED_WHOLE = (r"!! NOT checked whether the character sets of (either "
                      r"machine|the (?:old|new) machine) give a character to byte "
                      r"sequences that are not among the strings measured, "
                      r"because (.+)\. Where one does, a locale of that encoding "
-                     r"is unchanged only as far as measured\.")
+                     r"is unchanged only as far as measured(, unless its sort "
+                     r"table found it unchanged)?\.")
 NOT_CHECKED_SOME = (r"!! NOT checked whether their character set gives a "
                     r"character to byte sequences that are not among the strings "
                     r"measured, for (\d+) locale\(s\) of the (old|new) machine:")
+# The lines of the verdict by the sort tables (table_verdicts).
+TABLE_PHRASE = (r'its compiled sort table changed(?:: (sort rules on one machine '
+                r'only))?(?:; (step 11 saw no change in the strings it measured|'
+                r'step 11 could not measure it))?')
+DISAGREE = (r'!! Step 11 found a change in (\d+) locale\(s\) whose sort tables '
+            r'find them unchanged\. With the same glibc code that cannot '
+            r'happen, so the two machines compare with different code, and no '
+            r'locale is taken as unchanged by its sort table alone; they are '
+            r'listed as changed:')
+DISAGREE_BRIEF = ('!! Step 11 found a change where the sort tables find none, '
+                  'so the two machines compare with different glibc code and '
+                  'no locale is unchanged by its table alone: ')
+TABLES_ONLY = (r'Unchanged by their sort tables although step 11 could not '
+               r'measure them: (\d+) locale\(s\)\. Nothing in this run checks '
+               r'that the two machines compare them with the same glibc code:')
+TABLES_ONLY_BRIEF = ('unchanged by their sort tables, which step 11 could not '
+                     'cross-check: ')
+NOT_COMPARED = (r"!! Not compared by their sort tables: (\d+) locale\(s\)\. Each "
+                r"keeps step 11's verdict, and an unchanged one is unchanged "
+                r"only as far as step 11 measured:")
+NOT_COMPARED_BRIEF = (r"!! Not compared by their sort tables: (\d+) "
+                      r"locale\(s\); each keeps step 11's verdict, and an "
+                      r"unchanged one is unchanged only as far as step 11 "
+                      r"measured:")
+# 'why: count: names', the names cut at LIST_LIMIT with ', and N more'.
+NOT_COMPARED_ITEM = r'(.+): (\d+): (\S+(?:, \S+)*?)(?:, and (\d+) more)?'
+
+
+def more_names(text):
+    """'a, b, and 3 more' as (['a', 'b'], 5); refused when a name holds a
+    blank."""
+    mt = re.fullmatch(r'(\S+(?:, \S+)*?)(?:, and (\d+) more)?', text)
+    if not mt:
+        raise ReportShapeError(f'unknown list of names: {text!r}')
+    names = mt[1].split(', ')
+    return names, len(names) + int(mt[2] or 0)
+
+
+def not_compared_item(text):
+    """(why, names shown, how many) of one reason a locale was not compared
+    by its sort table; refused unless the count agrees with the names."""
+    mt = re.fullmatch(NOT_COMPARED_ITEM, text)
+    if not mt:
+        raise ReportShapeError(f'unknown not-compared line: {text!r}')
+    names = mt[3].split(', ')
+    if len(names) + int(mt[4] or 0) != int(mt[2]) or (
+            mt[4] is None) != (int(mt[2]) <= m.LIST_LIMIT) or (
+            mt[4] is not None and len(names) != m.LIST_LIMIT):
+        raise ReportShapeError(f'not compared counts {mt[2]}: {text!r}')
+    return mt[1], names, int(mt[2])
 
 
 def charmaps_unchecked(text, names=None):
@@ -1159,7 +1222,10 @@ def charmaps_unchecked(text, names=None):
     if whole:
         if names:
             raise ReportShapeError(f'names under a whole machine: {text!r}')
-        return (whole[1], whole[2], None)
+        # The third member says when the sentence spares the locales the
+        # sort tables decided.
+        return (whole[1], whole[2], 'unless the same table' if whole[3]
+                else None)
     some = re.match(NOT_CHECKED_SOME, text)
     if not some:
         raise ReportShapeError(f'unknown charmaps line: {text!r}')
@@ -1229,8 +1295,16 @@ def parse_summary(text):
     s['machines'] = (mt[1], mt[2])
     s['warnings'] = []
     while (line().startswith('     !! ') and not line().startswith('     !! Not measured: ')
+           and not line().startswith('     ' + DISAGREE_BRIEF[:20])
            and not line().startswith(tuple('     ' + p for p in ('Control: ', '!! Control ', '!! PostgreSQL on the ', '!! The glibc of the ')))):
         s['warnings'].append(warning_kind(item(5, 8)))
+    s['disagree'] = []
+    if line().startswith('     ' + DISAGREE_BRIEF[:20]):
+        text = item(5, 8)
+        if not text.startswith(DISAGREE_BRIEF):
+            fail('unknown line on step 11 against the sort tables')
+        s['disagree'], count = more_names(text[len(DISAGREE_BRIEF):])
+        s['disagree_count'] = count
     s['checks'] = []
     while line().startswith(tuple('     ' + p for p in ('Control: ', '!! Control ', '!! PostgreSQL on the ', '!! The glibc of the '))):
         s['checks'].append(above_the_list(check_kind(item(5, 8)), 'summary'))
@@ -1316,6 +1390,23 @@ def parse_summary(text):
         if (len(s['unmeasured']) + len(s['not_on_new'])
                 + len(s['refused'])) != int(mt[1]):
             fail(f'NOT known says {mt[1]}')
+    s['not_compared'], s['tables_only'] = {}, []
+    if line().startswith('     !! Not compared by their sort tables'):
+        mt = re.fullmatch(NOT_COMPARED_BRIEF, item(5, 8))
+        if not mt:
+            fail('unknown not-compared line')
+        while re.fullmatch(r'       \S.*', line()):
+            why, names, count = not_compared_item(item(7, 9))
+            if why in s['not_compared']:
+                fail(f'{why!r} twice')
+            s['not_compared'][why] = (names, count)
+        if sum(c for _, c in s['not_compared'].values()) != int(mt[1]):
+            fail(f'not compared says {mt[1]}')
+    if line().startswith('     ' + TABLES_ONLY_BRIEF[:20]):
+        text = item(5, 8)
+        if not text.startswith(TABLES_ONLY_BRIEF):
+            fail('unknown line on the tables alone')
+        s['tables_only'], _ = more_names(text[len(TABLES_ONLY_BRIEF):])
     partly = item(5, 8) if line().startswith('     !! Unchanged only') else None
     if partly is not None and not partly.startswith(PARTLY):
         raise ReportShapeError(f'unknown partly-measured line: {partly!r}')
@@ -1408,8 +1499,16 @@ def parse_report(text):
     mt = take(r'New machine: (.+), (\d+) locale\(s\)')
     r['new'] = (mt[1], int(mt[2]))
     r['warnings'] = []
-    while line().startswith('!! ') and not line().startswith(('Control: ', '!! Control ', '!! PostgreSQL on the ', '!! The glibc of the ')):
+    while line().startswith('!! ') and not line().startswith(('Control: ', '!! Control ', '!! PostgreSQL on the ', '!! The glibc of the ', '!! Step 11 found a change in ')):
         r['warnings'].append(warning_kind(paragraph()))
+    r['disagree'] = []
+    if line().startswith('!! Step 11 found a change in '):
+        mt = re.fullmatch(DISAGREE, paragraph())
+        if not mt:
+            fail('unknown line on step 11 against the sort tables')
+        r['disagree'], count = more_names(' '.join(indented(r'  \S.*')))
+        if count != int(mt[1]):
+            fail(f'step 11 against the tables says {mt[1]}')
     r['checks'] = []
     while line().startswith(('Control: ', '!! Control ', '!! PostgreSQL on the ', '!! The glibc of the ')):
         r['checks'].append(above_the_list(check_kind(paragraph()), 'report'))
@@ -1465,6 +1564,29 @@ def parse_report(text):
         fail(f'CHANGED says {changed} and the changes name {len(names)}')
 
     r['unchanged'] = int(take(r'Unchanged: (\d+) locale\(s\)\.')[1])
+    r['tables_only'] = []
+    if line().startswith('Unchanged by their sort tables'):
+        mt = re.fullmatch(TABLES_ONLY, paragraph())
+        if not mt:
+            fail('unknown line on the tables alone')
+        r['tables_only'], count = more_names(' '.join(indented(r'  \S.*')))
+        if count != int(mt[1]):
+            fail(f'the tables alone says {mt[1]}')
+    r['not_compared'] = {}
+    if line().startswith('!! Not compared by their sort tables'):
+        mt = re.fullmatch(NOT_COMPARED, paragraph())
+        if not mt:
+            fail('unknown not-compared paragraph')
+        while re.fullmatch(r'  \S.*', line()):
+            first = line()
+            at[0] += 1
+            why, names, count = not_compared_item(
+                flat(' '.join([first] + indented(r'    \S.*'))))
+            if why in r['not_compared']:
+                fail(f'{why!r} twice')
+            r['not_compared'][why] = (names, count)
+        if sum(c for _, c in r['not_compared'].values()) != int(mt[1]):
+            fail(f'not compared says {mt[1]}')
     r['partly'] = {}
     if line().startswith('!! Unchanged only as far as measured: '):
         count = int(re.match(r'!! Unchanged only as far as measured: (\d+) of',
@@ -1633,10 +1755,26 @@ def parse_details(details):
            'reversed': None, 'all_reversed': False, 'pairs': None,
            'pairs_count': None, 'probes': None, 'compared': None,
            'not_measured': None, 'still': None, 'still_count': None,
-           'undecided': 0}
+           'undecided': 0, 'table': None}
     if not details:
         raise ReportShapeError('a change with no detail lines')
     rest = list(details)
+    if rest[0].startswith('its compiled sort table changed'):
+        text = rest.pop(0)
+        while rest and re.fullmatch(r'  \S.*', rest[0]):
+            text += ' ' + rest.pop(0).strip()
+        mt = re.fullmatch(TABLE_PHRASE + r'\.', text)
+        if not mt or not (mt[1] or mt[2]):
+            raise ReportShapeError(f'unknown sort table line: {text!r}')
+        out['table'] = (mt[1], mt[2])
+        if not rest:
+            if mt[2] is None:
+                raise ReportShapeError(f'a change step 11 found, with no '
+                                       f'lines of it: {text!r}')
+            return out
+        if mt[2] is not None:
+            raise ReportShapeError(f'lines of step 11 under a change it did '
+                                   f'not find: {rest!r}')
 
     def wrapped_runs(text, indent):
         """Runs that wrap onto lines indented by indent."""
@@ -1762,7 +1900,22 @@ def parse_brief(text):
     gives the report's lines, so that the two can be compared one to one."""
     out = {'moved': None, 'moved_count': None, 'reversed': None,
            'pairs': None, 'pairs_count': None, 'probes': False, 'still': None,
-           'still_count': None, 'compared': None, 'undecided': 0}
+           'still_count': None, 'compared': None, 'undecided': 0,
+           'table': None}
+    mt = re.match(TABLE_PHRASE + r'(?=; |$)', text)
+    if mt and mt[0]:
+        if not (mt[1] or mt[2]):
+            raise ReportShapeError(f'unknown sort table phrase: {text!r}')
+        out['table'] = (mt[1], mt[2])
+        text = text[mt.end() + 2:]
+        if not text:
+            if mt[2] is None:
+                raise ReportShapeError(f'a change step 11 found, with no '
+                                       f'phrase of it: {mt[0]!r}')
+            return out
+        if mt[2] is not None:
+            raise ReportShapeError(f'a phrase of step 11 under a change it did '
+                                   f'not find: {text!r}')
     first, *rest = text.split('; ')
     many = re.fullmatch(COUNTED.format('characters') + r' moved', first)
     listed = re.fullmatch(COUNTED.format(r'character\(s\)') + r' moved: (.+)',
@@ -1860,14 +2013,22 @@ class Rhel8ToRhel9(unittest.TestCase):
         separate numbers, and they add up to the old machine's locales."""
         t = self.report['totals']
         self.assertEqual(t, {'old': 867, 'changed': 14, 'unchanged': 851,
-                             'partly': 10, 'not measured': 0, 'refused': 0,
+                             'partly': 849, 'not measured': 0,
+                             'refused': 0,
                              'not on new': 2})
         self.assertEqual(t['changed'] + t['unchanged'] + t['not measured']
                          + t['refused'] + t['not on new'], t['old'])
         self.assertEqual(t['unchanged'], self.report['unchanged'])
-        self.assertEqual(t['partly'], len(self.report['partly']))
+        self.assertEqual(t['partly'], t['unchanged'] - 2)
         self.assertEqual(t['not measured'], len(self.report['unmeasured']))
         self.assertEqual(t['not on new'], len(self.report['not_on_new']))
+        # Every locale on both machines but C and POSIX, changed or not, is
+        # not compared by its table, for the one reason that the file is of
+        # an earlier format.
+        (why, (names, count)), = self.report['not_compared'].items()
+        self.assertIn('which did not read the sort tables', why)
+        self.assertEqual(count, t['changed'] + t['unchanged'] - 2)
+        self.assertNotIn('C', names)
 
     def test_ko_KR_utf8_moves_one_character(self):
         """U+D7A3 moved while ko_KR's source did not change: localedef did.
@@ -1979,14 +2140,22 @@ class Rhel9ToRhel10(unittest.TestCase):
     def test_every_locale_of_the_old_machine_is_counted_once(self):
         t = self.report['totals']
         self.assertEqual(t, {'old': 869, 'changed': 4, 'unchanged': 863,
-                             'partly': 11, 'not measured': 0, 'refused': 0,
+                             'partly': 861, 'not measured': 0,
+                             'refused': 0,
                              'not on new': 2})
         self.assertEqual(t['changed'] + t['unchanged'] + t['not measured']
                          + t['refused'] + t['not on new'], t['old'])
         self.assertEqual(t['unchanged'], self.report['unchanged'])
-        self.assertEqual(t['partly'], len(self.report['partly']))
+        self.assertEqual(t['partly'], t['unchanged'] - 2)
         self.assertEqual(t['not measured'], len(self.report['unmeasured']))
         self.assertEqual(t['not on new'], len(self.report['not_on_new']))
+        # Every locale on both machines but C and POSIX, changed or not, is
+        # not compared by its table, for the one reason that the file is of
+        # an earlier format.
+        (why, (names, count)), = self.report['not_compared'].items()
+        self.assertIn('which did not read the sort tables', why)
+        self.assertEqual(count, t['changed'] + t['unchanged'] - 2)
+        self.assertNotIn('C', names)
 
     def test_thai_moves(self):
         tis = self.changes['th_TH']
@@ -2028,7 +2197,7 @@ FINDINGS = ('moved', 'sorts differently', 'pairs changed', 'not compared',
             'upper/lower/ILIKE group', 'LC_CTYPE converted',
             'upper/lower back not checked', 'upper/lower back group',
             'upper/lower back error', 'upper/lower back changed',
-            'measured in part')
+            'measured in part', 'sort table changed')
 # The rows of a locale NOT known to be unchanged, beside the changes.
 NOT_KNOWN = ('not measured', 'not on the new machine')
 # And of a locale unchanged as far as measured: none of the three changed.
@@ -2124,6 +2293,19 @@ def parse_characters(text):
     # The charmaps not checked, after the warnings and the control.
     out.charmaps_unchecked = [charmaps_unchecked(note) for note in notes
                               if note.startswith('!! NOT checked whether ')]
+    # What the sort tables say beside the rows (table_verdicts).
+    out.disagree, out.tables_only = [], []
+    for note in [x for x in notes if x.startswith(('!! step 11 found a change',
+                                                   'unchanged by their sort'))]:
+        head = '!! step 11 found a change where the sort tables find none: '
+        tail = 'unchanged by their sort tables, which step 11 could not cross-check: '
+        if note.startswith(head) and not out.disagree:
+            out.disagree = note[len(head):].split(',')
+        elif note.startswith(tail) and not out.tables_only:
+            out.tables_only = note[len(tail):].split(',')
+        else:
+            raise ReportShapeError(f'unknown note on the sort tables: {note!r}')
+        notes.remove(note)
     notes = [note for note in notes
              if not note.startswith('!! NOT checked whether ')]
     at = 0
@@ -2313,15 +2495,26 @@ def parse_characters(text):
                        seqs=[bytes.fromhex(s) for s in mt[4].split(', ')])
             out.setdefault((names,), []).append(row)
             continue
+        if finding == 'sort table changed':
+            mt = re.fullmatch(TABLE_PHRASE, how)
+            if (chars, test, before, now, measured) != ('-',) * 5 or not mt or (
+                    not (mt[1] or mt[2])):
+                raise ReportShapeError(f'characters line {n}: {line!r}')
+            row['table'] = (mt[1], mt[2])
+            out.setdefault(tuple(names.split(',')), []).append(row)
+            continue
         if finding in ('pairs changed', 'unchanged only as far as measured'):
             mt = (re.fullmatch(r'before: (.+); now: (.+)', how)
-                  if finding == 'pairs changed' else re.fullmatch(PARTLY_ROW, how))
+                  if finding == 'pairs changed' else re.fullmatch(
+                      PARTLY_ROW + r'|not compared by its sort table: (.+)', how))
             if (chars, test, before, now, measured) != ('-',) * 5 or not mt:
                 raise ReportShapeError(f'characters line {n}: {line!r}')
             if finding == 'pairs changed':
                 row['probes'] = (mt[1], mt[2])
-            else:
+            elif mt[1]:
                 row['count'] = int(mt[1])
+            else:
+                row['not_compared'] = mt[2]
             out.setdefault(tuple(names.split(',')), []).append(row)
             continue
         if finding in NOT_KNOWN:
@@ -3009,7 +3202,11 @@ class SummaryForTheAudit(unittest.TestCase):
                     for row in rows:
                         if row['finding'] in NOT_CHANGED:
                             self.assertEqual(len(names), 1)
-                            by_kind.setdefault(row['finding'], {})[names[0]] = row
+                            # A locale not compared by its table has a row
+                            # of that, beside its partly row if it has one.
+                            kind = row['finding'] + (
+                                ' (table)' if 'not_compared' in row else '')
+                            by_kind.setdefault(kind, {})[names[0]] = row
                 self.assertEqual(set(by_kind.get('not measured', ())),
                                  set(report['unmeasured']))
                 self.assertEqual(sorted(by_kind.get('not measured', ())),
@@ -3480,7 +3677,10 @@ class Reports(Variants):
             d['locales']['en_US']['partly'] = 5
         r = self.report(RHEL9, self.variant(edit, reseal=True))
         self.assertEqual(r['partly'].get('en_US'), 5)
-        self.assertEqual(r['totals']['partly'], len(r['partly']))
+        # Not compared by their tables (a file of the first format), every
+        # unchanged locale but C and POSIX is unchanged only as far as
+        # measured, the partly ones among them.
+        self.assertEqual(r['totals']['partly'], r['unchanged'] - 2)
 
     def test_the_probe_pairs_changed(self):
         def edit(d):
@@ -3587,7 +3787,7 @@ class Reports(Variants):
                                  'pairs': None, 'pairs_count': len(changed),
                                  'probes': False, 'still': None,
                                  'still_count': None, 'compared': None,
-                                 'undecided': 0})
+                                 'undecided': 0, 'table': None})
 
     def test_a_locale_name_with_a_comma_and_a_tab(self):
         """The file is tab-separated and lists the names of a change with
@@ -5053,7 +5253,9 @@ class FindingKinds(unittest.TestCase):
                                             'ctype', 'ctype rows',
                                             'other encoding', 'closing',
                                             'in part', 'charmaps not checked',
-                                            'charmaps checked'})
+                                            'charmaps checked',
+                                            'tables not compared',
+                                            'tables disagree', 'tables only'})
         for table in (m.LOCALE_KINDS, m.RUN_KINDS):
             for kind, how in table.items():
                 with self.subTest(kind=kind):
@@ -13467,6 +13669,419 @@ class SortTablesRead(Checks):
                     'checks'].update(x={}))):
             with self.subTest(case=case):
                 self.refused(self.MALFORMED, self.tables, edit)
+
+
+# A check of controls 2 to 4 that passed, as collate_check writes one.
+CHECK_PASSED = {'record_seqs': 3, 'record_mismatch': 0, 'record_examples': [],
+                'pairs': 2, 'triples': 1, 'pair_mismatch': 0, 'pair_skipped': 0,
+                'pair_unchecked': 0, 'pair_examples': []}
+
+
+def read_tables(entries=None, checks=None, byteorder='little',
+                elsewhere=()):
+    """An edit that gives a file of this format the sort table of each
+    locale as a machine that read them all writes it: C and POSIX built in,
+    every other locale a file of 4 rules whose fingerprint and table are
+    its name's, so two machines given the same edit hold the same tables;
+    each (table, encoding) a check that passed. ENTRIES replace a locale's
+    entry ({} keeps it), CHECKS replace or (None) drop the check of a
+    locale's own pair; a locale in ELSEWHERE has its check under another
+    encoding than its own, as for a table another locale uses."""
+    def edit(d):
+        part = d['collate']
+        part['byteorder'] = byteorder
+        part['checks'] = {}
+        for name, r in sorted(d['locales'].items()):
+            if name in ('C', 'POSIX'):
+                part['locales'][name] = {'state': 'builtin'}
+                continue
+            digest = hashlib.sha256(name.encode()).hexdigest()
+            e = {'state': 'file', 'fingerprint': digest, 'nrules': 4,
+                 'table': digest}
+            e = dict(e, **(entries or {}).get(name, {}))
+            e = {k: v for k, v in e.items() if v is not None}
+            part['locales'][name] = e
+            if e['state'] == 'file' and e['table'] != 'none':
+                key = f'{e["table"]} {r["codeset"]}'
+                if name in elsewhere:
+                    key = f'{e["table"]} ISO-8859-1'
+                part['checks'][key] = dict(CHECK_PASSED, locale=name)
+                if name in (checks or {}):
+                    if checks[name] is None:
+                        part['checks'].pop(key)
+                    else:
+                        part['checks'][key] = dict(checks[name], locale=name)
+    return edit
+
+
+def file_changed(e_name='de_DE.utf8'):
+    """An edit that makes step 11 find a change in a locale with nothing
+    moved: its probe pairs, sealed as measured() seals them (Reports)."""
+    def edit(d):
+        e = d['locales'][e_name]
+        blob = d['pair_data'][e['pairs']]
+        e['probes'] = e['probes'].replace('>', '<', 1)
+        e['pairs'] = hashlib.sha256(
+            e['probes'].encode('utf-8') + b'\n'
+            + zlib.decompress(base64.b64decode(blob))).hexdigest()
+        d['pair_data'][e['pairs']] = blob
+    return edit
+
+
+class SortTablesCompared(Checks):
+    """Each locale's verdict from its compiled sort table, beside step 11's
+    (table_verdicts), one route at a time, on RHEL9 and RHEL10 cut to FEW:
+    four UTF-8 locales step 11 finds unchanged, one of them (ja_JP.utf8)
+    only as far as measured, and C and POSIX.
+
+    Freezes: a locale whose table was not compared read as unchanged for
+    any text, or its step 11 caveats dropped; a pair with no control read
+    as one that passed; a changed table read as unchanged because step 11
+    saw nothing; a change step 11 finds dropped because the tables agree;
+    C and POSIX counted among the locales not compared; the three outputs
+    naming different locales."""
+
+    def outputs(self, old_edits=(), new_edits=(), form=(m.FORMAT, m.FORMAT),
+                charmaps=None):
+        """(report, summary, file) of RHEL9 -> RHEL10 with the edits, given
+        CHARMAPS (a folder) as both machines' charmaps."""
+        tag = self.id().rsplit('.', 1)[-1]
+        old = self.made(RHEL9, 'old', with_parts(form=form[0]), *old_edits)
+        new = self.made(RHEL10, 'new', with_parts(form=form[1]), *new_edits)
+        summary = os.path.join(self.tmp, f'{tag}.sum')
+        chars = os.path.join(self.tmp, f'{tag}.tsv')
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.object(m.sys, 'argv', [
+                SCRIPT, '--compare', old, new, '--summary-to', summary,
+                '--characters-to', chars] + (
+                    ['--old-charmaps', charmaps, '--new-charmaps', charmaps]
+                    if charmaps else [])), \
+                contextlib.redirect_stdout(stdout), \
+                contextlib.redirect_stderr(stderr):
+            self.assertEqual(m.main(), 0)
+        self.assertEqual(stderr.getvalue(), '')
+        with open(summary, encoding='utf-8') as f, \
+                open(chars, encoding='utf-8') as g:
+            return (parse_report(stdout.getvalue()), parse_summary(f.read()),
+                    parse_characters(g.read()))
+
+    def not_compared(self, outs):
+        """{why: [names]} the three outputs agree on, the file's rows giving
+        the unchanged ones."""
+        r, s, f = outs
+        self.assertEqual(s['not_compared'], r['not_compared'])
+        out = {why: names for why, (names, count) in r['not_compared'].items()}
+        for why, (names, count) in r['not_compared'].items():
+            self.assertEqual(len(names), count)
+        rows = {}
+        for names, group in f.items():
+            for row in group:
+                if 'not_compared' in row:
+                    rows.setdefault(row['not_compared'], []).extend(names)
+        unchanged = {why: [n for n in names if n not in by_name(r)]
+                     for why, names in out.items()}
+        self.assertEqual({w: sorted(n) for w, n in rows.items()},
+                         {w: n for w, n in unchanged.items() if n})
+        return out
+
+    def firm(self, outs, changed=()):
+        """The run compared every locale by its table: no locale not
+        compared, none unchanged only as far as measured, and the closing
+        that says only what is still not measured."""
+        r, s, f = outs
+        self.assertEqual(sorted(by_name(r)), sorted(changed))
+        self.assertEqual(sorted(s['changes']), sorted(changed))
+        self.assertEqual(r['not_compared'], {})
+        self.assertEqual(r['partly'], {})
+        self.assertEqual(s['partly'], [])
+        self.assertEqual(r['totals']['partly'], 0)
+        self.assertEqual(r['closing'], m.CLOSING_TABLES)
+        self.assertEqual(s['closing'], m.CLOSING_TABLES)
+        self.assertEqual(f.closing, m.CLOSING_TABLES)
+
+    def test_the_same_tables_decide_for_every_text(self):
+        outs = self.outputs([read_tables()], [read_tables()])
+        self.firm(outs)
+        r, s, f = outs
+        self.assertEqual(r['unchanged'], 6)
+        # No locale needs its charmaps checked, and the line says why.
+        self.assertIn(('charmaps', {'checked': 0, 'by_table': 4}),
+                      r['checks'])
+        self.assertIn(('charmaps', {'checked': 0, 'by_table': 4}),
+                      s['checks'])
+
+    def test_the_character_sets_where_the_tables_decide_some(self):
+        """Given charmaps, the check runs on the locale its table did not
+        find unchanged, and the line counts the three the tables decided."""
+        root = os.path.join(self.tmp, 'charmaps-of-both')
+        os.mkdir(root)
+        with open(os.path.join(root, 'UTF-8'), 'w', encoding='latin-1') as f:
+            f.write(CharmapsCheckedInTheComparison.UTF8.format(extra=''))
+        other = {'de_DE.utf8': {'fingerprint': 'f' * 64}}
+        r, s, f = self.outputs([read_tables()], [read_tables(other)],
+                               charmaps=root)
+        self.assertEqual(set(by_name(r)), {'de_DE.utf8'})
+        for out in (r['checks'], s['checks'], f.checks):
+            self.assertIn(('charmaps', {'checked': 1, 'by_table': 3}), out)
+        self.assertEqual(r['charmaps_unchecked'], [])
+
+    def test_no_locale_decided_and_none_to_check(self):
+        """Every locale but C and POSIX unmeasured and not compared: no
+        line says the check was not needed, and the charmaps not given are
+        said as such."""
+        unread = {n: {'state': 'not read', 'why': 'no file',
+                      'fingerprint': None, 'nrules': None, 'table': None}
+                  for n in ('de_DE.utf8', 'en_US.utf8', 'ja_JP.utf8',
+                            'sv_SE.utf8')}
+
+        def unmeasured(d):
+            for n in unread:
+                d['locales'][n] = {'error': 'measuring failed: MemoryError()',
+                                   'codeset': 'UTF-8'}
+        r, s, f = self.outputs([read_tables(unread), unmeasured],
+                               [read_tables()])
+        self.assertEqual(sorted(r['unmeasured']), sorted(unread))
+        self.assertFalse([d for kind, d in r['checks']
+                          if kind == 'charmaps' and 'by_table' in d])
+        self.assertEqual([x[::2] for x in r['charmaps_unchecked']],
+                         [('either machine', None)])
+
+    def test_tables_not_packed_still_decide(self):
+        """The packed records are what names a change (the next step);
+        whether a table changed is its fingerprint, in the file either way."""
+        def unpacked(d):
+            d['collate'].update(tables=None, tables_why='no lzma')
+        self.firm(self.outputs([read_tables(), unpacked],
+                               [read_tables(), unpacked]))
+
+    def test_no_rules_on_either_machine(self):
+        """A file of 0 rules compares bytes, like C, and needs no check:
+        the guard read the rule count from the file itself."""
+        none = {'de_DE.utf8': {'nrules': 0, 'table': 'none'}}
+        self.firm(self.outputs([read_tables(none)], [read_tables(none)]))
+
+    def test_a_changed_table_step_11_did_not_see(self):
+        other = {'de_DE.utf8': {'fingerprint': 'f' * 64}}
+        r, s, f = self.outputs([read_tables()], [read_tables(other)])
+        self.assertEqual(set(by_name(r)), {'de_DE.utf8'})
+        change = by_name(r)['de_DE.utf8']
+        self.assertEqual(change['table'],
+                         (None, 'step 11 saw no change in the strings it '
+                                'measured'))
+        self.assertIsNone(change['moved'])
+        self.assertEqual(s['changes']['de_DE.utf8']['brief'],
+                         'its compiled sort table changed; step 11 saw no '
+                         'change in the strings it measured')
+        self.assertEqual([row['table'] for row in f[('de_DE.utf8',)]
+                          if row['finding'] == 'sort table changed'],
+                         [change['table']])
+        self.assertEqual(r['totals']['changed'], 1)
+        self.assertEqual(r['totals']['partly'], 0)
+        self.assertEqual(r['partly'], {})
+        # The charmaps were not given: what that leaves is the changed one,
+        # whose table does not decide it unchanged.
+        self.assertEqual([x[::2] for x in r['charmaps_unchecked']],
+                         [('either machine', 'unless the same table')])
+        self.assertEqual(s['charmaps_unchecked'], r['charmaps_unchecked'])
+        self.assertEqual(r['closing'], m.CLOSING_TABLES)
+
+    def test_sort_rules_on_one_machine_only(self):
+        for side in ('old', 'new'):
+            with self.subTest(side=side):
+                none = read_tables({'de_DE.utf8': {'nrules': 0,
+                                                   'table': 'none'}})
+                edits = ([none], [read_tables()])
+                r, s, f = self.outputs(*(edits if side == 'old'
+                                         else edits[::-1]))
+                self.assertEqual(by_name(r)['de_DE.utf8']['table'],
+                                 ('sort rules on one machine only',
+                                  'step 11 saw no change in the strings it '
+                                  'measured'))
+                self.assertEqual(set(s['changes']), {'de_DE.utf8'})
+
+    def test_step_11_finds_a_change_the_tables_do_not(self):
+        outs = self.outputs([read_tables()], [read_tables(),
+                                              file_changed()])
+        r, s, f = outs
+        self.assertEqual(set(by_name(r)), {'de_DE.utf8'})
+        self.assertIsNone(by_name(r)['de_DE.utf8']['table'])
+        self.assertEqual(r['disagree'], ['de_DE.utf8'])
+        self.assertEqual(s['disagree'], ['de_DE.utf8'])
+        self.assertEqual(f.disagree, ['de_DE.utf8'])
+        # The same table proves nothing on these machines: every other
+        # locale but C and POSIX keeps step 11's verdict.
+        self.assertEqual(self.not_compared(outs), {
+            m.TABLE_CODE_DIFFERS: ['en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8']})
+        self.assertEqual(r['totals']['partly'], 3)
+        self.assertEqual(r['partly'], {'ja_JP.utf8': 3})
+        self.assertEqual(r['closing'], m.CLOSING)
+
+    def test_step_11_could_not_measure_a_locale_whose_table_is_the_same(self):
+        def unmeasured(d):
+            d['locales']['de_DE.utf8'] = {
+                'error': 'measuring failed: MemoryError()', 'codeset': 'UTF-8'}
+        r, s, f = self.outputs([read_tables(), unmeasured], [read_tables()])
+        self.firm((r, s, f))
+        self.assertEqual(r['unmeasured'], {})
+        self.assertEqual(r['tables_only'], ['de_DE.utf8'])
+        self.assertEqual(s['tables_only'], ['de_DE.utf8'])
+        self.assertEqual(f.tables_only, ['de_DE.utf8'])
+
+    def assert_not_compared(self, outs, why, names):
+        """Every name not compared, for why alone, each keeping step 11's
+        verdict: unchanged only as far as measured, ja_JP.utf8 with its
+        pairs not measured at every level, and the closing on
+        contractions."""
+        r, s, f = outs
+        self.assertEqual(self.not_compared(outs), {why: names})
+        self.assertEqual(by_name(r), {})
+        self.assertEqual(r['totals']['partly'], len(names))
+        self.assertEqual(r['partly'], ({'ja_JP.utf8': 3}
+                                       if 'ja_JP.utf8' in names else {}))
+        self.assertEqual(r['closing'], m.CLOSING)
+        self.assertEqual(s['closing'], m.CLOSING)
+        self.assertEqual(f.closing, m.CLOSING)
+
+    def test_a_table_not_read_on_one_machine(self):
+        unread = {'de_DE.utf8': {'state': 'not read', 'why': 'no file',
+                                 'fingerprint': None, 'nrules': None,
+                                 'table': None}}
+        for side in ('old', 'new'):
+            with self.subTest(side=side):
+                edits = ([read_tables(unread)], [read_tables()])
+                outs = self.outputs(*(edits if side == 'old' else edits[::-1]))
+                self.assert_not_compared(
+                    outs, f'not read on the {side} machine: no file',
+                    ['de_DE.utf8'])
+        with self.subTest(side='old, the new one not checked'):
+            self.assert_not_compared(
+                self.outputs([read_tables(unread)],
+                             [read_tables(checks={'de_DE.utf8': None})]),
+                'not read on the old machine: no file; on the new machine, '
+                'its table was not checked', ['de_DE.utf8'])
+        with self.subTest(side='both'):
+            other = {'de_DE.utf8': dict(unread['de_DE.utf8'], why='gone')}
+            self.assert_not_compared(
+                self.outputs([read_tables(unread)], [read_tables(other)]),
+                'not read on the old machine: no file; not read on the new '
+                'machine: gone', ['de_DE.utf8'])
+
+    def test_a_check_that_failed_or_never_ran(self):
+        bad = dict(CHECK_PASSED, record_mismatch=2)
+        for case, check, why in (
+                ('failed', bad, "its table does not match glibc's strxfrm (2 "
+                                "sequence(s) alone, 0 with others)"),
+                ('error', {'error': 'boom'}, 'the check of its table failed: '
+                                             'boom'),
+                ('unchecked', dict(CHECK_PASSED, pair_unchecked=1),
+                 "1 sequence(s) of its table could not be checked beside "
+                 "others against glibc's strxfrm"),
+                ('absent', None, 'its table was not checked')):
+            for side in ('old', 'new'):
+                with self.subTest(case=case, side=side):
+                    edits = ([read_tables(checks={'ja_JP.utf8': check})],
+                             [read_tables()])
+                    outs = self.outputs(*(edits if side == 'old'
+                                          else edits[::-1]))
+                    self.assert_not_compared(
+                        outs, f'on the {side} machine, {why}', ['ja_JP.utf8'])
+        with self.subTest(case='both'):
+            self.assert_not_compared(
+                self.outputs([read_tables(checks={'ja_JP.utf8': bad})],
+                             [read_tables(checks={'ja_JP.utf8': None})]),
+                "on the old machine, its table does not match glibc's strxfrm "
+                "(2 sequence(s) alone, 0 with others); on the new machine, its "
+                "table was not checked", ['ja_JP.utf8'])
+        with self.subTest(case='the charmaps sentence spares none of them'):
+            outs = self.outputs([read_tables(checks={'ja_JP.utf8': bad})],
+                                [read_tables()])
+            self.assertEqual([x[::2] for x in outs[0]['charmaps_unchecked']],
+                             [('either machine', 'unless the same table')])
+            self.assertIn('ja_JP.utf8', [n for names in self.not_compared(
+                outs).values() for n in names])
+        with self.subTest(case='a check of another encoding'):
+            self.assert_not_compared(
+                self.outputs([read_tables(elsewhere=('ja_JP.utf8',))],
+                             [read_tables()]),
+                'on the old machine, its table was not checked',
+                ['ja_JP.utf8'])
+
+    def test_the_same_items_read_as_two_tables(self):
+        other = {'de_DE.utf8': {'table': 'e' * 64}}
+        self.assert_not_compared(
+            self.outputs([read_tables()], [read_tables(other)]),
+            'the same compiled items gave two different readings of the '
+            'table', ['de_DE.utf8'])
+        with self.subTest(case='and a control that failed'):
+            self.assert_not_compared(
+                self.outputs([read_tables(checks={'de_DE.utf8': None})],
+                             [read_tables(other)]),
+                'the same compiled items gave two different readings of the '
+                'table; on the old machine, its table was not checked',
+                ['de_DE.utf8'])
+
+    def test_machines_of_another_byte_order(self):
+        self.assert_not_compared(
+            self.outputs([read_tables()], [read_tables(byteorder='big')]),
+            'the two machines store numbers in a different byte order '
+            '(little-endian, then big-endian), so their compiled tables '
+            'cannot be compared byte for byte',
+            ['de_DE.utf8', 'en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8'])
+
+    def test_a_file_of_the_format_before(self):
+        """C and POSIX are glibc's own locale on any machine, compared by
+        that, never counted among the locales not compared."""
+        for side, form in (('OLD', ('locale_order/6', m.FORMAT)),
+                           ('NEW', (m.FORMAT, 'locale_order/6'))):
+            with self.subTest(side=side):
+                tables = [read_tables()]
+                outs = self.outputs(*(([], tables) if side == 'OLD'
+                                      else (tables, [])), form=form)
+                self.assert_not_compared(
+                    outs, f'the {side} file was {m.TABLE_EARLIER} '
+                          '(locale_order/6)',
+                    ['de_DE.utf8', 'en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8'])
+                # No table decided a locale: the charmaps sentence spares none.
+                self.assertEqual([x[::2] for x in outs[0]['charmaps_unchecked']],
+                                 [('either machine', None)])
+
+    def test_two_not_compared_beside_a_firm_one(self):
+        """Two reasons, each with its own names, the largest first; the
+        totals count what was not compared, never the firm ones."""
+        # The larger reason sorts after the other by its words.
+        unread = {'de_DE.utf8': {'state': 'not read', 'why': 'no file',
+                                 'fingerprint': None, 'nrules': None,
+                                 'table': None}}
+        outs = self.outputs([read_tables(unread, {'ja_JP.utf8': None,
+                                                  'sv_SE.utf8': None})],
+                            [read_tables()])
+        r, s, f = outs
+        self.assertEqual(self.not_compared(outs), {
+            'not read on the old machine: no file': ['de_DE.utf8'],
+            'on the old machine, its table was not checked': ['ja_JP.utf8',
+                                                              'sv_SE.utf8']})
+        for out in (r, s):
+            self.assertEqual(list(out['not_compared']), [
+                'on the old machine, its table was not checked',
+                'not read on the old machine: no file'])
+        self.assertEqual(r['totals']['partly'], 3)
+        self.assertEqual(r['totals']['unchanged'], 6)
+
+    def test_not_compared_and_changed_by_step_11(self):
+        """Step 11's change stands, with no row that reads it as unchanged."""
+        unread = {'de_DE.utf8': {'state': 'not read', 'why': 'no file',
+                                 'fingerprint': None, 'nrules': None,
+                                 'table': None}}
+        outs = self.outputs([read_tables(unread)],
+                            [read_tables(), file_changed()])
+        r, s, f = outs
+        self.assertEqual(set(by_name(r)), {'de_DE.utf8'})
+        self.assertIsNone(by_name(r)['de_DE.utf8']['table'])
+        self.assertEqual(self.not_compared(outs), {
+            'not read on the old machine: no file': ['de_DE.utf8']})
+        self.assertEqual(r['totals']['partly'], 0)
+        self.assertEqual(r['disagree'], [])
+        self.assertEqual(r['closing'], m.CLOSING_TABLES)
 
 
 if __name__ == '__main__':

@@ -67,19 +67,25 @@ locales that share it, and so is each list of strings an order numbers, so
 that the comparison can name the strings that moved without a second run on
 the machines.
 
-Given each machine's charmaps (--old-charmaps and --new-charmaps; audit.sh
-passes those of a file --extract wrote), the comparison checks that every
-sequence they give a character is among the strings measured, and names a
-locale whose charmap gives one that is not as measured in part
-(charmap_check).
+The comparison decides each locale by its sort table where both machines'
+tables could be compared: the same six items sort any text alike, given the
+same comparison code, and different ones are a change whatever the strings
+showed (table_verdicts). A change the measured order finds under the same
+table still counts, and then no table is trusted alone. Where the tables
+could not be compared, the measured order decides, as far as it was
+measured. For those locales, given each machine's
+charmaps (--old-charmaps and --new-charmaps; audit.sh passes those of a file
+--extract wrote), the comparison checks that every sequence they give a
+character is among the strings measured, and names a locale whose charmap
+gives one that is not as measured in part (charmap_check).
 
-Not compared: a rule that applies only to a particular combination of letters,
-such as a contraction ("ch" sorted as one letter). The sort table has it,
-and the comparison does not read that table. Two machines that
-agree on both can still sort some longer strings differently. Where a
-character counts for nothing at some level (glibc ignores it there), how it is
-told apart from its neighbour is read less reliably, so a change there may go
-unseen.
+Not compared, in a locale whose table was not compared: a rule that applies
+only to a particular combination of letters, such as a contraction ("ch"
+sorted as one letter). The strings measured hold one character at a time, so
+two machines whose measurements agree can still sort some longer strings
+differently. Where a character counts for nothing at some level (glibc
+ignores it there), how it is told apart from its neighbour is read less
+reliably, so a change there may go unseen.
 
 Usage:
   python3 locale_order.py > old.out          # on each machine
@@ -5468,8 +5474,9 @@ OTHER_STRINGS = ('In the sort orders, a string that this comparison cannot '
                  'first to the last.')
 
 
-# Printed under every report and every summary, and at the end of the
-# characters file: what two machines that agree here can still disagree on.
+# Printed under the report, the summary and the characters file while a
+# locale found unchanged was not compared by its sort table (CLOSING_TABLES
+# otherwise): what two machines that agree here can still disagree on.
 CLOSING = ('!! Not measured: a rule that applies only to a particular '
            'combination of letters, such as a contraction ("ch" sorted as one '
            'letter), so two machines that agree here can still sort some longer '
@@ -7835,8 +7842,270 @@ def rows_of(items):
     return [(d['names'], d['rows']) for d in items]
 
 
+# ---------------------------------------------------------------------------
+# Each locale's verdict from its compiled sort table (16.41 A'), beside step
+# 11's. Two machines whose six items strcoll_l reads are the same bytes sort
+# any text alike, given the same comparison code; step 11 measures a sample
+# of strings, so where both answer, the table decides and step 11 is the
+# cross-check of that code: a change step 11 finds under the same table
+# says the code differs, and then no table decides alone.
+
+TABLE_EARLIER = ('written by an earlier version of locale_order.py, which did '
+                 'not read the sort tables')
+TABLE_CODE_DIFFERS = ('step 11 found a change under the same sort table in '
+                      'another locale, so the two machines compare with '
+                      'different code and the same table does not prove the '
+                      'same order')
+
+
+def table_sides_why_not(old, new):
+    """Why no locale of this pair can be compared by its sort table, or
+    None: a file of an earlier format, or two machines that store numbers
+    in a different byte order, whose compiled tables differ in bytes for
+    the same rules."""
+    parts = [d.get('collate') for d in (old, new)]
+    for side, part, d in zip(('OLD', 'NEW'), parts, (old, new)):
+        if part is None:
+            return f'the {side} file was {TABLE_EARLIER} ({d["format"]})'
+    if parts[0]['byteorder'] != parts[1]['byteorder']:
+        return ('the two machines store numbers in a different byte order '
+                f'({parts[0]["byteorder"]}-endian, then '
+                f'{parts[1]["byteorder"]}-endian), so their compiled tables '
+                'cannot be compared byte for byte')
+    return None
+
+
+def table_route(old, new, name):
+    """(route, why) of one locale measured on both machines, by its sort
+    table alone, where table_sides_why_not() is None:
+      ('bytes', why)        both machines compare bytes: unchanged;
+      ('identical', None)   the six items are the same bytes, read as the
+                            same table, whose controls passed on both
+                            machines;
+      ('changed', why)      the six items differ (why None), or one machine
+                            compares bytes and the other has sort rules;
+      ('not compared', why).
+    The controls are looked up by the locale's own (table, encoding), as
+    measure() keys them: a pair with no control is a table not checked,
+    never one that passed."""
+    entries = [d['collate']['locales'].get(name) for d in (old, new)]
+    # Every side's reason: a side that cannot answer never hides what the
+    # other one said, nor a table it read whose control failed.
+    unread = [f'not read on the {side} machine: '
+              + (e['why'] if e else 'no entry')
+              for side, e in zip(('old', 'new'), entries)
+              if e is None or e['state'] == 'not read']
+    failed = []
+    for side, d, e in zip(('old', 'new'), (old, new), entries):
+        if e and e['state'] == 'file' and e['table'] != 'none':
+            why = collate_check_ok(d['collate']['checks'].get(
+                f'{e["table"]} {d["locales"][name].get("codeset")}'))
+            if why:
+                failed.append(f'on the {side} machine, {why}')
+    if unread:
+        return 'not compared', '; '.join(unread + failed)
+    a, b = entries
+    zero = [e['state'] == 'builtin' or e['nrules'] == 0 for e in entries]
+    if all(zero):
+        return 'bytes', 'no sort rules on either machine'
+    if any(zero):
+        return 'changed', 'sort rules on one machine only'
+    if a['fingerprint'] != b['fingerprint']:
+        return 'changed', None
+    if a['table'] != b['table']:
+        # The reader reads its record from the very items the fingerprint
+        # is taken of: the same items and two records is the reader's
+        # fault, and neither can be trusted.
+        return 'not compared', '; '.join(
+            ['the same compiled items gave two different readings of the '
+             'table'] + failed)
+    if failed:
+        return 'not compared', '; '.join(failed)
+    return 'identical', None
+
+
+def table_verdicts(old, new, both, refused, changed, same, unmeasured):
+    """compare()'s lists after the sort tables: (changed, same, unmeasured,
+    firm, by_table, findings).
+
+    firm: the unchanged locales whose table says so, for any text.
+    by_table: {locale: (why, what step 11 said)} of the changed locales
+    whose table changed, why None or the reason a line names. A change step
+    11 finds under the same table stands, and makes every other locale its
+    table alone would clear 'not compared' (TABLE_CODE_DIFFERS). findings: the run's findings
+    'tables not compared', 'tables disagree' and 'tables only'.
+
+    C and POSIX are glibc's own locale whatever a machine holds
+    (findlocale.c:131-136@2.39, :133-138@2.28), which has no rules and
+    compares bytes (C-collate.c:108-111@2.28, :31-34@2.39), so they are
+    compared by that, never 'not compared'. A locale not compared keeps
+    step 11's verdict, and an unchanged one is unchanged only as far as
+    step 11 measured."""
+    whole = table_sides_why_not(old, new)
+    step11 = dict.fromkeys(changed, 'changed')
+    step11.update(dict.fromkeys(same, 'same'))
+    step11.update(dict.fromkeys(unmeasured, 'unmeasured'))
+    lists = {'changed': [], 'same': [], 'unmeasured': []}
+    firm, by_table = set(), {}
+    not_compared = collections.defaultdict(list)
+    disagree, only = [], []
+    routes = {}
+    for name in both:
+        if name in refused:
+            continue
+        if name in ('C', 'POSIX'):
+            routes[name] = 'bytes', 'built into glibc'
+        elif whole:
+            routes[name] = 'not compared', whole
+        else:
+            routes[name] = table_route(old, new, name)
+    # The same table and a change step 11 measured: the two machines compare
+    # with different code, so the same table proves nothing on them, and
+    # every other locale its table alone would clear keeps step 11's
+    # verdict. Comparing bytes (0 rules) is strcmp, which reads no table.
+    differs = any(route == 'identical' and step11[name] == 'changed'
+                  for name, (route, why) in routes.items())
+    for name, (route, why) in routes.items():
+        s11 = step11[name]
+        if differs and route == 'identical' and s11 != 'changed':
+            route, why = 'not compared', TABLE_CODE_DIFFERS
+        if route in ('identical', 'bytes'):
+            if s11 == 'changed':
+                lists['changed'].append(name)
+                disagree.append(name)
+            else:
+                lists['same'].append(name)
+                firm.add(name)
+                if s11 == 'unmeasured':
+                    only.append(name)
+        elif route == 'changed':
+            lists['changed'].append(name)
+            by_table[name] = (why, s11)
+        else:
+            not_compared[why].append((name, s11))
+            lists[s11].append(name)
+    findings = [('tables not compared', {
+        'why': why, 'names': [x for x, s in names],
+        'unchanged': [x for x, s in names if s == 'same']})
+        for why, names in sorted(not_compared.items(),
+                                 key=lambda kv: (-len(kv[1]), kv[0]))]
+    if disagree:
+        findings.append(('tables disagree', {'names': disagree}))
+    if only:
+        findings.append(('tables only', {'names': only}))
+    return (lists['changed'], lists['same'], lists['unmeasured'], firm,
+            by_table, findings)
+
+
+def table_change_lines(why, s11):
+    """The lines a changed locale gets from its table: none where step 11
+    found the change and the table adds no reason of its own."""
+    said = {'changed': None, 'same': 'step 11 saw no change in the strings '
+            'it measured', 'unmeasured': 'step 11 could not measure it'}[s11]
+    if why is None and said is None:
+        return [], None
+    text = 'its compiled sort table changed' + (f': {why}' if why else '')
+    if said:
+        text += f'; {said}'
+    # Printed four columns in, like the lines of the change under it.
+    return textwrap.wrap(text + '.', width=74, subsequent_indent='  ',
+                         break_on_hyphens=False), text
+
+
+def listed_names(names):
+    return (', '.join(shown(x) for x in names[:LIST_LIMIT])
+            + (f', and {len(names) - LIST_LIMIT} more'
+               if len(names) > LIST_LIMIT else ''))
+
+
+def tables_not_compared_lines(items, ctx):
+    total = sum(len(d['names']) for d in items)
+    out = [textwrap.fill(
+        f'!! Not compared by their sort tables: {total} locale(s). Each keeps '
+        'step 11\'s verdict, and an unchanged one is unchanged only as far as '
+        'step 11 measured:', width=78, subsequent_indent='   ')]
+    for d in items:
+        out.append(filled(f'{d["why"]}: {len(d["names"])}: '
+                          f'{listed_names(d["names"])}', 2, 4))
+    return out
+
+
+def tables_not_compared_summary(items, ctx):
+    total = sum(len(d['names']) for d in items)
+    out = wrapped(f'!! Not compared by their sort tables: {total} locale(s); '
+                  'each keeps step 11\'s verdict, and an unchanged one is '
+                  'unchanged only as far as step 11 measured:', 5, 8)
+    for d in items:
+        out += wrapped(f'{d["why"]}: {len(d["names"])}: '
+                       f'{listed_names(d["names"])}', 7, 9)
+    return out
+
+
+def tables_not_compared_rows(items):
+    # Only the unchanged ones: a changed one has the rows of its change, and
+    # an unmeasured one those of 'not measured'.
+    return [([name], [('unchanged only as far as measured', '-',
+                       'not compared by its sort table: '
+                       + d['why'].translate(TEXT_ESCAPES), '-', '-', '-', '-')])
+            for d in items for name in d['unchanged']]
+
+
+def tables_disagree_lines(items, ctx):
+    names = [x for d in items for x in d['names']]
+    return [textwrap.fill(
+        f'!! Step 11 found a change in {len(names)} locale(s) whose sort tables '
+        'find them unchanged. With the same glibc code that cannot happen, so '
+        'the two machines compare with different code, and no locale is taken '
+        'as unchanged by its sort table alone; they are listed as changed:',
+        width=78,
+        subsequent_indent='   '), filled(listed_names(names), 2, 2)]
+
+
+def tables_disagree_summary(items, ctx):
+    names = [x for d in items for x in d['names']]
+    return wrapped('!! Step 11 found a change where the sort tables find none, '
+                   'so the two machines compare with different glibc code and '
+                   'no locale is unchanged by its table alone: '
+                   f'{listed_names(names)}', 5, 8)
+
+
+def tables_disagree_notes(items):
+    return ['# !! step 11 found a change where the sort tables find none: '
+            + ','.join(shown(x).translate(TEXT_ESCAPES)
+                                          for d in items for x in d['names'])]
+
+
+def tables_only_lines(items, ctx):
+    names = [x for d in items for x in d['names']]
+    return [textwrap.fill(
+        f'Unchanged by their sort tables although step 11 could not measure '
+        f'them: {len(names)} locale(s). Nothing in this run checks that the '
+        'two machines compare them with the same glibc code:', width=78,
+        subsequent_indent='   '), filled(listed_names(names), 2, 2)]
+
+
+def tables_only_summary(items, ctx):
+    names = [x for d in items for x in d['names']]
+    return wrapped('unchanged by their sort tables, which step 11 could not '
+                   f'cross-check: {listed_names(names)}', 5, 8)
+
+
+def tables_only_notes(items):
+    return ['# unchanged by their sort tables, which step 11 could not '
+            'cross-check: ' + ','.join(shown(x).translate(TEXT_ESCAPES)
+                                        for d in items for x in d['names'])]
+
+
+# Printed instead of CLOSING when every unchanged locale was compared by its
+# sort table, which holds the contractions and what glibc ignores.
+CLOSING_TABLES = ('!! Not measured: whether the two machines compare strings '
+                  'with the same glibc code. Every locale found unchanged has '
+                  'the same sort table on both, and that table is what '
+                  'glibc\'s comparison code reads.')
+
+
 def run_findings(o, n, warnings, partly, unmeasured, only_old,
-                 checks=(), refused=None, beside=()):
+                 checks=(), refused=None, beside=(), closing=CLOSING):
     """[(kind, data)]: what the run says beside the changed locales -- its
     warnings, the locales NOT known to be unchanged (glibc refused them, they
     could not be measured, or they are not on the new machine) and those
@@ -7859,7 +8128,7 @@ def run_findings(o, n, warnings, partly, unmeasured, only_old,
               for name in unmeasured]
     found += [('not on the new machine', {'name': name}) for name in only_old]
     found += list(beside)
-    found.append(('closing', {'text': CLOSING}))
+    found.append(('closing', {'text': closing}))
     return found
 
 
@@ -8129,6 +8398,12 @@ RUN_KINDS = {
     'other encoding': (other_encoding_lines, other_encoding_summary,
                        other_encoding_notes),
     'closing': (closing_lines, closing_summary, notes),
+    'tables not compared': (tables_not_compared_lines,
+                            tables_not_compared_summary,
+                            tables_not_compared_rows),
+    'tables disagree': (tables_disagree_lines, tables_disagree_summary,
+                        tables_disagree_notes),
+    'tables only': (tables_only_lines, tables_only_summary, tables_only_notes),
 }
 
 
@@ -8200,6 +8475,7 @@ def summary_lines(old, new, groups, run, totals, characters_to=None,
     o, n = old['locales'], new['locales']
     out = [f'   ({machine_label(old)} -> {machine_label(new)})']
     out += run('warning')
+    out += run('tables disagree')
     out += run('control')
     out += run('postgres libc above')
     count = sum(len(names) for names, brief in groups)
@@ -8229,6 +8505,8 @@ def summary_lines(old, new, groups, run, totals, characters_to=None,
     out += run('refused')
     out += run('not measured')
     out += run('not on the new machine')
+    out += run('tables not compared')
+    out += run('tables only')
     out += run('partly')
     out += run('in part')
     out += run('charmaps not checked')
@@ -8317,7 +8595,7 @@ def charmap_check(data, charmaps):
     return lacking, unchecked, None
 
 
-def charmap_findings(old, new, charmaps, compared):
+def charmap_findings(old, new, charmaps, compared, firm=()):
     """({locale: [(side, charmap, [sequence])]}, [(kind, data)]): what
     charmap_check finds on each machine for the locales compared, as the
     findings 'in part' and 'charmaps not checked'. A machine not checked at
@@ -8325,7 +8603,19 @@ def charmap_findings(old, new, charmaps, compared):
     its charmaps. Where both machines were checked whole and neither gives a
     character to a sequence the strings lack, 'charmaps checked' says so,
     with how many locales it covers, as the money line does: a check that
-    finds nothing is not a check that did not run."""
+    finds nothing is not a check that did not run. FIRM are the locales
+    unchanged by their sort tables, which need no such check: the table
+    decides for every string, and the 'charmaps checked' line, when there
+    is one, says how many those are, C and POSIX aside (no charmap builds
+    them)."""
+    import node_charmaps as nc
+    other = sum(1 for name in firm if name not in nc.BUILTIN)
+    if not compared and other:
+        return {}, [('charmaps checked', {
+            'text': 'Character sets: not checked, and not needed: the '
+                    f'{other} locale(s) found unchanged were found so by their '
+                    'sort tables, which decide for every string.',
+            'warning': False})]
     lacking, found, whole = {}, [], []
     for side, data, how in (('old', old, charmaps[0]), ('new', new, charmaps[1])):
         lacks, cannot, why = charmap_check(data, how)
@@ -8354,18 +8644,25 @@ def charmap_findings(old, new, charmaps, compared):
                 + ' give a character to byte sequences that are not among the '
                 f'strings measured, because {why.rstrip(".")}. Where one does, '
                 'a locale of that encoding is unchanged only as far as '
-                'measured.',
+                'measured' + (', unless its sort table found it unchanged.'
+                              if other else '.'),
         'names': []}) for side, why in whole]
     found += [('in part', {'name': name, 'sides': lacking[name]})
               for name in sorted(lacking)]
     if not found:
-        import node_charmaps as nc
         checked = sum(1 for name in compared if name not in nc.BUILTIN)
-        found.append(('charmaps checked', {
-            'text': 'Character sets: every byte sequence that each machine\'s '
+        if other:
+            text = ('Character sets: every byte sequence that each machine\'s '
+                    'charmaps give a character is among the strings measured, '
+                    f'in the {checked} locale(s) checked. The {other} '
+                    'locale(s) unchanged by their sort tables need no such '
+                    'check: the table decides for every string.')
+        else:
+            text = ('Character sets: every byte sequence that each machine\'s '
                     'charmaps give a character, in the '
                     f'{checked} locale(s) compared, is among the strings '
-                    'measured.', 'warning': False}))
+                    'measured.')
+        found.append(('charmaps checked', {'text': text, 'warning': False}))
     return lacking, found
 
 
@@ -8449,6 +8746,12 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
         else:
             same.append(name)
     only_old = sorted(set(o) - set(n))
+    # Each locale's sort table decides where both machines' tables could be
+    # compared (table_verdicts); step 11's verdict stays where they could
+    # not.
+    measured11 = set(changed) | set(same)
+    changed, same, unmeasured, firm, by_table, table_found = table_verdicts(
+        old, new, both, refused, changed, same, unmeasured)
 
     # Locales whose measurements are the same on both sides changed the same
     # way, so each change is worked out once; then every locale whose change
@@ -8459,15 +8762,32 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     measured_alike = {}
     for name in changed:
         # The encoding too: the same bytes in the same order are other
-        # characters under another encoding, and are named under it.
-        key = (o[name]['order'], o[name]['pairs'], n[name]['order'],
-               n[name]['pairs'], o[name]['codeset'])
+        # characters under another encoding, and are named under it. A
+        # locale changed by its table alone has nothing of step 11 to read.
+        table = by_table.get(name)
+        if table and table[1] != 'changed':
+            key = ('table', o[name].get('codeset'), table)
+        else:
+            key = (o[name]['order'], o[name]['pairs'], n[name]['order'],
+                   n[name]['pairs'], o[name]['codeset'], table)
         measured_alike.setdefault(key, []).append(name)
     reads_alike, briefs, rows = {}, {}, []
     others = False   # whether a string that is not a character is named
     for names in measured_alike.values():
-        lines, brief, found, named = describe_change(old, new, o[names[0]],
-                                                     n[names[0]])
+        table = by_table.get(names[0])
+        if table and table[1] != 'changed':
+            lines, brief, found, named = [], '', [], False
+        else:
+            lines, brief, found, named = describe_change(old, new, o[names[0]],
+                                                         n[names[0]])
+        if table:
+            more, phrase = table_change_lines(*table)
+            lines = more + lines
+            if phrase:
+                brief = '; '.join(x for x in (phrase, brief) if x)
+                found = [('sort table changed', '-',
+                          phrase.translate(TEXT_ESCAPES), '-', '-', '-',
+                          '-')] + found
         others = others or named
         reads_alike.setdefault(tuple(lines), []).extend(names)
         briefs[tuple(lines)] = brief
@@ -8481,12 +8801,17 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     # Unchanged only as far as it was measured: some neighbours were not
     # measured at every level (unclassified), so a change in how they are
     # told apart would not show.
-    partly = [name for name in same if o[name]['partly'] or n[name]['partly']]
+    partly = [name for name in same if name not in firm
+              and (o[name]['partly'] or n[name]['partly'])]
     # Measured in part: a machine's charmap gives a character to sequences
     # its list of strings lacks. An unchanged one is unchanged only as far
     # as measured too.
-    lacking, beside = charmap_findings(old, new, charmaps, changed + same)
-    far = len(set(partly) | {name for name in same if name in lacking})
+    lacking, beside = charmap_findings(
+        old, new, charmaps,
+        [x for x in changed + same if x in measured11 and x not in firm], firm)
+    # Every unchanged locale its table did not decide: step 11 measured a
+    # sample, and the partly and in-part ones are among these.
+    far = len([name for name in same if name not in firm])
     in_part = f' ({far} of them only as far as measured)' if far else ''
     in_refused = f'{len(refused)} refused by glibc, ' if refused else ''
     totals = (f'Of the {len(o)} locale(s) on the old machine: {len(changed)} '
@@ -8517,6 +8842,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     beside += [('postgres use rows', d) for d in use_rows]
     beside += [('ctype', d) for d in ctype]
     beside += [('ctype rows', d) for d in ctype_rows]
+    beside += table_found
     # A side that glibc refuses has no encoding in the model's views, so it
     # never names a locale here: one refused on both sides is never named,
     # nor one only on the new machine that glibc refuses there. One only on
@@ -8524,14 +8850,19 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     other = other_encoding_text(both + only_new, model)
     if other:
         beside.append(('other encoding', {'text': other}))
+    # The sentence on contractions stays while an unchanged locale was not
+    # compared by its table.
     found = run_findings(o, n, warnings, partly, unmeasured, only_old, checks,
-                         refused, beside)
+                         refused, beside,
+                         CLOSING_TABLES if all(x in firm for x in same)
+                         else CLOSING)
     ctx = {'pg_names': pg_names, 'o': o, 'characters_to': characters_to}
 
     report = [f'Old machine: {machine_label(old)}, {len(old["locales"])} locale(s)',
               f'New machine: {machine_label(new)}, {len(new["locales"])} locale(s)']
     run = Drawn(found, REPORT, ctx)
     report += run('warning')
+    report += run('tables disagree')
     report += run('control')
     report += run('postgres libc above')
     report += ['', f'Sort order CHANGED in {len(changed)} locale(s):']
@@ -8553,6 +8884,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
         if others:
             report += wrapped(OTHER_STRINGS, 0, 0)
     report += ['', f'Unchanged: {len(same)} locale(s).']
+    report += run('tables only')
+    report += run('tables not compared')
     report += run('partly')
     report += run('in part')
     report += run('charmaps not checked')
@@ -8584,11 +8917,12 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
         # read them as unchanged; the warnings and what is not measured are
         # notes under the rows, as in the report.
         run = Drawn(found, FILE)
-        for kind in ('partly', 'in part', 'refused', 'not measured',
-                     'not on the new machine', 'postgres use rows',
-                     'ctype rows'):
+        for kind in ('partly', 'in part', 'tables not compared', 'refused',
+                     'not measured', 'not on the new machine',
+                     'postgres use rows', 'ctype rows'):
             rows += run(kind)
-        file_notes = (run('warning') + run('control')
+        file_notes = (run('warning') + run('tables disagree')
+                      + run('tables only') + run('control')
                       + run('charmaps not checked')
                       + run('postgres libc above') + run('money')
                       + run('charmaps checked') + run('postgres libc') + run('postgres use')
