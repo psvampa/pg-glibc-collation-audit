@@ -6177,9 +6177,10 @@ def with_parts(money=None, libc=None, use=None, form=m.FORMAT, ctype=None,
     in every locale, but those in money), its PostgreSQL processes
     (CLEAN_LIBC, but what libc changes), how PostgreSQL uses each locale
     (DEFAULT_USE by its encoding, but those in use), the character rules
-    of each (ctype_of, but the entries in ctype) and the converter of each
-    encoding (converter_of_use, but the entries in converter). The order
-    part is the machine's own, untouched."""
+    of each (ctype_of, but the entries in ctype), the converter of each
+    encoding (converter_of_use, but the entries in converter) and the sort
+    table of each, every one not read (NO_TABLES). The order part is the
+    machine's own, untouched."""
     def edit(d):
         d['format'] = form
         d['parts'] = list(m.PARTS[form])
@@ -6203,7 +6204,17 @@ def with_parts(money=None, libc=None, use=None, form=m.FORMAT, ctype=None,
         if 'back' in m.PARTS[form]:
             d['utf8_forward'], d['back'] = round_trip_of_use(
                 d['postgres_use'], d['converter'])
+        if 'collate' in m.PARTS[form]:
+            d['collate'] = dict(copy.deepcopy(NO_TABLES), locales={
+                name: {'state': 'not read', 'why': 'built by a test'}
+                for name in d['locales']})
     return edit
+
+
+# The 'collate' part of a file with no table read, packed once: xz at
+# preset 6 sets up its dictionary on every call.
+NO_TABLES = {'byteorder': 'little', 'checks': {},
+             'tables': m.base64.b64encode(m.ct_pack_all({})).decode('ascii')}
 
 
 # A table of LC_CTYPE as ctype_tables() writes one, kept small: the tests
@@ -7308,7 +7319,8 @@ class PostgresProcessesRead(unittest.TestCase):
         out = {'locales': {}, 'locales_listed': 0,
                'postgres_libc': dict(CLEAN_LIBC, stale=[[1, 'x']]),
                'ctype': {'locales': {}, 'tables': {}, 'wide': {}, 'bytes': {}},
-               'converter': NO_CONVERTER_LOCALES, **NO_ROUND_TRIP}
+               'converter': NO_CONVERTER_LOCALES, **NO_ROUND_TRIP,
+               'collate': dict(copy.deepcopy(NO_TABLES), locales={})}
         with unittest.mock.patch.object(m.sys, 'stderr', screen):
             m.finished(out, 1, 10)
         self.assertIn('!! 1 PostgreSQL process(es) still run the glibc',
@@ -7954,7 +7966,8 @@ class CtypeOnTheMachine(unittest.TestCase):
                          'tables': {'b' * 64: ['not checked', 'failed'],
                                     'c' * 64: ['w', 'b']},
                          'wide': {}, 'bytes': {}},
-               'converter': NO_CONVERTER_LOCALES, **NO_ROUND_TRIP}
+               'converter': NO_CONVERTER_LOCALES, **NO_ROUND_TRIP,
+               'collate': dict(copy.deepcopy(NO_TABLES), locales={})}
         screen = Screen()
         with unittest.mock.patch.object(m.sys, 'stderr', screen):
             rc = m.finished(out, 1, 10)
@@ -8465,6 +8478,8 @@ class PostgresUseCompared(Checks):
             for part in ('locales', 'money', 'postgres_use'):
                 d[part].pop('ja_JP.eucjp')
             d['ctype']['locales'].pop('ja_JP.eucjp')
+            if 'collate' in d:
+                d['collate']['locales'].pop('ja_JP.eucjp', None)
             d['locales_listed'] = len(d['locales'])
             refirst(d)
         found = self.use(*self.pair(measured_use(8), measured_use(9),
@@ -8492,6 +8507,8 @@ class PostgresUseCompared(Checks):
                 for part in ('locales', 'money', 'postgres_use'):
                     d[part].pop(name)
                 d['ctype']['locales'].pop(name)
+                if 'collate' in d:
+                    d['collate']['locales'].pop(name, None)
             d['locales_listed'] = len(d['locales'])
             refirst(d)
         checks = self.checks(*self.pair(measured_use(8), measured_use(8),
@@ -9386,6 +9403,8 @@ class CtypeCompared(Checks):
             for part in ('locales', 'money', 'postgres_use'):
                 d[part].pop('de_DE.utf8')
             d['ctype']['locales'].pop('de_DE.utf8')
+            if 'collate' in d:
+                d['collate']['locales'].pop('de_DE.utf8', None)
             d['locales_listed'] = len(d['locales'])
             refirst(d)
         for side in ('old', 'new'):
@@ -9718,6 +9737,8 @@ class CtypeComparedInEuc(Checks):
                 for part in ('locales', 'money', 'postgres_use'):
                     d[part].pop(name)
                 d['ctype']['locales'].pop(name)
+                if 'collate' in d:
+                    d['collate']['locales'].pop(name, None)
             d['locales_listed'] = len(d['locales'])
             refirst(d)
         found = [d for kind, d in self.checks(*self.pair(old_edits=[no_euc]))
@@ -9732,6 +9753,8 @@ class CtypeComparedInEuc(Checks):
             for part in ('locales', 'money', 'postgres_use'):
                 d[part].pop('ja_JP.eucjp')
             d['ctype']['locales'].pop('ja_JP.eucjp')
+            if 'collate' in d:
+                d['collate']['locales'].pop('ja_JP.eucjp', None)
             d['locales_listed'] = len(d['locales'])
             refirst(d)
         self.assertEqual(self.euc(*self.pair([dropped])), [
@@ -9751,6 +9774,8 @@ class CtypeComparedInEuc(Checks):
                             for part in ('locales', 'money', 'postgres_use'):
                                 d[part].pop(name)
                             d['ctype']['locales'].pop(name)
+                            if 'collate' in d:
+                                d['collate']['locales'].pop(name, None)
                         d['locales_listed'] = len(d['locales'])
                         refirst(d)
                     got, = self.euc(*self.pair([others], [others], old_use=uses[0],
@@ -10015,6 +10040,8 @@ class ConverterCompared(PostgresUseCompared):
             for part in ('locales', 'money', 'postgres_use'):
                 d[part].pop('th_TH.tis620')
             d['ctype']['locales'].pop('th_TH.tis620')
+            if 'collate' in d:
+                d['collate']['locales'].pop('th_TH.tis620', None)
             d['locales_listed'] = len(d['locales'])
             refirst(d)
         line = self.lacking(old_edits=[gone], new_converter=self.tis(0x80))
@@ -10796,7 +10823,8 @@ class ConverterOnTheMachine(unittest.TestCase):
         part['EUC-KR'] = ['measured', ['fails', 'Invalid argument'], 'ko_KR', 'x', 'd']
         out = {'locales': {}, 'locales_listed': 0, 'postgres_libc': dict(CLEAN_LIBC),
                'ctype': {'locales': {}, 'tables': {}, 'wide': {}, 'bytes': {}},
-               'converter': part, **NO_ROUND_TRIP}
+               'converter': part, **NO_ROUND_TRIP,
+               'collate': dict(copy.deepcopy(NO_TABLES), locales={})}
         screen = Screen()
         with unittest.mock.patch.object(m.sys, 'stderr', screen):
             self.assertEqual(m.finished(out, 1, 10), 1)
@@ -11390,7 +11418,8 @@ class BackOnTheMachine(unittest.TestCase):
                'converter': dict(NO_CONVERTER_LOCALES),
                'utf8_forward': ['not checked', ['opens', None], 'C.utf8', 'why f',
                                 None],
-               'back': part}
+               'back': part,
+               'collate': dict(copy.deepcopy(NO_TABLES), locales={})}
         screen = Screen()
         with unittest.mock.patch.object(m.sys, 'stderr', screen):
             self.assertEqual(m.finished(out, 1, 10), 1)
@@ -11440,7 +11469,7 @@ class BackOnTheMachine(unittest.TestCase):
                 unittest.mock.patch.object(m.sys, 'stderr', Screen()):
             text, out, _ = m.measure(1)
         data = json.loads(text)
-        self.assertEqual(data['parts'][-2:], ['utf8_forward', 'back'])
+        self.assertEqual(data['parts'][-3:], ['utf8_forward', 'back', 'collate'])
         self.assertEqual(data['utf8_forward'], ['asked', 'a'])
         self.assertEqual(data['back']['UTF-8'], ['asked', 'a'])
         self.assertEqual(data['back']['EUC-JP'], ['asked', None])
@@ -12784,6 +12813,660 @@ class TextModelAgainstTheTable(unittest.TestCase):
                           frozenset({'old', 'new'})})
         self.assertEqual(set().union(*(a[2] for a in answers)), {'old', 'new'})
         self.assertEqual(set().union(*(a[3] for a in answers)), {'old', 'new'})
+
+
+# LIMAGIC (LC_COLLATE), loadlocale.c:80@2.28; glibc checks it, not the tool.
+COLLATE_MAGIC = 0x20051014 ^ 3
+# Items 0 to 5 of a small compiled LC_COLLATE, and item 6, which strcoll
+# does not read.
+COLLATE_ITEMS = [m.struct.pack('=I', 2), b'\x01\x02\x00\x00', b'T' * 8,
+                 b'W' * 4, b'E' * 4, b'I' * 4, b'Z' * 4]
+
+
+def collate_file(items=COLLATE_ITEMS, nstrings=19):
+    """(bytes, string index) of a compiled LC_COLLATE holding ITEMS as its
+    first items, the rest empty."""
+    off = 8 + 4 * nstrings
+    index, body = [], b''
+    for item in items:
+        index.append(off + len(body))
+        body += item
+    index += [off + len(body)] * (nstrings - len(items))
+    return (m.struct.pack('=II', COLLATE_MAGIC, nstrings)
+            + m.struct.pack('=%dI' % nstrings, *index) + body, index)
+
+
+def collate_record(nrules, rules, seqs):
+    """A record as ct_record writes one: RULES the rule sets, nrules bytes
+    each; SEQS {sequence: (rule set, [order numbers of each level])}."""
+    out = bytearray()
+    m.ct_varint(out, nrules)
+    m.ct_varint(out, len(rules))
+    out += rules
+    m.ct_varint(out, len(seqs))
+    for s, (r, levels) in sorted(seqs.items()):
+        m.ct_varint(out, len(s))
+        out += s
+        out += rules[r * nrules:(r + 1) * nrules]
+        for level in levels:
+            m.ct_varint(out, len(level))
+            for x in level:
+                m.ct_varint(out, x)
+    return bytes(out)
+
+
+# A table of two levels, the second read backward as French accents are:
+# what glibc holds on the machine of the tests of controls 2 to 4.
+TRUE_RULES = bytes([m.CT_SORT_FORWARD, m.CT_SORT_BACKWARD])
+TRUE_SEQS = {b'a': (0, [[3], [3]]), b'b': (0, [[4], [5]]),
+             b'c': (0, [[5], [4]])}
+
+
+def true_key(t, buf=None):
+    """glibc's strxfrm of T on that machine: every byte one sequence."""
+    p = m.ct_parse(collate_record(2, TRUE_RULES, TRUE_SEQS))
+    many = m._CollateMany(2, [p['map'][bytes([b])] for b in t])
+    starts = {i: ((i << 24) | many.offs[i], i + 1) for i in range(len(t))}
+    return m.CollateTables.strxfrm(many, t, starts.__getitem__)
+
+
+class SortTablesOnTheMachine(unittest.TestCase):
+    """The compiled sort table (LC_COLLATE) of each locale, read where it is
+    measured: the fingerprint of the six items strcoll reads and the checks
+    that come before it, what collate_of answers, the part measure()
+    writes, and what the run says when it ends. glibc is a double, the
+    file a small one built here.
+
+    Freezes items read out of order, from a pointer glibc does not give,
+    or with a rule count read from the wrong half of glibc's union, read as
+    a table; a locale not read, a table that failed its check or tables
+    not packed left out of the end of the run or of its exit status; a
+    table checked once for two encodings; a planted error in a record that
+    controls 2 to 4 do not see, or a sequence they never check; and a
+    reader that misses a sequence glibc's findidx can return."""
+
+    def fingerprint(self, blob, index, pointers=None, nrules=2):
+        return m.collate_fingerprint(lambda off, n: blob[off:off + n],
+                                     pointers or index[1:6], nrules)
+
+    def test_the_six_items_and_nothing_else(self):
+        """The fingerprint covers items 0 to 5, and where each ends: one
+        byte of item 3 changed changes it, so does a byte moved from item 3
+        to item 4, and item 6 does not."""
+        blob, index = collate_file()
+        fp, nrules = self.fingerprint(blob, index)
+        self.assertEqual(nrules, 2)
+        h = hashlib.sha256()
+        for item in COLLATE_ITEMS[:6]:
+            h.update(m.struct.pack('>Q', len(item)) + item)
+        self.assertEqual(fp, h.hexdigest())
+        for items in ([*COLLATE_ITEMS[:3], b'W' * 3 + b'X', *COLLATE_ITEMS[4:]],
+                      [*COLLATE_ITEMS[:3], b'W' * 3, b'W' + b'E' * 4,
+                       *COLLATE_ITEMS[5:]]):
+            other = self.fingerprint(*collate_file(items))[0]
+            self.assertNotEqual(other, fp)
+        same = self.fingerprint(*collate_file(COLLATE_ITEMS[:6] + [b'Y' * 9]))
+        self.assertEqual(same[0], fp)
+
+    def test_items_out_of_order(self):
+        """Guard c: an item whose offset is below the one before has no
+        length; localedef writes them in order and glibc does not check."""
+        blob, index = collate_file()
+        for k in range(1, 7):
+            with self.subTest(item=k):
+                bad = list(index)
+                bad[k] = index[k - 1] - 1
+                raw = blob[:8] + m.struct.pack('=19I', *bad) + blob[84:]
+                with self.assertRaises(m.CollateUnread) as e:
+                    self.fingerprint(raw, bad, pointers=index[1:6])
+                self.assertEqual(str(e.exception), 'the items strcoll reads '
+                                 'are not in order in its file')
+
+    def test_a_pointer_glibc_gives_elsewhere(self):
+        """Guard d, for each of items 1 to 5."""
+        blob, index = collate_file()
+        for k in range(1, 6):
+            with self.subTest(item=k):
+                pointers = list(index[1:6])
+                pointers[k - 1] += 4
+                with self.assertRaises(m.CollateUnread) as e:
+                    self.fingerprint(blob, index, pointers=pointers)
+                self.assertEqual(str(e.exception),
+                                 f'glibc gives item {k} at offset '
+                                 f'{index[k] + 4}, the file\'s index at '
+                                 f'{index[k]}')
+
+    def test_a_rule_count_that_is_not_the_files(self):
+        """Guard e: the file holds 2 rules, the reader read 0 or 3."""
+        blob, index = collate_file()
+        for read in (0, 3):
+            with self.subTest(read=read):
+                with self.assertRaises(m.CollateUnread) as e:
+                    self.fingerprint(blob, index, nrules=read)
+                self.assertEqual(str(e.exception), f'the reader read {read} '
+                                 'rule(s) and the file holds 2')
+
+    def test_the_word_of_the_union_on_either_byte_order(self):
+        """glibc writes NRULES into the first 4 bytes of an 8-byte union
+        (loadlocale.c:157@2.28), and nl_langinfo_l hands back all 8: the
+        low half on a little-endian machine, the high half on a big-endian
+        one (s390x), the other half bytes nobody wrote."""
+        for order, value in (('little', 0xDEADBEEF00000003),
+                             ('big', 0x00000003DEADBEEF)):
+            with self.subTest(order=order), \
+                    unittest.mock.patch.object(m.sys, 'byteorder', order):
+                self.assertEqual(m.ct_word(value), 3)
+
+    def in_memory(self, indirect=(999, 4, 6, 8)):
+        """(items 1 to 5 as ctypes buffers, their addresses): a compiled
+        table of one level, laid out as glibc's findidx reads it
+        (weight.h@2.39). Every byte is a direct entry of weight 3 but b,
+        whose list holds bc, then the range bx to bz through INDIRECTMB,
+        then the closing entry for b alone."""
+        pack = m.struct.pack
+        weights = bytes([1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8])
+        table = [0] * 256
+        table[ord('b')] = -4
+        extra = (b'\0' * 4
+                 + pack('=iB', 2, 1) + b'c' + b'\0' * 2
+                 + pack('=iB', -1, 1) + b'xz' + b'\0'
+                 + pack('=iB', 10, 0) + b'\0' * 3)
+        bufs = [ctypes.create_string_buffer(bytes([m.CT_SORT_FORWARD])),
+                ctypes.create_string_buffer(pack('=256i', *table)),
+                ctypes.create_string_buffer(weights),
+                ctypes.create_string_buffer(extra),
+                ctypes.create_string_buffer(pack('=4i', *indirect))]
+        return bufs, [ctypes.addressof(b) for b in bufs]
+
+    def read_in_memory(self, **k):
+        bufs, addrs = self.in_memory(**k)
+        item = lambda n, loc: 1 if n == 0 else addrs[n - 1]
+        with unittest.mock.patch.object(m, 'ct_item', item):
+            T = m.CollateTables(77)
+        return T, bufs
+
+    def test_the_reader_finds_every_sequence(self):
+        """CollateTables and ct_record over a table that holds a direct
+        entry, a list, a range and a closing entry: every sequence glibc's
+        findidx can return, each with its weight, and the INDIRECTMB a
+        range reads in the table's digest."""
+        T, bufs = self.read_in_memory()
+        els, dup = m.ct_elements(T)
+        expected = {bytes([c]): 0 for c in range(1, 256) if c != ord('b')}
+        expected.update({b'bc': 2, b'bx': 4, b'by': 6, b'bz': 8, b'b': 10})
+        self.assertEqual((els, dup), (expected, 0))
+        mapped = m.ct_parse(m.ct_record(T))['map']
+        self.assertEqual(
+            {s: mapped[s] for s in (b'a', b'b', b'bc', b'bx', b'by', b'bz')},
+            {b'a': (b'\x01', [[3]]), b'b': (b'\x01', [[8]]),
+             b'bc': (b'\x01', [[4]]), b'bx': (b'\x01', [[5]]),
+             b'by': (b'\x01', [[6]]), b'bz': (b'\x01', [[7]])})
+        self.assertEqual(len(mapped), 259)
+        other, _ = self.read_in_memory(indirect=(999, 4, 8, 6))
+        self.assertNotEqual(other.digest, T.digest)
+
+    def test_collate_view_reads_glibc_structs(self):
+        """__locales[LC_COLLATE] three pointers into a locale_t
+        (bits/types/__locale_t.h), filedata one pointer into __locale_data
+        (localeinfo.h:49-53), alike in 2.28, 2.34 and 2.39; a C with no file
+        reads as filedata 0."""
+        P = ctypes.sizeof(ctypes.c_void_p)
+        filedata = ctypes.create_string_buffer(64)
+        fd = ctypes.addressof(filedata)
+        for given, want in ((fd, fd), (None, 0)):
+            with self.subTest(filedata=given):
+                data = (ctypes.c_void_p * 3)(0, given, 64)
+                loc = (ctypes.c_void_p * 13)()
+                loc[m.CT_LC_COLLATE] = ctypes.addressof(data)
+                item = lambda n, l: 2 if n == 0 else want + 8 * n
+                with unittest.mock.patch.object(m, 'ct_item', item):
+                    got = m.collate_view(ctypes.addressof(loc))
+                self.assertEqual(got, (want, 2, [8, 16, 24, 32, 40]))
+        self.assertEqual(P, 8)
+
+    def test_a_sequence_no_case_checks(self):
+        """b and e are the references every sequence is put before, one per
+        rule vector; cb and ce are sequences of their own, so glibc would
+        read c followed by either as one sequence, and c is never checked
+        beside another (two cases skipped, one sequence unchecked). Through
+        collate_check, against a strxfrm that reads the longest sequence
+        first, as glibc's findidx does: nothing mismatches, and the table
+        does not pass."""
+        seqs = {b'b': (0, [[3]]), b'c': (0, [[4]]), b'cb': (0, [[5]]),
+                b'e': (1, [[6]]), b'ce': (0, [[7]])}
+        rec = collate_record(1, bytes([m.CT_SORT_FORWARD, m.CT_SORT_FORWARD
+                                       | m.CT_SORT_POSITION]), seqs)
+        p = m.ct_parse(rec)
+
+        def key(t, buf=None):
+            parts, i = [], 0
+            while i < len(t):
+                s = max((s for s in p['map'] if t.startswith(s, i)), key=len)
+                parts.append(s)
+                i += len(s)
+            many = m._CollateMany(1, [p['map'][s] for s in parts])
+            ends = list(itertools.accumulate(len(s) for s in parts))
+            starts = {e - len(s): ((n << 24) | many.offs[n], e)
+                      for n, (s, e) in enumerate(zip(parts, ends))}
+            return m.CollateTables.strxfrm(many, t, starts.__getitem__)
+        got = self.checked(rec, key=key)
+        self.assertEqual((got['record_mismatch'], got['pair_mismatch'],
+                          got['pair_skipped'], got['pair_unchecked']),
+                         (0, 0, 2, 1))
+        self.assertEqual(m.collate_check_ok(got),
+                         '1 sequence(s) of its table could not be checked '
+                         'beside others against glibc\'s strxfrm')
+
+    def of(self, blob=None, nrules=2, pointers=None, loaded=True,
+           tables=None, sizeof=8):
+        """collate_of('xx') with glibc's newlocale a double, the file BLOB
+        in memory (none: glibc's own C), TABLES the reader's answer or the
+        exception it raises."""
+        buf = ctypes.create_string_buffer(blob) if blob is not None else None
+        addr = ctypes.addressof(buf) if buf is not None else 0
+        self.freed, made = [], []
+        lib = types.SimpleNamespace(
+            newlocale=lambda mask, name, base: (
+                made.append((mask, name)) or 77) if loaded else None,
+            freelocale=self.freed.append)
+
+        def tables_of(loc):
+            if isinstance(tables, Exception):
+                raise tables
+            self.assertEqual(loc, 77)
+            return types.SimpleNamespace(digest='f' * 64)
+        real = ctypes.sizeof
+        with unittest.mock.patch.multiple(
+                m, _ct_lib=lambda: lib, CollateTables=tables_of,
+                ct_record=lambda T: b'rec ' + T.digest.encode(),
+                collate_view=lambda loc: (addr, nrules, pointers)), \
+                unittest.mock.patch.object(
+                    m.ctypes, 'sizeof',
+                    lambda t: sizeof if t is ctypes.c_void_p else real(t)):
+            got = m.collate_of('xx')
+        if loaded and sizeof == 8:
+            self.assertEqual(made, [(1 << 3, b'xx')])
+            self.assertEqual(self.freed, [77])
+        return got
+
+    def test_what_collate_of_answers(self):
+        blob, index = collate_file()
+        fp = self.fingerprint(blob, index)[0]
+        self.assertEqual(self.of(blob, pointers=index[1:6]),
+                         ({'state': 'file', 'fingerprint': fp, 'nrules': 2,
+                           'table': 'f' * 64}, b'rec ' + b'f' * 64))
+        zero, zindex = collate_file([m.struct.pack('=I', 0)]
+                                    + COLLATE_ITEMS[1:])
+        self.assertEqual(self.of(zero, nrules=0, pointers=zindex[1:6],
+                                 tables=AssertionError('read')),
+                         ({'state': 'file',
+                           'fingerprint': self.fingerprint(
+                               zero, zindex, nrules=0)[0],
+                           'nrules': 0, 'table': 'none'}, None))
+        self.assertEqual(self.of(None, nrules=0), ({'state': 'builtin'}, None))
+        for case, kwargs, why in (
+                ('a C with rules', dict(nrules=3),
+                 'it has no file and 3 rule(s)'),
+                ('not loaded', dict(loaded=False), 'newlocale did not load it'),
+                ('a guard', dict(blob=blob, pointers=[index[1] + 1]
+                                 + index[2:6]),
+                 f'glibc gives item 1 at offset {index[1] + 1}, the file\'s '
+                 f'index at {index[1]}'),
+                ('the reader failing', dict(blob=blob, pointers=index[1:6],
+                                            tables=ValueError('nrules 40')),
+                 "reading failed: ValueError('nrules 40')"),
+                ('32 bits', dict(sizeof=4), 'not a 64-bit Python')):
+            with self.subTest(case=case):
+                self.assertEqual(self.of(**kwargs),
+                                 ({'state': 'not read', 'why': why}, None))
+
+    def checked(self, rec, stored=None, loaded=True, key=true_key):
+        """collate_check of a locale whose reader gives REC, the record
+        STORED (REC unless given), against KEY, glibc's strxfrm."""
+        lib = types.SimpleNamespace(
+            newlocale=lambda mask, name, base: 77 if loaded else None,
+            freelocale=lambda loc: None)
+        selected = []
+
+        class Reader:
+            """The reader of the locale, which gives REC; the controls
+            borrow its strxfrm."""
+            strxfrm = m.CollateTables.strxfrm
+
+            def __new__(cls, loc):
+                return rec
+        with unittest.mock.patch.multiple(
+                m, _ct_lib=lambda: lib, CollateTables=Reader,
+                ct_record=lambda T: T, ct_real_key=key), \
+                unittest.mock.patch.object(
+                    m.locale, 'setlocale',
+                    lambda c, n=None: selected.append(n) or n):
+            got = m.collate_check(
+                ('fr_FR', hashlib.sha256(stored or rec).hexdigest()))
+        self.assertEqual(selected, ['fr_FR'])
+        return got
+
+    def test_controls_see_a_planted_error(self):
+        """Controls 2 to 4 on a record that is right, then on one wrong
+        order number (seen alone), one level stored forward where glibc
+        reads it backward (seen only beside other sequences), and a record
+        other than the one stored."""
+        right = collate_record(2, TRUE_RULES, TRUE_SEQS)
+        got = self.checked(right)
+        self.assertEqual((got['locale'], got['record_seqs'],
+                          got['record_mismatch'], got['pair_mismatch'],
+                          got['pair_unchecked']),
+                         ('fr_FR', 3, 0, 0, 0))
+        self.assertGreater(got['pairs'], 0)
+        self.assertIsNone(m.collate_check_ok(got))
+        number = collate_record(2, TRUE_RULES,
+                                {**TRUE_SEQS, b'b': (0, [[6], [5]])})
+        got = self.checked(number)
+        self.assertEqual((got['record_mismatch'], got['record_examples']),
+                         (1, ['62']))
+        forward = collate_record(
+            2, TRUE_RULES + bytes([m.CT_SORT_FORWARD] * 2),
+            {**TRUE_SEQS, b'b': (1, [[4], [5]])})
+        got = self.checked(forward)
+        self.assertEqual(got['record_mismatch'], 0)
+        self.assertGreater(got['pair_mismatch'], 0)
+        self.assertEqual(self.checked(right, stored=number),
+                         {'locale': 'fr_FR', 'error': 'the record checked is '
+                          'not the one stored'})
+        self.assertEqual(self.checked(right, loaded=False),
+                         {'locale': 'fr_FR',
+                          'error': 'newlocale did not load it'})
+
+    def test_what_a_check_says(self):
+        ok = {'locale': 'x', 'record_mismatch': 0, 'pair_mismatch': 0,
+              'pair_unchecked': 0}
+        for check, why in (
+                (ok, None),
+                (None, 'its table was not checked'),
+                ({'locale': 'x', 'error': 'boom'},
+                 'the check of its table failed: boom'),
+                (dict(ok, record_mismatch=2), 'its table does not match '
+                 'glibc\'s strxfrm (2 sequence(s) alone, 0 with others)'),
+                (dict(ok, pair_mismatch=3), 'its table does not match '
+                 'glibc\'s strxfrm (0 sequence(s) alone, 3 with others)'),
+                (dict(ok, pair_unchecked=2), '2 sequence(s) of its table '
+                 'could not be checked beside others against glibc\'s '
+                 'strxfrm')):
+            with self.subTest(check=check):
+                self.assertEqual(m.collate_check_ok(check), why)
+
+    def test_tables_packed_alike(self):
+        """The same records give the same bytes, whatever order they were
+        met in, and come back as they went."""
+        records = {'a' * 64: b'one', 'b' * 64: b'two' * 100}
+        packed = m.ct_pack_all(records)
+        self.assertEqual(m.ct_pack_all(dict(reversed(list(records.items())))),
+                         packed)
+        self.assertEqual(m.ct_unpack_all(packed), records)
+
+    def test_tables_that_cannot_be_packed(self):
+        """A Python without lzma: the part says why, and holds no tables
+        rather than an empty set of them."""
+        def fail(records):
+            raise ModuleNotFoundError("No module named '_lzma'")
+        with unittest.mock.patch.object(m, 'ct_pack_all', fail):
+            part = m.collate_part({'de': {'state': 'builtin'}}, {}, {},
+                                  lambda f, jobs: [f(j) for j in jobs])
+        self.assertEqual(part, {
+            'byteorder': sys.byteorder, 'locales': {'de': {'state': 'builtin'}},
+            'checks': {}, 'tables': None,
+            'tables_why': 'ModuleNotFoundError("No module named \'_lzma\'")'})
+
+    def measured(self, names, one, check):
+        screen = Screen()
+        with unittest.mock.patch.multiple(
+                m, libc_version=lambda: 'glibc 2.34',
+                list_locales=lambda: names,
+                glibc_build=lambda: 'glibc-2.34-1.el9.x86_64',
+                measure_one=one, collate_check=check,
+                postgres_use=lambda name: use_of('converts', 'UTF-8',
+                                                 (0x80, 'c280')),
+                ctype_identity=lambda name, use: ['table', 'd' * 64],
+                ctype_part=lambda ids, f: {},
+                converter_of=lambda job: (job[0], ['asked', job[1]]),
+                round_trip_of=lambda job: (
+                    job[0] if job[0] == 'forward' else job[1],
+                    ['asked', job[2]]),
+                UTF8_BYTES=None,
+                fork_pool=lambda jobs: ThreadPoolExecutor(1),
+                money_digits=lambda names: {n: 3 for n in names},
+                postgres_libc=lambda: dict(CLEAN_LIBC)), \
+                unittest.mock.patch.object(m.os, 'nice'), \
+                unittest.mock.patch.object(m.sys, 'stderr', screen):
+            text, out, _ = m.measure(1)
+        return json.loads(text), screen
+
+    def test_measure_writes_the_part(self):
+        """The call site: each locale's entry, out of its result; one check
+        per table and encoding, so a table two encodings share is checked
+        under each; a table of no rules not checked; a locale glibc refused
+        not read, with why; the records packed."""
+        t = hashlib.sha256(b'rec').hexdigest()
+        file_ = {'state': 'file', 'fingerprint': '1' * 64, 'nrules': 2,
+                 'table': t}
+        none = {'state': 'file', 'fingerprint': '2' * 64, 'nrules': 0,
+                'table': 'none'}
+        said = {'a': ('UTF-8', (file_, b'rec')),
+                'b': ('UTF-8', (file_, b'rec')),
+                'c': ('ISO-8859-1', (file_, b'rec')),
+                'd': ('UTF-8', (none, None))}
+
+        def one(name):
+            if name == 'e':
+                return name, {'error': 'cannot be selected: no'}, None
+            codeset, coll = said[name]
+            return name, {'order': 'o', 'pairs': 'p', 'codeset': codeset,
+                          '_collate': copy.deepcopy(coll)}, None
+        data, screen = self.measured(
+            ['a', 'b', 'c', 'd', 'e'], one,
+            lambda job: {'locale': job[0], 'sha': job[1]})
+        part = data['collate']
+        sha = hashlib.sha256(b'rec').hexdigest()
+        self.assertEqual(part['checks'],
+                         {f'{t} ISO-8859-1': {'locale': 'c', 'sha': sha},
+                          f'{t} UTF-8': {'locale': 'a', 'sha': sha}})
+        self.assertEqual(part['locales'], {
+            'a': file_, 'b': file_, 'c': file_, 'd': none,
+            'e': {'state': 'not read', 'why': 'cannot be selected: no'}})
+        self.assertEqual(m.ct_unpack_all(base64.b64decode(part['tables'])),
+                         {t: b'rec'})
+        self.assertEqual(part['byteorder'], sys.byteorder)
+        self.assertNotIn('_collate', json.dumps(data['locales']))
+        self.assertIn('Checking the sort tables (LC_COLLATE) against glibc\'s '
+                      'strxfrm: one locale for each of the 2 distinct pairs of '
+                      'table and encoding...', flat(screen.getvalue()))
+
+    def test_the_checks_say_how_far_they_got(self):
+        """A line a tenth, each shown when written."""
+        names = [f'l{i:02}' for i in range(20)]
+
+        def one(name):
+            return name, {'order': 'o', 'pairs': 'p', 'codeset': 'UTF-8',
+                          '_collate': ({'state': 'file',
+                                        'fingerprint': '1' * 64, 'nrules': 2,
+                                        'table': hashlib.sha256(
+                                            name.encode()).hexdigest()},
+                                       name.encode())}, None
+        data, screen = self.measured(names, one,
+                                     lambda job: {'locale': job[0]})
+        lines = re.findall(r'  (\d+) of 20 sort table\(s\) done',
+                           screen.getvalue())
+        self.assertEqual([int(x) for x in lines], list(range(2, 20, 2)))
+        self.assertEqual(len(data['collate']['checks']), 20)
+        self.assertEqual(len(m.ct_unpack_all(base64.b64decode(
+            data['collate']['tables']))), 20)
+        self.assertEqual(screen.shown, screen.getvalue(), 'held back')
+        self.assertFalse(any(screen.held), 'a line was held back')
+
+    def ended(self, results, entries, checks=None, tables='x', why=None):
+        """(rc, what finished() wrote between the line that ends the
+        measurement, with its failed locales, and the one on PostgreSQL's
+        processes) over a measurement whose only other content is clean."""
+        part = {'byteorder': 'little', 'locales': entries,
+                'checks': checks or {}, 'tables': tables}
+        if why:
+            part['tables_why'] = why
+        out = {'locales': results, 'locales_listed': len(results),
+               'postgres_libc': dict(CLEAN_LIBC),
+               'ctype': {'locales': {}, 'tables': {}, 'wide': {},
+                         'bytes': {}},
+               'converter': NO_CONVERTER_LOCALES, **NO_ROUND_TRIP,
+               'collate': part}
+        screen = Screen()
+        with unittest.mock.patch.object(m.sys, 'stderr', screen):
+            rc = m.finished(out, 1, 10)
+        text = screen.getvalue()
+        start, end = text.index('MB written.\n'), text.index('PostgreSQL processes:')
+        return rc, text[start + len('MB written.\n'):end]
+
+    def test_the_run_says_what_was_not_read(self):
+        """By reason, the larger first, past LIST_LIMIT counted; a locale
+        whose measurement failed is named once, under that failure; the
+        exit status is 1."""
+        utf8 = {'codeset': 'UTF-8', 'order': 'o', 'pairs': 'p'}
+        names = [f'l{i:02}' for i in range(m.LIST_LIMIT + 2)]
+        results = {n: dict(utf8) for n in names + ['z']}
+        results['x'] = {'error': 'cannot be selected: no'}
+        entries = {n: {'state': 'not read', 'why': 'not a 64-bit Python'}
+                   for n in names}
+        entries['z'] = {'state': 'not read', 'why': 'newlocale did not load it'}
+        entries['x'] = {'state': 'not read', 'why': 'cannot be selected: no'}
+        rc, text = self.ended(results, entries)
+        self.assertEqual(rc, 1)
+        self.assertEqual(flat(text), flat(
+            'x: cannot be selected: no '
+            f'!! The sort tables (LC_COLLATE) of {m.LIST_LIMIT + 3} locale(s) '
+            'could not be read, so the comparison cannot compare them by '
+            'their tables: '
+            f'not a 64-bit Python: {m.LIST_LIMIT + 2}: '
+            + ', '.join(names[:m.LIST_LIMIT]) + ', and 2 more '
+            'newlocale did not load it: 1: z'))
+
+    def test_the_run_says_which_tables_failed(self):
+        """Each by the locale checked and how many more use the table and
+        encoding it was checked for, and one with no check at all by the
+        first locale that uses it; a table that fails under two encodings
+        is one table; the exit status is 1."""
+        t, u, v = 't' * 64, 'u' * 64, 'v' * 64
+        results = {n: {'codeset': cs, 'order': 'o', 'pairs': 'p'}
+                   for n, cs in (('de', 'UTF-8'), ('de2', 'UTF-8'),
+                                 ('de3', 'UTF-8'), ('de1', 'ISO-8859-1'),
+                                 ('fr', 'UTF-8'), ('it', 'UTF-8'))}
+        entries = {n: {'state': 'file', 'fingerprint': '1' * 64, 'nrules': 2,
+                       'table': {'fr': u, 'it': v}.get(n, t)}
+                   for n in results}
+        good = {'locale': 'de1', 'record_mismatch': 0, 'pair_mismatch': 0,
+                'pair_unchecked': 0}
+        checks = {f'{t} UTF-8': dict(good, locale='de', pair_mismatch=4),
+                  f'{t} ISO-8859-1': dict(good, record_mismatch=1),
+                  f'{u} UTF-8': {'locale': 'fr', 'error': 'boom'}}
+        rc, text = self.ended(results, entries, checks)
+        self.assertEqual(rc, 1)
+        self.assertEqual(flat(text), flat(
+            '!! 3 sort table(s) (LC_COLLATE) did not pass their check against '
+            'glibc\'s strxfrm, so the comparison cannot compare by their '
+            'tables the 6 locale(s) that use them: '
+            'de and 2 more: its table does not match glibc\'s strxfrm (0 '
+            'sequence(s) alone, 4 with others) '
+            'de1: its table does not match glibc\'s strxfrm (1 sequence(s) '
+            'alone, 0 with others) '
+            'fr: the check of its table failed: boom '
+            'it: its table was not checked'))
+
+    def test_the_run_says_the_tables_were_not_packed(self):
+        results = {'de': {'codeset': 'UTF-8', 'order': 'o', 'pairs': 'p'}}
+        entries = {'de': {'state': 'builtin'}}
+        rc, text = self.ended(results, entries, tables=None,
+                              why="ModuleNotFoundError('lzma')")
+        self.assertEqual(rc, 1)
+        self.assertEqual(flat(text), flat(
+            '!! The sort tables (LC_COLLATE) could not be packed into the '
+            'file (ModuleNotFoundError(\'lzma\')): the comparison can still '
+            'tell whether each one changed, but cannot name what changed in '
+            'it.'))
+        self.assertEqual(self.ended(results, entries), (0, ''))
+
+
+class SortTablesRead(Checks):
+    """A file of this format whose sort tables part is missing or malformed
+    is refused, and one of the format before is read without it."""
+
+    MALFORMED = 'what it says of the sort table of each locale is malformed'
+
+    @classmethod
+    def setUpClass(cls):
+        super(Checks, cls).setUpClass()
+        cls.texts[RHEL9] = trimmed(cls.texts[RHEL9], USE_NAMES)
+
+    def file_of(self, *edits, form=m.FORMAT):
+        return self.made(RHEL9, 'new', with_parts(form=form,
+                                                  use=measured_use(9)), *edits)
+
+    def loads(self, *edits, form=m.FORMAT):
+        with unittest.mock.patch.object(m.sys, 'stderr', io.StringIO()):
+            return m.load(self.file_of(*edits, form=form), m.corpus_digest())
+
+    def refused(self, phrase, *edits, form=m.FORMAT):
+        err = io.StringIO()
+        with unittest.mock.patch.object(m.sys, 'stderr', err), \
+                self.assertRaises(SystemExit) as stop:
+            m.load(self.file_of(*edits, form=form), m.corpus_digest())
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn(phrase, flat(err.getvalue()))
+
+    @staticmethod
+    def tables(d):
+        """Every locale read: a file, a C, one of no rules; one check."""
+        names = sorted(d['locales'])
+        for i, n in enumerate(names):
+            d['collate']['locales'][n] = (
+                {'state': 'builtin'} if i == 0 else
+                {'state': 'file', 'fingerprint': '0' * 64, 'nrules': 0,
+                 'table': 'none'} if i == 1 else
+                {'state': 'file', 'fingerprint': '1' * 64, 'nrules': 2,
+                 'table': 't' * 64})
+        d['collate']['checks'] = {f'{"t" * 64} UTF-8': {'locale': names[2]}}
+
+    def test_whole_files_load(self):
+        self.assertIn('collate', self.loads(self.tables)[0])
+        self.assertIn('collate', self.loads()[0])
+        self.assertNotIn('collate', self.loads(form='locale_order/6')[0])
+
+    def test_without_the_part_or_with_it_too_early(self):
+        self.refused('lacks a part its format holds',
+                     lambda d: d.pop('collate'))
+        self.refused('holds one it does not',
+                     lambda d: d.update(collate=copy.deepcopy(NO_TABLES)),
+                     form='locale_order/6')
+
+    def test_the_part_malformed(self):
+        def first(**k):
+            def edit(d):
+                e = d['collate']['locales'][sorted(d['locales'])[2]]
+                e.update(k)
+                for key in [x for x, v in k.items() if v is None]:
+                    e.pop(key)
+            return edit
+        for case, edit in (
+                ('byte order', lambda d: d['collate'].update(byteorder='pdp')),
+                ('a locale missing', lambda d: d['collate']['locales'].pop(
+                    sorted(d['locales'])[0])),
+                ('a state', first(state='read')),
+                ('a fingerprint', first(fingerprint='1' * 63)),
+                ('rules and no table', first(nrules=0)),
+                ('not read without why', lambda d: d['collate']['locales'][
+                    sorted(d['locales'])[2]].update(state='not read')),
+                ('tables neither packed nor why', lambda d: d['collate'].update(
+                    tables=None)),
+                ('a check without its locale', lambda d: d['collate'][
+                    'checks'].update(x={}))):
+            with self.subTest(case=case):
+                self.refused(self.MALFORMED, self.tables, edit)
 
 
 if __name__ == '__main__':
