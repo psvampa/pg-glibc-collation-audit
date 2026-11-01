@@ -8,7 +8,7 @@ something it cannot see has changed.
 3. [Below glibc 2.24 the method rests on one measured pair](#below-glibc-224-the-method-rests-on-one-measured-pair)
 4. [A copied folder's character sets are not compared](#a-copied-folders-character-sets-are-not-compared)
 5. [Step 5 reports, it does not decide](#step-5-reports-it-does-not-decide)
-6. [Step 11 measures one character at a time](#step-11-measures-one-character-at-a-time)
+6. [What step 11 does not see](#what-step-11-does-not-see)
 7. [`LC_CTYPE` is compared by step 11 alone](#lc_ctype-is-compared-by-step-11-alone)
 
 ## `C.UTF-8` is invisible to a tag diff
@@ -48,7 +48,7 @@ sources, which reaches patches to the locale data. What no file comparison reach
 
 Step 11 reaches it, because it measures the glibc actually installed, patches
 and all. For
-[what step 11 does not see](#step-11-measures-one-character-at-a-time), and
+[what step 11 does not see](#what-step-11-does-not-see), and
 for the order inside PostgreSQL, do not skip
 [confirming on the real machines](confirming-on-a-real-system.md).
 
@@ -96,27 +96,42 @@ on both machines, and
 PostgreSQL. Either path needs no source reading and is the stronger evidence
 anyway.
 
-## Step 11 measures one character at a time
+## What step 11 does not see
 
 Step 11 asks each machine's glibc where every character a locale can hold
 sorts, and how each two neighbours in that order are told apart. With the
 characters it measures every lone byte, and every other sequence of bytes
 that glibc's character set for the locale or PostgreSQL reads as one
 character, so text stored through `COPY ... ENCODING 'SQL_ASCII'`, or in a
-SQL_ASCII database, is in the order too, one string at a time. It does not
-see:
+SQL_ASCII database, is in the order too, one string at a time. Given each
+machine's measurement, it also compares each locale's compiled sort table, the
+part of the locale glibc reads when PostgreSQL sorts. A locale
+whose table is the same on both machines sorts the same for any text, longer
+strings and contractions included, and one whose table differs is reported
+as changed. It does not see:
 
-- a rule for a particular combination of letters, such as a contraction (`ch`
-  sorted as one letter). Two machines that agree on every character can still
-  sort some longer strings apart;
-- a change in how a character is told apart from its neighbour where glibc
-  ignores that character at some level, which it reads less reliably;
-- how two neighbours are told apart at a level where no pair could be found
-  to measure it. The run names those locales as unchanged only as far as
-  measured;
+- whether the two machines compare strings with the same glibc code. The
+  same table proves the same order only if they do, and the run says so
+  beside its result. Where step 11 finds a change in a locale whose table is
+  the same on both machines, or keeps every order, or whose compared parts
+  are the same bytes, the code differs, and where it finds one in a locale
+  whose table could not be compared, whether it differs is not known.
+  Either way the run says so and takes no locale as unchanged by its table
+  alone;
+- in a locale whose table it could not compare, what one character at a
+  time cannot show: a rule for a particular combination of letters, such as
+  a contraction (`ch` sorted as one letter); a change in how a character is
+  told apart from its neighbour where glibc ignores that character at some
+  level; and how two neighbours are told apart at a level where no pair
+  could be found to measure it. A table is not compared when a file comes
+  from an earlier version, when it could not be read or did not pass its
+  check, or when the two machines store numbers in a different byte order.
+  The run names those locales, and an unchanged one as unchanged only as far
+  as measured;
 - a locale whose encoding PostgreSQL does not know, in a database of
-  another encoding, which PostgreSQL allows with only a WARNING ("could not
-  determine encoding for locale"). On the RHEL 8, 9 and 10 machines this
+  another encoding, which CREATE DATABASE and CREATE COLLATION allow with
+  only a WARNING ("could not determine encoding for locale"). On the RHEL 8,
+  9 and 10 machines this
   project measured, these are ten: `th_TH`, `th_TH.tis620` and `thai`
   (TIS-620), `ka_GE` and `ka_GE.georgianps` (GEORGIAN-PS), `kk_KZ` and
   `kk_KZ.pt154` (PT154), `tg_TJ` and `tg_TJ.koi8t` (KOI8-T), and
@@ -124,8 +139,10 @@ see:
   byte, as for any locale of one byte per character, and reports one whose
   order changed as changed. In a database of another encoding, a UTF8 one
   say, PostgreSQL hands the locale that database's bytes, not the ones
-  measured. The run does not identify which strings sort differently there,
-  and a locale it reports unchanged is not shown to sort the same there.
+  measured. Where the locale's sort table is the same on both machines,
+  glibc orders those bytes alike on both. Otherwise the run does not
+  identify which strings sort differently there, and a locale it reports
+  unchanged is not shown to sort the same there.
   Command 3 does not confirm that order either. The run names each such
   locale, with what it measured of how its bytes convert;
 - a sequence of bytes that no character set of glibc 2.28, 2.34 or 2.39
@@ -137,15 +154,13 @@ see:
   cover is named as not measured. Given each machine's file from `--extract`,
   the run compares the list with the machine's own character sets, and names
   a locale whose character set gives a character to a sequence the list
-  lacks as measured in part; without that file it says it did not check;
+  lacks as measured in part; without that file it says it did not check. A
+  locale its sort table decides needs no such check;
 - a locale that is not installed, because it measures what `locale -a` lists
   and nothing else.
 
-The run prints the first two beside its result every time, the third and
-the fourth whenever it measured a locale they apply to, and the fifth
-whenever it finds such a sequence or could not look for one. Command 3 sorts
-strings you choose inside PostgreSQL, and reaches a rule for a combination of
-letters when the strings contain it.
+Command 3 sorts strings you choose inside PostgreSQL, and reaches a rule for
+a combination of letters when the strings contain it.
 
 Not tried yet, so a failure there would be new: Python 3.14 on a real
 machine, where only a simulation was run, a machine on cgroup v1, and ARM.

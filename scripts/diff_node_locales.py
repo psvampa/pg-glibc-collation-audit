@@ -689,8 +689,8 @@ def _main(opts, charmaps):
                 f"question. Run "
                 f"sql/c_utf8_probe.sql anyway if C.UTF-8 is your database "
                 f"collation: it measures the order these builds actually "
-                f"produce inside PostgreSQL, as step 11 does one character at "
-                f"a time through glibc when the run has both machines' "
+                f"produce inside PostgreSQL, as step 11 does through glibc "
+                f"when the run has both machines' "
                 f"measurements, and PostgreSQL reports collversion as NULL "
                 f"for every C.* name.")
     if not (charmaps or opts.no_charmaps):

@@ -1053,30 +1053,58 @@ def other_tail(rest, names):
     return out
 
 
+# The line on databases of another encoding, up to where its forms part.
+OTHER_HEAD = (r'!! Not measured in a database of another encoding: '
+              r'(\d+) locale\(s\) whose encoding PostgreSQL does not know, so '
+              r'that CREATE DATABASE and CREATE COLLATION let a database of any '
+              r'encoding use one, with only a WARNING \("could not determine '
+              r'encoding for locale"\)\. In such a database, a UTF8 one say, '
+              r'PostgreSQL hands the locale the database\'s bytes, not the '
+              r'ones measured here')
+NOT_TOLD = (' Whether upper(), lower() and ILIKE give an error there is not '
+            'known.')
+
+
 def bytes_kind(text):
     """('bytes', data) of the line on databases of another encoding than
-    the locale's; None when the line is not about it."""
-    mt = re.fullmatch(r'!! Not measured in a database of another encoding: '
-                      r'(\d+) locale\(s\) whose encoding PostgreSQL does not '
-                      r'know, so that CREATE DATABASE lets a database of any '
-                      r'encoding use one, with only a WARNING \("could not '
-                      r'determine encoding for locale"\)\. In such a database, a '
-                      r'UTF8 one say, PostgreSQL hands the locale the '
-                      r'database\'s bytes, not the ones measured here, so neither '
-                      r'its order nor whether upper\(\), lower\(\) and ILIKE give '
-                      rf'an error there is known\. ({GROUPS})\.', text)
+    the locale's; None when the line is not about it. data['same table']
+    lists the locales whose order there the line gives as the same on both
+    machines, by their sort tables; absent where it gives none."""
+    mt = re.fullmatch(OTHER_HEAD + r', so neither its order nor whether '
+                      r'upper\(\), lower\(\) and ILIKE give an error there is '
+                      rf'known\. ({GROUPS})\.', text)
     if mt:
         return 'bytes', {'other encoding': by_codeset(mt[2], mt[1])}
-    mt = re.match(r'!! Not measured in a database of another encoding: '
-                  r'(\d+) locale\(s\) whose encoding PostgreSQL does not '
-                  r'know, so that CREATE DATABASE lets a database of any '
-                  r'encoding use one, with only a WARNING \("could not '
-                  r'determine encoding for locale"\)\. In such a database, a '
-                  r'UTF8 one say, PostgreSQL hands the locale the '
-                  r'database\'s bytes, not the ones measured here, so its '
-                  rf'order there is not known\. ({GROUPS})\.(?= |$)', text)
+    mt = re.match(OTHER_HEAD + r', so its order there is not known\. '
+                  rf'({GROUPS})\.(?= |$)', text)
     if mt:
         return 'bytes', other_tail(text[mt.end():], by_codeset(mt[2], mt[1]))
+    every = re.match(OTHER_HEAD + r'\. Each one\'s compiled sort table is the '
+                     r'same on both machines, and glibc orders any bytes by '
+                     r'that table, so its order there is the same on both '
+                     rf'machines\. ({GROUPS})\.(?= |$)', text)
+    some = re.match(OTHER_HEAD + r'\. Its order there is the same on both '
+                    r'machines in the (\d+) whose compiled sort table is the '
+                    r'same on both, since glibc orders any bytes by that table; '
+                    r'in the other (\d+) it is not known\. '
+                    rf'({GROUPS})\. The same sort table on both machines: '
+                    r'(\S+(?:, \S+)*?)\.(?= |$)', text)
+    if every or some:
+        mt = every or some
+        names = by_codeset(mt[2] if every else mt[4], mt[1])
+        same = sorted(names) if every else mt[5].split(', ')
+        if some and (int(mt[2]) != len(same) or int(mt[2]) + int(mt[3])
+                     != int(mt[1]) or not 0 < len(same) < len(names)):
+            raise ReportShapeError(f'the counts do not add up: {text!r}')
+        if (same != sorted(set(same)) or not set(same) <= set(names)):
+            raise ReportShapeError(f'the same tables are not among the '
+                                   f'names, once each, sorted: {text!r}')
+        rest = text[mt.end():]
+        if rest == NOT_TOLD:
+            return 'bytes', {'other encoding': names, 'same table': same}
+        out = other_tail(rest, names)
+        out['same table'] = same
+        return 'bytes', out
     if text.startswith(('!! Not measured in ', '!! NOT checked in ',
                         '!! Not measured in a database of another',
                         'Every such byte', 'Pass --characters-to FILE for every such')):
@@ -13835,12 +13863,17 @@ class SortTablesCompared(Checks):
     naming different locales."""
 
     def outputs(self, old_edits=(), new_edits=(), form=(m.FORMAT, m.FORMAT),
-                charmaps=None):
+                charmaps=None, parts=None, old_parts=None):
         """(report, summary, file) of RHEL9 -> RHEL10 with the edits, given
-        CHARMAPS (a folder) as both machines' charmaps."""
+        CHARMAPS (a folder) as both machines' charmaps and PARTS (with_parts'
+        arguments) to both machines' parts, OLD_PARTS instead to the old
+        machine's."""
         tag = self.id().rsplit('.', 1)[-1]
-        old = self.made(RHEL9, 'old', with_parts(form=form[0]), *old_edits)
-        new = self.made(RHEL10, 'new', with_parts(form=form[1]), *new_edits)
+        old = self.made(RHEL9, 'old', with_parts(
+            form=form[0], **((parts if old_parts is None else old_parts) or {})),
+                        *old_edits)
+        new = self.made(RHEL10, 'new', with_parts(form=form[1], **(parts or {})),
+                        *new_edits)
         summary = os.path.join(self.tmp, f'{tag}.sum')
         chars = os.path.join(self.tmp, f'{tag}.tsv')
         stdout, stderr = io.StringIO(), io.StringIO()
@@ -14029,17 +14062,19 @@ class SortTablesCompared(Checks):
     def assert_not_compared(self, outs, why, names):
         """Every name not compared, for why alone, each keeping step 11's
         verdict: unchanged only as far as measured, ja_JP.utf8 with its
-        pairs not measured at every level, and the closing on
-        contractions."""
+        pairs not measured at every level, and the closing on contractions,
+        which also says the code assumption while another locale of FEW is
+        unchanged by its table alone."""
         r, s, f = outs
         self.assertEqual(self.not_compared(outs), {why: names})
         self.assertEqual(by_name(r), {})
         self.assertEqual(r['totals']['partly'], len(names))
         self.assertEqual(r['partly'], ({'ja_JP.utf8': 3}
                                        if 'ja_JP.utf8' in names else {}))
-        self.assertEqual(r['closing'], m.CLOSING)
-        self.assertEqual(s['closing'], m.CLOSING)
-        self.assertEqual(f.closing, m.CLOSING)
+        closing = m.CLOSING_MIXED if len(names) < len(FEW) - 2 else m.CLOSING
+        self.assertEqual(r['closing'], closing)
+        self.assertEqual(s['closing'], closing)
+        self.assertEqual(f.closing, closing)
 
     def test_a_table_not_read_on_one_machine(self):
         unread = {'de_DE.utf8': {'state': 'not read', 'why': 'no file',
@@ -14138,7 +14173,8 @@ class SortTablesCompared(Checks):
                                       else (tables, [])), form=form)
                 self.assert_not_compared(
                     outs, f'the {side} file was {m.TABLE_EARLIER} '
-                          '(locale_order/6)',
+                          f'(locale_order/6); run --extract again on the '
+                          f'{side.lower()} machine',
                     ['de_DE.utf8', 'en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8'])
                 # No table decided a locale: the charmaps sentence spares none.
                 self.assertEqual([x[::2] for x in outs[0]['charmaps_unchecked']],
@@ -14242,6 +14278,110 @@ def dict_of(*ds):
 def one_level(order):
     """{sequence: [[weight]]} of sequences in the order given."""
     return {s: [[i + 1]] for i, s in enumerate(order)}
+
+
+class OtherEncodingByTheTables(Checks):
+    """The line on a database of another encoding, where the sort tables
+    decide: RHEL9 and RHEL10 cut to FEW and two locales of encodings
+    PostgreSQL does not know, ka_GE (GEORGIAN-PS) and kk_KZ (PT154), whose
+    order step 11 finds unchanged.
+
+    Freezes: a locale whose table is the same on both machines said to
+    have an order not known there, or one whose table changed said to have
+    the same; the line's list of locales changing with the tables; the
+    locales of the same table left unnamed where only some are."""
+
+    NAMES = FEW + ('ka_GE', 'kk_KZ')
+    USE = {'ka_GE': use_of('one byte', 'GEORGIAN-PS'),
+           'kk_KZ': use_of('one byte', 'PT154')}
+
+    def outputs(self, old_edits=(), new_edits=(), converter=None,
+                old_use=None):
+        """SortTablesCompared.outputs, the two locales used as the
+        machines measured them (OLD_USE instead on the old one), and
+        CONVERTER in place on both."""
+        parts = {'use': self.USE, 'converter': converter}
+        return SortTablesCompared.outputs(
+            self, old_edits, new_edits, parts=parts,
+            old_parts=None if old_use is None else dict(parts, use=old_use))
+
+    @classmethod
+    def setUpClass(cls):
+        super(Checks, cls).setUpClass()
+        for path in (RHEL9, RHEL10):
+            cls.texts[path] = trimmed(cls.texts[path], cls.NAMES)
+
+    def line(self, outs):
+        """The line's data, the same in the report and the summary."""
+        r, s, f = outs
+        got = [d for kind, d in r['checks'] if kind == 'bytes']
+        self.assertEqual(got, [d for kind, d in s['checks'] if kind == 'bytes'])
+        self.assertEqual(len(got), 1, r['checks'])
+        self.assertEqual(got[0]['other encoding'],
+                         {'ka_GE': 'GEORGIAN-PS', 'kk_KZ': 'PT154'})
+        return got[0]
+
+    def test_every_table_the_same(self):
+        self.assertEqual(self.line(self.outputs([read_tables()],
+                                                [read_tables()]))['same table'],
+                         ['ka_GE', 'kk_KZ'])
+
+    def test_one_table_changed(self):
+        other = {'kk_KZ': {'fingerprint': 'f' * 64}}
+        outs = self.outputs([read_tables()], [read_tables(other)])
+        self.assertEqual(sorted(by_name(outs[0])), ['kk_KZ'])
+        self.assertEqual(self.line(outs)['same table'], ['ka_GE'])
+
+    def test_no_table_compared(self):
+        self.assertNotIn('same table', self.line(self.outputs()))
+
+    def test_a_check_failed_beside_the_same_tables(self):
+        """One locale not compared, its control failed on both machines:
+        the others are unchanged by their tables, and the closing says what
+        that assumes beside what the one not compared leaves unseen."""
+        checks = {'de_DE.utf8': {'error': 'MemoryError()'}}
+        r, s, f = self.outputs([read_tables(checks=checks)],
+                               [read_tables(checks=checks)])
+        self.assertEqual(self.line((r, s, f))['same table'],
+                         ['ka_GE', 'kk_KZ'])
+        for closing in (r['closing'], s['closing'], f.closing):
+            self.assertEqual(closing, m.CLOSING_MIXED)
+
+    def test_the_names_of_the_same_table_shown_as_the_others(self):
+        """The names after "The same sort table on both machines" go through
+        shown(), as every other name of the line (review, verification
+        round): a name shown otherwise, here ka_GE quoted, is quoted there
+        too."""
+        real = m.shown
+        quoted = lambda x: '"ka_GE"' if x == 'ka_GE' else real(x)
+        other = {'kk_KZ': {'fingerprint': 'f' * 64}}
+        with unittest.mock.patch.object(m, 'shown', quoted):
+            self.outputs([read_tables()], [read_tables(other)])
+        self.assertIn('The same sort table on both machines: "ka_GE".',
+                      flat(self.printed))
+
+    def test_a_locale_only_on_the_new_machine(self):
+        """kk_KZ on the new machine only: no table of the old one, so its
+        order there is not known (review round 1, A3)."""
+        whole = self.texts[RHEL9]
+        self.addCleanup(self.texts.__setitem__, RHEL9, whole)
+        self.texts[RHEL9] = trimmed(whole, [x for x in self.NAMES
+                                            if x != 'kk_KZ'])
+        r, s, f = self.outputs([read_tables()], [read_tables()],
+                               old_use={'ka_GE': self.USE['ka_GE']})
+        self.assertEqual(self.line((r, s, f))['same table'], ['ka_GE'])
+
+    def test_the_same_tables_and_no_converter_checked(self):
+        """Neither machine says whether upper() gives an error there: the
+        line says so after the locales of the same table."""
+        converter = {cs: ['not checked', ['opens', None], name, 'a test', None]
+                     for cs, name in (('GEORGIAN-PS', 'ka_GE'),
+                                      ('PT154', 'kk_KZ'))}
+        got = self.line(self.outputs([read_tables()], [read_tables()],
+                                     converter=converter))
+        self.assertEqual(got, {'other encoding': got['other encoding'],
+                               'same table': ['ka_GE', 'kk_KZ']})
+        self.assertIn(NOT_TOLD, flat(self.printed))
 
 
 class SortTablesNamed(Checks):

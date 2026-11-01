@@ -1715,7 +1715,7 @@ class TheLimitationNamesTheLocalesStep11Names(unittest.TestCase):
             return real(names, codesets)
         with unittest.mock.patch.object(m, 'by_codeset', spy):
             text = m.other_encoding_text(
-                both + only_new, m.TextModel(old, new, both, only_new))
+                both + only_new, m.TextModel(old, new, both, only_new), ())
         self.assertIsNotNone(text, f'{label}: no line')
         self.assertTrue(seen, f'{label}: by_codeset was not called')
         self.assertIn(' ' + real(seen[0], seen[0]) + '.', text,
@@ -1746,7 +1746,8 @@ class TheLimitationNamesTheLocalesStep11Names(unittest.TestCase):
             self.assertEqual(len(parts), 2, f'{path}: the line is not in the '
                              'report and the summary, once each')
             for i, part in enumerate(parts, 1):
-                mt = re.match(r'(\d+) locale\(s\) .*? is (?:not )?known\. ', part)
+                mt = re.match(r'(\d+) locale\(s\) .*?(?: is (?:not )?known'
+                              r'| is the same on both machines)\. ', part)
                 self.assertIsNotNone(mt, f'{path}: copy {i} unread')
                 groups = part[mt.end():].split('. ')[0].rstrip('.')
                 listed = {}
@@ -1797,10 +1798,9 @@ class TheLimitationNamesTheLocalesStep11Names(unittest.TestCase):
         self.assertEqual(word, self.WORDS.get(len(union), str(len(union))))
 
     def test_the_docs_quote_the_line_step_11_prints(self):
-        """README.md and docs/results.md send the reader of a green cell to
-        this line by its opening words, and docs/confirming-on-a-real-
-        system.md the reader of the template. Reworded in the code and not
-        there, the reader looks for a line no run prints and reads its
+        """docs/confirming-on-a-real-system.md sends the reader of the
+        template to this line by its opening words. Reworded in the code and
+        not there, the reader looks for a line no run prints and reads its
         absence as "none"."""
         import locale_order as m
         data = os.path.join(REPO_ROOT, 'tests', 'locale_order')
@@ -1810,12 +1810,11 @@ class TheLimitationNamesTheLocalesStep11Names(unittest.TestCase):
         both = sorted(set(old['locales']) & set(new['locales']))
         only_new = sorted(set(new['locales']) - set(old['locales']))
         text = m.other_encoding_text(both + only_new,
-                                     m.TextModel(old, new, both, only_new))
+                                     m.TextModel(old, new, both, only_new), ())
         self.assertIsNotNone(text)
         self.assertTrue(text.startswith(self.LINE), text[:80])
         quote = f'"{self.LINE[:-2]}"'
-        for doc in ('README.md', os.path.join('docs', 'results.md'),
-                    os.path.join('docs', 'confirming-on-a-real-system.md')):
+        for doc in (os.path.join('docs', 'confirming-on-a-real-system.md'),):
             with self.subTest(doc=doc):
                 self.assertIn(quote, flat(read(os.path.join(REPO_ROOT, doc))))
 

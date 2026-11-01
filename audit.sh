@@ -39,8 +39,8 @@
 # The --*-order options are optional too, and go together. Each is what
 # scripts/locale_order.py wrote on that machine: how its own glibc sorts every
 # locale. Step 11 compares the two, so it answers from each machine's glibc
-# rather than from locale sources, and names the characters and other
-# strings that moved.
+# rather than from locale sources, compares each locale's compiled sort table,
+# and names the characters and other strings that moved.
 #
 # The --*-node options go together and stand for all of the above. Each is the
 # one file `scripts/locale_order.py --extract` wrote on that machine, holding
@@ -361,8 +361,8 @@ rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
 # included.
 ORDER_LOG="$OUT_DIR/measured_order.$PAIR.log"
 ORDER_SUMMARY="$OUT_DIR/measured_order_summary.$PAIR.txt"
-# Every character, other string and pair step 11 found; its report and
-# summary name it.
+# Every character, other string and pair step 11 found, and every sequence
+# a changed sort table names; its report and summary name it.
 ORDER_CHARACTERS="$OUT_DIR/measured_order_characters.$PAIR.tsv"
 rm -f "$ORDER_LOG" "$ORDER_SUMMARY" "$ORDER_CHARACTERS"
 if [ -n "$OLD_ORDER" ]; then

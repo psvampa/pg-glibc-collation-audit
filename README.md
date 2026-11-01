@@ -16,7 +16,7 @@ real sort rules
 This tool reads glibc's own source, across every locale in the tree, and lists
 the locales the upgrade can affect. Given one file from each of your machines,
 it also measures how each machine's own glibc sorts the locales installed on
-it, and names the characters that moved.
+it, compares their compiled sort tables, and names the characters that moved.
 
 **This project does not set out to give a single, infallible answer.** It
 gives you a few simple ways to compare the source of two glibc versions —
@@ -195,9 +195,7 @@ psql -f sql/collation_confirmation_template.sql   # edit placeholders first
 ```
 
 A source diff is an argument, not a proof of what actually runs in
-production. Step 11 measures, but one character at a time: a rule for a
-combination of letters, such as a contraction, shows only in strings that
-contain it. Run it on both the old and the new OS, for every locale the audit
+production. Run it on both the old and the new OS, for every locale the audit
 flagged.
 
 What this box leaves out is in
@@ -220,13 +218,13 @@ A worked example for each pair is in
 |---|---|---|---|
 | `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | 🟢 No difference | steps 1–3 — `sv_FI` only via `copy`; the second pair is cleared by step 11's measurement |
 | `or_IN` | 🔴 **Changed** | 🟢 No difference | steps 1–3; the second pair is cleared by step 11's measurement |
-| `ko_KR` | 🔴 **Changed** | 🟢 No difference | step 4 flags it and **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement, as far as it can measure |
+| `ko_KR` | 🔴 **Changed** | 🟢 No difference | step 4 flags it and **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement |
 | `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | **step 2 warns** and cannot settle it <sup>†</sup> — the node-to-node check settles the data, step 11 or `sql/c_utf8_probe.sql` the order |
-| `th_TH` | 🟢 No difference | 🔴 **Changed** | steps 1–3; the first pair is cleared by step 11's measurement, as far as it can measure |
+| `th_TH` | 🟢 No difference | 🔴 **Changed** | steps 1–3; the first pair is cleared by step 11's measurement |
 | `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap; the first pair is cleared by step 11's measurement |
 | CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>the base table a locale inherits unless it<br>defines its own order | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
 | `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | step 4 flagged them via `iso14651_t1_common`; cleared by measurement |
-| everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | 🟢 No difference | 🟢 No difference | step 4 flags them and step 5 finds code changes in both pairs: step 11's measurement clears both, as far as it can measure |
+| everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | 🟢 No difference | 🟢 No difference | step 4 flags them and step 5 finds code changes in both pairs: step 11's measurement clears both |
 
 🔴 reindex · 🟡 flagged and *not* cleared, treat as changed until tested ·
 🟢 flagged, but a targeted test or mechanism argument shows the order does not
@@ -236,13 +234,8 @@ move.
 
 Step 11 measured the same on three test machines (Rocky Linux 8.9, 9.3 and
 10.1): the locales marked 🔴 are the ones that sort differently, and every
-other locale it could measure sorts the same, one character at a time
-([what that leaves out](docs/limitations.md#step-11-measures-one-character-at-a-time)).
-
-A green cell does not cover a locale of an encoding PostgreSQL does not know,
-such as `th_TH` in TIS-620. A database or a collation of any encoding can use
-one, and its order there is not measured. Step 11 names them in its line
-beginning "!! Not measured in a database of another encoding".
+other locale sorts the same, by its compiled sort table too
+([what that leaves out](docs/limitations.md#what-step-11-does-not-see)).
 
 <sup>†</sup> `C.UTF-8`'s source file is in neither tag for the first pair, so
 both verdicts come from the machines themselves

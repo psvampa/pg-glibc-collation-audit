@@ -120,8 +120,8 @@ nothing there.
 
 **contraction** — a rule that sorts a combination of letters as one, such as
 `ch` sorted as a single letter after `h` in Czech. It belongs to the
-combination, not to any one character, so step 11, which measures characters,
-cannot see it change.
+combination, not to any one character, so step 11 sees it change only by
+comparing the compiled sort tables.
 
 **inverted positive control** — the one place the rule below runs backwards.
 For `C.UTF-8`, agreeing with `LC_ALL=C` byte order is the *corrected*

@@ -74,13 +74,12 @@ showed (table_verdicts). A change the measured order finds under the same
 table, or under one that keeps every order, still counts, and then no table
 is trusted alone; under a table that could not be compared it leaves open
 whether the code differs, and no table is trusted alone either. Where the
-tables
-could not be compared, the measured order decides, as far as it was
-measured. For those locales, given each machine's
-charmaps (--old-charmaps and --new-charmaps; audit.sh passes those of a file
---extract wrote), the comparison checks that every sequence they give a
-character is among the strings measured, and names a locale whose charmap
-gives one that is not as measured in part (charmap_check).
+tables could not be compared, the measured order decides, as far as it was
+measured. For every locale its table does not find unchanged, given each
+machine's charmaps (--old-charmaps and --new-charmaps; audit.sh passes those
+of a file --extract wrote), the comparison checks that every sequence they
+give a character is among the strings measured, and names a locale whose
+charmap gives one that is not as measured in part (charmap_check).
 
 Not compared, in a locale whose table was not compared: a rule that applies
 only to a particular combination of letters, such as a contraction ("ch"
@@ -2759,8 +2758,7 @@ def measured(codeset, mb_cur_max):
     # strxfrm is a shortcut to the sort; PostgreSQL compares with strcoll.
     # Every neighbour is checked with strcoll, and since strcoll is a
     # transitive order, neighbours that agree mean the whole order is
-    # strcoll's. Where some do not (strxfrm's key and strcoll part on the
-    # th_TH of glibc 2.39, measured), the strings are sorted with strcoll
+    # strcoll's. Where some do not, the strings are sorted with strcoll
     # itself, its ties broken by the bytes as PostgreSQL breaks them, and
     # checked again.
     told_apart, disagree = told_records(data, order, plan, strcoll)
@@ -5484,8 +5482,10 @@ OTHER_STRINGS = ('In the sort orders, a string that this comparison cannot '
 
 
 # Printed under the report, the summary and the characters file while a
-# locale found unchanged was not compared by its sort table (CLOSING_TABLES
-# otherwise): what two machines that agree here can still disagree on.
+# locale found unchanged was not compared by its sort table and none but C and
+# POSIX was found unchanged by it (CLOSING_MIXED when one was, CLOSING_TABLES
+# when every one was): what two machines that agree here can still disagree
+# on.
 CLOSING = ('!! Not measured: a rule that applies only to a particular '
            'combination of letters, such as a contraction ("ch" sorted as one '
            'letter), so two machines that agree here can still sort some longer '
@@ -7710,7 +7710,7 @@ def lacking_text(codeset, got, unit='byte(s)'):
             ', not all the same' if mixed else '')
 
 
-def other_encoding_text(names, model):
+def other_encoding_text(names, model, firm):
     """The line that names the locales of names whose encoding PostgreSQL
     does not know, or None: a database of any encoding can use one, and
     nothing here measured its order there. What upper(), lower() and ILIKE
@@ -7729,7 +7729,12 @@ def other_encoding_text(names, model):
     16.16; a file of a format before the part; a converter not checked;
     the locale of another encoding there) is named as not known there,
     beside what the other machine measured. C and POSIX are accepted with
-    every encoding and convert nothing."""
+    every encoding and convert nothing.
+    FIRM are the locales unchanged by their sort tables: glibc orders any
+    bytes by the table, so the order of such a locale in a database of
+    another encoding is the same on both machines too, under the same
+    assumption the table's verdict rests on (CLOSING_TABLES or
+    CLOSING_MIXED)."""
     known = model.known
     codesets, unmeasured, lacking, told = {}, {}, {}, False
     for name in names:
@@ -7768,15 +7773,33 @@ def other_encoding_text(names, model):
         return None
     text = (f'!! Not measured in a database of another encoding: '
             f'{len(codesets)} locale(s) whose encoding PostgreSQL does not '
-            'know, so that CREATE DATABASE lets a database of any encoding use '
-            'one, with only a WARNING ("could not determine encoding for '
-            'locale"). In such a database, a UTF8 one say, PostgreSQL hands the '
-            'locale the database\'s bytes, not the ones measured here, so ')
-    if not told:
-        return (text + 'neither its order nor whether upper(), lower() and '
-                'ILIKE give an error there is known. '
-                + by_codeset(codesets, codesets) + '.')
-    text += 'its order there is not known. ' + by_codeset(codesets, codesets) + '.'
+            'know, so that CREATE DATABASE and CREATE COLLATION let a database '
+            'of any encoding use one, with only a WARNING ("could not '
+            'determine encoding for locale"). In such a database, a UTF8 one '
+            'say, PostgreSQL hands the locale the database\'s bytes, not the '
+            'ones measured here')
+    listed = by_codeset(codesets, codesets) + '.'
+    same = sorted(x for x in codesets if x in firm)
+    if not same:
+        if not told:
+            return (text + ', so neither its order nor whether upper(), '
+                    'lower() and ILIKE give an error there is known. ' + listed)
+        text += ', so its order there is not known. ' + listed
+    else:
+        if len(same) == len(codesets):
+            text += ('. Each one\'s compiled sort table is the same on both '
+                     'machines, and glibc orders any bytes by that table, so '
+                     'its order there is the same on both machines. ' + listed)
+        else:
+            text += (f'. Its order there is the same on both machines in the '
+                     f'{len(same)} whose compiled sort table is the same on '
+                     'both, since glibc orders any bytes by that table; in the '
+                     f'other {len(codesets) - len(same)} it is not known. '
+                     + listed + ' The same sort table on both machines: '
+                     + ', '.join(shown(x) for x in same) + '.')
+        if not told:
+            return (text + ' Whether upper(), lower() and ILIKE give an error '
+                    'there is not known.')
     if unmeasured:
         groups = {}
         for name, sides in unmeasured.items():
@@ -7880,7 +7903,8 @@ def table_sides_why_not(old, new):
     parts = [d.get('collate') for d in (old, new)]
     for side, part, d in zip(('OLD', 'NEW'), parts, (old, new)):
         if part is None:
-            return f'the {side} file was {TABLE_EARLIER} ({d["format"]})'
+            return (f'the {side} file was {TABLE_EARLIER} ({d["format"]}); '
+                    f'run --extract again on the {side.lower()} machine')
     if parts[0]['byteorder'] != parts[1]['byteorder']:
         return ('the two machines store numbers in a different byte order '
                 f'({parts[0]["byteorder"]}-endian, then '
@@ -8499,6 +8523,19 @@ CLOSING_TABLES = ('!! Not measured: whether the two machines compare strings '
                   'with the same glibc code. Every locale found unchanged has '
                   'the same sort table on both, and that table is what '
                   'glibc\'s comparison code reads.')
+# Printed instead of both when some unchanged locales other than C and POSIX
+# were found so by their sort tables and others were not compared by them.
+CLOSING_MIXED = ('!! Not measured: whether the two machines compare strings '
+                 'with the same glibc code. Each locale found unchanged by its '
+                 'sort table is so only if they do, since that table is what '
+                 'glibc\'s comparison code reads. Nor, in the locales not '
+                 'compared by their sort tables, a rule that applies only to '
+                 'a particular combination of letters, such as a contraction '
+                 '("ch" sorted as one letter), so two machines that agree there '
+                 'can still sort some longer strings apart; and where a '
+                 'character counts for nothing at some level (glibc ignores it '
+                 'there), how it is told apart from its neighbour is read less '
+                 'reliably, so a change there may go unseen.')
 
 
 def run_findings(o, n, warnings, partly, unmeasured, only_old,
@@ -9251,15 +9288,17 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     # never names a locale here: one refused on both sides is never named,
     # nor one only on the new machine that glibc refuses there. One only on
     # the new machine serves the databases made there.
-    other = other_encoding_text(both + only_new, model)
+    other = other_encoding_text(both + only_new, model, firm)
     if other:
         beside.append(('other encoding', {'text': other}))
     # The sentence on contractions stays while an unchanged locale was not
-    # compared by its table.
+    # compared by its table, and the one on the code while a locale other
+    # than C and POSIX is unchanged by its table alone.
+    by_tables = any(x not in ('C', 'POSIX') for x in firm)
     found = run_findings(o, n, warnings, partly, unmeasured, only_old, checks,
                          refused, beside,
                          CLOSING_TABLES if all(x in firm for x in same)
-                         else CLOSING)
+                         else CLOSING_MIXED if by_tables else CLOSING)
     ctx = {'pg_names': pg_names, 'o': o, 'characters_to': characters_to}
 
     report = [f'Old machine: {machine_label(old)}, {len(old["locales"])} locale(s)',
@@ -9414,9 +9453,10 @@ def main():
         epilog=note, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--compare', nargs=2, metavar=('OLD', 'NEW'),
                     help='compare the outputs of two machines, the one you '
-                         'upgrade from first, and name the characters and '
-                         'other strings that moved and those whose character '
-                         'rules (LC_CTYPE) change')
+                         'upgrade from first, decide each locale by its '
+                         'compiled sort table where both files hold one, and '
+                         'name the characters and other strings that moved '
+                         'and those whose character rules (LC_CTYPE) change')
     ap.add_argument('--tags', nargs=2, metavar=('OLD_TAG', 'NEW_TAG'),
                     help='with --compare: the glibc tags of the pair audited, '
                          'as audit.sh passes them; a file measured on another '

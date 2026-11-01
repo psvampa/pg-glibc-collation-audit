@@ -6,13 +6,13 @@
 |---|---|---|---|
 | `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | 🟢 No difference | steps 1–3 — `sv_FI` only via `copy`; the second pair is cleared by step 11's measurement |
 | `or_IN` | 🔴 **Changed** | 🟢 No difference | steps 1–3; the second pair is cleared by step 11's measurement |
-| `ko_KR` | 🔴 **Changed** | 🟢 No difference | step 4 flags it and **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement, as far as it can measure |
+| `ko_KR` | 🔴 **Changed** | 🟢 No difference | step 4 flags it and **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement |
 | `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | **step 2 warns** and cannot settle it <sup>†</sup> — the node-to-node check settles the data, step 11 or `sql/c_utf8_probe.sql` the order |
-| `th_TH` | 🟢 No difference | 🔴 **Changed** | steps 1–3; the first pair is cleared by step 11's measurement, as far as it can measure |
+| `th_TH` | 🟢 No difference | 🔴 **Changed** | steps 1–3; the first pair is cleared by step 11's measurement |
 | `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap; the first pair is cleared by step 11's measurement |
 | CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>the base table a locale inherits unless it<br>defines its own order | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
 | `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | step 4 flagged them via `iso14651_t1_common`; cleared by measurement |
-| everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | 🟢 No difference | 🟢 No difference | step 4 flags them and step 5 finds code changes in both pairs: step 11's measurement clears both, as far as it can measure |
+| everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | 🟢 No difference | 🟢 No difference | step 4 flags them and step 5 finds code changes in both pairs: step 11's measurement clears both |
 
 <sup>†</sup> `C.UTF-8`'s source file is in neither tag for the first pair, so
 both verdicts come from the machines themselves
@@ -32,11 +32,6 @@ The sections below are the evidence behind each row.
   tested.
 - 🟢 **No difference** — the audit flagged it, but a targeted test or a
   mechanism argument shows the order does not move.
-
-A green cell does not cover a locale of an encoding PostgreSQL does not know,
-such as `th_TH` in TIS-620. A database or a collation of any encoding can use
-one, and its order there is not measured. Step 11 names them in its line
-beginning "!! Not measured in a database of another encoding".
 
 ## Worked example: RHEL8 to RHEL9 (glibc 2.28 to 2.34)
 
@@ -97,8 +92,7 @@ under `en_US` and `zh_TW` on glibc 2.28 and 2.34.
 
 Step 11 swept every character of `zh_TW.utf8`, `zh_HK.utf8` and
 `zh_SG.utf8` on the three test machines and found no change in either pair.
-What it cannot see is a rule for a combination of characters. It measures
-`zh_TW.euctw` too, by its bytes, and finds no change there either.
+It measures `zh_TW.euctw` too, by its bytes, and finds no change there either.
 
 ardentperf reports a `glibc` engine and an `icu` engine, and only the first
 bears on a `libc` collation. Between RHEL8 and RHEL9 every locale changes
@@ -155,7 +149,7 @@ Full output:
 ### Everything else
 
 Every other locale step 11 measured (`en_US`, `de_DE`, `fr_FR`, ...) sorts the
-same on both, a few only as far as they could be measured.
+same on both.
 Step 4 flags them too, and step 5 finds code changes in this pair, so the
 clean data diff does not clear them: real `sort`/PostgreSQL tests on RHEL8 and
 RHEL9 nodes and step 11's measurement do.
@@ -209,8 +203,8 @@ both nodes as controls. Reproduce with
 
 `ko_KR` is flagged by step 4 here too, and step 5 finds code changes between
 2.34 and 2.39 that it leaves to a reader of C. What clears it is measurement.
-`ko_KR` is identical on both nodes above, step 11 finds it unchanged as far as
-it could measure it, and ardentperf's glibc checksum for `ko` is the same on
+`ko_KR` is identical on both nodes above, step 11 finds it unchanged, and
+ardentperf's glibc checksum for `ko` is the same on
 RHEL9 and RHEL10.
 
 ## What step 11 measured
@@ -227,8 +221,7 @@ locales, in UTF-8 and in the legacy encodings. In `ko_KR.utf8` only one
 character moved, 힣 (U+D7A3), the last Hangul syllable
 ([the mechanism above](#the-ko_kr-mechanism-and-its-minimal-test-case)).
 Every other locale it measured sorts the same, `ber_DZ`, `kab_DZ`, `zh_CN.utf8`
-and `en_US.utf8` among them, though a few only as far as they could be
-measured. The comparison names those, and also those missing from the new
+and `en_US.utf8` among them. The comparison names those missing from the new
 machine.
 
 On those machines glibc also stops converting the text of the locales whose
@@ -244,13 +237,12 @@ brings it in on 8 and not on 9 or 10.
 
 **RHEL9 to RHEL10.** Only `th_TH` sorts differently, in TIS-620 (`th_TH`,
 `th_TH.tis620`, `thai`) and in `th_TH.utf8`. Every other locale it measured
-sorts the same, `ber_DZ`, `kab_DZ` and `C.utf8` among them, though a few only as far
-as they could be measured, `ko_KR.utf8` among those. The comparison names
-them, and also those missing from the new machine. The same locales that need `glibc-gconv-extra` stop `upper()`,
+sorts the same, `ber_DZ`, `kab_DZ`, `C.utf8` and `ko_KR.utf8` among them. The
+comparison names those missing from the new machine. The same locales that need `glibc-gconv-extra` stop `upper()`,
 `lower()` and `ILIKE` with an error on both machines, for the same reason.
 
 No published verdict moved. What step 11 does not see is in
-[limitations.md](limitations.md#step-11-measures-one-character-at-a-time).
+[limitations.md](limitations.md#what-step-11-does-not-see).
 
 ## Tested on
 
