@@ -1682,6 +1682,13 @@ class ThePrivateRulesStayPrivate(unittest.TestCase):
                          f'private working files are tracked: {tracked}')
 
 
+def recorded_measurements():
+    """{'rhel8': path, ...}: the measurement inside each recorded --extract
+    file, as test_locale_order unpacks it."""
+    import test_locale_order as t
+    return {'rhel8': t.RHEL8, 'rhel9': t.RHEL9, 'rhel10': t.RHEL10}
+
+
 class TheLimitationNamesTheLocalesStep11Names(unittest.TestCase):
     """docs/limitations.md names, by encoding, every locale whose encoding
     PostgreSQL does not know on the RHEL 8, 9 and 10 machines measured. A
@@ -1726,10 +1733,9 @@ class TheLimitationNamesTheLocalesStep11Names(unittest.TestCase):
         """[(label, {locale: encoding})] step 11 names for each recorded
         file against itself and for each pair."""
         import locale_order as m
-        data = os.path.join(REPO_ROOT, 'tests', 'locale_order')
         digest = m.corpus_digest()
-        files = {n: m.load(os.path.join(data, n + '.out'), digest)[0]
-                 for n in ('rhel8', 'rhel9', 'rhel10')}
+        files = {n: m.load(path, digest)[0]
+                 for n, path in recorded_measurements().items()}
         out = [(n, self.named(d, d, n)) for n, d in files.items()]
         for a, b in self.PAIRS:
             out.append((f'{a}-to-{b}', self.named(files[a], files[b], f'{a} -> {b}')))
@@ -1803,9 +1809,9 @@ class TheLimitationNamesTheLocalesStep11Names(unittest.TestCase):
         not there, the reader looks for a line no run prints and reads its
         absence as "none"."""
         import locale_order as m
-        data = os.path.join(REPO_ROOT, 'tests', 'locale_order')
         digest = m.corpus_digest()
-        old, new = (m.load(os.path.join(data, n + '.out'), digest)[0]
+        recorded = recorded_measurements()
+        old, new = (m.load(recorded[n], digest)[0]
                     for n in self.PAIRS[1])
         both = sorted(set(old['locales']) & set(new['locales']))
         only_new = sorted(set(new['locales']) - set(old['locales']))

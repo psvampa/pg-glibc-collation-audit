@@ -29,7 +29,45 @@ import glibc_locale_data as g
 import locale_order as lom
 from _harness import GLIBC_CLONE, swap_alpha_beta, tag_charmaps
 from test_locale_order import (CHANGED_8_TO_9, RHEL8, RHEL9, RHEL10,
-                               changes_in, parse_characters, parse_summary)
+                               changes_in, parse_characters, parse_summary,
+                               trimmed)
+
+
+# The classes that run audit.sh on the recorded measurements read them cut
+# to the locales they assert about, every part cut and the sort tables
+# repacked (cut_to_pair): the fourteen that change from RHEL8 to RHEL9, the
+# two RHEL9 removes, C and POSIX (the control, and C's charmap line), the
+# three in ISO-8859-7 the hand-made greek charmap reaches, and one unchanged
+# locale. The classes that assert nothing of the fourteen (refusals, node
+# files without sources or with other charmaps) read them cut to FEW_NAMES,
+# the same with one of the fourteen, C.utf8 (built from the C the stand-in
+# sources lack, and a change step 11's charmap lines are about): describing
+# a change is most of what step 11 costs.
+FEW_NAMES = ('C', 'POSIX', 'en_US@ampm', 'en_US.utf8@ampm', 'el_CY', 'el_GR',
+             'el_GR@euro', 'en_US.utf8', 'C.utf8')
+PAIR_NAMES = tuple(sorted(CHANGED_8_TO_9 | set(FEW_NAMES)))
+_CUT = {}
+
+
+def cut_to_pair(path, names=PAIR_NAMES):
+    """path cut to names (those it holds), written once per process."""
+    key = (path, names)
+    if key not in _CUT:
+        with open(path, encoding='utf-8') as f:
+            text = f.read()
+        held = set(json.loads(text)['locales'])
+        out = tempfile.mkdtemp(prefix='pg-glibc-wrapper-cut-')
+        dest = os.path.join(out, os.path.basename(path))
+        with open(dest, 'w', encoding='utf-8') as f:
+            f.write(trimmed(text, [n for n in names if n in held],
+                            repack=True))
+        _CUT[key] = dest
+    return _CUT[key]
+
+
+def cut_few(path):
+    """path cut to FEW_NAMES."""
+    return cut_to_pair(path, FEW_NAMES)
 
 
 def pair_slug(old, new):
@@ -2198,8 +2236,9 @@ class WrapperMeasuredOrder(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-order-')
-        cls.rc, cls.out = run_wrapper(OLD, MID, '--old-order', RHEL8,
-                                      '--new-order', RHEL9,
+        cls.rc, cls.out = run_wrapper(OLD, MID,
+                                      '--old-order', cut_to_pair(RHEL8),
+                                      '--new-order', cut_to_pair(RHEL9),
                                       out_dir=cls.out_dir)
 
     @classmethod
@@ -2223,7 +2262,8 @@ class WrapperMeasuredOrder(unittest.TestCase):
         that neither machine's were checked, and why."""
         summary = parse_summary(measured_block(self.out))
         self.assertEqual(summary['charmaps_unchecked'],
-                         [('either machine', lom.ALONE_BOTH, None)])
+                         [('either machine', lom.ALONE_BOTH,
+                           'unless the same table')])
 
     def test_the_summary_names_this_runs_characters_file(self):
         """Every character, other string and pair step 11 found, in a file
@@ -2306,16 +2346,16 @@ class WrapperMeasuredOrderRefused(unittest.TestCase):
         return out
 
     def test_the_old_file_alone(self):
-        out = self.assertRefusedBeforeStep1('--old-order', RHEL8)
+        out = self.assertRefusedBeforeStep1('--old-order', cut_few(RHEL8))
         self.assertIn('go together', out)
 
     def test_the_new_file_alone(self):
-        out = self.assertRefusedBeforeStep1('--new-order', RHEL9)
+        out = self.assertRefusedBeforeStep1('--new-order', cut_few(RHEL9))
         self.assertIn('go together', out)
 
     def test_the_files_of_another_upgrade(self):
-        out = self.assertRefusedBeforeStep1('--old-order', RHEL9,
-                                            '--new-order', RHEL10)
+        out = self.assertRefusedBeforeStep1('--old-order', cut_few(RHEL9),
+                                            '--new-order', cut_few(RHEL10))
         self.assertIn('locale_order.py: ', out)
         self.assertIn(COULD_NOT_COMPARE, out)
 
@@ -2323,14 +2363,15 @@ class WrapperMeasuredOrderRefused(unittest.TestCase):
         """And a characters file an earlier run left is gone: a refused run
         leaves nothing that reads as its list."""
         cut = os.path.join(self.out_dir, 'cut.out')
-        with open(RHEL9, encoding='utf-8') as f, \
+        with open(cut_few(RHEL9), encoding='utf-8') as f, \
                 open(cut, 'w', encoding='utf-8') as g_:
-            g_.write(f.read()[:1000000])
+            text = f.read()
+            g_.write(text[:len(text) // 3])
         stale = os.path.join(self.out_dir, 'measured_order_characters.'
                              + pair_slug(OLD, MID) + '.tsv')
         with open(stale, 'w', encoding='utf-8') as f:
             f.write('left by an earlier run\n')
-        out = self.assertRefusedBeforeStep1('--old-order', RHEL8,
+        out = self.assertRefusedBeforeStep1('--old-order', cut_few(RHEL8),
                                             '--new-order', cut)
         self.assertIn('locale_order.py: ', out)
         self.assertIn(COULD_NOT_COMPARE, out)
@@ -2347,8 +2388,8 @@ class WrapperMeasuredOrderUncheckedTag(unittest.TestCase):
     def setUpClass(cls):
         cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-order-sha-')
         cls.rc, cls.out = run_wrapper(EXPECTED_SHA[OLD], MID,
-                                      '--old-order', RHEL8,
-                                      '--new-order', RHEL9,
+                                      '--old-order', cut_to_pair(RHEL8),
+                                      '--new-order', cut_to_pair(RHEL9),
                                       out_dir=cls.out_dir)
 
     @classmethod
@@ -2498,7 +2539,7 @@ def node_file(name, measurement, tag, sources=True, charmaps='tag'):
 
 
 def tearDownModule():
-    for path in _NODE_FILES.values():
+    for path in list(_NODE_FILES.values()) + list(_CUT.values()):
         shutil.rmtree(os.path.dirname(path), ignore_errors=True)
 
 
@@ -2594,8 +2635,9 @@ class WrapperNodeFiles(unittest.TestCase):
     def setUpClass(cls):
         cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-node-')
         cls.rc, cls.out = run_wrapper(
-            OLD, MID, '--old-node', node_file('old.tar', RHEL8, OLD),
-            '--new-node', node_file('new.tar', RHEL9, MID),
+            OLD, MID,
+            '--old-node', node_file('old.tar', cut_to_pair(RHEL8), OLD),
+            '--new-node', node_file('new.tar', cut_to_pair(RHEL9), MID),
             out_dir=cls.out_dir)
         laid = {side: os.path.join(cls.out_dir,
                                    f'node_file.{pair_slug(OLD, MID)}.{side}')
@@ -2735,8 +2777,10 @@ class NodeFileWithoutSources:
     @classmethod
     def setUpClass(cls):
         cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-node-bare-')
-        cls.old = node_file('old.tar', RHEL8, OLD, sources=cls.BARE != 'old')
-        cls.new = node_file('new.tar', RHEL9, MID, sources=cls.BARE != 'new')
+        cls.old = node_file('old.tar', cut_few(RHEL8), OLD,
+                            sources=cls.BARE != 'old')
+        cls.new = node_file('new.tar', cut_few(RHEL9), MID,
+                            sources=cls.BARE != 'new')
         cls.bare = cls.old if cls.BARE == 'old' else cls.new
         cls.rc, cls.out = run_wrapper(OLD, MID, '--old-node', cls.old,
                                       '--new-node', cls.new,
@@ -2866,9 +2910,9 @@ class NodeFileCharmaps:
     @classmethod
     def setUpClass(cls):
         cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-charmaps-')
-        cls.old = node_file(f'old-{cls.KINDS["old"]}.tar', RHEL8, OLD,
+        cls.old = node_file(f'old-{cls.KINDS["old"]}.tar', cut_few(RHEL8), OLD,
                             charmaps=cls.KINDS['old'])
-        cls.new = node_file(f'new-{cls.KINDS["new"]}.tar', RHEL9, MID,
+        cls.new = node_file(f'new-{cls.KINDS["new"]}.tar', cut_few(RHEL9), MID,
                             charmaps=cls.KINDS['new'])
         cls.keyed = {
             'old': os.path.join(cls.out_dir, f'distro_keyed_locales.'
@@ -3024,8 +3068,8 @@ class WrapperNodeFilesWithoutSources(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-node-bare2-')
-        cls.old = node_file('old.tar', RHEL8, OLD, sources=False)
-        cls.new = node_file('new.tar', RHEL9, MID, sources=False)
+        cls.old = node_file('old.tar', cut_few(RHEL8), OLD, sources=False)
+        cls.new = node_file('new.tar', cut_few(RHEL9), MID, sources=False)
         cls.rc, cls.out = run_wrapper(OLD, MID, '--old-node', cls.old,
                                       '--new-node', cls.new,
                                       out_dir=cls.out_dir)
@@ -3075,8 +3119,8 @@ class WrapperNodeFileRefused(unittest.TestCase):
     def setUp(self):
         self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-node-bad-')
         self.addCleanup(shutil.rmtree, self.out_dir, ignore_errors=True)
-        self.old = node_file('old.tar', RHEL8, OLD, sources=False)
-        self.new = node_file('new.tar', RHEL9, MID, sources=False)
+        self.old = node_file('old.tar', cut_few(RHEL8), OLD, sources=False)
+        self.new = node_file('new.tar', cut_few(RHEL9), MID, sources=False)
 
     def assertRefusedBeforeStep1(self, *args, tags=(OLD, MID)):
         rc, out = run_wrapper(*tags, *args, out_dir=self.out_dir)
@@ -3100,7 +3144,8 @@ class WrapperNodeFileRefused(unittest.TestCase):
                               self.assertRefusedBeforeStep1(*args))
 
     def test_with_the_options_they_stand_for(self):
-        for extra in (('--old-order', RHEL8), ('--new-order', RHEL9),
+        for extra in (('--old-order', cut_few(RHEL8)),
+                      ('--new-order', cut_few(RHEL9)),
                       ('--old-locales-dir', self.out_dir),
                       ('--new-build-id', build_of(RHEL9))):
             for nodes in (('--old-node', self.old, '--new-node', self.new),
@@ -3149,14 +3194,14 @@ class WrapperNodeFileRefused(unittest.TestCase):
         first = self.assertRefusedBeforeStep1('--old-node', self.new,
                                               '--new-node', self.old)
         self.assertIn('pass the machine you upgrade FROM first', first)
-        rhel10 = node_file('rhel10.tar', RHEL10, NEW, sources=False)
+        rhel10 = node_file('rhel10.tar', cut_few(RHEL10), NEW, sources=False)
         second = self.assertRefusedBeforeStep1('--old-node', self.old,
                                                '--new-node', rhel10)
         self.assertIn('and the NEW tag is glibc-2.34', second)
         self.assertNotIn('pass the machine you upgrade FROM first', second)
 
     def test_the_files_of_another_upgrade(self):
-        rhel10 = node_file('rhel10.tar', RHEL10, NEW, sources=False)
+        rhel10 = node_file('rhel10.tar', cut_few(RHEL10), NEW, sources=False)
         out = self.assertRefusedBeforeStep1('--old-node', self.new,
                                             '--new-node', rhel10)
         self.assertIn('and the OLD tag is glibc-2.28', out)
