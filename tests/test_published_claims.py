@@ -1819,5 +1819,31 @@ class TheLimitationNamesTheLocalesStep11Names(unittest.TestCase):
                 self.assertIn(quote, flat(read(os.path.join(REPO_ROOT, doc))))
 
 
+class OneProcessIsTheOneTheCodePlans(unittest.TestCase):
+    """docs/requirements.md says what the one process the script always
+    starts can take; the figure is the plan default_jobs makes for it,
+    RUN_BYTES and PROCESS_BYTES (16.39)."""
+
+    PAGE = os.path.join(REPO_ROOT, 'docs', 'requirements.md')
+    HEADING = '### Memory and time\n'
+
+    def section(self):
+        text = read(self.PAGE)
+        self.assertEqual(text.count(self.HEADING), 1,
+                         f'{self.PAGE}: the section is missing or doubled')
+        rest = text.split(self.HEADING, 1)[1]
+        end = re.search(r'^#', rest, re.M)
+        self.assertIsNotNone(end, f'{self.PAGE}: no heading ends the section')
+        return flat(rest[:end.start()])
+
+    def test_the_figure_is_the_plan_for_one_process(self):
+        import locale_order as m
+        said = re.findall(r'but always one, which can take up to (\S+) MiB',
+                          self.section())
+        self.assertEqual(len(said), 1, 'the sentence is missing or doubled')
+        self.assertEqual(said[0],
+                         str((m.RUN_BYTES + m.PROCESS_BYTES) // (1024 * 1024)))
+
+
 if __name__ == '__main__':
     unittest.main()

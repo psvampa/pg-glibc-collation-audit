@@ -63,15 +63,13 @@ empty file, which `audit.sh` refuses. Run the line without
 
 ### Memory and time
 
-Each measuring process takes about 0.3 GB. The script starts one per CPU,
-fewer when half the free memory does not hold them, and never more than the
-machine's cgroup allows, so a database on the same machine keeps the other
-half. It also runs at low priority.
+The script starts one measuring process per CPU, fewer when half the free
+memory does not hold them, but always one, which can take up to 850 MiB, and
+never more than the machine's cgroup allows. It also runs at low priority.
 
 How long it takes depends on how many locales there are and how many are
-measured at once. On the smallest EC2 machine, with memory for one process,
-each locale took about ten seconds. The script prints how far it has got
-every tenth of the way.
+measured at once. On the smallest EC2 machine each locale took about ten
+seconds. The script prints how far it has got every tenth of the way.
 
 `dnf` needs memory too. On a machine with 0.7 GB, the kernel killed it at
 516 MB and the package was not installed; free some memory, or add swap, for
