@@ -5847,6 +5847,247 @@ class WorkersOfAScriptOnStdin(unittest.TestCase):
                          p.stderr.decode()[-2000:])
 
 
+class CgroupLimitsOfAContainer(unittest.TestCase):
+    """What a container's memory and CPU limits do to the number of workers.
+
+    Inside a container /proc/meminfo and the CPU count are the host's, so
+    cgroup_limits reads the limits from /sys/fs/cgroup. A limit it fails to
+    read is no limit at all: the run plans for the host, and the container
+    is killed for its memory or its few CPUs are shared by far more workers
+    than its quota gives.
+
+    The files are a fake /sys/fs/cgroup with the shapes measured on
+    Rocky 8, 9 and 10 containers (cgroup v2, a path from the host's root,
+    the root directory without memory.max, `max` and `max 100000`) and the
+    shapes the kernel documents for v1, which no machine here has: the
+    unlimited memory.limit_in_bytes is PAGE_COUNTER_MAX * PAGE_SIZE and the
+    unlimited cfs quota is -1. The fake raises AssertionError on a path
+    outside /proc/self/cgroup, /proc/meminfo and /sys/fs/cgroup: an OSError
+    would be swallowed by read_number. A file under /sys/fs/cgroup that the
+    code stopped reading shows in the values the tests expect, and in
+    self.reads where a test asserts it. Memory for the CPU cases is
+    plentiful, so they do not depend on how default_jobs divides it.
+    """
+
+    V1_UNLIMITED = 9223372036854771712  # 0x7FFFFFFFFFFFF000, 4 KiB pages
+    GIB = 1 << 30
+    MIB = 1 << 20
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root)
+        self.reads = []
+        self.put('/proc/meminfo',
+                 'MemTotal:       2000000000000 kB\n'
+                 'MemAvailable:   1000000000000 kB\n')
+
+    def put(self, path, text):
+        full = self.root + path
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, 'w') as f:
+            f.write(text)
+
+    def cgroup(self, *lines):
+        self.put('/proc/self/cgroup', ''.join(line + '\n' for line in lines))
+
+    def files(self, directory, named):
+        for name, text in named.items():
+            self.put(directory + '/' + name, str(text) + '\n')
+
+    def fake_open(self, path, *args, **kwargs):
+        if (path in ('/proc/self/cgroup', '/proc/meminfo')
+                or path.startswith('/sys/fs/cgroup/')):
+            self.reads.append(path)
+            return open(self.root + path, *args, **kwargs)
+        raise AssertionError('read outside the fake tree: ' + path)
+
+    def limits(self):
+        with unittest.mock.patch.object(
+                m, 'open', self.fake_open, create=True):
+            return m.cgroup_limits()
+
+    def jobs(self, cpus):
+        with unittest.mock.patch.object(
+                m, 'open', self.fake_open, create=True), \
+                unittest.mock.patch.object(
+                    os, 'sched_getaffinity', lambda pid: set(range(cpus)),
+                    create=True):
+            return m.default_jobs()
+
+    def test_a_limit_in_the_parent_less_what_is_already_used(self):
+        # Measured on el8, el9 and el10 (a systemd-run scope inside the
+        # container whose parent holds the limit): the process's own
+        # directory says `max`, the parent's says the number.
+        base = '/sys/fs/cgroup/system.slice/docker-x.scope'
+        self.cgroup('0::/system.slice/docker-x.scope/init.scope')
+        self.files(base + '/init.scope', {
+            'memory.max': 'max', 'memory.current': 257900544})
+        self.files(base, {
+            'memory.max': 4 * self.GIB,
+            'memory.current': 3584 * self.MIB,
+            'cpu.max': 'max 100000'})
+        self.files('/sys/fs/cgroup/system.slice', {
+            'memory.max': 'max', 'cpu.max': 'max 100000'})
+        # The root of /sys/fs/cgroup has no memory.max, memory.current or
+        # cpu.max, and is not in the tree.
+        self.assertEqual(self.limits(), (512 * self.MIB, None))
+        self.assertIn(base + '/memory.current', self.reads)
+
+    def test_the_smaller_level_wins_whichever_is_nearer(self):
+        for tag, near, far, expected in (
+                ('near-is-smaller', self.GIB, 4 * self.GIB, self.GIB),
+                ('far-is-smaller', 4 * self.GIB, 2 * self.GIB,
+                 2 * self.GIB)):
+            with self.subTest(tag):
+                self.cgroup('0::/' + tag + '/leaf')
+                self.files('/sys/fs/cgroup/' + tag + '/leaf', {
+                    'memory.max': near, 'memory.current': 0})
+                self.files('/sys/fs/cgroup/' + tag, {
+                    'memory.max': far, 'memory.current': 0})
+                self.assertEqual(self.limits(), (expected, None))
+
+    def test_a_limit_already_used_up_leaves_zero(self):
+        self.cgroup('0::/full')
+        self.files('/sys/fs/cgroup/full', {
+            'memory.max': self.GIB, 'memory.current': self.GIB + 4096})
+        self.assertEqual(self.limits(), (0, None))
+
+    def test_v2_without_a_limit_is_none(self):
+        # Measured on el8, el9 and el10, no limit anywhere on the path.
+        base = '/sys/fs/cgroup/system.slice/docker-x.scope'
+        self.cgroup('0::/system.slice/docker-x.scope/init.scope')
+        self.files(base + '/init.scope', {
+            'memory.max': 'max', 'memory.current': 257900544})
+        self.files(base, {
+            'memory.max': 'max', 'memory.current': 633188352,
+            'cpu.max': 'max 100000'})
+        self.files('/sys/fs/cgroup/system.slice', {
+            'memory.max': 'max', 'memory.current': 116330381312,
+            'cpu.max': 'max 100000'})
+        self.assertEqual(self.limits(), (None, None))
+        self.assertIn('/sys/fs/cgroup/system.slice/memory.max', self.reads)
+
+    def test_v1_cgroup_missing_in_the_container_is_walked_up(self):
+        # Inside a v1 container the cgroup is often mounted as the root, so
+        # the path /proc/self/cgroup names is not under the mount.
+        self.cgroup('4:cpu,cpuacct:/docker/abc', '3:memory:/docker/abc',
+                    '2:perf_event:/docker/abc', '1:name=systemd:/docker/abc')
+        self.files('/sys/fs/cgroup/memory', {
+            'memory.limit_in_bytes': self.GIB,
+            'memory.usage_in_bytes': 256 * self.MIB})
+        self.files('/sys/fs/cgroup/cpu,cpuacct', {
+            'cpu.cfs_quota_us': 200000, 'cpu.cfs_period_us': 100000})
+        self.assertEqual(self.limits(), (768 * self.MIB, 2))
+
+    def test_v1_limit_in_the_parent_directory(self):
+        self.cgroup('3:memory:/docker/abc', '4:cpu,cpuacct:/docker/abc')
+        self.files('/sys/fs/cgroup/memory/docker/abc', {
+            'memory.limit_in_bytes': self.V1_UNLIMITED,
+            'memory.usage_in_bytes': 100 * self.MIB})
+        self.files('/sys/fs/cgroup/memory/docker', {
+            'memory.limit_in_bytes': 2 * self.GIB,
+            'memory.usage_in_bytes': self.GIB})
+        self.files('/sys/fs/cgroup/cpu,cpuacct/docker/abc', {
+            'cpu.cfs_quota_us': -1, 'cpu.cfs_period_us': 100000})
+        self.files('/sys/fs/cgroup/cpu,cpuacct/docker', {
+            'cpu.cfs_quota_us': 300000, 'cpu.cfs_period_us': 100000})
+        self.assertEqual(self.limits(), (self.GIB, 3))
+
+    def test_v1_without_a_limit_is_none(self):
+        # memory.limit_in_bytes holds the page counter's maximum and the cfs
+        # quota -1: neither is a limit.
+        self.cgroup('3:memory:/', '4:cpu,cpuacct:/')
+        self.files('/sys/fs/cgroup/memory', {
+            'memory.limit_in_bytes': self.V1_UNLIMITED,
+            'memory.usage_in_bytes': 123456789})
+        self.files('/sys/fs/cgroup/cpu,cpuacct', {
+            'cpu.cfs_quota_us': -1, 'cpu.cfs_period_us': 100000})
+        self.assertEqual(self.limits(), (None, None))
+        self.assertEqual(self.jobs(8), 8)
+
+    def test_the_cpu_quota_caps_the_cpus(self):
+        for i, (text, cpus, quota_cpus, jobs) in enumerate((
+                ('max 100000', 8, None, 8),
+                ('max', 8, None, 8),
+                ('200000 100000', 8, 2, 2),
+                ('250000 100000', 8, 3, 3),
+                ('50000 100000', 8, 1, 1),
+                ('1600000 100000', 8, 16, 8),
+                ('400000 100000', 2, 4, 2))):
+            with self.subTest(text=text, cpus=cpus):
+                self.cgroup('0::/case%d' % i)
+                self.files('/sys/fs/cgroup/case%d' % i, {'cpu.max': text})
+                self.assertEqual(self.limits(), (None, quota_cpus))
+                self.assertEqual(self.jobs(cpus), jobs)
+
+    def test_the_smaller_cpu_quota_wins_whichever_is_nearer(self):
+        for tag, near, far, expected in (
+                ('near-is-smaller', '100000 100000', '300000 100000', 1),
+                ('far-is-smaller', '400000 100000', '200000 100000', 2)):
+            with self.subTest(tag):
+                self.cgroup('0::/' + tag + '/leaf')
+                self.files('/sys/fs/cgroup/' + tag + '/leaf',
+                           {'cpu.max': near})
+                self.files('/sys/fs/cgroup/' + tag, {'cpu.max': far})
+                self.assertEqual(self.limits(), (None, expected))
+
+    def test_v2_mounted_as_the_container_own_cgroup(self):
+        # A container with its own cgroup namespace: the path is `/` and
+        # the limits are in the root of the mount, which has to be read.
+        self.cgroup('0::/')
+        self.files('/sys/fs/cgroup', {
+            'memory.max': 2 * self.GIB, 'memory.current': self.GIB,
+            'cpu.max': '150000 100000'})
+        self.assertEqual(self.limits(), (self.GIB, 2))
+
+    def test_the_memory_limit_caps_the_workers(self):
+        # A container with no memory left runs one worker, however many CPUs
+        # it has and however much memory the host reports free. Whatever
+        # default_jobs divides the memory by, it never plans less than one.
+        self.cgroup('0::/full')
+        self.files('/sys/fs/cgroup/full', {
+            'memory.max': self.GIB, 'memory.current': self.GIB})
+        self.assertEqual(self.limits(), (0, None))
+        self.assertEqual(self.jobs(8), 1)
+
+    def test_the_hosts_free_memory_counts_when_the_container_allows_more(self):
+        # `--memory=1t` on a host with 1 MiB free: the smaller of the two
+        # holds, and MemAvailable is the figure read (MemTotal is huge).
+        self.put('/proc/meminfo',
+                 'MemTotal:       2000000000000 kB\n'
+                 'MemAvailable:   1024 kB\n')
+        self.cgroup('0::/big')
+        self.files('/sys/fs/cgroup/big', {
+            'memory.max': 1 << 40, 'memory.current': 0})
+        self.assertEqual(self.jobs(8), 1)
+
+    def test_the_free_memory_is_read_in_kilobytes(self):
+        # /proc/meminfo counts in kB. 64 GiB free and no limit plans every
+        # CPU unless a process weighs gigabytes; read as bytes it plans one.
+        # MemTotal is 1 kB so that reading it instead is wrong too.
+        self.put('/proc/meminfo',
+                 'MemTotal:       1 kB\nMemAvailable:   67108864 kB\n')
+        self.cgroup('0::/free')
+        self.files('/sys/fs/cgroup/free', {'memory.max': 'max'})
+        self.assertEqual(self.jobs(8), 8)
+
+    def test_memory_that_cannot_be_read_plans_four_workers(self):
+        # default_jobs' own words: "Where free memory cannot be read at all,
+        # four" (or the CPUs, when there are fewer).
+        os.remove(self.root + '/proc/meminfo')
+        self.cgroup('0::/free')
+        self.files('/sys/fs/cgroup/free', {'memory.max': 'max'})
+        self.assertEqual(self.jobs(8), 4)
+        self.assertEqual(self.jobs(2), 2)
+
+    def test_an_unreadable_proc_self_cgroup_reads_as_no_limit(self):
+        # No /proc/self/cgroup in the fake tree: open raises
+        # FileNotFoundError (a refused read is the same OSError).
+        self.assertEqual(self.limits(), (None, None))
+        self.assertEqual(self.reads, ['/proc/self/cgroup'])
+        self.assertEqual(self.jobs(8), 8)
+
+
 class Screen(io.StringIO):
     """stderr as the person running the script sees it: only what was
     flushed, as over ssh from Python before 3.9.
