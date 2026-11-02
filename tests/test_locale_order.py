@@ -15108,5 +15108,76 @@ class SortTablesNamed(Checks):
                 self.assertEqual(flips, want)
 
 
+class DefaultJobsLeavesHalfTheMemory(unittest.TestCase):
+    """default_jobs plans the run's fixed share and each process's against
+    half the free memory (16.39).
+
+    PEAKS is the largest memory.peak of the three fixtures' builds for each
+    number of processes, measured on 2026-11-01 and 02 with main b702dfd and
+    --extract (.claude/backlog/handoff-6.8-2026-11-01/agE-memoria and
+    m700-prA/low): glibc 2.28, 2.34 and 2.39 at 1 to 4, 8, 16 and 128
+    processes, 2.34 alone at 32. SPREAD is how far one run measured twice
+    moved (2.39, four processes: 1338 and 1388 MiB).
+    """
+
+    MIB = 1024 * 1024
+    PEAKS = {1: 776, 2: 951, 3: 1116, 4: 1388, 8: 2155, 16: 3678,
+             32: 6708, 128: 25932}
+    SPREAD = 50
+
+    def jobs(self, free_mib, cpus=1024, cgroup_mib=None, meminfo=True):
+        def fake_open(path, *args, **kwargs):
+            if path != '/proc/meminfo':
+                raise AssertionError(f'default_jobs opened {path}')
+            if not meminfo:
+                raise OSError('not readable')
+            return io.StringIO(f'MemTotal: {4 * free_mib * 1024} kB\n'
+                               f'MemAvailable: {free_mib * 1024} kB\n')
+        cgroup = None if cgroup_mib is None else cgroup_mib * self.MIB
+        with unittest.mock.patch.object(m.os, 'sched_getaffinity',
+                                        lambda pid: set(range(cpus)),
+                                        create=True), \
+                unittest.mock.patch.object(m, 'cgroup_limits',
+                                           lambda: (cgroup, None)), \
+                unittest.mock.patch.object(m, 'open', fake_open, create=True):
+            return m.default_jobs()
+
+    def test_never_more_processes_than_half_the_memory_holds(self):
+        """With half the free memory one MiB short of the peak measured
+        for n processes and the spread between runs, fewer than n are
+        started."""
+        for n, peak in sorted(self.PEAKS.items()):
+            if n == 1:
+                continue   # one process is started whatever the memory
+            with self.subTest(processes=n, peak_mib=peak):
+                self.assertLess(self.jobs(2 * (peak + self.SPREAD - 1)), n)
+
+    def test_the_memory_that_holds_them_starts_them(self):
+        """And with half the memory at the planned size, as many as fit:
+        the share is not padded past the measurement."""
+        for n in sorted(self.PEAKS):
+            with self.subTest(processes=n):
+                self.assertEqual(self.jobs(2 * (650 + 200 * n)), n)
+
+    def test_one_process_when_not_even_one_fits(self):
+        """A machine short of memory still measures, with one process."""
+        for free in (0, 300, 700, 1200, 1699):
+            with self.subTest(free_mib=free):
+                self.assertEqual(self.jobs(free), 1)
+
+    def test_one_per_cpu_when_memory_is_plenty(self):
+        self.assertEqual(self.jobs(1024 * 1024, cpus=12), 12)
+
+    def test_the_cgroup_limit_counts_when_smaller(self):
+        self.assertEqual(self.jobs(1024 * 1024, cgroup_mib=2 * 1450), 4)
+        self.assertEqual(self.jobs(2 * 1450, cgroup_mib=1024 * 1024), 4)
+
+    def test_the_cgroup_counts_when_free_memory_cannot_be_read(self):
+        """Four with nothing read is CgroupLimitsOfAContainer's; a cgroup
+        limit read alone is planned like free memory."""
+        self.assertEqual(self.jobs(0, cpus=12, cgroup_mib=2 * 1650,
+                                   meminfo=False), 5)
+
+
 if __name__ == '__main__':
     unittest.main()

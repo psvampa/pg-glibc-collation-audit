@@ -100,10 +100,9 @@ there and is Python 3.6:
 
 Measuring needs Python 3.6 or newer and the language packs of the locales to
 be measured (on RHEL, glibc-all-langpacks or glibc-langpack-*). It needs no
-PostgreSQL and no root, runs at low priority, and takes about 0.3 GB of
-memory per process; to see PostgreSQL's processes it runs as root, or as their
-user where /proc does not hide other users' processes. Comparing needs only
-Python.
+PostgreSQL and no root, and runs at low priority; to see PostgreSQL's
+processes it runs as root, or as their user where /proc does not hide other
+users' processes. Comparing needs only Python.
 """
 import argparse
 import array
@@ -180,12 +179,17 @@ EXTRACT_FORMAT = 'locale_order_extract/1'
 LOCALE_SOURCES = '/usr/share/i18n/locales'
 CHARMAPS = '/usr/share/i18n/charmaps'
 
-# What one more measuring process adds to the peak memory of the whole run:
-# 255 to 280 MiB on glibc 2.34 (the cgroup's memory.peak was 396, 2356 and
-# 4394 MiB with 1, 8 and 16 processes). A process's own resident size is
-# larger, 385 MB, because it counts memory the processes share. The default
-# number of processes is planned at this much each.
-PROCESS_BYTES = 300 * 1024 * 1024
+# The peak memory of a whole run (its cgroup's memory.peak, --extract, on the
+# fixtures' builds of glibc 2.28, 2.34 and 2.39, with 1 to 4, 8, 16 and 128
+# processes, and 32 on 2.34): 545 to 554 MiB whatever the number of processes,
+# and 187 to 198 MiB more for each one (least squares per build). One process
+# alone peaked at 732 to 776 MiB, and one run measured twice differed by 50
+# MiB. A process's own resident size is larger, up to 579 MiB, because it
+# counts memory the processes share. The default number of processes is
+# planned at these two figures, which hold every peak measured with 50 MiB to
+# spare.
+RUN_BYTES = 650 * 1024 * 1024
+PROCESS_BYTES = 200 * 1024 * 1024
 
 # Every Unicode scalar value but NUL, which neither a C string nor a
 # PostgreSQL text value can hold. Ascending, which measured() relies on.
@@ -3129,11 +3133,13 @@ def _cpu_max_period(directory):
 
 def default_jobs():
     """One process per CPU this process may use, but no more than half the
-    free memory holds.
+    free memory holds, with the run's own share (RUN_BYTES) counted first, and
+    always one.
 
     The machine measured is often a database server, and the other half is
-    left to it. Inside a container the container's limits count, not the
-    host's (cgroup_limits). Where free memory cannot be read at all, four.
+    left to it wherever one process fits in it. Inside a container the
+    container's limits count, not the host's (cgroup_limits). Where free
+    memory cannot be read at all, four.
     """
     try:
         cpus = len(os.sched_getaffinity(0))
@@ -3152,7 +3158,7 @@ def default_jobs():
         available = memory if available is None else min(available, memory)
     if available is None:
         return min(cpus, 4)
-    return max(1, min(cpus, available // 2 // PROCESS_BYTES))
+    return max(1, min(cpus, (available // 2 - RUN_BYTES) // PROCESS_BYTES))
 
 
 def fork_pool(jobs):
@@ -9518,8 +9524,7 @@ def main():
                              'charmaps are not given, for the report')
     ap.add_argument('--jobs', type=int,
                     help='processes to measure with (default: one per CPU, '
-                         'fewer when half the free memory does not hold them '
-                         'at about 0.3 GB each)')
+                         'fewer when half the free memory does not hold them)')
     ap.add_argument('--extract', action='store_true',
                     help='measure, and write one compressed file with the '
                          'measurement, this machine\'s locale sources and '
