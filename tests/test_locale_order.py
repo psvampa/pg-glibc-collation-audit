@@ -7,15 +7,20 @@ it does not run here (tests/README.md, "What this suite does NOT cover"). What
 runs here is everything --compare does with a measurement, on the files three
 machines really wrote, kept in tests/locale_order/:
 
-  rhel8.out   Rocky Linux 8.9,  glibc-2.28-251.el8_10.40, 867 locales
-  rhel9.out   Rocky Linux 9.3,  glibc-2.34-275.el9_8,     869 locales
-  rhel10.out  Rocky Linux 10.1, glibc-2.39-128.el10_2,    885 locales
+  rhel8.extract.tar.gz   Rocky Linux 8.9,  glibc-2.28-251.el8_10.40, 867 locales
+  rhel9.extract.tar.gz   Rocky Linux 9.3,  glibc-2.34-275.el9_8,     869 locales
+  rhel10.extract.tar.gz  Rocky Linux 10.1, glibc-2.39-128.el10_2,    885 locales
 
-each measured on 2026-10-26 with `python3 locale_order.py --extract`
-(`/usr/libexec/platform-python` on RHEL8), every language pack installed,
-and cut to what a file of the first format holds and the lists of strings
-its orders number: the measurement inside the file --extract wrote, every
-other part taken out and the file sealed again.
+each the file `python3 locale_order.py --extract` wrote on 2026-11-01
+(`/usr/libexec/platform-python` on RHEL8), every language pack installed:
+the measurement with every part, and the machine's locale sources and
+charmaps. rhelN.v1.out is a file of the first format: the measurement an
+--extract run on the same machine wrote on 2026-10-26, cut to what that
+format holds and the lists of strings its orders number, every other part
+taken out and the file sealed again. The measurement inside
+rhelN.extract.tar.gz, cut the same way, gives the same bytes. The tests of
+a file of an earlier format, or of a locale no sort table decides, start
+from it.
 rhelN.pg_collation.txt is the same machine's libc collations as PostgreSQL
 18.6 imported them (the query is in PostgresNames), and rpm_order.json is
 rpm's own order of every pair of 62 version and release strings, identical on
@@ -28,6 +33,7 @@ the three builds did.
 Every class freezes a way the comparison can print a clean result it has no
 right to, and its docstring says which.
 """
+import atexit
 import base64
 import collections
 import contextlib
@@ -61,7 +67,156 @@ import locale_order as m
 
 DATA = os.path.join(_harness.TESTS_DIR, 'locale_order')
 SCRIPT = os.path.join(_harness.SCRIPTS_DIR, 'locale_order.py')
-RHEL8, RHEL9, RHEL10 = (os.path.join(DATA, f'rhel{n}.out') for n in (8, 9, 10))
+
+
+def unpacked_measurements():
+    """The measurement inside each recorded --extract file, unpacked once per
+    process into a temporary folder that is removed at exit: the paths of
+    RHEL8, RHEL9 and RHEL10. A file without one raises."""
+    out = tempfile.mkdtemp(prefix='locale_order_recorded_')
+    atexit.register(shutil.rmtree, out, True)
+    paths = []
+    for n in (8, 9, 10):
+        dest = os.path.join(out, f'rhel{n}.out')
+        with tarfile.open(os.path.join(DATA, f'rhel{n}.extract.tar.gz'),
+                          'r:gz') as t:
+            for member in t:
+                if member.name == 'locale_order.out':
+                    with t.extractfile(member) as src, open(dest, 'wb') as f:
+                        shutil.copyfileobj(src, f, 1 << 20)
+                    break
+            else:
+                raise RuntimeError(f'rhel{n}.extract.tar.gz holds no '
+                                   'locale_order.out')
+        paths.append(dest)
+    return paths
+
+
+RHEL8, RHEL9, RHEL10 = unpacked_measurements()
+# The files of the first format (locale_order/1) recorded before, byte for
+# byte: the same three measurements cut to what that format holds. A test
+# of a file of an earlier format, or of a locale no sort table decides,
+# starts from these.
+RHEL8_V1, RHEL9_V1, RHEL10_V1 = (os.path.join(DATA, f'rhel{n}.v1.out')
+                                 for n in (8, 9, 10))
+FIRST_FORMAT = {RHEL8: RHEL8_V1, RHEL9: RHEL9_V1, RHEL10: RHEL10_V1}
+_FIRST_WHOLE, _FIRST_CUT = {}, {}
+
+
+def first_format_text(base, text):
+    """The file of the first format of base's machine, cut to the locales
+    text (base as the class holds it, cut or whole) lists. Each file is
+    read once per process, and the last cut of each is kept."""
+    hit = _FIRST_CUT.get(base)
+    if hit is not None and hit[0] is text:
+        return hit[1]
+    if base not in _FIRST_WHOLE:
+        with open(FIRST_FORMAT[base], encoding='utf-8') as f:
+            whole = f.read()
+        _FIRST_WHOLE[base] = (whole, frozenset(json.loads(whole)['locales']))
+    whole, every = _FIRST_WHOLE[base]
+    names = list(json.loads(text)['locales'])
+    first = whole if set(names) == every else trimmed(whole, names)
+    _FIRST_CUT[base] = (text, first)
+    return first
+
+
+def builds_first(edits):
+    """Whether one of edits starts from the file of the first format."""
+    return any(getattr(e, 'first_format', False) for e in edits)
+
+
+def text_for(texts, base, edits):
+    """The text edits start from: the file of the first format when one of
+    them builds on it (with_parts, AS_FIRST, on_first_format), else base
+    as the class holds it. A base with no file of the first format (one
+    SmallFiles cut, say) raises rather than hand such an edit a later
+    format."""
+    if not builds_first(edits):
+        return texts[base]
+    if base not in FIRST_FORMAT:
+        raise AssertionError(f'{base} has no file of the first format')
+    return first_format_text(base, texts[base])
+
+
+def on_first_format(edit):
+    """edit, applied to the file of the first format: for a test of what
+    the comparison says of a locale no sort table decides."""
+    edit.first_format = True
+    return edit
+
+
+@on_first_format
+def AS_FIRST(d):
+    """No edit: the file of the first format as recorded, cut as the class
+    cuts its files."""
+
+
+def conform(d, repack=False):
+    """After an edit dropped locales from a file of a later format, every
+    part that names a locale cut to the locales left, as a machine listing
+    only those would have written it: a converter, or a sort table's check,
+    asked under a locale dropped is asked under the first left, as measure()
+    picks one. It only drops; a locale an edit added has no entry in the
+    parts, and load() refuses the file. The packed sort tables are cut to
+    the tables left only with repack: a table no locale uses is read by no
+    comparison."""
+    if 'parts' not in d:
+        return d
+    names = set(d['locales'])
+    if 'money' in d and set(d['money']) - names:
+        d['money'] = {k: v for k, v in d['money'].items() if k in names}
+    use = d.get('postgres_use')
+    if use is not None and set(use) - names:
+        use = d['postgres_use'] = {k: v for k, v in use.items() if k in names}
+    else:
+        use = None
+    if 'ctype' in d and set(d['ctype']['locales']) - names:
+        c = d['ctype']
+        c['locales'] = {k: v for k, v in c['locales'].items() if k in names}
+        named = {e[1] for e in c['locales'].values() if e[0] == 'table'}
+        c['tables'] = {k: v for k, v in c['tables'].items() if k in named}
+        wide = {t[0] for t in c['tables'].values() if t[0] != 'not checked'}
+        byte = {t[1] for t in c['tables'].values() if t[0] != 'not checked'}
+        c['wide'] = {k: v for k, v in c['wide'].items() if k in wide}
+        c['bytes'] = {k: v for k, v in c['bytes'].items() if k in byte}
+    if use is not None:
+        first = m.first_locales(use)
+
+        def refirst(cs, e):
+            if e[2] == first.get(cs):
+                return e
+            if first.get(cs) is None:
+                return ['no locale', e[1], None, None, None]
+            return [e[0], e[1], first[cs], e[3], e[4]]
+        for part in ('converter', 'back'):
+            if part in d:
+                d[part] = {cs: refirst(cs, e) for cs, e in d[part].items()}
+        if 'utf8_forward' in d:
+            d['utf8_forward'] = refirst('UTF-8', d['utf8_forward'])
+    if 'collate' in d and set(d['collate']['locales']) - names:
+        c = d['collate']
+        c['locales'] = {k: v for k, v in c['locales'].items() if k in names}
+        # Keyed as measure() keys a check: the table and the encoding.
+        users = {}
+        for n, e in sorted(c['locales'].items()):
+            if e['state'] == 'file' and e['table'] != 'none':
+                users.setdefault(
+                    f'{e["table"]} {d["locales"][n].get("codeset")}', n)
+        checks = {}
+        for k, r in c['checks'].items():
+            if k in users:
+                checks[k] = r if r.get('locale') in names else dict(
+                    r, locale=users[k])
+        c['checks'] = checks
+        if repack and c.get('tables') is not None:
+            keep = {k.split(' ', 1)[0] for k in users}
+            recs = m.ct_unpack_all(base64.b64decode(c['tables']), keep)
+            c['tables'] = base64.b64encode(
+                m.ct_pack_all(recs)).decode('ascii')
+    return d
+
+
 MACHINES = (('rhel8', RHEL8), ('rhel9', RHEL9), ('rhel10', RHEL10))
 
 CHANGED_8_TO_9 = {
@@ -121,6 +276,17 @@ def run_script(*args):
 def read_json(path):
     with open(path, encoding='utf-8') as f:
         return json.load(f)
+
+
+def measured_in_part(*paths):
+    """The locales any of the measurements records as measured in part.
+    Every recorded one records some, so an empty answer is a field read
+    wrong, and raises."""
+    out = {name for path in paths
+           for name, r in read_json(path)['locales'].items() if r.get('partly')}
+    if not out:
+        raise AssertionError(f'no locale measured in part in {paths}')
+    return out
 
 
 # --- the report as data -------------------------------------------------------
@@ -2127,22 +2293,18 @@ class Rhel8ToRhel9(unittest.TestCase):
         separate numbers, and they add up to the old machine's locales."""
         t = self.report['totals']
         self.assertEqual(t, {'old': 867, 'changed': 14, 'unchanged': 851,
-                             'partly': 849, 'not measured': 0,
+                             'partly': 0, 'not measured': 0,
                              'refused': 0,
                              'not on new': 2})
         self.assertEqual(t['changed'] + t['unchanged'] + t['not measured']
                          + t['refused'] + t['not on new'], t['old'])
         self.assertEqual(t['unchanged'], self.report['unchanged'])
-        self.assertEqual(t['partly'], t['unchanged'] - 2)
         self.assertEqual(t['not measured'], len(self.report['unmeasured']))
         self.assertEqual(t['not on new'], len(self.report['not_on_new']))
-        # Every locale on both machines but C and POSIX, changed or not, is
-        # not compared by its table, for the one reason that the file is of
-        # an earlier format.
-        (why, (names, count)), = self.report['not_compared'].items()
-        self.assertIn('which did not read the sort tables', why)
-        self.assertEqual(count, t['changed'] + t['unchanged'] - 2)
-        self.assertNotIn('C', names)
+        # Every locale on both machines is compared by its sort table, so
+        # none is unchanged only as far as measured.
+        self.assertEqual(self.report['not_compared'], {})
+        self.assertEqual(self.report['tables_only'], [])
 
     def test_ko_KR_utf8_moves_one_character(self):
         """U+D7A3 moved while ko_KR's source did not change: localedef did.
@@ -2191,28 +2353,37 @@ class Rhel8ToRhel9(unittest.TestCase):
     def test_what_could_not_be_measured_is_named(self):
         """Every locale is measured, the four Python has no codec for
         among them (their strings are bytes), and those four are
-        unchanged, measured whole."""
+        unchanged, measured whole (read in both files: the report names no
+        locale measured in part, each decided by its sort table)."""
         self.assertEqual(self.report['unmeasured'], {})
         self.assertFalse(NO_PYTHON_CODEC & set(self.changes))
-        self.assertFalse(NO_PYTHON_CODEC & set(self.report['partly']))
+        self.assertFalse(NO_PYTHON_CODEC & measured_in_part(RHEL8, RHEL9))
 
     def test_the_partly_measured_are_named(self):
-        """The five EUC-JP locales among them: two pairs of neighbours the
-        letters pair does not tell apart, FF next to A2 AF and FE FE next to
-        8F A2 C5 (read in the three files). The Chinese locales of GB2312,
-        GBK, GB18030, BIG5, BIG5-HKSCS and EUC-TW are not among them: the
-        separator keeps each pair from joining with a neighbour's bytes."""
-        self.assertEqual(self.report['partly'],
-                         {'ja_JP': 2, 'ja_JP.eucjp': 2, 'ja_JP.ujis': 2,
-                          'ja_JP.utf8': 3, 'japanese': 2, 'japanese.euc': 2,
-                          'ko_KR': 1, 'ko_KR.euckr': 1, 'korean': 1,
-                          'korean.euc': 1})
+        """The measurement records the locales it measured in part, the
+        five EUC-JP locales among them: two pairs of neighbours the letters
+        pair does not tell apart, FF next to A2 AF and FE FE next to 8F A2
+        C5 (read in the three files). The Chinese locales of GB2312, GBK,
+        GB18030, BIG5, BIG5-HKSCS and EUC-TW are not among them: the
+        separator keeps each pair from joining with a neighbour's bytes.
+        Each of them that did not change has the same sort table on both
+        machines, so the report names none as unchanged only as far as
+        measured."""
+        partly = {name: r['partly'] for name, r in
+                  read_json(RHEL8)['locales'].items() if r.get('partly')}
+        self.assertEqual(partly,
+                         {'C.utf8': 3, 'ja_JP': 2, 'ja_JP.eucjp': 2,
+                          'ja_JP.ujis': 2, 'ja_JP.utf8': 3, 'japanese': 2,
+                          'japanese.euc': 2, 'ko_KR': 1, 'ko_KR.euckr': 1,
+                          'ko_KR.utf8': 3, 'korean': 1, 'korean.euc': 1})
+        self.assertEqual(self.report['partly'], {})
 
     def test_the_charmaps_are_not_checked_without_them(self):
         """Given the two measurements alone, step 11 says once that neither
         machine's charmaps were checked, and nothing is measured in part."""
         self.assertEqual(self.report['charmaps_unchecked'],
-                         [('either machine', m.ALONE_BOTH, None)])
+                         [('either machine', m.ALONE_BOTH,
+                           'unless the same table')])
         self.assertEqual(self.report['in_part'], {})
 
     def test_locales_on_one_machine_only(self):
@@ -2254,22 +2425,17 @@ class Rhel9ToRhel10(unittest.TestCase):
     def test_every_locale_of_the_old_machine_is_counted_once(self):
         t = self.report['totals']
         self.assertEqual(t, {'old': 869, 'changed': 4, 'unchanged': 863,
-                             'partly': 861, 'not measured': 0,
+                             'partly': 0, 'not measured': 0,
                              'refused': 0,
                              'not on new': 2})
         self.assertEqual(t['changed'] + t['unchanged'] + t['not measured']
                          + t['refused'] + t['not on new'], t['old'])
         self.assertEqual(t['unchanged'], self.report['unchanged'])
-        self.assertEqual(t['partly'], t['unchanged'] - 2)
         self.assertEqual(t['not measured'], len(self.report['unmeasured']))
         self.assertEqual(t['not on new'], len(self.report['not_on_new']))
-        # Every locale on both machines but C and POSIX, changed or not, is
-        # not compared by its table, for the one reason that the file is of
-        # an earlier format.
-        (why, (names, count)), = self.report['not_compared'].items()
-        self.assertIn('which did not read the sort tables', why)
-        self.assertEqual(count, t['changed'] + t['unchanged'] - 2)
-        self.assertNotIn('C', names)
+        # Every locale on both machines is compared by its sort table.
+        self.assertEqual(self.report['not_compared'], {})
+        self.assertEqual(self.report['tables_only'], [])
 
     def test_thai_moves(self):
         tis = self.changes['th_TH']
@@ -2292,7 +2458,7 @@ class Rhel9ToRhel10(unittest.TestCase):
     def test_what_could_not_be_measured_is_named(self):
         self.assertEqual(self.report['unmeasured'], {})
         self.assertFalse(NO_PYTHON_CODEC & set(self.changes))
-        self.assertFalse(NO_PYTHON_CODEC & set(self.report['partly']))
+        self.assertFalse(NO_PYTHON_CODEC & measured_in_part(RHEL9, RHEL10))
 
     def test_locales_on_one_machine_only(self):
         self.assertEqual(self.report['not_on_new'],
@@ -3006,9 +3172,10 @@ class SummaryForTheAudit(unittest.TestCase):
         self.assertSameAnswer(summary, report)
         self.assertEqual(set(summary['changes']), CHANGED_8_TO_9)
         self.assertIn('U+D7A3', summary['changes']['ko_KR.utf8']['brief'])
-        # C.utf8 counts strings that are not characters: the note on how
-        # they are named is under both.
-        self.assertEqual(report['others_note'], m.OTHER_STRINGS)
+        # C.utf8 counts strings that are not characters, and the sort tables
+        # name strings of several: the note on how both are named is under
+        # both.
+        self.assertEqual(report['others_note'], m.names_note(True, True))
         self.assertEqual(summary['unmeasured'], [])
 
     def test_rhel9_to_rhel10(self):
@@ -3017,8 +3184,10 @@ class SummaryForTheAudit(unittest.TestCase):
         self.assertEqual(set(summary['changes']), CHANGED_9_TO_10)
 
     def rows(self, key, name):
-        """The rows of the change that lists name."""
-        found = [rows for names, rows in self.files[key].items() if name in names]
+        """The rows of the change that lists name. A locale is named by the
+        groups of its character rules too, which say nothing of its order."""
+        found = [rows for names, rows in changes_in(self.files[key]).items()
+                 if name in names]
         self.assertEqual(len(found), 1, name)
         return found[0]
 
@@ -3188,12 +3357,22 @@ class SummaryForTheAudit(unittest.TestCase):
                      'on the old machine; the new one by the characters between'))
 
     def test_swedish_V_and_w_with_their_test_pair(self):
-        """"Vb" against "wa", measured on both machines."""
+        """"Vb" against "wa", measured on both machines. The sort table
+        marks W and w as changed, and V and v compare differently against
+        them."""
         for name in ('sv_SE', 'sv_SE.iso885915'):
             with self.subTest(locale=name):
+                table = [(r['chars'], r['kind']) for r in self.rows('8-9', name)
+                         if r['finding'] == 'sort table changed'
+                         and 'chars' in r]
+                self.assertEqual(table, [('U+0057', 'marked'),
+                                         ('U+0077', 'marked'),
+                                         ('U+0056', 'flip'),
+                                         ('U+0076', 'flip')])
                 rows = [r for r in self.rows('8-9', name)
                         if r['finding'] not in ('sorts differently',
-                                                'also in PostgreSQL')]
+                                                'also in PostgreSQL',
+                                                'sort table changed')]
                 self.assertEqual(rows, [{
                     'finding': 'told apart differently', 'chars': [0x56, 0x77],
                     'how': ('like an accent', 'as different letters'),
@@ -3352,7 +3531,9 @@ class SummaryForTheAudit(unittest.TestCase):
                                       {}).items()}
                 self.assertEqual(partly, report['partly'])
                 self.assertEqual(sorted(partly), summary['partly'])
-                self.assertTrue(partly)
+                # Every unchanged locale here is decided by its sort table;
+                # Reports holds one unchanged only as far as measured.
+                self.assertEqual(partly, {})
                 self.assertEqual(files.warnings, report['warnings'])
                 self.assertEqual(summary['warnings'], report['warnings'])
                 self.assertEqual(files.closing, report['closing'])
@@ -3384,6 +3565,37 @@ def damaged(packed, offset, bit):
     return base64.b64encode(zlib.compress(bytes(raw))).decode('ascii')
 
 
+class SmallFiles:
+    """A mixin: the class reads RHEL8, RHEL9 and RHEL10 cut to SMALL_NAMES,
+    the module's names pointed at the cut files while it runs. Each of its
+    tests edits and seals a whole file, and a whole measurement with every
+    part is several times the size of the first format's."""
+    SMALL_NAMES = ('C', 'POSIX', 'de_DE.utf8', 'en_US.utf8', 'ja_JP.utf8',
+                   'sv_SE.utf8', 'ko_KR.utf8', 'sv_SE', 'en_US', 'th_TH')
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        g = globals()
+        cls._saved = {k: g[k] for k in ('RHEL8', 'RHEL9', 'RHEL10')}
+        for k, orig in cls._saved.items():
+            with open(orig, encoding='utf-8') as f:
+                d = json.loads(f.read())
+            names = [n for n in cls.SMALL_NAMES if n in d['locales']]
+            text = trimmed(json.dumps(d), names)
+            path = os.path.join(cls.tmp, f'small-{k}.out')
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(text)
+            cls.texts[orig] = cls.texts[path] = text
+            g[k] = path
+
+    @classmethod
+    def tearDownClass(cls):
+        if getattr(cls, '_saved', None):
+            globals().update(cls._saved)
+        super().tearDownClass()
+
+
 class Variants(unittest.TestCase):
     """Base for the classes that edit a real measurement: each edit is
     written to a scratch directory, from a fresh copy of the file."""
@@ -3401,8 +3613,10 @@ class Variants(unittest.TestCase):
         """base with edit(data) applied, as a new file. reseal recomputes the
         digest of the whole file, so that only the checks after it can see
         the edit."""
-        data = json.loads(self.texts[base])
+        data = json.loads(text_for(self.texts, base, (edit,)))
         edit(data)
+        if not builds_first((edit,)):
+            conform(data)
         if reseal:
             data['content'] = m.content_digest(data)
         path = os.path.join(self.tmp, f'{self.id().rsplit(".", 1)[-1]}.out')
@@ -3411,7 +3625,7 @@ class Variants(unittest.TestCase):
         return path
 
 
-class TagsOfTheAuditedPair(Variants):
+class TagsOfTheAuditedPair(SmallFiles, Variants):
     """--tags: the glibc tags audit.sh audits, one per file.
 
     Freezes the audit of one upgrade run over another upgrade's
@@ -3569,7 +3783,7 @@ class TagsOfTheAuditedPair(Variants):
         self.assertFalse(os.path.exists(path))
 
 
-class Refusals(Variants):
+class Refusals(SmallFiles, Variants):
     """A measurement that is not whole is refused: exit 2, a message, and not
     one line of report.
 
@@ -3716,7 +3930,8 @@ class Refusals(Variants):
         old, new = (read_json(p)['locales'] for p in (RHEL8, RHEL9))
         digest = new['en_US.utf8']['pairs']
         self.assertEqual(old['en_US.utf8']['pairs'], digest)
-        for name in CHANGED_8_TO_9:   # the premise: nothing that changed uses it
+        # The premise: nothing that changed, of the locales cut, uses it.
+        for name in CHANGED_8_TO_9 & old.keys():
             self.assertNotIn(digest, (old[name]['pairs'], new[name]['pairs']))
 
         def edit(d):
@@ -3806,9 +4021,10 @@ class Reports(Variants):
         self.assertEqual(r['warnings'], ['order unknown'])
 
     def test_a_locale_measured_only_in_part(self):
+        @on_first_format
         def edit(d):
             d['locales']['en_US']['partly'] = 5
-        r = self.report(RHEL9, self.variant(edit, reseal=True))
+        r = self.report(RHEL9_V1, self.variant(edit, reseal=True))
         self.assertEqual(r['partly'].get('en_US'), 5)
         # Not compared by their tables (a file of the first format), every
         # unchanged locale but C and POSIX is unchanged only as far as
@@ -3853,11 +4069,12 @@ class Reports(Variants):
              'also': de['de_DE.utf8']['also']}]})
 
     def test_a_locale_that_could_not_be_measured_on_one_machine(self):
+        @on_first_format
         def edit(d):
             d['locales']['ko_KR.utf8'] = {'error': 'cannot be selected: test',
                                           'codeset': 'UTF-8'}
         path = os.path.join(self.tmp, 'one-machine.tsv')
-        rc, out, err = run_compare(RHEL9, self.variant(edit, reseal=True),
+        rc, out, err = run_compare(RHEL9_V1, self.variant(edit, reseal=True),
                                    '--characters-to', path)
         self.assertEqual((rc, err), (0, ''))
         r = parse_report(out)
@@ -3927,7 +4144,7 @@ class Reports(Variants):
         commas: such a name is escaped, never written raw to split a row."""
         odd = 'th,TH' + chr(9) + 'x'
         paths = []
-        for base in (RHEL9, RHEL10):
+        for base in (RHEL9_V1, RHEL10_V1):
             with open(base, encoding='utf-8') as f:
                 data = json.loads(f.read())
             data['locales'][odd] = data['locales']['th_TH']
@@ -3955,12 +4172,13 @@ class Reports(Variants):
     def test_measured_over_different_strings(self):
         """Another list of strings on one machine: its own list, under its
         own digest, as a machine would write it."""
+        @on_first_format
         def edit(d):
             d['strings_data']['0' * 64] = d['strings_data'][
                 d['locales']['ko_KR']['corpus']]
             d['locales']['ko_KR']['corpus'] = '0' * 64
         path = os.path.join(self.tmp, 'different-characters.tsv')
-        rc, out, err = run_compare(RHEL9, self.variant(edit, reseal=True),
+        rc, out, err = run_compare(RHEL9_V1, self.variant(edit, reseal=True),
                                    '--characters-to', path)
         self.assertEqual((rc, err), (0, ''))
         r = parse_report(out)
@@ -3980,6 +4198,7 @@ class Reports(Variants):
         and the file say each alike, every warning included. And the file
         gives the missing one the names PostgreSQL gave it on the old
         machine, where the cluster created its collations."""
+        @on_first_format
         def edit(d):
             d['locales']['en_US']['partly'] = 5
             d['locales']['ko_KR.utf8'] = {'error': 'cannot be selected: test',
@@ -3992,7 +4211,7 @@ class Reports(Variants):
         summary_path = os.path.join(self.tmp, 'run-kinds.txt')
         file_path = os.path.join(self.tmp, 'run-kinds.tsv')
         # Both tags commit ids: two warnings more, one per side.
-        rc, out, err = run_compare(RHEL9, new, '--summary-to', summary_path,
+        rc, out, err = run_compare(RHEL9_V1, new, '--summary-to', summary_path,
                                    '--characters-to', file_path,
                                    '--tags', '3c03baca37fd', '1a2b3c4d5e6f')
         self.assertEqual((rc, err), (0, ''))
@@ -4647,6 +4866,41 @@ class NamesOfStrings(unittest.TestCase):
                 self.assertNotIn('\0', ''.join(lines))
                 self.assertEqual(flat(' '.join(lines)),
                                  flat(text.replace('\0', ' ')))
+
+
+class FirstFormatFilesAreTheExtracts(unittest.TestCase):
+    """rhelN.v1.out is the measurement inside rhelN.extract.tar.gz, cut to
+    the first format.
+
+    Freezes the two sets of tests on one measurement per machine: the tests
+    of a file of an earlier format, or of a locale no sort table decides,
+    read the first, the rest the second, and an extract recorded again
+    without its v1 file would have them test two different machines while
+    each passed."""
+
+    def test_each_field_of_the_first_format_is_the_extracts(self):
+        for name, path in MACHINES:
+            with self.subTest(machine=name):
+                first, whole = read_json(FIRST_FORMAT[path]), read_json(path)
+                self.assertEqual(first['format'], 'locale_order/1')
+                self.assertNotEqual(whole['format'], first['format'])
+                for key in sorted(set(first) - {'format', 'content',
+                                                'locales'}):
+                    self.assertEqual(first[key], whole[key], key)
+                self.assertEqual(set(first['locales']),
+                                 set(whole['locales']))
+                for locale, record in first['locales'].items():
+                    self.assertEqual(
+                        record, {k: whole['locales'][locale].get(k)
+                                 for k in record}, locale)
+
+    def test_an_edit_of_the_first_format_needs_its_file(self):
+        """A base with no file of the first format (a SmallFiles cut)
+        refuses such an edit, rather than hand it a later format."""
+        cut = os.path.join(DATA, 'a-cut.out')
+        self.assertEqual(text_for({cut: '{}'}, cut, (lambda d: None,)), '{}')
+        with self.assertRaises(AssertionError):
+            text_for({cut: '{}'}, cut, (AS_FIRST,))
 
 
 class MeasurementsAreCurrent(unittest.TestCase):
@@ -6784,6 +7038,7 @@ def with_parts(money=None, libc=None, use=None, form=m.FORMAT, ctype=None,
             d['collate'] = dict(copy.deepcopy(NO_TABLES), locales={
                 name: {'state': 'not read', 'why': 'built by a test'}
                 for name in d['locales']})
+    edit.first_format = True
     return edit
 
 
@@ -6848,7 +7103,7 @@ CTYPE_FEW = [('ctype', {'same': 'character', 'count': 4, 'other': False,
 FEW = ('C', 'POSIX', 'de_DE.utf8', 'en_US.utf8', 'ja_JP.utf8', 'sv_SE.utf8')
 
 
-def trimmed(text, names=FEW):
+def trimmed(text, names=FEW, repack=False):
     """A recorded measurement cut to names, with the records they use, as a
     machine listing only those would have written it."""
     d = json.loads(text)
@@ -6858,6 +7113,7 @@ def trimmed(text, names=FEW):
                       ('strings_data', 'corpus')):
         used = {r[key] for r in d['locales'].values() if 'error' not in r}
         d[kind] = {k: v for k, v in d[kind].items() if k in used}
+    conform(d, repack)
     d['content'] = m.content_digest(d)
     return json.dumps(d, sort_keys=True) + '\n'
 
@@ -6876,9 +7132,11 @@ class Checks(Variants):
 
     def made(self, base, tag, *edits):
         """base with every edit applied, resealed, as its own file."""
-        data = json.loads(self.texts[base])
+        data = json.loads(text_for(self.texts, base, edits))
         for edit in edits:
             edit(data)
+        if not builds_first(edits):
+            conform(data)
         data['content'] = m.content_digest(data)
         path = os.path.join(self.tmp, f'{self.id().rsplit(".", 1)[-1]}-{tag}.out')
         with open(path, 'w', encoding='utf-8') as f:
@@ -6940,7 +7198,17 @@ class OtherStringsNamedInTheOutputs(Checks):
         return parse_report(out), brief, rows
 
     def test_said_where_one_is_named(self):
+        """9 -> 10, where the sort tables name strings of several
+        characters too; and th_TH alone in the first format, which reads no
+        sort table."""
         report, summary, rows = self.outputs(RHEL9, RHEL10)
+        self.assertEqual((report['others_note'], summary['others_note'],
+                          rows.others_note), (m.names_note(True, True),) * 3)
+        names = ('C', 'POSIX', 'th_TH')
+        report, summary, rows = self.outputs(
+            self.made_from(RHEL9_V1, 'old', names),
+            self.made_from(RHEL10_V1, 'new', names))
+        self.assertEqual(set(by_name(report)), {'th_TH'})
         self.assertEqual((report['others_note'], summary['others_note'],
                           rows.others_note), (m.OTHER_STRINGS,) * 3)
 
@@ -6964,13 +7232,15 @@ class OtherStringsNamedInTheOutputs(Checks):
     def test_named_under_each_encoding(self):
         """th_TH (TIS-620) 9 -> 10, and the same two measurements given a
         second locale, ka_GE, under GEORGIAN-PS: byte C0, a character of
-        TIS-620 (U+0E40), is a byte there, so the two are named apart."""
+        TIS-620 (U+0E40), is a byte there, so the two are named apart. The
+        first format, which reads no sort table: ka_GE's own would decide
+        it."""
         def as_georgian(d):
             d['locales']['ka_GE'] = dict(d['locales']['th_TH'],
                                          codeset='GEORGIAN-PS')
         names = ('C', 'POSIX', 'th_TH', 'ka_GE')
-        old = self.made_from(RHEL9, 'old', names)
-        new = self.made_from(RHEL10, 'new', names)
+        old = self.made_from(RHEL9_V1, 'old', names)
+        new = self.made_from(RHEL10_V1, 'new', names)
         for path in (old, new):
             with open(path, encoding='utf-8') as f:
                 d = json.load(f)
@@ -7119,10 +7389,11 @@ class CharmapsCheckedInTheComparison(Checks):
         tag = self.id().rsplit('.', 1)[-1]
         summary = os.path.join(self.tmp, f'{tag}.sum')
         chars = os.path.join(self.tmp, f'{tag}.tsv')
-        # The two files cut to FEW, whose locales are all UTF-8 but C and
-        # POSIX.
-        argv = [SCRIPT, '--compare', self.made(RHEL9, 'old'),
-                self.made(RHEL10, 'new'), '--summary-to', summary,
+        # The two files of the first format cut to FEW, whose locales are
+        # all UTF-8 but C and POSIX: no sort table decides a locale, so
+        # what the charmaps say counts.
+        argv = [SCRIPT, '--compare', self.made(RHEL9, 'old', AS_FIRST),
+                self.made(RHEL10, 'new', AS_FIRST), '--summary-to', summary,
                 '--characters-to', chars, *args]
         stdout, stderr = io.StringIO(), io.StringIO()
         with unittest.mock.patch.object(m.sys, 'argv', argv), \
@@ -7269,25 +7540,27 @@ class FilesOfEachFormat(Checks):
         """The two whole files as recorded, on the command line. The line
         on databases of another encoding needs nothing such a file lacks,
         and is said."""
-        self.assertEqual(self.checks(RHEL9, RHEL10, command_line=True),
+        self.assertEqual(self.checks(RHEL9_V1, RHEL10_V1, command_line=True),
                          self.HELD + EARLIER_BOTH + STORED_9_TO_10)
 
     def test_two_files_of_the_first_format_cut(self):
         """The same cut to FEW: what the classes below build on."""
-        self.assertEqual(self.checks(self.made(RHEL9, 'old'),
-                                     self.made(RHEL10, 'new')),
+        self.assertEqual(self.checks(self.made(RHEL9, 'old', AS_FIRST),
+                                     self.made(RHEL10, 'new', AS_FIRST)),
                          self.HELD + EARLIER_BOTH)
 
     def test_the_first_format_on_the_old_side(self):
+        old = self.made(RHEL9, 'old', AS_FIRST)
         new = self.made(RHEL10, 'new', with_parts())
-        self.assertEqual(self.checks(self.made(RHEL9, 'old'), new), self.HELD + [
+        self.assertEqual(self.checks(old, new), self.HELD + [
             ('money', {'earlier': ['OLD']}), ('libc', {'earlier': ['OLD']}),
             ('libc', {'side': 'NEW', 'clean': 2}), ('libc', {'note': True}),
             ('use', {'earlier': ['OLD']}), ('ctype', {'earlier': ['OLD']})])
 
     def test_the_first_format_on_the_new_side(self):
         old = self.made(RHEL9, 'old', with_parts())
-        self.assertEqual(self.checks(old, self.made(RHEL10, 'new')), self.HELD + [
+        new = self.made(RHEL10, 'new', AS_FIRST)
+        self.assertEqual(self.checks(old, new), self.HELD + [
             ('money', {'earlier': ['NEW']}), ('libc', {'earlier': ['NEW']}),
             ('libc', {'side': 'OLD', 'clean': 2}), ('libc', {'note': True}),
             ('use', {'earlier': ['NEW']}), ('ctype', {'earlier': ['NEW']})])
@@ -7320,9 +7593,9 @@ class FilesOfEachFormat(Checks):
             ('use', {'earlier': ['OLD']}), ('ctype', {'earlier': ['OLD']})])
 
     def test_the_corpus_digest_did_not_move_with_the_format(self):
-        """The recorded files are of the first format; their corpus digest
-        is still this script's (MeasurementsAreCurrent asserts the same of
-        each file; this names why)."""
+        """The recorded measurements' corpus digest is still this script's
+        (MeasurementsAreCurrent asserts the same of each file; this names
+        why)."""
         self.assertNotEqual(m.FORMAT, m.CORPUS_VERSION)
         self.assertEqual(json.loads(self.texts[RHEL9])['corpus'],
                          m.corpus_digest())
@@ -7348,7 +7621,7 @@ class FilesOfEachFormatRefused(Checks):
 
     def test_refused_on_the_command_line(self):
         new = self.made(RHEL10, 'new', with_parts(), lambda d: d.pop('money'))
-        rc, out, err = run_compare(self.made(RHEL9, 'old'), new)
+        rc, out, err = run_compare(self.made(RHEL9, 'old', AS_FIRST), new)
         self.assertEqual((rc, out), (2, ''), err)
         self.assertIn('lacks a part its format holds', flat(err))
 
@@ -11616,7 +11889,7 @@ class ConverterRead(Checks):
         hands glibc's character rules."""
         pairs = []
         for form in ('locale_order/4', m.FORMAT):
-            data = json.loads(self.texts[RHEL8])
+            data = json.loads(first_format_text(RHEL8, self.texts[RHEL8]))
             with_parts(form=form, use=measured_use(8))(data)
             data['content'] = m.content_digest(data)
             path = os.path.join(self.tmp, f'fourth-{form[-1]}.out')

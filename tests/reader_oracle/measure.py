@@ -15,8 +15,8 @@ result if it changed. Each run of localedef has a time limit.
 What is recorded per run: the exit status (negative for a signal), whether
 the time limit stopped it, the LC_COLLATE file written (size, md5, and which
 of the case's marker strings its bytes hold, each string read as Latin-1
-bytes), and localedef's messages. The file is sealed like
-tests/locale_order/rhelN.out: `content` is a sha256 over every other key,
+bytes), and localedef's messages. The file is sealed like a measurement of
+scripts/locale_order.py: `content` is a sha256 over every other key,
 so a hand edit is caught on load.
 """
 import base64
