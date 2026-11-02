@@ -227,6 +227,16 @@ SWEDISH_LEGACY = {
     'sv_FI', 'sv_FI.iso88591', 'sv_FI.iso885915@euro', 'sv_FI@euro', 'sv_SE',
     'sv_SE.iso88591', 'sv_SE.iso885915', 'swedish'}
 CHANGED_9_TO_10 = {'th_TH', 'th_TH.tis620', 'th_TH.utf8', 'thai'}
+# The characters whose LC_CTYPE rules change and that the old machine
+# already classified (the others it did not classify at all).
+CLASSIFIED_8_TO_9 = {
+    0x282, 0x1063, 0x1064, *range(0x1069, 0x106E), *range(0x1087, 0x108E),
+    0x108F, 0x109A, 0x109B, 0x135F, 0x1C36, 0x1D8E, 0xA794, 0xA802, 0xA80B,
+    0xA8FF, 0xA9E5, *range(0xAA7B, 0xAA7E), *range(0x16B30, 0x16B37),
+    *range(0x16F8F, 0x16F93)}
+CLASSIFIED_9_TO_10 = {0xC04, 0xF82, 0xF83, 0x10FC, 0xAB69, 0x11080, 0x11081}
+# A name a sort table gives a sequence of several code points.
+SEVERAL = r'U\+[0-9A-F]{4,6}(?: U\+[0-9A-F]{4,6})+'
 # glibc-2.28's commit, a ref that names no release (tests/_harness.py).
 EXPECTED_2_28 = _harness.EXPECTED_SHA['glibc-2.28']
 # Python has no converter for their encodings (ARMSCII-8, GEORGIAN-PS,
@@ -3378,6 +3388,56 @@ class SummaryForTheAudit(unittest.TestCase):
                     'how': ('like an accent', 'as different letters'),
                     'test': ([0x56, 0x62], [0x77, 0x61]), 'before': '>',
                     'now': '<', 'measured': 'on both machines'}])
+
+    def test_the_contractions_the_sort_tables_name(self):
+        """The sequences of several code points each sort table names, by
+        how, counted from the file's rows: or_IN gains 868 on RHEL9, loses
+        DDA and DDHA with NUKTA, and marks KA VIRAMA SSA as changed; on
+        RHEL10 each th_TH gains its own and marks 220 of a leading vowel
+        and a consonant."""
+        for key, name, kinds in (
+                ('8-9', 'or_IN', {'new': 868, 'old': 2, 'marked': 1}),
+                ('9-10', 'th_TH', {'new': 14, 'marked': 220}),
+                ('9-10', 'th_TH.utf8', {'new': 651, 'marked': 220})):
+            with self.subTest(locale=name):
+                found = collections.Counter(
+                    r['kind'] for r in self.rows(key, name)
+                    if r['finding'] == 'sort table changed'
+                    and re.fullmatch(SEVERAL, r.get('chars', '')))
+                self.assertEqual(dict(found), kinds)
+        self.assertEqual(
+            sorted((r['chars'], r['kind']) for r in self.rows('8-9', 'or_IN')
+                   if r['finding'] == 'sort table changed'
+                   and re.fullmatch(SEVERAL, r.get('chars', ''))
+                   and r['kind'] != 'new'),
+            [('U+0B15 U+0B4D U+0B37', 'marked'), ('U+0B21 U+0B3C', 'old'),
+             ('U+0B22 U+0B3C', 'old')])
+
+    def test_the_character_rules_and_money(self):
+        """LC_CTYPE: 6,525 characters change from RHEL8 to RHEL9, 40 of them
+        classified on RHEL8, and 5,961 from RHEL9 to RHEL10, 7 of them; the
+        same characters in the report's line and in the file's rows. The
+        decimals of money are the same in every locale on both machines."""
+        for key, old, new, count, classified in (
+                ('8-9', RHEL8, RHEL9, 6525, CLASSIFIED_8_TO_9),
+                ('9-10', RHEL9, RHEL10, 5961, CLASSIFIED_9_TO_10)):
+            with self.subTest(pair=key):
+                checks = self.reports[key]['checks']
+                line = [d for kind, d in checks
+                        if kind == 'ctype' and d.get('change') == 'character']
+                self.assertEqual(len(line), 1)
+                self.assertEqual((line[0]['count'], set(line[0]['classified'])),
+                                 (count, classified))
+                rows = [r for label in self.files[key].ctype_groups
+                        for r in self.files[key][(label,)]
+                        if r['finding'] == 'LC_CTYPE changed']
+                self.assertEqual(len(rows), count)
+                self.assertEqual({int(r['chars'][2:], 16) for r in rows
+                                  if r['before'] == 'classified'}, classified)
+                both = (set(read_json(old)['locales'])
+                        & set(read_json(new)['locales']))
+                self.assertEqual([d for kind, d in checks if kind == 'money'],
+                                 [{'same': len(both)}])
 
     def test_a_pair_the_measurement_cannot_decide_is_counted_not_dropped(self):
         """sv_SE.utf8: W and the fullwidth W were neighbours on RHEL9 only;
@@ -14641,6 +14701,29 @@ class SortTablesCompared(Checks):
         self.assertEqual(r['closing'], closing)
         self.assertEqual(s['closing'], closing)
         self.assertEqual(f.closing, closing)
+
+    def test_the_closings_name_what_one_character_cannot_show(self):
+        """Where a table was not compared, the closing and docs/limitations.md
+        name each kind of rule that shows only in strings of several
+        letters, which step 11's strings of one character cannot reach:
+        contractions, expansions and accents read backwards (13.9). With
+        every table compared none is said, since the table holds them."""
+        with open(os.path.join(_harness.REPO_ROOT, 'docs', 'limitations.md'),
+                  encoding='utf-8') as f:
+            doc = flat(f.read())
+        bullet = re.search(r'in a locale whose table it could not compare, '
+                           r'what one character at a time cannot show: (.+?);'
+                           r' a change in how', doc)
+        self.assertIsNotNone(bullet)
+        for text in (flat(m.CLOSING), flat(m.CLOSING_MIXED), bullet[1]):
+            with self.subTest(text=text[:40]):
+                for said in ('shows only in strings of several letters',
+                             'a contraction', 'an expansion',
+                             'accents compared from the end of the word '
+                             'backwards'):
+                    self.assertIn(said, text)
+        for said in ('contraction', 'expansion', 'backwards'):
+            self.assertNotIn(said, m.CLOSING_TABLES)
 
     def test_a_table_not_read_on_one_machine(self):
         unread = {'de_DE.utf8': {'state': 'not read', 'why': 'no file',

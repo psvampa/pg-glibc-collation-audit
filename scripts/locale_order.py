@@ -81,13 +81,14 @@ of a file --extract wrote), the comparison checks that every sequence they
 give a character is among the strings measured, and names a locale whose
 charmap gives one that is not as measured in part (charmap_check).
 
-Not compared, in a locale whose table was not compared: a rule that applies
-only to a particular combination of letters, such as a contraction ("ch"
-sorted as one letter). The strings measured hold one character at a time, so
-two machines whose measurements agree can still sort some longer strings
-differently. Where a character counts for nothing at some level (glibc
-ignores it there), how it is told apart from its neighbour is read less
-reliably, so a change there may go unseen.
+Not compared, in a locale whose table was not compared: a rule that shows
+only in strings of several letters, such as a contraction ("ch" sorted as one
+letter), an expansion (U+00DF, sharp s, sorted like "ss") or accents compared
+from the end of the word backwards. The strings measured hold one character
+at a time, so two machines whose measurements agree can still sort some
+longer strings differently. Where a character counts for nothing at some
+level (glibc ignores it there), how it is told apart from its neighbour is
+read less reliably, so a change there may go unseen.
 
 Usage:
   python3 locale_order.py > old.out          # on each machine
@@ -5521,12 +5522,14 @@ def names_note(in_bytes, several):
 # unchanged by an identical one (CLOSING_MIXED when one was, CLOSING_TABLES
 # when every one was by its table or compares bytes): what two machines that
 # agree here can still disagree on.
-CLOSING = ('!! Not measured: a rule that applies only to a particular '
-           'combination of letters, such as a contraction ("ch" sorted as one '
-           'letter), so two machines that agree here can still sort some longer '
-           'strings apart. Where a character counts for nothing at some level '
-           '(glibc ignores it there), how it is told apart from its neighbour is '
-           'read less reliably, so a change there may go unseen.')
+CLOSING = ('!! Not measured: a rule that shows only in strings of several '
+           'letters, such as a contraction ("ch" sorted as one letter), an '
+           'expansion (U+00DF, sharp s, sorted like "ss") or accents compared '
+           'from the end of the word backwards, so two machines that agree '
+           'here can still sort some longer strings apart. Where a character '
+           'counts for nothing at some level (glibc ignores it there), how it '
+           'is told apart from its neighbour is read less reliably, so a '
+           'change there may go unseen.')
 
 
 EARLIER = ('written by an earlier version of locale_order.py, which did not '
@@ -8566,9 +8569,11 @@ CLOSING_MIXED = ('!! Not measured: whether the two machines compare strings '
                  'with the same glibc code. Each locale found unchanged by its '
                  'sort table is so only if they do, since that table is what '
                  'glibc\'s comparison code reads. Nor, in the locales not '
-                 'compared by their sort tables, a rule that applies only to '
-                 'a particular combination of letters, such as a contraction '
-                 '("ch" sorted as one letter), so two machines that agree there '
+                 'compared by their sort tables, a rule that shows only in '
+                 'strings of several letters, such as a contraction ("ch" '
+                 'sorted as one letter), an expansion (U+00DF, sharp s, sorted '
+                 'like "ss") or accents compared from the end of the word '
+                 'backwards, so two machines that agree there '
                  'can still sort some longer strings apart; and where a '
                  'character counts for nothing at some level (glibc ignores it '
                  'there), how it is told apart from its neighbour is read less '
@@ -9333,10 +9338,11 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     other = other_encoding_text(both + only_new, model, firm)
     if other:
         beside.append(('other encoding', {'text': other}))
-    # The sentence on contractions stays while an unchanged locale was not
-    # compared by its table; beside it, the one on the code only while
-    # another is unchanged by an identical table, which glibc's code reads
-    # (one of no sort rules, 'bytes', C and POSIX among them, reads none).
+    # The sentence on rules of several letters stays while an unchanged
+    # locale was not compared by its table; beside it, the one on the code
+    # only while another is unchanged by an identical table, which glibc's
+    # code reads (one of no sort rules, 'bytes', C and POSIX among them,
+    # reads none).
     # Where every unchanged locale is firm, CLOSING_TABLES says both kinds.
     by_tables = any(table_route(old, new, x)[0] == 'identical'
                     for x in firm if x not in ('C', 'POSIX'))

@@ -119,13 +119,15 @@ as changed. It does not see:
   Either way the run says so and takes no locale as unchanged by its table
   alone;
 - in a locale whose table it could not compare, what one character at a
-  time cannot show: a rule for a particular combination of letters, such as
-  a contraction (`ch` sorted as one letter); a change in how a character is
-  told apart from its neighbour where glibc ignores that character at some
-  level; and how two neighbours are told apart at a level where no pair
-  could be found to measure it. A table is not compared when a file comes
-  from an earlier version, when it could not be read or did not pass its
-  check, or when the two machines store numbers in a different byte order.
+  time cannot show: a rule that shows only in strings of several letters,
+  such as a contraction (`ch` sorted as one letter), an expansion (`ß`
+  sorted like `ss`) or accents compared from the end of the word backwards;
+  a change in how a character is told apart from its neighbour where glibc
+  ignores that character at some level; and how two neighbours are told
+  apart at a level where no pair could be found to measure it. A table is
+  not compared when a file comes from an earlier version, when it could not
+  be read or did not pass its check, or when the two machines store numbers
+  in a different byte order.
   The run names those locales, and an unchanged one as unchanged only as far
   as measured;
 - a locale whose encoding PostgreSQL does not know, in a database of
@@ -159,8 +161,8 @@ as changed. It does not see:
 - a locale that is not installed, because it measures what `locale -a` lists
   and nothing else.
 
-Command 3 sorts strings you choose inside PostgreSQL, and reaches a rule for
-a combination of letters when the strings contain it.
+Command 3 sorts strings you choose inside PostgreSQL, and reaches a rule that
+shows only in strings of several letters when the strings contain it.
 
 Not tried yet, so a failure there would be new: Python 3.14 on a real
 machine, where only a simulation was run, a machine on cgroup v1, and ARM.
