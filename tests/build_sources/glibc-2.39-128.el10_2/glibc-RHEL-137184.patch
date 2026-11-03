@@ -1,0 +1,26 @@
+commit 78fdb2d6b1c34ea8e779fd48f9436dfbd50b6387
+Author: Florian Weimer <fweimer@redhat.com>
+Date:   Thu Jan 8 12:35:08 2026 +0100
+
+    Switch currency symbol for the bg_BG locale to euro
+    
+    Bulgaria joined the eurozone on 2026-01-01.
+    
+    Suggested-by: Йордан Гигов <jgigov@abv.bg>
+    Reviewed-by: Collin Funk <collin.funk1@gmail.com>
+
+diff --git a/localedata/locales/bg_BG b/localedata/locales/bg_BG
+index 159a6c33343c7d0d..eda2a8d01b00e2b7 100644
+--- a/localedata/locales/bg_BG
++++ b/localedata/locales/bg_BG
+@@ -248,8 +248,8 @@ reorder-end
+ END LC_COLLATE
+ 
+ LC_MONETARY
+-int_curr_symbol           "BGN "
+-currency_symbol           "лв."
++int_curr_symbol           "EUR "
++currency_symbol           "€"
+ mon_decimal_point         ","
+ mon_thousands_sep         " "
+ mon_grouping              3

@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] quote an earlier change
+
+The earlier fix was:
+
+    --- a/localedata/locales/de_DE	2026-11-03 07:08:31.486317628 +0000
+    +++ b/localedata/locales/de_DE	2026-11-03 07:08:31.488317630 +0000
+    @@ -12,7 +12,7 @@
+     % Contributed by Ulrich Drepper <drepper@redhat.com>, 2000
+     
+     LC_IDENTIFICATION
+    -title      "German locale for Germany"
+    +title      "German locale for Germany (assessment)"
+     source     "Free Software Foundation, Inc."
+     address    "https:////www.gnu.org//software//libc//"
+     contact    ""
+
+---
+diff --git a/zz-note b/zz-note
+new file mode 100644
+--- /dev/null
++++ b/zz-note
+@@ -0,0 +1 @@
++note

@@ -1,0 +1,10 @@
+localedata/tst-ctype.sh
+localedata/tst-fmon.sh
+localedata/tst-langinfo.sh
+localedata/tst-locale.sh
+localedata/tst-rpmatch.sh
+localedata/tst-trans.sh
+localedata/unicode-gen/ctype_compatibility.py
+localedata/unicode-gen/gen_unicode_ctype.py
+localedata/unicode-gen/utf8_compatibility.py
+localedata/unicode-gen/utf8_gen.py

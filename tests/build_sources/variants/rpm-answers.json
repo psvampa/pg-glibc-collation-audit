@@ -1,0 +1,85 @@
+{
+ "V1": {
+  "edit_log": "inserted 2 line(s) after line 1606",
+  "rpm_tree_changes": {
+   "localedata/locales/de_DE": null
+  }
+ },
+ "V10": {
+  "edit_log": "deleted line 1633",
+  "rpm_tree_changes": {
+   "localedata/SUPPORTED.glibc": "76babe022bb52b4e54c0d86ae0e5852a",
+   "localedata/SUPPORTED.spec": "76babe022bb52b4e54c0d86ae0e5852a"
+  }
+ },
+ "V11": {
+  "edit_log": null,
+  "rpm_tree_changes": {
+   "localedata/locales/de_DE": "ba670c3950c9972af6a37b92797ae8e0"
+  }
+ },
+ "V2": {
+  "edit_log": "inserted 1 line(s) before line 733",
+  "rpm_tree_changes": {}
+ },
+ "V3": {
+  "edit_log": "inserted 1 line(s) before line 733",
+  "rpm_tree_changes": {
+   "locale/C-collate-seq.c.rpmkeep": "600452fe75cb396b6c9b561e8e7bd7dd",
+   "locale/C-collate.c.rpmkeep": "e390ca87c1e40243bc1bff93f1952829",
+   "locale/lc-ctype.c.rpmkeep": "c212525d548d8cbc13ff6c2bfdf36215",
+   "locale/loadlocale.c.rpmkeep": "876a8b0e4c1a8d2b3b29dd8ee1c079c5",
+   "locale/localeinfo.h.rpmkeep": "06cbd0afeb8cab8398ca9d373b1a18cb",
+   "locale/programs/ld-collate.c.rpmkeep": "445240827ed1389206d754ef59f4b250",
+   "locale/programs/ld-monetary.c.rpmkeep": "88c24123a69eec60abeb7127cd4156b9",
+   "locale/programs/locarchive.c.rpmkeep": "eccd2ab0eea8a94ffd9ee56f0fd95fa7",
+   "locale/programs/locfile-kw.gperf.rpmkeep": "1512da7832d8b9f9f267a0ca7839fac7",
+   "locale/programs/locfile-kw.h.rpmkeep": "a9eb949a3655eb293fdd6acf81f5189c",
+   "locale/programs/locfile-token.h.rpmkeep": "03206049e10efe0884c21573351ac076",
+   "locale/tst-localedef-path-norm.c.rpmkeep": "cf4bb5b28850bed56adc1ea427f85b9c",
+   "locale/uselocale.c.rpmkeep": "debdd6322aa42d78adf5b3ac28873d55",
+   "locale/xlocale.c.rpmkeep": "2dd1a8b9bfe5535abda46fe1eb169ec4",
+   "localedata/C.UTF-8.in.rpmkeep": "d41d8cd98f00b204e9800998ecf8427e",
+   "localedata/Makefile.rpmkeep": "d69c5abddf352ad5b7dd83534b31f5cf",
+   "localedata/SUPPORTED.rpmkeep": "1f11078094948d6dfc1c1e271a51b11f",
+   "localedata/charmaps/GB18030.rpmkeep": "aecac567745fca3271b854c2466ab900",
+   "localedata/gen-locale.sh.rpmkeep": "25da3e2df368768345b3cec22e575f62",
+   "localedata/locales/C.rpmkeep": "3a2a55413331e005d47da36ff64ee69d",
+   "localedata/locales/bg_BG.rpmkeep": "041a2411a82e0747092156ac8305339a",
+   "localedata/locales/hr_HR.rpmkeep": "05beea6fd43fbfe12ca12762a723c0c0",
+   "localedata/tst-bz12701-lc.c.rpmkeep": "d41d8cd98f00b204e9800998ecf8427e",
+   "localedata/tst-bz12701-lc2.c.rpmkeep": "d41d8cd98f00b204e9800998ecf8427e",
+   "localedata/tst-c-utf8-consistency.c.rpmkeep": "d41d8cd98f00b204e9800998ecf8427e",
+   "localedata/tst-ctype.c.rpmkeep": "86dfd68ff6219e65e3f0df3ae59fc42a",
+   "localedata/tst-localedef-hardlinks.c.rpmkeep": "e5496349ae633563dd5a2002255b42b0"
+  }
+ },
+ "V4": {
+  "edit_log": "inserted 1 line(s) before line 733",
+  "rpm_tree_changes": {
+   "localedata/SUPPORTED": "826ff36b6630d32bb780769089a61b18"
+  }
+ },
+ "V5": {
+  "edit_log": null,
+  "rpm_tree_changes": {
+   "localedata/locales/de_DE": null
+  }
+ },
+ "V6": {
+  "edit_log": null,
+  "rpm_tree_changes": {
+   "localedata/locales/de_DE": "ba670c3950c9972af6a37b92797ae8e0"
+  }
+ },
+ "V7": {
+  "edit_log": null,
+  "rpm_tree_changes": {}
+ },
+ "V9": {
+  "edit_log": "inserted 1 line(s) before line 733",
+  "rpm_tree_changes": {
+   "localedata/locales/de_DE": "ba670c3950c9972af6a37b92797ae8e0"
+  }
+ }
+}

@@ -1,0 +1,2515 @@
+commit 53fcdf5f743aa9b02972eec658e66f96d6a63386
+Author: Alejandro Colomar <alx@kernel.org>
+Date:   Sat Nov 16 16:51:31 2024 +0100
+
+    Silence most -Wzero-as-null-pointer-constant diagnostics
+    
+    Replace 0 by NULL and {0} by {}.
+    
+    Omit a few cases that aren't so trivial to fix.
+    
+    Link: <https://gcc.gnu.org/bugzilla/show_bug.cgi?id=117059>
+    Link: <https://software.codidact.com/posts/292718/292759#answer-292759>
+    Signed-off-by: Alejandro Colomar <alx@kernel.org>
+
+Conflicts:
+	elf/dl-tunables.c
+	  (modified non-existing code downstream)
+
+diff --git a/argp/argp-fmtstream.c b/argp/argp-fmtstream.c
+index eb0a886c723d9010..35b5b1d0fec74d78 100644
+--- a/argp/argp-fmtstream.c
++++ b/argp/argp-fmtstream.c
+@@ -74,7 +74,7 @@ __argp_make_fmtstream (FILE *stream,
+       if (! fs->buf)
+ 	{
+ 	  free (fs);
+-	  fs = 0;
++	  fs = NULL;
+ 	}
+       else
+ 	{
+diff --git a/argp/argp-help.c b/argp/argp-help.c
+index cc43f376d438ddb2..5c41fdcd593accd9 100644
+--- a/argp/argp-help.c
++++ b/argp/argp-help.c
+@@ -443,7 +443,7 @@ make_hol (const struct argp *argp, struct hol_cluster *cluster)
+   assert (hol);
+ 
+   hol->num_entries = 0;
+-  hol->clusters = 0;
++  hol->clusters = NULL;
+ 
+   if (opts)
+     {
+@@ -615,7 +615,7 @@ static char
+ hol_entry_first_short (const struct hol_entry *entry)
+ {
+   return hol_entry_short_iterate (entry, until_short,
+-				  entry->argp->argp_domain, 0);
++				  entry->argp->argp_domain, NULL);
+ }
+ 
+ /* Returns the first valid long option in ENTRY, or NULL if there is none.  */
+@@ -627,7 +627,7 @@ hol_entry_first_long (const struct hol_entry *entry)
+   for (opt = entry->opt, num = entry->num; num > 0; opt++, num--)
+     if (opt->name && ovisible (opt))
+       return opt->name;
+-  return 0;
++  return NULL;
+ }
+ 
+ /* Returns the entry in HOL with the long option name NAME, or NULL if there is
+@@ -652,7 +652,7 @@ hol_find_entry (struct hol *hol, const char *name)
+       entry++;
+     }
+ 
+-  return 0;
++  return NULL;
+ }
+ 
+ /* If an entry with the long option NAME occurs in HOL, set it's special
+@@ -926,7 +926,7 @@ hol_append (struct hol *hol, struct hol *more)
+   while (*cl_end)
+     cl_end = &(*cl_end)->next;
+   *cl_end = more->clusters;
+-  more->clusters = 0;
++  more->clusters = NULL;
+ 
+   /* Merge entries.  */
+   if (more->num_entries > 0)
+@@ -1299,7 +1299,7 @@ hol_entry_help (struct hol_entry *entry, const struct argp_state *state,
+     {
+       const char *tstr = real->doc ? dgettext (state == NULL ? NULL
+ 					       : state->root_argp->argp_domain,
+-					       real->doc) : 0;
++					       real->doc) : NULL;
+       const char *fstr = filter_doc (tstr, real->key, entry->argp, state);
+       if (fstr && *fstr)
+ 	{
+@@ -1339,7 +1339,7 @@ hol_help (struct hol *hol, const struct argp_state *state,
+ {
+   unsigned num;
+   struct hol_entry *entry;
+-  struct hol_help_state hhstate = { 0, 0, 0 };
++  struct hol_help_state hhstate = { NULL, 0, 0 };
+ 
+   for (entry = hol->entries, num = hol->num_entries; num > 0; entry++, num--)
+     hol_entry_help (entry, state, stream, &hhstate);
+@@ -1351,7 +1351,7 @@ hol_help (struct hol *hol, const struct argp_state *state,
+ Mandatory or optional arguments to long options are also mandatory or \
+ optional for any corresponding short options.");
+       const char *fstr = filter_doc (tstr, ARGP_KEY_HELP_DUP_ARGS_NOTE,
+-				     state ? state->root_argp : 0, state);
++				     state ? state->root_argp : NULL, state);
+       if (fstr && *fstr)
+ 	{
+ 	  __argp_fmtstream_putc (stream, '\n');
+@@ -1511,7 +1511,7 @@ argp_args_usage (const struct argp *argp, const struct argp_state *state,
+   char *our_level = *levels;
+   int multiple = 0;
+   const struct argp_child *child = argp->children;
+-  const char *tdoc = dgettext (argp->argp_domain, argp->args_doc), *nl = 0;
++  const char *tdoc = dgettext (argp->argp_domain, argp->args_doc), *nl = NULL;
+   const char *fdoc = filter_doc (tdoc, ARGP_KEY_HELP_ARGS_DOC, argp, state);
+ 
+   if (fdoc)
+@@ -1573,7 +1573,7 @@ argp_doc (const struct argp *argp, const struct argp_state *state,
+ {
+   const char *text;
+   const char *inp_text;
+-  void *input = 0;
++  void *input = NULL;
+   int anything = 0;
+   size_t inp_text_limit = 0;
+   const char *doc = dgettext (argp->argp_domain, argp->doc);
+@@ -1582,11 +1582,11 @@ argp_doc (const struct argp *argp, const struct argp_state *state,
+   if (doc)
+     {
+       char *vt = strchr (doc, '\v');
+-      inp_text = post ? (vt ? vt + 1 : 0) : doc;
++      inp_text = post ? (vt ? vt + 1 : NULL) : doc;
+       inp_text_limit = (!post && vt) ? (vt - doc) : 0;
+     }
+   else
+-    inp_text = 0;
++    inp_text = NULL;
+ 
+   if (argp->help_filter)
+     /* We have to filter the doc strings.  */
+@@ -1628,7 +1628,7 @@ argp_doc (const struct argp *argp, const struct argp_state *state,
+   if (post && argp->help_filter)
+     /* Now see if we have to output a ARGP_KEY_HELP_EXTRA text.  */
+     {
+-      text = (*argp->help_filter) (ARGP_KEY_HELP_EXTRA, 0, input);
++      text = (*argp->help_filter) (ARGP_KEY_HELP_EXTRA, NULL, input);
+       if (text)
+ 	{
+ 	  if (anything || pre_blank)
+@@ -1661,7 +1661,7 @@ _help (const struct argp *argp, const struct argp_state *state, FILE *stream,
+        unsigned flags, char *name)
+ {
+   int anything = 0;		/* Whether we've output anything.  */
+-  struct hol *hol = 0;
++  struct hol *hol = NULL;
+   argp_fmtstream_t fs;
+ 
+   if (! stream)
+@@ -1684,7 +1684,7 @@ _help (const struct argp *argp, const struct argp_state *state, FILE *stream,
+ 
+   if (flags & (ARGP_HELP_USAGE | ARGP_HELP_SHORT_USAGE | ARGP_HELP_LONG))
+     {
+-      hol = argp_hol (argp, 0);
++      hol = argp_hol (argp, NULL);
+ 
+       /* If present, these options always come last.  */
+       hol_set_group (hol, "help", -1);
+@@ -1801,7 +1801,7 @@ Try `%s --help' or `%s --usage' for more information.\n"),
+ void __argp_help (const struct argp *argp, FILE *stream,
+ 		  unsigned flags, char *name)
+ {
+-  _help (argp, 0, stream, flags, name);
++  _help (argp, NULL, stream, flags, name);
+ }
+ #ifdef weak_alias
+ weak_alias (__argp_help, argp_help)
+@@ -1843,7 +1843,7 @@ __argp_state_help (const struct argp_state *state, FILE *stream, unsigned flags)
+       if (state && (state->flags & ARGP_LONG_ONLY))
+ 	flags |= ARGP_HELP_LONG_ONLY;
+ 
+-      _help (state ? state->root_argp : 0, state, stream, flags,
++      _help (state ? state->root_argp : NULL, state, stream, flags,
+ 	     state ? state->name : __argp_short_program_name ());
+ 
+       if (!state || ! (state->flags & ARGP_NO_EXIT))
+diff --git a/argp/argp-parse.c b/argp/argp-parse.c
+index 9b7b91f65d9be4bd..7a75fa350615725f 100644
+--- a/argp/argp-parse.c
++++ b/argp/argp-parse.c
+@@ -83,13 +83,13 @@ static volatile int _argp_hang;
+ 
+ static const struct argp_option argp_default_options[] =
+ {
+-  {"help",	  '?',	  	0, 0,  N_("Give this help list"), -1},
+-  {"usage",	  OPT_USAGE,	0, 0,  N_("Give a short usage message")},
++  {"help",	  '?',	  	NULL, 0,  N_("Give this help list"), -1},
++  {"usage",	  OPT_USAGE,	NULL, 0,  N_("Give a short usage message")},
+   {"program-name",OPT_PROGNAME, N_("NAME"), OPTION_HIDDEN,
+    N_("Set the program name")},
+   {"HANG",	  OPT_HANG,    N_("SECS"), OPTION_ARG_OPTIONAL | OPTION_HIDDEN,
+    N_("Hang for SECS seconds (default 3600)")},
+-  {0, 0}
++  {NULL, 0}
+ };
+ 
+ static error_t
+@@ -149,8 +149,8 @@ static const struct argp argp_default_argp =
+ 
+ static const struct argp_option argp_version_options[] =
+ {
+-  {"version",	  'V',	  	0, 0,  N_("Print program version"), -1},
+-  {0, 0}
++  {"version",	  'V',	  	NULL, 0,  N_("Print program version"), -1},
++  {NULL, 0}
+ };
+ 
+ static error_t
+@@ -341,7 +341,7 @@ convert_options (const struct argp *argp,
+ 			  ? optional_argument
+ 			  : required_argument)
+ 		       : no_argument);
+-		    cvt->long_end->flag = 0;
++		    cvt->long_end->flag = NULL;
+ 		    /* we add a disambiguating code to all the user's
+ 		       values (which is removed before we actually call
+ 		       the function to parse the value); this means that
+@@ -364,9 +364,9 @@ convert_options (const struct argp *argp,
+       group->args_processed = 0;
+       group->parent = parent;
+       group->parent_index = parent_index;
+-      group->input = 0;
+-      group->hook = 0;
+-      group->child_inputs = 0;
++      group->input = NULL;
++      group->hook = NULL;
++      group->child_inputs = NULL;
+ 
+       if (children)
+ 	/* Assign GROUP's CHILD_INPUTS field some space from
+@@ -382,7 +382,7 @@ convert_options (const struct argp *argp,
+       parent = group++;
+     }
+   else
+-    parent = 0;
++    parent = NULL;
+ 
+   if (children)
+     {
+@@ -417,7 +417,7 @@ parser_convert (struct parser *parser, const struct argp *argp, int flags)
+   parser->argp = argp;
+ 
+   if (argp)
+-    parser->egroup = convert_options (argp, 0, 0, parser->groups, &cvt);
++    parser->egroup = convert_options (argp, NULL, 0, parser->groups, &cvt);
+   else
+     parser->egroup = parser->groups; /* No parsers at all! */
+ }
+@@ -530,7 +530,7 @@ parser_init (struct parser *parser, const struct argp *argp,
+ 	   makes very simple wrapper argps more convenient).  */
+ 	group->child_inputs[0] = group->input;
+ 
+-      err = group_parse (group, &parser->state, ARGP_KEY_INIT, 0);
++      err = group_parse (group, &parser->state, ARGP_KEY_INIT, NULL);
+     }
+   if (err == EBADKEY)
+     err = 0;			/* Some parser didn't understand.  */
+@@ -582,11 +582,11 @@ parser_finalize (struct parser *parser,
+ 	       group < parser->egroup && (!err || err==EBADKEY);
+ 	       group++)
+ 	    if (group->args_processed == 0)
+-	      err = group_parse (group, &parser->state, ARGP_KEY_NO_ARGS, 0);
++	      err = group_parse (group, &parser->state, ARGP_KEY_NO_ARGS, NULL);
+ 	  for (group = parser->egroup - 1;
+ 	       group >= parser->groups && (!err || err==EBADKEY);
+ 	       group--)
+-	    err = group_parse (group, &parser->state, ARGP_KEY_END, 0);
++	    err = group_parse (group, &parser->state, ARGP_KEY_END, NULL);
+ 
+ 	  if (err == EBADKEY)
+ 	    err = 0;		/* Some parser didn't understand.  */
+@@ -625,7 +625,7 @@ parser_finalize (struct parser *parser,
+ 
+       /* Since we didn't exit, give each parser an error indication.  */
+       for (group = parser->groups; group < parser->egroup; group++)
+-	group_parse (group, &parser->state, ARGP_KEY_ERROR, 0);
++	group_parse (group, &parser->state, ARGP_KEY_ERROR, NULL);
+     }
+   else
+     /* Notify parsers of success, and propagate back values from parsers.  */
+@@ -636,14 +636,14 @@ parser_finalize (struct parser *parser,
+       for (group = parser->egroup - 1
+ 	   ; group >= parser->groups && (!err || err == EBADKEY)
+ 	   ; group--)
+-	err = group_parse (group, &parser->state, ARGP_KEY_SUCCESS, 0);
++	err = group_parse (group, &parser->state, ARGP_KEY_SUCCESS, NULL);
+       if (err == EBADKEY)
+ 	err = 0;		/* Some parser didn't understand.  */
+     }
+ 
+   /* Call parsers once more, to do any final cleanup.  Errors are ignored.  */
+   for (group = parser->egroup - 1; group >= parser->groups; group--)
+-    group_parse (group, &parser->state, ARGP_KEY_FINI, 0);
++    group_parse (group, &parser->state, ARGP_KEY_FINI, NULL);
+ 
+   if (err == EBADKEY)
+     err = EINVAL;
+@@ -682,7 +682,7 @@ parser_parse_arg (struct parser *parser, char *val)
+ 	{
+ 	  parser->state.next--;	/* For ARGP_KEY_ARGS, put back the arg.  */
+ 	  key = ARGP_KEY_ARGS;
+-	  err = group_parse (group, &parser->state, key, 0);
++	  err = group_parse (group, &parser->state, key, NULL);
+ 	}
+     }
+ 
+@@ -792,11 +792,11 @@ parser_parse_next (struct parser *parser, int *arg_ebadkey)
+       parser->opt_data.optopt = KEY_END;
+       if (parser->state.flags & ARGP_LONG_ONLY)
+ 	opt = _getopt_long_only_r (parser->state.argc, parser->state.argv,
+-				   parser->short_opts, parser->long_opts, 0,
++				   parser->short_opts, parser->long_opts, NULL,
+ 				   &parser->opt_data);
+       else
+ 	opt = _getopt_long_r (parser->state.argc, parser->state.argv,
+-			      parser->short_opts, parser->long_opts, 0,
++			      parser->short_opts, parser->long_opts, NULL,
+ 			      &parser->opt_data);
+       /* And see what getopt did.  */
+       parser->state.next = parser->opt_data.optind;
+@@ -893,7 +893,7 @@ __argp_parse (const struct argp *argp, int argc, char **argv, unsigned flags,
+       child[child_index++].argp = &argp_default_argp;
+       if (argp_program_version || argp_program_version_hook)
+ 	child[child_index++].argp = &argp_version_argp;
+-      child[child_index].argp = 0;
++      child[child_index].argp = NULL;
+ 
+       argp = &top_argp;
+     }
+@@ -930,7 +930,7 @@ __argp_input (const struct argp *argp, const struct argp_state *state)
+ 	  return group->input;
+     }
+ 
+-  return 0;
++  return NULL;
+ }
+ #ifdef weak_alias
+ weak_alias (__argp_input, _argp_input)
+diff --git a/catgets/gencat.c b/catgets/gencat.c
+index 7110970bd519abfe..51700a47259c8fc8 100644
+--- a/catgets/gencat.c
++++ b/catgets/gencat.c
+@@ -429,7 +429,7 @@ read_input_file (struct catalog *current, const char *fname)
+ 
+ 		      /* Test whether the identifier was already used.  */
+ 		      runp = current->all_sets;
+-		      while (runp != 0)
++		      while (runp != NULL)
+ 			if (runp->symbol != NULL
+ 			    && strcmp (runp->symbol, symbol) == 0)
+ 			  break;
+diff --git a/debug/backtracesyms.c b/debug/backtracesyms.c
+index c1f6322981ad6548..9a8c9e53a6e41859 100644
+--- a/debug/backtracesyms.c
++++ b/debug/backtracesyms.c
+@@ -82,7 +82,7 @@ __backtrace_symbols (void *const *array, int size)
+ 		   relative to the file.  */
+ 		info[cnt].dli_saddr = info[cnt].dli_fbase;
+ 
+-	      if (info[cnt].dli_sname == NULL && info[cnt].dli_saddr == 0)
++	      if (info[cnt].dli_sname == NULL && info[cnt].dli_saddr == NULL)
+ 		last += 1 + sprintf (last, "%s(%s) [%p]",
+ 				     info[cnt].dli_fname ?: "",
+ 				     info[cnt].dli_sname ?: "",
+diff --git a/elf/dl-find_object.c b/elf/dl-find_object.c
+index 0e45f0af32c9e6b4..b3f947aa15c5c57e 100644
+--- a/elf/dl-find_object.c
++++ b/elf/dl-find_object.c
+@@ -872,6 +872,6 @@ _dl_find_object_freeres (void)
+           seg = previous;
+         }
+       /* Stop searching in shared objects.  */
+-      _dlfo_loaded_mappings[idx] = 0;
++      _dlfo_loaded_mappings[idx] = NULL;
+     }
+ }
+diff --git a/elf/dl-load.c b/elf/dl-load.c
+index 8b0890499d66f67a..6c253a9c352a1d03 100644
+--- a/elf/dl-load.c
++++ b/elf/dl-load.c
+@@ -1274,7 +1274,7 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
+       }
+ 
+     /* This check recognizes most separate debuginfo files.  */
+-    if (__glibc_unlikely ((l->l_ld == 0 && type == ET_DYN) || empty_dynamic))
++    if (__glibc_unlikely ((l->l_ld == NULL && type == ET_DYN) || empty_dynamic))
+       {
+ 	errstring = N_("object file has no dynamic section");
+ 	goto lose;
+@@ -1297,7 +1297,7 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
+       }
+   }
+ 
+-  if (l->l_ld != 0)
++  if (l->l_ld != NULL)
+     l->l_ld = (ElfW(Dyn) *) ((ElfW(Addr)) l->l_ld + l->l_addr);
+ 
+   elf_get_dynamic_info (l, false, false);
+diff --git a/elf/dl-load.h b/elf/dl-load.h
+index 656ec229bfae307b..ea6d917710161508 100644
+--- a/elf/dl-load.h
++++ b/elf/dl-load.h
+@@ -88,7 +88,7 @@ static __always_inline void
+ _dl_postprocess_loadcmd (struct link_map *l, const ElfW(Ehdr) *header,
+                          const struct loadcmd *c)
+ {
+-  if (l->l_phdr == 0
++  if (l->l_phdr == NULL
+       && c->mapoff <= header->e_phoff
+       && ((size_t) (c->mapend - c->mapstart + c->mapoff)
+           >= header->e_phoff + header->e_phnum * sizeof (ElfW(Phdr))))
+diff --git a/elf/dl-lookup.c b/elf/dl-lookup.c
+index 7a70f1df2d6cf839..ee70bbfc21bf2824 100644
+--- a/elf/dl-lookup.c
++++ b/elf/dl-lookup.c
+@@ -824,7 +824,7 @@ _dl_lookup_symbol_x (const char *undef_name, struct link_map *undef_map,
+ 	  _dl_exception_free (&exception);
+ 	}
+       *ref = NULL;
+-      return 0;
++      return NULL;
+     }
+ 
+   int protected = (*ref
+diff --git a/elf/dl-minimal-malloc.c b/elf/dl-minimal-malloc.c
+index 25d870728d5eb604..69fc19c1b79e7f61 100644
+--- a/elf/dl-minimal-malloc.c
++++ b/elf/dl-minimal-malloc.c
+@@ -34,7 +34,7 @@ static void *alloc_ptr, *alloc_end, *alloc_last_block;
+ void *
+ __minimal_malloc (size_t n)
+ {
+-  if (alloc_end == 0)
++  if (alloc_end == NULL)
+     {
+       /* Consume any unused space in the last page of our data segment.  */
+       extern int _end attribute_hidden;
+@@ -57,7 +57,7 @@ __minimal_malloc (size_t n)
+       if (__glibc_unlikely (nup == 0 && n != 0))
+ 	return NULL;
+       nup += GLRO(dl_pagesize);
+-      page = __mmap (0, nup, PROT_READ|PROT_WRITE,
++      page = __mmap (NULL, nup, PROT_READ|PROT_WRITE,
+ 		     MAP_ANON|MAP_PRIVATE, -1, 0);
+       if (page == MAP_FAILED)
+ 	return NULL;
+diff --git a/elf/dl-tunables.c b/elf/dl-tunables.c
+index 614ac9c0471c5963..546549065d10c72a 100644
+--- a/elf/dl-tunables.c
++++ b/elf/dl-tunables.c
+@@ -236,7 +236,7 @@ parse_tunables_string (const char *valstring, struct tunable_toset_t *tunables)
+ static void
+ parse_tunables (const char *valstring)
+ {
+-  struct tunable_toset_t tunables[tunables_list_size] = { 0 };
++  struct tunable_toset_t tunables[tunables_list_size] = {};
+   if (parse_tunables_string (valstring, tunables) == -1)
+     {
+       _dl_error_printf (
+diff --git a/elf/dynamic-link.h b/elf/dynamic-link.h
+index 83d834ecaf609082..370b0e872e4a191f 100644
+--- a/elf/dynamic-link.h
++++ b/elf/dynamic-link.h
+@@ -152,7 +152,7 @@ elf_machine_lazy_rel (struct link_map *map, struct r_scope_elem *scope[],
+ 
+ # define ELF_DYNAMIC_DO_RELR(map)					      \
+   do {									      \
+-    ElfW(Addr) l_addr = (map)->l_addr, *where = 0;			      \
++    ElfW(Addr) l_addr = (map)->l_addr, *where = NULL;			      \
+     const ElfW(Relr) *r, *end;						      \
+     if ((map)->l_info[DT_RELR] == NULL)					      \
+       break;								      \
+diff --git a/elf/readlib.c b/elf/readlib.c
+index 32e8b8eb2298c9dd..159345699fc3911e 100644
+--- a/elf/readlib.c
++++ b/elf/readlib.c
+@@ -105,7 +105,7 @@ process_file (const char *real_file_name, const char *file_name,
+       return 1;
+     }
+ 
+-  file_contents = mmap (0, statbuf.st_size, PROT_READ, MAP_SHARED,
++  file_contents = mmap (NULL, statbuf.st_size, PROT_READ, MAP_SHARED,
+ 			fileno (file), 0);
+   if (file_contents == MAP_FAILED)
+     {
+diff --git a/elf/tlsdeschtab.h b/elf/tlsdeschtab.h
+index 07e109842e582270..0b1b7cedc81c2aac 100644
+--- a/elf/tlsdeschtab.h
++++ b/elf/tlsdeschtab.h
+@@ -93,7 +93,7 @@ _dl_make_tlsdesc_dynamic (struct link_map *map, size_t ti_offset)
+     {
+       ht = htab_create ();
+       if (! ht)
+-	return 0;
++	return NULL;
+       map->l_mach.tlsdesc_table = ht;
+     }
+ 
+@@ -101,7 +101,7 @@ _dl_make_tlsdesc_dynamic (struct link_map *map, size_t ti_offset)
+   test.tlsinfo.ti_offset = ti_offset;
+   entry = htab_find_slot (ht, &test, 1, hash_tlsdesc, eq_tlsdesc);
+   if (! entry)
+-    return 0;
++    return NULL;
+ 
+   if (*entry)
+     {
+@@ -111,7 +111,7 @@ _dl_make_tlsdesc_dynamic (struct link_map *map, size_t ti_offset)
+ 
+   *entry = td = malloc (sizeof (struct tlsdesc_dynamic_arg));
+   if (! td)
+-    return 0;
++    return NULL;
+   /* This may be higher than the map's generation, but it doesn't
+      matter much.  Worst case, we'll have one extra DTV update per
+      thread.  */
+diff --git a/hesiod/hesiod.c b/hesiod/hesiod.c
+index ee087b0392fb9b72..0354e16ead468b58 100644
+--- a/hesiod/hesiod.c
++++ b/hesiod/hesiod.c
+@@ -80,7 +80,7 @@ hesiod_init(void **context) {
+ 	char *cp;
+ 
+ 	ctx = malloc(sizeof(struct hesiod_p));
+-	if (ctx == 0)
++	if (ctx == NULL)
+ 		return (-1);
+ 
+ 	ctx->LHS = NULL;
+@@ -247,7 +247,7 @@ parse_config_file(struct hesiod_p *ctx, const char *filename) {
+ 	 */
+ 	free(ctx->RHS);
+ 	free(ctx->LHS);
+-	ctx->RHS = ctx->LHS = 0;
++	ctx->RHS = ctx->LHS = NULL;
+ 	/* Set default query classes. */
+ 	ctx->classes[0] = C_IN;
+ 	ctx->classes[1] = C_HS;
+@@ -316,7 +316,7 @@ parse_config_file(struct hesiod_p *ctx, const char *filename) {
+ 	fclose(fp);
+ 	free(ctx->RHS);
+ 	free(ctx->LHS);
+-	ctx->RHS = ctx->LHS = 0;
++	ctx->RHS = ctx->LHS = NULL;
+ 	return (-1);
+ }
+ 
+diff --git a/inet/rcmd.c b/inet/rcmd.c
+index dcf4f4ffd119f15c..0abbdc89fe6a2065 100644
+--- a/inet/rcmd.c
++++ b/inet/rcmd.c
+@@ -179,7 +179,7 @@ rcmd: socket: All ports in use\n"));
+ 			else
+ 				__fxprintf(NULL, "rcmd: socket: %m\n");
+ 
+-			__sigprocmask (SIG_SETMASK, &omask, 0);
++			__sigprocmask (SIG_SETMASK, &omask, NULL);
+ 			freeaddrinfo(res);
+ 			return -1;
+ 		}
+@@ -209,7 +209,7 @@ rcmd: socket: All ports in use\n"));
+ 			    free (buf);
+ 			  }
+ 			__set_errno (oerrno);
+-			perror(0);
++			perror(NULL);
+ 			ai = ai->ai_next;
+ 			getnameinfo(ai->ai_addr, ai->ai_addrlen,
+ 				    paddr, sizeof(paddr),
+@@ -232,11 +232,11 @@ rcmd: socket: All ports in use\n"));
+ 		freeaddrinfo(res);
+ 		(void)__fxprintf(NULL, "%s: %s\n", *ahost,
+ 				 __strerror_r(errno, errbuf, sizeof (errbuf)));
+-		__sigprocmask (SIG_SETMASK, &omask, 0);
++		__sigprocmask (SIG_SETMASK, &omask, NULL);
+ 		return -1;
+ 	}
+ 	lport--;
+-	if (fd2p == 0) {
++	if (fd2p == NULL) {
+ 		__write(s, "", 1);
+ 		lport = 0;
+ 	} else {
+@@ -344,7 +344,7 @@ socket: protocol failure in circuit setup\n")) >= 0)
+ 		}
+ 		goto bad2;
+ 	}
+-	__sigprocmask (SIG_SETMASK, &omask, 0);
++	__sigprocmask (SIG_SETMASK, &omask, NULL);
+ 	freeaddrinfo(res);
+ 	return s;
+ bad2:
+@@ -352,7 +352,7 @@ bad2:
+ 		(void)__close(*fd2p);
+ bad:
+ 	(void)__close(s);
+-	__sigprocmask (SIG_SETMASK, &omask, 0);
++	__sigprocmask (SIG_SETMASK, &omask, NULL);
+ 	freeaddrinfo(res);
+ 	return -1;
+ }
+diff --git a/inet/rexec.c b/inet/rexec.c
+index d479753fc2854add..8e8653f30f2499bc 100644
+--- a/inet/rexec.c
++++ b/inet/rexec.c
+@@ -103,7 +103,7 @@ retry:
+ 		perror(res0->ai_canonname);
+ 		goto bad;
+ 	}
+-	if (fd2p == 0) {
++	if (fd2p == NULL) {
+ 		(void) __write(s, "", 1);
+ 		port = 0;
+ 	} else {
+diff --git a/inet/ruserpass.c b/inet/ruserpass.c
+index 75e2a065524aa1d5..903fc966fdee4857 100644
+--- a/inet/ruserpass.c
++++ b/inet/ruserpass.c
+@@ -157,7 +157,7 @@ next:
+ 
+ 		case LOGIN:
+ 			if (token()) {
+-				if (*aname == 0) {
++				if (*aname == NULL) {
+ 				  char *newp;
+ 				  newp = malloc((unsigned) strlen(tokval) + 1);
+ 				  if (newp == NULL)
+@@ -180,7 +180,7 @@ next:
+ 	warnx(_("Remove 'password' line or make file unreadable by others."));
+ 				goto bad;
+ 			}
+-			if (token() && *apass == 0) {
++			if (token() && *apass == NULL) {
+ 				char *newp;
+ 				newp = malloc((unsigned) strlen(tokval) + 1);
+ 				if (newp == NULL)
+diff --git a/libio/fileops.c b/libio/fileops.c
+index 4db4a76f755b1f3b..759d737ec7eb0e38 100644
+--- a/libio/fileops.c
++++ b/libio/fileops.c
+@@ -220,7 +220,7 @@ _IO_new_file_fopen (FILE *fp, const char *filename, const char *mode,
+   const char *last_recognized;
+ 
+   if (_IO_file_is_open (fp))
+-    return 0;
++    return NULL;
+   switch (*mode)
+     {
+     case 'r':
+diff --git a/libio/genops.c b/libio/genops.c
+index 02292beed9bc3668..c1db57e6b8bc25ef 100644
+--- a/libio/genops.c
++++ b/libio/genops.c
+@@ -462,8 +462,8 @@ _IO_default_setbuf (FILE *fp, char *p, ssize_t len)
+ 	fp->_flags &= ~_IO_UNBUFFERED;
+ 	_IO_setb (fp, p, p+len, 0);
+       }
+-    fp->_IO_write_base = fp->_IO_write_ptr = fp->_IO_write_end = 0;
+-    fp->_IO_read_base = fp->_IO_read_ptr = fp->_IO_read_end = 0;
++    fp->_IO_write_base = fp->_IO_write_ptr = fp->_IO_write_end = NULL;
++    fp->_IO_read_base = fp->_IO_read_ptr = fp->_IO_read_end = NULL;
+     return fp;
+ }
+ 
+@@ -944,7 +944,7 @@ _IO_unsave_markers (FILE *fp)
+   struct _IO_marker *mark = fp->_markers;
+   if (mark)
+     {
+-      fp->_markers = 0;
++      fp->_markers = NULL;
+     }
+ 
+   if (_IO_have_backup (fp))
+diff --git a/libio/iopopen.c b/libio/iopopen.c
+index 352513a2914a9d36..6bf187e2d5f0ccfc 100644
+--- a/libio/iopopen.c
++++ b/libio/iopopen.c
+@@ -106,7 +106,7 @@ spawn_process (posix_spawn_file_actions_t *fa, FILE *fp, const char *command,
+ 	}
+     }
+ 
+-  err = __posix_spawn (&((_IO_proc_file *) fp)->pid, _PATH_BSHELL, fa, 0,
++  err = __posix_spawn (&((_IO_proc_file *) fp)->pid, _PATH_BSHELL, fa, NULL,
+ 		       (char *const[]){ (char*) "sh", (char*) "-c", (char*) "--",
+ 		       (char *) command, NULL }, __environ);
+   if (err != 0)
+diff --git a/libio/libioP.h b/libio/libioP.h
+index a83a411fdf7d93c9..34bf91fcd89718bc 100644
+--- a/libio/libioP.h
++++ b/libio/libioP.h
+@@ -915,9 +915,10 @@ extern int _IO_vscanf (const char *, va_list) __THROW;
+ # else
+ #  define FILEBUF_LITERAL(CHAIN, FLAGS, FD, WDP) \
+        { _IO_MAGIC+_IO_LINKED+_IO_IS_FILEBUF+FLAGS, \
+-	 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (FILE *) CHAIN, FD, \
++	 NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, \
++	 NULL, NULL, (FILE *) CHAIN, FD, \
+ 	 0, _IO_pos_BAD, 0, 0, { 0 }, &_IO_stdfile_##FD##_lock, _IO_pos_BAD,\
+-	 NULL, WDP, 0 }
++	 NULL, WDP, NULL }
+ # endif
+ #else
+ # ifdef _IO_USE_OLD_IO_FILE
+diff --git a/libio/wfileops.c b/libio/wfileops.c
+index 6de59683587b40b4..e747d3ed73a6c08c 100644
+--- a/libio/wfileops.c
++++ b/libio/wfileops.c
+@@ -416,7 +416,7 @@ _IO_wfile_overflow (FILE *f, wint_t wch)
+       || f->_wide_data->_IO_write_base == NULL)
+     {
+       /* Allocate a buffer if needed. */
+-      if (f->_wide_data->_IO_write_base == 0)
++      if (f->_wide_data->_IO_write_base == NULL)
+ 	{
+ 	  _IO_wdoallocbuf (f);
+ 	  _IO_free_wbackup_area (f);
+diff --git a/libio/wgenops.c b/libio/wgenops.c
+index adfb97014ff4efcd..f77a2d22f03b6c75 100644
+--- a/libio/wgenops.c
++++ b/libio/wgenops.c
+@@ -601,7 +601,7 @@ _IO_unsave_wmarkers (FILE *fp)
+   struct _IO_marker *mark = fp->_markers;
+   if (mark)
+     {
+-      fp->_markers = 0;
++      fp->_markers = NULL;
+     }
+ 
+   if (_IO_have_backup (fp))
+diff --git a/locale/programs/xmalloc.c b/locale/programs/xmalloc.c
+index 4ae46b9003cace0a..38f2bc8a2c9f0d96 100644
+--- a/locale/programs/xmalloc.c
++++ b/locale/programs/xmalloc.c
+@@ -56,10 +56,10 @@ fixup_null_alloc (size_t n)
+ {
+   VOID *p;
+ 
+-  p = 0;
++  p = NULL;
+   if (n == 0)
+     p = malloc ((size_t) 1);
+-  if (p == 0)
++  if (p == NULL)
+     error (xmalloc_exit_failure, 0, _("memory exhausted"));
+   return p;
+ }
+@@ -72,7 +72,7 @@ xmalloc (size_t n)
+   VOID *p;
+ 
+   p = malloc (n);
+-  if (p == 0)
++  if (p == NULL)
+     p = fixup_null_alloc (n);
+   return p;
+ }
+@@ -85,7 +85,7 @@ xcalloc (size_t n, size_t s)
+   VOID *p;
+ 
+   p = calloc (n, s);
+-  if (p == 0)
++  if (p == NULL)
+     p = fixup_null_alloc (n);
+   return p;
+ }
+@@ -97,10 +97,10 @@ xcalloc (size_t n, size_t s)
+ VOID *
+ xrealloc (VOID *p, size_t n)
+ {
+-  if (p == 0)
++  if (p == NULL)
+     return xmalloc (n);
+   p = realloc (p, n);
+-  if (p == 0)
++  if (p == NULL)
+     p = fixup_null_alloc (n);
+   return p;
+ }
+diff --git a/locale/setlocale.c b/locale/setlocale.c
+index 7bd27e5398e7a211..fc5bf5c427c52755 100644
+--- a/locale/setlocale.c
++++ b/locale/setlocale.c
+@@ -52,7 +52,7 @@ static char *const _nl_current_used[] =
+ # undef	DEFINE_CATEGORY
+   };
+ 
+-# define CATEGORY_USED(category)	(_nl_current_used[category] != 0)
++# define CATEGORY_USED(category)	(_nl_current_used[category] != NULL)
+ 
+ #else
+ 
+diff --git a/locale/uselocale.c b/locale/uselocale.c
+index 0b247a77d5f47f81..a2b7a1a522cbd6f5 100644
+--- a/locale/uselocale.c
++++ b/locale/uselocale.c
+@@ -54,7 +54,7 @@ __uselocale (locale_t newloc)
+ 	extern char _nl_current_##category##_used;			      \
+ 	weak_extern (_nl_current_##category##_used)			      \
+ 	weak_extern (_nl_current_##category)				      \
+-	if (&_nl_current_##category##_used != 0)			      \
++	if (&_nl_current_##category##_used != NULL)			      \
+ 	  _nl_current_##category = &locobj->__locales[category];	      \
+       }
+ # include "categories.def"
+diff --git a/malloc/arena.c b/malloc/arena.c
+index cfb1ff885450aa78..91a43ee394ac931e 100644
+--- a/malloc/arena.c
++++ b/malloc/arena.c
+@@ -389,7 +389,7 @@ alloc_new_heap  (size_t size, size_t top_pad, size_t pagesize,
+   else if (size + top_pad <= max_size)
+     size += top_pad;
+   else if (size > max_size)
+-    return 0;
++    return NULL;
+   else
+     size = max_size;
+   size = ALIGN_UP (size, pagesize);
+@@ -411,7 +411,7 @@ alloc_new_heap  (size_t size, size_t top_pad, size_t pagesize,
+     }
+   if (p2 == MAP_FAILED)
+     {
+-      p1 = (char *) MMAP (0, max_size << 1, PROT_NONE, mmap_flags);
++      p1 = (char *) MMAP (NULL, max_size << 1, PROT_NONE, mmap_flags);
+       if (p1 != MAP_FAILED)
+         {
+           p2 = (char *) (((uintptr_t) p1 + (max_size - 1))
+@@ -427,21 +427,21 @@ alloc_new_heap  (size_t size, size_t top_pad, size_t pagesize,
+         {
+           /* Try to take the chance that an allocation of only max_size
+              is already aligned. */
+-          p2 = (char *) MMAP (0, max_size, PROT_NONE, mmap_flags);
++          p2 = (char *) MMAP (NULL, max_size, PROT_NONE, mmap_flags);
+           if (p2 == MAP_FAILED)
+-            return 0;
++            return NULL;
+ 
+           if ((unsigned long) p2 & (max_size - 1))
+             {
+               __munmap (p2, max_size);
+-              return 0;
++              return NULL;
+             }
+         }
+     }
+   if (__mprotect (p2, size, mtag_mmap_flags | PROT_READ | PROT_WRITE) != 0)
+     {
+       __munmap (p2, max_size);
+-      return 0;
++      return NULL;
+     }
+ 
+   /* Only considere the actual usable range.  */
+@@ -644,7 +644,7 @@ _int_new_arena (size_t size)
+          to deal with the large request via mmap_chunk().  */
+       h = new_heap (sizeof (*h) + sizeof (*a) + MALLOC_ALIGNMENT, mp_.top_pad);
+       if (!h)
+-        return 0;
++        return NULL;
+     }
+   a = h->ar_ptr = (mstate) (h + 1);
+   malloc_init_state (a);
+diff --git a/malloc/malloc-check.c b/malloc/malloc-check.c
+index da1158b33322fc2a..6ac71df5d5879d0f 100644
+--- a/malloc/malloc-check.c
++++ b/malloc/malloc-check.c
+@@ -245,7 +245,7 @@ static void *
+ realloc_check (void *oldmem, size_t bytes)
+ {
+   INTERNAL_SIZE_T chnb;
+-  void *newmem = 0;
++  void *newmem = NULL;
+   unsigned char *magic_p;
+   size_t rb;
+ 
+@@ -254,7 +254,7 @@ realloc_check (void *oldmem, size_t bytes)
+       __set_errno (ENOMEM);
+       return NULL;
+     }
+-  if (oldmem == 0)
++  if (oldmem == NULL)
+     return malloc_check (bytes);
+ 
+   if (bytes == 0)
+diff --git a/malloc/malloc.c b/malloc/malloc.c
+index 9e577ab90010a0f1..09dc60bf74c59945 100644
+--- a/malloc/malloc.c
++++ b/malloc/malloc.c
+@@ -369,7 +369,7 @@
+ #include "morecore.c"
+ 
+ #define MORECORE         (*__glibc_morecore)
+-#define MORECORE_FAILURE 0
++#define MORECORE_FAILURE  NULL
+ 
+ /* Memory tagging.  */
+ 
+@@ -2418,7 +2418,7 @@ sysmalloc_mmap (INTERNAL_SIZE_T nb, size_t pagesize, int extra_flags, mstate av)
+   if ((unsigned long) (size) <= (unsigned long) (nb))
+     return MAP_FAILED;
+ 
+-  char *mm = (char *) MMAP (0, size,
++  char *mm = (char *) MMAP (NULL, size,
+ 			    mtag_mmap_flags | PROT_READ | PROT_WRITE,
+ 			    extra_flags);
+   if (mm == MAP_FAILED)
+@@ -2505,7 +2505,7 @@ sysmalloc_mmap_fallback (long int *s, INTERNAL_SIZE_T nb,
+   if ((unsigned long) (size) <= (unsigned long) (nb))
+     return MORECORE_FAILURE;
+ 
+-  char *mbrk = (char *) (MMAP (0, size,
++  char *mbrk = (char *) (MMAP (NULL, size,
+ 			       mtag_mmap_flags | PROT_READ | PROT_WRITE,
+ 			       extra_flags));
+   if (mbrk == MAP_FAILED)
+@@ -2581,7 +2581,7 @@ sysmalloc (INTERNAL_SIZE_T nb, mstate av)
+ 
+   /* There are no usable arenas and mmap also failed.  */
+   if (av == NULL)
+-    return 0;
++    return NULL;
+ 
+   /* Record incoming configuration of top */
+ 
+@@ -2741,7 +2741,7 @@ sysmalloc (INTERNAL_SIZE_T nb, mstate av)
+ 
+       if (brk != (char *) (MORECORE_FAILURE))
+         {
+-          if (mp_.sbrk_base == 0)
++          if (mp_.sbrk_base == NULL)
+             mp_.sbrk_base = brk;
+           av->system_mem += size;
+ 
+@@ -2940,7 +2940,7 @@ sysmalloc (INTERNAL_SIZE_T nb, mstate av)
+ 
+   /* catch all failure paths */
+   __set_errno (ENOMEM);
+-  return 0;
++  return NULL;
+ }
+ 
+ 
+@@ -3078,7 +3078,7 @@ mremap_chunk (mchunkptr p, size_t new_size)
+                           MREMAP_MAYMOVE);
+ 
+   if (cp == MAP_FAILED)
+-    return 0;
++    return NULL;
+ 
+   madvise_thp (cp, new_size);
+ 
+@@ -3242,7 +3242,7 @@ static void
+ tcache_init(void)
+ {
+   mstate ar_ptr;
+-  void *victim = 0;
++  void *victim = NULL;
+   const size_t bytes = sizeof (tcache_perthread_struct);
+ 
+   if (tcache_shutting_down)
+@@ -3360,7 +3360,7 @@ __libc_free (void *mem)
+   mstate ar_ptr;
+   mchunkptr p;                          /* chunk corresponding to mem */
+ 
+-  if (mem == 0)                              /* free(0) has no effect */
++  if (mem == NULL)                              /* free(0) has no effect */
+     return;
+ 
+   /* Quickly check that the freed pointer matches the tag for the memory.
+@@ -3416,12 +3416,12 @@ __libc_realloc (void *oldmem, size_t bytes)
+ #if REALLOC_ZERO_BYTES_FREES
+   if (bytes == 0 && oldmem != NULL)
+     {
+-      __libc_free (oldmem); return 0;
++      __libc_free (oldmem); return NULL;
+     }
+ #endif
+ 
+   /* realloc of null is supposed to be same as malloc */
+-  if (oldmem == 0)
++  if (oldmem == NULL)
+     return __libc_malloc (bytes);
+ 
+   /* Perform a quick check to ensure that the pointer's tag matches the
+@@ -3495,8 +3495,8 @@ __libc_realloc (void *oldmem, size_t bytes)
+ 
+       /* Must alloc, copy, free. */
+       newmem = __libc_malloc (bytes);
+-      if (newmem == 0)
+-        return 0;              /* propagate failure */
++      if (newmem == NULL)
++        return NULL;              /* propagate failure */
+ 
+       memcpy (newmem, oldmem, oldsize - CHUNK_HDR_SZ);
+       munmap_chunk (oldp);
+@@ -3564,7 +3564,7 @@ aligned_alloc (size_t alignment, size_t bytes)
+   if (!powerof2 (alignment) || alignment == 0)
+     {
+       __set_errno (EINVAL);
+-      return 0;
++      return NULL;
+     }
+ 
+   void *address = RETURN_ADDRESS (0);
+@@ -3590,7 +3590,7 @@ _mid_memalign (size_t alignment, size_t bytes, void *address)
+   if (alignment > SIZE_MAX / 2 + 1)
+     {
+       __set_errno (EINVAL);
+-      return 0;
++      return NULL;
+     }
+ 
+ 
+@@ -3687,7 +3687,7 @@ __libc_pvalloc (size_t bytes)
+ 						&rounded_bytes)))
+     {
+       __set_errno (ENOMEM);
+-      return 0;
++      return NULL;
+     }
+   rounded_bytes = rounded_bytes & -(pagesize - 1);
+ 
+@@ -3748,7 +3748,7 @@ __libc_calloc (size_t n, size_t elem_size)
+   else
+     {
+       /* No usable arenas.  */
+-      oldtop = 0;
++      oldtop = NULL;
+       oldtopsize = 0;
+     }
+   mem = _int_malloc (av, sz);
+@@ -3758,7 +3758,7 @@ __libc_calloc (size_t n, size_t elem_size)
+ 
+   if (!SINGLE_THREAD_P)
+     {
+-      if (mem == 0 && av != NULL)
++      if (mem == NULL && av != NULL)
+ 	{
+ 	  LIBC_PROBE (memory_calloc_retry, 1, sz);
+ 	  av = arena_get_retry (av, sz);
+@@ -3770,8 +3770,8 @@ __libc_calloc (size_t n, size_t elem_size)
+     }
+ 
+   /* Allocation failed even after a retry.  */
+-  if (mem == 0)
+-    return 0;
++  if (mem == NULL)
++    return NULL;
+ 
+   mchunkptr p = mem2chunk (mem);
+ 
+@@ -4003,7 +4003,7 @@ _int_malloc (mstate av, size_t bytes)
+ 	      while (tcache->counts[tc_idx] < mp_.tcache_count
+ 		     && (tc_victim = last (bin)) != bin)
+ 		{
+-		  if (tc_victim != 0)
++		  if (tc_victim != NULL)
+ 		    {
+ 		      bck = tc_victim->bk;
+ 		      set_inuse_bit_at_offset (tc_victim, nb);
+@@ -4839,7 +4839,7 @@ static void malloc_consolidate(mstate av)
+   fb = &fastbin (av, 0);
+   do {
+     p = atomic_exchange_acquire (fb, NULL);
+-    if (p != 0) {
++    if (p != NULL) {
+       do {
+ 	{
+ 	  if (__glibc_unlikely (misaligned_chunk (p)))
+@@ -4898,7 +4898,7 @@ static void malloc_consolidate(mstate av)
+ 	  av->top = p;
+ 	}
+ 
+-      } while ( (p = nextp) != 0);
++      } while ( (p = nextp) != NULL);
+ 
+     }
+   } while (fb++ != maxfb);
+@@ -4973,8 +4973,8 @@ _int_realloc (mstate av, mchunkptr oldp, INTERNAL_SIZE_T oldsize,
+       else
+         {
+           newmem = _int_malloc (av, nb - MALLOC_ALIGN_MASK);
+-          if (newmem == 0)
+-            return 0; /* propagate failure */
++          if (newmem == NULL)
++            return NULL; /* propagate failure */
+ 
+           newp = mem2chunk (newmem);
+           newsize = chunksize (newp);
+@@ -5068,8 +5068,8 @@ _int_memalign (mstate av, size_t alignment, size_t bytes)
+   /* Call malloc with worst case padding to hit alignment. */
+   m = (char *) (_int_malloc (av, nb + alignment + MINSIZE));
+ 
+-  if (m == 0)
+-    return 0;           /* propagate failure */
++  if (m == NULL)
++    return NULL;           /* propagate failure */
+ 
+   p = mem2chunk (m);
+ 
+@@ -5281,7 +5281,7 @@ int_mallinfo (mstate av, struct mallinfo2 *m)
+   for (i = 0; i < NFASTBINS; ++i)
+     {
+       for (p = fastbin (av, i);
+-	   p != 0;
++	   p != NULL;
+ 	   p = REVEAL_PTR (p->fd))
+         {
+ 	  if (__glibc_unlikely (misaligned_chunk (p)))
+diff --git a/malloc/obstack.c b/malloc/obstack.c
+index 579c693939dc6409..6e8299a73c13836e 100644
+--- a/malloc/obstack.c
++++ b/malloc/obstack.c
+@@ -107,7 +107,7 @@ int obstack_exit_failure = EXIT_FAILURE;
+ /* A looong time ago (before 1994, anyway; we're not sure) this global variable
+    was used by non-GNU-C macros to avoid multiple evaluation.  The GNU C
+    library still exports it because somebody might use it.  */
+-struct obstack *_obstack_compat = 0;
++struct obstack *_obstack_compat = NULL;
+ compat_symbol (libc, _obstack_compat, _obstack, GLIBC_2_0);
+ #  endif
+ # endif
+@@ -180,7 +180,7 @@ _obstack_begin (struct obstack *h,
+ 					       alignment - 1);
+   h->chunk_limit = chunk->limit
+     = (char *) chunk + h->chunk_size;
+-  chunk->prev = 0;
++  chunk->prev = NULL;
+   /* The initial chunk now contains no empty object.  */
+   h->maybe_empty_object = 0;
+   h->alloc_failed = 0;
+@@ -228,7 +228,7 @@ _obstack_begin_1 (struct obstack *h, int size, int alignment,
+ 					       alignment - 1);
+   h->chunk_limit = chunk->limit
+     = (char *) chunk + h->chunk_size;
+-  chunk->prev = 0;
++  chunk->prev = NULL;
+   /* The initial chunk now contains no empty object.  */
+   h->maybe_empty_object = 0;
+   h->alloc_failed = 0;
+@@ -328,12 +328,12 @@ _obstack_allocated_p (struct obstack *h, void *obj)
+   /* We use >= rather than > since the object cannot be exactly at
+      the beginning of the chunk but might be an empty object exactly
+      at the end of an adjacent chunk.  */
+-  while (lp != 0 && ((void *) lp >= obj || (void *) (lp)->limit < obj))
++  while (lp != NULL && ((void *) lp >= obj || (void *) (lp)->limit < obj))
+     {
+       plp = lp->prev;
+       lp = plp;
+     }
+-  return lp != 0;
++  return lp != NULL;
+ }
+ 
+ /* Free objects in obstack H, including OBJ and everything allocate
+@@ -351,7 +351,7 @@ __obstack_free (struct obstack *h, void *obj)
+   /* We use >= because there cannot be an object at the beginning of a chunk.
+      But there can be an empty object at that address
+      at the end of another chunk.  */
+-  while (lp != 0 && ((void *) lp >= obj || (void *) (lp)->limit < obj))
++  while (lp != NULL && ((void *) lp >= obj || (void *) (lp)->limit < obj))
+     {
+       plp = lp->prev;
+       CALL_FREEFUN (h, lp);
+@@ -366,7 +366,7 @@ __obstack_free (struct obstack *h, void *obj)
+       h->chunk_limit = lp->limit;
+       h->chunk = lp;
+     }
+-  else if (obj != 0)
++  else if (obj != NULL)
+     /* obj is not in any of the chunks! */
+     abort ();
+ }
+@@ -383,7 +383,7 @@ _obstack_memory_used (struct obstack *h)
+   struct _obstack_chunk *lp;
+   int nbytes = 0;
+ 
+-  for (lp = h->chunk; lp != 0; lp = lp->prev)
++  for (lp = h->chunk; lp != NULL; lp = lp->prev)
+     {
+       nbytes += lp->limit - (char *) lp;
+     }
+diff --git a/malloc/reallocarray.c b/malloc/reallocarray.c
+index 2a5f2a446d9653a6..0118f882539c6469 100644
+--- a/malloc/reallocarray.c
++++ b/malloc/reallocarray.c
+@@ -27,7 +27,7 @@ __libc_reallocarray (void *optr, size_t nmemb, size_t elem_size)
+   if (__builtin_mul_overflow (nmemb, elem_size, &bytes))
+     {
+       __set_errno (ENOMEM);
+-      return 0;
++      return NULL;
+     }
+   return realloc (optr, bytes);
+ }
+diff --git a/misc/getttyent.c b/misc/getttyent.c
+index 92d92b026fbf5d0c..0df7c28ce1ca35c7 100644
+--- a/misc/getttyent.c
++++ b/misc/getttyent.c
+@@ -126,7 +126,7 @@ __getttyent (void)
+ 			;
+ 	tty.ty_comment = p;
+ 	if (*p == 0)
+-		tty.ty_comment = 0;
++		tty.ty_comment = NULL;
+ 	if ((p = strchr (p, '\n')))
+ 		*p = '\0';
+ 	return (&tty);
+diff --git a/misc/sbrk.c b/misc/sbrk.c
+index 8578666ed03699a3..06aa02179d937690 100644
+--- a/misc/sbrk.c
++++ b/misc/sbrk.c
+@@ -56,7 +56,7 @@ __sbrk (intptr_t increment)
+ #endif
+ 
+   if (update_brk)
+-    if (__brk (0) < 0)		/* Initialize the break.  */
++    if (__brk (NULL) < 0)		/* Initialize the break.  */
+       return (void *) -1;
+ 
+   if (increment == 0)
+diff --git a/nis/nis_server.c b/nis/nis_server.c
+index 622204f9b572887c..255b2f85144dbbc9 100644
+--- a/nis/nis_server.c
++++ b/nis/nis_server.c
+@@ -29,7 +29,7 @@ nis_servstate (const nis_server *serv, const nis_tag *tags,
+   nis_taglist taglist;
+   nis_taglist tagres;
+ 
+-  *result = 0;
++  *result = NULL;
+   tagres.tags.tags_len = 0;
+   tagres.tags.tags_val = NULL;
+   taglist.tags.tags_len = numtags;
+diff --git a/nptl/pthread_create.c b/nptl/pthread_create.c
+index ef3ec3329027ac9f..a6254b1204ccfc80 100644
+--- a/nptl/pthread_create.c
++++ b/nptl/pthread_create.c
+@@ -239,7 +239,7 @@ static int create_thread (struct pthread *pd, const struct pthread_attr *attr,
+      stopped since we have to set the scheduling parameters or set the
+      affinity.  */
+   bool need_setaffinity = (attr != NULL && attr->extension != NULL
+-			   && attr->extension->cpuset != 0);
++			   && attr->extension->cpuset != NULL);
+   if (attr != NULL
+       && (__glibc_unlikely (need_setaffinity)
+ 	  || __glibc_unlikely ((attr->flags & ATTR_FLAG_NOTINHERITSCHED) != 0)))
+diff --git a/nptl_db/fetch-value.c b/nptl_db/fetch-value.c
+index bdf1f444d6984431..5d7474b18d0c7be5 100644
+--- a/nptl_db/fetch-value.c
++++ b/nptl_db/fetch-value.c
+@@ -69,7 +69,7 @@ _td_locate_field (td_thragent_t *ta,
+ 	}
+     }
+ 
+-  if (idx != 0 && DB_DESC_NELEM (desc) != 0
++  if (idx != NULL && DB_DESC_NELEM (desc) != 0
+       && idx - (psaddr_t) 0 > DB_DESC_NELEM (desc))
+     /* This is an internal indicator to callers with nonzero IDX
+        that the IDX value is too big.  */
+diff --git a/nptl_db/td_init.c b/nptl_db/td_init.c
+index f47b68d92c079307..b431ea63601b22c3 100644
+--- a/nptl_db/td_init.c
++++ b/nptl_db/td_init.c
+@@ -32,7 +32,7 @@ td_init (void)
+ bool
+ __td_ta_rtld_global (td_thragent_t *ta)
+ {
+-  if (ta->ta_addr__rtld_global == 0)
++  if (ta->ta_addr__rtld_global == NULL)
+     {
+       psaddr_t rtldglobalp;
+       if (DB_GET_VALUE (rtldglobalp, ta, __nptl_rtld_global, 0) == TD_OK)
+diff --git a/nptl_db/td_ta_clear_event.c b/nptl_db/td_ta_clear_event.c
+index ebba4e83dc7b3c02..6322d800af5712ed 100644
+--- a/nptl_db/td_ta_clear_event.c
++++ b/nptl_db/td_ta_clear_event.c
+@@ -25,7 +25,7 @@ td_ta_clear_event (const td_thragent_t *ta_arg, td_thr_events_t *event)
+ {
+   td_thragent_t *const ta = (td_thragent_t *) ta_arg;
+   td_err_e err;
+-  psaddr_t eventmask = 0;
++  psaddr_t eventmask = NULL;
+   void *copy = NULL;
+ 
+   LOG ("td_ta_clear_event");
+diff --git a/nptl_db/td_ta_event_getmsg.c b/nptl_db/td_ta_event_getmsg.c
+index 8598716c741a5dae..d199546f597c2733 100644
+--- a/nptl_db/td_ta_event_getmsg.c
++++ b/nptl_db/td_ta_event_getmsg.c
+@@ -46,7 +46,7 @@ td_ta_event_getmsg (const td_thragent_t *ta_arg, td_event_msg_t *msg)
+   if (err != TD_OK)
+     return err;
+ 
+-  if (thp == 0)
++  if (thp == NULL)
+     /* Nothing waiting.  */
+     return TD_NOMSG;
+ 
+@@ -95,9 +95,9 @@ td_ta_event_getmsg (const td_thragent_t *ta_arg, td_event_msg_t *msg)
+   if (err != TD_OK)
+     return err;
+ 
+-  if (next != 0)
++  if (next != NULL)
+     /* Clear the next pointer in the current descriptor.  */
+-    err = DB_PUT_FIELD (ta, thp, pthread, nextevent, 0, 0);
++    err = DB_PUT_FIELD (ta, thp, pthread, nextevent, 0, NULL);
+ 
+   return err;
+ }
+diff --git a/nptl_db/td_ta_map_lwp2thr.c b/nptl_db/td_ta_map_lwp2thr.c
+index 1bd1fe9ec7400149..ab16e40119d2b1c5 100644
+--- a/nptl_db/td_ta_map_lwp2thr.c
++++ b/nptl_db/td_ta_map_lwp2thr.c
+@@ -119,7 +119,7 @@ __td_ta_lookup_th_unique (const td_thragent_t *ta_arg,
+       if (ps_lgetregs (ta->ph, lwpid, regs) != PS_OK)
+ 	return TD_ERR;
+       terr = _td_fetch_value_local (ta, ta->ta_howto_data.reg, -1,
+-				    0, regs, &addr);
++				    NULL, regs, &addr);
+       if (terr != TD_OK)
+ 	return terr;
+ 
+@@ -149,7 +149,7 @@ __td_ta_lookup_th_unique (const td_thragent_t *ta_arg,
+       if (ps_lgetregs (ta->ph, lwpid, regs) != PS_OK)
+ 	return TD_ERR;
+       terr = _td_fetch_value_local (ta, ta->ta_howto_data.reg_thread_area,
+-				    -1, 0, regs, &addr);
++				    -1, NULL, regs, &addr);
+       if (terr != TD_OK)
+ 	return terr;
+       /* In this descriptor the nelem word is overloaded as scale factor.  */
+@@ -195,12 +195,12 @@ td_ta_map_lwp2thr (const td_thragent_t *ta_arg,
+   if (err != TD_OK)
+     return err;
+ 
+-  if (list == 0)
++  if (list == NULL)
+     {
+       if (ps_getpid (ta->ph) != lwpid)
+ 	return TD_ERR;
+       th->th_ta_p = ta;
+-      th->th_unique = 0;
++      th->th_unique = NULL;
+       return TD_OK;
+     }
+ 
+diff --git a/nptl_db/td_ta_set_event.c b/nptl_db/td_ta_set_event.c
+index ee674b35fc8390a5..ee3d63e4e6d434f4 100644
+--- a/nptl_db/td_ta_set_event.c
++++ b/nptl_db/td_ta_set_event.c
+@@ -25,7 +25,7 @@ td_ta_set_event (const td_thragent_t *ta_arg, td_thr_events_t *event)
+ {
+   td_thragent_t *const ta = (td_thragent_t *) ta_arg;
+   td_err_e err;
+-  psaddr_t eventmask = 0;
++  psaddr_t eventmask = NULL;
+   void *copy = NULL;
+ 
+   LOG ("td_ta_set_event");
+diff --git a/nptl_db/td_ta_thr_iter.c b/nptl_db/td_ta_thr_iter.c
+index ce0c06cb3a89e845..cb3d8abb6132e92d 100644
+--- a/nptl_db/td_ta_thr_iter.c
++++ b/nptl_db/td_ta_thr_iter.c
+@@ -37,19 +37,19 @@ iterate_thread_list (td_thragent_t *ta, td_thr_iter_f *callback,
+   if (err != TD_OK)
+     return err;
+ 
+-  if (next == 0 && fake_empty)
++  if (next == NULL && fake_empty)
+     {
+       /* __pthread_initialize_minimal has not run.  There is just the main
+ 	 thread to return.  We cannot rely on its thread register.  They
+ 	 sometimes contain garbage that would confuse us, left by the
+ 	 kernel at exec.  So if it looks like initialization is incomplete,
+ 	 we only fake a special descriptor for the initial thread.  */
+-      td_thrhandle_t th = { ta, 0 };
++      td_thrhandle_t th = { ta, NULL };
+       return callback (&th, cbdata_p) != 0 ? TD_DBERR : TD_OK;
+     }
+ 
+   /* Cache the offset from struct pthread to its list_t member.  */
+-  err = DB_GET_FIELD_ADDRESS (ofs, ta, 0, pthread, list, 0);
++  err = DB_GET_FIELD_ADDRESS (ofs, ta, NULL, pthread, list, 0);
+   if (err != TD_OK)
+     return err;
+ 
+@@ -66,7 +66,7 @@ iterate_thread_list (td_thragent_t *ta, td_thr_iter_f *callback,
+       psaddr_t addr, schedpolicy, schedprio;
+ 
+       addr = next - (ofs - (psaddr_t) 0);
+-      if (next == 0 || addr == 0) /* Sanity check.  */
++      if (next == NULL || addr == NULL) /* Sanity check.  */
+ 	return TD_DBERR;
+ 
+       /* Copy the whole descriptor in once so we can access the several
+@@ -117,7 +117,7 @@ td_ta_thr_iter (const td_thragent_t *ta_arg, td_thr_iter_f *callback,
+ {
+   td_thragent_t *const ta = (td_thragent_t *) ta_arg;
+   td_err_e err;
+-  psaddr_t list = 0;
++  psaddr_t list = NULL;
+ 
+   LOG ("td_ta_thr_iter");
+ 
+diff --git a/nptl_db/td_ta_tsd_iter.c b/nptl_db/td_ta_tsd_iter.c
+index 58d68eb871ea4b2e..592d43ecc29beb3b 100644
+--- a/nptl_db/td_ta_tsd_iter.c
++++ b/nptl_db/td_ta_tsd_iter.c
+@@ -38,7 +38,7 @@ td_ta_tsd_iter (const td_thragent_t *ta_arg, td_key_iter_f *callback,
+     return TD_BADTA;
+ 
+   /* This makes sure we have the size information on hand.  */
+-  addr = 0;
++  addr = NULL;
+   err = _td_locate_field (ta,
+ 			  ta->ta_var___pthread_keys, SYM_DESC___pthread_keys,
+ 			  (psaddr_t) 0 + 1, &addr);
+diff --git a/nptl_db/td_thr_event_enable.c b/nptl_db/td_thr_event_enable.c
+index 48c474c6674fd39b..c630722a88402da9 100644
+--- a/nptl_db/td_thr_event_enable.c
++++ b/nptl_db/td_thr_event_enable.c
+@@ -24,7 +24,7 @@ td_thr_event_enable (const td_thrhandle_t *th, int onoff)
+ {
+   LOG ("td_thr_event_enable");
+ 
+-  if (th->th_unique != 0)
++  if (th->th_unique != NULL)
+     {
+       /* Write the new value into the thread data structure.  */
+       td_err_e err = DB_PUT_FIELD (th->th_ta_p, th->th_unique, pthread,
+diff --git a/nptl_db/td_thr_event_getmsg.c b/nptl_db/td_thr_event_getmsg.c
+index c0db52dd6261221b..aa5f55289138206c 100644
+--- a/nptl_db/td_thr_event_getmsg.c
++++ b/nptl_db/td_thr_event_getmsg.c
+@@ -74,7 +74,7 @@ td_thr_event_getmsg (const td_thrhandle_t *th, td_event_msg_t *msg)
+   if (err != TD_OK)
+     return err;
+ 
+-  while (thp != 0)
++  while (thp != NULL)
+     {
+       psaddr_t next;
+       err = DB_GET_FIELD (next, th->th_ta_p, th->th_unique, pthread,
+@@ -97,13 +97,13 @@ td_thr_event_getmsg (const td_thrhandle_t *th, td_event_msg_t *msg)
+ 
+ 	  err = _td_store_value (th->th_ta_p,
+ 				 th->th_ta_p->ta_var___nptl_last_event, -1,
+-				 0, prevp, next);
++				 NULL, prevp, next);
+ 	  if (err != TD_OK)
+ 	    return err;
+ 
+ 	  /* Now clear this thread's own next pointer so it's not dangling
+ 	     when the thread resumes and then chains on for its next event.  */
+-	  return DB_PUT_FIELD (th->th_ta_p, thp, pthread, nextevent, 0, 0);
++	  return DB_PUT_FIELD (th->th_ta_p, thp, pthread, nextevent, 0, NULL);
+ 	}
+ 
+       err = DB_GET_FIELD_ADDRESS (prevp, th->th_ta_p, thp, pthread,
+diff --git a/nptl_db/td_thr_get_info.c b/nptl_db/td_thr_get_info.c
+index 84765d7c91d2fa7c..6584a692579b4518 100644
+--- a/nptl_db/td_thr_get_info.c
++++ b/nptl_db/td_thr_get_info.c
+@@ -31,21 +31,21 @@ td_thr_get_info (const td_thrhandle_t *th, td_thrinfo_t *infop)
+ 
+   LOG ("td_thr_get_info");
+ 
+-  if (th->th_unique == 0)
++  if (th->th_unique == NULL)
+     {
+       /* Special case for the main thread before initialization.  */
+       copy = NULL;
+-      tls = 0;
+-      cancelhandling = 0;
++      tls = NULL;
++      cancelhandling = NULL;
+       schedpolicy = SCHED_OTHER;
+-      schedprio = 0;
+-      tid = 0;
++      schedprio = NULL;
++      tid = NULL;
+ 
+       /* Ignore errors to obtain the __nptl_initial_report_events
+ 	 value because GDB no longer uses the events interface, and
+ 	 other libthread_db consumers hopefully can handle different
+ 	 libpthread/lds.o load orders.  */
+-      report_events = 0;
++      report_events = NULL;
+       (void) DB_GET_VALUE (report_events, th->th_ta_p,
+ 			   __nptl_initial_report_events, 0);
+       err = TD_OK;
+@@ -105,8 +105,8 @@ td_thr_get_info (const td_thrhandle_t *th, td_thrinfo_t *infop)
+ 
+   /* Initialization which are the same in both cases.  */
+   infop->ti_ta_p = th->th_ta_p;
+-  infop->ti_lid = tid == 0 ? ps_getpid (th->th_ta_p->ph) : (uintptr_t) tid;
+-  infop->ti_traceme = report_events != 0;
++  infop->ti_lid = tid == NULL ? ps_getpid (th->th_ta_p->ph) : (uintptr_t) tid;
++  infop->ti_traceme = report_events != NULL;
+ 
+   if (copy != NULL)
+     err = DB_GET_FIELD_LOCAL (infop->ti_startfunc, th->th_ta_p, copy, pthread,
+diff --git a/nptl_db/td_thr_getfpregs.c b/nptl_db/td_thr_getfpregs.c
+index 81bbcdffb622d9c8..0af1e44331cb62a6 100644
+--- a/nptl_db/td_thr_getfpregs.c
++++ b/nptl_db/td_thr_getfpregs.c
+@@ -27,7 +27,7 @@ td_thr_getfpregs (const td_thrhandle_t *th, prfpregset_t *regset)
+ 
+   LOG ("td_thr_getfpregs");
+ 
+-  if (th->th_unique == 0)
++  if (th->th_unique == NULL)
+     /* Special case for the main thread before initialization.  */
+     return ps_lgetfpregs (th->th_ta_p->ph, ps_getpid (th->th_ta_p->ph),
+ 			  regset) != PS_OK ? TD_ERR : TD_OK;
+diff --git a/nptl_db/td_thr_getgregs.c b/nptl_db/td_thr_getgregs.c
+index eb075473aa2bf5c8..1dc0ec7063249f55 100644
+--- a/nptl_db/td_thr_getgregs.c
++++ b/nptl_db/td_thr_getgregs.c
+@@ -27,7 +27,7 @@ td_thr_getgregs (const td_thrhandle_t *th, prgregset_t regset)
+ 
+   LOG ("td_thr_getgregs");
+ 
+-  if (th->th_unique == 0)
++  if (th->th_unique == NULL)
+     /* Special case for the main thread before initialization.  */
+     return ps_lgetregs (th->th_ta_p->ph, ps_getpid (th->th_ta_p->ph),
+ 			regset) != PS_OK ? TD_ERR : TD_OK;
+diff --git a/nptl_db/td_thr_setfpregs.c b/nptl_db/td_thr_setfpregs.c
+index dae133464c0194ff..11b2fa814f73d21c 100644
+--- a/nptl_db/td_thr_setfpregs.c
++++ b/nptl_db/td_thr_setfpregs.c
+@@ -27,7 +27,7 @@ td_thr_setfpregs (const td_thrhandle_t *th, const prfpregset_t *fpregs)
+ 
+   LOG ("td_thr_setfpregs");
+ 
+-  if (th->th_unique == 0)
++  if (th->th_unique == NULL)
+     /* Special case for the main thread before initialization.  */
+     return ps_lsetfpregs (th->th_ta_p->ph, ps_getpid (th->th_ta_p->ph),
+ 			  fpregs) != PS_OK ? TD_ERR : TD_OK;
+diff --git a/nptl_db/td_thr_setgregs.c b/nptl_db/td_thr_setgregs.c
+index aa51885fd32565b5..9f6c3a35479c38e0 100644
+--- a/nptl_db/td_thr_setgregs.c
++++ b/nptl_db/td_thr_setgregs.c
+@@ -27,7 +27,7 @@ td_thr_setgregs (const td_thrhandle_t *th, prgregset_t gregs)
+ 
+   LOG ("td_thr_setgregs");
+ 
+-  if (th->th_unique == 0)
++  if (th->th_unique == NULL)
+     /* Special case for the main thread before initialization.  */
+     return ps_lsetregs (th->th_ta_p->ph, ps_getpid (th->th_ta_p->ph),
+ 			gregs) != PS_OK ? TD_ERR : TD_OK;
+diff --git a/nptl_db/td_thr_tlsbase.c b/nptl_db/td_thr_tlsbase.c
+index a952eea798004f64..9a3f59aa8044a88d 100644
+--- a/nptl_db/td_thr_tlsbase.c
++++ b/nptl_db/td_thr_tlsbase.c
+@@ -37,14 +37,14 @@ dtv_slotinfo_list (td_thragent_t *ta,
+     }
+   else
+     {
+-      if (ta->ta_addr__dl_tls_dtv_slotinfo_list == 0
++      if (ta->ta_addr__dl_tls_dtv_slotinfo_list == NULL
+ 	  && td_mod_lookup (ta->ph, NULL, SYM__dl_tls_dtv_slotinfo_list,
+ 			    &ta->ta_addr__dl_tls_dtv_slotinfo_list) != PS_OK)
+ 	return TD_ERR;
+ 
+       err = _td_fetch_value (ta, ta->ta_var__dl_tls_dtv_slotinfo_list,
+-			     SYM_DESC__dl_tls_dtv_slotinfo_list,
+-			     0, ta->ta_addr__dl_tls_dtv_slotinfo_list, &head);
++			     SYM_DESC__dl_tls_dtv_slotinfo_list, NULL,
++			     ta->ta_addr__dl_tls_dtv_slotinfo_list, &head);
+       if (err != TD_OK)
+ 	return err;
+     }
+@@ -129,7 +129,7 @@ td_thr_tlsbase (const td_thrhandle_t *th,
+     return TD_NOTLS;
+ 
+   psaddr_t pd = th->th_unique;
+-  if (pd == 0)
++  if (pd == NULL)
+     {
+       /* This is the fake handle for the main thread before libpthread
+ 	 initialization.  We are using 0 for its th_unique because we can't
+@@ -145,7 +145,7 @@ td_thr_tlsbase (const td_thrhandle_t *th,
+ 				      &main_th);
+       if (err == 0)
+ 	pd = main_th.th_unique;
+-      if (pd == 0)
++      if (pd == NULL)
+ 	return TD_TLSDEFER;
+     }
+ 
+diff --git a/nptl_db/td_thr_tsd.c b/nptl_db/td_thr_tsd.c
+index 234e894dbb818d4c..19dc2e7749358c5f 100644
+--- a/nptl_db/td_thr_tsd.c
++++ b/nptl_db/td_thr_tsd.c
+@@ -42,8 +42,8 @@ td_thr_tsd (const td_thrhandle_t *th, const thread_key_t tk, void **data)
+     return TD_BADKEY;
+ 
+   /* This makes sure we have the size information on hand.  */
+-  err = DB_GET_FIELD_ADDRESS (level2, th->th_ta_p, 0, pthread_key_data_level2,
+-			      data, 1);
++  err = DB_GET_FIELD_ADDRESS (level2, th->th_ta_p, NULL,
++			      pthread_key_data_level2, data, 1);
+   if (err != TD_OK)
+     return err;
+ 
+@@ -62,7 +62,7 @@ td_thr_tsd (const td_thrhandle_t *th, const thread_key_t tk, void **data)
+     return err;
+ 
+   /* Check the pointer to the second level array.  */
+-  if (level1 == 0)
++  if (level1 == NULL)
+     return TD_NOTSD;
+ 
+   /* Locate the element within the second level array.  */
+diff --git a/nptl_db/td_thr_validate.c b/nptl_db/td_thr_validate.c
+index 0c3afe346f1f2d06..76c4cf547b0f1578 100644
+--- a/nptl_db/td_thr_validate.c
++++ b/nptl_db/td_thr_validate.c
+@@ -27,7 +27,7 @@ __td_ta_stack_user (td_thragent_t *ta, psaddr_t *plist)
+ 				 rtld_global, _dl_stack_user, 0);
+   else
+     {
+-      if (ta->ta_addr__dl_stack_user == 0
++      if (ta->ta_addr__dl_stack_user == NULL
+ 	  && td_mod_lookup (ta->ph, NULL, SYM__dl_stack_user,
+ 			    &ta->ta_addr__dl_stack_user) != PS_OK)
+ 	return TD_ERR;
+@@ -45,7 +45,7 @@ __td_ta_stack_used (td_thragent_t *ta, psaddr_t *plist)
+ 				 rtld_global, _dl_stack_used, 0);
+   else
+     {
+-      if (ta->ta_addr__dl_stack_used == 0
++      if (ta->ta_addr__dl_stack_used == NULL
+ 	  && td_mod_lookup (ta->ph, NULL, SYM__dl_stack_used,
+ 			    &ta->ta_addr__dl_stack_used) != PS_OK)
+ 	return TD_ERR;
+@@ -63,12 +63,12 @@ check_thread_list (const td_thrhandle_t *th, psaddr_t head, bool *uninit)
+   err = DB_GET_FIELD (next, th->th_ta_p, head, list_t, next, 0);
+   if (err == TD_OK)
+     {
+-      if (next == 0)
++      if (next == NULL)
+ 	{
+ 	  *uninit = true;
+ 	  return TD_NOTHR;
+ 	}
+-      err = DB_GET_FIELD_ADDRESS (ofs, th->th_ta_p, 0, pthread, list, 0);
++      err = DB_GET_FIELD_ADDRESS (ofs, th->th_ta_p, NULL, pthread, list, 0);
+     }
+ 
+   while (err == TD_OK)
+@@ -108,7 +108,7 @@ td_thr_validate (const td_thrhandle_t *th)
+       if (err == TD_OK)
+ 	err = check_thread_list (th, list, &uninit);
+ 
+-      if (err == TD_NOTHR && uninit && th->th_unique == 0)
++      if (err == TD_NOTHR && uninit && th->th_unique == NULL)
+ 	/* __pthread_initialize_minimal has not run yet.
+ 	   There is only the special case thread handle.  */
+ 	err = TD_OK;
+diff --git a/nptl_db/thread_dbP.h b/nptl_db/thread_dbP.h
+index 72d55588457a3a74..24960d048e6b7f03 100644
+--- a/nptl_db/thread_dbP.h
++++ b/nptl_db/thread_dbP.h
+@@ -158,7 +158,7 @@ extern ps_err_e td_mod_lookup (struct ps_prochandle *ps, const char *modname,
+ 
+ /* Store in psaddr_t VAR the address of inferior's symbol NAME.  */
+ #define DB_GET_SYMBOL(var, ta, name)					      \
+-  (((ta)->ta_addr_##name == 0						      \
++  (((ta)->ta_addr_##name == NULL					      \
+     && td_lookup ((ta)->ph, SYM_##name, &(ta)->ta_addr_##name) != PS_OK)      \
+    ? TD_ERR : ((var) = (ta)->ta_addr_##name, TD_OK))
+ 
+@@ -199,7 +199,7 @@ extern td_err_e _td_locate_field (td_thragent_t *ta,
+ /* Store in psaddr_t VAR the value of variable NAME[IDX] in the inferior.
+    A target value smaller than psaddr_t is zero-extended.  */
+ #define DB_GET_VALUE(var, ta, name, idx)				      \
+-  (((ta)->ta_addr_##name == 0						      \
++  (((ta)->ta_addr_##name == NULL					      \
+     && td_lookup ((ta)->ph, SYM_##name, &(ta)->ta_addr_##name) != PS_OK)      \
+    ? TD_ERR								      \
+    : _td_fetch_value ((ta), (ta)->ta_var_##name, SYM_DESC_##name, 	      \
+@@ -231,7 +231,7 @@ extern td_err_e _td_fetch_value_local (td_thragent_t *ta,
+ /* Store psaddr_t VALUE in variable NAME[IDX] in the inferior.
+    A target field smaller than psaddr_t is zero-extended.  */
+ #define DB_PUT_VALUE(ta, name, idx, value)				      \
+-  (((ta)->ta_addr_##name == 0						      \
++  (((ta)->ta_addr_##name == NULL					      \
+     && td_lookup ((ta)->ph, SYM_##name, &(ta)->ta_addr_##name) != PS_OK)      \
+    ? TD_ERR								      \
+    : _td_store_value ((ta), (ta)->ta_var_##name, SYM_DESC_##name, 	      \
+diff --git a/nss/getaddrinfo.c b/nss/getaddrinfo.c
+index 3ccd3905fa0f07c5..78f50954df1cca36 100644
+--- a/nss/getaddrinfo.c
++++ b/nss/getaddrinfo.c
+@@ -1144,8 +1144,8 @@ gaih_inet (const char *name, const struct gaih_service *service,
+   struct gaih_addrtuple *addrmem = NULL;
+   int result = 0;
+ 
+-  struct gaih_result res = {0};
+-  struct gaih_addrtuple local_at[2] = {0};
++  struct gaih_result res = {};
++  struct gaih_addrtuple local_at[2] = {};
+ 
+   res.at = local_at;
+ 
+diff --git a/posix/getopt.c b/posix/getopt.c
+index e2951f746011eceb..66aaeb3cc46409fa 100644
+--- a/posix/getopt.c
++++ b/posix/getopt.c
+@@ -729,7 +729,7 @@ _getopt_internal (int argc, char **argv, const char *optstring,
+   NAME (int argc, char *const *argv, const char *optstring)	\
+   {								\
+     return _getopt_internal (argc, (char **)argv, optstring,	\
+-			     0, 0, 0, POSIXLY_CORRECT);		\
++			     NULL, NULL, 0, POSIXLY_CORRECT);	\
+   }
+ 
+ #ifdef _LIBC
+diff --git a/posix/regcomp.c b/posix/regcomp.c
+index 6595bb3c0d01a9f8..393ab0715ed02e7a 100644
+--- a/posix/regcomp.c
++++ b/posix/regcomp.c
+@@ -674,7 +674,7 @@ re_comp (const char *s)
+     {
+       if (!re_comp_buf.buffer)
+ 	return gettext ("No previous regular expression");
+-      return 0;
++      return NULL;
+     }
+ 
+   if (re_comp_buf.buffer)
+diff --git a/posix/regexec.c b/posix/regexec.c
+index 180e3bce40ca4f7c..99f49bed62f8edec 100644
+--- a/posix/regexec.c
++++ b/posix/regexec.c
+@@ -2277,7 +2277,7 @@ merge_state_with_log (reg_errcode_t *err, re_match_context_t *mctx,
+       mctx->state_log[cur_idx] = next_state;
+       mctx->state_log_top = cur_idx;
+     }
+-  else if (mctx->state_log[cur_idx] == 0)
++  else if (mctx->state_log[cur_idx] == NULL)
+     {
+       mctx->state_log[cur_idx] = next_state;
+     }
+diff --git a/resolv/base64.c b/resolv/base64.c
+index 6237257bb0ce468a..11463235c8d5c475 100644
+--- a/resolv/base64.c
++++ b/resolv/base64.c
+@@ -205,7 +205,7 @@ b64_pton (char const *src, u_char *target, size_t targsize)
+ 			break;
+ 
+ 		pos = strchr(Base64, ch);
+-		if (pos == 0) 		/* A non-base64 character. */
++		if (pos == NULL) 		/* A non-base64 character. */
+ 			return (-1);
+ 
+ 		switch (state) {
+diff --git a/resolv/compat-gethnamaddr.c b/resolv/compat-gethnamaddr.c
+index 1c630fcb3d63d377..eec68d0b23bb5734 100644
+--- a/resolv/compat-gethnamaddr.c
++++ b/resolv/compat-gethnamaddr.c
+@@ -804,7 +804,7 @@ _gethtbyname2 (const char *name, int af)
+ 			continue;
+ 		if (strcasecmp(p->h_name, name) == 0)
+ 			break;
+-		for (cp = p->h_aliases; *cp != 0; cp++)
++		for (cp = p->h_aliases; *cp != NULL; cp++)
+ 			if (strcasecmp(*cp, name) == 0)
+ 				goto found;
+ 	}
+diff --git a/resolv/res_debug.c b/resolv/res_debug.c
+index dab5283bbf1ab516..0221c322369a2ccd 100644
+--- a/resolv/res_debug.c
++++ b/resolv/res_debug.c
+@@ -502,7 +502,7 @@ const struct res_sym __p_rcode_syms[] attribute_hidden = {
+ 
+ int
+ sym_ston(const struct res_sym *syms, const char *name, int *success) {
+-	for ((void)NULL; syms->name != 0; syms++) {
++	for ((void)NULL; syms->name != NULL; syms++) {
+ 		if (strcasecmp (name, syms->name) == 0) {
+ 			if (success)
+ 				*success = 1;
+@@ -518,7 +518,7 @@ const char *
+ sym_ntos(const struct res_sym *syms, int number, int *success) {
+ 	static char unname[20];
+ 
+-	for ((void)NULL; syms->name != 0; syms++) {
++	for ((void)NULL; syms->name != NULL; syms++) {
+ 		if (number == syms->number) {
+ 			if (success)
+ 				*success = 1;
+@@ -537,7 +537,7 @@ const char *
+ sym_ntop(const struct res_sym *syms, int number, int *success) {
+ 	static char unname[20];
+ 
+-	for ((void)NULL; syms->name != 0; syms++) {
++	for ((void)NULL; syms->name != NULL; syms++) {
+ 		if (number == syms->number) {
+ 			if (success)
+ 				*success = 1;
+diff --git a/resolv/res_hconf.c b/resolv/res_hconf.c
+index e1158943a9457467..1737bce2f9d02ad8 100644
+--- a/resolv/res_hconf.c
++++ b/resolv/res_hconf.c
+@@ -118,12 +118,12 @@ arg_trimdomain_list (const char *fname, int line_num, const char *args)
+ 	  if (__asprintf (&buf, _("\
+ %s: line %d: cannot specify more than %d trim domains"),
+ 			  fname, line_num, TRIMDOMAINS_MAX) < 0)
+-	    return 0;
++	    return NULL;
+ 
+ 	  __fxprintf (NULL, "%s", buf);
+ 
+ 	  free (buf);
+-	  return 0;
++	  return NULL;
+ 	}
+       _res_hconf.trimdomain[_res_hconf.num_trimdomains++] =
+ 	__strndup (start, len);
+@@ -139,12 +139,12 @@ arg_trimdomain_list (const char *fname, int line_num, const char *args)
+ 	      if (__asprintf (&buf, _("\
+ %s: line %d: list delimiter not followed by domain"),
+ 			      fname, line_num) < 0)
+-		return 0;
++		return NULL;
+ 
+ 	      __fxprintf (NULL, "%s", buf);
+ 
+ 	      free (buf);
+-	      return 0;
++	      return NULL;
+ 	    }
+ 	default:
+ 	  break;
+@@ -175,12 +175,12 @@ arg_bool (const char *fname, int line_num, const char *args, unsigned flag)
+       if (__asprintf (&buf,
+ 		      _("%s: line %d: expected `on' or `off', found `%s'\n"),
+ 		      fname, line_num, args) < 0)
+-	return 0;
++	return NULL;
+ 
+       __fxprintf (NULL, "%s", buf);
+ 
+       free (buf);
+-      return 0;
++      return NULL;
+     }
+   return args;
+ }
+@@ -190,7 +190,7 @@ static void
+ parse_line (const char *fname, int line_num, const char *str)
+ {
+   const char *start;
+-  const struct cmd *c = 0;
++  const struct cmd *c = NULL;
+   size_t len;
+   size_t i;
+ 
+diff --git a/stdio-common/iovfscanf.c b/stdio-common/iovfscanf.c
+index 43b5c70c3f6e815c..68d0a325f799e0aa 100644
+--- a/stdio-common/iovfscanf.c
++++ b/stdio-common/iovfscanf.c
+@@ -29,7 +29,7 @@ attribute_compat_text_section
+ __IO_vfscanf (FILE *fp, const char *format, va_list ap, int *errp)
+ {
+   int rv = __vfscanf_internal (fp, format, ap, 0);
+-  if (__glibc_unlikely (errp != 0))
++  if (__glibc_unlikely (errp != NULL))
+     *errp = (rv == -1);
+   return rv;
+ }
+diff --git a/string/argz-delete.c b/string/argz-delete.c
+index e513e46d5869993f..879daa9821281a83 100644
+--- a/string/argz-delete.c
++++ b/string/argz-delete.c
+@@ -33,7 +33,7 @@ argz_delete (char **argz, size_t *argz_len, char *entry)
+       if (*argz_len == 0)
+ 	{
+ 	  free (*argz);
+-	  *argz = 0;
++	  *argz = NULL;
+ 	}
+     }
+ }
+diff --git a/string/argz-extract.c b/string/argz-extract.c
+index e685da57957ea5ba..fd0003965d4c8df7 100644
+--- a/string/argz-extract.c
++++ b/string/argz-extract.c
+@@ -30,6 +30,6 @@ __argz_extract (const char *argz, size_t len, char **argv)
+       argz += part_len + 1;
+       len -= part_len + 1;
+     }
+-  *argv = 0;
++  *argv = NULL;
+ }
+ weak_alias (__argz_extract, argz_extract)
+diff --git a/string/argz-replace.c b/string/argz-replace.c
+index fdd9a8e1c94bb928..d2add630ff664ed0 100644
+--- a/string/argz-replace.c
++++ b/string/argz-replace.c
+@@ -38,7 +38,7 @@ str_append (char **to, size_t *to_len, const char *buf, const size_t buf_len)
+   else
+     {
+       free (*to);
+-      *to = 0;
++      *to = NULL;
+     }
+ }
+ 
+@@ -53,10 +53,10 @@ __argz_replace (char **argz, size_t *argz_len, const char *str, const char *with
+ 
+   if (str && *str)
+     {
+-      char *arg = 0;
++      char *arg = NULL;
+       char *src = *argz;
+       size_t src_len = *argz_len;
+-      char *dst = 0;
++      char *dst = NULL;
+       size_t dst_len = 0;
+       int delayed_copy = 1;	/* True while we've avoided copying anything.  */
+       size_t str_len = strlen (str), with_len = strlen (with);
+@@ -84,7 +84,7 @@ __argz_replace (char **argz, size_t *argz_len, const char *str, const char *with
+ 		      else
+ 			{
+ 			  str_append (&to, &to_len, from, strlen (from));
+-			  from = 0;
++			  from = NULL;
+ 			}
+ 		    }
+ 		}
+diff --git a/string/argz.h b/string/argz.h
+index 49e85a09ec948d7b..b2dd99413225687e 100644
+--- a/string/argz.h
++++ b/string/argz.h
+@@ -141,7 +141,7 @@ __NTH (__argz_next (const char *__argz, size_t __argz_len,
+       return __entry >= __argz + __argz_len ? (char *) NULL : (char *) __entry;
+     }
+   else
+-    return __argz_len > 0 ? (char *) __argz : 0;
++    return __argz_len > 0 ? (char *) __argz : NULL;
+ }
+ __extern_inline char *
+ __NTH (argz_next (const char *__argz, size_t __argz_len,
+diff --git a/string/envz.c b/string/envz.c
+index cb02b4b338cc9118..4f53dcb2e75dc062 100644
+--- a/string/envz.c
++++ b/string/envz.c
+@@ -50,7 +50,7 @@ envz_entry (const char *envz, size_t envz_len, const char *name)
+ 	envz++, envz_len--;	/* skip '\0' */
+     }
+ 
+-  return 0;
++  return NULL;
+ }
+ libc_hidden_def (envz_entry)
+ 
+@@ -67,7 +67,7 @@ envz_get (const char *envz, size_t envz_len, const char *name)
+       if (*entry)
+ 	entry++;
+       else
+-	entry = 0;		/* A null entry.  */
++	entry = NULL;		/* A null entry.  */
+     }
+   return entry;
+ }
+diff --git a/sunrpc/clnt_raw.c b/sunrpc/clnt_raw.c
+index 5b9bd482478760ee..79c0964e7bb0e19b 100644
+--- a/sunrpc/clnt_raw.c
++++ b/sunrpc/clnt_raw.c
+@@ -90,11 +90,11 @@ clntraw_create (u_long prog, u_long vers)
+   XDR *xdrs;
+   CLIENT *client;
+ 
+-  if (clp == 0)
++  if (clp == NULL)
+     {
+       clp = (struct clntraw_private_s *) calloc (1, sizeof (*clp));
+-      if (clp == 0)
+-	return (0);
++      if (clp == NULL)
++	return NULL;
+       clntraw_private = clp;
+     }
+   xdrs = &clp->xdr_stream;
+diff --git a/sunrpc/clnt_simp.c b/sunrpc/clnt_simp.c
+index fab61d217003e959..ee77af9cbcf223bf 100644
+--- a/sunrpc/clnt_simp.c
++++ b/sunrpc/clnt_simp.c
+@@ -60,10 +60,10 @@ callrpc (const char *host, u_long prognum, u_long versnum, u_long procnum,
+   enum clnt_stat clnt_stat;
+   struct timeval timeout, tottimeout;
+ 
+-  if (crp == 0)
++  if (crp == NULL)
+     {
+       crp = (struct callrpc_private_s *) calloc (1, sizeof (*crp));
+-      if (crp == 0)
++      if (crp == NULL)
+ 	return 0;
+       callrpc_private = crp;
+     }
+diff --git a/sunrpc/key_call.c b/sunrpc/key_call.c
+index b0b29e09a7faa86e..c8e414b1df20773c 100644
+--- a/sunrpc/key_call.c
++++ b/sunrpc/key_call.c
+@@ -542,7 +542,7 @@ key_call (u_long proc, xdrproc_t xdr_arg, char *arg,
+   else if (proc == KEY_GEN && __key_gendes_LOCAL)
+     {
+       des_block *res;
+-      res = (*__key_gendes_LOCAL) (__geteuid (), 0);
++      res = (*__key_gendes_LOCAL) (__geteuid (), NULL);
+       *(des_block *) rslt = *res;
+       return 1;
+     }
+diff --git a/sunrpc/svc_raw.c b/sunrpc/svc_raw.c
+index f0176311d5cbd9f5..2879ce6f84a818f3 100644
+--- a/sunrpc/svc_raw.c
++++ b/sunrpc/svc_raw.c
+@@ -72,10 +72,10 @@ svcraw_create (void)
+ {
+   struct svcraw_private_s *srp = svcraw_private;
+ 
+-  if (srp == 0)
++  if (srp == NULL)
+     {
+       srp = (struct svcraw_private_s *) calloc (1, sizeof (*srp));
+-      if (srp == 0)
++      if (srp == NULL)
+ 	return NULL;
+     }
+   srp->server.xp_sock = 0;
+@@ -99,7 +99,7 @@ svcraw_recv (SVCXPRT *xprt, struct rpc_msg *msg)
+   struct svcraw_private_s *srp = svcraw_private;
+   XDR *xdrs;
+ 
+-  if (srp == 0)
++  if (srp == NULL)
+     return FALSE;
+   xdrs = &srp->xdr_stream;
+   xdrs->x_op = XDR_DECODE;
+@@ -115,7 +115,7 @@ svcraw_reply (SVCXPRT *xprt, struct rpc_msg *msg)
+   struct svcraw_private_s *srp = svcraw_private;
+   XDR *xdrs;
+ 
+-  if (srp == 0)
++  if (srp == NULL)
+     return FALSE;
+   xdrs = &srp->xdr_stream;
+   xdrs->x_op = XDR_ENCODE;
+@@ -131,7 +131,7 @@ svcraw_getargs (SVCXPRT *xprt, xdrproc_t xdr_args, caddr_t args_ptr)
+ {
+   struct svcraw_private_s *srp = svcraw_private;
+ 
+-  if (srp == 0)
++  if (srp == NULL)
+     return FALSE;
+   return (*xdr_args) (&srp->xdr_stream, args_ptr);
+ }
+@@ -142,7 +142,7 @@ svcraw_freeargs (SVCXPRT *xprt, xdrproc_t xdr_args, caddr_t args_ptr)
+   struct svcraw_private_s *srp = svcraw_private;
+   XDR *xdrs;
+ 
+-  if (srp == 0)
++  if (srp == NULL)
+     return FALSE;
+   xdrs = &srp->xdr_stream;
+   xdrs->x_op = XDR_FREE;
+diff --git a/sunrpc/svc_simple.c b/sunrpc/svc_simple.c
+index 2f2595c0ffe14ded..5a6dd1fce644fc68 100644
+--- a/sunrpc/svc_simple.c
++++ b/sunrpc/svc_simple.c
+@@ -74,7 +74,7 @@ __registerrpc (u_long prognum, u_long versnum, u_long procnum,
+ 	buf = NULL;
+       goto err_out;
+     }
+-  if (transp == 0)
++  if (transp == NULL)
+     {
+       transp = svcudp_create (RPC_ANYSOCK);
+       if (transp == NULL)
+diff --git a/sunrpc/xdr_mem.c b/sunrpc/xdr_mem.c
+index 46a1f6f1903dd961..a5aa93f4378ed93f 100644
+--- a/sunrpc/xdr_mem.c
++++ b/sunrpc/xdr_mem.c
+@@ -195,7 +195,7 @@ xdrmem_setpos (XDR *xdrs, u_int pos)
+ static int32_t *
+ xdrmem_inline (XDR *xdrs, u_int len)
+ {
+-  int32_t *buf = 0;
++  int32_t *buf = NULL;
+ 
+   if (xdrs->x_handy >= len)
+     {
+diff --git a/sunrpc/xdr_sizeof.c b/sunrpc/xdr_sizeof.c
+index 1592406d6462fe6e..03c23cd42b026556 100644
+--- a/sunrpc/xdr_sizeof.c
++++ b/sunrpc/xdr_sizeof.c
+@@ -89,7 +89,7 @@ x_inline (XDR *xdrs, u_int len)
+       free (xdrs->x_private);
+       if ((xdrs->x_private = (caddr_t) malloc (len)) == NULL)
+ 	{
+-	  xdrs->x_base = 0;
++	  xdrs->x_base = NULL;
+ 	  return NULL;
+ 	}
+       xdrs->x_base = (void *) (long) len;
+@@ -109,7 +109,7 @@ static void
+ x_destroy (XDR *xdrs)
+ {
+   xdrs->x_handy = 0;
+-  xdrs->x_base = 0;
++  xdrs->x_base = NULL;
+   if (xdrs->x_private)
+     {
+       free (xdrs->x_private);
+diff --git a/sunrpc/xdr_stdio.c b/sunrpc/xdr_stdio.c
+index 0c2cbb78ded8a229..204ed599ae2a2f33 100644
+--- a/sunrpc/xdr_stdio.c
++++ b/sunrpc/xdr_stdio.c
+@@ -89,7 +89,7 @@ xdrstdio_create (XDR *xdrs, FILE *file, enum xdr_op op)
+   xdrs->x_ops = (struct xdr_ops *) &xdrstdio_ops;
+   xdrs->x_private = (caddr_t) file;
+   xdrs->x_handy = 0;
+-  xdrs->x_base = 0;
++  xdrs->x_base = NULL;
+ }
+ 
+ /*
+diff --git a/support/blob_repeat.c b/support/blob_repeat.c
+index 693956f436cac916..19c9aaf4446296ef 100644
+--- a/support/blob_repeat.c
++++ b/support/blob_repeat.c
+@@ -92,7 +92,7 @@ allocate_malloc (size_t total_size, const void *element, size_t element_size,
+ {
+   void *buffer = malloc (total_size);
+   if (buffer == NULL)
+-    return (struct support_blob_repeat) { 0 };
++    return (struct support_blob_repeat) {};
+   fill (buffer, element, element_size, count);
+   return (struct support_blob_repeat)
+     {
+@@ -136,7 +136,7 @@ allocate_big (size_t total_size, const void *element, size_t element_size,
+   if (stride_size == 0)
+     {
+       errno = EOVERFLOW;
+-      return (struct support_blob_repeat) { 0 };
++      return (struct support_blob_repeat) {};
+     }
+ 
+   /* Ensure that the stride size is at least maximum_small_size.  This
+@@ -154,7 +154,7 @@ allocate_big (size_t total_size, const void *element, size_t element_size,
+   void *target = mmap (NULL, total_size, PROT_NONE,
+                        MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+   if (target == MAP_FAILED)
+-    return (struct support_blob_repeat) { 0 };
++    return (struct support_blob_repeat) {};
+ 
+   /* Create the backing file for the repeated mapping.  Call mkstemp
+      directly to remove the resources backing the temporary file
+@@ -191,7 +191,7 @@ allocate_big (size_t total_size, const void *element, size_t element_size,
+         xmunmap (target, total_size);
+         xclose (fd);
+         errno = saved_errno;
+-        return (struct support_blob_repeat) { 0 };
++        return (struct support_blob_repeat) {};
+       }
+     if (ptr != target)
+       FAIL_EXIT1 ("mapping of %zu bytes moved from %p to %p",
+@@ -235,7 +235,7 @@ allocate_big (size_t total_size, const void *element, size_t element_size,
+             xmunmap (target, total_size);
+             xclose (fd);
+             errno = saved_errno;
+-            return (struct support_blob_repeat) { 0 };
++            return (struct support_blob_repeat) {};
+           }
+         if (ptr != current)
+           FAIL_EXIT1 ("MAP_PRIVATE mapping of %zu bytes moved from %p to %p",
+@@ -263,7 +263,7 @@ repeat_allocate (const void *element, size_t element_size,
+   if (__builtin_mul_overflow (element_size, count, &total_size))
+     {
+       errno = EOVERFLOW;
+-      return (struct support_blob_repeat) { 0 };
++      return (struct support_blob_repeat) {};
+     }
+   if (total_size <= maximum_small_size)
+     return allocate_malloc (total_size, element, element_size, count);
+@@ -297,5 +297,5 @@ support_blob_repeat_free (struct support_blob_repeat *blob)
+         xmunmap (blob->start, blob->size);
+       errno = saved_errno;
+     }
+-  *blob = (struct support_blob_repeat) { 0 };
++  *blob = (struct support_blob_repeat) {};
+ }
+diff --git a/support/shell-container.c b/support/shell-container.c
+index ca833791d5f39289..86f43ab23fb40d03 100644
+--- a/support/shell-container.c
++++ b/support/shell-container.c
+@@ -119,7 +119,7 @@ copy_func (char **argv)
+       goto out;
+     }
+ 
+-  if (support_copy_file_range (sfd, 0, dfd, 0, st.st_size, 0) != st.st_size)
++  if (support_copy_file_range (sfd, NULL, dfd, NULL, st.st_size, 0) != st.st_size)
+     {
+       fprintf (stderr, "cp: cannot copy file %s to %s: %s\n",
+ 	       sname, dname, strerror (errno));
+@@ -145,7 +145,7 @@ exit_func (char **argv)
+ {
+   int exit_val = 0;
+ 
+-  if (argv[0] != 0)
++  if (argv[0] != NULL)
+     exit_val = atoi (argv[0]) & 0xff;
+   exit (exit_val);
+   return 0;
+diff --git a/support/support_openpty.c b/support/support_openpty.c
+index fbf9f71e738e0d38..1d154a9d0ae59529 100644
+--- a/support/support_openpty.c
++++ b/support/support_openpty.c
+@@ -57,7 +57,7 @@ support_openpty (int *a_outer, int *a_inner, char **a_name,
+                  const struct winsize *winp)
+ {
+   int outer = -1, inner = -1;
+-  char *namebuf = 0;
++  char *namebuf = NULL;
+ 
+   outer = posix_openpt (O_RDWR | O_NOCTTY);
+   if (outer == -1)
+diff --git a/support/support_set_vma_name_supported.c b/support/support_set_vma_name_supported.c
+index 2de066fbe8390e4f..99350663456b3f5d 100644
+--- a/support/support_set_vma_name_supported.c
++++ b/support/support_set_vma_name_supported.c
+@@ -32,7 +32,7 @@ support_set_vma_name_supported (void)
+   if (size == -1)
+     FAIL_EXIT1 ("sysconf (_SC_PAGESIZE): %m\n");
+ 
+-  void *vma = xmmap (0,
++  void *vma = xmmap (NULL,
+ 		     size,
+ 		     PROT_NONE,
+ 		     MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE,
+diff --git a/support/support_stack_alloc.c b/support/support_stack_alloc.c
+index edf3dbfc21020094..346a46aa2a60cfe9 100644
+--- a/support/support_stack_alloc.c
++++ b/support/support_stack_alloc.c
+@@ -58,7 +58,7 @@ support_stack_alloc (size_t size)
+   /* Use MAP_NORESERVE so that RAM will not be wasted on the guard
+      bands; touch all the pages of the actual stack before returning,
+      so we know they are allocated.  */
+-  void *alloc_base = xmmap (0,
++  void *alloc_base = xmmap (NULL,
+                             alloc_size,
+                             PROT_NONE,
+                             MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_STACK,
+diff --git a/support/test-container.c b/support/test-container.c
+index 1696d676fd101d42..2813b0ddf572fc48 100644
+--- a/support/test-container.c
++++ b/support/test-container.c
+@@ -440,7 +440,7 @@ copy_one_file (const char *sname, const char *dname)
+   if (dfd < 0)
+     FAIL_EXIT1 ("unable to open %s for writing\n", dname);
+ 
+-  xcopy_file_range (sfd, 0, dfd, 0, st.st_size, 0);
++  xcopy_file_range (sfd, NULL, dfd, NULL, st.st_size, 0);
+ 
+   xclose (sfd);
+   xclose (dfd);
+diff --git a/support/xsigstack.c b/support/xsigstack.c
+index 415e65976cc2e911..59512a2148eddf2d 100644
+--- a/support/xsigstack.c
++++ b/support/xsigstack.c
+@@ -64,7 +64,7 @@ xfree_sigstack (void *stack)
+ {
+   struct sigstack_desc *desc = stack;
+ 
+-  if (sigaltstack (&desc->old_stack, 0))
++  if (sigaltstack (&desc->old_stack, NULL))
+     FAIL_EXIT1 ("sigaltstack (restore old stack: sp=%p, size=%zu, flags=%u): "
+                 "%m\n", desc->old_stack.ss_sp, desc->old_stack.ss_size,
+                 desc->old_stack.ss_flags);
+diff --git a/sysdeps/posix/system.c b/sysdeps/posix/system.c
+index 01e8bc45215bb289..be3270428092b11b 100644
+--- a/sysdeps/posix/system.c
++++ b/sysdeps/posix/system.c
+@@ -144,7 +144,7 @@ do_system (const char *line)
+   __posix_spawnattr_setflags (&spawn_attr,
+ 			      POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK);
+ 
+-  ret = __posix_spawn (&pid, SHELL_PATH, 0, &spawn_attr,
++  ret = __posix_spawn (&pid, SHELL_PATH, NULL, &spawn_attr,
+ 		       (char *const[]){ (char *) SHELL_NAME,
+ 					(char *) "-c",
+ 					(char *) "--",
+diff --git a/sysdeps/unix/sysv/linux/brk.c b/sysdeps/unix/sysv/linux/brk.c
+index a0be43e4f9915297..dbdb8ddd7da32552 100644
+--- a/sysdeps/unix/sysv/linux/brk.c
++++ b/sysdeps/unix/sysv/linux/brk.c
+@@ -22,7 +22,7 @@
+ #include <brk_call.h>
+ 
+ /* This must be initialized data because commons can't have aliases.  */
+-void *__curbrk = 0;
++void *__curbrk = NULL;
+ 
+ #if HAVE_INTERNAL_BRK_ADDR_SYMBOL
+ /* Old braindamage in GCC's crtstuff.c requires this symbol in an attempt
+diff --git a/sysdeps/unix/sysv/linux/dl-early_allocate.c b/sysdeps/unix/sysv/linux/dl-early_allocate.c
+index 4d98076ab398cb54..ce5c6b55ffddf3c8 100644
+--- a/sysdeps/unix/sysv/linux/dl-early_allocate.c
++++ b/sysdeps/unix/sysv/linux/dl-early_allocate.c
+@@ -51,7 +51,7 @@ _dl_early_allocate (size_t size)
+     {
+       /* If brk has not been invoked, there is no need to update
+          __curbrk.  The first call to brk will take care of that.  */
+-      void *previous = __brk_call (0);
++      void *previous = __brk_call (NULL);
+       result = __brk_call (previous + size);
+       if (result == previous)
+         result = NULL;
+diff --git a/sysdeps/unix/sysv/linux/dl-sysdep.c b/sysdeps/unix/sysv/linux/dl-sysdep.c
+index a8ec2d7c18cc423e..1a7779a1841b3357 100644
+--- a/sysdeps/unix/sysv/linux/dl-sysdep.c
++++ b/sysdeps/unix/sysv/linux/dl-sysdep.c
+@@ -113,7 +113,7 @@ _dl_sysdep_start (void **start_argptr,
+   /* Initialize DSO sorting algorithm after tunables.  */
+   _dl_sort_maps_init ();
+ 
+-  __brk (0);			/* Initialize the break.  */
++  __brk (NULL);			/* Initialize the break.  */
+ 
+ #ifdef DL_PLATFORM_INIT
+   DL_PLATFORM_INIT;
+diff --git a/sysdeps/unix/sysv/linux/gettimeofday.c b/sysdeps/unix/sysv/linux/gettimeofday.c
+index 7ab147c6143a63cd..15be44b3777d4c21 100644
+--- a/sysdeps/unix/sysv/linux/gettimeofday.c
++++ b/sysdeps/unix/sysv/linux/gettimeofday.c
+@@ -31,7 +31,7 @@
+ static int
+ __gettimeofday_syscall (struct timeval *restrict tv, void *restrict tz)
+ {
+-  if (__glibc_unlikely (tz != 0))
++  if (__glibc_unlikely (tz != NULL))
+     memset (tz, 0, sizeof *tz);
+   return INLINE_SYSCALL_CALL (gettimeofday, tv, tz);
+ }
+@@ -47,7 +47,7 @@ libc_ifunc (__gettimeofday,
+ int
+ __gettimeofday (struct timeval *restrict tv, void *restrict tz)
+ {
+-  if (__glibc_unlikely (tz != 0))
++  if (__glibc_unlikely (tz != NULL))
+     memset (tz, 0, sizeof *tz);
+ 
+   return INLINE_VSYSCALL (gettimeofday, 2, tv, tz);
+diff --git a/sysdeps/unix/sysv/linux/settimeofday.c b/sysdeps/unix/sysv/linux/settimeofday.c
+index 4235dc83e6626ee6..4fa1d660153f7d88 100644
+--- a/sysdeps/unix/sysv/linux/settimeofday.c
++++ b/sysdeps/unix/sysv/linux/settimeofday.c
+@@ -26,9 +26,9 @@ int
+ __settimeofday64 (const struct __timeval64 *tv, const struct timezone *tz)
+ {
+   /* Backwards compatibility for setting the UTC offset.  */
+-  if (__glibc_unlikely (tz != 0))
++  if (__glibc_unlikely (tz != NULL))
+     {
+-      if (tv != 0)
++      if (tv != NULL)
+ 	{
+ 	  __set_errno (EINVAL);
+ 	  return -1;
+diff --git a/sysdeps/unix/sysv/linux/sigwait.c b/sysdeps/unix/sysv/linux/sigwait.c
+index 37de8db0dcf403a1..f0dff83dab12fc06 100644
+--- a/sysdeps/unix/sysv/linux/sigwait.c
++++ b/sysdeps/unix/sysv/linux/sigwait.c
+@@ -25,7 +25,7 @@ __sigwait (const sigset_t *set, int *sig)
+   siginfo_t si;
+   int ret;
+   do
+-    ret = __sigtimedwait (set, &si, 0);
++    ret = __sigtimedwait (set, &si, NULL);
+   /* Applications do not expect sigwait to return with EINTR, and the
+      error code is not specified by POSIX.  */
+   while (ret < 0 && errno == EINTR);
+diff --git a/sysdeps/unix/sysv/linux/sigwaitinfo.c b/sysdeps/unix/sysv/linux/sigwaitinfo.c
+index dba25bdc3b62e6f3..1d48b11b57e26895 100644
+--- a/sysdeps/unix/sysv/linux/sigwaitinfo.c
++++ b/sysdeps/unix/sysv/linux/sigwaitinfo.c
+@@ -22,7 +22,7 @@
+ int
+ __sigwaitinfo (const sigset_t *set, siginfo_t *info)
+ {
+-  return __sigtimedwait (set, info, 0);
++  return __sigtimedwait (set, info, NULL);
+ }
+ 
+ libc_hidden_def (__sigwaitinfo)
+diff --git a/sysdeps/unix/sysv/linux/spawni.c b/sysdeps/unix/sysv/linux/spawni.c
+index f57e92815eaf3c7b..fa3494898956f4be 100644
+--- a/sysdeps/unix/sysv/linux/spawni.c
++++ b/sysdeps/unix/sysv/linux/spawni.c
+@@ -115,7 +115,7 @@ __spawni_child (void *arguments)
+   memset (&sa, '\0', sizeof (sa));
+ 
+   sigset_t hset;
+-  __sigprocmask (SIG_BLOCK, 0, &hset);
++  __sigprocmask (SIG_BLOCK, NULL, &hset);
+   for (int sig = 1; sig < _NSIG; ++sig)
+     {
+       if ((attr->__flags & POSIX_SPAWN_SETSIGDEF)
+@@ -129,7 +129,7 @@ __spawni_child (void *arguments)
+ 	    sa.sa_handler = SIG_IGN;
+ 	  else
+ 	    {
+-	      __libc_sigaction (sig, 0, &sa);
++	      __libc_sigaction (sig, NULL, &sa);
+ 	      if (sa.sa_handler == SIG_IGN || sa.sa_handler == SIG_DFL)
+ 		continue;
+ 	      sa.sa_handler = SIG_DFL;
+@@ -138,7 +138,7 @@ __spawni_child (void *arguments)
+       else
+ 	continue;
+ 
+-      __libc_sigaction (sig, &sa, 0);
++      __libc_sigaction (sig, &sa, NULL);
+     }
+ 
+ #ifdef _POSIX_PRIORITY_SCHEDULING
+@@ -172,7 +172,7 @@ __spawni_child (void *arguments)
+     goto fail;
+ 
+   /* Execute the file actions.  */
+-  if (file_actions != 0)
++  if (file_actions != NULL)
+     {
+       int cnt;
+       struct rlimit64 fdlimit;
+diff --git a/sysdeps/x86/nptl/bits/struct_mutex.h b/sysdeps/x86/nptl/bits/struct_mutex.h
+index b6bb9aa34af2db8a..7a1b8a14b621d085 100644
+--- a/sysdeps/x86/nptl/bits/struct_mutex.h
++++ b/sysdeps/x86/nptl/bits/struct_mutex.h
+@@ -54,7 +54,7 @@ struct __pthread_mutex_s
+ 
+ #ifdef __x86_64__
+ # define __PTHREAD_MUTEX_INITIALIZER(__kind) \
+-  0, 0, 0, 0, __kind, 0, 0, { 0, 0 }
++  0, 0, 0, 0, __kind, 0, 0, { NULL, NULL }
+ #else
+ # define __PTHREAD_MUTEX_INITIALIZER(__kind) \
+   0, 0, 0, __kind, 0, { { 0, 0 } }
+diff --git a/timezone/zic.c b/timezone/zic.c
+index 2875b5544cc97864..b41c0d1cdc86e8b9 100644
+--- a/timezone/zic.c
++++ b/timezone/zic.c
+@@ -1452,7 +1452,7 @@ inzsub(char **fields, int nfields, bool iscont)
+ 	z.z_filename = filename;
+ 	z.z_linenum = linenum;
+ 	z.z_stdoff = gethms(fields[i_stdoff], _("invalid UT offset"));
+-	if ((cp = strchr(fields[i_format], '%')) != 0) {
++	if ((cp = strchr(fields[i_format], '%')) != NULL) {
+ 		if ((*++cp != 's' && *cp != 'z') || strchr(cp, '%')
+ 		    || strchr(fields[i_format], '/')) {
+ 			error(_("invalid abbreviation format"));
+@@ -1755,9 +1755,9 @@ rulesub(struct rule *rp, const char *loyearp, const char *hiyearp,
+ 		rp->r_wday = lp->l_value;
+ 		rp->r_dayofmonth = len_months[1][rp->r_month];
+ 	} else {
+-		if ((ep = strchr(dp, '<')) != 0)
++		if ((ep = strchr(dp, '<')) != NULL)
+ 			rp->r_dycode = DC_DOWLEQ;
+-		else if ((ep = strchr(dp, '>')) != 0)
++		else if ((ep = strchr(dp, '>')) != NULL)
+ 			rp->r_dycode = DC_DOWGEQ;
+ 		else {
+ 			ep = dp;
+diff --git a/wctype/wctrans.c b/wctype/wctrans.c
+index 9444ed08d81e1ce5..4c484c01b5b1d0b7 100644
+--- a/wctype/wctrans.c
++++ b/wctype/wctrans.c
+@@ -39,7 +39,7 @@ __wctrans (const char *property)
+     }
+ 
+   if (names[0] == '\0')
+-    return 0;
++    return NULL;
+ 
+   i = _NL_CURRENT_WORD (LC_CTYPE, _NL_CTYPE_MAP_OFFSET) + cnt;
+   return (wctrans_t) _NL_CURRENT_DATA (LC_CTYPE)->values[i].string;
+diff --git a/wctype/wctrans_l.c b/wctype/wctrans_l.c
+index 96fde935ffb579f0..1a34168b3f87c81a 100644
+--- a/wctype/wctrans_l.c
++++ b/wctype/wctrans_l.c
+@@ -39,7 +39,7 @@ __wctrans_l (const char *property, locale_t locale)
+     }
+ 
+   if (names[0] == '\0')
+-    return 0;
++    return NULL;
+ 
+   i = locale->__locales[LC_CTYPE]->values[_NL_ITEM_INDEX (_NL_CTYPE_MAP_OFFSET)].word + cnt;
+   return (wctrans_t) locale->__locales[LC_CTYPE]->values[i].string;

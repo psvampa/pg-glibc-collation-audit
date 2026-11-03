@@ -1,0 +1,193 @@
+commit 6cebb0b80fd783e442a8ad27c3f52cde52a9cac7
+Author: DJ Delorie <dj@redhat.com>
+Date:   Wed May 27 12:57:10 2026 -0400
+
+    stdio-common: Allow partially-filled %mc buffers [BZ #12701]
+    
+    This is a backwards-compatible alternative to the main solution to
+    the %mc part of 12701.  The allocated buffer is expanded to the
+    requested size and NUL padded, but truncated reads are allowed.
+    
+    Reviewed-by: Carlos O'Donell <carlos@redhat.com>
+
+Conflicts:
+	localedata/Makefile
+	  (usual test differences)
+
+diff -Nrup a/localedata/Makefile b/localedata/Makefile
+--- a/localedata/Makefile	2026-06-18 17:24:13.116929727 -0400
++++ b/localedata/Makefile	2026-06-18 17:24:46.030126591 -0400
+@@ -235,6 +235,7 @@ tests = \
+   bug-setlocale1 \
+   bug-usesetlocale \
+   tst-bz12701-lc \
++  tst-bz12701-lc2 \
+   tst-c-utf8-consistency \
+   tst-digits \
+   tst-iconv-emojis-trans \
+diff --git a/localedata/tst-bz12701-lc2.c b/localedata/tst-bz12701-lc2.c
+new file mode 100644
+index 0000000000..b24e86df0b
+--- /dev/null
++++ b/localedata/tst-bz12701-lc2.c
+@@ -0,0 +1,47 @@
++/* Verify scanf memory handling with the 'c' conversion (BZ #12701).
++   Copyright (C) 2026 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#include <stdio.h>
++#include <malloc.h>
++#include <string.h>
++
++#include <libc-diag.h>
++#include <support/check.h>
++#include <support/next_to_fault.h>
++#include <support/xstdio.h>
++
++static int
++do_test (void)
++{
++  wchar_t *c = NULL;
++  int i;
++
++  TEST_VERIFY (sscanf ("1234", "%30mlc", &c) == 1);
++
++  TEST_VERIFY (c != NULL);
++  TEST_COMPARE_BLOB (c, 5 * sizeof (wchar_t),
++		     L"1234\0", 5 * sizeof (wchar_t));
++  for (i = 5; i < 30; i ++)
++    TEST_VERIFY (c[i] == L'\0');
++
++  TEST_VERIFY (malloc_usable_size (c) >= 30 * sizeof(wchar_t));
++
++  return 0;
++}
++
++#include <support/test-driver.c>
+diff --git a/stdio-common/Makefile b/stdio-common/Makefile
+index fdb545242e..27e7ea20f0 100644
+--- a/stdio-common/Makefile
++++ b/stdio-common/Makefile
+@@ -261,6 +261,7 @@ tests := \
+   tst-bz11319 \
+   tst-bz11319-fortify2 \
+   tst-bz12701-c \
++  tst-bz12701-c2 \
+   tst-cookie \
+   tst-dprintf-length \
+   tst-fclose-devzero \
+diff --git a/stdio-common/tst-bz12701-c2.c b/stdio-common/tst-bz12701-c2.c
+new file mode 100644
+index 0000000000..5f9ca7c592
+--- /dev/null
++++ b/stdio-common/tst-bz12701-c2.c
+@@ -0,0 +1,46 @@
++/* Verify scanf memory handling with the 'c' conversion (BZ #12701).
++   Copyright (C) 2026 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#include <stdio.h>
++#include <malloc.h>
++#include <string.h>
++
++#include <libc-diag.h>
++#include <support/check.h>
++#include <support/next_to_fault.h>
++#include <support/xstdio.h>
++
++static int
++do_test (void)
++{
++  char *c = NULL;
++  int i;
++
++  TEST_VERIFY (sscanf ("1234", "%30mc", &c) == 1);
++
++  TEST_VERIFY (c != NULL);
++  TEST_COMPARE_BLOB (c, 5, "1234\0", 5);
++  for (i = 5; i < 30; i ++)
++    TEST_VERIFY (c[i] == '\0');
++
++  TEST_VERIFY (malloc_usable_size (c) >= 30);
++
++  return 0;
++}
++
++#include <support/test-driver.c>
+diff --git a/stdio-common/vfscanf-internal.c b/stdio-common/vfscanf-internal.c
+index 17b5565d0f..90a1886951 100644
+--- a/stdio-common/vfscanf-internal.c
++++ b/stdio-common/vfscanf-internal.c
+@@ -780,9 +780,9 @@ __vfscanf_internal (FILE *s, const char *format, va_list argptr,
+ 		    conv_error ();					      \
+ 		} while (0)
+ #ifdef COMPILE_WSCANF
+-	      STRING_ARG (str, char, 100);
++	      STRING_ARG (str, char, (width > 0 ? width : 1));
+ #else
+-	      STRING_ARG (str, char, (width > 1024 ? 1024 : width));
++	      STRING_ARG (str, char, (width > 0 ? width : 1));
+ #endif
+ 
+ 	      c = inchar ();
+@@ -891,6 +891,11 @@ __vfscanf_internal (FILE *s, const char *format, va_list argptr,
+ 
+ 	      if (!(flags & SUPPRESS))
+ 		{
++		  /* If the buffer isn't completely filled, pad it with NULs.  */
++		  if (flags & MALLOC)
++		    while (width-- > 0)
++		      *str++ = '\0';
++
+ 		  if ((flags & MALLOC) && str - *strptr != strsize)
+ 		    {
+ 		      char *cp = (char *) realloc (*strptr, str - *strptr);
+@@ -908,7 +913,7 @@ __vfscanf_internal (FILE *s, const char *format, va_list argptr,
+ 	  if (width == -1)
+ 	    width = 1;
+ 
+-	  STRING_ARG (wstr, wchar_t, (width > 1024 ? 1024 : width));
++	  STRING_ARG (wstr, wchar_t, (width > 0 ? width : 1));
+ 
+ 	  c = inchar ();
+ 	  if (__glibc_unlikely (c == EOF))
+@@ -1044,6 +1049,11 @@ __vfscanf_internal (FILE *s, const char *format, va_list argptr,
+ 
+ 	  if (!(flags & SUPPRESS))
+ 	    {
++	      /* If the buffer isn't completely filled, pad it with NULs.  */
++	      if (flags & MALLOC)
++		while (width-- > 0)
++		  *wstr++ = L'\0';
++
+ 	      if ((flags & MALLOC) && wstr - (wchar_t *) *strptr != strsize)
+ 		{
+ 		  wchar_t *cp = (wchar_t *) realloc (*strptr,

@@ -64,9 +64,13 @@ jobs:
         # _harness.glibc_commit makes on top of a tag shares
         # this clone's objects and cannot fetch one this clone lacks, so a
         # test of step 2 there read them only if an earlier class had.
+        # test_build_sources reads the whole of localedata/ and locale/ at
+        # the three tags of the published pairs (scope_from_git): 743 blobs
+        # more, 17.5 MB, in the same request.
         run: |
           tags=$(cd tests && python3 -c "import _harness as h; print(h.FLOOR_OLD, h.FLOOR_NEW, h.OLD, h.MID, h.NEW)")
-          oids=$(for t in $tags; do git -C scripts/glibc ls-tree -r "$t" localedata/locales locale/programs/locfile-kw.gperf locale/programs/charmap-kw.gperf localedata/SUPPORTED localedata/charmaps intl/locale.alias; done | awk '{print $3}' | sort -u)
+          three=$(cd tests && python3 -c "import _harness as h; print(h.OLD, h.MID, h.NEW)")
+          oids=$({ for t in $tags; do git -C scripts/glibc ls-tree -r "$t" localedata/locales locale/programs/locfile-kw.gperf locale/programs/charmap-kw.gperf localedata/SUPPORTED localedata/charmaps intl/locale.alias; done; for t in $three; do git -C scripts/glibc ls-tree -r "$t" localedata locale; done; } | awk '{print $3}' | sort -u)
           git -C scripts/glibc -c fetch.negotiationAlgorithm=noop fetch --quiet --no-tags --no-write-fetch-head origin $oids
 
       - name: Report tag provenance
@@ -126,8 +130,8 @@ jobs:
         # broken clone step would otherwise leave this job green with only the
         # clone-free layers (test_pure_functions, test_parallel_runner,
         # test_locale_order, and test_published_claims when it is enabled) and
-        # the classes of test_git_helpers, test_glibc_reader and
-        # test_provenance that need no clone having actually run.
+        # the classes of test_git_helpers, test_glibc_reader, test_build_sources
+        # and test_provenance that need no clone having actually run.
         #
         # Spread over four processes, one per processor of this runner, by
         # tests/run_parallel.py, on a pull request and on main alike. They are

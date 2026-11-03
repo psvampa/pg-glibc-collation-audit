@@ -1,0 +1,1501 @@
+"""One glibc build's localedata/ and locale/, rebuilt from its source RPM and
+checked against the build's binary packages.
+
+A RHEL or Rocky glibc build is upstream glibc plus the distro's patches,
+applied by rpmbuild's %prep. build() opens the build's SRPM, takes the inner
+tarball's localedata/ and locale/, applies the patches that touch them the
+way GNU patch does, and keeps the result in a cache. audit.sh does not call
+it.
+
+It does not work out from the spec what rpm did; it reads what rpm wrote
+down, and checks against it:
+
+  - rpm_record(): the order of the patches is the PATCH list rpm wrote into
+    the SRPM's header, reversed. rpm puts each Patch it reads at the head of
+    a list and writes the header from that list (rpm-4.14.3
+    build/parsePreamble.c:264-265, build/parseSpec.c:566; 4.16.1.3 :336-337,
+    :688; 4.19.1.1 :313-314, :690), whatever wrote the Patch line: the spec,
+    a macro, Lua, patch-git. Measured against rpmbuild -bp on rpm 4.14.3,
+    4.16.1.3 and 4.19.1.1.
+  - verify_against_binaries(): the result is compared with what rpm built
+    from the same sources: the sha256 of every locale source in the header
+    of the build's glibc-locale-source, and locale.alias in glibc-common's
+    header; and every charmap in glibc-locale-source's payload, when this
+    Python (3.14 or later) or a zstd program can decompress it -- el9 and
+    el10 packages are zstd -- else a `!!` line says the charmaps were not
+    checked.
+  - known_only(): for what neither record covers (localedata/SUPPORTED and
+    locale/ come from the SRPM's tarball, whose bytes its digests stand
+    for, and its patches), the spec, what %prep runs and the shape of every
+    patch are accepted only as they are in the seven real builds this was
+    measured on, anything else refused, naming it; a Lua Source the spec runs
+    is read only as NOT_CHECKED says.
+
+Whatever this cannot read the way rpm and GNU patch would, it refuses with
+the reason (Refused), and a refusal is never kept in the cache: a tree
+rebuilt from a guess would compare as that build's sources, and the tool
+would report on a build nobody made. It never falls back to the upstream tag.
+
+What it does not check is listed in every result: NOT_CHECKED, never a
+recipe, and the `!!` lines of `verified`.
+
+PG_GLIBC_BUILD_SOURCES_CACHE names the cache directory (default
+scripts/build-sources-cache/, outside git).
+"""
+import bz2
+import collections
+import fnmatch
+import gzip
+import hashlib
+import io
+import json
+import lzma
+import os
+import re
+import shutil
+import struct
+import subprocess
+import tarfile
+import tempfile
+
+import diff_collation_code as dcc
+import glibc_locale_data as g
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CACHE = os.path.join(_HERE, 'build-sources-cache')
+
+SCOPE = ('localedata/', 'locale/')
+
+NOT_CHECKED = (
+    'the compiler, and the code strcoll runs: the patches of this build '
+    'that change that code are listed under collation_code_patches, and '
+    'what the build compiled is not read',
+    "the SRPM's and the binary packages' GPG signatures (only rpm's own "
+    'digests are checked)',
+    'the host that built the binary packages is taken to read the spec as '
+    'the host that built the SRPM did (its architecture, its rpm and '
+    'redhat-rpm-config macros)',
+    'the Lua rpm runs while it reads the spec beyond the blocks of the '
+    'spec, which are pinned: a Lua Source such as patch-git.lua, which '
+    'changes in every build, is read only for the ways of changing '
+    "macros, the environment or rpm's table of patches the seven "
+    'builds were measured without',
+    'localedata/SUPPORTED and locale/ are in no binary package: they are the '
+    "SRPM's tarball and its patches, and the tarball is not compared with "
+    'the upstream tag',
+)
+
+# The rpm versions the seven real builds were made with, SRPMs and binary
+# packages alike, and whose sources these rules were read in.
+KNOWN_RPM = ('4.14.3', '4.16.1.3', '4.19.1.1')
+
+
+class Refused(Exception):
+    """These sources cannot be rebuilt the way rpm would; the message says
+    why."""
+
+
+# -- rpm files ---------------------------------------------------------------
+
+_NAME, _VERSION, _RELEASE = 1000, 1001, 1002
+_SOURCE, _PATCH = 1018, 1019
+_FILEDIGESTS, _SOURCERPM, _RPMVERSION = 1035, 1044, 1064
+_DIRINDEXES, _BASENAMES, _DIRNAMES = 1116, 1117, 1118
+_PAYLOADFORMAT, _PAYLOADCOMPRESSOR = 1124, 1125
+_FILEDIGESTALGO = 5011
+_PAYLOADDIGEST, _PAYLOADDIGESTALGO, _PAYLOADDIGESTALT = 5092, 5093, 5097
+_SIG_SHA256 = 273
+_HEADER_MAGIC = b'\x8e\xad\xe8\x01\x00\x00\x00\x00'
+_OPENERS = {'gzip': gzip.GzipFile, 'xz': lzma.LZMAFile, 'lzma': lzma.LZMAFile,
+            'bzip2': bz2.BZ2File}
+
+
+def _header(f, pad):
+    """One rpm header: {tag: value} and its bytes (lib/header.c@4.14.3)."""
+    magic = f.read(16)
+    if len(magic) != 16 or magic[:8] != _HEADER_MAGIC:
+        raise Refused('not an rpm header (magic %r)' % magic[:8])
+    nindex, hsize = struct.unpack('>II', magic[8:])
+    if nindex > 65535 or hsize > 0x0fffffff:
+        raise Refused('rpm header larger than rpm allows')
+    index, store = f.read(16 * nindex), f.read(hsize)
+    if len(index) != 16 * nindex or len(store) != hsize:
+        raise Refused('rpm header cut short')
+    tags = {}
+    for i in range(nindex):
+        tag, typ, off, cnt = struct.unpack('>IIII', index[16 * i:16 * i + 16])
+        if off > hsize:
+            raise Refused('rpm header entry outside the header')
+        if typ in (6, 8, 9):            # STRING, STRING_ARRAY, I18NSTRING
+            vals, p = [], off
+            for _ in range(1 if typ == 6 else cnt):
+                end = store.find(b'\0', p)
+                if end < 0:
+                    raise Refused('rpm header string without its end')
+                vals.append(store[p:end].decode('utf-8', 'replace'))
+                p = end + 1
+            tags[tag] = vals[0] if typ == 6 else vals
+        elif typ == 4:                  # INT32
+            if off + 4 * cnt > hsize:
+                raise Refused('rpm header entry outside the header')
+            tags[tag] = list(struct.unpack('>%dI' % cnt,
+                                           store[off:off + 4 * cnt]))
+    if pad:
+        f.read((8 - (16 * nindex + hsize) % 8) % 8)
+    return tags, magic + index + store
+
+
+def _read_rpm(path, kind):
+    """(header, payload bytes) of an rpm whose lead says `kind` (1 source,
+    0 binary), after the signature's sha256 of the header."""
+    with open(path, 'rb') as f:
+        lead = f.read(96)
+        if lead[:4] != b'\xed\xab\xee\xdb':
+            raise Refused('%s is not an rpm' % path)
+        if struct.unpack('>H', lead[6:8])[0] != kind:
+            raise Refused('%s is not a %s rpm'
+                          % (path, 'source' if kind == 1 else 'binary'))
+        sig, _ = _header(f, pad=True)
+        hdr, blob = _header(f, pad=False)
+        payload = f.read()
+    if sig.get(_SIG_SHA256) != hashlib.sha256(blob).hexdigest():
+        raise Refused("%s: the header's SHA256 is missing or wrong" % path)
+    digest = hdr.get(_PAYLOADDIGEST)
+    if hdr.get(_PAYLOADDIGESTALGO) != [8] or not digest or \
+            digest[0] != hashlib.sha256(payload).hexdigest():
+        raise Refused("%s: the payload's SHA256 is missing or wrong (cut "
+                      'short, or another file)' % path)
+    if hdr.get(_PAYLOADFORMAT) != 'cpio':
+        raise Refused('%s: payload format %r'
+                      % (path, hdr.get(_PAYLOADFORMAT)))
+    return hdr, payload
+
+
+def _cpio(f, regular_only=True):
+    """The payload's files, (name, bytes), from a newc archive. rpm writes a
+    file shared by hardlinks once, under its last name, and empty under the
+    others (lib/rpmfi.c:1994-2052@4.14.3), so a link count above one is
+    refused, never read as an empty file. With regular_only False, entries
+    that are not regular files (a binary package's directories) are
+    skipped; with it True they are refused."""
+    pos = [0]
+
+    def rd(n):
+        b = f.read(n)
+        if len(b) != n:
+            raise Refused('the payload is cut short')
+        pos[0] += n
+        return b
+
+    def align():
+        rd((4 - pos[0] % 4) % 4)
+
+    while True:
+        h = rd(110)
+        if h[:6] not in (b'070701', b'070702'):
+            raise Refused('payload is not a newc cpio archive (%r)' % h[:6])
+        fld = [int(h[6 + 8 * i:14 + 8 * i], 16) for i in range(13)]
+        mode, nlink, size, namesize = fld[1], fld[4], fld[6], fld[11]
+        name = rd(namesize)[:-1].decode('utf-8', 'replace')
+        align()
+        data = rd(size)
+        align()
+        if name == 'TRAILER!!!':
+            return
+        if name.startswith('./'):
+            name = name[2:]
+        if (mode & 0o170000) != 0o100000:
+            if regular_only:
+                raise Refused('payload file %r is not a regular file' % name)
+            continue
+        if nlink != 1:
+            raise Refused('payload file %r is one of %d hardlinks'
+                          % (name, nlink))
+        yield name, data
+
+
+def read_srpm(path):
+    """(info, header, {name: bytes}) of a source RPM, after rpm's own two
+    digests."""
+    hdr, payload = _read_rpm(path, 1)
+    comp = hdr.get(_PAYLOADCOMPRESSOR)
+    if comp not in _OPENERS:
+        raise Refused('SRPM payload compressed with %r, which Python cannot '
+                      'read without a module outside its standard library'
+                      % comp)
+    files = {}
+    for name, data in _cpio(_OPENERS[comp](fileobj=io.BytesIO(payload))):
+        if '/' in name or name in ('', '.', '..'):
+            raise Refused('unexpected path in the SRPM: %r' % name)
+        if name in files:
+            raise Refused('the SRPM holds %r twice' % name)
+        files[name] = data
+    info = {'name': hdr.get(_NAME), 'version': hdr.get(_VERSION),
+            'release': hdr.get(_RELEASE), 'payload_compressor': comp,
+            'srpm_sha256': _sha256_file(path)}
+    return info, hdr, files
+
+
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as fh:
+        for b in iter(lambda: fh.read(1 << 20), b''):
+            h.update(b)
+    return h.hexdigest()
+
+
+def identity(info):
+    """(build, version, tag) as the rest of the tool reads them. The build
+    ends in `.src`: locale_order.build_parts takes the last dotted word for
+    an architecture, and without one `glibc-2.28-251.el8_10.40` loses its
+    `.40`. The header's ARCH is the build host's, never written here."""
+    name, ver, rel = info.get('name'), info.get('version'), info.get('release')
+    if name != 'glibc':
+        raise Refused('the SRPM is %r, not glibc' % name)
+    m = re.match(r'^(\d+)\.(\d+)(?:\.\d+)?$', ver or '')
+    if not m or not re.match(r'^[^\s/-]+$', rel or ''):
+        raise Refused('unreadable version-release %r-%r' % (ver, rel))
+    return ('glibc-%s-%s.src' % (ver, rel), 'glibc %s.%s' % m.groups(),
+            'glibc-' + ver)
+
+
+# -- what rpm recorded in the SRPM -------------------------------------------
+
+Record = collections.namedtuple('Record', 'order sources rpm_version tag')
+
+
+def rpm_record(info, hdr, files):
+    """The patches in the order %autosetup applied them, the Sources, and
+    the rpm that wrote the SRPM, all from the SRPM's header. The payload
+    holds exactly the Sources, the Patches and glibc.spec: rpmbuild -bs
+    packs what it parsed and nothing else (build/files.c
+    processSourceFiles), so anything else means the header and the files
+    disagree."""
+    sources = hdr.get(_SOURCE)
+    patches = hdr.get(_PATCH, [])
+    if not isinstance(sources, list) or not sources:
+        raise Refused('the SRPM header records no Source')
+    if not isinstance(patches, list):
+        raise Refused('the SRPM header records the patches unreadably')
+    named = sources + patches + ['glibc.spec']
+    if any('/' in n or n in ('', '.', '..') for n in named):
+        raise Refused('the SRPM header names a path: %r'
+                      % [n for n in named if '/' in n or not n.strip('.')][0])
+    seen = collections.Counter(named)
+    twice = sorted(n for n, c in seen.items() if c > 1)
+    if twice:
+        raise Refused('the SRPM header names %s twice' % twice[0])
+    extra = sorted(set(files) - set(named))
+    missing = sorted(set(named) - set(files))
+    if extra or missing:
+        raise Refused('the SRPM payload is not what its header records: '
+                      '%d file(s) more (%s), %d fewer (%s)'
+                      % (len(extra), ', '.join(extra[:3]) or '-',
+                         len(missing), ', '.join(missing[:3]) or '-'))
+    ver = hdr.get(_RPMVERSION)
+    if ver not in KNOWN_RPM:
+        raise Refused('the SRPM was written by rpm %r; this knows %s'
+                      % (ver, ', '.join(KNOWN_RPM)))
+    return Record(list(reversed(patches)), list(sources), ver,
+                  identity(info)[2])
+
+
+# -- what rpm built from it: the binary packages ------------------------------
+
+Binary = collections.namedtuple('Binary', 'path sha256 header files why')
+
+_ZSTD_FRAME = b'\x28\xb5\x2f\xfd'
+
+
+def _unzstd(data):
+    """The decompressed bytes, or None when this Python has no zstd and no
+    zstd program is installed."""
+    try:
+        from compression import zstd    # Python 3.14
+        return zstd.decompress(data)
+    except ImportError:
+        pass
+    prog = shutil.which('zstd')
+    if not prog:
+        return None
+    r = subprocess.run([prog, '-dc'], input=data, stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE)
+    if r.returncode:
+        raise Refused('zstd could not read a payload: %s'
+                      % r.stderr.decode('utf-8', 'replace').strip())
+    return r.stdout
+
+
+NO_ZSTD = 'no zstd reader (Python before 3.14, and no zstd program)'
+
+
+def read_binary(path):
+    """A binary package: its header and, when it can be decompressed, its
+    files. A payload that cannot be decompressed here (zstd with no reader)
+    gives files None and the reason; its digest is checked all the same,
+    since PAYLOADDIGEST is taken over the compressed bytes."""
+    hdr, payload = _read_rpm(path, 0)
+    comp = hdr.get(_PAYLOADCOMPRESSOR)
+    if comp == 'xz':
+        data = lzma.decompress(payload)
+    elif comp == 'zstd':
+        if not payload.startswith(_ZSTD_FRAME):
+            raise Refused('%s: its zstd payload is not a zstd frame' % path)
+        data = _unzstd(payload)
+    else:
+        raise Refused('%s: payload compressed with %r; the binary packages '
+                      'this was measured on use xz or zstd' % (path, comp))
+    if data is None:
+        return Binary(path, _sha256_file(path), hdr, None, NO_ZSTD)
+    alt = hdr.get(_PAYLOADDIGESTALT)
+    if alt is not None and alt[0] != hashlib.sha256(data).hexdigest():
+        raise Refused("%s: the decompressed payload's SHA256 is wrong" % path)
+    files = {}
+    for name, body in _cpio(io.BytesIO(data), regular_only=False):
+        files['/' + name] = body
+    return Binary(path, _sha256_file(path), hdr, files, None)
+
+
+def _nvr(hdr):
+    return '%s-%s-%s' % (hdr.get(_NAME), hdr.get(_VERSION), hdr.get(_RELEASE))
+
+
+def _of_this_build(b, name, info):
+    """The package named `name` of this build, built by an rpm this knows."""
+    h = b.header
+    srpm = 'glibc-%s-%s.src.rpm' % (info['version'], info['release'])
+    if h.get(_NAME) != name:
+        raise Refused('%s is %r, not %s' % (b.path, h.get(_NAME), name))
+    if (h.get(_VERSION), h.get(_RELEASE)) != (info['version'],
+                                              info['release']) \
+            or h.get(_SOURCERPM) != srpm:
+        raise Refused('%s is %s, built from %r, not from %s'
+                      % (b.path, _nvr(h), h.get(_SOURCERPM), srpm))
+    if h.get(_RPMVERSION) not in KNOWN_RPM:
+        raise Refused('%s was built by rpm %r; this knows %s'
+                      % (b.path, h.get(_RPMVERSION), ', '.join(KNOWN_RPM)))
+
+
+def _installed(b):
+    """{installed path: sha256 hex} of a binary package's header. An entry
+    with no digest (a directory, a link) maps to ''."""
+    h = b.header
+    if h.get(_FILEDIGESTALGO) != [8]:
+        raise Refused('%s: file digests are not sha256 (%r)'
+                      % (b.path, h.get(_FILEDIGESTALGO)))
+    idx, base, dirs = (h.get(_DIRINDEXES), h.get(_BASENAMES),
+                       h.get(_DIRNAMES))
+    digests = h.get(_FILEDIGESTS)
+    if not (isinstance(base, list) and isinstance(dirs, list) and
+            isinstance(idx, list) and isinstance(digests, list)) or \
+            not len(idx) == len(base) == len(digests) or \
+            any(i >= len(dirs) for i in idx):
+        raise Refused("%s: its header's file list is not readable" % b.path)
+    return {dirs[i] + n: d for i, n, d in zip(idx, base, digests)}
+
+
+def _under(installed, folder):
+    out = {}
+    for p, d in installed.items():
+        if p.startswith(folder):
+            rest = p[len(folder):]
+            if '/' in rest or not d:
+                raise Refused('%s holds %s, which is not a plain file'
+                              % (folder, p))
+            out[rest] = d
+    return out
+
+
+def _same_names(what, pkg, mine, nvr):
+    only_pkg, only_tree = sorted(set(pkg) - set(mine)), \
+        sorted(set(mine) - set(pkg))
+    if only_pkg or only_tree:
+        raise Refused('%s: %s installs %d that the rebuilt tree lacks (%s), '
+                      'and the tree has %d it does not install (%s)'
+                      % (what, nvr, len(only_pkg), ', '.join(only_pkg[:3]) or
+                         '-', len(only_tree), ', '.join(only_tree[:3]) or '-'))
+
+
+def check_locales(tree, b):
+    """Every locale source glibc-locale-source installs is the rebuilt
+    tree's, by name and sha256, and the other way round: the build installs
+    `locales/*` (localedata/Makefile:28@2.28, :28@2.34, :29@2.39)."""
+    nvr = _nvr(b.header)
+    pkg = _under(_installed(b), '/usr/share/i18n/locales/')
+    mine = {p[len('localedata/locales/'):]: hashlib.sha256(v[0]).hexdigest()
+            for p, v in tree.items() if p.startswith('localedata/locales/')}
+    _same_names('locale sources', pkg, mine, nvr)
+    bad = sorted(n for n in pkg if pkg[n] != mine[n])
+    if bad:
+        raise Refused('locale sources: %d differ from %s, e.g. %s'
+                      % (len(bad), nvr, bad[0]))
+    return 'locale sources: %d, each the sha256 %s records' % (len(pkg), nvr)
+
+
+def check_charmaps(tree, b):
+    """Every charmap glibc-locale-source installs, decompressed, is the
+    rebuilt tree's, and the other way round. Without a reader for the
+    payload, the charmaps are named as not checked."""
+    nvr = _nvr(b.header)
+    if b.files is None:
+        return '!! charmaps NOT checked against %s: %s' % (nvr, b.why)
+    folder = '/usr/share/i18n/charmaps/'
+    pkg = {}
+    for p, body in b.files.items():
+        if not p.startswith(folder):
+            continue
+        rest = p[len(folder):]
+        if '/' in rest or not rest.endswith('.gz'):
+            raise Refused('charmaps: %s installs %s, which is not a gzipped '
+                          'charmap' % (nvr, p))
+        try:
+            pkg[rest[:-len('.gz')]] = gzip.decompress(body)
+        except (OSError, EOFError) as e:
+            raise Refused('charmaps: %s in %s does not decompress: %s'
+                          % (p, nvr, e))
+    mine = {p[len('localedata/charmaps/'):]: v[0] for p, v in tree.items()
+            if p.startswith('localedata/charmaps/')}
+    _same_names('charmaps', pkg, mine, nvr)
+    bad = sorted(n for n in pkg if pkg[n] != mine[n])
+    if bad:
+        raise Refused('charmaps: %d differ from %s, e.g. %s'
+                      % (len(bad), nvr, bad[0]))
+    return 'charmaps: %d, each the one %s installs' % (len(pkg), nvr)
+
+
+def check_alias(tag_alias, b):
+    """The locale.alias glibc-common installs is the upstream tag's, the one
+    a side reads (glibc_locale_data.locale_aliases)."""
+    nvr = _nvr(b.header)
+    got = [d for p, d in _installed(b).items()
+           if p == '/usr/share/locale/locale.alias']
+    if len(got) != 1 or not got[0]:
+        raise Refused('locale.alias: %s installs %d of it'
+                      % (nvr, len(got)))
+    if tag_alias is None or hashlib.sha256(tag_alias).hexdigest() != got[0]:
+        raise Refused("locale.alias: %s installs another than the tag's, "
+                      'which is the one a side reads' % nvr)
+    return 'locale.alias: the sha256 %s records' % nvr
+
+
+def verify_against_binaries(tree, tag_alias, info, binaries):
+    """The rebuilt tree against the build's binary packages: what rpm itself
+    built from the same SRPM. binaries is {'glibc-locale-source': Binary,
+    'glibc-common': Binary}; a missing one is refused (it is not published,
+    or was not fetched). Returns what was checked, a line each; a line
+    starting `!!` names what could not be."""
+    for name in ('glibc-locale-source', 'glibc-common'):
+        if binaries.get(name) is None:
+            raise Refused('no %s package of glibc-%s-%s to check the rebuilt '
+                          'sources against' % (name, info.get('version'),
+                                               info.get('release')))
+        _of_this_build(binaries[name], name, info)
+    ls, common = binaries['glibc-locale-source'], binaries['glibc-common']
+    return [check_locales(tree, ls), check_charmaps(tree, ls),
+            check_alias(tag_alias, common)]
+
+
+# -- the spec ----------------------------------------------------------------
+
+# The spec's last section, the package's history, is left out: tests/
+# test_wrapper keeps its name out of scripts/, and %prep ends before it in
+# every spec.
+_SECTION = re.compile(r'^%(prep|build|install|check|files|package|'
+                      r'description|pre|post|preun|postun|posttrans|pretrans|'
+                      r'transfiletriggerin|filetriggerin|triggerin|'
+                      r'triggerun|generate_buildrequires)(\s|$)')
+_COND_OPEN = re.compile(r'^%if(n?arch|n?os)?(\s|$)')
+_AUTOSETUP = '%autosetup -n %{glibcsrcdir} -p1'
+_SOURCE0 = 'Source0: %{?glibc_release_url}%{glibcsrcdir}.tar.xz'
+
+
+def spec_text(files):
+    raw = files.get('glibc.spec')
+    if raw is None:
+        raise Refused('the SRPM has no glibc.spec')
+    specs = [n for n in files if n.endswith('.spec')]
+    if specs != ['glibc.spec']:
+        raise Refused('expected glibc.spec alone, found %r' % sorted(specs))
+    try:
+        return raw.decode('utf-8')
+    except UnicodeDecodeError:
+        raise Refused('glibc.spec is not UTF-8')
+
+
+def prep_span(lines):
+    """(first, end) indexes of %prep's body in the spec's lines: from the
+    line after `%prep` to the next section. Refused when there is no %prep
+    or nothing ends it."""
+    starts = [i for i, ln in enumerate(lines) if re.match(r'^%prep(\s|$)', ln)]
+    if len(starts) != 1:
+        raise Refused('glibc.spec has %d %%prep sections' % len(starts))
+    for j in range(starts[0] + 1, len(lines)):
+        if _SECTION.match(lines[j]):
+            return starts[0] + 1, j
+    raise Refused('nothing ends %prep')
+
+
+def _lua_blocks(text):
+    """(start, end, body) of every %{lua: ...} in text, braces balanced."""
+    i = 0
+    while True:
+        i = text.find('%{lua:', i)
+        if i < 0:
+            return
+        depth, j = 0, i + 1
+        while j < len(text):
+            if text[j] == '{':
+                depth += 1
+            elif text[j] == '}':
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        if depth:
+            raise Refused('a %{lua: block without its end in glibc.spec')
+        yield i, j + 1, text[i + 6:j]
+        i = j + 1
+
+
+class _Spec(object):
+    """What prep_keys reads of the spec: its macros, which of them have more
+    than one value (defined twice, under a conditional, over several lines,
+    or inside another line), and its Sources."""
+
+    def __init__(self, text, files, tree):
+        self.files, self.tree = files, tree
+        self.macros, self.unsure, self.sources = {}, set(), {}
+        depth = 0
+        for ln in text.split('\n'):
+            s = ln.strip()
+            if _COND_OPEN.match(s):
+                depth += 1
+            elif re.match(r'^%endif(\s|$)', s):
+                depth -= 1
+            m = re.match(r'^%(?:global|define)\s+(\w+)(?:\s+(.*?))?\s*$', s)
+            if m:
+                name, value = m.group(1), m.group(2) or ''
+                if name in self.macros or depth or value.endswith('\\'):
+                    self.unsure.add(name)
+                self.macros[name] = value
+            for m in _DEFINES.finditer(s[1:]):
+                self.unsure.add(m.group(3))
+            m = re.match(r'^Source(\d*)\s*:\s*(\S+)', s, re.I)
+            if m:
+                self.sources[int(m.group(1) or 0)] = \
+                    os.path.basename(m.group(2))
+
+    def source(self, name):
+        raw = self.files.get(name)
+        if raw is None:
+            raise Refused('Source %s is not in the SRPM' % name)
+        sup = self.tree.get('localedata/SUPPORTED')
+        if sup is not None and sup[0] == raw:
+            return '@SRC:=localedata/SUPPORTED'
+        return '@SRC:sha256=' + hashlib.sha256(raw).hexdigest()
+
+    def expand(self, s, depth=0):
+        if depth > 8:
+            raise Refused('macros nested too deep')
+        out, last = '', 0
+        for a, b, body in _lua_blocks(s):
+            out += s[last:a] + '@LUA:' + \
+                hashlib.sha256(body.encode('utf-8')).hexdigest()
+            last = b
+        s = out + s[last:]
+
+        def rep(m):
+            if m.group(0) == '%%':
+                return '%'
+            name = (m.group(1) or m.group(2)).lstrip('?!')
+            n = re.match(r'^SOURCE(\d+)$', name, re.I)
+            if n:
+                if int(n.group(1)) not in self.sources:
+                    raise Refused('%%%s is not declared' % name)
+                return self.source(self.sources[int(n.group(1))])
+            if name == '_sourcedir':
+                return '@SD:'
+            if name in self.unsure:
+                raise Refused('%%%s has more than one value in glibc.spec'
+                              % name)
+            if name in self.macros:
+                return self.expand(self.macros[name], depth + 1)
+            raise Refused('macro %%%s, which this does not expand' % name)
+        return re.sub(r'%%|%\{([^{}:]+)\}|%([A-Za-z_]\w*)', rep, s)
+
+
+def prep_keys(spec, body):
+    """%prep's body lines as the shell runs them: each line expanded the way
+    rpm expands it (a macro whose value holds a newline makes more lines),
+    then comments dropped one physical line at a time (a comment ends at
+    its newline, even after a backslash), then lines ending in a backslash
+    joined, each key with its blanks collapsed. The first line is rpm's
+    %autosetup, which is kept as written."""
+    shell = []
+    for ln in body:
+        if ' '.join(ln.split()) == _AUTOSETUP:
+            shell.append(_AUTOSETUP)
+        else:
+            shell.extend(spec.expand(ln).split('\n'))
+    keys, buf = [], None
+    for s in shell:
+        if buf is None and (not s.strip() or s.lstrip().startswith('#')):
+            continue
+        if s.endswith('\\'):
+            buf = (buf or '') + s[:-1] + ' '
+            continue
+        keys.append(' '.join(((buf or '') + s).split()))
+        buf = None
+    if buf is not None:
+        keys.append(' '.join(buf.split()))
+    return tuple(keys)
+
+
+# -- what is known: the seven real builds -------------------------------------
+
+# Every %{lua: block of the specs of the seven builds this was measured on
+# (el8_10.40, el8_10.48, 168.el9_6.24, 275.el9_8, 283.el9_8, 128.el10_2,
+# 145.el10_2), by the sha256 of its body.
+LUA_CATALOGUE = frozenset((
+    '052f2341c249ca8edef05fc099930d1d21296a600756b8a59f668e7089825a40',
+    '0b04e359900e4c4e959765c2d2102dcfc53f32655a4f27fe96020afa351abd94',
+    '3125e9b3a410876afda001be8fc4afc2719916d7643557699d055ad9dc55f77c',
+    '360e1b756c9a8723df2eac0f287e1a32cf43e4b77493b5d23304b79498cb4c90',
+    '3b62e2b92acd2038b5748040d60104cc1b1e57efcb8aa4d34535bc4a9ace0bee',
+    '49093902285baf19b84b4e32734d9386a3f624e24cbe9880348931f25a9245af',
+    '5466bba4969221b736900901a43afe9c574344141c5199018d7f387c708a63bc',
+    'a4ec7462eb9b3f89dcb2181d9fcec137ea3f10b1d24bee78f7732af7a84f9aca',
+    'a88b8d25cc2fb5d94e5ea51b4be4e16205aabb259e62d0fad0dfcabb8b84e320',
+    'ab7915cadf6137360cd506455f07ee89ceb3daf937a2d8bca88b676edf3bc639',
+    'b8335ec2e9edce072684f263a6c51a23b94d196e56a1de809ef10200c5ae5c05',
+    'dd70ed296135f004e5f6892b583c2cf2753db9f60d1785b3b0f537f6036f97e7',
+    'df4a5453cda04fd457bcc166bee92118c3992d2e4e23191ad2062fef8717de45',
+    'ef89f1d6b842d73fc261ef0035c0bbd67c61b8a2df88dd0efd48d3d8a34d71bf',
+    'f212168e84f12b1bde9b4c25652b9ffe9b43b031d7cc58c75e425cef23030e00',
+))
+
+# Every macro those specs define before the end of %prep, by any spelling.
+MACRO_NAMES = frozenset((
+    '__brp_ldconfig',
+    '__filter_GLIBC_PRIVATE',
+    '__provides_exclude',
+    '_annotated_build',
+    '_auto_set_build_flags',
+    '_binaries_in_noarch_packages_terminate_build',
+    '_no_recompute_build_ids',
+    '_unique_build_ids',
+    'biarcharches',
+    'buildpower10',
+    'buildpower9',
+    'comment',
+    'enablekernel',
+    'glibc_has_libmvec',
+    'glibc_has_libnldbl',
+    'glibc_ldso',
+    'glibc_ldso_alternate',
+    'glibc_post_funcs',
+    'glibc_rtld_early_cflags',
+    'glibc_ship_tracelibs_in_utils',
+    'glibcrelease',
+    'glibcsrcdir',
+    'glibcversion',
+    'headers_package_name',
+    'locale_rx',
+    'man_pages_version',
+    'need_headers_package',
+    'pie_arches',
+    'sysroot_dist',
+    'sysroot_package_arch',
+    'sysroot_prefix',
+    'target',
+    'with_benchtests',
+    'with_docs',
+    'with_valgrind',
+    'with_werror',
+))
+
+# Their %prep bodies, as prep_keys reads them.
+PREP_SEQUENCES = frozenset((
+    (
+        '%autosetup -n %{glibcsrcdir} -p1',
+        'chmod +x benchtests/scripts/*.py scripts/pylint',
+        'find . -type f -size 0 -o -name "*.orig" -exec rm -f {} \\;',
+        'touch `find . -name configure`',
+        'touch locale/programs/*-kw.h',
+        'diff -u @SRC:=localedata/SUPPORTED localedata/SUPPORTED',
+    ),
+    (
+        '%autosetup -n %{glibcsrcdir} -p1',
+        'chmod +x benchtests/scripts/*.py scripts/pylint',
+        'find . -type f -size 0 -o -name "*.orig" -exec rm -f {} \\;',
+        'touch `find . -name configure`',
+        'touch locale/programs/*-kw.h',
+        'set +x',
+        "echo '@LUA:df4a5453cda04fd457bcc166bee92118c3992d2e4e23191ad2062fef8"
+        "717de45' > localedata/SUPPORTED.spec",
+        'set -x',
+        'python3 @SRC:sha256=aa72e727c7e92b923f24e9271efe7e9a3b3f52950a393b9e'
+        'fc779fe2ae39cd9d localedata/SUPPORTED > localedata/SUPPORTED.glibc',
+        'diff -u --label "spec file" localedata/SUPPORTED.spec --label "glibc'
+        ' localedata/SUPPORTED" localedata/SUPPORTED.glibc',
+        'rm localedata/SUPPORTED.spec localedata/SUPPORTED.glibc',
+    ),
+    (
+        '%autosetup -n %{glibcsrcdir} -p1',
+        'chmod +x benchtests/scripts/*.py scripts/pylint',
+        'find . -type f -size 0 -o -name "*.orig" -exec rm -f {} \\;',
+        'touch `find . -name configure`',
+        'touch locale/programs/*-kw.h',
+        'set +x',
+        "echo '@LUA:df4a5453cda04fd457bcc166bee92118c3992d2e4e23191ad2062fef8"
+        "717de45' > localedata/SUPPORTED.spec",
+        'set -x',
+        'python3 @SRC:sha256=aa72e727c7e92b923f24e9271efe7e9a3b3f52950a393b9e'
+        'fc779fe2ae39cd9d localedata/SUPPORTED > localedata/SUPPORTED.glibc',
+        'diff -u --label "spec file" localedata/SUPPORTED.spec --label "glibc'
+        ' localedata/SUPPORTED" localedata/SUPPORTED.glibc',
+        'rm localedata/SUPPORTED.spec localedata/SUPPORTED.glibc',
+        'cp @SRC:sha256=0e7104192ee401d67b8b8b24d122bf879b28b8af5194a45b34884'
+        '153a3be4ed2 .',
+        'chmod +x verify-ld-so-abi.sh',
+        'cp @SD:/*.baseline .',
+    ),
+    (
+        '%autosetup -n %{glibcsrcdir} -p1',
+        'chmod +x benchtests/scripts/*.py scripts/pylint',
+        'find . -type f -size 0 -o -name "*.orig" -exec rm -f {} \\;',
+        'touch `find . -name configure`',
+        'touch locale/programs/*-kw.h',
+        'set +x',
+        "echo '@LUA:df4a5453cda04fd457bcc166bee92118c3992d2e4e23191ad2062fef8"
+        "717de45' > localedata/SUPPORTED.spec",
+        'set -x',
+        'python3 @SRC:sha256=aa72e727c7e92b923f24e9271efe7e9a3b3f52950a393b9e'
+        'fc779fe2ae39cd9d localedata/SUPPORTED > localedata/SUPPORTED.glibc',
+        'diff -u --label "spec file" localedata/SUPPORTED.spec --label "glibc'
+        ' localedata/SUPPORTED" localedata/SUPPORTED.glibc',
+        'rm localedata/SUPPORTED.spec localedata/SUPPORTED.glibc',
+        'cp @SRC:sha256=6f3476de938d9676fc37f274bb98b85389defafef861421fcc5bd'
+        '5d61936e500 .',
+        'chmod +x verify-ld-so-abi.sh',
+        'cp @SD:/*.baseline .',
+    ),
+))
+
+_DEFINES = re.compile(r'%(?:\{(global|define|undefine):\s*|'
+                      r'(global|define|undefine)\s+)(\w+)')
+# What a Lua file may not do while rpm reads the spec: define, undefine or
+# load macros (rpmio/rpmlua.c at the three rpm versions: rpm.define,
+# rpm.undefine, rpm.load, the macros table of 4.19, an expansion of
+# %global/%define/%undefine/%{load:}), run %( ), set the environment the
+# %prep shell and GNU patch inherit (posix.setenv, putenv, unsetenv), or
+# write rpm's own table of patches, which %autopatch walks.
+_LUA_DEFINES = re.compile(
+    r'\brpm\.(define|undefine|load)\b|\bmacros\s*[.\[]|'
+    r'%\{?(global|define|undefine)\b|%\{load:|%\(|'
+    r'\bposix\.(setenv|putenv|unsetenv)\b|'
+    r'\btable\.\w+\(\s*(patches|patch_nums)\b|'
+    r'\b(patches|patch_nums)\s*(\[[^\]]*\])?\s*=(?!=)')
+# rpm reads a section's name in any case (build/parseSpec.c isPart,
+# rstrncasecmp, at the three versions).
+_LATE = re.compile(r'^[ \t]*(%(patchlist|sourcelist|package)(\s|$)|'
+                   r'Patch\d*\s*:)', re.M | re.I)
+
+
+def known_only(text, files, record, tree):
+    """[(where, what)] of everything in the SRPM that neither rpm's record
+    nor the binary packages stand for and that is not as it is in the seven
+    real builds; empty when everything is known. tree is the patched
+    {path: (bytes, exec)} of localedata/ and locale/."""
+    out = []
+    lines = text.split('\n')
+    try:
+        first, end = prep_span(lines)
+    except Refused as e:
+        return [('glibc.spec', str(e))]
+    head = '\n'.join(lines[:end])
+
+    def at(offset):
+        return 'glibc.spec:%d' % (text.count('\n', 0, offset) + 1)
+    # rpm runs every block, and every %( %{load: %include, while it reads
+    # the spec, before %prep's shell runs: those after %prep too.
+    for a, _, body in _lua_blocks(text):
+        sha = hashlib.sha256(body.encode('utf-8')).hexdigest()
+        if sha not in LUA_CATALOGUE:
+            out.append((at(a), 'a %%{lua: block this does not know (%s)'
+                        % sha[:12]))
+    for m in re.finditer(r'%\(|%\{load:|^[ \t]*%include(\s|$)', text, re.M):
+        out.append((at(m.start()), 'runs or reads something while rpm reads '
+                    'the spec: %s' % m.group(0).strip()))
+    # rpm 4.16 and later read patches from %patchlist, under its %ifarch
+    # too (build/parseSpec.c:79@4.16.1.3): the arch the SRPM was written on
+    # would decide them, as a Patch line under a conditional would.
+    for m in re.finditer(r'^[ \t]*%(patchlist|sourcelist)(\s|$)', head,
+                         re.M | re.I):
+        out.append((at(m.start()), 'a %%%s, which no real spec has'
+                    % m.group(1)))
+    # %autosetup's walk over the patches is expanded when rpm parses %prep
+    # (build/parsePrep.c, the three versions), so a patch a later
+    # %patchlist, %package preamble or Patch line adds is in the header and
+    # was never applied.
+    tail = '\n'.join(lines[end:])
+    for m in _LATE.finditer(tail):
+        out.append(('glibc.spec:%d' % (end + tail.count('\n', 0, m.start())
+                                       + 1),
+                    'a patch or a package declared after %%prep: %s'
+                    % m.group(1).strip()))
+    # A Lua file the spec runs (patch-git.lua, through dofile) changes from
+    # build to build, so it cannot be pinned; it is read for _LUA_DEFINES,
+    # none of which the five real ones holds. What else it does is in
+    # NOT_CHECKED.
+    for name in record.sources:
+        if name.endswith('.lua'):
+            m = _LUA_DEFINES.search(files[name].decode('utf-8', 'replace'))
+            if m:
+                out.append((name, 'changes macros, the environment or the '
+                            'patches while rpm reads the spec: %s'
+                            % m.group(0)))
+    for m in _DEFINES.finditer(head):
+        if m.group(3) not in MACRO_NAMES:
+            out.append((at(m.start()), 'defines %%%s, which no real spec '
+                        'does' % m.group(3)))
+    depth = 0
+    for i, ln in enumerate(lines[:end], 1):
+        s = ln.strip()
+        if _COND_OPEN.match(s):
+            depth += 1
+        elif re.match(r'^%endif(\s|$)', s):
+            depth -= 1
+        elif depth and re.match(r'^Patch\d*\s*:', s, re.I):
+            out.append(('glibc.spec:%d' % i, 'a Patch line under a '
+                        'conditional'))
+    srcdir = re.findall(r'^%(?:define|global)\s+glibcsrcdir\s+(\S+)\s*$',
+                        head, re.M)
+    tag = record.tag
+    if srcdir != [tag] or _SOURCE0 not in [ln.strip() for ln in lines[:end]] \
+            or tag + '.tar.xz' not in record.sources:
+        out.append(('glibc.spec', 'does not unpack %s.tar.xz the way the real '
+                    'specs do (glibcsrcdir %r)' % (tag, srcdir)))
+    try:
+        keys = prep_keys(_Spec(text, files, tree), lines[first:end])
+    except Refused as e:
+        out.append(('glibc.spec:%d' % first, '%%prep: %s' % e))
+    else:
+        if keys not in PREP_SEQUENCES:
+            out.append(('glibc.spec:%d' % first, '%%prep is not one the real '
+                        'specs have: %s' % _first_unknown(keys)))
+    orig = sorted(p for p in tree if p.endswith('.orig'))
+    if orig:
+        out.append(('%prep', 'the tree holds %s, which the find of %%prep '
+                    'deletes' % orig[0]))
+    if not any(fnmatch.fnmatchcase(p, 'locale/programs/*-kw.h') for p in tree):
+        out.append(('%prep', 'no locale/programs/*-kw.h for the touch of '
+                    '%prep'))
+    for name in record.order:
+        out.extend(patch_unknowns(name, files[name]))
+    return out
+
+
+def _first_unknown(keys):
+    """The first line of keys that no known sequence has at that place."""
+    best = None
+    for seq in PREP_SEQUENCES:
+        n = 0
+        while n < min(len(seq), len(keys)) and seq[n] == keys[n]:
+            n += 1
+        if best is None or n > best:
+            best = n
+    best = best or 0
+    if best < len(keys):
+        return 'line %d of its body, %s' % (best + 1, keys[best])
+    return 'it ends after line %d of its body' % len(keys)
+
+
+# -- the patches --------------------------------------------------------------
+
+_HUNK = re.compile(rb'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@')
+# The lines git writes between `diff --git` and `---` (git diff-generate-
+# patch, "extended header lines"); anything else ends the header.
+_GIT_HEADER = (b'old mode ', b'new mode ', b'deleted file mode ',
+               b'new file mode ', b'copy from ', b'copy to ', b'rename from ',
+               b'rename to ', b'similarity index ', b'dissimilarity index ',
+               b'index ', b'Binary files ', b'GIT binary patch')
+# Lines GNU patch 2.7.6 reads as the start of a diff's header, wherever they
+# are outside a hunk (intuit_diff_type, src/pch.c:549-830), after it skips
+# blanks, tabs and X's (:518) and, before `---`, RFC 934's `- ` (:703-705).
+_HEADER_SHAPED = (b'--- ', b'+++ ', b'*** ', b'Index:', b'diff --git ',
+                  b'Prereq:')
+_ALIAS = 'intl/locale.alias'
+# The code strcoll and strxfrm run: what step 5 reads as glibc's collation
+# code, and the four wrappers that call into it and are in no list there.
+COLLATION_CODE = frozenset(dcc.ENTRY_POINTS + dcc.TIER1 + dcc.TIER2 + [
+    'string/strcoll.c', 'string/strxfrm.c', 'wcsmbs/wcscoll.c',
+    'wcsmbs/wcsxfrm.c'])
+_EPOCH = re.compile(rb'^(1969-12-31|1970-01-01) ')
+
+
+def in_scope(path):
+    return path.startswith(SCOPE)
+
+
+def watched(path):
+    """A path the result reads or reports: localedata/ and locale/ (the
+    tree), intl/locale.alias (a side reads it), strcoll's code (listed)."""
+    return in_scope(path) or path == _ALIAS or path in COLLATION_CODE
+
+
+def _names_in_scope(line):
+    return any(w.encode() in line for w in SCOPE)
+
+
+def _names_watched(line):
+    return _names_in_scope(line) or _ALIAS.encode() in line or \
+        any(c.encode() in line for c in COLLATION_CODE)
+
+
+def rpm_compression(name, data):
+    """What rpm would unpack the patch as before applying it, or None.
+    rpmFileIsCompressed reads 13 bytes and calls a shorter file plain
+    (rpmio/rpmfileutil.c:341-378@4.14.3, :178-215@4.16.1.3, the same at
+    4.19.1.1); 4.14.3 spells zstd 28 85 2f, the later ones 28 b5 2f, and
+    either is refused here."""
+    m = data[:13]
+    if len(m) < 13:
+        return None
+    if m.startswith(b'BZh'):
+        return 'bzip2'
+    if m.startswith((b'PK\x03\x04', b'PK00')):
+        return 'zip'
+    if m.startswith(b'\xfd7zXZ\x00'):
+        return 'xz'
+    if m.startswith((b'\x28\x85\x2f', b'\x28\xb5\x2f')):
+        return 'zstd'
+    if m.startswith(b'LZIP'):
+        return 'lzip'
+    if m.startswith(b'LRZI'):
+        return 'lrzip'
+    if m[0] == 0o37 and m[1] in (0o213, 0o236, 0o036, 0o240, 0o235):
+        return 'gzip, pack, lzh or compress'
+    if m.startswith(b'7z\xbc\xaf\x27\x1c'):
+        return '7zip'
+    if name.endswith(('.lzma', '.gem')):
+        return name.rsplit('.', 1)[1]
+    return None
+
+
+def _lines(data):
+    ls = data.split(b'\n')
+    return [l + b'\n' for l in ls[:-1]] + ([ls[-1]] if ls[-1] else [])
+
+
+def _header_shaped(line):
+    """The line as GNU patch tests it for a header, or None."""
+    s = line.lstrip(b' \tX')
+    while s.startswith(b'- '):
+        s = s[2:]
+    return s if s.startswith(_HEADER_SHAPED) else None
+
+
+def _name(field, prefix):
+    """(path, timestamp) of a ---/+++ field whose name is prefix + a clean
+    relative path, else None: a quoted name, a doubled or leading slash, a
+    `.` or `..` part are not the shapes measured."""
+    raw, _, ts = field.rstrip(b'\r\n').partition(b'\t')
+    if raw == b'/dev/null':
+        return '/dev/null', ts
+    if not raw.startswith(prefix):
+        return None
+    p = raw[len(prefix):]
+    parts = p.split(b'/')
+    if not p or any(x in (b'', b'.', b'..') for x in parts) or b'"' in p:
+        return None
+    try:
+        return p.decode('utf-8'), ts
+    except UnicodeDecodeError:
+        return None
+
+
+def _shape(git, old, new, hunks):
+    """(shape, path, why) of a section, the shape one of those the seven
+    real builds use on localedata/ and locale/, else None and why:
+      git          diff --git a/P b/P, index, --- a/P, +++ b/P
+      git-create   ... new file mode, --- /dev/null, +++ b/P
+      plain        --- a/P <date>, +++ b/P <date>
+      plain-create --- a/P <1969-12-31 or 1970-01-01 date>, +++ b/P,
+                   one hunk @@ -0,0
+      git-empty    diff --git a/P b/P, new file mode, index 0..e69de29,
+                   no diff (el8's glibc-rh1817513-51.patch)"""
+    if git:
+        m = re.match(rb'^diff --git a/(\S+) b/(\S+)\r?\n?$', git[0])
+        if not m or m.group(1) != m.group(2):
+            return None, None, 'a git header naming two paths or none'
+        p = _name(b'a/' + m.group(1), b'a/')
+        if p is None or p[0] == '/dev/null':
+            return None, None, 'a git path not in the shapes measured'
+        path = p[0]
+        rest = [x for x in git[1:] if not x.startswith(b'index ')]
+        create = len(rest) == 1 and re.match(
+            rb'^new file mode 100(644|755)\r?\n?$', rest[0]) is not None
+        if rest and not create:
+            return None, path, 'the git lines %s' % ', '.join(
+                x.rstrip().decode('utf-8', 'replace') for x in rest[:2])
+        if old is None and new is None:
+            if create and any(x.startswith(b'index 0000000') and
+                              b'..e69de29' in x for x in git):
+                return 'git-empty', path, None
+            return None, path, 'a git section with no diff'
+        if old is None or new is None:
+            return None, path, 'a ---/+++ pair this does not read'
+        want_old = ('/dev/null',) if create else (path,)
+        if old[0] not in want_old or new[0] != path or old[1] or new[1]:
+            return None, path, ('its ---/+++ do not name %s as git writes'
+                                % path)
+        return ('git-create' if create else 'git'), path, None
+    if old is None or new is None or old[0] == '/dev/null' or \
+            new[0] == '/dev/null' or old[0] != new[0]:
+        return None, (new or old or (None,))[0], 'a ---/+++ pair this does ' \
+            'not read'
+    path = old[0]
+    if not old[1] or not new[1]:
+        return None, path, 'a plain diff without dates'
+    if _EPOCH.match(new[1]):
+        return None, path, 'a plain diff that deletes'
+    if _EPOCH.match(old[1]):
+        if len(hunks) == 1 and hunks[0][0] == 0 and not hunks[0][1]:
+            return 'plain-create', path, None
+        return None, path, 'a plain diff from the epoch that is not one ' \
+            'creating hunk'
+    return 'plain', path, None
+
+
+def parse_patch(data):
+    """The sections of a patch file, as GNU patch would find them at column
+    0: {shape, path, why, hunks, git, broken, lines, body}, each hunk (old
+    start, old lines, new lines, leading context, trailing context); lines
+    and body are the indexes of the section's header lines and of its hunk
+    lines."""
+    lines, files, i = _lines(data), [], 0
+
+    def take_hunks(i):
+        hunks, broken, body = [], None, []
+        while i < len(lines) and lines[i].startswith(b'@@ ') and not broken:
+            m = _HUNK.match(lines[i])
+            if not m:
+                return hunks, 'bad hunk header %r' % lines[i][:60], i, body
+            body.append(i)
+            start = int(m.group(1))
+            oc = int(m.group(2)) if m.group(2) is not None else 1
+            nc = int(m.group(4)) if m.group(4) is not None else 1
+            i += 1
+            ol, nl, ops = [], [], []
+            while (len(ol) < oc or len(nl) < nc) and i < len(lines):
+                t = lines[i]
+                c, rest = t[:1], t[1:]
+                if t == b'\n':          # an empty context line, its blank cut
+                    c, rest = b' ', b'\n'
+                if c not in (b' ', b'-', b'+'):
+                    broken = 'bad hunk line %r' % t[:60]
+                    break
+                body.append(i)
+                ops.append(c)
+                if c in (b' ', b'-'):
+                    ol.append(rest)
+                if c in (b' ', b'+'):
+                    nl.append(rest)
+                i += 1
+                if i < len(lines) and lines[i].startswith(b'\\'):
+                    body.append(i)
+                    if c in (b' ', b'-'):
+                        ol[-1] = ol[-1].rstrip(b'\n')
+                    if c in (b' ', b'+'):
+                        nl[-1] = nl[-1].rstrip(b'\n')
+                    i += 1
+            if not broken and (len(ol) != oc or len(nl) != nc):
+                broken = 'hunk cut short'
+            pre = 0
+            while pre < len(ops) and ops[pre] == b' ':
+                pre += 1
+            suf = 0
+            while suf < len(ops) - pre and ops[len(ops) - 1 - suf] == b' ':
+                suf += 1
+            hunks.append((start, ol, nl, pre, suf))
+        return hunks, broken, i, body
+
+    def triple(i):
+        return (i + 2 < len(lines) and lines[i].startswith(b'--- ') and
+                lines[i + 1].startswith(b'+++ ') and
+                lines[i + 2].startswith(b'@@ '))
+
+    def section(git, idx, i):
+        old = new = None
+        hunks, broken, body = [], None, []
+        if triple(i):
+            old = _name(lines[i][4:], b'a/')
+            new = _name(lines[i + 1][4:], b'b/')
+            idx = idx + [i, i + 1]
+            hunks, broken, i, body = take_hunks(i + 2)
+        shape, path, why = _shape(git, old, new, hunks)
+        files.append({'shape': shape, 'path': path, 'why': why,
+                      'hunks': hunks, 'git': git, 'broken': broken,
+                      'lines': idx, 'body': body,
+                      'names': (old, new)})
+        return i
+
+    while i < len(lines):
+        ln = lines[i]
+        if ln.startswith(b'diff --git '):
+            git, idx = [ln], [i]
+            i += 1
+            while i < len(lines) and lines[i].startswith(_GIT_HEADER):
+                git.append(lines[i])
+                idx.append(i)
+                i += 1
+            i = section(git, idx, i)
+            continue
+        if triple(i):
+            i = section([], [], i)
+            continue
+        i += 1
+    return files
+
+
+def _section_paths(s):
+    """Every path a section names, as GNU patch strips -p1."""
+    out = set()
+    if s['path']:
+        out.add(s['path'])
+    for n in s['names']:
+        if n and n[0] != '/dev/null':
+            out.add(n[0])
+    for g0 in s['git'][:1]:
+        for x in g0.split()[2:4]:
+            out.add(x[2:].decode('utf-8', 'replace'))
+    return out
+
+
+def _touches(s, lines, path_is, line_names):
+    """A section is on a path when a path it names is, or when one of its
+    header lines names one: a name this cannot read (`a//localedata/x`,
+    `glibc-2.34.orig/localedata/x`) still reaches the file under GNU patch's
+    -p1. apply_patch asks it of the folders, patch_unknowns of every path
+    the result reads."""
+    return any(path_is(p) for p in _section_paths(s)) or \
+        any(line_names(lines[i]) for i in s['lines'])
+
+
+def _touches_watched(s, lines):
+    return _touches(s, lines, watched, _names_watched)
+
+
+def patch_unknowns(name, data):
+    """[(name, what)] for one patch: rpm would unpack it, or GNU patch would
+    read from it a section on a path the result reads that is not one of
+    the shapes of the seven real builds (parse_patch), or a header-shaped
+    line naming such a path that no such section holds (an indented,
+    quoted or otherwise spelled diff GNU would still apply)."""
+    kind = rpm_compression(name, data)
+    if kind:
+        return [(name, 'rpm would unpack it as %s before applying it' % kind)]
+    out = []
+    sections = parse_patch(data)
+    lines = _lines(data)
+    claimed, body = set(), set()
+    for s in sections:
+        claimed.update(s['lines'])
+        body.update(s['body'])
+        if not _touches_watched(s, lines):
+            continue
+        if s['shape'] is None:
+            out.append((name, 'a section on %s this does not know: %s'
+                        % (s['path'] or sorted(_section_paths(s)), s['why'])))
+        elif s['broken']:
+            out.append((name, '%s: %s' % (s['path'], s['broken'])))
+    index = False
+    for i, ln in enumerate(lines):
+        if i in body:
+            continue
+        h = _header_shaped(ln)
+        if h is None:
+            continue
+        if h.startswith(b'Index:'):
+            index = True
+        if i not in claimed and _names_watched(h):
+            out.append((name, 'line %d reads to GNU patch as a header on a '
+                        'path the result reads: %r' % (i + 1, h[:80])))
+    if index and any(_touches_watched(s, lines) for s in sections):
+        out.append((name, 'an Index: line beside a section on a path the '
+                    'result reads'))
+    hunks = data.count(b'\n@@ -') + data.startswith(b'@@ -')
+    if hunks != sum(len(s['hunks']) for s in sections):
+        out.append((name, 'hunk headers this does not read as unified diff'))
+    return out
+
+
+def _matches(out, ol, pos):
+    return 0 <= pos <= len(out) - len(ol) and out[pos:pos + len(ol)] == ol
+
+
+def locate(out, ol, start, first_guess, frozen, prefix, suffix):
+    """Where GNU patch 2.7.6 puts a hunk at fuzz 0 (locate_hunk,
+    src/patch.c:1142-1214), 1-based, or 0. The search runs from first_guess
+    outwards, after before before (+offset first), never above the line
+    after the last one the previous hunk froze; a hunk with less context
+    before than after can only match at the file's start, and only if it
+    says it starts there, one with less after only at the file's end."""
+    pat = len(ol)
+    if not pat:
+        return first_guess
+    context = suffix if prefix < suffix else prefix
+    prefix_fuzz, suffix_fuzz = prefix - context, suffix - context
+    max_where = len(out) - (pat - suffix_fuzz) + 1
+    min_where = frozen + 1
+    max_pos = max_where - first_guess
+    max_neg = first_guess - min_where
+    max_offset = max(max_pos, max_neg)
+    if first_guess <= max_neg:
+        max_neg = first_guess - 1
+    if prefix_fuzz < 0 and start <= 1:
+        offset = 1 - first_guess
+        if frozen <= prefix and offset <= max_pos and \
+                _matches(out, ol, first_guess + offset - 1):
+            return first_guess + offset
+        return 0
+    if suffix_fuzz < 0:
+        offset = first_guess - (len(out) - pat + 1)
+        if offset <= max_neg and _matches(out, ol, first_guess - offset - 1):
+            return first_guess - offset
+        return 0
+    offset = (first_guess - max_where if max_pos < 0
+              else first_guess - min_where if max_neg < 0 else 0)
+    while offset <= max_offset:
+        if offset <= max_pos and _matches(out, ol, first_guess + offset - 1):
+            return first_guess + offset
+        if offset <= max_neg and _matches(out, ol, first_guess - offset - 1):
+            return first_guess - offset
+        offset += 1
+    return 0
+
+
+def apply_hunks(lines, hunks, where):
+    """The lines after every hunk, placed as GNU patch places them."""
+    out, adj, in_off, frozen = list(lines), 0, 0, 0
+    for start, ol, nl, pre, suf in hunks:
+        nominal = (start - 1 if ol else start) + adj
+        pos = locate(out, ol, start, nominal + in_off + 1, frozen, pre, suf)
+        if not pos:
+            raise Refused('a hunk at -%d does not apply to %s'
+                          % (start, where))
+        pos -= 1
+        out[pos:pos + len(ol)] = nl
+        in_off = pos - nominal
+        adj += len(nl) - len(ol)
+        frozen = pos + len(nl) - suf
+    return out
+
+
+def apply_patch(tree, name, data):
+    """Apply the localedata/ and locale/ sections of one patch file to tree
+    ({path: (bytes, exec)}). Returns (paths changed, strcoll's code paths
+    the patch names). A section on those folders whose shape is not known
+    is refused; patch_unknowns says why in detail."""
+    changed, code = [], set()
+    lines = _lines(data)
+    for s in parse_patch(data):
+        paths = _section_paths(s)
+        code.update(p for p in paths if p in COLLATION_CODE)
+        if not _touches(s, lines, in_scope, _names_in_scope):
+            continue
+        if s['shape'] is None or s['broken'] or not in_scope(s['path'] or ''):
+            raise Refused('%s: a section on %s this does not apply: %s'
+                          % (name, sorted(paths), s['why'] or s['broken'] or
+                             'it crosses into localedata/ or locale/'))
+        p = s['path']
+        if s['shape'] in ('git-create', 'plain-create', 'git-empty'):
+            # Without -f GNU patch takes an existing file as a patch already
+            # applied and fails the build; rpm 4.19 (el10) passes -f, and the
+            # hunk is then put into the file as it is (util.c:1047-1064,
+            # pch.c:200-223@2.7.6). Neither leaves a tree to read.
+            if p in tree:
+                raise Refused('%s: creates %s, which exists' % (name, p))
+            cur = []
+            exe = any(x.startswith(b'new file mode 100755') for x in s['git'])
+        else:
+            if p not in tree:
+                raise Refused('%s: changes %s, which is not there' % (name, p))
+            cur, exe = _lines(tree[p][0]), tree[p][1]
+        new = apply_hunks(cur, s['hunks'], '%s (%s)' % (p, name))
+        tree[p] = (b''.join(new), exe)
+        changed.append(p)
+    return changed, sorted(code)
+
+
+# -- the upstream tree -------------------------------------------------------
+
+def scope_from_tarball(files, srcdir):
+    """({path: (bytes, exec)} of localedata/ and locale/, intl/locale.alias)
+    of the SRPM's one tarball, whose top folder is srcdir."""
+    tars = [n for n in files if re.search(r'\.tar\.(xz|gz|bz2)$', n)]
+    if len(tars) != 1:
+        raise Refused('expected one tarball in the SRPM, found %r'
+                      % sorted(tars))
+    name = tars[0]
+    if not name.startswith(srcdir + '.tar.'):
+        raise Refused('the tarball %s is not %s' % (name, srcdir))
+    tree, alias = {}, None
+    with tarfile.open(fileobj=io.BytesIO(files[name]),
+                      mode='r:' + name.rsplit('.', 1)[1]) as t:
+        for m in t:
+            parts = m.name.split('/')
+            if parts[0] != srcdir or '..' in parts or m.name.startswith('/'):
+                raise Refused('unexpected tarball member %r' % m.name)
+            rel = '/'.join(parts[1:])
+            if m.isdir() or not (in_scope(rel) or rel == _ALIAS):
+                continue
+            if not m.isfile():
+                raise Refused('%s in the tarball is a link or a special file'
+                              % rel)
+            if rel == _ALIAS:
+                alias = t.extractfile(m).read()
+                continue
+            tree[rel] = (t.extractfile(m).read(), bool(m.mode & 0o100))
+    if not tree:
+        raise Refused('the tarball holds no localedata/ or locale/')
+    return tree, alias
+
+
+def scope_from_git(repo, tag):
+    """The same, from a tag of the clone: measured equal to the SRPM's
+    tarball in paths, bytes and executable bit for the seven builds."""
+    out = g.run_git(['ls-tree', '-r', '-z', tag, '--', 'localedata/',
+                     'locale/', _ALIAS], repo).stdout
+    modes = {}
+    for ent in out.split(b'\0'):
+        if not ent:
+            continue
+        meta, _, raw = ent.partition(b'\t')
+        mode, path = meta.split(b' ')[0], raw.decode('utf-8', 'replace')
+        if mode not in (b'100644', b'100755'):
+            raise Refused('%s at %s is not a regular file' % (path, tag))
+        modes[path] = mode == b'100755'
+    paths = sorted(modes)
+    blobs, missing = g.read_blobs(repo, tag, paths, raw=True)
+    g.require_read(tag, paths, missing, 'the localedata/ and locale/ of a '
+                   'build')
+    alias = blobs.get(_ALIAS)
+    return {p: (blobs[p], modes[p]) for p in modes if p != _ALIAS}, alias
+
+
+# -- putting it together -----------------------------------------------------
+
+def rebuild(info, hdr, files, base):
+    """(tree, provenance) of one build: base (the upstream tree) with its
+    patches applied in the order rpm recorded, and everything neither rpm's
+    record nor the binary packages stand for checked by known_only. files
+    is the SRPM's {name: bytes}."""
+    build, version, tag = identity(info)
+    text = spec_text(files)
+    record = rpm_record(info, hdr, files)
+    tree = dict(base)
+    applied, collation = [], []
+    for pos, name in enumerate(record.order, 1):
+        changed, code = apply_patch(tree, name, files[name])
+        if changed:
+            applied.append({'pos': pos, 'patch': name, 'paths': changed})
+        if code:
+            collation.append({'patch': name, 'paths': code})
+    unknown = known_only(text, files, record, tree)
+    if unknown:
+        raise Refused('%d thing(s) this does not know in %s; the first: '
+                      '%s: %s' % ((len(unknown), build) + unknown[0]))
+    return tree, {
+        'build': build, 'version': version, 'tag': tag,
+        'srpm_sha256': info.get('srpm_sha256'),
+        'payload_compressor': info.get('payload_compressor'),
+        'srpm_rpm_version': record.rpm_version,
+        'order_rule': "the SRPM header's PATCH list, reversed",
+        'patches': len(record.order), 'applied': applied,
+        'collation_code_patches': collation,
+        'not_checked': list(NOT_CHECKED)}
+
+
+Built = collections.namedtuple('Built', 'tree build version tag provenance')
+
+
+def _key():
+    """What a kept tree depends on besides its inputs: this module, and the
+    list of strcoll's code it takes from diff_collation_code."""
+    h = hashlib.sha256()
+    for f in (os.path.abspath(__file__), dcc.__file__):
+        with open(f.replace('.pyc', '.py'), 'rb') as fh:
+            h.update(fh.read())
+    return h.hexdigest()[:20]
+
+
+def build(srpm, binaries, cache=None):
+    """The build's rebuilt localedata/ and locale/, from the SRPM at `srpm`,
+    checked against the build's binary packages ({'glibc-locale-source':
+    path, 'glibc-common': path}) and kept under `cache`
+    (PG_GLIBC_BUILD_SOURCES_CACHE, else scripts/build-sources-cache).
+    Raises Refused, and keeps nothing, when the sources cannot be rebuilt
+    the way rpm would or do not match what rpm built."""
+    cache = cache or os.environ.get('PG_GLIBC_BUILD_SOURCES_CACHE') or \
+        DEFAULT_CACHE
+    names = ('glibc-locale-source', 'glibc-common')
+    missing = [n for n in names if not (binaries or {}).get(n)]
+    if missing:
+        raise Refused('no %s package given to check the rebuilt sources '
+                      'against' % missing[0])
+    sha = _sha256_file(srpm)
+    shas = [_sha256_file(binaries[n]) for n in names]
+    where = os.path.join(cache, hashlib.sha256(
+        ' '.join([sha] + shas).encode()).hexdigest()[:32] + '-' + _key())
+    kept = _kept(where, sha, shas)
+    if kept:
+        return kept
+    info, hdr, files = read_srpm(srpm)
+    _, _, tag = identity(info)
+    base, alias = scope_from_tarball(files, tag)
+    tree, prov = rebuild(info, hdr, files, base)
+    prov['verified'] = verify_against_binaries(
+        tree, alias, info, {n: read_binary(binaries[n]) for n in names})
+    prov['binaries_sha256'] = shas
+    os.makedirs(cache, exist_ok=True)
+    tmp = tempfile.mkdtemp(prefix='.new-', dir=cache)
+    try:
+        for p, (data, exe) in tree.items():
+            full = os.path.join(tmp, 'tree', p)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, 'wb') as fh:
+                fh.write(data)
+            os.chmod(full, 0o755 if exe else 0o644)
+        prov['files'] = len(tree)
+        with open(os.path.join(tmp, 'provenance.json'), 'w') as fh:
+            json.dump(prov, fh, indent=1, sort_keys=True)
+        if os.path.exists(where):
+            shutil.rmtree(where)
+        os.rename(tmp, where)
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    kept = _kept(where, sha, shas)
+    if kept is None:
+        shutil.rmtree(where, ignore_errors=True)
+        raise Refused('the tree just kept at %s does not read back whole'
+                      % where)
+    return kept
+
+
+def _kept(where, sha, shas):
+    """The kept result at `where`, or None when there is none or it is not
+    whole: a damaged entry is built again, never read as a smaller tree."""
+    try:
+        with open(os.path.join(where, 'provenance.json')) as fh:
+            prov = json.load(fh)
+        root = os.path.join(where, 'tree')
+        count = sum(len(fs) for _, _, fs in os.walk(root))
+    except (OSError, ValueError):
+        return None
+    if prov.get('srpm_sha256') != sha or prov.get('files') != count or \
+            prov.get('binaries_sha256') != shas or not prov.get('verified'):
+        return None
+    return Built(root, prov['build'], prov['version'], prov['tag'], prov)
