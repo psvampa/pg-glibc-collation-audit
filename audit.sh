@@ -198,6 +198,11 @@ export PG_GLIBC_AUDIT_WRAPPED=1
 # then looked for a file the step had written under another name.
 slug() { python3 "$SCRIPTS/glibc_locale_data.py" pair-slug "$1" "$2"; }
 PAIR=$(slug "$OLD" "$NEW")
+
+# Step 1 reads a build named as `rpm -q glibc` names it without the
+# architecture; the steps after it read two tags, so a build name is refused
+# here, before anything runs.
+python3 "$SCRIPTS/glibc_locale_data.py" tags-only "$OLD" "$NEW"
 STEP2_LIST="$OUT_DIR/step2_changed_collate.$PAIR.txt"
 STEP2_REMOVED="$OUT_DIR/step2_removed_locales.$PAIR.txt"
 STEP2_KEYED="$OUT_DIR/step2_keyed_locales.$PAIR.txt"

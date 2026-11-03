@@ -4,8 +4,9 @@ checked against the build's binary packages.
 A RHEL or Rocky glibc build is upstream glibc plus the distro's patches,
 applied by rpmbuild's %prep. build() opens the build's SRPM, takes the inner
 tarball's localedata/ and locale/, applies the patches that touch them the
-way GNU patch does, and keeps the result in a cache. audit.sh does not call
-it.
+way GNU patch does, and keeps the result in a cache. Step 1
+(audit-locale-diff.sh) reads a build named on its command line through
+glibc_locale_data.build_side; audit.sh refuses one so far.
 
 It does not work out from the spec what rpm did; it reads what rpm wrote
 down, and checks against it:
@@ -43,8 +44,13 @@ provenance['fetched'].
 fetch_build() takes a build's name instead of its files: where_from()
 finds the SRPM and the two binary packages in a mirror's public metadata
 (repomd.xml, then primary.xml), fetch() downloads each and compares it with
-the sha256 the metadata records, and build() does the rest. latest() names
-a major version's newest build.
+the sha256 the metadata records, and build() does the rest; given the
+glibc clone, build() also compares the SRPM's tarball with the upstream tag
+(tarball_is_tag). latest() names a major version's newest build.
+
+build_commit() makes a build a commit of the clone, again on every call: one
+parent, the upstream tag, and the tag's tree with localedata/ and locale/
+the build's, under build_ref(), outside refs/tags.
 
 PG_GLIBC_BUILD_SOURCES_CACHE names the cache directory (default
 scripts/build-sources-cache/, outside git), and PG_GLIBC_BUILD_MIRROR the
@@ -81,8 +87,8 @@ SCOPE = ('localedata/', 'locale/')
 
 NOT_CHECKED = (
     'the compiler, and the code strcoll runs: the patches of this build '
-    'that change that code are listed under collation_code_patches, and '
-    'what the build compiled is not read',
+    'that change that code are named with its patches, and what the build '
+    'compiled is not read',
     "the SRPM's and the binary packages' GPG signatures (only rpm's own "
     'digests are checked)',
     'the host that built the binary packages is taken to read the spec as '
@@ -94,9 +100,16 @@ NOT_CHECKED = (
     "macros, the environment or rpm's table of patches the seven "
     'builds were measured without',
     'localedata/SUPPORTED and locale/ are in no binary package: they are the '
-    "SRPM's tarball and its patches, and the tarball is not compared with "
-    'the upstream tag',
+    "SRPM's tarball and its patches; the tarball is compared with the "
+    "upstream tag only when the build is made with the clone (provenance "
+    "'tarball')",
 )
+
+# provenance['tarball'] when build() was given the clone and the SRPM's
+# tarball is the upstream tag in localedata/, locale/ and intl/locale.alias,
+# byte for byte and executable bit: so in the seven real builds, measured
+# 2026-11-03. Anything else is refused.
+TARBALL_IS_TAG = "the SRPM's tarball is %s in localedata/ and locale/"
 
 # The rpm versions the seven real builds were made with, SRPMs and binary
 # packages alike, and whose sources these rules were read in.
@@ -259,9 +272,10 @@ def _sha256_file(path):
 
 def identity(info):
     """(build, version, tag) as the rest of the tool reads them. The build
-    ends in `.src`: locale_order.build_parts takes the last dotted word for
-    an architecture, and without one `glibc-2.28-251.el8_10.40` loses its
-    `.40`. The header's ARCH is the build host's, never written here."""
+    ends in `.src`: locale_order.build_parts reads the last dotted word as
+    the architecture only when it starts with a letter and is not an `elN`
+    mark, so a name without one cannot be ordered. The header's ARCH is
+    the build host's, never written here."""
     name, ver, rel = info.get('name'), info.get('version'), info.get('release')
     if name != 'glibc':
         raise Refused('the SRPM is %r, not glibc' % name)
@@ -1398,6 +1412,25 @@ def scope_from_git(repo, tag):
     return {p: (blobs[p], modes[p]) for p in modes if p != _ALIAS}, alias
 
 
+def tarball_is_tag(repo, tag, base, alias):
+    """TARBALL_IS_TAG % tag when the SRPM's tarball (scope_from_tarball's
+    tree and alias) is the upstream tag `tag` of the clone in localedata/,
+    locale/ and intl/locale.alias, bytes and executable bit alike; else
+    Refused, naming the first paths that differ. The steps compare the
+    build's commit with the tag, so a tarball that is not the tag would make
+    its own differences read as the distro's patches."""
+    upstream, up_alias = scope_from_git(repo, tag)
+    differ = sorted(p for p in set(base) | set(upstream)
+                    if base.get(p) != upstream.get(p))
+    if alias != up_alias:
+        differ.append(_ALIAS)
+    if differ:
+        raise Refused("the SRPM's tarball is not %s in localedata/ and "
+                      "locale/: %d path(s) differ, the first %s"
+                      % (tag, len(differ), ', '.join(differ[:5])))
+    return TARBALL_IS_TAG % tag
+
+
 # -- putting it together -----------------------------------------------------
 
 def rebuild(info, hdr, files, base):
@@ -1444,13 +1477,19 @@ def _key():
     return h.hexdigest()[:20]
 
 
-def build(srpm, binaries, cache=None):
+def build(srpm, binaries, cache=None, repo=None):
     """The build's rebuilt localedata/ and locale/, from the SRPM at `srpm`,
     checked against the build's binary packages ({'glibc-locale-source':
     path, 'glibc-common': path}) and kept under `cache`
     (PG_GLIBC_BUILD_SOURCES_CACHE, else scripts/build-sources-cache).
     Raises Refused, and keeps nothing, when the sources cannot be rebuilt
-    the way rpm would or do not match what rpm built."""
+    the way rpm would or do not match what rpm built.
+
+    With `repo`, the glibc clone, the SRPM's tarball is also compared with
+    the upstream tag in localedata/, locale/ and intl/locale.alias and
+    refused unless they are the same (tarball_is_tag); provenance['tarball']
+    then says so. A result kept without that check is made again when the
+    clone is given, so the cache never skips it."""
     cache = cache or os.environ.get('PG_GLIBC_BUILD_SOURCES_CACHE') or \
         DEFAULT_CACHE
     names = ('glibc-locale-source', 'glibc-common')
@@ -1463,12 +1502,15 @@ def build(srpm, binaries, cache=None):
     where = os.path.join(cache, hashlib.sha256(
         ' '.join([sha] + shas).encode()).hexdigest()[:32] + '-' + _key())
     kept = _kept(where, sha, shas)
-    if kept:
+    if kept and (repo is None or kept.provenance.get('tarball')):
         return kept
     info, hdr, files = read_srpm(srpm)
     _, _, tag = identity(info)
     base, alias = scope_from_tarball(files, tag)
+    checked = tarball_is_tag(repo, tag, base, alias) if repo else None
     tree, prov = rebuild(info, hdr, files, base)
+    if checked:
+        prov['tarball'] = checked
     prov['verified'] = verify_against_binaries(
         tree, alias, info, {n: read_binary(binaries[n]) for n in names})
     prov['binaries_sha256'] = shas
@@ -1583,30 +1625,17 @@ def _cache(cache):
         DEFAULT_CACHE
 
 
-def _el(release):
-    """(major, minor or None) from a release's `.elN` or `.elN_M`; None
-    unless there is exactly one."""
-    found = re.findall(r'\.el(\d+)(?:_(\d+))?(?=\.|$)', release)
-    if len(found) != 1:
-        return None
-    major, minor = found[0]
-    return int(major), (int(minor) if minor else None)
+_el = g.release_el
 
 
 def _ask(name):
-    """(version, release, major, minor) of a build named as `rpm -q glibc`
-    names it without the architecture, `glibc-2.34-283.el9_8`. Read whole:
-    no word is taken for an architecture and dropped, since
-    glibc-2.39-46.el10_0 is a real build and so is glibc-2.39-46.el10_0.4.
-    The release has the shape of the 66 on Rocky's mirror (251.el8_10.48,
-    83.el9.12, 189.1.el8): numbers, `.elN` or `.elN_M`, numbers."""
-    m = re.match(r'^glibc-(\d+\.\d+(?:\.\d+)?)-'
-                 r'(\d+(?:\.\d+)*\.el\d+(?:_\d+)?(?:\.\d+)*)$', name or '')
-    el = _el(m.group(2)) if m else None
-    if not m or el is None:
+    """glibc_locale_data.build_name(name), refused when the name does not
+    read as a build."""
+    got = g.build_name(name)
+    if got is None:
         raise Refused('%r is not a glibc build name such as '
                       'glibc-2.34-283.el9_8' % (name,))
-    return m.group(1), m.group(2), el[0], el[1]
+    return got
 
 
 def _write_json(path, value):
@@ -1880,10 +1909,11 @@ def _recall(cache, name, keys):
                       % (path, e, name))
 
 
-def fetch_build(name, mirror=None, cache=None):
+def fetch_build(name, mirror=None, cache=None, repo=None):
     """build() of the build named `name` (glibc-2.34-283.el9_8), its three
-    files fetched from the mirror. The first time, where_from() reads the
-    mirror's metadata and the sha256 it gives each file are remembered;
+    files fetched from the mirror, and `repo` handed on to it. The first
+    time, where_from() reads the mirror's metadata and the sha256 it gives
+    each file are remembered;
     afterwards the kept files are checked against them with no network. A
     file that is missing or no longer has its sha256 is downloaded again
     from the remembered URL; the metadata is read again only when that
@@ -1921,7 +1951,7 @@ def fetch_build(name, mirror=None, cache=None):
                     {'mirror': mirror,
                      'files': {k: entries[k]._asdict() for k in keys}})
     built = build(paths['srpm'], {k: paths[k] for k in keys if k != 'srpm'},
-                  cache)
+                  cache, repo)
     if built.build != 'glibc-%s-%s.src' % (ver, rel):
         raise Refused('asked for %s and the SRPM fetched is %s'
                       % (name, built.build))
@@ -1957,3 +1987,143 @@ def latest(major, mirror=None, cache=None):
                key=functools.cmp_to_key(locale_order.rpm_vercmp))
     return Latest('glibc-%s-%s' % (versions[0], best), mirror, tree,
                   got.get('timestamp'))
+
+
+# -- a build as a commit of the clone ----------------------------------------
+
+# The identity and date of every build commit: fixed, so that the same build
+# gives the same commit on every run and every machine.
+_COMMIT_ENV = {'GIT_AUTHOR_NAME': 'pg-glibc-audit',
+               'GIT_AUTHOR_EMAIL': 'pg-glibc-audit@invalid',
+               'GIT_COMMITTER_NAME': 'pg-glibc-audit',
+               'GIT_COMMITTER_EMAIL': g.BUILD_EMAIL,
+               'GIT_AUTHOR_DATE': '1970-01-01T00:00:00Z',
+               'GIT_COMMITTER_DATE': '1970-01-01T00:00:00Z'}
+
+
+def build_ref(build):
+    """The one name of a build's commit in the clone: under
+    glibc_locale_data.BUILD_REFS, outside refs/tags, so `git describe`
+    never reads a build for a release, a bare name never finds it, and step
+    5 leaves it out of its search of the whole history (measured
+    2026-11-03 on a copy of the clone)."""
+    return g.BUILD_REFS + build
+
+
+def _git(repo, args, data=None):
+    """git with the reader's configuration held off (GIT_CONFIG_OVERRIDES,
+    and i18n.commitEncoding, which writes an encoding header into a commit:
+    measured, another commit id), the fixed identity, and `data` on stdin.
+    Refused on any failure."""
+    env = {k: v for k, v in os.environ.items() if k != 'GIT_DIFF_OPTS'}
+    env.update(_COMMIT_ENV)
+    p = subprocess.run(['git', *g.GIT_CONFIG_OVERRIDES,
+                        '-c', 'i18n.commitEncoding=UTF-8', *args],
+                       cwd=repo, input=data, capture_output=True, env=env)
+    if p.returncode:
+        raise Refused('`git %s` failed in %s: %s'
+                      % (' '.join(args[:2]), repo,
+                         p.stderr.decode('utf-8', 'replace').strip()))
+    return p.stdout
+
+
+def _mktree(repo, entries, missing=False):
+    """A tree from {name: (kind, mode, id) | ('tree', {...})}, made with
+    `git mktree`, which checks that every entry exists unless `missing`. A
+    ('tree', {...}) entry is a directory made here, below this one."""
+    lines = []
+    for name in sorted(entries):
+        e = entries[name]
+        if isinstance(e[1], dict):
+            e = ('tree', '040000', _mktree(repo, e[1]))
+        lines.append(b'%s %s %s\t%s' % (
+            e[1].encode(), e[0].encode(), e[2].encode(),
+            name.encode('utf-8', 'surrogateescape')))
+    args = ['mktree', '-z'] + (['--missing'] if missing else [])
+    return _git(repo, args, b''.join(ln + b'\0' for ln in lines)) \
+        .decode().strip()
+
+
+def build_commit(repo, built):
+    """The commit of `built` in the clone `repo`, made again on every call,
+    and build_ref(built's name) pointed at it.
+
+    Its one parent is the upstream tag (built.tag); its tree is the tag's,
+    with localedata/ and locale/ replaced by the build's: each file hashed
+    into the clone as its bytes are (--no-filters, so no attribute of the
+    reader's changes them), each directory made with mktree. The root tree
+    copies the tag's other entries as ls-tree lists them, and is made with
+    --missing because those are the tag's own: on a --filter=blob:none
+    clone its top-level files are not there to check, and none is read
+    (measured 2026-11-03: the same commit, no object fetched). The message
+    names the build and its SRPM, so two builds of one tree are two commits.
+
+    Whatever ref of that name was there before -- an older run's, or one
+    put there by hand -- is never read: the ref is set to the commit made
+    now. What it made is checked before the ref is set: one parent, the
+    tag; nothing outside localedata/ and locale/ different from the tag."""
+    files = []
+    for top, _, names in os.walk(built.tree):
+        for n in names:
+            full = os.path.join(top, n)
+            files.append((os.path.relpath(full, built.tree), full))
+    files.sort()
+    ids = _git(repo, ['hash-object', '-w', '--no-filters', '--stdin-paths'],
+               ''.join(f + '\n' for _, f in files).encode()).decode().split()
+    if len(ids) != len(files):
+        raise Refused('`git hash-object` gave %d id(s) for %d file(s) of %s'
+                      % (len(ids), len(files), built.build))
+    scope = {}
+    for (rel, full), oid in zip(files, ids):
+        parts = rel.split('/')
+        if parts[0] not in ('localedata', 'locale'):
+            raise Refused('%s of %s is outside localedata/ and locale/'
+                          % (rel, built.build))
+        d = scope
+        for part in parts[:-1]:
+            d = d.setdefault(part, ('tree', {}))[1]
+        exe = os.stat(full).st_mode & 0o100
+        d[parts[-1]] = ('blob', '100755' if exe else '100644', oid)
+    root = {}
+    for ent in _git(repo, ['ls-tree', '-z', built.tag + '^{tree}']) \
+            .split(b'\0'):
+        if not ent:
+            continue
+        meta, _, name = ent.partition(b'\t')
+        mode, kind, oid = meta.decode().split(' ')
+        root[name.decode('utf-8', 'surrogateescape')] = (kind, mode, oid)
+    for name in ('localedata', 'locale'):
+        if name not in scope:
+            raise Refused('%s of %s holds no %s/' % (built.tree, built.build,
+                                                     name))
+        root[name] = scope[name]
+    tree = _mktree(repo, root, missing=True)
+    parent = _git(repo, ['rev-parse', '--verify',
+                         built.tag + '^{commit}']).decode().strip()
+    message = ('pg-glibc-audit: %s with localedata/ and locale/ of %s\n\n'
+               'SRPM sha256 %s\n' % (built.tag, built.build,
+                                      built.provenance.get('srpm_sha256')))
+    commit = _git(repo, ['commit-tree', '--no-gpg-sign', tree, '-p', parent],
+                  message.encode()).decode().strip()
+    parents = _git(repo, ['rev-list', '--parents', '-n', '1', commit]) \
+        .decode().split()
+    if parents != [commit, parent]:
+        raise Refused('the commit made for %s has parents %r, not %s alone'
+                      % (built.build, parents[1:], built.tag))
+    outside = _git(repo, ['diff-tree', '-r', '--name-only', parent, commit,
+                          '--', '.', ':(exclude)localedata',
+                          ':(exclude)locale']).decode().split('\n')
+    outside = [p for p in outside if p]
+    if outside:
+        raise Refused('the commit made for %s differs from %s outside '
+                      'localedata/ and locale/: %s'
+                      % (built.build, built.tag, ', '.join(outside[:5])))
+    _git(repo, ['update-ref', build_ref(asked_name(built)), commit])
+    return commit
+
+
+def asked_name(built):
+    """The build's name as it is asked for, glibc-2.34-283.el9_8: Built.build
+    without the `.src` identity() adds."""
+    b = built.build
+    return b[:-len('.src')] if b.endswith('.src') else b

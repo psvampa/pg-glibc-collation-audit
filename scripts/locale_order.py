@@ -2956,15 +2956,23 @@ def build_parts(build):
     `rpm -q glibc` prints one such word per installed architecture. None when
     there is no build, when a word does not read that way, or when two words
     disagree: then the build cannot be ordered, and the comparison says so.
+
+    The last dotted word is the architecture only when it starts with a
+    letter and is not a release's `.elN` mark. A name without one,
+    glibc-2.28-251.el8_10.40 or glibc-2.39-46.el10_0, gives None: reading
+    `.40` as the architecture made .40 and .48 one build ("same"), and
+    `.el10_0` took 46.el10_0's release for 46 (measured 2026-11-02/03). A
+    build named from its SRPM ends in `.src` (build_sources.identity).
     """
     if not isinstance(build, str):
         return None
     parts = set()
     for word in build.split():
-        m = re.fullmatch(r'glibc-([^-]+)-(.+)\.[A-Za-z0-9_]+', word)
-        if not m:
+        m = re.fullmatch(r'glibc-([^-]+)-(.+)\.([A-Za-z0-9_]+)', word)
+        if not m or not re.fullmatch(r'(?!el\d)[A-Za-z][A-Za-z0-9_]*',
+                                     m.group(3)):
             return None
-        parts.add(m.groups())
+        parts.add(m.groups()[:2])
     return parts.pop() if len(parts) == 1 else None
 
 

@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Usage: ./audit-locale-diff.sh <old_tag> <new_tag> [--allow-reverse]
+# Usage: ./audit-locale-diff.sh <old> <new> [--allow-reverse]
 # Example: ./audit-locale-diff.sh glibc-2.28 glibc-2.34
+#          ./audit-locale-diff.sh glibc-2.28-251.el8_10.40 glibc-2.34-275.el9_8
 #
-# Step 1 of the audit: for a pair of glibc tags, OLD first, list which locale
-# files under localedata/locales/ changed, and report the blast radius of each
-# change through the LC_COLLATE `copy` graph. A pair given the other way round
-# is refused here rather than reported on, unless --allow-reverse says it is
-# deliberate.
+# Step 1 of the audit: for a pair of glibc tags, or of builds named as
+# `rpm -q glibc` names them without the architecture, OLD first, list which
+# locale files under localedata/locales/ changed, and report the blast radius
+# of each change through the LC_COLLATE `copy` graph. A pair given the other
+# way round is refused here rather than reported on, unless --allow-reverse
+# says it is deliberate.
 #
 # This used to hardcode iso14651_t1_common as "the master collation table" and
 # signal "unchanged" by printing nothing -- indistinguishable from an error --
@@ -16,7 +18,7 @@
 set -euo pipefail
 
 if [ $# -lt 2 ] || [ $# -gt 3 ]; then
-  echo "usage: $0 <old_tag> <new_tag> [--allow-reverse]" >&2
+  echo "usage: $0 <old> <new> [--allow-reverse]" >&2
   exit 2
 fi
 OLD=$1
@@ -28,56 +30,30 @@ if [ -n "$ALLOW" ] && [ "$ALLOW" != --allow-reverse ]; then
 fi
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-if [ ! -d "$HERE/glibc" ]; then
-  # Not --depth: step 5 asks `git log` whether a path absent at both tags was
-  # renamed away or had not been written yet, and a shallow clone answers the
-  # reassuring half of that for anything beyond its boundary.
-  echo "Cloning glibc (full history, blobs on demand)..."
-  git clone --filter=blob:none --no-checkout \
-    https://github.com/bminor/glibc.git "$HERE/glibc"
+# The two sides, before a single finding is printed: glibc_locale_data.py's
+# step1_sides, the one place step 1 asks what each argument is. A tag of
+# the clone is read by its name; a build named as `rpm -q glibc` names it
+# without the architecture (glibc-2.34-283.el9_8) is fetched, rebuilt from
+# its source RPM and made a commit of the clone again, and read by that
+# commit, never by a name. It also does what this script used to do here:
+# clone glibc when it is not there (full history, blobs on demand: step 5
+# asks `git log` about paths absent at both refs), fetch tags once when a
+# tag is missing, refuse a reversed pair unless --allow-reverse, print the
+# provenance -- the clone is a third-party mirror and a tag is a mutable
+# pointer -- and hold both sides to the corpus floor, so that an empty diff
+# cannot read as "nothing changed". With two tags every line is printed as
+# it was. The two refs come back in a file this run makes, a line each.
+REFS=$(mktemp "${TMPDIR:-/tmp}/pg-glibc-sides.XXXXXX")
+trap 'rm -f "$REFS"' EXIT
+python3 "$HERE/glibc_locale_data.py" sides ${ALLOW:+"$ALLOW"} \
+  --refs-file "$REFS" "$OLD" "$NEW"
+OLD_REF=$(sed -n 1p "$REFS")
+NEW_REF=$(sed -n 2p "$REFS")
+if [ -z "$OLD_REF" ] || [ -z "$NEW_REF" ]; then
+  echo "error: the sides of $OLD and $NEW were not written to $REFS" >&2
+  exit 2
 fi
 cd "$HERE/glibc"
-
-# A clone left over from an earlier run simply does not have newer tags, and
-# `git diff` against a missing ref is a confusing failure at best.
-missing=""
-for ref in "$OLD" "$NEW"; do
-  git rev-parse --verify --quiet "${ref}^{commit}" >/dev/null || missing="$missing $ref"
-done
-if [ -n "$missing" ]; then
-  echo "Refs not present locally:$missing -- fetching tags..."
-  git fetch --tags --quiet
-  for ref in "$OLD" "$NEW"; do
-    if ! git rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
-      echo "error: unknown git ref '$ref' even after fetching tags" >&2
-      exit 2
-    fi
-  done
-fi
-
-# Which of the two is the newer commit, before a single finding is printed.
-# This is the first step that has a clone to ask, and it is also a hand-run
-# entry point taking a pair: reversed, everything below is about the other
-# direction -- the fan-in is computed at the tag that is actually the older
-# one -- and nothing in the output said so. Silent when the pair is forward
-# and compares something, so the audited pairs' output does not move; the two
-# words on stdout are for audit.sh, which asks again for them, and are dropped
-# here.
-python3 "$HERE/glibc_locale_data.py" order ${ALLOW:+"$ALLOW"} "$OLD" "$NEW" \
-  >/dev/null
-
-# Say where this content came from before saying anything about it. The clone
-# is a third-party mirror and a tag is a mutable pointer; the release tags are
-# signed, and that is the only check available that the source about to be
-# diffed is the source glibc released. Aborts on an invalid signature; an
-# unchecked one is reported and the audit continues.
-python3 "$HERE/glibc_locale_data.py" provenance "$OLD" "$NEW"
-echo "---"
-
-# The corpus floor: both tags must hold a real locale corpus, or the diff
-# below is empty for a reason that has nothing to do with collation and reads
-# as "nothing changed". Silent on success; exits 2 with the count otherwise.
-python3 "$HERE/glibc_locale_data.py" corpus "$OLD" "$NEW"
 
 OUT_DIR=${PG_GLIBC_AUDIT_OUT:-/tmp/pg-glibc-collation-audit}
 mkdir -p "$OUT_DIR"
@@ -93,7 +69,7 @@ CHANGED="$OUT_DIR/changed_locales.txt"
 # pinned, it cannot start to.
 git -c color.ui=false -c diff.renames=true -c diff.renameLimit=0 \
   -c diff.algorithm=myers -c diff.indentHeuristic=true \
-  diff --find-renames --name-only "$OLD..$NEW" -- localedata/locales/ \
+  diff --find-renames --name-only "$OLD_REF..$NEW_REF" -- localedata/locales/ \
   | sort > "$CHANGED"
 # --name-only lists additions and deletions too, so this is not a count of
 # modified files. Step 2 separates them.
@@ -117,9 +93,9 @@ echo "---"
 # calls a file that exists ABSENT whenever that fetch cannot happen.
 echo "Collation templates -- did they change?"
 for tmpl in iso14651_t1 iso14651_t1_common iso14651_t1_pinyin; do
-  if [ -z "$(git ls-tree --name-only "$NEW" -- "localedata/locales/$tmpl")" ]; then
+  if [ -z "$(git ls-tree --name-only "$NEW_REF" -- "localedata/locales/$tmpl")" ]; then
     printf '  %-22s ABSENT at %s\n' "$tmpl" "$NEW"
-  elif git diff --quiet --no-ext-diff "$OLD..$NEW" \
+  elif git diff --quiet --no-ext-diff "$OLD_REF..$NEW_REF" \
        -- "localedata/locales/$tmpl"; then
     printf '  %-22s UNCHANGED\n' "$tmpl"
   else
@@ -128,10 +104,17 @@ for tmpl in iso14651_t1 iso14651_t1_common iso14651_t1_pinyin; do
 done
 echo "---"
 
-python3 "$HERE/glibc_locale_data.py" fanin "$NEW" "$CHANGED"
+# A build's commit is printed by the build's name.
+if [ "$NEW_REF" = "$NEW" ]; then
+  python3 "$HERE/glibc_locale_data.py" fanin "$NEW" "$CHANGED"
+else
+  python3 "$HERE/glibc_locale_data.py" fanin "$NEW_REF" "$CHANGED" --as "$NEW"
+fi
 echo "---"
 # Under audit.sh this hint names a step that has already run. Only the hint is
 # suppressed; every verdict above is printed either way.
-if [ "${PG_GLIBC_AUDIT_WRAPPED:-}" != "1" ]; then
+# A build pair gets no hint: the steps after this one read two glibc tags.
+if [ "${PG_GLIBC_AUDIT_WRAPPED:-}" != "1" ] && [ "$OLD_REF" = "$OLD" ] &&
+   [ "$NEW_REF" = "$NEW" ]; then
   echo "Next: python3 filter_lc_collate_changes.py $OLD $NEW"
 fi

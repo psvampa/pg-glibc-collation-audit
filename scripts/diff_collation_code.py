@@ -486,12 +486,14 @@ def absent_at_both(repo, paths, old_tag, new_tag):
     2.12..2.17.
 
     "Not yet born" is itself two facts, so it is asked once more against every
-    ref in the clone: a path NO ref ever carried is not a file waiting to be
-    written, it is a typo in the curated lists -- and the curated lists are
-    the ceiling of what a tier gets read. Measured with ld-collate.c spelt
-    `ld-colate.c` in ENTRY_POINTS and TIER1: 2.28..2.34 reported far fewer
-    substantive hunks and a far smaller coverage, with the Bug 22668 hunk
-    gone and no `!!` anywhere (backlog 1.24).
+    ref in the clone but the builds' commits (glibc_locale_data.BUILD_REFS,
+    which carry what a distro's patches add): a path NO ref ever carried is
+    not a file waiting to be written, it is a typo in the curated lists --
+    and the curated lists are the ceiling of what a tier gets read.
+    Measured with ld-collate.c spelt `ld-colate.c` in ENTRY_POINTS and
+    TIER1: 2.28..2.34 reported far fewer substantive hunks and a far smaller
+    coverage, with the Bug 22668 hunk gone and no `!!` anywhere (backlog
+    1.24).
     """
     if paths:
         # `git log` on a shallow clone exits 0 with empty output for every path
@@ -523,8 +525,12 @@ def absent_at_both(repo, paths, old_tag, new_tag):
         if seen:
             renamed.append(path)
             continue
+        # Every ref but the builds' commits (glibc_locale_data.BUILD_REFS):
+        # a path only a distro's patches add says nothing about whether the
+        # curated name is spelt right upstream.
         anywhere = g.run_git(['log', '-1', '--full-history', '--format=%H',
-                              '--all', '--', path], repo).stdout.strip()
+                              f'--exclude={g.BUILD_REFS}*', '--all', '--',
+                              path], repo).stdout.strip()
         (unborn if anywhere else never).append(path)
     return renamed, unborn, never
 

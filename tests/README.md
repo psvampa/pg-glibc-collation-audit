@@ -53,8 +53,8 @@ and CI, which clones glibc fresh, fails on any skip.
   Linux's mirror was measured by hand; the suite fetches from a mirror it
   makes, in the layouts found on Rocky's mirror.
 - Distro backports in what `audit.sh` compares: it reads upstream tags and
-  a machine's files. `scripts/build_sources.py`, which applies a build's
-  patches, is tested on three builds and `audit.sh` does not call it.
+  a machine's files, and refuses a build; only step 1, run on its own,
+  reads one through `scripts/build_sources.py`.
 - Any pair of glibc versions other than the ones the suite pins.
 - Some guards of `audit.sh` that cannot be reached as it stands, so no test
   drives them. Each is labelled "Unreachable" in the code.
