@@ -1,0 +1,456 @@
+commit 97926e9017f3faeaacce9337f1288460f5e6ec7d
+Author: Maciej W. Rozycki <macro@redhat.com>
+Date:   Wed May 27 12:57:10 2026 -0400
+
+    stdio-common: Reject insufficient character data in scanf [BZ #12701]
+    
+    Reject invalid formatted scanf character data with the 'c' conversion
+    where there is not enough input available to satisfy the field width
+    requested.  It is required by ISO C that this conversion matches a
+    sequence of characters of exactly the number specified by the field
+    width and it is also already documented as such in our own manual:
+    
+    "It reads precisely the next N characters, and fails if it cannot get
+    that many."
+    
+    Currently a matching success is instead incorrectly produced where the
+    EOF condition is encountered before the required number of characters
+    has been retrieved, and the characters actually obtained are stored in
+    the buffer provided.
+    
+    Add test cases accordingly and remove placeholders from 'c' conversion
+    input data for the existing scanf tests.
+    
+    Reviewed-by: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+    
+    [This is a modified version of commit 2b16c76609, which tests for the
+    old behavior and only includes the test cases, for older branches
+    and downstream backports - DJ]
+    
+    Reviewed-by: Carlos O'Donell <carlos@redhat.com>
+
+Conflicts:
+	localedata/Makefile
+	  (usual lay-out differences)
+	stdio-common/Makefile
+	  (usual lay-out differences)
+
+diff -Nrup a/localedata/Makefile b/localedata/Makefile
+--- a/localedata/Makefile	2026-06-03 12:13:30.441073814 -0400
++++ b/localedata/Makefile	2026-06-03 12:15:32.566080395 -0400
+@@ -154,7 +154,7 @@ locale_test_suite := tst_iswalnum tst_is
+ 
+ tests = $(locale_test_suite) tst-digits tst-setlocale bug-iconv-trans \
+ 	tst-leaks tst-mbswcs1 tst-mbswcs2 tst-mbswcs3 tst-mbswcs4 tst-mbswcs5 \
+-	tst-mbswcs6 tst-xlocale1 tst-xlocale2 bug-usesetlocale \
++	tst-mbswcs6 tst-xlocale1 tst-xlocale2 bug-usesetlocale tst-bz12701-lc \
+ 	tst-strfmon1 tst-sscanf bug-setlocale1 tst-setlocale2 tst-setlocale3 \
+ 	tst-wctype
+ tests-static = bug-setlocale1-static
+diff -Nrup a/localedata/tst-bz12701-lc.c b/localedata/tst-bz12701-lc.c
+--- a/localedata/tst-bz12701-lc.c	1969-12-31 19:00:00.000000000 -0500
++++ b/localedata/tst-bz12701-lc.c	2026-06-03 12:12:56.929422368 -0400
+@@ -0,0 +1,218 @@
++/* Verify scanf field width handling with the 'lc' conversion (BZ #12701).
++   Copyright (C) 2025-2026 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#include <locale.h>
++#include <stddef.h>
++#include <stdio.h>
++#include <string.h>
++#include <wchar.h>
++
++#include <libc-diag.h>
++#include <support/check.h>
++#include <support/next_to_fault.h>
++#include <support/xstdio.h>
++
++/* Compare character-wise the initial part of the wide character object
++   pointed to by WS corresponding to wide characters obtained by the
++   conversion of first N bytes of the multibyte character object pointed
++   to by S.  */
++
++static int
++tst_bz12701_lc_memcmp (const wchar_t *ds, const char *s, size_t n)
++{
++  size_t nc = mbsnrtowcs (NULL, &s, n, 0, NULL);
++
++  struct support_next_to_fault ntf;
++  ntf = support_next_to_fault_allocate (nc * sizeof (wchar_t));
++  wchar_t *ss = (wchar_t *) ntf.buffer;
++
++  mbsnrtowcs (ss, &s, n, nc, NULL);
++  int r = wmemcmp (ds, ss, nc);
++
++  support_next_to_fault_free (&ntf);
++
++  return r;
++}
++
++/* Verify various aspects of field width handling, including the data
++   obtained, the number of bytes consumed, and the stream position.  */
++
++static int
++do_test (void)
++{
++  if (setlocale (LC_ALL, "pl_PL.UTF-8") == NULL)
++    FAIL_EXIT1 ("setlocale (LC_ALL, \"pl_PL.UTF-8\")");
++
++  /* Part of a tongue-twister in Polish, which says:
++     "On a rainy morning cuckoos and warblers, rather than starting
++     on earthworms, stuffed themselves fasted with the flesh of cress."  */
++  static const char s[126] = "Dżdżystym rankiem gżegżółki i piegże, "
++			     "zamiast wziąć się za dżdżownice, "
++			     "nażarły się na czczo miąższu rzeżuchy";
++
++  const char *sp = s;
++  size_t nc;
++  TEST_VERIFY_EXIT ((nc = mbsnrtowcs (NULL, &sp, sizeof (s), 0, NULL)) == 108);
++
++  struct support_next_to_fault ntfo, ntfi;
++  ntfo = support_next_to_fault_allocate (nc * sizeof (wchar_t));
++  ntfi = support_next_to_fault_allocate (sizeof (s));
++  wchar_t *e = (wchar_t *) ntfo.buffer + nc;
++  char *b = ntfi.buffer;
++
++  wchar_t *c;
++  FILE *f;
++  int ic;
++  int n;
++  int i;
++
++  memcpy (ntfi.buffer, s, sizeof (s));
++
++  ic = i = 0;
++  f = xfmemopen (b, sizeof (s), "r");
++
++  c = e - 1;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  /* Avoid: "warning: zero width in gnu_scanf format [-Werror=format=]".  */
++  DIAG_PUSH_NEEDS_COMMENT;
++  DIAG_IGNORE_NEEDS_COMMENT (4.9, "-Wformat");
++  TEST_VERIFY_EXIT (fscanf (f, "%0lc%n", c, &n) == 1);
++  DIAG_POP_NEEDS_COMMENT;
++  TEST_VERIFY_EXIT (n == 1);
++  TEST_VERIFY_EXIT (tst_bz12701_lc_memcmp (c, s + i, n) == 0);
++  ic += 1;
++  i += n;
++
++  c = e - 1;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%lc%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 2);
++  TEST_VERIFY_EXIT (tst_bz12701_lc_memcmp (c, s + i, n) == 0);
++  ic += 1;
++  i += n;
++
++  c = e - 1;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%1lc%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 1);
++  TEST_VERIFY_EXIT (tst_bz12701_lc_memcmp (c, s + i, n) == 0);
++  ic += 1;
++  i += n;
++
++  c = e - 2;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%2lc%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 3);
++  TEST_VERIFY_EXIT (tst_bz12701_lc_memcmp (c, s + i, n) == 0);
++  ic += 2;
++  i += n;
++
++  c = e - 4;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%4lc%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 4);
++  TEST_VERIFY_EXIT (tst_bz12701_lc_memcmp (c, s + i, n) == 0);
++  ic += 4;
++  i += n;
++
++  c = e - 8;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%8lc%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 8);
++  TEST_VERIFY_EXIT (tst_bz12701_lc_memcmp (c, s + i, n) == 0);
++  ic += 8;
++  i += n;
++
++  c = e - 16;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%16lc%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 20);
++  TEST_VERIFY_EXIT (tst_bz12701_lc_memcmp (c, s + i, n) == 0);
++  ic += 16;
++  i += n;
++
++  c = e - 32;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%32lc%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 38);
++  TEST_VERIFY_EXIT (tst_bz12701_lc_memcmp (c, s + i, n) == 0);
++  ic += 32;
++  i += n;
++
++  c = e - (nc - ic);
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_COMPARE (fscanf (f, "%64lc%n", c, &n), 1);
++  TEST_COMPARE (n , 49);
++  TEST_VERIFY_EXIT (tst_bz12701_lc_memcmp (c, s + i, sizeof (s) - i) == 0);
++
++  TEST_VERIFY_EXIT (ftell (f) == sizeof (s));
++  TEST_VERIFY_EXIT (feof (f) != 0);
++
++  xfclose (f);
++
++  ic = i = 0;
++  f = xfmemopen (b, 3, "r");
++
++  c = e - 2;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%2lc%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 3);
++  TEST_VERIFY_EXIT (tst_bz12701_lc_memcmp (c, s + i, n) == 0);
++  ic += 2;
++  i += n;
++
++  c = e - (nc - ic);
++  TEST_VERIFY_EXIT (feof (f) == 0);
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%2lc%n", c, &n) == EOF);
++  TEST_VERIFY_EXIT (n == 3);
++
++  TEST_VERIFY_EXIT (ftell (f) == 3);
++  TEST_VERIFY_EXIT (feof (f) != 0);
++
++  xfclose (f);
++
++  ic = i = 0;
++  f = xfmemopen (b, 3, "r");
++
++  c = e - 1;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%lc%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 1);
++  TEST_VERIFY_EXIT (tst_bz12701_lc_memcmp (c, s + i, n) == 0);
++  ic += 1;
++  i += n;
++
++  c = e - (nc - ic);
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%2lc%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 2);
++  TEST_VERIFY_EXIT (tst_bz12701_lc_memcmp (c, s + i, 3 - i) == 0);
++
++  TEST_VERIFY_EXIT (ftell (f) == 3);
++  TEST_VERIFY_EXIT (feof (f) != 0);
++
++  xfclose (f);
++
++  support_next_to_fault_free (&ntfi);
++  support_next_to_fault_free (&ntfo);
++
++  return 0;
++}
++
++#include <support/test-driver.c>
+diff -Nrup a/stdio-common/Makefile b/stdio-common/Makefile
+--- a/stdio-common/Makefile	2026-06-03 12:13:35.562066297 -0400
++++ b/stdio-common/Makefile	2026-06-03 12:18:20.481891652 -0400
+@@ -49,7 +49,7 @@ tests := tstscanf test_rdwr test-popen t
+ 	 bug1 bug2 bug3 bug4 bug5 bug6 bug7 bug8 bug9 bug10 bug11 bug12 bug13 \
+ 	 tfformat tiformat tllformat tstdiomisc tst-printfsz tst-wc-printf \
+ 	 scanf1 scanf2 scanf3 scanf4 scanf5 scanf7 scanf8 scanf9 scanf10 \
+-	 scanf11 scanf12 tst-tmpnam tst-cookie tst-obprintf tst-sscanf \
++	 scanf11 scanf12 tst-tmpnam tst-bz12701-c tst-cookie tst-obprintf tst-sscanf \
+ 	 tst-swprintf tst-fseek tst-fmemopen test-vfprintf tst-gets \
+ 	 tst-perror tst-sprintf tst-rndseek tst-fdopen tst-fphex bug14 \
+ 	 tst-popen tst-unlockedio tst-fmemopen2 tst-put-error tst-fgets \
+diff -Nrup a/stdio-common/tst-bz12701-c.c b/stdio-common/tst-bz12701-c.c
+--- a/stdio-common/tst-bz12701-c.c	1969-12-31 19:00:00.000000000 -0500
++++ b/stdio-common/tst-bz12701-c.c	2026-06-03 12:12:56.929700530 -0400
+@@ -0,0 +1,169 @@
++/* Verify scanf field width handling with the 'c' conversion (BZ #12701).
++   Copyright (C) 2025-2026 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#include <stdio.h>
++#include <string.h>
++
++#include <libc-diag.h>
++#include <support/check.h>
++#include <support/next_to_fault.h>
++#include <support/xstdio.h>
++
++/* Verify various aspects of field width handling, including the data
++   obtained, the number of bytes consumed, and the stream position.  */
++
++static int
++do_test (void)
++{
++  static const char s[43] = "The quick brown fox jumps over the lazy dog";
++  struct support_next_to_fault ntfo, ntfi;
++  ntfo = support_next_to_fault_allocate (sizeof (s));
++  ntfi = support_next_to_fault_allocate (sizeof (s));
++  char *e = ntfo.buffer + sizeof (s);
++  char *b = ntfi.buffer;
++
++  char *c;
++  FILE *f;
++  int n;
++  int i;
++
++  memcpy (ntfi.buffer, s, sizeof (s));
++
++  i = 0;
++  f = xfmemopen (b, sizeof (s), "r");
++
++  c = e - 1;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  /* Avoid: "warning: zero width in gnu_scanf format [-Werror=format=]".  */
++  DIAG_PUSH_NEEDS_COMMENT;
++  DIAG_IGNORE_NEEDS_COMMENT (4.9, "-Wformat");
++  TEST_VERIFY_EXIT (fscanf (f, "%0c%n", c, &n) == 1);
++  DIAG_POP_NEEDS_COMMENT;
++  TEST_VERIFY_EXIT (n == 1);
++  TEST_VERIFY_EXIT (memcmp (c, s + i, n) == 0);
++  i += n;
++
++  c = e - 1;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%c%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 1);
++  TEST_VERIFY_EXIT (memcmp (c, s + i, n) == 0);
++  i += n;
++
++  c = e - 1;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%1c%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 1);
++  TEST_VERIFY_EXIT (memcmp (c, s + i, n) == 0);
++  i += n;
++
++  c = e - 2;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%2c%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 2);
++  TEST_VERIFY_EXIT (memcmp (c, s + i, n) == 0);
++  i += n;
++
++  c = e - 4;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%4c%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 4);
++  TEST_VERIFY_EXIT (memcmp (c, s + i, n) == 0);
++  i += n;
++
++  c = e - 8;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%8c%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 8);
++  TEST_VERIFY_EXIT (memcmp (c, s + i, n) == 0);
++  i += n;
++
++  c = e - 16;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%16c%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 16);
++  TEST_VERIFY_EXIT (memcmp (c, s + i, n) == 0);
++  i += n;
++
++  c = e - (sizeof (s) - i);
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%32c%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 10);
++  TEST_VERIFY_EXIT (memcmp (c, s + i, sizeof (s) - i) == 0);
++
++  TEST_VERIFY_EXIT (ftell (f) == sizeof (s));
++  TEST_VERIFY_EXIT (feof (f) != 0);
++
++  xfclose (f);
++
++  i = 0;
++  f = xfmemopen (b, 3, "r");
++
++  c = e - 1;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%c%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 1);
++  TEST_VERIFY_EXIT (memcmp (c, s + i, n) == 0);
++  i += n;
++
++  c = e - 2;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%2c%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 2);
++  TEST_VERIFY_EXIT (memcmp (c, s + i, n) == 0);
++  i += n;
++
++  c = e - (3 - i);
++  TEST_VERIFY_EXIT (feof (f) == 0);
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%2c%n", c, &n) == EOF);
++  TEST_VERIFY_EXIT (n == 2);
++
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (feof (f) != 0);
++
++  xfclose (f);
++
++  i = 0;
++  f = xfmemopen (b, 3, "r");
++
++  c = e - 2;
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%2c%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 2);
++  TEST_VERIFY_EXIT (memcmp (c, s + i, n) == 0);
++  i += n;
++
++  c = e - (3 - i);
++  TEST_VERIFY_EXIT (ftell (f) == i);
++  TEST_VERIFY_EXIT (fscanf (f, "%2c%n", c, &n) == 1);
++  TEST_VERIFY_EXIT (n == 1);
++  TEST_VERIFY_EXIT (memcmp (c, s + i, 3 - i) == 0);
++
++  TEST_VERIFY_EXIT (ftell (f) == 3);
++  TEST_VERIFY_EXIT (feof (f) != 0);
++
++  xfclose (f);
++
++  support_next_to_fault_free (&ntfi);
++  support_next_to_fault_free (&ntfo);
++
++  return 0;
++}
++
++#include <support/test-driver.c>

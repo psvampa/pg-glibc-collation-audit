@@ -1,0 +1,208 @@
+commit 6cebb0b80fd783e442a8ad27c3f52cde52a9cac7
+Author: DJ Delorie <dj@redhat.com>
+Date:   Wed May 27 12:57:10 2026 -0400
+
+    stdio-common: Allow partially-filled %mc buffers [BZ #12701]
+    
+    This is a backwards-compatible alternative to the main solution to
+    the %mc part of 12701.  The allocated buffer is expanded to the
+    requested size and NUL padded, but truncated reads are allowed.
+    
+    Reviewed-by: Carlos O'Donell <carlos@redhat.com>
+
+Conflicts:
+	localedata/Makefile
+	  (usual lay-out differences)
+	stdio-common/Makefile
+	  (usual lay-out differences)
+	stdio-common/vfscanf-internal.c
+	  (File does not exist downstream. Changes applied to
+	  stdio-common/vfscanf.c.)
+
+diff -Nrup a/localedata/Makefile b/localedata/Makefile
+--- a/localedata/Makefile	2026-06-11 15:40:57.754008211 -0400
++++ b/localedata/Makefile	2026-06-11 15:41:43.547421657 -0400
+@@ -155,8 +155,8 @@ locale_test_suite := tst_iswalnum tst_is
+ tests = $(locale_test_suite) tst-digits tst-setlocale bug-iconv-trans \
+ 	tst-leaks tst-mbswcs1 tst-mbswcs2 tst-mbswcs3 tst-mbswcs4 tst-mbswcs5 \
+ 	tst-mbswcs6 tst-xlocale1 tst-xlocale2 bug-usesetlocale tst-bz12701-lc \
+-	tst-strfmon1 tst-sscanf bug-setlocale1 tst-setlocale2 tst-setlocale3 \
+-	tst-wctype
++	tst-bz12701-lc2 tst-strfmon1 tst-sscanf bug-setlocale1 tst-setlocale2 \
++	tst-setlocale3 tst-wctype
+ tests-static = bug-setlocale1-static
+ tests += $(tests-static)
+ ifeq (yes,$(build-shared))
+diff -Nrup a/localedata/tst-bz12701-lc2.c b/localedata/tst-bz12701-lc2.c
+--- a/localedata/tst-bz12701-lc2.c	1969-12-31 19:00:00.000000000 -0500
++++ b/localedata/tst-bz12701-lc2.c	2026-06-11 15:41:43.547871199 -0400
+@@ -0,0 +1,47 @@
++/* Verify scanf memory handling with the 'c' conversion (BZ #12701).
++   Copyright (C) 2026 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#include <stdio.h>
++#include <malloc.h>
++#include <string.h>
++
++#include <libc-diag.h>
++#include <support/check.h>
++#include <support/next_to_fault.h>
++#include <support/xstdio.h>
++
++static int
++do_test (void)
++{
++  wchar_t *c = NULL;
++  int i;
++
++  TEST_VERIFY (sscanf ("1234", "%30mlc", &c) == 1);
++
++  TEST_VERIFY (c != NULL);
++  TEST_COMPARE_BLOB (c, 5 * sizeof (wchar_t),
++		     L"1234\0", 5 * sizeof (wchar_t));
++  for (i = 5; i < 30; i ++)
++    TEST_VERIFY (c[i] == L'\0');
++
++  TEST_VERIFY (malloc_usable_size (c) >= 30 * sizeof(wchar_t));
++
++  return 0;
++}
++
++#include <support/test-driver.c>
+diff -Nrup a/stdio-common/Makefile b/stdio-common/Makefile
+--- a/stdio-common/Makefile	2026-06-11 15:40:57.754660844 -0400
++++ b/stdio-common/Makefile	2026-06-11 15:43:00.329832195 -0400
+@@ -49,13 +49,13 @@ tests := tstscanf test_rdwr test-popen t
+ 	 bug1 bug2 bug3 bug4 bug5 bug6 bug7 bug8 bug9 bug10 bug11 bug12 bug13 \
+ 	 tfformat tiformat tllformat tstdiomisc tst-printfsz tst-wc-printf \
+ 	 scanf1 scanf2 scanf3 scanf4 scanf5 scanf7 scanf8 scanf9 scanf10 \
+-	 scanf11 scanf12 tst-tmpnam tst-bz12701-c tst-cookie tst-obprintf tst-sscanf \
+-	 tst-swprintf tst-fseek tst-fmemopen test-vfprintf tst-gets \
+-	 tst-perror tst-sprintf tst-rndseek tst-fdopen tst-fphex bug14 \
+-	 tst-popen tst-unlockedio tst-fmemopen2 tst-put-error tst-fgets \
+-	 tst-fwrite bug16 bug17 tst-swscanf tst-sprintf2 bug18 bug18a \
+-	 bug19 bug19a tst-popen2 scanf13 scanf14 scanf15 bug20 bug21 bug22 \
+-	 scanf16 scanf17 tst-setvbuf1 tst-grouping bug23 bug24 \
++	 scanf11 scanf12 tst-tmpnam tst-bz12701-c tst-bz12701-c2 tst-cookie \
++	 tst-obprintf tst-sscanf tst-swprintf tst-fseek tst-fmemopen \
++	 test-vfprintf tst-gets tst-perror tst-sprintf tst-rndseek tst-fdopen \
++	 tst-fphex bug14 tst-popen tst-unlockedio tst-fmemopen2 tst-put-error \
++	 tst-fgets tst-fwrite bug16 bug17 tst-swscanf tst-sprintf2 bug18 \
++	 bug18a bug19 bug19a tst-popen2 scanf13 scanf14 scanf15 bug20 bug21 \
++	 bug22 scanf16 scanf17 tst-setvbuf1 tst-grouping bug23 bug24 \
+ 	 bug-vfprintf-nargs tst-long-dbl-fphex tst-fphex-wide tst-sprintf3 \
+ 	 bug25 tst-printf-round bug23-2 bug23-3 bug23-4 bug26 tst-fmemopen3 \
+ 	 tst-printf-bz18872 tst-vfprintf-width-prec tst-fmemopen4 \
+diff -Nrup a/stdio-common/tst-bz12701-c2.c b/stdio-common/tst-bz12701-c2.c
+--- a/stdio-common/tst-bz12701-c2.c	1969-12-31 19:00:00.000000000 -0500
++++ b/stdio-common/tst-bz12701-c2.c	2026-06-11 15:41:43.548317866 -0400
+@@ -0,0 +1,46 @@
++/* Verify scanf memory handling with the 'c' conversion (BZ #12701).
++   Copyright (C) 2026 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#include <stdio.h>
++#include <malloc.h>
++#include <string.h>
++
++#include <libc-diag.h>
++#include <support/check.h>
++#include <support/next_to_fault.h>
++#include <support/xstdio.h>
++
++static int
++do_test (void)
++{
++  char *c = NULL;
++  int i;
++
++  TEST_VERIFY (sscanf ("1234", "%30mc", &c) == 1);
++
++  TEST_VERIFY (c != NULL);
++  TEST_COMPARE_BLOB (c, 5, "1234\0", 5);
++  for (i = 5; i < 30; i ++)
++    TEST_VERIFY (c[i] == '\0');
++
++  TEST_VERIFY (malloc_usable_size (c) >= 30);
++
++  return 0;
++}
++
++#include <support/test-driver.c>
+diff -Nrup a/stdio-common/vfscanf.c b/stdio-common/vfscanf.c
+--- a/stdio-common/vfscanf.c	2026-06-11 15:40:57.740361719 -0400
++++ b/stdio-common/vfscanf.c	2026-06-12 14:38:32.544596475 -0400
+@@ -731,9 +731,9 @@ _IO_vfscanf_internal (FILE *s, const cha
+ 		    conv_error ();					      \
+ 		} while (0)
+ #ifdef COMPILE_WSCANF
+-	      STRING_ARG (str, char, 100);
++	      STRING_ARG (str, char, (width > 0 ? width : 1));
+ #else
+-	      STRING_ARG (str, char, (width > 1024 ? 1024 : width));
++	      STRING_ARG (str, char, (width > 0 ? width : 1));
+ #endif
+ 
+ 	      c = inchar ();
+@@ -842,6 +842,11 @@ _IO_vfscanf_internal (FILE *s, const cha
+ 
+ 	      if (!(flags & SUPPRESS))
+ 		{
++		  /* If the buffer isn't completely filled, pad it with NULs.  */
++		  if (flags & MALLOC)
++		    while (width-- > 0)
++		      *str++ = '\0';
++
+ 		  if ((flags & MALLOC) && str - *strptr != strsize)
+ 		    {
+ 		      char *cp = (char *) realloc (*strptr, str - *strptr);
+@@ -859,7 +864,7 @@ _IO_vfscanf_internal (FILE *s, const cha
+ 	  if (width == -1)
+ 	    width = 1;
+ 
+-	  STRING_ARG (wstr, wchar_t, (width > 1024 ? 1024 : width));
++	  STRING_ARG (wstr, wchar_t, (width > 0 ? width : 1));
+ 
+ 	  c = inchar ();
+ 	  if (__glibc_unlikely (c == EOF))
+@@ -995,6 +1000,11 @@ _IO_vfscanf_internal (FILE *s, const cha
+ 
+ 	  if (!(flags & SUPPRESS))
+ 	    {
++	      /* If the buffer isn't completely filled, pad it with NULs.  */
++	      if (flags & MALLOC)
++		while (width-- > 0)
++		  *wstr++ = L'\0';
++
+ 	      if ((flags & MALLOC) && wstr - (wchar_t *) *strptr != strsize)
+ 		{
+ 		  wchar_t *cp = (wchar_t *) realloc (*strptr,

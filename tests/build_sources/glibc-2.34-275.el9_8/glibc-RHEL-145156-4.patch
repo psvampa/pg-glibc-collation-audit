@@ -1,0 +1,146 @@
+commit 9ef37798fa7dc2b10926742e3f3bd304a17a9ad1
+Author: Frédéric Bérat <fberat@redhat.com>
+Date:   Tue May 26 13:29:57 2026 +0200
+
+    test: Fix and stabilize tst-wcsmbs-clone-overflow test
+
+    The test tst-wcsmbs-clone-overflow was initially added to tests-static.
+    However, this causes the test to be unstable because gconv modules
+    dynamically load libc.so. Any discrepancy between the statically linked
+    version and the dynamically loaded one can lead to a crash.
+
+    By removing the test from tests-static, it relies on dynamic linking,
+    safely bypassing the dlopen crash. Since the test is now dynamically
+    linked, it cannot use the internal thread-local symbol
+    _NL_CURRENT_DATA(LC_CTYPE) because _nl_current_LC_CTYPE is hidden in
+    libc.so, leading to undefined references. Thus, the test now uses
+    newlocale and uselocale, safely extracting the locale data from the
+    returned locale_t object.
+
+    Furthermore, using newlocale requires the gconv-modules configuration to
+    be built and available so that the ISO8859-1.so module can be
+    dynamically loaded. Otherwise, glibc falls back to the built-in C locale
+    conversions, leaving __shlib_handle as NULL and silently bypassing the
+    reference counter increment.
+    A new Makefile fragment, gen-gconv-modules.mk, is introduced to ensure
+    the gconv-modules are built before the test runs, and an explicit check
+    for __shlib_handle != NULL is added to the test.
+
+    Reviewed-by: Carlos O'Donell <carlos@redhat.com>
+
+Conflicts:
+	wcsmbs/Makefile
+	  (test-c8rtomb, test-mbrtoc8, tst-wscanf-to_inpunct not present
+	  downstream)
+	wcsmbs/tst-wcsmbs-clone-overflow.c
+	  (struct lc_ctype_data not present downstream; use
+	  loc->private.ctype directly instead)
+
+diff --git a/gen-gconv-modules.mk b/gen-gconv-modules.mk
+new file mode 100644
+index 0000000000000000..046721a7a7bf460c
+--- /dev/null
++++ b/gen-gconv-modules.mk
+@@ -0,0 +1,6 @@
++# defines target $(gen-gconv-modules) that ensures gconv-modules are available
++
++gen-gconv-modules := $(common-objpfx)iconvdata/gconv-modules
++
++$(gen-gconv-modules):
++	$(MAKE) -C ../iconvdata subdir=iconvdata $@
+diff --git a/localedata/Makefile b/localedata/Makefile
+index 56de42e9262decd3..0cc02c430d96d804 100644
+--- a/localedata/Makefile
++++ b/localedata/Makefile
+@@ -204,7 +204,7 @@ install-others := $(addprefix $(inst_i18ndir)/, \
+ 			      $(locales))
+ endif
+ 
+-tests: $(objdir)/iconvdata/gconv-modules
++tests: $(gen-gconv-modules)
+ 
+ tests-static += tst-langinfo-newlocale-static tst-langinfo-setlocale-static
+ 
+@@ -315,6 +315,7 @@ LOCALES := \
+ 	$(NULL)
+ 
+ include ../gen-locales.mk
++include ../gen-gconv-modules.mk
+ 
+ $(objpfx)tst-iconv-math-trans.out: $(gen-locales)
+ endif
+@@ -486,6 +487,3 @@ $(objpfx)mtrace-tst-leaks.out: $(objpfx)tst-leaks.out
+ 
+ bug-setlocale1-ENV-only = LOCPATH=$(objpfx) LC_CTYPE=de_DE.UTF-8
+ bug-setlocale1-static-ENV-only = $(bug-setlocale1-ENV-only)
+-
+-$(objdir)/iconvdata/gconv-modules:
+-	$(MAKE) -C ../iconvdata subdir=iconvdata $@
+diff --git a/wcsmbs/Makefile b/wcsmbs/Makefile
+index f74b06d9749eaa02..bb03d92576700a99 100644
+--- a/wcsmbs/Makefile
++++ b/wcsmbs/Makefile
+@@ -62,16 +62,13 @@ xtests += test-wcsncmp-nonarray
+ tests-internal += \
+   tst-wcsmbs-clone-overflow
+ 
+-tests-static += \
+-  tst-wcsmbs-clone-overflow
+-
+-
+ include ../Rules
+ 
+ ifeq ($(run-built-tests),yes)
+ LOCALES := de_DE.ISO-8859-1 de_DE.UTF-8 en_US.ANSI_X3.4-1968 hr_HR.ISO-8859-2 \
+ 	   ja_JP.EUC-JP zh_TW.EUC-TW tr_TR.UTF-8 tr_TR.ISO-8859-9
+ include ../gen-locales.mk
++include ../gen-gconv-modules.mk
+ 
+ $(objpfx)tst-btowc.out: $(gen-locales)
+ $(objpfx)tst-c16c32-1.out: $(gen-locales)
+@@ -83,7 +80,7 @@ $(objpfx)tst-wcstol-locale.out: $(gen-locales)
+ $(objpfx)tst-wcstod-nan-locale.out: $(gen-locales)
+ $(objpfx)tst-c16-surrogate.out: $(gen-locales)
+ $(objpfx)tst-c32-state.out: $(gen-locales)
+-$(objpfx)tst-wcsmbs-clone-overflow.out: $(gen-locales)
++$(objpfx)tst-wcsmbs-clone-overflow.out: $(gen-locales) $(gen-gconv-modules)
+ endif
+ 
+ $(objpfx)tst-wcstod-round: $(libm)
+diff --git a/wcsmbs/tst-wcsmbs-clone-overflow.c b/wcsmbs/tst-wcsmbs-clone-overflow.c
+index 412e1c54085c68d5..6d8b643f48aa7775 100644
+--- a/wcsmbs/tst-wcsmbs-clone-overflow.c
++++ b/wcsmbs/tst-wcsmbs-clone-overflow.c
+@@ -30,8 +30,11 @@
+ static int
+ do_test (void)
+ {
+-  if (setlocale (LC_ALL, "de_DE.ISO-8859-1") == NULL)
+-    FAIL_EXIT1 ("setlocale failed, check if de_DE.ISO-8859-1 is generated");
++  locale_t loc_obj = newlocale (LC_ALL_MASK, "de_DE.ISO-8859-1", NULL);
++  if (loc_obj == NULL)
++    FAIL_EXIT1 ("newlocale failed, check if de_DE.ISO-8859-1 is generated");
++
++  uselocale (loc_obj);
+ 
+   wchar_t buf[32] = L"123";
+   int j;
+@@ -41,7 +44,7 @@ do_test (void)
+     FAIL_EXIT1 ("swscanf failed");
+ 
+   /* Retrieve the current gconv_fcts from the LC_CTYPE locale data.  */
+-  struct __locale_data *loc = _NL_CURRENT_DATA (LC_CTYPE);
++  struct __locale_data *loc = loc_obj->__locales[LC_CTYPE];
+   const struct gconv_fcts *fcts = loc->private.ctype;
+ 
+   TEST_VERIFY_EXIT (fcts != NULL);
+@@ -50,6 +53,9 @@ do_test (void)
+   /* Capture the reference counter.  */
+   int initial_counter = fcts->towc->__counter;
+ 
++  if (fcts->towc->__shlib_handle == NULL)
++    FAIL_EXIT1 ("__shlib_handle is NULL!");
++
+   /* Perform a second iteration of swscanf. If the stack-allocated FILE
+      leaks the gconv reference, the counter will increment.  */
+   if (swscanf (buf, L"%d", &j) < 1)

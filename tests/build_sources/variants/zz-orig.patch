@@ -1,0 +1,6 @@
+diff -Nrup a/localedata/locales/de_DE.orig b/localedata/locales/de_DE.orig
+--- a/localedata/locales/de_DE.orig	1969-12-31 19:00:00.000000000 -0500
++++ b/localedata/locales/de_DE.orig	2026-11-03 02:08:31.478317618 -0500
+@@ -0,0 +1,2 @@
++comment_char %
++% leftover

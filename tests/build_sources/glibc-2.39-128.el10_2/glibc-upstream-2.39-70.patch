@@ -1,0 +1,21 @@
+commit e1d0040a6d1b0714e1ad14abeb7b90bfbd86a8dc
+Author: Mike FABIAN <mfabian@redhat.com>
+Date:   Wed Feb 7 18:41:02 2024 +0100
+
+    localedata: ssy_ER: Fix syntax error
+    
+    (cherry picked from commit 07fd072caff50bca2a7e9f5737a5b38280d2ffda)
+
+diff --git a/localedata/locales/ssy_ER b/localedata/locales/ssy_ER
+index 05d94c9f10398c45..43a16e0f5452ad6a 100644
+--- a/localedata/locales/ssy_ER
++++ b/localedata/locales/ssy_ER
+@@ -106,7 +106,7 @@ country_ab3   "ERI"
+ country_num   232
+ country_car   "ER"
+ % country_isbn  unknown, Need ISO 2108
+-# https://en.wikipedia.org/wiki/Saho_language has "Saaho" as the endonym but CLDR has "Saho"
++% https://en.wikipedia.org/wiki/Saho_language has "Saaho" as the endonym but CLDR has "Saho"
+ lang_name     "Saho"
+ lang_ab       ""
+ lang_term     "ssy"

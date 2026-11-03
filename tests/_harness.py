@@ -40,6 +40,10 @@ DEFAULT_OUT_DIR = '/tmp/pg-glibc-collation-audit'
 SUITE_OUT_DIR = tempfile.mkdtemp(prefix='pg-glibc-audit-suite-')
 os.environ['PG_GLIBC_AUDIT_OUT'] = SUITE_OUT_DIR
 atexit.register(shutil.rmtree, SUITE_OUT_DIR, True)
+# The same for scripts/build_sources.py's cache: a test that forgets cache=
+# keeps its builds in the suite's folder, not in scripts/build-sources-cache.
+os.environ['PG_GLIBC_BUILD_SOURCES_CACHE'] = os.path.join(SUITE_OUT_DIR,
+                                                          'build-sources')
 
 # The scripts import each other as top-level modules (`import glibc_locale_data
 # as g`), so they are only importable with scripts/ on the path.
