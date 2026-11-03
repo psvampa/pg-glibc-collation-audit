@@ -372,6 +372,38 @@ class AbsentAtBothIsTwoFacts(unittest.TestCase):
         self.assertEqual((renamed, unborn, never),
                          ([], [], ['locale/programs/ld-colate.c']))
 
+    def test_a_builds_commit_does_not_make_a_misspelt_path_real(self):
+        """A path only a build's commit carries (glibc_locale_data.
+        BUILD_REFS) is still a path no upstream ref ever had. The control:
+        the same commit under a branch makes it "not yet written"."""
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-build-ref-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        repo = os.path.join(tmp, 'repo')
+        glibc_shaped(repo, MID)
+
+        def git_(*args, data=None):
+            return subprocess.run(['git', '-C', repo] + list(args),
+                                  input=data, check=True,
+                                  capture_output=True).stdout.decode().strip()
+        blob = git_('hash-object', '-w', '--stdin', data=b'x\n')
+        t = git_('mktree', data=('100644 blob %s\tld-colate.c\n'
+                                 % blob).encode())
+        t = git_('mktree', data=('040000 tree %s\tprograms\n' % t).encode())
+        t = git_('mktree', data=('040000 tree %s\tlocale\n' % t).encode())
+        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_COMMITTER_NAME='t',
+                   GIT_AUTHOR_EMAIL='t@example.invalid',
+                   GIT_COMMITTER_EMAIL='t@example.invalid')
+        c = subprocess.run(['git', '-C', repo, 'commit-tree', t, '-m', 'b'],
+                           env=env, check=True,
+                           capture_output=True).stdout.decode().strip()
+        path = 'locale/programs/ld-colate.c'
+        git_('update-ref', g.BUILD_REFS + 'glibc-2.34-275.el9_8', c)
+        self.assertEqual(d.absent_at_both(repo, [path], OLD, MID),
+                         ([], [], [path]))
+        git_('update-ref', 'refs/heads/control', c)
+        self.assertEqual(d.absent_at_both(repo, [path], OLD, MID),
+                         ([], [path], []))
+
     def test_a_failed_git_log_is_not_read_as_never_existed(self):
         """The reassuring half is "did not exist yet": an error must not land
         there."""
@@ -1771,15 +1803,53 @@ class TagModeCorpusFloor(unittest.TestCase):
         self.assertIn('below the floor', out)
         self.assertNotIn('Files with changes inside LC_COLLATE', out)
 
-    def test_the_shell_step_refuses_too(self):
-        """Step 1 is shell; it asks glibc_locale_data.py, which dies."""
-        repo = make_glibc_shaped_repo(self.tmp, n_files=3, base=None)
+    def test_step_1_refuses_too(self):
+        """Step 1 holds its tags to the floor in step1_sides, after the
+        provenance and before any diff; the corpus subcommand does the same
+        for any tags it is given."""
+        repo = make_glibc_shaped_repo(self.tmp, n_files=3, rename=True,
+                                      base=None)
+        here = os.path.join(self.tmp, 'here')
+        os.mkdir(here)
+        os.symlink(repo, os.path.join(here, 'glibc'))
+        err, out = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stderr(err), \
+                contextlib.redirect_stdout(out), \
+                self.assertRaises(SystemExit) as cm:
+            g.step1_sides(here, 't1', 't2')
+        self.assertEqual(cm.exception.code, 2, err.getvalue())
+        self.assertIn('below the floor', err.getvalue())
+        self.assertIn('Tag provenance', out.getvalue())
         p = subprocess.run([sys.executable,
                             os.path.join(SCRIPTS_DIR, 'glibc_locale_data.py'),
                             'corpus', 't1'],
                            cwd=repo, capture_output=True)
         self.assertEqual(p.returncode, 2, p.stderr)
         self.assertIn(b'below the floor', p.stderr)
+
+    def test_step_1_refuses_a_new_tag_below_the_floor(self):
+        """The other side: t1 holds a corpus above the floor, and t3, after it,
+        loses ten files. Every other step-1 case has the short tag first."""
+        root = os.path.join(self.tmp, 'new-short')
+        os.mkdir(root)
+        make_glibc_shaped_repo(root, n_files=g.MIN_LOCALE_FILES, base=None)
+        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+        loc = os.path.join(root, 'localedata', 'locales')
+        git(root, 'rm', '-q', *[os.path.join(loc, 'loc_%03d' % i)
+                                for i in range(10)], env=env)
+        git(root, 'commit', '-q', '-m', 't3', env=env)
+        git(root, 'tag', 't3', env=env)
+        here = os.path.join(self.tmp, 'here-new')
+        os.mkdir(here)
+        os.symlink(root, os.path.join(here, 'glibc'))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaises(SystemExit) as cm:
+            g.step1_sides(here, 't1', 't3')
+        self.assertEqual(cm.exception.code, 2, err.getvalue())
+        self.assertIn('at t3, below the floor', flat(err.getvalue()))
 
     def test_a_corpus_at_the_floor_passes(self):
         """The control: the guard refuses size, not fabricated repositories."""
@@ -3408,6 +3478,28 @@ class OneOrderForEverySide(unittest.TestCase):
         odd = build_side('weird-build-string', self.V)
         self.assertEqual(self.status(odd, odd), 'same')
 
+    def test_a_build_word_without_its_architecture_is_not_read(self):
+        """build_parts reads the last dotted word as the architecture only
+        when it can be one: `.40` and `.el10_0` cannot. Reading `.40` so
+        made el8_10.40 and el8_10.48 one build, 'same' in both directions
+        (measured 2026-11-02)."""
+        import locale_order as lo
+        for word in ('glibc-2.28-251.el8_10.40', 'glibc-2.28-251.el8_10.48',
+                     'glibc-2.39-46.el10_0'):
+            self.assertIsNone(lo.build_parts(word), word)
+        for arch in ('src', 'x86_64', 'i686', 'aarch64', 'noarch'):
+            self.assertEqual(
+                lo.build_parts('glibc-2.28-251.el8_10.40.' + arch),
+                ('2.28', '251.el8_10.40'), arch)
+        v = 'glibc 2.28'
+        bare = [build_side('glibc-2.28-251.el8_10.%d' % n, v)
+                for n in (40, 48)]
+        self.assertEqual(self.status(*bare), 'undetermined')
+        src = [build_side('glibc-2.28-251.el8_10.%d.src' % n, v)
+               for n in (40, 48)]
+        self.assertEqual(self.status(*src), 'forward')
+        self.assertEqual(self.status(*reversed(src)), 'reversed')
+
     def test_a_build_that_cannot_be_read_is_undetermined(self):
         odd = build_side('weird-build-string', self.V)
         new = build_side(self.NEW_B, self.V)
@@ -3667,8 +3759,13 @@ class OneFloorForEverySide(unittest.TestCase):
         import diff_distro_locales as dd
         import diff_node_locales as nl
         old, new, ok = FLOOR_OLD, FLOOR_NEW, self.dirs['ok']
+        here = os.path.join(self.tmp, 'step1')
+        if not os.path.isdir(here):
+            os.mkdir(here)
+            os.symlink(GLIBC_CLONE, os.path.join(here, 'glibc'))
         steps = (
-            ('1 corpus', g._main, ['corpus', old, new]),
+            ('1', lambda argv: g.step1_sides(*argv), [here, old, new]),
+            ('corpus subcommand', g._main, ['corpus', old, new]),
             ('1 fanin', g._main, ['fanin', old]),
             ('2', f.main, [old, new]),
             ('3', rc.main, [old, 'loc_000']),

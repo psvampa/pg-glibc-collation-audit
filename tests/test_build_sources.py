@@ -28,13 +28,15 @@ import json
 import lzma
 import os
 import struct
+import subprocess
 import tarfile
 import tempfile
 import shutil
 import unittest
 from unittest import mock
 
-from _harness import GLIBC_CLONE, TESTS_DIR, needs_clone
+from _harness import (GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR, flat,
+                      glibc_shaped, needs_clone)
 
 import build_sources as bs
 
@@ -2206,6 +2208,451 @@ class ReadsAUrl(unittest.TestCase):
         mirror = os.environ.get('PG_GLIBC_BUILD_MIRROR', '')
         self.assertTrue(mirror.startswith('file://'), mirror)
         self.assertEqual(bs._mirror(None), mirror.rstrip('/') + '/')
+
+
+
+# -- a build as a commit of the clone, and as a side -------------------------
+
+TAG = 'glibc-2.34'
+B275, B283 = 'glibc-2.34-275.el9_8', 'glibc-2.34-283.el9_8'
+
+
+def _git_out(repo, *args):
+    return subprocess.run(['git', '-C', repo] + list(args), check=True,
+                          capture_output=True).stdout.decode().strip()
+
+
+def _linked(src, dst, change=None):
+    """`src` at `dst` as hard links (a copy of a thousand files cost most of
+    these classes' time), with `change` ({path: bytes}) written over it: each
+    changed file unlinked first, so that the shared one never changes."""
+    shutil.copytree(src, dst, copy_function=os.link)
+    for path, data in (change or {}).items():
+        full = os.path.join(dst, path)
+        mode = os.stat(full).st_mode
+        os.remove(full)
+        with open(full, 'wb') as fh:
+            fh.write(data)
+        os.chmod(full, mode & 0o777)
+    return dst
+
+
+def _built(tree, name, tarball=True):
+    """A Built for the build `name` whose tree is the folder `tree`: what
+    fetch_build returns, without an SRPM."""
+    prov = {'srpm_sha256': hashlib.sha256(name.encode()).hexdigest(),
+            'verified': ['locale sources: 1, each the sha256 '
+                         'glibc-locale-source records'],
+            'applied': [], 'patches': 0, 'collation_code_patches': []}
+    if tarball:
+        prov['tarball'] = bs.TARBALL_IS_TAG % TAG
+    return bs.Built(tree, name + '.src', 'glibc 2.34', TAG, prov)
+
+
+@needs_clone
+class ABuildIsACommitOfTheClone(unittest.TestCase):
+    """build_commit: one parent, the upstream tag; the tag's tree with
+    localedata/ and locale/ the build's; made again on every call, and its
+    ref (build_ref, outside refs/tags) pointed at what was made, whatever
+    was there. Each test works in a repository of its own that reads
+    scripts/glibc's objects (glibc_shaped) and writes nothing there."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='build_commit_')
+        base, _ = bs.scope_from_git(GLIBC_CLONE, TAG)
+        cls.base = os.path.join(cls.tmp, 'base')
+        for path, (data, exe) in base.items():
+            full = os.path.join(cls.base, path)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, 'wb') as fh:
+                fh.write(data)
+            os.chmod(full, 0o755 if exe else 0o644)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, True)
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix='bc_', dir=self.tmp)
+        self.repo = os.path.join(self.dir, 'repo')
+        glibc_shaped(self.repo, TAG)
+
+    def tree(self, label, change=None):
+        """A copy of the tag's localedata/ and locale/, with `change`
+        ({path: bytes}) written over it."""
+        return _linked(self.base, os.path.join(self.dir, label), change)
+
+    def blob(self, commit, path):
+        return _git_out(self.repo, 'rev-parse', '%s:%s' % (commit, path))
+
+    def test_one_parent_the_tag_and_only_its_scope_changed(self):
+        sv = 'localedata/locales/sv_SE'
+        built = _built(self.tree('t', {sv: b'changed\n'}), B275)
+        commit = bs.build_commit(self.repo, built)
+        tag = _git_out(self.repo, 'rev-parse', TAG + '^{commit}')
+        self.assertEqual(_git_out(self.repo, 'rev-list', '--parents', '-n',
+                                  '1', commit).split(), [commit, tag])
+        self.assertEqual(_git_out(self.repo, 'diff-tree', '-r',
+                                  '--name-only', tag, commit), sv)
+        self.assertEqual(self.blob(commit, sv), _git_out(
+            self.repo, 'hash-object', os.path.join(built.tree, sv)))
+        self.assertEqual(_git_out(self.repo, 'rev-parse',
+                                  'refs/pg-glibc-audit/builds/' + B275),
+                         commit)
+        # describe reads refs/tags only: the build is not a release.
+        self.assertEqual(_git_out(self.repo, 'describe', '--tags',
+                                  '--abbrev=0', '--match', 'glibc-[0-9]*',
+                                  commit), TAG)
+
+    def test_a_ref_already_there_is_replaced_never_read(self):
+        """An older run's commit of another tree, and a ref set by hand to
+        the tag, both under the build's name: the commit made now is
+        returned and the ref points at it."""
+        ref = bs.build_ref(B275)
+        older = bs.build_commit(self.repo, _built(
+            self.tree('old', {'localedata/locales/sv_SE': b'old\n'}), B275))
+        now = bs.build_commit(self.repo, _built(self.tree('now'), B275))
+        self.assertNotEqual(now, older)
+        self.assertEqual(_git_out(self.repo, 'rev-parse', ref), now)
+        _git_out(self.repo, 'update-ref', ref, TAG + '^{commit}')
+        self.assertEqual(bs.build_commit(self.repo, _built(
+            self.tree('again'), B275)), now)
+        self.assertEqual(_git_out(self.repo, 'rev-parse', ref), now)
+
+    def test_another_tree_under_one_name_is_another_commit(self):
+        sv = 'localedata/locales/sv_SE'
+        one = bs.build_commit(self.repo, _built(self.tree('a'), B275))
+        two = bs.build_commit(self.repo, _built(
+            self.tree('b', {sv: b'another\n'}), B275))
+        self.assertNotEqual(one, two)
+        self.assertNotEqual(self.blob(one, sv), self.blob(two, sv))
+
+    def test_two_builds_of_one_tree_are_two_commits_of_one_tree(self):
+        """275 and 283 of el9 have one tree (measured): two commits, so the
+        two are never "the same commit", and nothing_compared says 'tree'."""
+        import glibc_locale_data as g
+        a = bs.build_commit(self.repo, _built(self.tree('a'), B275))
+        b = bs.build_commit(self.repo, _built(self.tree('b'), B283))
+        self.assertNotEqual(a, b)
+        self.assertEqual(g.nothing_compared(self.repo, a, b), 'tree')
+
+    def test_the_readers_git_config_does_not_change_the_commit(self):
+        """i18n.commitEncoding writes an encoding header into a commit, and
+        a clean filter in the attributes rewrites every file it hashes;
+        neither reaches the build's commit."""
+        clean = bs.build_commit(self.repo, _built(self.tree('a'), B275))
+        other = os.path.join(self.dir, 'hostile')
+        glibc_shaped(other, TAG)
+        _git_out(other, 'config', 'i18n.commitEncoding', 'ISO-8859-1')
+        _git_out(other, 'config', 'filter.up.clean', 'tr a-z A-Z')
+        with open(os.path.join(other, '.git', 'info', 'attributes'),
+                  'w') as fh:
+            fh.write('* filter=up\n')
+        # The control: the config does change what a plain hash gives.
+        sample = os.path.join(self.base, 'localedata/locales/sv_SE')
+        self.assertNotEqual(
+            _git_out(other, 'hash-object', '--path',
+                     'localedata/locales/sv_SE', sample),
+            _git_out(other, 'hash-object', '--no-filters', sample))
+        self.assertEqual(bs.build_commit(other, _built(self.tree('b'),
+                                                       B275)), clean)
+
+    def test_a_builds_commit_is_never_read_as_a_tag(self):
+        """Every step resolves its refs with check_refs, which refuses a
+        commit build_commit made however it is spelt: the id step 1 prints,
+        the ref under BUILD_REFS. Read as a tag, that commit is upstream's
+        strcoll code with the build's patches nowhere."""
+        import glibc_locale_data as g
+        commit = bs.build_commit(self.repo, _built(self.tree('t'), B275))
+
+        def refused(*refs):
+            err = io.StringIO()
+            with mock.patch('sys.stderr', err), \
+                    self.assertRaises(SystemExit) as cm:
+                g.check_refs(self.repo, *refs)
+            self.assertEqual(cm.exception.code, 2, refs)
+            return flat(err.getvalue())
+        for spelt in (commit[:12], 'pg-glibc-audit/builds/' + B275):
+            for refs in ((TAG, spelt), (spelt, TAG)):
+                self.assertIn('%s is a commit this tool made for a distro '
+                              'build' % spelt, refused(*refs))
+        # After a fetch of tags too: glibc-2.39 is gone from this clone,
+        # and its origin, scripts/glibc, gives it back.
+        _git_out(self.repo, 'update-ref', '-d', 'refs/tags/glibc-2.39')
+        _git_out(self.repo, 'remote', 'add', 'origin', GLIBC_CLONE)
+        out = io.StringIO()
+        with mock.patch('sys.stdout', out):
+            said = refused(commit[:12], 'glibc-2.39')
+        self.assertIn('%s is a commit this tool made for a distro build'
+                      % commit[:12], said)
+        self.assertIn('fetching tags', out.getvalue() + said)
+        # The controls: tags pass, and step 1's fan-in reads the build.
+        self.assertEqual(set(g.check_refs(self.repo, TAG, 'glibc-2.28')),
+                         {TAG, 'glibc-2.28'})
+        self.assertEqual(g.check_refs(self.repo, commit, builds=True),
+                         {commit: commit})
+
+    def test_the_tarball_is_compared_with_the_tag(self):
+        base, alias = bs.scope_from_git(GLIBC_CLONE, TAG)
+        self.assertEqual(bs.tarball_is_tag(self.repo, TAG, base, alias),
+                         bs.TARBALL_IS_TAG % TAG)
+        changed = dict(base)
+        p = 'localedata/locales/sv_SE'
+        changed[p] = (b'x', changed[p][1])
+        for args, why in (((changed, alias), p),
+                          ((base, b'other\n'), 'intl/locale.alias')):
+            with self.assertRaises(bs.Refused) as cm:
+                bs.tarball_is_tag(self.repo, TAG, *args)
+            self.assertIn(why, str(cm.exception))
+        flipped = dict(base)
+        flipped[p] = (base[p][0], not base[p][1])
+        with self.assertRaises(bs.Refused):
+            bs.tarball_is_tag(self.repo, TAG, flipped, alias)
+
+
+@needs_clone
+class FetchedWithTheCloneTheTarballIsTheTag(unittest.TestCase):
+    """fetch_build with the clone compares the SRPM's tarball with the tag
+    and refuses one that is not; a result kept without that comparison is
+    not taken. The small SRPM of FetchesFromAMirror is glibc 2.39 with a
+    tarball of a few files: not glibc-2.39's."""
+
+    setUp = FetchesFromAMirror.setUp
+    el10 = FetchesFromAMirror.el10
+
+    def test_a_tarball_that_is_not_the_tag_is_refused(self):
+        self.el10()
+        name = 'glibc-2.39-1.el10'
+        kept = bs.fetch_build(name, M, self.cache)
+        self.assertNotIn('tarball', kept.provenance)
+        with self.assertRaises(bs.Refused) as cm:
+            bs.fetch_build(name, M, self.cache, repo=GLIBC_CLONE)
+        self.assertIn("the SRPM's tarball is not glibc-2.39",
+                      str(cm.exception))
+
+
+def _fill_build_cache(cache, mirror, name, tree, warned=()):
+    """build_sources' cache as fetch_build leaves it for `name`: the record
+    of its three files, the files, and the kept tree with its provenance,
+    so that fetch_build answers with no network and no SRPM."""
+    ver, rel, _, _ = bs._ask(name)
+    entries, shas = {}, {}
+    for key in ('srpm', 'glibc-locale-source', 'glibc-common'):
+        data = ('%s %s' % (key, name)).encode()
+        sha = hashlib.sha256(data).hexdigest()
+        os.makedirs(os.path.join(cache, 'downloads'), exist_ok=True)
+        with open(os.path.join(cache, 'downloads', sha), 'wb') as fh:
+            fh.write(data)
+        shas[key] = sha
+        entries[key] = {'url': mirror + key, 'sha256': sha,
+                        'size': len(data), 'tree': 't', 'repo': 'r',
+                        'timestamp': '1'}
+    bs._write_json(os.path.join(cache, 'builds', name + '.json'),
+                   {'mirror': mirror, 'files': entries})
+    binaries = [shas['glibc-locale-source'], shas['glibc-common']]
+    where = os.path.join(cache, hashlib.sha256(
+        ' '.join([shas['srpm']] + binaries).encode()).hexdigest()[:32] +
+        '-' + bs._key())
+    _linked(tree, os.path.join(where, 'tree'))
+    count = sum(len(fs) for _, _, fs in os.walk(os.path.join(where, 'tree')))
+    prov = {'build': 'glibc-%s-%s.src' % (ver, rel),
+            'version': 'glibc %s' % '.'.join(ver.split('.')[:2]),
+            'tag': 'glibc-' + ver, 'srpm_sha256': shas['srpm'],
+            'binaries_sha256': binaries, 'files': count,
+            'verified': ['locale sources: %d, each the sha256 '
+                         'glibc-locale-source-%s-%s records' % (count, ver,
+                                                                rel)] +
+            list(warned),
+            'tarball': bs.TARBALL_IS_TAG % ('glibc-' + ver),
+            'applied': [{'pos': 1, 'patch': 'a.patch', 'paths': ['x']}],
+            'patches': 2,
+            'collation_code_patches': [{'patch': 'a.patch',
+                                        'paths': ['x']}]}
+    with open(os.path.join(where, 'provenance.json'), 'w') as fh:
+        json.dump(prov, fh)
+
+
+@needs_clone
+class ABuildIsASide(unittest.TestCase):
+    """side(named=...) is a build, and step 1 reads one: fetched (here
+    from a cache this test fills, so no network), made a commit of a clone
+    of the test's own, listed and held to the floor; ordered by rpm; never
+    replaced by its tag when it cannot be read."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='build_side_')
+        base, _ = bs.scope_from_git(GLIBC_CLONE, TAG)
+        cls.base = os.path.join(cls.tmp, 'base')
+        for path, (data, exe) in base.items():
+            full = os.path.join(cls.base, path)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, 'wb') as fh:
+                fh.write(data)
+            os.chmod(full, 0o755 if exe else 0o644)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, True)
+
+    def setUp(self):
+        import glibc_locale_data as g
+        self.g = g
+        self.dir = tempfile.mkdtemp(prefix='bs_', dir=self.tmp)
+        self.repo = os.path.join(self.dir, 'repo')
+        glibc_shaped(self.repo, TAG)
+
+    def fake_fetch(self, built=None, error=None):
+        def fetch(name, repo):
+            if error:
+                raise bs.Refused(error)
+            return built or _built(self.base, name)
+        return mock.patch.object(self.g, '_fetch', side_effect=fetch)
+
+    def test_named_is_a_build_and_build_is_a_machine(self):
+        with self.fake_fetch():
+            s = self.g.side(self.repo, named=B275)
+        self.assertEqual((s.kind, s.build, s.version),
+                         ('build', B275 + '.src', 'glibc 2.34'))
+        self.assertEqual(s.ref, _git_out(self.repo, 'rev-parse',
+                                         bs.build_ref(B275)))
+        self.assertGreaterEqual(len(s.paths), self.g.MIN_LOCALE_FILES)
+        self.assertEqual(self.g.label(s), B275)
+        m = self.g.side(None, build=B275 + '.x86_64', version='glibc 2.34')
+        self.assertEqual((m.kind, m.ref, m.paths), ('machine', None, None))
+        # Both at once is neither: refused.
+        err = io.StringIO()
+        with self.fake_fetch(), mock.patch('sys.stderr', err), \
+                self.assertRaises(SystemExit) as cm:
+            self.g.side(self.repo, named=B275, build=B275 + '.x86_64')
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn('not both', err.getvalue())
+
+    def test_two_builds_of_one_version_are_ordered_by_rpm(self):
+        with self.fake_fetch():
+            a = self.g.side(self.repo, named=B275)
+            b = self.g.side(self.repo, named=B283)
+        self.assertEqual(self.g.order(self.repo, a, b)[0], 'forward')
+        self.assertEqual(self.g.order(self.repo, b, a)[0], 'reversed')
+        self.assertEqual(self.g.nothing_compared(self.repo, a, b), 'tree')
+        # The same two built from el8's .40 and .48: by rpm, not "same".
+        s40 = self.g.Side('build', a.ref, None,
+                          'glibc-2.28-251.el8_10.40.src', 'glibc 2.28',
+                          a.paths, a.ids, ())
+        s48 = s40._replace(ref=b.ref, build='glibc-2.28-251.el8_10.48.src')
+        self.assertEqual(self.g.order(self.repo, s40, s48)[0], 'forward')
+        self.assertEqual(self.g.order(self.repo, s48, s40)[0], 'reversed')
+
+    def test_a_build_that_cannot_be_read_is_refused_never_the_tag(self):
+        for kw in ({'error': 'glibc-2.34-275.el9_8 is not in the mirror'},
+                   {'built': _built(self.base, B275, tarball=False)}):
+            err = io.StringIO()
+            with self.fake_fetch(**kw), mock.patch('sys.stderr', err), \
+                    self.assertRaises(SystemExit) as cm:
+                self.g.side(self.repo, named=B275)
+            self.assertEqual(cm.exception.code, 2)
+            self.assertIn('cannot read the build ' + B275, err.getvalue())
+            self.assertNotEqual(
+                subprocess.run(['git', '-C', self.repo, 'rev-parse',
+                                '--verify', '--quiet', bs.build_ref(B275)],
+                               capture_output=True).returncode, 0)
+
+    def test_step_1_reads_a_build_by_its_commit(self):
+        """audit-locale-diff.sh on two builds, in a folder whose glibc is a
+        repository of the test's own: the provenance of each build, the
+        diff and the fan-in read at the builds' commits, the fan-in named
+        by the build. The new build changes one locale file."""
+        here = os.path.join(self.dir, 'scripts')
+        os.makedirs(here)
+        for f in os.listdir(SCRIPTS_DIR):
+            if f.endswith(('.py', '.sh')):
+                os.symlink(os.path.join(SCRIPTS_DIR, f),
+                           os.path.join(here, f))
+        os.rename(self.repo, os.path.join(here, 'glibc'))
+        cache = os.path.join(self.dir, 'cache')
+        mirror = 'file:///nowhere/'
+        sv = 'localedata/locales/sv_SE'
+        with open(os.path.join(self.base, sv), 'rb') as fh:
+            data = fh.read() + b'% a change of the build\n'
+        changed = _linked(self.base, os.path.join(self.dir, 'changed'),
+                          {sv: data})
+        _fill_build_cache(cache, mirror, B275, self.base)
+        _fill_build_cache(cache, mirror, B283, changed,
+                          ['!! charmaps NOT checked against '
+                           'glibc-locale-source: no zstd reader'])
+        env = dict(os.environ, PG_GLIBC_BUILD_SOURCES_CACHE=cache,
+                   PG_GLIBC_BUILD_MIRROR=mirror, PG_GLIBC_AUDIT_WRAPPED='',
+                   PG_GLIBC_AUDIT_OUT=os.path.join(self.dir, 'out'))
+        step1 = os.path.join(here, 'audit-locale-diff.sh')
+        p = subprocess.run(['bash', step1, B275, B283], capture_output=True,
+                           env=env)
+        out = p.stdout.decode()
+        self.assertEqual(p.returncode, 0, p.stderr.decode()[-2000:])
+        repo = os.path.join(here, 'glibc')
+        commits = [_git_out(repo, 'rev-parse', bs.build_ref(b))
+                   for b in (B275, B283)]
+        for b, c in zip((B275, B283), commits):
+            self.assertIn('  %s = %s, one parent: %s' % (b, c[:12], TAG),
+                          out)
+        self.assertEqual(out.count('    checked: ' + bs.TARBALL_IS_TAG % TAG),
+                         2)
+        self.assertIn('Locale files added, modified or deleted: 1\n', out)
+        self.assertIn('Collation templates by blast radius at %s ' % B283,
+                      out)
+        self.assertIn("!! Not checked for these builds:", out)
+        self.assertIn("checked above against the upstream tag",
+                      flat(out))
+        self.assertNotIn('DIRECTION', p.stderr.decode())
+        # A `!!` a build's check gave reaches the run, naming the build.
+        self.assertIn('!! %s: charmaps NOT checked against '
+                      'glibc-locale-source: no zstd reader' % B283, flat(out))
+        # No hint names a step that reads two tags.
+        self.assertNotIn('Next:', out)
+        # The commit step 1 made, given back to it as if it were a tag, on
+        # either side.
+        for pair in ((TAG, commits[1][:12]), (commits[1][:12], TAG)):
+            with self.subTest(pair=pair):
+                p = subprocess.run(['bash', step1, *pair],
+                                   capture_output=True, env=env)
+                self.assertEqual(p.returncode, 2)
+                self.assertIn('%s is a commit this tool made for a distro '
+                              'build' % commits[1][:12],
+                              flat(p.stderr.decode()))
+                self.assertNotIn('Locale files added', p.stdout.decode())
+
+    def test_a_clone_without_the_builds_tag_fetches_it(self):
+        """A clone older than the build lacks the tag it is made on: step 1
+        fetches tags for it as it does for a tag argument, instead of
+        refusing in the middle of the build."""
+        here = os.path.join(self.dir, 'scripts')
+        os.makedirs(here)
+        repo = os.path.join(here, 'glibc')
+        os.rename(self.repo, repo)
+        tag = _git_out(repo, 'rev-parse', TAG + '^{commit}')
+        _git_out(repo, 'update-ref', '-d', 'refs/tags/' + TAG)
+        _git_out(repo, 'update-ref', 'HEAD', 'glibc-2.28^{commit}')
+        _git_out(repo, 'remote', 'add', 'origin', GLIBC_CLONE)
+        out = io.StringIO()
+        with self.fake_fetch(), mock.patch('sys.stdout', out):
+            _, a, b = self.g.step1_sides(here, B275, B283)
+        self.assertIn('Refs not present locally: %s -- fetching tags...'
+                      % TAG, out.getvalue())
+        self.assertEqual(_git_out(repo, 'rev-parse', TAG + '^{commit}'), tag)
+        self.assertEqual((a.kind, b.kind), ('build', 'build'))
+
+    def test_audit_sh_refuses_a_build_before_step_1(self):
+        for pair in ((TAG, B275), (B275, 'glibc-2.39')):
+            with self.subTest(pair=pair):
+                p = subprocess.run(
+                    ['bash', os.path.join(SCRIPTS_DIR, os.pardir,
+                                          'audit.sh'), *pair],
+                    capture_output=True,
+                    env=dict(os.environ, PG_GLIBC_AUDIT_OUT=self.dir))
+                self.assertEqual(p.returncode, 2)
+                self.assertIn('%s is a build. audit.sh does not read a '
+                              'build yet' % B275, flat(p.stderr.decode()))
+                self.assertNotIn('STEP 1', p.stdout.decode())
 
 
 if __name__ == '__main__':
