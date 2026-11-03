@@ -1624,5 +1624,589 @@ class OpensASourceRpm(unittest.TestCase):
         self.refused(self.srpm(files), 'rpm would unpack it as xz')
 
 
+# -- a mirror made by the tests -----------------------------------------------
+
+M = 'https://mirror.test/'
+NSC, NSR = ('http://linux.duke.edu/metadata/common',
+            'http://linux.duke.edu/metadata/repo')
+
+
+def _row(name, arch, rel, data=b'x', ver='2.39', href=None, sourcerpm=None,
+         sha=None, size=None):
+    """One package of a primary.xml, as Rocky writes it."""
+    fn = '%s-%s-%s.%s.rpm' % (name, ver, rel, arch)
+    return {'name': name, 'arch': arch, 'ver': ver, 'rel': rel,
+            'sha': sha or hashlib.sha256(data).hexdigest(),
+            'size': len(data) if size is None else size,
+            'href': href or 'Packages/g/' + fn,
+            'sourcerpm': '' if arch == 'src' else
+            (sourcerpm or 'glibc-%s-%s.src.rpm' % (ver, rel))}
+
+
+def _primary(rows):
+    out = ['<?xml version="1.0" encoding="UTF-8"?>\n<metadata xmlns="%s" '
+           'xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="%d">'
+           % (NSC, len(rows) + 1),
+           '<package type="rpm"><name>bash</name><arch>x86_64</arch>'
+           '<version epoch="0" ver="5" rel="1"/></package>']
+    for r in rows:
+        out.append(
+            '<package type="rpm"><name>%(name)s</name><arch>%(arch)s</arch>'
+            '<version epoch="0" ver="%(ver)s" rel="%(rel)s"/>'
+            '<checksum type="sha256" pkgid="YES">%(sha)s</checksum>'
+            '<size package="%(size)s" installed="0" archive="0"/>'
+            '<location href="%(href)s"/><format><rpm:sourcerpm>%(sourcerpm)s'
+            '</rpm:sourcerpm></format></package>' % r)
+    out.append('</metadata>\n')
+    return gzip.compress(''.join(out).encode(), mtime=0)
+
+
+def _repomd(primary, sha=None, kinds=('primary',)):
+    """repomd.xml naming `primary`; primary_db always first, as in every
+    real one."""
+    data = ['<data type="primary_db"><checksum type="sha256">%s</checksum>'
+            '<location href="repodata/db-primary.sqlite.xz"/></data>'
+            % ('1' * 64)]
+    for k in kinds:
+        data.append('<data type="%s"><checksum type="sha256">%s</checksum>'
+                    '<location href="repodata/%s-PRIMARY.xml.gz"/>'
+                    '<timestamp>1762000000</timestamp></data>'
+                    % (k, sha or hashlib.sha256(primary).hexdigest(), 'u'))
+    return ('<?xml version="1.0"?>\n<repomd xmlns="%s"><revision>10'
+            '</revision>%s</repomd>' % (NSR, ''.join(data))).encode()
+
+
+class FakeMirror(object):
+    """A mirror as a dict of URL to bytes, served in place of build_sources
+    ._get: a URL it does not hold answers 404, one in `errors` raises what
+    is there, and every URL asked is in `asked`."""
+
+    def __init__(self, vault=()):
+        self.files, self.errors, self.asked = {}, {}, []
+        self.files[M + 'vault/rocky/'] = (
+            '<a href="../">../</a>' + ''.join(
+                '<a href="%s/">%s/</a>' % (v, v) for v in vault)).encode()
+
+    def get(self, url):
+        self.asked.append(url)
+        if url in self.errors:
+            raise self.errors[url]
+        if url not in self.files:
+            raise bs._Absent(url)
+        return self.files[url]
+
+    def repo(self, tree, repo, rows, files=(), sha=None, kinds=('primary',)):
+        base = M + tree + '/' + repo + '/'
+        prim = _primary(rows)
+        self.files[base + 'repodata/repomd.xml'] = _repomd(prim, sha, kinds)
+        self.files[base + 'repodata/u-PRIMARY.xml.gz'] = prim
+        for href, data in files:
+            self.files[base + href] = data
+        return base
+
+    def copy(self, old, new, move=False):
+        """Every URL under `old` also under `new` (and no longer under
+        `old` with move): a build moved to the vault, or another mirror."""
+        for url in [u for u in self.files if u.startswith(old)]:
+            self.files[new + url[len(old):]] = self.files[url]
+            if move:
+                del self.files[url]
+
+
+class FetchesFromAMirror(unittest.TestCase):
+    """where_from, fetch, fetch_build and latest on a mirror the test makes,
+    shaped as Rocky's was measured on 2026-11-03 (two package layouts,
+    primary_db before primary, a vault folder with no metadata, 8.4-RC1/ and
+    9.0-ISO/ in the vault's index, pub/rocky/8's SRPMs in the order its
+    primary lists them). No test reads a real mirror: _get is the fake's for
+    every test."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='build_sources_fetch_')
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.cache = os.path.join(self.tmp, 'cache')
+        self.mirror = FakeMirror(vault=('9.2', '9.3', '9.4', '8.4', '8.4-RC1',
+                                        '9.0-ISO', '10.0'))
+        p = mock.patch.object(bs, '_get', side_effect=self.mirror.get)
+        p.start()
+        self.addCleanup(p.stop)
+        for name, value in (('PREP_SEQUENCES', frozenset([SMALL_KEYS])),
+                            ('MACRO_NAMES', frozenset(['glibcsrcdir']))):
+            p = mock.patch.object(bs, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def refused(self, call, why):
+        with self.assertRaises(bs.Refused) as cm:
+            call()
+        self.assertIn(why, str(cm.exception))
+
+    def where(self, name):
+        return bs.where_from(name, M, self.cache)
+
+    def el10(self, srpm_rel='1.el10', binaries=None, listed='1.el10'):
+        """pub/rocky/10 holding the small SRPM and its two binary packages,
+        the SRPM listed under the release `listed`."""
+        srpm = os.path.join(self.tmp, 'g.src.rpm')
+        make_srpm(srpm, small_srpm_files())
+        ls = make_binary(os.path.join(self.tmp, 'ls.rpm'),
+                         'glibc-locale-source', locale_source(BUILT))
+        common = make_binary(os.path.join(self.tmp, 'common.rpm'),
+                             'glibc-common',
+                             {'/usr/share/locale/locale.alias': ALIAS})
+        data = {}
+        for k, path in (('srpm', srpm), ('ls', ls), ('common', common)):
+            with open(path, 'rb') as fh:
+                data[k] = fh.read()
+        s = _row('glibc', 'src', listed, data['srpm'])
+        l_ = _row('glibc-locale-source', 'x86_64', listed, data['ls'])
+        c = _row('glibc-common', 'x86_64', listed, data['common'])
+        self.mirror.repo('pub/rocky/10', 'BaseOS/source/tree', [s],
+                         [(s['href'], data['srpm'])])
+        self.mirror.repo('pub/rocky/10', 'AppStream/x86_64/os', [l_],
+                         [(l_['href'], data['ls'])])
+        self.mirror.repo('pub/rocky/10', 'BaseOS/x86_64/os', [c],
+                         [(c['href'], data['common'])])
+        self.placed = {'srpm': ('BaseOS/source/tree', s),
+                       'glibc-locale-source': ('AppStream/x86_64/os', l_),
+                       'glibc-common': ('BaseOS/x86_64/os', c)}
+        return srpm, {'glibc-locale-source': ls, 'glibc-common': common}
+
+    def el8(self, rels, tree='pub/rocky/8', href=None):
+        """Rows for each release in `rels`, in the order given, in the three
+        repositories of `tree` (el8: both binaries in BaseOS)."""
+        src, bins = [], []
+        for rel in rels:
+            src.append(_row('glibc', 'src', rel, ver='2.28', href=href and
+                            href % ('glibc-2.28-%s.src' % rel)))
+            for n in ('glibc-common', 'glibc-locale-source'):
+                bins.append(_row(n, 'x86_64', rel, ver='2.28'))
+        self.mirror.repo(tree, 'BaseOS/source/tree', src)
+        self.mirror.repo(tree, 'BaseOS/x86_64/os', bins)
+        self.mirror.repo(tree, 'AppStream/x86_64/os', [])
+        return src, bins
+
+    # The real order of pub/rocky/8's 17 releases in its primary.xml.
+    EL8 = ['251.el8_10.%d' % n for n in (11, 13, 14, 16, 2, 22, 25, 27, 31,
+                                          34, 37, 38, 4, 40, 43, 48, 5)]
+
+    def test_fetches_the_three_files_and_builds_as_build_does(self):
+        """The control: what fetch_build returns is what build() returns
+        for the same three files."""
+        srpm, bins = self.el10()
+        got = bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        want = bs.build(srpm, bins, os.path.join(self.tmp, 'other'))
+        self.assertEqual((got.build, got.tag), (want.build, want.tag))
+        self.assertEqual(got.provenance['verified'],
+                         want.provenance['verified'])
+        files = got.provenance['fetched']['files']
+        self.assertEqual(sorted(files), sorted(p[0] for p in bs.PACKAGES))
+        self.assertEqual(files['glibc-locale-source']['repo'],
+                         'AppStream/x86_64/os')
+        self.assertEqual(got.provenance['fetched']['note'], bs.FETCHED_NOTE)
+
+    def test_a_file_that_is_not_the_one_the_metadata_records(self):
+        """Same size, other bytes; and a sha256 that agrees in its first
+        eight digits only: nothing is kept, nothing is returned."""
+        data = b'A' * 100
+        url = M + 'pub/rocky/10/BaseOS/x86_64/os/Packages/g/f.rpm'
+        sha = hashlib.sha256(data).hexdigest()
+        cases = ((b'B' * 100, sha, 100, 'sha256'),
+                 (data, sha[:8] + '0' * 56, 100, 'sha256'),
+                 (data[:99], sha, 100, '99 bytes'))
+        for served, want, size, why in cases:
+            with self.subTest(why=why, want=want[:10]):
+                self.mirror.files[url] = served
+                entry = bs.Entry(url, want, size, 't', 'r', None)
+                self.refused(lambda: bs.fetch(entry, self.cache), why)
+                self.assertFalse(os.path.exists(
+                    os.path.join(self.cache, 'downloads', want)))
+
+    def test_a_primary_that_is_not_the_one_repomd_records(self):
+        self.el10()
+        base = M + 'pub/rocky/10/BaseOS/source/tree/'
+        self.mirror.files[base + 'repodata/repomd.xml'] = _repomd(
+            b'', sha=hashlib.sha256(b'another').hexdigest())
+        self.refused(lambda: self.where('glibc-2.39-1.el10'),
+                     'is not the primary.xml repomd.xml records')
+
+    def test_repomd_must_name_one_primary(self):
+        self.el10()
+        base = M + 'pub/rocky/10/BaseOS/source/tree/'
+        self.mirror.files[base + 'repodata/repomd.xml'] = _repomd(
+            self.mirror.files[base + 'repodata/u-PRIMARY.xml.gz'],
+            kinds=('primary', 'primary'))
+        self.refused(lambda: self.where('glibc-2.39-1.el10'),
+                     'names 2 primary.xml')
+
+    def test_a_name_is_read_whole(self):
+        """A release that begins another release's name is that build and
+        no other: .4 beside .40 and .48, and glibc-2.39-46.el10_0.4, whose
+        last word locale_order.build_parts would drop."""
+        self.el8(self.EL8)
+        got = self.where('glibc-2.28-251.el8_10.4')
+        for k, e in got.items():
+            self.assertIn('-2.28-251.el8_10.4.', e.url)
+        rows = [_row('glibc', 'src', r) for r in ('46.el10_0', '46.el10_0.4')]
+        self.mirror.repo('vault/rocky/10.0', 'BaseOS/source/tree', rows)
+        self.mirror.repo('vault/rocky/10.0', 'BaseOS/x86_64/os', [
+            _row('glibc-common', 'x86_64', r) for r in ('46.el10_0',
+                                                        '46.el10_0.4')])
+        self.mirror.repo('vault/rocky/10.0', 'AppStream/x86_64/os', [
+            _row('glibc-locale-source', 'x86_64', r)
+            for r in ('46.el10_0', '46.el10_0.4')])
+        self.mirror.repo('pub/rocky/10', 'BaseOS/source/tree', [])
+        got = self.where('glibc-2.39-46.el10_0.4')
+        self.assertTrue(got['srpm'].url.endswith('glibc-2.39-46.el10_0.4.'
+                                                 'src.rpm'))
+        self.assertEqual(got['srpm'].tree, 'vault/rocky/10.0')
+
+    def test_names_that_are_not_build_names(self):
+        for name in ('glibc-2.34-283.el9_8.x86_64', 'glibc-2.34',
+                     'glibc-2.34-283', 'bash-5.1-1.el9', '', None,
+                     'glibc-2.34-283.el9_8 glibc-2.34-275.el9_8'):
+            with self.subTest(name=name):
+                self.refused(lambda: self.where(name),
+                             'is not a glibc build name')
+        self.assertFalse(self.mirror.asked)
+
+    def test_the_build_fetched_must_be_the_one_asked_for(self):
+        """The mirror lists the small SRPM, whose header says 1.el10, under
+        another release."""
+        self.el10(listed='1.el10_0.4')
+        self.refused(lambda: bs.fetch_build('glibc-2.39-1.el10_0.4', M,
+                                            self.cache),
+                     'asked for glibc-2.39-1.el10_0.4 and the SRPM fetched '
+                     'is glibc-2.39-1.el10.src')
+
+    def test_the_binaries_are_this_builds(self):
+        """Another build's package listed first is passed over; a package
+        named as this build but built from another SRPM is refused."""
+        src, bins = self.el8(['251.el8_10.40', '251.el8_10.48'])
+        got = self.where('glibc-2.28-251.el8_10.48')
+        self.assertIn('glibc-common-2.28-251.el8_10.48.x86_64',
+                      got['glibc-common'].url)
+        bins[2]['sourcerpm'] = 'glibc-2.28-251.el8_10.40.src.rpm'
+        self.mirror.repo('pub/rocky/8', 'BaseOS/x86_64/os', bins)
+        self.refused(lambda: self.where('glibc-2.28-251.el8_10.48'),
+                     "is built from 'glibc-2.28-251.el8_10.40.src.rpm'")
+
+    def test_a_package_missing_or_listed_twice(self):
+        src, bins = self.el8(['251.el8_10.48'])
+        self.mirror.repo('pub/rocky/8', 'BaseOS/x86_64/os', bins[:1])
+        self.refused(lambda: self.where('glibc-2.28-251.el8_10.48'),
+                     'lists 0 glibc-locale-source.x86_64 of '
+                     'glibc-2.28-251.el8_10.48')
+        self.mirror.repo('pub/rocky/8', 'BaseOS/x86_64/os',
+                         bins + bins[:1])
+        self.refused(lambda: self.where('glibc-2.28-251.el8_10.48'),
+                     'lists 2 glibc-common.x86_64')
+        self.refused(lambda: self.where('glibc-2.28-251.el8_10.99'),
+                     'glibc-2.28-251.el8_10.99 is not in')
+        for field, value in (('sha', 'abc'), ('size', 'x'),
+                             ('href', '../g.rpm')):
+            with self.subTest(field=field):
+                bad = [dict(b) for b in bins]
+                bad[0][field] = value
+                self.mirror.repo('pub/rocky/8', 'BaseOS/x86_64/os', bad)
+                self.refused(lambda: self.where('glibc-2.28-251.el8_10.48'),
+                             'has no sha256, size or path this reads')
+
+    def test_a_folder_with_no_metadata(self):
+        """vault 9.3's shape: SRPMs under Packages/g/, no repodata. Its
+        build is refused by name; a build of a lower folder is still found
+        past it."""
+        for v in ('9', '9.4'):
+            self.mirror.repo('pub/rocky/' + v if v == '9' else
+                             'vault/rocky/' + v, 'BaseOS/source/tree', [])
+        self.mirror.files[M + 'vault/rocky/9.3/BaseOS/source/tree/'
+                          'Packages/g/'] = \
+            b'<a href="glibc-2.34-83.el9.12.src.rpm">x</a>'
+        self.refused(lambda: self.where('glibc-2.34-83.el9.12'),
+                     'glibc-2.34-83.el9.12.src.rpm is published in '
+                     'https://mirror.test/vault/rocky/9.3 with no metadata')
+        rows = [_row('glibc', 'src', '60.el9', ver='2.34')]
+        self.mirror.repo('vault/rocky/9.2', 'BaseOS/source/tree', rows)
+        self.mirror.repo('vault/rocky/9.2', 'BaseOS/x86_64/os',
+                         [_row('glibc-common', 'x86_64', '60.el9',
+                               ver='2.34')])
+        self.mirror.repo('vault/rocky/9.2', 'AppStream/x86_64/os',
+                         [_row('glibc-locale-source', 'x86_64', '60.el9',
+                               ver='2.34')])
+        self.assertEqual(self.where('glibc-2.34-60.el9')['srpm'].tree,
+                         'vault/rocky/9.2')
+
+    def test_the_flat_layout_of_8_3_and_8_4(self):
+        self.mirror.repo('pub/rocky/8', 'BaseOS/source/tree', [])
+        self.el8(['151.el8'], tree='vault/rocky/8.4', href='Packages/%s.rpm')
+        got = self.where('glibc-2.28-151.el8')
+        self.assertEqual(got['srpm'].url, M + 'vault/rocky/8.4/BaseOS/source/'
+                         'tree/Packages/glibc-2.28-151.el8.src.rpm')
+
+    def test_release_candidates_and_iso_folders_are_not_trees(self):
+        self.mirror.repo('pub/rocky/8', 'BaseOS/source/tree', [])
+        self.mirror.repo('vault/rocky/8.4', 'BaseOS/source/tree', [])
+        self.el8(['151.el8'], tree='vault/rocky/8.4-RC1')
+        self.refused(lambda: self.where('glibc-2.28-151.el8'), 'is not in')
+        self.assertFalse([u for u in self.mirror.asked
+                          if 'RC1' in u or 'ISO' in u])
+
+    def test_a_failure_is_not_an_absence(self):
+        """A 503 or a timeout on the folder that holds the build refuses
+        with what happened, never "not there"."""
+        self.el10()
+        url = M + 'pub/rocky/10/BaseOS/source/tree/repodata/repomd.xml'
+        self.mirror.errors[url] = bs.Refused('%s: HTTP 503' % url)
+        self.refused(lambda: self.where('glibc-2.39-1.el10'), 'HTTP 503')
+
+    def test_nothing_is_built_after_a_failure(self):
+        """Every refusal comes before build(): no tree from anything else,
+        the upstream tag included."""
+        self.el10()
+        del self.mirror.files[M + 'pub/rocky/10/AppStream/x86_64/os/'
+                              'repodata/repomd.xml']
+        with mock.patch.object(bs, 'build', side_effect=AssertionError), \
+                mock.patch.object(bs, 'scope_from_git',
+                                  side_effect=AssertionError):
+            self.refused(lambda: bs.fetch_build('glibc-2.39-1.el10', M,
+                                                self.cache),
+                         'AppStream/x86_64/os has no metadata to find')
+
+    def test_the_latest_build_of_a_major(self):
+        """In the real order of pub/rocky/8 the newest is .48: not the first
+        row, not the last, not the greatest as text."""
+        self.el8(self.EL8)
+        got = bs.latest(8, M, self.cache)
+        self.assertEqual(got.build, 'glibc-2.28-251.el8_10.48')
+        self.assertEqual((got.tree, got.timestamp), ('pub/rocky/8',
+                                                     '1762000000'))
+        src = [_row('glibc', 'src', '1.el8', ver='2.28'),
+               _row('glibc', 'src', '1.el8', ver='2.29'),
+               _row('glibc', 'src', '9.el9', ver='2.34')]
+        self.mirror.repo('pub/rocky/8', 'BaseOS/source/tree', src)
+        self.refused(lambda: bs.latest(8, M, self.cache),
+                     'lists glibc 2.28, 2.29 for el8')
+
+    def test_rows_kept_whole_or_read_again(self):
+        self.el8(['251.el8_10.48'])
+        self.where('glibc-2.28-251.el8_10.48')
+        kept = os.listdir(os.path.join(self.cache, 'metadata'))
+        self.assertEqual(len(kept), 3)
+        for name in kept:
+            path = os.path.join(self.cache, 'metadata', name)
+            with open(path) as fh:
+                value = json.load(fh)
+            value.pop('complete')
+            with open(path, 'w') as fh:
+                json.dump(value, fh)
+        self.mirror.asked[:] = []
+        self.where('glibc-2.28-251.el8_10.48')
+        self.assertEqual(len([u for u in self.mirror.asked
+                              if u.endswith('PRIMARY.xml.gz')]), 3)
+
+    def test_once_fetched_no_network_and_a_damaged_file_again(self):
+        self.el10()
+        bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        self.mirror.asked[:] = []
+        with mock.patch.object(bs, '_get', side_effect=AssertionError):
+            bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        dl = os.path.join(self.cache, 'downloads')
+        victim = sorted(os.listdir(dl))[0]
+        with open(os.path.join(dl, victim), 'r+b') as fh:
+            fh.write(b'\0')
+        bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        self.assertEqual(len(self.mirror.asked), 1)
+        self.assertIn(victim, [hashlib.sha256(d).hexdigest()
+                               for u, d in self.mirror.files.items()
+                               if u == self.mirror.asked[0]])
+
+    def test_a_remembered_file_the_mirror_now_gives_another_sha256(self):
+        """Each of the three files in turn: its kept copy and its URL gone,
+        the metadata now names another sha256 for it."""
+        for key in [p[0] for p in bs.PACKAGES]:
+            with self.subTest(key=key):
+                cache = os.path.join(self.tmp, 'c-' + key)
+                self.el10()
+                bs.fetch_build('glibc-2.39-1.el10', M, cache)
+                shutil.rmtree(os.path.join(cache, 'downloads'))
+                repo, row = self.placed[key]
+                del self.mirror.files[M + 'pub/rocky/10/' + repo + '/' +
+                                      row['href']]
+                self.mirror.repo('pub/rocky/10', repo,
+                                 [dict(row, sha='0' * 64)])
+                self.refused(lambda: bs.fetch_build('glibc-2.39-1.el10', M,
+                                                    cache),
+                             'now gives %s of glibc-2.39-1.el10 another '
+                             'sha256 than the one remembered from %s'
+                             % (key, M))
+
+    def test_a_remembered_build_that_moved_to_the_vault(self):
+        """At a point release a build moves from pub/ to the vault with
+        the same files: it is found there, and remembered there."""
+        self.el10()
+        bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        shutil.rmtree(os.path.join(self.cache, 'downloads'))
+        self.mirror.copy(M + 'pub/rocky/10/', M + 'vault/rocky/10.0/',
+                         move=True)
+        self.mirror.repo('pub/rocky/10', 'BaseOS/source/tree', [])
+        # A CDN can answer a removed object with 403 rather than 404: a
+        # failure, which also sends the run back to the metadata.
+        repo, row = self.placed['srpm']
+        url = M + 'pub/rocky/10/' + repo + '/' + row['href']
+        self.mirror.errors[url] = bs.Refused('%s: HTTP 403' % url)
+        got = bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        self.assertEqual({f['tree'] for f in
+                          got.provenance['fetched']['files'].values()},
+                         {'vault/rocky/10.0'})
+        with open(os.path.join(self.cache, 'builds',
+                               'glibc-2.39-1.el10.json')) as fh:
+            rec = json.load(fh)
+        self.assertTrue(all('/vault/rocky/10.0/' in f['url']
+                            for f in rec['files'].values()))
+
+    def test_a_primary_repomd_names_that_is_not_there(self):
+        """A mirror in the middle of a sync: every entry point refuses
+        with what happened, never "not there"."""
+        self.el10()
+        bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        shutil.rmtree(os.path.join(self.cache, 'downloads'))
+        shutil.rmtree(os.path.join(self.cache, 'metadata'))
+        for u in [u for u in self.mirror.files
+                  if u.endswith('PRIMARY.xml.gz')]:
+            del self.mirror.files[u]
+        why = 'is named by repomd.xml and is not there'
+        self.refused(lambda: self.where('glibc-2.39-1.el10'), why)
+        self.refused(lambda: bs.latest(10, M, self.cache), why)
+        # The remembered path reads the metadata again when a kept URL
+        # fails, as when a build moves to the vault.
+        del self.mirror.files[[u for u in self.mirror.files
+                               if '/Packages/g/glibc-common-' in u][0]]
+        self.refused(lambda: bs.fetch_build('glibc-2.39-1.el10', M,
+                                            self.cache), why)
+
+    def test_a_vault_index_this_cannot_search(self):
+        self.mirror.repo('pub/rocky/9', 'BaseOS/source/tree', [])
+        index = M + 'vault/rocky/'
+        self.mirror.files[index] = b'<a href="/vault/rocky/9.2/">9.2/</a>'
+        self.refused(lambda: self.where('glibc-2.34-60.el9_2.7'),
+                     'lists no release folder this reads')
+        del self.mirror.files[index]
+        self.refused(lambda: self.where('glibc-2.34-60.el9_2.7'),
+                     'vault/rocky/ is not there')
+
+    def test_a_listing_that_cannot_be_read(self):
+        """The Packages/ listing of a folder with no metadata failing is a
+        failure, not "not published there"."""
+        for tree in ('pub/rocky/9', 'vault/rocky/9.4', 'vault/rocky/9.2'):
+            self.mirror.repo(tree, 'BaseOS/source/tree', [])
+        url = M + 'vault/rocky/9.3/BaseOS/source/tree/Packages/g/'
+        self.mirror.errors[url] = bs.Refused('%s: HTTP 503' % url)
+        self.refused(lambda: self.where('glibc-2.34-83.el9.12'), 'HTTP 503')
+
+    def test_a_record_that_cannot_be_read_is_not_a_first_time(self):
+        self.el10()
+        bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        path = os.path.join(self.cache, 'builds', 'glibc-2.39-1.el10.json')
+        with open(path) as fh:
+            good = fh.read()
+        rec = json.loads(good)
+        rec['files']['another'] = rec['files']['srpm']
+        for text, why in ((json.dumps(rec), 'does not hold what this '
+                           'remembers'), ('', 'cannot be read')):
+            with self.subTest(why=why):
+                with open(path, 'w') as fh:
+                    fh.write(text)
+                self.refused(lambda: bs.fetch_build('glibc-2.39-1.el10', M,
+                                                    self.cache),
+                             path + ' ' + why)
+        os.remove(path)
+        os.mkdir(path)
+        self.refused(lambda: bs.fetch_build('glibc-2.39-1.el10', M,
+                                            self.cache),
+                     path + ' cannot be read')
+        os.rmdir(path)
+        with open(path, 'w') as fh:
+            fh.write(good)
+        bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+
+    def test_another_mirror_is_asked_again(self):
+        """Another mirror named: its metadata is read, and it must give the
+        sha256 the first mirror gave; then it is the one remembered."""
+        other = 'https://other.test/'
+        self.el10()
+        bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        self.refused(lambda: bs.fetch_build('glibc-2.39-1.el10', other,
+                                            self.cache),
+                     other + 'vault/rocky/ is not there')
+        self.mirror.copy(M, other)
+        repo, row = self.placed['srpm']
+        base = other + 'pub/rocky/10/' + repo + '/'
+        prim = _primary([dict(row, sha='0' * 64)])
+        self.mirror.files[base + 'repodata/repomd.xml'] = _repomd(prim)
+        self.mirror.files[base + 'repodata/u-PRIMARY.xml.gz'] = prim
+        self.refused(lambda: bs.fetch_build('glibc-2.39-1.el10', other,
+                                            self.cache),
+                     '%s now gives srpm of glibc-2.39-1.el10 another sha256 '
+                     'than the one remembered from %s' % (other, M))
+        self.mirror.copy(M, other)
+        bs.fetch_build('glibc-2.39-1.el10', other, self.cache)
+        with open(os.path.join(self.cache, 'builds',
+                               'glibc-2.39-1.el10.json')) as fh:
+            self.assertEqual(json.load(fh)['mirror'], other)
+
+
+class ReadsAUrl(unittest.TestCase):
+    """_get, the one place that reads a URL: what each answer becomes. The
+    URLs here are file://, answered by a stand-in, or refused by urllib
+    before any network."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='build_sources_get_')
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_a_file_url(self):
+        path = os.path.join(self.tmp, 'f')
+        with open(path, 'wb') as fh:
+            fh.write(b'bytes')
+        self.assertEqual(bs._get('file://' + path), b'bytes')
+        with self.assertRaises(bs.Refused):
+            bs._get('file://' + path + '-missing')
+
+    def test_what_each_answer_becomes(self):
+        import urllib.error
+
+        class Resp(io.BytesIO):
+            def __init__(self, data, length):
+                io.BytesIO.__init__(self, data)
+                self.headers = {'Content-Length': length}
+
+        def err(code):
+            return urllib.error.HTTPError('u', code, 'x', {}, None)
+        cases = ((err(404), bs._Absent, ''),
+                 (err(503), bs.Refused, 'HTTP 503'),
+                 (urllib.error.URLError('timed out'), bs.Refused, 'timed out'),
+                 (Resp(b'abc', '10'), bs.Refused, 'cut short: 3 of 10'))
+        for answer, exc, why in cases:
+            with self.subTest(why=why or '404'):
+                kw = {'return_value': answer} if isinstance(answer, Resp) \
+                    else {'side_effect': answer}
+                with mock.patch.object(bs.urllib.request, 'urlopen', **kw):
+                    with self.assertRaises(exc) as cm:
+                        bs._get('https://mirror.test/x')
+                self.assertIn(why, str(cm.exception))
+        with mock.patch.object(bs.urllib.request, 'urlopen',
+                               return_value=Resp(b'abc', '3')):
+            self.assertEqual(bs._get('https://mirror.test/x'), b'abc')
+        # A mirror named without its scheme: urllib cannot open it.
+        with self.assertRaises(bs.Refused) as cm:
+            bs._get('dl.rockylinux.org/vault/rocky/')
+        self.assertIn('unknown url type', str(cm.exception))
+
+    def test_the_suite_names_a_mirror_that_is_not_the_network(self):
+        mirror = os.environ.get('PG_GLIBC_BUILD_MIRROR', '')
+        self.assertTrue(mirror.startswith('file://'), mirror)
+        self.assertEqual(bs._mirror(None), mirror.rstrip('/') + '/')
+
+
 if __name__ == '__main__':
     unittest.main()

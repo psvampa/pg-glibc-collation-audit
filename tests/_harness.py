@@ -44,6 +44,11 @@ atexit.register(shutil.rmtree, SUITE_OUT_DIR, True)
 # keeps its builds in the suite's folder, not in scripts/build-sources-cache.
 os.environ['PG_GLIBC_BUILD_SOURCES_CACHE'] = os.path.join(SUITE_OUT_DIR,
                                                           'build-sources')
+# And its mirror: a test that forgets mirror= reads a folder that is not
+# there and is refused, instead of reaching the network or a mirror named in
+# the shell.
+os.environ['PG_GLIBC_BUILD_MIRROR'] = 'file://' + os.path.join(SUITE_OUT_DIR,
+                                                               'no-mirror/')
 
 # The scripts import each other as top-level modules (`import glibc_locale_data
 # as g`), so they are only importable with scripts/ on the path.

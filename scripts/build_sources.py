@@ -37,16 +37,26 @@ rebuilt from a guess would compare as that build's sources, and the tool
 would report on a build nobody made. It never falls back to the upstream tag.
 
 What it does not check is listed in every result: NOT_CHECKED, never a
-recipe, and the `!!` lines of `verified`.
+recipe, and the `!!` lines of `verified`; and, for a fetched build,
+provenance['fetched'].
+
+fetch_build() takes a build's name instead of its files: where_from()
+finds the SRPM and the two binary packages in a mirror's public metadata
+(repomd.xml, then primary.xml), fetch() downloads each and compares it with
+the sha256 the metadata records, and build() does the rest. latest() names
+a major version's newest build.
 
 PG_GLIBC_BUILD_SOURCES_CACHE names the cache directory (default
-scripts/build-sources-cache/, outside git).
+scripts/build-sources-cache/, outside git), and PG_GLIBC_BUILD_MIRROR the
+mirror (default Rocky Linux's, ROCKY).
 """
 import bz2
 import collections
 import fnmatch
+import functools
 import gzip
 import hashlib
+import http.client
 import io
 import json
 import lzma
@@ -57,6 +67,9 @@ import struct
 import subprocess
 import tarfile
 import tempfile
+import urllib.error
+import urllib.request
+import xml.etree.ElementTree as ET
 
 import diff_collation_code as dcc
 import glibc_locale_data as g
@@ -1499,3 +1512,448 @@ def _kept(where, sha, shas):
             prov.get('binaries_sha256') != shas or not prov.get('verified'):
         return None
     return Built(root, prov['build'], prov['version'], prov['tag'], prov)
+
+
+# -- fetching a build from a mirror ------------------------------------------
+#
+# Measured on Rocky Linux's mirror on 2026-11-03, pub/rocky/{8,9,10} and
+# every vault/rocky/<major>.<minor>, 66 glibc builds: the SRPM is in
+# BaseOS/source/tree, glibc-locale-source in BaseOS on el8 and AppStream on
+# el9 and el10, glibc-common in BaseOS; every row sha256, every binary's
+# sourcerpm its build's SRPM; package paths come in two layouts (Packages/g/
+# and, on 8.3 and 8.4, Packages/), so a URL is always the metadata's href,
+# never made from the name; vault 9.3 and 9.5 publish the SRPMs with no
+# metadata, and those builds are refused.
+
+ROCKY = 'https://dl.rockylinux.org/'
+TIMEOUT = 120
+_SOURCE_REPO = 'BaseOS/source/tree'
+# (key, rpm name, arch, the repositories it can be in): one row per file.
+PACKAGES = (('srpm', 'glibc', 'src', (_SOURCE_REPO,)),
+            ('glibc-locale-source', 'glibc-locale-source', 'x86_64',
+             ('BaseOS/x86_64/os', 'AppStream/x86_64/os')),
+            ('glibc-common', 'glibc-common', 'x86_64', ('BaseOS/x86_64/os',)))
+_NAMES = frozenset(p[1] for p in PACKAGES)
+_RMD = '{http://linux.duke.edu/metadata/repo}'
+_PRI = '{http://linux.duke.edu/metadata/common}'
+_RPMNS = '{http://linux.duke.edu/metadata/rpm}'
+_SHA = re.compile(r'^[0-9a-f]{64}$')
+FETCHED_NOTE = ("each file's sha256 is the one the mirror's metadata "
+                "records; the metadata's GPG signature is not checked")
+
+Entry = collections.namedtuple('Entry', 'url sha256 size tree repo timestamp')
+Latest = collections.namedtuple('Latest', 'build mirror tree timestamp')
+
+
+class _Absent(Exception):
+    """The mirror answered 404: the one answer read as "not there"."""
+
+
+def _get(url):
+    """The bytes at url. A 404 raises _Absent; every other failure (another
+    status, a timeout, a body shorter than its Content-Length, a URL urllib
+    cannot open, such as a mirror named without its scheme) is Refused,
+    never read as "not there"."""
+    try:
+        with urllib.request.urlopen(url, timeout=TIMEOUT) as r:
+            data = r.read()
+            length = r.headers.get('Content-Length')
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise _Absent(url)
+        raise Refused('%s: HTTP %d' % (url, e.code))
+    except (urllib.error.URLError, OSError, http.client.HTTPException,
+            ValueError) as e:
+        raise Refused('could not read %s: %s'
+                      % (url, getattr(e, 'reason', e)))
+    if length is not None and length.strip().isdigit() and \
+            int(length) != len(data):
+        raise Refused('%s was cut short: %d of %s bytes'
+                      % (url, len(data), length.strip()))
+    return data
+
+
+def _mirror(mirror):
+    m = mirror or os.environ.get('PG_GLIBC_BUILD_MIRROR') or ROCKY
+    return m if m.endswith('/') else m + '/'
+
+
+def _cache(cache):
+    return cache or os.environ.get('PG_GLIBC_BUILD_SOURCES_CACHE') or \
+        DEFAULT_CACHE
+
+
+def _el(release):
+    """(major, minor or None) from a release's `.elN` or `.elN_M`; None
+    unless there is exactly one."""
+    found = re.findall(r'\.el(\d+)(?:_(\d+))?(?=\.|$)', release)
+    if len(found) != 1:
+        return None
+    major, minor = found[0]
+    return int(major), (int(minor) if minor else None)
+
+
+def _ask(name):
+    """(version, release, major, minor) of a build named as `rpm -q glibc`
+    names it without the architecture, `glibc-2.34-283.el9_8`. Read whole:
+    no word is taken for an architecture and dropped, since
+    glibc-2.39-46.el10_0 is a real build and so is glibc-2.39-46.el10_0.4.
+    The release has the shape of the 66 on Rocky's mirror (251.el8_10.48,
+    83.el9.12, 189.1.el8): numbers, `.elN` or `.elN_M`, numbers."""
+    m = re.match(r'^glibc-(\d+\.\d+(?:\.\d+)?)-'
+                 r'(\d+(?:\.\d+)*\.el\d+(?:_\d+)?(?:\.\d+)*)$', name or '')
+    el = _el(m.group(2)) if m else None
+    if not m or el is None:
+        raise Refused('%r is not a glibc build name such as '
+                      'glibc-2.34-283.el9_8' % (name,))
+    return m.group(1), m.group(2), el[0], el[1]
+
+
+def _write_json(path, value):
+    """Write value to path whole or not at all."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix='.new-', dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, 'w') as fh:
+            json.dump(value, fh, indent=1, sort_keys=True)
+        os.rename(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def _read_json(path):
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def _unpack(data, url):
+    """primary.xml's bytes, decompressed by what they are, not by the name
+    (vault 9.0-9.2 name it <uuid>-PRIMARY.xml.gz)."""
+    if data[:2] == b'\x1f\x8b':
+        return gzip.GzipFile(fileobj=io.BytesIO(data))
+    if data[:6] == b'\xfd7zXZ\x00':
+        return lzma.LZMAFile(io.BytesIO(data))
+    if data.lstrip()[:1] == b'<':
+        return io.BytesIO(data)
+    raise Refused('%s is compressed in a way this does not read' % url)
+
+
+def _text(el, tag):
+    x = el.find(tag)
+    return x.text if x is not None else None
+
+
+def _parse_primary(data, url):
+    """The rows of glibc, glibc-locale-source and glibc-common in one
+    primary.xml, read a package at a time: the whole of el8's BaseOS one
+    (60 MB packed) takes 4.3 GiB to hold at once."""
+    rows = []
+    try:
+        for _, el in ET.iterparse(_unpack(data, url)):
+            if el.tag != _PRI + 'package':
+                continue
+            name = _text(el, _PRI + 'name')
+            if name in _NAMES:
+                v, ck = el.find(_PRI + 'version'), el.find(_PRI + 'checksum')
+                loc, size = el.find(_PRI + 'location'), el.find(_PRI + 'size')
+                fmt = el.find(_PRI + 'format')
+                rows.append({
+                    'name': name, 'arch': _text(el, _PRI + 'arch'),
+                    'ver': v.get('ver') if v is not None else None,
+                    'rel': v.get('rel') if v is not None else None,
+                    'cktype': ck.get('type') if ck is not None else None,
+                    'sha256': ck.text if ck is not None else None,
+                    'href': loc.get('href') if loc is not None else None,
+                    'size': size.get('package') if size is not None else None,
+                    'sourcerpm': _text(fmt, _RPMNS + 'sourcerpm')
+                    if fmt is not None else None})
+            el.clear()
+    except (ET.ParseError, OSError, EOFError, lzma.LZMAError) as e:
+        raise Refused('%s does not read as a primary.xml: %s' % (url, e))
+    return rows
+
+
+def _rows(mirror, tree, repo, cache):
+    """{'rows', 'timestamp'} of one repository's primary.xml, or None when
+    the repository has no repodata/repomd.xml (404). The primary is checked
+    against the sha256 repomd.xml records, and its rows are kept by that
+    sha256 and this module's version, written whole or not at all."""
+    base = mirror + tree + '/' + repo + '/'
+    try:
+        md = _get(base + 'repodata/repomd.xml')
+    except _Absent:
+        return None
+    try:
+        root = ET.fromstring(md)
+    except ET.ParseError as e:
+        raise Refused('%srepodata/repomd.xml does not read as XML: %s'
+                      % (base, e))
+    prim = [d for d in root.findall(_RMD + 'data')
+            if d.get('type') == 'primary']
+    if len(prim) != 1:
+        raise Refused('%srepodata/repomd.xml names %d primary.xml'
+                      % (base, len(prim)))
+    ck, loc = prim[0].find(_RMD + 'checksum'), prim[0].find(_RMD + 'location')
+    href = loc.get('href') if loc is not None else None
+    sha = ck.text if ck is not None else None
+    if ck is None or ck.get('type') != 'sha256' or not _SHA.match(sha or '') \
+            or not _safe_href(href):
+        raise Refused('%srepodata/repomd.xml does not give primary.xml a '
+                      'sha256 and a path this reads' % base)
+    where = os.path.join(cache, 'metadata', '%s-%s.json' % (sha, _key()))
+    kept = _read_json(where)
+    if isinstance(kept, dict) and kept.get('complete') is True and \
+            kept.get('primary_sha256') == sha and \
+            isinstance(kept.get('rows'), list):
+        return kept
+    try:
+        data = _get(base + href)
+    except _Absent:
+        raise Refused('%s%s is named by repomd.xml and is not there (a '
+                      'mirror in the middle of a sync?)' % (base, href))
+    if hashlib.sha256(data).hexdigest() != sha:
+        raise Refused('%s%s is not the primary.xml repomd.xml records '
+                      '(sha256 %s)' % (base, href, sha))
+    out = {'rows': _parse_primary(data, base + href), 'primary_sha256': sha,
+           'timestamp': _text(prim[0], _RMD + 'timestamp'), 'complete': True}
+    _write_json(where, out)
+    return out
+
+
+def _safe_href(href):
+    return bool(href) and not href.startswith('/') and '://' not in href \
+        and '..' not in href.split('/')
+
+
+def _trees(mirror, major, minor):
+    """Where a build of `major` can be: pub/rocky/<major>, then the vault's
+    <major>.<n> folders, the release's own minor first. Only folders named
+    exactly <major>.<n>: the vault also lists 8.4-RC1/ and 9.0-ISO/."""
+    try:
+        index = _get(mirror + 'vault/rocky/').decode('utf-8', 'replace')
+    except _Absent:
+        raise Refused('%svault/rocky/ is not there' % mirror)
+    if not re.search(r'href="\d+\.\d+/"', index):
+        raise Refused('%svault/rocky/ lists no release folder this reads, '
+                      'so the vault cannot be searched' % mirror)
+    minors = sorted({int(n) for n in re.findall(r'href="%d\.(\d+)/"' % major,
+                                                 index)}, reverse=True)
+    if minor in minors:
+        minors.remove(minor)
+        minors.insert(0, minor)
+    return ['pub/rocky/%d' % major] + \
+        ['vault/rocky/%d.%d' % (major, n) for n in minors]
+
+
+def _is(row, name, arch, ver, rel):
+    return (row.get('name'), row.get('arch'), row.get('ver'),
+            row.get('rel')) == (name, arch, ver, rel)
+
+
+def where_from(name, mirror=None, cache=None):
+    """{key of PACKAGES: Entry} for the build `name`: the one place that
+    decides where each of its three files comes from and with which sha256.
+    The tree is the first whose source metadata lists exactly this SRPM; the
+    two binary packages come from that same tree, one row each, built from
+    it. A tree with no metadata is passed over while looking, and named if
+    the build turns out to be published there."""
+    ver, rel, major, minor = _ask(name)
+    mirror, cache = _mirror(mirror), _cache(cache)
+    unread, looked = [], []
+    srpm = 'glibc-%s-%s.src.rpm' % (ver, rel)
+    for tree in _trees(mirror, major, minor):
+        src = _rows(mirror, tree, _SOURCE_REPO, cache)
+        if src is None:
+            unread.append(tree)
+            continue
+        looked.append(tree)
+        if not any(_is(r, 'glibc', 'src', ver, rel) for r in src['rows']):
+            continue
+        out = {}
+        for key, rpm, arch, repos in PACKAGES:
+            hits = []
+            for repo in repos:
+                got = src if repo == _SOURCE_REPO else \
+                    _rows(mirror, tree, repo, cache)
+                if got is None:
+                    raise Refused('%s%s/%s has no metadata to find %s of '
+                                  'glibc-%s-%s in' % (mirror, tree, repo, rpm,
+                                                      ver, rel))
+                hits += [(repo, got, r) for r in got['rows']
+                         if _is(r, rpm, arch, ver, rel)]
+            if len(hits) != 1:
+                raise Refused('%s%s lists %d %s.%s of glibc-%s-%s'
+                              % (mirror, tree, len(hits), rpm, arch, ver, rel))
+            repo, got, r = hits[0]
+            if key != 'srpm' and r.get('sourcerpm') != srpm:
+                raise Refused('%s%s/%s: %s-%s-%s.%s is built from %r, not %s'
+                              % (mirror, tree, repo, rpm, ver, rel, arch,
+                                 r.get('sourcerpm'), srpm))
+            size = r.get('size')
+            if r.get('cktype') != 'sha256' or not _SHA.match(
+                    r.get('sha256') or '') or not _safe_href(r.get('href')) \
+                    or not (size or '').isdigit():
+                raise Refused('%s%s/%s: %s-%s-%s.%s has no sha256, size or '
+                              'path this reads' % (mirror, tree, repo, rpm,
+                                                   ver, rel, arch))
+            out[key] = Entry(mirror + tree + '/' + repo + '/' + r['href'],
+                             r['sha256'], int(size), tree, repo,
+                             got.get('timestamp'))
+        return out
+    for tree in unread:
+        for sub in ('Packages/g/', 'Packages/'):
+            try:
+                listing = _get(mirror + tree + '/' + _SOURCE_REPO + '/' + sub)
+            except _Absent:
+                continue
+            if ('"%s"' % srpm).encode() in listing:
+                raise Refused('%s is published in %s%s with no metadata, so '
+                              'its sha256 cannot be checked'
+                              % (srpm, mirror, tree))
+    raise Refused('glibc-%s-%s is not in %s (looked in %s%s)'
+                  % (ver, rel, mirror, ', '.join(looked) or 'nothing',
+                     '; no metadata in ' + ', '.join(unread)
+                     if unread else ''))
+
+
+def fetch(entry, cache=None):
+    """The path of entry's file in the cache, downloaded if it is not there
+    and compared with the size and sha256 the metadata records; a kept file
+    that no longer has that sha256 is downloaded again."""
+    folder = os.path.join(_cache(cache), 'downloads')
+    path = os.path.join(folder, entry.sha256)
+    if os.path.exists(path):
+        if os.path.getsize(path) == entry.size and \
+                _sha256_file(path) == entry.sha256:
+            return path
+        os.remove(path)
+    data = _get(entry.url)
+    got = hashlib.sha256(data).hexdigest()
+    if len(data) != entry.size or got != entry.sha256:
+        raise Refused('%s is not the file the metadata records: %d bytes, '
+                      'sha256 %s; the metadata says %d bytes, %s'
+                      % (entry.url, len(data), got, entry.size, entry.sha256))
+    os.makedirs(folder, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix='.new-', dir=folder)
+    try:
+        with os.fdopen(fd, 'wb') as fh:
+            fh.write(data)
+        os.rename(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    return path
+
+
+def _remembered(cache, name):
+    return os.path.join(cache, 'builds', name + '.json')
+
+
+def _recall(cache, name, keys):
+    """(mirror, {key: Entry}) remembered for `name`, or None when it was
+    never fetched. A record that is there and cannot be read whole is
+    refused, never taken for a first time: that would accept whatever the
+    mirror gives now in place of what it gave then."""
+    path = _remembered(cache, name)
+    try:
+        with open(path) as fh:
+            rec = json.load(fh)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        raise Refused('%s cannot be read (%s); remove it to fetch %s from '
+                      'the metadata again' % (path, e, name))
+    try:
+        files = rec['files']
+        if sorted(files) != sorted(keys):
+            raise KeyError(sorted(files))
+        return rec['mirror'], {k: Entry(**files[k]) for k in keys}
+    except (KeyError, TypeError) as e:
+        raise Refused('%s does not hold what this remembers of a build (%s); '
+                      'remove it to fetch %s from the metadata again'
+                      % (path, e, name))
+
+
+def fetch_build(name, mirror=None, cache=None):
+    """build() of the build named `name` (glibc-2.34-283.el9_8), its three
+    files fetched from the mirror. The first time, where_from() reads the
+    mirror's metadata and the sha256 it gives each file are remembered;
+    afterwards the kept files are checked against them with no network. A
+    file that is missing or no longer has its sha256 is downloaded again
+    from the remembered URL; the metadata is read again only when that
+    fails or another mirror is named, and it must then give the same
+    sha256. Refused unless the build rebuilt is exactly the one asked
+    for."""
+    ver, rel, _, _ = _ask(name)
+    cache, mirror = _cache(cache), _mirror(mirror)
+    keys = [p[0] for p in PACKAGES]
+    got = _recall(cache, name, keys)
+    entries, paths = None, {}
+    if got:
+        kept_mirror, kept = got
+        try:
+            if kept_mirror == mirror:
+                paths = {k: fetch(kept[k], cache) for k in keys}
+                entries = kept
+        except (Refused, _Absent):
+            paths = {}
+        if not paths:
+            fresh = where_from(name, mirror, cache)
+            moved = [k for k in keys if fresh[k].sha256 != kept[k].sha256]
+            if moved:
+                raise Refused('%s now gives %s of %s another sha256 than the '
+                              'one remembered from %s'
+                              % (mirror, moved[0], name, kept_mirror))
+            entries = fresh
+    if not paths:
+        try:
+            entries = entries or where_from(name, mirror, cache)
+            paths = {k: fetch(entries[k], cache) for k in keys}
+        except _Absent as e:
+            raise Refused('%s is not there any more' % e)
+        _write_json(_remembered(cache, name),
+                    {'mirror': mirror,
+                     'files': {k: entries[k]._asdict() for k in keys}})
+    built = build(paths['srpm'], {k: paths[k] for k in keys if k != 'srpm'},
+                  cache)
+    if built.build != 'glibc-%s-%s.src' % (ver, rel):
+        raise Refused('asked for %s and the SRPM fetched is %s'
+                      % (name, built.build))
+    built.provenance['fetched'] = {
+        'note': FETCHED_NOTE,
+        'files': {k: entries[k]._asdict() for k in keys}}
+    return built
+
+
+def latest(major, mirror=None, cache=None):
+    """The newest glibc build of RHEL `major` (8, 9, 10) the mirror's
+    pub/rocky/<major> lists, by rpm's own order of releases (as text,
+    el8_10.5 would beat el8_10.48), read from the metadata every time."""
+    mirror, cache = _mirror(mirror), _cache(cache)
+    tree = 'pub/rocky/%d' % major
+    got = _rows(mirror, tree, _SOURCE_REPO, cache)
+    if got is None:
+        raise Refused('%s%s has no source metadata' % (mirror, tree))
+    srpms = [r for r in got['rows'] if r.get('name') == 'glibc' and
+             r.get('arch') == 'src' and r.get('rel') and
+             (_el(r['rel']) or (None,))[0] == major]
+    if not srpms:
+        raise Refused('%s%s lists no glibc SRPM of el%d' % (mirror, tree,
+                                                             major))
+    versions = sorted({r.get('ver') for r in srpms})
+    if len(versions) != 1:
+        raise Refused('%s%s lists glibc %s for el%d: which is the newest is '
+                      'not decided by the release' % (mirror, tree,
+                                                      ', '.join(versions),
+                                                      major))
+    import locale_order
+    best = max((r['rel'] for r in srpms),
+               key=functools.cmp_to_key(locale_order.rpm_vercmp))
+    return Latest('glibc-%s-%s' % (versions[0], best), mirror, tree,
+                  got.get('timestamp'))
