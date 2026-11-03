@@ -4,10 +4,10 @@ Every case here freezes a failure this tool actually shipped, and its docstring
 says which, because a test whose purpose is forgotten is a test somebody
 deletes during a refactor.
 """
+import ast
 import bz2
 import contextlib
 import gzip
-import importlib.util
 import io
 import json
 import os
@@ -18,7 +18,7 @@ import unittest
 from unittest import mock
 
 import _harness  # also puts scripts/ on sys.path
-from _harness import flat
+from _harness import SCRIPTS_DIR, flat
 
 import glibc_locale_data as g
 import glibc_tree
@@ -497,28 +497,56 @@ class RenamedFileOnTheNewSide(unittest.TestCase):
 
 
 class CorpusFloorIsShared(unittest.TestCase):
-    """The node modes and the tag modes refuse the same size of corpus. Two
-    constants would drift the way two copies of a count do."""
+    """The node modes and the tag modes refuse the same size of corpus, and
+    the number is read in one place: glibc_locale_data.below_floor. That
+    every step's sides follow it is test_git_helpers.OneFloorForEverySide,
+    on the clone; this class needs none."""
 
-    def test_one_floor_for_tags_and_nodes(self):
-        """Moving the floor in glibc_locale_data moves the node modes' floor
-        with it. This used to be an assertIs between the two constants, which
-        passed with a second 200 typed by hand, because CPython keeps one
-        object per small integer."""
+    def test_the_floor_is_read_in_one_place(self):
+        """MIN_LOCALE_FILES is named by below_floor alone in scripts/, and
+        below_floor is called only by the two refusals that word it
+        (_require_corpus for a tag, corpus_problem for a directory). A
+        second number typed anywhere is a second floor: until 7.1 the node
+        modes took theirs from a --min-files default, and steps 6/7 had
+        none on the tag side."""
+        readers, callers = set(), set()
+        for name in sorted(os.listdir(SCRIPTS_DIR)):
+            if not name.endswith('.py'):
+                continue
+            with open(os.path.join(SCRIPTS_DIR, name), encoding='utf-8') as fh:
+                tree = ast.parse(fh.read())
+            for fn in ast.walk(tree):
+                if not isinstance(fn, ast.FunctionDef):
+                    continue
+                for node in ast.walk(fn):
+                    if (isinstance(node, (ast.Name, ast.Attribute))
+                            and getattr(node, 'id', getattr(node, 'attr', None))
+                            == 'MIN_LOCALE_FILES'):
+                        readers.add((name, fn.name))
+                    if (isinstance(node, ast.Call)
+                            and getattr(node.func, 'id',
+                                        getattr(node.func, 'attr', None))
+                            == 'below_floor'):
+                        callers.add((name, fn.name))
+        self.assertEqual(readers, {('glibc_locale_data.py', 'below_floor')})
+        self.assertEqual(callers, {
+            ('glibc_locale_data.py', '_require_corpus'),
+            ('diff_distro_locales.py', 'corpus_problem')})
+
+    def test_the_floor_follows_the_constant(self):
         for floor in (7, 4321):
-            with self.subTest(floor=floor):
-                with mock.patch.object(g, 'MIN_LOCALE_FILES', floor):
-                    spec = importlib.util.spec_from_file_location(
-                        'dd_fresh', dd.__file__)
-                    fresh = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(fresh)
-                self.assertEqual(fresh.DEFAULT_MIN_FILES, floor)
+            with self.subTest(floor=floor), \
+                    mock.patch.object(g, 'MIN_LOCALE_FILES', floor):
+                self.assertEqual(g.below_floor(floor - 1), floor)
+                self.assertIsNone(g.below_floor(floor))
 
     def test_the_node_modes_refuse_below_the_shared_floor(self):
-        """The rest of the path. The floor each node mode applies is the
-        default of its --min-files, and audit.sh passes no --min-files, so a
-        literal typed there would keep that mode at the old floor after the
-        shared one moved."""
+        """The rest of the path, on the machine side: the directories of
+        diff_node_locales and of flag_algorithmic_ranges are built by
+        glibc_locale_data.side, which refuses below the floor before the
+        clone is looked for, so a truncated copy is refused for what it is
+        on a machine without one too. (Steps 6/7 look for the clone first:
+        they read the tag before the copy.)"""
         base = tempfile.mkdtemp(prefix='pg-glibc-floor-')
         self.addCleanup(shutil.rmtree, base, ignore_errors=True)
         for side in ('old', 'new'):
@@ -542,11 +570,7 @@ class CorpusFloorIsShared(unittest.TestCase):
             for floor in (4, 4321):
                 with self.subTest(mode=name, floor=floor):
                     err = io.StringIO()
-                    # The floor is checked before the clone is looked for,
-                    # so a truncated copy is refused for what it is on a
-                    # machine without one too.
                     with mock.patch.object(g, 'MIN_LOCALE_FILES', floor), \
-                            mock.patch.object(dd, 'DEFAULT_MIN_FILES', floor), \
                             mock.patch.object(g, 'OUT_DIR', base), \
                             mock.patch.object(g, 'find_repo', side_effect=(
                                 AssertionError('looked for the clone'))), \
@@ -1393,7 +1417,9 @@ class KnownBackportedFromTheListing(unittest.TestCase):
         names.append(f'{g.LOCALES_DIR}/x\u2028{self.C}')
 
         class R:
-            stdout = ('\n'.join(names) + '\n').encode()
+            # `git ls-tree -r` as side() reads it: mode, type, id, a tab.
+            stdout = ''.join(f'100644 blob {"0" * 40}\t{n}\n'
+                             for n in names).encode()
 
         with mock.patch.object(g, 'run_git', lambda *a, **k: R()):
             listed = g.list_locale_files('/no/clone/here', 't')
@@ -2910,16 +2936,16 @@ class CorpusGuard(unittest.TestCase):
         three files, and every one of them is identical. An absolute floor is
         the only thing standing between that and a flawless clean upgrade."""
         self.assertIsNone(dd.corpus_problem(3))
-        self.assertIsNotNone(dd.corpus_problem(3, floor=dd.DEFAULT_MIN_FILES))
+        self.assertIsNotNone(dd.corpus_problem(3, floored=True))
 
     def test_a_real_corpus_passes_every_guard(self):
         self.assertIsNone(dd.corpus_problem(353, expect_files=353,
                                             reference=355,
-                                            floor=dd.DEFAULT_MIN_FILES))
+                                            floored=True))
 
     def test_the_message_says_why_it_refuses(self):
         for problem in (dd.corpus_problem(3, reference=353),
-                        dd.corpus_problem(3, floor=200)):
+                        dd.corpus_problem(3, floored=True)):
             self.assertIn('indistinguishable from a clean run', problem)
 
 

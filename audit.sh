@@ -412,15 +412,21 @@ run_step 1 "$SCRIPTS/audit-locale-diff.sh" "$OLD" "$NEW"
 #   reversed -- step 1 has already exited 2 and this script stopped with it.
 #               Reversed, all five steps run to the end; the direction was
 #               never compared at all.
-#   same     -- one commit, however each side is spelt. This used to be
+#   same     -- one commit, however each side is spelt (the second word is
+#               then `commit`). This used to be
 #               `[ "$OLD" = "$NEW" ]`, a comparison of TEXT, so
 #               `./audit.sh glibc-2.39 ef321e23...` -- the sha this run's own
 #               provenance line prints -- skipped the notice entirely and
 #               summarised "no locale's LC_COLLATE changed".
 #
-# The status word is the only thing the subcommand puts on stdout, so a forward
-# pair adds nothing to the output.
-ORDER=$(python3 "$SCRIPTS/glibc_locale_data.py" order --quiet "$OLD" "$NEW")
+# The second word says whether the pair compares anything at all: `commit`
+# (one commit), `tree` (two commits of one source tree, in whatever order;
+# the clone holds such pairs, not only fabricated ones) or `none`. Two
+# words on stdout and nothing else, so a forward pair adds nothing to the
+# output.
+ORDER_WORDS=$(python3 "$SCRIPTS/glibc_locale_data.py" order --quiet "$OLD" "$NEW")
+ORDER=${ORDER_WORDS%% *}
+NOTHING=${ORDER_WORDS#* }
 
 # A minor-version upgrade inside one RHEL major is two builds of the SAME
 # upstream release, so the steps that compare the two tags have nothing to
@@ -428,6 +434,15 @@ ORDER=$(python3 "$SCRIPTS/glibc_locale_data.py" order --quiet "$OLD" "$NEW")
 # was compared. That is not a clean result, and C.UTF-8 is the proof: its
 # order changed between RHEL 8.1 and 8.2, both of them upstream glibc 2.28.
 SAME_TAG=0
+case $NOTHING in
+  commit|tree) SAME_TAG=1 ;;
+  none) ;;
+  *)
+    echo "error: the order check answered '$ORDER_WORDS', whose second word is none" >&2
+    echo "       of commit, tree or none. Not continuing." >&2
+    exit 1
+    ;;
+esac
 case $ORDER in
   # The `!!` block for this case comes from the order check that every step
   # taking the pair runs -- measured, steps 1, 2 and 5 each print it -- so it
@@ -435,8 +450,7 @@ case $ORDER in
   # it and repeats it once. It used to be echoed here, and then only the
   # wrapper said it: a hand-run step printed its clean sentence over a
   # comparison that had not happened.
-  same) SAME_TAG=1 ;;
-  forward) ;;
+  same|forward) ;;
   # The steps printed their own `!!` block; the summary repeats it, because a
   # warning 400 lines up has not been delivered.
   undetermined) ;;
@@ -518,10 +532,14 @@ if [ ${#STEP3_ARGS[@]} -gt 0 ] || [ ${#KEYED_ARGS[@]} -gt 0 ]; then
 else
   banner "STEP 3  Skipped: step 2 gave it no locale"
   echo "Nothing to close over the copy graph for this pair."
-  if [ "$SAME_TAG" = "1" ]; then
+  if [ "$NOTHING" = "commit" ]; then
     echo "The two tags are one commit, so nothing was compared and this is"
     echo "NOT a clean result. Step 4's list, and the locales it leaves out as"
     echo "built in byte order, still need confirming."
+  elif [ "$NOTHING" = "tree" ]; then
+    echo "The two refs are two commits of one source tree, so nothing was"
+    echo "compared and this is NOT a clean result. Step 4's list, and the"
+    echo "locales it leaves out as built in byte order, still need confirming."
   else
     echo "This is a real result, not a failure -- steps 4 and 5 still matter,"
     echo "because they cover what a data diff cannot settle."
@@ -922,7 +940,8 @@ case $STEP5 in
     echo "   a tracked file vanished between the tags or was renamed away"
     echo "   before both of them, a tracked path exists at no ref in the"
     echo "   clone, the include walk reached nothing, the two tags are one"
-    echo "   commit, or the step did not finish."
+    echo "   commit or two commits of one source tree, or the step did not"
+    echo "   finish."
     echo "     $(count_lines "$STEP4_LIST") name(s) to confirm. They are locales and the"
     echo "     aliases glibc's locale.alias gives them. A collation or a database"
     echo "     uses one when its locale, without the part from the dot up to any @,"
@@ -1201,8 +1220,14 @@ fi
 
 if [ "$SAME_TAG" = "1" ]; then
   echo
-  echo "-- One commit, compared with itself"
-  echo "     $OLD -> $NEW. Everything above that compares the two tags"
+  if [ "$NOTHING" = "commit" ]; then
+    echo "-- One commit, compared with itself"
+    echo "     $OLD -> $NEW. Everything above that compares the two tags"
+  else
+    echo "-- One source tree, compared with itself"
+    echo "     $OLD -> $NEW are two commits of one source tree. Everything"
+    echo "     above that compares the two tags"
+  fi
   echo "     and says 'nothing changed' means 'nothing was compared'. For an"
   echo "     intra-major upgrade, what can still show a change is the machines'"
   echo "     own files (steps 6 to 10), the measured order (step 11),"

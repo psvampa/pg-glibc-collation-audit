@@ -39,7 +39,7 @@ Usage:
   python3 diff_node_locales.py --old-locales-dir DIR --old-build-id NVR \\
                                --new-locales-dir DIR --new-build-id NVR \\
                                [--old-tag TAG --new-tag TAG] \\
-                               [--expect-files N] [--min-files N] [--repo PATH]
+                               [--expect-files N] [--repo PATH]
                                [--allow-reverse]
                                [--old-charmaps-dir DIR --old-measurement FILE
                                 --new-charmaps-dir DIR --new-measurement FILE
@@ -87,9 +87,11 @@ def resolve_side(label, root, build_id):
     """
     if not os.path.isdir(root):
         g.die(f"--{label}-locales-dir {root} is not a directory")
-    names, skipped = dd.node_entries(root)
-    return Side(label=label, root=root, build_id=build_id, names=names,
-                skipped=skipped, manifest=dd.tree_manifest(root, names))
+    built = g.side(None, machine=root, build=build_id,
+                   what=f'--{label}-locales-dir')
+    return Side(label=label, root=root, build_id=build_id, names=built.paths,
+                skipped=built.skipped,
+                manifest=dd.tree_manifest(root, built.paths))
 
 
 def resolve_sides(opts):
@@ -147,12 +149,6 @@ def tag_basenames(repo, tag):
     reason.
     """
     return {os.path.basename(p) for p in g.list_locale_files(repo, tag)}
-
-
-def in_neither_tag(repo, old_tag, new_tag, names):
-    """Which of `names` exist at neither tag -- the structurally invisible set."""
-    present = tag_basenames(repo, old_tag) | tag_basenames(repo, new_tag)
-    return sorted(n for n in names if n not in present)
 
 
 def removal_verdicts(old, new, only_old, old_tag, old_tag_names):
@@ -459,9 +455,6 @@ def main(argv):
                     help="run a pair whose new tag is the OLDER commit. Refused by default. Prints a `!!` block saying the direction is reversed.")
     ap.add_argument('--expect-files', type=int,
                     help="abort unless exactly this many files are compared")
-    ap.add_argument('--min-files', type=int, default=dd.DEFAULT_MIN_FILES,
-                    help=f"abort if fewer than this many files are compared "
-                         f"(default {dd.DEFAULT_MIN_FILES})")
     ap.add_argument('--repo', help="path to the glibc clone (autodetected); "
                                    "only needed with --old-tag/--new-tag")
     for label in ('old', 'new'):
@@ -513,7 +506,7 @@ def _main(opts, charmaps):
     # had: the intersection is small, every file in it is identical, and the
     # result reads as a clean upgrade.
     problem = dd.corpus_problem(len(both), expect_files=opts.expect_files,
-                                floor=opts.min_files,
+                                floored=True,
                                 what='the two node directories')
     if problem:
         g.die(problem)
@@ -540,9 +533,9 @@ def _main(opts, charmaps):
         g.require_pair_order(repo, opts.old_tag, opts.new_tag,
                              allow_reverse=opts.allow_reverse,
                              commits=commits)
-        invisible = in_neither_tag(repo, opts.old_tag, opts.new_tag,
-                                   sorted(old_set | new_set))
         old_tag_names = tag_basenames(repo, opts.old_tag)
+        present = old_tag_names | tag_basenames(repo, opts.new_tag)
+        invisible = sorted(n for n in old_set | new_set if n not in present)
 
     buckets, side, texts = dd.compare_trees(old.root, new.root, both,
                                             label_a=old.build_id,

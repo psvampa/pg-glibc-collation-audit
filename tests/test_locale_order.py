@@ -15535,5 +15535,47 @@ class DefaultJobsLeavesHalfTheMemory(unittest.TestCase):
                                    meminfo=False), 5)
 
 
+class CompareTakesTheOneOrder(unittest.TestCase):
+    """--compare asks glibc_locale_data.order which machine is the older,
+    the function that orders every pair of the audit, tags included; rpm's
+    rule (build_parts, rpm_vercmp) stays in this file, which runs alone on
+    a machine. A planted answer must reach the comparison: one of its own
+    left behind would order the machines as before."""
+
+    def compare(self, status, old, new):
+        import glibc_locale_data as g
+        err = io.StringIO()
+        with unittest.mock.patch.object(g, 'order',
+                                        return_value=(status, 'planted')), \
+                contextlib.redirect_stderr(err), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaises(SystemExit) as cm:
+            m.compare(old, new)
+        return cm.exception.code, flat(err.getvalue())
+
+    def test_a_planted_reversed_refuses_the_pair_in_order(self):
+        code, err = self.compare('reversed', RHEL8, RHEL9)
+        self.assertEqual(code, 2, err)
+        self.assertIn('pass the machine you upgrade FROM first', err)
+
+    def test_the_machines_are_handed_over_whole(self):
+        """What order is asked about is each file's build and version."""
+        import glibc_locale_data as g
+        seen = []
+
+        def planted(repo, old, new, commits=None):
+            seen.append((old.kind, old.build, old.version,
+                         new.kind, new.build, new.version))
+            return 'reversed', 'planted'
+        with unittest.mock.patch.object(g, 'order', planted), \
+                contextlib.redirect_stderr(io.StringIO()), \
+                self.assertRaises(SystemExit):
+            m.compare(RHEL8, RHEL9)
+        old, new = (read_json(p) for p in (RHEL8, RHEL9))
+        self.assertEqual(seen, [('machine', old['glibc_build'],
+                                 old['glibc_version'], 'machine',
+                                 new['glibc_build'], new['glibc_version'])])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -605,9 +605,9 @@ def main(argv):
     # Reversed, this step reads the same diff backwards and reaches the same
     # hunk count, so nothing in its output would have said which direction it
     # was given. It asks git instead of assuming.
-    order = g.require_pair_order(repo, opts.old_tag, opts.new_tag,
-                                 allow_reverse=opts.allow_reverse,
-                                 commits=commits)
+    _, nothing = g.pair_check(repo, opts.old_tag, opts.new_tag,
+                              allow_reverse=opts.allow_reverse,
+                              commits=commits)
     rng = f'{opts.old_tag}..{opts.new_tag}'
 
     print(f"Collation code changes between {opts.old_tag} and {opts.new_tag}")
@@ -758,11 +758,15 @@ def main(argv):
     if not derived:
         blockers.append("the include walk reached no file")
     paths_blocked = bool(blockers)
-    # One commit compared with itself: every diff above is empty because
-    # nothing was compared, and its zero read as the clean verdict, which the
-    # summary turned into "a clean data diff is sufficient".
-    if order == 'same':
+    # One commit, or two commits of one source tree, compared with itself:
+    # every diff above is empty because nothing was compared, and its zero
+    # read as the clean verdict, which the summary turned into "a clean data
+    # diff is sufficient".
+    if nothing == 'commit':
         blockers.append("the two tags are one commit, so nothing was compared")
+    elif nothing == 'tree':
+        blockers.append("the two refs are two commits of one source tree, so "
+                        "nothing was compared")
 
     print()
     if blockers:

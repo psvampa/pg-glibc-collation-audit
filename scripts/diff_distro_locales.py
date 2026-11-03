@@ -13,9 +13,11 @@ escape characters it is read with.
 It takes a directory rather than reaching into a node, so the transport is the
 caller's problem and the comparison is testable without one. It does NOT take
 the directory on trust: a half-copied directory would report "12 compared, 0
-inside LC_COLLATE", which is indistinguishable from a clean result. Below half
-the tag's files it refuses, and so does a count other than --expect-files;
-above that, every file of the tag the directory lacks is named under a `!!`.
+inside LC_COLLATE", which is indistinguishable from a clean result. Below the
+floor of locale files (glibc_locale_data.below_floor), or sharing fewer than
+half the tag's files, it refuses, and so does a count other than
+--expect-files; above that, every file of the tag the directory lacks is
+named under a `!!`.
 
 The node is the authoritative side. Upstream is only the reference the audit
 reads; the node is what the running system actually sorts with.
@@ -68,14 +70,6 @@ def shown(name):
     SAFE_NAME.match: `$` also matches before a final newline, so "zz\\n"
     passed the check and was written as two lines."""
     return name if SAFE_NAME.fullmatch(name) else ascii(name)
-
-# Several hundred files ship in glibc-locale-source. A floor well below that
-# still catches a `docker cp` that landed three files, or a node without the
-# package at all. Used where there is no upstream side to take
-# half of -- see corpus_problem. One constant for nodes and tags alike, kept in
-# glibc_locale_data where the tag modes apply it, so the two cannot drift.
-DEFAULT_MIN_FILES = g.MIN_LOCALE_FILES
-
 
 # Moved to glibc_locale_data once step 4's directory mode and
 # diff_node_locales.py needed the same slicer. Re-exported under its old name:
@@ -268,8 +262,8 @@ def collate_diff_lines(text_a, text_b, label_a, label_b, limit=24):
     return lines
 
 
-def corpus_problem(compared, expect_files=None, reference=None, floor=None,
-                   what='--locales-dir'):
+def corpus_problem(compared, expect_files=None, reference=None,
+                   floored=False, what='--locales-dir'):
     """Why this corpus must not be reported on, or None if it is usable.
 
     Pure -- counts in, a message or None out -- so the guard that decides
@@ -278,9 +272,13 @@ def corpus_problem(compared, expect_files=None, reference=None, floor=None,
     differences inside LC_COLLATE, which is indistinguishable from a clean run.
 
     `reference` is an upstream file count, for a node compared against a tag.
-    `floor` is an absolute minimum, for a comparison with no reference side at
-    all: two equally truncated directories agree perfectly, and half of three
-    is one.
+    `floored` applies the absolute minimum, glibc_locale_data.below_floor,
+    the one floor for every side (side() asks it of each machine's
+    directory, and step 8 of the two directories' common files): several
+    hundred files ship in glibc-locale-source, and a floor well below that
+    still catches a `docker cp` that landed three files, or a node without
+    the package at all. Two equally truncated directories agree perfectly,
+    and half of three is one.
     """
     if expect_files is not None and compared != expect_files:
         return (f"compared {compared} file(s), expected {expect_files}. "
@@ -291,7 +289,8 @@ def corpus_problem(compared, expect_files=None, reference=None, floor=None,
                 f"in {what}. That is too few to be a real copy; a partial copy "
                 f"reports 0 differences inside LC_COLLATE, which is "
                 f"indistinguishable from a clean run.")
-    if floor is not None and compared < floor:
+    floor = g.below_floor(compared) if floored else None
+    if floor is not None:
         return (f"only {compared} file(s) to compare in {what}, below the floor "
                 f"of {floor}. glibc-locale-source ships several hundred; this "
                 f"is a truncated copy or a node without the package. Refusing "
@@ -377,12 +376,16 @@ def _main(opts):
 
     repo = g.find_repo(opts.repo)
     g.check_refs(repo, opts.tag)
+    # The tag's side, for its floor: git archive below lists nothing.
+    g.side(repo, opts.tag)
     g.report_tag_provenance(repo, opts.tag)
 
     print(f"\nNode build under test: {opts.build_id}")
     print(f"Node locale sources:   {opts.locales_dir}")
 
-    names, skipped = node_entries(opts.locales_dir)
+    node = g.side(repo, opts.tag, machine=opts.locales_dir,
+                  what='--locales-dir')
+    names, skipped = node.paths, node.skipped
     if skipped:
         print(f"\nSkipped {len(skipped)} directory entr(ies), named so a "
               f"shrunken corpus cannot pass unnoticed:")

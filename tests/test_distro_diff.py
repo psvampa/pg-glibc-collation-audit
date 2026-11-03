@@ -107,7 +107,10 @@ class RefusesToGuess(unittest.TestCase):
 
     def test_a_truncated_directory_aborts(self):
         """A half-copied directory reports '0 inside LC_COLLATE', which is
-        indistinguishable from a clean result. The recorded docker cp trap."""
+        indistinguishable from a clean result. The recorded docker cp trap.
+        Three files are below the floor every side is held to
+        (glibc_locale_data.side); the half-of-upstream guard behind it is
+        CorpusGuard's, since no pinned tag holds twice the floor."""
         keep = sorted(os.listdir(self.node))[:3]
         for name in os.listdir(self.node):
             if name not in keep:
@@ -115,7 +118,26 @@ class RefusesToGuess(unittest.TestCase):
         rc, out = run_script(MID, '--locales-dir', self.node,
                              '--build-id', 'truncated', '--node-label', 'trunc')
         self.assertEqual(rc, 2, out)
-        self.assertIn('too few to be a real copy', flat(out))
+        self.assertIn('only 3 file(s) to compare in --locales-dir, below the '
+                      'floor of', flat(out))
+
+    def test_a_copy_sharing_too_few_files_with_the_tag_aborts(self):
+        """The half-of-upstream guard, behind the floor: a copy above the
+        floor whose files are mostly not the tag's (170 of the tag's 355
+        and 40 of its own) is not a copy of that tag's sources."""
+        keep = set(sorted(os.listdir(self.node))[:170])
+        for name in os.listdir(self.node):
+            if name not in keep:
+                os.remove(os.path.join(self.node, name))
+        for i in range(40):
+            with open(os.path.join(self.node, f'zz_own_{i:02d}'), 'w') as fh:
+                fh.write('LC_CTYPE\nEND LC_CTYPE\n')
+        rc, out = run_script(MID, '--locales-dir', self.node,
+                             '--build-id', 'foreign', '--node-label', 'f')
+        self.assertEqual(rc, 2, out)
+        self.assertIn('only 170 of 355 upstream file(s) are present in '
+                      '--locales-dir. That is too few to be a real copy',
+                      flat(out))
 
     def test_a_copy_that_lost_files_says_so(self):
         """Above half the tag's files nothing refused, and the lost ones were

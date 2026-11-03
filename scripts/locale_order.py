@@ -9159,21 +9159,29 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     if old_raw == new_raw:
         die('the two files hold the same measurement, so nothing would be '
             'compared')
+    # Which machine is the older, asked of the one function that orders two
+    # sides (glibc_locale_data.order): the glibc version, and within one
+    # version the build by rpm's own rule -- a distro can change the order
+    # inside a major release, as RHEL8 did at glibc-2.28-93, so two builds
+    # of one version are a real pair to compare. rpm's rule itself stays in
+    # this file (build_parts, rpm_vercmp), which runs alone on a machine.
+    try:
+        import glibc_locale_data as g
+    except ImportError as e:
+        die(f'cannot order the two machines ({e}); run the comparison from '
+            'this checkout\'s scripts/')
+    direction = g.order(None, *(
+        g.side(None, build=d['glibc_build'], version=d['glibc_version'])
+        for d in (old, new)))[0]
     ov, nv = version_tuple(old['glibc_version']), version_tuple(new['glibc_version'])
-    if ov > nv:
-        die(f'the OLD file is from {old["glibc_version"]} and the NEW one from '
-            f'{new["glibc_version"]}: pass the machine you upgrade FROM first')
-    # Within one glibc version the builds decide, by rpm's own rule: a
-    # distro can change the order inside a major release, as RHEL8 did at
-    # glibc-2.28-93, so two builds of one version are a real pair to compare.
-    op, np_ = build_parts(old['glibc_build']), build_parts(new['glibc_build'])
-    build_order = None
-    if ov == nv and op and np_:
-        build_order = rpm_vercmp(op[0], np_[0]) or rpm_vercmp(op[1], np_[1])
-        if build_order > 0:
-            die(f'the OLD file is from {old["glibc_build"]} and the NEW one from '
-                f'{new["glibc_build"]}, an older build of the same glibc: pass '
-                'the machine you upgrade FROM first')
+    if direction == 'reversed':
+        if ov != nv:
+            die(f'the OLD file is from {old["glibc_version"]} and the NEW one '
+                f'from {new["glibc_version"]}: pass the machine you upgrade '
+                'FROM first')
+        die(f'the OLD file is from {old["glibc_build"]} and the NEW one from '
+            f'{new["glibc_build"]}, an older build of the same glibc: pass '
+            'the machine you upgrade FROM first')
     # The tags audit.sh audits. A file measured on another glibc would put
     # another upgrade's changes in this one's report, so it is refused; a tag
     # that names no release, such as a commit id, cannot be checked, and the
@@ -9306,10 +9314,10 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
               f'changed, {len(same)} unchanged{in_part}, {len(unmeasured)} not '
               f'measured, {in_refused}{len(only_old)} not on the new machine.')
     warnings = []   # (text, wrapped in the report)
-    if build_order == 0 or (old['glibc_build'] and old['glibc_build'] == new['glibc_build']):
+    if direction == 'same':
         warnings.append(('!! Both machines run the same glibc build. This '
                          'compares two machines, not an upgrade.', False))
-    elif ov == nv and build_order is None:
+    elif direction == 'undetermined':
         warnings.append((
             f'!! Both machines run {old["glibc_version"]} and the build of at '
             'least one is unknown or cannot be read, so which one is older '
@@ -9573,4 +9581,8 @@ def main():
 
 
 if __name__ == '__main__':
+    # glibc_locale_data.order imports this module by name for rpm's rule;
+    # run as a script it is __main__, and that import would load it a second
+    # time.
+    sys.modules.setdefault('locale_order', sys.modules[__name__])
     sys.exit(main())
