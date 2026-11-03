@@ -7,6 +7,8 @@ thing they print is a clean verdict.
 The failures are provoked with invalid tags and paths. No network is touched and
 the clone is never modified.
 """
+import contextlib
+import io
 import os
 import re
 import shutil
@@ -14,9 +16,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
-from _harness import (GLIBC_CLONE, MID, NEW, OLD, SCRIPTS_DIR, flat,
-                      glibc_shaped, needs_clone)
+from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
+                      SCRIPTS_DIR, flat, glibc_shaped, needs_clone,
+                      needs_floor_pair)
 
 import glibc_locale_data as g
 import diff_collation_code as d
@@ -786,6 +790,29 @@ class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
                         'GONE at', 'include walk reached'):
             self.assertNotIn(blocker, flat(out))
 
+    def test_two_commits_of_one_tree_compare_nothing(self):
+        """A commit with glibc-2.34's whole tree on top of glibc-2.34: in
+        order, and every diff of the step is empty. That is the shape branch
+        7.4 gives two builds of one version with the same sources, and its
+        one reason is that nothing was compared (nothing_compared), as one
+        commit's is."""
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-step5-one-tree-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        repo = os.path.join(tmp, 'r')
+        glibc_shaped(repo, MID)
+        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+        sha = subprocess.run(
+            ['git', '-C', repo, 'commit-tree', f'{MID}^{{tree}}',
+             '-p', f'{MID}^{{commit}}', '-m', 'one tree'], env=env,
+            check=True, capture_output=True, text=True).stdout.strip()
+        git(repo, 'tag', 'one-tree', sha, env=env)
+        rc, out = self.run_injected('', MID, 'one-tree', '--repo', repo)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.refusals(out), [
+            'the two refs are two commits of one source tree, so nothing '
+            'was compared'])
+
     def test_a_path_not_yet_written_leaves_the_clean_sentence_reachable(self):
         """The real clean branch, which no other test reaches: no pinned pair
         of two different tags has zero substantive hunks, and one tag twice is
@@ -794,7 +821,7 @@ class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
         clean sentence."""
         rc, out = self.run_injected(
             "d.TIER1 = ['locale/C-collate-seq.c']\nd.TIER2 = []\n"
-            "d.g.require_pair_order = lambda *a, **k: 'forward'", OLD, OLD)
+            "d.g.pair_check = lambda *a, **k: ('forward', None)", OLD, OLD)
         self.assertEqual(rc, 0, out)
         self.assertNotIn('are the same commit', flat(out),
                          'the injected pair order did not take')
@@ -3340,6 +3367,355 @@ class StepTwoListsWhatStepThreeWillNotRead(unittest.TestCase):
                                     r'names one of those characters or '
                                     r'could not be compared \(1\): '
                                     r'loc_a\.UTF-8 \(UTF-8\)')
+
+
+def build_side(build, version):
+    """A machine known by its measurement: what locale_order.compare
+    hands glibc_locale_data.order."""
+    return g.side(None, build=build, version=version)
+
+
+class OneOrderForEverySide(unittest.TestCase):
+    """glibc_locale_data.order is the one function that orders two sides:
+    git for two tags (PairOrderIsMeasuredNotAssumed), rpm for two builds of
+    one glibc, the release for a build against a tag. Two builds of one
+    version are a real pair -- RHEL8 changed C.UTF-8's order at
+    glibc-2.28-93 -- so rpm's own rule decides them, never their text."""
+
+    V = 'glibc 2.34'
+    OLD_B = 'glibc-2.34-275.el9_8.x86_64'
+    NEW_B = 'glibc-2.34-283.el9_8.x86_64'
+
+    def status(self, old, new, repo=None):
+        return g.order(repo, old, new)[0]
+
+    def test_two_builds_of_one_version_are_ordered_by_rpm(self):
+        old = build_side(self.OLD_B, self.V)
+        new = build_side(self.NEW_B, self.V)
+        self.assertEqual(self.status(old, new), 'forward')
+        self.assertEqual(self.status(new, old), 'reversed')
+        # 283 against 1000: a text comparison would call this reversed.
+        later = build_side('glibc-2.34-1000.el9_8.x86_64', self.V)
+        self.assertEqual(self.status(new, later), 'forward')
+
+    def test_the_same_build_is_the_same_side(self):
+        """Equal by rpm across architecture words, and equal words that
+        rpm cannot read."""
+        two_arch = build_side(f'{self.NEW_B} glibc-2.34-283.el9_8.i686',
+                              self.V)
+        self.assertEqual(self.status(build_side(self.NEW_B, self.V), two_arch),
+                         'same')
+        odd = build_side('weird-build-string', self.V)
+        self.assertEqual(self.status(odd, odd), 'same')
+
+    def test_a_build_that_cannot_be_read_is_undetermined(self):
+        odd = build_side('weird-build-string', self.V)
+        new = build_side(self.NEW_B, self.V)
+        self.assertEqual(self.status(odd, new), 'undetermined')
+        self.assertEqual(self.status(new, odd), 'undetermined')
+        self.assertEqual(self.status(build_side(self.NEW_B, None), new),
+                         'undetermined')
+        # Two machines whose `rpm -q glibc` printed nothing: no build on
+        # either side is not one build.
+        self.assertEqual(self.status(build_side(None, self.V),
+                                     build_side(None, self.V)), 'undetermined')
+        self.assertEqual(self.status(build_side('', self.V),
+                                     build_side('', self.V)), 'undetermined')
+
+    def test_the_version_decides_before_the_build(self):
+        """2.28's build 999 is still older than 2.34's 275."""
+        old = build_side('glibc-2.28-999.el8_10.x86_64', 'glibc 2.28')
+        new = build_side(self.OLD_B, self.V)
+        self.assertEqual(self.status(old, new), 'forward')
+        self.assertEqual(self.status(new, old), 'reversed')
+
+    def test_a_build_against_a_tag_is_ordered_by_release(self):
+        """A build carries its version, a tag its release (describe). One
+        release on both sides is not placed: nothing here says whether the
+        build is that tag or later."""
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-order-mixed-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        repo = make_release_line_repo(tmp)
+        b28 = build_side('glibc-2.28-251.el8_10.40.x86_64', 'glibc 2.28')
+        b34 = build_side(self.OLD_B, self.V)
+        self.assertEqual(self.status(b28, 'glibc-2.34', repo), 'forward')
+        self.assertEqual(self.status('glibc-2.34', b28, repo), 'reversed')
+        self.assertEqual(self.status(b34, 'glibc-2.28', repo), 'reversed')
+        self.assertEqual(self.status('glibc-2.28', b34, repo), 'forward')
+        self.assertEqual(self.status(b34, 'glibc-2.34', repo), 'undetermined')
+        self.assertEqual(self.status('glibc-2.34', b34, repo), 'undetermined')
+        # The backport describes as glibc-2.28: one release with b28.
+        self.assertEqual(self.status('backport', b28, repo), 'undetermined')
+
+    def test_pair_order_is_order(self):
+        """pair_order, which require_pair_order and every step ask, takes
+        its answer from order: a planted answer reaches it."""
+        with mock.patch.object(g, 'order', return_value=('reversed', 'x')):
+            self.assertEqual(g.pair_order(None, 'a', 'b'), ('reversed', 'x'))
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), \
+                    self.assertRaises(SystemExit):
+                g.require_pair_order(None, 'a', 'b')
+            self.assertIn('This pair is REVERSED', err.getvalue())
+
+
+class NothingComparedIsNotTheOrder(unittest.TestCase):
+    """Two commits of one source tree compare nothing, whatever their
+    order: two builds of one glibc version with the same locale sources
+    (measured 2026-11-02 for .40/.48, 275/283, 128/145) are in order by rpm,
+    and steps 1, 2 and 5 would read a tree against itself. The clone holds
+    real ones too, on glibc's own branches. They keep the `!!`
+    that one commit compared with itself gets (audit.sh's SAME_TAG), which
+    the order alone would not give them: built here as a tag and an empty
+    commit on top of it, the shape branch 7.4 gives two builds."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-one-tree-')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.repo = make_glibc_shaped_repo(self.tmp, n_files=3, rename=True,
+                                           base=None)
+        git(self.repo, 'checkout', '-q', 't1')
+        git(self.repo, 'commit', '-q', '--allow-empty', '-m', 't1b')
+        git(self.repo, 'tag', 't1b')
+
+    def word(self, *args):
+        """What `glibc_locale_data.py order --quiet` prints for audit.sh:
+        the direction, and what nothing_compared answered."""
+        out = io.StringIO()
+        with mock.patch.object(g, 'find_repo', return_value=self.repo), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(g._main(['order', '--quiet', *args]), 0)
+        return out.getvalue().strip()
+
+    def orphan(self):
+        """t1's tree in a commit with no parent: one tree that git cannot
+        order against t1, as a master commit and the same patch on a wip
+        branch are in the clone."""
+        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+        sha = subprocess.run(['git', 'commit-tree', 't1^{tree}', '-m', 'o'],
+                             cwd=self.repo, env=env, check=True,
+                             capture_output=True, text=True).stdout.strip()
+        git(self.repo, 'tag', 'orphan', sha, env=env)
+        return 'orphan'
+
+    def test_one_tree_in_order_compares_nothing(self):
+        self.assertEqual(g.order(self.repo, 't1', 't1b')[0], 'forward')
+        self.assertEqual(g.nothing_compared(self.repo, 't1', 't1b'), 'tree')
+        self.assertEqual(self.word('t1', 't1b'), 'forward tree')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status, nothing = g.pair_check(self.repo, 't1', 't1b')
+        self.assertEqual((status, nothing), ('forward', 'tree'))
+        self.assertIn('!! t1 and t1b are two commits of one source tree.',
+                      flat(out.getvalue()))
+        self.assertIn('step 5 reports that nothing was compared',
+                      flat(out.getvalue()))
+
+    def test_one_commit_still_says_so(self):
+        self.assertEqual(g.nothing_compared(self.repo, 't1', 't1'), 'commit')
+        self.assertEqual(self.word('t1', 't1'), 'same commit')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            g.pair_check(self.repo, 't1', 't1')
+        self.assertIn('!! t1 and t1 are the same commit.', flat(out.getvalue()))
+
+    def test_two_trees_compare_something(self):
+        """Control: t2 renames a file, so it is another tree."""
+        self.assertIsNone(g.nothing_compared(self.repo, 't1', 't2'))
+        self.assertEqual(self.word('t1', 't2'), 'forward none')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(g.pair_check(self.repo, 't1', 't2'),
+                             ('forward', None))
+        self.assertNotIn('!!', out.getvalue())
+
+    def test_one_tree_git_cannot_order_compares_nothing(self):
+        """Both answers, apart: the direction is not known, and nothing is
+        compared; audit.sh reads the second word for the latter."""
+        o = self.orphan()
+        self.assertEqual(self.word('t1', o), 'undetermined tree')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(g.pair_check(self.repo, 't1', o),
+                             ('undetermined', 'tree'))
+        text = flat(out.getvalue())
+        self.assertIn(f'!! t1 and {o} are two commits of one source tree.',
+                      text)
+        self.assertIn('The DIRECTION of this pair could not be established',
+                      text)
+
+    def test_one_tree_reversed_on_request_compares_nothing(self):
+        """--allow-reverse runs a reversed pair; of one tree, it still
+        compares nothing, and says so beside the REVERSED notice
+        (false-negative-reviewer, round 1 of 7.1: step 5 printed its clean
+        verdict over 9b3aac58 -> 7423da21 of the clone)."""
+        self.assertEqual(self.word('--allow-reverse', 't1b', 't1'),
+                         'reversed tree')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(g.pair_check(self.repo, 't1b', 't1',
+                                          allow_reverse=True),
+                             ('reversed', 'tree'))
+        text = flat(out.getvalue())
+        self.assertIn('!! t1b and t1 are two commits of one source tree.', text)
+        self.assertIn('REVERSED PAIR, allowed on request', text)
+
+    def test_one_tree_reversed_is_refused(self):
+        """The order is still asked: one tree given the wrong way round is
+        refused like any reversed pair."""
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaises(SystemExit):
+            g.pair_check(self.repo, 't1b', 't1')
+        self.assertIn('This pair is REVERSED', err.getvalue())
+
+
+@needs_clone
+class Step2AsksWhetherAnythingIsCompared(unittest.TestCase):
+    """Step 2 used to decide "one commit" by comparing the two commit ids
+    itself; it takes nothing_compared's answer now, so two commits of one
+    tree skip the character set check's reads as one commit does."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-step2-one-tree-')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.repo = make_glibc_shaped_repo(self.tmp, n_files=g.MIN_LOCALE_FILES,
+                                           rename=True)
+        git(self.repo, 'checkout', '-q', 't1')
+        git(self.repo, 'commit', '-q', '--allow-empty', '-m', 't1b')
+        git(self.repo, 'tag', 't1b')
+
+    def groups(self, old, new):
+        import filter_lc_collate_changes as f
+        seen = []
+        real = g.read_blobs_at
+
+        def spy(repo, groups, **kw):
+            groups = [(ref, list(paths)) for ref, paths in groups]
+            seen.extend(groups)
+            return real(repo, groups, **kw)
+        out = io.StringIO()
+        with mock.patch.object(g, 'read_blobs_at', spy), \
+                mock.patch.object(g, 'OUT_DIR', self.tmp), \
+                contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(io.StringIO()):
+            f.main([old, new, '--repo', self.repo])
+        self.out = flat(out.getvalue())
+        return [(ref, path) for ref, paths in seen for path in paths]
+
+    def test_one_tree_reads_no_supported(self):
+        self.assertNotIn(('t1b', g.SUPPORTED), self.groups('t1', 't1b'))
+        self.assertIn('Character sets and transliterations: not compared, '
+                      'the two refs are two commits of one source tree.',
+                      self.out)
+
+    def test_one_commit_says_one_commit(self):
+        self.groups('t1', 't1')
+        self.assertIn('Character sets and transliterations: not compared, '
+                      'the two tags are one commit.', self.out)
+
+    def test_two_trees_read_it(self):
+        """Control: the renamed pair is compared, and SUPPORTED is read."""
+        self.assertIn(('t2', g.SUPPORTED), self.groups('t1', 't2'))
+        self.assertNotIn('Character sets and transliterations: not compared',
+                         self.out)
+
+
+@needs_floor_pair
+class OneFloorForEverySide(unittest.TestCase):
+    """Every side of every step is refused below one floor
+    (glibc_locale_data.below_floor, applied by side()), on the tag side and
+    on the machine side. With the floor moved to 300, glibc-2.12 (286 locale
+    files) is below it and glibc-2.17 (312) above, and a machine directory
+    of 299 files is below it and one of 300 above: each step is driven so
+    that exactly one side is short, and must refuse that side. A step that
+    kept a floor of its own on one side stays at 200 and runs on."""
+
+    FLOOR = 300
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='pg-glibc-one-floor-')
+        cls.addClassCleanup(shutil.rmtree, cls.tmp, ignore_errors=True)
+        cls.dirs = {}
+        for name, start, count in (('ok', 0, 300), ('okb', 0, 300),
+                                   ('ok2', 150, 300), ('short', 0, 299)):
+            root = os.path.join(cls.tmp, name)
+            os.mkdir(root)
+            for i in range(start, start + count):
+                with open(os.path.join(root, f'loc_{i:03d}'), 'w') as fh:
+                    fh.write('LC_CTYPE\nEND LC_CTYPE\n')
+            cls.dirs[name] = root
+
+    def refusal(self, main, argv):
+        err = io.StringIO()
+        with mock.patch.object(g, 'MIN_LOCALE_FILES', self.FLOOR), \
+                mock.patch.object(g, 'OUT_DIR', self.tmp), \
+                contextlib.redirect_stderr(err), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaises(SystemExit) as cm:
+            main(argv)
+        self.assertEqual(cm.exception.code, 2, err.getvalue())
+        return flat(err.getvalue())
+
+    def test_the_tag_side_of_every_step(self):
+        import filter_lc_collate_changes as f
+        import resolve_copy_closure as rc
+        import flag_algorithmic_ranges as fa
+        import diff_distro_locales as dd
+        import diff_node_locales as nl
+        old, new, ok = FLOOR_OLD, FLOOR_NEW, self.dirs['ok']
+        steps = (
+            ('1 corpus', g._main, ['corpus', old, new]),
+            ('1 fanin', g._main, ['fanin', old]),
+            ('2', f.main, [old, new]),
+            ('3', rc.main, [old, 'loc_000']),
+            ('4', fa.main, [old]),
+            ('6/7', dd.main, [old, '--locales-dir', ok, '--build-id', 'b']),
+            ('8', nl.main, ['--old-locales-dir', ok, '--old-build-id', 'o',
+                            '--new-locales-dir', self.dirs['okb'],
+                            '--new-build-id', 'n',
+                            '--old-tag', old, '--new-tag', new]),
+            ('9/10', fa.main, ['--locales-dir', ok, '--build-id', 'b',
+                               '--supported-tag', old]),
+        )
+        for name, main, argv in steps:
+            with self.subTest(step=name):
+                self.assertIn(f'only 286 file(s) under {g.LOCALES_DIR}/ at '
+                              f'{old}, below the floor of {self.FLOOR}.',
+                              self.refusal(main, argv))
+
+    def test_the_machine_side_of_every_step(self):
+        import flag_algorithmic_ranges as fa
+        import diff_distro_locales as dd
+        import diff_node_locales as nl
+        ok, short = self.dirs['ok'], self.dirs['short']
+        steps = (
+            ('6/7', dd.main, [FLOOR_NEW, '--locales-dir', short,
+                              '--build-id', 'b'], '--locales-dir'),
+            ('8 old', nl.main, ['--old-locales-dir', short,
+                                '--old-build-id', 'o',
+                                '--new-locales-dir', ok,
+                                '--new-build-id', 'n'], '--old-locales-dir'),
+            ('8 new', nl.main, ['--old-locales-dir', ok, '--old-build-id', 'o',
+                                '--new-locales-dir', short,
+                                '--new-build-id', 'n'], '--new-locales-dir'),
+            ('8 both', nl.main, ['--old-locales-dir', ok,
+                                 '--old-build-id', 'o',
+                                 '--new-locales-dir', self.dirs['ok2'],
+                                 '--new-build-id', 'n'],
+             'the two node directories'),
+            ('9/10', fa.main, ['--locales-dir', short, '--build-id', 'b',
+                               '--supported-tag', FLOOR_NEW], '--locales-dir'),
+        )
+        for name, main, argv, what in steps:
+            with self.subTest(step=name):
+                shown = 150 if name == '8 both' else 299
+                self.assertIn(f'only {shown} file(s) to compare in {what}, '
+                              f'below the floor of {self.FLOOR}.',
+                              self.refusal(main, argv))
 
 
 if __name__ == '__main__':

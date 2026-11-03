@@ -778,9 +778,13 @@ class WrapperDirectionUndetermined(unittest.TestCase):
     checked and is fine"."""
 
     def setUp(self):
-        import sys
         self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-undet-')
         self.addCleanup(shutil.rmtree, self.out_dir, ignore_errors=True)
+        self.env = self.shim('undetermined none')
+
+    def shim(self, answer):
+        """PATH with a python3 that answers `answer` to the order check."""
+        import sys
         shim_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-undetshim-')
         self.addCleanup(shutil.rmtree, shim_dir, ignore_errors=True)
         shim = os.path.join(shim_dir, 'python3')
@@ -788,12 +792,12 @@ class WrapperDirectionUndetermined(unittest.TestCase):
             fh.write('#!/bin/sh\n'
                      'case "$1" in\n'
                      '  *glibc_locale_data.py)\n'
-                     '    if [ "$2" = order ]; then echo undetermined; exit 0; '
+                     f'    if [ "$2" = order ]; then echo {answer}; exit 0; '
                      'fi ;;\n'
                      'esac\n'
                      f'exec "{sys.executable}" "$@"\n')
         os.chmod(shim, 0o755)
-        self.env = {'PATH': shim_dir + os.pathsep + os.environ.get('PATH', '')}
+        return {'PATH': shim_dir + os.pathsep + os.environ.get('PATH', '')}
 
     def test_the_summary_says_the_direction_was_not_established(self):
         rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
@@ -820,27 +824,46 @@ class WrapperDirectionUndetermined(unittest.TestCase):
     def test_an_unrecognised_state_stops_the_run(self):
         """The branch that keeps the four states honest: a word the wrapper
         does not know means the check did not answer, and "the pair is in
-        order" is the assumption that runs the audit against the wrong tag."""
-        shim_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-badstate-')
-        self.addCleanup(shutil.rmtree, shim_dir, ignore_errors=True)
-        import sys
-        shim = os.path.join(shim_dir, 'python3')
-        with open(shim, 'w', encoding='utf-8') as fh:
-            fh.write('#!/bin/sh\n'
-                     'case "$1" in\n'
-                     '  *glibc_locale_data.py)\n'
-                     '    if [ "$2" = order ]; then echo perhaps; exit 0; '
-                     'fi ;;\n'
-                     'esac\n'
-                     f'exec "{sys.executable}" "$@"\n')
-        os.chmod(shim, 0o755)
-        rc, out = run_wrapper(
-            NEW, NEW, out_dir=self.out_dir,
-            env_extra={'PATH': shim_dir + os.pathsep
-                       + os.environ.get('PATH', '')})
-        self.assertNotEqual(rc, 0)
-        self.assertIn("answered 'perhaps'", out)
-        self.assertNotIn('AUDIT SUMMARY', out)
+        order" is the assumption that runs the audit against the wrong tag.
+        Each of the two words, apart."""
+        for answer, said in (('perhaps none', "answered 'perhaps'"),
+                             ('forward perhaps', "answered 'forward perhaps', "
+                                                 "whose second word"),
+                             ('forward', "answered 'forward', whose second "
+                                         "word")):
+            with self.subTest(answer=answer):
+                rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
+                                      env_extra=self.shim(repr(answer)))
+                self.assertNotEqual(rc, 0)
+                self.assertIn(said, out)
+                self.assertNotIn('AUDIT SUMMARY', out)
+
+    def test_one_tree_git_cannot_order_compares_nothing(self):
+        """Two commits of one source tree that neither descends from the
+        other, as a master commit and the same patch on a wip branch are in
+        the clone (158e939a and 42f22e7c). Both states are said:
+        the direction was not established, and nothing was compared -- step
+        3's skip notice must not call the empty step 2 a real result
+        (false-negative-reviewer, round 1 of 7.1)."""
+        rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
+                              env_extra=self.shim("'undetermined tree'"))
+        self.assertEqual(rc, 0, out)
+        step3 = flat(step_text(out, 3))
+        self.assertIn('The two refs are two commits of one source tree, so '
+                      'nothing was compared and this is NOT a clean result.',
+                      step3)
+        self.assertNotIn('This is a real result', step3)
+        summary = flat(out.split('AUDIT SUMMARY')[1])
+        self.assertIn('-- Direction of the pair: NOT ESTABLISHED', summary)
+        self.assertIn('-- One source tree, compared with itself', summary)
+        self.assertIn('are two commits of one source tree. Everything above '
+                      "that compares the two tags and says 'nothing changed' "
+                      "means 'nothing was compared'", summary)
+        # Step 5's list of reasons names this one too (false-negative-
+        # reviewer, round 2 of 7.1).
+        self.assertIn('the two tags are one commit or two commits of one '
+                      'source tree, or the step did not finish', summary)
+        self.assertNotIn('One commit, compared with itself', summary)
 
 
 @needs_clone

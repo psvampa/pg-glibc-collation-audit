@@ -50,7 +50,6 @@ Usage:
   python3 flag_algorithmic_ranges.py <tag> [--repo <path>]
   python3 flag_algorithmic_ranges.py --locales-dir <path> --build-id <nvr>
           --supported-tag <tag> [--node-label <side>] [--expect-files N]
-          [--min-files N]
 
 Example:
   python3 flag_algorithmic_ranges.py glibc-2.34
@@ -90,15 +89,17 @@ def load_from_dir(opts):
     root = opts.locales_dir
     if not os.path.isdir(root):
         g.die(f"--locales-dir {root} is not a directory")
-    names, skipped = dd.node_entries(root)
+    # The machine's side, refused below the floor (glibc_locale_data.side).
+    built = g.side(None, machine=root, build=opts.build_id,
+                   what='--locales-dir')
+    names, skipped = built.paths, built.skipped
     if skipped:
         print(f"Skipped {len(skipped)} directory entr(ies), named so a "
               f"shrunken corpus cannot pass unnoticed:")
         for entry, why in skipped:
             print(f"  {entry}  ({why})")
         print()
-    problem = dd.corpus_problem(len(names), expect_files=opts.expect_files,
-                                floor=opts.min_files)
+    problem = dd.corpus_problem(len(names), expect_files=opts.expect_files)
     if problem:
         g.die(problem)
     repo = g.find_repo(opts.repo)
@@ -580,9 +581,6 @@ def main(argv):
     ap.add_argument('--expect-files', type=int,
                     help="with --locales-dir: abort unless exactly this many "
                          "files are read")
-    ap.add_argument('--min-files', type=int, default=dd.DEFAULT_MIN_FILES,
-                    help=f"with --locales-dir: abort below this many files "
-                         f"(default {dd.DEFAULT_MIN_FILES})")
     ap.add_argument('--repo', help="path to the glibc clone (autodetected)")
     opts = ap.parse_args(argv)
 

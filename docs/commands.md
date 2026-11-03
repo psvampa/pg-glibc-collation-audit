@@ -167,8 +167,7 @@ The build ids are required.
 **Check each copy against the machine it came from** — compare the names,
 `ls el8-locales` against `ls /usr/share/i18n/locales/` run there, not only the
 counts. The run does not compare against the machine. It refuses a copy only
-when it is too small to be one, below half the files of the published version
-for steps 6 and 7 and below 200 for steps 8 to 10.
+when it is too small to be one.
 
 What never arrived is named, not refused. When a copy lacks a file its
 published version has, steps 6 and 7 and steps 9 and 10 print a `!!` naming

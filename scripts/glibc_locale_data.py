@@ -15,8 +15,11 @@ Also runnable directly, for the shell script:
   python3 glibc_locale_data.py provenance <tag> [<tag> ...]
   python3 glibc_locale_data.py corpus <tag> [<tag> ...]
   python3 glibc_locale_data.py order [--allow-reverse] [--quiet] <old_tag> <new_tag>
+      prints the direction (same, forward, reversed, undetermined) and
+      whether nothing is compared (commit, tree, none)
   python3 glibc_locale_data.py pair-slug <old> <new>
 """
+import collections
 import contextlib
 import io
 import os
@@ -30,12 +33,24 @@ SUPPORTED = 'localedata/SUPPORTED'
 
 # Fewer files than this under localedata/locales/ is not a glibc locale corpus.
 # The five pinned tags carry 286 (2.12), 312 (2.17), 353 (2.28), 355 (2.34) and
-# 366 (2.39). The node-reading modes have refused a directory below this floor
-# since they were written; the tag modes did not check at all, so a tag whose
-# tree lacks localedata/locales/ -- a restructured checkout, a tag from before
-# the directory existed -- produced "0 files changed", "No locale uses ellipsis
-# ranges here" and exit 0.
+# 366 (2.39). Read by below_floor alone, which side() applies to every side,
+# a tag's or a machine's. The tag modes once did not check at all, so a tag
+# whose tree lacks localedata/locales/ -- a restructured checkout, a tag from
+# before the directory existed -- produced "0 files changed", "No locale uses
+# ellipsis ranges here" and exit 0.
 MIN_LOCALE_FILES = 200
+
+
+def below_floor(count):
+    """The floor, when `count` locale files are too few to be a glibc locale
+    corpus; None when they are enough.
+
+    The one place that reads MIN_LOCALE_FILES. A tag side (side(), through
+    _require_corpus) and a machine's directory (diff_distro_locales.
+    corpus_problem) are refused by the same number: two copies of it drift,
+    and the node modes used to take theirs from a --min-files whose default
+    copied this one."""
+    return MIN_LOCALE_FILES if count < MIN_LOCALE_FILES else None
 
 # Prepended to every git invocation. `git diff` obeys the user's config, and
 # these four settings were the first measured to change the text this tool
@@ -619,14 +634,66 @@ def pair_order(repo, old, new, commits=None):
     upgrade reads as a harmless addition; and step 3 closes over the wrong
     tag's copy graph.
     """
+    return order(repo, old, new, commits)
+
+
+def _shas(repo, old, new, commits):
+    """The commit of each of two refs: check_refs' answer when the caller
+    has it, so they are not asked twice, else `rev-parse --verify`."""
     if commits is not None:
-        # check_refs' answer for these two refs, so they are not asked twice.
-        shas = [commits[old], commits[new]]
-    else:
-        shas = []
-        for ref in (old, new):
-            p = run_git(['rev-parse', '--verify', f'{ref}^{{commit}}'], repo)
-            shas.append(p.stdout.decode('utf-8', 'replace').strip())
+        return [commits[old], commits[new]]
+    shas = []
+    for ref in (old, new):
+        p = run_git(['rev-parse', '--verify', f'{ref}^{{commit}}'], repo)
+        shas.append(p.stdout.decode('utf-8', 'replace').strip())
+    return shas
+
+
+def _is_tag(s):
+    return isinstance(s, str) or s.kind == 'tag'
+
+
+def _ref(s):
+    return s if isinstance(s, str) else s.ref
+
+
+def order(repo, old, new, commits=None):
+    """The one function that orders two sides of the pair. Returns (status,
+    detail), status one of 'same', 'forward', 'reversed', 'undetermined'
+    (pair_order says what each means).
+
+    A side is a Side or, for a tag, its ref. By kind:
+      two tags          git, the questions pair_order lists: one commit,
+                        ancestry, the release each descends from.
+      two machines      the glibc version of each, then, within one
+                        version, the build by rpm's own rule
+                        (locale_order.build_parts and rpm_vercmp): a
+                        distro can change the order inside a release, as
+                        RHEL8 did at glibc-2.28-93. 'same' when rpm says
+                        the builds are one, or their words are equal;
+                        'undetermined' when a version or, within one
+                        version, a build cannot be read.
+      a tag and a       the release of each: the tag's through describe,
+      machine           the machine's from its version. One release on
+                        both sides is 'undetermined': nothing here says
+                        whether the build is that tag or later (branch 7.4
+                        gives a build a commit, and then git decides).
+
+    rpm's rule stays in locale_order.py, which is copied alone to a
+    machine and uses only the standard library; it is imported here, only
+    for a pair that holds a machine, so a run on tags never loads it.
+    """
+    if _is_tag(old) and _is_tag(new):
+        return _order_by_git(repo, _ref(old), _ref(new), commits)
+    # Imported here: rpm's rule lives with the measurement (see above).
+    import locale_order as lo
+    if not _is_tag(old) and not _is_tag(new):
+        return _order_by_build(lo, old, new)
+    return _order_by_release(repo, lo, old, new)
+
+
+def _order_by_git(repo, old, new, commits):
+    shas = _shas(repo, old, new, commits)
     if shas[0] == shas[1]:
         return 'same', f'{old} and {new} are one commit, {shas[0][:12]}'
 
@@ -649,46 +716,109 @@ def pair_order(repo, old, new, commits=None):
         f'{pair}: neither is an ancestor of the other, and {described}')
 
 
-def require_pair_order(repo, old, new, allow_reverse=False, commits=None):
-    """Refuse a reversed pair -- or say out loud that one was allowed.
+def _order_by_build(lo, old, new):
+    pair = f'the new build {new.build} against the old build {old.build}'
+    ov, nv = lo.version_tuple(old.version), lo.version_tuple(new.version)
+    if ov is None or nv is None:
+        return 'undetermined', (f'{pair}: the glibc version of '
+                                f'{"the old" if ov is None else "the new"} '
+                                f'side cannot be read')
+    if ov != nv:
+        return ('forward' if ov < nv else 'reversed'), (
+            f'{pair}: {old.version} against {new.version}')
+    op, np_ = lo.build_parts(old.build), lo.build_parts(new.build)
+    if op and np_:
+        c = lo.rpm_vercmp(op[0], np_[0]) or lo.rpm_vercmp(op[1], np_[1])
+        return {-1: 'forward', 0: 'same', 1: 'reversed'}[c], (
+            f'{pair}: one glibc version, ordered by rpm')
+    if old.build and old.build == new.build:
+        return 'same', f'{pair}: the same words'
+    return 'undetermined', (f'{pair}: one glibc version, and the build of at '
+                            f'least one cannot be read')
 
-    Deciding what the pair IS (pair_order) and deciding what to do about it are
-    different mistakes, so they are different functions with a test on each.
 
-    Silent only on 'forward'. It used to be silent on 'same' as well, on the
-    grounds that audit.sh prints a block of its own for that case -- which
-    left a hand-run `diff_collation_code.py <tag> <tag>` ending in "No
-    substantive collation code change", rc 0, no `!!`: a clean verdict over a
-    comparison that never happened. The notice lives here now, in one copy for
-    all four entry points, so under the wrapper every step that takes the pair
-    prints it into its own log -- measured, steps 1, 2 and 5 -- and the
-    summary's warnings block repeats it once.
-    """
+def _order_by_release(repo, lo, old, new):
+    def release(s):
+        if _is_tag(s):
+            found = nearest_glibc_tag(repo, _ref(s))
+            return found[1] if found else None
+        return lo.version_tuple(s.version)
+    r_old, r_new = release(old), release(new)
+    pair = (f'the new side {_ref(new) if _is_tag(new) else new.build} against '
+            f'the old side {_ref(old) if _is_tag(old) else old.build}')
+    if r_old and r_new and r_old != r_new:
+        return ('forward' if r_old < r_new else 'reversed'), (
+            f'{pair}: release {r_old[0]}.{r_old[1]} against '
+            f'{r_new[0]}.{r_new[1]}')
+    return 'undetermined', (f'{pair}: one release on both sides, or one that '
+                            f'cannot be read, and nothing here places a build '
+                            f'against a tag of its own release')
+
+
+def nothing_compared(repo, old, new, commits=None):
+    """'commit' when two refs are one commit, 'tree' when they are two
+    commits of one source tree, else None.
+
+    Kept apart from order(): two builds of one glibc version can be in
+    order by rpm and still hold the same sources (measured 2026-11-02:
+    .40/.48, 275/283 and 128/145 have the same locale sources), and then
+    every step that compares the two refs compares a tree with itself.
+    That is not a clean result, whatever the order. For two upstream tags
+    the two answers coincide: the five pinned tags have five trees
+    (measured on the pinned clone)."""
+    shas = _shas(repo, old, new, commits)
+    if shas[0] == shas[1]:
+        return 'commit'
+    out = run_git(['rev-parse', f'{shas[0]}^{{tree}}', f'{shas[1]}^{{tree}}'],
+                  repo).stdout.decode('utf-8', 'replace').split()
+    if len(out) != 2:
+        die(f"`git rev-parse` gave {len(out)} tree id(s) for 2 commits in "
+            f"{repo}, so whether the two hold the same sources is unknown.")
+    return 'tree' if out[0] == out[1] else None
+
+
+_NOTHING_COMPARED_REST = (
+    "Steps 1 to 3 can only report "
+    "'nothing changed', which for an intra-major upgrade "
+    "(RHEL 8.1 -> 8.2, say) says nothing at all, and step 5 reports "
+    "that nothing was compared. Step 4 reads only the new tag, so "
+    "its list still needs confirming. The distro's own "
+    "builds are where such a change lives. With each machine's file "
+    "(--old-node and --new-node), step 11 measures how each machine "
+    "sorts, and steps 6 to 10 read its locale sources when the file "
+    "holds them; sql/c_utf8_probe.sql checks C.UTF-8 on each "
+    "machine. C.UTF-8's order moved in glibc-2.28-93.el8 with the "
+    "upstream tag unchanged. See docs/results.md.")
+
+
+def pair_check(repo, old, new, allow_reverse=False, commits=None):
+    """require_pair_order's work, and what it found: (status,
+    nothing_compared's answer). The steps that skip a read, or refuse a
+    clean verdict, when nothing was compared take the second; the
+    direction is the first."""
     status, detail = pair_order(repo, old, new, commits)
-    if status == 'same':
+    if status == 'reversed' and not allow_reverse:
+        die(f"{detail}.\n"
+            f"       This pair is REVERSED. Every step takes <old_tag> "
+            f"<new_tag>, and reversed\n"
+            f"       they all run to the end: step 4 scans\n"
+            f"       the older tag, step 2 reports a deleted locale as a "
+            f"harmless addition, and\n"
+            f"       step 3 closes over the wrong copy graph. Swap the "
+            f"arguments.")
+    # Whatever the order: a reversed pair run on request, or one git cannot
+    # order, of one source tree compares nothing either; the clone holds
+    # such pairs on glibc's own branches.
+    nothing = nothing_compared(repo, old, new, commits)
+    if nothing == 'commit':
         warn(f"{old} and {new} are the same commit. Steps 1, 2 and 5 compare "
-             f"upstream source against itself. Steps 1 to 3 can only report "
-             f"'nothing changed', which for an intra-major upgrade "
-             f"(RHEL 8.1 -> 8.2, say) says nothing at all, and step 5 reports "
-             f"that nothing was compared. Step 4 reads only the new tag, so "
-             f"its list still needs confirming. The distro's own "
-             f"builds are where such a change lives. With each machine's file "
-             f"(--old-node and --new-node), step 11 measures how each machine "
-             f"sorts, and steps 6 to 10 read its locale sources when the file "
-             f"holds them; sql/c_utf8_probe.sql checks C.UTF-8 on each "
-             f"machine. C.UTF-8's order moved in glibc-2.28-93.el8 with the "
-             f"upstream tag unchanged. See docs/results.md.",
+             f"upstream source against itself. {_NOTHING_COMPARED_REST}",
              split_words=False)
-    elif status == 'reversed':
-        if not allow_reverse:
-            die(f"{detail}.\n"
-                f"       This pair is REVERSED. Every step takes <old_tag> "
-                f"<new_tag>, and reversed\n"
-                f"       they all run to the end: step 4 scans\n"
-                f"       the older tag, step 2 reports a deleted locale as a "
-                f"harmless addition, and\n"
-                f"       step 3 closes over the wrong copy graph. Swap the "
-                f"arguments.")
+    elif nothing == 'tree':
+        warn(f"{old} and {new} are two commits of one source tree. Steps 1, "
+             f"2 and 5 compare that tree against itself. "
+             f"{_NOTHING_COMPARED_REST}", split_words=False)
+    if status == 'reversed':
         warn(f"REVERSED PAIR, allowed on request: {detail}. Every finding "
              f"below has old and new the other way round -- what reads as "
              f"added was deleted in the real upgrade, and step 4 scanned the "
@@ -700,7 +830,27 @@ def require_pair_order(repo, old, new, allow_reverse=False, commits=None):
              f"step still runs: step 4 scans the older tag, and step 2 reports "
              f"a deleted locale as a harmless addition. "
              f"Confirm which build is the older one.")
-    return status
+    return status, nothing
+
+
+def require_pair_order(repo, old, new, allow_reverse=False, commits=None):
+    """Refuse a reversed pair -- or say out loud that one was allowed.
+
+    Deciding what the pair IS (order) and deciding what to do about it are
+    different mistakes, so they are different functions with a test on each.
+
+    Silent only on a forward pair that compares something. It used to be
+    silent on 'same' as well, on the
+    grounds that audit.sh prints a block of its own for that case -- which
+    left a hand-run `diff_collation_code.py <tag> <tag>` ending in "No
+    substantive collation code change", rc 0, no `!!`: a clean verdict over a
+    comparison that never happened. The notice lives here now, in one copy for
+    all four entry points, so under the wrapper every step that takes the pair
+    prints it into its own log -- measured, steps 1, 2 and 5 -- and the
+    summary's warnings block repeats it once. It is printed for two commits
+    of one source tree too (nothing_compared), whatever their order.
+    """
+    return pair_check(repo, old, new, allow_reverse, commits)[0]
 
 
 def verify_tag(repo, tag):
@@ -915,29 +1065,21 @@ def require_read(tag, paths, missing, what):
 
 
 def list_locale_files(repo, tag):
-    """Every file under localedata/locales/ at `tag`, as repo-relative paths.
-
-    Aborts below MIN_LOCALE_FILES. Every caller builds a result from this
-    list, and a result built from nothing reads as "nothing changed", which
-    is the reassuring direction. The node-reading modes had this guard from the
-    start; the tag modes did not.
-    """
-    out = run_git(['ls-tree', '-r', '--name-only', tag, '--', LOCALES_DIR + '/'],
-                  repo).stdout.decode('utf-8', 'replace')
-    # On '\n' only. git ends each name there, and under core.quotePath=false
-    # prints U+0085, U+2028 and U+2029 as they are, where splitlines() also
-    # cuts: a file `x<U+2028>localedata/locales/C` listed a C that is not
-    # there, and step 2 then dropped its C.UTF-8 note (false-negative-
-    # reviewer, measured with git 2.54).
-    paths = [ln for ln in out.split('\n') if ln.strip()]
-    _require_corpus(paths, tag)
-    return paths
+    """Every file under localedata/locales/ at `tag`, as repo-relative paths:
+    side(repo, tag).paths, so the floor is applied where every side is
+    built. Kept under this name for the callers that only need the list."""
+    return side(repo, tag).paths
 
 
 def _require_corpus(paths, tag):
-    if len(paths) < MIN_LOCALE_FILES:
+    """Aborts below the floor. Every caller builds a result from this list,
+    and a result built from nothing reads as "nothing changed", which is
+    the reassuring direction. The node-reading modes had this guard from
+    the start; the tag modes did not."""
+    floor = below_floor(len(paths))
+    if floor is not None:
         die(f"only {len(paths)} file(s) under {LOCALES_DIR}/ at {tag}, below "
-            f"the floor of {MIN_LOCALE_FILES}. That is not a glibc locale "
+            f"the floor of {floor}. That is not a glibc locale "
             f"corpus -- a restructured tree, or a tag from before the "
             f"directory existed. Refusing to report: an empty corpus reads "
             f"as 'nothing changed' and 'no locale uses ellipsis ranges', "
@@ -945,17 +1087,61 @@ def _require_corpus(paths, tag):
 
 
 def list_tree_ids(repo, tag, extra):
-    """list_locale_files, and the blob id of every file it lists and of
-    every file under the `extra` paths, from ONE `git ls-tree -r`.
+    """(locale paths as list_locale_files gives them, {path: blob id}) of
+    the locales and of every file under the `extra` paths, from ONE `git
+    ls-tree -r`: side(repo, tag, extra=extra). Step 2 compares charmaps by
+    blob id (collation_keys), and asking for them in the listing it already
+    makes costs no git process."""
+    s = side(repo, tag, extra=extra)
+    return s.paths, s.ids
 
-    Step 2 compares charmaps by blob id (collation_keys), and asking for
-    them in the listing it already makes costs no git process. Returns
-    (locale paths as list_locale_files gives them, {path: blob id}). Split
-    on '\\n' only, for list_locale_files' reason; a line that is not
-    `<mode> <type> <id>` and a tab dies, because a path read without its id
-    would compare as missing.
+
+# One side of an audited pair. kind is 'tag' (a glibc ref of the clone:
+# ref, paths and ids) or 'machine' (what a machine gave: its locale
+# directory in root, the names in paths and what was skipped; its glibc in
+# build, the words `rpm -q glibc` printed, and version, a measurement's
+# 'glibc X.Y'). A machine known only by its measurement has no root and no
+# paths. ref on a machine side is the upstream tag its files are read
+# against, or None.
+Side = collections.namedtuple(
+    'Side', 'kind ref root build version paths ids skipped')
+
+
+def side(repo, ref=None, machine=None, extra=(), build=None, version=None,
+         what=None):
+    """The one function that builds a side of the pair, and applies the
+    floor of locale files to it.
+
+    Where the side comes from, in this order: a machine's directory
+    (`machine`; `what` names it in a refusal), a machine known by its
+    measurement only (`build` and `version`, no directory, so nothing to
+    count), else the tag `ref` of the clone, listed with one `git ls-tree
+    -r` over localedata/locales/ and the `extra` paths. The named build of
+    branch 7.4 goes between the first and the last.
+
+    The floor (below_floor) is applied here once for every side that holds
+    files, so no step can refuse a smaller corpus on one side than on the
+    other. A tag side's list is split on newlines only: git ends each name
+    there, and under core.quotePath=false prints U+0085, U+2028 and U+2029
+    as they are, where splitlines() also cuts -- a file
+    `x<U+2028>localedata/locales/C` listed a C that is not there, and step
+    2 then dropped its C.UTF-8 note (false-negative-reviewer, measured with
+    git 2.54). A line that is not `<mode> <type> <id>` and a tab dies,
+    because a path read without its id would compare as missing.
     """
-    out = run_git(['ls-tree', '-r', tag, '--', LOCALES_DIR + '/', *extra],
+    if machine is not None:
+        # Imported here: diff_distro_locales imports this module.
+        import diff_distro_locales as dd
+        names, skipped = dd.node_entries(machine)
+        problem = dd.corpus_problem(len(names), floored=True,
+                                    what=what or machine)
+        if problem:
+            die(problem)
+        return Side('machine', ref, machine, build, version, names, None,
+                    skipped)
+    if ref is None:
+        return Side('machine', None, None, build, version, None, None, ())
+    out = run_git(['ls-tree', '-r', ref, '--', LOCALES_DIR + '/', *extra],
                   repo).stdout.decode('utf-8', 'replace')
     paths, ids = [], {}
     for ln in out.split('\n'):
@@ -964,12 +1150,12 @@ def list_tree_ids(repo, tag, extra):
         meta, tab, path = ln.partition('\t')
         fields = meta.split(' ')
         if not tab or len(fields) != 3:
-            die(f"unreadable `git ls-tree` line at {tag}: {ln!r}")
+            die(f"unreadable `git ls-tree` line at {ref}: {ln!r}")
         ids[path] = fields[2]
         if path.startswith((LOCALES_DIR + '/', f'"{LOCALES_DIR}/')):
             paths.append(path)
-    _require_corpus(paths, tag)
-    return paths, ids
+    _require_corpus(paths, ref)
+    return Side('tag', ref, None, build, version, paths, ids, ())
 
 
 def collate_block(text):
@@ -1985,15 +2171,16 @@ def _main(argv):
             list_locale_files(repo, tag)
         return 0
     if argv and argv[0] == 'order':
-        # The direction of the pair, for the two shell entry points. The status
-        # WORD is the only thing on stdout, because audit.sh captures it in a
-        # variable; every human sentence goes to stderr. A forward pair
+        # The direction of the pair and whether it compares anything, for
+        # the two shell entry points. The two status WORDS are the only thing
+        # on stdout, because audit.sh captures them in a variable; every human
+        # sentence goes to stderr. A forward pair that compares something
         # therefore adds nothing at all to the run's output, which is what
         # keeps the audited pairs byte-identical.
         #
         # --quiet suppresses the `!!` blocks, not the refusal: the steps are
         # the callers that print them, into their own logs, where the summary's
-        # warnings block finds them. audit.sh asks only for the word, and one
+        # warnings block finds them. audit.sh asks only for the words, and one
         # more copy of a warning the reader has already seen teaches them to
         # skip the section.
         allow = '--allow-reverse' in argv[1:]
@@ -2007,9 +2194,13 @@ def _main(argv):
         commits = check_refs(repo, *tags)
         sink = io.StringIO() if quiet else sys.stderr
         with contextlib.redirect_stdout(sink):
-            status = require_pair_order(repo, tags[0], tags[1],
-                                        allow_reverse=allow, commits=commits)
-        print(status)
+            status, nothing = pair_check(repo, tags[0], tags[1],
+                                         allow_reverse=allow, commits=commits)
+        # Two words: the direction, and what nothing_compared answered
+        # (commit, tree or none). audit.sh reads the second for "nothing was
+        # compared" (SAME_TAG), whatever the first says: a pair of one tree
+        # that git cannot order is both.
+        print(status, nothing or 'none')
         return 0
     if len(argv) >= 2 and argv[0] == 'fanin':
         repo = find_repo()

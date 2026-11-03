@@ -1317,16 +1317,21 @@ def _main(opts):
     # Which of the two is newer, asked of git rather than assumed. Reversed,
     # this step swaps its reassuring bucket for its noisy one: a locale
     # DELETED in the real upgrade is reported as "Added ... not analysed".
-    g.require_pair_order(repo, opts.old_tag, opts.new_tag,
-                         allow_reverse=opts.allow_reverse, commits=commits)
+    # And whether the two compare anything at all (one commit, or two
+    # commits of one source tree): then the character set check below has
+    # nothing to read.
+    _, nothing = g.pair_check(repo, opts.old_tag, opts.new_tag,
+                              allow_reverse=opts.allow_reverse,
+                              commits=commits)
     rng = f'{opts.old_tag}..{opts.new_tag}'
     pathspec = g.LOCALES_DIR + '/'
 
     # The corpus floor. `git diff` over a pathspec that matches nothing at
     # either tag is empty and exits 0, and this step then reports "0 changed"
     # -- the node-reading modes refuse a directory that small, and a tag
-    # deserves the same refusal. list_locale_files dies below the floor. The
-    # lists are kept: they answer the KNOWN_BACKPORTED check below.
+    # deserves the same refusal. side() dies below the floor (through
+    # list_tree_ids). The lists are kept: they answer the KNOWN_BACKPORTED
+    # check below.
     # The same listing gives the blob ids the character set check compares,
     # for charmaps and SUPPORTED too, so it costs no git process.
     listed, ids = {}, {}
@@ -1334,7 +1339,7 @@ def _main(opts):
         if tag not in listed:
             listed[tag], ids[tag] = g.list_tree_ids(
                 repo, tag, [ck.CHARMAPS_DIR + '/', g.SUPPORTED])
-    same_commit = commits[opts.old_tag] == commits[opts.new_tag]
+    same_commit = bool(nothing)
 
     # One diff for both questions. Its --raw half is git's list of what
     # changed and how, and its -U0 half is the text every verdict reads.
@@ -1667,7 +1672,8 @@ def _main(opts):
     # in a list of its own, so step 3 does not call it an LC_COLLATE change.
     if charmap_reads is None:
         print("\nCharacter sets and transliterations: not compared, the two "
-              "tags are one commit.")
+              + ("tags are one commit." if nothing == 'commit' else
+                 "refs are two commits of one source tree."))
         keyed = []
     else:
         side_old, side_new, sup = charmap_reads.sides(

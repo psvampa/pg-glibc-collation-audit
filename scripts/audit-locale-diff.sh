@@ -59,9 +59,10 @@ fi
 # This is the first step that has a clone to ask, and it is also a hand-run
 # entry point taking a pair: reversed, everything below is about the other
 # direction -- the fan-in is computed at the tag that is actually the older
-# one -- and nothing in the output said so. Silent when the pair is forward,
-# so the audited pairs' output does not move; the status word on stdout is for
-# audit.sh, which asks again for it, and is dropped here.
+# one -- and nothing in the output said so. Silent when the pair is forward
+# and compares something, so the audited pairs' output does not move; the two
+# words on stdout are for audit.sh, which asks again for them, and are dropped
+# here.
 python3 "$HERE/glibc_locale_data.py" order ${ALLOW:+"$ALLOW"} "$OLD" "$NEW" \
   >/dev/null
 
