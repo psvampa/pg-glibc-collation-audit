@@ -4,9 +4,9 @@ checked against the build's binary packages.
 A RHEL or Rocky glibc build is upstream glibc plus the distro's patches,
 applied by rpmbuild's %prep. build() opens the build's SRPM, takes the inner
 tarball's localedata/ and locale/, applies the patches that touch them the
-way GNU patch does, and keeps the result in a cache. Step 1
-(audit-locale-diff.sh) reads a build named on its command line through
-glibc_locale_data.build_side; audit.sh refuses one so far.
+way GNU patch does, and keeps the result in a cache. Steps 1 to 5 of
+the audit, each run on its own, read a build named on its command line through
+glibc_locale_data.side (build_side); audit.sh refuses one so far.
 
 It does not work out from the spec what rpm did; it reads what rpm wrote
 down, and checks against it:

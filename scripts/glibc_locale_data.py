@@ -26,7 +26,9 @@ order and pair-slug, and provenance and corpus are kept for a hand run:
       (build_sources); checks the order and the floor, prints the
       provenance, and writes to F the two refs the step reads
   python3 glibc_locale_data.py tags-only <old> <new>
-      refuses a build name: only step 1 reads builds so far
+      refuses a build name for audit.sh, which does not pass one from step
+      to step yet; steps 1 to 5 read one, each run on its own
+      (step_sides)
 """
 import collections
 import contextlib
@@ -417,8 +419,8 @@ def refuse_build_commits(repo, commits):
                 f"outside localedata/ and locale/ it holds the upstream "
                 f"tag's tree, so read as a tag it hides the build's own "
                 f"patches. Name the build itself (glibc-2.34-283.el9_8) "
-                f"to step 1, scripts/audit-locale-diff.sh; the steps after "
-                f"it read two glibc tags.")
+                f"to steps 1 to 5: each makes its commit again and reads "
+                f"that.")
 
 
 def warn(text, split_words=True):
@@ -716,9 +718,7 @@ def label(s):
     its build words."""
     if isinstance(s, str) or s.kind == 'tag':
         return _ref(s)
-    b = s.build or ''
-    return b[:-len('.src')] if s.kind == 'build' and b.endswith('.src') \
-        else b
+    return _asked(s.build) if s.kind == 'build' else (s.build or '')
 
 
 def order(repo, old, new, commits=None):
@@ -828,6 +828,17 @@ def _order_by_release(repo, lo, old, new):
                             f'against a tag of its own release')
 
 
+def pair_noun(old, new):
+    """What the two sides are, as the word a sentence about both uses:
+    'tags' (two tags of the clone: each sentence as it has always been
+    printed), 'builds', or 'sides' (a tag and a build)."""
+    kinds = (_is_tag(old), _is_tag(new))
+    return 'tags' if all(kinds) else 'sides' if any(kinds) else 'builds'
+
+
+ONE = {'tags': 'tag', 'builds': 'build', 'sides': 'side'}
+
+
 def nothing_compared(repo, old, new, commits=None):
     """'commit' when two refs are one commit, 'tree' when they are two
     commits of one source tree, else None.
@@ -850,6 +861,19 @@ def nothing_compared(repo, old, new, commits=None):
     return 'tree' if out[0] == out[1] else None
 
 
+# For two builds, or a tag and a build: what was not compared is what this
+# tool does not read of a build at all, not a distro's patches.
+_NOTHING_COMPARED_BUILDS = (
+    "Steps 1 to 3 can only report 'nothing changed', and step 5 reports "
+    "that nothing was compared: the two {noun} hold the same locale "
+    "sources and the same code under locale/. What can still differ is "
+    "what this tool does not read of a build: the compiler, and code "
+    "outside localedata/ and locale/. Step 4 reads only the new {one}, so "
+    "its list still needs confirming. sql/c_utf8_probe.sql and "
+    "docs/confirming-on-a-real-system.md check the order on the machines "
+    "themselves.")
+
+
 _NOTHING_COMPARED_REST = (
     "Steps 1 to 3 can only report "
     "'nothing changed', which for an intra-major upgrade "
@@ -870,12 +894,13 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
     clean verdict, when nothing was compared take the second; the
     direction is the first."""
     status, detail = pair_order(repo, old, new, commits)
+    one = ONE[pair_noun(old, new)]
     if status == 'reversed' and not allow_reverse:
         die(f"{detail}.\n"
-            f"       This pair is REVERSED. Every step takes <old_tag> "
-            f"<new_tag>, and reversed\n"
+            f"       This pair is REVERSED. Every step takes <old_{one}> "
+            f"<new_{one}>, and reversed\n"
             f"       they all run to the end: step 4 scans\n"
-            f"       the older tag, step 2 reports a deleted locale as a "
+            f"       the older {one}, step 2 reports a deleted locale as a "
             f"harmless addition, and\n"
             f"       step 3 closes over the wrong copy graph. Swap the "
             f"arguments.")
@@ -883,25 +908,30 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
     # order, of one source tree compares nothing either; the clone holds
     # such pairs on glibc's own branches.
     nothing = nothing_compared(repo, old, new, commits)
+    noun = pair_noun(old, new)
+    one = ONE[noun]
+    rest = (_NOTHING_COMPARED_REST if noun == 'tags' else
+            _NOTHING_COMPARED_BUILDS.format(noun=noun, one=one))
+    source = 'upstream source' if noun == 'tags' else 'that commit'
     old, new = label(old), label(new)
     if nothing == 'commit':
         warn(f"{old} and {new} are the same commit. Steps 1, 2 and 5 compare "
-             f"upstream source against itself. {_NOTHING_COMPARED_REST}",
-             split_words=False)
+             f"{source} against itself. {rest}", split_words=False)
     elif nothing == 'tree':
         warn(f"{old} and {new} are two commits of one source tree. Steps 1, "
              f"2 and 5 compare that tree against itself. "
-             f"{_NOTHING_COMPARED_REST}", split_words=False)
+             f"{rest}", split_words=False)
     if status == 'reversed':
         warn(f"REVERSED PAIR, allowed on request: {detail}. Every finding "
              f"below has old and new the other way round -- what reads as "
              f"added was deleted in the real upgrade, and step 4 scanned the "
-             f"older tag. Not an audit of an upgrade.")
+             f"older {one}. Not an audit of an upgrade.")
     elif status == 'undetermined':
         warn(f"The DIRECTION of this pair could not be established: {detail}. "
              f"Nothing below has checked it: if the two arguments are the "
              f"wrong way round, every "
-             f"step still runs: step 4 scans the older tag, and step 2 reports "
+             f"step still runs: step 4 scans the older {one}, and step 2 "
+             f"reports "
              f"a deleted locale as a harmless addition. "
              f"Confirm which build is the older one.")
     return status, nothing
@@ -1145,7 +1175,7 @@ def list_locale_files(repo, tag):
     return side(repo, tag).paths
 
 
-def _require_corpus(paths, tag):
+def _require_corpus(paths, tag, kind='tag'):
     """Aborts below the floor. Every caller builds a result from this list,
     and a result built from nothing reads as "nothing changed", which is
     the reassuring direction. The node-reading modes had this guard from
@@ -1154,8 +1184,9 @@ def _require_corpus(paths, tag):
     if floor is not None:
         die(f"only {len(paths)} file(s) under {LOCALES_DIR}/ at {tag}, below "
             f"the floor of {floor}. That is not a glibc locale "
-            f"corpus -- a restructured tree, or a tag from before the "
-            f"directory existed. Refusing to report: an empty corpus reads "
+            + ("corpus -- a restructured tree, or a tag from before the "
+               "directory existed. " if kind == 'tag' else "corpus. ")
+            + f"Refusing to report: an empty corpus reads "
             f"as 'nothing changed' and 'no locale uses ellipsis ranges', "
             f"which is indistinguishable from a clean run.")
 
@@ -1178,9 +1209,11 @@ def list_tree_ids(repo, tag, extra):
 # build, the words `rpm -q glibc` printed, and version, a measurement's
 # 'glibc X.Y'). A machine known only by its measurement has no root and no
 # paths. ref on a machine side is the upstream tag its files are read
-# against, or None.
+# against, or None. prov is a build's provenance (build_sources: what was
+# fetched, checked and applied, its tag, its patches to strcoll's code),
+# None on a tag or a machine; no default, so a constructor cannot forget it.
 Side = collections.namedtuple(
-    'Side', 'kind ref root build version paths ids skipped')
+    'Side', 'kind ref root build version paths ids skipped prov')
 
 
 def side(repo, ref=None, machine=None, extra=(), build=None, version=None,
@@ -1217,18 +1250,24 @@ def side(repo, ref=None, machine=None, extra=(), build=None, version=None,
         if problem:
             die(problem)
         return Side('machine', ref, machine, build, version, names, None,
-                    skipped)
+                    skipped, None)
+    if named is None and machine is None and build is None and \
+            is_build_name(ref):
+        # A build given where a tag goes (a step's argument): read as a
+        # build, never asked of git by its name.
+        named, ref = ref, None
     if named is not None:
         if build is not None or version is not None:
             die("side() takes a machine's build= and version= or a build's "
                 "named=, not both")
         return build_side(repo, named, extra)[0]
     if ref is None:
-        return Side('machine', None, None, build, version, None, None, ())
+        return Side('machine', None, None, build, version, None, None, (),
+                    None)
     return _listed('tag', repo, ref, extra, build, version)
 
 
-def _listed(kind, repo, ref, extra, build=None, version=None):
+def _listed(kind, repo, ref, extra, build=None, version=None, prov=None):
     """A side of the clone at `ref`, a tag or a build's commit, listed with
     one `git ls-tree -r` and held to the floor."""
     out = run_git(['ls-tree', '-r', ref, '--', LOCALES_DIR + '/', *extra],
@@ -1244,8 +1283,8 @@ def _listed(kind, repo, ref, extra, build=None, version=None):
         ids[path] = fields[2]
         if path.startswith((LOCALES_DIR + '/', f'"{LOCALES_DIR}/')):
             paths.append(path)
-    _require_corpus(paths, ref if kind == 'tag' else build)
-    return Side(kind, ref, None, build, version, paths, ids, ())
+    _require_corpus(paths, ref if kind == 'tag' else _asked(build), kind)
+    return Side(kind, ref, None, build, version, paths, ids, (), prov)
 
 
 # The fetch build_side uses; a test hands its own (no network).
@@ -1289,14 +1328,60 @@ def is_build_name(name):
     return build_name(name) is not None
 
 
+def _asked(build):
+    """A build as it is asked for: Built.build without the `.src`
+    build_sources.identity adds."""
+    b = build or ''
+    return b[:-len('.src')] if b.endswith('.src') else b
+
+
+# What the steps read of glibc's line reader by ANCESTRY, not from a tree:
+# whether a commit holds LR_GETC_FIX (glibc_tree._pre236, step 2's
+# predates_lr_getc_fix) and collation_keys.UTF8_READER (step 2's
+# reads_utf8). Those two commits change these two files and NEWS, nothing
+# else (measured 2026-11-03). A build's commit has the ancestry of its
+# upstream tag, so the answer speaks for the build only while the build
+# leaves these files as the tag has them.
+LINE_READER = ('locale/programs/linereader.c', 'locale/programs/linereader.h')
+
+
+def _need_tags(repo, tags):
+    """Fetch tags once when one of `tags` is missing from the clone; die
+    naming any still missing. A clone older than a build lacks the tag the
+    build is made on, so a build side needs this as much as a tag does."""
+    tags = list(dict.fromkeys(tags))
+    if not tags:
+        return
+    missing = [t for t in tags if t not in resolve_commits(repo, tags)]
+    if not missing:
+        return
+    print("Refs not present locally: %s -- fetching tags..."
+          % ' '.join(missing), flush=True)
+    p = subprocess.run(['git', 'fetch', '--tags', '--quiet'], cwd=repo)
+    if p.returncode:
+        sys.exit(p.returncode)
+    found = resolve_commits(repo, tags)
+    for t in tags:
+        if t not in found:
+            print(f"error: unknown git ref '{t}' even after fetching tags",
+                  file=sys.stderr)
+            sys.exit(2)
+
+
 def build_side(repo, name, extra=()):
     """(Side, Built) of the build `name`: fetched and rebuilt from its SRPM
     with the clone (build_sources.fetch_build, the tarball compared with the
     upstream tag), made a commit of the clone again (build_commit), and
-    listed at that commit and held to the floor like a tag. Any refusal
-    dies with its reason: a build that cannot be read is never replaced by
-    its tag, whose sources are not the build's."""
+    listed at that commit and held to the floor like a tag. Its upstream
+    tag is fetched first when the clone lacks it. Any refusal dies with its
+    reason: a build that cannot be read is never replaced by its tag, whose
+    sources are not the build's. So does a build that changes glibc's line
+    reader (LINE_READER): how localedef reads 0x1A, 0xFF and UTF-8 is
+    answered here by the tag's ancestry, which would not speak for it."""
     import build_sources as bs
+    parsed = build_name(name)
+    if parsed:
+        _need_tags(repo, ['glibc-' + parsed[0]])
     try:
         built = _fetch(name, repo)
         if not built.provenance.get('tarball'):
@@ -1305,8 +1390,87 @@ def build_side(repo, name, extra=()):
         commit = bs.build_commit(repo, built)
     except bs.Refused as e:
         die(f"cannot read the build {name}: {e}", 2)
+    changed = [p for p in run_git(
+        ['diff-tree', '-r', '--name-only', built.tag, commit, '--',
+         *LINE_READER], repo).stdout.decode('utf-8', 'replace').split('\n')
+               if p]
+    if changed:
+        die(f"cannot read the build {name}: it changes glibc's line reader "
+            f"({', '.join(changed)}), and how localedef reads the bytes 0x1A "
+            f"and 0xFF and UTF-8 input is answered here by the ancestry of "
+            f"{built.tag}, which does not speak for that change.", 2)
+    prov = dict(built.provenance, tag=built.tag)
     return _listed('build', repo, commit, extra, built.build,
-                   built.version), built
+                   built.version, prov), built
+
+
+def step_sides(repo, *names):
+    """The sides a step reads, (sides, commits): each argument a tag of the
+    clone, kept as its name, or a build (is_build_name), made a Side by
+    side() and read by its commit -- a build's name never reaches git.
+    commits maps what git reads (a tag's name, a build's commit) to the
+    commit, for pair_check and nothing_compared. The tags are checked as
+    check_refs checks them, a commit build_commit made refused among them.
+
+    Every line the step writes from then on names a build by its name:
+    name_commits replaces the commit's id with it."""
+    tags = [n for n in names if not is_build_name(n)]
+    commits = check_refs(repo, *tags) if tags else {}
+    sides = []
+    for n in names:
+        if n in tags:
+            sides.append(n)
+        else:
+            s = side(repo, n)
+            commits[s.ref] = s.ref
+            sides.append(s)
+    name_commits({s.ref: label(s) for s in sides if not _is_tag(s)})
+    return sides, commits
+
+
+class _Named(io.TextIOBase):
+    """A text stream that writes through to `out` with each commit id of
+    `names` replaced by its name. The id is the full 40 or 64 hex digits
+    git gives, which no other text a step prints holds."""
+
+    def __init__(self, out, names):
+        super().__init__()
+        self.out, self.names = out, names
+
+    def write(self, text):
+        for sha, name in self.names.items():
+            text = text.replace(sha, name)
+        return self.out.write(text)
+
+    def writable(self):
+        return True
+
+    def flush(self):
+        self.out.flush()
+
+    @property
+    def encoding(self):
+        return self.out.encoding
+
+    def isatty(self):
+        return self.out.isatty()
+
+
+_NAMES = {}
+
+
+def name_commits(names):
+    """From now on the build commits of {commit: name} are printed by name,
+    on stdout and stderr: the one place a step turns what git read into
+    what its reader is told. Installed once per process; a later call adds
+    names."""
+    if not names:
+        return
+    _NAMES.update(names)
+    for attr in ('stdout', 'stderr'):
+        stream = getattr(sys, attr)
+        if not isinstance(stream, _Named):
+            setattr(sys, attr, _Named(stream, _NAMES))
 
 
 def collate_block(text):
@@ -2324,50 +2488,26 @@ def step1_sides(here, old, new, allow_reverse=False):
     names = (old, new)
     tags = [n for n in names if not is_build_name(n)]
     # The tags git must hold: the arguments that are tags, and the upstream
-    # tag each build is made on, which a clone older than the build lacks.
-    needed = list(tags) + ['glibc-' + build_name(n)[0] for n in names
-                           if n not in tags]
-    needed = list(dict.fromkeys(needed))
-    if needed:
-        missing = [t for t in needed
-                   if t not in resolve_commits(repo, needed)]
-        if missing:
-            print("Refs not present locally: %s -- fetching tags..."
-                  % ' '.join(missing), flush=True)
-            p = subprocess.run(['git', 'fetch', '--tags', '--quiet'],
-                               cwd=repo)
-            if p.returncode:
-                sys.exit(p.returncode)
-            found = resolve_commits(repo, needed)
-            for t in needed:
-                if t not in found:
-                    print(f"error: unknown git ref '{t}' even after "
-                          f"fetching tags", file=sys.stderr)
-                    sys.exit(2)
+    # tag each build is made on, which a clone older than the build lacks
+    # (build_side fetches it too, for a step run on its own).
+    _need_tags(repo, tags + ['glibc-' + build_name(n)[0] for n in names
+                             if n not in tags])
     if tags:
         refuse_build_commits(repo, resolve_commits(repo, tags))
-    built = {}
-    sides = []
-    for n in names:
-        if n in tags:
-            sides.append(n)
-        else:
-            sd, b = build_side(repo, n)
-            built[n] = b
-            sides.append(sd)
+    sides = [n if n in tags else side(repo, n) for n in names]
     with contextlib.redirect_stdout(sys.stderr):
         pair_check(repo, sides[0], sides[1], allow_reverse=allow_reverse)
-    if not built:
+    builds = [sd for sd in sides if not _is_tag(sd)]
+    if not builds:
         report_tag_provenance(repo, old, new)
     else:
         under = []
-        for n in names:
-            t = built[n].tag if n in built else n
+        for sd in sides:
+            t = sd if _is_tag(sd) else sd.prov['tag']
             if t not in under:
                 under.append(t)
         report_tag_provenance(repo, *under)
-        report_build_provenance([(sd, built[n]) for n, sd in zip(names, sides)
-                                 if n in built])
+        report_build_provenance(builds)
     print('---', flush=True)
     # The corpus floor: both tags must hold a real locale corpus, or the
     # diff is empty for a reason that has nothing to do with collation and
@@ -2377,9 +2517,9 @@ def step1_sides(here, old, new, allow_reverse=False):
     return repo, sides[0], sides[1]
 
 
-def report_build_provenance(pairs):
-    """Print where each (Side, Built) of a build came from and what was
-    checked; one `!!` for what was not. URLs are never wrapped, so they can
+def report_build_provenance(builds):
+    """Print where each build Side came from and what was checked (its
+    prov); one `!!` for what was not. URLs are never wrapped, so they can
     be copied whole."""
     import build_sources as bs
     print("Build provenance (each build is rebuilt here: its upstream tag "
@@ -2388,9 +2528,9 @@ def report_build_provenance(pairs):
           "clone):")
     fetched = False
     warned = []
-    for sd, b in pairs:
-        prov = b.provenance
-        print(f"  {label(sd)} = {sd.ref[:12]}, one parent: {b.tag}")
+    for sd in builds:
+        prov = sd.prov
+        print(f"  {label(sd)} = {sd.ref[:12]}, one parent: {prov['tag']}")
         files = (prov.get('fetched') or {}).get('files') or {}
         fetched = fetched or bool(files)
         for key, title in (('srpm', 'SRPM'),
@@ -2464,12 +2604,14 @@ def _main(argv):
             fh.write(f"{_ref(o)}\n{_ref(n)}\n")
         return 0
     if len(argv) == 3 and argv[0] == 'tags-only':
-        # audit.sh, before step 1: every step after it reads two tags.
+        # audit.sh, before step 1: it does not pass a build from step to
+        # step yet.
         for name in argv[1:]:
             if is_build_name(name):
                 die(f"{name} is a build. audit.sh does not read a build yet: "
-                    f"only step 1 does (scripts/audit-locale-diff.sh <old> "
-                    f"<new>). Give audit.sh two glibc tags.")
+                    f"steps 1 to 5 do, each run on its own "
+                    f"(scripts/audit-locale-diff.sh <old> <new> names the "
+                    f"next). Give audit.sh two glibc tags.")
         return 0
     if len(argv) >= 2 and argv[0] == 'corpus':
         # The corpus floor of the tags given, silent on success;

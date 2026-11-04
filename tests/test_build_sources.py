@@ -27,8 +27,10 @@ import io
 import json
 import lzma
 import os
+import re
 import struct
 import subprocess
+import sys
 import tarfile
 import tempfile
 import shutil
@@ -2539,7 +2541,7 @@ class ABuildIsASide(unittest.TestCase):
         # The same two built from el8's .40 and .48: by rpm, not "same".
         s40 = self.g.Side('build', a.ref, None,
                           'glibc-2.28-251.el8_10.40.src', 'glibc 2.28',
-                          a.paths, a.ids, ())
+                          a.paths, a.ids, (), a.prov)
         s48 = s40._replace(ref=b.ref, build='glibc-2.28-251.el8_10.48.src')
         self.assertEqual(self.g.order(self.repo, s40, s48)[0], 'forward')
         self.assertEqual(self.g.order(self.repo, s48, s40)[0], 'reversed')
@@ -2607,8 +2609,9 @@ class ABuildIsASide(unittest.TestCase):
         # A `!!` a build's check gave reaches the run, naming the build.
         self.assertIn('!! %s: charmaps NOT checked against '
                       'glibc-locale-source: no zstd reader' % B283, flat(out))
-        # No hint names a step that reads two tags.
-        self.assertNotIn('Next:', out)
+        # The hint names the builds: each step after this one reads one.
+        self.assertIn('Next: python3 filter_lc_collate_changes.py %s %s\n'
+                      % (B275, B283), out)
         # The commit step 1 made, given back to it as if it were a tag, on
         # either side.
         for pair in ((TAG, commits[1][:12]), (commits[1][:12], TAG)):
@@ -2641,6 +2644,22 @@ class ABuildIsASide(unittest.TestCase):
         self.assertEqual(_git_out(repo, 'rev-parse', TAG + '^{commit}'), tag)
         self.assertEqual((a.kind, b.kind), ('build', 'build'))
 
+    def test_a_step_on_a_clone_without_the_builds_tag_fetches_it(self):
+        """The same for a step run on its own: side() fetches the tag a
+        build is made on, as step 1 does, before making the commit."""
+        tag = _git_out(self.repo, 'rev-parse', TAG + '^{commit}')
+        _git_out(self.repo, 'update-ref', '-d', 'refs/tags/' + TAG)
+        _git_out(self.repo, 'update-ref', 'HEAD', 'glibc-2.28^{commit}')
+        _git_out(self.repo, 'remote', 'add', 'origin', GLIBC_CLONE)
+        out = io.StringIO()
+        with self.fake_fetch(), mock.patch('sys.stdout', out):
+            s = self.g.side(self.repo, B275)
+        self.assertIn('Refs not present locally: %s -- fetching tags...'
+                      % TAG, out.getvalue())
+        self.assertEqual(_git_out(self.repo, 'rev-parse', TAG + '^{commit}'),
+                         tag)
+        self.assertEqual((s.kind, s.prov['tag']), ('build', TAG))
+
     def test_audit_sh_refuses_a_build_before_step_1(self):
         for pair in ((TAG, B275), (B275, 'glibc-2.39')):
             with self.subTest(pair=pair):
@@ -2651,8 +2670,389 @@ class ABuildIsASide(unittest.TestCase):
                     env=dict(os.environ, PG_GLIBC_AUDIT_OUT=self.dir))
                 self.assertEqual(p.returncode, 2)
                 self.assertIn('%s is a build. audit.sh does not read a '
-                              'build yet' % B275, flat(p.stderr.decode()))
+                              'build yet: steps 1 to 5 do, each run on its '
+                              'own' % B275, flat(p.stderr.decode()))
                 self.assertNotIn('STEP 1', p.stdout.decode())
+
+
+def _fill_with_code(cache, mirror, name, tree, code=()):
+    """_fill_build_cache, with the build's patches to strcoll's code in its
+    provenance as build() records them ((patch, paths) pairs): none by
+    default, where _fill_build_cache's placeholder names a path outside
+    localedata/ and locale/."""
+    _fill_build_cache(cache, mirror, name, tree)
+    for where in os.listdir(cache):
+        path = os.path.join(cache, where, 'provenance.json')
+        if not os.path.isfile(path):
+            continue
+        with open(path) as fh:
+            prov = json.load(fh)
+        if prov['build'] != name + '.src':
+            continue
+        prov['collation_code_patches'] = [
+            {'patch': p, 'paths': list(paths)} for p, paths in code]
+        with open(path, 'w') as fh:
+            json.dump(prov, fh)
+        return
+    raise AssertionError('no kept tree for %s in %s' % (name, cache))
+
+
+_HEX40 = re.compile(r'\b[0-9a-f]{40}\b')
+ABSENT = 'glibc-2.34-286.el9_8'
+LD = 'locale/programs/ld-collate.c'
+
+
+class _StepsOnBuilds:
+    """Steps 2 to 5, run on their own, read a build named as `rpm -q glibc`
+    names it: fetched (from a cache this test fills, so no network), made a
+    commit of a repository of the test's own, read by that commit, ordered
+    by rpm, and printed by its name -- never its commit's id. Each build
+    here is glibc-2.34's own scope with one change: B283 changes sv_SE,
+    adds a locale file and changes a line of ld-collate.c; SAME holds
+    B275's tree under another release."""
+
+    SAME = 'glibc-2.34-284.el9_8'
+    LR = 'glibc-2.34-285.el9_8'
+    CLEAN = 'glibc-2.34-287.el9_8'
+    OUT = 'glibc-2.34-288.el9_8'
+    LRC = 'glibc-2.34-289.el9_8'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='build_step_')
+        base, _ = bs.scope_from_git(GLIBC_CLONE, TAG)
+        cls.base = os.path.join(cls.tmp, 'base')
+        for path, (data, exe) in base.items():
+            full = os.path.join(cls.base, path)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, 'wb') as fh:
+                fh.write(data)
+            os.chmod(full, 0o755 if exe else 0o644)
+        sv = 'localedata/locales/sv_SE'
+        with open(os.path.join(cls.base, sv), 'rb') as fh:
+            sv_text = fh.read()
+        with open(os.path.join(cls.base, LD), 'rb') as fh:
+            ld = fh.read()
+        cls.changed = _linked(cls.base, os.path.join(cls.tmp, 'changed'), {
+            sv: sv_text + b'% a change of the build\n',
+            LD: ld + b'int pg_glibc_audit_test_line;\n'})
+        cls.clean = _linked(cls.base, os.path.join(cls.tmp, 'clean'), {
+            sv: sv_text + b'% a change of the build\n'})
+        added = os.path.join(cls.changed, 'localedata/locales/xx_YY')
+        with open(added, 'wb') as fh:
+            fh.write(sv_text)
+        with open(os.path.join(cls.base, 'locale/programs/linereader.h'),
+                  'rb') as fh:
+            lr = fh.read()
+        cls.reader = _linked(cls.base, os.path.join(cls.tmp, 'reader'), {
+            'locale/programs/linereader.h': lr + b'/* a change */\n'})
+        with open(os.path.join(cls.base, 'locale/programs/linereader.c'),
+                  'rb') as fh:
+            lrc = fh.read()
+        cls.reader_c = _linked(cls.base, os.path.join(cls.tmp, 'reader_c'), {
+            'locale/programs/linereader.c': lrc + b'/* a change */\n'})
+        cls.repo = os.path.join(cls.tmp, 'repo')
+        glibc_shaped(cls.repo, TAG)
+        cls.cache = os.path.join(cls.tmp, 'cache')
+        cls.mirror = 'file:///nowhere/'
+        in_locale = [('glibc-rh827510.patch', ['locale/loadlocale.c'])]
+        _fill_with_code(cls.cache, cls.mirror, B275, cls.base, in_locale)
+        _fill_with_code(cls.cache, cls.mirror, B283, cls.changed,
+                        in_locale + [('glibc-c-utf8-locale-1.patch', [LD])])
+        _fill_with_code(cls.cache, cls.mirror, cls.SAME, cls.base,
+                        [('glibc-example.patch', ['string/strcoll_l.c'])])
+        _fill_with_code(cls.cache, cls.mirror, cls.LR, cls.reader)
+        _fill_with_code(cls.cache, cls.mirror, cls.CLEAN, cls.clean,
+                        in_locale)
+        _fill_with_code(cls.cache, cls.mirror, cls.OUT, cls.changed,
+                        in_locale + [('glibc-example.patch',
+                                      ['wcsmbs/wcscoll.c'])])
+        _fill_with_code(cls.cache, cls.mirror, cls.LRC, cls.reader_c)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, True)
+
+    def run_step(self, script, *args):
+        out = tempfile.mkdtemp(prefix='out_', dir=self.tmp)
+        env = dict(os.environ, PG_GLIBC_BUILD_SOURCES_CACHE=self.cache,
+                   PG_GLIBC_BUILD_MIRROR=self.mirror, PG_GLIBC_AUDIT_OUT=out,
+                   PG_GLIBC_AUDIT_WRAPPED='')
+        p = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS_DIR, script), *args,
+             '--repo', self.repo], capture_output=True, env=env, cwd=self.tmp)
+        return (p.returncode, p.stdout.decode('utf-8', 'replace'),
+                p.stderr.decode('utf-8', 'replace'), out)
+
+    def assertNoCommitId(self, *texts, out_dir=None):
+        for text in texts:
+            self.assertEqual(_HEX40.findall(text), [], text[-1500:])
+        for name in os.listdir(out_dir) if out_dir else ():
+            self.assertNotRegex(name, _HEX40)
+            with open(os.path.join(out_dir, name), encoding='utf-8') as fh:
+                self.assertEqual(_HEX40.findall(fh.read()), [], name)
+
+
+@needs_clone
+class AStepReadsABuild(_StepsOnBuilds, unittest.TestCase):
+    """Steps 2, 3 and 4 on builds, and what every step refuses
+    (_StepsOnBuilds)."""
+
+    def test_step_2_reads_two_builds_and_names_them(self):
+        rc, out, err, d = self.run_step('filter_lc_collate_changes.py',
+                                        B275, B283)
+        self.assertEqual(rc, 0, err[-2000:])
+        self.assertNoCommitId(out, err, out_dir=d)
+        self.assertIn('Locale files changed between %s and %s: 2\n'
+                      % (B275, B283), out)
+        # Ordered by rpm: two builds of one version, which git cannot order.
+        self.assertNotIn('DIRECTION', out + err)
+        self.assertIn('SUPPORTED at both builds', flat(out))
+        self.assertNotIn('both tags', flat(out))
+        # The lists audit.sh reads are named for the builds.
+        self.assertEqual(sorted(os.listdir(d)), sorted(
+            '%s.%s..%s.txt' % (k, B275, B283) for k in (
+                'step2_changed_collate', 'step2_keyed_locales',
+                'step2_removed_locales')))
+        # An added file: the old build's own sources are the answer.
+        self.assertIn("%s's own locale sources do not have these files, so "
+                      "that build ships none of these locales:" % B275,
+                      flat(out))
+        self.assertNotIn('distros backport', out)
+
+    def test_a_tag_and_a_build_say_sides(self):
+        rc, out, err, _ = self.run_step('filter_lc_collate_changes.py',
+                                        TAG, B283)
+        self.assertEqual(rc, 0, err[-2000:])
+        self.assertNoCommitId(out, err)
+        self.assertIn('SUPPORTED at both sides', flat(out))
+        # The old side is the tag: its added-file sentence is the tag's.
+        self.assertIn('distros backport', out)
+
+    def test_two_builds_of_one_tree_compare_nothing(self):
+        for script in ('filter_lc_collate_changes.py',
+                       'diff_collation_code.py'):
+            with self.subTest(script=script):
+                rc, out, err, _ = self.run_step(script, B275, self.SAME)
+                self.assertEqual(rc, 0, err[-2000:])
+                text = flat(out + err)
+                self.assertIn('%s and %s are two commits of one source tree'
+                              % (B275, self.SAME), text)
+                self.assertIn('the two builds hold the same locale sources '
+                              'and the same code under locale/', text)
+                self.assertNotIn("The distro's own builds", text)
+                self.assertNotIn('DIRECTION', text)
+
+    def test_one_build_twice_is_one_commit(self):
+        rc, out, err, _ = self.run_step('filter_lc_collate_changes.py',
+                                        B275, B275)
+        self.assertEqual(rc, 0, err[-2000:])
+        self.assertIn('%s and %s are the same commit. Steps 1, 2 and 5 '
+                      'compare that commit against itself.' % (B275, B275),
+                      flat(out + err))
+        self.assertIn('the two builds are one commit.', flat(out))
+
+    def test_a_build_that_cannot_be_read_is_refused_never_its_tag(self):
+        for script, args in (
+                ('filter_lc_collate_changes.py', (B275, ABSENT)),
+                ('diff_collation_code.py', (B275, ABSENT)),
+                ('flag_algorithmic_ranges.py', (ABSENT,))):
+            with self.subTest(script=script):
+                rc, out, err, d = self.run_step(script, *args)
+                self.assertEqual(rc, 2)
+                self.assertIn('cannot read the build ' + ABSENT, err)
+                self.assertEqual(out, '')
+                self.assertEqual(os.listdir(d), [])
+
+    def test_a_build_that_changes_the_line_reader_is_refused(self):
+        for build, path in ((self.LR, 'locale/programs/linereader.h'),
+                            (self.LRC, 'locale/programs/linereader.c')):
+            with self.subTest(path=path):
+                rc, out, err, _ = self.run_step(
+                    'filter_lc_collate_changes.py', B275, build)
+                self.assertEqual(rc, 2)
+                self.assertIn("cannot read the build %s: it changes glibc's "
+                              "line reader (%s)" % (build, path), flat(err))
+                self.assertNotIn('Locale files changed', out)
+
+    def test_a_builds_commit_given_as_a_tag_is_refused_by_every_step(self):
+        rc, _, err, _ = self.run_step('flag_algorithmic_ranges.py', B283)
+        self.assertEqual(rc, 0, err[-2000:])
+        commit = _git_out(self.repo, 'rev-parse', bs.build_ref(B283))
+        for script, args in (
+                ('filter_lc_collate_changes.py', (TAG, commit)),
+                ('resolve_copy_closure.py', (commit, 'sv_SE')),
+                ('flag_algorithmic_ranges.py', (commit,)),
+                ('diff_collation_code.py', (TAG, commit[:12]))):
+            with self.subTest(script=script):
+                rc, out, err, _ = self.run_step(script, *args)
+                self.assertEqual(rc, 2)
+                self.assertIn('is a commit this tool made for a distro build',
+                              flat(err))
+                self.assertIn('Name the build itself '
+                              '(glibc-2.34-283.el9_8) to steps 1 to 5: each '
+                              'makes its commit again and reads that.',
+                              flat(err))
+
+    def test_steps_3_and_4_read_the_build_not_its_tag(self):
+        rc, out, err, _ = self.run_step('flag_algorithmic_ranges.py', B283)
+        self.assertEqual(rc, 0, err[-2000:])
+        self.assertNoCommitId(out, err)
+        at_tag = len(_git_out(GLIBC_CLONE, 'ls-tree', '--name-only',
+                              TAG + ':localedata/locales').split('\n'))
+        self.assertIn('Files at %s: %d,' % (B283, at_tag + 1), out)
+        # xx_YY exists only in the build.
+        rc, out, err, _ = self.run_step('resolve_copy_closure.py', B283,
+                                        'xx_YY')
+        self.assertEqual(rc, 0, err[-2000:])
+        self.assertNoCommitId(out, err)
+        self.assertIn('Copy chains read at %s' % B283, out)
+        # A note on stderr names the build too.
+        rc, out, err, _ = self.run_step('resolve_copy_closure.py', B283,
+                                        'sv_SE', 'translit_combining')
+        self.assertEqual(rc, 0, err[-2000:])
+        self.assertIn('note: translit_combining have no LC_COLLATE block at '
+                      '%s;' % B283, flat(err))
+        self.assertNoCommitId(out, err)
+
+    def test_a_reversed_pair_of_builds_names_builds(self):
+        rc, out, err, _ = self.run_step('filter_lc_collate_changes.py',
+                                        B283, B275)
+        self.assertEqual(rc, 2)
+        self.assertIn('Every step takes <old_build> <new_build>', flat(err))
+        self.assertIn('the older build', flat(err))
+        self.assertNoCommitId(out, err)
+
+
+@needs_clone
+class StepFiveReadsABuild(_StepsOnBuilds, unittest.TestCase):
+    """Step 5 on builds (_StepsOnBuilds)."""
+
+    def test_step_5_names_each_builds_patches_and_its_commit(self):
+        rc, out, err, _ = self.run_step('diff_collation_code.py', B275, B283)
+        self.assertEqual(rc, 0, err[-2000:])
+        self.assertNoCommitId(out, err)
+        self.assertIn("Each build's own patches to this code are under "
+                      "locale/, so the diff below holds them: %s, 1 "
+                      "patch(es); %s, 2 patch(es)." % (B275, B283), flat(out))
+        self.assertIn("A change that only undoes one of %s's patches lists "
+                      "no commit." % B275, flat(out))
+        self.assertRegex(out, r'\n        [0-9a-f]{7,} %s: the build\'s own '
+                              r'patches\n' % re.escape(B283))
+        self.assertNotIn('pg-glibc-audit:', out)
+        self.assertIn('pg_glibc_audit_test_line', out)
+
+    def test_step_5_refuses_a_clean_verdict_over_a_patch_it_cannot_read(self):
+        rc, out, err, _ = self.run_step('diff_collation_code.py', B275,
+                                        self.SAME)
+        self.assertEqual(rc, 0, err[-2000:])
+        self.assertIn("!! %s's patch glibc-example.patch changes strcoll's "
+                      "code outside localedata/ and locale/ "
+                      "(string/strcoll_l.c)." % self.SAME, flat(out))
+        self.assertIn("This is NOT a clean result:", out)
+        self.assertIn("1 patch(es) of a build change strcoll's code outside "
+                      "localedata/ and locale/, which this diff does not "
+                      "hold", flat(out))
+        self.assertNotIn('No substantive collation code change', out)
+        self.assertNotIn("so the diff below holds them", flat(out))
+
+    def test_a_patch_it_cannot_read_blocks_a_pair_with_hunks_too(self):
+        """The same refusal where nothing else refuses: two builds whose
+        trees differ, so that the diff has hunks and the pair compares
+        something. Backlog 1.24: a reason read only at zero, or only when
+        another reason is there, never fires on a real upgrade."""
+        rc, out, err, _ = self.run_step('diff_collation_code.py', B275,
+                                        self.OUT)
+        self.assertEqual(rc, 0, err[-2000:])
+        text = flat(out)
+        self.assertNotIn('one source tree', text)
+        self.assertRegex(text, r'\d+ substantive hunk\(s\) in the files this '
+                               r'audit could read\.')
+        self.assertIn('This is NOT a clean result:', out)
+        self.assertEqual(
+            [ln[4:] for ln in out.split('\n') if ln.startswith('  - ')],
+            ["1 patch(es) of a build change strcoll's code outside "
+             "localedata/ and locale/, which this diff does not hold"])
+        self.assertNotIn('substantive hunk(s) found', text)
+        self.assertNotIn('Resolve the paths listed above', text)
+        self.assertIn("The build's commit holds its own sources only in "
+                      "those two folders, so this diff reads upstream's code "
+                      "at those paths, not the build's.", text)
+
+    def test_a_clean_verdict_between_builds_says_what_it_covers(self):
+        rc, out, err, _ = self.run_step('diff_collation_code.py', B275,
+                                        self.CLEAN)
+        self.assertEqual(rc, 0, err[-2000:])
+        self.assertIn("No substantive collation code change in the sources. "
+                      "Every locale at both builds that steps 2 and 3 did "
+                      "not list is unaffected as far as the sources go, "
+                      "including every locale that flag_algorithmic_ranges.py"
+                      " lists. Not checked: what each build's compiler "
+                      "made of those sources, and a build's patches to code "
+                      "outside localedata/ and locale/ that this step does "
+                      "not read.", flat(out))
+        self.assertNotIn('genuinely unaffected', out)
+
+@needs_clone
+class AStepReadsTheFixtureBuilds(unittest.TestCase):
+    """Step 2 on the three real builds of the fixtures, rebuilt from
+    tests/build_sources/ and the clone (fixture()), read by audit.sh's
+    known answers: over RHEL 8 -> 9 the builds hold C.UTF-8's file on both
+    sides, so it is compared like any locale and changes, and en_US@ampm,
+    which only el8 ships, is deleted; over RHEL 9 -> 10 the C file is the
+    same and no `!!` says C.UTF-8 may change (backlog 13.6)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='fixture_step_')
+        cls.repo = os.path.join(cls.tmp, 'repo')
+        glibc_shaped(cls.repo, TAG)
+        cls.cache = os.path.join(cls.tmp, 'cache')
+        cls.mirror = 'file:///nowhere/'
+        for build, _ in FIXTURES:
+            tree = fixture(build)[5]
+            d = os.path.join(cls.tmp, build)
+            for path, (data, exe) in tree.items():
+                full = os.path.join(d, path)
+                os.makedirs(os.path.dirname(full), exist_ok=True)
+                with open(full, 'wb') as fh:
+                    fh.write(data)
+                os.chmod(full, 0o755 if exe else 0o644)
+            _fill_with_code(cls.cache, cls.mirror, build, d)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, True)
+
+    def step2(self, old, new):
+        out = tempfile.mkdtemp(prefix='out_', dir=self.tmp)
+        env = dict(os.environ, PG_GLIBC_BUILD_SOURCES_CACHE=self.cache,
+                   PG_GLIBC_BUILD_MIRROR=self.mirror, PG_GLIBC_AUDIT_OUT=out)
+        p = subprocess.run(
+            [sys.executable,
+             os.path.join(SCRIPTS_DIR, 'filter_lc_collate_changes.py'),
+             old, new, '--repo', self.repo], capture_output=True, env=env,
+            cwd=self.tmp)
+        self.assertEqual(p.returncode, 0, p.stderr.decode()[-2000:])
+
+        def lines(kind):
+            with open(os.path.join(out, 'step2_%s.%s..%s.txt'
+                                   % (kind, old, new))) as fh:
+                return [ln.strip() for ln in fh
+                        if ln.strip() and not ln.startswith('#')]
+        return p.stdout.decode(), lines
+
+    def test_rhel8_to_rhel9(self):
+        out, lines = self.step2(*(b for b, _ in FIXTURES[:2]))
+        self.assertIn('C', lines('changed_collate'))
+        self.assertIn('en_US@ampm (deleted)', lines('removed_locales'))
+        self.assertNotIn('BACKPORTED', out)
+
+    def test_rhel9_to_rhel10(self):
+        out, lines = self.step2(*(b for b, _ in FIXTURES[1:]))
+        self.assertNotIn('BACKPORTED', out)
+        self.assertEqual(lines('changed_collate'),
+                         ['ber_DZ', 'kab_DZ', 'th_TH'])
 
 
 if __name__ == '__main__':

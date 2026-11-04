@@ -199,9 +199,9 @@ export PG_GLIBC_AUDIT_WRAPPED=1
 slug() { python3 "$SCRIPTS/glibc_locale_data.py" pair-slug "$1" "$2"; }
 PAIR=$(slug "$OLD" "$NEW")
 
-# Step 1 reads a build named as `rpm -q glibc` names it without the
-# architecture; the steps after it read two tags, so a build name is refused
-# here, before anything runs.
+# Steps 1 to 5 read a build named as `rpm -q glibc` names it without the
+# architecture, each run on its own; this script does not hand one from step
+# to step yet, so a build name is refused here, before anything runs.
 python3 "$SCRIPTS/glibc_locale_data.py" tags-only "$OLD" "$NEW"
 STEP2_LIST="$OUT_DIR/step2_changed_collate.$PAIR.txt"
 STEP2_REMOVED="$OUT_DIR/step2_removed_locales.$PAIR.txt"
@@ -943,7 +943,7 @@ case $STEP5 in
     echo "-- Needs an empirical test: step 5 did NOT reach a clean result, so"
     echo "   the locales step 4 flagged stay UNRESOLVED. Read step 5's output:"
     echo "   a tracked file vanished between the tags or was renamed away"
-    echo "   before both of them, a tracked path exists at no ref in the"
+    echo "   before both of them, a tracked path exists at no ref of glibc in the"
     echo "   clone, the include walk reached nothing, the two tags are one"
     echo "   commit or two commits of one source tree, or the step did not"
     echo "   finish."

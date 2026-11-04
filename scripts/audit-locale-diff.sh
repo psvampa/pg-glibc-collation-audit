@@ -113,8 +113,7 @@ fi
 echo "---"
 # Under audit.sh this hint names a step that has already run. Only the hint is
 # suppressed; every verdict above is printed either way.
-# A build pair gets no hint: the steps after this one read two glibc tags.
-if [ "${PG_GLIBC_AUDIT_WRAPPED:-}" != "1" ] && [ "$OLD_REF" = "$OLD" ] &&
-   [ "$NEW_REF" = "$NEW" ]; then
+# By the names given: each step after this one reads a build by its name.
+if [ "${PG_GLIBC_AUDIT_WRAPPED:-}" != "1" ]; then
   echo "Next: python3 filter_lc_collate_changes.py $OLD $NEW"
 fi

@@ -29,6 +29,9 @@ reported the single most dangerous locale as harmless.
 Usage:
   python3 filter_lc_collate_changes.py <old_tag> <new_tag> [--repo <path>]
                                        [--diff-file <path>] [--allow-reverse]
+  each a glibc tag, or a build named as `rpm -q glibc` names it
+  without the architecture (glibc-2.34-283.el9_8),
+  fetched and read by its commit
 
 Example:
   python3 filter_lc_collate_changes.py glibc-2.28 glibc-2.34
@@ -960,7 +963,8 @@ class CharmapReads:
         self.all_read = True
 
 
-def check_charmaps(reads, repo, side_old, side_new, sup, names, new_tree):
+def check_charmaps(reads, repo, side_old, side_new, sup, names, new_tree,
+                   words=None):
     """Run collation_keys.compare over the two tags, print what it found,
     and return the source names it lists for step 3. `new_tree()` gives the
     glibc_tree.Tree of the new tag, asked only if compare needs step 3's
@@ -1020,7 +1024,7 @@ def check_charmaps(reads, repo, side_old, side_new, sup, names, new_tree):
         side.ask_utf8 = (lambda tag=side.tag: reads_utf8(repo, tag))
     report = ck.compare(side_old, side_new, builds_old, builds_new,
                         already_listed, read_more, fresh=False)
-    print_charmap_report(report, old, new)
+    print_charmap_report(report, old, new, words or STEP2_WORDS)
     return ck.listed_sources(report)
 
 
@@ -1062,6 +1066,18 @@ STEP2_WORDS = Words(
                  "compared: {its_their} source file is not at both.",
     changed_between="between the tags",
     at_new="at {new}")
+
+
+def step2_words(noun):
+    """STEP2_WORDS for two tags, else the same words naming the two sides
+    as `noun` says (glibc_locale_data.pair_noun)."""
+    if noun == 'tags':
+        return STEP2_WORDS
+    return STEP2_WORDS._replace(**{
+        f: getattr(STEP2_WORDS, f).replace('both tags', f'both {noun}')
+        .replace('between the tags', f'between the {noun}')
+        for f in ('builds', 'none_compared', 'not_compared',
+                  'changed_between')})
 
 
 def _said(words, field, old, new, **more):
@@ -1286,19 +1302,23 @@ def print_translit_report(report, new, words=STEP2_WORDS, old=None):
 def main(argv):
     ap = argparse.ArgumentParser(
         description="Filter changed locale files down to those that can "
-                    "change LC_COLLATE, add unchanged ones the two tags' "
+                    "change LC_COLLATE, add unchanged ones the two sides' "
                     "localedef read differently, and compare the charmaps "
                     "the SUPPORTED builds "
                     "use and the collating elements they build out of "
                     "transliterations.")
-    ap.add_argument('old_tag')
-    ap.add_argument('new_tag')
+    side_help = ("a glibc tag, or a build named as `rpm -q glibc` names it "
+                 "(glibc-2.34-283.el9_8)")
+    ap.add_argument('old_tag', help=side_help)
+    ap.add_argument('new_tag', help=side_help)
     ap.add_argument('--repo', help="path to the glibc clone (autodetected)")
     ap.add_argument('--allow-reverse', action='store_true',
-                    help="run a pair whose new tag is the OLDER commit. Refused by default. Prints a `!!` block saying the direction is reversed.")
+                    help="run a pair whose new side is the OLDER one. "
+                         "Refused by default. Prints a `!!` block saying the "
+                         "direction is reversed.")
     ap.add_argument('--diff-file',
                     help="a -U0 diff to check against the one git gives for "
-                         "the two tags: refused unless it places every change "
+                         "the two sides: refused unless it places every change "
                          "where git's does. The run still needs the clone, and "
                          "reads git's diff")
     opts = ap.parse_args(argv)
@@ -1312,7 +1332,14 @@ def main(argv):
 
 def _main(opts):
     repo = g.find_repo(opts.repo)
-    commits = g.check_refs(repo, opts.old_tag, opts.new_tag)
+    # Each side a tag or a build (step_sides): from here on git reads a
+    # build by its commit, and every line printed names it by its name.
+    # The names are kept for the lists audit.sh reads by name.
+    (old_side, new_side), commits = g.step_sides(repo, opts.old_tag,
+                                                 opts.new_tag)
+    old_name, new_name = opts.old_tag, opts.new_tag
+    noun = g.pair_noun(old_side, new_side)
+    opts.old_tag, opts.new_tag = g._ref(old_side), g._ref(new_side)
 
     # Which of the two is newer, asked of git rather than assumed. Reversed,
     # this step swaps its reassuring bucket for its noisy one: a locale
@@ -1320,7 +1347,7 @@ def _main(opts):
     # And whether the two compare anything at all (one commit, or two
     # commits of one source tree): then the character set check below has
     # nothing to read.
-    _, nothing = g.pair_check(repo, opts.old_tag, opts.new_tag,
+    _, nothing = g.pair_check(repo, old_side, new_side,
                               allow_reverse=opts.allow_reverse,
                               commits=commits)
     rng = f'{opts.old_tag}..{opts.new_tag}'
@@ -1383,7 +1410,7 @@ def _main(opts):
             g.die(f"--diff-file places the changes of {len(differ)} file(s) "
                   f"differently from the diff git gives for {rng}, e.g. "
                   f"{', '.join(differ[:3])}.\n"
-                  f"       It does not match these tags. Drop --diff-file and "
+                  f"       It does not match these sides. Drop --diff-file and "
                   f"let this script generate it.")
         # The ranges are all the verdict reads, and they now match; the lines
         # under them are what the characters are read from, and a file with
@@ -1615,7 +1642,7 @@ def _main(opts):
                 print_characters(chars)
             print(textwrap.fill(
                 ("those are the changed lines; " if chars else "")
-                + "the two tags' localedef read this file differently (see "
+                + f"the two {noun}' localedef read this file differently (see "
                 "the `!!` above that names it), so any rule in it can change",
                 width=78, initial_indent='      ', subsequent_indent='      '))
         elif path in unread_paths:
@@ -1672,7 +1699,7 @@ def _main(opts):
     # in a list of its own, so step 3 does not call it an LC_COLLATE change.
     if charmap_reads is None:
         print("\nCharacter sets and transliterations: not compared, the two "
-              + ("tags are one commit." if nothing == 'commit' else
+              + (f"{noun} are one commit." if nothing == 'commit' else
                  "refs are two commits of one source tree."))
         keyed = []
     else:
@@ -1686,17 +1713,17 @@ def _main(opts):
                                                     builds[opts.new_tag]))
             return trees[0]
         keyed = check_charmaps(charmap_reads, repo, side_old, side_new, sup,
-                               names, new_tree)
+                               names, new_tree, step2_words(noun))
 
     # Written whether or not it is empty, and named after the pair. audit.sh
     # reads this instead of the user retyping it, and an empty file for THIS
     # pair is a different fact from a leftover file for another one -- the
     # confusion this script's docstring exists to record.
-    g.write_list(f"step2_changed_collate.{g.pair_slug(opts.old_tag, opts.new_tag)}.txt",
+    g.write_list(f"step2_changed_collate.{g.pair_slug(old_name, new_name)}.txt",
                  names)
     # Written every run too, for the same reason: the builds the character
     # set check lists, which step 3 reads with --keyed.
-    g.write_list(f"step2_keyed_locales.{g.pair_slug(opts.old_tag, opts.new_tag)}.txt",
+    g.write_list(f"step2_keyed_locales.{g.pair_slug(old_name, new_name)}.txt",
                  keyed)
 
     # Every file of the old tag that is not at the new one, which is what the
@@ -1708,8 +1735,8 @@ def _main(opts):
         [(os.path.basename(p), 'deleted') for p in deleted]
         + [(os.path.basename(old), f'renamed to {os.path.basename(new)}')
            for old, new in renamed])
-    g.write_list(f"step2_removed_locales.{g.pair_slug(opts.old_tag, opts.new_tag)}.txt",
-                 [f"# locale files at {opts.old_tag} and not at {opts.new_tag}"]
+    g.write_list(f"step2_removed_locales.{g.pair_slug(old_name, new_name)}.txt",
+                 [f"# locale files at {old_name} and not at {new_name}"]
                  + [f"{name} ({how})" for name, how in removed])
 
     if (names or keyed) and not g.wrapped():
@@ -1751,10 +1778,18 @@ def _main(opts):
               f"change of order. An added file")
         print(f"cannot affect an existing index ONLY IF the locale did not "
               f"exist on the old system.")
-        print(f"An upstream source diff cannot establish that -- distros "
-              f"backport. Confirm with")
-        print(f"`locale -a` on the OLD node before treating these as out of "
-              f"scope:")
+        if g._is_tag(old_side):
+            print(f"An upstream source diff cannot establish that -- distros "
+                  f"backport. Confirm with")
+            print(f"`locale -a` on the OLD node before treating these as out "
+                  f"of scope:")
+        else:
+            # The old side is the build's own sources, distro patches and
+            # all, verified against its glibc-locale-source.
+            print(textwrap.fill(
+                f"{old_name}'s own locale sources do not have these files, "
+                f"so that build ships none of these locales:", width=78,
+                break_long_words=False, break_on_hyphens=False))
         for path in sorted(rest):
             print(f"  {path} -> {generated(path)}")
     if deleted:
