@@ -94,11 +94,16 @@ jobs:
         # names it keeps; the key names them too, and falls back to the runs
         # of the same reader, so after a change to those files alone one run
         # computes it again and saves it, instead of every run computing it
-        # and none saving it (backlog 15.2 B3).
+        # and none saving it (backlog 15.2 B3). The step below also fills
+        # what step 2 asks over the fixture builds of tests/build_sources/;
+        # the key names those files, the test code that builds them and asks
+        # (_harness.py, test_build_sources.py) and the scripts that decide
+        # what step 2 asks of a build, so a change to any of them is saved
+        # once instead of computed on every run (#145 changed three of them).
         uses: actions/cache@v4
         with:
           path: scripts/glibc-reader-cache
-          key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}-${{ hashFiles('scripts/glibc_tree.py', 'scripts/diff_distro_locales.py') }}
+          key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}-${{ hashFiles('scripts/glibc_tree.py', 'scripts/diff_distro_locales.py', 'scripts/filter_lc_collate_changes.py', 'scripts/glibc_locale_data.py', 'scripts/build_sources.py', 'tests/_harness.py', 'tests/test_build_sources.py', 'tests/build_sources/**') }}
           restore-keys: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}
 
       - name: Fill the reader's answers before the suite
@@ -106,8 +111,9 @@ jobs:
         # 600 s limit per process. Here, after a change to the reader, it
         # ran past that (#103's first run), and the classes then computed
         # the trees one processor each. As a step of its own it has no such
-        # limit and all four processors; with the cache full it takes about
-        # a second, and the runner then finds every tree kept.
+        # limit and all four processors. With the cache full it still runs
+        # step 2 over the fixture builds, about 12 s on the Mac, and the
+        # runner then finds every tree kept.
         run: |
           cd tests
           PG_GLIBC_READER_JOBS=$(nproc) python3 -c \

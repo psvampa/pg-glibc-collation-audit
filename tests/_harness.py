@@ -142,7 +142,8 @@ def fill_reader_cache():
     """Compute, with every processor, the localedef runs most of the suite
     asks scripts/reader_cache.py for: every locale of the five tags, and of
     OLD and MID read as RHEL 9 reads them (codepoint_collation is a keyword
-    there).
+    there), and what step 2 asks over the three fixture builds of
+    tests/build_sources/.
     Most trees the tests build are one of these with a file or two changed,
     so after this they find nearly every run kept. Without it, the classes
     that run at once each computed nearly the same tree on their own, one
@@ -190,14 +191,28 @@ def fill_reader_cache():
             glibc_tree.Tree.at_tag(GLIBC_CLONE, OLD, old9)
     if has_tags(MID):
         rhel9 = glibc_tree.build_at(GLIBC_CLONE, MID, '.el9')
-        if kept(MID, rhel9):
-            return
-        paths = g.list_locale_files(GLIBC_CLONE, MID)
-        contents, missing = g.read_blobs(GLIBC_CLONE, MID, paths, raw=True)
-        g.require_read(MID, paths, missing, 'the locale files')
-        files = {os.path.basename(p).encode('utf-8', 'surrogateescape'): v
-                 for p, v in contents.items()}
-        glibc_tree.Tree(MID, files, rhel9, g.decoded)
+        if not kept(MID, rhel9):
+            paths = g.list_locale_files(GLIBC_CLONE, MID)
+            contents, missing = g.read_blobs(GLIBC_CLONE, MID, paths,
+                                             raw=True)
+            g.require_read(MID, paths, missing, 'the locale files')
+            files = {os.path.basename(p).encode('utf-8', 'surrogateescape'):
+                     v for p, v in contents.items()}
+            glibc_tree.Tree(MID, files, rhel9, g.decoded)
+    # Step 2 over the three fixture builds, el8 -> el9 -> el10, as
+    # test_build_sources.AStepReadsTheFixtureBuilds runs it, by that class's
+    # own code. None of their trees is one of the tags above, and on GitHub
+    # each class gets one processor: with nothing kept the class ran past
+    # the 600 s limit there (main after #145, 2026-11-04).
+    if has_tags(OLD, MID, NEW):
+        import test_build_sources as tb
+        cls = tb.AStepReadsTheFixtureBuilds
+        cls.setUpClass()
+        try:
+            for (old, _), (new, _) in zip(tb.FIXTURES, tb.FIXTURES[1:]):
+                cls('test_rhel8_to_rhel9').step2(old, new)
+        finally:
+            cls.tearDownClass()
 
 
 def glibc_commit(base, files, tmp):
