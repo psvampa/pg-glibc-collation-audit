@@ -742,8 +742,10 @@ class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertNotIn('No substantive collation code change', out)
         self.assertEqual(self.refusals(out), [
-            '1 tracked path(s) exist at no ref in this clone', self.SAME])
-        self.assertIn('ld-colate.c: no ref in this clone has ever had it',
+            '1 tracked path(s) exist at no ref of glibc in this clone',
+            self.SAME])
+        self.assertIn('ld-colate.c: no ref of glibc in this clone has '
+                      'ever had it',
                       flat(out))
 
     def test_a_blocker_refuses_a_hunk_count_too(self):
@@ -775,8 +777,8 @@ class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
              "else p for p in d.ENTRY_POINTS]\n"
              "d.TIER1 = ['locale/programs/ld-colate.c' if p == %r "
              "else p for p in d.TIER1]" % (collate, collate),
-             'ld-colate.c: no ref in this clone has ever had it', 11,
-             ['1 tracked path(s) exist at no ref in this clone']),
+             'ld-colate.c: no ref of glibc in this clone has ever had it', 11,
+             ['1 tracked path(s) exist at no ref of glibc in this clone']),
             ("d.TIER2 = d.TIER2 + ['locale/xlocale.h']",
              'locale/xlocale.h: ABSENT at glibc-2.28 and glibc-2.34', 29,
              ['1 path(s) this audit must read are absent from both tags']),
@@ -818,7 +820,8 @@ class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.refusals(out), [self.SAME])
         self.assertNotIn('Resolve the paths listed above', out)
-        for blocker in ('vanished before', 'exist at no ref in this clone',
+        for blocker in ('vanished before',
+                        'exist at no ref of glibc in this clone',
                         'GONE at', 'include walk reached'):
             self.assertNotIn(blocker, flat(out))
 
@@ -2829,7 +2832,7 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
             "f.main([%r, %r, '--repo', repo])" % (OLD, OLD, MID))
         self.assertNotEqual(rc, 0, out)
         self.assertIn('could not be read', flat(out))
-        self.assertNotIn('does not match these tags', flat(out))
+        self.assertNotIn('does not match these', flat(out))
 
     def test_an_unreadable_new_blob_is_refused(self):
         """The new side of every content-changed file is read in the same

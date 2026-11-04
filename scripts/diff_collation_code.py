@@ -29,14 +29,19 @@ apart.
 Usage:
   python3 diff_collation_code.py <old_tag> <new_tag> [--repo <path>] [--all]
                                  [--allow-reverse]
+  each a glibc tag, or a build named as `rpm -q glibc` names it
+  without the architecture (glibc-2.34-283.el9_8),
+  fetched and read by its commit
 
 Example:
   python3 diff_collation_code.py glibc-2.28 glibc-2.34
 """
 import argparse
+import collections
 import os
 import re
 import sys
+import textwrap
 
 import glibc_locale_data as g
 
@@ -535,7 +540,8 @@ def absent_at_both(repo, paths, old_tag, new_tag):
     return renamed, unborn, never
 
 
-def report_file(repo, path, rng, show_all, quiet_when_clean=False):
+def report_file(repo, path, rng, show_all, quiet_when_clean=False,
+                builds=None):
     """Print one file's substantive hunks; return how many there were.
 
     `quiet_when_clean` suppresses the "no substantive change" line. TIER 1 and
@@ -589,35 +595,110 @@ def report_file(repo, path, rng, show_all, quiet_when_clean=False):
     if log.strip():
         print("      commits:")
         for line in log.strip().split('\n'):
+            short = line.split(' ', 1)[0]
+            built = [n for sha, n in (builds or {}).items()
+                     if sha.startswith(short)]
+            if built:
+                line = f"{short} {built[0]}: the build's own patches"
             print(f"        {line}")
     return len(kept)
 
 
+def _code_patches(sides):
+    """(name, patch, paths) for each build side's patch to strcoll's code
+    (prov['collation_code_patches']), in the order rpm applied them."""
+    for sd in sides:
+        if g._is_tag(sd):
+            continue
+        for c in sd.prov.get('collation_code_patches') or ():
+            yield g.label(sd), c['patch'], list(c['paths'])
+
+
+def build_patches_outside(sides):
+    """(name, patch, paths) of each build's patch to strcoll's code with a
+    path outside localedata/ and locale/: not in the build's commit, so not
+    in this step's diff."""
+    return [(n, p, [q for q in paths
+                    if not q.startswith(('localedata/', 'locale/'))])
+            for n, p, paths in _code_patches(sides)
+            if any(not q.startswith(('localedata/', 'locale/'))
+                   for q in paths)]
+
+
+def build_patches_held(sides):
+    """(name, 'N patch(es)') of each build with patches to strcoll's code,
+    every one of them under localedata/ or locale/; a build with one
+    elsewhere is left out (build_patches_outside names it)."""
+    outside = {n for n, _, _ in build_patches_outside(sides)}
+    counts = collections.Counter(n for n, _, _ in _code_patches(sides)
+                                 if n not in outside)
+    return [(n, f"{k} patch(es)") for n, k in counts.items()]
+
+
 def main(argv):
     ap = argparse.ArgumentParser(
-        description="Diff glibc's collation code between two tags.")
-    ap.add_argument('old_tag')
-    ap.add_argument('new_tag')
+        description="Diff glibc's collation code between two tags or "
+                    "builds.")
+    side_help = ("a glibc tag, or a build named as `rpm -q glibc` names it "
+                 "(glibc-2.34-283.el9_8)")
+    ap.add_argument('old_tag', help=side_help)
+    ap.add_argument('new_tag', help=side_help)
     ap.add_argument('--repo', help="path to the glibc clone (autodetected)")
     ap.add_argument('--allow-reverse', action='store_true',
-                    help="run a pair whose new tag is the OLDER commit. Refused by default. Prints a `!!` block saying the direction is reversed.")
+                    help="run a pair whose new side is the OLDER one. "
+                         "Refused by default. Prints a `!!` block saying the "
+                         "direction is reversed.")
     ap.add_argument('--all', action='store_true',
                     help="show every hunk, including comment-only ones")
     opts = ap.parse_args(argv)
 
     repo = g.find_repo(opts.repo)
-    commits = g.check_refs(repo, opts.old_tag, opts.new_tag)
+    # Each side a tag or a build (step_sides): git reads a build by its
+    # commit, and every line printed names it by its name.
+    (old_side, new_side), commits = g.step_sides(repo, opts.old_tag,
+                                                 opts.new_tag)
+    opts.old_tag, opts.new_tag = g._ref(old_side), g._ref(new_side)
+    noun = g.pair_noun(old_side, new_side)
+    one = g.ONE[noun]
+    commit_names = {sd.ref: g.label(sd) for sd in (old_side, new_side)
+                    if not g._is_tag(sd)}
 
     # Reversed, this step reads the same diff backwards and reaches the same
     # hunk count, so nothing in its output would have said which direction it
     # was given. It asks git instead of assuming.
-    _, nothing = g.pair_check(repo, opts.old_tag, opts.new_tag,
+    _, nothing = g.pair_check(repo, old_side, new_side,
                               allow_reverse=opts.allow_reverse,
                               commits=commits)
     rng = f'{opts.old_tag}..{opts.new_tag}'
 
     print(f"Collation code changes between {opts.old_tag} and {opts.new_tag}")
     print()
+    # A build's commit holds its patches to localedata/ and locale/ only
+    # (build_sources.apply_patch): a patch of its to strcoll's code outside
+    # them is recorded, not applied, so the diff below does not hold it.
+    unheld = build_patches_outside((old_side, new_side))
+    for name, patch, paths in unheld:
+        g.warn(f"{name}'s patch {patch} changes strcoll's code outside "
+               f"localedata/ and locale/ ({', '.join(paths)}). The build's "
+               f"commit holds its own sources only in those two folders, so "
+               f"this diff reads upstream's code at those paths, not the "
+               f"build's.", split_words=False)
+    held = build_patches_held((old_side, new_side))
+    if held and not unheld:
+        print(textwrap.fill(
+            "Each build's own patches to this code are under locale/, so the "
+            "diff below holds them: "
+            + '; '.join(f"{n}, {k}" for n, k in held) + ".", width=78,
+            break_long_words=False, break_on_hyphens=False))
+        print()
+    if not g._is_tag(old_side):
+        # old..new leaves out the old build's own commit, so a change that
+        # only undoes one of its patches comes with no commit of its own.
+        print(textwrap.fill(
+            f"A change that only undoes one of {g.label(old_side)}'s patches "
+            f"lists no commit.", width=78, break_long_words=False,
+            break_on_hyphens=False))
+        print()
 
     # Derived at BOTH tags and unioned: the walk at the new tag alone cannot
     # see a file that existed at the old one and was removed or renamed away,
@@ -673,15 +754,16 @@ def main(argv):
         print("   this step's result.")
         print()
     if never:
-        print(f"!! {len(never)} tracked path(s) exist at no ref in this clone "
-              f"at all. A path")
+        print(f"!! {len(never)} tracked path(s) exist at no ref of glibc in "
+              f"this clone at all. A path")
         print("   nothing ever carried is not a file waiting to be written, "
               "it is a name in")
         print("   ENTRY_POINTS/TIER1/TIER2 that matches nothing -- and those "
               "lists are the")
         print("   ceiling of what this step reads:")
         for path in never:
-            print(f"     {path}: no ref in this clone has ever had it")
+            print(f"     {path}: no ref of glibc in this clone has ever had "
+                  f"it")
         print("   Correct the spelling, or the path if the file moved, before "
               "trusting")
         print("   this step's result.")
@@ -696,8 +778,8 @@ def main(argv):
         print("   other collation code.")
         print()
     if outside:
-        print("Tracked files that exist at neither tag and have no history at "
-              f"{opts.old_tag}")
+        print(f"Tracked files that exist at neither {one} and have no "
+              f"history at {opts.old_tag}")
         print("-- not yet written when this range begins, so nothing to read "
               "and nothing to")
         print("miss:")
@@ -710,14 +792,14 @@ def main(argv):
     print("  (a change here can reorder any locale, including ones whose data "
           "file is unchanged)")
     for path in TIER1:
-        total += report_file(repo, path, rng, opts.all)
+        total += report_file(repo, path, rng, opts.all, builds=commit_names)
     print()
     print("TIER 2 -- parsing and serialisation")
     print("  (a change here can alter the compiled tables without touching the "
           "weight logic)")
     tier2 = 0
     for path in TIER2:
-        tier2 += report_file(repo, path, rng, opts.all)
+        tier2 += report_file(repo, path, rng, opts.all, builds=commit_names)
     total += tier2
 
     print()
@@ -729,7 +811,8 @@ def main(argv):
     print("   reached -- so this list grows on its own as glibc changes)")
     tier3_clean = 0
     for path in tier3:
-        n = report_file(repo, path, rng, opts.all, quiet_when_clean=True)
+        n = report_file(repo, path, rng, opts.all, quiet_when_clean=True,
+                        builds=commit_names)
         total += n
         if n == 0:
             tier3_clean += 1
@@ -757,19 +840,25 @@ def main(argv):
                         f"{opts.new_tag}")
     if unreadable:
         blockers.append(f"{len(unreadable)} path(s) this audit must read are "
-                        f"absent from both tags")
+                        f"absent from both {noun}")
     if never:
-        blockers.append(f"{len(never)} tracked path(s) exist at no ref in "
-                        f"this clone")
+        blockers.append(f"{len(never)} tracked path(s) exist at no ref of "
+                        f"glibc in this clone")
     if not derived:
         blockers.append("the include walk reached no file")
     paths_blocked = bool(blockers)
+    # Not a path to correct and re-run: the build's own patch.
+    if unheld:
+        blockers.append(f"{len(unheld)} patch(es) of a build change strcoll's "
+                        f"code outside localedata/ and locale/, which this "
+                        f"diff does not hold")
     # One commit, or two commits of one source tree, compared with itself:
     # every diff above is empty because nothing was compared, and its zero
     # read as the clean verdict, which the summary turned into "a clean data
     # diff is sufficient".
     if nothing == 'commit':
-        blockers.append("the two tags are one commit, so nothing was compared")
+        blockers.append(f"the two {noun} are one commit, so nothing was "
+                        f"compared")
     elif nothing == 'tree':
         blockers.append("the two refs are two commits of one source tree, so "
                         "nothing was compared")
@@ -792,6 +881,18 @@ def main(argv):
             print(f"  - {reason}")
         if paths_blocked:
             print("Resolve the paths listed above, then re-run.")
+    elif total == 0 and noun != 'tags':
+        # A build's sources, not what its compiler made of them.
+        print(f"No substantive collation code change in the sources. "
+              f"Every locale at both")
+        print(f"{noun} that steps 2 and 3 did not list is unaffected as "
+              f"far as the sources go,")
+        print("including every locale that flag_algorithmic_ranges.py "
+              "lists. Not checked:")
+        print("what each build's compiler made of those sources, and a "
+              "build's patches to")
+        print("code outside localedata/ and locale/ that this step does not "
+              "read.")
     elif total == 0:
         print("No substantive collation code change. Every locale at both "
               "tags that steps 2")

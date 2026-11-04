@@ -24,6 +24,9 @@ Two things this gets right that are easy to get wrong:
 Usage:
   python3 resolve_copy_closure.py <tag> [<locale> ...] [--keyed <locale> ...]
                                   [--repo <path>]
+  <tag> is a glibc tag, or a build named as `rpm -q glibc` names it
+  without the architecture (glibc-2.34-283.el9_8),
+  fetched and read by its commit
 
 `--keyed` takes the locales step 2 lists from its character set or
 transliteration check (collation_keys.py), not for their own rules. Step 2
@@ -47,7 +50,9 @@ def main(argv):
     ap = argparse.ArgumentParser(
         description="Close a set of changed locales over the LC_COLLATE "
                     "`copy` graph; --keyed ones are added as they are.")
-    ap.add_argument('tag', help="glibc tag whose copy graph to walk")
+    ap.add_argument('tag', help="glibc tag, or a build "
+                                "(glibc-2.34-283.el9_8), whose copy graph to "
+                                "walk")
     ap.add_argument('locales', nargs='*',
                     help="locales step 2 lists for their own LC_COLLATE, as "
                          "bare names or paths")
@@ -58,7 +63,9 @@ def main(argv):
     opts = ap.parse_args(argv)
 
     repo = g.find_repo(opts.repo)
-    g.check_refs(repo, opts.tag)
+    # A tag, or a build read by its commit and printed by its name.
+    (side,), _ = g.step_sides(repo, opts.tag)
+    opts.tag = g._ref(side)
 
     changed = {os.path.basename(name.strip()) for name in opts.locales
                if name.strip()}

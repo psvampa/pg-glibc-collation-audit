@@ -48,6 +48,9 @@ docs/results.md.
 
 Usage:
   python3 flag_algorithmic_ranges.py <tag> [--repo <path>]
+  <tag> is a glibc tag, or a build named as `rpm -q glibc` names it
+  without the architecture (glibc-2.34-283.el9_8),
+  fetched and read by its commit
   python3 flag_algorithmic_ranges.py --locales-dir <path> --build-id <nvr>
           --supported-tag <tag> [--node-label <side>] [--expect-files N]
 
@@ -69,8 +72,11 @@ TAG_OUT = 'step4_exposed_locales.txt'
 
 
 def load_from_tag(repo, tag):
-    """(tree, supported, label, out_name) for every locale file at `tag`."""
-    g.check_refs(repo, tag)
+    """(tree, supported, label, out_name) for every locale file at `tag`:
+    a tag of the clone, or a build read by its commit (step_sides) and
+    printed by its name."""
+    (side,), _ = g.step_sides(repo, tag)
+    tag = g._ref(side)
     tree = glibc_tree.Tree.at_tag(repo, tag)
     return tree, g.supported_map(repo, tag), tag, TAG_OUT
 
@@ -547,7 +553,8 @@ def main(argv):
                     "byte-order locale), because a character a locale "
                     "does not list takes localedef's default weight.")
     ap.add_argument('tag', nargs='?',
-                    help="glibc tag to scan, e.g. glibc-2.34")
+                    help="glibc tag to scan, e.g. glibc-2.34, or a build, e.g. "
+                         "glibc-2.34-283.el9_8")
     ap.add_argument('--locales-dir',
                     help="scan a copy of a node's /usr/share/i18n/locales/ "
                          "instead of a tag, which reaches a locale the distro "
@@ -600,6 +607,8 @@ def main(argv):
     if opts.tag:
         repo = g.find_repo(opts.repo)
         tree, supported, label, out_name = load_from_tag(repo, opts.tag)
+        # What git reads from here on: a build's commit, printed by name.
+        opts.tag = label
         if g.wrapped():
             hint = ["Step 5 below decides whether that matters for this pair."]
         else:
