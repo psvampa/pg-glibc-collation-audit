@@ -34,6 +34,7 @@ import sys
 import tarfile
 import tempfile
 import shutil
+import time
 import unittest
 from unittest import mock
 
@@ -42,6 +43,7 @@ from _harness import (GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR, flat,
                       glibc_shaped, needs_clone)
 
 import build_sources as bs
+import glibc_locale_data as g
 
 DATA = os.path.join(TESTS_DIR, 'build_sources')
 EXTRACT = os.path.join(TESTS_DIR, 'locale_order')
@@ -3127,6 +3129,196 @@ NOT_READ = ("What this run does not read of a build is under 'Not checked "
             "for these builds'")
 
 
+
+# -- latest-elN: the newest build of a release, resolved once by audit.sh ----
+
+class ResolvesTheLatestBuild(unittest.TestCase):
+    """glibc_locale_data's `resolve` and `latest` subcommands on a mirror
+    the test makes (FakeMirror, in place of build_sources._get), and the
+    refusal of latest-elN by every step run on its own. In one process: no
+    git and no network is reached, and a mutant that reaches either fails
+    on the stand-in that raises."""
+
+    EL8 = ('251.el8_10.2', '251.el8_10.40', '251.el8_10.5')
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='latest_')
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.cache = os.path.join(self.tmp, 'cache')
+        self.mirror = FakeMirror()
+        self.mirror.repo('pub/rocky/8', 'BaseOS/source/tree',
+                         [_row('glibc', 'src', r, ver='2.28')
+                          for r in self.EL8])
+        self.mirror.repo('pub/rocky/9', 'BaseOS/source/tree',
+                         [_row('glibc', 'src', '275.el9_8', ver='2.34'),
+                          _row('glibc', 'src', '70.el9', ver='2.34')])
+        for patch in (mock.patch.object(bs, '_get',
+                                        side_effect=self.mirror.get),
+                      mock.patch.dict(os.environ, {
+                          'PG_GLIBC_BUILD_MIRROR': M,
+                          'PG_GLIBC_BUILD_SOURCES_CACHE': self.cache,
+                          'TZ': 'America/Sao_Paulo'})):
+            patch.start()
+            self.addCleanup(patch.stop)
+        time.tzset()
+        self.addCleanup(time.tzset)
+
+    def main(self, *argv):
+        """(exit code, stdout, stderr) of glibc_locale_data's _main."""
+        out, err = io.StringIO(), io.StringIO()
+        code = 0
+        with mock.patch.object(sys, 'stdout', out), \
+                mock.patch.object(sys, 'stderr', err):
+            try:
+                code = g._main(list(argv))
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue(), err.getvalue()
+
+    def latest(self, *names):
+        to = os.path.join(self.tmp, 'latest.txt')
+        code, out, err = self.main('latest', '--to', to, *names)
+        lines = None
+        if os.path.exists(to):
+            with open(to) as fh:
+                lines = fh.read().split('\n')
+        return code, out, err, lines
+
+    def line(self, name, build, major, when='2025-11-01 12:26 UTC'):
+        return ('%s is %s: the newest glibc build in %spub/rocky/%d, by its '
+                'metadata of %s.' % (name, build, M, major, when))
+
+    def test_resolve_marks_latest_a_build_and_asks_no_mirror(self):
+        to = os.path.join(self.tmp, 'resolve.txt')
+        with mock.patch.object(bs, '_get', side_effect=AssertionError):
+            code, out, err = self.main('resolve', '--to', to, 'latest-el8',
+                                       'glibc-2.34')
+        self.assertEqual((code, out, err), (0, '', ''))
+        with open(to) as fh:
+            self.assertEqual(fh.read(), 'latest-el8\tbuild\tlatest\n'
+                             'glibc-2.34\ttag\n')
+
+    def test_each_latest_is_its_newest_build_and_says_so(self):
+        """el8's newest by rpm's order, .40 (not .5 as text); the line names
+        the build, the mirror's tree and the metadata's time in UTC
+        whatever the machine's time zone."""
+        code, out, err, lines = self.latest('latest-el8', 'latest-el9')
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(lines, [B40, B275, ''])
+        self.assertEqual(flat(out), flat(
+            self.line('latest-el8', B40, 8) + ' ' +
+            self.line('latest-el9', B275, 9)))
+
+    def test_a_tag_on_the_other_side_is_kept(self):
+        code, out, err, lines = self.latest('glibc-2.28', 'latest-el9')
+        self.assertEqual((code, lines), (0, ['glibc-2.28', B275, '']))
+        self.assertEqual(flat(out), flat(self.line('latest-el9', B275, 9)))
+
+    def test_one_release_on_both_sides_is_asked_once(self):
+        code, out, err, lines = self.latest('latest-el9', 'latest-el9')
+        self.assertEqual((code, lines), (0, [B275, B275, '']))
+        self.assertEqual(flat(out), flat(self.line('latest-el9', B275, 9)))
+        self.assertEqual(len([u for u in self.mirror.asked
+                              if u.endswith('repomd.xml')]), 1)
+
+    def test_metadata_with_no_date_says_so(self):
+        base = M + 'pub/rocky/9/BaseOS/source/tree/repodata/'
+        self.mirror.files[base + 'repomd.xml'] = re.sub(
+            rb'<timestamp>[^<]*</timestamp>', b'',
+            self.mirror.files[base + 'repomd.xml'])
+        code, out, err, lines = self.latest('latest-el9', 'latest-el9')
+        self.assertEqual(code, 0, err)
+        self.assertEqual(flat(out), flat(
+            'latest-el9 is %s: the newest glibc build in %spub/rocky/9, and '
+            'its metadata gives no date this reads.' % (B275, M)))
+
+    def test_a_release_the_mirror_does_not_publish_is_refused(self):
+        """latest-el7: the mirror answers 404 for its metadata. Nothing is
+        written, so audit.sh has no side to go on with."""
+        code, out, err, lines = self.latest('latest-el7', 'latest-el9')
+        self.assertEqual((code, out, lines), (2, '', None))
+        self.assertIn('error: cannot resolve latest-el7: %spub/rocky/7 has no '
+                      'source metadata' % M, flat(err))
+
+    def test_a_mirror_that_fails_is_refused_never_read_as_a_tag(self):
+        url = M + 'pub/rocky/9/BaseOS/source/tree/repodata/repomd.xml'
+        self.mirror.errors[url] = bs.Refused('%s: HTTP 503' % url)
+        code, out, err, lines = self.latest('latest-el8', 'latest-el9')
+        self.assertEqual((code, out, lines), (2, '', None))
+        self.assertIn('error: cannot resolve latest-el9: %s: HTTP 503' % url,
+                      flat(err))
+
+    REFUSED = ("latest-el9 is resolved only by audit.sh, once for the whole "
+               "run, so that every step reads the same build: run audit.sh, "
+               "or give the build's name it prints.")
+
+    def refused_by_hand(self, call):
+        """call() dies with the refusal before git is asked anything."""
+        err = io.StringIO()
+        with mock.patch.object(g, 'run_git', side_effect=AssertionError), \
+                mock.patch.object(g.subprocess, 'run',
+                                  side_effect=AssertionError), \
+                mock.patch.object(sys, 'stderr', err), \
+                self.assertRaises(SystemExit) as cm:
+            call()
+        self.assertEqual(cm.exception.code, 2)
+        self.assertEqual(flat(err.getvalue()), 'error: ' + self.REFUSED)
+
+    def test_step_one_by_hand_refuses_it(self):
+        """step1_sides, before it clones or fetches anything."""
+        self.refused_by_hand(lambda: g.step1_sides(self.tmp, 'glibc-2.34',
+                                                   'latest-el9'))
+
+    def test_a_step_reading_its_sides_refuses_it(self):
+        """step_sides, the entry of steps 2 to 5."""
+        self.refused_by_hand(lambda: g.step_sides(self.tmp, 'latest-el9',
+                                                  'glibc-2.39'))
+
+    def test_a_step_checking_a_tag_refuses_it(self):
+        """check_refs called directly, as steps 6 to 10 and provenance do."""
+        with mock.patch.object(g, 'find_repo', return_value=self.tmp):
+            self.refused_by_hand(lambda: g._main(['provenance',
+                                                  'latest-el9']))
+
+    def test_neither_the_url_nor_the_date_is_cut(self):
+        """Whatever the mirror's length, the URL stays on one line, so it
+        can be copied, and so does the date (on Rocky's real mirror the
+        wrap once fell between "04:24" and "UTC")."""
+        for n in range(40):
+            mirror = 'https://m%s.test/' % ('x' * n)
+            text = g.latest_line('latest-el9', bs.Latest(
+                B275, mirror, 'pub/rocky/9', '1762000000'))
+            with self.subTest(n=n):
+                lines = text.split('\n')
+                self.assertEqual(sum(mirror + 'pub/rocky/9,' in ln
+                                     for ln in lines), 1, text)
+                self.assertEqual(sum('2025-11-01 12:26 UTC.' in ln
+                                     for ln in lines), 1, text)
+
+    def test_the_rule_reads_only_latest_el_and_a_number(self):
+        for name, major in (('latest-el8', 8), ('latest-el10', 10),
+                            ('latest-el', None), ('latest-el9_8', None),
+                            ('latest-el9 ', None), ('latest-el9\n', None),
+                            ('xlatest-el9', None),
+                            ('glibc-2.34', None), (B275, None)):
+            with self.subTest(name=name):
+                self.assertEqual(g.latest_major(name), major)
+
+    def test_two_tags_never_import_build_sources(self):
+        """resolve with two tags, in a fresh interpreter: the run on two
+        tags is the run of before."""
+        to = os.path.join(self.tmp, 'r.txt')
+        p = subprocess.run(
+            [sys.executable, '-c',
+             'import sys; sys.argv = ["g", "resolve", "--to", %r, '
+             '"glibc-2.28", "glibc-2.34"]; sys.path.insert(0, %r); '
+             'import glibc_locale_data as g; g._main(sys.argv[1:]); '
+             'print("build_sources" in sys.modules)' % (to, SCRIPTS_DIR)],
+            capture_output=True, text=True)
+        self.assertEqual((p.returncode, p.stdout, p.stderr),
+                         (0, 'False\n', ''))
+
+
 class _AuditOnBuilds:
     """audit.sh on builds named as `rpm -q glibc` names them, from a folder
     of the test's own: audit.sh and a COPY of scripts/ (a linked script
@@ -3137,6 +3329,29 @@ class _AuditOnBuilds:
     tests read the output. `builds()` returns {build: tree folder}."""
 
     RUNS = {}
+    # {tree: [(version, release), ...]} of the glibc SRPMs the class's
+    # mirror lists, on disk and read by file:// (latest-elN); none by
+    # default, and then the mirror is a folder that is not there.
+    LISTS = {}
+
+    @classmethod
+    def make_mirror(cls):
+        if not cls.LISTS:
+            return 'file:///nowhere/'
+        root = os.path.join(cls.tmp, 'mirror')
+        for tree, srpms in cls.LISTS.items():
+            prim = _primary([_row('glibc', 'src', rel, ver=ver)
+                             for ver, rel in srpms])
+            d = os.path.join(root, tree, 'BaseOS/source/tree/repodata')
+            os.makedirs(d)
+            with open(os.path.join(d, 'repomd.xml'), 'wb') as fh:
+                fh.write(_repomd(prim))
+            with open(os.path.join(d, 'u-PRIMARY.xml.gz'), 'wb') as fh:
+                fh.write(prim)
+        # The build cache is filled with this URL too, slash and all:
+        # fetch_build reads a kept build with no network only from the
+        # mirror it was fetched from.
+        return 'file://' + root + '/'
 
     @classmethod
     def setUpClass(cls):
@@ -3151,7 +3366,7 @@ class _AuditOnBuilds:
         cls.repo = os.path.join(root, 'scripts', 'glibc')
         glibc_shaped(cls.repo, TAG)
         cls.cache = os.path.join(cls.tmp, 'cache')
-        cls.mirror = 'file:///nowhere/'
+        cls.mirror = cls.make_mirror()
         for build, (tree, code) in cls.builds().items():
             _fill_with_code(cls.cache, cls.mirror, build, tree, code)
         env = dict(os.environ, PG_GLIBC_BUILD_SOURCES_CACHE=cls.cache,
@@ -3231,11 +3446,33 @@ class AuditShReadsTheFixtureBuilds(_AuditOnBuilds, unittest.TestCase):
     summary says so without a tag's caveat; over RHEL 9 -> 10 nothing says
     C.UTF-8 may change or that the distros ship their own."""
 
-    RUNS = {'89': (B40, B275), '910': (B275, B128)}
+    RUNS = {'89': (B40, B275), '910': (B275, B128),
+            'latest': ('latest-el8', 'latest-el9')}
+    LISTS = {'pub/rocky/8': [('2.28', '251.el8_10.40'),
+                             ('2.28', '251.el8_10.5')],
+             'pub/rocky/9': [('2.34', '275.el9_8')]}
 
     @classmethod
     def builds(cls):
         return {b: (cls.tree(b, b), ()) for b in (B40, B275, B128)}
+
+    def test_latest_is_the_run_its_builds_would_give(self):
+        """latest-el8 latest-el9 is resolved before anything reads the
+        sides: after the lines that say which build each stands for, the
+        run is the run of B40 B275, line for line, but for its folder."""
+        lines = self.run_of('latest').split('\n')
+        cut = lines.index('')
+        self.assertEqual(flat('\n'.join(lines[:cut])), flat(
+            'latest-el8 is %s: the newest glibc build in %spub/rocky/8, by '
+            'its metadata of 2025-11-01 12:26 UTC. latest-el9 is %s: the '
+            'newest glibc build in %spub/rocky/9, by its metadata of '
+            '2025-11-01 12:26 UTC.' % (B40, self.mirror, B275, self.mirror)))
+        out = os.path.join(self.tmp, 'out')
+        self.assertEqual(
+            [ln.replace(os.path.join(out, 'latest'), 'OUT')
+             for ln in lines[cut:]],
+            [ln.replace(os.path.join(out, '89'), 'OUT')
+             for ln in self.run_of('89').split('\n')])
 
     def test_rhel8_to_rhel9_reindexes_c_utf8(self):
         body = summary_block(self.run_of('89'), REINDEX)
@@ -3380,10 +3617,14 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
 class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
     """A tag on one side and a build on the other: each sentence speaks of
     its side. And a build that cannot be read stops the run in step 1,
-    never replaced by its tag."""
+    never replaced by its tag. The new side of tag_build is given as
+    latest-el9, which the class's mirror resolves to B275: every sentence
+    names the build, none the word given; tag_typed names B275 and its
+    summary is tag_build's."""
 
-    RUNS = {'tag_build': (TAG, B275), 'build_tag': (B40, TAG),
-            'absent': (B275, ABSENT)}
+    RUNS = {'tag_build': (TAG, 'latest-el9'), 'tag_typed': (TAG, B275),
+            'build_tag': (B40, TAG), 'absent': (B275, ABSENT)}
+    LISTS = {'pub/rocky/9': [('2.34', '275.el9_8')]}
 
     @classmethod
     def builds(cls):
@@ -3391,6 +3632,8 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
 
     def test_an_old_tag_says_what_it_cannot_show(self):
         out = self.run_of('tag_build')
+        self.assertTrue(out.startswith('latest-el9 is %s:' % B275), out[:300])
+        self.assertNotIn('latest-el9', out.split('\n\n', 1)[1])
         self.assertEqual(' '.join(summary_block(out, REMOVED)),
                          '%s is an upstream tag, so what your old distro adds '
                          'to it is NOT CHECKED: a file only that distro ships, '
@@ -3418,6 +3661,15 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
         self.assertTrue(' '.join(summary_block(out, DECIDED)).endswith(
             "An upstream diff cannot see your distro's backports: %s is an "
             "upstream tag. %s, above." % (TAG, NOT_READ)))
+
+    def test_a_tag_and_a_build_typed_is_the_tag_and_latest_run(self):
+        """Every block of the summary of TAG B275 is tag_build's, four of
+        which the test above reads."""
+        typed = self.summary('tag_typed')
+        self.assertNotIn('latest-el9', typed)
+        self.assertEqual(typed, self.summary('tag_build').replace(
+            os.path.join(self.tmp, 'out', 'tag_build'),
+            os.path.join(self.tmp, 'out', 'tag_typed')))
 
     def test_a_new_tag_says_what_it_cannot_show(self):
         out = self.run_of('build_tag')
@@ -3453,13 +3705,15 @@ class AuditShRefusesAMachinesFilesWithABuild(unittest.TestCase):
     files is refused before step 1, its pair given or not, on the tag's
     side of a mixed pair too."""
 
-    def refused(self, *args):
+    def refused(self, *args, mirror=None):
         out = tempfile.mkdtemp(prefix='audit_refuse_')
         self.addCleanup(shutil.rmtree, out, True)
+        env = dict(os.environ, PG_GLIBC_AUDIT_OUT=out)
+        if mirror:
+            env['PG_GLIBC_BUILD_MIRROR'] = mirror
         p = subprocess.run(['bash', os.path.join(SCRIPTS_DIR, os.pardir,
                                                  'audit.sh'), *args],
-                           capture_output=True,
-                           env=dict(os.environ, PG_GLIBC_AUDIT_OUT=out))
+                           capture_output=True, env=env)
         self.assertEqual(p.returncode, 2, p.stderr.decode()[-2000:])
         self.assertNotIn('STEP 1', p.stdout.decode())
         self.assertEqual(os.listdir(out), [])
@@ -3489,6 +3743,25 @@ class AuditShRefusesAMachinesFilesWithABuild(unittest.TestCase):
                             '--old-build-id', 'x')
         self.assertIn('%s is a build' % B275, said)
         self.assertIn('--old-locales-dir and --old-build-id are refused', said)
+
+    def test_latest_is_refused_with_them_before_the_mirror_is_asked(self):
+        """latest-elN is a build: the options are refused first, with a
+        mirror that cannot be read, so nothing asked the network."""
+        said = self.refused('latest-el8', B275, '--old-build-id', 'x',
+                            mirror='file:///nowhere/')
+        self.assertIn('error: latest-el8 is a build, and with a build '
+                      "audit.sh does not read a machine's files yet: "
+                      '--old-build-id is refused.', said)
+        self.assertNotIn('cannot resolve', said)
+
+    def test_a_latest_that_cannot_be_resolved_stops_the_run(self):
+        """A mirror that cannot be read: the run stops before step 1 with
+        the reason, and no side is read as a tag."""
+        said = self.refused('latest-el8', 'latest-el9',
+                            mirror='file:///nowhere/')
+        self.assertIn('error: cannot resolve latest-el8: could not read '
+                      'file:///nowhere/pub/rocky/8/BaseOS/source/tree/'
+                      'repodata/repomd.xml', said)
 
 
 if __name__ == '__main__':

@@ -11,7 +11,7 @@ and the locale was reported unaffected. Everything here fails loudly instead,
 and blobs are read in a single `git cat-file --batch` stream.
 
 Also runnable directly; audit.sh and step 1 use fanin, sides, resolve,
-order and pair-slug, and provenance and corpus are kept for a hand run:
+latest, order and pair-slug, and provenance and corpus are kept for a hand run:
   python3 glibc_locale_data.py fanin <tag> [changed_files.txt] [--as NAME]
   python3 glibc_locale_data.py provenance <tag> [<tag> ...]
   python3 glibc_locale_data.py corpus <tag> [<tag> ...]
@@ -29,7 +29,12 @@ order and pair-slug, and provenance and corpus are kept for a hand run:
       it (SIDES_ENV)
   python3 glibc_locale_data.py resolve --to F <old> <new>
       for audit.sh, before anything runs: writes to F `<side>\t<kind>` a
-      line each, kind `tag` or `build` (is_build_name)
+      line each, kind `tag` or `build` (is_build_name); latest-elN is a
+      build with a third field `latest`
+  python3 glibc_locale_data.py latest --to F <old> <new>
+      for audit.sh, once: writes to F each side a line, latest-elN
+      replaced by the newest build of RHEL N the mirror lists, and prints
+      which it took
 """
 import collections
 import contextlib
@@ -378,6 +383,7 @@ def check_refs(repo, *refs, builds=False):
     refused (refuse_build_commits) unless `builds`, which only step 1's
     fan-in passes, for the build it has just made.
     """
+    refuse_latest(refs)
     commits = resolve_commits(repo, refs)
     missing = [r for r in refs if r not in commits]
     if not missing:
@@ -1327,6 +1333,47 @@ def is_build_name(name):
     measured 2026-11-03), so such a name is never asked of git as a ref: a
     build is read only through build_side."""
     return build_name(name) is not None
+
+
+def latest_major(name):
+    """N of `latest-elN`, which stands for the newest build of RHEL N
+    Rocky Linux's mirror lists, else None. Only audit.sh reads it, and
+    resolves it once for the whole run (`latest`); every step that asks git
+    for its sides refuses it (refuse_latest). Step 11's --tags, which asks
+    no git, reads it as it reads a build's name: "names no glibc release"."""
+    m = re.fullmatch(r'latest-el(\d+)', name or '')
+    return int(m.group(1)) if m else None
+
+
+def refuse_latest(names):
+    """Die on the first of `names` that is latest-elN, before git is asked
+    anything: read as a tag it made git fetch every tag and then call it an
+    unknown ref."""
+    for n in names:
+        if latest_major(n) is not None:
+            die(f"{n} is resolved only by audit.sh, once for the whole run, "
+                f"so that every step reads the same build: run audit.sh, or "
+                f"give the build's name it prints.")
+
+
+def latest_line(name, got):
+    """The line audit.sh prints for `name` (latest-elN) resolved to `got`
+    (build_sources.Latest): which build, where and as of when. Printed once,
+    before step 1; neither the URL nor the date is ever cut, so the one can
+    be copied whole and the other read on one line."""
+    stamp = got.timestamp or ''
+    if stamp.isdigit():
+        import datetime
+        when = datetime.datetime.fromtimestamp(
+            int(stamp), datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+        # Held together while wrapping: NUL is in no date and no URL.
+        when = "by its metadata of " + when.replace(' ', '\x00')
+    else:
+        when = "and its metadata gives no date this reads"
+    return textwrap.fill(
+        f"{name} is {got.build}: the newest glibc build in "
+        f"{got.mirror}{got.tree}, {when}.", width=78,
+        break_long_words=False, break_on_hyphens=False).replace('\x00', ' ')
 
 
 def _asked(build):
@@ -2541,7 +2588,8 @@ def step1_sides(here, old, new, allow_reverse=False):
     not there, fetch tags once when a tag is missing, refuse a reversed
     pair, print the provenance, hold each side to the floor. A build name
     (is_build_name) is never asked of git: build_side fetches it and makes
-    its commit again."""
+    its commit again. latest-elN is refused (refuse_latest)."""
+    refuse_latest((old, new))
     repo = os.path.join(here, 'glibc')
     if not os.path.isdir(repo):
         # Not --depth: step 5 asks `git log` whether a path absent at both
@@ -2677,13 +2725,45 @@ def _main(argv):
     if argv and argv[0] == 'resolve':
         # audit.sh, before anything runs: the kind of each side, by the one
         # rule every step applies (is_build_name), so that it picks each
-        # sentence of its summary by what the side is.
+        # sentence of its summary by what the side is. latest-elN is a
+        # build, marked `latest` in a third field, and asks nothing of the
+        # network here: audit.sh refuses a machine's files with a build
+        # first, then has `latest` resolve it.
         if len(argv) != 5 or argv[1] != '--to':
             die("usage: glibc_locale_data.py resolve --to <file> <old> <new>")
         with open(argv[2], 'w', encoding='utf-8') as fh:
             for name in argv[3:]:
-                kind = 'build' if is_build_name(name) else 'tag'
-                fh.write(f"{name}\t{kind}\n")
+                if latest_major(name) is not None:
+                    fh.write(f"{name}\tbuild\tlatest\n")
+                else:
+                    kind = 'build' if is_build_name(name) else 'tag'
+                    fh.write(f"{name}\t{kind}\n")
+        return 0
+    if argv and argv[0] == 'latest':
+        # audit.sh, once for the whole run: each latest-elN replaced by the
+        # newest build of RHEL N the mirror lists (build_sources.latest,
+        # which reads the metadata every time), each N asked once, all of it
+        # before anything is written. A refusal dies with its reason: a
+        # side that cannot be resolved is never read as a tag.
+        if len(argv) != 5 or argv[1] != '--to':
+            die("usage: glibc_locale_data.py latest --to <file> <old> <new>")
+        found = {}
+        for name in argv[3:]:
+            major = latest_major(name)
+            if major is None or major in found:
+                continue
+            import build_sources as bs
+            try:
+                found[major] = (name, bs.latest(major))
+            except bs.Refused as e:
+                die(f"cannot resolve {name}: {e}")
+        with open(argv[2], 'w', encoding='utf-8') as fh:
+            for name in argv[3:]:
+                major = latest_major(name)
+                fh.write((found[major][1].build if major is not None
+                          else name) + '\n')
+        for name, got in found.values():
+            print(latest_line(name, got), flush=True)
         return 0
     if len(argv) >= 2 and argv[0] == 'corpus':
         # The corpus floor of the tags given, silent on success;

@@ -25,7 +25,10 @@ Either side can name a RHEL build instead of a tag, as `rpm -q glibc` prints
 it without the architecture: `./audit.sh glibc-2.28-251.el8_10.40
 glibc-2.34-275.el9_8`. The run then fetches that build's source RPM and two
 of its packages from Rocky Linux's mirror, rebuilds its `localedata/` and
-`locale/`, and reads them instead of the tag. With a build, the options of 1.b are refused for now.
+`locale/`, and reads them instead of the tag. For a machine not installed
+yet, a side can be `latest-el10` (`latest-el<N>` for RHEL N): the newest
+build Rocky Linux's mirror lists for that release, whose name the run prints
+before step 1 and reads from then on. With a build, the options of 1.b are refused for now.
 
 | The run's step | The question it answers |
 |---|---|

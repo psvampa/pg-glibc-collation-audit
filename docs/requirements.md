@@ -13,7 +13,8 @@ network the first time. The clone is `--filter=blob:none --no-checkout` and
 still comes to roughly **370 MB** on disk. Later runs reuse it.
 
 A side named as a build (`glibc-2.34-275.el9_8`) needs outbound network to
-Rocky Linux's mirror the first time that build is read
+Rocky Linux's mirror the first time that build is read, and a side given
+as `latest-el<N>` on every run, to read which build is the newest
 (`PG_GLIBC_BUILD_MIRROR` names another), and its files are kept in
 `scripts/build-sources-cache/` (`PG_GLIBC_BUILD_SOURCES_CACHE` names
 another). Checking the charmaps of an el9 or el10 package needs Python 3.14
