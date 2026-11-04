@@ -17,7 +17,10 @@
 # Each side is a glibc tag, or a build named as `rpm -q glibc` names it
 # without the architecture (glibc-2.34-275.el9_8): each step that reads that
 # side then reads the build's own localedata/ and locale/, rebuilt from its
-# source RPM, in place of the tag. With a build, the options below that read a machine's
+# source RPM, in place of the tag. A side can also be latest-elN, for a machine
+# not installed yet: the newest build of RHEL N that Rocky Linux's mirror
+# lists, resolved once before anything else reads the sides, and named before
+# step 1. With a build, the options below that read a machine's
 # files are refused for now.
 #
 # The order of the two tags is not a formality: every step assumes the second
@@ -64,6 +67,7 @@
 #     --new-locales-dir ./el9-locales --new-build-id glibc-2.34-275.el9_8
 #   ./audit.sh glibc-2.28 glibc-2.34 --old-order rhel8.out --new-order rhel9.out
 #   ./audit.sh glibc-2.28-251.el8_10.40 glibc-2.34-275.el9_8
+#   ./audit.sh glibc-2.34-275.el9_8 latest-el10
 set -euo pipefail
 
 usage() {
@@ -74,9 +78,12 @@ usage() {
   echo "         [--old-node FILE --new-node FILE]" >&2
   echo "       e.g. $0 glibc-2.28 glibc-2.34" >&2
   echo "            $0 glibc-2.28-251.el8_10.40 glibc-2.34-275.el9_8" >&2
+  echo "            $0 glibc-2.34-275.el9_8 latest-el10" >&2
   echo "       each side is a glibc tag, glibc-<version> (run \`ldd --version\` on" >&2
   echo "       the node), or a build as \`rpm -q glibc\` names it without the" >&2
-  echo "       architecture, rebuilt from its source RPM; with a build, the --*" >&2
+  echo "       architecture, rebuilt from its source RPM, or latest-elN for a" >&2
+  echo "       machine not installed yet: the newest build of RHEL N on Rocky" >&2
+  echo "       Linux's mirror, named before step 1; with a build, the --*" >&2
   echo "       options below are refused for now" >&2
   echo "       OLD first, NEW second: a reversed pair is refused, not" >&2
   echo "       answered. Distance is NOT checked: RHEL8 to RHEL10 is one" >&2
@@ -151,12 +158,15 @@ SCRIPTS="$HERE/scripts"
 # its sentences by it: a sentence about what "the tags" cannot show is false
 # of a build, whose own sources the steps read. Asked before any other option
 # is checked, so that a build given with a machine's files is refused first,
-# with that reason.
+# with that reason. latest-elN is a build too, and nothing here asks the
+# network what it is: that is done once, below, after that refusal.
 RESOLVED=$(mktemp "${TMPDIR:-/tmp}/pg-glibc-resolve.XXXXXX")
 trap 'rm -f "$RESOLVED"' EXIT
 python3 "$SCRIPTS/glibc_locale_data.py" resolve --to "$RESOLVED" "$OLD" "$NEW"
 OLD_KIND=$(sed -n 1p "$RESOLVED" | cut -f2)
 NEW_KIND=$(sed -n 2p "$RESOLVED" | cut -f2)
+OLD_LATEST=$(sed -n 1p "$RESOLVED" | cut -f3)
+NEW_LATEST=$(sed -n 2p "$RESOLVED" | cut -f3)
 for kind in "$OLD_KIND" "$NEW_KIND"; do
   case $kind in
     tag|build) ;;
@@ -168,8 +178,7 @@ for kind in "$OLD_KIND" "$NEW_KIND"; do
   esac
 done
 # The word a sentence about both sides uses (glibc_locale_data.pair_noun):
-# tags, builds, or sides (a tag and a build). With a tag on one side only,
-# that tag, which side it is, and the build on the other.
+# tags, builds, or sides (a tag and a build).
 if [ "$OLD_KIND" = tag ] && [ "$NEW_KIND" = tag ]; then
   NOUN=tags
 elif [ "$OLD_KIND" = build ] && [ "$NEW_KIND" = build ]; then
@@ -183,15 +192,6 @@ fi
 # sentence and never restate it.
 NOT_READ="What this run does not read of a build is under 'Not checked for"
 NOT_READ="$NOT_READ these builds'"
-TAG_SIDE=""; TAG_NAME=""; BUILD_NAME=""
-if [ "$NOUN" = sides ]; then
-  if [ "$OLD_KIND" = tag ]; then
-    TAG_SIDE=old; TAG_NAME=$OLD; BUILD_NAME=$NEW
-  else
-    TAG_SIDE=new; TAG_NAME=$NEW; BUILD_NAME=$OLD
-  fi
-fi
-
 # The options that read a machine's files go with two tags only, for now:
 # steps 6 to 11 read a machine's files, and with a build
 # named on either side what they would compare it against is not settled.
@@ -229,6 +229,30 @@ if [ "$NOUN" != tags ]; then
     text="$text two tags, or the builds without them."
     printf '%s\n' "$text" | fold -s -w 70 | sed 's/ *$//; 2,$s/^/       /' >&2
     exit 2
+  fi
+fi
+
+# latest-elN, the newest build of RHEL N that Rocky Linux's mirror lists,
+# replaced by that build's name, once for the whole run and before PAIR, so
+# that every file, step and sentence below reads the name and the run is the
+# one that name would give. The line saying which build it took is printed
+# here and nowhere else. A side that cannot be resolved stops the run.
+if [ -n "$OLD_LATEST$NEW_LATEST" ]; then
+  python3 "$SCRIPTS/glibc_locale_data.py" latest --to "$RESOLVED" "$OLD" "$NEW"
+  OLD=$(sed -n 1p "$RESOLVED"); NEW=$(sed -n 2p "$RESOLVED")
+  if [ -z "$OLD" ] || [ -z "$NEW" ]; then
+    echo "error: latest-elN came back as no build name. Not continuing." >&2
+    exit 1
+  fi
+fi
+# With a tag on one side only, that tag, which side it is, and the build on
+# the other: set only now, so that the build is named as latest-elN resolved.
+TAG_SIDE=""; TAG_NAME=""; BUILD_NAME=""
+if [ "$NOUN" = sides ]; then
+  if [ "$OLD_KIND" = tag ]; then
+    TAG_SIDE=old; TAG_NAME=$OLD; BUILD_NAME=$NEW
+  else
+    TAG_SIDE=new; TAG_NAME=$NEW; BUILD_NAME=$OLD
   fi
 fi
 
