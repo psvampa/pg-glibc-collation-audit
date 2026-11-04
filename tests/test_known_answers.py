@@ -794,13 +794,18 @@ class Step5CollationCode(StepRun):
         treats anything else as unresolved. Neither documented pair is clean,
         so the sentence is tied to the source here: reword it in one place and
         not the other, and every run would be summarised as unresolved.
-        The vanished-path variant must NOT say it -- that is the whole fix."""
+        Between builds the sentence says "... change in the sources.", and
+        the pattern takes both forms (7.5b). The vanished-path variant must
+        NOT say it -- that is the whole fix."""
         src = open(os.path.join(_harness_scripts(), 'diff_collation_code.py'),
                    encoding='utf-8').read()
         self.assertIn('"No substantive collation code change. ', src)
+        self.assertIn('"No substantive collation code change in the sources. ',
+                      src)
         audit = open(os.path.join(_harness_scripts(), '..', 'audit.sh'),
                      encoding='utf-8').read()
-        self.assertIn("'^No substantive collation code change\\.'", audit)
+        self.assertIn("'^No substantive collation code change"
+                      "( in the sources)?\\.'", audit)
         out = self.step('diff_collation_code.py', NEW, MID, '--allow-reverse')
         self.assertNotIn('No substantive collation code change', out)
 

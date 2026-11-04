@@ -390,6 +390,27 @@ def run_wrapper(*args, out_dir=None, env_extra=None):
 # can get RHEL8's from the clone -- fabricating it is the only way
 # to test the locale this project's first false negative was about.
 
+def summary_block(out, heading):
+    """The body under a summary heading, one stripped line each.
+
+    It refuses the same things removed_lines below does. The heading must be
+    a whole line of the summary, exactly once, so text appended to it is
+    caught, and the body must end at a blank line or the next heading.
+    """
+    summary = out.split('AUDIT SUMMARY', 1)[-1]
+    lines = summary.splitlines()
+    at = [i for i, line in enumerate(lines) if line == heading]
+    if len(at) != 1:
+        raise AssertionError(f'{heading!r} is a whole line {len(at)} '
+                             f'time(s):\n{summary}')
+    body = []
+    for line in lines[at[0] + 1:]:
+        if not line.strip() or line.startswith('--'):
+            return body
+        body.append(line.strip())
+    raise AssertionError(f'{heading!r} never ends:\n{summary}')
+
+
 def flat(text):
     """Output with every run of whitespace collapsed to one space.
 

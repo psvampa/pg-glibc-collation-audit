@@ -155,7 +155,7 @@ Three things make it unlike the template.
   nothing. For `C.UTF-8`, agreement with byte order is the fix. Two
   contradictory rules in one file get read in the wrong order.
 - **It is run even when the audit flagged nothing**, because steps 1 to 5
-  read upstream's files, never your machine's `C.UTF-8`.
+  read source files and never measure how your machine sorts `C.UTF-8`.
 
 The probe refuses to run if `C.utf8` is not in `pg_collation`.
 

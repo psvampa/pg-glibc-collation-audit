@@ -10,12 +10,12 @@ fetch on a `--filter=blob:none` clone silently dropped files from the analysis
 and the locale was reported unaffected. Everything here fails loudly instead,
 and blobs are read in a single `git cat-file --batch` stream.
 
-Also runnable directly; audit.sh and step 1 use fanin, sides, tags-only,
+Also runnable directly; audit.sh and step 1 use fanin, sides, resolve,
 order and pair-slug, and provenance and corpus are kept for a hand run:
   python3 glibc_locale_data.py fanin <tag> [changed_files.txt] [--as NAME]
   python3 glibc_locale_data.py provenance <tag> [<tag> ...]
   python3 glibc_locale_data.py corpus <tag> [<tag> ...]
-  python3 glibc_locale_data.py order [--allow-reverse] [--quiet] <old_tag> <new_tag>
+  python3 glibc_locale_data.py order [--allow-reverse] [--quiet] <old> <new>
       prints the direction (same, forward, reversed, undetermined) and
       whether nothing is compared (commit, tree, none)
   python3 glibc_locale_data.py pair-slug <old> <new>
@@ -24,11 +24,12 @@ order and pair-slug, and provenance and corpus are kept for a hand run:
       step 1's sides: each a tag of the clone, or a build named as
       glibc-2.34-283.el9_8, fetched and made a commit of the clone
       (build_sources); checks the order and the floor, prints the
-      provenance, and writes to F the two refs the step reads
-  python3 glibc_locale_data.py tags-only <old> <new>
-      refuses a build name for audit.sh, which does not pass one from step
-      to step yet; steps 1 to 5 read one, each run on its own
-      (step_sides)
+      provenance, and writes to F the two refs the step reads; under
+      audit.sh it also records each build's commit for the steps after
+      it (SIDES_ENV)
+  python3 glibc_locale_data.py resolve --to F <old> <new>
+      for audit.sh, before anything runs: writes to F `<side>\t<kind>` a
+      line each, kind `tag` or `build` (is_build_name)
 """
 import collections
 import contextlib
@@ -419,8 +420,7 @@ def refuse_build_commits(repo, commits):
                 f"outside localedata/ and locale/ it holds the upstream "
                 f"tag's tree, so read as a tag it hides the build's own "
                 f"patches. Name the build itself (glibc-2.34-283.el9_8) "
-                f"to steps 1 to 5: each makes its commit again and reads "
-                f"that.")
+                f"instead.")
 
 
 def warn(text, split_words=True):
@@ -867,8 +867,8 @@ _NOTHING_COMPARED_BUILDS = (
     "Steps 1 to 3 can only report 'nothing changed', and step 5 reports "
     "that nothing was compared: the two {noun} hold the same locale "
     "sources and the same code under locale/. What can still differ is "
-    "what this tool does not read of a build: the compiler, and code "
-    "outside localedata/ and locale/. Step 4 reads only the new {one}, so "
+    "what this tool does not read of a build, which step 1 prints under "
+    "'Not checked for these builds'. Step 4 reads only the new {one}, so "
     "its list still needs confirming. sql/c_utf8_probe.sql and "
     "docs/confirming-on-a-real-system.md check the order on the machines "
     "themselves.")
@@ -1217,7 +1217,7 @@ Side = collections.namedtuple(
 
 
 def side(repo, ref=None, machine=None, extra=(), build=None, version=None,
-         what=None, named=None):
+         what=None, named=None, make=False):
     """The one function that builds a side of the pair, and applies the
     floor of locale files to it.
 
@@ -1229,7 +1229,8 @@ def side(repo, ref=None, machine=None, extra=(), build=None, version=None,
     the tag `ref` of the clone, listed with one `git ls-tree -r` over
     localedata/locales/ and the `extra` paths. `build=` is a machine's and
     `named=` a build's: two keywords, so that neither is ever read as the
-    other, and both at once is refused.
+    other, and both at once is refused. `make` is build_side's, which
+    step 1 passes.
 
     The floor (below_floor) is applied here once for every side that holds
     files, so no step can refuse a smaller corpus on one side than on the
@@ -1260,7 +1261,7 @@ def side(repo, ref=None, machine=None, extra=(), build=None, version=None,
         if build is not None or version is not None:
             die("side() takes a machine's build= and version= or a build's "
                 "named=, not both")
-        return build_side(repo, named, extra)[0]
+        return build_side(repo, named, extra, make=make)[0]
     if ref is None:
         return Side('machine', None, None, build, version, None, None, (),
                     None)
@@ -1324,7 +1325,7 @@ def is_build_name(name):
     """Does `name` read as a build, glibc-2.34-283.el9_8? No glibc tag does
     (125 tags glibc-[0-9]* in the mirror, none with an .elN release;
     measured 2026-11-03), so such a name is never asked of git as a ref: a
-    build is read only through build_side, which makes its commit again."""
+    build is read only through build_side."""
     return build_name(name) is not None
 
 
@@ -1368,7 +1369,66 @@ def _need_tags(repo, tags):
             sys.exit(2)
 
 
-def build_side(repo, name, extra=()):
+# Under audit.sh, the file where step 1 records the commit it made for each
+# build of the run, `<build>\t<commit>` a line; the steps after it take the
+# commit from there instead of making it again (0.46-0.61 s a side and a
+# step, against 0.06-0.08 s, measured 2026-11-03). audit.sh removes the file
+# before step 1 and exports its path to its steps only: a step run on its
+# own makes the commit.
+SIDES_ENV = 'PG_GLIBC_AUDIT_SIDES'
+
+
+def write_recorded(builds):
+    """Write `<build>\t<commit>` for each build Side to the file SIDES_ENV
+    names, whole or not at all; nothing when the variable is unset. One
+    line a build: one build given as both sides is one line."""
+    path = os.environ.get(SIDES_ENV)
+    if not path:
+        return
+    lines = dict.fromkeys(f"{_asked(s.build)}\t{s.ref}\n" for s in builds)
+    tmp = f"{path}.new-{os.getpid()}"
+    with open(tmp, 'w', encoding='utf-8') as fh:
+        fh.writelines(lines)
+    os.replace(tmp, path)
+
+
+def _recorded(repo, name, built):
+    """The commit step 1 of this run made for `name`, from the file
+    SIDES_ENV names, checked to be a commit build_commit made (its
+    committer) for this very build (its message names the tag, the build
+    and the SRPM's sha256). Dies when the file is missing, does not name
+    the build, or names a commit that fails either check."""
+    import build_sources as bs
+    path = os.environ[SIDES_ENV]
+    try:
+        with open(path, encoding='utf-8') as fh:
+            lines = fh.read().split('\n')
+    except OSError as e:
+        die(f"cannot read the build {name}: {SIDES_ENV} names {path}, where "
+            f"step 1 of this run records each build's commit, and it cannot "
+            f"be read ({e.strerror}).", 2)
+    found = [ln.split('\t')[1] for ln in lines
+             if ln.count('\t') == 1 and ln.split('\t')[0] == name]
+    if len(found) != 1:
+        die(f"cannot read the build {name}: {path}, where step 1 of this run "
+            f"records each build's commit, names it {len(found)} time(s).", 2)
+    commit = found[0]
+    out = run_git(['log', '-1', '--format=%ce%x00%B', commit],
+                  repo).stdout.decode('utf-8', 'replace')
+    email, _, message = out.partition('\0')
+    if email != BUILD_EMAIL:
+        die(f"cannot read the build {name}: {path} names {commit}, which "
+            f"this tool did not make for a build (its committer is "
+            f"{email!r}).", 2)
+    if message.rstrip('\n') != bs.commit_message(built).rstrip('\n'):
+        die(f"cannot read the build {name}: {path} names {commit}, a "
+            f"commit this tool made for another build or another SRPM "
+            f"(its message does not name {built.tag}, {built.build} and the "
+            f"SRPM's sha256).", 2)
+    return commit
+
+
+def build_side(repo, name, extra=(), make=False):
     """(Side, Built) of the build `name`: fetched and rebuilt from its SRPM
     with the clone (build_sources.fetch_build, the tarball compared with the
     upstream tag), made a commit of the clone again (build_commit), and
@@ -1377,7 +1437,12 @@ def build_side(repo, name, extra=()):
     reason: a build that cannot be read is never replaced by its tag, whose
     sources are not the build's. So does a build that changes glibc's line
     reader (LINE_READER): how localedef reads 0x1A, 0xFF and UTF-8 is
-    answered here by the tag's ancestry, which would not speak for it."""
+    answered here by the tag's ancestry, which would not speak for it.
+
+    Under audit.sh (SIDES_ENV set) a step after step 1 takes the commit
+    step 1 made from that file (_recorded) instead of making it again.
+    Step 1 passes `make`: it always makes the commit, and then records it
+    (write_recorded), so it never reads a file it has not written."""
     import build_sources as bs
     parsed = build_name(name)
     if parsed:
@@ -1387,7 +1452,10 @@ def build_side(repo, name, extra=()):
         if not built.provenance.get('tarball'):
             raise bs.Refused("the SRPM's tarball was not compared with %s"
                              % built.tag)
-        commit = bs.build_commit(repo, built)
+        if os.environ.get(SIDES_ENV) and not make:
+            commit = _recorded(repo, name, built)
+        else:
+            commit = bs.build_commit(repo, built)
     except bs.Refused as e:
         die(f"cannot read the build {name}: {e}", 2)
     changed = [p for p in run_git(
@@ -2494,10 +2562,13 @@ def step1_sides(here, old, new, allow_reverse=False):
                              if n not in tags])
     if tags:
         refuse_build_commits(repo, resolve_commits(repo, tags))
-    sides = [n if n in tags else side(repo, n) for n in names]
+    sides = [n if n in tags else side(repo, n, make=True) for n in names]
     with contextlib.redirect_stdout(sys.stderr):
         pair_check(repo, sides[0], sides[1], allow_reverse=allow_reverse)
     builds = [sd for sd in sides if not _is_tag(sd)]
+    # Under audit.sh, for the steps after this one (SIDES_ENV): after the
+    # order check, so a refused pair records nothing.
+    write_recorded(builds)
     if not builds:
         report_tag_provenance(repo, old, new)
     else:
@@ -2603,15 +2674,16 @@ def _main(argv):
         with open(rest[1], 'w') as fh:
             fh.write(f"{_ref(o)}\n{_ref(n)}\n")
         return 0
-    if len(argv) == 3 and argv[0] == 'tags-only':
-        # audit.sh, before step 1: it does not pass a build from step to
-        # step yet.
-        for name in argv[1:]:
-            if is_build_name(name):
-                die(f"{name} is a build. audit.sh does not read a build yet: "
-                    f"steps 1 to 5 do, each run on its own "
-                    f"(scripts/audit-locale-diff.sh <old> <new> names the "
-                    f"next). Give audit.sh two glibc tags.")
+    if argv and argv[0] == 'resolve':
+        # audit.sh, before anything runs: the kind of each side, by the one
+        # rule every step applies (is_build_name), so that it picks each
+        # sentence of its summary by what the side is.
+        if len(argv) != 5 or argv[1] != '--to':
+            die("usage: glibc_locale_data.py resolve --to <file> <old> <new>")
+        with open(argv[2], 'w', encoding='utf-8') as fh:
+            for name in argv[3:]:
+                kind = 'build' if is_build_name(name) else 'tag'
+                fh.write(f"{name}\t{kind}\n")
         return 0
     if len(argv) >= 2 and argv[0] == 'corpus':
         # The corpus floor of the tags given, silent on success;
@@ -2636,16 +2708,19 @@ def _main(argv):
         # skip the section.
         allow = '--allow-reverse' in argv[1:]
         quiet = '--quiet' in argv[1:]
-        tags = [a for a in argv[1:]
-                if a not in ('--allow-reverse', '--quiet')]
-        if len(tags) != 2:
+        names = [a for a in argv[1:]
+                 if a not in ('--allow-reverse', '--quiet')]
+        if len(names) != 2:
             die("usage: glibc_locale_data.py order [--allow-reverse] "
-                "[--quiet] <old_tag> <new_tag>")
+                "[--quiet] <old> <new>")
         repo = find_repo()
-        commits = check_refs(repo, *tags)
+        # A build is a Side, read by its commit and ordered by rpm; anything
+        # making it prints goes to stderr, so the two words stay alone.
+        with contextlib.redirect_stdout(sys.stderr):
+            sides, commits = step_sides(repo, *names)
         sink = io.StringIO() if quiet else sys.stderr
         with contextlib.redirect_stdout(sink):
-            status, nothing = pair_check(repo, tags[0], tags[1],
+            status, nothing = pair_check(repo, sides[0], sides[1],
                                          allow_reverse=allow, commits=commits)
         # Two words: the direction, and what nothing_compared answered
         # (commit, tree or none). audit.sh reads the second for "nothing was

@@ -28,7 +28,8 @@ PostgreSQL does not cover the gap either. It records no collation version for
 any name beginning with `C.`, so no version mismatch can fire for this locale
 and no warning will reach you.
 
-What reaches it needs your machines rather than the clone. Give `audit.sh`
+Naming the two builds instead of the tags (command 1.a) compares their own
+`C.UTF-8` files (step 2). Its order needs your machines: give `audit.sh`
 one file from each machine, as in command 1.b, and it compares the two
 machines' `C.UTF-8` files (step 8) and measures how each machine sorts it
 (step 11). [`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql) measures the
@@ -41,10 +42,16 @@ Your machines do not run upstream glibc. RHEL8 ships `glibc-2.28` carrying
 hundreds of backported patches, and a collation change among them is invisible
 to a comparison of the two upstream tags.
 
+Given a build's name instead of a tag (command 1.a), `audit.sh` reads that
+build's own `localedata/` and `locale/`, its patches applied. What it does
+not read of a build, every such run prints under "Not checked for these
+builds".
+
 Give `audit.sh` one file from each machine and each side is also checked
 against the version its distro started from, when its file holds the locale
-sources, which reaches patches to the locale data. What no file comparison reaches is a backported change to glibc's
-*code*, because the code is read between the two tags and nowhere else.
+sources, which reaches patches to the locale data. What no file comparison of two tags reaches is a backported change to
+glibc's *code*, because the code is read between the two tags and nowhere
+else; naming builds reaches their code under `locale/` (above).
 
 Step 11 reaches it, because it measures the glibc actually installed, patches
 and all. For

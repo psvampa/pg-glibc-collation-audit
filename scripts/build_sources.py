@@ -5,8 +5,8 @@ A RHEL or Rocky glibc build is upstream glibc plus the distro's patches,
 applied by rpmbuild's %prep. build() opens the build's SRPM, takes the inner
 tarball's localedata/ and locale/, applies the patches that touch them the
 way GNU patch does, and keeps the result in a cache. Steps 1 to 5 of
-the audit, each run on its own, read a build named on its command line through
-glibc_locale_data.side (build_side); audit.sh refuses one so far.
+the audit that read a side, run by audit.sh or on their own, read a build
+named on the command line through glibc_locale_data.side (build_side).
 
 It does not work out from the spec what rpm did; it reads what rpm wrote
 down, and checks against it:
@@ -86,9 +86,11 @@ DEFAULT_CACHE = os.path.join(_HERE, 'build-sources-cache')
 SCOPE = ('localedata/', 'locale/')
 
 NOT_CHECKED = (
-    'the compiler, and the code strcoll runs: the patches of this build '
-    'that change that code are named with its patches, and what the build '
-    'compiled is not read',
+    "the compiler, and the build's patches to code outside localedata/ and "
+    'locale/: one to the own files of strcoll, strxfrm, wcscoll or wcsxfrm '
+    "under string/ and wcsmbs/ is named with the build's patches above, and "
+    'step 5 then gives no clean result; the others, such as those to the '
+    'strcmp that strcoll calls, are not compared',
     "the SRPM's and the binary packages' GPG signatures (only rpm's own "
     'digests are checked)',
     'the host that built the binary packages is taken to read the spec as '
@@ -2100,11 +2102,8 @@ def build_commit(repo, built):
     tree = _mktree(repo, root, missing=True)
     parent = _git(repo, ['rev-parse', '--verify',
                          built.tag + '^{commit}']).decode().strip()
-    message = ('pg-glibc-audit: %s with localedata/ and locale/ of %s\n\n'
-               'SRPM sha256 %s\n' % (built.tag, built.build,
-                                      built.provenance.get('srpm_sha256')))
     commit = _git(repo, ['commit-tree', '--no-gpg-sign', tree, '-p', parent],
-                  message.encode()).decode().strip()
+                  commit_message(built).encode()).decode().strip()
     parents = _git(repo, ['rev-list', '--parents', '-n', '1', commit]) \
         .decode().split()
     if parents != [commit, parent]:
@@ -2120,6 +2119,16 @@ def build_commit(repo, built):
                       % (built.build, built.tag, ', '.join(outside[:5])))
     _git(repo, ['update-ref', build_ref(asked_name(built)), commit])
     return commit
+
+
+def commit_message(built):
+    """The message of the commit build_commit makes for `built`: its tag,
+    the build and its SRPM's sha256. One spelling, which a step that takes
+    the commit step 1 made checks that commit against
+    (glibc_locale_data.build_side)."""
+    return ('pg-glibc-audit: %s with localedata/ and locale/ of %s\n\n'
+            'SRPM sha256 %s\n' % (built.tag, built.build,
+                                   built.provenance.get('srpm_sha256')))
 
 
 def asked_name(built):

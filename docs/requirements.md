@@ -12,6 +12,14 @@ Step 1 clones glibc from `github.com/bminor/glibc`, so it needs outbound
 network the first time. The clone is `--filter=blob:none --no-checkout` and
 still comes to roughly **370 MB** on disk. Later runs reuse it.
 
+A side named as a build (`glibc-2.34-275.el9_8`) needs outbound network to
+Rocky Linux's mirror the first time that build is read
+(`PG_GLIBC_BUILD_MIRROR` names another), and its files are kept in
+`scripts/build-sources-cache/` (`PG_GLIBC_BUILD_SOURCES_CACHE` names
+another). Checking the charmaps of an el9 or el10 package needs Python 3.14
+or a `zstd` program; without one the run says the charmaps were not
+checked.
+
 Steps 1 to 4, and steps 9 and 10 of the extended run, work out how
 `localedef` reads every locale file of the versions they look at; step 2 looks
 at both. The first run for a version does that with one process per
@@ -150,9 +158,9 @@ to.
 
 **Both of them**, for steps 6 to 10. Steps 6 and 7 hold a machine's locale
 sources against the upstream version its distro started from, and steps 9 and
-10 scan them; step 8 holds the two machines' against each other, and it is the
-only check that compares a backported locale such as `C` *between* the two
-builds. A machine without the package still gives a file, and those checks
+10 scan them; step 8 holds the two machines' against each other, and with
+two tags it is the only check that compares a backported locale such as `C`
+*between* the two builds. A machine without the package still gives a file, and those checks
 then say `NOT RUN` with the reason. Step 11 runs without it, and then says
 it did not check the strings it measured against that machine's character
 sets, which a locale its sort table decides does not need.
