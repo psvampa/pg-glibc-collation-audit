@@ -6,20 +6,26 @@ sorts. The second and third measure, inside PostgreSQL, what the first leaves
 open.
 
 **Commands are numbered here; steps are what a run prints.** A run of command
-1 does its own work in up to eleven steps, five with the tags alone and six
-more with a file from each machine, and those numbers are not these three.
+1 does its own work in up to eleven steps, five without a machine's file and
+six more with a file from each machine, and those numbers are not these three.
 
 ## Command 1 — which locales the upgrade can affect
 
 It runs in two ways, as in [the README](../README.md#the-commands). 1.a needs
-the tags alone; 1.b adds one file from each of your machines, and with it six
+no machine; 1.b adds one file from each of your machines, and with it six
 more checks.
 
 ### 1.a — quick verification
 
-`./audit.sh <old tag> <new tag>` compares the two glibc versions as their
-maintainers published them, and needs nothing but this checkout. It runs five
-checks in order and ends with one summary.
+`./audit.sh <old> <new>`, given two tags, compares the two glibc versions as
+their maintainers published them, and needs nothing but this checkout. It
+runs five checks in order and ends with one summary.
+
+Either side can name a RHEL build instead of a tag, as `rpm -q glibc` prints
+it without the architecture: `./audit.sh glibc-2.28-251.el8_10.40
+glibc-2.34-275.el9_8`. The run then fetches that build's source RPM and two
+of its packages from Rocky Linux's mirror, rebuilds its `localedata/` and
+`locale/`, and reads them instead of the tag. With a build, the options of 1.b are refused for now.
 
 | The run's step | The question it answers |
 |---|---|

@@ -606,10 +606,13 @@ def report_file(repo, path, rng, show_all, quiet_when_clean=False,
 
 def _code_patches(sides):
     """(name, patch, paths) for each build side's patch to strcoll's code
-    (prov['collation_code_patches']), in the order rpm applied them."""
+    (prov['collation_code_patches']), in the order rpm applied them. One
+    build given as both sides is one build: its patches are counted once."""
+    seen = set()
     for sd in sides:
-        if g._is_tag(sd):
+        if g._is_tag(sd) or sd.ref in seen:
             continue
+        seen.add(sd.ref)
         for c in sd.prov.get('collation_code_patches') or ():
             yield g.label(sd), c['patch'], list(c['paths'])
 

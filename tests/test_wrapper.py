@@ -22,7 +22,7 @@ import unittest
 
 from _harness import (EXPECTED_SHA, MID, NEW, OLD, REPO_ROOT, SCRIPTS_DIR,
                       backported_c, flat, locale_file, needs_clone,
-                      run_wrapper, upstream_c)
+                      run_wrapper, upstream_c, summary_block)
 
 import diff_distro_locales as dd
 import glibc_locale_data as g
@@ -105,13 +105,17 @@ NOTHING_GONE_OVER_OLD_MID = [
 
 # audit.sh's usage text, whole, with the script's own path as "audit.sh".
 USAGE = [
-    'usage: audit.sh <old_tag> <new_tag>',
+    'usage: audit.sh <old> <new>',
     '         [--old-locales-dir DIR --old-build-id NVR]',
     '         [--new-locales-dir DIR --new-build-id NVR]',
     '         [--old-order FILE --new-order FILE]',
     '         [--old-node FILE --new-node FILE]',
     '       e.g. audit.sh glibc-2.28 glibc-2.34',
-    '       tags are glibc-<version>; run `ldd --version` on each node',
+    '            audit.sh glibc-2.28-251.el8_10.40 glibc-2.34-275.el9_8',
+    '       each side is a glibc tag, glibc-<version> (run `ldd --version` on',
+    '       the node), or a build as `rpm -q glibc` names it without the',
+    '       architecture, rebuilt from its source RPM; with a build, the --*',
+    '       options below are refused for now',
     '       OLD first, NEW second: a reversed pair is refused, not',
     '       answered. Distance is NOT checked: RHEL8 to RHEL10 is one',
     '       pair, glibc-2.28 glibc-2.39, not two runs added up. What',
@@ -200,27 +204,6 @@ DISTRO_NOT_RUN_BODY = [
     "So nothing above says whether either machine's own patches touch",
     'sort order, which the tags cannot show.',
 ]
-
-
-def summary_block(out, heading):
-    """The body under a summary heading, one stripped line each.
-
-    It refuses the same things removed_lines below does. The heading must be
-    a whole line of the summary, exactly once, so text appended to it is
-    caught, and the body must end at a blank line or the next heading.
-    """
-    summary = out.split('AUDIT SUMMARY', 1)[-1]
-    lines = summary.splitlines()
-    at = [i for i, line in enumerate(lines) if line == heading]
-    if len(at) != 1:
-        raise AssertionError(f'{heading!r} is a whole line {len(at)} '
-                             f'time(s):\n{summary}')
-    body = []
-    for line in lines[at[0] + 1:]:
-        if not line.strip() or line.startswith('--'):
-            return body
-        body.append(line.strip())
-    raise AssertionError(f'{heading!r} never ends:\n{summary}')
 
 
 def step_text(out, n):
