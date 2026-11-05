@@ -20,8 +20,11 @@
 # source RPM, in place of the tag. A side can also be latest-elN, for a machine
 # not installed yet: the newest build of RHEL N that Rocky Linux's mirror
 # lists, resolved once before anything else reads the sides, and named before
-# step 1. With a build, the options below that read a machine's
-# files are refused for now.
+# step 1. With a build, of the options below only --old-node and --new-node
+# are read, for now. Given each machine's file (--old-node, --new-node),
+# steps 1 to 5 read the build that file names, in place of its tag; a
+# build this cannot read makes both sides read their tags, and the run says
+# so.
 #
 # The order of the two tags is not a formality: every step assumes the second
 # one is the newer. Given them the other way round the run used to go to the
@@ -83,8 +86,8 @@ usage() {
   echo "       the node), or a build as \`rpm -q glibc\` names it without the" >&2
   echo "       architecture, rebuilt from its source RPM, or latest-elN for a" >&2
   echo "       machine not installed yet: the newest build of RHEL N on Rocky" >&2
-  echo "       Linux's mirror, named before step 1; with a build, the --*" >&2
-  echo "       options below are refused for now" >&2
+  echo "       Linux's mirror, named before step 1; with a build, only" >&2
+  echo "       --old-node and --new-node of the options below are read, for now" >&2
   echo "       OLD first, NEW second: a reversed pair is refused, not" >&2
   echo "       answered. Distance is NOT checked: RHEL8 to RHEL10 is one" >&2
   echo "       pair, glibc-2.28 glibc-2.39, not two runs added up. What" >&2
@@ -117,7 +120,9 @@ usage() {
   echo "       one file scripts/locale_order.py --extract wrote on that" >&2
   echo "       machine, with its measurement, its build, its locale sources and" >&2
   echo "       its charmaps (a file without them says why), and stands for all" >&2
-  echo "       the options above." >&2
+  echo "       the options above. Steps 1 to 5 then read the build each file" >&2
+  echo "       names, in place of the tag (the side given is that build or its" >&2
+  echo "       tag)." >&2
   exit 2
 }
 
@@ -163,6 +168,10 @@ SCRIPTS="$HERE/scripts"
 RESOLVED=$(mktemp "${TMPDIR:-/tmp}/pg-glibc-resolve.XXXXXX")
 trap 'rm -f "$RESOLVED"' EXIT
 python3 "$SCRIPTS/glibc_locale_data.py" resolve --to "$RESOLVED" "$OLD" "$NEW"
+# A build typed as `rpm -q glibc` prints it, with the architecture, is read
+# without it (glibc_locale_data.without_arch).
+OLD=$(sed -n 1p "$RESOLVED" | cut -f1)
+NEW=$(sed -n 2p "$RESOLVED" | cut -f1)
 OLD_KIND=$(sed -n 1p "$RESOLVED" | cut -f2)
 NEW_KIND=$(sed -n 2p "$RESOLVED" | cut -f2)
 OLD_LATEST=$(sed -n 1p "$RESOLVED" | cut -f3)
@@ -178,31 +187,35 @@ for kind in "$OLD_KIND" "$NEW_KIND"; do
   esac
 done
 # The word a sentence about both sides uses (glibc_locale_data.pair_noun):
-# tags, builds, or sides (a tag and a build).
-if [ "$OLD_KIND" = tag ] && [ "$NEW_KIND" = tag ]; then
-  NOUN=tags
-elif [ "$OLD_KIND" = build ] && [ "$NEW_KIND" = build ]; then
-  NOUN=builds
-else
-  NOUN=sides
-fi
+# tags, builds, or sides (a tag and a build). Set again below once each
+# machine's file has said what its side is.
+set_noun() {
+  if [ "$OLD_KIND" = tag ] && [ "$NEW_KIND" = tag ]; then
+    NOUN=tags
+  elif [ "$OLD_KIND" = build ] && [ "$NEW_KIND" = build ]; then
+    NOUN=builds
+  else
+    NOUN=sides
+  fi
+}
+set_noun
 # What a run does not read of a build is said in ONE place, the `!! Not
 # checked for these builds` step 1 prints (build_sources.NOT_CHECKED), which
 # the warnings block repeats; the summary's blocks point to it with this
 # sentence and never restate it.
 NOT_READ="What this run does not read of a build is under 'Not checked for"
 NOT_READ="$NOT_READ these builds'"
-# The options that read a machine's files go with two tags only, for now:
-# steps 6 to 11 read a machine's files, and with a build
-# named on either side what they would compare it against is not settled.
-# Every such option is refused, on either side, with or without its pair.
+# With a build named on either side, the machine's files come only from
+# --old-node and --new-node, for now: each of those names the build its
+# machine runs, and the other options say less (a folder and a build id
+# typed by hand, or a measurement alone). Every other such option is
+# refused, on either side, with or without its pair.
 # Not arrays: bash 3.2 under set -u calls an empty one unbound.
 if [ "$NOUN" != tags ]; then
   refused=""; n=0
-  for opt in old-node new-node old-order new-order old-locales-dir \
+  for opt in old-order new-order old-locales-dir \
              new-locales-dir old-build-id new-build-id; do
     case $opt in
-      old-node) v=$OLD_NODE ;; new-node) v=$NEW_NODE ;;
       old-order) v=$OLD_ORDER ;; new-order) v=$NEW_ORDER ;;
       old-locales-dir) v=$OLD_LOCALES ;; new-locales-dir) v=$NEW_LOCALES ;;
       old-build-id) v=$OLD_BUILD ;; new-build-id) v=$NEW_BUILD ;;
@@ -224,12 +237,62 @@ if [ "$NOUN" != tags ]; then
     done
     unset IFS
     if [ "$n" -eq 1 ]; then opts="$opts is"; else opts="$opts are"; fi
-    text="error: $b is a build, and with a build audit.sh does not read a"
-    text="$text machine's files yet: $opts refused. Give those options with"
-    text="$text two tags, or the builds without them."
+    text="error: $b is a build, and with a build audit.sh reads a machine's"
+    text="$text files only from --old-node and --new-node: $opts refused."
+    text="$text Give those options with two tags, or each machine's file with"
+    text="$text --old-node and --new-node."
     printf '%s\n' "$text" | fold -s -w 70 | sed 's/ *$//; 2,$s/^/       /' >&2
     exit 2
   fi
+fi
+
+# A node file already holds what the options below would give, so a run given
+# both would have two answers to one question; checked first, so that its
+# message is the one printed. And one machine's file compares nothing.
+if [ -n "$OLD_NODE$NEW_NODE" ] &&
+   [ -n "$OLD_LOCALES$OLD_BUILD$NEW_LOCALES$NEW_BUILD$OLD_ORDER$NEW_ORDER" ]; then
+  echo "error: --old-node and --new-node already hold the locale sources, the" >&2
+  echo "       builds and the measurements; give them without those options" >&2
+  exit 2
+fi
+if { [ -n "$OLD_NODE" ] && [ -z "$NEW_NODE" ]; } ||
+   { [ -z "$OLD_NODE" ] && [ -n "$NEW_NODE" ]; }; then
+  echo "error: --old-node and --new-node go together: one machine's file" >&2
+  echo "       alone compares nothing" >&2
+  exit 2
+fi
+# Mirror audit-locale-diff.sh exactly, and inherit the user's setting. Never
+# invent a private directory: the path is a documented knob, and the step
+# scripts resolve this same variable independently.
+OUT_DIR=${PG_GLIBC_AUDIT_OUT:-/tmp/pg-glibc-collation-audit}
+export PG_GLIBC_AUDIT_OUT="$OUT_DIR"
+
+# Each machine's file is checked and laid out here, before anything reads the
+# sides, because it names the build that machine runs, and steps 1 to 5 read
+# that build (glibc_locale_data.machine_sides): the side typed must be that
+# build or its tag. A build that cannot be read with nothing found wrong
+# makes both sides read their tags, and NODE_NOTE says so; the warnings block
+# repeats it from the step0 log written below. Laid out under a name of its
+# own, and moved under the pair's name once the pair is named.
+OLD_TAG=$OLD; NEW_TAG=$NEW; NODE_NOTE=""; NODE_TMP=""
+if [ -n "$OLD_NODE" ]; then
+  mkdir -p "$OUT_DIR"
+  NODE_TMP=$(mktemp -d "$OUT_DIR/node_files.XXXXXX")
+  trap 'rm -f "$RESOLVED"; rm -rf "$NODE_TMP"' EXIT
+  for side in old new; do
+    if [ "$side" = old ]; then file=$OLD_NODE; else file=$NEW_NODE; fi
+    if ! python3 "$SCRIPTS/locale_order.py" --unpack "$file" "$NODE_TMP/$side"; then
+      echo "error: the $side node's file could not be used (above). Not continuing." >&2
+      exit 2
+    fi
+  done
+  NODE_NOTE=$(python3 "$SCRIPTS/glibc_locale_data.py" machines --to "$RESOLVED" \
+    "$OLD" "$NEW" "$(cat "$NODE_TMP/old/build-id")" "$(cat "$NODE_TMP/new/build-id")")
+  [ -z "$NODE_NOTE" ] || printf '%s\n' "$NODE_NOTE"
+  OLD=$(sed -n 1p "$RESOLVED" | cut -f1); NEW=$(sed -n 2p "$RESOLVED" | cut -f1)
+  OLD_KIND=$(sed -n 1p "$RESOLVED" | cut -f2); NEW_KIND=$(sed -n 2p "$RESOLVED" | cut -f2)
+  OLD_TAG=$(sed -n 1p "$RESOLVED" | cut -f3); NEW_TAG=$(sed -n 2p "$RESOLVED" | cut -f3)
+  set_noun
 fi
 
 # latest-elN, the newest build of RHEL N that Rocky Linux's mirror lists,
@@ -256,21 +319,6 @@ if [ "$NOUN" = sides ]; then
   fi
 fi
 
-# A node file already holds what the options below would give, so a run given
-# both would have two answers to one question; checked first, so that its
-# message is the one printed. And one machine's file compares nothing.
-if [ -n "$OLD_NODE$NEW_NODE" ] &&
-   [ -n "$OLD_LOCALES$OLD_BUILD$NEW_LOCALES$NEW_BUILD$OLD_ORDER$NEW_ORDER" ]; then
-  echo "error: --old-node and --new-node already hold the locale sources, the" >&2
-  echo "       builds and the measurements; give them without those options" >&2
-  exit 2
-fi
-if { [ -n "$OLD_NODE" ] && [ -z "$NEW_NODE" ]; } ||
-   { [ -z "$OLD_NODE" ] && [ -n "$NEW_NODE" ]; }; then
-  echo "error: --old-node and --new-node go together: one machine's file" >&2
-  echo "       alone compares nothing" >&2
-  exit 2
-fi
 # A locales dir without its build id would produce a result that cannot be
 # cited, so refuse the pair rather than silently dropping half of it.
 if { [ -n "$OLD_LOCALES" ] && [ -z "$OLD_BUILD" ]; } ||
@@ -297,11 +345,6 @@ if { [ -n "$OLD_ORDER" ] && [ -z "$NEW_ORDER" ]; } ||
   echo "       measurement alone compares nothing" >&2
   exit 2
 fi
-# Mirror audit-locale-diff.sh exactly, and inherit the user's setting. Never
-# invent a private directory: the path is a documented knob, and the step
-# scripts resolve this same variable independently.
-OUT_DIR=${PG_GLIBC_AUDIT_OUT:-/tmp/pg-glibc-collation-audit}
-export PG_GLIBC_AUDIT_OUT="$OUT_DIR"
 
 # Python block-buffers stdout when it is not a tty. Without this, the `note:`
 # lines on stderr overtake step 2's `!!` warning -- the single most important
@@ -336,22 +379,22 @@ STEP4_LIST="$OUT_DIR/step4_exposed_locales.txt"
 STEP4_BYTE_ORDER="$OUT_DIR/step4_byte_order_locales.txt"
 # What step 7 found missing from the new copy, named after the new tag and the
 # label step 7 is given below.
-NEW_COPY_MISSING="$OUT_DIR/copy_missing.$(slug "$NEW" new).txt"
+NEW_COPY_MISSING="$OUT_DIR/copy_missing.$(slug "$NEW_TAG" new).txt"
 # What steps 6 and 7 found inside LC_COLLATE, one list per side, named the same
 # way. The summary reads them for its steps 6 and 7 block.
-OLD_DISTRO_LIST="$OUT_DIR/backports_inside_collate.$(slug "$OLD" old).txt"
-NEW_DISTRO_LIST="$OUT_DIR/backports_inside_collate.$(slug "$NEW" new).txt"
+OLD_DISTRO_LIST="$OUT_DIR/backports_inside_collate.$(slug "$OLD_TAG" old).txt"
+NEW_DISTRO_LIST="$OUT_DIR/backports_inside_collate.$(slug "$NEW_TAG" new).txt"
 # What their character set check lists (13.7 PR D), written only when it
 # ran, which it does with a machine's file that holds the charmaps.
-OLD_DISTRO_KEYED="$OUT_DIR/distro_keyed_locales.$(slug "$OLD" old).txt"
-NEW_DISTRO_KEYED="$OUT_DIR/distro_keyed_locales.$(slug "$NEW" new).txt"
+OLD_DISTRO_KEYED="$OUT_DIR/distro_keyed_locales.$(slug "$OLD_TAG" old).txt"
+NEW_DISTRO_KEYED="$OUT_DIR/distro_keyed_locales.$(slug "$NEW_TAG" new).txt"
 
-# The node files are laid out before anything reads them. locale_order.py
-# --unpack checks each one whole, and it then stands for the options above:
-# the measurement and the build always; the sources when the file holds them.
-# A file without the sources says why, and the summary prints that reason
-# where their checks would have answered. Each is laid out afresh, under a name
-# for the pair, like every other file this run reads.
+# The node files, laid out above (locale_order.py --unpack checks each one
+# whole), are moved here under a name for the pair, like every other file
+# this run reads, and stand for the options above: the measurement and the
+# build always; the sources when the file holds them. A file without the
+# sources says why, and the summary prints that reason where their checks
+# would have answered.
 #
 # The charmaps go to steps 6 to 8 with the measurement, which names the
 # locales the machine builds with them, and to step 11, which checks the
@@ -368,10 +411,7 @@ if [ -n "$OLD_NODE" ]; then
     if [ "$side" = old ]; then file=$OLD_NODE; else file=$NEW_NODE; fi
     dir="$OUT_DIR/node_file.$PAIR.$side"
     rm -rf "$dir"
-    if ! python3 "$SCRIPTS/locale_order.py" --unpack "$file" "$dir"; then
-      echo "error: the $side node's file could not be used (above). Not continuing." >&2
-      exit 2
-    fi
+    mv "$NODE_TMP/$side" "$dir"
     build=$(cat "$dir/build-id")
     locales=""; reason=""
     if [ -d "$dir/locales" ]; then
@@ -418,6 +458,7 @@ if [ -n "$OLD_NODE" ]; then
       NOCM+=("$file" "$cmreason")
     fi
   done
+  rmdir "$NODE_TMP"
   # Step 8 compares the charmaps only with both machines'; otherwise it
   # prints what each file that lacks them says.
   if [ -n "$reasons" ]; then
@@ -476,6 +517,9 @@ rm -f "$STEP2_LIST" "$STEP2_REMOVED" "$STEP2_KEYED" "$STEP3_LIST" "$STEP4_LIST" 
       ${NODE_REMOVED:+"$NODE_REMOVED"} ${NODE_UNDETERMINED:+"$NODE_UNDETERMINED"} \
       ${NODE_KEYED:+"$NODE_KEYED"} "$SIDES_FILE"
 rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
+# What the machines' files decided, for the warnings block below, which
+# repeats the `!!` blocks of every step*.$PAIR.log.
+[ -z "$NODE_NOTE" ] || printf '%s\n' "$NODE_NOTE" > "$OUT_DIR/step0.$PAIR.log"
 
 # Step 11 is worked out before step 1, so that a measurement the comparison
 # refuses -- cut short, damaged, measured by another copy of locale_order.py
@@ -496,7 +540,7 @@ rm -f "$ORDER_LOG" "$ORDER_SUMMARY" "$ORDER_CHARACTERS"
 if [ -n "$OLD_ORDER" ]; then
   # From the --*-order options there are no charmaps, and step 11 says so.
   if ! python3 "$SCRIPTS/locale_order.py" --compare "$OLD_ORDER" "$NEW_ORDER" \
-       --tags "$OLD" "$NEW" --summary-to "$ORDER_SUMMARY" \
+       --tags "$OLD_TAG" "$NEW_TAG" --summary-to "$ORDER_SUMMARY" \
        --characters-to "$ORDER_CHARACTERS" ${ORDER_CM[@]+"${ORDER_CM[@]}"} \
        > "$ORDER_LOG" 2>&1; then
     cat "$ORDER_LOG" >&2
@@ -686,13 +730,13 @@ run_step 5 python3 "$SCRIPTS/diff_collation_code.py" "$OLD" "$NEW"
 # supply them, and keep their numbers when a side is left out.
 if [ -n "$OLD_LOCALES" ]; then
   banner "STEP 6  DISTRO CHECK  do $OLD_BUILD's patches touch sort order?"
-  run_step 6 python3 "$SCRIPTS/diff_distro_locales.py" "$OLD" \
+  run_step 6 python3 "$SCRIPTS/diff_distro_locales.py" "$OLD_TAG" \
     --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --node-label old \
     ${OLD_CM[@]+"${OLD_CM[@]}"}
 fi
 if [ -n "$NEW_LOCALES" ]; then
   banner "STEP 7  DISTRO CHECK  do $NEW_BUILD's patches touch sort order?"
-  run_step 7 python3 "$SCRIPTS/diff_distro_locales.py" "$NEW" \
+  run_step 7 python3 "$SCRIPTS/diff_distro_locales.py" "$NEW_TAG" \
     --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --node-label new \
     ${NEW_CM[@]+"${NEW_CM[@]}"}
 fi
@@ -704,7 +748,7 @@ if [ -n "$OLD_LOCALES" ] && [ -n "$NEW_LOCALES" ]; then
   run_step 8 python3 "$SCRIPTS/diff_node_locales.py" \
     --old-locales-dir "$OLD_LOCALES" --old-build-id "$OLD_BUILD" \
     --new-locales-dir "$NEW_LOCALES" --new-build-id "$NEW_BUILD" \
-    --old-tag "$OLD" --new-tag "$NEW" ${NODE_CM[@]+"${NODE_CM[@]}"}
+    --old-tag "$OLD_TAG" --new-tag "$NEW_TAG" ${NODE_CM[@]+"${NODE_CM[@]}"}
 fi
 
 # Step 4 again, over each NODE's own locale directory instead of the new tag.
@@ -717,13 +761,13 @@ fi
 if [ -n "$OLD_LOCALES" ]; then
   banner "STEP 9  NODE ELLIPSIS  does $OLD_BUILD's own locale data use ellipsis ranges?"
   run_step 9 python3 "$SCRIPTS/flag_algorithmic_ranges.py" \
-    --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --supported-tag "$OLD" \
+    --locales-dir "$OLD_LOCALES" --build-id "$OLD_BUILD" --supported-tag "$OLD_TAG" \
     --node-label old
 fi
 if [ -n "$NEW_LOCALES" ]; then
   banner "STEP 10  NODE ELLIPSIS  does $NEW_BUILD's own locale data use ellipsis ranges?"
   run_step 10 python3 "$SCRIPTS/flag_algorithmic_ranges.py" \
-    --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --supported-tag "$NEW" \
+    --locales-dir "$NEW_LOCALES" --build-id "$NEW_BUILD" --supported-tag "$NEW_TAG" \
     --node-label new
 fi
 
@@ -922,7 +966,7 @@ fi
 # question, and this one comes first: it says where the other is, so that the
 # tags' list -- or their "none" -- is not read as the whole answer.
 if [ -n "$OLD_ORDER" ]; then
-  echo "     This list is from the tags. What each machine's own glibc says"
+  echo "     This list is from the $NOUN. What each machine's own glibc says"
   echo "     is under '-- Measured order', below."
 fi
 
@@ -1071,8 +1115,8 @@ else
     echo "     option, or --old-order and --new-order, each written by"
     echo "     scripts/locale_order.py on that machine. Without them nothing above"
   else
-    echo "     audit.sh takes each machine's file (--old-node and --new-node) only"
-    echo "     with two tags for now. So nothing above"
+    echo "     Pass --old-node and --new-node, each machine's file written by"
+    echo "     scripts/locale_order.py --extract. Without them nothing above"
   fi
   echo "     asked either machine's glibc how it sorts, and a locale whose files"
   echo "     did not change can still sort differently. Nor did anything compare"
@@ -1142,9 +1186,9 @@ echo
 if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
   for side in old new; do
     if [ "$side" = old ]; then
-      dir=$OLD_LOCALES; build=$OLD_BUILD; tag=$OLD; n=6; list=$OLD_DISTRO_LIST
+      dir=$OLD_LOCALES; build=$OLD_BUILD; tag=$OLD_TAG; n=6; list=$OLD_DISTRO_LIST
     else
-      dir=$NEW_LOCALES; build=$NEW_BUILD; tag=$NEW; n=7; list=$NEW_DISTRO_LIST
+      dir=$NEW_LOCALES; build=$NEW_BUILD; tag=$NEW_TAG; n=7; list=$NEW_DISTRO_LIST
     fi
     if [ -z "$dir" ]; then
       echo "-- Distro patches, step $n: NOT RUN"
@@ -1154,8 +1198,14 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
         echo "     No --$side-locales-dir. Pass --$side-locales-dir with"
         echo "     --$side-build-id."
       fi
-      echo "     So nothing above says whether the $side machine's own patches"
-      echo "     touch sort order, which the tags cannot show."
+      if [ "$side" = old ]; then kind=$OLD_KIND; b=$OLD; else kind=$NEW_KIND; b=$NEW; fi
+      if [ "$kind" = build ]; then
+        echo "     So nothing above holds this machine's own locale files against"
+        echo "     $tag. Steps 1 to 5 read its build, $b."
+      else
+        echo "     So nothing above says whether the $side machine's own patches"
+        echo "     touch sort order, which the tags cannot show."
+      fi
       continue
     fi
     echo "-- Distro patches, step $n ($build against $tag)"
@@ -1173,8 +1223,14 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
       # and saying "the tag diff reads what this machine runs" read it as clean.
       echo "     No locale compared with $tag differs inside LC_COLLATE."
     else
-      echo "     $inside locale(s) differ inside LC_COLLATE -- for these the tag"
-      echo "     diff is NOT reading what this machine runs:"
+      if [ "$side" = old ]; then kind=$OLD_KIND; b=$OLD; else kind=$NEW_KIND; b=$NEW; fi
+      if [ "$kind" = build ]; then
+        echo "     $inside locale(s) differ inside LC_COLLATE from $tag -- this"
+        echo "     machine's own patches, which steps 1 to 5 read in $b:"
+      else
+        echo "     $inside locale(s) differ inside LC_COLLATE -- for these the tag"
+        echo "     diff is NOT reading what this machine runs:"
+      fi
       names=$(awk '!/^#/ && NF' "$list" | tr '\n' ' ')
       printf '%s\n' "$names" | fold -s -w 64 | sed 's/ *$//; s/^/       /'
       echo "     full list: $list"
@@ -1187,8 +1243,15 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
     unread=$(sed -n 's/^  \([^ ]*\): HAS ITS OWN TAILORING.*/\1/p' \
       "$OUT_DIR/step$n.$PAIR.log" 2>/dev/null | tr '\n' ' ')
     if [ -n "$unread" ]; then
-      echo "     Not compared, because $tag lacks them, and with sort rules of"
-      echo "     their own, so no tag diff reads them (step $n above):"
+      if [ "$side" = old ]; then kind=$OLD_KIND; b=$OLD; else kind=$NEW_KIND; b=$NEW; fi
+      if [ "$kind" = build ]; then
+        echo "     Not compared, because $tag lacks them, and with sort rules of"
+        echo "     their own (step $n above); steps 1 to 5 read them as files of"
+        echo "     $b:"
+      else
+        echo "     Not compared, because $tag lacks them, and with sort rules of"
+        echo "     their own, so no tag diff reads them (step $n above):"
+      fi
       printf '%s\n' "$unread" | fold -s -w 64 | sed 's/ *$//; s/^/       /'
     fi
     if [ "$side" = old ]; then
@@ -1204,15 +1267,19 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
   done
 else
   echo "-- Distro patches, steps 6 and 7: NOT RUN"
-  if [ "$NOUN" = builds ]; then
+  if [ -n "$OLD_NODE" ] && [ "$NOUN" = builds ]; then
+    no_sources old
+    no_sources new
+    echo "     So nothing above holds either machine's own locale files against"
+    echo "     its tag. Steps 1 to 5 read each machine's build."
+  elif [ "$NOUN" = builds ]; then
     text="Steps 6 and 7 compare a machine's own locale files with its"
-    text="$text upstream tag, and audit.sh takes those files only with two tags"
-    text="$text for now. $NOT_READ, below."
+    text="$text upstream tag: pass --old-node and --new-node. $NOT_READ, below."
     printf '%s\n' "$text" | fold -s -w 70 | sed 's/ *$//; s/^/     /'
   elif [ "$NOUN" = sides ]; then
     text="Steps 6 and 7 compare a machine's own locale files with its"
-    text="$text upstream tag, and audit.sh takes those files only with two tags"
-    text="$text for now. $TAG_NAME is an upstream tag, so nothing above says"
+    text="$text upstream tag: pass --old-node and --new-node. $TAG_NAME is an"
+    text="$text upstream tag, so nothing above says"
     text="$text whether the $TAG_SIDE machine's own patches touch sort order:"
     text="$text name that side as a build. $NOT_READ, below."
     printf '%s\n' "$text" | fold -s -w 70 | sed 's/ *$//; s/^/     /'
@@ -1275,7 +1342,16 @@ else
   # reads exactly like one that cleared it, and that is how this locale gets
   # missed -- it is false negative #1 in a different costume.
   echo "-- Node-to-node locale data: NOT RUN"
-  if [ -n "$OLD_NODE" ]; then
+  if [ -n "$OLD_NODE" ] && [ "$NOUN" = builds ]; then
+    no_sources old
+    no_sources new
+    text="So nothing above compared the two machines' own C.UTF-8 files."
+    text="$text Step 2 compared every locale file of the two builds, glibc's"
+    text="$text file C (C.UTF-8) as any other; what step 11 measured of it is"
+    text="$text under '-- Measured order'. PostgreSQL reports collversion as"
+    text="$text NULL for every C.* collation, so no mismatch can ever fire."
+    printf '%s\n' "$text" | fold -s -w 70 | sed 's/ *$//; s/^/     /'
+  elif [ -n "$OLD_NODE" ]; then
     no_sources old
     no_sources new
     echo "     So nothing above compared the two nodes' C.UTF-8 files against"
@@ -1283,8 +1359,8 @@ else
     echo "     order'. PostgreSQL reports collversion as NULL for every C.*"
     echo "     collation, so no mismatch can ever fire."
   elif [ "$NOUN" = builds ]; then
-    text="Step 8 compares two machines' own locale files, which audit.sh"
-    text="$text takes only with two tags for now. Step 2 compared every locale"
+    text="Step 8 compares two machines' own locale files: pass --old-node and"
+    text="$text --new-node. Step 2 compared every locale"
     text="$text file of the two builds, glibc's file C (C.UTF-8) as any other."
     text="$text PostgreSQL reports collversion as NULL for every C.* collation,"
     text="$text so no mismatch can ever fire."
@@ -1396,7 +1472,11 @@ else
   # reason that holds on every pair is provenance, not content: a tag is
   # upstream by construction, and no tag scan speaks for what a node built.
   echo "-- Node's own ellipsis scan: NOT RUN"
-  if [ -n "$OLD_NODE" ]; then
+  if [ -n "$OLD_NODE" ] && [ "$NEW_KIND" = build ]; then
+    no_sources old
+    no_sources new
+    echo "     Step 4 above scanned $NEW's own locale files."
+  elif [ -n "$OLD_NODE" ]; then
     no_sources old
     no_sources new
     echo "     Step 4 above scanned the TAG, and a tag holds at most upstream's"
@@ -1407,9 +1487,8 @@ else
   elif [ "$NEW_KIND" = build ]; then
     # Step 4 read the new build's own locale files: its C.UTF-8 is not
     # upstream's.
-    text="Steps 9 and 10 scan a machine's own locale files, which audit.sh"
-    text="$text takes only with two tags for now. Step 4 above scanned $NEW's"
-    text="$text own locale files."
+    text="Steps 9 and 10 scan a machine's own locale files: pass --old-node"
+    text="$text and --new-node. Step 4 above scanned $NEW's own locale files."
     printf '%s\n' "$text" | fold -s -w 70 | sed 's/ *$//; s/^/     /'
   else
     if [ "$NOUN" = tags ]; then
@@ -1476,6 +1555,10 @@ if [ "$SAME_TAG" = "1" ] && [ "$NOUN" != tags ]; then
     text="$text the same locale sources and the same code under locale/."
     text="$text Everything above that compares the two $NOUN and says 'nothing"
     text="$text changed' means 'nothing was compared'. $NOT_READ, below."
+    if [ -n "$OLD_ORDER" ]; then
+      text="$text What each machine's own glibc says is under '-- Measured"
+      text="$text order'."
+    fi
     text="$text sql/c_utf8_probe.sql and docs/confirming-on-a-real-system.md"
     text="$text check the order on the machines themselves."
   fi

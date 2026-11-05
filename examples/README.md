@@ -22,8 +22,8 @@ Raw output, start to finish, with nothing trimmed or annotated.
 ### Command 1 extended
 
 The same command given one file from each machine, the one
-`scripts/locale_order.py --extract` wrote there, so the six node steps run
-instead of saying `NOT RUN`.
+`scripts/locale_order.py --extract` wrote there, so steps 1 to 5 read each
+machine's build and the six node steps run instead of saying `NOT RUN`.
 
 | File | |
 |---|---|

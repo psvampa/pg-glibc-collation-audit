@@ -28,7 +28,8 @@ of its packages from Rocky Linux's mirror, rebuilds its `localedata/` and
 `locale/`, and reads them instead of the tag. For a machine not installed
 yet, a side can be `latest-el10` (`latest-el<N>` for RHEL N): the newest
 build Rocky Linux's mirror lists for that release, whose name the run prints
-before step 1 and reads from then on. With a build, the options of 1.b are refused for now.
+before step 1 and reads from then on. With a build, only `--old-node` and
+`--new-node` of the options of 1.b are read, for now.
 
 | The run's step | The question it answers |
 |---|---|
@@ -47,8 +48,14 @@ a role swap that leaves the order alone.
 
 The same command, given one file from each machine with `--old-node` and
 `--new-node`. Each is the file `scripts/locale_order.py --extract` wrote on
-that machine. The five checks above run either way; the two files add six
-more.
+that machine. The five checks above then read the build each file names,
+as `rpm -q glibc` printed it on that machine, in place of the tag, as in
+1.a: the side you give is that build or its tag. When a build cannot be
+read (an older build whose spec the run does not know how to read,
+one Rocky Linux's mirror does not list, or no network the first time it is
+read) and you gave its tag, both sides read their tags and the run says so
+before step 1; given as the build itself, it is refused, as in 1.a. The two
+files add six more checks.
 
 | The run's step | The question it answers |
 |---|---|

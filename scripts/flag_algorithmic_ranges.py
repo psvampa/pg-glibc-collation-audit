@@ -627,7 +627,7 @@ def main(argv):
                 "computes for these",
                 "differ between two nodes is a question about localedef, not "
                 "about this",
-                "directory: diff_collation_code.py for the two upstream tags, "
+                "directory: diff_collation_code.py for the two sides, "
                 "and",
                 "docs/confirming-on-a-real-system.md for the glibc each node "
                 "actually runs."]

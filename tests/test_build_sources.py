@@ -46,6 +46,21 @@ import build_sources as bs
 import glibc_locale_data as g
 
 DATA = os.path.join(TESTS_DIR, 'build_sources')
+
+# What build_sources raises as Unread, by message: a build this cannot read
+# with nothing found wrong. Every other refusal is Refused, and a test of a
+# refusal asserts which of the two it is (assertRefusedAs).
+UNREAD = ('this does not know in', ' (looked in ', 'with no metadata, so its',
+          'is not there any more', 'could not read ')
+
+
+def assertRefusedAs(test, exc, why):
+    """`exc` is Unread when its message is one of UNREAD, else exactly
+    Refused; and it says `why`."""
+    text = str(exc)
+    test.assertIn(why, text)
+    unread = any(u in text for u in UNREAD)
+    test.assertIs(type(exc), bs.Unread if unread else bs.Refused, text)
 EXTRACT = os.path.join(TESTS_DIR, 'locale_order')
 FIXTURES = (('glibc-2.28-251.el8_10.40', 8), ('glibc-2.34-275.el9_8', 9),
             ('glibc-2.39-128.el10_2', 10))
@@ -379,7 +394,7 @@ class RefusesTenInputsRpmBuiltOtherwise(unittest.TestCase):
     def refused(self, info, hdr, files, base, why):
         with self.assertRaises(bs.Refused) as cm:
             bs.rebuild(info, hdr, files, base)
-        self.assertIn(why, str(cm.exception))
+        assertRefusedAs(self, cm.exception, why)
 
     def test_v1_a_comment_ending_in_a_backslash(self):
         """rpm removed de_DE: the shell ends a comment at its newline."""
@@ -1747,7 +1762,7 @@ class FetchesFromAMirror(unittest.TestCase):
     def refused(self, call, why):
         with self.assertRaises(bs.Refused) as cm:
             call()
-        self.assertIn(why, str(cm.exception))
+        assertRefusedAs(self, cm.exception, why)
 
     def where(self, name):
         return bs.where_from(name, M, self.cache)
@@ -2028,6 +2043,17 @@ class FetchesFromAMirror(unittest.TestCase):
                                for u, d in self.mirror.files.items()
                                if u == self.mirror.asked[0]])
 
+    def test_a_listed_file_that_is_not_there_is_unread(self):
+        """The metadata lists the build, and its SRPM is gone from the
+        mirror (a sync half done, a build moved): nothing was found wrong
+        in what was read, so the build is Unread."""
+        self.el10()
+        repo, row = self.placed['srpm']
+        del self.mirror.files[M + 'pub/rocky/10/' + repo + '/' + row['href']]
+        self.refused(lambda: bs.fetch_build('glibc-2.39-1.el10', M,
+                                            self.cache),
+                     'is not there any more')
+
     def test_a_remembered_file_the_mirror_now_gives_another_sha256(self):
         """Each of the three files in turn: its kept copy and its URL gone,
         the metadata now names another sha256 for it."""
@@ -2192,7 +2218,7 @@ class ReadsAUrl(unittest.TestCase):
             return urllib.error.HTTPError('u', code, 'x', {}, None)
         cases = ((err(404), bs._Absent, ''),
                  (err(503), bs.Refused, 'HTTP 503'),
-                 (urllib.error.URLError('timed out'), bs.Refused, 'timed out'),
+                 (urllib.error.URLError('timed out'), bs.Unread, 'timed out'),
                  (Resp(b'abc', '10'), bs.Refused, 'cut short: 3 of 10'))
         for answer, exc, why in cases:
             with self.subTest(why=why or '404'):
@@ -2201,13 +2227,17 @@ class ReadsAUrl(unittest.TestCase):
                 with mock.patch.object(bs.urllib.request, 'urlopen', **kw):
                     with self.assertRaises(exc) as cm:
                         bs._get('https://mirror.test/x')
+                self.assertIs(type(cm.exception), exc)
                 self.assertIn(why, str(cm.exception))
         with mock.patch.object(bs.urllib.request, 'urlopen',
                                return_value=Resp(b'abc', '3')):
             self.assertEqual(bs._get('https://mirror.test/x'), b'abc')
-        # A mirror named without its scheme: urllib cannot open it.
+        # A mirror named without its scheme: urllib cannot open it. The
+        # mirror named is wrong, which is a refusal, not "cannot be
+        # reached" (Unread): audit.sh does not read the tags over it.
         with self.assertRaises(bs.Refused) as cm:
             bs._get('dl.rockylinux.org/vault/rocky/')
+        self.assertIs(type(cm.exception), bs.Refused)
         self.assertIn('unknown url type', str(cm.exception))
 
     def test_the_suite_names_a_mirror_that_is_not_the_network(self):
@@ -3498,24 +3528,23 @@ class AuditShReadsTheFixtureBuilds(_AuditOnBuilds, unittest.TestCase):
         out = self.run_of('89')
         self.assertEqual(' '.join(summary_block(out, DISTRO)),
                          "Steps 6 and 7 compare a machine's own locale files "
-                         "with its upstream tag, and audit.sh takes those "
-                         "files only with two tags for now. %s, below."
-                         % NOT_READ)
+                         "with its upstream tag: pass --old-node and "
+                         "--new-node. %s, below." % NOT_READ)
         self.assertEqual(' '.join(summary_block(out, NODE)),
-                         "Step 8 compares two machines' own locale files, "
-                         "which audit.sh takes only with two tags for now. "
+                         "Step 8 compares two machines' own locale files: "
+                         "pass --old-node and --new-node. "
                          "Step 2 compared every locale file of the two "
                          "builds, glibc's file C (C.UTF-8) as any other. "
                          "PostgreSQL reports collversion as NULL for every "
                          "C.* collation, so no mismatch can ever fire. Then "
                          "run sql/c_utf8_probe.sql on both nodes.")
         self.assertEqual(' '.join(summary_block(out, ELLIPSIS)),
-                         "Steps 9 and 10 scan a machine's own locale files, "
-                         "which audit.sh takes only with two tags for now. "
+                         "Steps 9 and 10 scan a machine's own locale files: "
+                         "pass --old-node and --new-node. "
                          "Step 4 above scanned %s's own locale files." % B275)
         self.assertEqual(summary_block(out, MEASURED)[:2], [
-            "audit.sh takes each machine's file (--old-node and --new-node) only",
-            'with two tags for now. So nothing above'])
+            "Pass --old-node and --new-node, each machine's file written by",
+            'scripts/locale_order.py --extract. Without them nothing above'])
         self.assertTrue(' '.join(summary_block(out, DECIDED)).endswith(
             '%s, above.' % NOT_READ))
         self.assertNotIn('the TAG', flat(out.split('AUDIT SUMMARY', 1)[1]))
@@ -3591,8 +3620,8 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
             "the two builds and says 'nothing changed' means 'nothing was "
             "compared'." % (B275, B275))
         self.assertEqual(' '.join(summary_block(out, ELLIPSIS)),
-                         "Steps 9 and 10 scan a machine's own locale files, "
-                         "which audit.sh takes only with two tags for now. "
+                         "Steps 9 and 10 scan a machine's own locale files: "
+                         "pass --old-node and --new-node. "
                          "Step 4 above scanned %s's own locale files." % B275)
 
     def test_a_clean_step_5_between_builds_is_read_as_clean(self):
@@ -3643,8 +3672,8 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
                          % (TAG, B275, TAG, B275))
         self.assertEqual(' '.join(summary_block(out, DISTRO)),
                          "Steps 6 and 7 compare a machine's own locale files "
-                         "with its upstream tag, and audit.sh takes those "
-                         "files only with two tags for now. %s is an upstream "
+                         "with its upstream tag: pass --old-node and "
+                         "--new-node. %s is an upstream "
                          "tag, so nothing above says whether the old "
                          "machine's own patches touch sort order: name that "
                          "side as a build. %s, below." % (TAG, NOT_READ))
@@ -3702,8 +3731,8 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
 
 class AuditShRefusesAMachinesFilesWithABuild(unittest.TestCase):
     """With a build on either side, every option that reads a machine's
-    files is refused before step 1, its pair given or not, on the tag's
-    side of a mixed pair too."""
+    files, but --old-node and --new-node, is refused before step 1, its
+    pair given or not, on the tag's side of a mixed pair too."""
 
     def refused(self, *args, mirror=None):
         out = tempfile.mkdtemp(prefix='audit_refuse_')
@@ -3723,8 +3752,6 @@ class AuditShRefusesAMachinesFilesWithABuild(unittest.TestCase):
         for args, build, said in (
                 (('--old-build-id', 'x'), B40, '--old-build-id is refused'),
                 (('--new-build-id', 'x'), B40, '--new-build-id is refused'),
-                (('--old-node', 'a', '--new-node', 'b'), B40,
-                 '--old-node and --new-node are refused'),
                 (('--old-order', 'a', '--new-order', 'b',
                   '--new-build-id', 'y'), B40,
                  '--old-order, --new-order and --new-build-id are refused'),
@@ -3733,10 +3760,26 @@ class AuditShRefusesAMachinesFilesWithABuild(unittest.TestCase):
             with self.subTest(args=args):
                 said_all = self.refused(B40, B275, *args)
                 self.assertIn('error: %s is a build, and with a build '
-                              "audit.sh does not read a machine's files yet: "
-                              '%s. Give those options with two tags, or the '
-                              'builds without them.' % (build, said),
-                              said_all)
+                              "audit.sh reads a machine's files only from "
+                              '--old-node and --new-node: %s. Give those '
+                              "options with two tags, or each machine's file "
+                              'with --old-node and --new-node.'
+                              % (build, said), said_all)
+
+    def test_each_machines_file_is_not_refused(self):
+        """--old-node and --new-node are read with a build: what stops this
+        run is the file, which is not there, not the option."""
+        out = tempfile.mkdtemp(prefix='audit_refuse_')
+        self.addCleanup(shutil.rmtree, out, True)
+        p = subprocess.run(['bash', os.path.join(SCRIPTS_DIR, os.pardir,
+                                                 'audit.sh'), B40, B275,
+                            '--old-node', 'a', '--new-node', 'b'],
+                           capture_output=True,
+                           env=dict(os.environ, PG_GLIBC_AUDIT_OUT=out))
+        err = flat(p.stderr.decode())
+        self.assertEqual(p.returncode, 2, err[-2000:])
+        self.assertNotIn('is a build, and with a build', err)
+        self.assertIn("the old node's file could not be used", err)
 
     def test_the_tag_sides_options_are_refused_too(self):
         said = self.refused(TAG, B275, '--old-locales-dir', '/',
@@ -3750,8 +3793,8 @@ class AuditShRefusesAMachinesFilesWithABuild(unittest.TestCase):
         said = self.refused('latest-el8', B275, '--old-build-id', 'x',
                             mirror='file:///nowhere/')
         self.assertIn('error: latest-el8 is a build, and with a build '
-                      "audit.sh does not read a machine's files yet: "
-                      '--old-build-id is refused.', said)
+                      "audit.sh reads a machine's files only from --old-node "
+                      'and --new-node: --old-build-id is refused.', said)
         self.assertNotIn('cannot resolve', said)
 
     def test_a_latest_that_cannot_be_resolved_stops_the_run(self):
@@ -3762,6 +3805,418 @@ class AuditShRefusesAMachinesFilesWithABuild(unittest.TestCase):
         self.assertIn('error: cannot resolve latest-el8: could not read '
                       'file:///nowhere/pub/rocky/8/BaseOS/source/tree/'
                       'repodata/repomd.xml', said)
+
+
+# -- each machine's file names its build (7.6a) -------------------------------
+
+W8, W9 = B40 + '.x86_64', B275 + '.x86_64'
+
+
+class MachineSides(unittest.TestCase):
+    """glibc_locale_data.machine_sides in this process, each rule on its own:
+    what steps 1 to 5 read when audit.sh is given each machine's file, with
+    build_sources.fetch_build replaced, so that nothing is fetched."""
+
+    def sides(self, given, words, fetch=None):
+        calls = []
+
+        def fake(name, *a, **k):
+            calls.append(name)
+            if fetch:
+                fetch(name)
+        with mock.patch.object(bs, 'fetch_build', fake):
+            got = g.machine_sides(given, words)
+        return got, calls
+
+    def refused(self, given, words, fetch=None):
+        err = io.StringIO()
+        with mock.patch('sys.stderr', err), \
+                self.assertRaises(SystemExit) as cm:
+            self.sides(given, words, fetch)
+        self.assertEqual(cm.exception.code, 2)
+        return flat(err.getvalue())
+
+    def test_the_builds_are_read_in_place_of_the_tags(self):
+        (sides, lines), calls = self.sides(('glibc-2.28', 'glibc-2.34'),
+                                           (W8, W9))
+        self.assertEqual(sides, [(B40, 'build', 'glibc-2.28'),
+                                 (B275, 'build', 'glibc-2.34')])
+        self.assertEqual(calls, [B40, B275])
+        self.assertEqual(flat('\n'.join(lines)), flat(
+            "Each machine's file names the build it runs: steps 1 to 5 read "
+            "%s and %s, in place of glibc-2.28 and glibc-2.34." % (B40, B275)))
+
+    def test_the_builds_themselves_given_say_nothing_more(self):
+        for given in ((B40, B275), (W8, W9), ('glibc-2.28', B275)):
+            with self.subTest(given=given):
+                (sides, lines), _ = self.sides(
+                    tuple(g.without_arch(x) for x in given), (W8, W9))
+                self.assertEqual([s[0] for s in sides], [B40, B275])
+                self.assertEqual(lines != [], given[0] == 'glibc-2.28')
+
+    def test_two_words_of_one_build_are_that_build(self):
+        (sides, _), _ = self.sides(('glibc-2.28', 'glibc-2.34'),
+                                   (W8 + ' ' + B40 + '.i686', W9))
+        self.assertEqual(sides[0], (B40, 'build', 'glibc-2.28'))
+
+    def test_two_builds_on_one_machine_are_refused(self):
+        said = self.refused(('glibc-2.28', 'glibc-2.34'),
+                            (W8 + ' ' + B48 + '.i686', W9))
+        self.assertIn('two builds, %s and %s' % (B40, B48), said)
+
+    def test_a_word_that_is_no_package_is_refused(self):
+        said = self.refused(('glibc-2.28', 'glibc-2.34'), (B40, W9))
+        self.assertIn('does not read as a package and its architecture', said)
+
+    def test_a_side_given_that_is_not_the_machines(self):
+        for given, side, typed, tag, build in (
+                (('glibc-2.34', 'glibc-2.34'), 'old', 'glibc-2.34',
+                 'glibc-2.28', B40),
+                (('glibc-2.28', B283), 'new', B283, 'glibc-2.34', B275),
+                (('glibc-2.28', 'glibc-2.39'), 'new', 'glibc-2.39',
+                 'glibc-2.34', B275)):
+            with self.subTest(given=given):
+                said = self.refused(given, (W8, W9))
+                self.assertIn("the %s machine's file names %s, and the %s "
+                              "side given is %s: give that build's tag, %s, "
+                              "or the build itself." % (side, build, side,
+                                                        typed, tag), said)
+
+    def test_the_files_the_wrong_way_round(self):
+        said = self.refused(('glibc-2.28', 'glibc-2.34'), (W9, W8))
+        self.assertIn('pass the machine you upgrade FROM first', said)
+
+    def test_latest_with_a_machines_file_is_refused(self):
+        said = self.refused(('glibc-2.28', 'latest-el9'), (W8, W9))
+        self.assertIn('latest-el9 stands for a machine not installed yet', said)
+
+    def test_a_build_that_cannot_be_read_makes_both_sides_tags(self):
+        """Unread on one side: both sides read their tags (a tag against a
+        build of one release cannot be ordered), and one `!!` names the
+        build, why, and what the tags lack."""
+        def fetch(name):
+            if name == B275:
+                raise bs.Unread('it is not in the mirror')
+        (sides, lines), _ = self.sides(('glibc-2.28', 'glibc-2.34'),
+                                       (W8, W9), fetch)
+        self.assertEqual(sides, [('glibc-2.28', 'tag', 'glibc-2.28'),
+                                 ('glibc-2.34', 'tag', 'glibc-2.34')])
+        said = flat('\n'.join(lines))
+        self.assertEqual(said.count('!!'), 1)
+        self.assertIn("!! The new machine's file names %s, which this run "
+                      "cannot read: it is not in the mirror. So steps 1 to 5 "
+                      "read the tags glibc-2.28 and glibc-2.34, which hold "
+                      "neither build's patches" % B275, said)
+        self.assertNotIn(B40, said)
+
+    def test_a_build_typed_as_itself_that_cannot_be_read_is_refused(self):
+        """Typed by its name, with or without the architecture, a build
+        that cannot be read stops the run, as it does without a machine's
+        file; typed as its tag, the tags are read (above)."""
+        def fetch(name):
+            raise bs.Unread('it is not in the mirror')
+        for given in ((B40, 'glibc-2.34'), ('glibc-2.28', W9)):
+            with self.subTest(given=given):
+                said = self.refused(tuple(g.without_arch(x) for x in given),
+                                    (W8, W9), fetch)
+                self.assertIn('cannot read the build %s: it is not in the '
+                              'mirror' % (B40 if given[0] == B40 else B275),
+                              said)
+        # A build of another distro typed as itself: nothing is fetched,
+        # and it is refused for its name.
+        alma = 'glibc-2.39-128.el10_2.alma.1'
+        said = self.refused(('glibc-2.34', alma), (W9, alma + '.x86_64'))
+        self.assertIn('cannot read the build %s: the name does not read as '
+                      'a build this tool fetches' % alma, said)
+
+    def test_the_notice_says_only_what_was_read(self):
+        """Steps 6 to 10 run only when a machine's file holds its sources:
+        the `!!` says what steps 1 to 5 read, and nothing about them."""
+        def fetch(name):
+            raise bs.Unread('it is not in the mirror')
+        (_, lines), _ = self.sides(('glibc-2.28', 'glibc-2.34'), (W8, W9),
+                                   fetch)
+        said = flat('\n'.join(lines))
+        self.assertTrue(said.endswith("which hold neither build's "
+                                      "patches."), said)
+        self.assertNotIn('steps 6', said)
+
+    def test_a_build_that_fails_a_check_is_refused(self):
+        def fetch(name):
+            raise bs.Refused('the mirror now gives another sha256')
+        said = self.refused(('glibc-2.28', 'glibc-2.34'), (W8, W9), fetch)
+        self.assertIn('cannot read the build %s: the mirror now gives '
+                      'another sha256' % B40, said)
+
+    def test_a_name_that_is_no_build_this_fetches(self):
+        """A build whose name Rocky's would not be (a suffix of another
+        distro): nothing is fetched, and the tags are read."""
+        alma = 'glibc-2.39-128.el10_2.alma.1'
+        (sides, lines), calls = self.sides(
+            ('glibc-2.34', 'glibc-2.39'), (W9, alma + '.x86_64'))
+        self.assertEqual([s[1] for s in sides], ['tag', 'tag'])
+        self.assertEqual(calls, [B275])
+        self.assertIn(alma, flat('\n'.join(lines)))
+
+
+class WithoutTheArchitecture(unittest.TestCase):
+    """A build typed as `rpm -q glibc` prints it (backlog 16.79), and
+    resolve, which audit.sh reads every side through."""
+
+    def test_each_shape(self):
+        for name, bare in ((W9, B275), (B275, B275), ('glibc-2.34', 'glibc-2.34'),
+                           ('glibc-2.39-46.el10_0', 'glibc-2.39-46.el10_0'),
+                           ('glibc-2.39-46.el10_0.4.x86_64',
+                            'glibc-2.39-46.el10_0.4'),
+                           (B40, B40), ('latest-el9', 'latest-el9')):
+            with self.subTest(name=name):
+                self.assertEqual(g.without_arch(name), bare)
+
+    def test_resolve_writes_the_build_without_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            to = os.path.join(d, 'r.txt')
+            with mock.patch('sys.stdout', io.StringIO()):
+                self.assertEqual(g._main(['resolve', '--to', to, W8, 'glibc-2.34']),
+                                 0)
+            with open(to) as fh:
+                self.assertEqual(fh.read(), '%s\tbuild\nglibc-2.34\ttag\n' % B40)
+
+
+MACHINES = "Each machine's file names the build it runs: steps 1 to 5 read"
+
+
+@needs_clone
+class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
+    """audit.sh glibc-2.28 glibc-2.34 with each machine's file: the fixture
+    builds the files name are read by steps 1 to 5 (C.UTF-8 joins the
+    reindex list, as between the builds); steps 6 and 7 compare each machine
+    with its tag; and with the builds' cache empty and no mirror, both sides
+    read their tags, with the `!!`."""
+
+    RUNS = {}
+
+    @classmethod
+    def builds(cls):
+        return {b: (cls.tree(b, b), ()) for b in (B40, B275)}
+
+    # What a distro's patch inside LC_COLLATE looks like, the change
+    # test_wrapper.WrapperNodePatchedInsideCollate makes: by injection,
+    # since no fixture build differs from its tag in a compared locale.
+    INSIDE = ('reorder-after <U0076>\n'
+              '<U0077> <U0076>;<BASE>;<MIN>;IGNORE\n')
+
+    @classmethod
+    def machine_file(cls, build, measurement, inside=()):
+        """A machine's file as --extract writes it, with locale_order's own
+        writer: the real measurement of that machine (cut to a few
+        locales), the build's own locale sources and its charmaps, gzipped
+        as glibc-locale-source installs them in /usr/share/i18n/charmaps,
+        which is what a machine of that build holds (measured equal on six
+        builds, 7.2)."""
+        import locale_order as lom
+        base = tempfile.mkdtemp(prefix='audit_machine_file_')
+        cls.made.append(base)
+        root = os.path.join(base, 'locales')
+        charmaps = os.path.join(base, 'charmaps')
+        for path, (data, _) in fixture(build)[5].items():
+            for prefix, into, gz in (('localedata/locales/', root, False),
+                                     ('localedata/charmaps/', charmaps, True)):
+                if path.startswith(prefix):
+                    full = os.path.join(into, path[len(prefix):])
+                    os.makedirs(os.path.dirname(full), exist_ok=True)
+                    if gz:
+                        with gzip.open(full + '.gz', 'wb') as fh:
+                            fh.write(data)
+                        continue
+                    if path[len(prefix):] in inside:
+                        at = re.search(rb'(?m)^LC_COLLATE\n', data)
+                        assert at, path
+                        data = (data[:at.end()] + cls.INSIDE.encode('ascii')
+                                + data[at.end():])
+                    with open(full, 'wb') as fh:
+                        fh.write(data)
+        with open(measurement, encoding='ascii') as fh:
+            text = fh.read()
+        data, _ = lom.archive(text, json.loads(text), root, charmaps)
+        out = os.path.join(base, build + '.tar.gz')
+        with open(out, 'wb') as fh:
+            fh.write(data)
+        return out
+
+    @classmethod
+    def tearDownClass(cls):
+        for d in cls.made:
+            shutil.rmtree(d, True)
+        # test_wrapper's helpers made the files without sources and the cut
+        # measurements; its tearDownModule removes them, and never runs in
+        # a process that runs this class alone.
+        import test_wrapper
+        test_wrapper.tearDownModule()
+        super().tearDownClass()
+
+    @classmethod
+    def setUpClass(cls):
+        from test_wrapper import node_file, cut_few
+        from test_locale_order import RHEL8, RHEL9
+        cls.made = []
+        # The old machine's de_DE and sv_SE carry a change inside
+        # LC_COLLATE (INSIDE), so that step 6's block names them; the other
+        # locales are the build's, C among them.
+        old = cls.machine_file(B40, cut_few(RHEL8), inside=('de_DE', 'sv_SE'))
+        new = cls.machine_file(B275, cut_few(RHEL9))
+        # Machines without glibc-locale-source: their files hold no
+        # sources, and steps 6 to 10 do not run for them.
+        bare_old = node_file('old.tar', cut_few(RHEL8), 'glibc-2.28',
+                             sources=False)
+        bare_new = node_file('new.tar', cut_few(RHEL9), 'glibc-2.34',
+                             sources=False)
+        cls.RUNS = {'read': ('glibc-2.28', 'glibc-2.34', '--old-node', old,
+                             '--new-node', new),
+
+                    'old_bare': ('glibc-2.28', 'glibc-2.34', '--old-node',
+                                 bare_old, '--new-node', new),
+                    'bare': ('glibc-2.28', 'glibc-2.34', '--old-node',
+                             bare_old, '--new-node', bare_new)}
+        super().setUpClass()
+        # The same files with no build to read: an empty cache, no mirror.
+        out = os.path.join(cls.tmp, 'out', 'unread')
+        os.makedirs(out)
+        env = dict(os.environ, PG_GLIBC_AUDIT_OUT=out,
+                   PG_GLIBC_BUILD_SOURCES_CACHE=os.path.join(cls.tmp, 'none'),
+                   PG_GLIBC_BUILD_MIRROR='file:///nowhere/',
+                   PG_GLIBC_READER_CACHE=os.path.join(SCRIPTS_DIR,
+                                                      'glibc-reader-cache'))
+        env.pop('PG_GLIBC_AUDIT_WRAPPED', None)
+        env.pop('PG_GLIBC_AUDIT_SIDES', None)
+        p = subprocess.run(['bash', os.path.join(cls.tmp, 'audit', 'audit.sh'),
+                            *cls.RUNS['read']], cwd=cls.tmp,
+                           capture_output=True, env=env)
+        # Kept apart from cls.out: a run on the tags, which the class's
+        # checks of a build run do not read.
+        cls.unread = (p.returncode,
+                      (p.stdout + p.stderr).decode('utf-8', 'replace'))
+
+    def test_steps_1_to_5_read_the_builds(self):
+        out = self.run_of('read')
+        before = out.split('== STEP 1', 1)[0]
+        self.assertEqual(flat(before), flat(
+            MACHINES + ' %s and %s, in place of glibc-2.28 and glibc-2.34. '
+            '================================================================'
+            % (B40, B275)))
+        self.assertIn('Locale files changed between %s and %s:' % (B40, B275),
+                      out)
+        self.assertIn('AUDIT SUMMARY  %s -> %s' % (B40, B275), out)
+        self.assertIn('C.UTF-8', summary_block(out, REINDEX))
+        self.assertIn('This list is from the builds.',
+                      flat(self.summary('read')))
+
+    def test_steps_6_and_7_compare_each_machine_with_its_tag(self):
+        summary = self.summary('read')
+        for n, build, tag in ((6, W8, 'glibc-2.28'), (7, W9, 'glibc-2.34')):
+            with self.subTest(step=n):
+                self.assertIn('-- Distro patches, step %d (%s against %s)'
+                              % (n, build, tag), summary)
+        self.assertNotIn('NOT REPORTED', summary)
+        self.assertNotIn('compared nothing', summary)
+        # Each file holds its build's charmaps, as --extract packs them: the
+        # character sets are compared in steps 6, 7 and 8.
+        for what in ('this machine against glibc-2.28',
+                     'this machine against glibc-2.34',
+                     'between the two machines'):
+            with self.subTest(charmaps=what):
+                said = re.findall(r'Character sets and transliterations, %s'
+                                  r': (\S+ \S+)' % re.escape(what),
+                                  flat(summary))
+                self.assertEqual(len(said), 1, (what, said))
+                # Both forms: "NOT RUN." and "NOT RUN -- step N compared
+                # nothing".
+                self.assertFalse(said[0].startswith('NOT RUN'), what)
+        # C, which neither tag has: read by steps 1 to 5 as a file of the
+        # build (examples/rhel8-to-rhel9-audit-output.txt prints it).
+        for n, build in ((6, B40), (7, B275)):
+            with self.subTest(step=n):
+                block = flat(' '.join(summary_block(
+                    summary, '-- Distro patches, step %d (%s against %s)'
+                    % (n, W8 if n == 6 else W9,
+                       'glibc-2.28' if n == 6 else 'glibc-2.34'))))
+                self.assertIn('their own (step %d above); steps 1 to 5 read '
+                              'them as files of %s: C' % (n, build), block)
+
+    def test_a_machines_own_patch_read_in_its_build(self):
+        """The old machine's de_DE and sv_SE differ from glibc-2.28 inside
+        LC_COLLATE: its step 6 names them as that machine's own patches,
+        which steps 1 to 5 read in its build -- not "the tag diff", which a
+        run on builds has not."""
+        summary = self.summary('read')
+        self.assertEqual(summary_block(summary, '-- Distro patches, step 6 '
+                                       '(%s against glibc-2.28)' % W8)[:3], [
+            '2 locale(s) differ inside LC_COLLATE from glibc-2.28 -- this',
+            "machine's own patches, which steps 1 to 5 read in %s:" % B40,
+            'de_DE sv_SE'])
+        self.assertNotIn('tag diff is NOT reading', flat(summary))
+
+    def test_the_extended_example_states_this_runs_hunks(self):
+        """Step 5 between the two machines' builds: the count the extended
+        8->9 example states three times (test_published_claims holds the
+        three copies together) is this run's."""
+        said = re.findall(r'(?m)^(\d+) substantive hunk\(s\) found',
+                          self.run_of('read'))
+        with open(os.path.join(TESTS_DIR, os.pardir, 'examples',
+                               'rhel8-to-rhel9-audit-output.txt'),
+                  encoding='utf-8') as fh:
+            published = re.findall(r'(?m)^(\d+) substantive hunk\(s\) found',
+                                   fh.read())
+        self.assertEqual(said, published)
+        self.assertEqual(said, ['35'])
+
+    def test_a_machine_without_its_sources(self):
+        """The old machine's file holds no sources: its step 6 says NOT RUN
+        with the file's reason and that steps 1 to 5 read its build; the
+        new copy's list (copy_missing) is read under its tag's name, so the
+        Removed block does not say NOT REPORTED."""
+        summary = self.summary('old_bare')
+        block = flat(' '.join(summary_block(
+            summary, '-- Distro patches, step 6: NOT RUN')))
+        self.assertIn('holds no locale sources.', block)
+        self.assertIn("So nothing above holds this machine's own locale "
+                      "files against glibc-2.28. Steps 1 to 5 read its "
+                      "build, %s." % B40, block)
+        self.assertNotIn('NOT REPORTED', summary)
+
+    def test_two_machines_without_their_sources(self):
+        summary = self.summary('bare')
+        distro = flat(' '.join(summary_block(summary, DISTRO)))
+        self.assertEqual(distro.count('holds no locale sources.'), 2, distro)
+        self.assertIn("So nothing above holds either machine's own locale "
+                      "files against its tag. Steps 1 to 5 read each "
+                      "machine's build.", distro)
+        node = flat(' '.join(summary_block(summary, NODE)))
+        self.assertEqual(node.count('holds no locale sources.'), 2, node)
+        self.assertIn("So nothing above compared the two machines' own "
+                      "C.UTF-8 files. Step 2 compared every locale file of "
+                      "the two builds", node)
+        ellipsis = flat(' '.join(summary_block(summary, ELLIPSIS)))
+        self.assertEqual(ellipsis.count('holds no locale sources.'), 2)
+        self.assertIn("Step 4 above scanned %s's own locale files." % B275,
+                      ellipsis)
+        self.assertNotIn('the TAG', ellipsis)
+
+    def test_a_build_that_cannot_be_read_reads_the_tags(self):
+        rc, out = self.unread
+        self.assertEqual(rc, 0, out[-3000:])
+        before, _, rest = out.partition('== STEP 1')
+        self.assertTrue(before.startswith("!! The old machine's file names "
+                                          "%s, which this run" % B40), before)
+        self.assertNotIn(MACHINES, out)
+        self.assertIn('Locale files changed between glibc-2.28 and '
+                      'glibc-2.34:', rest)
+        self.assertIn('AUDIT SUMMARY  glibc-2.28 -> glibc-2.34', rest)
+        warned = rest.split('-- Warnings the clean results above do NOT '
+                            'cover', 1)[1]
+        self.assertIn("!! The old machine's file names %s" % B40, warned)
+        self.assertIn("the new machine's file names %s" % B275, flat(warned))
+        self.assertIn('-- Measured order: each machine', rest)
+        self.assertNotIn('steps 6 to 11 read', flat(out))
 
 
 if __name__ == '__main__':

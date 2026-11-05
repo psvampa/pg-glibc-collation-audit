@@ -123,6 +123,19 @@ class Refused(Exception):
     why."""
 
 
+class Unread(Refused):
+    """A build this cannot read, with nothing found wrong in what it read:
+    its spec holds what known_only() does not know, the mirror does not
+    list it or no longer has it, lists it with no metadata to check it
+    against, or cannot be reached or stops answering in the middle of a
+    file. Every other refusal stops the run: a check that failed (a sha256,
+    a digest, a header), an answer of the mirror that is not a file (an
+    HTTP status), or what this does not read (an rpm version, a payload
+    compressor). audit.sh, given a machine's file and that machine's tag
+    as the side, reads the tags in place of a build that is Unread and
+    says so; a build named on the command line is refused either way."""
+
+
 # -- rpm files ---------------------------------------------------------------
 
 _NAME, _VERSION, _RELEASE = 1000, 1001, 1002
@@ -1453,7 +1466,7 @@ def rebuild(info, hdr, files, base):
             collation.append({'patch': name, 'paths': code})
     unknown = known_only(text, files, record, tree)
     if unknown:
-        raise Refused('%d thing(s) this does not know in %s; the first: '
+        raise Unread('%d thing(s) this does not know in %s; the first: '
                       '%s: %s' % ((len(unknown), build) + unknown[0]))
     return tree, {
         'build': build, 'version': version, 'tag': tag,
@@ -1594,10 +1607,13 @@ class _Absent(Exception):
 
 
 def _get(url):
-    """The bytes at url. A 404 raises _Absent; every other failure (another
-    status, a timeout, a body shorter than its Content-Length, a URL urllib
-    cannot open, such as a mirror named without its scheme) is Refused,
-    never read as "not there"."""
+    """The bytes at url. A 404 raises _Absent; every other failure is
+    Refused, never read as "not there". Of those, another HTTP status and a
+    URL urllib cannot open (a mirror named without its scheme) stop the run;
+    a mirror that cannot be reached or stops answering (a timeout, no
+    network, a body cut short, which http.client raises as IncompleteRead
+    before the length check below) is Unread. The length check is kept for
+    a reader that does not check Content-Length itself."""
     try:
         with urllib.request.urlopen(url, timeout=TIMEOUT) as r:
             data = r.read()
@@ -1606,10 +1622,13 @@ def _get(url):
         if e.code == 404:
             raise _Absent(url)
         raise Refused('%s: HTTP %d' % (url, e.code))
-    except (urllib.error.URLError, OSError, http.client.HTTPException,
-            ValueError) as e:
-        raise Refused('could not read %s: %s'
-                      % (url, getattr(e, 'reason', e)))
+    except ValueError as e:
+        # A URL urllib cannot open (a mirror named without its scheme): the
+        # mirror named is wrong, which is not "cannot be reached".
+        raise Refused('cannot open %s: %s' % (url, e))
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+        raise Unread('could not read %s: %s'
+                     % (url, getattr(e, 'reason', e)))
     if length is not None and length.strip().isdigit() and \
             int(length) != len(data):
         raise Refused('%s was cut short: %d of %s bytes'
@@ -1843,13 +1862,13 @@ def where_from(name, mirror=None, cache=None):
             except _Absent:
                 continue
             if ('"%s"' % srpm).encode() in listing:
-                raise Refused('%s is published in %s%s with no metadata, so '
-                              'its sha256 cannot be checked'
-                              % (srpm, mirror, tree))
-    raise Refused('glibc-%s-%s is not in %s (looked in %s%s)'
-                  % (ver, rel, mirror, ', '.join(looked) or 'nothing',
-                     '; no metadata in ' + ', '.join(unread)
-                     if unread else ''))
+                raise Unread('%s is published in %s%s with no metadata, so '
+                             'its sha256 cannot be checked'
+                             % (srpm, mirror, tree))
+    raise Unread('glibc-%s-%s is not in %s (looked in %s%s)'
+                 % (ver, rel, mirror, ', '.join(looked) or 'nothing',
+                    '; no metadata in ' + ', '.join(unread)
+                    if unread else ''))
 
 
 def fetch(entry, cache=None):
@@ -1948,7 +1967,7 @@ def fetch_build(name, mirror=None, cache=None, repo=None):
             entries = entries or where_from(name, mirror, cache)
             paths = {k: fetch(entries[k], cache) for k in keys}
         except _Absent as e:
-            raise Refused('%s is not there any more' % e)
+            raise Unread('%s is not there any more' % e)
         _write_json(_remembered(cache, name),
                     {'mirror': mirror,
                      'files': {k: entries[k]._asdict() for k in keys}})

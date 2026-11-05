@@ -734,12 +734,17 @@ class Step5HunkCountsAgreeEverywhere(unittest.TestCase):
     step-4 "2" was.
 
     Both transcripts of each pair are read, the audit output and the tags-only
-    run, because they are regenerated apart. The counts against the real
-    clone are asserted in test_known_answers; this layer only checks that
-    every published copy says the same thing.
+    run, because they are regenerated apart. The tags-only counts (29, 55)
+    are asserted against the real clone in test_known_answers. The audit
+    output's (35, 43) are between each machine's build (7.6a): 35 is also
+    asserted against a run on the fixture builds in test_build_sources; 43
+    is checked here only, copy against copy.
     """
 
-    EXAMPLES = {'rhel8-to-rhel9': 29, 'rhel9-to-rhel10': 55}
+    # Between the tags (tags-only), and between each machine's build,
+    # which the extended examples' steps 1 to 5 read (7.6a).
+    EXAMPLES = {'rhel8-to-rhel9': {'tags-only': 29, 'audit-output': 35},
+                'rhel9-to-rhel10': {'tags-only': 55, 'audit-output': 43}}
 
     def counts(self, filename):
         text = read(os.path.join(REPO_ROOT, 'examples', filename))
@@ -757,7 +762,7 @@ class Step5HunkCountsAgreeEverywhere(unittest.TestCase):
                     self.assertEqual(
                         len(got), 3,
                         f'{filename}: found {got}, expected three copies')
-                    self.assertEqual(set(got), {str(expected)}, got)
+                    self.assertEqual(set(got), {str(expected[kind])}, got)
 
 
 class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
@@ -863,28 +868,25 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
          r'or newer',
          4,
          ()),
-        # The shape ends at the newline because, in each transcript, the
+        # The shape ends at the newline because, in the transcript, the
         # line above the one it matches names iso14651_t1_common and starts
         # the same way. Without the newline the sentence is found twice and
-        # the row refuses. Both transcripts of this pair print the line, and
-        # they have been regenerated apart.
+        # the row refuses. The tags-only transcript: the audit output prints
+        # the radius at the new machine's build (7.6a), another fact.
         ('the locales that inherit iso14651_t1 at glibc 2.34',
          r'inherited by (\d+) locales|template that (\d+) locales',
          2,
-         (Evidence('examples/rhel8-to-rhel9-audit-output.txt',
-                   shape='{n} locales inherit from iso14651_t1\n'),
-          Evidence('examples/rhel8-to-rhel9-tags-only.txt',
-                   shape='{n} locales inherit from iso14651_t1\n'))),
+         (Evidence('examples/rhel8-to-rhel9-tags-only.txt',
+                   shape='{n} locales inherit from iso14651_t1\n'),)),
         ('the locale files that differ between glibc 2.28 and 2.34',
          r'(\d+) files that differ between (?:glibc )?2\.28 and 2\.34'
          r'|one line out of (\d+)',
          1,
-         (Evidence('examples/rhel8-to-rhel9-audit-output.txt',
+         # The tags-only transcript: the extended one compares each
+         # machine's build in steps 1 to 5 (7.6a).
+         (Evidence('examples/rhel8-to-rhel9-tags-only.txt',
                    shape='Locale files changed between glibc-2.28 and '
-                         'glibc-2.34: {n}'),
-          Evidence('examples/rhel8-to-rhel9-tags-only.txt',
-                   shape='Locale files changed between glibc-2.28 and '
-                         'glibc-2.34: {n}'))),
+                         'glibc-2.34: {n}'),)),
     )
 
     @staticmethod
@@ -1163,7 +1165,9 @@ class ASectionNeverWidensInSilence(unittest.TestCase):
     """
 
     AUDIT = 'examples/rhel8-to-rhel9-audit-output.txt'
-    SHAPE = 'Locale files changed between glibc-2.28 and glibc-2.34: {n}'
+    # Between the two machines' builds, which this transcript's step 2 reads.
+    SHAPE = ('Locale files changed between glibc-2.28-251.el8_10.40 and '
+             'glibc-2.34-275.el9_8: {n}')
     STEP_2 = ('== STEP 2  Which changes can reach sort order\n'
               + '=' * 64)
     STEP_4 = ('== STEP 4  Which locales a data diff can never clear\n'
@@ -1173,7 +1177,7 @@ class ASectionNeverWidensInSilence(unittest.TestCase):
     REPEATED = 'Additionally exposed via `copy` inheritance: {n}'
     PROBE = 'examples/c-utf8-probe-rhel8-vs-rhel9.txt'
 
-    def check(self, ev, bare='283'):
+    def check(self, ev, bare='275'):
         row = AFigureStatedTwiceIsStatedOnce(
             'test_the_evidence_under_it_carries_the_same_number')
         row.check_evidence('a row written for this test', bare, ev)

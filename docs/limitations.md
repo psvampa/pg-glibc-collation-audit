@@ -47,11 +47,13 @@ build's own `localedata/` and `locale/`, its patches applied. What it does
 not read of a build, every such run prints under "Not checked for these
 builds".
 
-Give `audit.sh` one file from each machine and each side is also checked
-against the version its distro started from, when its file holds the locale
-sources, which reaches patches to the locale data. What no file comparison of two tags reaches is a backported change to
-glibc's *code*, because the code is read between the two tags and nowhere
-else; naming builds reaches their code under `locale/` (above).
+Give `audit.sh` one file from each machine and it reads the build each
+file names the same way, unless that build cannot be read, which the run
+says; each side is also checked against the version its distro started
+from, when its file holds the locale sources. What no file comparison of
+two tags reaches is a backported change to glibc's *code*, because the code
+is read between the two tags and nowhere else; reading builds reaches their
+code under `locale/` (above).
 
 Step 11 reaches it, because it measures the glibc actually installed, patches
 and all. For
