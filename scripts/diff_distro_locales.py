@@ -525,11 +525,11 @@ def _main(opts):
     print()
     warn(f"This compares locale DATA. glibc's collation CODE is step 5's job "
          f"(diff_collation_code.py) -- that is where Bug 22668 lives, the "
-         f"change that reorders ko_KR -- and step 5 reads it between the two "
-         f"upstream tags. What neither step covers is a distro backporting a "
-         f"CODE change that is in neither tag. That gap is closed by the "
-         f"empirical check on real nodes, which measures the glibc actually "
-         f"installed, patches and all: docs/confirming-on-a-real-system.md.")
+         f"change that reorders ko_KR. What step 5 does not read of a "
+         f"distro's code (all of it, when step 5 compares two tags) is "
+         f"closed by the empirical check on real nodes, which measures the "
+         f"glibc actually installed, patches and all: "
+         f"docs/confirming-on-a-real-system.md.")
     if not (opts.charmaps_dir or opts.no_charmaps):
         warn(f"A machine's own localedata/charmaps/ is NOT compared, nor "
              f"what its own transliterations build. glibc-locale-source "

@@ -195,14 +195,16 @@ class Step2Filter(StepRun):
 
     def test_the_changed_file_count_published_for_the_pair(self):
         """283 is published for glibc 2.28 -> 2.34, and test_published_claims
-        holds the pages that state it to the two rhel8-to-rhel9 transcripts.
-        This holds the transcripts, and the figure, to the run: a count that
-        moved without regenerating them goes red, as the blast radius does."""
+        holds the pages that state it to the rhel8-to-rhel9 tags-only
+        transcript. This holds that transcript, and the figure, to the run: a
+        count that moved without regenerating it goes red, as the blast
+        radius does. The extended transcript compares each machine's build
+        in steps 1 to 5 (7.6a), not the two tags."""
         label = (r'(?m)^Locale files changed between glibc-2\.28 and '
                  r'glibc-2\.34: (\d+)$')
         out = self.step('filter_lc_collate_changes.py', OLD, MID)
         self.assertEqual(re.findall(label, out), ['283'])
-        for kind in ('audit-output', 'tags-only'):
+        for kind in ('tags-only',):
             name = f'examples/rhel8-to-rhel9-{kind}.txt'
             with self.subTest(transcript=kind):
                 with open(os.path.join(REPO_ROOT, *name.split('/')),
@@ -229,7 +231,8 @@ class Step2Filter(StepRun):
         a transliteration over both pairs, the 24 instances the 2026-10-08
         emulation found, and none differs. The 20 of fi_FI and fi_FI@euro
         are not built at either tag (translit_combining gives U+0335 an
-        empty string)."""
+        empty string). The tags-only transcripts print these lines; the
+        extended ones compare each machine's build (7.6a)."""
         expect = {(OLD, MID): ('rhel8-to-rhel9', 486, 1,
                                'UTF-8: 6485 characters added.'),
                   (MID, NEW): ('rhel9-to-rhel10', 487, 2,
@@ -257,7 +260,7 @@ class Step2Filter(StepRun):
                     f'step2_keyed_locales.{g.pair_slug(old, new)}.txt')
                 with open(path, encoding='utf-8') as fh:
                     self.assertEqual(fh.read(), '')
-                for kind in ('audit-output', 'tags-only'):
+                for kind in ('tags-only',):
                     name = f'examples/{pair}-{kind}.txt'
                     with self.subTest(transcript=kind):
                         with open(os.path.join(REPO_ROOT, *name.split('/')),

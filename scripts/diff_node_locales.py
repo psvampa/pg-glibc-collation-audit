@@ -288,8 +288,8 @@ def report_buckets(old, new, buckets, side, texts, both, only_old, only_new,
             print(f"  {len(hidden)} of those exist at NEITHER tag, so no "
                   f"tag-to-tag diff could see them: {', '.join(hidden)}")
         else:
-            print("  All of those exist at one of the two tags, so the tag "
-                  "diff could see them.")
+            print("  All of those exist at one of the two tags, so a "
+                  "tag-to-tag diff could see them.")
 
     if buckets['collate']:
         # Through the NEW node's own copy graph: the order those files define
@@ -408,8 +408,8 @@ def report_backported(old, new, buckets, invisible):
             styles.append('codepoint' if via is not None else style)
         styles = tuple(styles)
         if invisible is not None and name in set(invisible):
-            print(f"      exists at neither tag: nothing in steps 1-5 can see "
-                  f"this file at all")
+            print(f"      exists at neither tag: no tag-to-tag diff can see "
+                  f"this file")
         compared.append(locale_name)
         if name in copies['old'] or name in copies['new']:
             via_copy.append(locale_name)

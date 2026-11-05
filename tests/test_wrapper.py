@@ -117,8 +117,8 @@ USAGE = [
     '       the node), or a build as `rpm -q glibc` names it without the',
     '       architecture, rebuilt from its source RPM, or latest-elN for a',
     '       machine not installed yet: the newest build of RHEL N on Rocky',
-    "       Linux's mirror, named before step 1; with a build, the --*",
-    '       options below are refused for now',
+    "       Linux's mirror, named before step 1; with a build, only",
+    '       --old-node and --new-node of the options below are read, for now',
     '       OLD first, NEW second: a reversed pair is refused, not',
     '       answered. Distance is NOT checked: RHEL8 to RHEL10 is one',
     '       pair, glibc-2.28 glibc-2.39, not two runs added up. What',
@@ -151,7 +151,9 @@ USAGE = [
     '       one file scripts/locale_order.py --extract wrote on that',
     '       machine, with its measurement, its build, its locale sources and',
     '       its charmaps (a file without them says why), and stands for all',
-    '       the options above.',
+    '       the options above. Steps 1 to 5 then read the build each file',
+    '       names, in place of the tag (the side given is that build or its',
+    '       tag).',
 ]
 
 REINDEX = '-- Reindex: sort order changes, confirm then REINDEX'
@@ -2486,6 +2488,17 @@ def without_the_charmap_check(out):
     return '\n'.join(kept), (regions, keyed, warned, in_report, in_brief)
 
 
+def without_the_unread_notice(out):
+    """(out without the `!!` that a machine's build cannot be read, before
+    step 1 and among the summary's warnings; how many of each came out)."""
+    lines = out.split('\n')
+    starts = {x for x in lines if x.startswith("!! The old machine's file "
+                                               "names ")}
+    lines, top = _cut_blocks(lines, starts, '')
+    lines, warned = _cut_blocks(lines, {'     ' + x for x in starts}, '     ')
+    return '\n'.join(lines), (top, warned)
+
+
 # Step 11's line when both machines' charmaps were checked and nothing found.
 STEP_11_CHECKED = "Character sets: every byte sequence that each machine's"
 
@@ -2550,6 +2563,12 @@ def node_file(name, measurement, tag, sources=True, charmaps='tag'):
 def tearDownModule():
     for path in list(_NODE_FILES.values()) + list(_CUT.values()):
         shutil.rmtree(os.path.dirname(path), ignore_errors=True)
+    # Called by test_build_sources too, in a process that may run this
+    # module's classes afterwards: a cached path to a removed file would be
+    # handed out, and a refusal of a missing file read as the one a test
+    # asserts. Emptied, they are made again when asked.
+    _NODE_FILES.clear()
+    _CUT.clear()
 
 
 def build_of(measurement):
@@ -2694,7 +2713,14 @@ class WrapperNodeFiles(unittest.TestCase):
         says once in its report and once in its summary that both machines'
         charmaps were checked and nothing found."""
         self.assertEqual((self.rc, self.classic_rc), (0, 0), self.out[-2000:])
-        node, added = without_the_charmap_check(self.out)
+        # The suite has no mirror and no build in its cache, so the builds
+        # the two files name cannot be read, and both sides read their tags
+        # (7.6a): the run is the six options' plus that `!!`, before step 1
+        # and once among the warnings. AuditShReadsEachMachinesBuild
+        # (test_build_sources) reads the builds.
+        node, gone = without_the_unread_notice(self.out)
+        self.assertEqual(gone, (1, 1))
+        node, added = without_the_charmap_check(node)
         classic, notices = without_the_charmaps_notice(self.classic)
         self.assertEqual(added, (3, 3, 3, 1, 1))
         self.assertEqual(notices, (3, 1, 1, 1))
@@ -3189,8 +3215,6 @@ class WrapperNodeFileRefused(unittest.TestCase):
         out = self.assertRefusedBeforeStep1('--old-node', self.new,
                                             '--new-node', self.old)
         self.assertIn('pass the machine you upgrade FROM first', out)
-        self.assertIn(f'{COULD_NOT_COMPARE_NODES} {self.new} and {self.old}',
-                      out)
 
     def test_a_second_run_lays_the_files_out_again(self):
         """The folders a run lays the files out in are its own: a second run
@@ -3206,15 +3230,31 @@ class WrapperNodeFileRefused(unittest.TestCase):
         rhel10 = node_file('rhel10.tar', cut_few(RHEL10), NEW, sources=False)
         second = self.assertRefusedBeforeStep1('--old-node', self.old,
                                                '--new-node', rhel10)
-        self.assertIn('and the NEW tag is glibc-2.34', second)
+        self.assertIn("the new side given is glibc-2.34", second)
         self.assertNotIn('pass the machine you upgrade FROM first', second)
+
+    def test_a_removed_file_is_made_again(self):
+        """tearDownModule is called by test_build_sources too, in a process
+        that may run this module's classes after it: the cut measurements it
+        removed must not be handed out again. (A node file is keyed by its
+        cut's path, so once the cut is made again under a new name an old
+        node file is never asked for.)"""
+        cut = cut_few(RHEL9)
+        made = node_file('new.tar', cut, MID, sources=False)
+        self.assertTrue(os.path.exists(cut) and os.path.exists(made))
+        tearDownModule()
+        self.assertFalse(os.path.exists(cut) or os.path.exists(made))
+        again = cut_few(RHEL9)
+        self.assertTrue(os.path.exists(again), again)
+        self.assertTrue(os.path.exists(node_file('new.tar', again, MID,
+                                                 sources=False)))
 
     def test_the_files_of_another_upgrade(self):
         rhel10 = node_file('rhel10.tar', cut_few(RHEL10), NEW, sources=False)
         out = self.assertRefusedBeforeStep1('--old-node', self.new,
                                             '--new-node', rhel10)
-        self.assertIn('and the OLD tag is glibc-2.28', out)
-        self.assertIn(COULD_NOT_COMPARE_NODES, out)
+        self.assertIn("the old side given is glibc-2.28: give that build's "
+                      "tag, glibc-2.34", out)
 
 
 if __name__ == '__main__':

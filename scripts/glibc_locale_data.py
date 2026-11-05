@@ -11,7 +11,8 @@ and the locale was reported unaffected. Everything here fails loudly instead,
 and blobs are read in a single `git cat-file --batch` stream.
 
 Also runnable directly; audit.sh and step 1 use fanin, sides, resolve,
-latest, order and pair-slug, and provenance and corpus are kept for a hand run:
+machines, latest, order and pair-slug, and provenance and corpus are kept for
+a hand run:
   python3 glibc_locale_data.py fanin <tag> [changed_files.txt] [--as NAME]
   python3 glibc_locale_data.py provenance <tag> [<tag> ...]
   python3 glibc_locale_data.py corpus <tag> [<tag> ...]
@@ -29,8 +30,15 @@ latest, order and pair-slug, and provenance and corpus are kept for a hand run:
       it (SIDES_ENV)
   python3 glibc_locale_data.py resolve --to F <old> <new>
       for audit.sh, before anything runs: writes to F `<side>\t<kind>` a
-      line each, kind `tag` or `build` (is_build_name); latest-elN is a
-      build with a third field `latest`
+      line each, the side without the architecture `rpm -q` prints
+      (without_arch), kind `tag` or `build` (is_build_name); latest-elN is
+      a build with a third field `latest`
+  python3 glibc_locale_data.py machines --to F <old> <new> <old_build>
+          <new_build>
+      for audit.sh, given each machine's file: <old_build> and <new_build>
+      are what `rpm -q glibc` printed on each; writes to F, a line each,
+      the side steps 1 to 5 read, its kind and its upstream tag, and
+      prints which each side reads
   python3 glibc_locale_data.py latest --to F <old> <new>
       for audit.sh, once: writes to F each side a line, latest-elN
       replaced by the newest build of RHEL N the mirror lists, and prints
@@ -1333,6 +1341,135 @@ def is_build_name(name):
     measured 2026-11-03), so such a name is never asked of git as a ref: a
     build is read only through build_side."""
     return build_name(name) is not None
+
+
+def without_arch(name):
+    """`name` without the architecture `rpm -q glibc` ends each word with,
+    when what is left is a build: glibc-2.34-275.el9_8.x86_64 is
+    glibc-2.34-275.el9_8 (backlog 16.79). Anything else is returned as it
+    is: a tag, a build without one, and a word whose last part is a
+    release's own (glibc-2.39-46.el10_0, glibc-2.28-251.el8_10.40), which
+    locale_order.build_parts does not read as an architecture."""
+    if is_build_name(name):
+        return name
+    import locale_order as lo
+    parts = lo.build_parts(name) if len((name or '').split()) == 1 else None
+    if parts:
+        bare = 'glibc-%s-%s' % parts
+        if is_build_name(bare):
+            return bare
+    return name
+
+
+def machine_build(words):
+    """The build a machine runs, from what `rpm -q glibc` printed there
+    (a machine's file keeps it whole): each word without its
+    architecture. A machine with glibc of 64 and of 32 bits prints two
+    words, and they are one build: dnf installs and moves the two
+    together (measured 2026-11-04 on Rocky 9, glibc.i686 beside x86_64).
+    Dies when the words give two builds, since then which one the steps
+    should read is not known, and when a word does not read as `rpm -q`
+    prints one."""
+    import locale_order as lo
+    got = []
+    for w in (words or '').split():
+        parts = lo.build_parts(w)
+        if parts is None:
+            die(f"`rpm -q glibc` printed {words!r} on that machine, and "
+                f"{w!r} does not read as a package and its architecture, "
+                f"so the build it runs is not known.")
+        got.append('glibc-%s-%s' % parts)
+    if not got:
+        die("that machine's file names no glibc build")
+    if len(set(got)) != 1:
+        die(f"`rpm -q glibc` printed {words!r} on that machine: two builds, "
+            f"{' and '.join(sorted(set(got)))}, so which one steps 1 to 5 "
+            f"should read is not known.")
+    return got[0]
+
+
+def machine_sides(given, words):
+    """What steps 1 to 5 read for each side when audit.sh is given each
+    machine's file: [(name, kind, tag)], kind 'build' or 'tag', tag the
+    upstream tag of that side, which steps 6 to 11 read; and the lines to
+    print, `!!` blocks included.
+
+    `given` are the two sides as typed, `words` what `rpm -q glibc` printed
+    on each machine. A side typed must be that machine's build, with or
+    without the architecture, or its upstream tag; anything else dies, as
+    does latest-elN (the machine exists, its file names its build).
+
+    Each build is fetched first (build_sources.fetch_build). When one
+    cannot be read with nothing found wrong (build_sources.Unread: a spec
+    this does not know, a build the mirror does not list or no longer has,
+    or no network), BOTH sides read their tags, as they did before a
+    machine's file named its build, and a `!!` says which build, why, and
+    what the tags lack: a tag against a build of one release cannot even
+    be ordered. That holds for a side typed as its tag; a side typed as the
+    build itself dies, as it does without a machine's file. Any other
+    refusal (a sha256 that moved, a digest that fails) dies."""
+    import build_sources as bs
+    builds = [machine_build(w) for w in words]
+    sides = ('old', 'new')
+    # machine_build gives glibc-<version>-<release>.
+    own = [('glibc-' + b.split('-', 2)[1], b) for b in builds]
+    typed = [without_arch(t) for t in given]
+    if typed[0] not in own[0] and typed[1] not in own[1] and \
+            typed[0] in own[1] and typed[1] in own[0]:
+        die(f"the old machine's file names {builds[0]} and the new "
+            f"machine's {builds[1]}, which are the other way round from "
+            f"{given[0]} -> {given[1]}: pass the machine you upgrade FROM "
+            f"first.")
+    tags = []
+    for side, typed, b in zip(sides, given, builds):
+        tag = 'glibc-' + b.split('-', 2)[1]
+        if latest_major(typed) is not None:
+            die(f"{typed} stands for a machine not installed yet, and the "
+                f"{side} machine's file names the build it runs, {b}: give "
+                f"{tag} or {b}.")
+        if without_arch(typed) not in (b, tag):
+            die(f"the {side} machine's file names {b}, and the {side} side "
+                f"given is {typed}: give that build's tag, {tag}, or the "
+                f"build itself.")
+        tags.append(tag)
+    unread = []
+    for side, typed, b in zip(sides, given, builds):
+        # A side typed as the build itself asks for that build: one that
+        # cannot be read is refused, as it is without a machine's file.
+        # Only a side typed as its tag reads the tag in its place.
+        asked = without_arch(typed) == b
+        if not is_build_name(b):
+            why = ("the name does not read as a build this tool fetches "
+                   "from Rocky Linux's mirror")
+            if asked:
+                die(f"cannot read the build {b}: {why}", 2)
+            unread.append((side, b, why))
+            continue
+        try:
+            bs.fetch_build(b)
+        except bs.Unread as e:
+            if asked:
+                die(f"cannot read the build {b}: {e}", 2)
+            unread.append((side, b, str(e)))
+        except bs.Refused as e:
+            die(f"cannot read the build {b}: {e}", 2)
+    if not unread:
+        lines = []
+        if list(given) != builds:
+            lines.append(textwrap.fill(
+                f"Each machine's file names the build it runs: steps 1 to 5 "
+                f"read {builds[0]} and {builds[1]}, in place of "
+                f"{given[0]} and {given[1]}.", width=78,
+                break_long_words=False, break_on_hyphens=False))
+        return [(b, 'build', t) for b, t in zip(builds, tags)], lines
+    out = io.StringIO()
+    said = '; and '.join(f"the {side} machine's file names {b}, which this "
+                         f"run cannot read: {why}" for side, b, why in unread)
+    with contextlib.redirect_stdout(out):
+        warn(f"{said[0].upper()}{said[1:]}. So steps 1 to 5 read the tags "
+             f"{tags[0]} and {tags[1]}, which hold neither build's patches.",
+             split_words=False)
+    return [(t, 'tag', t) for t in tags], out.getvalue().rstrip('\n').split('\n')
 
 
 def latest_major(name):
@@ -2736,8 +2873,23 @@ def _main(argv):
                 if latest_major(name) is not None:
                     fh.write(f"{name}\tbuild\tlatest\n")
                 else:
-                    kind = 'build' if is_build_name(name) else 'tag'
-                    fh.write(f"{name}\t{kind}\n")
+                    bare = without_arch(name)
+                    kind = 'build' if is_build_name(bare) else 'tag'
+                    fh.write(f"{bare}\t{kind}\n")
+        return 0
+    if argv and argv[0] == 'machines':
+        # audit.sh, given each machine's file, before step 1: which side
+        # steps 1 to 5 read (machine_sides), its kind and its tag, a line
+        # each in --to; what to say about it on stdout.
+        if len(argv) != 7 or argv[1] != '--to':
+            die("usage: glibc_locale_data.py machines --to <file> <old> "
+                "<new> <old_build> <new_build>")
+        sides, lines = machine_sides(argv[3:5], argv[5:7])
+        with open(argv[2], 'w', encoding='utf-8') as fh:
+            for name, kind, tag in sides:
+                fh.write(f"{name}\t{kind}\t{tag}\n")
+        for ln in lines:
+            print(ln, flush=True)
         return 0
     if argv and argv[0] == 'latest':
         # audit.sh, once for the whole run: each latest-elN replaced by the

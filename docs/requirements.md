@@ -12,7 +12,8 @@ Step 1 clones glibc from `github.com/bminor/glibc`, so it needs outbound
 network the first time. The clone is `--filter=blob:none --no-checkout` and
 still comes to roughly **370 MB** on disk. Later runs reuse it.
 
-A side named as a build (`glibc-2.34-275.el9_8`) needs outbound network to
+A side named as a build (`glibc-2.34-275.el9_8`), or the build a machine's
+file names (`--old-node`, `--new-node`), needs outbound network to
 Rocky Linux's mirror the first time that build is read, and a side given
 as `latest-el<N>` on every run, to read which build is the newest
 (`PG_GLIBC_BUILD_MIRROR` names another), and its files are kept in
@@ -159,9 +160,7 @@ to.
 
 **Both of them**, for steps 6 to 10. Steps 6 and 7 hold a machine's locale
 sources against the upstream version its distro started from, and steps 9 and
-10 scan them; step 8 holds the two machines' against each other, and with
-two tags it is the only check that compares a backported locale such as `C`
-*between* the two builds. A machine without the package still gives a file, and those checks
+10 scan them; step 8 holds the two machines' against each other. A machine without the package still gives a file, and those checks
 then say `NOT RUN` with the reason. Step 11 runs without it, and then says
 it did not check the strings it measured against that machine's character
 sets, which a locale its sort table decides does not need.
