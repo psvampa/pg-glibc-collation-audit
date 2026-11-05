@@ -353,8 +353,7 @@ if { [ -n "$OLD_ORDER" ] && [ -z "$NEW_ORDER" ]; } ||
 fi
 
 # Python block-buffers stdout when it is not a tty. Without this, the `note:`
-# lines on stderr overtake step 2's `!!` warning -- the single most important
-# message the audit prints.
+# lines on stderr overtake the steps' `!!` warnings.
 export PYTHONUNBUFFERED=1
 
 # Tells the steps to drop their "run this next" hints, which name commands
@@ -375,6 +374,17 @@ PAIR=$(slug "$OLD" "$NEW")
 # this run's steps only.
 SIDES_FILE="$OUT_DIR/build_sides.$PAIR.txt"
 export PG_GLIBC_AUDIT_SIDES="$SIDES_FILE"
+# What step 1's `!!` for a side read as a tag asks for
+# (glibc_locale_data.TAG_ASK_ENV): with any option a build is refused with
+# (the list above), the machines' files; with a machine's file, a tag is
+# read only when its build could not be, which NODE_NOTE says.
+if [ -n "$OLD_NODE" ]; then
+  export PG_GLIBC_AUDIT_TAG_ASK=none
+elif [ -n "$OLD_ORDER$NEW_ORDER$OLD_LOCALES$NEW_LOCALES$OLD_BUILD$NEW_BUILD" ]; then
+  export PG_GLIBC_AUDIT_TAG_ASK=node
+else
+  export PG_GLIBC_AUDIT_TAG_ASK=build
+fi
 STEP2_LIST="$OUT_DIR/step2_changed_collate.$PAIR.txt"
 STEP2_REMOVED="$OUT_DIR/step2_removed_locales.$PAIR.txt"
 STEP2_KEYED="$OUT_DIR/step2_keyed_locales.$PAIR.txt"
@@ -1321,16 +1331,41 @@ if [ -n "$NODE_LIST" ] && [ -f "$NODE_LIST" ]; then
       echo "     blast radius via copy: NOT REPORTED -- step 8 wrote no"
       echo "     inheritance list; read its output above"
     fi
+    # Every name step 8 found inside LC_COLLATE and not at both tags, relayed
+    # whole (backlog 6.3), with glibc's file C spelt as the locale PostgreSQL
+    # uses, named by the count it qualifies.
+    hidden=$(sed -n 's/^  [0-9]* of those are not at both tags, so no tag-to-tag diff compared them: //p' \
+      "$OUT_DIR/step8.$PAIR.log" 2>/dev/null | tail -1 | tr ',' '\n' \
+      | sed 's/^ *//; s/^C$/C.UTF-8/' | awk 'NF' | paste -sd, - | sed 's/,/, /g')
+    # Only when steps 1 to 5 read the two tags (the locale folders, or a
+    # machine's build this run could not read). Reading the builds, they
+    # compared every file both builds hold, C among them; a file not in both
+    # builds (a locale an admin added on both machines) is in step 8's count
+    # and full list only, not named here.
+    if [ -n "$hidden" ] && { [ "$OLD_KIND" != build ] || [ "$NEW_KIND" != build ]; }; then
+      echo "     Of the $NODE_DIFFS that differ, not at both tags:"
+      printf '%s\n' "$hidden" | fold -s -w 64 | sed 's/ *$//; s/^/       /'
+      text="Steps 1 to 5 read the tags and compare none of these files,"
+      text="$text so Reindex above does not hold them: their order can change."
+      if [ -n "$OLD_ORDER" ]; then
+        text="$text What step 11 measured of them is under '-- Measured order'."
+      else
+        text="$text Step 11 measures their order: pass --old-node and --new-node."
+      fi
+      case ", $hidden," in
+        *", C.UTF-8,"*)
+          text="$text For C.UTF-8, sql/c_utf8_probe.sql measures it inside"
+          text="$text PostgreSQL, which reports collversion as NULL for every C.*"
+          text="$text collation." ;;
+      esac
+      printf '%s\n' "$text" | fold -s -w 68 | sed 's/ *$//; s/^/     /'
+    fi
   else
     echo "     no locale differs inside LC_COLLATE between the two nodes'"
     echo "     own sources. Data only -- localedef computes the weights an"
     echo "     ellipsis range expands to, and a rule in its code, not these"
     echo "     files, picks the default weight of every character a locale"
     echo "     does not list."
-  fi
-  if grep -q '^  C (C\.UTF-8): present on both nodes, LC_COLLATE DIFFERS' \
-       "$OUT_DIR/step8.$PAIR.log" 2>/dev/null; then
-    echo "     C (C.UTF-8): DIFFERS  <- LC_COLLATE is not the same on the two nodes"
   fi
   [ "${NODE_CM[0]:-}" = --old-charmaps-dir ] && given=yes || given=no
   keyed_lines 8 "$NODE_KEYED" "$given" "between the two machines" \
@@ -1419,14 +1454,20 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
       echo "-- Node's own locale data, ellipsis scan: NOT RUN"
       if [ -n "$OLD_NODE" ]; then
         no_sources "$side"
-        echo "     So nothing above says whether the $side node's own C.UTF-8 is"
-        echo "     ellipsis-based. The other node's scan does not answer it,"
+        if [ "$side" = new ] && [ "$NEW_KIND" = build ]; then
+          # The one side step 4 scans, and the build it read is this
+          # machine's (machine_sides).
+          echo "     Step 4 above scanned $NEW's own locale files."
+          continue
+        fi
+        echo "     So nothing above scans the $side node's own locale data for"
+        echo "     ellipsis ranges. The other node's scan does not answer for it,"
         echo "     because each node has its own locales."
         continue
       fi
-      echo "     No --$side-locales-dir, so nothing above says whether the"
-      echo "     $side node's own C.UTF-8 is ellipsis-based. The other node's"
-      echo "     scan does not answer it: each node has its own locales."
+      echo "     No --$side-locales-dir, so nothing above scans the $side"
+      echo "     node's own locale data for ellipsis ranges. The other node's"
+      echo "     scan does not answer for it: each node has its own locales."
       echo "     Pass --$side-locales-dir with --$side-build-id."
       continue
     fi
@@ -1434,39 +1475,6 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
     echo "-- Node's own locale data, ellipsis scan ($build)"
     sed -n 's/^Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: /     ellipsis-based locale(s): /p' \
       "$log" 2>/dev/null
-    # Read the status step N DECLARED for C, rather than inferring one from
-    # two greps. The old form asked "is C in the ellipsis list?", then "does
-    # the codepoint line name it?", and printed NOTHING when both answers were
-    # no -- which is also what it printed when the step never looked. A C that
-    # is present with explicit weights, one that only copies another, and one
-    # absent from the directory all reached the reader as silence, and silence
-    # here reads as cleared. Five branches, and no state falls through.
-    CSTAT=$(sed -n 's/^  C (C\.UTF-8): //p' "$log" 2>/dev/null | tail -1)
-    case "$CSTAT" in
-      ellipsis-based*)
-        echo "     C (C.UTF-8): ellipsis-based  <- localedef computes its weights,"
-        echo "     so identical data does NOT mean identical order" ;;
-      codepoint_collation*)
-        echo "     C (C.UTF-8): codepoint_collation  <- byte order by construction" ;;
-      ABSENT*)
-        echo "     C (C.UTF-8): ABSENT from this locale directory  <- not examined,"
-        echo "     NOT cleared. If the node has C.UTF-8, the directory passed in"
-        echo "     does not hold that node's locale sources" ;;
-      '')
-        # Unreachable as the step stands -- it declares a status for every
-        # backported locale it knows of, on every run -- so no test drives
-        # this branch. It is here because the alternative to an unreachable
-        # branch is a reworded script silently taking the reassuring one.
-        echo "     C (C.UTF-8): NOT DECLARED  <- step $n printed no status line for"
-        echo "     it. Read step $n above; do not read this as cleared" ;;
-      *)
-        # Relay what the step declared, whole. This branch used to add
-        # "neither ellipsis-based nor codepoint_collation", which is true of
-        # the FILE and false of the ORDER when that file copies a template
-        # step 4 flagged: the step knows the difference and says so, and the
-        # summary must not overwrite it with a guess of its own.
-        echo "     C (C.UTF-8): $CSTAT" ;;
-    esac
   done
 else
   # The reason here used to be "no tag of this pair holds localedata/locales/C".
@@ -1637,13 +1645,13 @@ esac
 # A build's diff is its distro's own sources; what it leaves out is said in
 # the one place NOT_READ points to.
 if [ "$NOUN" = tags ]; then
-  echo "     An upstream diff cannot see your distro's backports."
+  echo "     What a tag does not hold is under 'Not checked for', above."
 else
   if [ "$NOUN" = builds ]; then
     text="$NOT_READ, above."
   else
-    text="An upstream diff cannot see your distro's backports: $TAG_NAME is"
-    text="$text an upstream tag. $NOT_READ, above."
+    text="What a tag does not hold is under 'Not checked for $TAG_NAME',"
+    text="$text above. $NOT_READ, above."
   fi
   printf '%s\n' "$text" | fold -s -w 70 | sed 's/ *$//; s/^/     /'
 fi

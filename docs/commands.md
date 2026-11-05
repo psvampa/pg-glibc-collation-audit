@@ -194,9 +194,8 @@ each one, and the summary repeats it. The run cannot tell a file the machine
 does not ship from one the copy lost, and the check above is what tells them
 apart. Step 8 lists what one copy lacks under `Only on the old node` or `Only
 on the new node`, where a failed transport reads exactly like a locale the
-upgrade removed or added. Two more cases earn their own `!!`: a backported
-locale such as `C` missing from one side (step 8), and a missing file that
-other locales copy, such as `iso14651_t1` (steps 9 and 10).
+upgrade removed or added. One more case earns its own `!!`: a missing file
+that other locales copy, such as `iso14651_t1` (steps 9 and 10).
 
 **Which printed count to check against matters.** Steps 9 and 10 print the
 copy's own count as `Files at <build id>`, and that is the number to set

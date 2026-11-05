@@ -2018,11 +2018,9 @@ def reading_chars(text):
 def reading_chars_once():
     """For the length of the block, reading_chars answers each text once.
 
-    One run of steps 2, 6, 7 or 8 asks it of the same texts several times:
-    step 8 reads each file's characters in compare_trees and again in
-    byte_order_locales, about 0.2 s of every run (13.7 PR D, measured on the
-    Mac). Each step's main wraps its run in this, and the reader is restored
-    on the way out, so nothing is kept past the run: a test that calls two
+    One run of steps 2, 6, 7 or 8 asks it of the same texts several times
+    (13.7 PR D). Each step's main wraps its run in this, and the reader is
+    restored on the way out, so nothing is kept past the run: a test that calls two
     steps in one process gets two fresh readings.
     """
     global reading_chars
@@ -2773,7 +2771,8 @@ def step1_sides(here, old, new, allow_reverse=False):
     it used to do in bash before its first finding, with the same texts in
     the same order for two tags: clone glibc into `here`/glibc when it is
     not there, fetch tags once when a tag is missing, refuse a reversed
-    pair, print the provenance, hold each side to the floor. A build name
+    pair, print the provenance, hold each side to the floor; and, which the
+    bash did not, a `!!` for the sides read as tags (tag_sides_text). A build name
     (is_build_name) is never asked of git: build_side fetches it and makes
     its commit again. latest-elN is refused (refuse_latest)."""
     refuse_latest((old, new))
@@ -2814,6 +2813,8 @@ def step1_sides(here, old, new, allow_reverse=False):
                 under.append(t)
         report_tag_provenance(repo, *under)
         report_build_provenance(builds)
+    if tags:
+        warn(tag_sides_text(tags), split_words=False)
     print('---', flush=True)
     # The corpus floor: both tags must hold a real locale corpus, or the
     # diff is empty for a reason that has nothing to do with collation and
@@ -2821,6 +2822,42 @@ def step1_sides(here, old, new, allow_reverse=False):
     for n in tags:
         side(repo, n)
     return repo, sides[0], sides[1]
+
+
+# How audit.sh tells step 1 what a reader of this run can do to have a
+# side read as a build (tag_sides_text): 'build' (name it), 'node' (the
+# locale folders or the measurements, which a build refuses: pass the
+# machines' files),
+# 'none' (a machine's file named a build this run could not read, and its
+# own `!!` says so). Unset, by hand: 'build'.
+TAG_ASK_ENV = 'PG_GLIBC_AUDIT_TAG_ASK'
+
+
+def tag_sides_text(tags):
+    """The `!!` for the sides step 1 reads as upstream tags: what a tag
+    does not hold, said once here (the summary relays it from step 1's
+    log), and what to pass instead, by the route TAG_ASK_ENV names."""
+    ask = os.environ.get(TAG_ASK_ENV) or 'build'
+    if ask not in ('build', 'node', 'none'):
+        die(f"{TAG_ASK_ENV}={ask!r} is not one of build, node, none.")
+    one = len(tags) == 1
+    text = (f"Not checked for {' and '.join(tags)}: "
+            f"{'it is an upstream tag' if one else 'they are upstream tags'}"
+            f", which hold{'s' if one else ''} none of a distro's own locale "
+            f"files or patches. Steps 1 to 5 read only what "
+            f"{'that tag holds' if one else 'the tags hold'}.")
+    if ask == 'build':
+        text += (f" If {'that machine runs' if one else 'the machines run'} "
+                 f"RHEL 8, 9 or 10, name {'that side' if one else 'each side'} "
+                 f"as its build instead, as rpm -q glibc prints it on the "
+                 f"machine without the architecture (glibc-2.34-283.el9_8), "
+                 f"or as latest-el8, latest-el9 or latest-el10.")
+    elif ask == 'node':
+        text += (" Pass each machine's file with --old-node and --new-node "
+                 "instead of every other --old-*/--new-* option: steps 1 to 5 "
+                 "then read the build each file names, if this run can read "
+                 "it.")
+    return text
 
 
 def report_build_provenance(builds):

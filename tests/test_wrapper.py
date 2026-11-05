@@ -27,6 +27,23 @@ from _harness import (EXPECTED_SHA, MID, NEW, OLD, REPO_ROOT, SCRIPTS_DIR,
 import diff_distro_locales as dd
 import glibc_locale_data as g
 import locale_order as lom
+
+# Step 1's `!!` for two sides read as tags (glibc_locale_data.tag_sides_text)
+# over 2.28..2.34, as a run with neither machine's file asks for the builds;
+# the summary repeats it whole among its warnings.
+TAGS_FACT = ("!! Not checked for glibc-2.28 and glibc-2.34: they are upstream "
+               "tags, which hold none of a distro's own locale files or "
+               "patches. Steps 1 to 5 read only what the tags hold.")
+TAGS_NOTICE = (TAGS_FACT + " If the machines run RHEL 8, 9 or 10, name each "
+               "side as its build instead, as rpm -q glibc prints it on the "
+               "machine without the architecture (glibc-2.34-283.el9_8), or as "
+               "latest-el8, latest-el9 or latest-el10.")
+# The same with the locale folders or the measurements, which a build
+# refuses.
+TAGS_NOTICE_FOLDERS = (TAGS_FACT + " Pass each machine's file with --old-node "
+                       "and --new-node instead of every other --old-*/--new-* "
+                       "option: steps 1 to 5 then read the build each file "
+                       "names, if this run can read it.")
 from _harness import GLIBC_CLONE, swap_alpha_beta, tag_charmaps
 from test_locale_order import (CHANGED_8_TO_9, RHEL8, RHEL9, RHEL10,
                                changes_in, parse_characters, parse_summary,
@@ -375,7 +392,7 @@ class Wrapper(unittest.TestCase):
             self.assertEqual(sorted(n.strip() for n in fh if n.strip()),
                              ['or_IN', 'sv_SE'])
 
-    def test_summary_repeats_the_C_UTF_8_warning_in_full(self):
+    def test_summary_repeats_the_tags_warning_in_full(self):
         """A warning that scrolled past 400 lines ago was not delivered.
 
         And it must be the whole block: the first `!!` line alone stops at
@@ -383,7 +400,7 @@ class Wrapper(unittest.TestCase):
         """
         summary = self.out[self.out.index('AUDIT SUMMARY'):]
         self.assertIn('Warnings the clean results above do NOT cover', summary)
-        self.assertIn('collversion is NULL', summary)
+        self.assertIn(TAGS_NOTICE, flat(summary))
 
     def test_summary_does_not_decide_step_5_for_you(self):
         """Step 5 reports; it does not decide. The summary must say so."""
@@ -420,7 +437,7 @@ class Wrapper(unittest.TestCase):
         published runs take `hunks`, so no output this tool ever printed
         carried it (backlog 1.14, measured 2026-09-20)."""
         summary = flat(self.out[self.out.index('AUDIT SUMMARY'):])
-        self.assertIn("An upstream diff cannot see your distro's backports",
+        self.assertIn("What a tag does not hold is under 'Not checked for', above.",
                       summary)
 
     def test_next_step_hints_are_suppressed(self):
@@ -700,7 +717,7 @@ class WrapperEmptyPair(unittest.TestCase):
         # The caveat is true of this branch too: a run that compared nothing
         # still cannot see a distro patch. It printed in the `clean` branch
         # only until backlog 1.14 was fixed.
-        self.assertIn("upstream diff cannot see your distro's backports",
+        self.assertIn("What a tag does not hold is under 'Not checked for', above.",
                       summary)
 
     def test_the_step_4_lines_say_how_to_read_their_list(self):
@@ -876,7 +893,7 @@ class WrapperRefusesBadInput(unittest.TestCase):
     def test_the_usage_claims_no_single_step_for_C_UTF_8(self):
         """The usage text called step 8 "the only
         source-level evidence there is about C.UTF-8"; steps 6/7 read that
-        file and steps 9/10 declare its status with one node alone."""
+        file and steps 9/10 scan it with one node alone."""
         rc, out = run_wrapper(OLD, out_dir=self.out_dir)
         self.assertEqual(rc, 2)
         script = os.path.join(os.path.dirname(os.path.dirname(
@@ -1041,10 +1058,16 @@ class WrapperNodeToNode(unittest.TestCase):
                                           os.path.join(cls.nodes, 'a'))
         cls.new_root = dd.materialise_tag(GLIBC_CLONE, MID,
                                           os.path.join(cls.nodes, 'b'))
-        for root, body in ((cls.old_root, backported_c()),
-                           (cls.new_root, upstream_c())):
+        # C and zz_TWO are at no tag and differ inside LC_COLLATE:
+        # two names for the summary to relay (backlog 6.3). zz_TWO only
+        # copies, so steps 6 and 7 compare it and name only C.
+        for root, c, two in ((cls.old_root, backported_c(), 'iso14651_t1'),
+                             (cls.new_root, upstream_c(), 'en_US')):
             with open(os.path.join(root, 'C'), 'w', encoding='utf-8') as fh:
-                fh.write(body)
+                fh.write(c)
+            with open(os.path.join(root, 'zz_TWO'), 'w',
+                      encoding='utf-8') as fh:
+                fh.write(locale_file(f'copy "{two}"'))
         cls.rc, cls.out = run_wrapper(
             OLD, MID,
             '--old-locales-dir', cls.old_root, '--old-build-id', 'build-old',
@@ -1086,42 +1109,45 @@ class WrapperNodeToNode(unittest.TestCase):
                     self.out, f'-- Distro patches, step {n} ({build} '
                               f'against {tag})'), distro_clean(tag, n))
 
-    def test_the_summary_names_C_UTF_8_as_differing(self):
-        """The payoff line: the two nodes' C.UTF-8 data differ.
-
-        It used to add "in neither tag; no other step sees
-        it". Steps 9 and 10 declare C's status in this same summary, steps 6
-        and 7 read its file, and over 2.34..2.39 the new tag holds it."""
+    def test_the_summary_relays_every_name_not_at_both_tags(self):
+        """Every name step 8 found inside LC_COLLATE and not at both tags,
+        not only C's (backlog 6.3), and with steps 1 to 5 on the tags, what that
+        leaves out of Reindex and how to measure it."""
         block = summary_block(
             self.out.replace(self.out_dir, '<out>'),
             '-- Node-to-node locale data (build-old -> build-new.el9)')
-        self.assertEqual(block, [
-            '3 locale(s) differ inside LC_COLLATE between the two',
-            "nodes' OWN sources; full list: "
-            '<out>/node_collate_diffs.build-old..build-new.el9.txt',
-            "plus 2 locale(s) that inherit one of those files'",
-            'LC_COLLATE via copy on build-new.el9; full list: '
-            '<out>/node_collate_inherited.build-old..build-new.el9.txt',
-            'C (C.UTF-8): DIFFERS  <- LC_COLLATE is not the same on the two '
-            'nodes',
-        ])
+        starts = [i for i, ln in enumerate(block)
+                  if ln.endswith('that differ, not at both tags:')]
+        self.assertEqual(len(starts), 1, block)
+        start = starts[0]
+        self.assertEqual(block[start:start + 7], [
+            'Of the 4 that differ, not at both tags:',
+            'C.UTF-8, zz_TWO',
+            'Steps 1 to 5 read the tags and compare none of these files, so',
+            'Reindex above does not hold them: their order can change. Step 11',
+            'measures their order: pass --old-node and --new-node. For C.UTF-8,',
+            'sql/c_utf8_probe.sql measures it inside PostgreSQL, which reports',
+            'collversion as NULL for every C.* collation.'])
+        # Named by the count it qualifies, the one that opens the block.
+        self.assertEqual(block[0], '4 locale(s) differ inside LC_COLLATE '
+                                   'between the two')
+
+    def test_the_folders_get_the_tags_warning_that_asks_for_the_files(self):
+        """With the locale folders a build is refused, so step 1's `!!` asks
+        for the machines' files, and the summary repeats it whole."""
+        summary = self.out[self.out.index('AUDIT SUMMARY'):]
+        self.assertIn(TAGS_NOTICE_FOLDERS, flat(summary))
+        self.assertNotIn('name each side as its build', flat(self.out))
 
     def test_the_ellipsis_scan_lines_for_each_node_are_printed(self):
-        """audit.sh's steps 9/10 block prints "C (C.UTF-8): ellipsis-based"
-        for RHEL8's C and "codepoint_collation" for the upstream one.
-        This class has always produced both lines and asserted neither."""
+        """audit.sh's steps 9/10 block, one for each node, each with its
+        count of ellipsis-based locales."""
         summary = self.out.split('AUDIT SUMMARY')[1]
         self.assertIn("-- Node's own locale data, ellipsis scan (build-old)",
                       summary)
         self.assertIn("-- Node's own locale data, ellipsis scan (build-new.el9)",
                       summary)
         self.assertEqual(summary.count('ellipsis-based locale(s):'), 2)
-        flat = ' '.join(summary.split())
-        self.assertIn('C (C.UTF-8): ellipsis-based <- localedef computes its '
-                      'weights, so identical data does NOT mean identical '
-                      'order', flat)
-        self.assertIn('C (C.UTF-8): codepoint_collation <- byte order by '
-                      'construction', flat)
 
     def test_the_blast_radius_of_the_differing_files_is_in_the_summary(self):
         """"Node-to-node did not close over the copy graph." The summary now
@@ -1390,8 +1416,9 @@ class WrapperNodesRemoveALocale(unittest.TestCase):
 
 @needs_clone
 class WrapperNodesRemoveAndCannotDecide(unittest.TestCase):
-    """Both at once: a file only the old copy has, and a backported C only
-    the old copy has. The removal comes first under its own count and the
+    """Both at once: two files only the old copy has (C among them, at no
+    tag), and a file of the old tag neither copy has. The removal comes
+    first under its own count and the
     undetermined after it under its own heading; no test drove this state,
     and a mutant that hid the removal whenever something was undetermined
     passed the whole suite (false-negative-reviewer on this change)."""
@@ -1409,6 +1436,8 @@ class WrapperNodesRemoveAndCannotDecide(unittest.TestCase):
             fh.write(locale_file('copy "iso14651_t1"'))
         with open(os.path.join(cls.old_root, 'C'), 'w', encoding='utf-8') as fh:
             fh.write(backported_c())
+        for root in (cls.old_root, cls.new_root):
+            os.remove(os.path.join(root, 'zu_ZA'))
         cls.rc, cls.out = run_wrapper(
             OLD, MID,
             '--old-locales-dir', cls.old_root, '--old-build-id', 'build-old',
@@ -1425,14 +1454,15 @@ class WrapperNodesRemoveAndCannotDecide(unittest.TestCase):
         path = os.path.join(self.out_dir,
                             'node_removed_locales.build-old..build-new.txt')
         self.assertEqual(removed_lines(self.out), [
+            'C',
             'zz_GONE',
-            '(1 name(s) on build-old and not on build-new;',
+            '(2 name(s) on build-old and not on build-new;',
             'an index on one does not just sort differently; the collation '
             'is gone.',
             f'Full list: {path})',
             'UNDETERMINED -- step 8 cannot say whether the upgrade removes '
             'these:',
-            'C: backported (C.UTF-8), on the old node only: not examined',
+            'zu_ZA: in glibc-2.28, and in neither copy',
         ])
 
 
@@ -1440,9 +1470,9 @@ class WrapperNodesRemoveAndCannotDecide(unittest.TestCase):
 class WrapperNodeCopiesDisagreeWithTheTags(unittest.TestCase):
     """Both copies over 2.34..2.39, arranged so the tags and the nodes give
     different answers. The new copy keeps aa_ER@saaho, which the tags rename
-    away, so the nodes remove nothing the tags do. And the new copy lacks C,
-    which the old one has: step 8's verdict on that is "not examined", so the
-    section is UNDETERMINED and may not print "none"."""
+    away, so the nodes remove nothing the tags do. And neither copy has
+    zu_ZA, a file of the old tag: the copy may have lost it, so the section
+    is UNDETERMINED and may not print "none"."""
 
     @classmethod
     def setUpClass(cls):
@@ -1452,9 +1482,8 @@ class WrapperNodeCopiesDisagreeWithTheTags(unittest.TestCase):
                                           os.path.join(cls.nodes, 'a'))
         cls.new_root = dd.materialise_tag(GLIBC_CLONE, NEW,
                                           os.path.join(cls.nodes, 'b'))
-        with open(os.path.join(cls.old_root, 'C'), 'w', encoding='utf-8') as fh:
-            fh.write(backported_c())
-        os.remove(os.path.join(cls.new_root, 'C'))
+        for root in (cls.old_root, cls.new_root):
+            os.remove(os.path.join(root, 'zu_ZA'))
         shutil.copy(os.path.join(cls.old_root, 'aa_ER@saaho'), cls.new_root)
         cls.rc, cls.out = run_wrapper(
             MID, NEW,
@@ -1472,7 +1501,7 @@ class WrapperNodeCopiesDisagreeWithTheTags(unittest.TestCase):
         self.assertEqual(removed_lines(self.out), [
             'UNDETERMINED -- step 8 cannot say whether the upgrade removes '
             'these:',
-            'C: backported (C.UTF-8), on the old node only: not examined',
+            'zu_ZA: in glibc-2.34, and in neither copy',
             f'every other file in {self.old_root} is also in {self.new_root}',
         ])
 
@@ -1533,13 +1562,12 @@ class WrapperOneSideOnly(unittest.TestCase):
         self.assertIn('-- Node-to-node locale data: NOT RUN', summary)
         self.assertIn("-- Node's own locale data, ellipsis scan (build-old)",
                       summary)
-        self.assertIn('C (C.UTF-8): ellipsis-based', summary)
         self.assertNotIn('ellipsis scan (build-new)', summary)
 
     def test_the_NOT_RUN_block_does_not_deny_the_scan_below_it(self):
         """Backlog 1.18. With one directory the block said
-        "nothing above says anything about C.UTF-8" over a summary that
-        declares the old node's C status a few lines further down."""
+        "nothing above says anything about C.UTF-8" over a summary whose
+        old node's scan covers its C a few lines further down."""
         self.assertEqual(summary_block(self.out, NODE_TO_NODE_NOT_RUN),
                          NODE_TO_NODE_NOT_RUN_BODY)
 
@@ -1926,7 +1954,7 @@ class WrapperStep5Unresolved(unittest.TestCase):
         # The caveat is true of this branch too: the run that could not read
         # the upstream code still cannot see a distro patch. It printed in the
         # `clean` branch only until backlog 1.14 was fixed.
-        self.assertIn("An upstream diff cannot see your distro's backports",
+        self.assertIn("What a tag does not hold is under 'Not checked for', above.",
                       flat)
 
     def test_the_vanished_path_is_repeated_in_the_warnings_block(self):
@@ -2071,11 +2099,10 @@ class WrapperStep5Clean(unittest.TestCase):
                       summary)
         self.assertIn('Nothing from step 5.', summary)
         self.assertNotIn('did NOT reach a clean result', summary)
-        # The branch that always carried the backport caveat keeps it. Matched
-        # without its first word, so this assertion holds both before and after
-        # the line moved out of the case: it is the control for the tests that
-        # fail when it moves back in (backlog 1.14).
-        self.assertIn("upstream diff cannot see your distro's backports",
+        # The branch that always carried the tags caveat keeps it: the
+        # control for the tests that fail when it moves back into the case
+        # (backlog 1.14).
+        self.assertIn("What a tag does not hold is under 'Not checked for', above.",
                       summary)
 
     def test_the_canned_sentence_is_the_one_the_script_prints(self):
@@ -2107,155 +2134,6 @@ class WrapperStep5Clean(unittest.TestCase):
 
 
 @needs_clone
-class WrapperNodeCIsNeitherEllipsisNorCodepoint(unittest.TestCase):
-    """The third state of C, which the summary used to pass over in silence,
-    on the shape where getting it wrong costs the most.
-
-    audit.sh decided C's line with two greps -- in the ellipsis list, else
-    named on the codepoint line -- so a C that is neither produced no line at
-    all. With a single --old-locales-dir the step-8 block that names a missing
-    backport does not run either, so nothing distinguished this node from one
-    whose C was never looked at. This C copies `iso14651_t1`: its own file has
-    no ellipsis, and every weight it sorts by is one localedef computed from
-    that template's ranges. The summary relays what step 9 declared, so the
-    copy is in the line; the first version of this fix printed "neither
-    ellipsis-based nor codepoint_collation" over exactly this input.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-cstate-')
-        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-ctree-')
-        root = dd.materialise_tag(GLIBC_CLONE, OLD, os.path.join(cls.nodes, 'a'))
-        with open(os.path.join(root, 'C'), 'w', encoding='utf-8') as fh:
-            fh.write(locale_file('copy "iso14651_t1"'))
-        cls.rc, cls.out = run_wrapper(
-            OLD, MID, '--old-locales-dir', root, '--old-build-id', 'build-old',
-            out_dir=cls.out_dir)
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.out_dir, ignore_errors=True)
-        shutil.rmtree(cls.nodes, ignore_errors=True)
-
-    def test_the_summary_says_what_the_copy_reaches_rather_than_nothing(self):
-        self.assertEqual(self.rc, 0, self.out)
-        flat = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
-        self.assertIn('C (C.UTF-8): copy-only', flat)
-        self.assertIn('it copies iso14651_t1, which this step flagged -- so '
-                      'this locale IS exposed', flat)
-
-    def test_it_is_not_reported_as_either_of_the_two_settled_states(self):
-        """The direction that matters: codepoint_collation is the reassuring
-        one, and a fall-through must never land there."""
-        flat = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
-        self.assertNotIn('C (C.UTF-8): codepoint_collation', flat)
-        self.assertNotIn('C (C.UTF-8): ellipsis-based', flat)
-
-
-@needs_clone
-class WrapperNodeCWithExplicitWeights(unittest.TestCase):
-    """A C whose weights are written one by one: no range for localedef to
-    expand, and every character it does not list still takes localedef's
-    default weight (backlog 1.6). Step 9 lists it, so the line the summary
-    relays has to say it is exposed rather than stop at "no ellipsis range".
-    No RHEL build ships this shape; it is injected."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-cexpl-')
-        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-cexpltree-')
-        root = dd.materialise_tag(GLIBC_CLONE, OLD, os.path.join(cls.nodes, 'a'))
-        with open(os.path.join(root, 'C'), 'w', encoding='utf-8') as fh:
-            fh.write(locale_file('order_start forward',
-                                 '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
-                                 'order_end'))
-        cls.rc, cls.out = run_wrapper(
-            OLD, MID, '--old-locales-dir', root, '--old-build-id', 'build-old',
-            out_dir=cls.out_dir)
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.out_dir, ignore_errors=True)
-        shutil.rmtree(cls.nodes, ignore_errors=True)
-
-    def test_the_summary_says_the_default_weight_exposes_it(self):
-        self.assertEqual(self.rc, 0, self.out)
-        flat = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
-        self.assertIn("C (C.UTF-8): explicit weights <- no ellipsis range for "
-                      "localedef to expand; and every character it does not "
-                      "list takes localedef's default weight -- so this "
-                      "locale IS exposed", flat)
-
-
-@needs_clone
-class WrapperNodeCNamesTheKeywordNotAlone(unittest.TestCase):
-    """Backlog 13.2, where it surfaces. A C that copies `iso14651_t1` and
-    also holds codepoint_collation compiles on RHEL9 and RHEL10 into tables
-    whose strcoll returns garbage and crashes (glibc study, E5). Step 9
-    called it byte order, and the summary printed "byte order by
-    construction" over it. The summary decides C's line by how the step's
-    status starts, so the new status must not start with the keyword. No
-    RHEL build ships this shape; it is injected."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-cmixed-')
-        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-cmixedtree-')
-        # A RHEL 9 machine: codepoint_collation is a keyword only where Red
-        # Hat's patch adds it, which the build id names (glibc_tree).
-        root = dd.materialise_tag(GLIBC_CLONE, MID, os.path.join(cls.nodes, 'a'))
-        with open(os.path.join(root, 'C'), 'w', encoding='utf-8') as fh:
-            fh.write(locale_file('copy "iso14651_t1"', 'codepoint_collation'))
-        cls.rc, cls.out = run_wrapper(
-            OLD, MID, '--new-locales-dir', root,
-            '--new-build-id', 'build-new.el9', out_dir=cls.out_dir)
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.out_dir, ignore_errors=True)
-        shutil.rmtree(cls.nodes, ignore_errors=True)
-
-    def test_the_summary_does_not_call_it_byte_order(self):
-        self.assertEqual(self.rc, 0, self.out)
-        flat = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
-        self.assertIn('C (C.UTF-8): names codepoint_collation, but could not '
-                      'be read as the keyword alone in its LC_COLLATE <- the '
-                      'one form glibc builds in byte order, so this is NOT '
-                      'cleared; and it copies iso14651_t1, which this step '
-                      'flagged -- so this locale IS exposed', flat)
-        self.assertNotIn('byte order by construction', flat)
-
-
-@needs_clone
-class WrapperNodeWithoutC(unittest.TestCase):
-    """A locale directory with no C at all. Absent is not cleared, and with one
-    side only nothing else in the summary says so."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-noc-')
-        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-noctree-')
-        root = dd.materialise_tag(GLIBC_CLONE, OLD, os.path.join(cls.nodes, 'a'))
-        cls.rc, cls.out = run_wrapper(
-            OLD, MID, '--old-locales-dir', root, '--old-build-id', 'build-old',
-            out_dir=cls.out_dir)
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.out_dir, ignore_errors=True)
-        shutil.rmtree(cls.nodes, ignore_errors=True)
-
-    def test_the_summary_calls_an_absent_C_absent_and_not_cleared(self):
-        self.assertEqual(self.rc, 0, self.out)
-        flat = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
-        self.assertIn('C (C.UTF-8): ABSENT from this locale directory <- not '
-                      'examined, NOT cleared', flat)
-        self.assertNotIn('C (C.UTF-8): codepoint_collation', flat)
-
-
-
-@needs_clone
 class WrapperMeasuredOrder(unittest.TestCase):
     """--old-order and --new-order on RHEL8 -> RHEL9: step 11 runs, and the
     summary names what each machine's own glibc says changed.
@@ -2276,6 +2154,14 @@ class WrapperMeasuredOrder(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_the_tags_warning_asks_for_the_files_not_a_build(self):
+        """A build is refused beside --old-order and --new-order, so step 1's
+        `!!` for the two tags asks for the machines' files
+        (false-negative-reviewer, 7.7 round 1)."""
+        summary = self.out[self.out.index('AUDIT SUMMARY'):]
+        self.assertIn(TAGS_NOTICE_FOLDERS, flat(summary))
+        self.assertNotIn('name each side as its build', flat(self.out))
 
     def test_step_11_runs(self):
         self.assertEqual(self.rc, 0, self.out[-2000:])
@@ -2520,6 +2406,29 @@ def without_the_unread_notice(out):
     return '\n'.join(lines), (top, warned)
 
 
+def without_the_tags_notice(out):
+    """(out without step 1's `!!` for the sides read as tags, before step 1's
+    findings and among the summary's warnings, ((how many of each), what it
+    asked for: 'build', 'node', or '' for nothing))."""
+    lines = out.split('\n')
+    starts = {x for x in lines if x.startswith('!! Not checked for glibc-')}
+    blocks = []
+    for i, line in enumerate(lines):
+        if line.lstrip(' ').startswith('!! Not checked for glibc-'):
+            pad = line[:len(line) - len(line.lstrip(' '))] + '   '
+            j = i + 1
+            while j < len(lines) and lines[j].startswith(pad):
+                j += 1
+            blocks.append(flat('\n'.join(lines[i:j])))
+    ask = {('build' if 'name each side' in b or 'name that side' in b else
+            'node' if '--old-node' in b else '') for b in blocks}
+    if len(ask) != 1:
+        raise AssertionError(f'the tags warning asks for {ask}')
+    lines, top = _cut_blocks(lines, starts, '')
+    lines, warned = _cut_blocks(lines, {'     ' + x for x in starts}, '     ')
+    return '\n'.join(lines), ((top, warned), ask.pop())
+
+
 # Step 11's line when both machines' charmaps were checked and nothing found.
 STEP_11_CHECKED = "Character sets: every byte sequence that each machine's"
 
@@ -2741,8 +2650,12 @@ class WrapperNodeFiles(unittest.TestCase):
         # (test_build_sources) reads the builds.
         node, gone = without_the_unread_notice(self.out)
         self.assertEqual(gone, (1, 1))
+        node, asked = without_the_tags_notice(node)
+        classic, asked_classic = without_the_tags_notice(self.classic)
+        self.assertEqual((asked, asked_classic),
+                         (((1, 1), ''), ((1, 1), 'node')))
         node, added = without_the_charmap_check(node)
-        classic, notices = without_the_charmaps_notice(self.classic)
+        classic, notices = without_the_charmaps_notice(classic)
         self.assertEqual(added, (3, 3, 3, 1, 1))
         self.assertEqual(notices, (3, 1, 1, 1))
         self.assertEqual(node.splitlines(), classic.splitlines())
@@ -2928,10 +2841,10 @@ class NodeFileWithoutSources:
     def test_the_ellipsis_scan_says_which_file_and_why(self):
         self.assertEqual(
             section_body(self.summary, ELLIPSIS_SIDE_NOT_RUN),
-            f"{no_sources_text(self.bare)} So nothing above says whether the "
-            f"{self.BARE} node's own C.UTF-8 is ellipsis-based. The other "
-            "node's scan does not answer it, because each node has its own "
-            "locales.")
+            f"{no_sources_text(self.bare)} So nothing above scans the "
+            f"{self.BARE} node's own locale data for ellipsis ranges. The "
+            "other node's scan does not answer for it, because each node has "
+            "its own locales.")
 
     def test_no_block_asks_for_the_options_the_files_replace(self):
         self.assertNotIn('Pass --', flat(self.summary))

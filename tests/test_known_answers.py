@@ -322,52 +322,36 @@ class Step2Filter(StepRun):
                 for name in names:
                     self.assertIn(f'localedata/locales/{name}', out)
 
-    def test_c_utf8_is_named_on_both_pairs(self):
-        """#1: C.UTF-8 is shipped by RHEL8 and RHEL9, so 'added upstream'
-        does not mean 'new on your system'. It is absent from both tags on the
-        first pair and added on the second -- both must warn."""
-        for old, new in ((OLD, MID), (MID, NEW)):
+    def test_c_utf8_is_one_more_file_between_the_tags(self):
+        """No list of what a distro ships (backlog 13.6, 7.7): over 2.28..2.34
+        C is in neither tag, so step 2 says nothing of it and step 1's `!!`
+        says what a tag does not hold; over 2.34..2.39 upstream adds it, and
+        it is listed with the other added files, whose sentence says an
+        added file can still exist on the old system. No `!!` says C.UTF-8's
+        order can change: the old tag cannot say that, and on RHEL 9 and 10
+        it does not."""
+        cases = (((OLD, MID), None),
+                 ((MID, NEW), '  localedata/locales/C -> C.utf8'))
+        for (old, new), added in cases:
             with self.subTest(pair=f'{old}..{new}'):
                 out = self.step('filter_lc_collate_changes.py', old, new)
-                self.assertIn('C.UTF-8', out)
-                self.assertRegex(
-                    out, re.compile(r'^!! localedata/locales/C\b', re.M))
+                self.assertNotIn('!!', out)
+                self.assertNotIn('C.UTF-8', out)
+                lines = out.splitlines()
+                if added is None:
+                    self.assertFalse([ln for ln in lines if ln.strip()
+                                      .startswith('localedata/locales/C ')],
+                                     out)
+                    continue
+                head = [i for i, ln in enumerate(lines)
+                        if ln.startswith(f'Added at {new} (')]
+                self.assertEqual(len(head), 1, out)
+                body = lines[head[0]:]
+                body = body[:body.index('')] if '' in body else body
+                self.assertIn(added, body)
+                self.assertIn('Confirm with', flat('\n'.join(body)))
 
-    def test_the_c_utf8_warning_is_about_the_tags_only(self):
-        """The warning said "this audit is blind to it: a
-        clean result above says nothing about C.UTF-8", and the summary repeats
-        it under a run that read both machines' copies of C. It is compared
-        whole, so a claim added back in any wording fails."""
-        for (old, new), where in (
-                ((OLD, MID), f'exists at NEITHER {OLD} nor {MID}'),
-                ((MID, NEW), f'is new UPSTREAM at {NEW}')):
-            with self.subTest(pair=f'{old}..{new}'):
-                out = self.step('filter_lc_collate_changes.py', old, new)
-                # Every `!!` block that names C.UTF-8, not only the first:
-                # a second block making the old claim would otherwise pass.
-                blocks, cur = [], None
-                for line in out.splitlines():
-                    if line.startswith('!!'):
-                        cur = [line]
-                        blocks.append(cur)
-                    elif cur is not None and line.startswith('   '):
-                        cur.append(line)
-                    else:
-                        cur = None
-                named = [flat('\n'.join(b)) for b in blocks
-                         if 'C.UTF-8' in flat('\n'.join(b))]
-                self.assertEqual(named, [(
-                    f"!! localedata/locales/C {where}, but C.UTF-8 is "
-                    f"BACKPORTED by the distros this audit targets -- so it "
-                    f"very likely DOES exist on your old system, with an order "
-                    f"of its own, and that order can change. The old tag has "
-                    f"no source file for it, so a comparison of the two tags "
-                    f"cannot see what your old system runs, and a clean result "
-                    f"from steps 1 to 5 says nothing about the C.UTF-8 it runs. "
-                    f"PostgreSQL will not cover the gap either -- collversion "
-                    f"is NULL for every collation whose name starts with 'C.', "
-                    f"so no version mismatch can ever fire. Compare C.UTF-8 "
-                    f"empirically on both nodes. See docs/limitations.md.")])
+
 
     def test_the_false_blanket_claim_is_gone(self):
         """Added files used to be reported as unable to affect an existing

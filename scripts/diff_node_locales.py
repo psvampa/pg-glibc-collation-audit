@@ -10,8 +10,8 @@ the two nodes run actually change?" Both sides are authoritative and the
 verdict is about the delta between them.
 
 Why that is worth a separate comparison: a locale the DISTRO backports may be
-in neither tag of the pair, and then no tag-to-tag diff can see it.
-`localedata/locales/C` is the case that matters -- upstream has it only from
+missing from one tag of the pair or both, and then no tag-to-tag diff
+compares it. `localedata/locales/C` is the case that matters -- upstream has it only from
 glibc 2.35, RHEL8 and RHEL9 predate that and ship one anyway, and C.UTF-8's
 order demonstrably differs between them. (RHEL10 is glibc 2.39 and has
 upstream's copy, so on RHEL9 -> RHEL10 the new side is in the tag and RHEL9's
@@ -58,11 +58,6 @@ import sys
 
 import diff_distro_locales as dd
 import glibc_locale_data as g
-# One definition, imported rather than copied. A locale listed as backported in
-# one script and not the other is a locale that gets reported by one of them and
-# silently dropped by the other -- and this whole script exists because of the
-# one entry in that dict.
-from filter_lc_collate_changes import KNOWN_BACKPORTED
 
 Side = collections.namedtuple(
     'Side', 'label root build_id names skipped manifest')
@@ -150,8 +145,7 @@ def tag_basenames(repo, tag):
 
     ls-tree, not cat-file -e: on a --filter=blob:none clone the latter must
     fetch the blob to answer, and reports a file that exists as absent whenever
-    that fetch cannot happen. filter_lc_collate_changes.py records the same
-    reason.
+    that fetch cannot happen.
     """
     return {os.path.basename(p) for p in g.list_locale_files(repo, tag)}
 
@@ -161,10 +155,8 @@ def removal_verdicts(old, new, only_old, old_tag, old_tag_names):
     comparison cannot say either way.
 
     `removed` is every name only the old copy holds that the new copy does
-    not hold in any form, less the KNOWN_BACKPORTED ones. report_backported
-    gives those a verdict of their own -- present on the old node only, not
-    examined -- and a locale that verdict leaves unexamined must not be
-    relayed as gone.
+    not hold in any form, at a tag or not: a file the old machine has and the
+    new one does not is gone from the new machine, whoever wrote it.
 
     `undetermined` is (name, why) for everything that could be a removal and
     that this comparison can neither report as one nor rule out. "Held" means
@@ -178,7 +170,6 @@ def removal_verdicts(old, new, only_old, old_tag, old_tag_names):
         very file. Checked against the tag, not against a list of what distros
         ship, so nothing here goes stale. Not checked without --old-tag, and
         the written list says so in its header.
-      - a KNOWN_BACKPORTED locale on the old copy only (see above).
       - an entry the old copy holds and this step did not read -- a symlink, a
         directory -- that the new copy does not hold as a file it read. A
         dotfile is left out: no locale's name starts with a dot, and Finder
@@ -206,17 +197,13 @@ def removal_verdicts(old, new, only_old, old_tag, old_tag_names):
         return "not on the new side"
 
     removed = [shown(n) for n in only_old
-               if n not in KNOWN_BACKPORTED and n not in new_skipped]
+               if n not in new_skipped]
     undetermined = []
     if old_tag_names is not None:
         for name in sorted(old_tag_names - old_held - new_read):
             where = ("and in neither copy" if name not in new_skipped
                      else f"not in the old copy, and {new_side(name)}")
             undetermined.append((name, f"in {old_tag}, {where}"))
-    for name in sorted(KNOWN_BACKPORTED):
-        if name in old.names and name not in new.names:
-            undetermined.append((name, f"backported ({KNOWN_BACKPORTED[name]}), "
-                                       f"on the old node only: not examined"))
     for name in sorted(set(old_skipped) - new_read):
         if old_skipped[name] == 'dotfile':
             continue
@@ -224,7 +211,7 @@ def removal_verdicts(old, new, only_old, old_tag, old_tag_names):
                                           f"({old_skipped[name]}), and "
                                           f"{new_side(name)}"))
     for name in only_old:
-        if name in new_skipped and name not in KNOWN_BACKPORTED:
+        if name in new_skipped:
             undetermined.append((shown(name), f"read on the old side, and "
                                               f"{new_side(name)}"))
     return removed, undetermined
@@ -290,11 +277,11 @@ def report_buckets(old, new, buckets, side, texts, both, only_old, only_new,
         hidden = [n for n in buckets['collate'] if n in set(invisible)]
         print()
         if hidden:
-            print(f"  {len(hidden)} of those exist at NEITHER tag, so no "
-                  f"tag-to-tag diff could see them: {', '.join(hidden)}")
+            print(f"  {len(hidden)} of those are not at both tags, so no "
+                  f"tag-to-tag diff compared them: {', '.join(hidden)}")
         else:
-            print("  All of those exist at one of the two tags, so a "
-                  "tag-to-tag diff could see them.")
+            print("  All of those are at both tags, so a tag-to-tag diff "
+                  "compared them.")
 
     if buckets['collate']:
         # Through the NEW node's own copy graph: the order those files define
@@ -319,121 +306,6 @@ def report_buckets(old, new, buckets, side, texts, both, only_old, only_new,
             print(f"  {name}: {STYLE_TEXT[style]}")
 
 
-def report_backported(old, new, buckets, invisible):
-    """Every KNOWN_BACKPORTED locale, whether or not it differs.
-
-    Absent is not empty. A run that says nothing about C.UTF-8 and a run that
-    cleared it look identical on a terminal, and that is how this locale gets
-    missed -- it is the false negative this whole script was written for.
-
-    Returns (computed, unexamined, fallback, not_alone, settled):
-
-      computed    backported locales that are ellipsis-based on at least one
-                  side. That -- not the fact of being backported -- is what
-                  makes identical data insufficient, so the closing warning is
-                  written from it rather than asserting the RHEL8 shape on
-                  every run. RHEL9 and RHEL10 declare codepoint_collation, and
-                  a warning that contradicts the output eight lines above it
-                  is a warning nobody believes twice.
-      unexamined  backported locales this run could NOT compare: absent from
-                  both nodes, or present on only one. Kept separate because an
-                  empty `computed` has two very different causes, and one of
-                  them must never produce a reassuring closing line. Getting
-                  that wrong is how "this comparison says nothing about
-                  C.UTF-8" ended up printed directly above "the data
-                  comparison is the whole story", the closing line of the
-                  time.
-      fallback    backported locales compared on both nodes with explicit
-                  weights or a copy, and no ellipsis range on either side; a
-                  copy of a byte-order locale and nothing else is not one of
-                  them (backlog 6.9, glibc_locale_data.byte_order_locales).
-                  Every character such a file does not list takes localedef's
-                  default weight (backlog 1.6), so identical data does not
-                  settle their order either. Until that was named, an explicit
-                  C read "the data comparison is the whole story" here, which
-                  the default weight makes false.
-      not_alone   backported locales that name codepoint_collation on at
-                  least one side, but could not be read as the keyword alone
-                  (glibc_locale_data.declares_byte_order), and use no ellipsis
-                  range. The data does not settle their order either. Kept
-                  apart from `fallback`, whose warning gives the default
-                  weight as the reason.
-      settled     None, unless every backported locale compared sorts by
-                  byte order on both nodes: the one case the closing "whole
-                  story" is true of. 'declared' when each declares
-                  codepoint_collation alone, 'by-copy' when one only copies a
-                  byte-order locale, so the closing line can say which. A C
-                  with no LC_COLLATE block at all is neither, and gets no
-                  reassurance.
-    """
-    print(f"\nBackported locales, reported whether or not they differ "
-          f"(these are why this comparison exists):")
-    computed, unexamined, fallback, not_alone = [], [], [], []
-    compared, byte_order, via_copy = [], [], []
-    # Backlog 6.9: a copy of a byte-order locale and nothing else sorts by
-    # bytes too, which only the whole directory can show.
-    copies = {side.label: g.byte_order_locales(
-        read_texts(side.root, side.names))[1] for side in (old, new)}
-    for name in sorted(KNOWN_BACKPORTED):
-        locale_name = KNOWN_BACKPORTED[name]
-        on_old = name in old.names
-        on_new = name in new.names
-        if not on_old and not on_new:
-            print(f"  {name} ({locale_name}): on NEITHER node. Either the "
-                  f"distro does not ship it or glibc-locale-source is not "
-                  f"installed -- this comparison says nothing about it.")
-            unexamined.append(locale_name)
-            continue
-        if on_old != on_new:
-            where = 'old' if on_old else 'new'
-            print(f"  {name} ({locale_name}): present on the {where} node "
-                  f"ONLY. The order it provides is not the same thing on both "
-                  f"sides; test it empirically.")
-            unexamined.append(locale_name)
-            continue
-        old_text = read_texts(old.root, [name])[name]
-        new_text = read_texts(new.root, [name])[name]
-        if name in buckets['collate']:
-            verdict = 'LC_COLLATE DIFFERS'
-        elif name in buckets['other']:
-            verdict = 'differs, but outside LC_COLLATE'
-        elif name in buckets['identical']:
-            verdict = 'byte-identical'
-        else:
-            verdict = 'no LC_COLLATE block on either node'
-        print(f"  {name} ({locale_name}): present on both nodes, {verdict}")
-        styles = []
-        for side, text in ((old, old_text), (new, new_text)):
-            style, hits = style_of(text)
-            extra = f" ({hits} hit(s))" if style == 'ellipsis' else ''
-            via = copies[side.label].get(name)
-            if via is not None:
-                extra = f", of {via}, which glibc builds in byte order"
-            print(f"      {side.build_id}: {STYLE_TEXT[style]}{extra}")
-            styles.append('codepoint' if via is not None else style)
-        styles = tuple(styles)
-        if invisible is not None and name in set(invisible):
-            print(f"      exists at neither tag: no tag-to-tag diff can see "
-                  f"this file")
-        compared.append(locale_name)
-        if name in copies['old'] or name in copies['new']:
-            via_copy.append(locale_name)
-        if 'ellipsis' in styles:
-            computed.append(locale_name)
-            print(f"      an ellipsis range means localedef computes the "
-                  f"weights, so identical data does NOT clear the order")
-        elif 'codepoint-not-alone' in styles:
-            not_alone.append(locale_name)
-        elif {'explicit', 'copy-only'} & set(styles):
-            fallback.append(locale_name)
-        elif styles == ('codepoint', 'codepoint'):
-            byte_order.append(locale_name)
-    settled = None
-    if compared and compared == byte_order:
-        settled = 'by-copy' if set(via_copy) & set(byte_order) else 'declared'
-    return computed, unexamined, fallback, not_alone, settled
-
-
 def main(argv):
     ap = argparse.ArgumentParser(
         description="Compare two nodes' locale sources against each other and "
@@ -449,9 +321,9 @@ def main(argv):
                              f"either directory carries a version.")
     ap.add_argument('--old-tag', help="the upstream tag the audit used for the "
                                       "old side. With --new-tag, reports which "
-                                      "findings exist at neither tag -- the "
-                                      "ones a diff of these two tags cannot "
-                                      "see -- and "
+                                      "findings are not at both tags -- the "
+                                      "ones a diff of these two tags does not "
+                                      "compare -- and "
                                       "lets the list of what cannot be decided "
                                       "include a file of the old tag that "
                                       "neither copy holds.")
@@ -479,7 +351,7 @@ def main(argv):
 
     if bool(opts.old_tag) != bool(opts.new_tag):
         g.die("--old-tag and --new-tag go together: one tag cannot say whether "
-              "a file exists at neither.")
+              "a file is at both.")
     four = (opts.old_charmaps_dir, opts.old_measurement,
             opts.new_charmaps_dir, opts.new_measurement)
     if any(four) and not all(four):
@@ -563,8 +435,11 @@ def _main(opts, charmaps):
                              allow_reverse=opts.allow_reverse,
                              commits=commits)
         old_tag_names = tag_basenames(repo, opts.old_tag)
-        present = old_tag_names | tag_basenames(repo, opts.new_tag)
-        invisible = sorted(n for n in old_set | new_set if n not in present)
+        # Not at both tags: steps 1 to 5 over two tags compare only a file
+        # both hold; one the old tag lacks is "added", one the new tag lacks
+        # "deleted", neither compared (filter_lc_collate_changes.py).
+        both_tags = old_tag_names & tag_basenames(repo, opts.new_tag)
+        invisible = sorted(n for n in old_set | new_set if n not in both_tags)
 
     buckets, side, texts = dd.compare_trees(old.root, new.root, both,
                                             label_a=old.build_id,
@@ -576,8 +451,6 @@ def _main(opts, charmaps):
     removed, undetermined = removal_verdicts(old, new, only_old, opts.old_tag,
                                              old_tag_names)
     report_undetermined(undetermined)
-    computed, unexamined, fallback, not_alone, settled = report_backported(
-        old, new, buckets, invisible)
 
     slug = g.pair_slug(old.build_id, new.build_id)
     out = g.write_list(
@@ -643,78 +516,6 @@ def _main(opts, charmaps):
             f"between two glibc builds. Bug 22668 (commit 82292c99b2) changed "
             f"exactly that and reordered ko_KR from a byte-identical file. So "
             f"a clean result here clears the data half and nothing else.")
-    # Written from what was actually read. Asserting the ellipsis shape on
-    # every run made this contradict the output a few lines above it whenever
-    # both nodes declared codepoint_collation -- which is the RHEL9 -> RHEL10
-    # case, and half of what this script is run for.
-    #
-    # `unexamined` is checked FIRST and separately. An empty `computed` means
-    # either "nothing here is ellipsis-based" or "nothing here could be
-    # compared", and only the first licenses a reassuring line. Collapsing them
-    # printed "the data comparison is the whole story" directly under "this
-    # comparison says nothing about C.UTF-8" -- a reassurance over an absence,
-    # which is the false negative this script was written to remove.
-    if unexamined:
-        dd.warn(f"{', '.join(unexamined)}: NOT compared by this run -- absent "
-                f"from a node, or present on only one. Nothing above says "
-                f"anything about it, and that is not the same as clearing it. "
-                f"Install glibc-locale-source on both nodes and re-run, and "
-                f"measure the order with sql/c_utf8_probe.sql regardless: "
-                f"PostgreSQL reports collversion as NULL for every C.* name, "
-                f"so nothing else will warn you.")
-    if computed:
-        dd.warn(f"{', '.join(computed)}: built from ellipsis ranges on at "
-                f"least one of these nodes, so the order is whatever localedef "
-                f"computed and is NOT settled by comparing the data. "
-                f"PostgreSQL also reports collversion as NULL for every C.* "
-                f"name, so nothing warns either. Step 11 measures each "
-                f"character's order through each machine's glibc when the "
-                f"run has both machines' measurements, and "
-                f"sql/c_utf8_probe.sql measures it inside PostgreSQL.")
-    # The keyword is not the same as settled either: beside anything else in
-    # LC_COLLATE glibc does not give byte order (backlog 13.2).
-    if not_alone:
-        dd.warn(f"{', '.join(not_alone)}: names codepoint_collation on at "
-                f"least one of these nodes, but could not be read as the "
-                f"keyword alone in its LC_COLLATE, the one form glibc builds "
-                f"in byte order. So the order is NOT settled by comparing the "
-                f"data. PostgreSQL also "
-                f"reports collversion as NULL for every C.* name, so nothing "
-                f"warns either. Step 11 measures each character's order "
-                f"through each machine's glibc when the run has both "
-                f"machines' measurements, and sql/c_utf8_probe.sql measures "
-                f"it inside PostgreSQL.")
-    # No ellipsis is not the same as settled: a file with explicit weights or
-    # a copy still takes localedef's default weight for every character it
-    # does not list (backlog 1.6). Only byte order on both nodes --
-    # codepoint_collation alone, or a copy of nothing but a byte-order locale --
-    # earns the reassuring line below.
-    if fallback:
-        dd.warn(f"{', '.join(fallback)}: no ellipsis range on either node, but "
-                f"every character the file does not list takes localedef's "
-                f"default weight, so the order is NOT settled by comparing the "
-                f"data either. PostgreSQL also reports collversion as NULL for "
-                f"every C.* name, so nothing warns either. Step 11 measures "
-                f"each character's order through each machine's glibc when the "
-                f"run has both machines' measurements, and "
-                f"sql/c_utf8_probe.sql measures it inside PostgreSQL.")
-    if settled and not unexamined:
-        how = ("declares codepoint_collation" if settled == 'declared' else
-               "declares codepoint_collation alone, or copies nothing but a "
-               "byte-order locale,")
-        # Not "the whole story": the code compares such a locale on a branch
-        # of its own, and step 5 is what says whether that code changed
-        # (backlog 13.7).
-        dd.warn(f"Every backported locale here {how} "
-                f"on both nodes, so their data leaves localedef nothing to "
-                f"compute; whether changed code moves their order is step 5's "
-                f"question. Run "
-                f"sql/c_utf8_probe.sql anyway if C.UTF-8 is your database "
-                f"collation: it measures the order these builds actually "
-                f"produce inside PostgreSQL, as step 11 does through glibc "
-                f"when the run has both machines' "
-                f"measurements, and PostgreSQL reports collversion as NULL "
-                f"for every C.* name.")
     if not (charmaps or opts.no_charmaps):
         dd.warn(f"A machine's own localedata/charmaps/ is NOT compared, nor "
                 f"what its own transliterations build. glibc-locale-source "

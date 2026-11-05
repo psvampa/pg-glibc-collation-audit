@@ -66,7 +66,6 @@ import sys
 import diff_distro_locales as dd
 import glibc_locale_data as g
 import glibc_tree
-from filter_lc_collate_changes import KNOWN_BACKPORTED
 
 TAG_OUT = 'step4_exposed_locales.txt'
 
@@ -188,112 +187,6 @@ def listed_names(names, aliases):
     by glibc_locale_data.locale_source; an alias does not, so it is listed.
     """
     return set(names) | set(g.aliases_of(set(names), aliases))
-
-
-def report_backported(tree, inherited=None, unresolved=None,
-                      default_only=(), by_copy=None):
-    """Declare, one by one, what this scan found for each locale the distros
-    are known to BACKPORT. Returns {name: status}.
-
-    `inherited` is step 4's own closure, {name: roots it reaches}. A locale
-    whose file uses no ellipsis can still be exposed by copying one that does,
-    and its style alone is then true of the FILE and false of the ORDER. The
-    closure is already computed where this is called from; not passing it is
-    a verdict computed and thrown away.
-    `unresolved` is the other half of the same question: {name: why}, from
-    glibc_tree.Tree.unresolved -- a file localedef cannot open on the way, or
-    a reading this reader could not settle. Either is a locale whose order
-    was never read, and saying only "copy-only, its order is whatever it
-    inherits" makes that indistinguishable from a copy resolved to a file
-    with nothing in it.
-    `default_only` is the third: the locales no range reaches, which this step
-    lists for localedef's default weight (backlog 1.6). Without it an explicit
-    C read "no ellipsis range for localedef to expand" in the summary while the
-    step's own list named it.
-
-    `codepoint_collation` is byte order only alone, the one statement of
-    the LC_COLLATE localedef builds (glibc_tree.Tree.byte_order), and a file
-    holding it alone copies nothing, so none of the three notes can reach
-    it. Beside anything else this code does not call it byte order. Beside a
-    copied template glibc gives none (`copy "iso14651_t1"` plus the keyword
-    compiles into broken tables on RHEL9 and RHEL10, glibc study E5). The
-    style is then 'codepoint-not-alone', or 'ellipsis' when a range sits
-    beside the keyword, and the notes apply to it as to any other file. A
-    run the reader could not settle, or that localedef does not finish, is
-    'unread': what was not read has no shape to report.
-    `by_copy` is the fourth, and the one that clears: {name: the locale it
-    copies}, for a locale whose LC_COLLATE copies a byte-order locale and
-    nothing else (backlog 6.9). Its style says "copy-only", which is true of
-    the file; without the note the status would leave the order unsaid while
-    step 4 names the locale as byte order.
-
-    The wrapper used to infer C's state from two greps -- is it in the ellipsis
-    list, else does the codepoint line name it -- and a C that was neither
-    printed nothing at all. Nothing is also what a run that never looked
-    prints, so a locale present with explicit weights, a locale that only
-    copies another, and a locale absent from the directory all arrived at the
-    reader as silence. Absent, cleared and unexamined are three answers.
-
-    Directory mode only. A git tag holds no distro backport by construction,
-    and a heading here in tag mode would invite the reader to trust the tag
-    scan on the one question it structurally cannot answer.
-    """
-    styles = {
-        'ellipsis': 'ellipsis-based  <- localedef computes the weights, so '
-                    'identical data is not identical order',
-        'codepoint': 'codepoint_collation  <- byte order by construction',
-        # Must not start with "codepoint_collation": audit.sh reads C's line
-        # by how it starts and would print "byte order by construction".
-        'codepoint-not-alone': 'names codepoint_collation, but could not be '
-                               'read as the keyword alone in its LC_COLLATE  '
-                               '<- the one form glibc builds in byte order, '
-                               'so this is NOT cleared',
-        'explicit': 'explicit weights  <- no ellipsis range for localedef to '
-                    'expand',
-        'copy-only': 'copy-only  <- its order is whatever it inherits; follow '
-                     'the copy chain',
-        'none': 'present, but defines no LC_COLLATE block',
-        'unread': 'not read to the end the way localedef reads it  <- NOT '
-                  'cleared',
-    }
-    inherited = inherited or {}
-    unresolved = unresolved or {}
-    by_copy = by_copy or {}
-    missing = tree.missing()
-    found = {}
-    print("\nDistro-backported locales, declared one by one -- absent, "
-          "cleared and")
-    print("unexamined are three different answers:")
-    for name in sorted(KNOWN_BACKPORTED):
-        if name not in tree.names:
-            status = 'ABSENT from this directory  <- not examined here'
-        else:
-            status = styles[tree.style(name)]
-            if name in inherited:
-                status += (f"; and it copies "
-                           f"{', '.join(sorted(inherited[name]))}, which this "
-                           f"step flagged -- so this locale IS exposed")
-            if name in default_only:
-                status += ("; and every character it does not list takes "
-                           "localedef's default weight -- so this locale IS "
-                           "exposed")
-            if name in missing:
-                gone = ', '.join(dd.shown(n)
-                                 for n in sorted(missing[name]))
-                status += (f"; and it copies {gone}, which is "
-                           f"NOT in this corpus -- what that carries was never "
-                           f"read, so this locale is NOT cleared")
-            elif name in unresolved:
-                status += (f"; and how localedef reads it could not be "
-                           f"settled ({unresolved[name]}) -- so this locale "
-                           f"is NOT cleared")
-            if name in by_copy:
-                status += (f"; and it copies {by_copy[name]} and nothing "
-                           f"else, which glibc builds in byte order -- so "
-                           f"this locale is byte order too")
-        found[name] = status
-        print(f"  {name} ({KNOWN_BACKPORTED[name]}): {status}")
-    return found
 
 
 def report_default_weight(names):
@@ -449,13 +342,6 @@ def report(tree, supported, label, out_name, next_hint,
         listed = sorted(listed_names(names, aliases))
         out_path = g.write_list(out_name, listed)
         print(f"  full list ({len(listed)} name(s)): {out_path}")
-        # Declared on this path too. A directory where nothing uses an
-        # ellipsis is where this step comes closest to reassuring, and it is
-        # exactly where the summary must still be able to say what the node's
-        # C is -- returning here without a status made the wrapper print
-        # "NOT DECLARED" over a scan that had looked and found an answer.
-        if node_dir:
-            report_backported(tree, {}, unresolved, default_only, by_copy)
         return 0
 
     print(f"\nAdditionally exposed via `copy` inheritance: {len(inherited)}")
@@ -534,13 +420,6 @@ def report(tree, supported, label, out_name, next_hint,
     for line in next_hint:
         print(line)
 
-    # Last, not before the sentence above: "These" names the exposed set, and
-    # a declaration wedged in between put "C (C.UTF-8): codepoint_collation"
-    # directly above it, where a reader takes C for one of "these" and tests a
-    # locale glibc settled by construction. Noise is a cost like any other.
-    if node_dir:
-        report_backported(tree, inherited, unresolved, default_only,
-                          by_copy)
     return 0
 
 

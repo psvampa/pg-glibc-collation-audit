@@ -3136,14 +3136,35 @@ class AStepReadsTheFixtureBuilds(unittest.TestCase):
         out, lines = self.step2(*(b for b, _ in FIXTURES[:2]))
         self.assertIn('C', lines('changed_collate'))
         self.assertIn('en_US@ampm (deleted)', lines('removed_locales'))
-        self.assertNotIn('BACKPORTED', out)
+        # Each build holds its own C: compared, not added, and nothing said
+        # of a tag.
+        self.assertNotIn('localedata/locales/C ->', out)
+        self.assertNotIn('Not checked for glibc-', out)
 
     def test_rhel9_to_rhel10(self):
         out, lines = self.step2(*(b for b, _ in FIXTURES[1:]))
-        self.assertNotIn('BACKPORTED', out)
+        self.assertNotIn('localedata/locales/C ->', out)
+        self.assertNotIn('C.UTF-8', out)
         self.assertEqual(lines('changed_collate'),
                          ['ber_DZ', 'kab_DZ', 'th_TH'])
 
+
+
+def without_the_tags_notice(text):
+    """text without step 1's `!!` for the sides read as tags, at any indent:
+    it names latest-el8, latest-el9 and latest-el10 as forms a side can be
+    typed in, which tests of what a run says it resolved must not count."""
+    out, skip = [], None
+    for line in text.split('\n'):
+        stripped = line.lstrip(' ')
+        if stripped.startswith('!! Not checked for glibc-'):
+            skip = line[:len(line) - len(stripped)] + '   '
+            continue
+        if skip is not None and line.startswith(skip):
+            continue
+        skip = None
+        out.append(line)
+    return '\n'.join(out)
 
 B40, B48 = 'glibc-2.28-251.el8_10.40', 'glibc-2.28-251.el8_10.48'
 B128 = 'glibc-2.39-128.el10_2'
@@ -3552,7 +3573,8 @@ class AuditShReadsTheFixtureBuilds(_AuditOnBuilds, unittest.TestCase):
 
     def test_rhel9_to_rhel10_says_nothing_of_upstreams_c_utf8(self):
         out = self.run_of('910')
-        self.assertNotIn('BACKPORTED', out)
+        self.assertNotIn('Not checked for glibc-', out)
+        self.assertNotIn('localedata/locales/C ->', out)
         self.assertNotIn('ship their own', flat(out))
         self.assertNotIn('C.UTF-8', summary_block(out, REINDEX))
 
@@ -3662,7 +3684,8 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
     def test_an_old_tag_says_what_it_cannot_show(self):
         out = self.run_of('tag_build')
         self.assertTrue(out.startswith('latest-el9 is %s:' % B275), out[:300])
-        self.assertNotIn('latest-el9', out.split('\n\n', 1)[1])
+        self.assertNotIn('latest-el9',
+                         without_the_tags_notice(out.split('\n\n', 1)[1]))
         self.assertEqual(' '.join(summary_block(out, REMOVED)),
                          '%s is an upstream tag, so what your old distro adds '
                          'to it is NOT CHECKED: a file only that distro ships, '
@@ -3688,14 +3711,50 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
                          'addition. Confirm which side is older.'
                          % (B275, B275))
         self.assertTrue(' '.join(summary_block(out, DECIDED)).endswith(
-            "An upstream diff cannot see your distro's backports: %s is an "
-            "upstream tag. %s, above." % (TAG, NOT_READ)))
+            "What a tag does not hold is under 'Not checked for %s', above. "
+            "%s, above." % (TAG, NOT_READ)))
+
+    def test_the_tag_side_alone_gets_the_tags_warning(self):
+        """The old side is a tag and the new one a build: step 1's `!!`
+        names the tag alone and asks for its build, the summary repeats it,
+        and C, which the build ships and the tag lacks, is an added file
+        whose sentence says it may exist on the old system. Nothing says
+        its order is settled (7.7)."""
+        out = self.run_of('tag_typed')
+        notice = ("!! Not checked for %s: it is an upstream tag, which holds "
+                  "none of a distro's own locale files or patches. Steps 1 to "
+                  "5 read only what that tag holds. If that machine runs "
+                  "RHEL 8, 9 or 10, name that side as its build instead, as "
+                  "rpm -q glibc prints it on the machine without the "
+                  "architecture (glibc-2.34-283.el9_8), or as latest-el8, "
+                  "latest-el9 or latest-el10." % TAG)
+        self.assertEqual(flat(out).count(notice), 2, out[-3000:])
+        self.assertNotIn('Not checked for %s and' % TAG, out)
+        step2 = out.split('== STEP 2', 1)[1].split('== STEP 3', 1)[0]
+        self.assertIn('Added at %s (' % B275, step2)
+        added = step2.split('Added at %s (' % B275, 1)[1].split('\n\n', 1)[0]
+        self.assertIn('  localedata/locales/C -> ', added)
+        self.assertIn('An upstream source diff cannot establish that',
+                      flat(added))
+
+    def test_a_build_then_a_tag_does_not_say_the_tag_removes_what_the_distro_ships(self):
+        """16.78: over B40 -> TAG the new side is a tag, which cannot show
+        what its distro ships, so a file the tag lacks is not said to fail
+        on the new system for certain."""
+        out = self.run_of('build_tag')
+        step2 = out.split('== STEP 2', 1)[1].split('== STEP 3', 1)[0]
+        deleted = step2.split('Deleted at %s (' % TAG, 1)[1].split('\n\n', 1)[0]
+        self.assertEqual(flat(deleted), flat(
+            "2). An index using one of these fails to sort on the new system "
+            "UNLESS its distro ships the file anyway, which an upstream tag "
+            "cannot show: localedata/locales/C localedata/locales/en_US@ampm"))
+        self.assertNotIn('will fail to sort on the new system at all', step2)
 
     def test_a_tag_and_a_build_typed_is_the_tag_and_latest_run(self):
         """Every block of the summary of TAG B275 is tag_build's, four of
         which the test above reads."""
         typed = self.summary('tag_typed')
-        self.assertNotIn('latest-el9', typed)
+        self.assertNotIn('latest-el9', without_the_tags_notice(typed))
         self.assertEqual(typed, self.summary('tag_build').replace(
             os.path.join(self.tmp, 'out', 'tag_build'),
             os.path.join(self.tmp, 'out', 'tag_typed')))
@@ -4075,6 +4134,8 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
 
                     'old_bare': ('glibc-2.28', 'glibc-2.34', '--old-node',
                                  bare_old, '--new-node', new),
+                    'new_bare': ('glibc-2.28', 'glibc-2.34', '--old-node',
+                                 old, '--new-node', bare_new),
                     'bare': ('glibc-2.28', 'glibc-2.34', '--old-node',
                              bare_old, '--new-node', bare_new)}
         super().setUpClass()
@@ -4109,6 +4170,65 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         self.assertIn('C.UTF-8', summary_block(out, REINDEX))
         self.assertIn('This list is from the builds.',
                       flat(self.summary('read')))
+
+    def test_with_the_builds_read_nothing_is_relayed_of_step_8s_names(self):
+        """Steps 1 to 5 read the builds, so they compared C and C.UTF-8 is in
+        Reindex: the summary relays nothing of step 8's names not at both
+        tags (that would be a caveat with nothing to qualify), and no `!!`
+        speaks of a tag. Step 8 itself still names C."""
+        out = self.run_of('read')
+        self.assertIn('C.UTF-8', summary_block(out, REINDEX))
+        self.assertIn('1 of those are not at both tags, so no tag-to-tag diff '
+                      'compared them: C', flat(out))
+        self.assertNotIn('that differ, not at both tags', out)
+        self.assertNotIn('Steps 1 to 5 read the tags', flat(out))
+        self.assertNotIn('Not checked for glibc-', out)
+
+    def test_a_new_machine_without_sources_was_scanned_by_step_4(self):
+        """The new machine's file holds no locale sources and its build was
+        read: step 4 scanned that build's own files, so the NOT RUN block of
+        step 10 says so instead of "nothing above scans" (doc-sweep, 7.7
+        round 2). The old side's block is the control."""
+        summary = self.summary('new_bare')
+        blocks = summary.split("-- Node's own locale data, ellipsis scan")
+        new = [x for x in blocks if x.startswith(': NOT RUN')]
+        self.assertEqual(len(new), 1, summary)
+        self.assertIn("Step 4 above scanned %s's own locale files." % B275,
+                      flat(new[0]))
+        self.assertNotIn('nothing above scans', flat(new[0]))
+        old = self.summary('old_bare').split(
+            "-- Node's own locale data, ellipsis scan")
+        old = [x for x in old if x.startswith(': NOT RUN')]
+        self.assertEqual(len(old), 1)
+        self.assertIn("nothing above scans the old node's own locale data",
+                      flat(old[0]))
+
+    def test_with_the_builds_unread_the_tags_warning_asks_for_nothing(self):
+        """The builds the files name cannot be read, so steps 1 to 5 read the
+        tags and say so; the `!!` above step 1 already says why, so the
+        tags' `!!` asks for nothing, and step 8's names come with where
+        step 11's answer is."""
+        rc, out = self.unread
+        self.assertEqual(rc, 0, out[-3000:])
+        fact = ("!! Not checked for glibc-2.28 and glibc-2.34: they are "
+                "upstream tags, which hold none of a distro's own locale "
+                "files or patches. Steps 1 to 5 read only what the tags "
+                "hold.")
+        lines, blocks = out.split('\n'), []
+        for i, line in enumerate(lines):
+            if line.lstrip(' ').startswith('!! Not checked for glibc-'):
+                pad = line[:len(line) - len(line.lstrip(' '))] + '   '
+                j = i + 1
+                while j < len(lines) and lines[j].startswith(pad):
+                    j += 1
+                blocks.append(flat('\n'.join(lines[i:j])))
+        self.assertEqual(len(blocks), 2, out[-3000:])
+        for b in blocks:
+            self.assertTrue(b.startswith(fact) and
+                            not b[len(fact):].strip().startswith(('If', 'Pass')),
+                            b)
+        self.assertIn("What step 11 measured of them is under '-- Measured "
+                      "order'.", flat(out))
 
     def test_steps_6_and_7_compare_each_machine_with_its_tag(self):
         summary = self.summary('read')

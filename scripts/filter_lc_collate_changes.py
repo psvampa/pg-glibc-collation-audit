@@ -56,25 +56,6 @@ _BOTH_RE = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', re.M)
 # too, so each changed line can be placed on its own side of the diff.
 _HUNK_LINE_RE = re.compile(r'^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@')
 
-# Locale source files that arrive upstream at some tag but are ALREADY SHIPPED,
-# backported, by the distros this audit targets. For these, "added upstream"
-# does not mean "new on your system": the locale exists on the old node, has an
-# order, and that order can change.
-#
-# This is hardcoded because it is not derivable. `localedata/SUPPORTED` cannot
-# tell them apart -- measured at 2.34 -> 2.39, `C` is absent from SUPPORTED at
-# the old tag and present at the new one, exactly like the genuinely new `tok`,
-# `crh_RU` and `gbm_IN`. The difference lives in what the distro backports,
-# which by definition is not in an upstream tag.
-#
-# Keep this minimal: every entry asserts something about what a distro ships,
-# and only C.UTF-8 is measured (RHEL8 and RHEL9 nodes, see
-# docs/results.md). Do not add a locale here on the strength of a guess.
-KNOWN_BACKPORTED = {
-    'C': 'C.UTF-8',
-}
-
-
 def hunk_touches_block(start, length, lc_start, lc_end):
     """Does an old-side hunk overlap the LC_COLLATE block?
 
@@ -596,22 +577,6 @@ def split_raw(text):
         g.die(f"git's diff has no list of changed files above it, so nothing "
               f"says what changed: {text[:80]!r}")
     return status, text[pos:]
-
-
-def in_listing(path, listed):
-    """Would `git ls-tree <tag> -- <path>` name `path`? Answered from
-    list_locale_files' recursive listing of the same tag, so asking costs no
-    git: a file is in the listing itself, a directory as the files under it,
-    quoted when their names need it. A tree with no file under it at any
-    depth, which only plumbing can commit, is named by ls-tree and absent
-    from the listing; the answer is then no, and the note about the path
-    prints: the noisy direction. ls-tree rather than `cat-file -e` either
-    way: on a --filter=blob:none clone the latter must fetch the blob to
-    answer, and calls a file that exists absent whenever that fetch cannot
-    happen.
-    """
-    return path in listed or any(p.startswith((path + '/', f'"{path}/'))
-                                 for p in listed)
 
 
 def parse_diff(diff_text):
@@ -1357,8 +1322,7 @@ def _main(opts):
     # either tag is empty and exits 0, and this step then reports "0 changed"
     # -- the node-reading modes refuse a directory that small, and a tag
     # deserves the same refusal. side() dies below the floor (through
-    # list_tree_ids). The lists are kept: they answer the KNOWN_BACKPORTED
-    # check below.
+    # list_tree_ids).
     # The same listing gives the blob ids the character set check compares,
     # for charmaps and SUPPORTED too, so it costs no git process.
     listed, ids = {}, {}
@@ -1432,32 +1396,13 @@ def _main(opts):
               f"       git's diff and its list of changed files disagree, so "
               f"the diff was not read the way this script expects.")
 
-    # KNOWN_BACKPORTED locales a tag-to-tag diff is structurally blind to on
-    # the OLD side: no source file at the old tag means nothing to diff
-    # against, whether or not the file shows up at the new one.
-    #
-    # Reported whenever the old side is missing, NOT only when the file happens
-    # to be ADDED in this range. The silent case is the one that matters: over
-    # 2.28 -> 2.34 (RHEL8 -> RHEL9) localedata/locales/C is in neither tag, so
-    # nothing was printed at all -- for the pair where C.UTF-8 demonstrably
-    # does change. Decided here and printed further down; the added files it
-    # leaves are the ones that need SUPPORTED, read in the batch below.
-    blind = []
-    for name in sorted(KNOWN_BACKPORTED):
-        path = f'{g.LOCALES_DIR}/{name}'
-        if in_listing(path, listed[opts.old_tag]):
-            continue          # present at the old tag: judged like any file
-        blind.append((path, KNOWN_BACKPORTED[name],
-                      in_listing(path, listed[opts.new_tag])))
-    blind_paths = {path for path, _, _ in blind}
-    rest = [path for path in added if path not in blind_paths]
-
     # Every file text this step reads, in one batch: the old side of every
     # content-changed file, its new side under the name it has at the new tag
     # (see new_side_paths) -- which lines its LC_COLLATE sections hold and
     # what can stop glibc reading them are asked of it too -- SUPPORTED,
     # which an added file needs for its names and the character set check at
     # both tags, and what that check reads (CharmapReads).
+    rest = added
     to_read = new_side_paths(content_changed, renamed_to)
     new_paths = sorted(set(to_read.values()))
     groups = [(opts.old_tag, content_changed), (opts.new_tag, new_paths)]
@@ -1744,27 +1689,6 @@ def _main(opts):
         print(f"  python3 resolve_copy_closure.py {opts.new_tag} "
               + ' '.join(names + (['--keyed'] + keyed if keyed else [])))
 
-    for path, locale_name, at_new in blind:
-        where = (f"is new UPSTREAM at {opts.new_tag}" if at_new
-                 else f"exists at NEITHER {opts.old_tag} nor {opts.new_tag}")
-        # Wrapped at runtime rather than hand-wrapped: tag and locale names
-        # vary in length, and a ragged block reads like a formatting bug in the
-        # one message the reader most needs to take seriously.
-        print()
-        print(textwrap.fill(
-            f"{path} {where}, but {locale_name} is BACKPORTED by the distros "
-            f"this audit targets -- so it very likely DOES exist on your old "
-            f"system, with an order of its own, and that order can change. "
-            f"The old tag has no source file for it, so a comparison of the "
-            f"two tags cannot see what your old system runs, and a clean "
-            f"result from steps 1 to 5 says nothing about the {locale_name} "
-            f"it runs. PostgreSQL will not cover the gap either -- "
-            f"collversion is NULL for every collation whose name starts with "
-            f"'C.', so no version mismatch can ever fire. Compare "
-            f"{locale_name} empirically on both nodes. See "
-            f"docs/limitations.md.",
-            width=78, initial_indent='!! ', subsequent_indent='   '))
-
     if rest:
         supported = g.parse_supported(read[2][0].get(g.SUPPORTED),
                                       opts.new_tag)
@@ -1792,7 +1716,14 @@ def _main(opts):
                 break_long_words=False, break_on_hyphens=False))
         for path in sorted(rest):
             print(f"  {path} -> {generated(path)}")
-    if deleted:
+    if deleted and g._is_tag(new_side):
+        print(f"\nDeleted at {opts.new_tag} ({len(deleted)}). An index using one "
+              f"of these fails to sort on the new system")
+        print("UNLESS its distro ships the file anyway, which an upstream tag "
+              "cannot show:")
+        for path in sorted(deleted):
+            print(f"  {path}")
+    elif deleted:
         print(f"\nDeleted at {opts.new_tag} ({len(deleted)}) -- any index using "
               f"one of these will fail to sort on the new system at all:")
         for path in sorted(deleted):
