@@ -29,7 +29,7 @@ of its packages from Rocky Linux's mirror, rebuilds its `localedata/` and
 yet, a side can be `latest-el10` (`latest-el<N>` for RHEL N): the newest
 build Rocky Linux's mirror lists for that release, whose name the run prints
 before step 1 and reads from then on. With a build, only `--old-node` and
-`--new-node` of the options of 1.b are read, for now.
+`--new-node` of the options of 1.b are read.
 
 | The run's step | The question it answers |
 |---|---|
@@ -178,7 +178,10 @@ glibc` gives the build id, with or without the architecture (`...x86_64`).
 A copy taken this way carries no checksum, so the checks below are yours to
 make.
 
-The build ids are required.
+The build ids are required, and the run orders the two machines by them:
+ids typed the other way round are refused before step 1, and when one is
+not read as the name of a glibc build, so the two cannot be ordered, a `!!`
+says so.
 
 **Check each copy against the machine it came from** — compare the names,
 `ls el8-locales` against `ls /usr/share/i18n/locales/` run there, not only the

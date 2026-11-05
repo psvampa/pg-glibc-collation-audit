@@ -21,7 +21,7 @@
 # not installed yet: the newest build of RHEL N that Rocky Linux's mirror
 # lists, resolved once before anything else reads the sides, and named before
 # step 1. With a build, of the options below only --old-node and --new-node
-# are read, for now. Given each machine's file (--old-node, --new-node),
+# are read. Given each machine's file (--old-node, --new-node),
 # steps 1 to 5 read the build that file names, in place of its tag; a
 # build this cannot read makes both sides read their tags, and the run says
 # so.
@@ -87,7 +87,7 @@ usage() {
   echo "       architecture, rebuilt from its source RPM, or latest-elN for a" >&2
   echo "       machine not installed yet: the newest build of RHEL N on Rocky" >&2
   echo "       Linux's mirror, named before step 1; with a build, only" >&2
-  echo "       --old-node and --new-node of the options below are read, for now" >&2
+  echo "       --old-node and --new-node of the options below are read" >&2
   echo "       OLD first, NEW second: a reversed pair is refused, not" >&2
   echo "       answered. Distance is NOT checked: RHEL8 to RHEL10 is one" >&2
   echo "       pair, glibc-2.28 glibc-2.39, not two runs added up. What" >&2
@@ -206,7 +206,7 @@ set_noun
 NOT_READ="What this run does not read of a build is under 'Not checked for"
 NOT_READ="$NOT_READ these builds'"
 # With a build named on either side, the machine's files come only from
-# --old-node and --new-node, for now: each of those names the build its
+# --old-node and --new-node: each of those names the build its
 # machine runs, and the other options say less (a folder and a build id
 # typed by hand, or a measurement alone). Every other such option is
 # refused, on either side, with or without its pair.
@@ -336,6 +336,12 @@ fi
 if [ -n "$NEW_LOCALES" ] && [ ! -d "$NEW_LOCALES" ]; then
   echo "error: --new-locales-dir $NEW_LOCALES is not a directory" >&2
   exit 2
+fi
+# Two machines given the other way round, refused here by the build ids
+# typed for them (glibc_locale_data.typed_machines_order), which step 8 asks
+# too: left to step 8, the refusal came after steps 1 to 7 had run.
+if [ -n "$OLD_LOCALES" ] && [ -n "$NEW_LOCALES" ]; then
+  python3 "$SCRIPTS/glibc_locale_data.py" typed-machines "$OLD_BUILD" "$NEW_BUILD"
 fi
 # One machine's measurement compares nothing, and a run that dropped the other
 # half in silence would end with a summary that reads as if it had.
