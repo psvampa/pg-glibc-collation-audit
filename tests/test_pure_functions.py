@@ -1384,49 +1384,6 @@ class OneDiffForBothQuestions(unittest.TestCase):
         self.refused(DiffParsing.DIFF)
 
 
-class KnownBackportedFromTheListing(unittest.TestCase):
-    """in_listing answers, from the recursive listing step 2 already read,
-    whether a file is at that path or under it, where step 2 used to ask
-    `git ls-tree <tag> -- localedata/locales/C`. Measured in a scratch
-    repository with git 2.54: ls-tree names a directory by its own path, and
-    the recursive listing shows it as the files under it, quoted when their
-    names need it."""
-
-    C = 'localedata/locales/C'
-
-    def test_a_file_at_the_path_is_there(self):
-        self.assertTrue(f.in_listing(self.C, ['localedata/locales/C',
-                                              'localedata/locales/sv_SE']))
-
-    def test_a_name_that_only_starts_the_same_is_not(self):
-        self.assertFalse(f.in_listing(self.C, ['localedata/locales/C.UTF-8',
-                                               'localedata/locales/CN']))
-
-    def test_a_directory_is_there_through_the_files_under_it(self):
-        self.assertTrue(f.in_listing(self.C, ['localedata/locales/C/x']))
-        self.assertTrue(f.in_listing(self.C,
-                                     ['"localedata/locales/C/\\303\\251"']))
-
-    def test_a_name_with_a_line_separator_in_it_stays_one_name(self):
-        """Under core.quotePath=false git prints U+2028 as it is, and
-        splitlines() cut `x<U+2028>localedata/locales/C` in two, listing a C
-        that is not there: step 2 dropped its C.UTF-8 note
-        (false-negative-reviewer; measured with git 2.54)."""
-        names = [f'{g.LOCALES_DIR}/loc_{i:03d}'
-                 for i in range(g.MIN_LOCALE_FILES)]
-        names.append(f'{g.LOCALES_DIR}/x\u2028{self.C}')
-
-        class R:
-            # `git ls-tree -r` as side() reads it: mode, type, id, a tab.
-            stdout = ''.join(f'100644 blob {"0" * 40}\t{n}\n'
-                             for n in names).encode()
-
-        with mock.patch.object(g, 'run_git', lambda *a, **k: R()):
-            listed = g.list_locale_files('/no/clone/here', 't')
-        self.assertEqual(listed, names)
-        self.assertFalse(f.in_listing(self.C, listed))
-
-
 class LocaleSource(unittest.TestCase):
     """glibc's rule from a locale name to the file it is built from
     (localedata/Makefile builds locales/<name> with everything from the first
@@ -1683,13 +1640,11 @@ class StepFourWithoutRanges(unittest.TestCase):
     def test_a_file_name_that_is_not_one_plain_word_is_quoted(self):
         """The empty name (cases c17 and c54), a blank, a newline, a
         control character, a comma, a character that draws as nothing
-        visible and a combining mark, named quoted (dd.shown) in both
-        places flag_algorithmic_ranges.py names a missing `copy` or
-        `include` target:
-        step 4's `!!` list, and C's line in steps 9 and 10. Not as
-        nothing, not as two names, and not on a second line, which ends
-        what audit.sh relays from either (false-negative-reviewer,
-        rounds 1 to 3 of 13.44)."""
+        visible and a combining mark, named quoted (dd.shown) where
+        flag_algorithmic_ranges.py names a missing `copy` or `include`
+        target, step 4's `!!` list. Not as nothing, not as two names, and
+        not on a second line, which ends what audit.sh relays from it
+        (false-negative-reviewer, rounds 1 to 3 of 13.44)."""
         tree = self._Tree()
         tree.unresolved = lambda: {'nb_NO': "localedef cannot open ''"}
         names = ['', ' ', 'a\nb', 'c\x01', 'x,y', 'plain', '\u3164',
@@ -1703,21 +1658,6 @@ class StepFourWithoutRanges(unittest.TestCase):
                       "     '', ' ', 'a\\nb', 'c\\x01', 'e\\u0301', "
                       "plain, 'x,y', '\\u3164'\n"
                       "   1 locale(s) reach one.", out.getvalue())
-
-        class Backported(object):
-            names = ['C']
-
-            def style(self, name):
-                return 'copy-only'
-
-            def missing(self):
-                return {'C': names}
-        with contextlib.redirect_stdout(io.StringIO()):
-            found = fa.report_backported(Backported())
-        self.assertIn("it copies '', ' ', 'a\\nb', 'c\\x01', 'e\\u0301', "
-                      "plain, 'x,y', '\\u3164', which is NOT in this "
-                      "corpus", flat(found['C']))
-        self.assertNotIn('\n', found['C'])
 
     def test_it_states_the_rule_and_the_aliases_it_leaves_out(self):
         aliases = {'norwegian': 'nb_NO.ISO-8859-1',

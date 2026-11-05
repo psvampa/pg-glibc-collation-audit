@@ -1763,12 +1763,17 @@ class Step1RefusesAReversedPairBeforeReportingAnything(unittest.TestCase):
         self.assertIn('Locale files added, modified or deleted', out)
 
     def test_the_forward_control_is_untouched(self):
-        """The guard refuses a direction, and says nothing otherwise: the
-        pinned pairs' output has to stay byte-identical."""
+        """The guard refuses a direction, and says nothing otherwise: the one
+        `!!` of a forward pair of tags is what a tag does not hold, and run
+        by hand it asks for the builds (glibc_locale_data.tag_sides_text)."""
         rc, out = run_script('audit-locale-diff.sh', OLD, MID,
                              env_extra=self.env)
         self.assertEqual(rc, 0, out)
-        self.assertNotIn('!!', out)
+        self.assertEqual([ln for ln in out.splitlines() if '!!' in ln], [
+            '!! Not checked for glibc-2.28 and glibc-2.34: they are upstream '
+            'tags, which'])
+        self.assertIn('name each side as its build instead', flat(out))
+        self.assertNotIn('REVERSED', out)
 
     def test_a_third_argument_that_is_not_the_flag_is_refused(self):
         rc, out = run_script('audit-locale-diff.sh', OLD, MID, '--nonsense',

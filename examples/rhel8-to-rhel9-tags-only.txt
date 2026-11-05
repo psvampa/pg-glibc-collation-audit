@@ -7,6 +7,12 @@ Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointe
   UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was NOT checked
   NOTE: signatures were not checked. The commit ids above are what was actually read;
         compare them against a source you trust (sourceware.org/git/glibc.git) if it matters.
+!! Not checked for glibc-2.28 and glibc-2.34: they are upstream tags, which
+   hold none of a distro's own locale files or patches. Steps 1 to 5 read only
+   what the tags hold. If the machines run RHEL 8, 9 or 10, name each side as
+   its build instead, as rpm -q glibc prints it on the machine without the
+   architecture (glibc-2.34-283.el9_8), or as latest-el8, latest-el9 or
+   latest-el10.
 ---
 Locale files added, modified or deleted: 283
 Full list in /tmp/pg-glibc-collation-audit/changed_locales.txt
@@ -96,16 +102,6 @@ UTF-8: 6485 characters added.
 No build's LC_COLLATE names one of those characters.
 Transliteration (LC_CTYPE): 24 collating elements of 3 locale builds depend on
 a transliteration; none is built differently at glibc-2.34.
-
-!! localedata/locales/C exists at NEITHER glibc-2.28 nor glibc-2.34, but
-   C.UTF-8 is BACKPORTED by the distros this audit targets -- so it very
-   likely DOES exist on your old system, with an order of its own, and that
-   order can change. The old tag has no source file for it, so a comparison of
-   the two tags cannot see what your old system runs, and a clean result from
-   steps 1 to 5 says nothing about the C.UTF-8 it runs. PostgreSQL will not
-   cover the gap either -- collversion is NULL for every collation whose name
-   starts with 'C.', so no version mismatch can ever fire. Compare C.UTF-8
-   empirically on both nodes. See docs/limitations.md.
 
 Added at glibc-2.34 (2), not analysed for a change of order. An added file
 cannot affect an existing index ONLY IF the locale did not exist on the old system.
@@ -662,15 +658,12 @@ every locale it names as built in byte order.
      C.UTF-8 defines its order.
 
 -- Warnings the clean results above do NOT cover
-     !! localedata/locales/C exists at NEITHER glibc-2.28 nor glibc-2.34, but
-        C.UTF-8 is BACKPORTED by the distros this audit targets -- so it very
-        likely DOES exist on your old system, with an order of its own, and that
-        order can change. The old tag has no source file for it, so a comparison of
-        the two tags cannot see what your old system runs, and a clean result from
-        steps 1 to 5 says nothing about the C.UTF-8 it runs. PostgreSQL will not
-        cover the gap either -- collversion is NULL for every collation whose name
-        starts with 'C.', so no version mismatch can ever fire. Compare C.UTF-8
-        empirically on both nodes. See docs/limitations.md.
+     !! Not checked for glibc-2.28 and glibc-2.34: they are upstream tags, which
+        hold none of a distro's own locale files or patches. Steps 1 to 5 read only
+        what the tags hold. If the machines run RHEL 8, 9 or 10, name each side as
+        its build instead, as rpm -q glibc prints it on the machine without the
+        architecture (glibc-2.34-283.el9_8), or as latest-el8, latest-el9 or
+        latest-el10.
      (see docs/limitations.md)
 
 -- Not decided for you
@@ -679,5 +672,5 @@ every locale it names as built in byte order.
      If nobody will, treat step 4's list, and the locales it leaves
      out as byte order, as unresolved and confirm empirically instead:
      docs/confirming-on-a-real-system.md
-     An upstream diff cannot see your distro's backports.
+     What a tag does not hold is under 'Not checked for', above.
 

@@ -29,7 +29,6 @@ from _harness import (GLIBC_CLONE, MID, NEW, OLD, SCRIPTS_DIR, backported_c,
 
 import diff_distro_locales as dd
 import glibc_locale_data as g
-from filter_lc_collate_changes import KNOWN_BACKPORTED
 
 _TREES = {}
 
@@ -138,44 +137,17 @@ class NodeToNodeSeesWhatNoTagCan(NodeCase):
         self.assertIn('C', self.result_names())
         self.assertIn('ellipsis -> codepoint', text)
 
-    def test_C_is_named_even_when_identical(self):
-        """Absent is not empty. A run that says nothing about C.UTF-8 and a run
-        that cleared it must not look the same on a terminal."""
+    def test_an_identical_C_is_not_listed_and_the_data_caveat_stays(self):
+        """C is one more file: identical on both nodes, it is not in the
+        list, and the caveat that identical data is not identical order
+        covers it like any other."""
         same = backported_c()
         old_root = self.node(OLD, 'a', extra={'C': same})
         new_root = self.node(MID, 'b', extra={'C': same})
         rc, text = self.node_to_node(old_root, new_root, OLD, MID)
         self.assertEqual(rc, 0, text)
         self.assertNotIn('C', self.result_names())
-        self.assertIn('C (C.UTF-8): present on both nodes, byte-identical', text)
-        self.assertIn('identical data does NOT clear the order', flat(text))
-
-    def test_the_ellipsis_shape_is_reported_for_both_sides(self):
-        same = backported_c()
-        rc, text = self.node_to_node(self.node(OLD, 'a', extra={'C': same}),
-                                     self.node(MID, 'b', extra={'C': same}),
-                                     'glibc-2.28-251.el8_10.40',
-                                     'glibc-2.34-275.el9_8')
-        self.assertEqual(rc, 0, text)
-        self.assertIn('glibc-2.28-251.el8_10.40: ellipsis ranges', text)
-        self.assertIn('glibc-2.34-275.el9_8: ellipsis ranges', text)
-
-    def test_every_known_backported_name_is_reported(self):
-        """One dict, two consumers. A name reported by step 2 and dropped here
-        would be a locale nobody looks at twice."""
-        rc, text = self.node_to_node(self.node(OLD, 'a'), self.node(MID, 'b'),
-                                     OLD, MID)
-        self.assertEqual(rc, 0, text)
-        for name, locale in KNOWN_BACKPORTED.items():
-            self.assertIn(f'{name} ({locale})', text)
-
-    def test_a_backported_locale_missing_from_the_nodes_says_so(self):
-        """Neither materialised tag has C, and the answer must be "this says
-        nothing about it" -- not silence."""
-        rc, text = self.node_to_node(self.node(OLD, 'a'), self.node(MID, 'b'),
-                                     OLD, MID)
-        self.assertEqual(rc, 0, text)
-        self.assertIn('on NEITHER node', text)
+        self.assertIn('Identical data is NOT identical ORDER', flat(text))
 
     def test_the_in_neither_tag_annotation_names_C(self):
         old_root = self.node(OLD, 'a', extra={'C': backported_c()})
@@ -185,8 +157,23 @@ class NodeToNodeSeesWhatNoTagCan(NodeCase):
         rc, text = self.node_to_node(old_root, new_root, OLD, MID,
                                      '--old-tag', OLD, '--new-tag', MID)
         self.assertEqual(rc, 0, text)
-        self.assertIn('exists at neither tag', text)
-        self.assertIn('exist at NEITHER tag', text)
+        self.assertIn('1 of those are not at both tags, so no tag-to-tag '
+                      'diff compared them: C', flat(text))
+
+    def test_a_differing_file_at_one_tag_only_is_named_too(self):
+        """Over 2.34..2.39 C is at the new tag only: a tag diff lists it as
+        added and compares nothing, so where the two machines' C differ,
+        step 8 names it like a file at neither tag (false-negative-reviewer,
+        7.7 round 1). By injection: the fixtures' el9 and el10 C are one
+        file."""
+        old_root = self.node(MID, 'a', extra={'C': backported_c()})
+        new_root = self.node(NEW, 'b')
+        rc, text = self.node_to_node(old_root, new_root, MID, NEW,
+                                     '--old-tag', MID, '--new-tag', NEW)
+        self.assertEqual(rc, 0, text)
+        self.assertIn('C', self.result_names())
+        self.assertIn('1 of those are not at both tags, so no tag-to-tag '
+                      'diff compared them: C', flat(text))
 
     def test_a_locale_only_on_one_node_is_framed_as_a_removal(self):
         old_root = self.node(OLD, 'a', extra={'zz_GONE': backported_c()})
@@ -282,19 +269,17 @@ class NodeToNodeWritesWhatTheUpgradeRemoves(NodeCase):
         self.assertEqual(undetermined, [])
         self.assertIn('NOT checked against a tag', header)
 
-    def test_a_backported_locale_on_the_old_copy_only_is_not_called_removed(self):
-        """Step 8's own verdict on C there is "present on the old node ONLY
-        ... test it empirically" -- not examined. The summary must not relay
-        it as a collation that is gone."""
+    def test_a_file_only_on_the_old_copy_and_at_no_tag_is_removed(self):
+        """A file the old machine has and the new one does not is gone from
+        the new machine, whether a tag has it or not: C, which neither tag
+        of 2.28..2.34 holds, is listed as removed like any other file."""
         rc, text = self.node_to_node(
             self.node(OLD, 'a', extra={'C': backported_c()}),
             self.node(MID, 'b'), 'build-A', 'build-B',
             '--old-tag', OLD, '--new-tag', MID)
         self.assertEqual(rc, 0, text)
-        self.assertEqual(self.listed('node_removed_locales')[1], [])
-        self.assertEqual(self.listed('node_removed_undetermined')[1],
-                         ['C: backported (C.UTF-8), on the old node only: '
-                          'not examined'])
+        self.assertEqual(self.listed('node_removed_locales')[1], ['C'])
+        self.assertEqual(self.listed('node_removed_undetermined')[1], [])
 
     def test_an_entry_the_old_copy_holds_and_did_not_read_is_undetermined(self):
         """A symlink on the old side is skipped, so it is in neither side's
@@ -575,7 +560,6 @@ class NodeToNodeRefusesToGuess(NodeCase):
                                      '--new-tag', OLD)
         self.assertEqual(rc, 2, text)
         self.assertIn('REVERSED', text)
-        self.assertNotIn('exists at neither tag', text)
 
     # Backlog 16.61: nothing ordered the two machines given as directories.
     # Measured on 3575cc3 through audit.sh with the fixtures' rhel8 and
@@ -655,6 +639,8 @@ class NodeToNodeRefusesToGuess(NodeCase):
         rc, text = self.node_to_node(self.node(OLD, 'a'), self.node(MID, 'b'),
                                      'x', 'y', '--old-tag', OLD)
         self.assertEqual(rc, 2, text)
+        self.assertIn('--old-tag and --new-tag go together: one tag cannot '
+                      'say whether a file is at both.', flat(text))
 
     def test_both_build_ids_reach_the_output_and_the_filename(self):
         rc, text = self.node_to_node(self.node(OLD, 'a'), self.node(MID, 'b'),
@@ -691,174 +677,6 @@ class NodeToNodeRefusesToGuess(NodeCase):
         self.assertEqual(rc, 0, text)
         self.assertIn('a_subdir', text)
 
-    def test_the_caveat_never_reassures_about_a_locale_it_could_not_compare(self):
-        """The regression the conditional warning introduced and this pins shut.
-
-        `computed` is empty both when nothing is ellipsis-based AND when
-        nothing could be compared at all, and collapsing the two printed "the
-        data comparison is the whole story" directly under "this comparison
-        says nothing about C.UTF-8". A reassurance over an absence is the exact
-        false negative this script exists to remove.
-        """
-        # Neither materialised tag has C, so it is absent from both nodes.
-        rc, text = self.node_to_node(self.node(OLD, 'a'), self.node(MID, 'b'),
-                                     'build-A', 'build-B')
-        self.assertEqual(rc, 0, text)
-        self.assertIn('on NEITHER node', flat(text))
-        self.assertNotIn('so their data leaves localedef nothing to compute',
-                         flat(text))
-        self.assertIn('NOT compared by this run', flat(text))
-
-    def test_a_locale_on_one_node_only_is_not_reassured_about_either(self):
-        rc, text = self.node_to_node(
-            self.node(OLD, 'a', extra={'C': backported_c()}),
-            self.node(MID, 'b'), 'build-A', 'build-B')
-        self.assertEqual(rc, 0, text)
-        self.assertIn('present on the old node', flat(text))
-        self.assertNotIn('so their data leaves localedef nothing to compute',
-                         flat(text))
-        self.assertIn('NOT compared by this run', flat(text))
-
-    def test_the_reassuring_branch_fires_only_when_it_was_actually_compared(self):
-        same = upstream_c()
-        rc, text = self.node_to_node(self.node(OLD, 'a', extra={'C': same}),
-                                     self.node(MID, 'b', extra={'C': same}),
-                                     'build-A', 'build-B')
-        self.assertEqual(rc, 0, text)
-        # The reason as well as the verdict: "no backported locale here is
-        # ellipsis-based" was the reason, and backlog 1.6 made it false.
-        # Not "the whole story" since backlog 13.7: changed code can move a
-        # byte-order locale, and step 5 is what says whether it changed.
-        self.assertIn('Every backported locale here declares '
-                      'codepoint_collation on both nodes, so their data leaves '
-                      "localedef nothing to compute; whether changed code "
-                      "moves their order is step 5's question.", flat(text))
-        self.assertNotIn('whole story', flat(text))
-        self.assertNotIn('NOT compared by this run', flat(text))
-        self.assertNotIn('no ellipsis range on either node', flat(text))
-
-    def test_no_ellipsis_is_not_the_whole_story_without_codepoint(self):
-        """A C with explicit weights, or one that only copies, uses no
-        ellipsis range and still takes localedef's default weight for every
-        character it does not list (backlog 1.6). "The data comparison is the
-        whole story" was printed for both, which the default weight makes
-        false. A C with no LC_COLLATE block at all gets
-        neither line: nothing measured says what localedef builds for it."""
-        explicit = locale_file('order_start forward',
-                               '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
-                               'order_end')
-        no_block = ('comment_char %\nescape_char /\n\nLC_CTYPE\n'
-                    'copy "i18n"\nEND LC_CTYPE\n')
-        copy_only = locale_file('copy "iso14651_t1"')
-        # The last case: codepoint_collation on one node only is not settled.
-        cases = (('explicit', explicit, explicit, True),
-                 ('copy-only', copy_only, copy_only, True),
-                 ('none', no_block, no_block, False),
-                 ('codepoint-none', upstream_c(), no_block, False))
-        for name, old_body, new_body, warned in cases:
-            with self.subTest(case=name):
-                rc, text = self.node_to_node(
-                    self.node(OLD, f'{name}-a', extra={'C': old_body}),
-                    self.node(MID, f'{name}-b', extra={'C': new_body}),
-                    'build-A', 'build-B')
-                self.assertEqual(rc, 0, text)
-                self.assertNotIn('so their data leaves localedef nothing to '
-                                 'compute', flat(text))
-                self.assertEqual('C.UTF-8: no ellipsis range on either node, '
-                                 "but every character the file does not list "
-                                 "takes localedef's default weight, so the "
-                                 'order is NOT settled by comparing the data '
-                                 'either.' in flat(text), warned)
-
-    def test_the_keyword_beside_anything_else_is_not_the_whole_story(self):
-        """Backlog 13.2. `copy "iso14651_t1"` plus codepoint_collation
-        compiles on RHEL9 and RHEL10 into tables whose strcoll returns garbage
-        and crashes (glibc study, E5), and it read here as codepoint_collation
-        on both nodes, so "the data comparison is the whole story". It gets a
-        warning of its own, which names the reason, on one node or on both,
-        and either node may be the one (round 2 of false-negative-reviewer
-        found the old-only side untested); the default-weight warning gives a
-        reason that is not this one."""
-        mixed = locale_file('copy "iso14651_t1"', 'codepoint_collation')
-        for name, old_body, new_body, side in (
-                ('both', mixed, mixed, 'build-B'),
-                ('new only', upstream_c(), mixed, 'build-B'),
-                ('old only', mixed, upstream_c(), 'build-A')):
-            with self.subTest(case=name):
-                slug = name.replace(' ', '-')
-                rc, text = self.node_to_node(
-                    self.node(OLD, f'{slug}-a', extra={'C': old_body}),
-                    self.node(MID, f'{slug}-b', extra={'C': new_body}),
-                    'build-A', 'build-B')
-                self.assertEqual(rc, 0, text)
-                self.assertNotIn('so their data leaves localedef nothing to '
-                                 'compute', flat(text))
-                self.assertIn('C.UTF-8: names codepoint_collation on at least '
-                              'one of these nodes, but could not be read as '
-                              'the keyword alone in its LC_COLLATE, the one '
-                              'form glibc builds in byte order.', flat(text))
-                self.assertIn(f'{side}: names codepoint_collation, but could '
-                              'not be read as the keyword alone -- NOT '
-                              'cleared', flat(text))
-                self.assertNotIn('no ellipsis range on either node',
-                                 flat(text))
-
-    def test_a_C_that_only_copies_a_byte_order_locale_is_settled_data(self):
-        """Backlog 6.9 in step 8. A C whose LC_COLLATE copies a locale holding
-        the keyword alone, and nothing else, is byte order (measured on RHEL9
-        and RHEL10: byte-identical to the installed C.UTF-8). It took the
-        default-weight warning, whose reason is false there, while step 4
-        named it byte order. The closing line says how it got there. The
-        control: on the node where the copied locale is not the keyword
-        alone, it is not settled."""
-        copy_c = locale_file('copy "zz_ZZ"')
-        mixed = locale_file('copy "iso14651_t1"', 'codepoint_collation')
-        for name, new_target, settled in (('alone', upstream_c(), True),
-                                          ('control', mixed, False)):
-            with self.subTest(case=name):
-                rc, text = self.node_to_node(
-                    self.node(OLD, f'{name}-a',
-                              extra={'C': copy_c, 'zz_ZZ': upstream_c()}),
-                    self.node(MID, f'{name}-b',
-                              extra={'C': copy_c, 'zz_ZZ': new_target}),
-                    'build-A', 'build-B')
-                self.assertEqual(rc, 0, text)
-                self.assertIn('build-A: pure copy; inherits its order, of '
-                              'zz_ZZ, which glibc builds in byte order',
-                              flat(text))
-                self.assertEqual(
-                    'Every backported locale here declares codepoint_collation '
-                    'alone, or copies nothing but a byte-order locale, on both '
-                    'nodes, so their data leaves localedef nothing to compute; '
-                    "whether changed code moves their order is step 5's "
-                    'question.' in flat(text), settled)
-                self.assertEqual('no ellipsis range on either node'
-                                 in flat(text), not settled)
-
-    def test_the_caveat_does_not_assert_a_shape_it_did_not_see(self):
-        """It used to say "C.UTF-8, whose backported source IS built from
-        ellipsis ranges" on every run -- including the RHEL9 -> RHEL10 run
-        whose own output a few lines above reports codepoint_collation on both
-        nodes. A warning that contradicts the output beside it is a warning
-        nobody believes twice."""
-        same = upstream_c()
-        rc, text = self.node_to_node(self.node(OLD, 'a', extra={'C': same}),
-                                     self.node(MID, 'b', extra={'C': same}),
-                                     'build-A', 'build-B')
-        self.assertEqual(rc, 0, text)
-        self.assertIn('codepoint_collation', flat(text))
-        self.assertNotIn('built from ellipsis ranges', flat(text))
-        self.assertIn('c_utf8_probe.sql', flat(text))
-
-    def test_the_caveat_names_the_locale_when_it_IS_ellipsis_based(self):
-        rc, text = self.node_to_node(
-            self.node(OLD, 'a', extra={'C': backported_c()}),
-            self.node(MID, 'b', extra={'C': upstream_c()}),
-            'build-A', 'build-B')
-        self.assertEqual(rc, 0, text)
-        self.assertIn('C.UTF-8: built from ellipsis ranges on at least one',
-                      flat(text))
-
     def test_the_data_only_caveat_is_printed(self):
         """Data equality is not order equality: Bug 22668 reordered ko_KR from
         a byte-identical file. Without this the mode's cleanest result is also
@@ -867,7 +685,6 @@ class NodeToNodeRefusesToGuess(NodeCase):
         self.assertEqual(rc, 0, text)
         self.assertIn('!!', text)
         self.assertIn('22668', text)
-        self.assertIn('c_utf8_probe.sql', text)
         self.assertIn('charmaps', text)
 
 
@@ -919,8 +736,8 @@ class DirectoryModeStepFour(NodeCase):
         entry = text.split('\n  --old-tag', 1)[1].split('\n  --', 1)[0]
         self.assertEqual(flat(entry), (
             "OLD_TAG the upstream tag the audit used for the old side. With "
-            "--new-tag, reports which findings exist at neither tag -- the "
-            "ones a diff of these two tags cannot see -- and lets the list "
+            "--new-tag, reports which findings are not at both tags -- the "
+            "ones a diff of these two tags does not compare -- and lets the list "
             "of what cannot be decided include a file of the old tag that "
             "neither copy holds."))
 
@@ -1117,50 +934,17 @@ class DirectoryModeStepFour(NodeCase):
         # there, so this cannot pass by the label being renamed away.
         self.assertNotIn('not in SUPPORTED (not built by default)', flat(text))
 
-    def test_each_backported_locale_gets_a_declared_status(self):
-        """Absent, cleared and unexamined are three answers; the wrapper could
-        distinguish two. It grepped the ellipsis list, then the codepoint line,
-        and printed NOTHING about C when it was neither -- which is what a run
-        that never looked also prints. The scan declares a status per locale
-        the distro is known to backport, and the wrapper reads it.
-        """
-        cases = ((backported_c(), 'C (C.UTF-8): ellipsis-based'),
-                 (upstream_c(), 'C (C.UTF-8): codepoint_collation'),
-                 (locale_file('order_start forward',
-                              '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
-                              'order_end'),
-                  'C (C.UTF-8): explicit weights'),
-                 (locale_file('copy "iso14651_t1"'),
-                  'C (C.UTF-8): copy-only'),
-                 (locale_file('copy "iso14651_t1"'),
-                  'it copies iso14651_t1, which this step flagged -- so this '
-                  'locale IS exposed'),
-                 (None, 'C (C.UTF-8): ABSENT from this directory'))
-        for i, (body, expected) in enumerate(cases):
-            with self.subTest(expected=expected):
-                extra = {'C': body} if body is not None else None
-                rc, text = run('flag_algorithmic_ranges.py',
-                               '--locales-dir',
-                               self.node(MID, f'declared{i}', extra=extra),
-                               '--build-id', 'fake.el9',
-                               '--supported-tag', MID, out_dir=self.out)
-                self.assertEqual(rc, 0, text)
-                self.assertIn(expected, text)
-
-    def test_an_explicit_C_is_declared_exposed_by_the_default_weight(self):
-        """Step 4 lists a C with explicit weights for localedef's default
-        weight (backlog 1.6), so its declaration says so too; "no ellipsis
-        range for localedef to expand" alone read as cleared. Both places that
-        declare are driven: the scan with the templates' ranges intact, and
-        the one where nothing uses an ellipsis. The control is a C declaring
-        codepoint_collation, which no default weight reaches."""
+    def test_an_explicit_C_is_listed_for_the_default_weight(self):
+        """Step 4 over a machine's folder lists a C with explicit weights for
+        localedef's default weight (backlog 1.6), like any locale: in the
+        scan with the templates' ranges intact, and in the one where nothing
+        uses an ellipsis. The control is a C declaring codepoint_collation,
+        which no default weight reaches: listed as byte order instead."""
         explicit = locale_file('order_start forward',
                                '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
                                'order_end')
         no_ranges = {name: explicit for name in
                      ('i18n', 'iso14651_t1', 'iso14651_t1_common', 'ko_KR')}
-        clause = ("takes localedef's default weight -- so this locale IS "
-                  "exposed")
         cases = (('ranges', {'C': explicit}, True),
                  ('noranges', {**no_ranges, 'C': explicit}, True),
                  ('control', {'C': upstream_c()}, False))
@@ -1172,24 +956,21 @@ class DirectoryModeStepFour(NodeCase):
                                '--build-id', 'fake.el9',
                                '--supported-tag', MID, out_dir=self.out)
                 self.assertEqual(rc, 0, text)
-                line = re.search(r'^  C \(C\.UTF-8\): (.*)$', text, re.M)
-                self.assertIsNotNone(line, text)
-                if exposed:
-                    self.assertTrue(line.group(1).startswith('explicit weights'),
-                                    line.group(1))
-                    self.assertIn(clause, line.group(1))
-                else:
-                    self.assertTrue(
-                        line.group(1).startswith('codepoint_collation'),
-                        line.group(1))
-                    self.assertNotIn('default weight', line.group(1))
+                lists = {}
+                for kind in ('exposed', 'byte_order'):
+                    with open(os.path.join(
+                            self.out, f'step4_{kind}_locales.fake.el9.txt'),
+                            encoding='utf-8') as fh:
+                        lists[kind] = [ln.strip() for ln in fh]
+                self.assertEqual(('C' in lists['exposed'],
+                                  'C' in lists['byte_order']),
+                                 (exposed, not exposed), text)
 
     def test_a_copy_only_C_is_not_declared_clear_of_an_ellipsis_it_inherits(self):
         """A `C` that copies `iso14651_t1` uses no ellipsis of its own and is
-        exposed by every weight that template computes. Reporting only its own
-        style is true of the file and false of the order -- and step 4 has the
-        closure in hand when it declares, so there is no excuse for the
-        summary to be told less than the step knows."""
+        exposed by every weight that template computes: its own style is
+        true of the file and false of the order, and step 4's list, which has
+        the closure, names it."""
         rc, text = run('flag_algorithmic_ranges.py',
                        '--locales-dir',
                        self.node(MID, 'copyc',
@@ -1197,7 +978,6 @@ class DirectoryModeStepFour(NodeCase):
                        '--build-id', 'fake.el9',
                        '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 0, text)
-        self.assertIn('so this locale IS exposed', flat(text))
         with open(os.path.join(self.out,
                                'step4_exposed_locales.fake.el9.txt'),
                   encoding='utf-8') as fh:
@@ -1222,10 +1002,6 @@ class DirectoryModeStepFour(NodeCase):
                        '--build-id', 'fake.el9',
                        '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 0, text)
-        self.assertIn('C (C.UTF-8): names codepoint_collation, but could '
-                      'not be read as the keyword alone', flat(text))
-        self.assertIn('so this locale IS exposed', flat(text))
-        self.assertNotIn('C (C.UTF-8): codepoint_collation', flat(text))
         self.assertNotIn('Declare codepoint_collation', flat(text))
         with open(os.path.join(self.out, 'step4_exposed_locales.fake.el9.txt'),
                   encoding='utf-8') as fh:
@@ -1262,13 +1038,11 @@ class DirectoryModeStepFour(NodeCase):
         self.assertIn('yy_YY', written)
 
     def test_a_C_that_only_copies_a_byte_order_locale_says_so(self):
-        """Backlog 6.9 in the status steps 9 and 10 declare. Step 4 names such
-        a C as byte order and leaves it off the list, and the status stopped
-        at "copy-only", true of the file and silent about the order; the two
-        disagreed until false-negative-reviewer noticed. The control: when
-        what it copies is not the keyword alone, the copy is no byte order.
-        The status is declared on two paths, one for a corpus where nothing
-        uses an ellipsis range, so that path has a case of its own."""
+        """Backlog 6.9 in steps 9 and 10: step 4 names such a C as byte
+        order and leaves it off the list. The control: when what it copies
+        is not the keyword alone, the copy is no byte order. Step 4 writes
+        its list on two paths, one for a corpus where nothing uses an
+        ellipsis range, so that path has a case of its own."""
         flat_body = locale_file('order_start forward',
                                 '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
                                 'order_end')
@@ -1291,11 +1065,6 @@ class DirectoryModeStepFour(NodeCase):
                                '--build-id', 'fake.el9',
                                '--supported-tag', MID, out_dir=out)
                 self.assertEqual(rc, 0, text)
-                self.assertEqual(
-                    'C (C.UTF-8): copy-only <- its order is whatever it '
-                    'inherits; follow the copy chain; and it copies zz_ZZ and '
-                    'nothing else, which glibc builds in byte order -- so '
-                    'this locale is byte order too' in flat(text), byte_order)
                 with open(os.path.join(out, 'step4_exposed_locales.fake.el9.txt'),
                           encoding='utf-8') as fh:
                     self.assertEqual('C' in [ln.strip() for ln in fh],
@@ -1318,7 +1087,6 @@ class DirectoryModeStepFour(NodeCase):
                        out_dir=self.out)
         self.assertEqual(rc, 0, text)
         self.assertIn('no_such_locale', text)
-        self.assertIn('so this locale is NOT cleared', flat(text))
         # Named, not just counted: a reader looks the collation their database
         # uses up in this list, by its locale or its alias (backlog 13.1).
         self.assertIn('sv_SE', flat(text))
@@ -1356,7 +1124,6 @@ class DirectoryModeStepFour(NodeCase):
                        out_dir=self.out)
         self.assertEqual(rc, 0, text)
         self.assertNotIn('steps 1-3 are sufficient', flat(text))
-        self.assertIn('so this locale is NOT cleared', flat(text))
         # Every other locale here takes the default weight (backlog 1.6), so
         # the sentence counts those and the unresolved ones together. Each
         # locale once: one reaching the absent target is in the `!!` block and
@@ -1429,17 +1196,13 @@ class DirectoryModeStepFour(NodeCase):
         self.assertEqual(rc, 0, text)
         # glibc stops at the copy and never reads the keyword, so neither
         # the keyword nor "copy-only" describes what was read (backlog 15.2).
-        self.assertIn('C (C.UTF-8): not read to the end the way localedef '
-                      'reads it <- NOT cleared; and it copies no_such_locale, '
-                      'which is NOT in this corpus', flat(text))
-        self.assertIn('so this locale is NOT cleared', flat(text))
         with open(os.path.join(self.out, 'step4_exposed_locales.fake.el9.txt'),
                   encoding='utf-8') as fh:
             self.assertIn('C', [ln.strip() for ln in fh])
 
     def test_a_C_the_reader_cannot_settle_is_not_cleared(self):
-        """A run this reader cannot settle is not read as clean: C's status
-        says so and C is on the list (backlog 15.2). reorder-sections-after
+        """A run this reader cannot settle is not read as clean: the `!!`
+        names C and C is on the list (backlog 15.2). reorder-sections-after
         is one such statement."""
         body = locale_file('copy "iso14651_t1"',
                            'reorder-sections-after <LATIN> <X>')
@@ -1449,11 +1212,6 @@ class DirectoryModeStepFour(NodeCase):
                        '--build-id', 'fake.el9',
                        '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 0, text)
-        self.assertIn('C (C.UTF-8): not read to the end the way localedef '
-                      'reads it <- NOT cleared;', flat(text))
-        self.assertIn('; and how localedef reads it could not be settled '
-                      '(C:6: reorder-sections-after in LC_COLLATE) -- so this '
-                      'locale is NOT cleared', flat(text))
         self.assertRegex(text, r'(?m)^!! 1 locale\(s\) could not be read the '
                                r'way localedef reads them')
         self.assertRegex(text, r'(?m)^     C: C:\d+: reorder-sections-after '
@@ -1492,8 +1250,6 @@ class DirectoryModeStepFour(NodeCase):
                        '--build-id', 'fake.el9', '--supported-tag', MID,
                        out_dir=self.out)
         self.assertEqual(rc, 0, text)
-        self.assertIn('C (C.UTF-8): not read to the end the way localedef '
-                      'reads it <- NOT cleared', flat(text))
         self.assertIn('C: localedef stops reading C at line 1, before the '
                       'end of the file', flat(text))
         self.assertNotIn('defines no LC_COLLATE block', text)
@@ -1519,11 +1275,9 @@ class DirectoryModeStepFour(NodeCase):
         self.assertNotIn('No locale uses ellipsis ranges', text)
         self.assertIn('not one defines LC_COLLATE', flat(text))
 
-    def test_a_directory_without_any_ellipsis_still_declares_C(self):
-        """The most reassuring output this step had -- "No locale uses ellipsis
-        ranges here; steps 1-3 are sufficient" -- returned before the
-        declaration, so the wrapper printed NOT DECLARED over a scan that had
-        looked and found an answer. Every path declares.
+    def test_a_directory_without_any_ellipsis_is_not_sufficient(self):
+        """The most reassuring output this step had is "No locale uses
+        ellipsis ranges here; steps 1-3 are sufficient".
 
         Since backlog 1.6 this input takes the default-weight path: with no
         ellipsis anywhere and no copy target missing, which is the shape a real
@@ -1547,15 +1301,14 @@ class DirectoryModeStepFour(NodeCase):
         self.assertIn(f'No locale uses ellipsis ranges here, but the {default} '
                       f'locale(s) above are NOT cleared by steps 1-3.',
                       flat(text))
-        self.assertIn('C (C.UTF-8): codepoint_collation', text)
 
     def test_an_all_codepoint_directory_is_the_one_clean_result(self):
         """The only input left that earns "steps 1-3 are sufficient": every
         locale declares codepoint_collation, so localedef has no range to
         expand and no default weight to give. No real corpus has this shape,
         so it is injected; without it the branch had no test once the input
-        above moved to the default-weight path. The list is still written and
-        C still declared on it."""
+        above moved to the default-weight path. The list is still written,
+        and empty."""
         tree = _tree(MID)
         extra = {'C': upstream_c()}
         for fname in os.listdir(tree):
@@ -1579,15 +1332,6 @@ class DirectoryModeStepFour(NodeCase):
         with open(named.group(2), encoding='utf-8') as fh:
             written = [ln.strip() for ln in fh if ln.strip()]
         self.assertEqual((int(named.group(1)), written), (0, []))
-        self.assertIn('C (C.UTF-8): codepoint_collation', text)
-
-    def test_the_tag_scan_declares_no_backported_status(self):
-        """A tag has no distro backports by construction, and a heading that
-        appeared there would invite the reader to trust a tag scan on the one
-        question it structurally cannot answer."""
-        rc, text = run('flag_algorithmic_ranges.py', NEW, out_dir=self.out)
-        self.assertEqual(rc, 0, text)
-        self.assertNotIn('C (C.UTF-8):', text)
 
 
 _CHARMAPS = {}

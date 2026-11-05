@@ -1338,7 +1338,7 @@ Differ INSIDE LC_COLLATE (3) -- these two nodes do not carry the same collation 
       +%[reorder Thai]
       +% #
 
-  All of those exist at one of the two tags, so a tag-to-tag diff could see them.
+  All of those are at both tags, so a tag-to-tag diff compared them.
 
 Additionally affected via `copy` inheritance at glibc-2.39-128.el10_2.x86_64: 0 locale(s)
   (no other locale copies any of those files)
@@ -1358,11 +1358,6 @@ Only on the new node (11) -- locales this upgrade adds:
 
 Only on the old node (1) -- locales this upgrade REMOVES. An index built on one of these does not just sort differently on the new node; the collation is gone:
   aa_ER@saaho: pure copy; inherits its order
-
-Backported locales, reported whether or not they differ (these are why this comparison exists):
-  C (C.UTF-8): present on both nodes, byte-identical
-      glibc-2.34-275.el9_8.x86_64: codepoint_collation -- byte order by construction
-      glibc-2.39-128.el10_2.x86_64: codepoint_collation -- byte order by construction
 
 Locale names measured on glibc-2.34-275.el9_8.x86_64: 869, built as 493 locale
 build(s) (C and POSIX are glibc's built-in locale, built from no charmap).
@@ -1387,13 +1382,6 @@ Full result written to /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.
    built, and that code differs between two glibc builds. Bug 22668 (commit
    82292c99b2) changed exactly that and reordered ko_KR from a byte-identical
    file. So a clean result here clears the data half and nothing else.
-!! Every backported locale here declares codepoint_collation on both nodes, so
-   their data leaves localedef nothing to compute; whether changed code moves
-   their order is step 5's question. Run sql/c_utf8_probe.sql anyway if
-   C.UTF-8 is your database collation: it measures the order these builds
-   actually produce inside PostgreSQL, as step 11 does through glibc when the
-   run has both machines' measurements, and PostgreSQL reports collversion as
-   NULL for every C.* name.
 
 ================================================================
 == STEP 9  NODE ELLIPSIS  does glibc-2.34-275.el9_8.x86_64's own locale data use ellipsis ranges?
@@ -1442,10 +1430,6 @@ differ between two nodes is a question about localedef, not about this
 directory: diff_collation_code.py for the two sides, and
 docs/confirming-on-a-real-system.md for the glibc each node actually runs.
 
-Distro-backported locales, declared one by one -- absent, cleared and
-unexamined are three different answers:
-  C (C.UTF-8): codepoint_collation  <- byte order by construction
-
 ================================================================
 == STEP 10  NODE ELLIPSIS  does glibc-2.39-128.el10_2.x86_64's own locale data use ellipsis ranges?
 ================================================================
@@ -1492,10 +1476,6 @@ This is one node's own data. Whether the WEIGHTS localedef computes for these
 differ between two nodes is a question about localedef, not about this
 directory: diff_collation_code.py for the two sides, and
 docs/confirming-on-a-real-system.md for the glibc each node actually runs.
-
-Distro-backported locales, declared one by one -- absent, cleared and
-unexamined are three different answers:
-  C (C.UTF-8): codepoint_collation  <- byte order by construction
 
 ================================================================
 == STEP 11  MEASURED ORDER  how each machine's own glibc sorts every locale
@@ -1875,10 +1855,8 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
 
 -- Node's own locale data, ellipsis scan (glibc-2.34-275.el9_8.x86_64)
      ellipsis-based locale(s): 4
-     C (C.UTF-8): codepoint_collation  <- byte order by construction
 -- Node's own locale data, ellipsis scan (glibc-2.39-128.el10_2.x86_64)
      ellipsis-based locale(s): 4
-     C (C.UTF-8): codepoint_collation  <- byte order by construction
 
 -- Warnings the clean results above do NOT cover
      !! Not checked for these builds: the compiler, and the build's patches to code
@@ -1908,13 +1886,6 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
         built, and that code differs between two glibc builds. Bug 22668 (commit
         82292c99b2) changed exactly that and reordered ko_KR from a byte-identical
         file. So a clean result here clears the data half and nothing else.
-     !! Every backported locale here declares codepoint_collation on both nodes, so
-        their data leaves localedef nothing to compute; whether changed code moves
-        their order is step 5's question. Run sql/c_utf8_probe.sql anyway if
-        C.UTF-8 is your database collation: it measures the order these builds
-        actually produce inside PostgreSQL, as step 11 does through glibc when the
-        run has both machines' measurements, and PostgreSQL reports collversion as
-        NULL for every C.* name.
      (see docs/limitations.md)
 
 -- Not decided for you
