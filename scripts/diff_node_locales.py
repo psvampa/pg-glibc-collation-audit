@@ -95,7 +95,10 @@ def resolve_side(label, root, build_id):
 
 
 def resolve_sides(opts):
-    """Both sides, refusing the comparisons that cannot mean anything."""
+    """Both sides, refusing the comparisons that cannot mean anything, and
+    the order of the two machines by their build ids
+    (glibc_locale_data.typed_machines_order, which refuses them the other
+    way round): (old, new, status, unread)."""
     old = resolve_side('old', opts.old_locales_dir, opts.old_build_id)
     new = resolve_side('new', opts.new_locales_dir, opts.new_build_id)
     if dd.same_tree(old.root, new.root):
@@ -103,7 +106,9 @@ def resolve_sides(opts):
               f"directory ({os.path.realpath(old.root)}). That comparison "
               f"reports every file identical, which is the most reassuring "
               f"result this tool can print and means nothing.")
-    return old, new
+    status, unread = g.typed_machines_order(old.build_id, new.build_id,
+                                            opts.allow_reverse)
+    return old, new, status, unread
 
 
 def read_texts(root, names):
@@ -452,7 +457,7 @@ def main(argv):
                                       "neither copy holds.")
     ap.add_argument('--new-tag', help="the upstream tag for the new side")
     ap.add_argument('--allow-reverse', action='store_true',
-                    help="run a pair whose new tag is the OLDER commit. Refused by default. Prints a `!!` block saying the direction is reversed.")
+                    help="run a pair whose new tag is the OLDER commit, or whose new machine runs the older build. Refused by default. Prints a `!!` block saying the direction is reversed.")
     ap.add_argument('--expect-files', type=int,
                     help="abort unless exactly this many files are compared")
     ap.add_argument('--repo', help="path to the glibc clone (autodetected); "
@@ -493,7 +498,7 @@ def main(argv):
 
 def _main(opts, charmaps):
 
-    old, new = resolve_sides(opts)
+    old, new, status, unread = resolve_sides(opts)
     report_sides(old, new)
 
     new_set = set(new.names)
@@ -518,10 +523,34 @@ def _main(opts, charmaps):
                 f"produce that. Check the transport before believing anything "
                 f"below -- one tar extracted over the other yields a flawless "
                 f"clean result.")
-    if old.build_id == new.build_id:
-        dd.warn(f"Both --*-build-id values are {old.build_id}. This is a valid "
+    if status == 'same':
+        ids = (f"Both --*-build-id values are {old.build_id}"
+               if old.build_id == new.build_id else
+               f"--old-build-id {old.build_id} and --new-build-id "
+               f"{new.build_id} are one build")
+        dd.warn(f"{ids}. This is a valid "
                 f"control run and it proves nothing about a glibc upgrade: it "
                 f"compares a build with itself.")
+    elif status == 'reversed':
+        # Only on request: typed_machines_order refuses it otherwise.
+        dd.warn(f"REVERSED PAIR of machines, allowed on request: "
+                f"{old.build_id} is newer than {new.build_id}. Every finding "
+                f"below has old and new the other way round -- what reads as "
+                f"added was removed in the real upgrade. Not an audit of an "
+                f"upgrade.")
+    elif status == 'undetermined':
+        # Every typed id whose version reads is ordered (rpm's rule, the
+        # `.src` of typed_machines_order), so an undetermined pair always
+        # names at least one id here.
+        why = (f"{' and '.join(unread)} "
+               f"{'is' if len(unread) == 1 else 'are'} not read as the name "
+               f"of a glibc build, as rpm -q glibc prints it, with or without "
+               f"the architecture")
+        dd.warn(f"Which of {old.build_id} and {new.build_id} is the newer "
+                f"build could not be established: {why}. Nothing in step 8 "
+                f"checked it: if the two machines are the wrong way round, "
+                f"step 8 reads a locale the upgrade removes as one it adds. "
+                f"Confirm which machine is the older one.")
 
     invisible = None
     old_tag_names = None

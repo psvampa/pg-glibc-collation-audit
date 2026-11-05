@@ -11,8 +11,8 @@ and the locale was reported unaffected. Everything here fails loudly instead,
 and blobs are read in a single `git cat-file --batch` stream.
 
 Also runnable directly; audit.sh and step 1 use fanin, sides, resolve,
-machines, latest, order and pair-slug, and provenance and corpus are kept for
-a hand run:
+machines, typed-machines, latest, order and pair-slug, and provenance and
+corpus are kept for a hand run:
   python3 glibc_locale_data.py fanin <tag> [changed_files.txt] [--as NAME]
   python3 glibc_locale_data.py provenance <tag> [<tag> ...]
   python3 glibc_locale_data.py corpus <tag> [<tag> ...]
@@ -39,6 +39,10 @@ a hand run:
       are what `rpm -q glibc` printed on each; writes to F, a line each,
       the side steps 1 to 5 read, its kind and its upstream tag, and
       prints which each side reads
+  python3 glibc_locale_data.py typed-machines <old_build_id> <new_build_id>
+      for audit.sh, given two --*-locales-dir: dies when the two typed
+      build ids are the other way round (typed_machines_order); prints
+      nothing
   python3 glibc_locale_data.py latest --to F <old> <new>
       for audit.sh, once: writes to F each side a line, latest-elN
       replaced by the newest build of RHEL N the mirror lists, and prints
@@ -747,10 +751,11 @@ def order(repo, old, new, commits=None):
                         version, the build by rpm's own rule
                         (locale_order.build_parts and rpm_vercmp): a
                         distro can change the order inside a release, as
-                        RHEL8 did at glibc-2.28-93. 'same' when rpm says
-                        the builds are one, or their words are equal;
-                        'undetermined' when a version or, within one
-                        version, a build cannot be read.
+                        RHEL8 did at glibc-2.28-93. 'same' when their
+                        words and versions are equal, or rpm says the
+                        builds are one; otherwise 'undetermined' when a
+                        version or, within one version, a build cannot
+                        be read.
       two builds, or a  the same rule as two machines: a build named
       build and a       from its SRPM (side(named=...)) is ordered by rpm,
       machine           never by git, although it is a commit of the
@@ -806,6 +811,12 @@ def _order_by_git(repo, old, new, commits):
 
 def _order_by_build(lo, old, new):
     pair = f'the new build {label(new)} against the old build {label(old)}'
+    # Equal words of equal versions are one build, a version that cannot be
+    # read included: step 8 knows a machine only by the build id typed for
+    # it, and a free-text id gives none (backlog 16.62). One side's version
+    # missing is not that: nothing says the two are one.
+    if old.build and old.build == new.build and old.version == new.version:
+        return 'same', f'{pair}: the same words'
     ov, nv = lo.version_tuple(old.version), lo.version_tuple(new.version)
     if ov is None or nv is None:
         return 'undetermined', (f'{pair}: the glibc version of '
@@ -819,8 +830,6 @@ def _order_by_build(lo, old, new):
         c = lo.rpm_vercmp(op[0], np_[0]) or lo.rpm_vercmp(op[1], np_[1])
         return {-1: 'forward', 0: 'same', 1: 'reversed'}[c], (
             f'{pair}: one glibc version, ordered by rpm')
-    if old.build and old.build == new.build:
-        return 'same', f'{pair}: the same words'
     return 'undetermined', (f'{pair}: one glibc version, and the build of at '
                             f'least one cannot be read')
 
@@ -840,6 +849,47 @@ def _order_by_release(repo, lo, old, new):
     return 'undetermined', (f'{pair}: one release on both sides, or one that '
                             f'cannot be read, and nothing here places a build '
                             f'against a tag of its own release')
+
+
+def typed_machines_order(old_id, new_id, allow_reverse=False):
+    """order() of two machines known only by the build id typed for each
+    (--old-build-id and --new-build-id, given with --*-locales-dir): step 8
+    asks it, and audit.sh before step 1. Returns (status, unread), unread
+    the ids whose glibc version cannot be read from them.
+
+    Each version is read from its id: the words `rpm -q glibc` prints
+    (locale_order.build_parts), or one word glibc-<version>-<release>
+    named without the architecture (glibc-2.28-251.el8_10.40, as audit.sh's
+    usage types it; AlmaLinux 10's glibc-2.39-121.el10_2.alma.1), handed to
+    rpm's rule with the `.src` a build named from its SRPM carries
+    (build_sources.identity). An id is in unread when no glibc version
+    reads from it as numbers: free text, dnf's epoch form
+    (glibc-0:2.28-...), another package's line. Dies when the two are the
+    other way round,
+    unless `allow_reverse`: nothing else orders two directories, and given
+    reversed, step 8 read a locale the upgrade removes as one it adds
+    (backlog 16.61, measured: the fixtures' rhel9 and rhel8 directories
+    swapped, en_US@ampm out of the summary's Removed block, ckb_IQ and
+    mnw_MM in it, exit 0)."""
+    import locale_order as lo
+
+    def one(typed):
+        parts, word = lo.build_parts(typed), typed
+        if parts is None and re.fullmatch(r'glibc-\d[^\s-]*-\S+', typed or ''):
+            word = typed + '.src'
+            parts = lo.build_parts(word)
+        return Side('machine', None, None, word,
+                    'glibc ' + parts[0] if parts else None, None, None, (),
+                    None)
+    sides = [one(old_id), one(new_id)]
+    status, _ = order(None, *sides)
+    if status == 'reversed' and not allow_reverse:
+        die(f"--old-build-id {old_id} and --new-build-id {new_id} are the "
+            f"other way round: {old_id} is the newer build. Give the "
+            f"machine you upgrade FROM as --old-locales-dir and "
+            f"--old-build-id.")
+    return status, [t for t, s in zip((old_id, new_id), sides)
+                    if lo.version_tuple(s.version) is None]
 
 
 def pair_noun(old, new):
@@ -2890,6 +2940,16 @@ def _main(argv):
                 fh.write(f"{name}\t{kind}\t{tag}\n")
         for ln in lines:
             print(ln, flush=True)
+        return 0
+    if argv and argv[0] == 'typed-machines':
+        # audit.sh, given two --*-locales-dir, before step 1: dies when the
+        # two typed build ids are the other way round (typed_machines_order).
+        # Prints nothing: what step 8 says of their order is in its own log,
+        # which the warnings block repeats.
+        if len(argv) != 3:
+            die("usage: glibc_locale_data.py typed-machines <old_build_id> "
+                "<new_build_id>")
+        typed_machines_order(argv[1], argv[2])
         return 0
     if argv and argv[0] == 'latest':
         # audit.sh, once for the whole run: each latest-elN replaced by the

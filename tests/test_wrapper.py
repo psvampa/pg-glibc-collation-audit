@@ -118,7 +118,7 @@ USAGE = [
     '       architecture, rebuilt from its source RPM, or latest-elN for a',
     '       machine not installed yet: the newest build of RHEL N on Rocky',
     "       Linux's mirror, named before step 1; with a build, only",
-    '       --old-node and --new-node of the options below are read, for now',
+    '       --old-node and --new-node of the options below are read',
     '       OLD first, NEW second: a reversed pair is refused, not',
     '       answered. Distance is NOT checked: RHEL8 to RHEL10 is one',
     '       pair, glibc-2.28 glibc-2.39, not two runs added up. What',
@@ -944,6 +944,27 @@ class WrapperRefusesBadInput(unittest.TestCase):
                 self.assertIn(f'error: --{side}-locales-dir {missing} is not '
                               f'a directory', out)
                 self.assertNotIn('STEP 1', out)
+
+    def test_two_machines_the_other_way_round_are_refused_first(self):
+        """Backlog 16.61, measured on 3575cc3: the fixtures' rhel9 directory
+        as the old machine and rhel8's as the new, the tags in order, ran to
+        exit 0, and the summary's Removed block named ckb_IQ and mnw_MM, which
+        the upgrade adds, in place of en_US@ampm, which it removes. Refused
+        before step 1, so no step runs on the pair as given; empty
+        directories are enough, since nothing reads them first."""
+        old_dir = os.path.join(self.out_dir, 'old-machine')
+        new_dir = os.path.join(self.out_dir, 'new-machine')
+        os.makedirs(old_dir)
+        os.makedirs(new_dir)
+        rc, out = run_wrapper(
+            OLD, MID, '--old-locales-dir', old_dir,
+            '--old-build-id', 'glibc-2.34-275.el9_8.x86_64',
+            '--new-locales-dir', new_dir,
+            '--new-build-id', 'glibc-2.28-251.el8_10.40.x86_64',
+            out_dir=self.out_dir)
+        self.assertEqual(rc, 2, out)
+        self.assertIn('the other way round', flat(out))
+        self.assertNotIn('STEP 1', out)
 
     def test_step_2_rewrites_the_list_so_a_seed_cannot_survive(self):
         """This is the real protection on the files that become step 3's

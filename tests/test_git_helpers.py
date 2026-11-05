@@ -3481,6 +3481,46 @@ class OneOrderForEverySide(unittest.TestCase):
         odd = build_side('weird-build-string', self.V)
         self.assertEqual(self.status(odd, odd), 'same')
 
+    def test_equal_words_are_one_build_whatever_the_version_says(self):
+        """Step 8 knows a machine by the build id typed for it, and reads
+        the version from that id: a free-text id gives none. Two equal ids
+        are still one build (backlog 16.62), where reading the version
+        first called them undetermined."""
+        self.assertEqual(self.status(build_side('same-build', None),
+                                     build_side('same-build', None)), 'same')
+        self.assertEqual(self.status(build_side('same-build', None),
+                                     build_side('other-build', None)),
+                         'undetermined')
+
+    def test_typed_ids_name_every_id_whose_version_is_not_read(self):
+        """The `!!` of step 8 names each typed id it could not read a glibc
+        version from, so its reason is never "rpm cannot order them" when
+        what failed was the id (false-negative-reviewer, round 1 of 7.6b):
+        dnf repoquery prints the epoch (glibc-0:2.28-...), and a line of
+        another package can be copied by mistake."""
+        good = 'glibc-2.34-275.el9_8.x86_64'
+        for odd in ('el8-server', 'glibc-0:2.28-251.el8_10.40.x86_64',
+                    'glibc-common-2.34-275.el9_8.x86_64'):
+            with self.subTest(odd=odd):
+                self.assertEqual(g.typed_machines_order(odd, good),
+                                 ('undetermined', [odd]))
+                self.assertEqual(g.typed_machines_order(good, odd),
+                                 ('undetermined', [odd]))
+
+    def test_typed_ids_without_the_architecture_are_ordered(self):
+        """A build named without the architecture, Rocky's
+        (glibc-2.28-251.el8_10.40) and AlmaLinux 10's, whose release ends in
+        `.alma.1` (glibc-2.39-121.el10_2.alma.1, on repo.almalinux.org)."""
+        for old, new in (('glibc-2.28-251.el8_10.40', 'glibc-2.34-275.el9_8'),
+                         ('glibc-2.34-275.el9_8', 'glibc-2.34-283.el9_8'),
+                         ('glibc-2.34-275.el9_8',
+                          'glibc-2.39-121.el10_2.alma.1')):
+            with self.subTest(old=old, new=new):
+                self.assertEqual(g.typed_machines_order(old, new),
+                                 ('forward', []))
+                self.assertEqual(g.typed_machines_order(new, old, True),
+                                 ('reversed', []))
+
     def test_a_build_word_without_its_architecture_is_not_read(self):
         """build_parts reads the last dotted word as the architecture only
         when it can be one: `.40` and `.el10_0` cannot. Reading `.40` so

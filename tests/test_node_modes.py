@@ -577,6 +577,80 @@ class NodeToNodeRefusesToGuess(NodeCase):
         self.assertIn('REVERSED', text)
         self.assertNotIn('exists at neither tag', text)
 
+    # Backlog 16.61: nothing ordered the two machines given as directories.
+    # Measured on 3575cc3 through audit.sh with the fixtures' rhel8 and
+    # rhel9 directories the other way round and the tags in order: exit 0,
+    # and the summary's Removed block named ckb_IQ and mnw_MM, which the
+    # upgrade adds, in place of en_US@ampm, which it removes.
+    B28 = 'glibc-2.28-251.el8_10.40.x86_64'
+    B34 = 'glibc-2.34-275.el9_8.x86_64'
+
+    def test_two_machines_the_other_way_round_are_refused(self):
+        rc, text = self.node_to_node(self.node(MID, 'a'), self.node(OLD, 'b'),
+                                     self.B34, self.B28)
+        self.assertEqual(rc, 2, text)
+        said = flat(text)
+        self.assertIn('the other way round', said)
+        self.assertIn(self.B34, said)
+        self.assertIn(self.B28, said)
+        # Refused before anything is compared or written.
+        self.assertNotIn('Compared', text)
+        self.assertEqual(glob.glob(os.path.join(self.out, 'node_*')), [])
+
+    def test_two_machines_reversed_on_request_say_so(self):
+        rc, text = self.node_to_node(self.node(MID, 'a'), self.node(OLD, 'b'),
+                                     self.B34, self.B28, '--allow-reverse')
+        self.assertEqual(rc, 0, text)
+        self.assertIn('!! REVERSED PAIR of machines', flat(text))
+
+    def test_two_machines_in_order_say_nothing_of_their_order(self):
+        """With and without the architecture rpm -q prints: a build id typed
+        as audit.sh's own example types it (glibc-2.28-251.el8_10.40) is
+        ordered too, by rpm's rule, within one glibc version as well."""
+        for old_b, new_b in ((self.B28, self.B34),
+                             ('glibc-2.28-251.el8_10.40',
+                              'glibc-2.34-275.el9_8'),
+                             ('glibc-2.34-275.el9_8', 'glibc-2.34-283.el9_8')):
+            with self.subTest(old=old_b, new=new_b):
+                out = os.path.join(self.out, new_b)
+                rc, text = run('diff_node_locales.py',
+                               '--old-locales-dir', self.node(OLD, 'a' + new_b),
+                               '--old-build-id', old_b,
+                               '--new-locales-dir', self.node(MID, 'b' + new_b),
+                               '--new-build-id', new_b, out_dir=out)
+                self.assertEqual(rc, 0, text)
+                said = flat(text)
+                for words in ('other way round', 'REVERSED',
+                              'could not be established',
+                              'compares a build with itself'):
+                    self.assertNotIn(words, said)
+        rc, text = self.node_to_node(self.node(MID, 'a'), self.node(OLD, 'b'),
+                                     'glibc-2.34-283.el9_8',
+                                     'glibc-2.34-275.el9_8')
+        self.assertEqual(rc, 2, text)
+        self.assertIn('the other way round', flat(text))
+
+    def test_two_machines_that_cannot_be_ordered_say_so(self):
+        rc, text = self.node_to_node(self.node(OLD, 'a'), self.node(MID, 'b'),
+                                     'build-old', 'build-new')
+        self.assertEqual(rc, 0, text)
+        said = flat(text)
+        self.assertIn('!! Which of build-old and build-new', said)
+        self.assertIn('could not be established: build-old and build-new '
+                      'are not read as the name of a glibc build', said)
+
+    def test_one_build_in_two_word_orders_is_one_build(self):
+        """Backlog 16.62: the build ids were compared as text, so one
+        machine's `rpm -q glibc` words in another order were two builds."""
+        a = f'{self.B34} glibc-2.34-275.el9_8.i686'
+        b = f'glibc-2.34-275.el9_8.i686 {self.B34}'
+        rc, text = self.node_to_node(self.node(OLD, 'a'), self.node(MID, 'b'),
+                                     a, b)
+        self.assertEqual(rc, 0, text)
+        said = flat(text)
+        self.assertIn('compares a build with itself', said)
+        self.assertNotIn('could not be established', said)
+
     def test_one_tag_without_the_other_is_refused(self):
         rc, text = self.node_to_node(self.node(OLD, 'a'), self.node(MID, 'b'),
                                      'x', 'y', '--old-tag', OLD)
