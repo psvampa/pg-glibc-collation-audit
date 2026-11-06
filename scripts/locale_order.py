@@ -7325,6 +7325,52 @@ def ctype_wide_changes(old_part, ok, new_part, nk):
     return out
 
 
+def ctype_tests(old_part, ok, new_part, nk):
+    """([(code point, kind, name, old answer, new answer)], skipped):
+    every answer a UTF8 database gets from a character whose rules two
+    wide tables change (ctype_wide_changes) that differs between them, for
+    the SQL files of --sql-to; the answers never equal.
+
+    kind 'text': name is the function upper, lower or initcap, whose answer
+    is the UTF-8 of the text it gives, in hexadecimal. kind 'class': name
+    is a class of CTYPE_CLASSES, whose answer is 't' or 'f'; two classes,
+    upper and lower, have the names of two functions, so the kind is what
+    tells them apart. upper() and lower() of the character map
+    it by towupper and towlower. initcap() of the character twice:
+    PostgreSQL maps the first by towupper, and the second by towlower if
+    the first, mapped, is alphanumeric (iswalnum), else by towupper
+    (formatting.c:1955-1964@REL_14_19; pg_locale_libc.c:309-316
+    @REL_18_6). A class, by a regular expression, which PostgreSQL's own
+    engine answers by isw<class> in a UTF8 database. NUL and the
+    surrogates, which no UTF8 text holds, are skipped and counted."""
+    a, b = ctype_wide_of(old_part, ok), ctype_wide_of(new_part, nk)
+    starts = {k: ([r[0] for r in a[2][k]], [r[0] for r in b[2][k]])
+              for k in CTYPE_CLASSES}
+
+    def initcap(t, side, cp):
+        first = t[0].get(cp, cp)
+        alnum = in_runs(t[2]['alnum'], starts['alnum'][side], first)
+        return chr(first) + chr(t[1].get(cp, cp) if alnum else first)
+
+    out, skipped = [], 0
+    for cp, known, words, exact in ctype_wide_changes(old_part, ok,
+                                                      new_part, nk):
+        if cp == 0 or 0xD800 <= cp <= 0xDFFF:
+            skipped += 1
+            continue
+        answers = [('upper', chr(a[0].get(cp, cp)), chr(b[0].get(cp, cp))),
+                   ('lower', chr(a[1].get(cp, cp)), chr(b[1].get(cp, cp))),
+                   ('initcap', initcap(a, 0, cp), initcap(b, 1, cp))]
+        answers = [('text', f, x.encode('utf-8').hex(),
+                    y.encode('utf-8').hex()) for f, x, y in answers]
+        answers += [('class', k,
+                     't' if in_runs(a[2][k], starts[k][0], cp) else 'f',
+                     't' if in_runs(b[2][k], starts[k][1], cp) else 'f')
+                    for k in CTYPE_CLASSES]
+        out += [(cp, kind, f, x, y) for kind, f, x, y in answers if x != y]
+    return out, skipped
+
+
 def ctype_byte_changes(old_part, ok, new_part, nk):
     """[(byte, report's words, file's words)] of every byte whose toupper,
     tolower or class differs between two byte tables."""
@@ -7355,8 +7401,13 @@ def ctype_group(members, compared, which=''):
 
 
 def ctype_texts(old, new, names, refused, model):
-    """([finding], [file rows]): what glibc's character rules (LC_CTYPE)
-    answer differently on the two machines, for the locales of names.
+    """([finding], [file rows], what the SQL files get): what glibc's
+    character rules (LC_CTYPE) answer differently on the two machines, for
+    the locales of names. The SQL files of --sql-to get {'groups':
+    [(locales, {locale: (old wide table, new wide table)})] of the
+    locales a UTF8 database can use whose characters change, a group per
+    set of changes; 'why': why no character was compared, or None;
+    'unknown': [locales whose rules either side could not measure]}.
 
     PostgreSQL picks glibc's functions by the database's encoding, never the
     locale's: in a database of more than one byte per character the wide
@@ -7396,7 +7447,9 @@ def ctype_texts(old, new, names, refused, model):
                                     and n not in ('C', 'POSIX')], rows)
         if rows:
             found.append({'where': 'byte sequence'})
-        return found, rows
+        return found, rows, {
+            'groups': [], 'unknown': [],
+            'why': f'{files} ' + EARLIER.format(which_machines(earlier))}
     euc = {}
     for name in names:
         for view in model.views[name]:
@@ -7432,6 +7485,7 @@ def ctype_texts(old, new, names, refused, model):
             elsewhere.append(name)
         byte_pairs.setdefault((keys[0][1], keys[1][1]), []).append(name)
     found, rows, sames = [], [], []
+    sql = {'groups': [], 'why': None, 'unknown': sorted(unknown)}
     for what, pairs, changes in (
             ('character', wide_pairs, ctype_wide_changes),
             ('byte', byte_pairs, ctype_byte_changes)):
@@ -7452,6 +7506,8 @@ def ctype_texts(old, new, names, refused, model):
                  'change in these locale(s), each a row under that name',
                  '-', '-', '-', '-')]})
             if what == 'character':
+                sql['groups'].append((members, {x: wide_of[x]
+                                                for x in members}))
                 found.append(ctype_character_finding(
                     got, ctype_group(members, compared, UTF8_USE)))
                 rows.append({'names': [label], 'rows': [
@@ -7502,7 +7558,9 @@ def ctype_texts(old, new, names, refused, model):
                 TEXT_ESCAPES), '-', '-', '-', '-') for side, why in sides]}
                  for n, sides in sorted(unknown.items())]
     found += euc_tail
-    return found, rows
+    if not wide_pairs:
+        sql['why'] = 'no locale a UTF8 database can use was compared'
+    return found, rows, sql
 
 
 EUC_LINE = f'{CTYPE_LINE} in an EUC_JP, EUC_KR, EUC_CN or EUC_TW database'
@@ -8108,7 +8166,7 @@ def table_route(old, new, name):
 
 def table_verdicts(old, new, both, refused, changed, same, unmeasured):
     """compare()'s lists after the sort tables: (changed, same, unmeasured,
-    firm, by_table, findings).
+    firm, by_table, findings, naming).
 
     firm: the unchanged locales whose table says so, for any text.
     by_table: {locale: (why, what step 11 said, named)} of the changed
@@ -8122,6 +8180,8 @@ def table_verdicts(old, new, both, refused, changed, same, unmeasured):
     not compared either (TABLE_CODE_OPEN).
     findings: the run's findings
     'tables not compared', 'tables disagree' and 'tables only'.
+    naming: the TableNaming that named them, whose tests() the SQL files
+    of --sql-to take.
 
     C and POSIX are glibc's own locale whatever a machine holds
     (findlocale.c:131-136@2.39, :133-138@2.28), which has no rules and
@@ -8212,7 +8272,7 @@ def table_verdicts(old, new, both, refused, changed, same, unmeasured):
     if only:
         findings.append(('tables only', {'names': only}))
     return (lists['changed'], lists['same'], lists['unmeasured'], firm,
-            by_table, findings)
+            by_table, findings, naming)
 
 
 def table_change_lines(why, s11, named=None):
@@ -8378,6 +8438,7 @@ class TableNaming:
         self.records = [None, None]
         self.parsed = {}
         self.named = {}
+        self.seqs = {}      # (o, n, table_sequences) by naming()'s key
         self.wanted = [{d['collate']['locales'][n]['table'] for n in names}
                        for d in self.sides]
 
@@ -8465,21 +8526,51 @@ class TableNaming:
         if o['nrules'] != n['nrules']:
             return (f'{NAMED_LEVELS}{o["nrules"]} to {n["nrules"]}), so its '
                     'sequences are not compared one by one', '', (), False)
-        return table_naming(o, n, codeset)
+        seqs = table_sequences(o, n)
+        self.seqs[a['table'], a['nrules'], b['table'], b['nrules'],
+                  (codeset,)] = (o, n, seqs)
+        return table_naming(o, n, codeset, seqs)
+
+    def tests(self, name):
+        """([(a, b, old sign, new sign)], untested) for the SQL files of
+        --sql-to: a test pair for each string of several characters the
+        table names as changed in NAME (table_contraction_tests), where its
+        encoding is UTF-8, and how many of the sequences it names get none.
+        LookupError where __call__ named nothing for NAME's tables: a
+        caller that asks there would read "no sequence" for "not looked"."""
+        a, b = (d['collate']['locales'][name] for d in self.sides)
+        codeset = self.sides[0]['locales'][name].get('codeset')
+        got = self.seqs.get((a['table'], a['nrules'], b['table'],
+                             b['nrules'], (codeset,)))
+        if got is None:
+            raise LookupError(f'no sequences named for {name!r}')
+        o, n, seqs = got
+        total = sum(map(len, seqs))
+        tests = (table_contraction_tests(o, n, seqs) if codeset == 'UTF-8'
+                 else [])
+        return tests, total - len(tests)
 
 
-def table_naming(o, n, codeset):
+def table_sequences(o, n):
+    """(marked, only_old, only_new, flips) of two parsed records of the same
+    number of rules: the sequences each names as changed (table_marked,
+    table_flips), four lists with no sequence in two of them."""
+    marked, only_old, only_new = table_marked(o, n)
+    flips = table_flips(o, n, marked) if marked else []
+    return marked, only_old, only_new, flips
+
+
+def table_naming(o, n, codeset, seqs=None):
     """(head, shown, rows, others) of two parsed records of the same number
     of rules: the counts, the first LIST_LIMIT names "among them", every
     name as (characters, how) for the characters file, and whether a name
     is bytes. Characters of consecutive code points are one run, as step
     11 writes them; a string of several characters is named by its code
     points, and one the encoding reads as no character by its bytes
-    (Names)."""
-    marked, only_old, only_new = table_marked(o, n)
+    (Names). seqs: table_sequences(o, n), when already worked out."""
+    marked, only_old, only_new, flips = seqs or table_sequences(o, n)
     if not (marked or only_old or only_new):
         return NAMED_NUMBERING, '', (), False
-    flips = table_flips(o, n, marked) if marked else []
     names = Names([], codeset)
     items, others = [], False
     for kind, seqs in (('marked', marked), ('old', only_old),
@@ -8538,6 +8629,135 @@ def table_naming(o, n, codeset):
     rows = tuple((tok.translate(TSV_ESCAPES), NAMED_HOW[kind])
                  for kind, _, tok in items)
     return head, shown_, rows, others
+
+
+class TableKeys:
+    """Sort keys of UTF-8 strings under one machine's parsed record
+    (ct_parse), built as glibc's strxfrm builds them from the stored rule
+    vectors and weights (CollateTables.strxfrm over _CollateMany, as
+    ct_seq_check does): the string cut into the longest sequences the
+    record holds, as findidx reads them. A string the record cannot cut
+    so, or that glibc would read in other pieces (_ct_segments_as), has
+    no key: ValueError."""
+
+    def __init__(self, parsed):
+        self.m, self.nrules = parsed['map'], parsed['nrules']
+        self.longest = max(map(len, self.m))
+        self.keys = {}
+
+    def key(self, t):
+        if t not in self.keys:
+            parts, i = [], 0
+            while i < len(t):
+                for k in range(min(self.longest, len(t) - i), 0, -1):
+                    if t[i:i + k] in self.m:
+                        parts.append(t[i:i + k])
+                        i += k
+                        break
+                else:
+                    raise ValueError(f'no sequence of the table at byte {i}')
+            if not _ct_segments_as(self.m, parts):
+                raise ValueError('glibc would read other pieces')
+            many = _CollateMany(self.nrules, [self.m[x] for x in parts])
+            starts, pos = {}, 0
+            for i, part in enumerate(parts):
+                starts[pos] = ((i << 24) | many.offs[i], pos + len(part))
+                pos += len(part)
+            self.keys[t] = CollateTables.strxfrm(many, t, starts.__getitem__)
+        return self.keys[t]
+
+    def sign(self, a, b):
+        """-1, 0 or 1: how a sorts against b; ValueError where either has no
+        key."""
+        ka, kb = self.key(a), self.key(b)
+        return (ka > kb) - (ka < kb)
+
+
+def table_contraction_tests(o, n, seqs):
+    """[(a, b, old sign, new sign)]: a test pair for each string of several
+    characters that two parsed UTF-8 records name as changed (seqs:
+    table_sequences), each sign as each machine's record orders a against
+    b, the two never equal nor a tie.
+
+    a is the string; b, the first single character, by this order, that
+    the two records order the other way round against it: one of its own
+    characters; one of the same block of 128 code points; for a string
+    only one record holds, its first character followed by one of those;
+    then any. Letters and marks come first, by code point; no character
+    of category C. A b against which the string's first character alone
+    flips as well is kept only when no other is found: the pair is to
+    show the string's change, not its first letter's. A string named in
+    both records looks only among its own characters and its block. One
+    that gets no pair is not tested, and is counted where the caller
+    counts what is not (TableNaming.tests). The rule of the prototype that
+    measured these pairs on PostgreSQL 14 to 18 (871 for or_IN, 871 for
+    th_TH.utf8, every one answering like its machine; backlog 16.54)."""
+    marked, only_old, only_new, flips = seqs
+    keys = (TableKeys(o), TableKeys(n))
+
+    def text(s):
+        try:
+            return s.decode('utf-8')
+        except UnicodeDecodeError:
+            return None
+
+    def several(xs):
+        return sorted(s for s in xs if (u := text(s)) is not None
+                      and len(u) > 1)
+
+    singles = sorted(
+        {s for m_ in (o['map'], n['map']) for s in m_
+         if (u := text(s)) is not None and len(u) == 1
+         and not unicodedata.category(u).startswith('C')},
+        key=lambda s: (unicodedata.category(text(s))[0] not in 'LM',
+                       ord(text(s))))
+    by_block = {}
+    for x in singles:
+        by_block.setdefault(ord(text(x)) >> 7, []).append(x)
+
+    def flipped(a, b):
+        try:
+            so, sn = (k.sign(a, b) for k in keys)
+        except ValueError:
+            return None
+        return (so, sn) if so and sn and so != sn else None
+
+    def candidates(c, own_block):
+        mine = []
+        for ch in text(c):
+            if ch.encode('utf-8') not in mine:
+                mine.append(ch.encode('utf-8'))
+        same = [x for x in by_block.get(ord(text(c)[0]) >> 7, ())
+                if x not in mine]
+        yield from mine
+        yield from same
+        if own_block:
+            return
+        for y in mine + same:
+            if mine[0] + y != c:
+                yield mine[0] + y
+        yield from singles
+
+    out = []
+    for kind, strings in (('new', only_new), ('old', only_old),
+                          ('both', sorted(set(marked) | set(flips)))):
+        for c in several(strings):
+            first = text(c)[0].encode('utf-8')
+            fallback = None
+            for x in candidates(c, kind == 'both'):
+                signs = flipped(c, x)
+                if signs is None:
+                    continue
+                if x == first or flipped(first, x) is None:
+                    fallback = signs + (x,)
+                    break
+                if fallback is None:
+                    fallback = signs + (x,)
+            if fallback:
+                so, sn, x = fallback
+                out.append((c, x, '<' if so < 0 else '>',
+                            '<' if sn < 0 else '>'))
+    return out
 
 
 def table_runs(xs, follows):
@@ -9052,7 +9272,7 @@ def sql_lines(prefix, files, not_checked):
     else:
         out.append('No SQL file written to confirm a change in PostgreSQL: no '
                    'change has a test')
-        out.append('pair that a database can store and use.')
+        out.append('that a database can store and use.')
     for names, why in not_checked:
         out += wrapped(f'Not checked in PostgreSQL by these files: '
                        f'{", ".join(names)}: {why}.', 0, 2)
@@ -9296,10 +9516,12 @@ def ascii_name(name):
     return name if name.isascii() else json.dumps(shown(name))
 
 
-def confirm_groups(groups, pg_names, old, new, only_old, unknown=()):
+def confirm_groups(groups, pg_names, old, new, only_old, unknown=(),
+                   ctype=None):
     """The SQL files of --sql-to: ([(encoding, text, id, tests)], not
     checked), from groups [(locales measured alike, their encoding, what
-    describe_change gave the SQL, plus a changed table's lines)].
+    describe_change gave the SQL, plus a changed table's lines)], and
+    ctype, what ctype_texts gave the SQL files.
 
     A group goes to the file of the database encoding PostgreSQL gives its
     encoding, under every name a database of that encoding knows it by: the
@@ -9312,7 +9534,16 @@ def confirm_groups(groups, pg_names, old, new, only_old, unknown=()):
     unknown, [(locales, why)]: those step 11 could not measure, glibc
     refuses, or the new machine lacks, which are not known to be
     unchanged and have no pair. An encoding with no test gets no file, so
-    that no file reads as "0 of 0"."""
+    that no file reads as "0 of 0".
+
+    The characters whose rules (LC_CTYPE) change go to the UTF8 file, one
+    group of locales with the same changes at a time, under one of its
+    locales that no group of sort tests of the file checks
+    (ctype_collation): every answer of ctype_tests, from that locale's own
+    tables. The other locales of the group are counted, not
+    run one by one: step 11 found the same changes in each (Pablo,
+    2026-11-06: 25,531 rows under each of 631 names would be 16 million).
+    No other file tests character rules, and each says so."""
     import confirm_sql
     import collation_keys
     machines = []
@@ -9373,15 +9604,76 @@ def confirm_groups(groups, pg_names, old, new, only_old, unknown=()):
         by_encoding.setdefault(encoding, []).append({
             'locales': shown_names, 'collations': sorted(collations),
             'tests': kept, 'untested': untested, 'unstorable': unstorable})
+    utf8_notes = []
+    ctype = ctype or {'groups': [], 'why': 'not compared', 'unknown': []}
+    # Named among what no file checks, which the report prints whether or
+    # not a file is written.
+    if ctype['why']:
+        not_checked.append((['the character rules (LC_CTYPE) of every '
+                             'locale'], ctype['why']))
+    if ctype['unknown']:
+        not_checked.append(([ascii_name(x) for x in ctype['unknown']],
+                            'its character rules (LC_CTYPE): step 11 could '
+                            'not compare them on both machines'))
+    taken = {x for g in by_encoding.get('UTF8', ()) for x in g['collations']}
+    for members, tables in ctype['groups']:
+        shown_members = [ascii_name(x) for x in members]
+        # A name a group of sort tests checks would run these rows under
+        # every name of that group, whose rules may be others.
+        name = ctype_collation([x for x in members if x not in taken])
+        if name is None:
+            not_checked.append((shown_members,
+                                'its character rules (LC_CTYPE): every name '
+                                'of it is C.* or POSIX, which PostgreSQL may '
+                                'answer itself, cannot be written into a SQL '
+                                'file, or already runs sort tests in this '
+                                'file'))
+            continue
+        rows, skipped = ctype_tests(old['ctype'], tables[name][0],
+                                    new['ctype'], tables[name][1])
+        if not rows:
+            not_checked.append((shown_members, 'its character rules '
+                                '(LC_CTYPE): no change a UTF8 database can '
+                                'hold'))
+            continue
+        taken.add(name)
+        by_encoding.setdefault('UTF8', []).append({
+            'locales': [name], 'collations': [name], 'tests': [],
+            'ctype': rows, 'untested': [], 'unstorable': 0})
+        if len(members) > 1:
+            utf8_notes.append(
+                f'character rules (LC_CTYPE) of {len(members) - 1:,} more '
+                f'locale(s), not run one by one: step 11 found in each the '
+                f'changes it found in {name}, which this file tests (the '
+                'LC_CTYPE group of step 11\'s characters file names them)')
+        if skipped:
+            utf8_notes.append(f'character rules (LC_CTYPE) of {skipped:,} '
+                              'code point(s) that no UTF8 text holds')
     files = []
     gone = sorted(x for x in only_old if x.isascii()
                   and confirm_sql.SAFE_NAME.fullmatch(x))
     for encoding in sorted(by_encoding):
+        notes = (utf8_notes if encoding == 'UTF8' else []) + [
+            'character rules (LC_CTYPE) in a database of any encoding but '
+            'UTF8: no file tests them; step 11\'s report says what it found']
         text, ident, tests = confirm_sql.sql_text(
             encoding, *machines, by_encoding[encoding], not_checked,
-            [x for x in sorted(by_encoding) if x != encoding], gone)
+            [x for x in sorted(by_encoding) if x != encoding], gone, notes)
         files.append((encoding, text, ident, tests))
     return files, not_checked
+
+
+def ctype_collation(members):
+    """The locale of a group of the same character rules whose name a UTF8
+    file runs its LC_CTYPE tests under: en_US.utf8 where the group holds
+    it, else the first of the others that a SQL file can name, never C.*
+    nor POSIX (which PostgreSQL may answer itself); None if none can be."""
+    import confirm_sql
+    names = [x for x in members if x.isascii()
+             and confirm_sql.SAFE_NAME.fullmatch(x)
+             and not x.startswith(('C.', 'POSIX'))]
+    return 'en_US.utf8' if 'en_US.utf8' in names else (
+        sorted(names)[0] if names else None)
 
 
 def sql_paths(prefix, encoding):
@@ -9492,8 +9784,9 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     # compared (table_verdicts); step 11's verdict stays where they could
     # not.
     measured11 = set(changed) | set(same)
-    changed, same, unmeasured, firm, by_table, table_found = table_verdicts(
-        old, new, both, refused, changed, same, unmeasured)
+    (changed, same, unmeasured, firm, by_table, table_found,
+     table_names) = table_verdicts(old, new, both, refused, changed, same,
+                                   unmeasured)
 
     # Locales whose measurements are the same on both sides changed the same
     # way, so each change is worked out once; then every locale whose change
@@ -9526,12 +9819,20 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
                 old, new, o[names[0]], n[names[0]])
         if table:
             more, phrase, counted = table_change_lines(*table)
+            if sql_to and table[2] and table[2][2]:
+                # A string of several characters the table names gets a
+                # test pair from the two records; every other sequence it
+                # names is counted, one by one (a run of the characters
+                # file is several).
+                pairs, untested = table_names.tests(names[0])
+                sql += [('test', (a,), (b,), so, sn, 'table')
+                        for a, b, so, sn in pairs]
+                if untested:
+                    sql.append(('untested', untested, 'sequence(s) its '
+                                'compiled sort table names as changed, which '
+                                'no test here takes one by one'))
             if table[1] != 'changed':
                 sql.append(('untested', None, counted))
-            elif table[2] and table[2][2]:
-                sql.append(('untested', len(table[2][2]), 'sequence(s) its '
-                            'compiled sort table names as changed, which no '
-                            'test here takes one by one'))
             lines = more + lines
             if phrase:
                 brief = '; '.join(x for x in (phrase, brief) if x)
@@ -9556,17 +9857,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     groups = sorted(reads_alike.items(), key=lambda item: sorted(item[1]))
     note = names_note(others, several)
     # The names PostgreSQL gives the locales, taken from the old machine: a
-    # cluster being upgraded had its collations created there. A locale that
-    # could not be measured takes part as well: whether PostgreSQL imported
-    # it does not depend on the measurement.
+    # cluster being upgraded had its collations created there.
     pg_names = postgres_names(o)
-    sql_files, sql_not_checked = (confirm_groups(
-        confirm, pg_names, old, new, only_old,
-        [(sorted(refused), 'glibc refuses it on at least one machine'),
-         (sorted(unmeasured), 'step 11 could not measure it on both '
-                              'machines'),
-         (only_old, 'it is not on the new machine')])
-        if sql_to else ([], []))
     # Unchanged only as far as it was measured: some neighbours were not
     # measured at every level (unclassified), so a change in how they are
     # told apart would not show.
@@ -9607,7 +9899,17 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
                [(text, warning) for text, warning, above in libc if not above]))
     use, use_rows = use_texts(model)
     checks += (('postgres use', use),)
-    ctype, ctype_rows = ctype_texts(old, new, both, refused, model)
+    ctype, ctype_rows, ctype_sql = ctype_texts(old, new, both, refused,
+                                               model)
+    # A locale that could not be measured takes part as well: whether
+    # PostgreSQL imported it does not depend on the measurement.
+    sql_files, sql_not_checked = (confirm_groups(
+        confirm, pg_names, old, new, only_old,
+        [(sorted(refused), 'glibc refuses it on at least one machine'),
+         (sorted(unmeasured), 'step 11 could not measure it on both '
+                              'machines'),
+         (only_old, 'it is not on the new machine')], ctype_sql)
+        if sql_to else ([], []))
     beside += [('postgres use rows', d) for d in use_rows]
     beside += [('ctype', d) for d in ctype]
     beside += [('ctype rows', d) for d in ctype_rows]
@@ -9818,8 +10120,8 @@ def main():
                          '(tab-separated)')
     ap.add_argument('--sql-to', metavar='PREFIX',
                     help='with --compare: also write PREFIX.<ENCODING>.sql, '
-                         'one SQL file per database encoding with the test '
-                         'pairs found, to run on both servers and read with '
+                         'one SQL file per database encoding with the tests '
+                         'found, to run on both servers and read with '
                          'confirm_sql.py read')
     for side in ('old', 'new'):
         cm = ap.add_mutually_exclusive_group()

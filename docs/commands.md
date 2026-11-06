@@ -248,7 +248,12 @@ at stake. That half needs no editing and no confirmation; what it lists is in
 per database encoding, `measured_order_confirm.<pair>.<ENCODING>.sql` in the
 output folder, with the test pairs step 11 found that a database of that
 encoding can store, in the bytes it measured, under every name such a
-database knows the locale by. These files need no editing. Each only reads, so
+database knows the locale by. The UTF8 file also tests each string of
+several characters that a locale's compiled sort table names as changed,
+with a pair taken from the two machines' tables, and the characters whose
+rules (LC_CTYPE) change: every answer of upper(), lower(), initcap() and the
+character classes that differs between the two machines, under one locale of
+each group step 11 found changed alike, the others counted. These files need no editing. Each only reads, so
 it runs unchanged on both servers (`psql -X -d DATABASE -f FILE > old.out
 2>&1`), and `scripts/confirm_sql.py read FILE old.out new.out` reads the two
 outputs against the file. It confirms only when every test is answered once

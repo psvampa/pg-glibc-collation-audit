@@ -553,7 +553,7 @@ ORDER_SUMMARY="$OUT_DIR/measured_order_summary.$PAIR.txt"
 # a changed sort table names; its report and summary name it.
 ORDER_CHARACTERS="$OUT_DIR/measured_order_characters.$PAIR.tsv"
 # One SQL file per database encoding, $ORDER_SQL.<ENCODING>.sql, with the
-# test pairs step 11 found; its report names each one and how to read the
+# tests step 11 wrote; its report names each one and how to read the
 # two servers' outputs.
 ORDER_SQL="$OUT_DIR/measured_order_confirm.$PAIR"
 rm -f "$ORDER_LOG" "$ORDER_SUMMARY" "$ORDER_CHARACTERS" "$ORDER_SQL".*.sql

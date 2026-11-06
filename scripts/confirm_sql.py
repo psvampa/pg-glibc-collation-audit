@@ -6,9 +6,13 @@ database encoding, and read what the two servers answered.
 Step 11 (locale_order.py --compare) finds, for each locale whose sort order
 changed, pairs of strings the two machines' glibc sort the other way round.
 `locale_order.py --compare ... --sql-to PREFIX` hands those pairs here, and
-write() turns them into PREFIX.<ENCODING>.sql, one file per database
+sql_text() turns them into PREFIX.<ENCODING>.sql, one file per database
 encoding (UTF8, LATIN1, LATIN9...), each holding the pairs a database of that
-encoding can store, with the bytes step 11 measured.
+encoding can store, with the bytes step 11 measured. The UTF8 file also
+holds a pair for each string of several characters a changed compiled sort
+table names, taken from the two machines' tables, and every LC_CTYPE answer
+(upper(), lower(), initcap(), the character classes) that differs between
+the two machines, under one locale of each group with the same changes.
 
 The same file runs unchanged on both servers, in a database of its
 encoding, and only reads (SELECT, one SET for the session, and psql
@@ -52,7 +56,17 @@ WORDS = {'both': 'measured on both machines',
          'old': 'measured on the old machine, the new one by the characters '
                 'between',
          'new': 'measured on the new machine, the old one by the characters '
-                'between'}
+                'between',
+         'table': 'from both machines\' compiled sort tables'}
+# What an LC_CTYPE row asks of a character x: upper(), lower(), initcap()
+# of x twice, each answered as the hexadecimal of its UTF-8; or whether x
+# is in a class, answered t or f.
+CTYPE_TEXT = ('upper', 'lower', 'initcap')
+CTYPE_CLASSES = ('alpha', 'upper', 'lower', 'digit', 'space', 'punct',
+                 'alnum', 'print', 'graph', 'xdigit')
+CTYPE_ROW = re.compile(
+    r"\((\d+), '(text|class)', '(\w+)', '([0-9A-F]{4,6})', '[0-9a-f]+', "
+    r"'([0-9a-f]+|[tf])', '([0-9a-f]+|[tf])'\),?")
 LIKE = {'old': 'like the OLD machine', 'new': 'like the NEW machine',
         None: 'like NEITHER machine'}
 SETTINGS = ('lc_messages', 'lc_monetary', 'lc_numeric', 'lc_time')
@@ -96,21 +110,23 @@ def comment(text):
 # --------------------------------------------------------------- write ----
 
 def sql_text(encoding, old, new, groups, not_checked=(), elsewhere=(),
-             gone=()):
+             gone=(), notes=()):
     """(text, id, tests) of the SQL file for a database of encoding.
 
     old, new: {'label': how step 11 names the machine, 'version': the
     glibc version PostgreSQL reports there ('2.28'), or None}.
     groups: [{'locales': names measured alike, 'collations': the names a
     database of this encoding knows them by, 'tests': [(a, b, old sign,
-    new sign, 'both'|'old'|'new')], 'untested': [(count or None, why)],
-    'unstorable': pairs whose strings this encoding cannot store}].
+    new sign, 'both'|'old'|'new'|'table')], 'ctype': [(code point,
+    kind, name, old answer, new answer)] (locale_order.ctype_tests, UTF8
+    only), 'untested': [(count or None, why)], 'unstorable': pairs whose
+    strings this encoding cannot store}].
     not_checked: [(locales, why)] of changed locales no file tests.
     elsewhere: the other encodings a file was written for.
     gone: the locale names of the old machine the new one lacks.
-    A test pair whose two machines agree is a bug of the caller: it
-    raises, since a row that cannot answer unlike one machine proves
-    nothing."""
+    notes: more of what the file does not test, each a sentence.
+    A test whose two machines agree is a bug of the caller: it raises,
+    since a row that cannot answer unlike one machine proves nothing."""
     out = []
     w = out.append
     tests = 0
@@ -141,7 +157,8 @@ def sql_text(encoding, old, new, groups, not_checked=(), elsewhere=(),
     if elsewhere:
         w(comment('the locales of other encodings are in the files written '
                   'beside this one: ' + ', '.join(elsewhere)))
-    w(comment('not tested: character rules (LC_CTYPE)'))
+    for note in notes:
+        w(comment('not tested: ' + note))
     w('\\set QUIET on')
     # Each message with its SQLSTATE, which the reader goes by: the words
     # around it are translated, by the client's LANG (DETALLE, LINEA) and
@@ -178,7 +195,23 @@ def sql_text(encoding, old, new, groups, not_checked=(), elsewhere=(),
             number += 1
             rows.append(f"({number}, '{a.hex()}', '{b.hex()}', '{so}', "
                         f"'{sn}', '{measured}')")
-        if not rows:
+        crows = []
+        for cp, kind, f, x, y in g.get('ctype', ()):
+            answer = {'text': '[0-9a-f]+', 'class': '[tf]'}.get(kind)
+            if (x == y or answer is None or encoding != 'UTF8'
+                    or f not in (CTYPE_TEXT if kind == 'text'
+                                 else CTYPE_CLASSES)
+                    or not re.fullmatch(answer, x)
+                    or not re.fullmatch(answer, y)):
+                raise ValueError(f'an LC_CTYPE test the two machines do not '
+                                 f'answer apart: {cp:04X} {kind} {f} {x} {y}')
+            number += 1
+            crows.append(f"({number}, '{kind}', '{f}', '{cp:04X}', "
+                         f"'{chr(cp).encode('utf-8').hex()}', '{x}', '{y}')")
+            if not CTYPE_ROW.fullmatch(crows[-1]):
+                raise ValueError(f'an LC_CTYPE test this reader cannot read: '
+                                 f'{crows[-1]}')
+        if not rows and not crows:
             continue
         for name in g['collations']:
             if name in seen or not SAFE_NAME.fullmatch(name):
@@ -198,10 +231,20 @@ def sql_text(encoding, old, new, groups, not_checked=(), elsewhere=(),
               f"(SELECT encoding FROM pg_database WHERE datname = "
               f"current_database())) AND pg_collation_is_visible(c.oid)), "
               f"'NULL');")
+            if crows:
+                ctype_query(w, name, ident, crows)
+            if not rows:
+                w('\\else')
+                w(echo(f'collation|{name}|CANNOT BE USED'))
+                w('\\endif')
+                tests += len(crows)
+                continue
+            # Every value of m by name: one left to an ELSE would print
+            # another's words.
             w(f"SELECT 'test|' || id || '|{name}|' || r || '|old ' || o || "
-              f"', new ' || n || '|' || CASE m WHEN 'both' THEN "
-              f"{literal(WORDS['both'])} WHEN 'old' THEN "
-              f"{literal(WORDS['old'])} ELSE {literal(WORDS['new'])} END || "
+              f"', new ' || n || '|' || CASE m "
+              + ' '.join(f'WHEN {literal(k)} THEN {literal(v)}'
+                         for k, v in WORDS.items()) + " END || "
               f"'|' || CASE WHEN r = o THEN {literal(LIKE['old'])} WHEN r = n "
               f"THEN {literal(LIKE['new'])} ELSE {literal(LIKE[None])} END")
             # COLLATE on each comparison: carried out of a subquery it
@@ -219,7 +262,7 @@ def sql_text(encoding, old, new, groups, not_checked=(), elsewhere=(),
             w('\\else')
             w(echo(f'collation|{name}|CANNOT BE USED'))
             w('\\endif')
-            tests += len(rows)
+            tests += len(rows) + len(crows)
     if gone:
         names = ', '.join(f'({literal(x)})' for x in gone)
         w(comment('the databases, libc collations and lc_* settings that use '
@@ -242,6 +285,31 @@ def sql_text(encoding, old, new, groups, not_checked=(), elsewhere=(),
     text = '\n'.join(out) + '\n'
     ident = hashlib.sha256(text.encode('ascii')).hexdigest()
     return text.replace(PLACEHOLDER, ident), ident, tests
+
+
+def ctype_query(w, name, ident, crows):
+    """The query of a collation's LC_CTYPE rows: what the server answers
+    for each, and whom that is like. The kind of a row (text or class)
+    decides what is asked: two classes, upper and lower, have the names of
+    two functions."""
+    w(f"SELECT 'ctype|' || id || '|{name}|' || r || '|old ' || o || ', new ' "
+      f"|| n || '|' || CASE k WHEN 'class' THEN '[[:' || f || ':]]' ELSE f "
+      f"|| '()' END || ' of U+' || cp || '|' || CASE WHEN r = o THEN "
+      f"{literal(LIKE['old'])} WHEN r = n THEN {literal(LIKE['new'])} ELSE "
+      f"{literal(LIKE[None])} END")
+    w(f"FROM (SELECT id, k, f, cp, o, n, CASE WHEN k = 'class' THEN CASE "
+      f"WHEN x COLLATE {ident} ~ ('^[[:' || f || ':]]$') THEN 't' ELSE 'f' "
+      f"END WHEN f = 'upper' THEN encode(convert_to(upper(x COLLATE "
+      f"{ident}), 'UTF8'), 'hex') WHEN f = 'lower' THEN encode(convert_to("
+      f"lower(x COLLATE {ident}), 'UTF8'), 'hex') WHEN f = 'initcap' THEN "
+      f"encode(convert_to(initcap((x || x) COLLATE {ident}), 'UTF8'), "
+      f"'hex') END AS r")
+    w('      FROM (VALUES')
+    w(',\n'.join(crows))
+    w('      ) AS v(id, k, f, cp, xh, o, n)')
+    w("      CROSS JOIN LATERAL (SELECT convert_from(decode(xh, 'hex'), "
+      "'UTF8') AS x) AS s) AS t")
+    w('ORDER BY id;')
 
 
 # ---------------------------------------------------------------- read ----
@@ -299,9 +367,13 @@ class Sql:
                 self.collations[m.group(1)] = (number, current)
                 continue
             m = re.fullmatch(r"\((\d+), '[0-9a-f]+', '[0-9a-f]+', '([<>])', "
-                             r"'([<>])', '(both|old|new)'\),?", line)
+                             r"'([<>])', '(both|old|new|table)'\),?", line)
             if m:
                 current[int(m.group(1))] = (m.group(2), m.group(3))
+                continue
+            m = CTYPE_ROW.fullmatch(line)
+            if m:
+                current[int(m.group(1))] = (m.group(5), m.group(6))
                 continue
             m = re.fullmatch(r"\\echo 'end\|[0-9a-f]{64}\|(\d+) tests'", line)
             if m:
@@ -320,7 +392,7 @@ class Sql:
 # the text. Class 01 is a warning (00 a notice); every other, an error.
 MESSAGE = re.compile(r'(?:psql:(.*?):(\d+): )?([^\s:]+):  ([0-9A-Z]{5}): (.*)')
 RECORDS = ('pg-glibc-audit confirmation', 'database encoding', 'server',
-           'collation', 'test', 'gone', 'end')
+           'collation', 'test', 'ctype', 'gone', 'end')
 
 
 class Out:
@@ -413,8 +485,11 @@ class Out:
                                              else version)
                 else:
                     unknown.append(line)
-            elif head == 'test' and len(fields) == 7 and fields[1].isdigit() \
-                    and fields[3] in ('<', '>', '='):
+            elif (head == 'test' and len(fields) == 7 and fields[1].isdigit()
+                  and fields[3] in ('<', '>', '=')) or (
+                    head == 'ctype' and len(fields) == 7
+                    and fields[1].isdigit()
+                    and re.fullmatch('[0-9a-f]*|[tf]', fields[3])):
                 key = (fields[2], int(fields[1]))
                 if key in self.answers:
                     self.problems.append(f'test {key[1]} of collation '
@@ -602,9 +677,8 @@ def read(sql_path, old_path, new_path):
                   'have:')
             for item in out.gone:
                 print(f'     {item}')
-    print('!! This file confirms the changes step 11 found a test pair for; '
-          'it does not say that anything else is unchanged. Not tested by '
-          'it:')
+    print('!! This file confirms only the changes it tests; it does not '
+          'say that anything else is unchanged. Not tested by it:')
     for note in sql.notes:
         print(f'     {note}')
     return code
