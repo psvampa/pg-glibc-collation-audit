@@ -5163,22 +5163,54 @@ def relation_words(rel, levels):
             if levels else 'told apart')
 
 
+def test_level(before, now, probes, levels):
+    """(lo, hi, prepend, level) of the first level compared whose answer
+    differs between before and now: the pair that measured it, whether it
+    goes before the strings (apart()), and the level; None when no level
+    compared shows the change. The one rule test_pair and test_bytes
+    share."""
+    for k in levels:
+        if (before ^ now) >> (1 + k) & 1:
+            token = probes.split(' ')[k]
+            lo, hi = (bytes.fromhex(h) for h in token[:-1].split('.'))
+            return lo, hi, token[-1] == '<', k
+    return None
+
+
 def test_pair(x, y, before, now, probes, levels, naming):
     """(string a, string b, sign before, sign now) that shows a level change
     between the strings x and y, each string as the tokens of its two
     parts, or None when no level compared shows it."""
-    for k in levels:
-        if (before ^ now) >> (1 + k) & 1:
-            token = probes.split(' ')[k]
-            lo_, hi_ = (naming.token_of(bytes.fromhex(h)) for h in token[:-1].split('.'))
-            x_, y_ = naming.token(x), naming.token(y)
-            if token[-1] == '<':
-                a, b = f'{hi_} {x_}', f'{lo_} {y_}'
-            else:
-                a, b = f'{x_} {hi_}', f'{y_} {lo_}'
-            return (a, b, '<' if before >> (1 + k) & 1 else '>',
-                    '<' if now >> (1 + k) & 1 else '>')
-    return None
+    got = test_level(before, now, probes, levels)
+    if got is None:
+        return None
+    lo, hi, prepend, k = got
+    lo_, hi_ = naming.token_of(lo), naming.token_of(hi)
+    x_, y_ = naming.token(x), naming.token(y)
+    if prepend:
+        a, b = f'{hi_} {x_}', f'{lo_} {y_}'
+    else:
+        a, b = f'{x_} {hi_}', f'{y_} {lo_}'
+    return (a, b, '<' if before >> (1 + k) & 1 else '>',
+            '<' if now >> (1 + k) & 1 else '>')
+
+
+def test_bytes(x, y, before, now, probes, levels, strings):
+    """test_pair's pair as the bytes the measurement compared, each string
+    as its parts: (a parts, b parts, sign before, sign now), SEPARATOR
+    between a string and the probe's pair, as apart() joins them; None
+    where test_pair gives None."""
+    got = test_level(before, now, probes, levels)
+    if got is None:
+        return None
+    lo, hi, prepend, k = got
+    xs, ys = strings[x], strings[y]
+    if prepend:
+        a, b = (hi, SEPARATOR, xs), (lo, SEPARATOR, ys)
+    else:
+        a, b = (xs, SEPARATOR, hi), (ys, SEPARATOR, lo)
+    return (a, b, '<' if before >> (1 + k) & 1 else '>',
+            '<' if now >> (1 + k) & 1 else '>')
 
 
 MEASURED = {'both': 'on both machines',
@@ -5261,7 +5293,11 @@ def locale_findings(old, new, o, n, naming):
                 seq = new_seq if side == 'new' else old_seq
                 chains.append((naming.chain_runs(seq[first:last + 2]), before, now,
                                test_pair(seq[first], seq[first + 1], before,
-                                         now, o['probes'], levels, naming), side))
+                                         now, o['probes'], levels, naming),
+                               test_bytes(seq[first], seq[first + 1], before,
+                                          now, o['probes'], levels,
+                                          strings[0]),
+                               side))
             pairs = None
             if count <= LIST_LIMIT:
                 pairs = [(seq[i], seq[i + 1], before, now)
@@ -5329,6 +5365,14 @@ def moved_rows(d):
     return rows
 
 
+def moved_sql(d):
+    """One test per run of moved strings: moved_rows' pair, in bytes."""
+    strings = d['naming'].names.strings
+    return [('test', (strings[a],), (strings[d['partner'][a][0]],),
+             d['partner'][a][1], '>' if d['partner'][a][1] == '<' else '<',
+             'both') for a, b in d['runs']]
+
+
 def reversed_lines(d):
     everyone = 'all ' if d['all'] else ''
     return report_lines(f'{everyone}{d["naming"].counted(d["flagged"])} sort '
@@ -5343,6 +5387,12 @@ def reversed_rows(d):
     nm = d['naming']
     return [('sorts differently', nm.run_text(a, b), '-', '-', '-', '-',
              MEASURED['both']) for a, b in d['runs']]
+
+
+def reversed_sql(d):
+    # Each sorts differently against a string that moved, and each run of
+    # those is tested (moved_sql).
+    return []
 
 
 PROBES_CHANGED = ('the pairs that tell letters, accents and case apart here '
@@ -5364,6 +5414,11 @@ def probes_rows(d):
              (f'before: {readable_probes(d["before"], d["naming"])}; '
               f'now: {readable_probes(d["now"], d["naming"])}')
              .translate(TEXT_ESCAPES), '-', '-', '-', '-')]
+
+
+def probes_sql(d):
+    return [('untested', None, PROBES_CHANGED.replace(' here ', ' ')
+             + ', which no test here checks')]
 
 
 def compared_by(d):
@@ -5392,6 +5447,11 @@ def left_out_rows(d):
              '-', '-', '-', '-')]
 
 
+def left_out_sql(d):
+    # Not a change: a level no pair measured, which the report names.
+    return []
+
+
 def told_apart_lines(d):
     nm = d['naming']
     if d['pairs'] is None:
@@ -5417,13 +5477,28 @@ def told_apart_rows(d):
     """A chain of neighbours told apart differently, with the test pair of
     its first two strings where a level compared shows the change."""
     rows, nm = [], d['naming']
-    for runs, before, now, t, side in d['chains']:
+    for runs, before, now, t, tb, side in d['chains']:
         rows.append(('told apart differently', nm.runs_text(runs),
                      f'{relation_words(before, d["levels"])} -> '
                      f'{relation_words(now, d["levels"])}',
                      ' / '.join(t[:2]) if t else '-', t[2] if t else '-',
                      t[3] if t else '-', MEASURED[side]))
     return rows
+
+
+def told_apart_sql(d):
+    """A test per chain whose change a level compared shows (told_apart_
+    rows' pair, in bytes); the others counted."""
+    tests, none = [], 0
+    for runs, before, now, t, tb, side in d['chains']:
+        if tb is None:
+            none += 1
+        else:
+            tests.append(('test',) + tb + (side,))
+    if none:
+        tests.append(('untested', none, 'chain(s) of neighbours told apart '
+                      'differently at no level a measured pair compares'))
+    return tests
 
 
 def among(d):
@@ -5449,6 +5524,11 @@ def still_rows(d):
     return []
 
 
+def still_sql(d):
+    # The strings of the chains told_apart_sql tests.
+    return []
+
+
 def undecided_lines(d):
     return [f'{len(d["pairs"]):,} more pair(s) may be told apart differently; '
             'what was measured cannot decide']
@@ -5466,18 +5546,25 @@ def undecided_rows(d):
             for x, y in d['pairs']]
 
 
-# kind: (lines of the report, phrases of the summary, rows of the file), each
-# from the finding's data.
+def undecided_sql(d):
+    return [('untested', len(d['pairs']), 'pair(s) of neighbours the '
+             'measurement cannot decide')]
+
+
+# kind: (lines of the report, phrases of the summary, rows of the file, what
+# it gives the SQL files of --sql-to), each from the finding's data.
 LOCALE_KINDS = {
-    'moved': (moved_lines, moved_brief, moved_rows),
-    'reversed': (reversed_lines, reversed_brief, reversed_rows),
-    'probes changed': (probes_lines, probes_brief, probes_rows),
-    'left out': (left_out_lines, left_out_brief, left_out_rows),
-    'told apart': (told_apart_lines, told_apart_brief, told_apart_rows),
-    'did not move': (still_lines, still_brief, still_rows),
-    'undecided': (undecided_lines, undecided_brief, undecided_rows),
+    'moved': (moved_lines, moved_brief, moved_rows, moved_sql),
+    'reversed': (reversed_lines, reversed_brief, reversed_rows, reversed_sql),
+    'probes changed': (probes_lines, probes_brief, probes_rows, probes_sql),
+    'left out': (left_out_lines, left_out_brief, left_out_rows, left_out_sql),
+    'told apart': (told_apart_lines, told_apart_brief, told_apart_rows,
+                   told_apart_sql),
+    'did not move': (still_lines, still_brief, still_rows, still_sql),
+    'undecided': (undecided_lines, undecided_brief, undecided_rows,
+                  undecided_sql),
 }
-REPORT, SUMMARY, FILE = 0, 1, 2
+REPORT, SUMMARY, FILE, SQL = 0, 1, 2, 3
 
 
 def printer(table, kind, part):
@@ -5489,19 +5576,21 @@ def printer(table, kind, part):
 
 
 def describe_change(old, new, o, n):
-    """(lines, phrase, rows, others): what changed between two measurements
-    of a locale, drawn from its findings for the report, the summary and the
-    characters file, in which nothing is cut short; and whether any of the
-    three names or counts a string that is not a character. The strings
-    are named under the old machine's encoding, the one a database made
-    there holds."""
+    """(lines, phrase, rows, others, sql): what changed between two
+    measurements of a locale, drawn from its findings for the report, the
+    summary and the characters file, in which nothing is cut short;
+    whether any of the three names or counts a string that is not a
+    character; and its test pairs in bytes and its changes without one,
+    for the SQL files (confirm_groups). The strings are named under the
+    old machine's encoding, the one a database made there holds."""
     naming = Naming(names_for(strings_of(old, o['corpus'])[0], o['codeset']))
-    lines, brief, rows = [], [], []
+    lines, brief, rows, sql = [], [], [], []
     for kind, d in locale_findings(old, new, o, n, naming):
         lines += printer(LOCALE_KINDS, kind, REPORT)(d)
         brief += printer(LOCALE_KINDS, kind, SUMMARY)(d)
         rows += printer(LOCALE_KINDS, kind, FILE)(d)
-    return lines, '; '.join(brief), rows, naming.others
+        sql += printer(LOCALE_KINDS, kind, SQL)(d)
+    return lines, '; '.join(brief), rows, naming.others, sql
 
 
 # Printed under the report and the summary, and at the head of the
@@ -8945,6 +9034,31 @@ def also_rows(names, pg_names, locales):
              '-', '-', '-', '-')]
 
 
+def sql_lines(prefix, files, not_checked):
+    """What the report says of the SQL files: each one, how to run and read
+    it, and what no file tests; or why none was written."""
+    out = []
+    if files:
+        out.append('To confirm these changes in PostgreSQL, run each SQL file '
+                   'unchanged on both')
+        out.append('servers, in a database of its encoding (psql -X -d '
+                   'DATABASE -f FILE > old.out')
+        out.append('2>&1, and new.out on the new server), and read the two '
+                   'outputs with:')
+        out.append('  python3 scripts/confirm_sql.py read FILE old.out new.out')
+        for encoding, text, ident, tests in files:
+            out.append(f'  {encoding} database, {tests:,} test(s):')
+            out.append(f'    {sql_paths(prefix, encoding)}')
+    else:
+        out.append('No SQL file written to confirm a change in PostgreSQL: no '
+                   'change has a test')
+        out.append('pair that a database can store and use.')
+    for names, why in not_checked:
+        out += wrapped(f'Not checked in PostgreSQL by these files: '
+                       f'{", ".join(names)}: {why}.', 0, 2)
+    return out
+
+
 def summary_lines(old, new, groups, run, totals, characters_to=None,
                   note=None):
     """The report in brief, for the summary audit.sh prints at the end.
@@ -9150,8 +9264,144 @@ def charmap_findings(old, new, charmaps, compared, firm=()):
     return lacking, found
 
 
+def stores(piece, codeset):
+    """Whether a database of the encoding PostgreSQL gives a locale of
+    codeset stores piece, a string step 11 measured, a probe's pair or
+    SEPARATOR, as stored_strings() decides what a database holds: UTF-8,
+    the UTF-8 of a scalar value (not the lone bytes 80 to FF nor
+    CHARMAP_ONLY's sequences, which step 11 measures too); EUC-JP, EUC-KR,
+    GB2312 and EUC-TW, accepted_sequences(); another encoding PostgreSQL
+    imports a collation of is of one byte, every byte but NUL, which no
+    measured string holds. None for an encoding it imports none of
+    (postgres_reach), and for a spelling of a database encoding of more
+    than one byte other than those five, which this does not read."""
+    if codeset == 'UTF-8':
+        try:
+            piece.decode('utf-8')
+        except UnicodeDecodeError:
+            return False
+        return b'\0' not in piece
+    if postgres_reach(codeset) != 'imported':
+        return None
+    if codeset in EUC_CODESETS:
+        return piece == SEPARATOR or piece in accepted_set(codeset)
+    if codeset.upper() in postgres_codesets()[2]:
+        return None
+    return b'\0' not in piece
+
+
+def ascii_name(name):
+    """A locale name as ASCII, for a SQL file: as it is, or quoted with
+    escapes."""
+    return name if name.isascii() else json.dumps(shown(name))
+
+
+def confirm_groups(groups, pg_names, old, new, only_old, unknown=()):
+    """The SQL files of --sql-to: ([(encoding, text, id, tests)], not
+    checked), from groups [(locales measured alike, their encoding, what
+    describe_change gave the SQL, plus a changed table's lines)].
+
+    A group goes to the file of the database encoding PostgreSQL gives its
+    encoding, under every name a database of that encoding knows it by: the
+    names `locale -a` gives (pg_import_system_collations imports those of
+    ASCII) and their aliases (postgres_names). Only the pairs both of whose
+    strings that database stores are tested, and the others counted. A
+    group PostgreSQL imports no collation of (TIS-620; BIG5, allowed only
+    on the client), or with no pair a database stores, is in no file:
+    every file names it, and so does the report. So does every locale in
+    unknown, [(locales, why)]: those step 11 could not measure, glibc
+    refuses, or the new machine lacks, which are not known to be
+    unchanged and have no pair. An encoding with no test gets no file, so
+    that no file reads as "0 of 0"."""
+    import confirm_sql
+    import collation_keys
+    machines = []
+    for d in (old, new):
+        m = re.fullmatch(r'glibc (\d+\.\d+(?:\.\d+)?)', d['glibc_version'])
+        machines.append({'label': machine_label(d),
+                         'version': m.group(1) if m else None})
+    by_encoding = {}
+    not_checked = [([ascii_name(x) for x in names], why)
+                   for names, why in unknown if names]
+    for names, codeset, items in sorted(groups):
+        shown_names = [ascii_name(x) for x in names]
+        untested = [(count, why) for kind, count, why in
+                    (x for x in items if x[0] == 'untested')]
+        tests = [x[1:] for x in items if x[0] == 'test']
+        reach = postgres_reach(codeset) if codeset else None
+        if reach != 'imported':
+            not_checked.append((shown_names, {
+                None: 'its encoding is not known',
+                'anywhere': f'PostgreSQL imports no collation of its '
+                            f'encoding, {codeset}',
+                'superuser': f'PostgreSQL allows its encoding, {codeset}, '
+                             'only on the client and imports no collation of '
+                             'it'}[reach]))
+            continue
+        encoding = collation_keys.SERVER_ENCODINGS[codeset.upper()]
+        collations = set()
+        for name in names:
+            for x in (name, pg_names.get(name, (None,))[0]):
+                if x and x.isascii() and confirm_sql.SAFE_NAME.fullmatch(x):
+                    collations.add(x)
+        kept, unstorable, undecided = [], 0, False
+        for a, b, so, sn, measured in tests:
+            held = [stores(x, codeset) for x in a + b]
+            if None in held:
+                undecided = True
+            elif all(held):
+                kept.append((b''.join(a), b''.join(b), so, sn, measured))
+            else:
+                unstorable += 1
+        if undecided:
+            not_checked.append((shown_names, 'which strings a database of its '
+                                f'encoding, {encoding}, stores is not known '
+                                'here'))
+            continue
+        if not collations:
+            not_checked.append((shown_names, 'no name of it can be written '
+                                'into a SQL file'))
+            continue
+        if not kept:
+            why = (f'none of its {unstorable:,} test pair(s) can be stored in '
+                   f'a {encoding} database' if unstorable else
+                   'step 11 found no test pair for its change')
+            not_checked.append((shown_names, why + ''.join(
+                f'; {count:,} {what}' if count is not None else f'; {what}'
+                for count, what in untested)))
+            continue
+        by_encoding.setdefault(encoding, []).append({
+            'locales': shown_names, 'collations': sorted(collations),
+            'tests': kept, 'untested': untested, 'unstorable': unstorable})
+    files = []
+    gone = sorted(x for x in only_old if x.isascii()
+                  and confirm_sql.SAFE_NAME.fullmatch(x))
+    for encoding in sorted(by_encoding):
+        text, ident, tests = confirm_sql.sql_text(
+            encoding, *machines, by_encoding[encoding], not_checked,
+            [x for x in sorted(by_encoding) if x != encoding], gone)
+        files.append((encoding, text, ident, tests))
+    return files, not_checked
+
+
+def sql_paths(prefix, encoding):
+    return f'{prefix}.{encoding}.sql'
+
+
 def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
-            charmaps=(('why', ALONE), ('why', ALONE))):
+            charmaps=(('why', ALONE), ('why', ALONE)), sql_to=None):
+    if sql_to:
+        # A file an earlier run wrote under this prefix, for an encoding
+        # this run writes none for, would read as this run's.
+        folder = os.path.dirname(sql_to) or '.'
+        base = os.path.basename(sql_to)
+        try:
+            for entry in os.listdir(folder):
+                if re.fullmatch(re.escape(base) + r'\.[A-Z0-9_]+\.sql'
+                                r'(\.partial)?', entry):
+                    os.remove(os.path.join(folder, entry))
+        except OSError as e:
+            die(f'cannot write {sql_to}.*.sql: {e}')
     if characters_to:
         # An earlier run's list under this name would read as this run's
         # answer if this one is refused or gives up: it goes first.
@@ -9264,17 +9514,24 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
                    n[name]['pairs'], o[name]['codeset'], table)
         measured_alike.setdefault(key, []).append(name)
     reads_alike, briefs, rows = {}, {}, []
+    confirm = []     # (names, encoding, what the SQL files get)
     others = False   # whether a string is named by its bytes
     several = False  # whether a sort table names a string of several characters
     for names in measured_alike.values():
         table = by_table.get(names[0])
         if table and table[1] != 'changed':
-            lines, brief, found, named = [], '', [], False
+            lines, brief, found, named, sql = [], '', [], False, []
         else:
-            lines, brief, found, named = describe_change(old, new, o[names[0]],
-                                                         n[names[0]])
+            lines, brief, found, named, sql = describe_change(
+                old, new, o[names[0]], n[names[0]])
         if table:
             more, phrase, counted = table_change_lines(*table)
+            if table[1] != 'changed':
+                sql.append(('untested', None, counted))
+            elif table[2] and table[2][2]:
+                sql.append(('untested', len(table[2][2]), 'sequence(s) its '
+                            'compiled sort table names as changed, which no '
+                            'test here takes one by one'))
             lines = more + lines
             if phrase:
                 brief = '; '.join(x for x in (phrase, brief) if x)
@@ -9295,6 +9552,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
         reads_alike.setdefault(tuple(lines), []).extend(names)
         briefs[tuple(lines)] = brief
         rows.append((sorted(names), found))
+        confirm.append((sorted(names), o[names[0]].get('codeset'), sql))
     groups = sorted(reads_alike.items(), key=lambda item: sorted(item[1]))
     note = names_note(others, several)
     # The names PostgreSQL gives the locales, taken from the old machine: a
@@ -9302,6 +9560,13 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     # could not be measured takes part as well: whether PostgreSQL imported
     # it does not depend on the measurement.
     pg_names = postgres_names(o)
+    sql_files, sql_not_checked = (confirm_groups(
+        confirm, pg_names, old, new, only_old,
+        [(sorted(refused), 'glibc refuses it on at least one machine'),
+         (sorted(unmeasured), 'step 11 could not measure it on both '
+                              'machines'),
+         (only_old, 'it is not on the new machine')])
+        if sql_to else ([], []))
     # Unchanged only as far as it was measured: some neighbours were not
     # measured at every level (unclassified), so a change in how they are
     # told apart would not show.
@@ -9393,6 +9658,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
                           'other string and pair found.')
         if note:
             report += wrapped(note, 0, 0)
+    if sql_to:
+        report += [''] + sql_lines(sql_to, sql_files, sql_not_checked)
     report += ['', f'Unchanged: {len(same)} locale(s).']
     report += run('tables only')
     report += run('tables not compared')
@@ -9453,12 +9720,15 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
 
     partial = characters_to + '.partial' if characters_to else None
     written = []    # what this run wrote, removed again if it gives up
+    sql_partials = [(sql_paths(sql_to, enc) + '.partial', sql_paths(sql_to, enc),
+                     text) for enc, text, ident, tests in sql_files]
 
     def give_up(msg):
         # A list half written, or whole beside a summary that is not, is not
         # this run's answer: nothing is left under either name, nor a summary
-        # that names a list that is not there.
-        for path in [partial] + written:
+        # that names a list that is not there; nor a SQL file.
+        for path in [partial] + written + [x for part, final, t in sql_partials
+                                           for x in (part, final)]:
             if path:
                 try:
                     os.remove(path)
@@ -9491,6 +9761,12 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
                 f.write(f'# end: {len(rows)} locale group(s), {count} row(s)\n')
         except OSError as e:
             give_up(f'cannot write {characters_to}: {e}')
+    for part, final, text in sql_partials:
+        try:
+            with open(part, 'w', encoding='ascii') as f:
+                f.write(text)
+        except OSError as e:
+            give_up(f'cannot write {final}: {e}')
     if summary_to:
         # Written before the report, so that a summary that cannot be written
         # stops the run with no report on the screen, like damage does.
@@ -9505,6 +9781,11 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
             os.replace(partial, characters_to)
         except OSError as e:
             give_up(f'cannot write {characters_to}: {e}')
+    for part, final, text in sql_partials:
+        try:
+            os.replace(part, final)
+        except OSError as e:
+            give_up(f'cannot write {final}: {e}')
 
     for line in report:
         print(line)
@@ -9535,6 +9816,11 @@ def main():
                     help='with --compare: also write every character, other '
                          'string and pair found, by locale, to FILE '
                          '(tab-separated)')
+    ap.add_argument('--sql-to', metavar='PREFIX',
+                    help='with --compare: also write PREFIX.<ENCODING>.sql, '
+                         'one SQL file per database encoding with the test '
+                         'pairs found, to run on both servers and read with '
+                         'confirm_sql.py read')
     for side in ('old', 'new'):
         cm = ap.add_mutually_exclusive_group()
         cm.add_argument(f'--{side}-charmaps', metavar='DIR',
@@ -9564,10 +9850,10 @@ def main():
             die(f'--{side}-no-charmaps needs a reason that prints')
         charmaps.append(('dir', folder) if folder is not None
                         else ('why', why if why is not None else ALONE))
-    if (args.tags or args.summary_to or args.characters_to or given) \
-            and not args.compare:
-        die('--tags, --summary-to, --characters-to and the charmaps options '
-            'go with --compare')
+    if (args.tags or args.summary_to or args.characters_to or args.sql_to
+            or given) and not args.compare:
+        die('--tags, --summary-to, --characters-to, --sql-to and the '
+            'charmaps options go with --compare')
     if sum(map(bool, (args.extract, args.compare, args.unpack))) > 1:
         die('--extract, --compare and --unpack are three different runs; '
             'give one')
@@ -9577,7 +9863,7 @@ def main():
         return compare(*args.compare, tags=args.tags,
                        summary_to=args.summary_to,
                        characters_to=args.characters_to,
-                       charmaps=tuple(charmaps))
+                       charmaps=tuple(charmaps), sql_to=args.sql_to)
     if args.jobs is not None and args.jobs < 1:
         die('--jobs must be at least 1')
     jobs = args.jobs or default_jobs()

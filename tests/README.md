@@ -22,12 +22,14 @@ this tool shipped, or a way of losing one, and its docstring says which.
 | `test_build_sources.py` | mostly | `scripts/build_sources.py`, which rebuilds a RHEL glibc build's `localedata/` and `locale/` from its source RPM in the order rpm recorded in its header, against what `rpmbuild -bp` did with three builds (`build_sources/`), what those machines hold, and what the builds' binary packages record; and how it fetches a build's three files by name, on a mirror the tests make; and `audit.sh` end to end on builds |
 | `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, locale names and their aliases, the comment filter |
 | `test_locale_order.py` | no | step 11: the comparison on three real machines' measurements, the file each machine writes, and the progress lines |
+| `test_confirm_sql.py` | no | the SQL files step 11 writes for PostgreSQL (`--sql-to`), and `scripts/confirm_sql.py read` on outputs PostgreSQL printed for them (`confirm_sql/`) |
 | `test_parallel_runner.py` | no | guards against losing tests quietly, in the parallel runner and in a test file run on its own |
 | `test_published_claims.py` | no | the figures, links and paths the documentation publishes |
 
 Without a clone at `scripts/glibc`, every layer marked "yes" skips with a
 reason; `test_pure_functions.py`, `test_parallel_runner.py`,
-`test_locale_order.py`, `test_published_claims.py` and the classes of
+`test_locale_order.py`, `test_confirm_sql.py`, `test_published_claims.py`
+and the classes of
 `test_git_helpers.py`, `test_glibc_reader.py`, `test_build_sources.py` and
 `test_provenance.py` that do not need it still run. A skip is never a pass,
 and CI, which clones glibc fresh, fails on any skip.
@@ -38,7 +40,8 @@ and CI, which clones glibc fresh, fails on any skip.
 
 - The SQL files, `sql/collation_confirmation_template.sql` and
   `sql/c_utf8_probe.sql`, are never run, because that needs PostgreSQL on
-  two machines.
+  two machines. Neither are the files step 11 writes: the suite reads
+  outputs PostgreSQL printed for them, recorded by hand (`confirm_sql/`).
 - A real machine: what runs on one -- the half of `scripts/locale_order.py`
   that measures, and `tests/reader_oracle/measure.py run`, which compiles
   the reader's cases with `localedef` -- needs Linux with glibc. So does

@@ -1038,10 +1038,18 @@ class WrapperRefusesBadInput(unittest.TestCase):
                               + pair_slug(NEW, NEW) + '.tsv')
         with open(listed, 'w', encoding='utf-8') as fh:
             fh.write('left by an earlier run\n')
+        # And its SQL files, one per database encoding.
+        sql = [os.path.join(self.out_dir, 'measured_order_confirm.'
+                            + pair_slug(NEW, NEW) + f'.{enc}.sql')
+               for enc in ('UTF8', 'LATIN1')]
+        for path in sql:
+            with open(path, 'w', encoding='utf-8') as fh:
+                fh.write('left by an earlier run\n')
         rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir)
         self.assertEqual(rc, 0, out)
         self.assertNotIn('no_SUCH_locale', out)
         self.assertFalse(os.path.exists(listed))
+        self.assertEqual([x for x in sql if os.path.exists(x)], [])
 
 
 @needs_clone
@@ -2195,6 +2203,25 @@ class WrapperMeasuredOrder(unittest.TestCase):
             names = set().union(*map(set, changes_in(parse_characters(f.read()))))
         self.assertEqual(names, CHANGED_8_TO_9)
 
+    def test_step_11_names_this_runs_sql_files(self):
+        """One SQL file per database encoding, named for the pair in this
+        run's output folder, in step 11's block with the command that reads
+        two servers' outputs; nothing of them in the summary."""
+        step11 = self.out.split('\n== STEP 11  MEASURED ORDER  ')[1].split(
+            'AUDIT SUMMARY')[0]
+        named = re.findall(r'^  (\w+) database, [\d,]+ test\(s\):\n    (\S+)$',
+                           step11, re.M)
+        prefix = os.path.join(self.out_dir, 'measured_order_confirm.'
+                              + pair_slug(OLD, MID))
+        self.assertEqual(named, [(enc, f'{prefix}.{enc}.sql')
+                                 for enc in ('LATIN1', 'LATIN9', 'UTF8')])
+        for enc, path in named:
+            self.assertTrue(os.path.isfile(path), path)
+        self.assertIn('  python3 scripts/confirm_sql.py read FILE old.out '
+                      'new.out', step11.split('\n'))
+        self.assertNotIn('measured_order_confirm.',
+                         self.out[self.out.index('AUDIT SUMMARY'):])
+
     def test_the_block_sits_under_removed(self):
         """Removed stays directly under Reindex, where it was put so that a
         locale the upgrade deletes is on the first screen: this block is long,
@@ -2287,13 +2314,17 @@ class WrapperMeasuredOrderRefused(unittest.TestCase):
             g_.write(text[:len(text) // 3])
         stale = os.path.join(self.out_dir, 'measured_order_characters.'
                              + pair_slug(OLD, MID) + '.tsv')
-        with open(stale, 'w', encoding='utf-8') as f:
-            f.write('left by an earlier run\n')
+        sql = os.path.join(self.out_dir, 'measured_order_confirm.'
+                           + pair_slug(OLD, MID) + '.UTF8.sql')
+        for path in (stale, sql):
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('left by an earlier run\n')
         out = self.assertRefusedBeforeStep1('--old-order', cut_few(RHEL8),
                                             '--new-order', cut)
         self.assertIn('locale_order.py: ', out)
         self.assertIn(COULD_NOT_COMPARE, out)
         self.assertFalse(os.path.exists(stale))
+        self.assertFalse(os.path.exists(sql))
 
 
 @needs_clone

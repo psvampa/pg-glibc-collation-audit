@@ -135,7 +135,8 @@ jobs:
         # DESIGN, which is right on a contributor's laptop and wrong here -- a
         # broken clone step would otherwise leave this job green with only the
         # clone-free layers (test_pure_functions, test_parallel_runner,
-        # test_locale_order, and test_published_claims when it is enabled) and
+        # test_locale_order, test_confirm_sql, and test_published_claims when
+        # it is enabled) and
         # the classes of test_git_helpers, test_glibc_reader, test_build_sources
         # and test_provenance that need no clone having actually run.
         #
