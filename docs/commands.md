@@ -51,11 +51,12 @@ The same command, given one file from each machine with `--old-node` and
 that machine. The five checks above then read the build each file names,
 as `rpm -q glibc` printed it on that machine, in place of the tag, as in
 1.a: the side you give is that build or its tag. When a build cannot be
-read (an older build whose spec the run does not know how to read,
-one Rocky Linux's mirror does not list, or no network the first time it is
-read) and you gave its tag, both sides read their tags and the run says so
-before step 1; given as the build itself, it is refused, as in 1.a. The two
-files add six more checks.
+read (a build whose spec the run does not know how to read, one Rocky
+Linux's mirror does not list or lists with no metadata to check it
+against, or no network the first time it is read) and you gave its tag,
+both sides read their tags and the run says so before step 1; given as
+the build itself, it is refused, as in 1.a. The two files add six more
+checks.
 
 | The run's step | The question it answers |
 |---|---|
