@@ -35,9 +35,9 @@ The sections below are the evidence behind each row.
 
 ## Worked example: RHEL8 to RHEL9 (glibc 2.28 to 2.34)
 
-Full output and the PostgreSQL confirmation script for this pair:
+Full output and the PostgreSQL confirmation files for this pair:
 [`examples/rhel8-to-rhel9-audit-output.txt`](../examples/rhel8-to-rhel9-audit-output.txt),
-[`examples/rhel8-to-rhel9.sql`](../examples/rhel8-to-rhel9.sql).
+[the SQL step 11 writes, with both servers' outputs](../examples/README.md#command-3--the-sql-step-11-writes).
 
 ### `or_IN` and the Swedish locales — from the data diff
 
@@ -173,8 +173,8 @@ again by step 4.
 
 On inspection, `ber_DZ` and `kab_DZ` turned out to be a
 [role swap](glossary.md) — the same collation ruleset, relocated to the other
-file — not an actual rule change, confirmed by an empirical test showing no
-observable difference.
+file — not an actual rule change. Step 11 finds both unchanged
+([below](#what-step-11-measured)).
 
 `th_TH` is a real rewrite, and it **does** move sort order.
 
@@ -195,17 +195,16 @@ glibc 2.39:  ก เก ไก ไก่ ฤ เฤ ฦ เฦ ฮ      <- each 
 
 Confirmed by direct `strcoll`, not only `ORDER BY`, so it is not a tie-break
 artifact: `เฤ` > `ฮ` at 2.34 and `เฤ` < `ฮ` at 2.39, and likewise for `เฦ`.
-With `ber_DZ`, `kab_DZ`, `ko_KR`, `en_US`, `de_DE` and `fr_FR` identical on
-both nodes as controls. Reproduce with
-[`examples/rhel9-to-rhel10.sql`](../examples/rhel9-to-rhel10.sql).
+The SQL step 11 writes for this pair tests
+`th_TH.utf8` in PostgreSQL, and each server answers like its machine
+([examples/README.md, under Command 3](../examples/README.md#command-3--the-sql-step-11-writes)).
 
 ### `ko_KR` — flagged by step 4, cleared by measurement
 
 `ko_KR` is flagged by step 4 here too, and step 5 finds code changes between
 2.34 and 2.39 that it leaves to a reader of C. What clears it is measurement.
-`ko_KR` is identical on both nodes above, step 11 finds it unchanged, and
-ardentperf's glibc checksum for `ko` is the same on
-RHEL9 and RHEL10.
+Step 11 finds `ko_KR` unchanged, and ardentperf's glibc checksum for `ko`
+is the same on RHEL9 and RHEL10.
 
 ## What step 11 measured
 

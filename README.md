@@ -215,7 +215,7 @@ What this box leaves out is in
   `REINDEX` fixes
 
 A worked example for each pair is in
-[examples/README.md, under Command 3](examples/README.md#command-3--the-worked-example-scripts).
+[examples/README.md, under Command 3](examples/README.md#command-3--the-sql-step-11-writes).
 
 ## Results for the two RHEL pairs
 

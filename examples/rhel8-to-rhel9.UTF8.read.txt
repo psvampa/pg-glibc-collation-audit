@@ -1,0 +1,25 @@
+$ python3 scripts/confirm_sql.py read examples/rhel8-to-rhel9.UTF8.sql examples/rhel8-to-rhel9.UTF8.el8.out examples/rhel8-to-rhel9.UTF8.el9.out
+SQL file: examples/rhel8-to-rhel9.UTF8.sql (UTF8 database; glibc-2.28-251.el8_10.40.x86_64 -> glibc-2.34-275.el9_8.x86_64)
+OLD output: examples/rhel8-to-rhel9.UTF8.el8.out, PostgreSQL 18.6, database encoding UTF8
+NEW output: examples/rhel8-to-rhel9.UTF8.el9.out, PostgreSQL 18.6, database encoding UTF8
+Confirmed in PostgreSQL: 38761 of 38761 tests answer like the old machine in examples/rhel8-to-rhel9.UTF8.el8.out and like the new one in examples/rhel8-to-rhel9.UTF8.el9.out.
+!! examples/rhel8-to-rhel9.UTF8.el8.out: PostgreSQL gives no glibc version for collation C.utf8 (it gives none for C.* and POSIX, nor before PostgreSQL 13), so its version is not checked
+!! examples/rhel8-to-rhel9.UTF8.el9.out: PostgreSQL gives no glibc version for collation C.utf8 (it gives none for C.* and POSIX, nor before PostgreSQL 13), so its version is not checked
+!! examples/rhel8-to-rhel9.UTF8.el8.out: uses a locale name the new machine does not have:
+     collation en_US.utf8@ampm: en_US.utf8@ampm
+     collation en_US@ampm: en_US@ampm
+!! This file confirms only the changes it tests; it does not say that anything else is unchanged. Not tested by it:
+     not tested: C.utf8: 2,721 pair(s) of neighbours the measurement cannot decide
+     not tested: C.utf8: 215 pair(s) whose strings a UTF8 database cannot store
+     not tested: ko_KR.utf8: 2 pair(s) of neighbours the measurement cannot decide
+     not tested: ko_KR.utf8: 4,889 sequence(s) its compiled sort table names as changed, which no test here takes one by one
+     not tested: or_IN, or_IN.utf8: the pairs that tell letters, accents and case apart are told apart differently themselves, which no test here checks
+     not tested: or_IN, or_IN.utf8: 1,055 chain(s) of neighbours told apart differently at no level a measured pair compares
+     not tested: or_IN, or_IN.utf8: 8,406 pair(s) of neighbours the measurement cannot decide
+     not tested: or_IN, or_IN.utf8: 50,838 sequence(s) its compiled sort table names as changed, which no test here takes one by one
+     not tested: sv_FI.utf8, sv_SE.utf8: 7 pair(s) of neighbours the measurement cannot decide
+     not tested: sv_FI.utf8, sv_SE.utf8: 125 sequence(s) its compiled sort table names as changed, which no test here takes one by one
+     not checked in PostgreSQL by this file: en_US.utf8@ampm, en_US@ampm: it is not on the new machine
+     the locales of other encodings are in the files written beside this one: LATIN1, LATIN9
+     not tested: character rules (LC_CTYPE) of 485 more locale(s), not run one by one: step 11 found in each the changes it found in en_US.utf8, which this file tests (the LC_CTYPE group of step 11's characters file names them)
+     not tested: character rules (LC_CTYPE) in a database of any encoding but UTF8: no file tests them; step 11's report says what it found

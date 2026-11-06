@@ -48,18 +48,32 @@ glibc version. Everything the probe measured is byte-identical.
 | [`c-utf8-probe-rhel8-vs-rhel9.txt`](c-utf8-probe-rhel8-vs-rhel9.txt) | RHEL8 against RHEL9 |
 | [`c-utf8-probe-rhel9-vs-rhel10.txt`](c-utf8-probe-rhel9-vs-rhel10.txt) | RHEL9 against RHEL10 |
 
-## Command 3 — the worked-example scripts
+## Command 3 — the SQL step 11 writes
 
-These are the PostgreSQL scripts [docs/results.md](../docs/results.md) cites
-for each pair. Run one on both machines and diff the outputs. They pick
-collations by name. For a new confirmation, start from
-[the template](../sql/collation_confirmation_template.sql), which reads each
-collation's locale instead.
+Command 1 extended writes, in its output folder, one SQL file per database
+encoding that tests in PostgreSQL the changes step 11 found
+(`measured_order_confirm.<pair>.<ENCODING>.sql`). These are the files it
+writes for the two pairs. Each runs unchanged on both servers; beside it are
+the old and the new server's output, and what `scripts/confirm_sql.py read`
+said of the two, the command above what it printed.
 
-| File | |
-|---|---|
-| [`rhel8-to-rhel9.sql`](rhel8-to-rhel9.sql) | glibc 2.28 to 2.34 |
-| [`rhel9-to-rhel10.sql`](rhel9-to-rhel10.sql) | glibc 2.34 to 2.39 |
+| SQL file | Old server | New server | Read |
+|---|---|---|---|
+| [`rhel8-to-rhel9.UTF8.sql`](rhel8-to-rhel9.UTF8.sql) | [`el8`](rhel8-to-rhel9.UTF8.el8.out) | [`el9`](rhel8-to-rhel9.UTF8.el9.out) | [`read`](rhel8-to-rhel9.UTF8.read.txt) |
+| [`rhel8-to-rhel9.LATIN1.sql`](rhel8-to-rhel9.LATIN1.sql) | [`el8`](rhel8-to-rhel9.LATIN1.el8.out) | [`el9`](rhel8-to-rhel9.LATIN1.el9.out) | [`read`](rhel8-to-rhel9.LATIN1.read.txt) |
+| [`rhel8-to-rhel9.LATIN9.sql`](rhel8-to-rhel9.LATIN9.sql) | [`el8`](rhel8-to-rhel9.LATIN9.el8.out) | [`el9`](rhel8-to-rhel9.LATIN9.el9.out) | [`read`](rhel8-to-rhel9.LATIN9.read.txt) |
+| [`rhel9-to-rhel10.UTF8.sql`](rhel9-to-rhel10.UTF8.sql) | [`el9`](rhel9-to-rhel10.UTF8.el9.out) | [`el10`](rhel9-to-rhel10.UTF8.el10.out) | [`read`](rhel9-to-rhel10.UTF8.read.txt) |
+
+The UTF8 outputs come from the test machines the results page cites, on
+PostgreSQL 18.6. The LATIN1 and LATIN9 outputs come from a Rocky Linux 8
+machine with PostgreSQL 18.6 and a Rocky Linux 9 machine with Percona's
+PostgreSQL 17.11, running the test machines' glibc builds,
+`glibc-2.28-251.el8_10.40` and `glibc-2.34-275.el9_8`. Raw output, nothing
+trimmed.
+
+Without the two machines' files, start from
+[the template](../sql/collation_confirmation_template.sql), which sorts
+strings you choose and reads each collation's locale.
 
 ---
 
