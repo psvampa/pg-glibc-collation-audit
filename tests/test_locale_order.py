@@ -255,6 +255,19 @@ TOLD_APART = ({'not at all (the bytes decide)', 'by less than a letter',
 # summary.
 FILE_LINE = 'Every character, other string and pair found, by locale:'
 SUMMARY_FILE_LINE = '       every character, other string and pair:'
+# What compare's report says of the SQL files of --sql-to (sql_lines).
+SQL_HEAD = ('To confirm these changes in PostgreSQL, run each SQL file '
+            'unchanged on both',
+            'servers, in a database of its encoding (psql -X -d DATABASE -f '
+            'FILE > old.out',
+            '2>&1, and new.out on the new server), and read the two outputs '
+            'with:',
+            '  python3 scripts/confirm_sql.py read FILE old.out new.out')
+SQL_LINE = SQL_HEAD[0]
+NO_SQL_HEAD = ('No SQL file written to confirm a change in PostgreSQL: no '
+               'change has a test',
+               'pair that a database can store and use.')
+NO_SQL_LINE = NO_SQL_HEAD[0]
 NO_FILE_LINE = ('Pass --characters-to FILE for every character, other '
                 'string and pair found.')
 # How a string that is not a character is named, under the changes, and a
@@ -1809,8 +1822,37 @@ def parse_report(text):
     changed = int(take(r'Sort order CHANGED in (\d+) locale\(s\):')[1])
     r['changes'] = []
     r['characters_file'] = None
+    r['sql'] = None
+
+    def sql_block():
+        # What --sql-to wrote, before the unchanged count: each file with
+        # its count, or none and why, and what no file checks.
+        if not line().startswith((SQL_LINE, NO_SQL_LINE)):
+            return
+        got = {'files': [], 'not_checked': []}
+        if line().startswith(SQL_LINE):
+            for want in SQL_HEAD:
+                take(re.escape(want))
+            while line().startswith('  ') and line().endswith(' test(s):'):
+                mt = take(r'  (\w+) database, ([\d,]+) test\(s\):')
+                got['files'].append((mt[1], int(mt[2].replace(',', '')),
+                                     take(r'    (\S+)')[1]))
+            if not got['files']:
+                fail('SQL files announced and none named')
+        else:
+            for want in NO_SQL_HEAD:
+                take(re.escape(want))
+        while line().startswith('Not checked in PostgreSQL by these files: '):
+            text = [take(r'(Not checked in PostgreSQL by these files: .*)')[1]]
+            while line().startswith('  '):
+                text.append(take(r'  (\S.*)')[1])
+            got['not_checked'].append(' '.join(text))
+        take('')
+        r['sql'] = got
+
     while True:
         take('')
+        sql_block()
         if line().startswith('Unchanged: '):
             # Every change is followed by where its whole list is, or by how
             # to get it.
@@ -1831,6 +1873,7 @@ def parse_report(text):
                 if r['others_note'] not in NOTES:
                     fail('unknown note on how names read')
             take('')
+            sql_block()
             if not line().startswith('Unchanged: '):
                 fail('expected the unchanged count after the characters file')
             break
@@ -5703,16 +5746,17 @@ class FindingKinds(unittest.TestCase):
                                             'charmaps checked',
                                             'tables not compared',
                                             'tables disagree', 'tables only'})
-        for table in (m.LOCALE_KINDS, m.RUN_KINDS):
+        # A locale's kinds give the SQL files of --sql-to their pairs too.
+        for table, parts in ((m.LOCALE_KINDS, 4), (m.RUN_KINDS, 3)):
             for kind, how in table.items():
                 with self.subTest(kind=kind):
-                    self.assertEqual(len(how), 3)
+                    self.assertEqual(len(how), parts)
                     self.assertTrue(all(map(callable, how)))
 
     def test_a_kind_with_no_entry_raises(self):
         """Rather than be left out of an output: a new kind of finding
         with no way to be printed, and a kind one output never takes."""
-        for part in (m.REPORT, m.SUMMARY, m.FILE):
+        for part in (m.REPORT, m.SUMMARY, m.FILE, m.SQL):
             with self.assertRaises(LookupError):
                 m.printer(m.LOCALE_KINDS, 'a new kind', part)
         with self.assertRaises(LookupError):
@@ -5772,7 +5816,7 @@ class FindingKinds(unittest.TestCase):
         for limit in (m.LIST_LIMIT, 0):
             with unittest.mock.patch.object(m, 'LIST_LIMIT', limit):
                 for name, args in self.changes().items():
-                    lines, brief, rows, others = m.describe_change(*args)
+                    lines, brief, rows, others, sql = m.describe_change(*args)
                     # Code points in UTF-8: every string a character.
                     self.assertFalse(others)
                     old, nw, o, n = args
@@ -5796,6 +5840,27 @@ class FindingKinds(unittest.TestCase):
                         assert_named_alike(self, parse_details(lines),
                                            parse_brief(brief),
                                            files.get(('x',), []))
+                    with self.subTest(change=name, limit=limit, kind='sql'):
+                        # What the SQL files get: a test for each row of the
+                        # file with a test pair, in its order, with its signs
+                        # and where it was measured; each row without one
+                        # counted.
+                        tests = [x for x in sql if x[0] == 'test']
+                        paired = [r for r in rows if r[0] in (
+                            'moved', 'told apart differently') and r[3] != '-']
+                        self.assertEqual(
+                            [(x[3], x[4], m.MEASURED[x[5]]) for x in tests],
+                            [(r[4], r[5], r[6]) for r in paired])
+                        untested = {why: count for kind, count, why in
+                                    (x for x in sql if x[0] == 'untested')}
+                        for row, words in (
+                                ('not decided', 'cannot decide'),
+                                ('told apart differently', 'no level')):
+                            got = sum(n for why, n in untested.items()
+                                      if words in why)
+                            self.assertEqual(got, sum(
+                                1 for r in rows if r[0] == row
+                                and r[3] == '-'))
         # Each kind came up, in both forms, and changes measured on each side.
         self.assertEqual(sides, {'old', 'new'})
         for kind in LOCALE_KINDS:
@@ -14464,11 +14529,11 @@ class SortTablesCompared(Checks):
     naming different locales."""
 
     def outputs(self, old_edits=(), new_edits=(), form=(m.FORMAT, m.FORMAT),
-                charmaps=None, parts=None, old_parts=None):
+                charmaps=None, parts=None, old_parts=None, sql=False):
         """(report, summary, file) of RHEL9 -> RHEL10 with the edits, given
         CHARMAPS (a folder) as both machines' charmaps and PARTS (with_parts'
         arguments) to both machines' parts, OLD_PARTS instead to the old
-        machine's."""
+        machine's; with SQL, --sql-to as well, under self.sql_prefix."""
         tag = self.id().rsplit('.', 1)[-1]
         old = self.made(RHEL9, 'old', with_parts(
             form=form[0], **((parts if old_parts is None else old_parts) or {})),
@@ -14482,12 +14547,15 @@ class SortTablesCompared(Checks):
                 SCRIPT, '--compare', old, new, '--summary-to', summary,
                 '--characters-to', chars] + (
                     ['--old-charmaps', charmaps, '--new-charmaps', charmaps]
-                    if charmaps else [])), \
+                    if charmaps else []) + (
+                    ['--sql-to', os.path.join(self.tmp, tag)] if sql
+                    else [])), \
                 contextlib.redirect_stdout(stdout), \
                 contextlib.redirect_stderr(stderr):
             self.assertEqual(m.main(), 0)
         self.assertEqual(stderr.getvalue(), '')
         self.printed = stdout.getvalue()
+        self.sql_prefix = os.path.join(self.tmp, tag)
         with open(summary, encoding='utf-8') as f, \
                 open(chars, encoding='utf-8') as g:
             return (parse_report(stdout.getvalue()), parse_summary(f.read()),
@@ -14552,6 +14620,24 @@ class SortTablesCompared(Checks):
         for out in (r['checks'], s['checks'], f.checks):
             self.assertIn(('charmaps', {'checked': 1, 'by_table': 3}), out)
         self.assertEqual(r['charmaps_unchecked'], [])
+
+    def test_a_locale_not_measured_is_named_by_the_sql_files(self):
+        """A locale step 11 could not measure is not known to be
+        unchanged and has no pair: --sql-to names it (review round 1)."""
+        # Its table not read either, so that nothing decides it.
+        unread = {'ja_JP.utf8': {'state': 'not read', 'why': 'no file',
+                                 'fingerprint': None, 'nrules': None,
+                                 'table': None}}
+
+        def unmeasured(d):
+            d['locales']['ja_JP.utf8'] = {
+                'error': 'measuring failed: MemoryError()', 'codeset': 'UTF-8'}
+        r, s, f = self.outputs([read_tables(unread), unmeasured],
+                               [read_tables()], sql=True)
+        self.assertIn('ja_JP.utf8', r['unmeasured'])
+        self.assertIn('Not checked in PostgreSQL by these files: ja_JP.utf8: '
+                      'step 11 could not measure it on both machines.',
+                      ' '.join(self.printed.split()))
 
     def test_no_locale_decided_and_none_to_check(self):
         """Every locale but C and POSIX unmeasured and not compared: no
@@ -14629,6 +14715,24 @@ class SortTablesCompared(Checks):
                          [('either machine', 'unless the same table')])
         self.assertEqual(s['charmaps_unchecked'], r['charmaps_unchecked'])
         self.assertEqual(r['closing'], m.CLOSING_TABLES)
+
+    def test_a_changed_table_step_11_did_not_see_has_no_sql_file(self):
+        """Nothing to test in PostgreSQL: no file, and the locale named
+        with why, never left out (--sql-to)."""
+        other = {'de_DE.utf8': {'fingerprint': 'f' * 64}}
+        self.outputs([read_tables()], [read_tables(other)], sql=True)
+        folder, base = os.path.split(self.sql_prefix)
+        self.assertEqual([x for x in os.listdir(folder)
+                          if x.startswith(base + '.') and x.endswith('.sql')],
+                         [])
+        self.assertIn('No SQL file written to confirm a change in PostgreSQL',
+                      self.printed)
+        self.assertIn('Not checked in PostgreSQL by these files: de_DE.utf8: '
+                      'step 11 found no test pair for its change; its '
+                      'compiled sort table changed in bytes its record of '
+                      'the sequences does not keep, so none is named; step '
+                      '11 saw no change in the strings it measured.',
+                      ' '.join(self.printed.split()))
 
     def test_sort_rules_on_one_machine_only(self):
         for side in ('old', 'new'):

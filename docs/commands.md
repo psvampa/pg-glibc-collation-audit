@@ -244,12 +244,28 @@ anything; how to choose them is in
 at stake. That half needs no editing and no confirmation; what it lists is in
 [confirming-on-a-real-system.md](confirming-on-a-real-system.md#what-else-the-template-reports).
 
+**With the two machines' files, step 11 writes the SQL itself.** One file
+per database encoding, `measured_order_confirm.<pair>.<ENCODING>.sql` in the
+output folder, with the test pairs step 11 found that a database of that
+encoding can store, in the bytes it measured, under every name such a
+database knows the locale by. These files need no editing. Each only reads, so
+it runs unchanged on both servers (`psql -X -d DATABASE -f FILE > old.out
+2>&1`), and `scripts/confirm_sql.py read FILE old.out new.out` reads the two
+outputs against the file. It confirms only when every test is answered once
+in each output, like the old machine in the old one and like the new machine
+in the new one. It refuses when a collation cannot be used, psql reports an
+error outside a collation's own check, or the glibc version PostgreSQL
+reports is not that machine's. It never says that a locale is unchanged:
+what the file does not test is listed in it, and the reader repeats the
+list. The list of your objects at stake still comes from the template.
+
 ## What none of the three does
 
 None of them touches your data or your indexes, and none of them decides for
 you. What they do change is small and named: 1.b installs one package on each
 machine, the locale sources of the build it already runs; commands 2 and 3
 each create a test table of their own, and command 3 first imports the
-system's collations into PostgreSQL's catalog. Command 1 hands you a list,
+system's collations into PostgreSQL's catalog; the SQL files step 11 writes
+only read. Command 1 hands you a list,
 and in 1.b a measurement; commands 2 and 3 hand you measurements. The decision
 to reindex is yours.

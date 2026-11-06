@@ -552,12 +552,17 @@ ORDER_SUMMARY="$OUT_DIR/measured_order_summary.$PAIR.txt"
 # Every character, other string and pair step 11 found, and every sequence
 # a changed sort table names; its report and summary name it.
 ORDER_CHARACTERS="$OUT_DIR/measured_order_characters.$PAIR.tsv"
-rm -f "$ORDER_LOG" "$ORDER_SUMMARY" "$ORDER_CHARACTERS"
+# One SQL file per database encoding, $ORDER_SQL.<ENCODING>.sql, with the
+# test pairs step 11 found; its report names each one and how to read the
+# two servers' outputs.
+ORDER_SQL="$OUT_DIR/measured_order_confirm.$PAIR"
+rm -f "$ORDER_LOG" "$ORDER_SUMMARY" "$ORDER_CHARACTERS" "$ORDER_SQL".*.sql
 if [ -n "$OLD_ORDER" ]; then
   # From the --*-order options there are no charmaps, and step 11 says so.
   if ! python3 "$SCRIPTS/locale_order.py" --compare "$OLD_ORDER" "$NEW_ORDER" \
        --tags "$OLD_TAG" "$NEW_TAG" --summary-to "$ORDER_SUMMARY" \
-       --characters-to "$ORDER_CHARACTERS" ${ORDER_CM[@]+"${ORDER_CM[@]}"} \
+       --characters-to "$ORDER_CHARACTERS" --sql-to "$ORDER_SQL" \
+       ${ORDER_CM[@]+"${ORDER_CM[@]}"} \
        > "$ORDER_LOG" 2>&1; then
     cat "$ORDER_LOG" >&2
     if [ -n "$OLD_NODE" ]; then
