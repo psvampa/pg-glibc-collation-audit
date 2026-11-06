@@ -13,12 +13,12 @@ glibc-locale-source and glibc-common binary packages (no payload), and what
 `rpmbuild -bp --nodeps` did with the whole SRPM on Rocky 8, 9 and 10 on
 2026-11-03: the order it applied every patch in (rpm-order.txt) and the md5
 and executable bit of every file of the tree it left (rpm-tree.md5,
-rpm-tree.exec). specs/ holds the spec of the other four builds the
-catalogues were made from; variants/ what real rpm did with ten inputs
-that a reading of the spec in place of rpm's record accepted with a tree
-other than rpm's, and the files those inputs add. A patch the fixture does not record
-is handed in empty: it touches neither folder, which the tree's equality
-with rpm's proves for the three builds.
+rpm-tree.exec). specs/ holds the spec of each build OTHER_SPECS names;
+variants/ what real rpm did with ten inputs that a reading of the spec
+in place of rpm's record accepted with a tree other than rpm's, and the
+files those inputs add. A patch the fixture does not record is handed in
+empty: it touches neither folder, which the tree's equality with rpm's
+proves for the three builds.
 """
 import functools
 import gzip
@@ -65,8 +65,13 @@ EXTRACT = os.path.join(TESTS_DIR, 'locale_order')
 FIXTURES = (('glibc-2.28-251.el8_10.40', 8), ('glibc-2.34-275.el9_8', 9),
             ('glibc-2.39-128.el10_2', 10))
 EL9 = 'glibc-2.34-275.el9_8'
+# One spec of each RHEL among the 25 older builds Rocky Linux publishes
+# with metadata; together they hold the two Lua blocks and ten macro names
+# that no spec above holds.
+OLDER_SPECS = ('glibc-2.28-127.el8.2', 'glibc-2.34-100.el9_4.4',
+               'glibc-2.39-37.el10')
 OTHER_SPECS = ('glibc-2.28-251.el8_10.48', 'glibc-2.34-168.el9_6.24',
-               'glibc-2.34-283.el9_8', 'glibc-2.39-145.el10_2')
+               'glibc-2.34-283.el9_8', 'glibc-2.39-145.el10_2') + OLDER_SPECS
 
 
 def recorded(build):
@@ -296,8 +301,9 @@ class RebuildsTheFixtureBuildsAsRpmDid(unittest.TestCase):
 @needs_clone
 class TheCataloguesAreTheRealSpecs(unittest.TestCase):
     """Each entry of the three catalogues of known_only comes from a real
-    spec of the seven builds, each real spec without its entries is
-    refused naming them, and nothing else is in them."""
+    spec of the seven builds or of the older ones (OLDER_SPECS), each real
+    spec without its entries is refused naming them, and nothing else is in
+    them."""
 
     def heads(self):
         out = {}
@@ -307,17 +313,24 @@ class TheCataloguesAreTheRealSpecs(unittest.TestCase):
             out[build] = other_spec(build)
         return out
 
+    @staticmethod
+    def entries(text):
+        """(Lua block shas, names defined before the end of %prep)."""
+        lines = text.split('\n')
+        head = '\n'.join(lines[:bs.prep_span(lines)[1]])
+        return ({hashlib.sha256(b.encode()).hexdigest()
+                 for _, _, b in bs._lua_blocks(text)},
+                {m.group(3) for m in bs._DEFINES.finditer(head)})
+
     def test_the_lua_blocks_and_the_macro_names(self):
         lua, names = set(), set()
         for build, text in self.heads().items():
-            lines = text.split('\n')
-            head = '\n'.join(lines[:bs.prep_span(lines)[1]])
-            lua.update(hashlib.sha256(b.encode()).hexdigest()
-                       for _, _, b in bs._lua_blocks(text))
-            names.update(m.group(3) for m in bs._DEFINES.finditer(head))
+            got = self.entries(text)
+            lua |= got[0]
+            names |= got[1]
         self.assertEqual(lua, set(bs.LUA_CATALOGUE))
         self.assertEqual(names, set(bs.MACRO_NAMES))
-        self.assertEqual((len(lua), len(names)), (15, 36))
+        self.assertEqual((len(lua), len(names)), (17, 46))
 
     def test_the_prep_sequences(self):
         """168.el9_6.24's sequence is in no fixture's spec; its %prep runs
@@ -352,6 +365,37 @@ class TheCataloguesAreTheRealSpecs(unittest.TestCase):
                                        tree)
                     self.assertTrue(got)
                     self.assertTrue(all(why in w for _, w in got), got)
+
+    def test_each_entry_only_an_older_spec_holds_is_needed(self):
+        """Each older spec, read with the files and tree of the fixture of
+        its glibc version, is accepted whole; each Lua block or macro name
+        that only the older specs hold, removed alone, is named alone, in
+        each older spec that holds it."""
+        fx = {build.split('-')[1]: build for build, _ in FIXTURES}
+        heads = self.heads()
+        seen = [set(), set()]
+        for build, text in heads.items():
+            if build not in OLDER_SPECS:
+                for i, got in enumerate(self.entries(text)):
+                    seen[i] |= got
+        only = [set(), set()]
+        for build in OLDER_SPECS:
+            info, hdr, files, _, _, tree, _ = fixture(fx[build.split('-')[1]])
+            text = heads[build]
+            with self.subTest(build=build):
+                self.assertEqual(unknowns(text, files, hdr, info, tree), [])
+            for i, (cat, word) in enumerate((
+                    ('LUA_CATALOGUE', lambda e: '(%s)' % e[:12]),
+                    ('MACRO_NAMES', lambda e: 'defines %%%s,' % e))):
+                for entry in self.entries(text)[i] - seen[i]:
+                    only[i].add(entry)
+                    with self.subTest(build=build, entry=entry), \
+                            mock.patch.object(bs, cat,
+                                              getattr(bs, cat) - {entry}):
+                        got = unknowns(text, files, hdr, info, tree)
+                        self.assertEqual(len(got), 1, got)
+                        self.assertIn(word(entry), got[0][1])
+        self.assertEqual((len(only[0]), len(only[1])), (2, 10))
 
 
 # -- ten inputs, against real rpm --------------------------------------------

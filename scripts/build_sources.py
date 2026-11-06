@@ -28,9 +28,10 @@ down, and checks against it:
   - known_only(): for what neither record covers (localedata/SUPPORTED and
     locale/ come from the SRPM's tarball, whose bytes its digests stand
     for, and its patches), the spec, what %prep runs and the shape of every
-    patch are accepted only as they are in the seven real builds this was
-    measured on, anything else refused, naming it; a Lua Source the spec runs
-    is read only as NOT_CHECKED says.
+    patch are accepted only as they are in the real builds this was
+    measured on (the seven, and for Lua blocks and macro names the 25 older
+    ones above LUA_CATALOGUE), anything else refused, naming it; a Lua
+    Source the spec runs is read only as NOT_CHECKED says.
 
 Whatever this cannot read the way rpm and GNU patch would, it refuses with
 the reason (Refused), and a refusal is never kept in the cache: a tree
@@ -693,11 +694,18 @@ def prep_keys(spec, body):
     return tuple(keys)
 
 
-# -- what is known: the seven real builds -------------------------------------
+# -- what is known: the real builds -------------------------------------------
 
-# Every %{lua: block of the specs of the seven builds this was measured on
-# (el8_10.40, el8_10.48, 168.el9_6.24, 275.el9_8, 283.el9_8, 128.el10_2,
-# 145.el10_2), by the sha256 of its body.
+# Every %{lua: block of the specs of the seven builds this was first measured
+# on (el8_10.40, el8_10.48, 168.el9_6.24, 275.el9_8, 283.el9_8, 128.el10_2,
+# 145.el10_2), by the sha256 of its body, and the two that the 25 older
+# builds Rocky Linux publishes with metadata add: fc80a189, el8's langpack
+# packages in 2.28-127.el8.2 to 251.el8_10.5 (ab7915ca with %ifnarch
+# %{auxarches} around %files), and 4a5d7edf, the __debug_install_post of
+# 2.34-28.el9_0.2 to 100.el9_4.4 (0b04e359 without its ld.so argument). On
+# those 25, real rpmbuild -bp left in localedata/ and locale/ the tree
+# rebuild() makes, file by file, and their specs hold nothing else this
+# does not know.
 LUA_CATALOGUE = frozenset((
     '052f2341c249ca8edef05fc099930d1d21296a600756b8a59f668e7089825a40',
     '0b04e359900e4c4e959765c2d2102dcfc53f32655a4f27fe96020afa351abd94',
@@ -705,6 +713,7 @@ LUA_CATALOGUE = frozenset((
     '360e1b756c9a8723df2eac0f287e1a32cf43e4b77493b5d23304b79498cb4c90',
     '3b62e2b92acd2038b5748040d60104cc1b1e57efcb8aa4d34535bc4a9ace0bee',
     '49093902285baf19b84b4e32734d9386a3f624e24cbe9880348931f25a9245af',
+    '4a5d7edf58b3544d2b6b29bd177448b5fde613bdde45cebf6b3cb9823300dde7',
     '5466bba4969221b736900901a43afe9c574344141c5199018d7f387c708a63bc',
     'a4ec7462eb9b3f89dcb2181d9fcec137ea3f10b1d24bee78f7732af7a84f9aca',
     'a88b8d25cc2fb5d94e5ea51b4be4e16205aabb259e62d0fad0dfcabb8b84e320',
@@ -714,22 +723,37 @@ LUA_CATALOGUE = frozenset((
     'df4a5453cda04fd457bcc166bee92118c3992d2e4e23191ad2062fef8717de45',
     'ef89f1d6b842d73fc261ef0035c0bbd67c61b8a2df88dd0efd48d3d8a34d71bf',
     'f212168e84f12b1bde9b4c25652b9ffe9b43b031d7cc58c75e425cef23030e00',
+    'fc80a18933fe118985896ea759647ec3d87a608a1f61a81c6a4cd97ccddc8392',
 ))
 
 # Every macro those specs define before the end of %prep, by any spelling.
+# The 25 older builds add ten, which no line of %prep and no patch reads:
+# auxarches and debuginfocommonarches (el8), seven debuginfo controls
+# (2.28-127.el8.2 to 164.el8_5.3) and baserelease (2.39-37.el10 to
+# 46.el10_0; it reaches %prep's shell only as RPM_PACKAGE_RELEASE).
 MACRO_NAMES = frozenset((
     '__brp_ldconfig',
+    '__debug_install_post',
+    '__debug_package',
     '__filter_GLIBC_PRIVATE',
     '__provides_exclude',
     '_annotated_build',
     '_auto_set_build_flags',
     '_binaries_in_noarch_packages_terminate_build',
+    '_debuginfo_subpackages',
+    '_debugsource_packages',
     '_no_recompute_build_ids',
     '_unique_build_ids',
+    '_unique_debug_names',
+    '_unique_debug_srcs',
+    'auxarches',
+    'baserelease',
     'biarcharches',
     'buildpower10',
     'buildpower9',
     'comment',
+    'debug_package',
+    'debuginfocommonarches',
     'enablekernel',
     'glibc_has_libmvec',
     'glibc_has_libnldbl',
@@ -846,9 +870,9 @@ _LATE = re.compile(r'^[ \t]*(%(patchlist|sourcelist|package)(\s|$)|'
 
 def known_only(text, files, record, tree):
     """[(where, what)] of everything in the SRPM that neither rpm's record
-    nor the binary packages stand for and that is not as it is in the seven
-    real builds; empty when everything is known. tree is the patched
-    {path: (bytes, exec)} of localedata/ and locale/."""
+    nor the binary packages stand for and that is not as it is in the real
+    builds above LUA_CATALOGUE; empty when everything is known. tree is the
+    patched {path: (bytes, exec)} of localedata/ and locale/."""
     out = []
     lines = text.split('\n')
     try:
