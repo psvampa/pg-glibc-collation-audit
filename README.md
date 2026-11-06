@@ -198,7 +198,8 @@ A source diff is an argument, not a proof of what actually runs in
 production. Run it on both the old and the new OS, for every locale the audit
 flagged.
 
-With 1.b, step 11 writes SQL that tests the order for you, with no editing;
+With 1.b, step 11 writes SQL that tests the order, and in a UTF8 database
+the character rules, for you, with no editing;
 how to run it on both servers and read the two outputs is in
 [docs/commands.md](docs/commands.md#command-3--confirming-the-order-on-your-own-builds).
 

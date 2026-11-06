@@ -266,7 +266,7 @@ SQL_HEAD = ('To confirm these changes in PostgreSQL, run each SQL file '
 SQL_LINE = SQL_HEAD[0]
 NO_SQL_HEAD = ('No SQL file written to confirm a change in PostgreSQL: no '
                'change has a test',
-               'pair that a database can store and use.')
+               'that a database can store and use.')
 NO_SQL_LINE = NO_SQL_HEAD[0]
 NO_FILE_LINE = ('Pass --characters-to FILE for every character, other '
                 'string and pair found.')
@@ -15449,8 +15449,17 @@ class SortTablesNamed(Checks):
                                                            locale='x')},
                     'tables': m.base64.b64encode(m.ct_pack_all(
                         {digest: rec})).decode('ascii')}})
-        head = m.TableNaming(*sides, ['x'])('x')[0]
+        naming = m.TableNaming(*sides, ['x'])
+        # Asked before it named anything, it refuses rather than say that
+        # the table names no sequence (backlog 16.54, the SQL files).
+        with self.assertRaises(LookupError):
+            naming.tests('x')
+        head = naming('x')[0]
         self.assertTrue(head.startswith(': it marks'), head)
+        pairs, untested = naming.tests('x')
+        self.assertEqual(len(pairs) + untested,
+                         sum(map(len, m.table_sequences(*(
+                             naming.record(side, 'x') for side in (0, 1))))))
 
     def test_the_code_question_left_open_or_proved(self):
         """Beside a change step 11 found: a changed table that could not be
