@@ -170,7 +170,8 @@ USAGE = [
     '       place of the tag (the side given is that build or its tag),',
     '       and download nothing. A file without the sources, or naming a',
     '       build that is not of RHEL 8, 9 or 10, makes both sides read',
-    '       their tags, and the run says so.',
+    '       their tags when that side was given as its tag, and the run',
+    '       says so; given as the build itself, the run is refused.',
 ]
 
 REINDEX = '-- Reindex: sort order changes, confirm then REINDEX'

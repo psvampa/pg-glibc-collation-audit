@@ -24,7 +24,8 @@
 # steps 1 and 2 read that machine's own locale sources and charmaps, as the
 # build the file names, in place of its tag; a file without the sources, or
 # naming a build that is not of RHEL 8, 9 or 10, makes both sides read their
-# tags, and the run says so.
+# tags when that side was given as its tag, and the run says so; given as
+# the build itself, the run is refused.
 #
 # The order of the two tags is not a formality: every step assumes the second
 # one is the newer. Given them the other way round the run used to go to the
@@ -120,7 +121,8 @@ usage() {
   echo "       place of the tag (the side given is that build or its tag)," >&2
   echo "       and download nothing. A file without the sources, or naming a" >&2
   echo "       build that is not of RHEL 8, 9 or 10, makes both sides read" >&2
-  echo "       their tags, and the run says so." >&2
+  echo "       their tags when that side was given as its tag, and the run" >&2
+  echo "       says so; given as the build itself, the run is refused." >&2
   exit 2
 }
 
@@ -271,7 +273,8 @@ export PG_GLIBC_AUDIT_OUT="$OUT_DIR"
 # (glibc_locale_data.machine_sides; nothing is downloaded): the side typed
 # must be that build or its tag. A file that holds no locale sources, or
 # names a build that is not of RHEL 8, 9 or 10, makes both sides read their
-# tags, and NODE_NOTE says so; the warnings block repeats it from the step0 log
+# tags when that side was given as its tag (given as the build itself, the
+# run is refused), and NODE_NOTE says so; the warnings block repeats it from the step0 log
 # written below. Laid out under a name of its own, and moved under the
 # pair's name once the pair is named.
 OLD_TAG=$OLD; NEW_TAG=$NEW; NODE_NOTE=""; NODE_TMP=""
