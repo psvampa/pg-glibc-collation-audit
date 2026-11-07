@@ -169,19 +169,10 @@ def fill_reader_cache():
         if has_tags(tag) and not kept(tag, glibc_tree.build_at(GLIBC_CLONE,
                                                                tag)):
             glibc_tree.Tree.at_tag(GLIBC_CLONE, tag)
-    # What step 2 asks when a pair crosses glibc 2.36: every file the two
-    # tags' localedef read differently (glibc_tree.across), for the three
-    # such pairs the suite runs. Computed by every class at once, each one
-    # waited on the first and the whole suite took 512 s against 260 s
-    # (backlog 15.2 B3, measured on the Mac with nothing kept).
-    import filter_lc_collate_changes as f
-    for old, new in ((MID, NEW), (NEW, MID), (OLD, NEW)):
-        if not has_tags(old, new):
-            continue
-        builds = glibc_tree.builds_at(GLIBC_CLONE, [old, new])
-        paths, ids = g.list_tree_ids(GLIBC_CLONE, old, [])
-        f.read_across(GLIBC_CLONE, old, (builds[old], builds[new]), paths,
-                      ids)
+    # glibc_tree.across is not filled: since step 9.2 no step asks it
+    # (step 2 reads glibc_tree.compare_rules), and its tests build trees of
+    # their own. Filled, it cost up to 602 s of one processor whenever
+    # glibc_tree.py or glibc_locale_data.py changed (measured 2026-11-07).
     # OLD as RHEL 9 reads it: the tree test_wrapper.WrapperNodesOnOneBuild
     # reads, with its own C (two machines on one el9 build). Left to that
     # class, one processor, it ran past the 600 s limit on GitHub (PR #117).

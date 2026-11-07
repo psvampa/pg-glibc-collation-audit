@@ -785,7 +785,7 @@ def pair_order(repo, old, new, commits=None):
     glibc-2.34) drop out of the exposed set; step 2 swaps
     the reassuring "Added ... not analysed" for the noisy "Deleted ... any
     index using one of these will fail", so a locale DELETED in the real
-    upgrade reads as a harmless addition; and step 3 closes over the wrong
+    upgrade reads as a harmless addition; and step 2 compares over the wrong
     tag's copy graph.
     """
     return order(repo, old, new, commits)
@@ -1010,7 +1010,7 @@ def nothing_compared(repo, old, new, commits=None):
 # For two builds, or a tag and a build: what was not compared is what this
 # tool does not read of a build at all, not a distro's patches.
 _NOTHING_COMPARED_BUILDS = (
-    "Steps 1 to 3 can only report 'nothing changed', and step 5 reports "
+    "Steps 1 and 2 can only report 'nothing changed', and step 5 reports "
     "that nothing was compared: the two {noun} hold the same locale "
     "sources and the same code under locale/. What can still differ is "
     "what this tool does not read of a build, which step 1 prints under "
@@ -1021,7 +1021,7 @@ _NOTHING_COMPARED_BUILDS = (
 
 
 _NOTHING_COMPARED_REST = (
-    "Steps 1 to 3 can only report "
+    "Steps 1 and 2 can only report "
     "'nothing changed', which for an intra-major upgrade "
     "(RHEL 8.1 -> 8.2, say) says nothing at all, and step 5 reports "
     "that nothing was compared. Step 4 reads only the new tag, so "
@@ -1048,8 +1048,8 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
             f"       they all run to the end: step 4 scans\n"
             f"       the older {one}, step 2 reports a deleted locale as a "
             f"harmless addition, and\n"
-            f"       step 3 closes over the wrong copy graph. Swap the "
-            f"arguments.")
+            f"       step 2 compares every locale the wrong way round. Swap "
+            f"the arguments.")
     # Whatever the order: a reversed pair run on request, or one git cannot
     # order, of one source tree compares nothing either; the clone holds
     # such pairs on glibc's own branches.

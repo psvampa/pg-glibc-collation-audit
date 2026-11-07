@@ -180,7 +180,7 @@ def byte_order_list_name(out_name):
 def listed_names(names, aliases):
     """`names`, and every alias glibc's locale.alias gives one of them.
 
-    The list holds locales, not spellings, for the reason step 3 gives
+    The list holds locales, not spellings, for the reason the summary's Reindex gives
     (backlog 13.1): SUPPORTED's spellings missed sv_SE.iso885915, swedish and
     the others the real machines carry, and a name that cannot be found in
     the list reads as a name that was cleared. A spelling reaches its locale
@@ -316,16 +316,16 @@ def report(tree, supported, label, out_name, next_hint,
         if default_only:
             print("\nNo locale uses ellipsis ranges here, but the "
                   f"{len(default_only) + len(unresolved)} locale(s) above are "
-                  "NOT cleared by steps 1-3.")
+                  "NOT cleared by step 2.")
         elif unresolved:
             print("\nNothing that could be READ here uses an ellipsis range, "
                   f"but the {len(unresolved)} locale(s)\nnamed above under "
-                  "`!!` were not read the way localedef reads them: steps 1-3 "
-                  "are NOT\nsufficient for those.")
+                  "`!!` were not read the way localedef reads them: step 2 is "
+                  "NOT\nsufficient for those.")
         else:
-            print("\nNo locale uses ellipsis ranges here; steps 1-3 are "
+            print("\nNo locale uses ellipsis ranges here; step 2 is "
                   "sufficient.")
-        # Written whether or not anything was found: same reason as step 3.
+        # Written whether or not anything was found: same reason as step 2.
         # audit.sh must be able to tell "nothing exposed" from "step 4 did not
         # run". Announced too -- the `!!` block above promises a list, and this
         # path used to write it and never say where, so the promise pointed at
@@ -405,7 +405,7 @@ def report(tree, supported, label, out_name, next_hint,
               f"aliases glibc's locale.alias gives them are not added -- pass "
               f"--supported-tag to add them.")
         print(f"  e.g. {', '.join(exposed[:8])}, ...")
-    # Same rule as step 3: every exposed and every unresolved locale, and
+    # Same rule as step 2: every exposed and every unresolved locale, and
     # their aliases. A list of SUPPORTED's spellings once dropped every exposed
     # locale SUPPORTED does not name, so the file the sentence above calls the
     # full list was NARROWER than what was reported. On a node that omission
@@ -499,7 +499,7 @@ def main(argv):
                     f"above as built",
                     f"in byte order, empirically before trusting a 'not "
                     f"flagged' result from",
-                    f"steps 1-3."]
+                    f"step 2."]
     else:
         tree, supported, label, out_name, repo = load_from_dir(opts)
         hint = ["This is one node's own data. Whether the WEIGHTS localedef "
