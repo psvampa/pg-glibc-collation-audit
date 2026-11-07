@@ -47,10 +47,12 @@ build's own `localedata/` and `locale/`, its patches applied. What it does
 not read of a build, every such run prints under "Not checked for these
 builds".
 
-Give `audit.sh` one file from each machine and it reads the build each
-file names the same way, unless that build cannot be read, which the run
-says; each side is also checked against the version its distro started
-from, when its file holds the locale sources. No file comparison reaches a
+Give `audit.sh` one file from each machine and it reads each machine's own
+locale sources and charmaps, which the file holds, as that build's, unless
+a file holds none, which the run says; what it does not read of a machine,
+the run prints under "Not checked for these machines". Each side is also
+checked against the version its distro started from, when its file holds
+the locale sources. No file comparison reaches a
 backported change to glibc's *code*, between two tags or two builds
 ([below](#no-step-compares-localedefs-or-strcolls-code)).
 

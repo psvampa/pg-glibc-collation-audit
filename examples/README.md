@@ -23,7 +23,8 @@ Raw output, start to finish, with nothing trimmed or annotated.
 
 The same command given one file from each machine, the one
 `scripts/locale_order.py --extract` wrote there, so steps 1 and 2 read each
-machine's build and the node steps run instead of saying `NOT RUN`.
+machine's own locale sources and charmaps and the node steps run instead of
+saying `NOT RUN`.
 
 | File | |
 |---|---|

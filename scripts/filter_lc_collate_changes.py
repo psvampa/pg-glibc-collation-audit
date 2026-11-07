@@ -296,24 +296,29 @@ class CharmapReads:
 
 
 def check_charmaps(reads, repo, side_old, side_new, sup, already,
-                   words=None):
+                   words=None, builds=None):
     """Run collation_keys.compare over the two sides, print what it found,
     and return the source names it lists for Reindex. `already` is the set
     of source names the comparison lists already (their rules differ or
-    could not be compared), which the check does not list again."""
+    could not be compared), which the check does not list again. `builds`
+    is [old, new] when the caller has them from the machines' measurements
+    (machine_builds), in place of SUPPORTED's."""
     old, new = side_old.tag, side_new.tag
     # The charmaps read ahead of time (CharmapReads.prefetch) are back by
     # now: the verdicts above took far longer than one `git cat-file`.
     # Joined first, so that a git that failed says so here, whatever path
     # the check takes.
     reads._join(side_old, side_new)
-    try:
-        builds_old = (ck.supported_builds(sup[old], old)
-                      if sup[old] is not None else None)
-        builds_new = (ck.supported_builds(sup[new], new)
-                      if sup[new] is not None else None)
-    except ck.Unsettled as e:
-        return _charmaps_not_run(str(e))
+    if builds is not None:
+        builds_old, builds_new = builds
+    else:
+        try:
+            builds_old = (ck.supported_builds(sup[old], old)
+                          if sup[old] is not None else None)
+            builds_new = (ck.supported_builds(sup[new], new)
+                          if sup[new] is not None else None)
+        except ck.Unsettled as e:
+            return _charmaps_not_run(str(e))
     if builds_old is None or builds_new is None:
         where = ' and '.join(t for t in (old, new) if sup[t] is None)
         return _charmaps_not_run(f"{g.SUPPORTED} does not exist at {where}")
@@ -349,6 +354,55 @@ def check_charmaps(reads, repo, side_old, side_new, sup, already,
                         already_listed, read_more, fresh=False)
     print_charmap_report(report, old, new, words or STEP2_WORDS)
     return ck.listed_sources(report)
+
+
+def _measured(sd, aliases):
+    """{source name: [names measured on that machine]} for a side read
+    from a machine's own files (glibc_locale_data.machine_side): what
+    SUPPORTED says for a tag or a build, which a machine's file does not
+    hold. Each name goes to the locale file it is built from, through the
+    side's locale.alias, as measured_builds maps it."""
+    import json
+    path = os.path.join(sd.prov['machine'], 'locale_order.out')
+    try:
+        with open(path, encoding='ascii') as fh:
+            locales = json.load(fh).get('locales')
+    except (OSError, ValueError, AttributeError) as e:
+        g.die(f"cannot read the measurement {path}: {e}")
+    if not isinstance(locales, dict) or not locales:
+        g.die(f"the measurement {path} lists no locale")
+    out = collections.defaultdict(list)
+    for name in sorted(locales):
+        out[g.locale_source(aliases.get(name, name))].append(name)
+    return dict(out)
+
+
+def machine_builds(repo, sides, aliases):
+    """For two sides read from machines' own files: ([old builds, new
+    builds], [(machine, unmapped names)], None) from each machine's
+    measurement (node_charmaps.measured_builds), in place of SUPPORTED,
+    which a machine's file does not hold; or (None, None, reason) when a
+    machine's charmaps cannot be read, which makes the check NOT RUN."""
+    import node_charmaps as nc
+    builds, unmapped = [], []
+    for sd, al in zip(sides, aliases):
+        p = sd.prov
+        if p['charmaps'] is None:
+            return None, None, (f"The file of the machine that runs "
+                                f"{g.label(sd)} holds no charmaps this reads, "
+                                f"because {p['charmaps_why']}")
+        try:
+            m = nc.measured_builds(
+                os.path.join(p['machine'], 'locale_order.out'), p['word'],
+                nc.CharmapsDir(p['charmaps_dir']), al, p['tag'],
+                nc._tag_charmaps(repo, p['tag']))
+        except nc.Unusable as e:
+            return None, None, (f"On the machine that runs {g.label(sd)}: "
+                                f"{str(e).rstrip('.')}")
+        builds.append(m.builds)
+        if m.unmapped:
+            unmapped.append((g.label(sd), m.unmapped))
+    return builds, unmapped, None
 
 
 def step2_words(noun):
@@ -453,14 +507,15 @@ def characters_rows(got, differs):
     return rows
 
 
-def print_added(added, renamed_from, supported, old_side, old_name):
+def print_added(added, renamed_from, supported, old_side, old_name,
+                missing='(not in SUPPORTED)'):
     if not added:
         return
     print()
     print(f"Not compared, no file at {old_name} ({len(added)}):")
     for name in added:
         spelt = supported.get(name)
-        tail = ', '.join(spelt) if spelt else '(not in SUPPORTED)'
+        tail = ', '.join(spelt) if spelt else missing
         if name in renamed_from:
             tail += f"; renamed from {g.shown(renamed_from[name])}"
         print(f"  {g.shown(name)} -> {tail}")
@@ -591,10 +646,13 @@ def _main(opts):
         + [(a, f'renamed to {b}') for a, b in renamed_to.items()])
 
     tsv = os.path.join(g.OUT_DIR, f"step2_rules_characters.{slug}.tsv")
+    machine = g.is_machine(old_side) and g.is_machine(new_side)
     if nothing:
         # A tree compared with itself answers "the same" for every locale
         # the reader settles: nothing was compared, and that is said first.
         what = (f"the two {noun} are one commit" if nothing == 'commit'
+                else "the two machines' files hold the same locale sources "
+                     "and charmaps" if machine
                 else "the two refs are two commits of one source tree")
         print(f"Rules: not compared, {what}.")
         print(f"Character sets and transliterations: not compared, {what}.")
@@ -606,12 +664,37 @@ def _main(opts):
                  predates_lr_getc_fix(repo, new))
         pre = lr_getc_sides(repo, early, (old, new))
         builds = glibc_tree.builds_at(repo, [old, new], pre)
+        # A machine's commit holds the tag's keyword tables, not its
+        # build's: read with what the build's RHEL major adds
+        # (glibc_tree.build_at), as step 1's fan-in reads it.
+        for sd in (old_side, new_side):
+            if g.is_machine(sd):
+                builds[g._ref(sd)] = glibc_tree.build_at(
+                    repo, g._ref(sd), g._asked(sd.build))
         old_tree = glibc_tree.Tree.at_tag(repo, old, builds[old])
         new_tree = glibc_tree.Tree.at_tag(repo, new, builds[new])
         aliases = (g.locale_aliases(repo, old), g.locale_aliases(repo, new))
-        supported = (g.supported_map(repo, old), g.supported_map(repo, new))
+        # A machine's file holds no SUPPORTED: what it builds is what was
+        # measured on it.
+        supported = tuple(
+            _measured(sd, al) if g.is_machine(sd) else g.supported_map(repo, t)
+            for sd, al, t in ((old_side, aliases[0], old),
+                              (new_side, aliases[1], new)))
         got = glibc_tree.compare_rules(old_tree, new_tree, aliases)
         differs, added, removed, listed = sort_out(got, old_tree, new_tree)
+        # An entry of a machine's sources that is not a regular file was not
+        # read (glibc_locale_data.machine_side): neither added nor removed,
+        # whatever the other side holds, but not compared, and listed.
+        unread = {}
+        for sd, which in ((old_side, 'old'), (new_side, 'new')):
+            if g.is_machine(sd):
+                for e, why in sd.prov['skipped']:
+                    if not e.startswith('charmaps/'):
+                        unread.setdefault(e, []).append(
+                            f"{why} on the {which} machine")
+        added = [n for n in added if n not in unread]
+        removed = [n for n in removed if n not in unread]
+        removed_rows = [r for r in removed_rows if r[0] not in unread]
         n_same = sum(1 for r in got.values() if r.state == glibc_tree.SAME)
 
         print(_fill(f"The sort rules localedef builds for each locale at "
@@ -625,9 +708,18 @@ def _main(opts):
         print_differs(got, differs, tsv)
         g.write_list(f"step2_rules_characters.{slug}.tsv",
                      characters_rows(got, differs))
-        print_added(added, renamed_from, supported[1], old_side, old_name)
+        print_added(added, renamed_from, supported[1], old_side, old_name,
+                    '(not measured on that machine)' if machine
+                    else '(not in SUPPORTED)')
         print_removed(removed, renamed_to, new_side, new_name)
         print_listed(got, listed)
+        if unread:
+            print()
+            print(_fill(f"Not compared, not a regular file in a machine's "
+                        f"locale sources ({len(unread)}): "
+                        + ', '.join(f"{g.shown(n)} ({'; '.join(w)})"
+                                    for n, w in sorted(unread.items())),
+                        '', '  '))
 
         # The character set check, with what this step lists already. It
         # reads both texts of every content-changed file, in one batch with
@@ -646,14 +738,31 @@ def _main(opts):
                        'the transliteration check')
         g.require_read(new, new_paths, new_missing,
                        'the transliteration check')
-        charmap_reads.prefetch(repo, read[3:], old_contents, new_contents,
-                               read[2])
+        if not machine:
+            # Reads ahead from SUPPORTED's builds, which a machine's file
+            # does not hold.
+            charmap_reads.prefetch(repo, read[3:], old_contents,
+                                   new_contents, read[2])
         side_old, side_new, sup = charmap_reads.sides(
             repo, read[3:], old_contents, new_contents, read[2])
         sources = set(old_tree.names) | set(new_tree.names)
         already = {n for n in differs + listed if n in sources}
-        keyed = check_charmaps(charmap_reads, repo, side_old, side_new, sup,
-                               already, step2_words(noun))
+        if machine:
+            measured, unmapped, why = machine_builds(
+                repo, (old_side, new_side), aliases)
+            for who, names_ in unmapped or ():
+                _warn_block(f"{len(names_)} locale name(s) measured on {who} "
+                            f"could not be traced to the charmap they are "
+                            f"built with, so their character set is not "
+                            f"compared:",
+                            [f"{n}: {w}" for n, w in names_])
+            keyed = (_charmaps_not_run(why) if why else
+                     check_charmaps(charmap_reads, repo, side_old, side_new,
+                                    sup, already, step2_words(noun),
+                                    builds=measured))
+        else:
+            keyed = check_charmaps(charmap_reads, repo, side_old, side_new,
+                                   sup, already, step2_words(noun))
 
         # The character set check names locale files; the aliases of each
         # side's locale.alias that are built from one go to Reindex with it
@@ -664,15 +773,18 @@ def _main(opts):
         for al in aliases:
             keyed_aliases |= set(g._aliases_reaching(set(keyed), al))
         names = sorted(set(differs) | set(listed) | set(keyed)
-                       | keyed_aliases)
+                       | keyed_aliases | set(unread))
         not_ascii = [n for n in names if not n.isascii()]
         names = [n for n in names if n.isascii()]
         print()
         print(_fill(f"Listed for Reindex ({len(names)}): "
                     + (', '.join(shown_name(n) for n in names) or 'none'),
                     '', '  '))
-        unbuilt = [n for n in names if n in sources
-                   and n not in supported[0] and n not in supported[1]]
+        # SUPPORTED's note: a machine's file holds no SUPPORTED, and what a
+        # machine builds is what was measured on it (step 11).
+        unbuilt = [] if machine else [
+            n for n in names if n in sources
+            and n not in supported[0] and n not in supported[1]]
         if unbuilt:
             print(_fill("Not listed in localedata/SUPPORTED (not built by "
                         "default, so normally absent from `locale -a`): "

@@ -216,7 +216,7 @@ class Step2Compare(StepRun):
         emulation found, and none differs. The 20 of fi_FI and fi_FI@euro
         are not built at either tag (translit_combining gives U+0335 an
         empty string). The tags-only transcripts print these lines; the
-        extended ones compare each machine's build (7.6a)."""
+        extended ones compare each machine's own files (7.6a, 9.4a)."""
         expect = {(OLD, MID): ('rhel8-to-rhel9', 486, 1,
                                'UTF-8: 6485 characters added.'),
                   (MID, NEW): ('rhel9-to-rhel10', 487, 2,

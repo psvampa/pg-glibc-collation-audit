@@ -1,6 +1,6 @@
 Each machine's file names the build it runs: steps 1 and 2 read
 glibc-2.28-251.el8_10.40 and glibc-2.34-275.el9_8, in place of glibc-2.28 and
-glibc-2.34.
+glibc-2.34, from each machine's own locale sources.
 
 ================================================================
 == STEP 1  What changed, and how far it reaches
@@ -10,53 +10,27 @@ Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointe
   UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was NOT checked
   NOTE: signatures were not checked. The commit ids above are what was actually read;
         compare them against a source you trust (sourceware.org/git/glibc.git) if it matters.
-Build provenance (each build is rebuilt here: its upstream tag above, with
-localedata/ and locale/ from its source RPM, as one commit of the clone):
-  glibc-2.28-251.el8_10.40 = 4ad85b6ccbec, one parent: glibc-2.28
-    SRPM                 https://dl.rockylinux.org/pub/rocky/8/BaseOS/source/tree/Packages/g/glibc-2.28-251.el8_10.40.src.rpm
-                         sha256 b2566311d82f4378deeaf154f17a99ed7ddd6677da7a12be39a628a59d5e8c4a
-    glibc-locale-source  https://dl.rockylinux.org/pub/rocky/8/BaseOS/x86_64/os/Packages/g/glibc-locale-source-2.28-251.el8_10.40.x86_64.rpm
-                         sha256 803a4450298fe9ce5bf768dfc7043d380d3a8ba0e2bda916d118527f35e88ee8
-    glibc-common         https://dl.rockylinux.org/pub/rocky/8/BaseOS/x86_64/os/Packages/g/glibc-common-2.28-251.el8_10.40.x86_64.rpm
-                         sha256 fef3b59c014ec8d288bbefaf343e74c225a9644813c2078eda53679825a8645e
-    checked: the SRPM's tarball is glibc-2.28 in localedata/ and locale/
-    checked: locale sources: 355, each the sha256 glibc-locale-source-2.28-251.el8_10.40 records
-    checked: charmaps: 233, each the one glibc-locale-source-2.28-251.el8_10.40 installs
-    checked: locale.alias: the sha256 glibc-common-2.28-251.el8_10.40 records
-    patches: 31 of the SRPM's 1096 change localedata/ or locale/, applied in
-             the order rpm recorded; 5 change strcoll's code:
-             glibc-rh827510.patch, glibc-rh1691528-1.patch,
-             glibc-rh1691528-2.patch, glibc-RHEL-72011-2.patch,
-             glibc-RHEL-72011-3.patch
-  glibc-2.34-275.el9_8 = f9d99124b11c, one parent: glibc-2.34
-    SRPM                 https://dl.rockylinux.org/pub/rocky/9/BaseOS/source/tree/Packages/g/glibc-2.34-275.el9_8.src.rpm
-                         sha256 7c8421be53dc10cea020f876dd9ecf219e00a02d90e4b5470a726997dd2ad9b7
-    glibc-locale-source  https://dl.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/Packages/g/glibc-locale-source-2.34-275.el9_8.x86_64.rpm
-                         sha256 614ae9b78682190920198d908845d7d4aa577d2253b53b6b7c1704a67a3c3e04
-    glibc-common         https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/Packages/g/glibc-common-2.34-275.el9_8.x86_64.rpm
-                         sha256 243156253aaa83cf19e0475583f56f4b9759037919276f5677f8b6cbb9b269c9
-    checked: the SRPM's tarball is glibc-2.34 in localedata/ and locale/
-    checked: locale sources: 356, each the sha256 glibc-locale-source-2.34-275.el9_8 records
-    checked: charmaps: 233, each the one glibc-locale-source-2.34-275.el9_8 installs
-    checked: locale.alias: the sha256 glibc-common-2.34-275.el9_8 records
-    patches: 21 of the SRPM's 1109 change localedata/ or locale/, applied in
-             the order rpm recorded; 5 change strcoll's code:
-             glibc-rh827510.patch, glibc-c-utf8-locale-1.patch,
-             glibc-rh2149102.patch, glibc-RHEL-72017-2.patch,
-             glibc-RHEL-72017-3.patch
-!! Not checked for these builds: the compiler that built the binary packages,
-   and the build's patches to code, such as those to the strcmp that strcoll
-   calls; the SRPM's and the binary packages' GPG signatures (only rpm's own
-   digests are checked), and the mirror metadata's, whose sha256 is the only
-   check on each file; the host that built the binary packages is taken to
-   read the spec as the host that built the SRPM did (its architecture, its
-   rpm and redhat-rpm-config macros); the Lua rpm runs while it reads the spec
-   beyond the blocks of the spec, which are pinned: a Lua Source such as
-   patch-git.lua, which changes in every build, is read only for the ways of
-   changing macros, the environment or rpm's table of patches the seven builds
-   were measured without; localedata/SUPPORTED and locale/ are in no binary
-   package: they are the SRPM's tarball, checked above against the upstream
-   tag, and its patches.
+Machine provenance (each machine's own locale sources and charmaps, from its
+file, on its upstream tag above, as one commit of the clone; nothing downloaded):
+  glibc-2.28-251.el8_10.40 = f1bee415843d, one parent: glibc-2.28
+    rpm -q glibc   glibc-2.28-251.el8_10.40.x86_64
+    measurement    sha256 78fa02b6f413f30abc026c49596b226cd8f1b034b4aa860053bcc5189508e5cf
+    locale sources 355 file(s)
+    charmaps       233 file(s)
+  glibc-2.34-275.el9_8 = ee86fbe49d51, one parent: glibc-2.34
+    rpm -q glibc   glibc-2.34-275.el9_8.x86_64
+    measurement    sha256 c7ef613b81f12827f4c01289e034bbaa1199756dcce7a30414e64e43a4bfcbae
+    locale sources 356 file(s)
+    charmaps       233 file(s)
+!! Not checked for these machines: their locale sources and charmaps are read
+   as each machine's file holds them, with no check against the
+   glibc-locale-source package they came from; localedata/SUPPORTED and
+   intl/locale.alias are the upstream tag's, as a machine's file holds neither
+   (step 2 takes which locales each machine builds with each charmap from its
+   measurement instead); localedef's keyword tables are the tag's with what
+   Red Hat's patches are known to add for that RHEL major, and how localedef
+   reads the bytes 0x1A and 0xFF and UTF-8 input is answered by the tag's
+   ancestry.
 !! Not compared on any route: the code that compiles and compares the rules
    (localedef's and strcoll's, each build's patches to it included). Only step
    11 sees what it does, when it measures both machines;
@@ -124,8 +98,8 @@ Rules differ (6):
       characters in the changed rules (2): W (U+0057)  w (U+0077)
 
 Not compared, no file at glibc-2.28-251.el8_10.40 (2):
-  ckb_IQ -> ckb_IQ
-  mnw_MM -> mnw_MM
+  ckb_IQ -> ckb_IQ, ckb_IQ.utf8
+  mnw_MM -> mnw_MM, mnw_MM.utf8
    glibc-2.28-251.el8_10.40's own locale sources do not have these files, so
    that build ships none of these locales.
 
@@ -140,7 +114,7 @@ glibc-2.34-275.el9_8.
 UTF-8: 6485 characters added.
 Locale builds Reindex lists anyway, whose LC_COLLATE names one of those
 characters or could not be compared (1):
-  C.UTF-8 (UTF-8): 1546 characters, named in C
+  C.utf8 (UTF-8): 1546 characters, named in C
 Transliteration (LC_CTYPE): 24 collating elements of 3 locale builds depend on
 a transliteration; none is built differently at
 glibc-2.34-275.el9_8.
@@ -953,19 +927,15 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
      whose bytes differ, and no collating element is built differently.
 
 -- Warnings the clean results above do NOT cover
-     !! Not checked for these builds: the compiler that built the binary packages,
-        and the build's patches to code, such as those to the strcmp that strcoll
-        calls; the SRPM's and the binary packages' GPG signatures (only rpm's own
-        digests are checked), and the mirror metadata's, whose sha256 is the only
-        check on each file; the host that built the binary packages is taken to
-        read the spec as the host that built the SRPM did (its architecture, its
-        rpm and redhat-rpm-config macros); the Lua rpm runs while it reads the spec
-        beyond the blocks of the spec, which are pinned: a Lua Source such as
-        patch-git.lua, which changes in every build, is read only for the ways of
-        changing macros, the environment or rpm's table of patches the seven builds
-        were measured without; localedata/SUPPORTED and locale/ are in no binary
-        package: they are the SRPM's tarball, checked above against the upstream
-        tag, and its patches.
+     !! Not checked for these machines: their locale sources and charmaps are read
+        as each machine's file holds them, with no check against the
+        glibc-locale-source package they came from; localedata/SUPPORTED and
+        intl/locale.alias are the upstream tag's, as a machine's file holds neither
+        (step 2 takes which locales each machine builds with each charmap from its
+        measurement instead); localedef's keyword tables are the tag's with what
+        Red Hat's patches are known to add for that RHEL major, and how localedef
+        reads the bytes 0x1A and 0xFF and UTF-8 input is answered by the tag's
+        ancestry.
      !! Not compared on any route: the code that compiles and compares the rules
         (localedef's and strcoll's, each build's patches to it included). Only step
         11 sees what it does, when it measures both machines;

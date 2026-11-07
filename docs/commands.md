@@ -50,15 +50,13 @@ and its order changed through `localedef`'s code.
 
 The same command, given one file from each machine with `--old-node` and
 `--new-node`. Each is the file `scripts/locale_order.py --extract` wrote on
-that machine. Steps 1 and 2 then read the build each file names,
-as `rpm -q glibc` printed it on that machine, in place of the tag, as in
-1.a: the side you give is that build or its tag. When a build cannot be
-read (a build whose spec the run does not know how to read, one Rocky
-Linux's mirror does not list or lists with no metadata to check it
-against, or no network the first time it is read) and you gave its tag,
-both sides read their tags and the run says so before step 1; given as
-the build itself, it is refused, as in 1.a. The two files add the checks
-below.
+that machine. Steps 1 and 2 then read each machine's own locale sources
+and charmaps, which its file holds, as the build `rpm -q glibc` printed on
+that machine, in place of the tag, as in 1.a: the side you give is that
+build or its tag. Nothing is downloaded. When a file holds no locale
+sources, or names a build that is not RHEL's, and you gave its tag, both
+sides read their tags and the run says so before step 1; given as the build
+itself, it is refused, as in 1.a. The two files add the checks below.
 
 | The run's step | The question it answers |
 |---|---|
