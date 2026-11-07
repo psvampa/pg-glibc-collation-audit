@@ -4254,6 +4254,13 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         # C.UTF-8: the measured C.utf8 build is compared, by its measured
         # name.
         step2 = out.split('== STEP 2', 1)[1].split('== STEP 6', 1)[0]
+        # C, whose RHEL 9 file uses codepoint_collation, a keyword only the
+        # build's table holds: read with that table (glibc_tree.build_at by
+        # the build's name), its rules are compared and differ in 12
+        # characters, as between the builds.
+        self.assertIn('Rules differ', step2)
+        self.assertIn('C.UTF-8 12 character(s) named by the lines',
+                      flat(step2.split('Rules differ', 1)[1]))
         self.assertIn('C.utf8 (UTF-8): 1546 characters, named in C', step2)
         # SUPPORTED's note is not printed of a machine, and a file only the
         # new machine has is spelt as measured there: the measurement
