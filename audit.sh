@@ -118,7 +118,9 @@ usage() {
   echo "       the options above. Steps 1 and 2 then read each machine's own" >&2
   echo "       locale sources and charmaps, as the build its file names, in" >&2
   echo "       place of the tag (the side given is that build or its tag)," >&2
-  echo "       and download nothing." >&2
+  echo "       and download nothing. A file without the sources, or naming a" >&2
+  echo "       build that is not of RHEL 8, 9 or 10, makes both sides read" >&2
+  echo "       their tags, and the run says so." >&2
   exit 2
 }
 
@@ -836,7 +838,10 @@ if [ "$(count_lines "$STEP2_LIST")" -gt 0 ]; then
 else
   if [ "$SAME_TAG" = 1 ] && [ -n "$OLD_NODE" ] && [ "$NOUN" = builds ] \
      && [ "$NOTHING" = tree ]; then
-    # Two machines' own files, read and the same (see below). The charmaps
+    # Two machines' own files, read and the same (see below). The NOUN test
+    # is unreachable as machine_sides stands (with machine files both sides
+    # are builds or both tags, and two tags are never NOTHING=tree); kept so
+    # a tag pair is never called "the two machines' files". The charmaps
     # are named only when both files hold them: a file without them left
     # them out of its commit, and none was read.
     if [ "$CM_NOT_READ" = 0 ]; then

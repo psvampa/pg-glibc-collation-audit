@@ -168,7 +168,9 @@ USAGE = [
     "       the options above. Steps 1 and 2 then read each machine's own",
     '       locale sources and charmaps, as the build its file names, in',
     '       place of the tag (the side given is that build or its tag),',
-    '       and download nothing.',
+    '       and download nothing. A file without the sources, or naming a',
+    '       build that is not of RHEL 8, 9 or 10, makes both sides read',
+    '       their tags, and the run says so.',
 ]
 
 REINDEX = '-- Reindex: sort order changes, confirm then REINDEX'
