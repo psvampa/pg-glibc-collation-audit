@@ -43,8 +43,8 @@ TAGS_NOTICE = (TAGS_FACT + " If the machines run RHEL 8, 9 or 10, name each "
 # refuses.
 TAGS_NOTICE_FOLDERS = (TAGS_FACT + " Pass each machine's file with --old-node "
                        "and --new-node instead of every other --old-*/--new-* "
-                       "option: steps 1 and 2 then read the build each file "
-                       "names, if this run can read it.")
+                       "option: steps 1 and 2 then read each machine's own "
+                       "locale sources, which its file holds.")
 from _harness import GLIBC_CLONE, Step2Report, swap_alpha_beta, tag_charmaps
 from test_locale_order import (CHANGED_8_TO_9, RHEL8, RHEL9, RHEL10,
                                changes_in, parse_characters, parse_summary,
@@ -165,9 +165,13 @@ USAGE = [
     '       one file scripts/locale_order.py --extract wrote on that',
     '       machine, with its measurement, its build, its locale sources and',
     '       its charmaps (a file without them says why), and stands for all',
-    '       the options above. Steps 1 and 2 then read the build each file',
-    '       names, in place of the tag (the side given is that build or its',
-    '       tag).',
+    "       the options above. Steps 1 and 2 then read each machine's own",
+    '       locale sources and charmaps, as the build its file names, in',
+    '       place of the tag (the side given is that build or its tag),',
+    '       and download nothing. A file without the sources, or naming a',
+    '       build that is not of RHEL 8, 9 or 10, makes both sides read',
+    '       their tags when that side was given as its tag, and the run',
+    '       says so; given as the build itself, the run is refused.',
 ]
 
 REINDEX = '-- Reindex: sort order changes, confirm then REINDEX'
@@ -1870,55 +1874,6 @@ def _cut_blocks(lines, starts, indent):
     return out, cut
 
 
-def without_the_charmap_check(out):
-    """(out without what a node file's character set check adds, the count
-    of each kind taken out): each step's lines, from the names measured to
-    the list written and the blank after it; the summary's lines; the
-    `!!` blocks those steps printed, as the summary repeats them; and step
-    11's line that both machines' charmaps were checked and nothing found,
-    in its report and its summary."""
-    lines, kept, regions, bangs, i = out.split('\n'), [], 0, set(), 0
-    while i < len(lines):
-        if lines[i].startswith('Locale names measured on '):
-            regions += 1
-            while not lines[i].startswith('Character set result written to '):
-                if lines[i].startswith('!! '):
-                    bangs.add('     ' + lines[i])
-                i += 1
-            i += 2
-            continue
-        kept.append(lines[i])
-        i += 1
-    lines, kept, keyed = kept, [], 0
-    for line in lines:
-        if line.startswith(KEYED_HEAD):
-            keyed += 1
-            kept.append(None)
-        elif kept and kept[-1] is None and line.startswith('     ') \
-                and not line.startswith('     !!'):
-            continue
-        else:
-            kept.append(line)
-    kept, warned = _cut_blocks([x for x in kept if x is not None], bangs,
-                               '     ')
-    first = {x for x in kept if x.startswith(STEP_11_CHECKED)}
-    kept, in_report = _cut_blocks(kept, first, '')
-    brief = {x for x in kept if x.startswith('     ' + STEP_11_CHECKED)}
-    kept, in_brief = _cut_blocks(kept, brief, '     ')
-    return '\n'.join(kept), (regions, keyed, warned, in_report, in_brief)
-
-
-def without_the_unread_notice(out):
-    """(out without the `!!` that a machine's build cannot be read, before
-    step 1 and among the summary's warnings; how many of each came out)."""
-    lines = out.split('\n')
-    starts = {x for x in lines if x.startswith("!! The old machine's file "
-                                               "names ")}
-    lines, top = _cut_blocks(lines, starts, '')
-    lines, warned = _cut_blocks(lines, {'     ' + x for x in starts}, '     ')
-    return '\n'.join(lines), (top, warned)
-
-
 def without_the_tags_notice(out):
     """(out without step 1's `!!` for the sides read as tags, before step 1's
     findings and among the summary's warnings, ((how many of each), what it
@@ -1946,22 +1901,6 @@ def without_the_tags_notice(out):
 STEP_11_CHECKED = "Character sets: every byte sequence that each machine's"
 
 
-def without_the_charmaps_notice(out):
-    """(out without the notice a run with copied folders prints in steps 6
-    to 8 and repeats once in its summary, and without step 11's line that
-    neither machine's charmaps were checked, in its report and its summary;
-    how many of each came out)."""
-    lines = out.split('\n')
-    starts = {x for x in lines if x.startswith(CHARMAPS_NOTICE)}
-    lines, in_steps = _cut_blocks(lines, starts, '')
-    lines, in_summary = _cut_blocks(lines, {'     ' + x for x in starts},
-                                    '     ')
-    first = {x for x in lines if x.startswith(STEP_11_NOT_CHECKED)}
-    lines, in_report = _cut_blocks(lines, first, '')
-    # The summary wraps it at another width: its own first line.
-    brief = {x for x in lines if x.startswith('     ' + STEP_11_NOT_CHECKED)}
-    lines, in_brief = _cut_blocks(lines, brief, '     ')
-    return '\n'.join(lines), (in_steps, in_summary, in_report, in_brief)
 NO_SOURCES_REASON = (f'{NO_SOURCES_DIR} does not exist; it comes with the '
                      'package glibc-locale-source.')
 _NODE_FILES = {}
@@ -2095,13 +2034,13 @@ class WrapperNodePatchedInsideCollate(unittest.TestCase):
 
 @needs_clone
 class WrapperNodeFiles(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
-    """--old-node and --new-node on RHEL8 -> RHEL9 stand for the six options:
-    the same files given as --*-locales-dir, --*-build-id and --*-order give
-    the same run, line for line. Freezes what each node file is laid out as,
-    side by side."""
-
-    # Two runs write to one folder.
-    FILES_ARE_THIS_RUNS = False
+    """--old-node and --new-node on RHEL8 -> RHEL9, each file holding a
+    tag's locale sources and charmaps in place of its machine's: steps 1 and
+    2 read each machine's own files as the build it runs, and every step
+    that takes a node's files runs. Until step 9.4a the same files given as
+    the six options --*-locales-dir, --*-build-id and --*-order gave the
+    same run, line for line: no longer, since those options read the tags
+    in steps 1 and 2, and they go with steps 6 to 8 (9.4b)."""
 
     @classmethod
     def setUpClass(cls):
@@ -2110,18 +2049,6 @@ class WrapperNodeFiles(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
             OLD, MID,
             '--old-node', node_file('old.tar', cut_to_pair(RHEL8), OLD),
             '--new-node', node_file('new.tar', cut_to_pair(RHEL9), MID),
-            out_dir=cls.out_dir)
-        laid = {side: os.path.join(cls.out_dir,
-                                   f'node_file.{pair_slug(OLD, MID)}.{side}')
-                for side in ('old', 'new')}
-        cls.classic_rc, cls.classic = run_wrapper(
-            OLD, MID,
-            '--old-locales-dir', os.path.join(laid['old'], 'locales'),
-            '--old-build-id', build_of(RHEL8),
-            '--new-locales-dir', os.path.join(laid['new'], 'locales'),
-            '--new-build-id', build_of(RHEL9),
-            '--old-order', os.path.join(laid['old'], 'locale_order.out'),
-            '--new-order', os.path.join(laid['new'], 'locale_order.out'),
             out_dir=cls.out_dir)
 
     @classmethod
@@ -2148,31 +2075,6 @@ class WrapperNodeFiles(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
             f'1 more locale(s) whose LC_COLLATE names a character whose bytes '
             f'differ, whose collating elements are built differently, or that '
             f'could not be compared: C full list: {path}'))
-
-    def test_it_is_the_run_the_six_options_give(self):
-        """The same run, plus the one check only a node file carries: the
-        machines' character sets (13.7 PR D). Steps 6, 7 and 8 each add their
-        lines, the summary its three, and the notice that they are not
-        compared, printed three times and repeated once, goes. Step 11
-        says once in its report and once in its summary that both machines'
-        charmaps were checked and nothing found."""
-        self.assertEqual((self.rc, self.classic_rc), (0, 0), self.out[-2000:])
-        # The suite has no mirror and no build in its cache, so the builds
-        # the two files name cannot be read, and both sides read their tags
-        # (7.6a): the run is the six options' plus that `!!`, before step 1
-        # and once among the warnings. AuditShReadsEachMachinesBuild
-        # (test_build_sources) reads the builds.
-        node, gone = without_the_unread_notice(self.out)
-        self.assertEqual(gone, (1, 1))
-        node, asked = without_the_tags_notice(node)
-        classic, asked_classic = without_the_tags_notice(self.classic)
-        self.assertEqual((asked, asked_classic),
-                         (((1, 1), ''), ((1, 1), 'node')))
-        node, added = without_the_charmap_check(node)
-        classic, notices = without_the_charmaps_notice(classic)
-        self.assertEqual(added, (3, 3, 3, 1, 1))
-        self.assertEqual(notices, (3, 1, 1, 1))
-        self.assertEqual(node.splitlines(), classic.splitlines())
 
     def test_every_section_ran(self):
         self.assertEqual(banners(self.out), {
@@ -2245,6 +2147,231 @@ class WrapperNodeFiles(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
                     flat(' '.join(node.value for node in strings)))
             hits += [(os.path.relpath(path, REPO_ROOT), m) for m in found]
         self.assertEqual(hits, [])
+
+
+@needs_clone
+class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
+    """Steps 1 and 2 read each machine's own locale sources and charmaps
+    from its file (step 9.4a): what a machine's file holds that a build's
+    sources do not. Each file holds a tag's sources and charmaps in place
+    of its machine's, as node_file's do.
+
+    link:          the new machine's de_IT is a link to de_DE and a link
+                   zz_LINK sits beside it: neither is read (its file is
+                   not in the commit), neither is added or removed, both
+                   are named as not compared and listed. The same file
+                   holds no charmaps: the rules are compared and the
+                   character sets are NOT RUN, with the reason, never
+                   compared against the tag's charmaps.
+    same_sources:  two builds of glibc 2.34 whose files hold the same
+                   sources: ordered by rpm, forward, and said to hold the
+                   same sources, never "nothing was compared".
+    one_build:     two machines of one build: one commit, said as such,
+                   and step 11's `!!` that this compares two machines."""
+
+    @classmethod
+    def machine_file(cls, name, text, tag, links=(), charmaps=True):
+        base = tempfile.mkdtemp(prefix='pg-glibc-machine-file-')
+        cls.made.append(base)
+        directory = dd.materialise_tag(GLIBC_CLONE, tag, base)
+        for link, target in links:
+            path = os.path.join(directory, link)
+            if os.path.exists(path):
+                os.remove(path)
+            os.symlink(target, path)
+        cm = (tag_charmaps(tag, os.path.join(base, 'charmaps'))
+              if charmaps else None)
+        data, _ = lom.archive(text, json.loads(text), directory, cm)
+        path = os.path.join(base, name)
+        with open(path, 'wb') as f:
+            f.write(data)
+        return path
+
+    @classmethod
+    def measurement(cls, path, build=None):
+        """The text of the measurement at `path`, with its glibc build
+        replaced by `build`: a second machine of the same release (an
+        injected value; no recorded measurement is of two builds of one
+        release)."""
+        with open(path, encoding='utf-8') as f:
+            text = f.read()
+        if build:
+            # Resealed, as test_locale_order.trimmed reseals a cut one.
+            data = json.loads(text)
+            data['glibc_build'] = build
+            data['content'] = lom.content_digest(data)
+            text = json.dumps(data, sort_keys=True) + '\n'
+        return text
+
+    @classmethod
+    def setUpClass(cls):
+        # Three runs, each measurement cut to FEW_NAMES but one (two
+        # machines of one build need two measurements): step 11 is most of
+        # what a run costs. The link and the missing charmaps share a run.
+        cls.made, cls.runs = [], {}
+        few8 = cls.measurement(cut_few(RHEL8))
+        few9 = cls.measurement(cut_few(RHEL9))
+        b9 = json.loads(few9)['glibc_build']
+        later9 = b9.replace('-275.', '-283.')
+        assert later9 != b9
+        files = {
+            'link': (cls.machine_file('old.tar', few8, OLD),
+                     cls.machine_file('new.tar', few9, MID,
+                                      links=(('de_IT', 'de_DE'),
+                                             ('zz_LINK', 'de_DE')),
+                                      charmaps=False)),
+            'same_sources': (cls.machine_file('old.tar', few9, MID),
+                             cls.machine_file('new.tar', cls.measurement(
+                                 cut_few(RHEL9), later9), MID)),
+            'one_build': (cls.machine_file('old.tar', few9, MID),
+                          cls.machine_file('new.tar', cls.measurement(
+                              cut_to_pair(RHEL9)), MID)),
+            # The same sources and neither file with charmaps: one tree,
+            # no charmap read.
+            'same_no_charmaps': (
+                cls.machine_file('old.tar', few9, MID, charmaps=False),
+                cls.machine_file('new.tar', cls.measurement(
+                    cut_few(RHEL9), later9), MID, charmaps=False)),
+        }
+        tags = {'link': (OLD, MID), 'same_sources': (MID, MID),
+                'one_build': (MID, MID), 'same_no_charmaps': (MID, MID)}
+        for label, (old, new) in files.items():
+            out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-machines-')
+            cls.made.append(out_dir)
+            cls.runs[label] = (out_dir,) + run_wrapper(
+                *tags[label], '--old-node', old, '--new-node', new,
+                out_dir=out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        for d in cls.made:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def out(self, label):
+        _, rc, out = self.runs[label]
+        self.assertEqual(rc, 0, out[-3000:])
+        self.assertIn('AUDIT SUMMARY', out)
+        return out
+
+    def step(self, out, n):
+        """Step n's output: from the line after its banner to the next
+        banner, which must be there."""
+        after = out.split(f'== STEP {n} ', 1)[1].split('\n', 2)[2]
+        body, end, _ = after.partition('\n====')
+        self.assertTrue(end, n)
+        return body
+
+    def test_a_link_is_named_not_compared_never_added_or_removed(self):
+        out = self.out('link')
+        step2 = flat(self.step(out, 2))
+        self.assertIn("Not compared, not read among a machine's locale "
+                      "sources (2): de_IT (symlink on the new machine), "
+                      "zz_LINK (symlink on the new machine)", step2)
+        listed = re.search(r'Listed for Reindex \(\d+\): ([^.]*?)(?: Not |$)',
+                           step2)
+        self.assertTrue(listed, step2)
+        names = listed.group(1).replace(',', ' ').split()
+        for name in ('de_IT', 'zz_LINK'):
+            with self.subTest(name=name):
+                self.assertIn(name, names)
+        # Step 2's own list of what is gone (with machine files the summary's
+        # Removed is step 8's until step 9.4b, which names de_IT as
+        # undetermined): neither link is in it, nor among the files added.
+        out_dir = self.runs['link'][0]
+        lists = glob.glob(os.path.join(out_dir, 'step2_removed_locales.*.txt'))
+        self.assertEqual(len(lists), 1, lists)
+        with open(lists[0], encoding='utf-8') as f:
+            gone = f.read()
+        self.assertNotIn('de_IT', gone)
+        self.assertNotIn('zz_LINK', gone)
+        unread_line = 'Not compared, not read among'
+        self.assertEqual(step2.count(unread_line), 1, step2)
+        self.assertNotIn('de_IT', step2.split('Not compared, no file at')[-1]
+                         .split(unread_line)[0])
+        self.assertNotIn('zz_LINK', step2.split('Listed for Reindex')[0]
+                         .split(unread_line)[0])
+        step1 = flat(self.step(out, 1))
+        self.assertIn("2 entries of the machine's files were not read, so a "
+                      "locale that is, or copies, one of them is not "
+                      "compared: de_IT (symlink), zz_LINK (symlink).", step1)
+
+    def test_two_builds_of_one_release_with_the_same_sources(self):
+        out = self.out('same_sources')
+        before = flat(out.split('== STEP 1', 1)[0])
+        self.assertNotIn('DIRECTION', flat(out))
+        self.assertIn('Rules: not compared, the two machines\' files hold '
+                      'the same locale sources and charmaps.',
+                      flat(self.step(out, 2)))
+        self.assertIn("glibc-2.34-283.el9_8: the two machines' files hold the "
+                      "same locale sources and charmaps, so no locale's sort "
+                      "rules can differ between them", flat(self.step(out, 1)))
+        summary = out.split('AUDIT SUMMARY', 1)[1]
+        block = section_body(summary, '-- One source tree, compared with '
+                                      'itself')
+        self.assertIn("the two machines' files hold the same locale sources "
+                      "and charmaps, so no locale's sort rules can differ "
+                      "between them", block)
+        self.assertNotIn("means 'nothing was compared'", block)
+        reindex = section_body(summary, '-- Reindex: sort order changes, '
+                                        'confirm then REINDEX')
+        self.assertTrue(reindex.startswith(
+            "none -- the two machines' files hold the same locale sources "
+            "and charmaps (see below)"), reindex)
+        self.assertNotIn('nothing was compared', reindex)
+        self.assertNotIn('code under locale/', block)
+        self.assertNotIn('cannot read', before)
+
+    def test_the_same_sources_without_charmaps_never_claim_the_charmaps(self):
+        """Neither file holds charmaps, so no charmap was read: one source
+        tree, said as the same locale sources, and the character sets as
+        not compared, in step 1, step 2, Reindex and the block below it --
+        never "the same charmaps" (false-negative-reviewer and doc-sweep,
+        round 2)."""
+        out = self.out('same_no_charmaps')
+        self.assertNotIn('DIRECTION', flat(out))
+        step1, step2 = flat(self.step(out, 1)), flat(self.step(out, 2))
+        self.assertIn("the two machines' files hold the same locale sources, "
+                      "so no locale's sort rules can differ between them, "
+                      "and steps 1 and 2 have nothing to compare; their "
+                      "character sets were not compared, as a file holds no "
+                      "charmaps this reads.", step1)
+        self.assertIn("Rules: not compared, the two machines' files hold the "
+                      "same locale sources.", step2)
+        self.assertIn("Character sets and transliterations: not compared, a "
+                      "machine's file holds no charmaps this reads.", step2)
+        summary = out.split('AUDIT SUMMARY', 1)[1]
+        reindex = section_body(summary, '-- Reindex: sort order changes, '
+                                        'confirm then REINDEX')
+        self.assertTrue(reindex.startswith(
+            "none -- the two machines' files hold the same locale sources; "
+            "their character sets were not compared (see below)"), reindex)
+        block = section_body(summary, '-- One source tree, compared with '
+                                      'itself')
+        self.assertIn('their character sets were not compared', block)
+        for text in (step1, step2, reindex, block):
+            with self.subTest(text=text[:40]):
+                self.assertNotIn('the same locale sources and charmaps',
+                                 text)
+
+    def test_two_machines_of_one_build(self):
+        out = self.out('one_build')
+        summary = out.split('AUDIT SUMMARY', 1)[1]
+        self.assertIn('-- One commit, compared with itself', summary)
+        self.assertIn('one build given twice', flat(summary))
+        self.assertIn('!! Both machines run the same glibc build. This '
+                      'compares two machines, not an upgrade.', flat(summary))
+
+    def test_a_file_without_charmaps(self):
+        out = self.out('link')
+        step2 = flat(self.step(out, 2))
+        self.assertIn('Rules differ', step2)
+        self.assertRegex(step2, r'NOT RUN: the comparison of .*\. The file '
+                                r'of the machine that runs \S+ holds no '
+                                r'charmaps this reads, because ')
+        self.assertNotIn('Character sets and transliterations: nothing',
+                         step2)
+        step1 = flat(self.step(out, 1))
+        self.assertIn('charmaps none, because', step1)
 
 
 class NodeFileWithoutSources:

@@ -12,15 +12,15 @@ Step 1 clones glibc from `github.com/bminor/glibc`, so it needs outbound
 network the first time. The clone is `--filter=blob:none --no-checkout` and
 still comes to roughly **370 MB** on disk. Later runs reuse it.
 
-A side named as a build (`glibc-2.34-275.el9_8`), or the build a machine's
-file names (`--old-node`, `--new-node`), needs outbound network to
+A side named as a build (`glibc-2.34-275.el9_8`) needs outbound network to
 Rocky Linux's mirror the first time that build is read, and a side given
 as `latest-el<N>` on every run, to read which build is the newest
 (`PG_GLIBC_BUILD_MIRROR` names another), and its files are kept in
 `scripts/build-sources-cache/` (`PG_GLIBC_BUILD_SOURCES_CACHE` names
 another). Checking the charmaps of an el9 or el10 package needs Python 3.14
 or a `zstd` program; without one the run says the charmaps were not
-checked.
+checked. A machine's file (`--old-node`, `--new-node`) needs no network
+beyond the clone: steps 1 and 2 read the locale sources it holds.
 
 Steps 1 and 2 work out how `localedef` reads every locale file of the
 versions they look at; step 2 looks at both. The first run for a version
@@ -44,11 +44,13 @@ and the run continues.
 - **`rpm`.** The extraction reads the glibc build with `rpm -q glibc`, and
   `audit.sh` refuses a file that names none, so the machine has to be one
   that installs glibc from RPM.
-- **`glibc-locale-source` at the exact build the machine runs**, for steps 6
-  to 8, and for step 11's check of what it measured against the machine's
+- **`glibc-locale-source` at the exact build the machine runs**, for steps 1
+  and 2, which read the machine's own locale sources and charmaps, for steps
+  6 to 8, and for step 11's check of what it measured against the machine's
   character sets (trap 3, below). Without it the machine still gives a file,
-  with the measurement and the build, and the summary says which checks did
-  not run and why.
+  with the measurement and the build; steps 1 and 2 then read the tags
+  (given as its tag; given as the build itself, the run is refused), and
+  the run says which checks did not run and why.
 - **The language packs of the locales you care about.** The measurement
   covers every locale `locale -a` lists and nothing else. A locale a database
   uses is installed already. On a stock RHEL image on EC2 that was English
@@ -158,10 +160,13 @@ to.
 
 ## Which nodes need `glibc-locale-source`
 
-**Both of them**, for steps 6 to 8. Steps 6 and 7 hold a machine's locale
-sources against the upstream version its distro started from; step 8 holds the
-two machines' against each other. A machine without the package still gives a
-file, and those checks then say `NOT RUN` with the reason. Step 11 runs
+**Both of them**, for steps 1 and 2, which compare the two machines' own
+locale sources and charmaps, and for steps 6 to 8. Steps 6 and 7 hold a
+machine's locale sources against the upstream version its distro started
+from; step 8 holds the two machines' against each other. A machine without
+the package still gives a file: steps 1 and 2 then read the tags (or the
+run is refused, when that side is given as the build itself), and the
+other checks say `NOT RUN`, each with the reason. Step 11 runs
 without it, and then says it did not check the strings it measured against
 that machine's character sets, which a locale its sort table decides does not
 need.

@@ -3,7 +3,9 @@
 Steps 6 to 8's comparison of the character sets a machine builds its locales
 with, and of the collating elements they build out of transliterations
 (backlog 13.7): collation_keys, the check step 2 makes between two tags, over
-a machine's own /usr/share/i18n/charmaps/ and locale sources. Steps 6 and 7
+a machine's own /usr/share/i18n/charmaps/ and locale sources. Step 2 itself
+reads which locales each machine builds through measured_builds when it is
+given two machines' own files. Steps 6 and 7
 compare a machine with the tag its glibc is built from, step 8 the two
 machines. Step 11 reads the same folder through CharmapsDir to check the
 strings it measured against it (locale_order.charmap_check).

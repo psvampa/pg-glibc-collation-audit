@@ -843,8 +843,9 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
          r'|one line out of (\d+)',
          1,
          # The tags-only transcript: the extended one compares each
-         # machine's build in steps 1 to 5 (7.6a). Step 1's count; step 2
-         # printed it too until it became the comparison of rules (9.2).
+         # machine's own files in steps 1 and 2 (7.6a, 9.4a). Step 1's
+         # count; step 2 printed it too until it became the comparison of
+         # rules (9.2).
          (Evidence('examples/rhel8-to-rhel9-tags-only.txt',
                    shape='Locale files added, modified or deleted: {n}'),)),
     )

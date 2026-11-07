@@ -24,7 +24,9 @@ corpus are kept for a hand run:
           <old> <new>
       step 1's sides: each a tag of the clone, or a build named as
       glibc-2.34-283.el9_8, fetched and made a commit of the clone
-      (build_sources); checks the order and the floor, prints the
+      (build_sources), or, under audit.sh given each machine's file, made
+      a commit from that file with nothing fetched (machine_side, through
+      MACHINES_ENV); checks the order and the floor, prints the
       provenance, and writes to F the two refs the step reads; under
       audit.sh it also records each build's commit for the steps after
       it (SIDES_ENV)
@@ -34,11 +36,12 @@ corpus are kept for a hand run:
       (without_arch), kind `tag` or `build` (is_build_name); latest-elN is
       a build with a third field `latest`
   python3 glibc_locale_data.py machines --to F <old> <new> <old_build>
-          <new_build>
+          <new_build> <old_folder> <new_folder>
       for audit.sh, given each machine's file: <old_build> and <new_build>
-      are what `rpm -q glibc` printed on each; writes to F, a line each,
-      the side steps 1 and 2 read, its kind and its upstream tag, and
-      prints which each side reads
+      are what `rpm -q glibc` printed on each, each folder that file laid
+      out (whether it holds locales/, else the sources-not-included
+      reason); writes to F, a line each, the side steps 1 and 2 read, its
+      kind and its upstream tag, and prints which each side reads
   python3 glibc_locale_data.py typed-machines <old_build_id> <new_build_id>
       for audit.sh, given two --*-locales-dir: dies when the two typed
       build ids are the other way round (typed_machines_order); prints
@@ -1013,6 +1016,43 @@ _NOTHING_COMPARED_BUILDS = (
     "themselves.")
 
 
+# For two machines' files (machine_side): the two hold the same locale
+# sources, and the same charmaps when both files hold them, which is a
+# result; what no step reads of a machine is said where step 1 names them.
+# A file without charmaps leaves them out of its commit (machine_commit), so
+# two such files of one source tree are one tree with no charmap read: the
+# sentence then says the character sets were not compared, never that they
+# are the same (false-negative-reviewer and doc-sweep, 9.4a round 2).
+def nothing_compared_machines(charmaps):
+    """The machines' sentence for one source tree; `charmaps` is whether
+    both files hold charmaps this reads."""
+    same = ("The two machines' files hold the same locale sources and "
+            "charmaps, so no locale's sort rules can differ between them, "
+            "and steps 1 and 2 have nothing to compare."
+            if charmaps else
+            "The two machines' files hold the same locale sources, so no "
+            "locale's sort rules can differ between them, and steps 1 and 2 "
+            "have nothing to compare; their character sets were not "
+            "compared, as a file holds no charmaps this reads.")
+    return (same + " What can still differ is what no step reads of a "
+            "machine, which step 1 prints under 'Not checked for these "
+            "machines', and how each machine's glibc sorts, which step 11 "
+            "measures. sql/c_utf8_probe.sql and "
+            "docs/confirming-on-a-real-system.md check the order on the "
+            "machines themselves.")
+
+
+def machines_charmaps(old, new):
+    """Do both machine sides' files hold charmaps this reads?"""
+    return all(s.prov.get('charmaps') is not None for s in (old, new))
+
+
+def is_machine(s):
+    """Is the side a build read from a machine's own files (machine_side)?"""
+    return (not _is_tag(s) and isinstance(s.prov, dict)
+            and bool(s.prov.get('machine')))
+
+
 _NOTHING_COMPARED_REST = (
     "Step 1 can only report "
     "'nothing changed', which for an intra-major upgrade "
@@ -1020,8 +1060,9 @@ _NOTHING_COMPARED_REST = (
     "that nothing was compared. The distro's own "
     "builds are where such a change lives. With each machine's file "
     "(--old-node and --new-node), step 11 measures how each machine "
-    "sorts, and steps 6 to 8 read its locale sources when the file "
-    "holds them; sql/c_utf8_probe.sql checks C.UTF-8 on each "
+    "sorts, and steps 1 and 2 compare the two machines' own locale "
+    "sources and steps 6 to 8 read them, when the files hold them; "
+    "sql/c_utf8_probe.sql checks C.UTF-8 on each "
     "machine. C.UTF-8's order moved in glibc-2.28-93.el8 with the "
     "upstream tag unchanged. See docs/results.md.")
 
@@ -1047,13 +1088,19 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
     nothing = nothing_compared(repo, old, new, commits)
     noun = pair_noun(old, new)
     one = ONE[noun]
+    machines = is_machine(old) and is_machine(new)
     rest = (_NOTHING_COMPARED_REST if noun == 'tags' else
+            nothing_compared_machines(machines_charmaps(old, new))
+            if machines else
             _NOTHING_COMPARED_BUILDS.format(noun=noun, one=one))
     source = 'upstream source' if noun == 'tags' else 'that commit'
     old, new = label(old), label(new)
     if nothing == 'commit':
         warn(f"{old} and {new} are the same commit. Step 1 compares "
              f"{source} against itself, and step 2 compares nothing. {rest}",
+             split_words=False)
+    elif nothing == 'tree' and machines:
+        warn(f"{old} and {new}: {rest[0].lower()}{rest[1:]}",
              split_words=False)
     elif nothing == 'tree':
         warn(f"{old} and {new} are two commits of one source tree. Step 1 "
@@ -1349,6 +1396,10 @@ def list_tree_ids(repo, tag, extra):
 # against, or None. prov is a build's provenance (build_sources: what was
 # fetched, checked and applied, its tag, its patches to strcoll's code),
 # None on a tag or a machine; no default, so a constructor cannot forget it.
+# A 'build' Side is also made from a machine's own file (machine_side: its
+# commit made from the file, build `<name>.src`, prov naming the machine's
+# folder, `rpm -q` word, measurement sha256, what was skipped and its
+# charmaps; is_machine).
 Side = collections.namedtuple(
     'Side', 'kind ref root build version paths ids skipped prov')
 
@@ -1509,27 +1560,26 @@ def machine_build(words):
     return got[0]
 
 
-def machine_sides(given, words):
+def machine_sides(given, words, no_sources=(None, None)):
     """What steps 1 and 2 read for each side when audit.sh is given each
     machine's file: [(name, kind, tag)], kind 'build' or 'tag', tag the
-    upstream tag of that side, which steps 6 to 11 read; and the lines to
-    print, `!!` blocks included.
+    upstream tag of that side, which steps 6, 7 and 11 read; and the lines
+    to print, `!!` blocks included.
 
     `given` are the two sides as typed, `words` what `rpm -q glibc` printed
-    on each machine. A side typed must be that machine's build, with or
+    on each machine, `no_sources` for each side None when its file holds
+    the machine's locale sources, else the reason the file gives for
+    holding none. A side typed must be that machine's build, with or
     without the architecture, or its upstream tag; anything else dies, as
     does latest-elN (the machine exists, its file names its build).
 
-    Each build is fetched first (build_sources.fetch_build). When one
-    cannot be read with nothing found wrong (build_sources.Unread: a spec
-    this does not know, a build the mirror does not list or no longer has,
-    or no network), BOTH sides read their tags, as they did before a
-    machine's file named its build, and a `!!` says which build, why, and
-    what the tags lack: a tag against a build of one release cannot even
-    be ordered. That holds for a side typed as its tag; a side typed as the
-    build itself dies, as it does without a machine's file. Any other
-    refusal (a sha256 that moved, a digest that fails) dies."""
-    import build_sources as bs
+    A side whose build is read is read from the machine's own files
+    (machine_side, through MACHINES_ENV): nothing is downloaded. When a
+    side cannot be read that way -- its file holds no locale sources, or
+    its build is not a RHEL build this tool reads -- BOTH sides read their
+    tags, and a `!!` says which machine, why, and what the tags lack: a tag
+    against a build of one release cannot even be ordered. That holds for
+    a side typed as its tag; a side typed as the build itself dies."""
     builds = [machine_build(w) for w in words]
     sides = ('old', 'new')
     # machine_build gives glibc-<version>-<release>.
@@ -1553,35 +1603,35 @@ def machine_sides(given, words):
                 f"given is {typed}: give that build's tag, {tag}, or the "
                 f"build itself.")
         tags.append(tag)
+    import glibc_reader as gr
     unread = []
-    for side, typed, b in zip(sides, given, builds):
+    for side, typed, b, why in zip(sides, given, builds, no_sources):
         # A side typed as the build itself asks for that build: one that
         # cannot be read is refused, as it is without a machine's file.
-        # Only a side typed as its tag reads the tag in its place.
+        # Only a side typed as its tag reads the tag in its place. A build
+        # of a RHEL major whose keyword tables this tool does not hold
+        # (glibc_reader.RHEL_BUILDS: 8, 9 and 10) is not read as one: its
+        # localedef could read words the tag's tables do not have.
         asked = without_arch(typed) == b
-        if not is_build_name(b):
-            why = ("the name does not read as a build this tool fetches "
-                   "from Rocky Linux's mirror")
-            if asked:
-                die(f"cannot read the build {b}: {why}", 2)
-            unread.append((side, b, why))
+        major = (build_name(b) or (None, None, None))[2]
+        if not is_build_name(b) or f'rhel{major}' not in gr.RHEL_BUILDS:
+            why = ("the name does not read as a build of RHEL 8, 9 or 10, "
+                   "the releases whose localedef this tool reads")
+        elif why is not None:
+            why = f"it holds no locale sources, because {why}"
+        else:
             continue
-        try:
-            bs.fetch_build(b)
-        except bs.Unread as e:
-            if asked:
-                die(f"cannot read the build {b}: {e}", 2)
-            unread.append((side, b, str(e)))
-        except bs.Refused as e:
-            die(f"cannot read the build {b}: {e}", 2)
+        if asked:
+            die(f"cannot read the build {b}: {why}", 2)
+        unread.append((side, b, why))
     if not unread:
         lines = []
         if list(given) != builds:
             lines.append(textwrap.fill(
                 f"Each machine's file names the build it runs: steps 1 and 2 "
-                f"read {builds[0]} and {builds[1]}, in place of "
-                f"{given[0]} and {given[1]}.", width=78,
-                break_long_words=False, break_on_hyphens=False))
+                f"read {builds[0]} and {builds[1]}, in place of {given[0]} "
+                f"and {given[1]}, from each machine's own locale sources.",
+                width=78, break_long_words=False, break_on_hyphens=False))
         return [(b, 'build', t) for b, t in zip(builds, tags)], lines
     out = io.StringIO()
     said = '; and '.join(f"the {side} machine's file names {b}, which this "
@@ -1704,6 +1754,16 @@ def _recorded(repo, name, built):
     and the SRPM's sha256). Dies when the file is missing, does not name
     the build, or names a commit that fails either check."""
     import build_sources as bs
+    return _recorded_commit(
+        repo, name, bs.commit_message(built),
+        f"another build or another SRPM (its message does not name "
+        f"{built.tag}, {built.build} and the SRPM's sha256)")
+
+
+def _recorded_commit(repo, name, message, other):
+    """The commit SIDES_ENV's file records for `name`, checked to be a
+    commit this tool made (its committer) whose message is `message`;
+    `other` says what a commit with another message was made for."""
     path = os.environ[SIDES_ENV]
     try:
         with open(path, encoding='utf-8') as fh:
@@ -1720,17 +1780,248 @@ def _recorded(repo, name, built):
     commit = found[0]
     out = run_git(['log', '-1', '--format=%ce%x00%B', commit],
                   repo).stdout.decode('utf-8', 'replace')
-    email, _, message = out.partition('\0')
+    email, _, got = out.partition('\0')
     if email != BUILD_EMAIL:
         die(f"cannot read the build {name}: {path} names {commit}, which "
             f"this tool did not make for a build (its committer is "
             f"{email!r}).", 2)
-    if message.rstrip('\n') != bs.commit_message(built).rstrip('\n'):
+    if got.rstrip('\n') != message.rstrip('\n'):
         die(f"cannot read the build {name}: {path} names {commit}, a "
-            f"commit this tool made for another build or another SRPM "
-            f"(its message does not name {built.tag}, {built.build} and the "
-            f"SRPM's sha256).", 2)
+            f"commit this tool made for {other}.", 2)
     return commit
+
+
+# Under audit.sh given each machine's file, the file that names, for the
+# build each machine runs, the folder that machine's file was laid out in
+# (`<build>\t<folder>` a line, the build as rpm -q glibc prints it without
+# the architecture). A step that reads that build reads the machine's own
+# locale sources from there (machine_side) and downloads nothing. audit.sh
+# writes it before step 1 and exports its path to its steps only.
+MACHINES_ENV = 'PG_GLIBC_AUDIT_MACHINES'
+MACHINE_REFS = 'refs/pg-glibc-audit/machines/'
+
+
+def machine_folders(name):
+    """The folders MACHINES_ENV's file names for the build `name`, in the
+    file's order: none when the variable is unset or the file does not
+    name it. A file that cannot be read, or a line that is not two fields,
+    dies: read as "no machine" it would send the step to download the
+    build in place of the machine's own files."""
+    path = os.environ.get(MACHINES_ENV)
+    if not path:
+        return []
+    try:
+        with open(path, encoding='utf-8') as fh:
+            lines = [ln for ln in fh.read().split('\n') if ln]
+    except OSError as e:
+        die(f"{MACHINES_ENV} names {path}, where audit.sh records each "
+            f"machine's laid-out file, and it cannot be read ({e.strerror}).",
+            2)
+    found = []
+    for ln in lines:
+        fields = ln.split('\t')
+        if len(fields) != 2 or not fields[0] or not fields[1]:
+            die(f"{path}, where audit.sh records each machine's laid-out "
+                f"file, holds a line that is not a build and a folder: "
+                f"{ln!r}", 2)
+        if fields[0] == name:
+            found.append(fields[1])
+    return found
+
+
+def machine_message(tag, name, sha):
+    """The message of the commit made from a machine's own files: the tag
+    it is made on, the build the machine runs and the sha256 of its
+    measurement, so two machines' commits are two commits and step 1's
+    record can be checked against the machine it names."""
+    return ('pg-glibc-audit: %s with localedata/locales/ and '
+            'localedata/charmaps/ of the machine that runs %s\n\n'
+            'measurement sha256 %s\n' % (tag, name, sha))
+
+
+def _machine_files(folder):
+    """(locale names, skipped entries, node_charmaps.CharmapsDir or None,
+    why there is none or None) of a machine's laid-out file. The names are
+    those node_entries reads as regular files: a link or a folder among the
+    sources is skipped and named, never refused. The charmaps are read as
+    glibc's charmap_open finds them (NAME, NAME.gz or NAME.bz2); a folder
+    CharmapsDir cannot read whole gives none, with its reason, never a part
+    of them."""
+    import node_charmaps as nc
+    names, skipped = node_entries(os.path.join(folder, 'locales'))
+    cdir = os.path.join(folder, 'charmaps')
+    if os.path.isdir(cdir):
+        try:
+            return names, skipped, nc.CharmapsDir(cdir), None
+        except nc.Unusable as e:
+            return names, skipped, None, str(e)
+    try:
+        with open(os.path.join(folder, 'charmaps-not-included'),
+                  encoding='utf-8') as fh:
+            why = fh.read().strip()
+    except OSError:
+        why = ''
+    return names, skipped, None, why or "the file gives no reason"
+
+
+def machine_commit(repo, tag, folder, name, sha):
+    """The commit of the machine that runs `name`, made from its laid-out
+    file `folder`, and MACHINE_REFS + name pointed at it.
+
+    Its one parent is `tag`; its tree is the tag's with
+    localedata/locales/ replaced by the machine's locale sources and
+    localedata/charmaps/ by its charmaps, or left out when the file holds
+    none: a charmap of the tag in its place would be compared as if the
+    machine had it. Everything else is the tag's (locale/, SUPPORTED,
+    intl/locale.alias), as a machine's file holds none of it; the run says
+    so where it names each machine. Made with build_sources' fixed identity
+    and the same checks as build_commit: one parent, nothing outside
+    localedata/locales/ and localedata/charmaps/ different from the tag."""
+    import tempfile
+    import build_sources as bs
+    import node_charmaps as nc
+    names, _, charmaps, _ = _machine_files(folder)
+
+    def hashed(paths, files):
+        ids = bs._git(repo, ['hash-object', '-w', '--no-filters',
+                             '--stdin-paths'],
+                      ''.join(p + '\n' for p in paths).encode()) \
+            .decode().split()
+        if len(ids) != len(paths):
+            raise bs.Refused('`git hash-object` gave %d id(s) for %d file(s) '
+                             'of %s' % (len(ids), len(paths), folder))
+        return {f: ('blob', '100644', i) for f, i in zip(files, ids)}
+
+    try:
+        local = {}
+        cm_tree = None
+        if charmaps is not None:
+            # Uncompressed, under the name glibc opens: the tag's charmap
+            # and the machine's same bytes are one blob.
+            cm_names = sorted(charmaps.files)
+            with tempfile.TemporaryDirectory() as tmp:
+                paths = []
+                for i, c in enumerate(cm_names):
+                    p = os.path.join(tmp, str(i))
+                    with open(p, 'wb') as fh:
+                        fh.write(charmaps.raw(c))
+                    paths.append(p)
+                cm_tree = hashed(paths, cm_names)
+        for ent in bs._git(repo, ['ls-tree', '-z', tag + ':localedata']) \
+                .split(b'\0'):
+            if not ent:
+                continue
+            meta, _, n = ent.partition(b'\t')
+            mode, kind, oid = meta.decode().split(' ')
+            local[n.decode('utf-8', 'surrogateescape')] = (kind, mode, oid)
+        local['locales'] = ('tree', hashed(
+            [os.path.join(folder, 'locales', n) for n in names], names))
+        local.pop('charmaps', None)
+        if cm_tree is not None:
+            local['charmaps'] = ('tree', cm_tree)
+        root = {}
+        for ent in bs._git(repo, ['ls-tree', '-z', tag + '^{tree}']) \
+                .split(b'\0'):
+            if not ent:
+                continue
+            meta, _, n = ent.partition(b'\t')
+            mode, kind, oid = meta.decode().split(' ')
+            root[n.decode('utf-8', 'surrogateescape')] = (kind, mode, oid)
+        root['localedata'] = ('tree', '040000',
+                              bs._mktree(repo, local, missing=True))
+        tree = bs._mktree(repo, root, missing=True)
+        parent = bs._git(repo, ['rev-parse', '--verify',
+                                tag + '^{commit}']).decode().strip()
+        commit = bs._git(repo, ['commit-tree', '--no-gpg-sign', tree, '-p',
+                                parent],
+                         machine_message(tag, name, sha).encode()) \
+            .decode().strip()
+        parents = bs._git(repo, ['rev-list', '--parents', '-n', '1',
+                                 commit]).decode().split()
+        if parents != [commit, parent]:
+            raise bs.Refused('the commit made for the machine that runs %s '
+                             'has parents %r, not %s alone'
+                             % (name, parents[1:], tag))
+        outside = bs._git(repo, ['diff-tree', '-r', '--name-only', parent,
+                                 commit, '--', '.',
+                                 ':(exclude)localedata/locales',
+                                 ':(exclude)localedata/charmaps']) \
+            .decode().split('\n')
+        outside = [p for p in outside if p]
+        if outside:
+            raise bs.Refused('the commit made for the machine that runs %s '
+                             'differs from %s outside localedata/locales/ '
+                             'and localedata/charmaps/: %s'
+                             % (name, tag, ', '.join(outside[:5])))
+        bs._git(repo, ['update-ref', MACHINE_REFS + name, commit])
+    except (bs.Refused, nc.Unusable) as e:
+        die(f"cannot read the machine that runs {name}: {e}", 2)
+    return commit
+
+
+def _measurement_sha(folder):
+    """The sha256 of the measurement a machine's laid-out file holds."""
+    import hashlib
+    try:
+        with open(os.path.join(folder, 'locale_order.out'), 'rb') as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    except OSError as e:
+        die(f"cannot read the measurement in {folder}: {e.strerror}", 2)
+
+
+def machine_side(repo, name, folders, extra=(), make=False):
+    """(Side, None) of the build `name` read from the machines' own files
+    in `folders` (MACHINES_ENV): no download. A build Side like
+    build_side's -- its build `<name>.src` and its version 'glibc X.Y', so
+    it is ordered and printed as a build is -- whose commit is
+    machine_commit's and whose prov says which machine's files it holds.
+
+    Two machines that run one build (both sides of a pair) are one side
+    only when their files hold the same locale sources and charmaps; two
+    machines of one build whose files differ die, since which of them a
+    step reads would be a guess. Under audit.sh a step after step 1 takes
+    the commit step 1 recorded (SIDES_ENV), checked against its message."""
+    parsed = build_name(name)
+    tag = 'glibc-' + parsed[0]
+    _need_tags(repo, [tag])
+    folder = folders[0]
+    for f in folders:
+        if not os.path.isdir(os.path.join(f, 'locales')):
+            die(f"cannot read the machine that runs {name}: its file, laid "
+                f"out in {f}, holds no locale sources", 2)
+    sha = _measurement_sha(folder)
+    if os.environ.get(SIDES_ENV) and not make:
+        commit = _recorded_commit(
+            repo, name, machine_message(tag, name, sha),
+            "another machine (its message does not name "
+            f"{tag}, {name} and that machine's measurement)")
+    else:
+        commit = machine_commit(repo, tag, folder, name, sha)
+        for other in folders[1:]:
+            twin = machine_commit(repo, tag, other, name,
+                                  _measurement_sha(other))
+            trees = [run_git(['rev-parse', '--verify', c + '^{tree}'], repo)
+                     .stdout.decode().strip() for c in (commit, twin)]
+            if trees[0] != trees[1]:
+                die(f"the two machines run {name} and their files hold "
+                    f"different locale sources or charmaps, so which of them "
+                    f"a step should read is not known.", 2)
+        # The ref names the commit of the first folder, the one recorded.
+        run_git(['update-ref', MACHINE_REFS + name, commit], repo)
+    names, skipped, charmaps, why = _machine_files(folder)
+    try:
+        with open(os.path.join(folder, 'build-id'), encoding='utf-8') as fh:
+            word = fh.read().strip()
+    except OSError as e:
+        die(f"cannot read the build id in {folder}: {e.strerror}", 2)
+    prov = {'tag': tag, 'machine': folder, 'word': word,
+            'measurement_sha256': sha, 'locales': len(names),
+            'skipped': list(skipped),
+            'charmaps': None if charmaps is None else len(charmaps.files),
+            'charmaps_dir': None if charmaps is None else charmaps.root,
+            'charmaps_why': why}
+    return _listed('build', repo, commit, extra, f'{name}.src',
+                   f'glibc {parsed[0]}', prov), None
 
 
 def build_side(repo, name, extra=(), make=False):
@@ -1747,9 +2038,18 @@ def build_side(repo, name, extra=(), make=False):
     Under audit.sh (SIDES_ENV set) a step after step 1 takes the commit
     step 1 made from that file (_recorded) instead of making it again.
     Step 1 passes `make`: it always makes the commit, and then records it
-    (write_recorded), so it never reads a file it has not written."""
+    (write_recorded), so it never reads a file it has not written.
+
+    When MACHINES_ENV names `name`, none of the above: the build is read
+    from the machines' own files (machine_side), nothing is fetched, and
+    the commit leaves locale/ as the tag's, so LINE_READER cannot differ."""
     import build_sources as bs
     parsed = build_name(name)
+    folders = machine_folders(name) if parsed else []
+    if folders:
+        # A machine's file of this run names this build: its own locale
+        # sources are read, and nothing is downloaded.
+        return machine_side(repo, name, folders, extra, make)
     if parsed:
         _need_tags(repo, ['glibc-' + parsed[0]])
     try:
@@ -2841,7 +3141,8 @@ def step1_sides(here, old, new, allow_reverse=False):
     pair, print the provenance, hold each side to the floor; and, which the
     bash did not, a `!!` for the sides read as tags (tag_sides_text). A build name
     (is_build_name) is never asked of git: build_side fetches it and makes
-    its commit again. latest-elN is refused (refuse_latest)."""
+    its commit again, or makes it from a machine's own file under audit.sh
+    (machine_side). latest-elN is refused (refuse_latest)."""
     refuse_latest((old, new))
     repo = os.path.join(here, 'glibc')
     if not os.path.isdir(repo):
@@ -2878,7 +3179,12 @@ def step1_sides(here, old, new, allow_reverse=False):
             if t not in under:
                 under.append(t)
         report_tag_provenance(repo, *under)
-        report_build_provenance(builds)
+        machines = [sd for sd in builds if is_machine(sd)]
+        if machines:
+            report_machine_provenance(machines)
+        rebuilt = [sd for sd in builds if not is_machine(sd)]
+        if rebuilt:
+            report_build_provenance(rebuilt)
     if tags:
         warn(tag_sides_text(tags), split_words=False)
     warn(CODE_NOT_COMPARED, split_words=False)
@@ -2895,8 +3201,9 @@ def step1_sides(here, old, new, allow_reverse=False):
 # side read as a build (tag_sides_text): 'build' (name it), 'node' (the
 # locale folders or the measurements, which a build refuses: pass the
 # machines' files),
-# 'none' (a machine's file named a build this run could not read, and its
-# own `!!` says so). Unset, by hand: 'build'.
+# 'none' (a machine's file holds no locale sources or names a build that is
+# not of RHEL 8, 9 or 10, and its own `!!` says so). Unset, by hand:
+# 'build'.
 TAG_ASK_ENV = 'PG_GLIBC_AUDIT_TAG_ASK'
 
 
@@ -2938,9 +3245,57 @@ def tag_sides_text(tags):
     elif ask == 'node':
         text += (" Pass each machine's file with --old-node and --new-node "
                  "instead of every other --old-*/--new-* option: steps 1 and 2 "
-                 "then read the build each file names, if this run can read "
-                 "it.")
+                 "then read each machine's own locale sources, which its file "
+                 "holds.")
     return text
+
+
+# What no step reads of a machine whose own files are read (machine_side),
+# said once, where step 1 names the machines; every other block points here.
+MACHINE_NOT_CHECKED = (
+    "Not checked for these machines: their locale sources and charmaps are "
+    "read as each machine's file holds them, with no check against the "
+    "glibc-locale-source package they came from; localedata/SUPPORTED and "
+    "intl/locale.alias are the upstream tag's, as a machine's file holds "
+    "neither (step 2 takes which locales each machine builds with each "
+    "charmap from its measurement instead); localedef's keyword tables are "
+    "the tag's with what Red Hat's patches are known to add for that RHEL "
+    "major, and how localedef reads the bytes 0x1A and 0xFF and UTF-8 input "
+    "is answered by the tag's ancestry.")
+
+
+def report_machine_provenance(machines):
+    """Print, for each Side read from a machine's own files, which file and
+    what it held; a `!!` for the entries of its sources that were not read;
+    one `!!` for what no step reads of a machine (MACHINE_NOT_CHECKED)."""
+    print("Machine provenance (each machine's own locale sources and charmaps, "
+          "from its")
+    print("file, on its upstream tag above, as one commit of the clone; "
+          "nothing downloaded):")
+    for sd in machines:
+        prov = sd.prov
+        print(f"  {label(sd)} = {sd.ref[:12]}, one parent: {prov['tag']}")
+        print(f"    rpm -q glibc   {prov['word']}")
+        print(f"    measurement    sha256 {prov['measurement_sha256']}")
+        print(f"    locale sources {prov['locales']} file(s)")
+        if prov['charmaps'] is None:
+            print(textwrap.fill(
+                f"charmaps       none, because {prov['charmaps_why']}",
+                width=78, initial_indent='    ', subsequent_indent=' ' * 19,
+                break_long_words=False, break_on_hyphens=False))
+        else:
+            print(f"    charmaps       {prov['charmaps']} file(s)")
+    for sd in machines:
+        skipped = sd.prov['skipped']
+        if skipped:
+            warn(f"{label(sd)}: {len(skipped)} entr"
+                 f"{'y' if len(skipped) == 1 else 'ies'} of the machine's "
+                 f"files {'was' if len(skipped) == 1 else 'were'} not read, "
+                 f"so a locale that is, or copies, one of them is not "
+                 f"compared: "
+                 + ', '.join(f"{shown(e)} ({why})" for e, why in skipped)
+                 + '.', split_words=False)
+    warn(MACHINE_NOT_CHECKED, split_words=False)
 
 
 def report_build_provenance(builds):
@@ -3050,11 +3405,25 @@ def _main(argv):
     if argv and argv[0] == 'machines':
         # audit.sh, given each machine's file, before step 1: which side
         # steps 1 and 2 read (machine_sides), its kind and its tag, a line
-        # each in --to; what to say about it on stdout.
-        if len(argv) != 7 or argv[1] != '--to':
+        # each in --to; what to say about it on stdout. Each machine's
+        # laid-out file says whether it holds the locale sources, and why
+        # not (sources-not-included).
+        if len(argv) != 9 or argv[1] != '--to':
             die("usage: glibc_locale_data.py machines --to <file> <old> "
-                "<new> <old_build> <new_build>")
-        sides, lines = machine_sides(argv[3:5], argv[5:7])
+                "<new> <old_build> <new_build> <old_folder> <new_folder>")
+        no_sources = []
+        for folder in argv[7:9]:
+            if os.path.isdir(os.path.join(folder, 'locales')):
+                no_sources.append(None)
+                continue
+            try:
+                with open(os.path.join(folder, 'sources-not-included'),
+                          encoding='utf-8') as fh:
+                    why = fh.read().strip()
+            except OSError:
+                why = ''
+            no_sources.append(why or "the file gives no reason")
+        sides, lines = machine_sides(argv[3:5], argv[5:7], no_sources)
         with open(argv[2], 'w', encoding='utf-8') as fh:
             for name, kind, tag in sides:
                 fh.write(f"{name}\t{kind}\t{tag}\n")
@@ -3152,7 +3521,12 @@ def _main(argv):
         import glibc_tree
         # Who inherits what, from what localedef reads to build each locale
         # (glibc_tree), every `copy` followed the way glibc follows it.
-        tree = glibc_tree.Tree.at_tag(repo, tag)
+        # A machine's commit holds the tag's keyword tables, not the
+        # build's: read with what the build's RHEL major adds, as step 2
+        # reads it (one Build, one entry of the reader's cache).
+        build = (glibc_tree.build_at(repo, tag, shown)
+                 if shown and machine_folders(shown) else None)
+        tree = glibc_tree.Tree.at_tag(repo, tag, build)
         # Every locale with an LC_COLLATE of its own first, in name order,
         # so that equal counts print in the order they always have.
         counts = {name: 0 for name in tree.names if tree.defines(name)}

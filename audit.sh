@@ -21,9 +21,11 @@
 # lists, resolved once before anything else reads the sides, and named before
 # step 1. With a build, of the options below only --old-node and --new-node
 # are read. Given each machine's file (--old-node, --new-node),
-# steps 1 and 2 read the build that file names, in place of its tag; a
-# build this cannot read makes both sides read their tags, and the run says
-# so.
+# steps 1 and 2 read that machine's own locale sources and charmaps, as the
+# build the file names, in place of its tag; a file without the sources, or
+# naming a build that is not of RHEL 8, 9 or 10, makes both sides read their
+# tags when that side was given as its tag, and the run says so; given as
+# the build itself, the run is refused.
 #
 # The order of the two tags is not a formality: every step assumes the second
 # one is the newer. Given them the other way round the run used to go to the
@@ -57,8 +59,8 @@
 # its measurement, its locale sources, its charmaps and its glibc build. A
 # file without the sources or the charmaps says why, and the summary repeats
 # it where their checks would have answered. Only a node file carries the
-# charmaps, so only with these options do steps 6 to 8 compare them and step
-# 11 check what it measured against them.
+# charmaps, so only with these options do steps 2 and 6 to 8 compare them
+# and step 11 check what it measured against them.
 #
 # Example (the names are examples -- `ldd --version` on each node gives the
 # tag, `rpm -q glibc` the build):
@@ -114,9 +116,13 @@ usage() {
   echo "       one file scripts/locale_order.py --extract wrote on that" >&2
   echo "       machine, with its measurement, its build, its locale sources and" >&2
   echo "       its charmaps (a file without them says why), and stands for all" >&2
-  echo "       the options above. Steps 1 and 2 then read the build each file" >&2
-  echo "       names, in place of the tag (the side given is that build or its" >&2
-  echo "       tag)." >&2
+  echo "       the options above. Steps 1 and 2 then read each machine's own" >&2
+  echo "       locale sources and charmaps, as the build its file names, in" >&2
+  echo "       place of the tag (the side given is that build or its tag)," >&2
+  echo "       and download nothing. A file without the sources, or naming a" >&2
+  echo "       build that is not of RHEL 8, 9 or 10, makes both sides read" >&2
+  echo "       their tags when that side was given as its tag, and the run" >&2
+  echo "       says so; given as the build itself, the run is refused." >&2
   exit 2
 }
 
@@ -263,11 +269,14 @@ export PG_GLIBC_AUDIT_OUT="$OUT_DIR"
 
 # Each machine's file is checked and laid out here, before anything reads the
 # sides, because it names the build that machine runs, and steps 1 and 2 read
-# that build (glibc_locale_data.machine_sides): the side typed must be that
-# build or its tag. A build that cannot be read with nothing found wrong
-# makes both sides read their tags, and NODE_NOTE says so; the warnings block
-# repeats it from the step0 log written below. Laid out under a name of its
-# own, and moved under the pair's name once the pair is named.
+# that build from the machine's own locale sources, which the file holds
+# (glibc_locale_data.machine_sides; nothing is downloaded): the side typed
+# must be that build or its tag. A file that holds no locale sources, or
+# names a build that is not of RHEL 8, 9 or 10, makes both sides read their
+# tags when that side was given as its tag (given as the build itself, the
+# run is refused), and NODE_NOTE says so; the warnings block repeats it from the step0 log
+# written below. Laid out under a name of its own, and moved under the
+# pair's name once the pair is named.
 OLD_TAG=$OLD; NEW_TAG=$NEW; NODE_NOTE=""; NODE_TMP=""
 if [ -n "$OLD_NODE" ]; then
   mkdir -p "$OUT_DIR"
@@ -281,7 +290,8 @@ if [ -n "$OLD_NODE" ]; then
     fi
   done
   NODE_NOTE=$(python3 "$SCRIPTS/glibc_locale_data.py" machines --to "$RESOLVED" \
-    "$OLD" "$NEW" "$(cat "$NODE_TMP/old/build-id")" "$(cat "$NODE_TMP/new/build-id")")
+    "$OLD" "$NEW" "$(cat "$NODE_TMP/old/build-id")" "$(cat "$NODE_TMP/new/build-id")" \
+    "$NODE_TMP/old" "$NODE_TMP/new")
   [ -z "$NODE_NOTE" ] || printf '%s\n' "$NODE_NOTE"
   OLD=$(sed -n 1p "$RESOLVED" | cut -f1); NEW=$(sed -n 2p "$RESOLVED" | cut -f1)
   OLD_KIND=$(sed -n 1p "$RESOLVED" | cut -f2); NEW_KIND=$(sed -n 2p "$RESOLVED" | cut -f2)
@@ -368,10 +378,17 @@ PAIR=$(slug "$OLD" "$NEW")
 # this run's steps only.
 SIDES_FILE="$OUT_DIR/build_sides.$PAIR.txt"
 export PG_GLIBC_AUDIT_SIDES="$SIDES_FILE"
+# Where each machine's file is laid out, for the build it runs
+# (glibc_locale_data.MACHINES_ENV): a step that reads that build reads the
+# machine's own locale sources from there. Written below with the layout,
+# only for a side read as its build; removed with every other file this run
+# reads.
+MACHINES_FILE="$OUT_DIR/machine_files.$PAIR.txt"
 # What step 1's `!!` for a side read as a tag asks for
 # (glibc_locale_data.TAG_ASK_ENV): with any option a build is refused with
 # (the list above), the machines' files; with a machine's file, a tag is
-# read only when its build could not be, which NODE_NOTE says.
+# read only when a file holds no locale sources or names a build that is
+# not of RHEL 8, 9 or 10, which NODE_NOTE says.
 if [ -n "$OLD_NODE" ]; then
   export PG_GLIBC_AUDIT_TAG_ASK=none
 elif [ -n "$OLD_ORDER$NEW_ORDER$OLD_LOCALES$NEW_LOCALES$OLD_BUILD$NEW_BUILD" ]; then
@@ -418,6 +435,11 @@ NEW_DISTRO_KEYED="$OUT_DIR/distro_keyed_locales.$(slug "$NEW_TAG" new).txt"
 OLD_NO_SOURCES=""; NEW_NO_SOURCES=""; OLD_CM=(); NEW_CM=(); NODE_CM=()
 ORDER_CM=()
 OLD_CM_WHY=""; NEW_CM_WHY=""; reasons=""; NOCM=()
+# Never one an earlier run left: removed before the layout writes it, and
+# the variable is exported only when this run wrote the file (a value from
+# the reader's environment would send the steps to another run's folders).
+rm -f "$MACHINES_FILE"
+unset PG_GLIBC_AUDIT_MACHINES
 if [ -n "$OLD_NODE" ]; then
   mkdir -p "$OUT_DIR"
   for side in old new; do
@@ -458,6 +480,10 @@ if [ -n "$OLD_NODE" ]; then
       echo "       why they are missing. Not continuing." >&2
       exit 2
     fi
+    if [ "$side" = old ]; then kind=$OLD_KIND; b=$OLD; else kind=$NEW_KIND; b=$NEW; fi
+    if [ "$kind" = build ]; then
+      printf '%s\t%s\n' "$b" "$dir" >> "$MACHINES_FILE"
+    fi
     if [ "$side" = old ]; then
       OLD_BUILD=$build; OLD_LOCALES=$locales; OLD_NO_SOURCES=$reason
       OLD_ORDER="$dir/locale_order.out"; OLD_CM=("${cm[@]}"); OLD_CM_WHY=$cmreason
@@ -472,6 +498,9 @@ if [ -n "$OLD_NODE" ]; then
     fi
   done
   rmdir "$NODE_TMP"
+  if [ -f "$MACHINES_FILE" ]; then
+    export PG_GLIBC_AUDIT_MACHINES="$MACHINES_FILE"
+  fi
   # Step 8 compares the charmaps only with both machines'; otherwise it
   # prints what each file that lacks them says.
   if [ -n "$reasons" ]; then
@@ -645,6 +674,16 @@ esac
 
 banner "STEP 2  Which locales' sort rules changed"
 run_step 2 python3 "$SCRIPTS/filter_lc_collate_changes.py" "$OLD" "$NEW"
+# Two machines of one source tree: whether step 2 read their charmaps, as
+# step 2 says it (a file without them, or with a folder it cannot read
+# whole, left them out of its commit). The summary names the charmaps as
+# the same only when it did. Read from the file, not through a pipe.
+CM_NOT_READ=0
+said="Character sets and transliterations: not compared, a machine's file"
+said="$said holds no charmaps this reads."
+if grep -qF "$said" "$OUT_DIR/step2.$PAIR.log"; then
+  CM_NOT_READ=1
+fi
 
 # Absent is not empty. Step 2 writes these files whether or not it found
 # anything, so a missing file means step 2 did not get that far -- an error to
@@ -666,8 +705,9 @@ fi
 # passed on as an argument: the name check that used to guard step 3's argv
 # is no longer needed.
 
-# Optional, and not part of the source audit: steps 1 and 2 read only the
-# clone and the builds, while steps 6 to 11 need a node's files. They run
+# Optional, and not part of the source audit: steps 1 and 2 read the clone
+# and the builds, or each machine's own locale sources from its file, while
+# steps 6 to 11 need a node's files. They run
 # only when you supply them. Every step keeps its number when a side is left
 # out, and kept it when steps 3, 4, 5, 9 and 10 were deleted (branch 9).
 if [ -n "$OLD_LOCALES" ]; then
@@ -799,7 +839,22 @@ if [ "$(count_lines "$STEP2_LIST")" -gt 0 ]; then
     echo "   is exactly C or POSIX is compared by PostgreSQL itself, without glibc."
   fi
 else
-  if [ "$SAME_TAG" = 1 ]; then
+  if [ "$SAME_TAG" = 1 ] && [ -n "$OLD_NODE" ] && [ "$NOUN" = builds ] \
+     && [ "$NOTHING" = tree ]; then
+    # Two machines' own files, read and the same (see below). The NOUN test
+    # is unreachable as machine_sides stands (with machine files both sides
+    # are builds or both tags, and two tags are never NOTHING=tree); kept so
+    # a tag pair is never called "the two machines' files". The charmaps
+    # are named only when both files hold them: a file without them left
+    # them out of its commit, and none was read.
+    if [ "$CM_NOT_READ" = 0 ]; then
+      echo "     none -- the two machines' files hold the same locale sources and"
+      echo "     charmaps (see below)"
+    else
+      echo "     none -- the two machines' files hold the same locale sources;"
+      echo "     their character sets were not compared (see below)"
+    fi
+  elif [ "$SAME_TAG" = 1 ]; then
     echo "     none -- nothing was compared: the two $NOUN are one commit or one"
     echo "     source tree (see below)"
   else
@@ -811,8 +866,13 @@ fi
 # question, and this one comes first: it says where the other is, so that the
 # tags' list -- or their "none" -- is not read as the whole answer.
 if [ -n "$OLD_ORDER" ]; then
-  echo "     This list is from the $NOUN. What each machine's own glibc says"
-  echo "     is under '-- Measured order', below."
+  if [ -n "$OLD_NODE" ] && [ "$NOUN" = builds ]; then
+    echo "     This list is from each machine's own locale sources. What each"
+    echo "     machine's own glibc says is under '-- Measured order', below."
+  else
+    echo "     This list is from the $NOUN. What each machine's own glibc says"
+    echo "     is under '-- Measured order', below."
+  fi
 fi
 
 # What the upgrade removes. A locale that is gone is worse than one that sorts
@@ -995,6 +1055,9 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
       fi
       if [ "$side" = old ]; then kind=$OLD_KIND; b=$OLD; else kind=$NEW_KIND; b=$NEW; fi
       if [ "$kind" = build ]; then
+        # Unreachable: a side without a locale folder is a build only with
+        # the machines' files, and a file without its sources makes both
+        # sides tags (machine_sides). Kept until step 9.4b deletes it.
         echo "     So nothing above holds this machine's own locale files against"
         echo "     $tag. Steps 1 and 2 read its build, $b."
       else
@@ -1063,10 +1126,13 @@ if [ -n "$OLD_LOCALES" ] || [ -n "$NEW_LOCALES" ]; then
 else
   echo "-- Distro patches, steps 6 and 7: NOT RUN"
   if [ -n "$OLD_NODE" ] && [ "$NOUN" = builds ]; then
+    # Unreachable: with the machines' files, both sides are builds only when
+    # both files hold their sources (machine_sides), and then steps 6 and 7
+    # run. Kept until step 9.4b deletes this block.
     no_sources old
     no_sources new
     echo "     So nothing above holds either machine's own locale files against"
-    echo "     its tag. Steps 1 and 2 read each machine's build."
+    echo "     its tag. Steps 1 and 2 read each machine's own locale sources."
   elif [ "$NOUN" = builds ]; then
     text="Steps 6 and 7 compare a machine's own locale files with its"
     text="$text upstream tag: pass --old-node and --new-node. $NOT_READ, below."
@@ -1117,10 +1183,9 @@ if [ -n "$NODE_LIST" ] && [ -f "$NODE_LIST" ]; then
       "$OUT_DIR/step8.$PAIR.log" 2>/dev/null | tail -1 | tr ',' '\n' \
       | sed 's/^ *//; s/^C$/C.UTF-8/' | awk 'NF' | paste -sd, - | sed 's/,/, /g')
     # Only when steps 1 and 2 read the two tags (the locale folders, or a
-    # machine's build this run could not read). Reading the builds, they
-    # compared every file both builds hold, C among them; a file not in both
-    # builds (a locale an admin added on both machines) is in step 8's count
-    # and full list only, not named here.
+    # machine's file naming a build that is not of RHEL 8, 9 or 10). Reading
+    # each machine's own sources, they compared every file both machines
+    # hold, C among them.
     if [ -n "$hidden" ] && { [ "$OLD_KIND" != build ] || [ "$NEW_KIND" != build ]; }; then
       echo "     Of the $NODE_DIFFS that differ, not at both tags:"
       printf '%s\n' "$hidden" | fold -s -w 64 | sed 's/ *$//; s/^/       /'
@@ -1242,8 +1307,9 @@ if [ "$ORDER" = "undetermined" ]; then
 fi
 
 if [ "$SAME_TAG" = "1" ] && [ "$NOUN" != tags ]; then
-  # What a build holds is its sources in localedata/ and locale/; the
-  # machines' files are not read with a build, so they are not offered.
+  # What a build holds is its sources in localedata/ and locale/; what two
+  # machines' files hold is their locale sources and charmaps, which steps 1
+  # and 2 read in place of their builds'.
   echo
   if [ "$NOTHING" = "commit" ]; then
     echo "-- One commit, compared with itself"
@@ -1255,6 +1321,25 @@ if [ "$SAME_TAG" = "1" ] && [ "$NOUN" != tags ]; then
     fi
     text="$text Everything above that compares the two $NOUN and says"
     text="$text 'nothing changed' means 'nothing was compared'."
+  elif [ -n "$OLD_NODE" ]; then
+    # Two machines' files: their own sources were read, and are the same.
+    echo "-- One source tree, compared with itself"
+    if [ "$CM_NOT_READ" = 0 ]; then
+      text="$OLD -> $NEW: the two machines' files hold the same locale sources"
+      text="$text and charmaps, so no locale's sort rules can differ between"
+      text="$text them, and steps 1 and 2 had nothing to compare."
+    else
+      text="$OLD -> $NEW: the two machines' files hold the same locale sources,"
+      text="$text so no locale's sort rules can differ between them, and steps"
+      text="$text 1 and 2 had nothing to compare; their character sets were not"
+      text="$text compared, as a file holds no charmaps this reads."
+    fi
+    text="$text What this run"
+    text="$text does not read of a machine is under 'Not checked for these"
+    text="$text machines', below. What each machine's own glibc says is under"
+    text="$text '-- Measured order'. sql/c_utf8_probe.sql and"
+    text="$text docs/confirming-on-a-real-system.md check the order on the"
+    text="$text machines themselves."
   else
     echo "-- One source tree, compared with itself"
     text="$OLD -> $NEW are two commits of one source tree: the two $NOUN hold"

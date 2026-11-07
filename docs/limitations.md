@@ -31,7 +31,7 @@ and no warning will reach you.
 Naming the two builds instead of the tags (command 1.a) compares their own
 `C.UTF-8` files (step 2). Its order needs your machines: give `audit.sh`
 one file from each machine, as in command 1.b, and it compares the two
-machines' `C.UTF-8` files (step 8) and measures how each machine sorts it
+machines' `C.UTF-8` files (steps 2 and 8) and measures how each machine sorts it
 (step 11). [`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql) measures the
 order inside PostgreSQL, on the builds you actually run. What the file
 comparison and the probe found is in [results.md](results.md).
@@ -47,10 +47,12 @@ build's own `localedata/` and `locale/`, its patches applied. What it does
 not read of a build, every such run prints under "Not checked for these
 builds".
 
-Give `audit.sh` one file from each machine and it reads the build each
-file names the same way, unless that build cannot be read, which the run
-says; each side is also checked against the version its distro started
-from, when its file holds the locale sources. No file comparison reaches a
+Give `audit.sh` one file from each machine and it reads each machine's own
+locale sources and charmaps, which the file holds, as that build's, unless
+a file holds none, which the run says; what it does not read of a machine,
+the run prints under "Not checked for these machines". Each side is also
+checked against the version its distro started from, when its file holds
+the locale sources. No file comparison reaches a
 backported change to glibc's *code*, between two tags or two builds
 ([below](#no-step-compares-localedefs-or-strcolls-code)).
 
@@ -76,11 +78,12 @@ bytes change, or when the character appears or disappears. Step 2 compares,
 between the two glibc versions, the character sets the locales in SUPPORTED
 are built with, and lists the locales whose rules name a character the newer
 version added, removed or gave other bytes. A distro can patch the character
-sets it ships. Given the file from each machine, as in command 1.b, steps 6
-and 7 compare each machine's own with the version its distro started from,
-and step 8 compares the two machines'.
+sets it ships. Given the file from each machine, as in command 1.b, step 2
+compares the two machines' own character sets, for the locales measured on
+them; steps 6 and 7 compare each machine's own with the version its distro
+started from, and step 8 compares the two machines'.
 Given copied folders instead (`--old-locales-dir` and `--new-locales-dir`),
-they are not compared, and those steps say so.
+they are not compared, and steps 6 to 8 say so.
 
 Step 2 also compares, for the same builds, the collating elements a locale
 builds out of transliterations. localedef builds them for the characters a

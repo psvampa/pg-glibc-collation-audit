@@ -108,7 +108,7 @@ class Step1Templates(StepRun):
         count that moved without regenerating it goes red, as the blast
         radius does. Step 1 prints it; step 2 printed it too until it became
         the comparison of rules (9.2). The extended transcript compares each
-        machine's build in steps 1 to 5 (7.6a)."""
+        machine's own files in steps 1 and 2 (7.6a, 9.4a)."""
         label = r'(?m)^Locale files added, modified or deleted: (\d+)$'
         out = self.step('audit-locale-diff.sh', OLD, MID)
         self.assertEqual(re.findall(label, out), ['283'])
@@ -216,7 +216,7 @@ class Step2Compare(StepRun):
         emulation found, and none differs. The 20 of fi_FI and fi_FI@euro
         are not built at either tag (translit_combining gives U+0335 an
         empty string). The tags-only transcripts print these lines; the
-        extended ones compare each machine's build (7.6a)."""
+        extended ones compare each machine's own files (7.6a, 9.4a)."""
         expect = {(OLD, MID): ('rhel8-to-rhel9', 486, 1,
                                'UTF-8: 6485 characters added.'),
                   (MID, NEW): ('rhel9-to-rhel10', 487, 2,
