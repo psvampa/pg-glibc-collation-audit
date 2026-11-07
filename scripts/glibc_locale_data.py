@@ -242,9 +242,8 @@ GIT_CONFIG_OVERRIDES = ['-c', 'color.ui=false',
 #                  `-c diff.algorithm` above, is what holds: `* diff=alg` with
 #                  `diff.alg.algorithm=patience` beats the setting.
 #
-# The context count is not here, because the two readers need different ones:
-# step 2 reads -U0 and step 5 -U3. GIT_DIFF_OPTS would beat either, so run_git
-# drops it from the environment.
+# The context count is not here: only step 5 reads one (-U3), and
+# GIT_DIFF_OPTS would beat it, so run_git drops it from the environment.
 DIFF_FLAGS = ['--text', '--no-textconv', '--no-ext-diff', '--no-color',
               '--inter-hunk-context=0', '--diff-algorithm=myers',
               '--indent-heuristic']
@@ -777,16 +776,14 @@ def pair_order(repo, old, new, commits=None):
     in the correct order. Measured on the pinned clone before this shipped.
 
     Why the question is asked at all: nothing here used to compare the order,
-    and a reversed pair runs to the end at exit 0 with a plausible summary --
-    step 2 reporting the same two files that touch LC_COLLATE, step 5 a
-    substantive hunk count, no `!!` anywhere. What it hides: step 4 scans the
+    and a reversed pair ran to the end at exit 0 with a plausible summary --
+    step 5 a substantive hunk count, no `!!` anywhere. What it hides: step 4
+    scans the
     tag it is handed, so reversed it scans the older one and the locales added
     in the newer tag (ckb_IQ and mnw_MM, both `copy "iso14651_t1"` at
-    glibc-2.34) drop out of the exposed set; step 2 swaps
-    the reassuring "Added ... not analysed" for the noisy "Deleted ... any
-    index using one of these will fail", so a locale DELETED in the real
-    upgrade reads as a harmless addition; and step 2 compares over the wrong
-    tag's copy graph.
+    glibc-2.34) drop out of the exposed set; step 2 names a locale
+    DELETED in the real upgrade as one with no file at the old side, a
+    harmless-looking addition.
     """
     return order(repo, old, new, commits)
 
@@ -1010,7 +1007,7 @@ def nothing_compared(repo, old, new, commits=None):
 # For two builds, or a tag and a build: what was not compared is what this
 # tool does not read of a build at all, not a distro's patches.
 _NOTHING_COMPARED_BUILDS = (
-    "Steps 1 and 2 can only report 'nothing changed', and step 5 reports "
+    "Step 1 can only report 'nothing changed', and steps 2 and 5 report "
     "that nothing was compared: the two {noun} hold the same locale "
     "sources and the same code under locale/. What can still differ is "
     "what this tool does not read of a build, which step 1 prints under "
@@ -1021,9 +1018,9 @@ _NOTHING_COMPARED_BUILDS = (
 
 
 _NOTHING_COMPARED_REST = (
-    "Steps 1 and 2 can only report "
+    "Step 1 can only report "
     "'nothing changed', which for an intra-major upgrade "
-    "(RHEL 8.1 -> 8.2, say) says nothing at all, and step 5 reports "
+    "(RHEL 8.1 -> 8.2, say) says nothing at all, and steps 2 and 5 report "
     "that nothing was compared. Step 4 reads only the new tag, so "
     "its list still needs confirming. The distro's own "
     "builds are where such a change lives. With each machine's file "
@@ -1061,12 +1058,13 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
     source = 'upstream source' if noun == 'tags' else 'that commit'
     old, new = label(old), label(new)
     if nothing == 'commit':
-        warn(f"{old} and {new} are the same commit. Steps 1, 2 and 5 compare "
-             f"{source} against itself. {rest}", split_words=False)
+        warn(f"{old} and {new} are the same commit. Steps 1 and 5 compare "
+             f"{source} against itself, and step 2 compares nothing. {rest}",
+             split_words=False)
     elif nothing == 'tree':
-        warn(f"{old} and {new} are two commits of one source tree. Steps 1, "
-             f"2 and 5 compare that tree against itself. "
-             f"{rest}", split_words=False)
+        warn(f"{old} and {new} are two commits of one source tree. Steps 1 "
+             f"and 5 compare that tree against itself, and step 2 compares "
+             f"nothing. {rest}", split_words=False)
     if status == 'reversed':
         warn(f"REVERSED PAIR, allowed on request: {detail}. Every finding "
              f"below has old and new the other way round -- what reads as "
@@ -2241,10 +2239,10 @@ def _sections_above(lines, comments, escapes):
     comment character is dropped whole, continued or not (lr_token,
     :221-229). When they are not settled, `comments` and `escapes` hold
     both of each, and such a line that ends in an escape is joined: the
-    answer is then a guess in either direction. Step 2 asks it after
-    glibc_reader has placed the file's sections and characters
-    (filter_lc_collate_changes.classify_change), and every file
-    unread_above asks about is listed already.
+    answer is then a guess in either direction. No step asks it since step
+    9.2, when step 2 began comparing each locale's rules
+    (glibc_tree.compare_rules); it is kept, with its tests, for branches 12
+    and 13.
     A word built with an escape (get_ident keeps the character after one,
     :580-589) is not read here: it is a reason too.
     """
@@ -2327,8 +2325,9 @@ def lc_collate_unread(text, early):
       - Before LR_GETC_FIX, a 0x1A or 0xFF byte above the end of the block
         (byte_ends_it_early).
 
-    Each is counted wherever glibc might be stopped by it: a reason only
-    keeps a locale listed. No locale file at glibc-2.12..2.42 holds any of
+    Each is counted wherever glibc might be stopped by it. No step asks it
+    since step 9.2; it is kept, with its tests, for branches 12 and 13. No
+    locale file at glibc-2.12..2.42 holds any of
     them (measured 2026-10-12).
 
     The comment and escape characters are the ones reading_chars settles,
@@ -2338,11 +2337,7 @@ def lc_collate_unread(text, early):
     one of those bytes.
 
     None for a text with no LC_COLLATE line, which this line search reads
-    only at the start of a line, is not a clean answer. Step 2 places the
-    sections with glibc_reader first (glibc_tree.Facts): a file with none
-    at either tag is filed as having no block or gaining one, one whose new
-    side has none is 'unread', and one with another number of sections is
-    'collate', whatever this returns.
+    only at the start of a line, is not a clean answer.
     """
     bounds = collate_bounds(text)
     if bounds is None:
@@ -2769,8 +2764,9 @@ def supported_map(repo, tag):
     """{source file name: [names SUPPORTED installs it under]} from
     localedata/SUPPORTED, in the spelling localedef gives them (sv_FI.utf8).
 
-    Step 2 prints these names for the locales a tag adds; steps 3 and 4 read
-    the map to say which locales are not built by default. They are not
+    Step 2 prints these names for the files only the new side has, and
+    steps 2 and 4 read the map to say which locales are not built by
+    default. They are not
     every name a locale takes: the archive and RHEL add others
     (sv_SE.iso885915), and locale.alias adds swedish (backlog 13.1).
     """

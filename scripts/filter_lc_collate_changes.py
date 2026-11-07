@@ -66,10 +66,9 @@ def predates_lr_getc_fix(repo, tag):
     """A zero-argument question: does `tag`'s localedef read 0x1A and 0xFF
     as the end of the file? True, False, or None when git cannot place
     glibc_locale_data.LR_GETC_FIX (a shallow clone, a fabricated
-    repository). main asks it of both tags before anything is judged and
-    refuses a None (glibc_tree.builds_at), and two "predates" on a shallow
-    clone; lc_collate_unread asks it again, and would count None as yes.
-    Asked of git at most once per tag."""
+    repository). main asks it of both tags before anything is compared
+    and refuses a None (glibc_tree.builds_at), and two "predates" on a
+    shallow clone. Asked of git at most once per tag."""
     box = []
 
     def ask():
@@ -97,18 +96,19 @@ def lr_getc_sides(repo, early, tags):
 
 
 def split_raw(text):
-    """([name-status line, ...], patch) from a `--patch-with-raw` diff.
+    """([name-status line, ...], what follows the list) from a `--raw`
+    diff.
 
-    git writes one `:` line per changed file, a blank line, and the patch;
-    with nothing changed, nothing. A `:` line is `:<old mode> <new mode>
-    <old id> <new id> <status>` and a tab before the path or paths, so what
-    follows its fourth space is the line `--name-status` prints for that
-    file. Measured with git 2.54 on every pair the tests run, renames and
-    the same commit twice included: those lines are the name-status, and the
-    patch is the `-U0` diff, byte for byte. A `:` line of another shape dies:
-    read as a modified file, it would be judged against hunks it has not got.
-    So does a patch with no list above it, which would read as nothing
-    changed.
+    git writes one `:` line per changed file; with nothing changed,
+    nothing. A `:` line is `:<old mode> <new mode> <old id> <new id>
+    <status>` and a tab before the path or paths, so what follows its fourth
+    space is the line `--name-status` prints for that file. Measured with
+    git 2.54 on every pair the tests run, renames and the same commit twice
+    included. Step 2 asks for `--raw` alone, so what follows the list is
+    empty (measured on 2.34..2.39: 318 lines, nothing after them). A `:`
+    line of another shape dies: a deletion or a rename it could not read
+    would be missing from Removed. So does text with no list above it,
+    which would read as nothing removed.
     """
     status, pos = [], 0
     while text.startswith(':', pos):
@@ -452,7 +452,7 @@ def characters_rows(got, differs):
     return rows
 
 
-def print_added(added, renamed_from, supported, old_side, old_name, new_name):
+def print_added(added, renamed_from, supported, old_side, old_name):
     if not added:
         return
     print()
@@ -465,7 +465,7 @@ def print_added(added, renamed_from, supported, old_side, old_name, new_name):
         print(f"  {g.shown(name)} -> {tail}")
     if g._is_tag(old_side):
         print(_fill(
-            f"A file added at {new_name} cannot affect an existing index "
+            f"A file added at the new side cannot affect an existing index "
             f"ONLY IF the locale did not exist on the old system. An "
             f"upstream tag cannot establish that -- distros backport. "
             f"Confirm with `locale -a` on the OLD machine, under the names "
@@ -509,7 +509,7 @@ def print_listed(got, listed):
                 why = 'both sides: ' + a
         whys.setdefault(why, []).append(name)
     _warn_block(
-        f"Not compared, so listed for Reindex ({len(listed)}): the reader "
+        f"Not compared, so listed for REINDEX ({len(listed)}): the reader "
         f"could not settle how localedef builds them, or LC_COLLATE is "
         f"stored on one side only, or an alias does not resolve on both "
         f"sides:",
@@ -564,19 +564,26 @@ def _main(opts):
                 repo, tag, [ck.CHARMAPS_DIR + '/', g.SUPPORTED])
 
     # git's list of the files that differ: what is gone, and where a file
-    # was renamed to, for Removed. Through git_diff, so the reader's git
-    # config cannot change it.
+    # was renamed to, for Removed; and the files whose content changed, whose
+    # two texts the transliteration check compares (collation_keys: an
+    # LC_CTYPE that changed builds a collating element otherwise). Through
+    # git_diff, so the reader's git config cannot change it.
     status, _ = split_raw(g.git_diff(
         repo, ['--raw', '--find-renames', f'{old}..{new}', '--',
                g.LOCALES_DIR + '/']))
-    deleted, renamed_to = [], {}
+    deleted, renamed_to, content_changed, new_path = [], {}, [], {}
     for line in status:
         parts = line.split('\t')
         if parts[0].startswith('R'):
             renamed_to[os.path.basename(parts[1])] = os.path.basename(
                 parts[2])
+            content_changed.append(parts[1])
+            new_path[parts[1]] = parts[2]
         elif parts[0] == 'D':
             deleted.append(os.path.basename(parts[1]))
+        elif parts[0] != 'A':
+            content_changed.append(parts[1])
+            new_path[parts[1]] = parts[1]
     renamed_from = {b: a for a, b in renamed_to.items()}
     removed_rows = sorted(
         [(n, 'deleted') for n in deleted]
@@ -606,36 +613,57 @@ def _main(opts):
         differs, added, removed, listed = sort_out(got, old_tree, new_tree)
         n_same = sum(1 for r in got.values() if r.state == glibc_tree.SAME)
 
-        print(f"The sort rules localedef builds for each locale at "
-              f"{old_name} and at {new_name}, every `copy` followed, "
-              f"compared statement by statement:")
-        print(_fill(f"{len(got)} name(s), the locale files and locale.alias "
-                    f"aliases of the two {noun}: {n_same} the same, "
-                    f"{len(differs)} differ, "
+        print(_fill(f"The sort rules localedef builds for each locale at "
+                    f"{old_name} and at {new_name}, every `copy` followed, "
+                    f"compared statement by statement:", ''))
+        print(_fill(f"{len(got)} name(s), locale files and locale.alias "
+                    f"aliases: {n_same} the same, {len(differs)} differ, "
                     f"{len(got) - n_same - len(differs)} not compared.",
                     '  '))
         print(_fill(NOT_COMPARED_HERE, '  '))
         print_differs(got, differs, tsv)
         g.write_list(f"step2_rules_characters.{slug}.tsv",
                      characters_rows(got, differs))
-        print_added(added, renamed_from, supported[1], old_side, old_name,
-                    new_name)
+        print_added(added, renamed_from, supported[1], old_side, old_name)
         print_removed(removed, renamed_to, new_side, new_name)
         print_listed(got, listed)
 
-        # The character set check, with what this step lists already.
+        # The character set check, with what this step lists already. It
+        # reads both texts of every content-changed file, in one batch with
+        # SUPPORTED and what CharmapReads adds: given none, the
+        # transliteration check said no LC_CTYPE changed over a changed
+        # translit_neutral (found writing the 9.2 tests). A file of git's
+        # list that comes back unread is refused, never read as absent.
+        new_paths = sorted({new_path[p] for p in content_changed})
+        charmap_reads = CharmapReads(old, new, listed_ids, ids,
+                                     content_changed, new_paths)
+        read = g.read_blobs_at(repo, [(old, content_changed),
+                                      (new, new_paths), (new, [g.SUPPORTED])]
+                               + charmap_reads.groups)
+        (old_contents, old_missing), (new_contents, new_missing) = read[:2]
+        g.require_read(old, content_changed, old_missing,
+                       'the transliteration check')
+        g.require_read(new, new_paths, new_missing,
+                       'the transliteration check')
+        charmap_reads.prefetch(repo, read[3:], old_contents, new_contents,
+                               read[2])
+        side_old, side_new, sup = charmap_reads.sides(
+            repo, read[3:], old_contents, new_contents, read[2])
         sources = set(old_tree.names) | set(new_tree.names)
         already = {n for n in differs + listed if n in sources}
-        charmap_reads = CharmapReads(old, new, listed_ids, ids, [], [])
-        read = g.read_blobs_at(repo, [(new, [g.SUPPORTED])]
-                               + charmap_reads.groups)
-        charmap_reads.prefetch(repo, read[1:], {}, {}, read[0])
-        side_old, side_new, sup = charmap_reads.sides(repo, read[1:], {}, {},
-                                                      read[0])
         keyed = check_charmaps(charmap_reads, repo, side_old, side_new, sup,
                                already, step2_words(noun))
 
-        names = sorted(set(differs) | set(listed) | set(keyed))
+        # The character set check names locale files; the aliases of each
+        # side's locale.alias that are built from one go to Reindex with it
+        # (swedish with sv_SE). compare_rules adds the aliases of what it
+        # compares itself, but an alias of a keyed locale whose rules are the
+        # same comes out "same" there (false-negative-reviewer, 9.2).
+        keyed_aliases = set()
+        for al in aliases:
+            keyed_aliases |= set(g._aliases_reaching(set(keyed), al))
+        names = sorted(set(differs) | set(listed) | set(keyed)
+                       | keyed_aliases)
         not_ascii = [n for n in names if not n.isascii()]
         names = [n for n in names if n.isascii()]
         print()
@@ -645,12 +673,13 @@ def _main(opts):
         unbuilt = [n for n in names if n in sources
                    and n not in supported[0] and n not in supported[1]]
         if unbuilt:
-            print(_fill("Not in localedata/SUPPORTED (not built by default, "
-                        "so normally absent from `locale -a`): "
+            print(_fill("Not listed in localedata/SUPPORTED (not built by "
+                        "default, so normally absent from `locale -a`): "
                         + ', '.join(g.shown(n) for n in unbuilt), '  '))
         if not_ascii:
-            print(_fill("Not listed: alias(es) whose name is not ASCII, which "
-                        "PostgreSQL never imports as a collation: "
+            print(_fill("Not listed: alias(es) whose name is not ASCII; "
+                        "PostgreSQL never imports such a name as a "
+                        "collation: "
                         + ', '.join(g.shown(n) for n in not_ascii), '  '))
 
     # Written whether or not they are empty, and named after the pair: an

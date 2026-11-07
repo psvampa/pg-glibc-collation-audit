@@ -6,7 +6,7 @@
 -- two outputs with `diff`.
 --
 -- Replace <LOCALE>/<value*> below with the locale(s) flagged by the audit and
--- with strings known (from reading the diff, see the step 2 and step 4 output)
+-- with strings known (the characters step 2 names, and step 4's ranges)
 -- to hit the specific rule that changed.
 --
 -- Notes before you run it:

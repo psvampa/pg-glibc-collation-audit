@@ -1618,11 +1618,11 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
 
 @needs_clone
 class StepsReadWhatLocaledefReads(unittest.TestCase):
-    """The same shapes through steps 1, 3 and 4, on glibc-2.39 plus the
+    """The same shapes through steps 1, 2 and 4, on glibc-2.39 plus the
     files (a commit git can place, _harness.glibc_commit). Before backlog
     15.2 step 3 left all four copiers out of the set a change to
     iso14651_t1 affects: a reassuring answer about four locales that
-    inherit its order."""
+    inherit its order. Step 2 follows every copy since step 9.2."""
 
     @classmethod
     def setUpClass(cls):
@@ -1644,16 +1644,25 @@ class StepsReadWhatLocaledefReads(unittest.TestCase):
         self.assertEqual(0, p.returncode, out)
         return out
 
-    def test_step_3_lists_every_copier_of_a_changed_template(self):
-        out = self.step('resolve_copy_closure.py', self.ref, 'iso14651_t1',
-                        '--repo', self.repo)
-        full = re.search(r'^Full affected set \(\d+ locale source file\(s\)'
-                         r'\): (.+)$', out, re.M)
-        self.assertIsNotNone(full, out)
-        for name in _COPIERS:
-            self.assertIn(name, full.group(1).split(', '))
-            self.assertIn('  %s: copy "iso14651_t1" -> reaches iso14651_t1'
-                          % name, out)
+    def test_step_2_lists_every_copier_of_a_changed_template(self):
+        """The four copy shapes of _SHAPES, pointed at a small template
+        zz_T of their own so that a change to it is quick to compare: when
+        zz_T's rules change, every copier's do, and step 2 says so for
+        each."""
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-steps-t-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        shapes = {n: _SHAPES[n].replace(b'iso14651/_t1', b'zz/_T')
+                  .replace(b'iso14651_t1', b'zz_T') for n in _COPIERS}
+        rules = (_HEAD + b'LC_COLLATE\norder_start forward\nA\nB\n'
+                 b'order_end\nEND LC_COLLATE\n')
+        ab = rules.replace(b'A\n', b'<U0041>\n').replace(b'B\n', b'<U0042>\n')
+        ba = rules.replace(b'A\n', b'<U0042>\n').replace(b'B\n', b'<U0041>\n')
+        _, old = _harness.glibc_commit(NEW, dict(shapes, zz_T=ab), tmp)
+        repo, new = _harness.glibc_commit(old, {'zz_T': ba}, tmp)
+        report = _harness.Step2Report(self.step(
+            'filter_lc_collate_changes.py', old, new, '--repo', repo))
+        self.assertEqual(sorted(_COPIERS + ('zz_T',)), sorted(report.differs))
+        self.assertEqual({}, report.listed)
 
     def test_step_4_reads_ranges_and_copies_as_localedef_does(self):
         base = self.step('flag_algorithmic_ranges.py', NEW)
@@ -1666,25 +1675,29 @@ class StepsReadWhatLocaledefReads(unittest.TestCase):
         self.assertIn('  zz_PC\n', flagged)
         self.assertNotIn('zz_HC', flagged)
 
-    def test_step_3_names_a_changed_locale_it_could_not_read(self):
+    def test_step_2_names_a_changed_locale_it_could_not_read(self):
         """zz_X's LC_CTYPE copies a file the tree lacks, so localedef stops
-        before zz_X's LC_COLLATE. Step 3 must not tell its reader that zz_X
-        has none and nothing can inherit from it: zz_X is named under the
-        `!!`, and zz_Y, which copies it, is listed (false-negative-reviewer,
-        round 1 of B2)."""
+        before zz_X's LC_COLLATE. Step 2 must not tell its reader that zz_X
+        has none, or that its rules are the same: zz_X is named under the
+        `!!` with the reason (false-negative-reviewer, round 1 of B2). zz_Y
+        copies zz_X's LC_COLLATE alone, whose rules gain a reorder: its run
+        never meets the missing file, and it differs."""
         tmp = tempfile.mkdtemp(prefix='pg-glibc-steps-x-')
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        repo, ref = _harness.glibc_commit(NEW, {
-            'zz_X': _HEAD + (b'LC_CTYPE\ncopy "zz_nope"\nEND LC_CTYPE\n'
-                             b'LC_COLLATE\ncopy "iso14651_t1"\n'
-                             b'END LC_COLLATE\n'),
+        x = _HEAD + (b'LC_CTYPE\ncopy "zz_nope"\nEND LC_CTYPE\n'
+                     b'LC_COLLATE\ncopy "iso14651_t1"\nEND LC_COLLATE\n')
+        _, old = _harness.glibc_commit(NEW, {
+            'zz_X': x,
             'zz_Y': _HEAD + b'LC_COLLATE\ncopy "zz_X"\nEND LC_COLLATE\n'},
             tmp)
-        out = self.step('resolve_copy_closure.py', ref, 'zz_X',
-                        '--repo', repo)
-        self.assertNotIn('have no LC_COLLATE block', out)
-        self.assertIn('\n     zz_X: localedef cannot open zz_nope\n', out)
-        self.assertIn('  zz_Y: copy "zz_X" -> reaches zz_X', out)
+        x2 = x.replace(b'copy "iso14651_t1"\n', b'copy "iso14651_t1"\n'
+                       b'reorder-after <U0041>\n<U0042>\nreorder-end\n')
+        repo, new = _harness.glibc_commit(old, {'zz_X': x2}, tmp)
+        report = _harness.Step2Report(self.step(
+            'filter_lc_collate_changes.py', old, new, '--repo', repo))
+        self.assertEqual({'zz_X': 'both sides: localedef cannot open '
+                                  'zz_nope'}, report.listed)
+        self.assertEqual(['zz_Y'], sorted(report.differs))
 
     def test_step_1_counts_every_copier(self):
         here = self.step('glibc_locale_data.py', 'fanin', self.ref,
@@ -2540,13 +2553,12 @@ class CollateInstructionsAreTheLinesThatSteer(unittest.TestCase):
 @needs_clone
 class StepTwoReadsWhereLocaledefReads(unittest.TestCase):
     """Step 2 on two commits on top of glibc-2.39 (_harness.glibc_commit):
-    where a change sits against LC_COLLATE is decided by the sections
-    glibc_reader read (glibc_tree.file_facts), so a change the line
-    readers put outside the block, or in a file they found no block in, is
-    counted as one. zz_IN is read and judged
-    'collate', and zz_RF 'reading'. zz_EJ's section is read to its second END, as glibc reads
-    it, but the reader does not settle an END inside a statement, so the
-    file is counted under the `!!` that says so: listed, never cleared."""
+    each locale's rules are the sections glibc_reader read, so a change the
+    line readers put outside the block, or in a file they found no block
+    in, is compared as one. zz_IN's indented section is read and differs.
+    zz_EJ's section is read to its second END, as glibc reads it, but the
+    reader does not settle an END inside a statement, so zz_EJ is not
+    compared and is listed under the `!!` that says so, never cleared."""
 
     @classmethod
     def setUpClass(cls):
@@ -2575,49 +2587,33 @@ class StepTwoReadsWhereLocaledefReads(unittest.TestCase):
         # list and then stopped is no run to read it from.
         self.assertEqual(0, self.rc, self.text)
 
-    def test_every_change_counts(self):
-        self.assertEqual(0, self.rc, self.text)
-        self.assertIn('Of the 3 content-changed file(s): 3 touch LC_COLLATE, '
-                      '0 do not, 0 have no LC_COLLATE block', self.text)
+    def test_every_locale_whose_rules_changed_is_listed(self):
+        """zz_RF moved its escape_char to the top level, and zz_RB copies
+        its LC_COLLATE, which is a copy of iso14651_t1 alone: both read the
+        same statements at both commits, and neither is listed (measured
+        2026-11-07). A copier whose reading does change is
+        test_git_helpers.ALineAboveLcCollateThatStopsGlibc's rb."""
         with open(os.path.join(self.out, 'step2_changed_collate.%s.txt'
                                % g.pair_slug(self.old, self.new))) as fh:
-            self.assertEqual(['zz_EJ', 'zz_IN', 'zz_RF'], fh.read().split())
-
-    def test_a_section_a_copier_reads_otherwise_is_named(self):
-        """False-negative-reviewer, 15.2 B3: zz_RF's own run reads its
-        LC_COLLATE with `/` at both commits, and zz_RB's run, which copies
-        it, with `\\` at the first. Taken from the own run alone, the
-        characters did not change and zz_RF was 'other'."""
-        flat = _harness.flat(self.text)
-        self.assertIn('!! 1 file(s) are read at %s with other comment or '
-                      'escape characters than at %s' % (self.new, self.old),
-                      flat)
-        self.assertIn('localedata/locales/zz_RF comment_char # and '
-                      'escape_char \\ and comment_char # and escape_char / '
-                      'at %s comment_char # and escape_char / at %s'
-                      % (self.old, self.new), flat)
+            self.assertEqual(['zz_EJ', 'zz_IN'], fh.read().split())
+        report = _harness.Step2Report(self.text)
+        for name in ('zz_RF', 'zz_RB'):
+            self.assertNotIn(name, report.differs)
+            self.assertNotIn(name, report.listed)
 
     def test_the_one_the_reader_cannot_settle_says_why(self):
-        self.assertIn('!! 1 file(s) could not be read the way localedef '
-                      'reads them', _harness.flat(self.text))
-        for ref in (self.old, self.new):
-            self.assertIn('localedata/locales/zz_EJ at %s: zz_EJ:5: `END` '
-                          'after the first token of a statement in '
-                          'LC_COLLATE' % ref, _harness.flat(self.text))
-        self.assertNotIn('zz_IN at', _harness.flat(self.text))
+        report = _harness.Step2Report(self.text)
+        self.assertEqual({'zz_EJ': 'both sides: zz_EJ:5: `END` after the '
+                                   'first token of a statement in '
+                                   'LC_COLLATE'}, report.listed)
 
     def test_the_changed_rules_name_their_characters(self):
-        """zz_EJ's changed rule, line 7, comes after the END on line 5
-        that the reader holds unsettled: what glibc reads after that
-        place is not something it is sure of, in that file or in any it
-        did not begin, zz_IN's included (rounds 2 and 3 of the 15.3 C2
-        review). The warning is printed for both rather than a list; the
-        characters of zz_IN's changed rule are named in a tree with no
-        such run (StepTwoNamesWhatTheReaderRead)."""
-        for name in ('zz_EJ', 'zz_IN'):
-            self.assertIn('localedata/locales/%s could not identify which '
-                          'characters changed' % name,
-                          _harness.flat(self.text))
+        """zz_IN's own run is sure of its lines: B and C. zz_EJ's changed
+        rule, line 7, comes after the END on line 5 that the reader holds
+        unsettled, and zz_EJ names none: it is listed instead (rounds 2
+        and 3 of the 15.3 C2 review)."""
+        report = _harness.Step2Report(self.text)
+        self.assertEqual({'zz_IN': ([0x42, 0x43], False)}, report.differs)
 
     def test_the_line_readers_really_put_these_outside(self):
         """Control: each change is one the line readers placed outside a
@@ -3133,7 +3129,11 @@ _STOPPED = {
 
 class _StepTwoNames(object):
     """Step 2 run on a pair of commits on top of NEW whose files are
-    FILES: {name: (first version, second)}."""
+    FILES: {name: (first version, second)}. Step 2 compares each locale
+    (glibc_tree.compare_rules): a locale whose own run the reader is sure
+    of names the characters its lines name, and one whose run it cannot
+    settle is not compared and listed for Reindex with the reason, whatever
+    the locales it copies or that copy it say."""
 
     FILES = None
 
@@ -3163,60 +3163,68 @@ class _StepTwoNames(object):
         # As StepTwoReadsWhereLocaledefReads: no test reads a run that
         # stopped.
         self.assertEqual(0, self.rc, self.text)
+        self.report = _harness.Step2Report(self.text)
+        self.rows = _harness.step2_characters_file(os.path.join(
+            self.out, 'step2_rules_characters.%s.tsv'
+            % g.pair_slug(self.old, self.new)))
 
-    def listed(self, name):
-        """The characters printed under `name`, as code points, or None
-        when no list is printed there."""
-        m = re.search(r'^  localedata/locales/%s\n((?:      .*\n)*)'
-                      % re.escape(name), self.text, re.M)
-        self.assertIsNotNone(m, self.text)
-        block = m.group(1)
-        if 'characters in the changed rules' not in block:
+    def named(self, name):
+        """The characters `name`'s rules name, sorted, from the characters
+        file, which the line under it counts or lists alike; None when the
+        locale is not compared."""
+        if name in self.report.listed:
+            self.assertNotIn(name, self.rows)
             return None
-        return [int(h, 16) for h in re.findall(r'\(U\+([0-9A-F]{4,6})\)',
-                                               block)]
+        chars, _ = self.report.differs[name]
+        _, row = self.rows[name]
+        self.assertEqual(len(chars) if isinstance(chars, list) else chars,
+                         len(row))
+        return sorted(row)
 
-    def test_every_file_is_listed(self):
-        self.assertEqual(0, self.rc, self.text)
+    def test_the_written_list_is_what_differs_and_what_is_listed(self):
         with open(os.path.join(self.out, 'step2_changed_collate.%s.txt'
                                % g.pair_slug(self.old, self.new))) as fh:
             got = fh.read().split()
-        for name, (first, second) in self.FILES.items():
-            if first != second:
-                self.assertIn(name, got)
+        self.assertEqual(got, self.report.reindex)
+        self.assertEqual(got, sorted(set(self.report.differs)
+                                     | set(self.report.listed)))
 
 
 @needs_clone
 class StepTwoNamesNothingAfterAStoppedRun(_StepTwoNames, unittest.TestCase):
-    """glibc_tree.Facts.stopped: zz_FB's own run names C and Z on the else
-    branch, and the branch zz_RV builds is read only by a run the reader
-    stopped in. Printing C and Z alone would hand zz_RV test values it
-    never places: the warning is printed instead."""
+    """zz_FB's own run names C and Z on the else branch; the branch zz_RV
+    builds is read only by a run the reader stopped in. zz_RV is not
+    compared and is listed with its reason, so C and Z are never offered as
+    test values for it."""
 
     FILES = _STOPPED
 
-    def test_no_line_can_be_named(self):
-        self.assertIsNone(self.listed('zz_FB'))
+    def test_the_stopped_run_is_listed_and_the_sure_one_named(self):
+        self.assertEqual([0x43, 0x5A], self.named('zz_FB'))
+        self.assertIsNone(self.named('zz_RV'))
+        self.assertIn('glibc reads outside its buffer here',
+                      self.report.listed['zz_RV'])
 
 
 @needs_clone
 class StepTwoNamesNothingAfterAnUnsurePlace(_StepTwoNames, unittest.TestCase):
-    """glibc_reader.Run.named_lines and Facts.stopped: after a
-    statement the reader cannot settle, glibc may read every line
-    otherwise, and any file through a `copy` the reader did not read as
-    it does (rounds 2 and 3 of the 15.3 C2 review)."""
+    """glibc_reader.Run.named_lines: after a statement the reader cannot
+    settle, glibc may read every line otherwise, and any file through a
+    `copy` the reader did not read as it does (rounds 2 and 3 of the 15.3
+    C2 review). The run that meets the place is not compared."""
 
     FILES = _UNSURE_A
 
     def test_after_a_statement_the_reader_cannot_settle_nothing_is_named(
             self):
         """zz_BS's own run is unsettled on its first statement."""
-        self.assertIsNone(self.listed('zz_BS'))
+        self.assertIsNone(self.named('zz_BS'))
 
-    def test_a_file_glibc_may_copy_there_is_not_named(self):
-        """zz_G's own run names C and Z; zz_M's, which the reader does not
-        follow into zz_G, places X."""
-        self.assertIsNone(self.listed('zz_G'))
+    def test_a_copier_glibc_may_read_otherwise_is_listed(self):
+        """zz_M, which the reader does not follow into zz_G, is listed;
+        zz_G's own run, sure of its lines, names C and Z."""
+        self.assertIsNone(self.named('zz_M'))
+        self.assertEqual([0x43, 0x5A], self.named('zz_G'))
 
 
 # zz_K's own run skips an ifdef branch holding a line the reader cannot
@@ -3235,84 +3243,87 @@ _CUT = {
 @needs_clone
 class StepTwoNamesNothingAnotherRunCannotSay(_StepTwoNames, unittest.TestCase):
     """The map's 'from' (glibc_reader.Run.named_lines) through step 2:
-    one run is sure of the line, the other is not, and the warning is
-    printed."""
+    zz_K's own run is sure of the line and names it; zz_RK's is not, and
+    zz_RK is listed with the place."""
 
     FILES = _CUT
 
-    def test_a_line_one_run_cuts_is_not_named(self):
-        self.assertIsNone(self.listed('zz_K'))
+    def test_the_run_that_cuts_the_line_is_listed(self):
+        self.assertEqual([0x43, 0x44], self.named('zz_K'))
+        self.assertIsNone(self.named('zz_RK'))
+        self.assertIn('zz_K:7: `endif`', self.report.listed['zz_RK'])
 
 
 @needs_clone
 class StepTwoNamesAFileReadBeforeThatPlace(_StepTwoNames, unittest.TestCase):
-    """The control of the class above: a file read to its end before the
-    place keeps its list, as iso14651_t1_common does under the locales
-    that copy am_ET at glibc-2.12 and 2.17; one the unsure run never
-    begins does not."""
+    """The control of the classes above: a locale whose run reads a file
+    to its end before the place keeps its list, as iso14651_t1_common does
+    under the locales that copy am_ET at glibc-2.12 and 2.17, and so does
+    one the unsure run never begins; the unsure one is listed."""
 
     FILES = _UNSURE_B
 
     def test_a_file_read_whole_before_that_place_keeps_its_list(self):
-        self.assertEqual([0x42, 0x43], self.listed('zz_EA'))
+        self.assertEqual([0x42, 0x43], self.named('zz_EA'))
 
-    def test_a_file_the_unsure_run_never_begins_is_not_named(self):
-        self.assertIsNone(self.listed('zz_PL'))
+    def test_a_locale_the_unsure_run_never_begins_keeps_its_list(self):
+        self.assertEqual([0x44, 0x45], self.named('zz_PL'))
+        self.assertIsNone(self.named('zz_LA'))
 
 
 @needs_clone
 class StepTwoNamesWhatTheReaderRead(_StepTwoNames, unittest.TestCase):
-    """Backlog 13.29 (15.3 C2): step 2 lists under each changed file the
-    characters glibc_reader read on its changed lines, in every run that
-    reads them (glibc_tree.Facts.characters), and no longer cuts the text
-    of the line at the first comment character: a `%` inside a <name> or
-    a string, or after the escape, cut the list short, and a line two runs
-    read with two comment characters gave no list at all."""
+    """Backlog 13.29 (15.3 C2): step 2 names the characters glibc_reader
+    read on the lines that count, in every run that reads them, and no
+    longer cuts the text of the line at the first comment character: a `%`
+    inside a <name> or a string, or after the escape, cut the list short,
+    and a line two runs read with two comment characters gave no list at
+    all. Sorted: the characters file lists them by code point."""
 
     FILES = _NAMES
 
     def test_a_comment_character_in_a_from_string_cuts_nothing(self):
-        self.assertEqual([0x41, 0x25, 0x42], self.listed('zz_FP'))
+        self.assertEqual([0x25, 0x41, 0x42], self.named('zz_FP'))
 
     def test_a_comment_character_in_a_name_cuts_nothing(self):
-        self.assertEqual([0x41, 0x45, 0x46], self.listed('zz_PN'))
+        self.assertEqual([0x41, 0x45, 0x46], self.named('zz_PN'))
 
     def test_a_comment_character_in_a_weight_string_cuts_nothing(self):
         """Only its <U....> names are characters; `%` there names a
         symbol."""
-        self.assertEqual([0x46, 0x47, 0x48, 0x49], self.listed('zz_WS'))
+        self.assertEqual([0x46, 0x47, 0x48, 0x49], self.named('zz_WS'))
 
     def test_the_declared_comment_character_too(self):
-        self.assertEqual([0x46, 0x47, 0x48, 0x49], self.listed('zz_CC'))
+        self.assertEqual([0x46, 0x47, 0x48, 0x49], self.named('zz_CC'))
 
     def test_an_escaped_comment_character_in_a_from_string(self):
-        self.assertEqual([0x25, 0x44, 0x45], self.listed('zz_ES'))
+        self.assertEqual([0x25, 0x44, 0x45], self.named('zz_ES'))
 
     def test_a_from_string_of_raw_characters_names_them(self):
-        self.assertEqual([0x63, 0x68, 0x78], self.listed('zz_RW'))
+        self.assertEqual([0x63, 0x68, 0x78], self.named('zz_RW'))
 
     def test_a_raw_utf8_character_from_2_36(self):
-        self.assertEqual([0x42, 0xE9], self.listed('zz_U8'))
+        self.assertEqual([0x42, 0xE9], self.named('zz_U8'))
 
     def test_a_line_read_with_two_comment_characters_names_both_readings(
             self):
         """zz_TW's own run reads `%` as a word and the name after it; the
         run of zz_TB reads `%` as a comment."""
-        self.assertEqual([0x41, 0x5A, 0x59], self.listed('zz_TW'))
+        self.assertEqual([0x41, 0x59, 0x5A], self.named('zz_TW'))
 
     def test_a_plain_rule_in_a_tree_the_reader_is_sure_of(self):
         """The control of StepTwoNamesAFileReadBeforeThatPlace: the same
         file, named."""
-        self.assertEqual([0x44, 0x45], self.listed('zz_PL'))
+        self.assertEqual([0x44, 0x45], self.named('zz_PL'))
 
-    def test_a_refused_entry_names_nothing(self):
+    def test_a_refused_entry_changes_no_rule(self):
         """The control of the list: an entry glibc drops unread, on both
-        sides, moves nothing. The locale stays listed, with the warning."""
-        self.assertIsNone(self.listed('zz_RE'))
-        self.assertIn('could not identify which characters changed',
-                      _harness.flat(self.text.split(
-                          'localedata/locales/zz_RE', 1)[1].split(
-                              'localedata/locales/', 1)[0]))
+        sides, moves nothing, and the locale's rules are the same: neither
+        differing nor listed. Until step 9.2 the file was listed because
+        it changed, with the could-not-identify warning."""
+        self.assertNotIn('zz_RE', self.report.differs)
+        self.assertNotIn('zz_RE', self.report.listed)
+        self.assertNotIn('zz_RE', self.report.reindex)
 
 
 @needs_clone
@@ -3471,23 +3482,25 @@ class AcrossTheTwoReaders(unittest.TestCase):
 
     def test_two_tags_on_one_side_of_2_36_are_still_asked(self):
         """Keyword tables differ between tags that read bytes alike
-        (codepoint_collation arrives in 2.35, alt_mon in 2.27): step 2
-        asks glibc_tree.across of every pair whose Builds differ."""
-        import filter_lc_collate_changes as f
+        (codepoint_collation arrives in 2.35, alt_mon in 2.27): across
+        answers for any two Builds that differ, not only for two on either
+        side of 2.36. (Step 2 asked it of every such pair until step 9.2;
+        compare_rules reads each side with its own Build, and its
+        test_the_same_bytes_read_otherwise_name_no_character holds the
+        same keyword.)"""
         table = dict(self.b0.locfile_kw)
         table[b'codepoint_collation'] = self.b1.locfile_kw[
             b'codepoint_collation']
         b35 = gr.Build(self.b0.pre236, self.b0.signed_char, table,
                        self.b0.charmap_kw, '2.34 + codepoint_collation')
-        tmp = os.path.join(self.tmp, 'side')
-        os.mkdir(tmp)
-        repo, ref = _harness.glibc_commit(MID, {'zz_K': self.FILES[b'zz_K']},
-                                          tmp)
-        paths, ids = g.list_tree_ids(repo, ref, [])
-        self.assertEqual(['localedata/locales/zz_K'],
-                         f.read_across(repo, ref, (self.b0, b35), paths, ids))
-        self.assertEqual([], f.read_across(repo, ref, (self.b0, self.b0),
-                                           paths, ids))
+        files = {b'zz_K': self.FILES[b'zz_K']}
+        ids = {'zz_K': rc.blob_id(files[b'zz_K'])}
+        self.assertEqual(['zz_K'], self.gt.across(
+            ids, lambda: dict(files), self.b0, b35,
+            cache_dir=os.path.join(self.tmp, 'side')))
+        self.assertEqual([], self.gt.across(
+            ids, lambda: dict(files), self.b0, self.b0,
+            cache_dir=os.path.join(self.tmp, 'side0')))
 
     def test_what_a_file_met_survives_a_lookahead_that_stops(self):
         """A statement whose lookahead reaches a place glibc reads outside

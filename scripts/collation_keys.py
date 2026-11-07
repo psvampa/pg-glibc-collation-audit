@@ -14,7 +14,7 @@ linereader.c, glibc-2.39). glibc builds each SUPPORTED entry with
 tags sorts differently when the charmap gives a character it names other
 bytes, or starts or stops defining it: the key of an order line is the bytes,
 a range skips the names the charmap lacks, and a name the charmap lacks gets
-no entry. Step 2's diff of localedata/locales/ cannot see any of that; this
+no entry. Step 2's comparison of the rules cannot see any of that; this
 compares localedata/charmaps/.
 
 For the builds SUPPORTED lists at both tags (same entry, its source file at
@@ -39,8 +39,9 @@ both):
      and only where the comment is certain (confirmed_hit).
   4. A build is listed when a file its run reads (the source and what its
      LC_COLLATE copies) names a member of K of the build's charmap pair. A
-     build whose source step 3 lists anyway -- it changed inside
-     LC_COLLATE, or copies one that did -- is counted, not repeated.
+     build whose source step 2 lists for Reindex anyway -- its rules
+     differ, every copy followed, or could not be compared -- is counted,
+     not repeated.
   5. A source SUPPORTED never builds in a changed charmap is searched the
      same way, because a distro can build it in that charmap: Red Hat builds
      en_US, en_GB, da_DK and sv_SE in ISO-8859-15
@@ -65,7 +66,7 @@ both):
      (_readers_differ). A 0xFF byte in any file the run holds lists every
      build (_ff_gate).
 
-What it cannot settle it lists with the reason, under a `!!` unless step 3
+What it cannot settle it lists with the reason, under a `!!` unless step 2
 lists the locale anyway: for example a charmap of a shape this reader does
 not model, a range whose start depends on what the run defined before it, a
 `...` range or a form other than `..` and `....`, a second LC_COLLATE
@@ -81,8 +82,8 @@ that is not there, is NOT RUN.
 Not covered here: a character the charmap gains that no rule names, which
 takes the UNDEFINED weight -- step 4 lists every locale that relies on
 UNDEFINED; an LC_COLLATE keyword built out of escape characters
-(`LC_COLL/ATE`), which steps 2 and 3 do not see either, and an
-`escape_char` directive spelled that way; the transliterations of a build
+(`LC_COLL/ATE`), and an `escape_char` directive spelled that way; the
+transliterations of a build
 SUPPORTED does not list, which point 5 looks for only through the
 characters a rule names.
 """
@@ -2369,7 +2370,7 @@ def ctype_moved(old, new):
     bytes that are not UTF-8 decode as U+FFFD on both. Files that did not
     change but read differently across UTF8_READER are compare()'s to
     catch (_readers_differ). A change inside LC_COLLATE is step 2's own
-    finding, and step 3 lists every locale that copies it; a changed
+    finding, for every locale that copies it too; a changed
     file that defines collating elements still runs point 6, which counts
     the builds that read it as listed anyway."""
     if set(old.present) != set(new.present):
@@ -2440,7 +2441,7 @@ how many builds are built out of a transliteration at either tag and were
 compared; unmoved: how many builds that may build one were not compared,
 because nothing they read changed; found: [Translit]; changed: how many
 elements are built differently, counted before compare() takes out the
-builds step 3 lists anyway, so the printed total is never short."""
+builds step 2 lists anyway, so the printed total is never short."""
 
 
 def _translit_plan(old, new, common):
@@ -2594,7 +2595,8 @@ def compare_translit(old, new, common, ks, bad, read_charmaps):
                 elems.append(got)
             # An element that needs a transliteration at either tag and is
             # not the same element at both: the file that defines it changed
-            # inside LC_COLLATE, which step 2 lists and step 3 follows.
+            # inside LC_COLLATE, which step 2 lists for every locale that
+            # reads it.
             # Listed with that reason, so that compare() counts it as
             # listed anyway, and a `!!` would show if it ever were not.
             def needs(parts):
@@ -2665,13 +2667,13 @@ Report = collections.namedtuple(
 Report.__doc__ = """not_run: None, or why nothing was compared. builds: how
 many builds were compared; charmaps: those they use; changed: [(old, new)]
 whose blobs differ; sizes: {pair: (size of K, added, removed), or None when
-the pair could not be compared}; found: [Found] listed for step 3;
-skipped: [Found] whose source step 3 lists anyway; not_compared: the
+the pair could not be compared}; found: [Found] listed for Reindex;
+skipped: [Found] whose source step 2 lists anyway; not_compared: the
 SUPPORTED entries at both tags whose source is not at both; unsearched:
 [(charmap, reason)] changed charmaps where point 5 could not run;
 translit: the TranslitReport of point 6, None when no charmap changed, no
 LC_CTYPE is read differently (ctype_moved) and both tags read bytes alike
-(_readers_differ), its found without the builds step 3 lists
+(_readers_differ), its found without the builds step 2 lists
 anyway, or `found` lists; translit_skipped: how many of those."""
 
 
@@ -2717,7 +2719,7 @@ def compare(old, new, builds_old, builds_new, already_listed,
             search_unbuilt=True):
     """Points 1 to 6 of the module docstring over two Sides.
 
-    `already_listed()` returns the sources step 3 lists anyway; it is
+    `already_listed()` returns the sources step 2 lists anyway; it is
     called only when something is found. `read_more({tag: {charmap}},
     locales)` reads those charmaps into the Sides, and with `locales` every
     locale file they do not hold (point 6). `fresh=False` keeps the memos
@@ -2885,7 +2887,7 @@ def compare(old, new, builds_old, builds_new, already_listed,
 
 
 def listed_sources(report):
-    """The source names the report lists for step 3, sorted."""
+    """The source names the report lists for Reindex, sorted."""
     return sorted({f.source for f in report.found}
                   | {f.source for f in (report.translit.found
                                         if report.translit else ())})

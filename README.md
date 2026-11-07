@@ -108,8 +108,7 @@ machines, 1.b is the stronger answer.
 ./audit.sh glibc-2.28 glibc-2.34
 ```
 
-It runs the five steps in order, passes the locales step 2 found on to step 3
-so you never retype a name, and ends with a consolidated summary. What each
+It runs the steps in order and ends with a consolidated summary. What each
 step asks, and what the run leaves unsettled, is in
 [docs/commands.md](docs/commands.md). What this exact command prints, on
 both audited pairs, is in
@@ -221,12 +220,12 @@ A worked example for each pair is in
 
 | Locale | RHEL8 → RHEL9<br>glibc 2.28 → 2.34 | RHEL9 → RHEL10<br>glibc 2.34 → 2.39 | Caught by |
 |---|---|---|---|
-| `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | 🟢 No difference | steps 1–3 — `sv_FI` only via `copy`; the second pair is cleared by step 11's measurement |
-| `or_IN` | 🔴 **Changed** | 🟢 No difference | steps 1–3; the second pair is cleared by step 11's measurement |
+| `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | 🟢 No difference | step 2 — `sv_FI` only via `copy`; the second pair is cleared by step 11's measurement |
+| `or_IN` | 🔴 **Changed** | 🟢 No difference | step 2; the second pair is cleared by step 11's measurement |
 | `ko_KR` | 🔴 **Changed** | 🟢 No difference | step 4 flags it and **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement |
 | `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | between two tags nothing compares it <sup>†</sup>; between the two builds step 2 lists it — the node-to-node check settles the data, step 11 or `sql/c_utf8_probe.sql` the order |
-| `th_TH` | 🟢 No difference | 🔴 **Changed** | steps 1–3; the first pair is cleared by step 11's measurement |
-| `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | steps 1–3 flagged it; inspection found a role swap; the first pair is cleared by step 11's measurement |
+| `th_TH` | 🟢 No difference | 🔴 **Changed** | step 2; the first pair is cleared by step 11's measurement |
+| `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | step 4 flags them; step 2 finds the same rules in both pairs, though over the second their files changed by a role swap; step 11's measurement finds both unchanged |
 | CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>the base table a locale inherits unless it<br>defines its own order | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
 | `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | step 4 flagged them via `iso14651_t1_common`; cleared by measurement |
 | everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | 🟢 No difference | 🟢 No difference | step 4 flags them and step 5 finds code changes in both pairs: step 11's measurement clears both |

@@ -20,7 +20,7 @@ import tempfile
 import unittest
 
 from _harness import (GLIBC_CLONE, MID, NEW, OLD, SCRIPTS_DIR, flat,
-                      needs_clone, run_step)
+                      needs_clone)
 
 import diff_distro_locales as dd
 import glibc_locale_data as g
@@ -42,15 +42,12 @@ def run_script(*args):
 
 
 @needs_clone
-class MatchesStepTwo(unittest.TestCase):
-    """The equivalence that makes this script trustworthy without a node.
-
-    Two independent algorithms must agree. Step 2 counts a renamed file by its
-    OLD path, so its content-changed total is `modified + renames` while a
-    both-tags file set can only see `modified`. Asserting raw equality would
-    fail on 2.34..2.39, which has one rename -- so the relation is asserted
-    instead.
-    """
+class TheOldTagAsANode(unittest.TestCase):
+    """This script on the old tag standing in for a node, over both
+    audited pairs: the files that differ and the ones inside LC_COLLATE are
+    known answers, the way a node built from that tag would show them.
+    Until step 9.2 they were checked against step 2's file counts, which
+    step 2 no longer makes: it compares each locale's rules."""
 
     EXPECTED = {
         # pair: (files differing, locales differing inside LC_COLLATE)
@@ -58,7 +55,7 @@ class MatchesStepTwo(unittest.TestCase):
         (MID, NEW): (306, ['ber_DZ', 'kab_DZ', 'th_TH']),
     }
 
-    def test_reproduces_step_2_on_both_pairs(self):
+    def test_the_known_answers_on_both_pairs(self):
         for (old, new), (differ, inside) in self.EXPECTED.items():
             with self.subTest(pair=f'{old}..{new}'):
                 tmp = tempfile.mkdtemp(prefix='pg-glibc-distro-')
@@ -73,27 +70,14 @@ class MatchesStepTwo(unittest.TestCase):
                     return int(re.search(rf'{label}:\s+(\d+)', out).group(1))
                 got_inside = n('differ INSIDE LC_COLLATE')
                 self.assertEqual(got_inside, len(inside), out)
-                # The three buckets step 2 also prints: "N touch LC_COLLATE,
-                # M do not, K have no LC_COLLATE block". All three are
-                # differing files; only the first is a collation finding.
+                # Three buckets of differing files; only the first is a
+                # collation finding.
                 self.assertEqual(
                     got_inside + n('differ outside LC_COLLATE')
                     + n('no LC_COLLATE either side'),
                     differ, out)
                 for name in inside:
                     self.assertIn(name, out)
-
-    def test_the_delta_from_step_2_is_exactly_the_renames(self):
-        """Step 2's content-changed count includes each rename's old path.
-        Pair 1 has no rename and matches exactly; pair 2 has one and is off by
-        one. Pinning the relation stops that looking like a regression."""
-        for (old, new), (differ, _) in self.EXPECTED.items():
-            with self.subTest(pair=f'{old}..{new}'):
-                step2 = run_step('filter_lc_collate_changes.py', old, new)[1]
-                content = int(re.search(r'Of the (\d+) content-changed',
-                                        step2).group(1))
-                renames = int(re.search(r'renamed:\s+(\d+)', step2).group(1))
-                self.assertEqual(content - renames, differ)
 
 
 @needs_clone

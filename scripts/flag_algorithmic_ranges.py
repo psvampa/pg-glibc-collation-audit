@@ -180,8 +180,9 @@ def byte_order_list_name(out_name):
 def listed_names(names, aliases):
     """`names`, and every alias glibc's locale.alias gives one of them.
 
-    The list holds locales, not spellings, for the reason the summary's Reindex gives
-    (backlog 13.1): SUPPORTED's spellings missed sv_SE.iso885915, swedish and
+    The list holds locales, not spellings, for the reason the summary's
+    Reindex gives (backlog 13.1): SUPPORTED's spellings missed
+    sv_SE.iso885915, swedish and
     the others the real machines carry, and a name that cannot be found in
     the list reads as a name that was cleared. A spelling reaches its locale
     by glibc_locale_data.locale_source; an alias does not, so it is listed.

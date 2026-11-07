@@ -19,8 +19,8 @@ import unittest
 from unittest import mock
 
 from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
-                      SCRIPTS_DIR, flat, glibc_shaped, needs_clone,
-                      needs_floor_pair)
+                      SCRIPTS_DIR, Step2Report, flat, glibc_shaped,
+                      needs_clone, needs_floor_pair)
 
 import glibc_locale_data as g
 import diff_collation_code as d
@@ -1291,7 +1291,7 @@ def make_release_line_repo(root, dates=None):
 class PairOrderIsMeasuredNotAssumed(unittest.TestCase):
     """"Nothing stopped a reversed pair": `./audit.sh glibc-2.34 glibc-2.28`
     ran to the end at exit 0 with a plausible summary -- step 2 reporting the
-    same two files that touch LC_COLLATE and step 5 a hunk count, no `!!`
+    same two files that touched LC_COLLATE and step 5 a hunk count, no `!!`
     anywhere -- while step 4 scanned the older tag and step 2 called a locale
     deleted in the real upgrade a harmless addition.
 
@@ -1615,12 +1615,17 @@ class TheStepsRefuseAReversedPair(unittest.TestCase):
         self.assertIn('REVERSED', out)
         self.assertIn('Swap the arguments', flat(out))
         self.assertNotIn('below the floor', out)
-        self.assertNotIn('Files with changes inside LC_COLLATE', out)
+        self.assertNotIn('The sort rules localedef builds', out)
+        self.assertNotIn('Listed for Reindex', out)
 
     def test_the_forward_control_still_runs(self):
+        """x, renamed y at t2: compared by name, y has no file at t1 and
+        x none at t2."""
         rc, out = self.step2('t1', 't2')
         self.assertEqual(rc, 0, out)
-        self.assertIn('Files with changes inside LC_COLLATE: 1', out)
+        r = Step2Report(out)
+        self.assertEqual(r.added, {'y': 'y.utf8; renamed from x'})
+        self.assertEqual(r.removed, {'x': '(renamed to y)'})
 
     def test_the_same_commit_twice_says_nothing_was_compared(self):
         """A hand-run step used to end in its clean sentence, rc 0 and no
@@ -1631,9 +1636,12 @@ class TheStepsRefuseAReversedPair(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertIn('!! ', out)
         self.assertIn('t1 and t1 are the same commit', flat(out))
-        self.assertIn("Steps 1 to 3 can only report 'nothing changed'",
+        self.assertIn("Step 1 can only report 'nothing changed', which",
                       flat(out))
-        self.assertIn('step 5 reports that nothing was compared', flat(out))
+        self.assertIn('steps 2 and 5 report that nothing was compared',
+                      flat(out))
+        self.assertEqual(Step2Report(out).nothing,
+                         'the two tags are one commit.')
         # Step 4 reads only the new tag. Counted among the steps that compare,
         # it invited the reader to dismiss the list the summary asks them to
         # confirm (false-negative-reviewer, 2026-09-30).
@@ -1809,7 +1817,7 @@ class TagModeCorpusFloor(unittest.TestCase):
                              '--repo', repo)
         self.assertEqual(rc, 2, out)
         self.assertIn('below the floor', out)
-        self.assertNotIn('Files with changes inside LC_COLLATE', out)
+        self.assertNotIn('The sort rules localedef builds', out)
 
     def test_step_1_refuses_too(self):
         """Step 1 holds its tags to the floor in step1_sides, after the
@@ -1869,55 +1877,14 @@ class TagModeCorpusFloor(unittest.TestCase):
 
 
 @needs_clone
-class RenamedFileGainsABlock(unittest.TestCase):
-    """"Step 2 aborted on a rename without an old LC_COLLATE block", end to end
-    on a fabricated repository: `x` (no block) becomes `y` (with one). The old
-    code died reading `x` at t2; with the read fixed but the lookup not, it
-    reported y as 'no LC_COLLATE on either side'."""
+class APureRenameGoesToRemoved(unittest.TestCase):
+    """A file git reports as renamed with no change: step 2 reads git's
+    `--find-renames` list for Removed, and a pure rename is in it with its
+    new name, never a deletion and an unrelated addition. No audited pair
+    has a pure rename (the one rename, over 2.34..2.39, changes the file
+    too)."""
 
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-rename-repo-')
-        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-rename-out-')
-        self.addCleanup(shutil.rmtree, self.out_dir, ignore_errors=True)
-        self.repo = make_glibc_shaped_repo(self.tmp, n_files=g.MIN_LOCALE_FILES,
-                                           rename=True)
-
-    def test_the_renamed_file_is_reported_as_gained_collate(self):
-        rc, out = run_script('filter_lc_collate_changes.py', 't1', 't2',
-                             '--repo', self.repo,
-                             env_extra={'PG_GLIBC_AUDIT_OUT': self.out_dir})
-        self.assertEqual(rc, 0, out)
-        self.assertIn('renamed: 1', out)
-        self.assertIn('1 file(s) GAINED an LC_COLLATE block at t2', out)
-        self.assertIn('Files with changes inside LC_COLLATE: 1', out)
-        self.assertIn('x -> y', out)
-        with open(os.path.join(self.out_dir, 'step2_changed_collate.t1..t2.txt'),
-                  encoding='utf-8') as fh:
-            self.assertEqual(fh.read().split(), ['y'],
-                             'step 3 must get the name that exists at t2')
-
-    def test_the_gained_block_is_read_under_its_new_name(self):
-        """The characters of a file that gained its block
-        come from its new version, which lives under the new name. Looked up
-        under the old one, nothing is found and the file gets the warning."""
-        rc, out = run_script('filter_lc_collate_changes.py', 't1', 't2',
-                             '--repo', self.repo,
-                             env_extra={'PG_GLIBC_AUDIT_OUT': self.out_dir})
-        self.assertEqual(rc, 0, out)
-        self.assertIn('localedata/locales/x characters in the changed rules '
-                      '(1): A (U+0041)', flat(out))
-
-
-@needs_clone
-class APureRenamePassesTheNoHunkCheck(unittest.TestCase):
-    """A file git reports as renamed with no change has no hunk, and step 2
-    now refuses a changed file with no hunk unless both tags hold the same
-    blob. The rename is read under its NEW name there; no audited pair has a
-    pure rename (the one rename, over 2.34..2.39, has hunks), so this is the
-    only run that reaches that branch."""
-
-    def test_a_pure_rename_is_not_refused(self):
+    def test_a_pure_rename_is_listed_with_its_new_name(self):
         tmp = tempfile.mkdtemp(prefix='pg-glibc-pure-rename-')
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         out_dir = tempfile.mkdtemp(prefix='pg-glibc-pure-rename-out-')
@@ -1931,7 +1898,12 @@ class APureRenamePassesTheNoHunkCheck(unittest.TestCase):
                              '--repo', repo,
                              env_extra={'PG_GLIBC_AUDIT_OUT': out_dir})
         self.assertEqual(rc, 0, out)
-        self.assertIn('renamed: 1', out)
+        r = Step2Report(out)
+        self.assertEqual(r.removed, {'x': '(renamed to y)'})
+        self.assertEqual(r.added, {'y': 'y.utf8; renamed from x'})
+        self.assertEqual(read_list(os.path.join(
+            out_dir, 'step2_removed_locales.t1..t2.txt')),
+            ['# locale files at t1 and not at t2', 'x (renamed to y)'])
 
 
 @needs_clone
@@ -2003,6 +1975,10 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
             'rf': cls.RF % b'', 'rb': cls.RB, 'rx': cls.RX})
         cls.commit('cr2', ' % a note', extra={
             'rf': cls.RF % b' # a \\', 'rb': None, 'rw': cls.RB})
+        git(cls.repo, 'checkout', '-q', 'ctl')
+        cls.commit('cq', ' % a note', extra={
+            'rf': cls.RF % b'', 'rb': cls.RB, 'rx': cls.RX})
+        cls.commit('cq2', ' % a note', extra={'rf': cls.RF % b' # a \\'})
 
     @classmethod
     def tearDownClass(cls):
@@ -2099,8 +2075,9 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
             capture_output=True, text=True).stdout.strip()
 
     def step2(self, old, new, fix=None):
-        """(exit, output, step 3's list). `fix` moves LR_GETC_FIX to one of
-        this history's commits, so that a tag can hold it."""
+        """(exit, Step2Report, the Reindex list written). `fix` moves
+        LR_GETC_FIX to one of this history's commits, so that a tag can
+        hold it."""
         out_dir = tempfile.mkdtemp(dir=self.tmp)
         code = ("import sys; sys.path.insert(0, %r)\n"
                 "import glibc_locale_data as g\n" % SCRIPTS_DIR)
@@ -2113,64 +2090,69 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
                            env=dict(os.environ, PG_GLIBC_AUDIT_OUT=out_dir),
                            capture_output=True)
         out = (p.stdout + p.stderr).decode('utf-8', 'replace')
+        self.assertEqual(p.returncode, 0, out)
         listed = read_list(os.path.join(
             out_dir, f'step2_changed_collate.{old}..{new}.txt'))
-        return p.returncode, flat(out), listed
+        r = Step2Report(out)
+        self.assertEqual(r.reindex, listed)
+        return r
 
     def test_an_end_that_swallows_lc_collate_is_listed(self):
-        rc, out, listed = self.step2('ctl', 'cont')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
-        self.assertIn('!! 1 file(s) hold something that can stop glibc '
-                      'reading their LC_COLLATE as written', out)
-        self.assertIn('localedata/locales/k at cont: the line above '
-                      'LC_COLLATE ends in the escape character', out)
-        self.assertIn('glibc may not read the block as written', out)
-        self.assertEqual(listed, ['k'])
+        """k's END LC_CTYPE line ends in the escape at cont: lr_next joins
+        the LC_COLLATE line to it, and glibc stores no LC_COLLATE for k on
+        the new side. Not compared, and listed with a `!!`."""
+        r = self.step2('ctl', 'cont')
+        self.assertEqual(r.listed,
+                         {'k': 'LC_COLLATE stored on the old side only'})
+        self.assertEqual(r.differs, {})
+        self.assertEqual(r.reindex, ['k'])
 
     def test_the_control_a_note_without_the_escape(self):
-        rc, out, listed = self.step2('base', 'ctl')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('0 touch LC_COLLATE, 1 do not', out)
-        self.assertNotIn('stop glibc reading it', out)
-        self.assertEqual(listed, [])
+        r = self.step2('base', 'ctl')
+        self.assertEqual((r.differs, r.listed, r.reindex), ({}, {}, []))
 
-    def test_a_0x1a_counts_when_both_tags_predate_the_fix(self):
-        """Neither tag holds LR_GETC_FIX: both read the byte as the end of
-        the file."""
-        rc, out, listed = self.step2('ctl', 'sub')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('localedata/locales/k at sub: a 0x1A or 0xFF byte '
-                      'above the end of LC_COLLATE', out)
-        self.assertEqual(listed, ['k'])
+    def test_a_0x1a_on_a_comment_line_is_not_read_either_way(self):
+        """k at sub holds a 0x1A on a comment line, above LC_COLLATE, and
+        neither tag holds LR_GETC_FIX. glibc drops the rest of a comment
+        line without lr_getc reading it (lr_ignore_rest), so both tags'
+        localedef read k whole and alike: the same rules. Until step 9.2
+        step 2 listed k here, from a search of the file's lines for the
+        byte rather than from how glibc reads it."""
+        for fix in (None, 'sub'):
+            with self.subTest(fix=fix):
+                r = self.step2('ctl', 'sub', fix=fix)
+                self.assertEqual((r.differs, r.listed, r.reindex),
+                                 ({}, {}, []))
 
     def test_each_tag_is_asked_about_its_own_localedef(self):
-        """The new side holds the byte and the fix: cleared. The old side
-        holds the byte and not the fix: listed. Either question asked of
-        the other tag reverses both answers."""
-        rc, out, listed = self.step2('ctl', 'sub', fix='sub')
-        self.assertEqual(rc, 0, out)
-        self.assertEqual(listed, [], out)
-        rc, out, listed = self.step2('sub', 'sub2', fix='sub2')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('localedata/locales/k at sub: a 0x1A', out)
-        self.assertNotIn('did not change are read', out,
-                         'k changed: it is judged with the changed files, '
-                         'not again as one that did not change')
-        self.assertEqual(listed, ['k'])
+        """k at bare and bare2 holds a 0x1A on a line of its own above
+        LC_COLLATE. With the fix at bare2, only the old tag's localedef
+        stops there: k is listed, and the reason names the OLD side.
+        Asked of the other tag, the reason would name the new one."""
+        r = self.step2('bare', 'bare2', fix='bare2')
+        self.assertEqual(r.listed, {'k': 'old side: localedef stops reading '
+                                         'k at line 6, before the end of '
+                                         'the file'})
+        self.assertEqual(r.reindex, ['k'])
+
+    def test_a_0x1a_counts_when_both_tags_predate_the_fix(self):
+        """Neither tag holds LR_GETC_FIX: both localedef read the 0x1A on
+        its own line as the end of the file, before LC_COLLATE. Both stop
+        at the same place, and agreeing on a run that did not finish is
+        not reading k: listed, the reason naming both sides."""
+        r = self.step2('bare', 'bare2')
+        self.assertEqual(sorted(r.listed), ['k'])
+        self.assertTrue(r.listed['k'].startswith('both sides: '),
+                        r.listed['k'])
+        self.assertEqual(r.reindex, ['k'])
 
     def test_a_file_that_did_not_change_is_read_across_the_fix(self):
         """Review of 13.18, finding 3: k is the same bytes at both tags,
-        and only the old tag's localedef stops at its 0x1A. Step 2 judges
-        the files that changed, and k is not one of them."""
-        rc, out, listed = self.step2('bare', 'bare2', fix='bare2')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('0 touch LC_COLLATE, 0 do not, 1 have no LC_COLLATE '
-                      'block', out)
-        self.assertIn("!! 1 file(s) that did not change are read differently "
-                      "by the localedef of bare and that of bare2", out)
-        self.assertIn('localedata/locales/k', out)
-        self.assertEqual(listed, ['k'])
+        and only the old tag's localedef stops at its 0x1A. Every locale
+        is compared, changed file or not, so k is listed."""
+        r = self.step2('bare', 'bare2', fix='bare2')
+        self.assertEqual(sorted(r.listed), ['k'])
+        self.assertEqual(r.totals[2], 0)
 
     def test_a_file_the_reader_cannot_settle_is_not_cleared(self):
         """A second LC_CTYPE in k copies a file there is none of, and a
@@ -2178,125 +2160,103 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
         Builds the run stops there, before the 0x1A, and the two runs
         agree. Agreeing on a run that did not finish is not reading the
         byte alike: listed."""
-        rc, out, listed = self.step2('miss', 'miss2', fix='miss2')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('!! 1 file(s) that did not change are read differently', out)
-        self.assertEqual(listed, ['k'])
+        r = self.step2('miss', 'miss2', fix='miss2')
+        self.assertEqual(r.listed,
+                         {'k': 'both sides: localedef cannot open zz_none'})
+        self.assertEqual(r.reindex, ['k'])
 
     def test_a_byte_that_picks_another_branch_is_listed(self):
         """False-negative-reviewer, 15.2 B3: j did not change, and the two
         tags' localedef build opposite orders from it, out of the same
-        number of statements: the runs are compared token by token, never
-        by the summary the reader's cache keeps."""
-        rc, out, listed = self.step2('ifd', 'ifd2', fix='ifd2')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('!! 1 file(s) that did not change are read differently', out)
-        self.assertIn('localedata/locales/j', out)
-        self.assertEqual(listed, ['j'])
-        rc, out, listed = self.step2('ifd', 'ifd2', fix='ifd')
-        self.assertEqual(rc, 0, out)
-        self.assertNotIn('did not change are read', out, 'the control: one reader')
-        self.assertEqual(listed, [])
+        number of statements: the runs are compared statement by
+        statement, never by a count."""
+        r = self.step2('ifd', 'ifd2', fix='ifd2')
+        self.assertEqual(r.differs, {'j': (2, True)})
+        self.assertEqual(r.reindex, ['j'])
+        r = self.step2('ifd', 'ifd2', fix='ifd')
+        self.assertEqual((r.differs, r.reindex), ({}, []),
+                         'the control: one reader')
 
     def test_a_byte_only_a_copier_reads_otherwise_is_listed(self):
         """zz_L holds no such byte, and its order changes with the reader:
-        every run of the tree is asked, not only the runs of the files that
-        hold the byte, and zz_L is listed. zz_F is listed too: with the
-        reader of 2.34 the 0xFF ends its ifdef line inside a statement, a
-        run this reader does not settle, and one it cannot settle is never
-        cleared."""
-        rc, out, listed = self.step2('cpd', 'cpd2', fix='cpd2')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('!! 2 file(s) that did not change are read differently',
-                      out)
-        self.assertEqual(listed, ['zz_F', 'zz_L'])
+        it defines YES and copies zz_F, whose ifdef ends in an 0xFF, and
+        glibc keeps one list of defined names for the whole run. zz_F's
+        own run defines no YES and takes the same branch with either
+        reader: the same rules. Every locale is compared, not only the
+        files that hold the byte."""
+        r = self.step2('cpd', 'cpd2', fix='cpd2')
+        self.assertEqual(r.differs, {'zz_L': (2, True)})
+        self.assertEqual(r.listed, {})
+        self.assertEqual(r.reindex, ['zz_L'])
 
     def test_utf8_glibc_reads_from_2_36_is_read_across(self):
         """u did not change and w changed in LC_TIME alone; glibc before
-        2.36 and after it build different orders from both. u is added to
-        step 3's list, w is counted as changed with its own `!!`."""
-        rc, out, listed = self.step2('utf', 'utf2', fix='utf2')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
-        self.assertIn('!! 1 file(s) that changed are also read differently '
-                      'by the localedef of utf and that of utf2', out)
-        self.assertIn('localedata/locales/w the two tags\' localedef read '
-                      'this file differently', out)
-        self.assertIn('!! 1 file(s) that did not change are read differently',
-                      out)
-        self.assertEqual(listed, ['u', 'w'])
-        rc, out, listed = self.step2('utf', 'utf2', fix='utf')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('0 touch LC_COLLATE, 1 do not', out, 'the control')
-        self.assertEqual(listed, [])
+        2.36 and after it build different orders from both: both differ,
+        every rule able to change."""
+        r = self.step2('utf', 'utf2', fix='utf2')
+        self.assertEqual(r.differs, {'u': (2, True), 'w': (2, True)})
+        self.assertEqual(r.reindex, ['u', 'w'])
+        r = self.step2('utf', 'utf2', fix='utf')
+        self.assertEqual((r.differs, r.reindex), ({}, []), 'the control')
 
     def test_a_new_side_with_no_lc_collate_is_named(self):
-        """m's new side has no LC_COLLATE to glibc: counted as changed, and
-        its `!!` says why, though the line search finds nothing."""
-        rc, out, listed = self.step2('mm', 'mm2')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
-        self.assertIn('localedata/locales/m at mm2: localedef reads no '
-                      'LC_COLLATE section in it', out)
-        self.assertEqual(listed, ['m'])
+        """m's new side has no LC_COLLATE to glibc (the escape `!` ends its
+        END LC_CTYPE line): not compared, listed, and the reason says
+        which side stores it."""
+        r = self.step2('mm', 'mm2')
+        self.assertEqual(r.listed,
+                         {'m': 'LC_COLLATE stored on the old side only'})
+        self.assertEqual(r.reindex, ['m'])
 
     def test_one_section_read_for_another_is_listed(self):
         """x has one LC_COLLATE section to glibc on each side, and they
-        are not the same lines: a change to its rules, though no hunk
-        falls inside the old section."""
-        rc, out, listed = self.step2('sw', 'sw2')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
-        self.assertIn('localedata/locales/x at sw2: localedef reads other '
-                      'lines as its LC_COLLATE than at sw', out)
-        self.assertIn('glibc may not read the block as written (see the `!!` '
-                      'above that names it), so every rule in it can change',
-                      out)
-        self.assertEqual(listed, ['x'])
+        are not the same lines: its rules differ, every rule able to
+        change."""
+        r = self.step2('sw', 'sw2')
+        self.assertEqual(r.differs, {'x': (2, True)})
+        self.assertEqual(r.reindex, ['x'])
 
-    def test_one_section_read_for_another_is_listed_under_a_rename(self):
-        """r is renamed r2, so its own run has two names, r and r2; the
-        sections are compared for that one run all the same (round 5 of
-        the 15.2 B3 review)."""
-        rc, out, listed = self.step2('rn', 'rn2')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('renamed: 1', out)
-        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
-        self.assertIn('localedata/locales/r at rn2: localedef reads other '
-                      'lines as its LC_COLLATE than at rn', out)
-        self.assertEqual(listed, ['r2'])
+    def test_a_renamed_file_is_not_compared_and_goes_to_removed(self):
+        """r is renamed r2, and rb, which copies rf, is renamed rw. A
+        locale is compared by its name: r and rb have no file on the new
+        side and are listed under Removed, with the new name, and r2 and rw
+        none on the old side. rf, whose own rules are the same, is not
+        listed: until step 9.2 step 2 judged files, and listed rf for
+        what its copier rb read (round 6 of the 15.2 B3 review)."""
+        r = self.step2('rn', 'rn2')
+        self.assertEqual(r.removed, {'r': '(renamed to r2)'})
+        self.assertEqual(r.added, {'r2': '(not in SUPPORTED); renamed '
+                                         'from r'})
+        self.assertEqual(r.reindex, [])
+        r = self.step2('cr', 'cr2')
+        self.assertEqual(r.removed, {'rb': '(renamed to rw)'})
+        self.assertEqual(r.added, {'rw': '(not in SUPPORTED); renamed '
+                                         'from rb'})
+        self.assertEqual((r.differs, r.listed, r.reindex), ({}, {}, []))
 
-    def test_a_renamed_copier_reading_less_lists_the_file(self):
-        """rf's own run reads both sections at cr and cr2; rb, renamed
-        rw, reads one fewer at cr2. Compared as one run, rf is listed."""
-        rc, out, listed = self.step2('cr', 'cr2')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('renamed: 1', out)
-        self.assertIn('1 touch LC_COLLATE', out)
-        self.assertIn('localedata/locales/rf at cr2: localedef reads other '
-                      'lines as its LC_COLLATE than at cr', out)
-        # The characters did not change: not named as if they had.
-        self.assertNotIn('file(s) are read at', flat(out))
-        self.assertIn('rf', listed)
+    def test_a_copier_that_reads_less_differs_and_its_source_does_not(self):
+        """cr and cr2 without the rename: rf's own run obeys its escape_char
+        `/` and reads both sections at cq and cq2, the same rules; rb,
+        which copies rf's LC_COLLATE and reads with the default `\\`, loses
+        the first section's header at cq2, where the END LC_CTYPE line
+        ends in `\\`. Each locale is compared on its own run: rb differs,
+        rf does not (round 6 of the 15.2 B3 review, by locale since step
+        9.2)."""
+        r = self.step2('cq', 'cq2')
+        self.assertEqual(sorted(r.differs), ['rb'])
+        self.assertEqual(r.listed, {})
+        self.assertEqual(r.reindex, ['rb'])
 
     def test_a_change_inside_lc_collate_read_across_says_so(self):
         """v adds <U0063> to its first branch, and the two readers take
         different branches: the characters of the changed line are not all
-        that moves, and the `!!` and the note under v say so (round 3 of
-        the 15.2 B3 review)."""
-        rc, out, listed = self.step2('vv', 'vv2', fix='vv2')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
-        self.assertIn('!! 1 file(s) that changed are also read differently '
-                      'by the localedef of vv and that of vv2', out)
-        self.assertIn("localedata/locales/v characters in the changed rules "
-                      "(1): c (U+0063) those are the changed lines; the two "
-                      "tags' localedef read this file differently", out)
-        self.assertEqual(listed, ['v'])
-        rc, out, listed = self.step2('vv', 'vv2', fix='vv')
-        self.assertEqual(rc, 0, out)
-        self.assertNotIn('also read differently', out, 'the control')
-        self.assertNotIn("tags' localedef read this file", out)
+        that moves, and the line under v says every rule can change. With
+        one reader, the changed line's character alone (round 3 of the
+        15.2 B3 review)."""
+        r = self.step2('vv', 'vv2', fix='vv2')
+        self.assertEqual(r.differs, {'v': (3, True)})
+        r = self.step2('vv', 'vv2', fix='vv')
+        self.assertEqual(r.differs, {'v': ([0x63], False)}, 'the control')
 
     def test_each_tag_is_placed_on_its_own_side_of_the_fix(self):
         """The answer lr_getc_sides hands to the Builds, in its direction:
@@ -2326,17 +2286,13 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
         that came before the reader: on a comment line glibc drops the
         rest of the line without lr_getc reading it, so both tags read k
         alike, and the reader says so."""
-        rc, out, listed = self.step2('sub', 'same', fix='same')
-        self.assertEqual(rc, 0, out)
-        self.assertNotIn('did not change are read', out)
-        self.assertEqual(listed, [])
+        r = self.step2('sub', 'same', fix='same')
+        self.assertEqual((r.differs, r.listed, r.reindex), ({}, {}, []))
 
     def test_the_control_both_tags_read_it_alike(self):
         """Both hold the fix: the same bytes are read the same way."""
-        rc, out, listed = self.step2('bare', 'bare2', fix='bare')
-        self.assertEqual(rc, 0, out)
-        self.assertNotIn('did not change are read', out)
-        self.assertEqual(listed, [])
+        r = self.step2('bare', 'bare2', fix='bare')
+        self.assertEqual((r.differs, r.listed, r.reindex), ({}, {}, []))
 
     def test_a_tag_git_cannot_place_is_refused(self):
         """Before the reader, a history that does not hold LR_GETC_FIX
@@ -2353,7 +2309,7 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
         self.assertEqual(rc, 2, out)
         self.assertIn("git cannot tell whether t1 comes before or after "
                       "glibc's lr_getc fix", flat(out))
-        self.assertNotIn('Files with changes inside LC_COLLATE', out)
+        self.assertNotIn('The sort rules localedef builds', out)
 
 
 def read_list(path):
@@ -2394,8 +2350,9 @@ class Step2ListsWhatTheTagsRemove(unittest.TestCase):
                              '--repo', repo,
                              env_extra={'PG_GLIBC_AUDIT_OUT': out_dir})
         self.assertEqual(rc, 0, out)
-        # The control: git reported both, so the list below is step 2's.
-        self.assertIn('deleted: 1   renamed: 1', out)
+        # The output says the same as the file.
+        self.assertEqual(Step2Report(out).removed,
+                         {'loc_000': '', 'x': '(renamed to y)'})
         self.assertEqual(
             read_list(os.path.join(out_dir, 'step2_removed_locales.t1b..t2.txt')),
             ['# locale files at t1b and not at t2', 'loc_000 (deleted)',
@@ -2428,13 +2385,11 @@ class Step2RemovalListOnThePublishedPairs(unittest.TestCase):
 
 @needs_clone
 class AGainedBlockThatNamesNoCharacter(unittest.TestCase):
-    """The case the attempt before it got wrong: a file
-    that gains a block naming no character -- a bare `copy` -- was reported as
-    "no character is named", which loses that it gained a sort order. Its
-    changed lines are a copy and where the block starts and ends, so it is
-    told every rule in it can change (backlog 13.36); before that, it got
-    the could-not-identify warning. Fabricated, because no file gains a
-    block in a pinned pair."""
+    """A file that gains a block naming no character -- a bare `copy` --
+    gained a sort order: it was once reported as "no character is named",
+    which lost that. A locale whose LC_COLLATE is stored on one side only
+    is not compared, and is listed for Reindex under the `!!`, with the
+    side. Fabricated, because no file gains a block in a pinned pair."""
 
     def setUp(self):
         tmp = tempfile.mkdtemp(prefix='pg-glibc-gained-copy-')
@@ -2448,26 +2403,29 @@ class AGainedBlockThatNamesNoCharacter(unittest.TestCase):
         git(self.repo, 'commit', '-q', '-am', 't2')
         git(self.repo, 'tag', 't2')
 
-    def test_it_is_told_every_rule_can_change_not_an_empty_list(self):
+    def test_it_is_listed_with_the_side_that_stores_it(self):
         rc, out = run_script('filter_lc_collate_changes.py', 't1', 't2',
                              '--repo', self.repo,
                              env_extra={'PG_GLIBC_AUDIT_OUT': self.out_dir})
         self.assertEqual(rc, 0, out)
-        self.assertIn('GAINED an LC_COLLATE block', out)
-        self.assertIn('localedata/locales/x a changed line decides how other '
-                      'lines are read or where other rules sort, so every '
-                      'rule in it can change', flat(out))
-        self.assertNotIn('characters in the changed rules', flat(out))
+        r = Step2Report(out)
+        self.assertEqual(r.listed,
+                         {'x': 'LC_COLLATE stored on the new side only'})
+        self.assertEqual(r.differs, {})
+        self.assertEqual(r.reindex, ['x'])
+        self.assertEqual(read_list(os.path.join(
+            self.out_dir, 'step2_changed_collate.t1..t2.txt')), ['x'])
 
 
 @needs_clone
 class AChangedCommentCharIsARulesChange(unittest.TestCase):
     """Backlog 13.7, end to end on a fabricated repository. `loc_000` keeps
     the text of its LC_COLLATE block from t2 to t3 and is read with another
-    comment character at t3; step 2 must count it as changed, say why, and
-    hand it to step 3. Before, the hunk sat outside the block and the file
-    was filed under "do not touch LC_COLLATE". Fabricated, because no
-    directive changes inside a pinned pair."""
+    comment character at t3: the line `<U0043> % a note` ends in a comment
+    under `%` and not under `#`, so the rules differ, and step 2 must list
+    the locale and name the character. Fabricated, because no directive
+    changes inside a pinned pair. A comment character that no line of the
+    block meets changes no rule, and step 2 says the same (the control)."""
 
     def setUp(self):
         tmp = tempfile.mkdtemp(prefix='pg-glibc-reading-')
@@ -2478,6 +2436,13 @@ class AChangedCommentCharIsARulesChange(unittest.TestCase):
         self.path = os.path.join(self.repo, 'localedata', 'locales',
                                  'loc_000')
         with open(self.path, 'a') as fh:
+            fh.write('LC_COLLATE\ncopy "iso14651_t1"\nreorder-after '
+                     '<U0041>\n<U0042>\n<U0043> % a note\nreorder-end\n'
+                     'END LC_COLLATE\n')
+        # loc_001 copies the same rules with no line a comment character
+        # reaches (test_the_control_a_comment_character_no_rule_meets).
+        with open(os.path.join(self.repo, 'localedata', 'locales',
+                               'loc_001'), 'a') as fh:
             fh.write('LC_COLLATE\ncopy "iso14651_t1"\nEND LC_COLLATE\n')
         git(self.repo, 'commit', '-q', '-am', 't2')
         git(self.repo, 'tag', 't2')
@@ -2500,37 +2465,25 @@ class AChangedCommentCharIsARulesChange(unittest.TestCase):
         return read_list(os.path.join(self.out_dir,
                                       'step2_changed_collate.t2..t3.txt'))
 
-    def test_the_file_is_counted_named_and_handed_to_step_3(self):
+    def test_the_locale_differs_and_names_the_character(self):
         rc, out = self.commit_t3('comment_char %', 'comment_char #')
         self.assertEqual(rc, 0, out)
-        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
-        self.assertIn('Files with changes inside LC_COLLATE: 1', out)
-        self.assertIn('!! 1 file(s) are read at t3 with other comment or '
-                      'escape characters than at t2, so any rule in them can '
-                      'read differently.', flat(out))
-        self.assertIn('comment_char % and escape_char / at t2', out)
-        self.assertIn('comment_char # and escape_char / at t3', out)
-        self.assertIn('localedata/locales/loc_000 the block is read with '
-                      'other characters', flat(out))
-        self.assertNotIn('could not identify which characters changed',
-                         flat(out))
+        r = Step2Report(out)
+        self.assertEqual(r.differs, {'loc_000': ([0x43], False)})
+        self.assertEqual(r.listed, {})
         self.assertEqual(self.written(), ['loc_000'])
 
     def test_a_rule_and_the_characters_changed_together(self):
-        """The verdict is 'collate', from the hunk inside the block. The `!!`
-        still names the file, and the characters of the changed lines are
-        not presented as all that can move."""
+        """A rule added in the same commit: its character is named beside
+        the one the comment character reads otherwise."""
         rc, out = self.commit_t3(
             'comment_char %', 'comment_char #',
-            ('copy "iso14651_t1"\n', 'copy "iso14651_t1"\n'
-                                      'reorder-after <U0041>\n<U0042>\n'))
+            ('<U0042>\n', '<U0042>\n<U0044>\n'))
         self.assertEqual(rc, 0, out)
-        self.assertIn('1 touch LC_COLLATE, 0 do not', out)
-        self.assertIn('!! 1 file(s) are read at t3 with other comment or '
-                      'escape characters', flat(out))
-        self.assertIn('characters in the changed rules (2):', out)
-        self.assertIn('those are the changed lines; the block is read with '
-                      'other characters', flat(out))
+        r = Step2Report(out)
+        self.assertEqual(sorted(r.differs), ['loc_000'])
+        chars, _ = r.differs['loc_000']
+        self.assertLessEqual({0x43, 0x44}, set(chars))
         self.assertEqual(self.written(), ['loc_000'])
 
     def test_a_directive_spelt_across_the_escape_is_read(self):
@@ -2542,7 +2495,8 @@ class AChangedCommentCharIsARulesChange(unittest.TestCase):
         rc, out = self.commit_t3('\nLC_COLLATE\n',
                                  '\ncomment_c/har #\nLC_COLLATE\n')
         self.assertEqual(rc, 0, out)
-        self.assertIn('comment_char # and escape_char / at t3', out)
+        self.assertEqual(Step2Report(out).differs,
+                         {'loc_000': ([0x43], False)})
         self.assertEqual(self.written(), ['loc_000'])
 
     def test_the_control_a_comment_edit_is_not(self):
@@ -2550,9 +2504,22 @@ class AChangedCommentCharIsARulesChange(unittest.TestCase):
         directive: still "do not touch LC_COLLATE"."""
         rc, out = self.commit_t3('% filler line 0\n', '% filler line zero\n')
         self.assertEqual(rc, 0, out)
-        self.assertIn('0 touch LC_COLLATE, 1 do not', out)
-        self.assertNotIn('file(s) are read at', flat(out))
+        r = Step2Report(out)
+        self.assertEqual((r.differs, r.listed), ({}, {}))
         self.assertEqual(self.written(), [])
+
+    def test_the_control_a_comment_character_no_rule_meets(self):
+        """loc_001 copies the same rules with no line a comment character
+        reaches: `%` to `#` there changes no rule."""
+        path = os.path.join(self.repo, 'localedata', 'locales', 'loc_001')
+        with open(path) as fh:
+            text = fh.read()
+        with open(path, 'w') as fh:
+            fh.write(text.replace('comment_char %', 'comment_char #', 1))
+        rc, out = self.commit_t3('% filler line 0\n', '% filler line zero\n')
+        self.assertEqual(rc, 0, out)
+        r = Step2Report(out)
+        self.assertEqual((r.differs, r.listed), ({}, {}))
 
 
 @needs_clone
@@ -2597,8 +2564,11 @@ class UserGitConfigCannotChangeTheAnswer(unittest.TestCase):
                              env_extra={'PG_GLIBC_AUDIT_OUT': self.out_b,
                                         'GIT_CONFIG_GLOBAL': self.cfg})
         self.assertEqual(plain[0], 0, plain[1])
-        self.assertEqual(hostile, plain)
-        self.assertIn('renamed: 1', hostile[1])
+        # The characters file is named under each run's own directory.
+        self.assertEqual((hostile[0], hostile[1].replace(self.out_b,
+                                                         self.out_a)), plain)
+        self.assertEqual(Step2Report(hostile[1]).removed,
+                         {'aa_ER@saaho': '(renamed to ssy_ER)'})
 
     def test_the_template_verdict_does_not_trust_an_external_diff(self):
         """`git diff --quiet` ignores an external helper -- unless the config
@@ -2659,7 +2629,12 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
 
     Each case asserts that step 2 prints exactly what it prints under no
     config, and carries its own control: the same config must change what a
-    bare `git diff` prints, or the case guards nothing."""
+    bare `git diff` prints, or the case guards nothing. Since step 9.2 step
+    2 reads no patch, only git's `--raw` list of what was deleted or
+    renamed, which none of these change (measured with git 2.54; the
+    rename settings that do are UserGitConfigCannotChangeTheAnswer's): the
+    cases hold that its answer does not move whatever the patch would
+    print."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix='pg-glibc-step2cfg-')
@@ -2724,7 +2699,8 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
         clean = {'GIT_NO_LAZY_FETCH': '1'}
         plain = self.step2(clean)
         self.assertEqual(plain[0], 0, plain[1])
-        self.assertIn('Files with changes inside LC_COLLATE: 2', plain[1])
+        self.assertEqual(sorted(Step2Report(plain[1]).differs),
+                         ['or_IN', 'sv_FI', 'sv_FI@euro', 'sv_SE', 'swedish'])
         reference = self.bare_diff(clean)
         for name, env_extra in cases.items():
             with self.subTest(config=name):
@@ -2733,138 +2709,72 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
                                 f'this case guards nothing')
                 self.assertEqual(self.step2(env_extra), plain)
 
-    def test_a_file_git_says_changed_with_no_change_in_the_diff_is_refused(self):
-        """The general form of "Binary files": git reports the file as
-        modified and the diff shows nothing for it. That is an answer only
-        when the two versions are the same bytes -- a pure rename, a mode
-        change. The patch git gives is replaced, by injection, with the real
-        one minus sv_SE's hunks, header kept, under git's own list of what
-        changed: a shape parse_diff has no specific rule for, reaching the
-        guard without --diff-file, whose own comparison would stop it
-        first."""
-        clean = {'GIT_NO_LAZY_FETCH': '1'}
-        text = self.bare_diff(clean).decode('utf-8')
-        start = text.index('diff --git a/localedata/locales/sv_SE ')
-        first_hunk = text.index('\n@@', start) + 1
-        end = text.index('\ndiff --git', first_hunk) + 1
-        cut = os.path.join(self.tmp, 'cut.diff')
-        with open(cut, 'w', encoding='utf-8') as fh:
-            fh.write(text[:first_hunk] + text[end:])
-        out_dir = tempfile.mkdtemp(dir=self.tmp)
-        rc, out = in_subprocess(
+    def unreadable_locales_at(self, tag):
+        """Step 2 with every locale file at `tag` coming back `missing`, as
+        a partial clone with no promisor, or GIT_NO_LAZY_FETCH, gives them:
+        the files are in the tag's own tree, so that is a read that failed,
+        never a tree with no locale."""
+        return in_subprocess(
             "import filter_lc_collate_changes as f\n"
-            "g.OUT_DIR = %r\n"
-            "real = g.git_diff\n"
-            "cut = open(%r, encoding='utf-8').read()\n"
-            "def fake(r, a):\n"
-            "    text = real(r, a)\n"
-            "    if '-U0' not in a:\n"
-            "        return text\n"
-            "    return text[:text.index('\\ndiff --git') + 1] + cut\n"
-            "g.git_diff = fake\n"
-            "f.main([%r, %r, '--repo', repo])" % (out_dir, cut, OLD, MID))
-        self.assertNotEqual(rc, 0, out)
-        self.assertIn('have no hunk in the diff', flat(out))
-        self.assertIn('localedata/locales/sv_SE', out)
+            "real = g.read_blobs_at\n"
+            "def fake(r, groups, raw=False):\n"
+            "    return [({}, set(paths)) if tag == %r and paths and all(\n"
+            "            p.startswith(g.LOCALES_DIR + '/') for p in paths)\n"
+            "            else real(r, [(tag, paths)], raw=raw)[0]\n"
+            "            for tag, paths in groups]\n"
+            "g.read_blobs_at = fake\n"
+            "f.main([%r, %r, '--repo', repo])" % (tag, OLD, MID))
 
-    def test_a_diff_file_that_places_changes_elsewhere_is_refused(self):
-        """A --diff-file passed every check above when it had FEWER hunks for
-        a path, or hunks numbered on other text: measured, one taken under the
-        textconv that prepends lines and one with sv_SE's hunks inside
-        LC_COLLATE cut both lost sv_SE at exit 0. It is now read only if it
-        places every change where the diff git gives does."""
-        clean = {'GIT_NO_LAZY_FETCH': '1'}
-        text = self.bare_diff(clean).decode('utf-8')
-        start = text.index('diff --git a/localedata/locales/sv_SE ')
-        end = text.index('\ndiff --git', start) + 1
-        section = text[start:end]
-        first = section.index('\n@@') + 1
-        last = section.rindex('\n@@') + 1
-        self.assertLess(first, last, 'sv_SE has one hunk; nothing to cut')
-        cut = os.path.join(self.tmp, 'fewer.diff')
-        with open(cut, 'w', encoding='utf-8') as fh:
-            fh.write(text[:start] + section[:first] + section[last:]
-                     + text[end:])
-        rc, out = self.step2(clean, '--diff-file', cut)
-        self.assertNotEqual(rc, 0, out)
-        self.assertIn('localedata/locales/sv_SE', out)
-
-        pad = os.path.join(self.tmp, 'pad.sh')
-        with open(pad, 'w', encoding='utf-8') as fh:
-            fh.write('#!/bin/sh\nyes "" | head -n 300\ncat "$1"\n')
-        os.chmod(pad, 0o755)
-        padded = os.path.join(self.tmp, 'padded.diff')
-        with open(padded, 'wb') as fh:
-            fh.write(self.bare_diff(self.env_with(
-                '[diff "pad"]\n\ttextconv = %s\n' % pad, '* diff=pad\n')))
-        rc, out = self.step2(clean, '--diff-file', padded)
-        self.assertNotEqual(rc, 0, out)
-
-    def test_a_diff_file_with_git_s_headers_does_not_choose_the_characters(self):
-        """The comparison checks where each change is, which is all the
-        verdict reads. The lines under the headers are where the characters
-        come from, and a file with git's headers and sv_SE's `<U0057>` and
-        `<U0077>` swapped for `<U00E5>` and `<U00C5>` printed U+00E5 and U+00C5
-        under sv_SE at exit 0 -- the list the confirmation guide tells the
-        reader to take test strings from."""
-        clean = {'GIT_NO_LAZY_FETCH': '1'}
-        text = self.bare_diff(clean).decode('utf-8')
-        start = text.index('diff --git a/localedata/locales/sv_SE ')
-        end = text.index('\ndiff --git', start) + 1
-        section = text[start:end]
-        self.assertIn('<U0057>', section)
-        swapped = os.path.join(self.tmp, 'swapped.diff')
-        with open(swapped, 'w', encoding='utf-8') as fh:
-            fh.write(text[:start]
-                     + section.replace('<U0057>', '<U00E5>')
-                              .replace('<U0077>', '<U00C5>')
-                     + text[end:])
-        self.assertEqual(self.step2(clean, '--diff-file', swapped),
-                         self.step2(clean))
-
-    def test_an_unreadable_old_blob_is_not_blamed_on_the_diff_file(self):
-        """The files step 2 reads at the old tag come from git's own list of
-        what changed there, so they exist; a blob that comes back `missing`
-        is a read that failed -- a partial clone with no promisor, or
-        GIT_NO_LAZY_FETCH. The message said "the diff and the tags disagree
-        -- if you passed --diff-file, it does not match these tags"."""
+    def test_an_unreadable_changed_file_in_the_transliteration_batch(self):
+        """The transliteration check reads both texts of every file git
+        lists as changed, in the batch with SUPPORTED, after the trees read
+        them once already: a file that comes back unread there is refused,
+        never compared as absent, which would say its LC_CTYPE changed or
+        did not on no evidence. The fake fails only that batch (the call
+        that also reads SUPPORTED at the new tag)."""
         rc, out = in_subprocess(
             "import filter_lc_collate_changes as f\n"
             "real = g.read_blobs_at\n"
-            "g.read_blobs_at = lambda r, groups: [\n"
-            "    ({}, set(paths)) if tag == %r else real(r, [(tag, paths)])[0]\n"
-            "    for tag, paths in groups]\n"
-            "f.main([%r, %r, '--repo', repo])" % (OLD, OLD, MID))
+            "def fake(r, groups, raw=False):\n"
+            "    batch = (%r, [g.SUPPORTED]) in [(t, list(p)) for t, p in\n"
+            "                                      groups]\n"
+            "    return [({}, set(paths)) if batch and tag == %r and paths\n"
+            "            and all(p.startswith(g.LOCALES_DIR + '/')\n"
+            "                    for p in paths)\n"
+            "            else real(r, [(tag, paths)], raw=raw)[0]\n"
+            "            for tag, paths in groups]\n"
+            "g.read_blobs_at = fake\n"
+            "f.main([%r, %r, '--repo', repo])" % (MID, OLD, OLD, MID))
         self.assertNotEqual(rc, 0, out)
-        self.assertIn('could not be read', flat(out))
-        self.assertNotIn('does not match these', flat(out))
+        self.assertIn(f'listed at {OLD} could not be read while building the '
+                      f'transliteration check', flat(out))
+        self.assertNotIn('Listed for Reindex', out)
 
-    def test_an_unreadable_new_blob_is_refused(self):
-        """The new side of every content-changed file is read in the same
-        batch as the old side and refused after the no-hunk check, where it
-        was refused before the reads were batched. Read as absent, every file
-        would be judged on its old text alone."""
-        rc, out = in_subprocess(
-            "import filter_lc_collate_changes as f\n"
-            "real = g.read_blobs_at\n"
-            "g.read_blobs_at = lambda r, groups: [\n"
-            "    ({}, set(paths)) if tag == %r and paths != [g.SUPPORTED]\n"
-            "    else real(r, [(tag, paths)])[0] for tag, paths in groups]\n"
-            "f.main([%r, %r, '--repo', repo])" % (MID, OLD, MID))
+    def test_an_unreadable_old_locale_file_is_refused(self):
+        rc, out = self.unreadable_locales_at(OLD)
         self.assertNotEqual(rc, 0, out)
-        self.assertIn('could not be read while building the check of every '
-                      'content-changed file at the new tag', flat(out))
+        self.assertIn(f'listed at {OLD} could not be read while building the '
+                      f'locale files', flat(out))
+        self.assertNotIn('The sort rules localedef builds', out)
+
+    def test_an_unreadable_new_locale_file_is_refused(self):
+        rc, out = self.unreadable_locales_at(MID)
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn(f'listed at {MID} could not be read while building the '
+                      f'locale files', flat(out))
+        self.assertNotIn('The sort rules localedef builds', out)
 
     def test_an_unreadable_supported_is_refused(self):
-        """SUPPORTED is read in the same batch, at both tags: the added
-        files need its names -- ckb_IQ and mnw_MM over 2.28..2.34 -- and the
+        """SUPPORTED is read at both tags: the files with no old side
+        need its names -- ckb_IQ and mnw_MM over 2.28..2.34 -- and the
         character set check its builds. It is in the tree, so a read that
-        comes back empty failed. Read as empty, each added file would print
+        comes back empty failed. Read as empty, each such file would print
         "(not in SUPPORTED)", a false and reassuring line. The fake answers
         only at the new tag. A step that read SUPPORTED at the old tag for
-        the added files would get the real file, which lacks both names, and
+        those files would get the real file, which lacks both names, and
         print that line at exit 0; with the tag unpinned this test passed
-        over it (false-negative-reviewer)."""
+        over it (false-negative-reviewer). Since step 9.2 the first read of
+        it is supported_map's, which refuses it as absent."""
         rc, out = in_subprocess(
             "import filter_lc_collate_changes as f\n"
             "real = g.read_blobs_at\n"
@@ -2874,10 +2784,10 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
             "    for tag, paths in groups]\n"
             "f.main([%r, %r, '--repo', repo])" % (MID, OLD, MID))
         self.assertNotEqual(rc, 0, out)
-        self.assertIn(f'file(s) listed at {MID} could not be read while '
-                      f'building the character set check: '
-                      f'localedata/SUPPORTED', flat(out))
+        self.assertIn(f'localedata/SUPPORTED does not exist at {MID}',
+                      flat(out))
         self.assertNotIn('(not in SUPPORTED)', out)
+        self.assertNotIn('Listed for Reindex', out)
 
     def test_an_unreadable_charmap_is_refused(self):
         """UTF-8 differs between 2.28 and 2.34, so both copies are read. A
@@ -3079,7 +2989,7 @@ def make_translit_repo(root):
     put('localedata/charmaps/ISO-8859-1',
         _cm('ISO-8859-1', *ascii_[2:]))
     put('localedata/charmaps/UTF-8', _cm('UTF-8'))
-    # Step 3 names the aliases glibc gives a locale, and refuses a tree
+    # Step 2 names the aliases glibc gives a locale, and refuses a tree
     # without the file or with none in it.
     put('intl/locale.alias', 'uzbek uz_XX.ISO-8859-1\n')
     put('localedata/SUPPORTED', 'SUPPORTED-LOCALES=\\\nuz_XX/ISO-8859-1 '
@@ -3121,7 +3031,10 @@ def make_translit_repo(root):
 class StepTwoComparesTransliterations(unittest.TestCase):
     """Step 2's transliteration check end to end on a repository built for
     it: the element uz_XX builds out of a transliteration, at both tags,
-    and the list step 3 takes after --keyed."""
+    and what it adds to Reindex. With no charmap changed, the check knows
+    a locale file changed only from the texts step 2 reads of every file
+    git lists as changed: given none, it said no LC_CTYPE changed over a
+    changed translit_neutral (found writing step 9.2's tests)."""
 
     @classmethod
     def setUpClass(cls):
@@ -3163,7 +3076,7 @@ class StepTwoComparesTransliterations(unittest.TestCase):
                                       r'element, defined in uz_XX\n      '
                                       r'transliterated characters \(1\): '
                                       '\u02bb \\(U\\+02BB\\)$')
-                self.assertIn('--keyed uz_XX', out)
+                self.assertEqual(Step2Report(out).reindex, ['uz_XX'])
 
     def test_a_0xff_byte_is_seen_where_the_bytes_are_read(self):
         """read_blobs_at records the text it decoded from bytes that held
@@ -3184,20 +3097,14 @@ class StepTwoComparesTransliterations(unittest.TestCase):
         self.assertIn('holds a 0xFF byte', flat(out))
         # Every build of the run, not only the one that reads the file: one
         # gate, so that no path of the plan passes over the byte. uz_XX is
-        # the build that reads it, and since step 2 reads with glibc_reader
-        # (backlog 15.2 B3) its run stops at the byte on this pre-2.36 tag:
-        # step 3 lists it as not settled, so the check counts it among the
-        # builds listed already. Step 3 is run to show it does.
+        # the build that reads it, and its run stops at the byte on this
+        # pre-2.36 tag: step 2 cannot compare it and lists it, so the check
+        # counts it among the builds listed already.
         self.assertEqual(listed, ['loc_u'])
         self.assertIn('is listed already', flat(out))
-        rc, out3 = run_script('resolve_copy_closure.py', 't6',
-                              'translit_neutral', '--keyed', 'loc_u',
-                              '--repo', self.repo)
-        self.assertEqual(rc, 0, out3)
-        affected = re.search(r'Full affected set \(\d+ locale source '
-                             r'file\(s\)\): (.*)', out3)
-        self.assertIsNotNone(affected, out3)
-        self.assertEqual(affected.group(1).split(', '),
+        r = Step2Report(out)
+        self.assertIn('uz_XX', r.listed)
+        self.assertEqual(r.reindex,
                          ['i18n', 'loc_u', 'translit_neutral', 'uz_XX'])
 
     def test_a_charmap_that_gains_an_answer_is_found(self):
@@ -3250,9 +3157,9 @@ class StepTwoNamesWhatItDidNotCompare(unittest.TestCase):
 
 @needs_clone
 class StepTwoComparesCharmaps(unittest.TestCase):
-    """Step 2 end to end on a repository built for it: what goes to step 3
-    in step2_keyed_locales.<pair>.txt, what it counts as listed anyway, and
-    when it says NOT RUN instead of a clean line."""
+    """Step 2 end to end on a repository built for it: what goes to
+    Reindex through step2_keyed_locales.<pair>.txt, what it counts as
+    listed anyway, and when it says NOT RUN instead of a clean line."""
 
     @classmethod
     def setUpClass(cls):
@@ -3276,11 +3183,11 @@ class StepTwoComparesCharmaps(unittest.TestCase):
                 listed = fh.read().split()
         return rc, out, listed
 
-    def test_what_a_charmap_change_reaches_goes_to_step_3(self):
+    def test_what_a_charmap_change_reaches_goes_to_reindex(self):
         """loc_a and en_XX name U+00E9, which UTF-8 gains: listed, each with
         the character. They are found through ISO-8859-15 too, which
         SUPPORTED never builds them in and which moves U+00E9 (H3). loc_c
-        names it as well, and its own rules changed, so step 3 lists it
+        names it as well, and its own rules differ, so Reindex lists it
         anyway: counted, not repeated. loc_b and de_XX name only A."""
         rc, out, listed = self.step2('t1', 't2')
         self.assertEqual(rc, 0, out)
@@ -3290,24 +3197,28 @@ class StepTwoComparesCharmaps(unittest.TestCase):
                               r'set changed \(1\): \xe9 \(U\+00E9\)$')
         self.assertIn('ISO-8859-15: 1 character given other bytes. UTF-8: 1 '
                       'character added.', flat(out))
-        self.assertRegex(flat(out), r'step 3 lists anyway, whose LC_COLLATE '
-                                    r'names one of those characters or '
-                                    r'could not be compared \(2\): '
-                                    r'loc_c\.UTF-8 \(UTF-8\)')
+        self.assertRegex(flat(out), r'Reindex lists anyway, whose '
+                                    r'LC_COLLATE names one of those '
+                                    r'characters or could not be compared '
+                                    r'\(2\): loc_c\.UTF-8 \(UTF-8\)')
         self.assertRegex(flat(out), r'!! 2 locale\(s\) that SUPPORTED never '
                                     r'builds in a charmap that changed .*'
                                     r'en_XX \(ISO-8859-15\).* loc_a '
                                     r'\(ISO-8859-15\)')
         self.assertNotIn('loc_b', out)
         self.assertNotIn('de_XX', out)
-        self.assertIn('--keyed en_XX loc_a', out)
+        self.assertEqual(Step2Report(out).reindex, ['en_XX', 'loc_a', 'loc_c'])
 
     def test_a_missing_supported_or_charmap_is_not_run(self):
-        """Absent is not empty: a tag with no SUPPORTED, or without a
-        charmap SUPPORTED names, gets a `!!` NOT RUN, never the clean
-        line."""
-        for new, why in (('t3', f'{g.SUPPORTED} does not exist at t3'),
-                         ('t4', 'ISO-8859-15 at t4'),
+        """Absent is not empty: a tag without a charmap SUPPORTED names,
+        or whose SUPPORTED lists no locale, gets a `!!` NOT RUN, never the
+        clean line. One with no SUPPORTED at all is refused: step 2 needs
+        its names for the files only the new side has (supported_map)."""
+        rc, out, listed = self.step2('t2', 't3')
+        self.assertEqual(rc, 2, out)
+        self.assertIn(f'{g.SUPPORTED} does not exist at t3', flat(out))
+        self.assertNotIn('Listed for Reindex', out)
+        for new, why in (('t4', 'ISO-8859-15 at t4'),
                          ('t8', f'{g.SUPPORTED} at t8 lists no locale')):
             with self.subTest(new):
                 rc, out, listed = self.step2('t2', new)
@@ -3409,13 +3320,13 @@ def make_unsettled_charmap_repo(root):
 
 
 @needs_clone
-class StepTwoListsWhatStepThreeWillNotRead(unittest.TestCase):
-    """A locale glibc_reader cannot settle is one step 3 lists, but step 3
-    runs only when step 2 gives it a name (audit.sh). With no name of its
-    own, step 2 counted loc_a as listed by step 3 anyway, wrote no list,
-    step 3 did not run, and the summary said "Reindex: none" over a
-    locale whose character set changed (review of the whole of block 15,
-    2026-10-30)."""
+class StepTwoListsWhatItCannotCompare(unittest.TestCase):
+    """A locale glibc_reader cannot settle is listed for Reindex by step 2
+    itself, whatever else changed. Before step 9.2 step 3 listed it, and ran
+    only when step 2 gave it a name: with none, step 2 counted loc_a as
+    listed by step 3 anyway, wrote no list, and the summary said "Reindex:
+    none" over a locale whose character set changed (review of the whole
+    of block 15, 2026-10-30)."""
 
     @classmethod
     def setUpClass(cls):
@@ -3428,23 +3339,31 @@ class StepTwoListsWhatStepThreeWillNotRead(unittest.TestCase):
 
     step2 = StepTwoComparesCharmaps.step2
 
-    def test_with_no_name_of_its_own_step_2_lists_it(self):
+    def test_with_nothing_else_changed_it_is_listed(self):
+        """u2 changes UTF-8 alone: no locale's rules differ, and loc_a,
+        which the reader cannot settle, is listed for Reindex with its
+        reason; the character set check counts it as listed anyway."""
         rc, out, listed = self.step2('u1', 'u2')
         self.assertEqual(rc, 0, out)
-        self.assertIn('Files with changes inside LC_COLLATE: 0', out)
-        self.assertEqual(listed, ['loc_a'])
-        self.assertNotIn('step 3 lists anyway', flat(out))
+        r = Step2Report(out)
+        self.assertEqual(r.differs, {})
+        self.assertEqual(sorted(r.listed), ['loc_a'])
+        self.assertEqual(r.reindex, ['loc_a'])
+        self.assertEqual(listed, [])
+        self.assertRegex(flat(out), r'Reindex lists anyway, whose '
+                                    r'LC_COLLATE names one of those '
+                                    r'characters or could not be compared '
+                                    r'\(1\): loc_a\.UTF-8 \(UTF-8\)')
 
-    def test_with_a_name_step_3_lists_it_anyway(self):
-        """Control: with loc_b's change, step 3 runs and lists every
-        locale whose run is not settled, loc_a among them."""
+    def test_with_another_locale_changed_it_is_listed_too(self):
+        """Control: with loc_b's change, loc_b differs and loc_a is still
+        listed."""
         rc, out, listed = self.step2('u1', 'u3')
         self.assertEqual(rc, 0, out)
+        r = Step2Report(out)
+        self.assertEqual(sorted(r.differs), ['loc_b'])
+        self.assertEqual(r.reindex, ['loc_a', 'loc_b'])
         self.assertEqual(listed, [])
-        self.assertRegex(flat(out), r'step 3 lists anyway, whose LC_COLLATE '
-                                    r'names one of those characters or '
-                                    r'could not be compared \(1\): '
-                                    r'loc_a\.UTF-8 \(UTF-8\)')
 
 
 def build_side(build, version):
@@ -3603,7 +3522,8 @@ class NothingComparedIsNotTheOrder(unittest.TestCase):
     """Two commits of one source tree compare nothing, whatever their
     order: two builds of one glibc version with the same locale sources
     (measured 2026-11-02 for .40/.48, 275/283, 128/145) are in order by rpm,
-    and steps 1, 2 and 5 would read a tree against itself. The clone holds
+    and steps 1 and 5 would read a tree against itself, and step 2 compares
+    nothing. The clone holds
     real ones too, on glibc's own branches. They keep the `!!`
     that one commit compared with itself gets (audit.sh's SAME_TAG), which
     the order alone would not give them: built here as a tag and an empty
@@ -3649,7 +3569,9 @@ class NothingComparedIsNotTheOrder(unittest.TestCase):
         self.assertEqual((status, nothing), ('forward', 'tree'))
         self.assertIn('!! t1 and t1b are two commits of one source tree.',
                       flat(out.getvalue()))
-        self.assertIn('step 5 reports that nothing was compared',
+        self.assertIn('and 5 compare that tree against itself, and step 2 '
+                      'compares nothing.', flat(out.getvalue()))
+        self.assertIn('steps 2 and 5 report that nothing was compared',
                       flat(out.getvalue()))
 
     def test_one_commit_still_says_so(self):
@@ -3802,7 +3724,6 @@ class OneFloorForEverySide(unittest.TestCase):
 
     def test_the_tag_side_of_every_step(self):
         import filter_lc_collate_changes as f
-        import resolve_copy_closure as rc
         import flag_algorithmic_ranges as fa
         import diff_distro_locales as dd
         import diff_node_locales as nl
@@ -3816,7 +3737,6 @@ class OneFloorForEverySide(unittest.TestCase):
             ('corpus subcommand', g._main, ['corpus', old, new]),
             ('1 fanin', g._main, ['fanin', old]),
             ('2', f.main, [old, new]),
-            ('3', rc.main, [old, 'loc_000']),
             ('4', fa.main, [old]),
             ('6/7', dd.main, [old, '--locales-dir', ok, '--build-id', 'b']),
             ('8', nl.main, ['--old-locales-dir', ok, '--old-build-id', 'o',

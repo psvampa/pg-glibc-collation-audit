@@ -31,39 +31,6 @@ import collation_keys as ck
 import node_charmaps as nc
 
 
-def facts(*collate, cc=0x25, ec=0x2f, unresolved=None, instructions=(),
-          names=None):
-    """A glibc_tree.Facts by hand, so step 2's logic is tested without
-    glibc_reader: LC_COLLATE sections on the (start, end) lines given, read
-    with `cc` and `ec` by the run '@', or (start, end, comment, escape) for
-    a section read with its own pair, or (..., run) by another run;
-    `instructions` are (first, last) lines the reader read as instructions;
-    `names` is {line: code point string, or None} for what the reader read
-    each line to name (Facts.characters), one character map. What the
-    reader puts in Facts for real files is tested in
-    test_glibc_reader.FileFactsReadLikeGlibc."""
-    rows = []
-    for r in collate:
-        r = tuple(r)
-        r = r + (cc, ec) if len(r) == 2 else r
-        rows.append(r + ('@',) if len(r) == 4 else r)
-    if names is None:
-        return glibc_tree.Facts(rows, unresolved, list(instructions), (),
-                                (), None)
-    kept = {'m': {n: None if v is None else tuple(map(ord, v))
-                  for n, v in names.items()}}
-    return glibc_tree.Facts(rows, unresolved, list(instructions), ['m'], (),
-                            kept.get)
-
-
-def same_lines(ranges):
-    """A file's diff sections, -U0, whose hunks are `ranges` (old start,
-    old length) and write as many lines as they remove, so every other
-    line keeps its number: what most cases here mean by a hunk."""
-    return ['\n'.join('@@ -%d,%d +%d,%d @@' % (s, n, s, n)
-                       for s, n in ranges)]
-
-
 def collate(*body):
     """A minimal locale file with an LC_COLLATE block, as glibc writes them."""
     return '\n'.join(['comment_char %', 'escape_char /', '',
@@ -124,376 +91,6 @@ class Ellipsis(unittest.TestCase):
 
     def test_a_long_run_around_the_count_form_is_matched(self):
         self.assertEqual(len(g.ellipsis_hits('<A>.....(2).....<B>')), 1)
-
-
-class ClassifyChange(unittest.TestCase):
-    """Which of the things a content-changed file can be.
-
-    The bucket for "no LC_COLLATE block" used to be counted and never listed,
-    and nothing checked whether the NEW side had gained one. A file that gains
-    a block changes its sort order by definition. Where the sections are and
-    which characters read them come from glibc_reader (Facts, injected here);
-    the texts are the lines those sections are cut from, and what
-    lc_collate_unread searches.
-    """
-
-    OLD = collate('copy "iso14651_t1"')          # block on lines 4..6
-    OLD_F = facts((4, 6))
-    NO_BLOCK = 'comment_char %\nLC_CTYPE\ntranslit_start\ntranslit_end\nEND LC_CTYPE\n'
-    NO_BLOCK_F = facts()
-
-    def classify(self, new_f, ranges, old_f=OLD_F, old=OLD, new=None,
-                 early=None):
-        args = (old, new if new is not None else old, old_f, new_f, ranges,
-                same_lines(ranges))
-        return f.classify_change(*args, *([early] if early else []))
-
-    def test_a_hunk_inside_the_block_is_a_collation_change(self):
-        self.assertEqual(f.classify_change(self.OLD, None, self.OLD_F, None,
-                                           [(5, 1)], same_lines([(5, 1)])),
-                         'collate')
-
-    def test_a_hunk_outside_the_block_is_not(self):
-        """Read with the same characters on both sides. Until backlog 13.7
-        this passed no new side and a hunk on line 1, which is the
-        `comment_char` line: the test held the defect in place."""
-        self.assertEqual(self.classify(facts((4, 6)), [(8, 2)]), 'other')
-
-    def test_a_section_with_no_end_reaches_the_end_of_the_file(self):
-        """Section.end is None when the file ended first: every line after
-        the start is inside."""
-        self.assertEqual(self.classify(facts((4, None)), [(400, 1)],
-                                       old_f=facts((4, None))), 'collate')
-
-    def test_every_section_is_asked(self):
-        """glibc reads each LC_COLLATE section of a file into the same
-        tables (collate_startup, ld-collate.c:1499@2.39)."""
-        both = facts((4, 6), (20, 30))
-        self.assertEqual(self.classify(both, [(25, 1)], old_f=both),
-                         'collate')
-
-    def test_a_changed_comment_char_is_a_rules_change(self):
-        """The block is the same text and is read differently: another
-        comment character keeps or drops other lines (backlog 13.7, measured
-        on the RHEL 8, 9 and 10 builds)."""
-        self.assertEqual(self.classify(facts((4, 6), cc=0x23), [(1, 1)]),
-                         'reading')
-
-    def test_a_changed_escape_char_is_a_rules_change(self):
-        """`/` to the default `\\`, by dropping the directive."""
-        self.assertEqual(self.classify(facts((3, 5), ec=0x5c), [(2, 1)]),
-                         'reading')
-
-    def test_a_directive_dropped_for_the_default_is_a_rules_change(self):
-        """No directive is glibc's `#`, not this module's `%`: a file that
-        stops declaring `comment_char %` is read with another character."""
-        self.assertEqual(self.classify(facts((3, 5), cc=0x23), [(1, 1)]),
-                         'reading')
-
-    def test_every_section_is_read_with_its_own_characters(self):
-        """A second LC_COLLATE section after a new directive is read with
-        other characters than the first: a change of the directive between
-        them reads the second one otherwise."""
-        old = facts((4, 6), (12, 14))
-        new = facts((4, 6), (12, 14, 0x23, 0x2f))
-        self.assertEqual(self.classify(new, [(8, 0)], old_f=old), 'reading')
-
-    def test_a_section_one_run_reads_otherwise_is_a_rules_change(self):
-        """False-negative-reviewer, 15.2 B3: the file's own run obeys a
-        directive that a run copying its LC_COLLATE skips, so the same lines
-        are read with two pairs. Only the copier's pair changed here."""
-        old = facts((4, 6), (4, 6, 0x23, 0x5c, 'cp'))
-        new = facts((4, 6), (4, 6, 0x25, 0x2f, 'cp'))
-        self.assertEqual(self.classify(new, [(1, 1)], old_f=old), 'reading')
-        self.assertEqual(self.classify(old, [(1, 1)], old_f=old), 'other')
-        # A copier that stops reading the file is its own change, not this
-        # file's: until backlog 13.36 (a) the pairs as a whole called it one.
-        self.assertEqual(self.classify(facts((4, 6)), [(1, 1)], old_f=old),
-                         'other')
-
-    def test_two_runs_that_swap_their_characters_are_a_rules_change(self):
-        """Round 2 of the same review: the file's own run and a copier's
-        swap their pairs, so the pairs are the ones they were and both
-        orders change. Compared as a set, that was 'other'."""
-        old = facts((4, 6, 0x23, 0x2f, 'own'), (4, 6, 0x23, 0x5c, 'cp'))
-        new = facts((4, 6, 0x23, 0x5c, 'own'), (4, 6, 0x23, 0x2f, 'cp'))
-        self.assertEqual(set(old.reading()), set(new.reading()))
-        self.assertEqual(self.classify(new, [(1, 1)], old_f=old), 'reading')
-        self.assertEqual(f.read_otherwise(['p'], [], ({'p': old},
-                                                      {'p': new}), {},
-                                          {'p': self.OLD}, {'p': self.OLD},
-                                          {'p': same_lines([(1, 1)])}),
-                         ['p'])
-
-    def test_a_run_that_reads_the_file_at_one_tag_only_is_not_compared(self):
-        """A locale added at the new tag that copies the file reads it with
-        the pair everyone does: nothing in this file changed. The added
-        locale is reported as added."""
-        old = facts((4, 6, 0x23, 0x2f, 'own'))
-        new = facts((4, 6, 0x23, 0x2f, 'own'), (4, 6, 0x23, 0x2f, 'added'))
-        self.assertEqual(self.classify(new, [(1, 1)], old_f=old), 'other')
-
-    def test_a_side_the_reader_cannot_settle_is_not_cleared(self):
-        """Each side on its own, and checked before anything is compared:
-        nothing below can be answered for it."""
-        why = 'am_ET:584: reorder-sections-after in LC_COLLATE'
-        self.assertEqual(self.classify(facts((4, 6), unresolved=why),
-                                       [(8, 1)]), 'unsettled')
-        self.assertEqual(self.classify(facts((4, 6)), [(5, 1)],
-                                       old_f=facts((4, 6), unresolved=why)),
-                         'unsettled')
-        self.assertEqual(self.classify(facts(), [(1, 1)],
-                                       old_f=facts(unresolved=why)),
-                         'unsettled', 'not no-collate: it may have one')
-
-    def test_a_block_with_no_new_side_is_not_cleared(self):
-        """main() reads every new side; a caller that passes none cannot
-        settle the characters, so the block is not called unchanged."""
-        self.assertEqual(f.classify_change(self.OLD, None, self.OLD_F, None,
-                                           [(8, 1)], same_lines([(8, 1)])),
-                         'reading')
-
-    def test_no_block_on_either_side_is_no_collate(self):
-        self.assertEqual(
-            self.classify(self.NO_BLOCK_F, [(2, 1)], old_f=self.NO_BLOCK_F),
-            'no-collate')
-
-    def test_gaining_a_block_is_its_own_verdict(self):
-        """Injected, because it has never happened in glibc between 2.17 and
-        2.42 -- which is exactly why it needs a test rather than a comment."""
-        self.assertEqual(
-            self.classify(self.OLD_F, [(2, 1)], old_f=self.NO_BLOCK_F),
-            'gained-collate')
-
-    def test_a_gained_block_is_not_filed_under_no_collate(self):
-        """The regression this guards: folding it into the silent bucket hides
-        a real collation change behind a count."""
-        self.assertNotEqual(
-            self.classify(self.OLD_F, [], old_f=self.NO_BLOCK_F),
-            'no-collate')
-
-    def test_losing_a_block_is_still_judged_by_the_old_bounds(self):
-        """The old side is what an existing index was built against."""
-        self.assertEqual(self.classify(self.NO_BLOCK_F, [(5, 1)]), 'collate')
-
-    def test_another_number_of_sections_is_a_collation_change(self):
-        """A second LC_COLLATE section added below the first, which the
-        hunk does not touch: glibc reads both into the same tables
-        (doc-sweep of 15.2 B3: spelled indented, the line search behind
-        lc_collate_unread does not see it)."""
-        self.assertEqual(self.classify(facts((4, 6), (20, 25)), [(10, 0)]),
-                         'collate')
-        self.assertEqual(self.classify(facts((4, 6)), [(10, 0)],
-                                       old_f=facts((4, 6), (20, 25))),
-                         'collate')
-
-    # One section on each side, of other lines: the escape at the end of
-    # line 6 swallows the old one, and localedef reads the one appended
-    # below instead (round 4 of the 15.2 B3 review).
-    SWALLOWED = ('comment_char %\nescape_char /\n\nLC_CTYPE\ncopy "i18n"\n'
-                 'END LC_CTYPE{end}\n LC_COLLATE\norder_start forward\n'
-                 '<U0061>\n<U0062>\norder_end\nEND LC_COLLATE\n{more}')
-    APPENDED = (' LC_COLLATE\norder_start forward\n<U0062>\n<U0061>\n'
-                'order_end\nEND LC_COLLATE\n')
-
-    def test_one_section_for_another_is_a_collation_change(self):
-        old = self.SWALLOWED.format(end='', more='')
-        new = self.SWALLOWED.format(end=' % a /', more=self.APPENDED)
-        self.assertEqual('collate', f.classify_change(
-            old, new, facts((7, 12)), facts((13, 18)), [(6, 1), (12, 0)],
-            ['@@ -6 +6 @@\n@@ -12,0 +13,6 @@\n']))
-
-    def test_the_same_section_further_down_is_not(self):
-        """Control: the lines moved, and they are the same lines."""
-        old = self.SWALLOWED.format(end='', more='')
-        new = '% a note\n' + old
-        self.assertEqual('other', f.classify_change(
-            old, new, facts((7, 12)), facts((8, 13)), [(0, 0)],
-            ['@@ -0,0 +1 @@\n']))
-
-    def test_a_run_on_one_side_only_is_not_a_change_to_the_file(self):
-        """Another locale that starts copying the file reads the same
-        lines; what the file says did not change."""
-        old = self.SWALLOWED.format(end='', more='')
-        new = old + '% a note\n'
-        self.assertEqual('other', f.classify_change(
-            old, new, facts((7, 12)),
-            facts((7, 12), (7, 12, 0x25, 0x2f, 'zz_C')), [(12, 0)],
-            ['@@ -12,0 +13 @@\n']))
-
-    def test_a_block_localedef_stops_reading_is_a_rules_change(self):
-        """No hunk inside the old section, and localedef reads no LC_COLLATE
-        in the new file: glibc does not read the block as written."""
-        self.assertEqual(self.classify(self.NO_BLOCK_F, [(3, 1)]), 'unread')
-
-    def test_a_missing_new_side_does_not_crash(self):
-        """main() reads every new side; a caller may pass none."""
-        self.assertEqual(f.classify_change(self.NO_BLOCK, None,
-                                           self.NO_BLOCK_F, None, [], []),
-                         'no-collate')
-
-    # LC_CTYPE's END on line 6, LC_COLLATE opening on line 7.
-    BELOW_CTYPE = ('comment_char %\nescape_char /\n\nLC_CTYPE\ncopy "i18n"\n'
-                   'END LC_CTYPE{end}\nLC_COLLATE\ncopy "iso14651_t1"\n'
-                   'END LC_COLLATE\n')
-    BELOW_F = facts((7, 9))
-
-    def test_an_end_that_swallows_lc_collate_is_a_rules_change(self):
-        """Backlog 13.18: the END line ends in the escape, lr_ignore_rest
-        drops the LC_COLLATE line below it, and glibc builds the file with
-        no LC_COLLATE: the reader finds no section in it. The other way
-        round, glibc reads one where it read none."""
-        old = self.BELOW_CTYPE.format(end='')
-        new = self.BELOW_CTYPE.format(end=' % a note /')
-        one = same_lines([(6, 1)])
-        self.assertEqual(f.classify_change(old, new, self.BELOW_F, facts(),
-                                           [(6, 1)], one), 'unread')
-        self.assertEqual(f.classify_change(new, old, facts(), self.BELOW_F,
-                                           [(6, 1)], one), 'gained-collate')
-
-    def test_the_control_a_note_without_the_escape_is_not(self):
-        old = self.BELOW_CTYPE.format(end='')
-        new = self.BELOW_CTYPE.format(end=' % a note')
-        self.assertEqual(f.classify_change(old, new, self.BELOW_F,
-                                           self.BELOW_F, [(6, 1)],
-                                           same_lines([(6, 1)])), 'other')
-
-    def test_early_is_asked_of_each_side_for_its_own_text(self):
-        """A 0x1A above LC_COLLATE ends the file only for a localedef
-        before LR_GETC_FIX. The old side holds it here, so only the old
-        side's answer can clear it. (lc_collate_unread's own question, on
-        the texts; the sections are given as read.)"""
-        old = self.BELOW_CTYPE.format(end='\n\x1a')
-        new = self.BELOW_CTYPE.format(end='')
-        old_f, new_f = facts((8, 10)), self.BELOW_F
-        yes, no = (lambda: True), (lambda: False)
-        down, up = ['@@ -7 +6,0 @@\n'], ['@@ -6,0 +7 @@\n']
-        self.assertEqual(f.classify_change(old, new, old_f, new_f, [(7, 1)],
-                                           down, (yes, no)), 'unread')
-        self.assertEqual(f.classify_change(old, new, old_f, new_f, [(7, 1)],
-                                           down, (no, yes)), 'other')
-        self.assertEqual(f.classify_change(old, new, old_f, new_f, [(7, 1)],
-                                           down),
-                         'unread', 'a caller that cannot ask must not clear it')
-        # And the new side, holding the byte, asks the new side's question.
-        self.assertEqual(f.classify_change(new, old, new_f, old_f, [(6, 0)],
-                                           up, (yes, no)), 'other')
-        self.assertEqual(f.classify_change(new, old, new_f, old_f, [(6, 0)],
-                                           up, (no, yes)), 'unread')
-
-    def test_an_end_commented_out_above_lc_collate_is_a_rules_change(self):
-        """Review of 13.18, finding 1: LC_CTYPE is never closed, and glibc
-        reads LC_COLLATE inside it."""
-        old = self.BELOW_CTYPE.format(end='')
-        new = old.replace('END LC_CTYPE', '% END LC_CTYPE', 1)
-        self.assertEqual(f.classify_change(old, new, self.BELOW_F,
-                                           self.BELOW_F, [(6, 1)],
-                                           same_lines([(6, 1)])), 'unread')
-
-
-class RenamedFileOnTheNewSide(unittest.TestCase):
-    """"Step 2 aborted on a rename whose old side had no LC_COLLATE block", and
-    could not see such a file gain one: the new side was read and looked up
-    under the OLD path, which does not exist at the new tag. Latent -- the one
-    rename in the audited pairs has a block on both sides -- so it is tested
-    by injection, like gained-collate itself."""
-
-    OLD = {'localedata/locales/x': 'LC_CTYPE\ncopy "i18n"\nEND LC_CTYPE\n',
-           'localedata/locales/k': collate('order_start forward', '<U0041>',
-                                          'order_end')}
-    RENAMED = {'localedata/locales/x': 'localedata/locales/y'}
-
-    def test_a_renamed_file_is_read_under_its_new_name(self):
-        to_read = f.new_side_paths(list(self.OLD), self.RENAMED)
-        self.assertEqual(to_read['localedata/locales/x'],
-                         'localedata/locales/y')
-
-    def test_a_file_with_an_old_block_is_read_too(self):
-        """Its block can be read with other characters at the new tag
-        (backlog 13.7). It used to be left out, and judged on its old side
-        alone."""
-        to_read = f.new_side_paths(list(self.OLD), {})
-        self.assertEqual(to_read, {p: p for p in self.OLD})
-
-    def test_a_renamed_file_that_gained_a_block_is_gained_collate(self):
-        """Restore the lookup under the old path and this reads 'no-collate':
-        the new side is there, filed under a name nobody asks for."""
-        new = {'localedata/locales/y': collate('order_start forward',
-                                               '<U0042>', 'order_end')}
-        found = ({'x': facts(), 'k': facts((4, 8))},
-                 {'y': facts((4, 8)), 'k': facts((4, 8))})
-        verdicts = dict(f.judge(list(self.OLD), self.OLD, new, {}, {},
-                                self.RENAMED, found))
-        self.assertEqual(verdicts['localedata/locales/x'], 'gained-collate')
-
-    def test_a_renamed_file_s_own_run_has_one_name(self):
-        """Its run is the locale of its name, x then y: under two names
-        no run is on both sides, and nothing is compared by run (round 5
-        of the 15.2 B3 review). A copier keeps its own."""
-        found = ({'x': facts((4, 8, 0x25, 0x2f, 'x'))},
-                 {'y': facts((4, 8, 0x25, 0x2f, 'y'),
-                             (4, 8, 0x25, 0x2f, 'zz_C'),
-                             instructions=[(5, 6)])})
-        old, new = f.facts_of(found, self.RENAMED, 'localedata/locales/x')
-        self.assertEqual([(4, 8, 0x25, 0x2f, 'x'),
-                          (4, 8, 0x25, 0x2f, 'zz_C')], new.collate)
-        self.assertEqual([(5, 6)], new.instructions,
-                         'a renamed file keeps its instructions (13.36)')
-
-    def test_a_renamed_file_keeps_what_its_lines_name(self):
-        """Facts.chars and Facts.stopped go with the file through a rename
-        (15.3 C2): made again without them, no line named a character,
-        and a renamed run the reader stopped in kept a name no row has."""
-        y = glibc_tree.Facts([(4, 8, 0x25, 0x2f, 'y'),
-                              (4, 8, 0x25, 0x2f, 'zz_C')], None, [], ['m'],
-                             ['y'], {'m': {5: (0x41,)}}.get)
-        found = ({'x': facts((4, 8, 0x25, 0x2f, 'x'))}, {'y': y})
-        _, new = f.facts_of(found, self.RENAMED, 'localedata/locales/x')
-        self.assertEqual(('m',), new.chars)
-        self.assertEqual(('x',), new.stopped)
-        self.assertIsNone(new.characters(5))
-
-    def test_a_renamed_copier_keeps_its_old_name_too(self):
-        """k is not renamed; zz_B, which copies it, became zz_W: one run
-        (round 6 of the 15.2 B3 review)."""
-        found = ({'k': facts((4, 8, 0x25, 0x2f, 'k'),
-                             (4, 8, 0x23, 0x5c, 'zz_B'))},
-                 {'k': facts((4, 8, 0x25, 0x2f, 'k'),
-                             (4, 8, 0x23, 0x5c, 'zz_W'))})
-        old, new = f.facts_of(
-            found, {'localedata/locales/zz_B': 'localedata/locales/zz_W'},
-            'localedata/locales/k')
-        self.assertEqual(old.collate, new.collate)
-
-    def test_a_renamed_file_reading_its_sections_swapped_is_listed(self):
-        """The run reads two sections with two pairs of characters, and
-        at the new tag each with the other's: the same pairs, the same
-        lines, other rules."""
-        text = collate('order_start forward', '<U0041>', 'order_end')
-        a, b = (0x23, 0x5c), (0x25, 0x2f)
-        found = ({'x': facts((4, 8) + a + ('x',), (10, 14) + b + ('x',))},
-                 {'y': facts((4, 8) + b + ('y',), (10, 14) + a + ('y',))})
-        verdicts = dict(f.judge(['localedata/locales/x'],
-                                {'localedata/locales/x': text},
-                                {'localedata/locales/y': text}, {}, {},
-                                self.RENAMED, found))
-        self.assertEqual('reading', verdicts['localedata/locales/x'])
-
-    def test_an_unrenamed_file_still_finds_its_own_new_side(self):
-        new = {'localedata/locales/x': collate('order_start forward',
-                                               '<U0042>', 'order_end')}
-        found = ({'x': facts()}, {'x': facts((4, 8)), 'y': facts()})
-        verdicts = dict(f.judge(['localedata/locales/x'], self.OLD, new, {},
-                                {}, {}, found))
-        self.assertEqual(verdicts['localedata/locales/x'], 'gained-collate')
-
-    def test_a_file_the_old_listing_lacks_is_refused(self):
-        """Every content-changed file is listed at the old tag; one whose
-        name is not there would be judged on nothing."""
-        with self.assertRaises(SystemExit), \
-                contextlib.redirect_stderr(io.StringIO()):
-            f.judge(['localedata/locales/x'], self.OLD, {}, {}, {}, {},
-                    ({}, {'x': facts()}))
 
 
 class CorpusFloorIsShared(unittest.TestCase):
@@ -587,57 +184,6 @@ class CorpusFloorIsShared(unittest.TestCase):
         smallest measured node."""
         self.assertLess(g.MIN_LOCALE_FILES, 286)
         self.assertGreater(g.MIN_LOCALE_FILES, 3)
-
-
-class PartitionVerdicts(unittest.TestCase):
-    """What the report DOES with each verdict.
-
-    Split from ClassifyChange on purpose: mutation testing showed that testing
-    the classifier alone left the acting-on-it step unguarded -- the verdict was
-    computed correctly and then dropped, with every test still green.
-    """
-
-    def test_a_gained_block_counts_as_a_collation_change(self):
-        changed, gained, _, _, _, no_collate = f.partition_verdicts(
-            [('p', 'gained-collate')])
-        self.assertIn('p', changed, 'a gained block was not counted as changed')
-        self.assertIn('p', gained)
-        self.assertNotIn('p', no_collate)
-
-    def test_a_block_read_otherwise_counts_as_a_collation_change(self):
-        changed, _, reading, _, unchanged, _ = f.partition_verdicts(
-            [('p', 'reading')])
-        self.assertIn('p', changed, 'a block read otherwise was not counted')
-        self.assertIn('p', reading)
-        self.assertNotIn('p', unchanged)
-
-    def test_a_file_the_reader_cannot_settle_counts_and_is_named(self):
-        """Never cleared: counted as changed, and in its own list for the
-        `!!` that says why."""
-        self.assertEqual(f.partition_verdicts([('p', 'unsettled')]),
-                         (['p'], [], [], ['p'], [], []))
-
-    def test_each_verdict_lands_in_its_list(self):
-        lists = f.partition_verdicts(
-            [('a', 'collate'), ('b', 'other'), ('c', 'no-collate')])
-        self.assertEqual(lists, (['a'], [], [], [], ['b'], ['c']))
-
-    def test_a_block_glibc_may_not_read_counts_as_a_collation_change(self):
-        """Backlog 13.18. Its `!!` is built by unread_above, from every
-        changed file: here only the count and step 3's list are decided."""
-        lists = f.partition_verdicts([('p', 'unread')])
-        self.assertEqual(lists, (['p'], [], [], [], [], []))
-
-    def test_an_unknown_verdict_is_refused_not_cleared(self):
-        """It used to fall into `unchanged`, the bucket a new answer must not
-        land in by default."""
-        with self.assertRaises(ValueError):
-            f.partition_verdicts([('p', 'something-new')])
-
-    def test_order_is_preserved(self):
-        changed = f.partition_verdicts(
-            [('z', 'collate'), ('a', 'collate')])[0]
-        self.assertEqual(changed, ['z', 'a'])
 
 
 class CopyGraph(unittest.TestCase):
@@ -746,216 +292,6 @@ class CollateBounds(unittest.TestCase):
         conservative direction: the locale stays in the copy graph."""
         text = 'LC_COLLATE\ncopy "a"\n'
         self.assertEqual(g.collate_block(text), '\ncopy "a"\n')
-
-
-class HunkOverlap(unittest.TestCase):
-    """Does a hunk fall inside LC_COLLATE? Step 2's `collate` verdict rests here."""
-
-    # Block occupies old-side lines 10..20 inclusive.
-    LC = (10, 20)
-
-    def test_modification_inside_the_block(self):
-        self.assertTrue(f.hunk_touches_block(12, 3, *self.LC))
-
-    def test_modification_entirely_before_the_block(self):
-        self.assertFalse(f.hunk_touches_block(1, 5, *self.LC))
-
-    def test_modification_entirely_after_the_block(self):
-        self.assertFalse(f.hunk_touches_block(25, 2, *self.LC))
-
-    def test_modification_straddling_the_start(self):
-        self.assertTrue(f.hunk_touches_block(8, 5, *self.LC))
-
-    def test_pure_insertion_just_inside_the_end_counts(self):
-        """`@@ -19,0` adds lines after old line 19, still inside the block."""
-        self.assertTrue(f.hunk_touches_block(19, 0, *self.LC))
-
-    def test_pure_insertion_after_end_lc_collate_does_not_count(self):
-        """`@@ -20,0` appends after the END LC_COLLATE line -- outside.
-
-        Without the length==0 special case this read as a collation change.
-        """
-        self.assertFalse(f.hunk_touches_block(20, 0, *self.LC))
-
-    def test_pure_insertion_just_before_the_block_does_not_count(self):
-        self.assertFalse(f.hunk_touches_block(9, 0, *self.LC))
-
-
-class ChangedCharacters(unittest.TestCase):
-    """"Step 2 named the file and stopped": the characters
-    the confirmation template needs as test values were in the diff step 2
-    had already read, and reaching them meant a `git diff` by hand. These pin
-    how the changed lines are placed, by injection, because the corpus never
-    produces most of these shapes. Where the sections are and what each
-    line names come from glibc_reader (Facts); how it reads them, comments
-    and strings included, is tested on real files in
-    test_glibc_reader.StepTwoNamesWhatTheReaderRead.
-
-    The new block sits three lines lower than the old one, so a line placed
-    against the wrong side's block lands outside it.
-    """
-
-    # LC_COLLATE is old lines 6..9 and new lines 9..12. Each side names a
-    # character on every line, inside the block and out, so a line placed
-    # against the wrong side names the wrong one.
-    OLD = facts((6, 9), names={n: chr(0x40 + n) for n in range(1, 16)})
-    NEW = facts((9, 12), names={n: chr(0x60 + n) for n in range(1, 16)})
-
-    def chars(self, section, old=OLD, new=NEW):
-        return f.changed_characters([section], old, new)
-
-    def test_a_removed_rule_is_read_against_the_old_block(self):
-        """Old line 8 is inside the old block and outside the new one."""
-        self.assertEqual(self.chars('\n@@ -8 +10,0 @@\n-<U0042> <b>\n'), ['H'])
-
-    def test_an_added_rule_is_read_against_the_new_block(self):
-        """New line 11 is inside the new block and outside the old one."""
-        self.assertEqual(self.chars('\n@@ -8,0 +11 @@\n+<U0044> <b>\n'), ['k'])
-
-    def test_lines_outside_the_block_name_nothing(self):
-        self.assertEqual(self.chars('\n@@ -4 +4,4 @@\n-<U0043>\n+<U0043>\n'
-                                    '+<U0045>\n+<U0046>\n+<U0047>\n'), [])
-
-    def test_a_hunk_crossing_the_block_edge_counts_only_its_lines_inside(self):
-        """ber_DZ over 2.34..2.39: one hunk deletes from before LC_COLLATE to
-        past its end. The character named before the block is not a rule."""
-        section = ('\n@@ -4,5 +4,0 @@\n-<U0043>\n-END LC_CTYPE\n-LC_COLLATE\n'
-                   '-<U0041> <a>\n-<U0042> <b>\n')
-        self.assertEqual(self.chars(section), ['F', 'G', 'H'])
-
-    def test_context_lines_move_both_sides(self):
-        """Step 2 reads git's -U0 diff, with --inter-hunk-context=0 pinned in
-        DIFF_FLAGS, so no run hands this branch a context line. It is held for
-        a diff that has them: uncounted, both changed lines below are numbered
-        as if they sat before the block, and nothing is found."""
-        section = ('\n@@ -5,3 +8,3 @@\n END LC_CTYPE\n LC_COLLATE\n'
-                   '-<U0041> <a>\n+<U0048> <a>\n')
-        self.assertEqual(self.chars(section), ['G', 'j'])
-
-    def test_a_removed_line_opening_with_two_dashes_is_a_rule(self):
-        """After the first hunk header, `---` is a removed line whose text
-        opens with `--`, not a file name."""
-        section = '\n--- a/x\n+++ b/x\n@@ -8 +11 @@\n---<U0046>\n+<U0044> <b>\n'
-        self.assertEqual(self.chars(section), ['H', 'k'])
-
-    def test_a_line_that_names_no_character_adds_none(self):
-        """A comment line, a keyword, a refused entry: the reader names
-        nothing there (Facts.characters gives [])."""
-        old = facts((6, 9), names={7: 'A'})
-        self.assertEqual(self.chars('\n@@ -7,2 +10,0 @@\n-<U0041>\n-% x\n',
-                                    old=old), ['A'])
-
-    def test_each_character_once_in_the_order_met(self):
-        old = facts((6, 9), names={7: 'BA', 8: 'AC'})
-        self.assertEqual(self.chars('\n@@ -7,2 +10,0 @@\n-x\n-y\n', old=old),
-                         ['B', 'A', 'C'])
-
-    def test_a_code_point_above_unicode_is_left_out(self):
-        """A <U....> name of eight digits can name one (glibc reads it
-        as tok_ucs4, linereader.c:534@2.39); no character is printed for
-        it, and the list is not cut."""
-        new = glibc_tree.Facts([(9, 12, 0x25, 0x2f, '@')], None, [], ['m'],
-                               (), {'m': {11: (0x110000, 0x41)}}.get)
-        self.assertEqual(self.chars('\n@@ -8,0 +11 @@\n+x\n', new=new),
-                         ['A'])
-
-    def test_every_run_s_reading_counts_once(self):
-        """Facts.characters: two runs read the line with two maps, and a
-        character both name is named once, in the order met."""
-        two = glibc_tree.Facts([(9, 12, 0x25, 0x2f, '@')], None, [],
-                               ['m1', 'm2'], (),
-                               {'m1': {11: (0x42, 0x41)},
-                                'm2': {11: (0x41, 0x43)}}.get)
-        self.assertEqual([0x42, 0x41, 0x43], two.characters(11))
-        self.assertEqual([], two.characters(10))
-
-    def test_a_directive_acts_from_the_line_after_it(self):
-        """glibc_tree.chars_before: a `comment_char #` on line 5 does not
-        reach a section that starts on line 5 or above it."""
-        dirs = [(1, 'comment_char', 0x25), (5, 'comment_char', 0x23),
-                (6, 'escape_char', 0x2f)]
-        self.assertEqual(glibc_tree.chars_before(dirs, 5), (0x25, 0x5c))
-        self.assertEqual(glibc_tree.chars_before(dirs, 6), (0x23, 0x5c))
-        self.assertEqual(glibc_tree.chars_before(dirs, 7), (0x23, 0x2f))
-
-    def test_a_gained_block_is_read_from_the_new_side(self):
-        section = '\n@@ -3,0 +4,3 @@\n+LC_COLLATE\n+<U0041> <a>\n+END LC_COLLATE\n'
-        self.assertEqual(self.chars(section, facts(names={}),
-                                    facts((4, 6), names={5: 'A'})), ['A'])
-
-    def test_a_gained_block_that_names_no_character_is_empty(self):
-        """The caller turns this into the warning, so a character named on a
-        changed line outside the new block must not fill the list and
-        suppress it. Not reachable in any audited pair: no file has gained a
-        block there at all."""
-        section = ('\n@@ -3 +3 @@\n-<U0043>\n+<U0044>\n'
-                   '@@ -4,0 +5,3 @@\n+LC_COLLATE\n+copy "iso14651_t1"\n'
-                   '+END LC_COLLATE\n')
-        self.assertEqual(self.chars(section, facts(names={3: 'C'}),
-                                    facts((5, 7), names={3: 'D'})), [])
-
-
-class ChangedCharactersCannotTell(unittest.TestCase):
-    """What it cannot tell comes back empty, never partial: the caller prints
-    the warning for an empty answer, and a partial one would print as if it
-    were the whole list."""
-
-    OLD, NEW = ChangedCharacters.OLD, ChangedCharacters.NEW
-    SECTION = '\n@@ -8 +11 @@\n-<U0042> <b>\n+<U0044> <b>\n'
-
-    def test_the_control_names_both(self):
-        self.assertEqual(
-            f.changed_characters([self.SECTION], self.OLD, self.NEW), ['H', 'k'])
-
-    def test_an_unreadable_new_version(self):
-        self.assertEqual(f.changed_characters([self.SECTION], self.OLD, None), [])
-
-    def test_a_path_the_diff_carries_twice(self):
-        self.assertEqual(f.changed_characters([self.SECTION, self.SECTION],
-                                              self.OLD, self.NEW), [])
-
-    def test_a_path_the_diff_does_not_carry(self):
-        self.assertEqual(f.changed_characters([], self.OLD, self.NEW), [])
-
-    def test_an_unparsable_hunk_header_after_a_good_one(self):
-        section = self.SECTION + '@@ not a header @@\n-<U0041> <a>\n'
-        self.assertEqual(f.changed_characters([section], self.OLD, self.NEW), [])
-
-    def test_a_line_the_reader_cannot_name(self):
-        """A pre-2.36 `from` holding a raw byte above 0x7F
-        (glibc_reader.statement_characters): the line before it names one,
-        and none is printed."""
-        new = facts((9, 12), names={10: 'x', 11: None})
-        self.assertEqual(f.changed_characters(
-            ['\n@@ -8 +10,2 @@\n-a\n+b\n+c\n'], self.OLD, new), [])
-
-    def test_a_tree_with_a_run_the_reader_stopped_in(self):
-        """Facts.stopped: what glibc reads after the place the reader
-        stopped is not known in any file, whatever the maps say."""
-        new = glibc_tree.Facts([(9, 12, 0x25, 0x2f, '@')], None, [], ['m'],
-                               ['zz_S'], {'m': {10: (0x41,)}}.get)
-        self.assertIsNone(new.characters(10))
-        self.assertEqual([], f.changed_characters(
-            ['\n@@ -8 +10 @@\n-a\n+b\n'], self.OLD, new))
-
-    def test_a_map_known_up_to_a_line(self):
-        """The map's 'from' (glibc_reader.Run.named_lines): the
-        lines before it are named, none from it on."""
-        new = glibc_tree.Facts([(9, 12, 0x25, 0x2f, '@')], None, [], ['m'],
-                               (), {'m': {10: (0x41,), 'from': 11}}.get)
-        self.assertEqual([0x41], new.characters(10))
-        self.assertIsNone(new.characters(11))
-        self.assertIsNone(new.characters(12))
-        self.assertEqual([], f.changed_characters(
-            ['\n@@ -8 +10,2 @@\n-a\n+b\n+c\n'], self.OLD, new))
-
-    def test_a_character_map_that_cannot_be_read(self):
-        """reader_cache.char_map answers None for a map not kept or
-        damaged."""
-        new = glibc_tree.Facts([(9, 12, 0x25, 0x2f, '@')], None, [], ['m'],
-                               (), lambda sha: None)
-        self.assertEqual(f.changed_characters([self.SECTION], self.OLD, new),
-                         [])
 
 
 class PrintCharacters(unittest.TestCase):
@@ -1182,172 +518,131 @@ class TrackedLists(unittest.TestCase):
         self.assertLessEqual(set(d.ENTRY_POINTS), set(d.TIER1) | set(d.TIER2))
 
 
-class DiffParsing(unittest.TestCase):
+class StepTwoPrintsWhatCompareRulesAnswered(unittest.TestCase):
+    """Step 2's printing of glibc_tree.compare_rules' answers (step 9.2),
+    driven with answers made by hand: two of the four ways the characters
+    of a locale whose rules differ are printed -- not known, and named by
+    no line -- come out of no real pair, and sort_out's refusal of a state
+    it does not know comes out of none."""
+
+    R = glibc_tree.Rules
+
+    class Tree:
+        def __init__(self, *names):
+            self.names = list(names)
+
+    def printed(self, fn, *args):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            fn(*args)
+        return out.getvalue()
+
+    def report(self, got, differs):
+        return _harness.Step2Report(
+            'The sort rules localedef builds for each locale at a and at b:\n'
+            '  %d name(s), locale files and locale.alias aliases: 0 the '
+            'same, %d differ, 0 not compared.\n'
+            % (len(differs), len(differs))
+            + self.printed(f.print_differs, got, differs, '/out/chars.tsv')
+            + '\nListed for Reindex (0): none\n')
+
+    def test_each_of_the_four_printings(self):
+        got = {
+            'aa': self.R(glibc_tree.DIFFERS, 'a line it cannot name', None,
+                         False),
+            'bb': self.R(glibc_tree.DIFFERS, None, (), False),
+            'cc': self.R(glibc_tree.DIFFERS, None, (0x41, 0x42), False),
+            'dd': self.R(glibc_tree.DIFFERS, None, (0x41, 0x42), True),
+            'ee': self.R(glibc_tree.DIFFERS, 'another', None, True),
+        }
+        r = self.report(got, sorted(got))
+        self.assertEqual(r.differs, {'aa': (None, False), 'bb': ((), False),
+                                     'cc': ([0x41, 0x42], False),
+                                     'dd': (2, True), 'ee': (None, True)})
+        text = flat(self.printed(f.print_differs, got, sorted(got),
+                                 '/out/chars.tsv'))
+        # Not known is never a count, and says why.
+        self.assertIn('aa which characters is not known: a line it cannot '
+                      'name', text)
+        self.assertIn('ee which characters is not known: another a changed '
+                      'line decides', text)
+        # No character is said in words, never as 0.
+        self.assertIn('bb the lines that count name no character', text)
+        self.assertNotIn('0 character(s)', text)
+        self.assertNotIn('(0)', text)
+
+    def test_names_with_one_answer_are_one_group_and_two_answers_two(self):
+        got = {n: self.R(glibc_tree.DIFFERS, None, (0x57, 0x77), False)
+               for n in ('sv_FI', 'sv_SE')}
+        got['th_TH'] = self.R(glibc_tree.DIFFERS, None, (0x41,), True)
+        text = self.printed(f.print_differs, got, sorted(got),
+                            '/out/chars.tsv')
+        self.assertIn('\n  sv_FI, sv_SE\n', text)
+        self.assertIn('\n  th_TH\n', text)
+        self.assertEqual(sorted(self.report(got, sorted(got)).differs),
+                         ['sv_FI', 'sv_SE', 'th_TH'])
+
+    def test_the_characters_file_says_not_known_never_an_empty_list(self):
+        got = {'aa': self.R(glibc_tree.DIFFERS, 'why', None, True),
+               'bb': self.R(glibc_tree.DIFFERS, None, (0x41,), False)}
+        self.assertEqual(f.characters_rows(got, ['aa', 'bb']), [
+            '# name\tstate\tevery rule can change\tcharacters',
+            'aa\tdiffers\tyes\tnot known: why',
+            'bb\tdiffers\tno\tU+0041'])
+
+    def test_sort_out_splits_by_the_sides_that_have_a_file(self):
+        """Not by the words of `why`: an alias one side cannot resolve has
+        files on both sides' trees, and is listed."""
+        nc = glibc_tree.NOT_COMPARED
+        got = {'new_only': self.R(nc, 'no file new_only on the old side',
+                                  None, False),
+               'old_only': self.R(nc, 'no file old_only on the new side',
+                                  None, False),
+               'doubt': self.R(nc, 'old side: x:3: something', None, False),
+               'alias': self.R(nc, "an alias in the new side's locale.alias "
+                                   "only", None, False),
+               'same': self.R(glibc_tree.SAME, None, (), False),
+               'diff': self.R(glibc_tree.DIFFERS, None, (0x41,), False)}
+        old = self.Tree('old_only', 'doubt', 'same', 'diff')
+        new = self.Tree('new_only', 'doubt', 'same', 'diff')
+        self.assertEqual(f.sort_out(got, old, new),
+                         (['diff'], ['new_only'], ['old_only'],
+                          ['alias', 'doubt']))
+
+    def test_sort_out_refuses_a_state_it_does_not_know(self):
+        got = {'x': self.R('maybe', None, (), False)}
+        with self.assertRaises(ValueError):
+            f.sort_out(got, self.Tree('x'), self.Tree('x'))
+
+    def test_the_listed_block_joins_both_sides_only_when_they_agree(self):
+        nc = glibc_tree.NOT_COMPARED
+        got = {'a': self.R(nc, 'old side: r; new side: r', None, False),
+               'b': self.R(nc, 'old side: r; new side: r', None, False),
+               'c': self.R(nc, 'old side: r; new side: s', None, False)}
+        text = self.printed(f.print_listed, got, ['a', 'b', 'c'])
+        self.assertTrue(text.startswith('\n!! Not compared, so listed for '
+                                        'REINDEX (3):'), text)
+        self.assertIn('\n     a, b: both sides: r\n', text)
+        self.assertIn('\n     c: old side: r; new side: s\n', text)
+
+    def test_nothing_listed_prints_nothing(self):
+        self.assertEqual(self.printed(f.print_listed, {}, []), '')
+
+
+class OneDiffForBothQuestions(unittest.TestCase):
+    """split_raw: step 2 reads git's list of changed files (`--raw`) for
+    what the new side deleted or renamed, which the summary's Removed lists.
+    A line it cannot read must not drop a file from that list, and text with
+    no list above it must not read as nothing removed. The split of a list
+    from a patch below it is kept and tested: git writes one after the other
+    when asked for both."""
+
     DIFF = (
         'diff --git a/localedata/locales/sv_SE b/localedata/locales/sv_SE\n'
         'index 111..222 100644\n'
         '--- a/localedata/locales/sv_SE\n'
         '+++ b/localedata/locales/sv_SE\n'
-        '@@ -100,2 +100,3 @@\n-old\n+new\n'
-        '@@ -200 +201 @@\n-x\n+y\n'
-        'diff --git a/localedata/locales/or_IN b/localedata/locales/or_IN\n'
-        'index 333..444 100644\n'
-        '--- a/localedata/locales/or_IN\n'
-        '+++ b/localedata/locales/or_IN\n'
-        '@@ -50,0 +51,2 @@\n+a\n+b\n')
-
-    def test_hunks_are_grouped_by_file(self):
-        got = f.parse_diff(self.DIFF)
-        self.assertEqual(sorted(got), ['localedata/locales/or_IN',
-                                       'localedata/locales/sv_SE'])
-
-    def test_a_hunk_without_a_length_means_one_line(self):
-        got = f.parse_diff(self.DIFF)
-        self.assertIn((200, 1), got['localedata/locales/sv_SE'])
-
-    def test_a_pure_insertion_keeps_its_zero_length(self):
-        got = f.parse_diff(self.DIFF)
-        self.assertEqual(got['localedata/locales/or_IN'], [(50, 0)])
-
-    def test_a_binary_section_is_refused(self):
-        """"Binary files ... differ" carries no hunk, so the file came back
-        with no range at all and classify_change called it 'other': a change
-        nothing read, reported as a change outside LC_COLLATE. The stale
-        check does not see it, because the path IS in the result. Git writes
-        it for every locale under one `-diff` in the reader's attributes."""
-        diff = ('diff --git a/localedata/locales/sv_SE '
-                'b/localedata/locales/sv_SE\n'
-                'index 111..222 100644\n'
-                'Binary files a/localedata/locales/sv_SE and '
-                'b/localedata/locales/sv_SE differ\n')
-        with self.assertRaises(SystemExit), \
-                contextlib.redirect_stderr(io.StringIO()):
-            f.parse_diff(diff)
-
-    def test_an_unreadable_hunk_header_is_refused(self):
-        """A `@@` line the header pattern does not read produced no range and
-        said nothing. If it was the only hunk inside LC_COLLATE the file was
-        not flagged, at exit 0. Measured by injection on f7fa3f9."""
-        diff = self.DIFF.replace('@@ -200 +201 @@', '@@ -200 +201 garbled @@')
-        with self.assertRaises(SystemExit), \
-                contextlib.redirect_stderr(io.StringIO()):
-            f.parse_diff(diff)
-
-    def test_a_path_with_two_sections_keeps_the_ranges_of_both(self):
-        """A locale replaced by a symlink is a deletion plus a creation, two
-        sections under one path. Keeping only the last one kept `@@ -0,0` and
-        lost the deletion's range over the whole file -- the block included --
-        so the file was judged 'other'. No typechange in the corpus's
-        history; a --diff-file that repeats a path has the same shape."""
-        diff = ('diff --git a/localedata/locales/sv_SE '
-                'b/localedata/locales/sv_SE\n'
-                'deleted file mode 100644\n'
-                '@@ -1,8 +0,0 @@\n-a\n'
-                'diff --git a/localedata/locales/sv_SE '
-                'b/localedata/locales/sv_SE\n'
-                'new file mode 120000\n'
-                '@@ -0,0 +1 @@\n+sv_FI\n')
-        self.assertEqual(f.parse_diff(diff),
-                         {'localedata/locales/sv_SE': [(1, 8), (0, 0)]})
-
-    def test_a_pure_rename_still_parses_to_no_range(self):
-        """Control: a rename with no content change has no hunk, and that is
-        an answer, not a failure."""
-        diff = ('diff --git a/localedata/locales/aa_ER@saaho '
-                'b/localedata/locales/ssy_ER\n'
-                'similarity index 100%\n'
-                'rename from localedata/locales/aa_ER@saaho\n'
-                'rename to localedata/locales/ssy_ER\n')
-        self.assertEqual(f.parse_diff(diff),
-                         {'localedata/locales/aa_ER@saaho': []})
-
-    def test_split_hunks_keeps_content_lines_and_stops_at_the_next_file(self):
-        """Context lines are kept -- classify_body tracks the open-comment
-        state through them -- and the next file's `diff --git`/`---`/`+++`
-        header is not one of them."""
-        hunks = d.split_hunks(self.DIFF)
-        self.assertEqual(len(hunks), 3)
-        for _, body in hunks:
-            for line in body:
-                self.assertIn(line[:1], ('+', '-', ' '))
-        joined = [ln for _, body in hunks for ln in body]
-        for header in ('--- a/localedata/locales/or_IN',
-                       '+++ b/localedata/locales/or_IN'):
-            self.assertNotIn(header, joined,
-                             'a file header leaked into a hunk body')
-
-    def test_a_comment_closing_in_context_is_read_through_split_hunks(self):
-        """The call site, not the helper: classify_body can only see a context
-        line if split_hunks kept it. Tested separately because dropping them
-        again in split_hunks leaves every classify_body test green -- they
-        hand it a body of their own."""
-        diff = ('diff --git a/locale/x.c b/locale/x.c\n'
-                'index 111..222 100644\n'
-                '--- a/locale/x.c\n'
-                '+++ b/locale/x.c\n'
-                '@@ -10,6 +10,6 @@ static void f (void)\n'
-                '-  /* old comment\n'
-                '+  /* new comment\n'
-                '     still the comment  */\n'
-                '+  new_code ();\n'
-                '   return;\n')
-        [(_, body)] = d.split_hunks(diff)
-        self.assertIn('     still the comment  */', body,
-                      'the context line was dropped before the filter saw it')
-        marked = d.classify_body(body)
-        self.assertEqual([ln for ln, _ in marked],
-                         ['-  /* old comment', '+  /* new comment',
-                          '+  new_code ();'])
-        self.assertFalse(marked[2][1],
-                         'the hunk would be filtered as comment/licence')
-
-    def test_split_hunks_keeps_a_changed_line_that_starts_with_two_signs(self):
-        """The old filter was `not startswith(('+++', '---'))`, which also
-        discarded a changed line whose own content began with `++` or `--`.
-        A discarded line is one the noise filter never sees, and a hunk whose
-        remaining lines are all comment is dropped whole."""
-        diff = ('diff --git a/locale/x.c b/locale/x.c\n'
-                'index 111..222 100644\n'
-                '--- a/locale/x.c\n'
-                '+++ b/locale/x.c\n'
-                '@@ -1,3 +1,3 @@\n'
-                ' /* a comment */\n'
-                '---argc;\n'
-                '+++idx;\n')
-        [(_, body)] = d.split_hunks(diff)
-        self.assertIn('---argc;', body)
-        self.assertIn('+++idx;', body)
-        marked = d.classify_body(body)
-        self.assertTrue(any(not noise for _, noise in marked),
-                        'a hunk of real code was left with nothing to mark')
-
-    def test_a_body_line_that_is_neither_content_nor_a_new_file_is_an_error(self):
-        """Ending a body on anything unrecognised drops every line after it,
-        and a hunk with nothing left is filtered as comment. Measured with
-        `color.diff=always`: every body line began with an escape."""
-        diff = ('@@ -1,2 +1,2 @@\n'
-                '\x1b[32m+  code ();\x1b[m\n'
-                ' ctx\n')
-        with self.assertRaises(SystemExit):
-            d.split_hunks(diff)
-
-    def test_split_hunks_keeps_the_rest_of_a_hunk_after_a_no_newline_marker(self):
-        r"""`\ No newline at end of file` sits between the two sides of a
-        hunk. Stopping there would drop the `+` side."""
-        diff = ('@@ -1 +1 @@\n'
-                '-old\n'
-                '\\ No newline at end of file\n'
-                '+new\n')
-        [(_, body)] = d.split_hunks(diff)
-        self.assertEqual(body, ['-old', '+new'])
-
-
-class OneDiffForBothQuestions(unittest.TestCase):
-    """split_raw: step 2 asks git for its list of changed files and for the
-    -U0 patch in one `--patch-with-raw` diff, where it used to run two. The
-    list is what classifies every file as modified, added, deleted or
-    renamed, so a line it cannot read must not become a modified file, and a
-    patch with no list above it must not read as nothing changed."""
+        '@@ -100,2 +100,3 @@\n-old\n+new\n')
 
     RAW = (':100644 100644 1a2b3c4 5d6e7f8 M\tlocaledata/locales/sv_SE\n'
            ':100644 100644 0a1b2c3 4d5e6f7 R087\t'
@@ -1361,12 +656,12 @@ class OneDiffForBothQuestions(unittest.TestCase):
             f.split_raw(text)
 
     def test_the_list_is_the_name_status_and_the_rest_is_the_patch(self):
-        status, patch = f.split_raw(self.RAW + DiffParsing.DIFF)
+        status, patch = f.split_raw(self.RAW + self.DIFF)
         self.assertEqual(status, [
             'M\tlocaledata/locales/sv_SE',
             'R087\tlocaledata/locales/aa_ER@saaho\tlocaledata/locales/ssy_ER',
             'A\tlocaledata/locales/ckb_IQ'])
-        self.assertEqual(patch, DiffParsing.DIFF)
+        self.assertEqual(patch, self.DIFF)
 
     def test_nothing_changed_is_two_empty_answers(self):
         self.assertEqual(f.split_raw(''), ([], ''))
@@ -1375,13 +670,13 @@ class OneDiffForBothQuestions(unittest.TestCase):
         for bad in (':100644 100644 1a2b3c4 5d6e7f8 M localedata/locales/x\n',
                     ':100644 M\tlocaledata/locales/x\n'):
             with self.subTest(line=bad):
-                self.refused(bad + '\n' + DiffParsing.DIFF)
+                self.refused(bad + '\n' + self.DIFF)
 
     def test_a_list_cut_off_inside_a_line_is_refused(self):
         self.refused(':100644 100644 1a2b3c4 5d6e7f8 M\tlocaledata/locales/x')
 
     def test_a_patch_with_no_list_above_it_is_refused(self):
-        self.refused(DiffParsing.DIFF)
+        self.refused(self.DIFF)
 
 
 class LocaleSource(unittest.TestCase):
@@ -1843,304 +1138,6 @@ class ReadingCharsReadsLikeGlibc(unittest.TestCase):
             'read with characters this tool cannot settle at node'])
 
 
-class FoldAcross(unittest.TestCase):
-    """A changed file the two tags' localedef read differently is counted
-    as changed, whatever its diff touched (round 2 of the 15.2 B3 review)."""
-
-    def test_files_filed_as_clear_move_into_changed(self):
-        got = f.fold_across(['a'], ['b', 'c'], ['d', 'e'], {'c', 'e', 'z'})
-        self.assertEqual(got, (['a', 'c', 'e'], ['b'], ['d'], ['c', 'e']))
-
-    def test_a_changed_file_stays_where_it_is(self):
-        self.assertEqual(f.fold_across(['a'], [], [], {'a'}),
-                         (['a'], [], [], []))
-
-    def test_the_control_nothing_read_across(self):
-        self.assertEqual(f.fold_across(['a'], ['b'], ['d'], set()),
-                         (['a'], ['b'], ['d'], []))
-
-
-class InstructionChanged(unittest.TestCase):
-    """Backlog 13.36: a changed line inside LC_COLLATE that is an
-    instruction -- a reorder-after, an order_start, a conditional, a copy
-    -- moves rules on lines that did not change, and the characters of the
-    changed lines are then not all the test values. Measured on the
-    audited pairs: or_IN over 2.28..2.34; ber_DZ, kab_DZ and th_TH over
-    2.34..2.39. Which lines are instructions is the reader's answer
-    (Facts.instructions), placed on each side as changed_characters
-    places a line.
-
-    The new block sits three lines lower than the old one, so a line
-    placed against the wrong side lands elsewhere."""
-
-    # LC_COLLATE is old lines 6..12 and new lines 9..15; the old side's
-    # line 8 and the new side's line 11 are reorder-after.
-    OLD = facts((6, 12), instructions=[(8, 8)])
-    NEW = facts((9, 15), instructions=[(11, 11)])
-
-    def changed(self, section, old=OLD, new=NEW):
-        return f.instruction_changed([section], old, new)
-
-    def test_a_removed_instruction_is_found_on_the_old_side(self):
-        self.assertTrue(self.changed('\n@@ -8 +10,0 @@\n-reorder-after <a>\n'))
-
-    def test_an_added_instruction_is_found_on_the_new_side(self):
-        self.assertTrue(self.changed('\n@@ -7,0 +11 @@\n+reorder-after <a>\n'))
-
-    def test_the_control_a_rule_is_not(self):
-        """Old line 10 and new line 13 are rules: their characters are
-        the test values, and nothing else moves."""
-        self.assertFalse(self.changed('\n@@ -10 +13 @@\n-<U0042> <b>\n'
-                                      '+<U0042> <c>\n'))
-
-    def test_each_side_is_read_with_its_own_numbers(self):
-        """Old line 11 is a rule, new line 11 is the reorder-after: a
-        removed line placed against the new side's instructions was one."""
-        self.assertFalse(self.changed('\n@@ -11 +14,0 @@\n-<U0042> <b>\n'))
-        self.assertFalse(self.changed('\n@@ -7,0 +8 @@\n+% a note\n'),
-                         'new line 8 is outside the new block')
-
-    def test_a_line_where_a_section_starts_or_ends_is_one(self):
-        """glibc starts each LC_COLLATE section from state 0
-        (ld-collate.c:2558@2.34): a section split in two, or two joined,
-        reads the lines after the split otherwise."""
-        self.assertTrue(self.changed('\n@@ -12 +15 @@\n-END LC_COLLATE\n'
-                                     '+END LC_COLLATE % x\n'))
-        self.assertTrue(self.changed('\n@@ -6 +9 @@\n-LC_COLLATE\n'
-                                     '+LC_COLLATE % x\n'))
-
-    def test_a_line_outside_the_block_is_not(self):
-        self.assertFalse(self.changed('\n@@ -2 +2 @@\n-reorder-after <a>\n'
-                                      '+reorder-after <b>\n'))
-
-    def test_what_cannot_be_placed_is_not_called_one(self):
-        """The caller prints that the characters are not known."""
-        section = '\n@@ -8 +10,0 @@\n-reorder-after <a>\n'
-        self.assertFalse(f.instruction_changed([section], self.OLD, None))
-        self.assertFalse(f.instruction_changed([section, section], self.OLD,
-                                               self.NEW))
-        self.assertFalse(f.instruction_changed(['\n@@ bad @@\n'], self.OLD,
-                                               self.NEW))
-
-
-class SectionsPairedByTheirLines(unittest.TestCase):
-    """Backlog 13.36 (a): which characters a section is read with,
-    section by section through the diff's line map, never the pairs of
-    all sections as a set. A file whose second section goes with a pair
-    of its own was named as read with other characters while the first
-    reads as before. Taking the set out without the map loses a run that
-    reads its section with another pair and gains a second one with the
-    old pair."""
-
-    A, B = (0x25, 0x2f), (0x23, 0x5c)
-    TEXT = ''.join('l%d\n' % n for n in range(1, 30))
-
-    def test_a_section_that_goes_with_its_own_pair_is_not_other_characters(self):
-        old = facts((4, 6) + self.A, (10, 12) + self.B)
-        new = facts((4, 6) + self.A)
-        self.assertNotEqual(set(old.reading()), set(new.reading()))
-        self.assertFalse(f._read_otherwise(old, self.TEXT, new, self.TEXT,
-                                           ['@@ -10,3 +9,0 @@\n']))
-
-    def test_a_section_read_otherwise_beside_a_new_one_is(self):
-        old = facts((4, 6) + self.A)
-        new = facts((4, 6) + self.B, (10, 12) + self.A)
-        self.assertTrue(f._read_otherwise(old, self.TEXT, new, self.TEXT,
-                                          ['@@ -9,0 +10,3 @@\n']))
-
-    def test_a_section_is_found_where_the_diff_moved_it(self):
-        """Five lines added above: old 4..6 is new 9..11. Compared by
-        number, without the map, each answer below is the other one."""
-        old = facts((4, 6) + self.A)
-        down = ['@@ -1,0 +2,5 @@\n']
-        self.assertTrue(f._read_otherwise(
-            old, self.TEXT, facts((9, 11) + self.B, (4, 6) + self.A),
-            self.TEXT, down))
-        self.assertFalse(f._read_otherwise(
-            old, self.TEXT, facts((9, 11) + self.A, (4, 6) + self.B),
-            self.TEXT, down))
-
-    def test_the_verdict_and_the_list_agree(self):
-        """classify_change asks the same question, with no hunk inside
-        the old sections: the one read with B is swallowed by a line above
-        it and one read with A appended, as many sections as before. Other
-        lines, not other characters."""
-        old = facts((4, 6) + self.A, (10, 12) + self.B)
-        new = facts((4, 6) + self.A, (15, 17) + self.A)
-        diff = ['@@ -9 +9 @@\n@@ -14,0 +15,3 @@\n']
-        self.assertEqual('collate', f.classify_change(
-            self.TEXT, self.TEXT, old, new, [(9, 1), (14, 0)], diff))
-        self.assertEqual([], f.read_otherwise(
-            ['p'], [], ({'p': old}, {'p': new}), {}, {'p': self.TEXT},
-            {'p': self.TEXT}, {'p': diff}))
-
-
-class SectionsReadAgainstCharacters(unittest.TestCase):
-    """Which lines are read as LC_COLLATE, apart from which characters
-    they are read with (doc-sweep of 15.2 B3): a run that reads one
-    section fewer with the same pairs was named as read with other
-    characters, and a section swallowed and replaced got only its changed
-    lines' characters, with no word that every rule can change."""
-
-    # Lines 7-12 a section, swallowed at the new side; 13-18 its
-    # replacement, appended (ClassifyChange.SWALLOWED).
-    OLD_TEXT = ClassifyChange.SWALLOWED.format(end='', more='')
-    NEW_TEXT = ClassifyChange.SWALLOWED.format(end=' % a /',
-                                               more=ClassifyChange.APPENDED)
-    SWAP_DIFF = ['@@ -6 +6 @@\n-END LC_CTYPE\n+END LC_CTYPE % a /\n'
-                 '@@ -12,0 +13,6 @@\n']
-
-    def test_one_section_fewer_with_the_same_characters_is_not_other_characters(self):
-        old = facts((4, 6), (10, 12), (4, 6, 0x25, 0x2f, 'zz_C'),
-                    (10, 12, 0x25, 0x2f, 'zz_C'))
-        new = facts((4, 6), (10, 12), (10, 12, 0x25, 0x2f, 'zz_C'))
-        self.assertFalse(f._read_otherwise(old, self.OLD_TEXT, new,
-                                           self.OLD_TEXT, []))
-
-    def test_swapped_characters_in_as_many_sections_still_are(self):
-        a, b = (0x23, 0x5c), (0x25, 0x2f)
-        self.assertTrue(f._read_otherwise(
-            facts((4, 6) + a, (10, 12) + b), self.OLD_TEXT,
-            facts((4, 6) + b, (10, 12) + a), self.OLD_TEXT, []))
-
-    def test_a_section_swallowed_and_replaced_has_moved(self):
-        self.assertTrue(f._sections_moved(
-            facts((7, 12)), self.OLD_TEXT, facts((13, 18)), self.NEW_TEXT,
-            self.SWAP_DIFF))
-
-    def test_a_rule_edited_in_place_has_not(self):
-        new = self.OLD_TEXT.replace('<U0062>', '<U0063>')
-        self.assertFalse(f._sections_moved(
-            facts((7, 12)), self.OLD_TEXT, facts((7, 12)), new,
-            ['@@ -10 +10 @@\n-<U0062>\n+<U0063>\n']))
-
-    def test_a_section_pushed_down_by_a_line_above_has_not(self):
-        new = '% a note\n' + self.OLD_TEXT
-        self.assertFalse(f._sections_moved(
-            facts((7, 12)), self.OLD_TEXT, facts((8, 13)), new,
-            ['@@ -0,0 +1 @@\n+% a note\n']))
-
-    def test_the_swap_is_named_with_every_rule_able_to_change(self):
-        got = f.unread_above(
-            ['p'], {'p': self.OLD_TEXT}, {'p': self.NEW_TEXT}, {},
-            (lambda: None, lambda: None), ('t1', 't2'),
-            ({'p': facts((7, 12))}, {'p': facts((13, 18))}),
-            {'p': self.SWAP_DIFF})
-        self.assertEqual([('p', ['at t2: localedef reads other lines as its '
-                                 'LC_COLLATE than at t1'])], got)
-
-    def test_a_section_of_added_lines_is_not_named(self):
-        """Backlog 13.36 (b): another number of sections put the file
-        under "can stop glibc reading their LC_COLLATE as written" when an
-        edit simply added one; its lines are changed lines, and the line
-        that starts it is an instruction (InstructionChanged). Indented,
-        as the doc-sweep of 15.2 B3 found it: the line search behind
-        lc_collate_unread finds no block in a file whose sections are all
-        indented, and one that finds an unindented block names the second
-        section itself."""
-        old = ('comment_char %\nescape_char /\n\n LC_COLLATE\n'
-               'order_start forward\n<U0041>\norder_end\n END LC_COLLATE\n')
-        new = old + (' LC_COLLATE\norder_start forward\n<U0042>\n'
-                     'order_end\n END LC_COLLATE\n')
-        got = f.unread_above(
-            ['p'], {'p': old}, {'p': new}, {},
-            (lambda: False, lambda: False), ('t1', 't2'),
-            ({'p': facts((4, 8))}, {'p': facts((4, 8), (9, 13))}),
-            {'p': ['@@ -8,0 +9,5 @@\n']})
-        self.assertEqual([], got)
-
-    def test_without_the_diff_it_says_nothing_of_lines(self):
-        """main always passes the diff; a caller that has none is not
-        given an answer about lines it cannot place."""
-        got = f.unread_above(
-            ['p'], {'p': self.OLD_TEXT}, {'p': self.NEW_TEXT}, {},
-            (lambda: None, lambda: None), ('t1', 't2'),
-            ({'p': facts((7, 12))}, {'p': facts((13, 18))}))
-        self.assertEqual([], got)
-
-
-class ReadOtherwise(unittest.TestCase):
-    """Every changed file read with other characters, whatever its verdict
-    (review of backlog 13.7): a hunk inside the block made the verdict
-    'collate' before the characters were compared, and step 2 then listed
-    only the changed lines' characters as if they were all that moved."""
-
-    OLD = facts((4, 6))
-    HASH = facts((4, 6), cc=0x23)
-    TEXT = collate('order_start forward', '<U0041>', 'order_end')
-
-    def otherwise(self, reading, found, renamed=None, sections=None):
-        return f.read_otherwise(['p'], reading, found, renamed or {},
-                                {'p': self.TEXT}, {'p': self.TEXT, 'q': self.TEXT},
-                                sections or {'p': same_lines([(1, 1)])})
-
-    def test_a_block_and_its_characters_changed_together(self):
-        self.assertEqual(self.otherwise([], ({'p': self.OLD},
-                                             {'p': self.HASH})), ['p'])
-
-    def test_the_reading_verdict_is_kept(self):
-        self.assertEqual(self.otherwise(['p'], ({'p': self.OLD},
-                                                {'p': self.OLD})), ['p'])
-
-    def test_a_block_with_no_new_side_counts(self):
-        self.assertEqual(self.otherwise([], ({'p': self.OLD}, {})), ['p'])
-
-    def test_a_block_with_no_new_text_counts(self):
-        """Facts and no text: nothing places its lines on the other side,
-        so nothing settles its characters either."""
-        self.assertEqual(f.read_otherwise(
-            ['p'], [], ({'p': self.OLD}, {'p': self.OLD}), {},
-            {'p': self.TEXT}, {}, {'p': same_lines([(1, 1)])}), ['p'])
-
-    def test_a_renamed_file_is_read_under_its_new_name(self):
-        self.assertEqual(self.otherwise([], ({'p': self.OLD},
-                                             {'q': self.HASH}), {'p': 'q'}),
-                         ['p'])
-
-    def test_the_control_same_characters_are_not_listed(self):
-        self.assertEqual(self.otherwise([], ({'p': self.OLD},
-                                             {'p': facts((5, 9))})), [])
-
-    def test_a_file_without_an_old_block_is_not_listed(self):
-        """A gained block is its own `!!`; this one is about reading."""
-        self.assertEqual(self.otherwise([], ({'p': facts()},
-                                             {'p': self.HASH})), [])
-
-    def test_a_block_the_new_side_does_not_read_is_not_listed(self):
-        """Its verdict is 'unread': the characters did not change, glibc
-        stopped reading the block, and saying "other characters" would
-        name the wrong cause."""
-        self.assertEqual(self.otherwise([], ({'p': self.OLD},
-                                             {'p': facts(cc=0x23)})), [])
-
-
-class DescribeReading(unittest.TestCase):
-    """The lines under the `!!` that names a file read otherwise."""
-
-    def test_one_pair_for_the_sections(self):
-        self.assertEqual(f.describe_reading(facts((4, 6)), 't1'),
-                         'comment_char % and escape_char / at t1')
-
-    def test_glibcs_defaults_when_nothing_declares_them(self):
-        self.assertEqual(f.describe_reading(facts((4, 6), cc=0x23, ec=0x5c),
-                                            't2'),
-                         'comment_char # and escape_char \\ at t2')
-
-    def test_a_side_with_no_section_says_so(self):
-        self.assertEqual(f.describe_reading(facts(), 't5'),
-                         'no LC_COLLATE read at t5')
-
-    def test_two_sections_read_otherwise_are_both_named(self):
-        two = facts((4, 6, 0x25, 0x5c), (12, 14, 0x23, 0x5c))
-        self.assertEqual(f.describe_reading(two, 't3'),
-                         'comment_char % and escape_char \\ and comment_char '
-                         '# and escape_char \\ at t3')
-
-    def test_a_byte_a_terminal_would_not_show_is_its_value(self):
-        self.assertEqual(f.describe_reading(facts((4, 6), cc=0xa7), 't4'),
-                         'comment_char 0xA7 and escape_char / at t4')
-
-
 class LcCollateUnread(unittest.TestCase):
     """Backlog 13.18: what in a file can stop glibc reading its LC_COLLATE
     block as written, read on linereader at 2.28, 2.34 and 2.39
@@ -2356,58 +1353,6 @@ class LcCollateUnread(unittest.TestCase):
     def test_no_block_has_no_reason(self):
         self.assertIsNone(g.lc_collate_unread('LC_CTYPE /\nEND LC_CTYPE\n',
                                               self.never))
-
-
-class UnreadAbove(unittest.TestCase):
-    """The files step 2's `!!` names, whatever their verdict: a block that
-    also changed is 'collate', and the characters printed under it name
-    only its changed lines."""
-
-    OLD = LcCollateUnread.text()
-    SWALLOWS = OLD.replace('END LC_CTYPE', 'END LC_CTYPE /', 1)
-    ASK = (lambda: None, lambda: None)
-
-    def test_each_side_is_named_by_its_tag(self):
-        got = f.unread_above(['p', 'q'], {'p': self.OLD, 'q': self.SWALLOWS},
-                             {'p': self.SWALLOWS, 'q': self.OLD}, {},
-                             self.ASK, ('t1', 't2'))
-        self.assertEqual([(p, [w.split(':')[0] for w in why])
-                          for p, why in got],
-                         [('p', ['at t2']), ('q', ['at t1'])])
-
-    def test_a_changed_block_is_named_too(self):
-        new = self.SWALLOWS.replace('iso14651_t1', 'iso14651_t2')
-        got = f.unread_above(['p'], {'p': self.OLD}, {'p': new}, {},
-                             self.ASK, ('t1', 't2'))
-        self.assertEqual([p for p, _ in got], ['p'])
-
-    def test_a_renamed_file_is_read_under_its_new_name(self):
-        got = f.unread_above(['p'], {'p': self.OLD}, {'q': self.SWALLOWS},
-                             {'p': 'q'}, self.ASK, ('t1', 't2'))
-        self.assertEqual([p for p, _ in got], ['p'])
-
-    def test_the_control_nothing_above_is_not_listed(self):
-        self.assertEqual(f.unread_above(['p'], {'p': self.OLD},
-                                        {'p': self.OLD}, {}, self.ASK,
-                                        ('t1', 't2')), [])
-
-    def test_a_new_side_with_no_section_is_named(self):
-        """The 'unread' verdict when localedef reads no LC_COLLATE in the
-        new file: its `!!` says so, whether or not the line search sees why
-        (doc-sweep of 15.2 B3), and once."""
-        found = ({'p': facts((4, 6)), 'q': facts((4, 6))},
-                 {'p': facts(), 'q': facts()})
-        got = f.unread_above(['p', 'q'], {'p': self.OLD, 'q': self.OLD},
-                             {'p': self.OLD, 'q': self.SWALLOWS}, {},
-                             self.ASK, ('t1', 't2'), found)
-        self.assertEqual(got[0], ('p', ['at t2: localedef reads no '
-                                        'LC_COLLATE section in it']))
-        self.assertEqual(len(got[1][1]), 1, got[1])
-        self.assertTrue(got[1][1][0].startswith('at t2: '), got[1])
-
-    def test_a_side_with_no_text_is_not_asked(self):
-        self.assertEqual(f.unread_above(['p'], {'p': self.OLD}, {}, {},
-                                        self.ASK, ('t1', 't2')), [])
 
 
 class DistroDiffReadingCharacters(unittest.TestCase):

@@ -541,7 +541,7 @@ rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
 # Step 11 is worked out before step 1, so that a measurement the comparison
 # refuses -- cut short, damaged, measured by another copy of locale_order.py
 # over other strings, or taken on another glibc than its tag -- stops the run
-# here instead of after the five steps. Its report is printed where step 11
+# here instead of after steps 1 to 5. Its report is printed where step 11
 # stands, below, and its summary at the end.
 #
 # Its log is not named step11.*.log on purpose: the warnings block at the end
@@ -604,7 +604,7 @@ run_step 1 "$SCRIPTS/audit-locale-diff.sh" "$OLD" "$NEW"
 # adding one more copy of their `!!` block. Two questions in one answer:
 #
 #   reversed -- step 1 has already exited 2 and this script stopped with it.
-#               Reversed, all five steps run to the end; the direction was
+#               Reversed, steps 1 to 5 run to the end; the direction was
 #               never compared at all.
 #   same     -- one commit, however each side is spelt (the second word is
 #               then `commit`). This used to be
@@ -624,9 +624,9 @@ NOTHING=${ORDER_WORDS#* }
 
 # A minor-version upgrade inside one RHEL major is two builds of the SAME
 # upstream release, so the steps that compare the two tags have nothing to
-# compare. Steps 1 and 2 report that nothing changed, and step 5 that nothing
-# was compared. That is not a clean result, and C.UTF-8 is the proof: its
-# order changed between RHEL 8.1 and 8.2, both of them upstream glibc 2.28.
+# compare. Step 1 reports that nothing changed, and steps 2 and 5 that
+# nothing was compared. That is not a clean result, and C.UTF-8 is the proof:
+# its order changed between RHEL 8.1 and 8.2, both of them upstream glibc 2.28.
 SAME_TAG=0
 case $NOTHING in
   commit|tree) SAME_TAG=1 ;;
@@ -689,7 +689,7 @@ run_step 4 python3 "$SCRIPTS/flag_algorithmic_ranges.py" "$NEW"
 banner "STEP 5  Did the code that computes weights change"
 run_step 5 python3 "$SCRIPTS/diff_collation_code.py" "$OLD" "$NEW"
 
-# Optional, and not part of the five-step method: steps 1-5 read only the
+# Optional, and not part of the source audit: steps 1 to 5 read only the
 # clone, while steps 6 to 11 need a node's files. They run only when you
 # supply them, and keep their numbers when a side is left out.
 if [ -n "$OLD_LOCALES" ]; then
