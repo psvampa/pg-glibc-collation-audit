@@ -4144,6 +4144,27 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         return out
 
     @classmethod
+    def odd_codeset(cls, measurement, name):
+        """A copy of `measurement` whose `name` was measured in an encoding
+        no charmap declares, resealed as test_locale_order.trimmed reseals
+        a cut one."""
+        import locale_order as lom
+        with open(measurement, encoding='ascii') as fh:
+            data = json.load(fh)
+        # Both records of the encoding, as one glibc reads it for the order
+        # and for how PostgreSQL uses the locale (locale_order.load holds
+        # the two to each other).
+        data['locales'][name]['codeset'] = 'X-ADMINS-OWN'
+        data['postgres_use'][name]['codeset'] = 'X-ADMINS-OWN'
+        data['content'] = lom.content_digest(data)
+        base = tempfile.mkdtemp(prefix='audit_machine_odd_')
+        cls.made.append(base)
+        path = os.path.join(base, os.path.basename(measurement))
+        with open(path, 'w', encoding='ascii') as fh:
+            fh.write(json.dumps(data, sort_keys=True) + '\n')
+        return path
+
+    @classmethod
     def tearDownClass(cls):
         for d in cls.made:
             shutil.rmtree(d, True)
@@ -4162,7 +4183,12 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         # The old machine's de_DE and sv_SE carry a change inside
         # LC_COLLATE (INSIDE), so that step 6's block names them; the other
         # locales are the build's, C among them.
-        old = cls.machine_file(B40, cut_few(RHEL8), inside=('de_DE', 'sv_SE'))
+        # The old machine's el_CY is measured in an encoding no charmap on
+        # that machine declares, as a locale built with a charmap of the
+        # admin's own would be: step 2 names it as not traced, never drops
+        # it.
+        old = cls.machine_file(B40, cls.odd_codeset(cut_few(RHEL8), 'el_CY'),
+                               inside=('de_DE', 'sv_SE'))
         new = cls.machine_file(B275, cut_few(RHEL9))
         # Machines without glibc-locale-source: their files hold no
         # sources, and steps 6 and 7 do not run for them.
@@ -4229,6 +4255,19 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         # name.
         step2 = out.split('== STEP 2', 1)[1].split('== STEP 6', 1)[0]
         self.assertIn('C.utf8 (UTF-8): 1546 characters, named in C', step2)
+        # SUPPORTED's note is not printed of a machine, and a file only the
+        # new machine has is spelt as measured there: the measurement
+        # lists none of these.
+        self.assertNotIn('Not listed in localedata/SUPPORTED', flat(step2))
+        for name in ('ckb_IQ', 'mnw_MM'):
+            with self.subTest(added=name):
+                self.assertIn('  %s -> (not measured on that machine)\n'
+                              % name, step2)
+        # A name measured in an encoding no charmap declares is named.
+        self.assertIn('1 locale name(s) measured on %s could not be traced '
+                      'to the charmap they are built with, so their character '
+                      'set is not compared: el_CY: no charmap on the machine '
+                      'declares its encoding X-ADMINS-OWN' % B40, flat(step2))
 
     def test_nothing_is_downloaded(self):
         """The same files with no build to read (an empty build cache, no
