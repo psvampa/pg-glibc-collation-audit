@@ -40,40 +40,22 @@ range-expansion syntax, `<UAC00>` / `..` / `<UD7A3>`, used instead of an
 explicit weight per character. `localedef` expands it at build time, so those
 weights are **not** in the locale file. If the expansion logic changes, every
 character in the range can get a different weight with zero change to the
-locale's own source. Step 4 lists the locales that use these, and every
-other locale as well except one whose `LC_COLLATE` is `codepoint_collation`
-alone, or only a copy of a byte-order locale, because every character a
-locale does not list takes a default weight that a rule in `localedef`'s
-code picks, not the file. Steps 1 and 2 cannot clear any of them on data
-alone.
+locale's own source. Step 2 compares the range as it is written, so it
+cannot see such a change, and no step compares `localedef`'s code; step 11
+measures what it produced.
 
-**locale, in the Reindex and step 4 lists** — the locale a collation is built
+**locale, in the Reindex list** — the locale a collation is built
 from (`sv_SE`), not one way of writing it. `locale -a`, `pg_collation` and a
 database's own locale write one locale many ways (`sv_SE.utf8`,
 `sv_SE.iso885915`, `sv_SE.UTF-8`), and glibc builds all of them from one file,
-named as the locale is without the part from the dot up to any `@`. Both lists
-also hold the aliases glibc's `locale.alias` gives these locales (`swedish`).
+named as the locale is without the part from the dot up to any `@`. The list
+also holds the aliases glibc's `locale.alias` gives these locales (`swedish`).
 `sql/collation_confirmation_template.sql` reads collations the same way. Its
 inventories show the locale of each collation they list, and its version query
 lists the collations each name in its list reaches.
 
-**hunk** — one contiguous changed block in a `git diff`. Step 5 reports how
-many it found and prints them. "Read the hunks" means reading those blocks
-of C. Step 5 marks each changed line it counts as code with `>>`.
-
 **`!!`** — a warning printed where a clean-looking result does not cover
 something. The summary repeats each one.
-
-**tier** (step 5 only) — one of the three groups of glibc source paths step 5
-diffs. Tiers 1 and 2 are curated lists. Tier 3 is *derived*, by walking
-glibc's own `#include` graph from the collation entry points, so it grows as
-glibc changes and catches files a hand-written list would miss.
-
-**substantive change** (step 5 only) — a hunk that can change an order, as
-opposed to a comment, a licence header, a format-string fix or a type
-replacement. Step 5 cannot tell these apart for you; deciding is a manual
-step, and it is the one part of the method that requires reading C. See
-[limitations.md](limitations.md#step-5-reports-it-does-not-decide).
 
 **role swap** — two locale files exchanging which one holds the ruleset and
 which one merely copies it. Both files show a large diff while the effective

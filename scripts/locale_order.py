@@ -3804,7 +3804,7 @@ def lay_out(packed, prefix, root, entries, path, dest):
                 with os.fdopen(fd, 'wb') as f:
                     f.write(content)
         # Read back from the disk and held to the manifest: a write that went
-        # wrong would otherwise reach steps 6 to 10 as the machine's files.
+        # wrong would otherwise reach steps 6 to 8 as the machine's files.
         written = on_disk(root)
     except OSError as e:
         die(f'cannot lay the file out in {dest}: {e}')

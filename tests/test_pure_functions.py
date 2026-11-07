@@ -22,11 +22,9 @@ from _harness import SCRIPTS_DIR, flat
 
 import glibc_locale_data as g
 import glibc_tree
-import diff_collation_code as d
 import filter_lc_collate_changes as f
 import diff_distro_locales as dd
 import diff_node_locales as nl
-import flag_algorithmic_ranges as fa
 import collation_keys as ck
 import node_charmaps as nc
 
@@ -39,7 +37,9 @@ def collate(*body):
 
 class Ellipsis(unittest.TestCase):
     """"flag_algorithmic_ranges.py matched one ellipsis form of four" and
-    "Step 4 cleared zh_CN and three siblings that it should have flagged"."""
+    "Step 4 cleared zh_CN and three siblings that it should have flagged"
+    (both deleted in step 9.3). glibc_locale_data.ellipsis_hits stays: step
+    8 reads ranges through it."""
 
     def test_all_five_forms_glibc_accepts(self):
         # linereader.c consumes one '.' before comparing the rest, so these are
@@ -139,7 +139,7 @@ class CorpusFloorIsShared(unittest.TestCase):
 
     def test_the_node_modes_refuse_below_the_shared_floor(self):
         """The rest of the path, on the machine side: the directories of
-        diff_node_locales and of flag_algorithmic_ranges are built by
+        diff_node_locales are built by
         glibc_locale_data.side, which refuses below the floor before the
         clone is looked for, so a truncated copy is refused for what it is
         on a machine without one too. (Steps 6/7 look for the clone first:
@@ -156,9 +156,6 @@ class CorpusFloorIsShared(unittest.TestCase):
             ('diff_node_locales', nl.main,
              ['--old-locales-dir', old, '--old-build-id', 'o',
               '--new-locales-dir', new, '--new-build-id', 'n']),
-            ('flag_algorithmic_ranges', fa.main,
-             ['--locales-dir', new, '--build-id', 'n',
-              '--supported-tag', 'glibc-2.34']),
         )
         # Both directions: a floor moved down and left behind by a mode is a
         # drift too. OUT_DIR is base, so a mode that stopped refusing writes
@@ -319,203 +316,6 @@ class PrintCharacters(unittest.TestCase):
             re.findall(r'(\S) \(U\+([0-9A-F]{4,6})\)', out),
             [(c, f'{ord(c):04X}') for c in chars])
         self.assertLessEqual(max(len(line) for line in out.splitlines()), 78)
-
-
-class NoiseFilter(unittest.TestCase):
-    """"Step 5 discarded real code as comment/copyright".
-
-    The rule used to be: noise unless the line carries one of ;{}=(). That
-    swallowed whole hunks under the heading "no substantive change". These are
-    three of them.
-    """
-
-    def test_preprocessor_include_is_code(self):
-        self.assertFalse(d.is_noise_line('+#include "C-collate-seq.c"'))
-
-    def test_preprocessor_define_is_code(self):
-        self.assertFalse(d.is_noise_line('-#define NO_FINALIZE'))
-        self.assertFalse(d.is_noise_line('+#define NO_ADD_LOCALE'))
-
-    def test_indented_preprocessor_define_is_code(self):
-        self.assertFalse(d.is_noise_line('-# define STRCMP strcmp'))
-
-    def test_a_label_is_code(self):
-        self.assertFalse(d.is_noise_line('+  case tok_codepoint_collation:'))
-
-    def test_a_bare_declarator_is_code(self):
-        self.assertFalse(d.is_noise_line('+  bool codepoint_collation;'))
-
-    def test_a_lone_else_is_code(self):
-        self.assertFalse(d.is_noise_line('+  else'))
-
-    def test_comments_and_licences_are_noise(self):
-        for line in ('+/* Compare the file */', '+ * continuation',
-                     '+// trailing', '+   end of comment */',
-                     '-   Copyright (C) 2000-2018 Free Software Foundation, Inc.',
-                     '+   <https://www.gnu.org/licenses/>.  */',
-                     '-   Contributed by Ulrich Drepper <drepper@gnu.org>, 1995.',
-                     '-   Written by Ulrich Drepper, 1995.',
-                     '+'):
-            with self.subTest(line=line):
-                self.assertTrue(d.is_noise_line(line), line)
-
-    def test_comment_continuation_without_a_leading_star_is_noise(self):
-        """The second line here opens with neither '*' nor '/*', and closes
-        with neither '*/'. Only carrying the open-comment state sees it."""
-        body = ['+  /* Compare the file with the locale data files for the same',
-                '+     category in other locales, to save disk space.  */',
-                '+  int x = 1;']
-        marked = d.classify_body(body)
-        self.assertTrue(marked[0][1])
-        self.assertTrue(marked[1][1], 'comment continuation read as code')
-        self.assertFalse(marked[2][1])
-
-    def test_open_comment_state_is_tracked_per_side(self):
-        """+ and - are two different versions of the file; one side's open
-        comment must not silence the other."""
-        body = ['-  /* removed comment', '+  int kept = 1;', '-     tail */']
-        marked = d.classify_body(body)
-        self.assertFalse(marked[1][1], '+ line silenced by an open - comment')
-
-    def test_a_preprocessor_line_is_never_swallowed_by_comment_state(self):
-        body = ['+  /* an unterminated comment', '+#include <array_length.h>']
-        marked = d.classify_body(body)
-        self.assertFalse(marked[1][1])
-
-    def test_a_pointer_dereference_is_code(self):
-        """"The noise filter took C code for a comment": every line opening
-        with `*` was noise, and `*wp = '\\0';` opens with `*`. Ten such lines
-        sat unmarked in the two published examples."""
-        for line in ("-      *wp = '\\0';", '-	  *wp++ = tolower (codeset[cnt]);',
-                     "-  *endp++ = '/';", '+      *wch = result;',
-                     '+  **argv = 0;', '+  *(p + 1) = 2;'):
-            with self.subTest(line=line):
-                self.assertFalse(d.is_noise_line(line), line)
-
-    def test_a_star_comment_continuation_is_still_noise(self):
-        for line in ('+ * continuation text', '+ *', '+ */',
-                     '+   *  indented star, then text'):
-            with self.subTest(line=line):
-                self.assertTrue(d.is_noise_line(line), line)
-
-    def test_a_comment_closed_on_a_context_line_does_not_hide_the_code(self):
-        """"The noise filter read every third line of the comment it was
-        tracking." `git diff` gives three lines of context; the filter kept
-        only the +/- lines, so a comment that opened on a changed line and
-        closed on a CONTEXT line stayed open for the rest of the hunk and
-        every changed line after it was marked noise -- eight lines of
-        charmap_find_value() in linereader.c over 2.34..2.39, printed without
-        the `>>` the docs tell the reader to scan for. Discard the context
-        lines again and this fails."""
-        body = ['-  /* old', '+  /* new', '   rest */', '+  code();']
-        marked = d.classify_body(body)
-        self.assertEqual([ln for ln, _ in marked],
-                         ['-  /* old', '+  /* new', '+  code();'],
-                         'a context line was emitted as a changed line')
-        self.assertFalse(marked[2][1],
-                         'code after a comment that closed on a context line '
-                         'was filtered as prose')
-
-    def test_a_continuation_of_a_comment_opened_in_context_is_still_noise(self):
-        """The control for the test above: reading the context lines must not
-        turn into marking everything as code. Here the comment OPENS on a
-        context line, so the changed line inside it is prose, and a hunk of
-        only that is filtered."""
-        body = ['   /* open', '+   more prose about the table', '   close */']
-        marked = d.classify_body(body)
-        self.assertEqual([ln for ln, _ in marked],
-                         ['+   more prose about the table'])
-        self.assertTrue(marked[0][1],
-                        'a comment opened on a context line was marked code')
-
-    def test_a_comment_marker_inside_a_string_or_line_comment_opens_nothing(self):
-        """A state wrongly left OPEN marks the code after it as prose, which
-        is the direction that hides a hunk -- and with the context lines now
-        read there are three times as many lines that can do it. Replace the
-        scanner with `rfind` and both of these mark `code ();` as noise."""
-        for prefix in (' ', '+'):
-            # Both call sites: the context line and the changed line advance
-            # the state through different lines of classify_body, and a test
-            # that only feeds one leaves the other free to go back to `rfind`.
-            for opener in ('// see /* below', 'x = f ("/*");',
-                           "c = '/'; /* real */"):
-                with self.subTest(prefix=prefix, opener=opener):
-                    body = [f'{prefix}  {opener}', '+  code ();']
-                    marked = d.classify_body(body)
-                    self.assertFalse(marked[-1][1], body)
-
-    def test_a_real_comment_still_opens_after_a_string(self):
-        """Control: masking the string must not swallow the comment that
-        follows it."""
-        marked = d.classify_body(['   f ("x");  /* opens here',
-                                  '+  still prose'])
-        self.assertTrue(marked[0][1])
-
-    def test_a_string_continued_with_a_backslash_opens_nothing(self):
-        """A string whose line ends in `\\` goes on on the next line, and the
-        scanner started every line outside any string. A `/*` in the
-        continuation then opened a comment that never closed, and every
-        changed line after it was marked as prose -- code included. No line
-        in the five pinned tags has that shape; this is the shape."""
-        for prefix in (' ', '+'):
-            # Both call sites, as above: the state is carried through a
-            # context line and through a changed line by different code.
-            with self.subTest(prefix=prefix):
-                body = [f'{prefix}  msg = "one \\',
-                        f'{prefix}  two /* three";',
-                        '+  code ();']
-                marked = d.classify_body(body)
-                self.assertFalse(marked[-1][1], body)
-
-    def test_a_line_that_starts_inside_a_continued_string_is_code(self):
-        """Carrying the string was not enough: the verdict for the line it is
-        carried INTO still came from is_noise_line, and `* new option\\n",
-        stdout);` opens with the `*` of a comment continuation."""
-        body = [' fputs ("Usage: \\',
-                '-* old option\\n", stdout);',
-                '+* new option\\n", stdout);']
-        marked = d.classify_body(body)
-        self.assertEqual([noise for _, noise in marked], [False, False])
-
-    def test_a_quote_left_open_without_a_backslash_is_not_carried(self):
-        """Only a `\\` at the end of the line continues a string. A quote left
-        open for any other reason -- here the apostrophe in a comment that
-        began before the hunk, which the scanner cannot know -- must end with
-        its line, or the code after it is marked as prose."""
-        body = [" do not reorder: this is the user's choice",
-                '+  x = \'"\'; y = "/*";',
-                '+  weight = next ();']
-        marked = d.classify_body(body)
-        self.assertFalse(marked[-1][1], body)
-
-    def test_a_backslash_outside_a_string_carries_nothing(self):
-        """Control: a macro continuation is not a string, so a real `/*` on
-        the line after it still opens a comment."""
-        marked = d.classify_body(['+#define X 1 \\',
-                                  '+  /* opens here',
-                                  '+  still prose'])
-        self.assertTrue(marked[-1][1])
-
-    def test_a_hunk_made_only_of_dereferences_is_kept(self):
-        """The failure that mattered: a hunk is dropped only when EVERY line
-        is noise, so a hunk whose changed lines are all `*p = x;` vanished
-        whole under "comment/licence hunk(s) filtered" and step 5 went on to
-        say there was no substantive change. Restore `startswith('*')` and
-        this fails."""
-        body = ["-      *wp = '\\0';", "+      *wp = 0;"]
-        marked = d.classify_body(body)
-        self.assertTrue(any(not noise for _, noise in marked),
-                        'a hunk of pointer writes was filtered as comment')
-
-
-class TrackedLists(unittest.TestCase):
-    """The walk subtracts its entry points from what it reports, so an entry
-    point that is in no tier is checked for existence and never diffed. That
-    is false negative "two entry points of step 5 were diffed by nobody"; this
-    is the assertion that keeps a sixth entry point from repeating it."""
-
-    def test_every_entry_point_is_also_in_a_tier(self):
-        self.assertLessEqual(set(d.ENTRY_POINTS), set(d.TIER1) | set(d.TIER2))
 
 
 class StepTwoPrintsWhatCompareRulesAnswered(unittest.TestCase):
@@ -896,96 +696,6 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
             "('C', 'POSIX')) "
             "OR (c.collprovider = 'd' AND d.datlocprovider = 'c' "
             "AND d.datcollate NOT IN ('C', 'POSIX')) )")
-
-
-class StepFourWithoutRanges(unittest.TestCase):
-    """The path of step 4 where nothing uses an ellipsis range writes its list
-    too, and says what the other path says: the reading rule, and which
-    aliases it leaves out because their name is not ASCII (backlog 13.1);
-    and how flag_algorithmic_ranges.py names a file it could not open, in
-    step 4 and in steps 9 and 10. Driven directly, because no pinned tag
-    reaches either."""
-
-    class _Tree(object):
-        """What glibc_tree.Tree answers for three locales: nb_NO copies a
-        file the tree lacks, xx_XX spells its weights out, and xx_YY the
-        reader could not settle. Answers only
-        what report() asks on this path, and raises on anything else."""
-        names = ['nb_NO', 'xx_XX', 'xx_YY']
-
-        def defines(self, name):
-            return name in self.names
-
-        def ranges(self, name):
-            return []
-
-        def byte_order(self):
-            return set(), {}
-
-        def unresolved(self):
-            return {'nb_NO': 'localedef cannot open no_such_locale',
-                    'xx_YY': 'xx_YY:3: reorder-sections-after in LC_COLLATE'}
-
-        def missing(self):
-            return {'nb_NO': ['no_such_locale']}
-
-        def roots(self, name, roots):
-            raise AssertionError('no range, so no closure to walk')
-
-    def test_a_file_name_that_is_not_one_plain_word_is_quoted(self):
-        """The empty name (cases c17 and c54), a blank, a newline, a
-        control character, a comma, a character that draws as nothing
-        visible and a combining mark, named quoted (dd.shown) where
-        flag_algorithmic_ranges.py names a missing `copy` or `include`
-        target, step 4's `!!` list. Not as nothing, not as two names, and
-        not on a second line, which ends what audit.sh relays from it
-        (false-negative-reviewer, rounds 1 to 3 of 13.44)."""
-        tree = self._Tree()
-        tree.unresolved = lambda: {'nb_NO': "localedef cannot open ''"}
-        names = ['', ' ', 'a\nb', 'c\x01', 'x,y', 'plain', '\u3164',
-                 'e\u0301']
-        tree.missing = lambda: {'nb_NO': names}
-        out = io.StringIO()
-        with mock.patch.object(g, 'write_list', return_value='/x'), \
-                contextlib.redirect_stdout(out):
-            fa.report(tree, {}, 'fake', 'list.txt', [])
-        self.assertIn("so what they carry was never read:\n"
-                      "     '', ' ', 'a\\nb', 'c\\x01', 'e\\u0301', "
-                      "plain, 'x,y', '\\u3164'\n"
-                      "   1 locale(s) reach one.", out.getvalue())
-
-    def test_it_states_the_rule_and_the_aliases_it_leaves_out(self):
-        aliases = {'norwegian': 'nb_NO.ISO-8859-1',
-                   'bokm\ufffdl': 'nb_NO.ISO-8859-1'}
-        out = io.StringIO()
-        with mock.patch.object(g, 'write_list', return_value='/x') as wl, \
-                contextlib.redirect_stdout(out):
-            fa.report(self._Tree(), {}, 'fake', 'list.txt', [],
-                      aliases=aliases)
-        text = out.getvalue()
-        self.assertIn('Locales, not spellings', text)
-        self.assertIn('not listed: an alias of nb_NO whose name is not ASCII',
-                      text)
-        # xx_YY is unsettled, not missing a file: listed all the same.
-        self.assertEqual(wl.call_args[0][1],
-                         ['nb_NO', 'norwegian', 'xx_XX', 'xx_YY'])
-
-
-class ByteOrderListName(unittest.TestCase):
-    """Step 4's second list is named after its full list and can never be
-    that list (backlog 13.7)."""
-
-    def test_named_after_the_full_list(self):
-        self.assertEqual(fa.byte_order_list_name('step4_exposed_locales.txt'),
-                         'step4_byte_order_locales.txt')
-        self.assertEqual(
-            fa.byte_order_list_name('step4_exposed_locales.b-1.txt'),
-            'step4_byte_order_locales.b-1.txt')
-
-    def test_never_the_full_list_itself(self):
-        for name in ('list.txt', 'step4_byte_order_locales.txt', 'x'):
-            with self.subTest(name=name):
-                self.assertNotEqual(fa.byte_order_list_name(name), name)
 
 
 class CommentChar(unittest.TestCase):
@@ -1948,7 +1658,6 @@ class SameTreeAndManifest(unittest.TestCase):
                             dd.tree_manifest(b, ['C'])[2])
 
 
-
 # --- step 2's character set check (backlog 13.7, PR B) ----------------------
 
 _PROLOG = ('<code_set_name> TEST', '<comment_char> %', '<escape_char> /',
@@ -2581,7 +2290,6 @@ class CompareBuilds(unittest.TestCase):
                          ['sv_SE.UTF-8'])
 
 
-
 class CharmapReportLines(unittest.TestCase):
     """Lines print_charmap_report writes that no real pair reaches."""
 
@@ -2610,7 +2318,6 @@ class CharmapReportLines(unittest.TestCase):
         out = self.lines(found=[found])
         self.assertIn('2 characters, named in loc', out)
         self.assertIn('A (U+0041)  U+110000', out)
-
 
 
 # --- step 2's transliteration check (backlog 13.7, PR C) --------------------
@@ -3784,7 +3491,6 @@ class TranslitReportLines(unittest.TestCase):
                                          'elements') and 'fi_XX (TEST): a '
                             'reason' in b for b in _bang_blocks(out)), out)
         self.assertEqual(self.lines(None, builds=0), '')
-
 
 
 def _cm_file(root, entry, text):

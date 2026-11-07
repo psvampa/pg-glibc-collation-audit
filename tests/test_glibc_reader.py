@@ -1294,7 +1294,6 @@ class ReaderAgreesOnEveryRealFile(unittest.TestCase):
         self.assertEqual(self.UNSETTLED.get(tag, {}), unsettled)
 
 
-
 # The shapes the line readers steps 1, 3 and 4 used before backlog 15.2 got
 # wrong, each with what localedef reads (backlog items in the names). Every
 # one copies or ranges like a real locale, so a step that reads it wrong
@@ -1663,17 +1662,6 @@ class StepsReadWhatLocaledefReads(unittest.TestCase):
             'filter_lc_collate_changes.py', old, new, '--repo', repo))
         self.assertEqual(sorted(_COPIERS + ('zz_T',)), sorted(report.differs))
         self.assertEqual({}, report.listed)
-
-    def test_step_4_reads_ranges_and_copies_as_localedef_does(self):
-        base = self.step('flag_algorithmic_ranges.py', NEW)
-        out = self.step('flag_algorithmic_ranges.py', self.ref,
-                        '--repo', self.repo)
-        via = r'^  via iso14651_t1: (\d+) locale'
-        self.assertEqual(int(re.search(via, base, re.M).group(1)) + 4,
-                         int(re.search(via, out, re.M).group(1)), out)
-        flagged = out.split('ranges: ', 1)[1].split('\n\n', 1)[0]
-        self.assertIn('  zz_PC\n', flagged)
-        self.assertNotIn('zz_HC', flagged)
 
     def test_step_2_names_a_changed_locale_it_could_not_read(self):
         """zz_X's LC_CTYPE copies a file the tree lacks, so localedef stops

@@ -6,21 +6,21 @@ sorts. The second and third measure, inside PostgreSQL, what the first leaves
 open.
 
 **Commands are numbered here; steps are what a run prints.** A run of command
-1 does its own work in steps numbered 1 to 11: 1, 2, 4 and 5 without a
-machine's file, and six more with a file from each machine. Those numbers
+1 does its own work in steps numbered 1 to 11: 1 and 2 without a machine's
+file, and 6, 7, 8 and 11 with a file from each machine. Those numbers
 are not these three.
 
 ## Command 1 — which locales the upgrade can affect
 
 It runs in two ways, as in [the README](../README.md#the-commands). 1.a needs
-no machine; 1.b adds one file from each of your machines, and with it six
-more checks.
+no machine; 1.b adds one file from each of your machines, and with it more
+checks.
 
 ### 1.a — quick verification
 
 `./audit.sh <old> <new>`, given two tags, compares the two glibc versions as
 their maintainers published them, and needs nothing but this checkout. It
-runs four checks in order and ends with one summary.
+runs steps 1 and 2 in order and ends with one summary.
 
 Either side can name a RHEL build instead of a tag, as `rpm -q glibc` prints
 it without the architecture: `./audit.sh glibc-2.28-251.el8_10.40
@@ -36,33 +36,34 @@ before step 1 and reads from then on. With a build, only `--old-node` and
 |---|---|
 | 1 | which locale files changed between the two versions, and how far the change reaches |
 | 2 | which locales' sort rules differ between the two versions, every `copy` followed, which locales' rules name a character their character set added, removed or gave other bytes, and which locales build a collating element differently out of a transliteration |
-| 4 | which locales a comparison of files can never clear, because part of their order is computed later: the weights of abbreviated ranges, and the default weight of each character they do not list |
-| 5 | whether the code that computes those weights changed |
+
+Neither compares the code that compiles and compares the rules, `localedef`'s
+and `strcoll`'s; step 1 says so on every run
+([limitations](limitations.md#no-step-compares-localedefs-or-strcolls-code)).
 
 What you get is a list to worry about. What you do **not** get is
-confirmation that a locale on the list really moved. A flagged locale can
-turn out not to move — step 4 flags `zh_CN`, and step 11 measures its order
-unchanged on both pairs.
+confirmation that a locale on the list really moved, nor that a locale off it
+did not: `ko_KR` is off the list over RHEL8 to RHEL9, its rules unchanged,
+and its order changed through `localedef`'s code.
 
 ### 1.b — extended verification, against your two machines
 
 The same command, given one file from each machine with `--old-node` and
 `--new-node`. Each is the file `scripts/locale_order.py --extract` wrote on
-that machine. The four checks above then read the build each file names,
+that machine. Steps 1 and 2 then read the build each file names,
 as `rpm -q glibc` printed it on that machine, in place of the tag, as in
 1.a: the side you give is that build or its tag. When a build cannot be
 read (a build whose spec the run does not know how to read, one Rocky
 Linux's mirror does not list or lists with no metadata to check it
 against, or no network the first time it is read) and you gave its tag,
 both sides read their tags and the run says so before step 1; given as
-the build itself, it is refused, as in 1.a. The two files add six more
-checks.
+the build itself, it is refused, as in 1.a. The two files add the checks
+below.
 
 | The run's step | The question it answers |
 |---|---|
 | 6 and 7 | do the distro's patches on that machine touch sort order? One step per side |
 | 8 | does one machine's collation data differ from the other's? |
-| 9 and 10 | the question of step 4, asked of that machine's own data. One step per side |
 | 11 | how does each machine's own glibc sort the locales installed on it, is each one's compiled sort table the same on both, and which characters and other strings moved between the two? |
 
 Three of those answer questions the upstream comparison cannot reach at all:
@@ -84,7 +85,7 @@ Three of those answer questions the upstream comparison cannot reach at all:
   result.
 
 Leave the files out and the summary says `NOT RUN` for steps 6 and 7, step
-8, steps 9 and 10 and step 11, and `NOT CHECKED` for what the distro adds or
+8 and step 11, and `NOT CHECKED` for what the distro adds or
 drops. They are not omitted, because a section that vanishes reads like a
 section that found nothing.
 
@@ -96,7 +97,7 @@ A file without the charmaps is read the same way. Steps 6 to 8 say `NOT RUN`
 for the character sets, and step 11 says it did not check the strings it
 measured against them, each with the reason.
 
-**Steps 6 to 10 settle data, not order.** The weights are computed when the
+**Steps 6 to 8 settle data, not order.** The weights are computed when the
 locale is built, so two machines can hold byte-identical files
 and still sort differently. That is what step 11 measures, and commands 2 and
 3 measure inside PostgreSQL.
@@ -190,22 +191,19 @@ counts. The run does not compare against the machine. It refuses a copy only
 when it is too small to be one.
 
 What never arrived is named, not refused. When a copy lacks a file its
-published version has, steps 6 and 7 and steps 9 and 10 print a `!!` naming
+published version has, steps 6 and 7 print a `!!` naming
 each one, and the summary repeats it. The run cannot tell a file the machine
 does not ship from one the copy lost, and the check above is what tells them
 apart. Step 8 lists what one copy lacks under `Only on the old node` or `Only
 on the new node`, where a failed transport reads exactly like a locale the
-upgrade removed or added. One more case earns its own `!!`: a missing file
-that other locales copy, such as `iso14651_t1` (steps 9 and 10).
+upgrade removed or added.
 
-**Which printed count to check against matters.** Steps 9 and 10 print the
-copy's own count as `Files at <build id>`, and that is the number to set
-against the machine's. The `Compared N file(s)` lines of steps 6 to 8 are
-intersections — with the published version for steps 6 and 7, with the other
-machine for step 8 — so they are never larger than `Files at`, and equality
-there does not mean the copy is complete. A `Compared` line adds back up to
-`Files at` only together with the `absent upstream` or `only on the ... node`
-line printed beside it.
+**Which printed count to check against matters.** The `Compared N file(s)`
+lines of steps 6 to 8 are intersections — with the published version for
+steps 6 and 7, with the other machine for step 8 — so they are never larger
+than the copy, and equality there does not mean the copy is complete. A
+`Compared` line adds back up to the copy's own count only together with the
+`absent upstream` or `only on the ... node` line printed beside it.
 
 Supply one side only and that side is still checked against its published
 version; the side you left out prints `NOT RUN` and names the flag that was

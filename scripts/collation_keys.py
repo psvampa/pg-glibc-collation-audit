@@ -79,9 +79,10 @@ translit_ignore line, an include or copy cycle, lookups in two files of one
 run. A SUPPORTED this reads differently than glibc, or a charmap it names
 that is not there, is NOT RUN.
 
-Not covered here: a character the charmap gains that no rule names, which
-takes the UNDEFINED weight -- step 4 lists every locale that relies on
-UNDEFINED; an LC_COLLATE keyword built out of escape characters
+Not covered here: a character the charmap gains that no rule names, whose
+place localedef's and strcoll's code decides, which no step compares
+(glibc_locale_data.CODE_NOT_COMPARED); an LC_COLLATE keyword built out of
+escape characters
 (`LC_COLL/ATE`), and an `escape_char` directive spelled that way; the
 transliterations of a build
 SUPPORTED does not list, which point 5 looks for only through the

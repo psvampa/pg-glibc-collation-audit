@@ -13,14 +13,14 @@ this tool shipped, or a way of losing one, and its docstring says which.
 | file | needs the glibc clone | what it covers |
 |---|---|---|
 | `test_provenance.py` | mostly | the tags resolve to the pinned commits; if one no longer does, every number in `test_known_answers.py` is suspect |
-| `test_known_answers.py` | yes | steps 1 to 5 end to end on the pinned pairs |
+| `test_known_answers.py` | yes | steps 1 and 2 end to end on the pinned pairs |
 | `test_wrapper.py` | yes | `audit.sh` end to end, mostly its failure modes: node files, missing sources, refused files |
 | `test_node_modes.py` | yes | the steps that read a machine's own locale files |
 | `test_distro_diff.py` | yes | the comparison of a machine's locale files against its upstream tag (steps 6 and 7) |
 | `test_git_helpers.py` | mostly | code that cannot tell "nothing here" from "could not look"; some of its classes build a small repository of their own |
-| `test_glibc_reader.py` | mostly | `scripts/glibc_reader.py`, a reader of glibc's locale files that follows `localedef`, against what `localedef` did on the three RHEL builds (`reader_oracle/`); `scripts/reader_cache.py`, which keeps its answers; and `scripts/glibc_tree.py`, through which steps 1, 2, 4, 9 and 10 read them |
+| `test_glibc_reader.py` | mostly | `scripts/glibc_reader.py`, a reader of glibc's locale files that follows `localedef`, against what `localedef` did on the three RHEL builds (`reader_oracle/`); `scripts/reader_cache.py`, which keeps its answers; and `scripts/glibc_tree.py`, through which steps 1 and 2 read them |
 | `test_build_sources.py` | mostly | `scripts/build_sources.py`, which rebuilds a RHEL glibc build's `localedata/` and `locale/` from its source RPM in the order rpm recorded in its header, against what `rpmbuild -bp` did with three builds (`build_sources/`), what those machines hold, and what the builds' binary packages record; and how it fetches a build's three files by name, on a mirror the tests make; and `audit.sh` end to end on builds |
-| `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, locale names and their aliases, the comment filter |
+| `test_pure_functions.py` | no | the algorithmic core: ellipsis matching, the `copy` graph, locale names and their aliases |
 | `test_locale_order.py` | no | step 11: the comparison on three real machines' measurements, the file each machine writes, and the progress lines |
 | `test_confirm_sql.py` | no | the SQL files step 11 writes for PostgreSQL (`--sql-to`), and `scripts/confirm_sql.py read` on outputs PostgreSQL printed for them (`confirm_sql/`) |
 | `test_parallel_runner.py` | no | guards against losing tests quietly, in the parallel runner and in a test file run on its own |

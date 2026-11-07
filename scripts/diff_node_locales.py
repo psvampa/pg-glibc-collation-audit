@@ -435,7 +435,7 @@ def _main(opts, charmaps):
                              allow_reverse=opts.allow_reverse,
                              commits=commits)
         old_tag_names = tag_basenames(repo, opts.old_tag)
-        # Not at both tags: steps 1 to 5 over two tags compare only a file
+        # Not at both tags: steps 1 and 2 over two tags compare only a file
         # both hold; one the old tag lacks is "added", one the new tag lacks
         # "deleted", neither compared (filter_lc_collate_changes.py).
         both_tags = old_tag_names & tag_basenames(repo, opts.new_tag)
