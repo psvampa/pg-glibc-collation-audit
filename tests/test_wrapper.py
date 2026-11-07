@@ -2223,9 +2223,15 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
             'one_build': (cls.machine_file('old.tar', few9, MID),
                           cls.machine_file('new.tar', cls.measurement(
                               cut_to_pair(RHEL9)), MID)),
+            # The same sources and neither file with charmaps: one tree,
+            # no charmap read.
+            'same_no_charmaps': (
+                cls.machine_file('old.tar', few9, MID, charmaps=False),
+                cls.machine_file('new.tar', cls.measurement(
+                    cut_few(RHEL9), later9), MID, charmaps=False)),
         }
         tags = {'link': (OLD, MID), 'same_sources': (MID, MID),
-                'one_build': (MID, MID)}
+                'one_build': (MID, MID), 'same_no_charmaps': (MID, MID)}
         for label, (old, new) in files.items():
             out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-machines-')
             cls.made.append(out_dir)
@@ -2311,6 +2317,38 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
         self.assertNotIn('nothing was compared', reindex)
         self.assertNotIn('code under locale/', block)
         self.assertNotIn('cannot read', before)
+
+    def test_the_same_sources_without_charmaps_never_claim_the_charmaps(self):
+        """Neither file holds charmaps, so no charmap was read: one source
+        tree, said as the same locale sources, and the character sets as
+        not compared, in step 1, step 2, Reindex and the block below it --
+        never "the same charmaps" (false-negative-reviewer and doc-sweep,
+        round 2)."""
+        out = self.out('same_no_charmaps')
+        self.assertNotIn('DIRECTION', flat(out))
+        step1, step2 = flat(self.step(out, 1)), flat(self.step(out, 2))
+        self.assertIn("the two machines' files hold the same locale sources, "
+                      "so no locale's sort rules can differ between them, "
+                      "and steps 1 and 2 have nothing to compare; their "
+                      "character sets were not compared, as a file holds no "
+                      "charmaps this reads.", step1)
+        self.assertIn("Rules: not compared, the two machines' files hold the "
+                      "same locale sources.", step2)
+        self.assertIn("Character sets and transliterations: not compared, a "
+                      "machine's file holds no charmaps this reads.", step2)
+        summary = out.split('AUDIT SUMMARY', 1)[1]
+        reindex = section_body(summary, '-- Reindex: sort order changes, '
+                                        'confirm then REINDEX')
+        self.assertTrue(reindex.startswith(
+            "none -- the two machines' files hold the same locale sources; "
+            "their character sets were not compared (see below)"), reindex)
+        block = section_body(summary, '-- One source tree, compared with '
+                                      'itself')
+        self.assertIn('their character sets were not compared', block)
+        for text in (step1, step2, reindex, block):
+            with self.subTest(text=text[:40]):
+                self.assertNotIn('the same locale sources and charmaps',
+                                 text)
 
     def test_two_machines_of_one_build(self):
         out = self.out('one_build')

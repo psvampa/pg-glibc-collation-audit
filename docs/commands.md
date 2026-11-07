@@ -169,9 +169,10 @@ them already, such as a copy of the locale folder taken from an image:
 `--old-locales-dir` and `--new-locales-dir`, each with its `--old-build-id` or
 `--new-build-id`, and `--old-order` and `--new-order`, each the output of a
 plain `python3 scripts/locale_order.py > old.out` on that machine. One check
-is not among them. Steps 6 to 8 compare the machines' character sets, and
-step 11 checks the strings it measured against them, only from a node file,
-because no piece carries the charmaps, and from the pieces they say so. Take a
+is not among them. Steps 2 and 6 to 8 compare the machines' character sets,
+and step 11 checks the strings it measured against them, only from a node
+file, because no piece carries the charmaps; from the pieces, steps 6 to 8
+and step 11 say so, and step 2 compares the tags'. Take a
 folder with `tar` over `ssh`, never `docker cp`, whose target `/tmp` in a
 container is a separate mount, so the copy silently does nothing. `rpm -q
 glibc` gives the build id, with or without the architecture (`...x86_64`).

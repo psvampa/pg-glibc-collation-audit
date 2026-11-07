@@ -672,12 +672,22 @@ def _main(opts):
     if nothing:
         # A tree compared with itself answers "the same" for every locale
         # the reader settles: nothing was compared, and that is said first.
+        cm = machine and g.machines_charmaps(old_side, new_side)
         what = (f"the two {noun} are one commit" if nothing == 'commit'
                 else "the two machines' files hold the same locale sources "
-                     "and charmaps" if machine
+                     "and charmaps" if cm
+                else "the two machines' files hold the same locale sources"
+                if machine
                 else "the two refs are two commits of one source tree")
         print(f"Rules: not compared, {what}.")
-        print(f"Character sets and transliterations: not compared, {what}.")
+        if machine and not cm and nothing != 'commit':
+            # Never "the same charmaps": a file without them left them out
+            # of its commit, and none was read.
+            print("Character sets and transliterations: not compared, a "
+                  "machine's file holds no charmaps this reads.")
+        else:
+            print(f"Character sets and transliterations: not compared, "
+                  f"{what}.")
         names, keyed = [], []
         g.write_list(f"step2_rules_characters.{slug}.tsv",
                      characters_rows({}, []))
@@ -704,8 +714,9 @@ def _main(opts):
                               (new_side, aliases[1], new)))
         got = glibc_tree.compare_rules(old_tree, new_tree, aliases)
         differs, added, removed, listed = sort_out(got, old_tree, new_tree)
-        # An entry of a machine's sources that is not a regular file was not
-        # read (glibc_locale_data.machine_side): neither added nor removed,
+        # An entry of a machine's sources that node_entries skipped (a link, a
+        # folder, a dotfile, a name it does not read) was not read
+        # (glibc_locale_data.machine_side): neither added nor removed,
         # whatever the other side holds, but not compared, and listed.
         unread = {}
         for sd, which in ((old_side, 'old'), (new_side, 'new')):

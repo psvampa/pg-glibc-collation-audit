@@ -83,7 +83,7 @@ compares the two machines' own character sets, for the locales measured on
 them; steps 6 and 7 compare each machine's own with the version its distro
 started from, and step 8 compares the two machines'.
 Given copied folders instead (`--old-locales-dir` and `--new-locales-dir`),
-they are not compared, and those steps say so.
+they are not compared, and steps 6 to 8 say so.
 
 Step 2 also compares, for the same builds, the collating elements a locale
 builds out of transliterations. localedef builds them for the characters a

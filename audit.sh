@@ -22,8 +22,9 @@
 # step 1. With a build, of the options below only --old-node and --new-node
 # are read. Given each machine's file (--old-node, --new-node),
 # steps 1 and 2 read that machine's own locale sources and charmaps, as the
-# build the file names, in place of its tag; a file without the sources
-# makes both sides read their tags, and the run says so.
+# build the file names, in place of its tag; a file without the sources, or
+# naming a build that is not of RHEL 8, 9 or 10, makes both sides read their
+# tags, and the run says so.
 #
 # The order of the two tags is not a formality: every step assumes the second
 # one is the newer. Given them the other way round the run used to go to the
@@ -266,9 +267,9 @@ export PG_GLIBC_AUDIT_OUT="$OUT_DIR"
 # sides, because it names the build that machine runs, and steps 1 and 2 read
 # that build from the machine's own locale sources, which the file holds
 # (glibc_locale_data.machine_sides; nothing is downloaded): the side typed
-# must be that build or its tag. A file that holds no locale sources, or a
-# build this tool does not read as RHEL's, makes both sides read their tags,
-# and NODE_NOTE says so; the warnings block repeats it from the step0 log
+# must be that build or its tag. A file that holds no locale sources, or
+# names a build that is not of RHEL 8, 9 or 10, makes both sides read their
+# tags, and NODE_NOTE says so; the warnings block repeats it from the step0 log
 # written below. Laid out under a name of its own, and moved under the
 # pair's name once the pair is named.
 OLD_TAG=$OLD; NEW_TAG=$NEW; NODE_NOTE=""; NODE_TMP=""
@@ -668,6 +669,16 @@ esac
 
 banner "STEP 2  Which locales' sort rules changed"
 run_step 2 python3 "$SCRIPTS/filter_lc_collate_changes.py" "$OLD" "$NEW"
+# Two machines of one source tree: whether step 2 read their charmaps, as
+# step 2 says it (a file without them, or with a folder it cannot read
+# whole, left them out of its commit). The summary names the charmaps as
+# the same only when it did. Read from the file, not through a pipe.
+CM_NOT_READ=0
+said="Character sets and transliterations: not compared, a machine's file"
+said="$said holds no charmaps this reads."
+if grep -qF "$said" "$OUT_DIR/step2.$PAIR.log"; then
+  CM_NOT_READ=1
+fi
 
 # Absent is not empty. Step 2 writes these files whether or not it found
 # anything, so a missing file means step 2 did not get that far -- an error to
@@ -823,10 +834,18 @@ if [ "$(count_lines "$STEP2_LIST")" -gt 0 ]; then
     echo "   is exactly C or POSIX is compared by PostgreSQL itself, without glibc."
   fi
 else
-  if [ "$SAME_TAG" = 1 ] && [ -n "$OLD_NODE" ] && [ "$NOTHING" = tree ]; then
-    # Two machines' own files, read and the same (see below).
-    echo "     none -- the two machines' files hold the same locale sources and"
-    echo "     charmaps (see below)"
+  if [ "$SAME_TAG" = 1 ] && [ -n "$OLD_NODE" ] && [ "$NOUN" = builds ] \
+     && [ "$NOTHING" = tree ]; then
+    # Two machines' own files, read and the same (see below). The charmaps
+    # are named only when both files hold them: a file without them left
+    # them out of its commit, and none was read.
+    if [ "$CM_NOT_READ" = 0 ]; then
+      echo "     none -- the two machines' files hold the same locale sources and"
+      echo "     charmaps (see below)"
+    else
+      echo "     none -- the two machines' files hold the same locale sources;"
+      echo "     their character sets were not compared (see below)"
+    fi
   elif [ "$SAME_TAG" = 1 ]; then
     echo "     none -- nothing was compared: the two $NOUN are one commit or one"
     echo "     source tree (see below)"
@@ -1297,9 +1316,17 @@ if [ "$SAME_TAG" = "1" ] && [ "$NOUN" != tags ]; then
   elif [ -n "$OLD_NODE" ]; then
     # Two machines' files: their own sources were read, and are the same.
     echo "-- One source tree, compared with itself"
-    text="$OLD -> $NEW: the two machines' files hold the same locale sources"
-    text="$text and charmaps, so no locale's sort rules can differ between"
-    text="$text them, and steps 1 and 2 had nothing to compare. What this run"
+    if [ "$CM_NOT_READ" = 0 ]; then
+      text="$OLD -> $NEW: the two machines' files hold the same locale sources"
+      text="$text and charmaps, so no locale's sort rules can differ between"
+      text="$text them, and steps 1 and 2 had nothing to compare."
+    else
+      text="$OLD -> $NEW: the two machines' files hold the same locale sources,"
+      text="$text so no locale's sort rules can differ between them, and steps"
+      text="$text 1 and 2 had nothing to compare; their character sets were not"
+      text="$text compared, as a file holds no charmaps this reads."
+    fi
+    text="$text What this run"
     text="$text does not read of a machine is under 'Not checked for these"
     text="$text machines', below. What each machine's own glibc says is under"
     text="$text '-- Measured order'. sql/c_utf8_probe.sql and"

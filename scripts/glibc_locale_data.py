@@ -1017,16 +1017,34 @@ _NOTHING_COMPARED_BUILDS = (
 
 
 # For two machines' files (machine_side): the two hold the same locale
-# sources and charmaps, which is a result, and what no step reads of a
-# machine is said where step 1 names them.
-_NOTHING_COMPARED_MACHINES = (
-    "The two machines' files hold the same locale sources and charmaps, so "
-    "no locale's sort rules can differ between them, and steps 1 and 2 have "
-    "nothing to compare. What can still differ is what no step reads of a "
-    "machine, which step 1 prints under 'Not checked for these machines', "
-    "and how each machine's glibc sorts, which step 11 measures. "
-    "sql/c_utf8_probe.sql and docs/confirming-on-a-real-system.md check the "
-    "order on the machines themselves.")
+# sources, and the same charmaps when both files hold them, which is a
+# result; what no step reads of a machine is said where step 1 names them.
+# A file without charmaps leaves them out of its commit (machine_commit), so
+# two such files of one source tree are one tree with no charmap read: the
+# sentence then says the character sets were not compared, never that they
+# are the same (false-negative-reviewer and doc-sweep, 9.4a round 2).
+def nothing_compared_machines(charmaps):
+    """The machines' sentence for one source tree; `charmaps` is whether
+    both files hold charmaps this reads."""
+    same = ("The two machines' files hold the same locale sources and "
+            "charmaps, so no locale's sort rules can differ between them, "
+            "and steps 1 and 2 have nothing to compare."
+            if charmaps else
+            "The two machines' files hold the same locale sources, so no "
+            "locale's sort rules can differ between them, and steps 1 and 2 "
+            "have nothing to compare; their character sets were not "
+            "compared, as a file holds no charmaps this reads.")
+    return (same + " What can still differ is what no step reads of a "
+            "machine, which step 1 prints under 'Not checked for these "
+            "machines', and how each machine's glibc sorts, which step 11 "
+            "measures. sql/c_utf8_probe.sql and "
+            "docs/confirming-on-a-real-system.md check the order on the "
+            "machines themselves.")
+
+
+def machines_charmaps(old, new):
+    """Do both machine sides' files hold charmaps this reads?"""
+    return all(s.prov.get('charmaps') is not None for s in (old, new))
 
 
 def is_machine(s):
@@ -1072,7 +1090,8 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
     one = ONE[noun]
     machines = is_machine(old) and is_machine(new)
     rest = (_NOTHING_COMPARED_REST if noun == 'tags' else
-            _NOTHING_COMPARED_MACHINES if machines else
+            nothing_compared_machines(machines_charmaps(old, new))
+            if machines else
             _NOTHING_COMPARED_BUILDS.format(noun=noun, one=one))
     source = 'upstream source' if noun == 'tags' else 'that commit'
     old, new = label(old), label(new)
