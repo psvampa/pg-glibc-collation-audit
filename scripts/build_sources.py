@@ -78,7 +78,6 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
-import diff_collation_code as dcc
 import glibc_locale_data as g
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -992,9 +991,112 @@ _GIT_HEADER = (b'old mode ', b'new mode ', b'deleted file mode ',
 _HEADER_SHAPED = (b'--- ', b'+++ ', b'*** ', b'Index:', b'diff --git ',
                   b'Prereq:')
 _ALIAS = 'intl/locale.alias'
-# The code strcoll and strxfrm run: what step 5 reads as glibc's collation
-# code, and the four wrappers that call into it and are in no list there.
-COLLATION_CODE = frozenset(dcc.ENTRY_POINTS + dcc.TIER1 + dcc.TIER2 + [
+
+# The code that turns locale data into weights reaches this audit two ways.
+#
+# TIER1/TIER2 below are CURATED: a human ranking of what to read first. They are
+# no longer the ceiling of what gets read -- step 5's
+# diff_collation_code.reachable_from_entry_points() walks glibc's own #include
+# graph and everything it finds is reported too, under TIER 3. Before this, a
+# file absent from these lists was indistinguishable from a file that did not
+# change, and `locale/programs/linereader.h` (lr_getc) and
+# `locale/elem-hash.h` (elem_hash) both changed over 2.34..2.39 unseen.
+#
+# So do NOT add a path here just because it looks collation-related: if the
+# include walk already reaches it, listing it here only freezes by hand what the
+# walk derives. Add a path only when the walk STRUCTURALLY cannot reach it, and
+# say which blind spot it falls into. There are two, both marked below:
+#
+#   (macro)  reached by a macro-computed #include, which a regex cannot resolve
+#   (TU)     a separately compiled translation unit with no header of its own,
+#            linked rather than included
+ENTRY_POINTS = [
+    'locale/programs/ld-collate.c',   # localedef: the collation compiler
+    'string/strcoll_l.c',             # runtime comparison
+    'string/strxfrm_l.c',             # runtime sort-key generation
+    'wcsmbs/wcscoll_l.c',             # the wide-char variants, which #define
+    'wcsmbs/wcsxfrm_l.c',             # their way into the two above
+    'locale/loadlocale.c',            # reads the compiled tables back in
+]
+
+# Weight assignment and comparison: a change here can reorder any locale.
+TIER1 = [
+    'locale/programs/ld-collate.c',   # localedef: ellipsis expansion, weights,
+                                      # sections, reorder-after
+    'string/strcoll_l.c',             # runtime comparison
+    'string/strxfrm_l.c',             # runtime sort-key generation
+    # The wide-char comparison and sort-key wrappers: a handful of #defines
+    # (`STRCMP __wcscmp`, `WEIGHT_H "../locale/weightwc.h"`) and then
+    # `#include <string/strcoll_l.c>`. A change here moves wcscoll/wcsxfrm
+    # behaviour and nothing else. They are ENTRY_POINTS, and the walk subtracts
+    # its entry points from what it reports -- so until they were listed here
+    # they were checked for existence and never diffed. Measured over
+    # 2.28..2.39: copyright and URL lines only, so no verdict moved.
+    'wcsmbs/wcscoll_l.c',
+    'wcsmbs/wcsxfrm_l.c',
+    # (macro) strcoll_l.c reaches the next two as `#include WEIGHT_H`, where
+    # WEIGHT_H is defined by whoever includes IT -- weight.h for the narrow
+    # build, weightwc.h for the wide one. Nothing resolves that without a
+    # preprocessor, and locale/weight.h does change over 2.34..2.39.
+    'locale/weight.h',
+    'locale/weightwc.h',
+    # wcscoll_l.c and wcsxfrm_l.c include this one by name.
+    'locale/coll-lookup.h',
+    # (TU) __collidx_table_lookup, compiled and linked, included by nobody.
+    'locale/coll-lookup.c',
+    # (TU) installs the _NL_COLLATE_* pointers when a locale is loaded.
+    'locale/lc-collate.c',
+    # The C locale's own collation sequence. ld-collate.c does
+    # `#include "C-collate-seq.c"`, so tracking only ld-collate.c showed the
+    # include line and none of the 100 lines of weights behind it. Both change
+    # over 2.34..2.39 -- the RHEL9-to-RHEL10 pair.
+    # (TU) C-collate.c has no header; the walk cannot reach it.
+    'locale/C-collate.c',
+    'locale/C-collate-seq.c',
+]
+
+# Parsing and serialisation: a change here can alter the compiled LC_COLLATE
+# tables without touching the weight logic itself.
+TIER2 = [
+    'locale/programs/linereader.c',   # tokeniser -- how `..` is even parsed
+    'locale/programs/locfile.c',      # writes the compiled category files
+    'locale/programs/locfile.h',
+    'locale/programs/3level.h',       # the weight table representation
+    'locale/loadlocale.c',            # reads the compiled tables back in
+    'locale/localeinfo.h',            # the structs those tables live in
+    # The keyword table is generated from this by gperf. The generated
+    # locfile-kw.h, which the walk does not reach, is a machine-built hash
+    # table whose hunks are unreadable. This is the source they mean, one
+    # line per keyword.
+    'locale/programs/locfile-kw.gperf',
+    # (TU) find_translit. A `collating-element ... from "..."` string naming a
+    # character the charmap lacks is completed through LC_CTYPE's translit
+    # table, and the element exists or not by its answer: uz_UZ's "g'"
+    # contraction in ISO-8859-1 is made that way (backlog 13.7). Declared in
+    # locfile.h, which the walk reaches, and defined here, which has no
+    # header of its own.
+    'locale/programs/ld-ctype.c',
+]
+
+# Not listed, on purpose, though a locale's order passes through them:
+#
+#   string/strcmp.c and the per-architecture strcmp implementations. They
+#   are the whole order of a locale glibc builds in byte order (strcoll_l.c
+#   calls strcmp when it has no rules), but what they return is fixed by the
+#   C standard, and what changes between releases is how fast they get
+#   there, in pages of assembly per release.
+#
+#   The locale-loading code (locale/findlocale.c, loadarchive.c,
+#   setlocale.c, newlocale.c, programs/locarchive.c). It decides which
+#   compiled locale is opened, not how that locale sorts.
+#
+# Both were read hunk by hunk over 2.28..2.34..2.39, and the RHEL patches to
+# them too, without one that moves an order (backlog 13.7).
+
+# The code strcoll and strxfrm run: the three lists above, which step 5
+# reads as glibc's collation code, and the four wrappers that call into it
+# and are in none of them.
+COLLATION_CODE = frozenset(ENTRY_POINTS + TIER1 + TIER2 + [
     'string/strcoll.c', 'string/strxfrm.c', 'wcsmbs/wcscoll.c',
     'wcsmbs/wcsxfrm.c'])
 _EPOCH = re.compile(rb'^(1969-12-31|1970-01-01) ')
@@ -1507,12 +1609,12 @@ Built = collections.namedtuple('Built', 'tree build version tag provenance')
 
 
 def _key():
-    """What a kept tree depends on besides its inputs: this module, and the
-    list of strcoll's code it takes from diff_collation_code."""
+    """What a kept tree, and the mirror metadata kept (_rows), depend on
+    besides their inputs: this module, which holds the list of strcoll's
+    code (COLLATION_CODE) too."""
     h = hashlib.sha256()
-    for f in (os.path.abspath(__file__), dcc.__file__):
-        with open(f.replace('.pyc', '.py'), 'rb') as fh:
-            h.update(fh.read())
+    with open(os.path.abspath(__file__).replace('.pyc', '.py'), 'rb') as fh:
+        h.update(fh.read())
     return h.hexdigest()[:20]
 
 

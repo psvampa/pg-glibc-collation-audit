@@ -86,11 +86,93 @@ def below_floor(count):
     corpus; None when they are enough.
 
     The one place that reads MIN_LOCALE_FILES. A tag side (side(), through
-    _require_corpus) and a machine's directory (diff_distro_locales.
-    corpus_problem) are refused by the same number: two copies of it drift,
-    and the node modes used to take theirs from a --min-files whose default
-    copied this one."""
+    _require_corpus) and a machine's directory (corpus_problem, below) are
+    refused by the same number: two copies of it drift, and the node modes
+    used to take theirs from a --min-files whose default copied this
+    one."""
     return MIN_LOCALE_FILES if count < MIN_LOCALE_FILES else None
+
+
+# A directory entry becomes a path and a git argument. read_blobs' batch
+# protocol desynchronises on an embedded newline, and audit.sh already made
+# this decision for the same reason.
+SAFE_NAME = re.compile(r'^[A-Za-z0-9_@.+-]+$')
+
+
+def shown(name):
+    """`name` as a message or a list line can carry it: bare when it is a
+    plain file name (SAFE_NAME, the characters a locale file name is made
+    of), else ascii(), quoted with every character outside printable ASCII
+    escaped. Defined by what is safe to print rather than by what is not:
+    the empty name (cases c17 and c54), a blank, a comma, a newline, a
+    control character, a character that draws as nothing visible
+    (U+3164) and a combining mark all fall outside it
+    (false-negative-reviewer, rounds 1 to 3 of 13.44). fullmatch, not
+    SAFE_NAME.match: `$` also matches before a final newline, so "zz\\n"
+    passed the check and was written as two lines."""
+    return name if SAFE_NAME.fullmatch(name) else ascii(name)
+
+
+def node_entries(root):
+    """Depth-1 regular files with usable names, plus everything skipped.
+
+    Every skipped entry is returned so it can be printed. An unreported skip
+    shrinks the corpus, and a smaller corpus produces a cleaner answer.
+    """
+    names, skipped = [], []
+    for entry in sorted(os.listdir(root)):
+        path = os.path.join(root, entry)
+        if entry.startswith('.'):
+            skipped.append((entry, 'dotfile'))
+        elif os.path.islink(path):
+            skipped.append((entry, 'symlink'))
+        elif os.path.isdir(path):
+            skipped.append((entry, 'directory'))
+        elif not os.path.isfile(path):
+            skipped.append((entry, 'not a regular file'))
+        elif not SAFE_NAME.match(entry):
+            skipped.append((entry, 'unsafe name'))
+        else:
+            names.append(entry)
+    return names, skipped
+
+
+def corpus_problem(compared, expect_files=None, reference=None,
+                   floored=False, what='--locales-dir'):
+    """Why this corpus must not be reported on, or None if it is usable.
+
+    Pure -- counts in, a message or None out -- so the guard that decides
+    whether a whole result is publishable is testable without fabricating a
+    directory. Every branch exists because its failure mode reports ZERO
+    differences inside LC_COLLATE, which is indistinguishable from a clean run.
+
+    `reference` is an upstream file count, for a node compared against a tag.
+    `floored` applies the absolute minimum, glibc_locale_data.below_floor,
+    the one floor for every side (side() asks it of each machine's
+    directory, and step 8 of the two directories' common files): several
+    hundred files ship in glibc-locale-source, and a floor well below that
+    still catches a `docker cp` that landed three files, or a node without
+    the package at all. Two equally truncated directories agree perfectly,
+    and half of three is one.
+    """
+    if expect_files is not None and compared != expect_files:
+        return (f"compared {compared} file(s), expected {expect_files}. "
+                f"Refusing to report: a partial copy of the node's locales "
+                f"yields a clean-looking zero.")
+    if reference is not None and compared < reference // 2:
+        return (f"only {compared} of {reference} upstream file(s) are present "
+                f"in {what}. That is too few to be a real copy; a partial copy "
+                f"reports 0 differences inside LC_COLLATE, which is "
+                f"indistinguishable from a clean run.")
+    floor = below_floor(compared) if floored else None
+    if floor is not None:
+        return (f"only {compared} file(s) to compare in {what}, below the floor "
+                f"of {floor}. glibc-locale-source ships several hundred; this "
+                f"is a truncated copy or a node without the package. Refusing "
+                f"to report: too few files reports 0 differences inside "
+                f"LC_COLLATE, which is indistinguishable from a clean run.")
+    return None
+
 
 # Prepended to every git invocation. `git diff` obeys the user's config, and
 # these four settings were the first measured to change the text this tool
@@ -1307,11 +1389,9 @@ def side(repo, ref=None, machine=None, extra=(), build=None, version=None,
     because a path read without its id would compare as missing.
     """
     if machine is not None:
-        # Imported here: diff_distro_locales imports this module.
-        import diff_distro_locales as dd
-        names, skipped = dd.node_entries(machine)
-        problem = dd.corpus_problem(len(names), floored=True,
-                                    what=what or machine)
+        names, skipped = node_entries(machine)
+        problem = corpus_problem(len(names), floored=True,
+                                 what=what or machine)
         if problem:
             die(problem)
         return Side('machine', ref, machine, build, version, names, None,

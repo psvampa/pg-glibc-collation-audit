@@ -44,7 +44,6 @@ import argparse
 import difflib
 import hashlib
 import os
-import re
 import subprocess
 import sys
 import tarfile
@@ -52,24 +51,14 @@ import tempfile
 
 import glibc_locale_data as g
 
-# A directory entry becomes a path and a git argument. read_blobs' batch
-# protocol desynchronises on an embedded newline, and audit.sh already made
-# this decision for the same reason.
-SAFE_NAME = re.compile(r'^[A-Za-z0-9_@.+-]+$')
-
-
-def shown(name):
-    """`name` as a message or a list line can carry it: bare when it is a
-    plain file name (SAFE_NAME, the characters a locale file name is made
-    of), else ascii(), quoted with every character outside printable ASCII
-    escaped. Defined by what is safe to print rather than by what is not:
-    the empty name (cases c17 and c54), a blank, a comma, a newline, a
-    control character, a character that draws as nothing visible
-    (U+3164) and a combining mark all fall outside it
-    (false-negative-reviewer, rounds 1 to 3 of 13.44). fullmatch, not
-    SAFE_NAME.match: `$` also matches before a final newline, so "zz\\n"
-    passed the check and was written as two lines."""
-    return name if SAFE_NAME.fullmatch(name) else ascii(name)
+# SAFE_NAME, shown(), node_entries() and corpus_problem() moved to
+# glibc_locale_data when the glibc_tree and machine-file code that stays
+# needed them (step 9.1). Named here as well: this module and the steps
+# that import it still call them by these names.
+SAFE_NAME = g.SAFE_NAME
+shown = g.shown
+node_entries = g.node_entries
+corpus_problem = g.corpus_problem
 
 # Moved to glibc_locale_data once step 4's directory mode and
 # diff_node_locales.py needed the same slicer. Re-exported under its old name:
@@ -140,30 +129,6 @@ def materialise_tag(repo, tag, dest):
         with tarfile.open(fileobj=fh, mode='r|') as tar:
             tar.extractall(dest)
     return os.path.join(dest, g.LOCALES_DIR)
-
-
-def node_entries(root):
-    """Depth-1 regular files with usable names, plus everything skipped.
-
-    Every skipped entry is returned so it can be printed. An unreported skip
-    shrinks the corpus, and a smaller corpus produces a cleaner answer.
-    """
-    names, skipped = [], []
-    for entry in sorted(os.listdir(root)):
-        path = os.path.join(root, entry)
-        if entry.startswith('.'):
-            skipped.append((entry, 'dotfile'))
-        elif os.path.islink(path):
-            skipped.append((entry, 'symlink'))
-        elif os.path.isdir(path):
-            skipped.append((entry, 'directory'))
-        elif not os.path.isfile(path):
-            skipped.append((entry, 'not a regular file'))
-        elif not SAFE_NAME.match(entry):
-            skipped.append((entry, 'unsafe name'))
-        else:
-            names.append(entry)
-    return names, skipped
 
 
 def compare_trees(root_a, root_b, names, label_a='a', label_b='b'):
@@ -260,43 +225,6 @@ def collate_diff_lines(text_a, text_b, label_a, label_b, limit=24):
         lines += [f"read with {g.describe_reading(text_a, label_a)}",
                   f"read with {g.describe_reading(text_b, label_b)}"]
     return lines
-
-
-def corpus_problem(compared, expect_files=None, reference=None,
-                   floored=False, what='--locales-dir'):
-    """Why this corpus must not be reported on, or None if it is usable.
-
-    Pure -- counts in, a message or None out -- so the guard that decides
-    whether a whole result is publishable is testable without fabricating a
-    directory. Every branch exists because its failure mode reports ZERO
-    differences inside LC_COLLATE, which is indistinguishable from a clean run.
-
-    `reference` is an upstream file count, for a node compared against a tag.
-    `floored` applies the absolute minimum, glibc_locale_data.below_floor,
-    the one floor for every side (side() asks it of each machine's
-    directory, and step 8 of the two directories' common files): several
-    hundred files ship in glibc-locale-source, and a floor well below that
-    still catches a `docker cp` that landed three files, or a node without
-    the package at all. Two equally truncated directories agree perfectly,
-    and half of three is one.
-    """
-    if expect_files is not None and compared != expect_files:
-        return (f"compared {compared} file(s), expected {expect_files}. "
-                f"Refusing to report: a partial copy of the node's locales "
-                f"yields a clean-looking zero.")
-    if reference is not None and compared < reference // 2:
-        return (f"only {compared} of {reference} upstream file(s) are present "
-                f"in {what}. That is too few to be a real copy; a partial copy "
-                f"reports 0 differences inside LC_COLLATE, which is "
-                f"indistinguishable from a clean run.")
-    floor = g.below_floor(compared) if floored else None
-    if floor is not None:
-        return (f"only {compared} file(s) to compare in {what}, below the floor "
-                f"of {floor}. glibc-locale-source ships several hundred; this "
-                f"is a truncated copy or a node without the package. Refusing "
-                f"to report: too few files reports 0 differences inside "
-                f"LC_COLLATE, which is indistinguishable from a clean run.")
-    return None
 
 
 def tree_manifest(root, names):

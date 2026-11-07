@@ -976,10 +976,11 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
         self.kept(files)
         for dirpath, _, names in os.walk(self.dir):
             for n in names:
-                # The character maps (reader_cache.char_maps) are another
-                # kind of entry, read by their sha1.
+                # The character maps (reader_cache.char_maps) and the
+                # statement maps (statement_map) are other kinds of entry,
+                # read by their sha1.
                 if not n.endswith('.json') \
-                        or os.path.basename(dirpath) == 'chars':
+                        or os.path.basename(dirpath) in ('chars', 'lines'):
                     continue
                 path = os.path.join(dirpath, n)
                 with open(path) as fh:
@@ -1006,7 +1007,7 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
             b'b': b'LC_COLLATE\ncodepoint_collation\nEND LC_COLLATE\n'}
         fatal, _, unsettled, collate, _, named = self.kept(files)[b'a']
         self.assertIsNone(fatal)
-        counts, ranges, codepoint, steer = collate
+        counts, ranges, codepoint, steer = collate[:4]
         maps, rest = named
         self.assertFalse(rest, 'the reader was sure of every line')
         self.assertEqual((('a', 4), ('b', 1)), counts)
@@ -1398,7 +1399,8 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
                               b'END LC_COLLATE\n'),
             # A blank, and a newline the translated string makes, named
             # quoted: one prints as nothing visible, the other would end
-            # the line audit.sh relays from a `!!` block (dd.shown).
+            # the line audit.sh relays from a `!!` block
+            # (glibc_locale_data.shown).
             'zz_BL': _HEAD + b'LC_COLLATE\ncopy " "\nEND LC_COLLATE\n',
             'zz_NL': _HEAD + b'LC_COLLATE\ncopy "a<U000A>b"\nEND LC_COLLATE\n',
             # The same in the two other messages that name a file: a place
@@ -2628,7 +2630,7 @@ class StepTwoReadsWhereLocaledefReads(unittest.TestCase):
 
 class TheFactsKeyNamesTheCodeThatMakesThem(unittest.TestCase):
     """glibc_tree keeps what _facts computes as text, the reasons
-    Tree.unresolved writes with diff_distro_locales.shown among it, under
+    Tree.unresolved writes with glibc_locale_data.shown among it, under
     _SELF. A change to any file that makes that text has to start it from
     nothing, here and in CI's cache; keyed on glibc_tree.py alone, a
     change to shown() reached no full cache (review of the whole of block
@@ -2645,7 +2647,7 @@ class TheFactsKeyNamesTheCodeThatMakesThem(unittest.TestCase):
     def test_a_change_to_each_source_changes_the_key(self):
         import glibc_tree as gt
         names = sorted(os.path.basename(p) for p in gt._SELF_SOURCES)
-        self.assertEqual(['diff_distro_locales.py', 'glibc_tree.py'], names)
+        self.assertEqual(['glibc_locale_data.py', 'glibc_tree.py'], names)
         tmp = tempfile.mkdtemp(prefix='pg-glibc-self-')
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         for name in os.listdir(_harness.SCRIPTS_DIR):
@@ -3660,6 +3662,524 @@ def _tag_files(tag):
     data = {os.path.basename(p).encode('utf-8', 'surrogateescape'): v
             for p, v in contents.items()}
     return sorted(data), data
+
+
+# -- glibc_tree.compare_rules ------------------------------------------------
+
+def _order(*cps):
+    """An LC_COLLATE section that orders `cps`, one per line."""
+    return (b'LC_COLLATE\norder_start forward\n'
+            + b''.join(b'<U%04X>\n' % c for c in cps)
+            + b'UNDEFINED\norder_end\nEND LC_COLLATE\n')
+
+
+def _copying(name):
+    return b'LC_COLLATE\ncopy "%s"\nEND LC_COLLATE\n' % name.encode('ascii')
+
+
+_IDENT = b'LC_IDENTIFICATION\ntitle "t"\nEND LC_IDENTIFICATION\n'
+# A file the reader leaves unsettled on every build: oracle case s18,
+# translit_start with no translit_end (EXPECTED_UNSETTLED, _LATER).
+_UNSURE = (b'LC_CTYPE\ntranslit_start\nEND LC_CTYPE\n'
+           + _order(0x61, 0x62))
+
+
+@needs_clone
+class CompareRules(unittest.TestCase):
+    """glibc_tree.compare_rules, the one comparison of each locale's
+    effective rules on two sides that steps 2 and 3 become (branch 9): a
+    side it cannot read, or read in doubt, is NOT_COMPARED and names the
+    side; never SAME. Each guard has a case that reaches it with the other
+    side readable."""
+
+    @classmethod
+    def setUpClass(cls):
+        import glibc_tree
+        cls.gt = glibc_tree
+        cls.build = gr.Build.at(GLIBC_CLONE, MID, True)
+        cls.cache = tempfile.mkdtemp(prefix='pg-glibc-compare-')
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.cache, ignore_errors=True)
+
+    def tree(self, files, build=None):
+        return self.gt.Tree('t', {k.encode('ascii'): v
+                                  for k, v in files.items()},
+                            build or self.build, g.decoded, self.cache)
+
+    def compare(self, old, new, aliases=({}, {}), build=(None, None)):
+        return self.gt.compare_rules(self.tree(old, build[0]),
+                                     self.tree(new, build[1]), aliases)
+
+    def states(self, got):
+        return {n: r.state for n, r in got.items()}
+
+    def test_the_same_rules_are_same_and_name_no_character(self):
+        files = {'xx_AA': _order(0x61, 0x62), 'xx_BB': _order(0x63, 0x64)}
+        got = self.compare(files, files)
+        self.assertEqual({'xx_AA': 'same', 'xx_BB': 'same'},
+                         self.states(got))
+        self.assertEqual(self.gt.Rules('same', None, (), False),
+                         got['xx_AA'])
+
+    def test_two_locales_whose_rules_differ_name_their_characters(self):
+        old = {'xx_AA': _order(0x61, 0x62, 0x65), 'xx_BB': _order(0x63, 0x64),
+               'xx_CC': _order(0x66)}
+        new = {'xx_AA': _order(0x62, 0x61, 0x65), 'xx_BB': _order(0x63, 0x67),
+               'xx_CC': _order(0x66)}
+        got = self.compare(old, new)
+        self.assertEqual({'xx_AA': 'differs', 'xx_BB': 'differs',
+                          'xx_CC': 'same'}, self.states(got))
+        # Two lines swapped: the diff moves one of them, as step 2's does.
+        self.assertEqual((0x62,), got['xx_AA'].chars)
+        # A removed line by the old run, an added one by the new.
+        self.assertEqual((0x64, 0x67), got['xx_BB'].chars)
+        self.assertEqual((False, False), (got['xx_AA'].every_rule,
+                                          got['xx_BB'].every_rule))
+        self.assertEqual((None, None), (got['xx_AA'].why, got['xx_BB'].why))
+
+    def test_a_locale_that_copies_changed_rules_differs_with_them(self):
+        old = {'xx_AA': _order(0x61, 0x62), 'xx_CP': _copying('xx_AA'),
+               'xx_DP': _copying('xx_AA')}
+        new = dict(old, xx_AA=_order(0x61, 0x63))
+        got = self.compare(old, new)
+        self.assertEqual({'xx_AA': 'differs', 'xx_CP': 'differs',
+                          'xx_DP': 'differs'}, self.states(got))
+        self.assertEqual((0x62, 0x63), got['xx_CP'].chars)
+        self.assertEqual((0x62, 0x63), got['xx_DP'].chars)
+
+    def test_rules_moved_to_another_file_or_renamed_are_the_same(self):
+        """kab_DZ took ber_DZ's rules into its own file between 2.34 and
+        2.39 (review B): without file and line in what is compared, the
+        same statements in the same order are SAME."""
+        old = {'xx_AA': _order(0x61, 0x62), 'xx_CP': _copying('xx_AA'),
+               'xx_IN': _copying('xx_AA')}
+        new = {'xx_BB': _order(0x61, 0x62), 'xx_CP': _copying('xx_BB'),
+               'xx_IN': _order(0x61, 0x62)}
+        got = self.compare(old, new)
+        self.assertEqual('same', got['xx_CP'].state)
+        self.assertEqual('same', got['xx_IN'].state)
+
+    def test_a_name_with_no_file_on_one_side_is_not_compared(self):
+        old = {'xx_AA': _order(0x61), 'xx_OL': _order(0x61),
+               'xx_O2': _order(0x62)}
+        new = {'xx_AA': _order(0x61), 'xx_NW': _order(0x61),
+               'xx_N2': _order(0x62)}
+        got = self.compare(old, new)
+        self.assertEqual({'xx_AA': 'same', 'xx_OL': 'not compared',
+                          'xx_O2': 'not compared', 'xx_NW': 'not compared',
+                          'xx_N2': 'not compared'}, self.states(got))
+        self.assertIn('new side', got['xx_OL'].why)
+        self.assertIn('old side', got['xx_NW'].why)
+        self.assertIsNone(got['xx_OL'].chars)
+
+    def test_doubt_on_either_side_is_not_compared_and_names_the_side(self):
+        """The reader's doubt is never read past: the unsettled file holds
+        the same rules as the settled one, so a comparison that ignored
+        the doubt would say SAME."""
+        sure = _IDENT + _order(0x61, 0x62)
+        old = {'xx_OD': _UNSURE, 'xx_ND': sure, 'xx_BD': _UNSURE,
+               'xx_OK': sure}
+        new = {'xx_OD': sure, 'xx_ND': _UNSURE, 'xx_BD': _UNSURE,
+               'xx_OK': sure}
+        got = self.compare(old, new)
+        self.assertEqual({'xx_OD': 'not compared', 'xx_ND': 'not compared',
+                          'xx_BD': 'not compared', 'xx_OK': 'same'},
+                         self.states(got))
+        self.assertTrue(got['xx_OD'].why.startswith('old side: '),
+                        got['xx_OD'].why)
+        self.assertNotIn('new side', got['xx_OD'].why)
+        self.assertTrue(got['xx_ND'].why.startswith('new side: '),
+                        got['xx_ND'].why)
+        self.assertEqual(['old side', 'new side'],
+                         re.findall(r'(old side|new side)',
+                                    got['xx_BD'].why))
+
+    def test_a_copied_file_read_in_doubt_is_not_compared(self):
+        """The doubt can be in a file the locale copies, never its own."""
+        old = {'xx_AA': _order(0x61, 0x62), 'xx_CP': _copying('xx_AA')}
+        new = {'xx_AA': _UNSURE, 'xx_CP': _copying('xx_AA')}
+        got = self.compare(old, new)
+        self.assertEqual('not compared', got['xx_CP'].state)
+        self.assertTrue(got['xx_CP'].why.startswith('new side: '))
+
+    def test_lc_collate_gained_or_lost_is_not_compared(self):
+        old = {'xx_GN': _IDENT, 'xx_G2': _IDENT,
+               'xx_LS': _IDENT + _order(0x61), 'xx_NO': _IDENT}
+        new = {'xx_GN': _IDENT + _order(0x61), 'xx_G2': _IDENT + _order(0x62),
+               'xx_LS': _IDENT, 'xx_NO': _IDENT}
+        got = self.compare(old, new)
+        self.assertEqual({'xx_GN': 'not compared', 'xx_G2': 'not compared',
+                          'xx_LS': 'not compared', 'xx_NO': 'same'},
+                         self.states(got))
+        self.assertIn('new side only', got['xx_GN'].why)
+        self.assertIn('old side only', got['xx_LS'].why)
+
+    def test_an_alias_is_compared_through_each_side_s_locale_alias(self):
+        old = {'xx_AA': _order(0x61, 0x62), 'xx_BB': _order(0x61, 0x62),
+               'xx_CC': _order(0x63)}
+        new = {'xx_AA': _order(0x62, 0x61), 'xx_BB': _order(0x61, 0x62),
+               'xx_CC': _order(0x63)}
+        old_al = {'alpha': 'xx_AA.ISO-8859-1', 'beta': 'xx_AA.UTF-8',
+                  'moved': 'xx_AA.UTF-8', 'gone': 'xx_CC.UTF-8',
+                  'only_old': 'xx_CC.UTF-8', 'xx_AA': 'xx_AA.ISO-8859-1',
+                  'nowhere': 'zz_ZZ.UTF-8'}
+        new_al = {'alpha': 'xx_AA.ISO-8859-1', 'beta': 'xx_AA.UTF-8',
+                  'moved': 'xx_BB.UTF-8', 'gone': 'xx_DD.UTF-8',
+                  'only_new': 'xx_CC.UTF-8', 'xx_AA': 'xx_AA.ISO-8859-1',
+                  'nowhere': 'zz_ZZ.UTF-8'}
+        got = self.compare(old, new, (old_al, new_al))
+        self.assertEqual({'xx_AA': 'differs', 'xx_BB': 'same',
+                          'xx_CC': 'same', 'alpha': 'differs',
+                          'beta': 'differs', 'moved': 'same',
+                          'gone': 'not compared', 'only_old': 'not compared',
+                          'only_new': 'not compared'}, self.states(got))
+        self.assertEqual(got['xx_AA'], got['alpha'])
+        self.assertIn('xx_DD.UTF-8', got['gone'].why)
+        self.assertIn('new side', got['gone'].why)
+        self.assertIn("old side's locale.alias only", got['only_old'].why)
+        self.assertIn("new side's locale.alias only", got['only_new'].why)
+
+    def test_a_side_with_no_locale_alias_is_refused(self):
+        files = {'xx_AA': _order(0x61)}
+        for aliases in (({}, None), (None, {})):
+            with self.subTest(aliases=aliases):
+                with self.assertRaises(TypeError):
+                    self.compare(files, files, aliases)
+
+    def test_a_changed_instruction_says_every_rule_can_change(self):
+        """backlog 13.36: a changed line that steers other lines moves
+        rules on lines that did not change."""
+        old = {'xx_DIR': _order(0x61, 0x62), 'xx_CH': _order(0x61, 0x62)}
+        new = {'xx_DIR': _order(0x61, 0x62).replace(b'forward',
+                                                    b'backward'),
+               'xx_CH': _order(0x61, 0x63)}
+        got = self.compare(old, new)
+        self.assertEqual({'xx_DIR': 'differs', 'xx_CH': 'differs'},
+                         self.states(got))
+        self.assertTrue(got['xx_DIR'].every_rule)
+        self.assertFalse(got['xx_CH'].every_rule)
+
+    def test_the_same_bytes_read_otherwise_name_no_character(self):
+        """codepoint_collation is a keyword of the RHEL 9 build and not of
+        glibc-2.34: the same file read by the two differs with no changed
+        line. The keyword line is read otherwise and steers the rest
+        (every_rule), naming no character."""
+        rhel9 = gr.rhel_build(GLIBC_CLONE, 'rhel9')
+        files = {'xx_CP': _IDENT + b'LC_COLLATE\ncodepoint_collation\n'
+                 b'END LC_COLLATE\n',
+                 'xx_AA': _IDENT + _order(0x61)}
+        got = self.compare(files, files, build=(self.build, rhel9))
+        self.assertEqual('same', got['xx_AA'].state)
+        r = got['xx_CP']
+        self.assertEqual('differs', r.state)
+        self.assertTrue(r.every_rule)
+        # A line changed outside LC_COLLATE is no changed rule: the same.
+        new = dict(files, xx_CP=files['xx_CP'].replace(b'title "t"',
+                                                        b'title "u"'))
+        r2 = self.compare(files, new, build=(self.build, rhel9))['xx_CP']
+        self.assertEqual(r, r2)
+
+    def test_rules_that_differ_where_no_line_counts_name_no_character(self):
+        """Injected: the two sides' rules differ (another sha1) and every
+        line reads the same, which no case here reaches by its files. The
+        characters are then not known, never an empty list, and a changed
+        line outside LC_COLLATE is no counted line. A changed line on a
+        section's edge counts and steers the rest: no character,
+        every_rule."""
+        files = {'xx_AA': _order(0x61, 0x62), 'xx_BB': _order(0x63),
+                 'xx_TI': _IDENT + _order(0x64), 'xx_T2': _IDENT + _order(0x65),
+                 'xx_ED': _order(0x66), 'xx_E2': _order(0x67)}
+        # Lines whose bytes change and whose reading does not: a title,
+        # outside LC_COLLATE; blanks after END, the edge of a section.
+        changed = dict(files)
+        for name in ('xx_TI', 'xx_T2'):
+            changed[name] = files[name].replace(b'title "t"', b'title "u"')
+        for name in ('xx_ED', 'xx_E2'):
+            changed[name] = files[name].replace(b'END LC_COLLATE\n',
+                                                b'END LC_COLLATE  \n')
+        old, new = self.tree(files), self.tree(changed)
+        for name in files:
+            run = list(new._runs[name])
+            run[3] = run[3][:4] + ('0' * 40,) + run[3][5:]
+            new._runs[name] = tuple(run)
+        got = self.gt.compare_rules(old, new, ({}, {}))
+        self.assertEqual({n: 'differs' for n in files}, self.states(got))
+        for name in ('xx_AA', 'xx_BB', 'xx_TI', 'xx_T2'):
+            self.assertIsNone(got[name].chars, name)
+            self.assertIn('none is read otherwise', got[name].why)
+            self.assertFalse(got[name].every_rule, name)
+        for name in ('xx_ED', 'xx_E2'):
+            self.assertEqual((), got[name].chars, name)
+            self.assertTrue(got[name].every_rule, name)
+
+    def test_an_unchanged_line_two_builds_read_otherwise_counts(self):
+        """The same codepoint_collation file with one ordinary line changed
+        too: the RHEL 9 build reads the keyword, glibc-2.34 a word, so a
+        line that did not change moves rules as well, and the changed
+        line's characters are not all of them (false-negative-reviewer,
+        step 9.1, round 1). The unchanged line starts other statements on
+        the two sides and steers others: every_rule. The same change read
+        by one build is the changed line alone."""
+        rhel9 = gr.rhel_build(GLIBC_CLONE, 'rhel9')
+        old = {'xx_CP': _IDENT + b'LC_COLLATE\ncodepoint_collation\n'
+               b'order_start forward\n<U0061>\n<U0062>\nUNDEFINED\n'
+               b'order_end\nEND LC_COLLATE\n',
+               'xx_C2': _IDENT + b'LC_COLLATE\ncodepoint_collation\n'
+               b'order_start forward\n<U0064>\n<U0065>\nUNDEFINED\n'
+               b'order_end\nEND LC_COLLATE\n'}
+        new = {'xx_CP': old['xx_CP'].replace(b'<U0062>', b'<U0063>'),
+               'xx_C2': old['xx_C2'].replace(b'<U0065>', b'<U0066>')}
+        got = self.compare(old, new, build=(self.build, rhel9))
+        for name in ('xx_CP', 'xx_C2'):
+            self.assertEqual('differs', got[name].state)
+            self.assertTrue(got[name].every_rule, name)
+        same = self.compare(old, new, build=(rhel9, rhel9))
+        self.assertEqual((0x62, 0x63), same['xx_CP'].chars)
+        self.assertEqual((0x65, 0x66), same['xx_C2'].chars)
+        self.assertEqual((False, False), (same['xx_CP'].every_rule,
+                                          same['xx_C2'].every_rule))
+
+    def test_an_unchanged_line_a_changed_directive_reads_otherwise_counts(
+            self):
+        """An escape_char or comment_char line above LC_COLLATE changed,
+        one build, and one ordinary line changed too: the collating-element
+        line did not change and is read otherwise, so its characters are
+        named and it steers others (false-negative-reviewer, step 9.1,
+        round 2; no file of the two RHEL pairs of tags changes such a line
+        today)."""
+        body = (_IDENT + b'LC_COLLATE\ncollating-element <x> from '
+                b'"<U0041>/<U0042>"\norder_start forward\n<U0065>\n<x>\n'
+                b'UNDEFINED\norder_end\nEND LC_COLLATE\n')
+        cbody = (_IDENT + b'LC_COLLATE\norder_start forward\n<U0061>;'
+                 b'<U0062>;<U0063> %x\n<U0065>\nUNDEFINED\norder_end\n'
+                 b'END LC_COLLATE\n')
+        old = {'xx_ES': b'escape_char /\n' + body,
+               'xx_CC': b'comment_char %\n' + cbody}
+        new = {'xx_ES': (b'escape_char \\\n' + body).replace(b'<U0065>',
+                                                            b'<U0066>'),
+               'xx_CC': (b'comment_char ;\n' + cbody).replace(b'<U0065>',
+                                                            b'<U0066>')}
+        got = self.compare(old, new)
+        self.assertEqual({'xx_ES': 'differs', 'xx_CC': 'differs'},
+                         self.states(got))
+        self.assertTrue(got['xx_ES'].every_rule)
+        self.assertLessEqual({0x41, 0x42, 0x65, 0x66}, set(got['xx_ES'].chars))
+        self.assertLessEqual({0x61, 0x62, 0x63, 0x65, 0x66},
+                             set(got['xx_CC'].chars))
+
+    def test_a_file_one_run_reads_counts_whole_on_that_side(self):
+        """A copied file whose LC_COLLATE the new run alone reads: its
+        lines are named, though the file is the same on both sides."""
+        old = {'xx_AA': _order(0x61, 0x62), 'xx_BB': _order(0x63, 0x64),
+               'xx_CP': _order(0x61, 0x62), 'xx_DP': _order(0x61, 0x62)}
+        new = dict(old, xx_CP=_copying('xx_BB'), xx_DP=_copying('xx_BB'))
+        got = self.compare(old, new)
+        for name in ('xx_CP', 'xx_DP'):
+            self.assertEqual('differs', got[name].state)
+            self.assertLessEqual({0x63, 0x64}, set(got[name].chars), name)
+
+    def test_a_changed_section_edge_says_every_rule_can_change(self):
+        """A section split in two starts the lines after it from state 0
+        (filter_lc_collate_changes.instruction_changed): the line that ends
+        or starts a section steers the rest. Here an END and a header
+        added; no other instruction changed."""
+        body = (b'<U0061>\n<U0062>\n<U0063>\n')
+        old = {'xx_SP': b'LC_COLLATE\norder_start forward\n' + body
+               + b'UNDEFINED\norder_end\nEND LC_COLLATE\n'}
+        new = {'xx_SP': old['xx_SP'].replace(
+            b'order_start forward\n',
+            b'order_start forward\nEND LC_COLLATE\nLC_COLLATE\n')}
+        got = self.compare(old, new)
+        r = got['xx_SP']
+        self.assertEqual('differs', r.state)
+        self.assertTrue(r.every_rule, r)
+
+    def test_characters_the_reader_cannot_name_are_not_known(self):
+        """Injected: no rule of the corpus leaves a changed line the reader
+        cannot name, or a run with no character map or no statement map of
+        a file it read. Each makes the characters not known, never fewer
+        of them."""
+        old = {'xx_AA': _order(0x61, 0x62), 'xx_BB': _order(0x63, 0x64)}
+        new = {'xx_AA': _order(0x61, 0x65), 'xx_BB': _order(0x63, 0x66)}
+        real = rc.char_map
+
+        def blind(sha, cache_dir=None):
+            got = real(sha, cache_dir)
+            return None if got is None else {n: None for n in got}
+        with mock.patch.object(self.gt.rc, 'char_map', blind):
+            got = self.compare(old, new)
+        for name in ('xx_AA', 'xx_BB'):
+            self.assertEqual('differs', got[name].state)
+            self.assertIsNone(got[name].chars)
+            self.assertIn('cannot name what line', got[name].why)
+        real_read = self.gt._read_collate
+
+        def no_maps(tree, name):
+            bounds, steer, _ = real_read(tree, name)
+            return bounds, steer, {}
+        with mock.patch.object(self.gt, '_read_collate', no_maps):
+            got = self.compare(old, new)
+        for name in ('xx_AA', 'xx_BB'):
+            self.assertIsNone(got[name].chars)
+            self.assertIn('is not kept', got[name].why)
+        with mock.patch.object(self.gt.rc, 'char_map', return_value=None):
+            got = self.compare(old, new)
+        for name in ('xx_AA', 'xx_BB'):
+            self.assertIsNone(got[name].chars)
+            self.assertIn('is not kept', got[name].why)
+        with mock.patch.object(self.gt.rc, 'statement_map',
+                               return_value=None):
+            got = self.compare(old, new)
+        for name in ('xx_AA', 'xx_BB'):
+            self.assertIsNone(got[name].chars)
+            self.assertIn('statement map', got[name].why)
+
+    def test_the_cases_of_15_4_give_localedef_s_answer_or_not_compared(self):
+        """The oracle cases backlog 15.4 left to branch 9: the reader
+        leaves every one unsettled on the three builds
+        (EXPECTED_UNSETTLED), and compare_rules gives NOT_COMPARED for
+        each, against itself: what was not settled is never SAME."""
+        wanted = {'s18', 's27', 's30', 's31', 's41', 's43', 's45', 's46',
+                  's62', 's64', 's65', 's66', 'c34', 'c45', 'c46'}
+        cases = {c.id: c for c in oracle_cases.generate()
+                 if c.id in wanted}
+        self.assertEqual(wanted, set(cases))
+        for name in ('rhel8', 'rhel9', 'rhel10'):
+            build = gr.rhel_build(GLIBC_CLONE, name)
+            for cid in sorted(wanted):
+                case = cases[cid]
+                with self.subTest(build=name, case=cid):
+                    files = {k.encode('latin-1'): v
+                             for k, v in case.files.items()}
+                    tree = self.gt.Tree(cid, files, build, g.decoded,
+                                        self.cache)
+                    got = self.gt.compare_rules(tree, tree, ({}, {}))
+                    p = predict(case, build)
+                    if p['outcome'] == 'unsettled':
+                        self.assertEqual('not compared',
+                                         got[case.main].state)
+                    else:
+                        self.assertEqual('same', got[case.main].state)
+
+
+@needs_clone
+class CompareRulesOnTheTags(unittest.TestCase):
+    """compare_rules over the two RHEL pairs of upstream tags, the known
+    answers of branch 9's plan: or_IN and the three sv_* differ over
+    2.28..2.34 and th_TH over 2.34..2.39, sv_SE and th_TH with their
+    locale.alias names (swedish, thai); ber_DZ and kab_DZ, whose rules
+    moved from one file to the other, are the same; C, which glibc-2.34
+    has no file for, is not compared. Every other name is the same, or
+    not compared because one tag has no file for it."""
+
+    def compare(self, old, new):
+        import glibc_tree as gt
+        return gt.compare_rules(
+            gt.Tree.at_tag(GLIBC_CLONE, old), gt.Tree.at_tag(GLIBC_CLONE, new),
+            (g.locale_aliases(GLIBC_CLONE, old),
+             g.locale_aliases(GLIBC_CLONE, new)))
+
+    def by_state(self, got, state):
+        return sorted(n for n, r in got.items() if r.state == state)
+
+    def test_rhel8_to_rhel9(self):
+        got = self.compare(OLD, MID)
+        self.assertEqual(['or_IN', 'sv_FI', 'sv_FI@euro', 'sv_SE', 'swedish'],
+                         self.by_state(got, 'differs'))
+        self.assertEqual(['ckb_IQ', 'mnw_MM'],
+                         self.by_state(got, 'not compared'))
+        self.assertEqual(got['sv_SE'], got['swedish'])
+        self.assertTrue(got['sv_SE'].chars)
+
+    def test_rhel9_to_rhel10(self):
+        got = self.compare(MID, NEW)
+        self.assertEqual(['th_TH', 'thai'], self.by_state(got, 'differs'))
+        self.assertEqual(['C', 'aa_ER@saaho', 'ab_GE', 'crh_RU', 'gbm_IN',
+                          'kv_RU', 'rif_MA', 'ssy_ER', 'su_ID', 'syr', 'tok',
+                          'translit_emojis', 'zgh_MA'],
+                         self.by_state(got, 'not compared'))
+        for name in self.by_state(got, 'not compared'):
+            self.assertRegex(got[name].why, r'^no file \S+ on the (old|new) '
+                             r'side$', name)
+        self.assertIn('old side', got['C'].why)
+        for name in ('ber_DZ', 'kab_DZ'):
+            self.assertEqual('same', got[name].state, name)
+        self.assertTrue(got['th_TH'].every_rule)
+
+class RulesDigest(unittest.TestCase):
+    """reader_cache.rules: what compare_rules compares. Every field of a
+    token but its line is in it, and a summary kept without it is not
+    read as one."""
+
+    def test_every_field_of_a_token_but_its_line_is_in_the_sha1(self):
+        self.assertEqual(set(gr.Tok.__slots__) - {'line'},
+                         set(rc._TOK_FIELDS))
+
+    def test_a_refused_statement_and_a_moved_line_change_nothing(self):
+        c = gr.Collate()
+        t = gr.Tok('ucs4', 0x61, 3)
+        c.statements = [('a', 3, [t])]
+        base = rc.rules(c)
+        moved = gr.Collate()
+        moved.statements = [('b', 9, [gr.Tok('ucs4', 0x61, 9)])]
+        self.assertEqual(base, rc.rules(moved))
+        refused = gr.Collate()
+        refused.statements = [('a', 3, [t]), ('a', 4, [gr.Tok('ucs4', 0x62,
+                                                              4)])]
+        refused.refused = {1}
+        self.assertEqual(base, rc.rules(refused))
+        refused.refused = set()
+        self.assertNotEqual(base, rc.rules(refused))
+        for field, value in (('val', 0x62), ('tok', 'bsymbol'),
+                             ('kwtok', 'tok_x'), ('raw', b'x'),
+                             ('closed', False), ('items', [('cp', 1)])):
+            with self.subTest(field=field):
+                other = gr.Collate()
+                u = gr.Tok('ucs4', 0x61, 3)
+                setattr(u, field, value)
+                other.statements = [('a', 3, [u])]
+                self.assertNotEqual(base, rc.rules(other))
+
+    def test_a_statement_map_that_does_not_read_whole_is_none(self):
+        """reader_cache.statement_map, as char_map: a map kept under a
+        sha1 its text does not have, or of another shape, is not read as
+        one that names no statement, and the file is removed."""
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-lines-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        d = rc._chars_dir(tmp, 'lines')
+        os.makedirs(d)
+        good = json.dumps([3, 'a' * 40, 5, 'b' * 40], separators=(',', ':'))
+        for text, want in ((good, {3: 'a' * 40, 5: 'b' * 40}),
+                           (json.dumps([3, 'a' * 40, 3, 'b' * 40]), None),
+                           (json.dumps([3, 'x']), None),
+                           (json.dumps([3]), None),
+                           (json.dumps({'3': 'a' * 40}), None)):
+            with self.subTest(text=text):
+                sha = hashlib.sha1(text.encode('ascii')).hexdigest()
+                path = os.path.join(d, sha + '.json')
+                with open(path, 'w') as fh:
+                    fh.write(text)
+                self.assertEqual(want, rc.statement_map(sha, tmp))
+                self.assertEqual(want is not None, os.path.exists(path))
+        sha = hashlib.sha1(good.encode('ascii')).hexdigest()
+        rc._LINES.pop(sha, None)
+        with open(os.path.join(d, sha + '.json'), 'w') as fh:
+            fh.write(good.replace('a', 'c', 1))
+        self.assertIsNone(rc.statement_map(sha, tmp))
+
+    def test_a_summary_kept_without_the_rules_is_refused(self):
+        ok = (None, (), (), ((('a', 1),), (), (), (), 'f' * 40,
+                             (('a', 'e' * 40),)), (False, ()), ((), False))
+        self.assertEqual(ok, rc._check(ok))
+        head = ok[3][:4]
+        for bad in (head, head + ('f' * 40,), head + ('x', ()),
+                    head + (None, ()), head + ('f' * 40, (('a', 'x'),)),
+                    head + ('f' * 40, None)):
+            with self.subTest(collate=bad):
+                with self.assertRaises(ValueError):
+                    rc._check(ok[:3] + (bad,) + ok[4:])
 
 
 if __name__ == '__main__':

@@ -90,7 +90,7 @@ jobs:
         # and starts over. The key below says the same, so a run after such
         # a change restores nothing instead of a cache it would throw away.
         # What glibc_tree.py derives from the runs is kept under the hash of
-        # that file and of diff_distro_locales.py, whose shown() writes the
+        # that file and of glibc_locale_data.py, whose shown() writes the
         # names it keeps; the key names them too, and falls back to the runs
         # of the same reader, so after a change to those files alone one run
         # computes it again and saves it, instead of every run computing it
@@ -98,12 +98,13 @@ jobs:
         # what step 2 asks over the fixture builds of tests/build_sources/;
         # the key names those files, the test code that builds them and asks
         # (_harness.py, test_build_sources.py) and the scripts that decide
-        # what step 2 asks of a build, so a change to any of them is saved
+        # what step 2 asks of a build (node_charmaps.py holds part of step
+        # 2's check of character sets), so a change to any of them is saved
         # once instead of computed on every run (#145 changed three of them).
         uses: actions/cache@v4
         with:
           path: scripts/glibc-reader-cache
-          key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}-${{ hashFiles('scripts/glibc_tree.py', 'scripts/diff_distro_locales.py', 'scripts/filter_lc_collate_changes.py', 'scripts/glibc_locale_data.py', 'scripts/build_sources.py', 'tests/_harness.py', 'tests/test_build_sources.py', 'tests/build_sources/**') }}
+          key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}-${{ hashFiles('scripts/glibc_tree.py', 'scripts/filter_lc_collate_changes.py', 'scripts/node_charmaps.py', 'scripts/glibc_locale_data.py', 'scripts/build_sources.py', 'tests/_harness.py', 'tests/test_build_sources.py', 'tests/build_sources/**') }}
           restore-keys: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}
 
       - name: Fill the reader's answers before the suite
