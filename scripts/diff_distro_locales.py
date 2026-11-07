@@ -60,7 +60,7 @@ shown = g.shown
 node_entries = g.node_entries
 corpus_problem = g.corpus_problem
 
-# Moved to glibc_locale_data once step 4's directory mode and
+# Moved to glibc_locale_data once another step's directory mode and
 # diff_node_locales.py needed the same slicer. Re-exported under its old name:
 # it is what this module's docstrings and tests call it.
 collate_text = g.collate_text
@@ -172,7 +172,7 @@ def inherited_via_copy(texts, roots):
     LC_COLLATE reaches one of them through `copy`.
 
     Pure: glibc_locale_data.inherited_from's rule over each file read
-    alone, applied to a node's own files (steps 3 and 4 walk what localedef
+    alone, applied to a node's own files (steps 1 and 2 walk what localedef
     reads for each locale instead, glibc_tree, backlog 15.2). A backport that edits iso14651_t1 changes the order of the
     hundreds of locales that copy it, and until this existed the
     node-reading checks reported "1 locale(s) differ inside LC_COLLATE" for
@@ -188,8 +188,8 @@ def inherited_via_copy(texts, roots):
 
 
 def print_inheritance(inherited, where, indent='  '):
-    """The blast-radius block under a list of differing files, in the shape
-    step 4 prints. Always printed when there is a list above it: a count of
+    """The blast-radius block under a list of differing files. Always
+    printed when there is a list above it: a count of
     zero is a fact, an absent line is not."""
     print(f"\n{indent[:-2]}Additionally affected via `copy` inheritance at "
           f"{where}: {len(inherited)} locale(s)")
@@ -451,12 +451,10 @@ def _main(opts):
         print(f"\nFull result written to {out}")
 
     print()
-    warn(f"This compares locale DATA. glibc's collation CODE is step 5's job "
-         f"(diff_collation_code.py) -- that is where Bug 22668 lives, the "
-         f"change that reorders ko_KR. What step 5 does not read of a "
-         f"distro's code (all of it, when step 5 compares two tags) is "
-         f"closed by the empirical check on real nodes, which measures the "
-         f"glibc actually installed, patches and all: "
+    warn(f"This compares locale DATA. glibc's collation CODE, where Bug "
+         f"22668 lives (the change that reorders ko_KR), is compared by no "
+         f"step: step 1 says so. The empirical check on real nodes "
+         f"measures the glibc actually installed, patches and all: "
          f"docs/confirming-on-a-real-system.md.")
     if not (opts.charmaps_dir or opts.no_charmaps):
         warn(f"A machine's own localedata/charmaps/ is NOT compared, nor "

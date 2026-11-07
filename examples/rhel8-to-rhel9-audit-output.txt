@@ -1,4 +1,4 @@
-Each machine's file names the build it runs: steps 1 to 5 read
+Each machine's file names the build it runs: steps 1 and 2 read
 glibc-2.28-251.el8_10.40 and glibc-2.34-275.el9_8, in place of glibc-2.28 and
 glibc-2.34.
 
@@ -44,22 +44,23 @@ localedata/ and locale/ from its source RPM, as one commit of the clone):
              glibc-rh827510.patch, glibc-c-utf8-locale-1.patch,
              glibc-rh2149102.patch, glibc-RHEL-72017-2.patch,
              glibc-RHEL-72017-3.patch
-!! Not checked for these builds: the compiler, and the build's patches to code
-   outside localedata/ and locale/: one to the own files of strcoll, strxfrm,
-   wcscoll or wcsxfrm under string/ and wcsmbs/ is named with the build's
-   patches above, and step 5 then gives no clean result; the others, such as
-   those to the strcmp that strcoll calls, are not compared; the SRPM's and
-   the binary packages' GPG signatures (only rpm's own digests are checked),
-   and the mirror metadata's, whose sha256 is the only check on each file; the
-   host that built the binary packages is taken to read the spec as the host
-   that built the SRPM did (its architecture, its rpm and redhat-rpm-config
-   macros); the Lua rpm runs while it reads the spec beyond the blocks of the
-   spec, which are pinned: a Lua Source such as patch-git.lua, which changes
-   in every build, is read only for the ways of changing macros, the
-   environment or rpm's table of patches the seven builds were measured
-   without; localedata/SUPPORTED and locale/ are in no binary package: they
-   are the SRPM's tarball, checked above against the upstream tag, and its
-   patches.
+!! Not checked for these builds: the compiler that built the binary packages,
+   and the build's patches to code, such as those to the strcmp that strcoll
+   calls; the SRPM's and the binary packages' GPG signatures (only rpm's own
+   digests are checked), and the mirror metadata's, whose sha256 is the only
+   check on each file; the host that built the binary packages is taken to
+   read the spec as the host that built the SRPM did (its architecture, its
+   rpm and redhat-rpm-config macros); the Lua rpm runs while it reads the spec
+   beyond the blocks of the spec, which are pinned: a Lua Source such as
+   patch-git.lua, which changes in every build, is read only for the ways of
+   changing macros, the environment or rpm's table of patches the seven builds
+   were measured without; localedata/SUPPORTED and locale/ are in no binary
+   package: they are the SRPM's tarball, checked above against the upstream
+   tag, and its patches.
+!! Not compared on any route: the code that compiles and compares the rules
+   (localedef's and strcoll's, each build's patches to it included). Only step
+   11 sees what it does, when it measures both machines;
+   docs/confirming-on-a-real-system.md says how to confirm the order on them.
 ---
 Locale files added, modified or deleted: 275
 Full list in /tmp/pg-glibc-collation-audit/changed_locales.txt
@@ -103,8 +104,8 @@ statement:
   400 name(s), locale files and locale.alias aliases: 391 the same, 6 differ,
   3 not compared.
   Not compared here: the code that compiles and compares the rules
-  (localedef's and strcoll's), which step 5 reads; the character sets are
-  compared below.
+  (localedef's and strcoll's), as step 1 says; the character sets are compared
+  below.
 
 Rules differ (6):
   C.UTF-8
@@ -145,570 +146,6 @@ a transliteration; none is built differently at
 glibc-2.34-275.el9_8.
 
 Listed for Reindex (6): C.UTF-8, or_IN, sv_FI, sv_FI@euro, sv_SE, swedish
-
-================================================================
-== STEP 4  Which locales a data diff can never clear
-================================================================
-Files at glibc-2.34-275.el9_8: 356, of which 343 define LC_COLLATE
-Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 4
-  i18n
-      collating-symbol <S0200>..<S1100> % 0x0200..0x1100
-      collating-symbol <S4E00>..<S9FA5> % Symbols for Han
-      collating-symbol <SAC00>..<SD7A3> % Symbols for Hangul
-      ... and 1 more
-  iso14651_t1
-      .. ..;IGNORE;IGNORE;IGNORE
-  iso14651_t1_common
-      collating-symbol <S0009>..<S327F> % Alphabetics, syllabics, general symbols
-      collating-symbol <S4DC0>..<S4DFF> % Yijing hexagram symbols
-      collating-symbol <SA000>..<SABFF> % Alphabetics, syllabics, general symbols
-      ... and 20 more
-  ko_KR
-      ..
-
-Declare codepoint_collation, so no expansion change can move them: C
-
-Additionally exposed via `copy` inheritance: 331
-  via iso14651_t1: 327 locale(s)
-      aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, agr_PE, ak_GH, am_ET, an_ES, anp_IN, ar_AE, ar_BH, ...
-  via iso14651_t1_common: 4 locale(s)
-      cmn_TW, cns11643_stroke, iso14651_t1_pinyin, zh_CN
-
-Additionally exposed through localedef's default weight: 7
-      POSIX, ar_SA, ja_JP, km_KH, lo_LA, sl_SI, th_TH
-  No ellipsis range reaches these, but every character a locale does not list
-  takes a default weight picked by a rule in localedef's code, not by the file.
-
-Full set needing empirical confirmation: 342 locale(s), and 43 more
-name(s), the aliases glibc's locale.alias gives them. Locales, not spellings.
-One is in use wherever a locale name, without the part from the dot up to
-any @, is one of them.
-  e.g. POSIX, aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, agr_PE, ak_GH, ...
-  not in SUPPORTED (not built by default): POSIX, cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
-  full list (385 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
-
-These cannot be cleared by a source diff alone.
-Step 5 below decides whether that matters for this pair.
-
-================================================================
-== STEP 5  Did the code that computes weights change
-================================================================
-Collation code changes between glibc-2.28-251.el8_10.40 and glibc-2.34-275.el9_8
-
-Each build's own patches to this code are under locale/, so the diff below
-holds them: glibc-2.28-251.el8_10.40, 5 patch(es); glibc-2.34-275.el9_8, 5
-patch(es).
-
-A change that only undoes one of glibc-2.28-251.el8_10.40's patches lists no
-commit.
-
-TIER 1 -- weight assignment and comparison
-  (a change here can reorder any locale, including ones whose data file is unchanged)
-  locale/programs/ld-collate.c: 10 substantive hunk(s), 4 comment/licence hunk(s) filtered
-      @@ -24,6 +24,7 @@
-      >> +#include <array_length.h>
-      @@ -195,6 +196,9 @@ struct name_list
-         +  /* Does the locale use code points to compare the encoding?  */
-      >> +  bool codepoint_collation;
-         +
-      @@ -1483,6 +1487,9 @@ order for `%.*s' already defined at %s:%Zu"),
-         +  /* Move the cursor to the last entry in the ellipsis.
-         +     Subsequent operations need to start from the last entry.  */
-      >> +  collate->cursor = endp;
-      @@ -1507,6 +1514,7 @@ collate_startup (struct linereader *ldfile, struct localedef_t *locale,
-      >> +	  collate->codepoint_collation = false;
-      @@ -1565,6 +1573,10 @@ collate_finish (struct localedef_t *locale, const struct charmap_t *charmap)
-         +  /* No data required.  */
-      >> +  if (collate->codepoint_collation)
-      >> +    return;
-         +
-      @@ -2089,6 +2101,10 @@ add_to_tablewc (uint32_t ch, struct element_t *runp)
-         +/* Include the C locale identity tables for _NL_COLLATE_COLLSEQMB and
-         +   _NL_COLLATE_COLLSEQWC.  */
-      >> +#include "C-collate-seq.c"
-         +
-      @@ -2112,7 +2128,7 @@ collate_output (struct localedef_t *locale, const struct charmap_t *charmap,
-      >> -  if (collate == NULL)
-      >> +  if (collate == NULL || collate->codepoint_collation)
-      @@ -2120,6 +2136,17 @@ collate_output (struct localedef_t *locale, const struct charmap_t *charmap,
-      >> +	  else if (idx == _NL_ITEM_INDEX (_NL_COLLATE_CODESET)
-      >> +		   && collate != NULL)
-         +	    /* A valid LC_COLLATE must have a code set name.  */
-      >> +	    add_locale_string (&file, charmap->code_set_name);
-      >> +	  else if (idx == _NL_ITEM_INDEX (_NL_COLLATE_COLLSEQMB)
-      >> +		   && collate != NULL)
-      >> +	    add_locale_raw_data (&file, collseqmb, sizeof (collseqmb));
-      >> +	  else if (idx == _NL_ITEM_INDEX (_NL_COLLATE_COLLSEQWC)
-      >> +		   && collate != NULL)
-      >> +	    add_locale_uint32_array (&file, collseqwc,
-      >> +				     array_length (collseqwc));
-      @@ -2669,6 +2696,10 @@ collate_read (struct linereader *ldfile, struct localedef_t *result,
-      >> +	case tok_codepoint_collation:
-      >> +	  collate->codepoint_collation = true;
-      >> +	  break;
-         +
-      @@ -3739,9 +3770,11 @@ error while adding equivalent collating symbol"));
-      >> -	      if (state == 0 && copy_locale == NULL)
-      >> +	      if (state == 0
-      >> +		  && copy_locale == NULL
-      >> +		  && !collate->codepoint_collation)
-         -		   ordering values.  */
-         +		   ordering values, or codepoint_collation.  */
-      commits:
-        f9d99124b1 glibc-2.34-275.el9_8: the build's own patches
-        82292c99b2 LC_COLLATE: Fix last character ellipsis handling (Bug 22668)
-        2b778ceb40 Update copyright dates with scripts/update-copyrights
-        14ef9c185b treewide: fix incorrect spelling of indices in comments
-        d614a75396 Update copyright dates with scripts/update-copyrights.
-        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        5abcddd794 Fix parentheses error in iconvconfig.c and ld-collate.c [BZ #24372]
-        ac64195ccd iconv, localedef: avoid floating point rounding differences [BZ #24372]
-        04277e02d7 Update copyright dates with scripts/update-copyrights.
-  string/strcoll_l.c: no substantive change (2 comment/licence hunk(s) filtered)
-  string/strxfrm_l.c: no substantive change (3 comment/licence hunk(s) filtered)
-  wcsmbs/wcscoll_l.c: no substantive change (2 comment/licence hunk(s) filtered)
-  wcsmbs/wcsxfrm_l.c: no substantive change (2 comment/licence hunk(s) filtered)
-  locale/weight.h: no substantive change (2 comment/licence hunk(s) filtered)
-  locale/weightwc.h: no substantive change (2 comment/licence hunk(s) filtered)
-  locale/coll-lookup.h: no substantive change (2 comment/licence hunk(s) filtered)
-  locale/coll-lookup.c: no substantive change (2 comment/licence hunk(s) filtered)
-  locale/lc-collate.c: no substantive change (2 comment/licence hunk(s) filtered)
-  locale/C-collate.c: 1 substantive hunk(s), 1 comment/licence hunk(s) filtered
-      @@ -14,89 +14,13 @@
-         -   <http://www.gnu.org/licenses/>.  */
-         +   <https://www.gnu.org/licenses/>.  */
-      >> -static const char collseqmb[] =
-      >> -{
-      >> -  '\x00', '\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x07',
-      >> -  '\x08', '\x09', '\x0a', '\x0b', '\x0c', '\x0d', '\x0e', '\x0f',
-      >> -  '\x10', '\x11', '\x12', '\x13', '\x14', '\x15', '\x16', '\x17',
-      >> -  '\x18', '\x19', '\x1a', '\x1b', '\x1c', '\x1d', '\x1e', '\x1f',
-      >> -  '\x20', '\x21', '\x22', '\x23', '\x24', '\x25', '\x26', '\x27',
-      >> -  '\x28', '\x29', '\x2a', '\x2b', '\x2c', '\x2d', '\x2e', '\x2f',
-      >> -  '\x30', '\x31', '\x32', '\x33', '\x34', '\x35', '\x36', '\x37',
-      >> -  '\x38', '\x39', '\x3a', '\x3b', '\x3c', '\x3d', '\x3e', '\x3f',
-      >> -  '\x40', '\x41', '\x42', '\x43', '\x44', '\x45', '\x46', '\x47',
-      >> -  '\x48', '\x49', '\x4a', '\x4b', '\x4c', '\x4d', '\x4e', '\x4f',
-      >> -  '\x50', '\x51', '\x52', '\x53', '\x54', '\x55', '\x56', '\x57',
-      >> -  '\x58', '\x59', '\x5a', '\x5b', '\x5c', '\x5d', '\x5e', '\x5f',
-      >> -  '\x60', '\x61', '\x62', '\x63', '\x64', '\x65', '\x66', '\x67',
-      >> -  '\x68', '\x69', '\x6a', '\x6b', '\x6c', '\x6d', '\x6e', '\x6f',
-      >> -  '\x70', '\x71', '\x72', '\x73', '\x74', '\x75', '\x76', '\x77',
-      >> -  '\x78', '\x79', '\x7a', '\x7b', '\x7c', '\x7d', '\x7e', '\x7f',
-      >> -  '\x80', '\x81', '\x82', '\x83', '\x84', '\x85', '\x86', '\x87',
-      >> -  '\x88', '\x89', '\x8a', '\x8b', '\x8c', '\x8d', '\x8e', '\x8f',
-      >> -  '\x90', '\x91', '\x92', '\x93', '\x94', '\x95', '\x96', '\x97',
-      >> -  '\x98', '\x99', '\x9a', '\x9b', '\x9c', '\x9d', '\x9e', '\x9f',
-      >> -  '\xa0', '\xa1', '\xa2', '\xa3', '\xa4', '\xa5', '\xa6', '\xa7',
-      >> -  '\xa8', '\xa9', '\xaa', '\xab', '\xac', '\xad', '\xae', '\xaf',
-      >> -  '\xb0', '\xb1', '\xb2', '\xb3', '\xb4', '\xb5', '\xb6', '\xb7',
-      >> -  '\xb8', '\xb9', '\xba', '\xbb', '\xbc', '\xbd', '\xbe', '\xbf',
-      >> -  '\xc0', '\xc1', '\xc2', '\xc3', '\xc4', '\xc5', '\xc6', '\xc7',
-      >> -  '\xc8', '\xc9', '\xca', '\xcb', '\xcc', '\xcd', '\xce', '\xcf',
-      >> -  '\xd0', '\xd1', '\xd2', '\xd3', '\xd4', '\xd5', '\xd6', '\xd7',
-      >> -  '\xd8', '\xd9', '\xda', '\xdb', '\xdc', '\xdd', '\xde', '\xdf',
-      >> -  '\xe0', '\xe1', '\xe2', '\xe3', '\xe4', '\xe5', '\xe6', '\xe7',
-      >> -  '\xe8', '\xe9', '\xea', '\xeb', '\xec', '\xed', '\xee', '\xef',
-      >> -  '\xf0', '\xf1', '\xf2', '\xf3', '\xf4', '\xf5', '\xf6', '\xf7',
-      >> -  '\xf8', '\xf9', '\xfa', '\xfb', '\xfc', '\xfd', '\xfe', '\xff'
-      >> -};
-         -
-      >> -static const uint32_t collseqwc[] =
-      >> -{
-      >> -  8, 1, 8, 0x0, 0xff,
-         -  /* 1st-level table */
-      >> -  6 * sizeof (uint32_t),
-         -  /* 2nd-level table */
-      >> -  7 * sizeof (uint32_t),
-         -  /* 3rd-level table */
-      >> -  L'\x00', L'\x01', L'\x02', L'\x03', L'\x04', L'\x05', L'\x06', L'\x07',
-      >> -  L'\x08', L'\x09', L'\x0a', L'\x0b', L'\x0c', L'\x0d', L'\x0e', L'\x0f',
-      >> -  L'\x10', L'\x11', L'\x12', L'\x13', L'\x14', L'\x15', L'\x16', L'\x17',
-      >> -  L'\x18', L'\x19', L'\x1a', L'\x1b', L'\x1c', L'\x1d', L'\x1e', L'\x1f',
-      >> -  L'\x20', L'\x21', L'\x22', L'\x23', L'\x24', L'\x25', L'\x26', L'\x27',
-      >> -  L'\x28', L'\x29', L'\x2a', L'\x2b', L'\x2c', L'\x2d', L'\x2e', L'\x2f',
-      >> -  L'\x30', L'\x31', L'\x32', L'\x33', L'\x34', L'\x35', L'\x36', L'\x37',
-      >> -  L'\x38', L'\x39', L'\x3a', L'\x3b', L'\x3c', L'\x3d', L'\x3e', L'\x3f',
-      >> -  L'\x40', L'\x41', L'\x42', L'\x43', L'\x44', L'\x45', L'\x46', L'\x47',
-      >> -  L'\x48', L'\x49', L'\x4a', L'\x4b', L'\x4c', L'\x4d', L'\x4e', L'\x4f',
-      >> -  L'\x50', L'\x51', L'\x52', L'\x53', L'\x54', L'\x55', L'\x56', L'\x57',
-      >> -  L'\x58', L'\x59', L'\x5a', L'\x5b', L'\x5c', L'\x5d', L'\x5e', L'\x5f',
-      >> -  L'\x60', L'\x61', L'\x62', L'\x63', L'\x64', L'\x65', L'\x66', L'\x67',
-      >> -  L'\x68', L'\x69', L'\x6a', L'\x6b', L'\x6c', L'\x6d', L'\x6e', L'\x6f',
-      >> -  L'\x70', L'\x71', L'\x72', L'\x73', L'\x74', L'\x75', L'\x76', L'\x77',
-      >> -  L'\x78', L'\x79', L'\x7a', L'\x7b', L'\x7c', L'\x7d', L'\x7e', L'\x7f',
-      >> -  L'\x80', L'\x81', L'\x82', L'\x83', L'\x84', L'\x85', L'\x86', L'\x87',
-      >> -  L'\x88', L'\x89', L'\x8a', L'\x8b', L'\x8c', L'\x8d', L'\x8e', L'\x8f',
-      >> -  L'\x90', L'\x91', L'\x92', L'\x93', L'\x94', L'\x95', L'\x96', L'\x97',
-      >> -  L'\x98', L'\x99', L'\x9a', L'\x9b', L'\x9c', L'\x9d', L'\x9e', L'\x9f',
-      >> -  L'\xa0', L'\xa1', L'\xa2', L'\xa3', L'\xa4', L'\xa5', L'\xa6', L'\xa7',
-      >> -  L'\xa8', L'\xa9', L'\xaa', L'\xab', L'\xac', L'\xad', L'\xae', L'\xaf',
-      >> -  L'\xb0', L'\xb1', L'\xb2', L'\xb3', L'\xb4', L'\xb5', L'\xb6', L'\xb7',
-      >> -  L'\xb8', L'\xb9', L'\xba', L'\xbb', L'\xbc', L'\xbd', L'\xbe', L'\xbf',
-      >> -  L'\xc0', L'\xc1', L'\xc2', L'\xc3', L'\xc4', L'\xc5', L'\xc6', L'\xc7',
-      >> -  L'\xc8', L'\xc9', L'\xca', L'\xcb', L'\xcc', L'\xcd', L'\xce', L'\xcf',
-      >> -  L'\xd0', L'\xd1', L'\xd2', L'\xd3', L'\xd4', L'\xd5', L'\xd6', L'\xd7',
-      >> -  L'\xd8', L'\xd9', L'\xda', L'\xdb', L'\xdc', L'\xdd', L'\xde', L'\xdf',
-      >> -  L'\xe0', L'\xe1', L'\xe2', L'\xe3', L'\xe4', L'\xe5', L'\xe6', L'\xe7',
-      >> -  L'\xe8', L'\xe9', L'\xea', L'\xeb', L'\xec', L'\xed', L'\xee', L'\xef',
-      >> -  L'\xf0', L'\xf1', L'\xf2', L'\xf3', L'\xf4', L'\xf5', L'\xf6', L'\xf7',
-      >> -  L'\xf8', L'\xf9', L'\xfa', L'\xfb', L'\xfc', L'\xfd', L'\xfe', L'\xff'
-      >> -};
-      >> +#include "C-collate-seq.c"
-      commits:
-        f9d99124b1 glibc-2.34-275.el9_8: the build's own patches
-        2b778ceb40 Update copyright dates with scripts/update-copyrights
-        d614a75396 Update copyright dates with scripts/update-copyrights.
-        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        04277e02d7 Update copyright dates with scripts/update-copyrights.
-  locale/C-collate-seq.c: 1 substantive hunk(s)
-      @@ -0,0 +1,100 @@
-         +/* Copyright (C) 1995-2021 Free Software Foundation, Inc.
-         +   This file is part of the GNU C Library.
-         +
-         +   The GNU C Library is free software; you can redistribute it and/or
-         +   modify it under the terms of the GNU Lesser General Public
-         +   License as published by the Free Software Foundation; either
-         +   version 2.1 of the License, or (at your option) any later version.
-         +
-         +   The GNU C Library is distributed in the hope that it will be useful,
-         +   but WITHOUT ANY WARRANTY; without even the implied warranty of
-         +   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-         +   Lesser General Public License for more details.
-         +
-         +   You should have received a copy of the GNU Lesser General Public
-         +   License along with the GNU C Library; if not, see
-         +   <https://www.gnu.org/licenses/>.  */
-         +
-      >> +#include <stdint.h>
-         +
-      >> +static const char collseqmb[] =
-      >> +{
-      >> +  '\x00', '\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x07',
-      >> +  '\x08', '\x09', '\x0a', '\x0b', '\x0c', '\x0d', '\x0e', '\x0f',
-      >> +  '\x10', '\x11', '\x12', '\x13', '\x14', '\x15', '\x16', '\x17',
-      >> +  '\x18', '\x19', '\x1a', '\x1b', '\x1c', '\x1d', '\x1e', '\x1f',
-      >> +  '\x20', '\x21', '\x22', '\x23', '\x24', '\x25', '\x26', '\x27',
-      >> +  '\x28', '\x29', '\x2a', '\x2b', '\x2c', '\x2d', '\x2e', '\x2f',
-      >> +  '\x30', '\x31', '\x32', '\x33', '\x34', '\x35', '\x36', '\x37',
-      >> +  '\x38', '\x39', '\x3a', '\x3b', '\x3c', '\x3d', '\x3e', '\x3f',
-      >> +  '\x40', '\x41', '\x42', '\x43', '\x44', '\x45', '\x46', '\x47',
-      >> +  '\x48', '\x49', '\x4a', '\x4b', '\x4c', '\x4d', '\x4e', '\x4f',
-      >> +  '\x50', '\x51', '\x52', '\x53', '\x54', '\x55', '\x56', '\x57',
-      >> +  '\x58', '\x59', '\x5a', '\x5b', '\x5c', '\x5d', '\x5e', '\x5f',
-      >> +  '\x60', '\x61', '\x62', '\x63', '\x64', '\x65', '\x66', '\x67',
-      >> +  '\x68', '\x69', '\x6a', '\x6b', '\x6c', '\x6d', '\x6e', '\x6f',
-      >> +  '\x70', '\x71', '\x72', '\x73', '\x74', '\x75', '\x76', '\x77',
-      >> +  '\x78', '\x79', '\x7a', '\x7b', '\x7c', '\x7d', '\x7e', '\x7f',
-      >> +  '\x80', '\x81', '\x82', '\x83', '\x84', '\x85', '\x86', '\x87',
-      >> +  '\x88', '\x89', '\x8a', '\x8b', '\x8c', '\x8d', '\x8e', '\x8f',
-      >> +  '\x90', '\x91', '\x92', '\x93', '\x94', '\x95', '\x96', '\x97',
-      >> +  '\x98', '\x99', '\x9a', '\x9b', '\x9c', '\x9d', '\x9e', '\x9f',
-      >> +  '\xa0', '\xa1', '\xa2', '\xa3', '\xa4', '\xa5', '\xa6', '\xa7',
-      >> +  '\xa8', '\xa9', '\xaa', '\xab', '\xac', '\xad', '\xae', '\xaf',
-      >> +  '\xb0', '\xb1', '\xb2', '\xb3', '\xb4', '\xb5', '\xb6', '\xb7',
-      >> +  '\xb8', '\xb9', '\xba', '\xbb', '\xbc', '\xbd', '\xbe', '\xbf',
-      >> +  '\xc0', '\xc1', '\xc2', '\xc3', '\xc4', '\xc5', '\xc6', '\xc7',
-      >> +  '\xc8', '\xc9', '\xca', '\xcb', '\xcc', '\xcd', '\xce', '\xcf',
-      >> +  '\xd0', '\xd1', '\xd2', '\xd3', '\xd4', '\xd5', '\xd6', '\xd7',
-      >> +  '\xd8', '\xd9', '\xda', '\xdb', '\xdc', '\xdd', '\xde', '\xdf',
-      >> +  '\xe0', '\xe1', '\xe2', '\xe3', '\xe4', '\xe5', '\xe6', '\xe7',
-      >> +  '\xe8', '\xe9', '\xea', '\xeb', '\xec', '\xed', '\xee', '\xef',
-      >> +  '\xf0', '\xf1', '\xf2', '\xf3', '\xf4', '\xf5', '\xf6', '\xf7',
-      >> +  '\xf8', '\xf9', '\xfa', '\xfb', '\xfc', '\xfd', '\xfe', '\xff'
-      >> +};
-         +
-         +/* This table must be 256 bytes in size. We index bytes into the
-         +   table to find the collation sequence.  */
-      >> +_Static_assert (sizeof (collseqmb) == 256, "sizeof (collseqmb)");
-         +
-      >> +static const uint32_t collseqwc[] =
-      >> +{
-      >> +  8, 1, 8, 0x0, 0xff,
-         +  /* 1st-level table */
-      >> +  6 * sizeof (uint32_t),
-         +  /* 2nd-level table */
-      >> +  7 * sizeof (uint32_t),
-         +  /* 3rd-level table */
-      >> +  L'\x00', L'\x01', L'\x02', L'\x03', L'\x04', L'\x05', L'\x06', L'\x07',
-      >> +  L'\x08', L'\x09', L'\x0a', L'\x0b', L'\x0c', L'\x0d', L'\x0e', L'\x0f',
-      >> +  L'\x10', L'\x11', L'\x12', L'\x13', L'\x14', L'\x15', L'\x16', L'\x17',
-      >> +  L'\x18', L'\x19', L'\x1a', L'\x1b', L'\x1c', L'\x1d', L'\x1e', L'\x1f',
-      >> +  L'\x20', L'\x21', L'\x22', L'\x23', L'\x24', L'\x25', L'\x26', L'\x27',
-      >> +  L'\x28', L'\x29', L'\x2a', L'\x2b', L'\x2c', L'\x2d', L'\x2e', L'\x2f',
-      >> +  L'\x30', L'\x31', L'\x32', L'\x33', L'\x34', L'\x35', L'\x36', L'\x37',
-      >> +  L'\x38', L'\x39', L'\x3a', L'\x3b', L'\x3c', L'\x3d', L'\x3e', L'\x3f',
-      >> +  L'\x40', L'\x41', L'\x42', L'\x43', L'\x44', L'\x45', L'\x46', L'\x47',
-      >> +  L'\x48', L'\x49', L'\x4a', L'\x4b', L'\x4c', L'\x4d', L'\x4e', L'\x4f',
-      >> +  L'\x50', L'\x51', L'\x52', L'\x53', L'\x54', L'\x55', L'\x56', L'\x57',
-      >> +  L'\x58', L'\x59', L'\x5a', L'\x5b', L'\x5c', L'\x5d', L'\x5e', L'\x5f',
-      >> +  L'\x60', L'\x61', L'\x62', L'\x63', L'\x64', L'\x65', L'\x66', L'\x67',
-      >> +  L'\x68', L'\x69', L'\x6a', L'\x6b', L'\x6c', L'\x6d', L'\x6e', L'\x6f',
-      >> +  L'\x70', L'\x71', L'\x72', L'\x73', L'\x74', L'\x75', L'\x76', L'\x77',
-      >> +  L'\x78', L'\x79', L'\x7a', L'\x7b', L'\x7c', L'\x7d', L'\x7e', L'\x7f',
-      >> +  L'\x80', L'\x81', L'\x82', L'\x83', L'\x84', L'\x85', L'\x86', L'\x87',
-      >> +  L'\x88', L'\x89', L'\x8a', L'\x8b', L'\x8c', L'\x8d', L'\x8e', L'\x8f',
-      >> +  L'\x90', L'\x91', L'\x92', L'\x93', L'\x94', L'\x95', L'\x96', L'\x97',
-      >> +  L'\x98', L'\x99', L'\x9a', L'\x9b', L'\x9c', L'\x9d', L'\x9e', L'\x9f',
-      >> +  L'\xa0', L'\xa1', L'\xa2', L'\xa3', L'\xa4', L'\xa5', L'\xa6', L'\xa7',
-      >> +  L'\xa8', L'\xa9', L'\xaa', L'\xab', L'\xac', L'\xad', L'\xae', L'\xaf',
-      >> +  L'\xb0', L'\xb1', L'\xb2', L'\xb3', L'\xb4', L'\xb5', L'\xb6', L'\xb7',
-      >> +  L'\xb8', L'\xb9', L'\xba', L'\xbb', L'\xbc', L'\xbd', L'\xbe', L'\xbf',
-      >> +  L'\xc0', L'\xc1', L'\xc2', L'\xc3', L'\xc4', L'\xc5', L'\xc6', L'\xc7',
-      >> +  L'\xc8', L'\xc9', L'\xca', L'\xcb', L'\xcc', L'\xcd', L'\xce', L'\xcf',
-      >> +  L'\xd0', L'\xd1', L'\xd2', L'\xd3', L'\xd4', L'\xd5', L'\xd6', L'\xd7',
-      >> +  L'\xd8', L'\xd9', L'\xda', L'\xdb', L'\xdc', L'\xdd', L'\xde', L'\xdf',
-      >> +  L'\xe0', L'\xe1', L'\xe2', L'\xe3', L'\xe4', L'\xe5', L'\xe6', L'\xe7',
-      >> +  L'\xe8', L'\xe9', L'\xea', L'\xeb', L'\xec', L'\xed', L'\xee', L'\xef',
-      >> +  L'\xf0', L'\xf1', L'\xf2', L'\xf3', L'\xf4', L'\xf5', L'\xf6', L'\xf7',
-      >> +  L'\xf8', L'\xf9', L'\xfa', L'\xfb', L'\xfc', L'\xfd', L'\xfe', L'\xff'
-      >> +};
-      commits:
-        f9d99124b1 glibc-2.34-275.el9_8: the build's own patches
-
-TIER 2 -- parsing and serialisation
-  (a change here can alter the compiled tables without touching the weight logic)
-  locale/programs/linereader.c: no substantive change (2 comment/licence hunk(s) filtered)
-  locale/programs/locfile.c: 2 substantive hunk(s), 2 comment/licence hunk(s) filtered
-      @@ -702,7 +702,7 @@ write_locale_data (const char *output_path, int catidx, const char *category,
-      >> -  const char **other_paths;
-      >> +  const char **other_paths = NULL;
-      @@ -827,9 +827,22 @@ failure while writing data for category `%s'"), category);
-         -  /* Compare the file with the locale data files for the same category in
-         -     other locales, and see if we can reuse it, to save disk space.  */
-      >> -  other_paths = siblings (output_path);
-         +  /* Compare the file with the locale data files for the same category
-         +     in other locales, and see if we can reuse it, to save disk space.
-         +     If the user specified --no-hard-links to localedef then hard_links
-         +     is false, other_paths remains NULL and we skip the optimization
-         +     below.  The use of --no-hard-links is distribution specific since
-         +     some distros have post-processing hard-link steps and so doing this
-         +     here is a waste of time.  Worse than a waste of time in rpm-based
-         +     distributions it can result in build determinism issues from
-         +     build-to-build since some files may get a hard link in one pass but
-         +     not in another (if the files happened to be created in parallel).  */
-      >> +  if (hard_links)
-      >> +    other_paths = siblings (output_path);
-         +
-         +  /* If there are other paths, then walk the sibling paths looking for
-         +     files with the same content so we can hard link and reduce disk
-         +     space usage.  */
-      commits:
-        2b778ceb40 Update copyright dates with scripts/update-copyrights
-        d614a75396 Update copyright dates with scripts/update-copyrights.
-        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        04277e02d7 Update copyright dates with scripts/update-copyrights.
-        8cebd4ffe6 Add --no-hard-links option to localedef (bug 23923)
-  locale/programs/locfile.h: no substantive change (2 comment/licence hunk(s) filtered)
-  locale/programs/3level.h: no substantive change (2 comment/licence hunk(s) filtered)
-  locale/loadlocale.c: 3 substantive hunk(s), 2 comment/licence hunk(s) filtered
-      @@ -167,7 +167,7 @@ _nl_load_locale (struct loaded_l10nfile *file, int category)
-      >> -  struct stat64 st;
-      >> +  struct __stat64_t64 st;
-      @@ -179,7 +179,7 @@ _nl_load_locale (struct loaded_l10nfile *file, int category)
-      >> -  if (__builtin_expect (__fxstat64 (_STAT_VER, fd, &st), 0) < 0)
-      >> +  if (__glibc_unlikely (__fstat64_time64 (fd, &st) < 0))
-      @@ -198,15 +198,14 @@ _nl_load_locale (struct loaded_l10nfile *file, int category)
-      >> -			    "/SYS_", 5),
-      >> -		 _nl_category_names.str + _nl_category_name_idxs[category],
-      >> +			    "/SYS_", 5), _nl_category_names_get (category),
-      >> -      if (__builtin_expect (__fxstat64 (_STAT_VER, fd, &st), 0) < 0)
-      >> +      if (__glibc_unlikely (__fstat64_time64 (fd, &st) < 0))
-      commits:
-        f9d99124b1 glibc-2.34-275.el9_8: the build's own patches
-        52a5fe70a2 Use 64 bit time_t stat internally
-        2b778ceb40 Update copyright dates with scripts/update-copyrights
-        04986243d1 Remove internal usage of extensible stat functions
-        d614a75396 Update copyright dates with scripts/update-copyrights.
-        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        de18a7061c locale: Avoid zero-length array in _nl_category_names [BZ #24962]
-        04277e02d7 Update copyright dates with scripts/update-copyrights.
-  locale/localeinfo.h: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
-      @@ -183,23 +183,29 @@ enum
-         -/* Category name handling variables.  */
-         +/* Category name handling variables.  Concatenate all the strings in a
-         +   single object to minimize relocations.  Individual strings can be
-         +   accessed using _nl_category_names.  */
-      >> -extern const union catnamestr_t
-      >> +extern const struct catnamestr_t
-      >> -  struct
-      >> -  {
-      >> -    char CATNAMEMF (__LINE__)[sizeof (category_name)];
-      >> +  char CATNAMEMF (__LINE__)[sizeof (category_name)];
-      >> -  };
-      >> -  char str[0];
-         +/* Return the name of the category INDEX, which must be nonnegative
-         +   and less than _LC_LAST.  */
-      >> +static inline const char *
-      >> +_nl_category_names_get (int index)
-      >> +{
-      >> +  return (const char *) &_nl_category_names + _nl_category_name_idxs[index];
-      >> +}
-         +
-      commits:
-        f9d99124b1 glibc-2.34-275.el9_8: the build's own patches
-        2b778ceb40 Update copyright dates with scripts/update-copyrights
-        d614a75396 Update copyright dates with scripts/update-copyrights.
-        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        de18a7061c locale: Avoid zero-length array in _nl_category_names [BZ #24962]
-        04277e02d7 Update copyright dates with scripts/update-copyrights.
-  locale/programs/locfile-kw.gperf: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
-      @@ -54,6 +54,7 @@ translit_end,           tok_translit_end,           0
-      >> +codepoint_collation,    tok_codepoint_collation,    0
-      commits:
-        f9d99124b1 glibc-2.34-275.el9_8: the build's own patches
-        2b778ceb40 Update copyright dates with scripts/update-copyrights
-        d614a75396 Update copyright dates with scripts/update-copyrights.
-        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        04277e02d7 Update copyright dates with scripts/update-copyrights.
-  locale/programs/ld-ctype.c: 5 substantive hunk(s), 2 comment/licence hunk(s) filtered
-      @@ -842,8 +842,6 @@ no input digits defined and none of the standard names in the charmap"));
-      >> -	static struct charseq replace[2];
-         -
-      @@ -851,10 +849,12 @@ not all characters used in `outdigit' are available in the charmap"));
-      >> -	replace[0].nbytes = 1;
-      >> -	replace[0].bytes[0] = '?';
-      >> -	replace[0].bytes[1] = '\0';
-      >> -	ctype->mboutdigits[cnt] = &replace[0];
-      >> +	static const struct charseq replace =
-      >> +	  {
-      >> +	     .nbytes = 1,
-      >> +	     .bytes = "?",
-      >> +	  };
-      >> +	ctype->mboutdigits[cnt] = (struct charseq *) &replace;
-      @@ -1396,7 +1396,8 @@ charclass_symbolic_ellipsis (struct linereader *ldfile,
-      >> -	  get_character (now, charmap, repertoire, &seq, &wch);
-      >> +	  if (get_character (now, charmap, repertoire, &seq, &wch))
-      >> +	    goto invalid_range;
-      @@ -3148,11 +3149,12 @@ set_class_defaults (struct locale_ctype_t *ctype,
-      >> -      unsigned long int mask = BIT (tok_upper) | BIT (tok_lower) |
-      >> -	BIT (tok_alpha) | BIT (tok_digit) | BIT (tok_xdigit) | BIT (tok_punct);
-      >> -      unsigned long int maskw = BITw (tok_upper) | BITw (tok_lower) |
-      >> -	BITw (tok_alpha) | BITw (tok_digit) | BITw (tok_xdigit) |
-      >> -	BITw (tok_punct);
-      >> +      unsigned long int mask = BIT (tok_upper) | BIT (tok_lower)
-      >> +	| BIT (tok_alpha) | BIT (tok_digit) | BIT (tok_xdigit)
-      >> +	| BIT (tok_punct);
-      >> +      unsigned long int maskw = BITw (tok_upper) | BITw (tok_lower)
-      >> +	| BITw (tok_alpha) | BITw (tok_digit) | BITw (tok_xdigit)
-      >> +	| BITw (tok_punct);
-      @@ -3169,11 +3171,12 @@ set_class_defaults (struct locale_ctype_t *ctype,
-      >> -      unsigned long int mask = BIT (tok_upper) | BIT (tok_lower) |
-      >> -	BIT (tok_alpha) | BIT (tok_digit) | BIT (tok_xdigit) | BIT (tok_punct);
-      >> -      unsigned long int maskw = BITw (tok_upper) | BITw (tok_lower) |
-      >> -	BITw (tok_alpha) | BITw (tok_digit) | BITw (tok_xdigit) |
-      >> -	BITw (tok_punct);
-      >> +      unsigned long int mask = BIT (tok_upper) | BIT (tok_lower)
-      >> +	| BIT (tok_alpha) | BIT (tok_digit) | BIT (tok_xdigit)
-      >> +	| BIT (tok_punct);
-      >> +      unsigned long int maskw = BITw (tok_upper) | BITw (tok_lower)
-      >> +	| BITw (tok_alpha) | BITw (tok_digit) | BITw (tok_xdigit)
-      >> +	| BITw (tok_punct);
-      commits:
-        2b778ceb40 Update copyright dates with scripts/update-copyrights
-        d614a75396 Update copyright dates with scripts/update-copyrights.
-        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        1471fa556a localedef: Use initializer for flexible array member [BZ #24950]
-        9e6a7d9c17 Fix build warnings in locale/programs/ld-ctype.c
-        34a5a1460e Break some lines before not after operators.
-        04277e02d7 Update copyright dates with scripts/update-copyrights.
-
-TIER 3 -- reachable from the collation entry points, not classified
-  (derived by walking #include from ld-collate.c, strcoll_l.c, strxfrm_l.c and the
-   wide-char variants, bounded to locale/, plus the sibling .c of every header
-   reached -- so this list grows on its own as glibc changes)
-  locale/programs/charmap.h: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
-      @@ -60,7 +60,7 @@ struct charseq
-      >> -  unsigned char bytes[0];
-      >> +  unsigned char bytes[];
-      commits:
-        2b778ceb40 Update copyright dates with scripts/update-copyrights
-        d614a75396 Update copyright dates with scripts/update-copyrights.
-        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        1471fa556a localedef: Use initializer for flexible array member [BZ #24950]
-        04277e02d7 Update copyright dates with scripts/update-copyrights.
-  locale/programs/linereader.h: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
-      @@ -29,7 +29,7 @@
-      >> -typedef const struct keyword_t *(*kw_hash_fct_t) (const char *, unsigned int);
-      >> +typedef const struct keyword_t *(*kw_hash_fct_t) (const char *, size_t);
-      commits:
-        2b778ceb40 Update copyright dates with scripts/update-copyrights
-        d614a75396 Update copyright dates with scripts/update-copyrights.
-        3f02b772a4 Regenerate charmap-kw.h, locfile-kw.h
-        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        04277e02d7 Update copyright dates with scripts/update-copyrights.
-  locale/programs/localedef.c: 5 substantive hunk(s), 2 comment/licence hunk(s) filtered
-      @@ -85,6 +85,9 @@ static bool replace_archive;
-         +/* If true create hard links to other locales (default).  */
-      >> +bool hard_links = true;
-         +
-      @@ -105,6 +108,7 @@ void (*argp_program_version_hook) (FILE *, struct argp_state *) = print_version;
-      >> +#define OPT_NO_HARD_LINKS 404
-      @@ -120,6 +124,8 @@ static const struct argp_option options[] =
-      >> +  { "no-hard-links", OPT_NO_HARD_LINKS, NULL, 0,
-      >> +    N_("Do not create hard links between installed locales") },
-      @@ -390,6 +396,10 @@ parse_opt (int key, char *arg, struct argp_state *state)
-      >> +    case OPT_NO_HARD_LINKS:
-         +      /* Do not hard link to other locales.  */
-      >> +      hard_links = false;
-      >> +      break;
-      @@ -451,7 +461,7 @@ print_version (FILE *stream, struct argp_state *state)
-      >> -"), "2018");
-      >> +"), "2021");
-      commits:
-        9fcdec7386 Update copyright dates not handled by scripts/update-copyrights.
-        2b778ceb40 Update copyright dates with scripts/update-copyrights
-        92954ffa5a localedef: Add verbose messages for failure paths.
-        5f72f9800b Update copyright dates not handled by scripts/update-copyrights.
-        d614a75396 Update copyright dates with scripts/update-copyrights.
-        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        c9123888d8 Update copyright dates not handled by scripts/update-copyrights.
-        04277e02d7 Update copyright dates with scripts/update-copyrights.
-        8cebd4ffe6 Add --no-hard-links option to localedef (bug 23923)
-  locale/programs/localedef.h: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
-      @@ -118,6 +118,7 @@ extern const char *repertoire_global;
-      >> +extern bool hard_links;
-      commits:
-        2b778ceb40 Update copyright dates with scripts/update-copyrights
-        92954ffa5a localedef: Add verbose messages for failure paths.
-        d614a75396 Update copyright dates with scripts/update-copyrights.
-        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        04277e02d7 Update copyright dates with scripts/update-copyrights.
-        8cebd4ffe6 Add --no-hard-links option to localedef (bug 23923)
-  locale/programs/locfile-token.h: 1 substantive hunk(s), 2 comment/licence hunk(s) filtered
-      @@ -91,6 +91,7 @@ enum token_t
-      >> +  tok_codepoint_collation,
-      commits:
-        f9d99124b1 glibc-2.34-275.el9_8: the build's own patches
-        2b778ceb40 Update copyright dates with scripts/update-copyrights
-        d614a75396 Update copyright dates with scripts/update-copyrights.
-        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        04277e02d7 Update copyright dates with scripts/update-copyrights.
-  locale/programs/repertoire.c: 2 substantive hunk(s), 2 comment/licence hunk(s) filtered
-      @@ -37,7 +37,7 @@
-      >> -						   unsigned int len);
-      >> +						   size_t len);
-      @@ -358,7 +358,7 @@ repertoire_compare (const void *p1, const void *p2)
-      >> -repertoiremap_hash (const char *str, unsigned int len)
-      >> +repertoiremap_hash (const char *str, size_t len)
-      commits:
-        2b778ceb40 Update copyright dates with scripts/update-copyrights
-        d614a75396 Update copyright dates with scripts/update-copyrights.
-        3f02b772a4 Regenerate charmap-kw.h, locfile-kw.h
-        5a82c74822 Prefer https to http for gnu.org and fsf.org URLs
-        04277e02d7 Update copyright dates with scripts/update-copyrights.
-  (14 further file(s) reached and read, with no substantive change)
-
-Coverage: 28 file(s) reached by the include walk, 20 of them beyond
-TIER 1/2. The walk cannot follow a macro-computed include (`#include WEIGHT_H`) or
-reach a translation unit with no header of its own -- locale/weight.h, weightwc.h,
-lc-collate.c and C-collate.c are in TIER 1 by hand for exactly that reason.
-
-35 substantive hunk(s) found. Locale data alone does not settle this pair.
-Lines marked >> are the code changes; read them and decide whether they can
-change an order. If any can, every locale step 4 listed above needs an
-empirical sort-order test, however clean its data diff is, and so does
-every locale it names as built in byte order.
 
 ================================================================
 == STEP 6  DISTRO CHECK  do glibc-2.28-251.el8_10.40.x86_64's patches touch sort order?
@@ -752,12 +189,10 @@ Character set result written to /tmp/pg-glibc-collation-audit/distro_keyed_local
 
 Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.glibc-2.28..old.txt
 
-!! This compares locale DATA. glibc's collation CODE is step 5's job
-   (diff_collation_code.py) -- that is where Bug 22668 lives, the change that
-   reorders ko_KR. What step 5 does not read of a distro's code (all of it,
-   when step 5 compares two tags) is closed by the empirical check on real
-   nodes, which measures the glibc actually installed, patches and all:
-   docs/confirming-on-a-real-system.md.
+!! This compares locale DATA. glibc's collation CODE, where Bug 22668 lives
+   (the change that reorders ko_KR), is compared by no step: step 1 says so.
+   The empirical check on real nodes measures the glibc actually installed,
+   patches and all: docs/confirming-on-a-real-system.md.
 
 ================================================================
 == STEP 7  DISTRO CHECK  do glibc-2.34-275.el9_8.x86_64's patches touch sort order?
@@ -799,12 +234,10 @@ Character set result written to /tmp/pg-glibc-collation-audit/distro_keyed_local
 
 Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.glibc-2.34..new.txt
 
-!! This compares locale DATA. glibc's collation CODE is step 5's job
-   (diff_collation_code.py) -- that is where Bug 22668 lives, the change that
-   reorders ko_KR. What step 5 does not read of a distro's code (all of it,
-   when step 5 compares two tags) is closed by the empirical check on real
-   nodes, which measures the glibc actually installed, patches and all:
-   docs/confirming-on-a-real-system.md.
+!! This compares locale DATA. glibc's collation CODE, where Bug 22668 lives
+   (the change that reorders ko_KR), is compared by no step: step 1 says so.
+   The empirical check on real nodes measures the glibc actually installed,
+   patches and all: docs/confirming-on-a-real-system.md.
 
 ================================================================
 == STEP 8  NODE TO NODE  does glibc-2.28-251.el8_10.40.x86_64's collation data differ from glibc-2.34-275.el9_8.x86_64's?
@@ -940,103 +373,6 @@ Full result written to /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.
    built, and that code differs between two glibc builds. Bug 22668 (commit
    82292c99b2) changed exactly that and reordered ko_KR from a byte-identical
    file. So a clean result here clears the data half and nothing else.
-
-================================================================
-== STEP 9  NODE ELLIPSIS  does glibc-2.28-251.el8_10.40.x86_64's own locale data use ellipsis ranges?
-================================================================
-Files at glibc-2.28-251.el8_10.40.x86_64 (/tmp/pg-glibc-collation-audit/node_file.glibc-2.28-251.el8_10.40..glibc-2.34-275.el9_8.old/locales): 355, of which 342 define LC_COLLATE
-Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 5
-  C
-      ..
-      ..
-      ..
-      ... and 3 more
-  i18n
-      collating-symbol <S0200>..<S1100> % 0x0200..0x1100
-      collating-symbol <S4E00>..<S9FA5> % Symbols for Han
-      collating-symbol <SAC00>..<SD7A3> % Symbols for Hangul
-      ... and 1 more
-  iso14651_t1
-      .. ..;IGNORE;IGNORE;IGNORE
-  iso14651_t1_common
-      collating-symbol <S0009>..<S327F> % Alphabetics, syllabics, general symbols
-      collating-symbol <S4DC0>..<S4DFF> % Yijing hexagram symbols
-      collating-symbol <SA000>..<SABFF> % Alphabetics, syllabics, general symbols
-      ... and 20 more
-  ko_KR
-      ..
-
-Additionally exposed via `copy` inheritance: 329
-  via iso14651_t1: 325 locale(s)
-      aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, agr_PE, ak_GH, am_ET, an_ES, anp_IN, ar_AE, ar_BH, ...
-  via iso14651_t1_common: 4 locale(s)
-      cmn_TW, cns11643_stroke, iso14651_t1_pinyin, zh_CN
-
-Additionally exposed through localedef's default weight: 8
-      POSIX, ar_SA, ja_JP, km_KH, lo_LA, or_IN, sl_SI, th_TH
-  No ellipsis range reaches these, but every character a locale does not list
-  takes a default weight picked by a rule in localedef's code, not by the file.
-
-Full set needing empirical confirmation: 342 locale(s), and 43 more
-name(s), the aliases glibc's locale.alias gives them. Locales, not spellings.
-One is in use wherever a locale name, without the part from the dot up to
-any @, is one of them.
-  e.g. C, POSIX, aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, agr_PE, ...
-  not in glibc-2.28's SUPPORTED -- the node's `locale -a` is the authority on whether these are built: C, POSIX, cns11643_stroke, en_US@ampm, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
-  full list (385 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.28-251.el8_10.40.x86_64..old.txt
-
-These cannot be cleared by a source diff alone.
-This is one node's own data. Whether the WEIGHTS localedef computes for these
-differ between two nodes is a question about localedef, not about this
-directory: diff_collation_code.py for the two sides, and
-docs/confirming-on-a-real-system.md for the glibc each node actually runs.
-
-================================================================
-== STEP 10  NODE ELLIPSIS  does glibc-2.34-275.el9_8.x86_64's own locale data use ellipsis ranges?
-================================================================
-Files at glibc-2.34-275.el9_8.x86_64 (/tmp/pg-glibc-collation-audit/node_file.glibc-2.28-251.el8_10.40..glibc-2.34-275.el9_8.new/locales): 356, of which 343 define LC_COLLATE
-Locales whose LC_COLLATE uses ellipsis (algorithmic) ranges: 4
-  i18n
-      collating-symbol <S0200>..<S1100> % 0x0200..0x1100
-      collating-symbol <S4E00>..<S9FA5> % Symbols for Han
-      collating-symbol <SAC00>..<SD7A3> % Symbols for Hangul
-      ... and 1 more
-  iso14651_t1
-      .. ..;IGNORE;IGNORE;IGNORE
-  iso14651_t1_common
-      collating-symbol <S0009>..<S327F> % Alphabetics, syllabics, general symbols
-      collating-symbol <S4DC0>..<S4DFF> % Yijing hexagram symbols
-      collating-symbol <SA000>..<SABFF> % Alphabetics, syllabics, general symbols
-      ... and 20 more
-  ko_KR
-      ..
-
-Declare codepoint_collation, so no expansion change can move them: C
-
-Additionally exposed via `copy` inheritance: 331
-  via iso14651_t1: 327 locale(s)
-      aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, agr_PE, ak_GH, am_ET, an_ES, anp_IN, ar_AE, ar_BH, ...
-  via iso14651_t1_common: 4 locale(s)
-      cmn_TW, cns11643_stroke, iso14651_t1_pinyin, zh_CN
-
-Additionally exposed through localedef's default weight: 7
-      POSIX, ar_SA, ja_JP, km_KH, lo_LA, sl_SI, th_TH
-  No ellipsis range reaches these, but every character a locale does not list
-  takes a default weight picked by a rule in localedef's code, not by the file.
-
-Full set needing empirical confirmation: 342 locale(s), and 43 more
-name(s), the aliases glibc's locale.alias gives them. Locales, not spellings.
-One is in use wherever a locale name, without the part from the dot up to
-any @, is one of them.
-  e.g. POSIX, aa_DJ, aa_ER, aa_ER@saaho, aa_ET, af_ZA, agr_PE, ak_GH, ...
-  not in glibc-2.34's SUPPORTED -- the node's `locale -a` is the authority on whether these are built: POSIX, cns11643_stroke, i18n, iso14651_t1, iso14651_t1_common, iso14651_t1_pinyin
-  full list (385 name(s)): /tmp/pg-glibc-collation-audit/step4_exposed_locales.glibc-2.34-275.el9_8.x86_64..new.txt
-
-These cannot be cleared by a source diff alone.
-This is one node's own data. Whether the WEIGHTS localedef computes for these
-differ between two nodes is a question about localedef, not about this
-directory: diff_collation_code.py for the two sides, and
-docs/confirming-on-a-real-system.md for the glibc each node actually runs.
 
 ================================================================
 == STEP 11  MEASURED ORDER  how each machine's own glibc sorts every locale
@@ -1586,26 +922,10 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
         compares bytes on both.
      Full report: step 11 above.
 
--- Needs an empirical test: step 5 found 35 substantive hunk(s),
-   so a clean data diff CANNOT clear the locales step 4 flagged
-     385 name(s) to confirm. They are locales and the
-     aliases glibc's locale.alias gives them. A collation or a database
-     uses one when its locale, without the part from the dot up to any @,
-     is one of them.
-     full list: /tmp/pg-glibc-collation-audit/step4_exposed_locales.txt
-     Also the locale(s) step 4 leaves out because glibc builds them in
-     byte order, which changed code can move too: C
-     Step 9 finds no locale built in byte order on glibc-2.28-251.el8_10.40.x86_64.
-     Step 10 finds locale(s) built in byte order on glibc-2.34-275.el9_8.x86_64,
-     which changed code can move too: C
-     Here C means C.UTF-8 and its other spellings. A database or
-     collation whose locale is exactly C or POSIX is compared by
-     PostgreSQL itself, without glibc.
-
 -- Distro patches, step 6 (glibc-2.28-251.el8_10.40.x86_64 against glibc-2.28)
      No locale compared with glibc-2.28 differs inside LC_COLLATE.
      Not compared, because glibc-2.28 lacks them, and with sort rules of
-     their own (step 6 above); steps 1 to 5 read them as files of
+     their own (step 6 above); steps 1 and 2 read them as files of
      glibc-2.28-251.el8_10.40:
        C
      Character sets and transliterations, this machine against
@@ -1615,7 +935,7 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
 -- Distro patches, step 7 (glibc-2.34-275.el9_8.x86_64 against glibc-2.34)
      No locale compared with glibc-2.34 differs inside LC_COLLATE.
      Not compared, because glibc-2.34 lacks them, and with sort rules of
-     their own (step 7 above); steps 1 to 5 read them as files of
+     their own (step 7 above); steps 1 and 2 read them as files of
      glibc-2.34-275.el9_8:
        C
      Character sets and transliterations, this machine against
@@ -1632,47 +952,32 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
      nothing to add. No other locale's LC_COLLATE names a character
      whose bytes differ, and no collating element is built differently.
 
--- Node's own locale data, ellipsis scan (glibc-2.28-251.el8_10.40.x86_64)
-     ellipsis-based locale(s): 5
--- Node's own locale data, ellipsis scan (glibc-2.34-275.el9_8.x86_64)
-     ellipsis-based locale(s): 4
-
 -- Warnings the clean results above do NOT cover
-     !! Not checked for these builds: the compiler, and the build's patches to code
-        outside localedata/ and locale/: one to the own files of strcoll, strxfrm,
-        wcscoll or wcsxfrm under string/ and wcsmbs/ is named with the build's
-        patches above, and step 5 then gives no clean result; the others, such as
-        those to the strcmp that strcoll calls, are not compared; the SRPM's and
-        the binary packages' GPG signatures (only rpm's own digests are checked),
-        and the mirror metadata's, whose sha256 is the only check on each file; the
-        host that built the binary packages is taken to read the spec as the host
-        that built the SRPM did (its architecture, its rpm and redhat-rpm-config
-        macros); the Lua rpm runs while it reads the spec beyond the blocks of the
-        spec, which are pinned: a Lua Source such as patch-git.lua, which changes
-        in every build, is read only for the ways of changing macros, the
-        environment or rpm's table of patches the seven builds were measured
-        without; localedata/SUPPORTED and locale/ are in no binary package: they
-        are the SRPM's tarball, checked above against the upstream tag, and its
-        patches.
-     !! This compares locale DATA. glibc's collation CODE is step 5's job
-        (diff_collation_code.py) -- that is where Bug 22668 lives, the change that
-        reorders ko_KR. What step 5 does not read of a distro's code (all of it,
-        when step 5 compares two tags) is closed by the empirical check on real
-        nodes, which measures the glibc actually installed, patches and all:
-        docs/confirming-on-a-real-system.md.
+     !! Not checked for these builds: the compiler that built the binary packages,
+        and the build's patches to code, such as those to the strcmp that strcoll
+        calls; the SRPM's and the binary packages' GPG signatures (only rpm's own
+        digests are checked), and the mirror metadata's, whose sha256 is the only
+        check on each file; the host that built the binary packages is taken to
+        read the spec as the host that built the SRPM did (its architecture, its
+        rpm and redhat-rpm-config macros); the Lua rpm runs while it reads the spec
+        beyond the blocks of the spec, which are pinned: a Lua Source such as
+        patch-git.lua, which changes in every build, is read only for the ways of
+        changing macros, the environment or rpm's table of patches the seven builds
+        were measured without; localedata/SUPPORTED and locale/ are in no binary
+        package: they are the SRPM's tarball, checked above against the upstream
+        tag, and its patches.
+     !! Not compared on any route: the code that compiles and compares the rules
+        (localedef's and strcoll's, each build's patches to it included). Only step
+        11 sees what it does, when it measures both machines;
+        docs/confirming-on-a-real-system.md says how to confirm the order on them.
+     !! This compares locale DATA. glibc's collation CODE, where Bug 22668 lives
+        (the change that reorders ko_KR), is compared by no step: step 1 says so.
+        The empirical check on real nodes measures the glibc actually installed,
+        patches and all: docs/confirming-on-a-real-system.md.
      !! This compares locale DATA. Identical data is NOT identical ORDER: the
         weights for an ellipsis range are computed by localedef when the locale is
         built, and that code differs between two glibc builds. Bug 22668 (commit
         82292c99b2) changed exactly that and reordered ko_KR from a byte-identical
         file. So a clean result here clears the data half and nothing else.
      (see docs/limitations.md)
-
--- Not decided for you
-     35 hunk(s) marked >> in step 5. Whether any of them can change
-     an order is a judgement call that needs someone to read C.
-     If nobody will, treat step 4's list, and the locales it leaves
-     out as byte order, as unresolved and confirm empirically instead:
-     docs/confirming-on-a-real-system.md
-     What this run does not read of a build is under 'Not checked for
-     these builds', above.
 

@@ -19,11 +19,10 @@ import unittest
 from unittest import mock
 
 from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
-                      SCRIPTS_DIR, Step2Report, flat, glibc_shaped,
-                      needs_clone, needs_floor_pair)
+                      SCRIPTS_DIR, Step2Report, deleted_steps_named, flat,
+                      glibc_shaped, needs_clone, needs_floor_pair)
 
 import glibc_locale_data as g
-import diff_collation_code as d
 
 BAD = 'no-such-tag-4c1f'
 
@@ -35,7 +34,7 @@ def in_subprocess(code):
     without tearing down the test runner.
     """
     boot = ("import sys; sys.path.insert(0, %r); "
-            "import glibc_locale_data as g, diff_collation_code as d; "
+            "import glibc_locale_data as g; "
             "repo = %r\n" % (os.path.dirname(g.__file__), GLIBC_CLONE))
     p = subprocess.run([sys.executable, '-c', boot + code],
                        capture_output=True, cwd=os.path.dirname(g.__file__))
@@ -76,345 +75,6 @@ class DescendsFrom(unittest.TestCase):
 
 
 @needs_clone
-class GitFailureIsNotSilence(unittest.TestCase):
-    """"A failed git was indistinguishable from 'this file did not change'".
-
-    On a --filter=blob:none clone, fetches really do fail:
-        fatal: could not fetch <oid> from promisor remote
-    An invalid revision range produces the same shape -- non-zero exit, empty
-    stdout -- without needing the network to be down.
-    """
-
-    def test_report_file_aborts_instead_of_reporting_no_change(self):
-        """It used to return 0, i.e. 'no substantive change', for a file whose
-        diff it never read."""
-        rc, out = in_subprocess(
-            "d.report_file(repo, 'locale/programs/ld-collate.c',"
-            " '%s1..%s2', False)" % (BAD, BAD))
-        self.assertNotEqual(rc, 0, 'a failed git diff was swallowed')
-        self.assertIn('fatal', out.lower())
-
-    def test_check_paths_aborts_instead_of_calling_a_real_file_harmless(self):
-        """It used to return outside=['locale/programs/ld-collate.c'], printed
-        as 'nothing to read, and nothing to miss', for a file that exists."""
-        rc, out = in_subprocess(
-            "print(d.check_paths(repo, ['locale/programs/ld-collate.c'],"
-            " '%s1', '%s2'))" % (BAD, BAD))
-        self.assertNotEqual(rc, 0, 'a failed ls-tree was swallowed')
-        self.assertIn('error: `git ls-tree ', out)
-
-    def test_a_diff_that_really_is_empty_still_reports_no_change(self):
-        """The other direction: aborting must not turn 'unchanged' into an
-        error. coll-lookup.h has only a copyright change over this pair."""
-        n = d.report_file(GLIBC_CLONE, 'locale/coll-lookup.h',
-                          f'{MID}..{NEW}', False, quiet_when_clean=True)
-        self.assertEqual(n, 0)
-
-
-class AnUnreadableTreeOnOneSideIsNotHarmless(unittest.TestCase):
-    """check_paths and the include walk, on a tag whose tree cannot be read.
-
-    The test above passes two bad tags, so whichever side still aborts hides
-    the other. Silencing the probe on one side only stayed green there, and
-    returned ([], ['locale/C-collate-seq.c']) at exit 0 for glibc-2.34 against
-    a bad tag. A bad tag also fails every git command that names it, so that
-    test cannot tell the probe from any other ls-tree of the tag run before it.
-
-    In step 5 neither input gets this far today. check_refs refuses a bad tag,
-    and the include walk lists both trees in full (`ls-tree -r`) before
-    check_paths runs, and dies on the same unreadable tree. The last test
-    guards that walk. The two before it guard check_paths, one per side, as
-    the backstop for when the walk does not abort first. The fixture is a
-    valid tag t2 where rev-parse and a bare `git ls-tree t2` succeed, while
-    the per-path read and `ls-tree -r` fail, next to t1 and t3, which read
-    cleanly and do not have the file.
-    """
-
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-unreadable-')
-        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        t = self.tmp
-        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
-                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
-        with open(os.path.join(t, 'keep'), 'w') as fh:
-            fh.write('base\n')
-        git(t, 'init', '-q', env=env)
-        git(t, 'add', '.', env=env)
-        git(t, 'commit', '-q', '-m', 'without locale/', env=env)
-        git(t, 'tag', 't1', env=env)
-        os.makedirs(os.path.join(t, 'locale', 'programs'))
-        with open(os.path.join(t, 'locale', 'programs', 'ld-collate.c'),
-                  'w') as fh:
-            fh.write('int f (void) { return 0; }\n')
-        git(t, 'add', '.', env=env)
-        git(t, 'commit', '-q', '-m', 'add ld-collate.c', env=env)
-        git(t, 'tag', 't2', env=env)
-        git(t, 'rm', '-q', '-r', 'locale', env=env)
-        git(t, 'commit', '-q', '-m', 'remove locale/', env=env)
-        git(t, 'tag', 't3', env=env)
-
-        probe = ['git', 'ls-tree', '--name-only', 't2', '--',
-                 'locale/programs/ld-collate.c']
-        before = subprocess.run(probe, cwd=t, capture_output=True, text=True)
-        self.assertEqual(before.stdout.strip(), 'locale/programs/ld-collate.c',
-                         'the file must exist at t2 before the damage')
-        sub = subprocess.run(['git', 'rev-parse', 't2:locale/programs'],
-                             cwd=t, capture_output=True, text=True,
-                             check=True).stdout.strip()
-        os.remove(os.path.join(t, '.git', 'objects', sub[:2], sub[2:]))
-        for premise in (['rev-parse', '--verify', 't2^{commit}'],
-                        ['ls-tree', 't2']):
-            self.assertEqual(
-                subprocess.run(['git', *premise], cwd=t,
-                               capture_output=True).returncode, 0,
-                f'git {" ".join(premise)} must still succeed on t2')
-        self.assertNotEqual(
-            subprocess.run(probe, cwd=t, capture_output=True).returncode, 0,
-            'the per-path read at t2 must fail, or nothing is tested')
-        for tag in ('t1', 't3'):
-            read = subprocess.run(probe[:3] + [tag] + probe[4:], cwd=t,
-                                  capture_output=True, text=True)
-            self.assertEqual((read.returncode, read.stdout), (0, ''),
-                             f'the per-path read at {tag} must succeed and '
-                             'find nothing, or a failure there hides t2')
-
-    def assert_aborts(self, old, new):
-        rc, out = in_subprocess(
-            "print(d.check_paths(%r, ['locale/programs/ld-collate.c'],"
-            " %r, %r))" % (self.tmp, old, new))
-        self.assertNotEqual(rc, 0, 'an unreadable tree was swallowed:\n' + out)
-        self.assertIn('error: `git ls-tree ', out)
-
-    def test_an_unreadable_new_tag_aborts(self):
-        self.assert_aborts('t1', 't2')
-
-    def test_an_unreadable_old_tag_aborts(self):
-        self.assert_aborts('t2', 't3')
-
-    def test_the_include_walk_aborts_on_the_unreadable_tag(self):
-        rc, out = in_subprocess(
-            "d.reachable_from_entry_points(%r, 't2')" % self.tmp)
-        self.assertNotEqual(rc, 0,
-                            'an unreadable tree emptied the walk:\n' + out)
-        self.assertIn('error: `git ls-tree -r ', out)
-
-
-class StepFiveStopsOnATreeOnlyTheWalkReads(unittest.TestCase):
-    """Step 5 itself, on a tag with an unreadable tree off every tracked path.
-
-    The class above calls the include walk directly, so a step 5 that caught
-    the walk's abort where main() calls it stayed green. check_paths does not
-    cover that case. It reads only the trees along the tracked paths, and the
-    walk's `ls-tree -r` reads every tree in the tag. On this fixture, a main()
-    that caught the new tag's abort and kept the old tag's walk printed that
-    steps 1-3 are sufficient for t1..t2, at exit 0, where the undamaged answer
-    is one substantive hunk (newhdr.h). die() prints its line before it exits,
-    so a caught abort still leaves the message behind. The exit code is what
-    tells the two apart. That is why setUp checks that the damage is off the
-    paths check_paths reads, and why each test allows one git failure only,
-    the walk's. A later read that also hit the damaged tree would otherwise
-    supply the exit code. One case per side.
-    """
-
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix='pg-glibc-walk-only-')
-        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        t = self.tmp
-        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
-                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
-
-        def put(path, text):
-            os.makedirs(os.path.dirname(os.path.join(t, path)), exist_ok=True)
-            with open(os.path.join(t, path), 'w') as fh:
-                fh.write(text)
-
-        tracked = list(dict.fromkeys(d.ENTRY_POINTS + d.TIER1 + d.TIER2))
-        put('localedata/locales/x', 'LC_COLLATE\nEND LC_COLLATE\n')
-        for i, path in enumerate(tracked):
-            put(path, f'/* stub */\nint stub_{i};\n')
-        put('locale/programs/ld-collate.c', '#include "oldhdr.h"\n'
-            '#include "newhdr.h"\nint f (void) { return 0; }\n')
-        put('locale/programs/oldhdr.h', 'int old_weight = 1;\n')
-        git(t, 'init', '-q', env=env)
-        for tag, extra in (('t1', None), ('t2', 'locale/programs/newhdr.h'),
-                           ('t3', None)):
-            if extra:
-                put(extra, 'int weight_of_a = 2;\n')
-            put('aaa/z', f'not collation code, {tag}\n')
-            git(t, 'add', '.', env=env)
-            git(t, 'commit', '-q', '-m', tag, env=env)
-            git(t, 'tag', tag, env=env)
-
-        for pair in (('t1', 't2'), ('t2', 't3')):
-            rc, out = self.step5(*pair)
-            self.assertEqual(rc, 0, f'step 5 must run clean on {pair} before '
-                             f'the damage, or a later abort proves nothing:\n'
-                             + out)
-        sub = subprocess.run(['git', 'rev-parse', 't2:aaa'], cwd=t,
-                             capture_output=True, text=True,
-                             check=True).stdout.strip()
-        os.remove(os.path.join(t, '.git', 'objects', sub[:2], sub[2:]))
-        for tag, ok in (('t1', True), ('t2', False), ('t3', True)):
-            rc = subprocess.run(['git', 'ls-tree', '-r', '--name-only', tag],
-                                cwd=t, capture_output=True).returncode
-            self.assertEqual(rc == 0, ok,
-                             f'`git ls-tree -r {tag}` must '
-                             f'{"succeed" if ok else "fail"}')
-        for old, new in (('t1', 't2'), ('t2', 't3')):
-            rc, out = in_subprocess(
-                "print(d.check_paths(%r, %r, %r, %r))"
-                % (t, tracked, old, new))
-            self.assertEqual(rc, 0, 'the damage must be off every path '
-                             'check_paths reads, or it stops step 5 '
-                             'instead of the walk:\n' + out)
-
-    def step5(self, old, new):
-        return run_script('diff_collation_code.py', '--repo', self.tmp,
-                          old, new)
-
-    def assert_step5_stops(self, old, new):
-        rc, out = self.step5(old, new)
-        self.assertNotEqual(rc, 0, 'step 5 read past an unreadable tree:\n'
-                            + out)
-        self.assertIn('error: `git ls-tree -r ', out)
-        self.assertEqual(out.count('error: `git '), 1,
-                         'another git failure can supply the exit code:\n'
-                         + out)
-
-    def test_an_unreadable_new_tag_stops_step_5(self):
-        self.assert_step5_stops('t1', 't2')
-
-    def test_an_unreadable_old_tag_stops_step_5(self):
-        self.assert_step5_stops('t2', 't3')
-
-
-@needs_clone
-class AbsentAtBothIsTwoFacts(unittest.TestCase):
-    """"A tracked path absent from BOTH tags was called harmless."
-
-    check_paths files every such path under "nothing to read, and nothing to
-    miss". That is true of a file not yet written when the range begins, and
-    false of one renamed away before the older tag -- for which the audit reads
-    nothing and `git diff` reports no error. Both shapes are in the real
-    clone: locale/C-collate-seq.c
-    arrives in glibc 2.35, and locale/xlocale.h was deleted before 2.28.
-    """
-
-    def test_a_path_deleted_before_the_old_tag_is_not_harmless(self):
-        renamed, unborn, never = d.absent_at_both(
-            GLIBC_CLONE, ['locale/xlocale.h', 'locale/C-collate-seq.c'],
-            OLD, MID)
-        self.assertEqual(renamed, ['locale/xlocale.h'])
-        self.assertEqual(unborn, ['locale/C-collate-seq.c'])
-        self.assertEqual(never, [])
-
-    def test_a_path_that_lived_and_died_inside_the_range_is_not_unborn(self):
-        """Asking only the OLDER tag files a path added and removed inside the
-        range under "not yet written, nothing to miss".
-        posix/spawnattr_tcgetpgrp.c is added by 342cc934a3 and removed by
-        6289d28d3c, both between 2.34 and 2.39."""
-        renamed, unborn, never = d.absent_at_both(
-            GLIBC_CLONE, ['posix/spawnattr_tcgetpgrp.c'], MID, NEW)
-        self.assertEqual((renamed, unborn, never),
-                         (['posix/spawnattr_tcgetpgrp.c'], [], []))
-
-    def test_a_path_that_lived_on_a_merged_side_branch_is_not_unborn(self):
-        """`git log -- <path>` with default history simplification does not
-        report a path that was added and deleted on a branch that was later
-        merged: the merge has the same tree as its first parent for that path,
-        so simplification prunes the side. --full-history keeps it. Fabricated,
-        because glibc has no path of this shape in the audited pairs."""
-        tmp = tempfile.mkdtemp(prefix='pg-glibc-sidebranch-')
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
-                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
-        with open(os.path.join(tmp, 'keep'), 'w') as fh:
-            fh.write('base\n')
-        git(tmp, 'init', '-q', env=env)
-        git(tmp, 'add', '.', env=env)
-        git(tmp, 'commit', '-q', '-m', 'base', env=env)
-        git(tmp, 'checkout', '-q', '-b', 'side', env=env)
-        with open(os.path.join(tmp, 'gone.c'), 'w') as fh:
-            fh.write('int f (void) { return 0; }\n')
-        git(tmp, 'add', '.', env=env)
-        git(tmp, 'commit', '-q', '-m', 'add gone.c', env=env)
-        git(tmp, 'rm', '-q', 'gone.c', env=env)
-        git(tmp, 'commit', '-q', '-m', 'remove gone.c', env=env)
-        git(tmp, 'checkout', '-q', '-', env=env)
-        git(tmp, 'merge', '-q', '--no-ff', '-m', 'merge side', 'side', env=env)
-        git(tmp, 'tag', 'old', env=env)
-        with open(os.path.join(tmp, 'keep'), 'a') as fh:
-            fh.write('later\n')
-        git(tmp, 'add', '.', env=env)
-        git(tmp, 'commit', '-q', '-m', 'later', env=env)
-        git(tmp, 'tag', 'new', env=env)
-
-        simplified = subprocess.run(
-            ['git', '-C', tmp, 'log', '-1', '--format=%H', 'old', '--',
-             'gone.c'], capture_output=True, env=env)
-        if simplified.stdout.strip():
-            self.skipTest('this git does not simplify the side branch away; '
-                          'the case this test guards is not reproducible here')
-        renamed, unborn, never = d.absent_at_both(tmp, ['gone.c'], 'old', 'new')
-        self.assertEqual((renamed, unborn, never), (['gone.c'], [], []),
-                         'a file that existed and was removed read as '
-                         '"not yet written"')
-
-    def test_a_path_no_ref_ever_carried_is_not_read_as_not_yet_written(self):
-        """A path NO ref in the clone has ever had is not a file waiting to
-        be written: it is a name in the curated lists that matches nothing,
-        and those lists are the ceiling of what step 5 reads. Measured with
-        `ld-collate.c` spelt `ld-colate.c`: the pair reported far fewer
-        substantive hunks, the Bug 22668 hunk gone, and the only mention was
-        a note saying there was nothing to miss."""
-        renamed, unborn, never = d.absent_at_both(
-            GLIBC_CLONE, ['locale/programs/ld-colate.c'], OLD, MID)
-        self.assertEqual((renamed, unborn, never),
-                         ([], [], ['locale/programs/ld-colate.c']))
-
-    def test_a_builds_commit_does_not_make_a_misspelt_path_real(self):
-        """A path only a build's commit carries (glibc_locale_data.
-        BUILD_REFS) is still a path no upstream ref ever had. The control:
-        the same commit under a branch makes it "not yet written"."""
-        tmp = tempfile.mkdtemp(prefix='pg-glibc-build-ref-')
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        repo = os.path.join(tmp, 'repo')
-        glibc_shaped(repo, MID)
-
-        def git_(*args, data=None):
-            return subprocess.run(['git', '-C', repo] + list(args),
-                                  input=data, check=True,
-                                  capture_output=True).stdout.decode().strip()
-        blob = git_('hash-object', '-w', '--stdin', data=b'x\n')
-        t = git_('mktree', data=('100644 blob %s\tld-colate.c\n'
-                                 % blob).encode())
-        t = git_('mktree', data=('040000 tree %s\tprograms\n' % t).encode())
-        t = git_('mktree', data=('040000 tree %s\tlocale\n' % t).encode())
-        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_COMMITTER_NAME='t',
-                   GIT_AUTHOR_EMAIL='t@example.invalid',
-                   GIT_COMMITTER_EMAIL='t@example.invalid')
-        c = subprocess.run(['git', '-C', repo, 'commit-tree', t, '-m', 'b'],
-                           env=env, check=True,
-                           capture_output=True).stdout.decode().strip()
-        path = 'locale/programs/ld-colate.c'
-        git_('update-ref', g.BUILD_REFS + 'glibc-2.34-275.el9_8', c)
-        self.assertEqual(d.absent_at_both(repo, [path], OLD, MID),
-                         ([], [], [path]))
-        git_('update-ref', 'refs/heads/control', c)
-        self.assertEqual(d.absent_at_both(repo, [path], OLD, MID),
-                         ([], [path], []))
-
-    def test_a_failed_git_log_is_not_read_as_never_existed(self):
-        """The reassuring half is "did not exist yet": an error must not land
-        there."""
-        rc, out = in_subprocess(
-            "print(d.absent_at_both(repo, ['locale/xlocale.h'], '%s', '%s'))"
-            % (BAD, BAD))
-        self.assertNotEqual(rc, 0, 'a failed git log was swallowed')
-        self.assertNotIn("(['locale/xlocale.h'], [], [])", out)
-
-
-@needs_clone
 class AShallowCloneCannotAnswerThis(unittest.TestCase):
     """`git log` on a shallow clone exits 0 with empty output for any path
     whose last commit is beyond the boundary -- and empty is the half of
@@ -443,14 +103,6 @@ class AShallowCloneCannotAnswerThis(unittest.TestCase):
                                  capture_output=True)
         self.assertEqual(shallow.stdout.strip(), b'true',
                          'the fixture clone is not shallow')
-
-    def test_absent_at_both_refuses_a_shallow_clone(self):
-        rc, out = in_subprocess(
-            "print(d.absent_at_both(%r, ['locale/xlocale.h'], '%s', '%s'))"
-            % (self.repo, OLD, OLD))
-        self.assertNotEqual(rc, 0, 'a shallow clone was read as history')
-        self.assertIn('shallow', out)
-        self.assertNotIn("([], ['locale/xlocale.h'], [])", out)
 
     def test_two_predates_are_not_trusted_on_a_shallow_clone(self):
         """Round 2 of the 13.18 review, finding 6: on a shallow clone git
@@ -520,348 +172,16 @@ class AShallowCloneCannotAnswerThis(unittest.TestCase):
             "real = g.run_git\n"
             "g.run_git = lambda a, *rest, **k: (R() if a[:1] == ['rev-parse']\n"
             "                                   else real(a, *rest, **k))\n"
-            "print(d.absent_at_both(repo, ['locale/xlocale.h'], '%s', '%s'))"
-            % (OLD, MID))
+            "g.require_full_history(repo, 'step 2', 'a test')\n"
+            "print('ANSWER')")
         self.assertNotEqual(rc, 0, 'an unusable answer was read as "not shallow"')
         self.assertIn('neither true nor false', out)
+        self.assertNotIn('ANSWER', out)
 
     def test_the_full_clone_still_answers(self):
         """Control: the refusal must not fire on the clone this tool uses."""
-        renamed, unborn, never = d.absent_at_both(
-            GLIBC_CLONE, ['locale/xlocale.h'], OLD, MID)
-        self.assertEqual((renamed, unborn, never),
-                         (['locale/xlocale.h'], [], []))
-
-
-@needs_clone
-class AHijackedDiffIsNotNoChange(unittest.TestCase):
-    """`diff.external` in a config this run does not control, or
-    GIT_EXTERNAL_DIFF in the environment, replaces the unified diff with
-    whatever that program prints. With /usr/bin/true, every tracked file read
-    as "no substantive change" and the step printed its clean sentence."""
-
-    def test_an_external_diff_driver_does_not_change_the_count(self):
-        env = dict(os.environ, GIT_EXTERNAL_DIFF='/usr/bin/true',
-                   GIT_NO_LAZY_FETCH='1')
-        p = subprocess.run([sys.executable, 'diff_collation_code.py', OLD, MID],
-                           cwd=SCRIPTS_DIR, env=env, capture_output=True)
-        out = (p.stdout + p.stderr).decode('utf-8', 'replace')
-        self.assertEqual(p.returncode, 0, out)
-        self.assertIn('29 substantive hunk(s) found', out)
-
-    def test_a_textconv_driver_does_not_change_the_count(self):
-        """--no-ext-diff does NOT disable `diff.<driver>.textconv`, and a
-        textconv that empties both sides leaves an EMPTY diff -- which the
-        hunk-less guard below never sees either, because there is no output
-        at all. Reached through the user's core.attributesFile, which no
-        override this run makes can pin."""
-        tmp = tempfile.mkdtemp(prefix='pg-glibc-textconv-')
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        attrs = os.path.join(tmp, 'attributes')
-        with open(attrs, 'w', encoding='utf-8') as fh:
-            fh.write('* diff=nul\n')
-        cfg = os.path.join(tmp, 'gitconfig')
-        with open(cfg, 'w', encoding='utf-8') as fh:
-            fh.write('[core]\n\tattributesFile = %s\n'
-                     '[diff "nul"]\n\ttextconv = /usr/bin/true\n' % attrs)
-        env = dict(os.environ, GIT_CONFIG_GLOBAL=cfg, GIT_NO_LAZY_FETCH='1')
-
-        # The fixture must bite, or this test guards nothing: without the
-        # flag, the same config has to empty the diff.
-        bare = subprocess.run(
-            ['git', '-C', GLIBC_CLONE, 'diff', '--no-ext-diff',
-             f'{OLD}..{MID}', '--', 'locale/programs/ld-collate.c'],
-            env=env, capture_output=True)
-        if bare.stdout.strip():
-            self.skipTest('textconv is not applied by this git; nothing to '
-                          'guard against here')
-
-        p = subprocess.run([sys.executable, 'diff_collation_code.py', OLD, MID],
-                           cwd=SCRIPTS_DIR, env=env, capture_output=True)
-        out = (p.stdout + p.stderr).decode('utf-8', 'replace')
-        self.assertEqual(p.returncode, 0, out)
-        self.assertIn('29 substantive hunk(s) found', out)
-
-    def hostile(self, body):
-        """A GIT_CONFIG_GLOBAL holding `body`, plus a check that it bites."""
-        tmp = tempfile.mkdtemp(prefix='pg-glibc-hostile-')
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        cfg = os.path.join(tmp, 'gitconfig')
-        with open(cfg, 'w', encoding='utf-8') as fh:
-            fh.write(body)
-        return dict(os.environ, GIT_CONFIG_GLOBAL=cfg, GIT_NO_LAZY_FETCH='1')
-
-    def step5(self, env, old, new):
-        p = subprocess.run([sys.executable, 'diff_collation_code.py', old, new],
-                           cwd=SCRIPTS_DIR, env=env, capture_output=True)
-        return p.returncode, (p.stdout + p.stderr).decode('utf-8', 'replace')
-
-    def test_a_coloured_diff_does_not_read_as_all_comment(self):
-        """`color.diff` beats the `color.ui=false` override (more specific
-        wins). With the hunk headers left plain they still match, every body
-        line begins with an escape, each hunk comes back empty and therefore
-        all-noise, and step 5 printed its clean sentence over the pair that
-        carries Bug 22668."""
-        env = self.hostile('[color]\n\tdiff = always\n'
-                           '[color "diff"]\n\tfrag = normal\n')
-        raw = subprocess.run(
-            ['git', '-C', GLIBC_CLONE, '-c', 'color.ui=false', 'diff',
-             f'{OLD}..{MID}', '--', 'locale/programs/ld-collate.c'],
-            env=env, capture_output=True)
-        if b'\x1b[' not in raw.stdout:
-            self.skipTest('this git does not colour a piped diff here')
-        rc, out = self.step5(env, OLD, MID)
-        self.assertEqual(rc, 0, out)
-        self.assertIn('29 substantive hunk(s) found', out)
-
-    def test_the_context_count_is_not_the_readers_to_choose(self):
-        """The classifier reads the context lines, so the count of them is
-        part of the measurement. Both routes: `diff.context` in config, and
-        GIT_DIFF_OPTS, which git applies AFTER the command line -- so `-U3` on
-        the argv does not win and run_git drops the variable instead."""
-        for name, env in (
-                ('diff.context', self.hostile('[diff]\n\tcontext = 0\n')),
-                # interHunkContext=50 merges nearby changes into one hunk:
-                # fewer hunks, with the same >> lines. Nothing hidden, the
-                # same drift in a published number.
-                ('diff.interHunkContext',
-                 self.hostile('[diff]\n\tinterHunkContext = 50\n')),
-                ('GIT_DIFF_OPTS', dict(os.environ, GIT_DIFF_OPTS='-u0',
-                                       GIT_NO_LAZY_FETCH='1'))):
-            with self.subTest(route=name):
-                rc, out = self.step5(env, MID, NEW)
-                self.assertEqual(rc, 0, out)
-                self.assertIn('55 substantive hunk(s) found', out)
-
-    def test_the_diff_algorithm_is_not_the_readers_to_choose(self):
-        """patience and histogram pair the same changed lines into different
-        hunks: the hunk count holds over 2.34..2.39 but the number of `>>`
-        lines moves, so the count alone would not notice. Nothing is
-        hidden -- every changed line still carries its marker -- but a
-        published number must not move with a reader's config."""
-        for algo in ('patience', 'histogram'):
-            with self.subTest(algorithm=algo):
-                env = self.hostile('[diff]\n\talgorithm = %s\n' % algo)
-                rc, out = self.step5(env, MID, NEW)
-                self.assertEqual(rc, 0, out)
-                self.assertIn('55 substantive hunk(s) found', out)
-                marked = [ln for ln in out.split('\n')
-                          if ln.startswith('      >> ')]
-                self.assertEqual(len(marked), 761)
-
-    def test_output_with_no_hunk_in_it_is_not_read_as_unchanged(self):
-        """"Binary files ... differ", or any diff this parser does not
-        understand: the file DID change and nothing read the change."""
-        rc, out = in_subprocess(
-            "class R:\n"
-            "    stdout = b'Binary files a/x and b/x differ\\n'\n"
-            "g.run_git = lambda *a, **k: R()\n"
-            "d.report_file(repo, 'locale/programs/ld-collate.c', 'a..b', False)")
-        self.assertNotEqual(rc, 0, 'a diff with no hunk was read as no change')
-        self.assertIn('no hunk', out)
-
-
-@needs_clone
-class TheCleanSentenceNeedsSomethingRead(unittest.TestCase):
-    """"Step 5 printed its clean sentence over a walk that read nothing."
-
-    Unreachable with any tag in use: it needs glibc to have moved ld-collate.c
-    or strcoll_l.c before BOTH tags of a pair, so the branches are driven by
-    injection, on the real clone.
-    """
-
-    SAME = "the two tags are one commit, so nothing was compared"
-
-    def run_injected(self, assignments, *tags):
-        return in_subprocess(
-            "%s\nsys.argv = ['x']\nd.main(%r)\n" % (assignments, list(tags)))
-
-    def refusals(self, out):
-        """The reasons listed under "This is NOT a clean result:", which must
-        be printed exactly once. Most tests here pass one tag twice, and one
-        commit compared with itself is a reason of its own, so the verdict
-        alone no longer proves a guard: only the reason that guard adds to
-        this list does."""
-        lines = out.splitlines()
-        heads = [i for i, line in enumerate(lines)
-                 if line == 'This is NOT a clean result:']
-        self.assertEqual(len(heads), 1, out)
-        reasons = []
-        for line in lines[heads[0] + 1:]:
-            if not line.startswith('  - '):
-                break
-            reasons.append(line[len('  - '):])
-        return reasons
-
-    def test_a_collapsed_include_walk_is_not_a_clean_result(self):
-        """Entry points that resolve to nothing: the walk reaches 0 files,
-        every tier is empty, and the step used to exit 0 saying there was no
-        substantive collation code change."""
-        rc, out = self.run_injected(
-            "d.ENTRY_POINTS = ['locale/programs/no-such-entry.c']\n"
-            "d.TIER1 = []\nd.TIER2 = []", OLD, MID)
-        self.assertEqual(rc, 0, out)
-        self.assertNotIn('No substantive collation code change', out)
-        self.assertIn('!!', out)
-        self.assertIn('the include walk reached no file', flat(out))
-
-    def test_a_path_renamed_away_before_both_tags_is_not_a_clean_result(self):
-        """A same-tag range makes every diff empty, and that alone refuses
-        the clean verdict, so what proves this guard is the reason the tracked
-        path in neither tree adds to the list."""
-        rc, out = self.run_injected(
-            "d.TIER1 = ['locale/xlocale.h']\nd.TIER2 = []", OLD, OLD)
-        self.assertEqual(rc, 0, out)
-        self.assertNotIn('No substantive collation code change', out)
-        self.assertEqual(self.refusals(out), [
-            '1 path(s) this audit must read are absent from both tags',
-            self.SAME])
-        self.assertIn('locale/xlocale.h: ABSENT at glibc-2.28 and glibc-2.28',
-                      flat(out))
-        self.assertIn('are in NEITHER tree', flat(out))
-
-    def test_a_vanished_path_is_still_a_blocker(self):
-        """The oldest of the reasons, driven here with no hunk at all; with
-        hunks it is test_a_blocker_refuses_a_hunk_count_too. Remove the
-        `vanished` entry from the list and this fails."""
-        rc, out = self.run_injected(
-            "d.check_paths = lambda *a: (['locale/xlocale.h'], [])",
-            OLD, OLD)
-        self.assertEqual(rc, 0, out)
-        self.assertNotIn('No substantive collation code change', out)
-        self.assertEqual(self.refusals(out), [
-            '1 tracked path(s) vanished before glibc-2.28', self.SAME])
-
-    def test_a_misspelt_tracked_path_is_not_a_clean_result(self):
-        """The whole of finding "a path that never existed is filed under
-        nothing to miss": with a name that matches nothing, the tier is read
-        as empty and the step used to say so in a note."""
-        rc, out = self.run_injected(
-            "d.TIER1 = ['locale/programs/ld-colate.c']\nd.TIER2 = []",
-            OLD, OLD)
-        self.assertEqual(rc, 0, out)
-        self.assertNotIn('No substantive collation code change', out)
-        self.assertEqual(self.refusals(out), [
-            '1 tracked path(s) exist at no ref of glibc in this clone',
-            self.SAME])
-        self.assertIn('ld-colate.c: no ref of glibc in this clone has '
-                      'ever had it',
-                      flat(out))
-
-    def test_a_blocker_refuses_a_hunk_count_too(self):
-        """Backlog 1.24. The reasons above used to be read only when the
-        count was zero, and no pinned pair has zero. With a tracked path
-        missing, step 5 printed "N substantive hunk(s) found" over the files
-        it could read, and the summary invited reading those N to clear step
-        4's list. A path that vanishes always brings a hunk of its own, its
-        deletion, so the case the guard was written for never reached it.
-
-        On 2.28..2.34, real data, one case per path reason, each alone:
-        C-translit.h is a file glibc deleted inside the range (it became
-        generated); ld-collate.c misspelt is the case that hides the Bug 22668
-        hunk; xlocale.h was renamed away before 2.28; and an entry point list
-        holding only C-collate-seq.c, which arrives in 2.35, walks nothing
-        while the curated tiers still find hunks. A fifth case leaves one
-        hunk, the deletion alone, because one is where a count test written
-        as "more than one" would slip. The count is the one the reader is
-        shown, so it is asserted whole: 29 without the injection, one more
-        for the deletion, fewer for what the misspelt or empty walk no longer
-        reaches."""
-        collate = 'locale/programs/ld-collate.c'
-        vanished = '1 tracked path(s) vanished before glibc-2.34'
-        no_walk = 'the include walk reached no file'
-        cases = (
-            ("d.TIER2 = d.TIER2 + ['locale/C-translit.h']",
-             'locale/C-translit.h: ABSENT at glibc-2.34', 30, [vanished]),
-            ("d.ENTRY_POINTS = ['locale/programs/ld-colate.c' if p == %r "
-             "else p for p in d.ENTRY_POINTS]\n"
-             "d.TIER1 = ['locale/programs/ld-colate.c' if p == %r "
-             "else p for p in d.TIER1]" % (collate, collate),
-             'ld-colate.c: no ref of glibc in this clone has ever had it', 11,
-             ['1 tracked path(s) exist at no ref of glibc in this clone']),
-            ("d.TIER2 = d.TIER2 + ['locale/xlocale.h']",
-             'locale/xlocale.h: ABSENT at glibc-2.28 and glibc-2.34', 29,
-             ['1 path(s) this audit must read are absent from both tags']),
-            ("d.ENTRY_POINTS = ['locale/C-collate-seq.c']",
-             'The include walk reached 0 file(s).', 13, [no_walk]),
-            ("d.ENTRY_POINTS = ['locale/C-collate-seq.c']\nd.TIER1 = []\n"
-             "d.TIER2 = ['locale/C-translit.h']",
-             'locale/C-translit.h: ABSENT at glibc-2.34', 1,
-             [vanished, no_walk]))
-        for injected, notice, hunks, reasons in cases:
-            with self.subTest(reasons=reasons, hunks=hunks):
-                rc, out = self.run_injected(injected, OLD, MID)
-                self.assertEqual(rc, 0, out)
-                self.assertIn(notice, flat(out), 'the injection did not take')
-                # The case under test is a count above zero; at zero the
-                # tests above already cover it.
-                count = re.search(r'(?m)^(\d+) substantive hunk\(s\)', out)
-                self.assertIsNotNone(count, out)
-                self.assertEqual(int(count.group(1)), hunks)
-                self.assertEqual(self.refusals(out), reasons)
-                self.assertIn('Resolve the paths listed above, then re-run.',
-                              out)
-                self.assertNotIn('substantive hunk(s) found', out)
-                self.assertNotIn('No substantive collation code change', out)
-
-    def test_a_path_not_yet_written_adds_no_reason(self):
-        """The control: same shape, benign cause. C-collate-seq.c arrives in
-        2.35, so over a 2.28 range there is genuinely nothing to read -- and a
-        guard that fires here would make every audited pair unresolved.
-
-        This class passes the same tag twice on purpose, to isolate the
-        injected condition, and one commit compared with itself is now a
-        reason of its own not to call the result clean. So the clean sentence
-        cannot print here any more, and what is asserted instead is that the
-        same-commit reason is the ONLY one: the path added none. The path
-        blockers' notices must be absent too, named one by one."""
-        rc, out = self.run_injected(
-            "d.TIER1 = ['locale/C-collate-seq.c']\nd.TIER2 = []", OLD, OLD)
-        self.assertEqual(rc, 0, out)
-        self.assertEqual(self.refusals(out), [self.SAME])
-        self.assertNotIn('Resolve the paths listed above', out)
-        for blocker in ('vanished before',
-                        'exist at no ref of glibc in this clone',
-                        'GONE at', 'include walk reached'):
-            self.assertNotIn(blocker, flat(out))
-
-    def test_two_commits_of_one_tree_compare_nothing(self):
-        """A commit with glibc-2.34's whole tree on top of glibc-2.34: in
-        order, and every diff of the step is empty. That is the shape branch
-        7.4 gives two builds of one version with the same sources, and its
-        one reason is that nothing was compared (nothing_compared), as one
-        commit's is."""
-        tmp = tempfile.mkdtemp(prefix='pg-glibc-step5-one-tree-')
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        repo = os.path.join(tmp, 'r')
-        glibc_shaped(repo, MID)
-        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
-                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
-        sha = subprocess.run(
-            ['git', '-C', repo, 'commit-tree', f'{MID}^{{tree}}',
-             '-p', f'{MID}^{{commit}}', '-m', 'one tree'], env=env,
-            check=True, capture_output=True, text=True).stdout.strip()
-        git(repo, 'tag', 'one-tree', sha, env=env)
-        rc, out = self.run_injected('', MID, 'one-tree', '--repo', repo)
-        self.assertEqual(rc, 0, out)
-        self.assertEqual(self.refusals(out), [
-            'the two refs are two commits of one source tree, so nothing '
-            'was compared'])
-
-    def test_a_path_not_yet_written_leaves_the_clean_sentence_reachable(self):
-        """The real clean branch, which no other test reaches: no pinned pair
-        of two different tags has zero substantive hunks, and one tag twice is
-        refused now. So the pair order is injected as two commits, over the
-        same tag, and with nothing else to refuse the step must print its
-        clean sentence."""
-        rc, out = self.run_injected(
-            "d.TIER1 = ['locale/C-collate-seq.c']\nd.TIER2 = []\n"
-            "d.g.pair_check = lambda *a, **k: ('forward', None)", OLD, OLD)
-        self.assertEqual(rc, 0, out)
-        self.assertNotIn('are the same commit', flat(out),
-                         'the injected pair order did not take')
-        self.assertIn('No substantive collation code change', out)
-        self.assertNotIn('This is NOT a clean result:', out)
+        self.assertIsNone(g.require_full_history(GLIBC_CLONE, 'step 2',
+                                                 'a test'))
 
 
 @needs_clone
@@ -910,19 +230,6 @@ class UnreadableBlobsAreNotDropped(unittest.TestCase):
         self.assertIn('could not be read while building the locale files',
                       flat(out))
 
-    def test_the_include_walk_aborts_on_an_unreadable_blob(self):
-        rc, out = in_subprocess(
-            "real = g.read_blobs\n"
-            "def fake(repo, tag, paths):\n"
-            "    c, _ = real(repo, tag, paths)\n"
-            "    dropped = sorted(c)[0]\n"
-            "    del c[dropped]\n"
-            "    return c, {dropped}\n"
-            "g.read_blobs = fake\n"
-            "d.reachable_from_entry_points(repo, %r)\n" % NEW)
-        self.assertNotEqual(rc, 0, 'an unreadable header shrank the walk')
-        self.assertIn('include walk', out)
-
 
 @needs_clone
 class OneBatchForSeveralTags(unittest.TestCase):
@@ -967,76 +274,6 @@ class OneBatchForSeveralTags(unittest.TestCase):
 
 
 @needs_clone
-class MissingIsNotUnchanged(unittest.TestCase):
-    """"Step 5 could not tell 'unchanged' from 'not there'".
-
-    git diff over a path absent at both tags is empty and exits 0, which is
-    the truth only for a path not yet written. A path that vanished between
-    the tags shows as deleted, and nothing compares it with where its code
-    went.
-    """
-
-    def test_a_path_that_vanished_is_reported_as_vanished(self):
-        # gen-translit.pl exists at 2.28 and is deleted by 2.34.
-        vanished, outside = d.check_paths(GLIBC_CLONE,
-                                          ['locale/gen-translit.pl'], OLD, MID)
-        self.assertEqual(vanished, ['locale/gen-translit.pl'])
-        self.assertEqual(outside, [])
-
-    def test_a_path_absent_at_both_tags_is_reported_as_outside(self):
-        # C-collate-seq.c arrives upstream after 2.34.
-        vanished, outside = d.check_paths(GLIBC_CLONE,
-                                          ['locale/C-collate-seq.c'], OLD, MID)
-        self.assertEqual(vanished, [])
-        self.assertEqual(outside, ['locale/C-collate-seq.c'])
-
-    def test_a_path_present_at_both_tags_is_neither(self):
-        vanished, outside = d.check_paths(
-            GLIBC_CLONE, ['locale/programs/ld-collate.c'], OLD, MID)
-        self.assertEqual((vanished, outside), ([], []))
-
-
-@needs_clone
-class IncludeWalk(unittest.TestCase):
-    """"Step 5's file list was the ceiling of what it could see".
-
-    linereader.h and elem-hash.h both changed over 2.34..2.39 and were in
-    neither hand-written tier, so they were never read.
-    """
-
-    def test_the_walk_reaches_the_files_the_hand_lists_missed(self):
-        got = d.reachable_from_entry_points(GLIBC_CLONE, NEW)
-        for path in ('locale/programs/linereader.h', 'locale/elem-hash.h',
-                     'locale/programs/locfile-token.h'):
-            self.assertIn(path, got)
-
-    def test_the_walk_picks_up_separately_compiled_units(self):
-        """coll-lookup.c and simple-hash.c are linked, not included; they are
-        reached as the sibling .c of a header the walk found."""
-        got = d.reachable_from_entry_points(GLIBC_CLONE, NEW)
-        self.assertIn('locale/coll-lookup.c', got)
-        self.assertIn('locale/programs/simple-hash.c', got)
-
-    def test_the_walk_stays_bounded(self):
-        """Unbounded it reaches 265 files dominated by stdio.h and cdefs.h.
-        The bound is what makes the output readable, so it is asserted."""
-        got = d.reachable_from_entry_points(GLIBC_CLONE, NEW)
-        self.assertLess(len(got), 60, 'the include walk escaped locale/')
-        for path in got:
-            self.assertTrue(path.startswith('locale/'), path)
-
-    def test_hand_listed_paths_the_walk_cannot_reach_are_still_tracked(self):
-        """weight.h arrives via `#include WEIGHT_H`, a macro no regex resolves,
-        and it HAS a substantive change over 2.34..2.39. Replacing the curated
-        lists with the walk would have lost it."""
-        walk = d.reachable_from_entry_points(GLIBC_CLONE, NEW)
-        for path in ('locale/weight.h', 'locale/weightwc.h',
-                     'locale/lc-collate.c', 'locale/C-collate.c'):
-            self.assertNotIn(path, walk)
-            self.assertIn(path, d.TIER1)
-
-
-@needs_clone
 class SupportedMap(unittest.TestCase):
     """"supported_map() returned an empty map when SUPPORTED was missing",
     which made every locale print as 'not built by default'."""
@@ -1044,6 +281,11 @@ class SupportedMap(unittest.TestCase):
     def test_aborts_when_supported_is_absent(self):
         rc, out = in_subprocess("g.supported_map(repo, '%s')" % BAD)
         self.assertNotEqual(rc, 0)
+        # The refusal itself, not any exit: until step 9.3 the helper
+        # imported a module that no longer exists, and that import error
+        # passed a test reading only the exit code.
+        self.assertIn('localedata/SUPPORTED does not exist at %s' % BAD,
+                      flat(out))
 
     def test_maps_source_names_to_generated_names(self):
         got = g.supported_map(GLIBC_CLONE, NEW)
@@ -1638,16 +880,13 @@ class TheStepsRefuseAReversedPair(unittest.TestCase):
         self.assertIn('t1 and t1 are the same commit', flat(out))
         self.assertIn("Step 1 can only report 'nothing changed', which",
                       flat(out))
-        self.assertIn('steps 2 and 5 report that nothing was compared',
+        self.assertIn('step 2 reports that nothing was compared',
                       flat(out))
         self.assertEqual(Step2Report(out).nothing,
                          'the two tags are one commit.')
-        # Step 4 reads only the new tag. Counted among the steps that compare,
-        # it invited the reader to dismiss the list the summary asks them to
-        # confirm (false-negative-reviewer, 2026-09-30).
-        self.assertIn('Step 4 reads only the new tag, so its list still '
-                      'needs confirming', flat(out))
-        self.assertNotIn('Steps 1-5 compare', flat(out))
+        # The notice names no step deleted in branch 9 (it named steps 4
+        # and 5 until step 9.3).
+        self.assertEqual(deleted_steps_named(out), [])
 
     def test_an_undetermined_direction_is_said_out_loud_and_runs(self):
         """The fourth state at the call site. Not an error -- nothing below is
@@ -1771,15 +1010,18 @@ class Step1RefusesAReversedPairBeforeReportingAnything(unittest.TestCase):
         self.assertIn('Locale files added, modified or deleted', out)
 
     def test_the_forward_control_is_untouched(self):
-        """The guard refuses a direction, and says nothing otherwise: the one
-        `!!` of a forward pair of tags is what a tag does not hold, and run
-        by hand it asks for the builds (glibc_locale_data.tag_sides_text)."""
+        """The guard refuses a direction, and says nothing otherwise: the
+        `!!` of a forward pair of tags are what a tag does not hold, which
+        run by hand asks for the builds (glibc_locale_data.tag_sides_text),
+        and the code no step compares (CODE_NOT_COMPARED)."""
         rc, out = run_script('audit-locale-diff.sh', OLD, MID,
                              env_extra=self.env)
         self.assertEqual(rc, 0, out)
         self.assertEqual([ln for ln in out.splitlines() if '!!' in ln], [
             '!! Not checked for glibc-2.28 and glibc-2.34: they are upstream '
-            'tags, which'])
+            'tags, which',
+            '!! Not compared on any route: the code that compiles and '
+            'compares the rules'])
         self.assertIn('name each side as its build instead', flat(out))
         self.assertNotIn('REVERSED', out)
 
@@ -1802,13 +1044,6 @@ class TagModeCorpusFloor(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix='pg-glibc-tiny-repo-')
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-
-    def test_step_4_refuses_a_tag_below_the_floor(self):
-        repo = make_glibc_shaped_repo(self.tmp, n_files=3, base=None)
-        rc, out = run_script('flag_algorithmic_ranges.py', 't1', '--repo', repo)
-        self.assertEqual(rc, 2, out)
-        self.assertIn(f'below the floor of {g.MIN_LOCALE_FILES}', out)
-        self.assertNotIn('No locale uses ellipsis ranges', out)
 
     def test_step_2_refuses_a_tag_below_the_floor(self):
         repo = make_glibc_shaped_repo(self.tmp, n_files=3, rename=True,
@@ -2847,7 +2082,6 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
         self.assertNotIn('Transliteration', out)
 
 
-
 def bang_blocks(out):
     """The `!!` blocks of a step's output as audit.sh's warnings block reads
     them: a line opening with `!!` and every line after it that opens with
@@ -3569,9 +2803,9 @@ class NothingComparedIsNotTheOrder(unittest.TestCase):
         self.assertEqual((status, nothing), ('forward', 'tree'))
         self.assertIn('!! t1 and t1b are two commits of one source tree.',
                       flat(out.getvalue()))
-        self.assertIn('and 5 compare that tree against itself, and step 2 '
+        self.assertIn('Step 1 compares that tree against itself, and step 2 '
                       'compares nothing.', flat(out.getvalue()))
-        self.assertIn('steps 2 and 5 report that nothing was compared',
+        self.assertIn('step 2 reports that nothing was compared',
                       flat(out.getvalue()))
 
     def test_one_commit_still_says_so(self):
@@ -3724,7 +2958,6 @@ class OneFloorForEverySide(unittest.TestCase):
 
     def test_the_tag_side_of_every_step(self):
         import filter_lc_collate_changes as f
-        import flag_algorithmic_ranges as fa
         import diff_distro_locales as dd
         import diff_node_locales as nl
         old, new, ok = FLOOR_OLD, FLOOR_NEW, self.dirs['ok']
@@ -3737,14 +2970,11 @@ class OneFloorForEverySide(unittest.TestCase):
             ('corpus subcommand', g._main, ['corpus', old, new]),
             ('1 fanin', g._main, ['fanin', old]),
             ('2', f.main, [old, new]),
-            ('4', fa.main, [old]),
             ('6/7', dd.main, [old, '--locales-dir', ok, '--build-id', 'b']),
             ('8', nl.main, ['--old-locales-dir', ok, '--old-build-id', 'o',
                             '--new-locales-dir', self.dirs['okb'],
                             '--new-build-id', 'n',
                             '--old-tag', old, '--new-tag', new]),
-            ('9/10', fa.main, ['--locales-dir', ok, '--build-id', 'b',
-                               '--supported-tag', old]),
         )
         for name, main, argv in steps:
             with self.subTest(step=name):
@@ -3753,7 +2983,6 @@ class OneFloorForEverySide(unittest.TestCase):
                               self.refusal(main, argv))
 
     def test_the_machine_side_of_every_step(self):
-        import flag_algorithmic_ranges as fa
         import diff_distro_locales as dd
         import diff_node_locales as nl
         ok, short = self.dirs['ok'], self.dirs['short']
@@ -3772,8 +3001,6 @@ class OneFloorForEverySide(unittest.TestCase):
                                  '--new-locales-dir', self.dirs['ok2'],
                                  '--new-build-id', 'n'],
              'the two node directories'),
-            ('9/10', fa.main, ['--locales-dir', short, '--build-id', 'b',
-                               '--supported-tag', FLOOR_NEW], '--locales-dir'),
         )
         for name, main, argv, what in steps:
             with self.subTest(step=name):

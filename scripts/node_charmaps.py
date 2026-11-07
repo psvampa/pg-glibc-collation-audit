@@ -500,7 +500,7 @@ def reads_utf8(repo, tag, step='step 2'):
     """Does `tag` hold collation_keys.UTF8_READER: True, False, or None when
     git cannot place it. A shallow clone can answer no, or nothing, for a
     tag that holds it, and _readers_differ would read two such sides as one
-    reader (round 7 of the 13.7 review): it is refused, as step 5 refuses
+    reader (round 7 of the 13.7 review): it is refused, as step 5 refused
     it. A yes is a path git found in the history it has, so it stands on
     any clone, and the check (a git process) is not paid for it. Steps 6
     to 8 ask it of the tag a machine's glibc is built from (node_charmaps),

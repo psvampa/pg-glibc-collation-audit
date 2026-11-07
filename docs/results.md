@@ -6,13 +6,13 @@
 |---|---|---|---|
 | `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | 🟢 No difference | step 2 — `sv_FI` only via `copy`; the second pair is cleared by step 11's measurement |
 | `or_IN` | 🔴 **Changed** | 🟢 No difference | step 2; the second pair is cleared by step 11's measurement |
-| `ko_KR` | 🔴 **Changed** | 🟢 No difference | step 4 flags it and **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement |
+| `ko_KR` | 🔴 **Changed** | 🟢 No difference | **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs, and what changed is `localedef`'s code, which no step compares; the second pair is cleared by measurement |
 | `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | between two tags nothing compares it <sup>†</sup>; between the two builds step 2 lists it — the node-to-node check settles the data, step 11 or `sql/c_utf8_probe.sql` the order |
 | `th_TH` | 🟢 No difference | 🔴 **Changed** | step 2; the first pair is cleared by step 11's measurement |
-| `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | step 4 flags them; step 2 finds the same rules in both pairs, though over the second their files changed by a role swap; step 11's measurement finds both unchanged |
-| CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>the base table a locale inherits unless it<br>defines its own order | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
-| `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | step 4 flagged them via `iso14651_t1_common`; cleared by measurement |
-| everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | 🟢 No difference | 🟢 No difference | step 4 flags them and step 5 finds code changes in both pairs: step 11's measurement clears both |
+| `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | step 2 finds the same rules in both pairs, though over the second their files changed by a role swap; step 11's measurement finds both unchanged |
+| CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>the base table a locale inherits unless it<br>defines its own order | 🟢 No difference | 🟢 No difference | an ellipsis range: step 2 finds the same rules, which cannot clear it; cleared by measurement |
+| `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | they copy `iso14651_t1_common`'s ranges; cleared by measurement |
+| everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | 🟢 No difference | 🟢 No difference | step 2 finds the same rules, which cannot clear them alone; step 11's measurement clears both |
 
 <sup>†</sup> `C.UTF-8`'s source file is in neither tag for the first pair, so
 both verdicts come from the machines themselves
@@ -28,10 +28,9 @@ The sections below are the evidence behind each row.
 ## How to read the verdicts
 
 - 🔴 **Changed** — sort order moves. Reindex.
-- 🟡 **Unresolved** — flagged and *not* cleared. Treat as changed until
-  tested.
-- 🟢 **No difference** — the audit flagged it, but a targeted test or a
-  mechanism argument shows the order does not move.
+- 🟡 **Unresolved** — *not* cleared. Treat as changed until tested.
+- 🟢 **No difference** — measured, or shown by a targeted test or a
+  mechanism argument, not to move.
 
 ## Worked example: RHEL8 to RHEL9 (glibc 2.28 to 2.34)
 
@@ -45,7 +44,7 @@ Full output and the PostgreSQL confirmation files for this pair:
 2.28 and 2.34. `sv_FI` comes in only via inheritance from `sv_SE` and is
 never flagged by a plain file diff.
 
-### `ko_KR` — from the code diff
+### `ko_KR` — from the code, not the data
 
 **`ko_KR` also changes**, and its data file is byte-identical between the two
 tags. The cause is a single commit,
@@ -81,11 +80,11 @@ How to turn a rule like this one into the three values the template tests
 with is in
 [confirming-on-a-real-system.md](confirming-on-a-real-system.md#choosing-the-three-values).
 
-### The CJK range — flagged by step 4, cleared by measurement
+### The CJK range — cleared by measurement
 
-Step 4 also flags `iso14651_t1`'s CJK range (U+4E00..U+9FA5), inherited by
-328 locales. Step 5 shows the ellipsis logic did change in this pair, so a
-source diff cannot clear those locales either.
+`iso14651_t1`'s CJK range (U+4E00..U+9FA5), inherited by 328 locales, is an
+ellipsis range, whose weights `localedef` computes. That code changed in this
+pair (Bug 22668), so the same rules cannot clear those locales either.
 
 Empirically they are fine. The range boundary (`一 龤 龥 龦`) sorts identically
 under `en_US` and `zh_TW` on glibc 2.28 and 2.34.
@@ -115,7 +114,6 @@ Measured, and re-measured unchanged, on `glibc-2.28-251.el8_10.40` and
 | | RHEL8 | RHEL9 |
 |---|---|---|
 | its `LC_COLLATE` | six **ellipsis ranges** — planes 0, 1, 2, 14, 15, 16, then `UNDEFINED` | the single keyword **`codepoint_collation`** |
-| steps 9 and 10, over the node's directory | flagged | byte order by construction |
 | `C.utf8` equals byte order? | **no**, 40 of 41 probed code points in a different position | yes, 0 |
 | database `datcollate` / `datcollversion` | `C.UTF-8` / NULL | `C.UTF-8` / NULL |
 
@@ -140,7 +138,7 @@ locale was not applied.
 unused took effect.
 
 Both sides of that upgrade are upstream glibc 2.28, so the tag pair is
-`glibc-2.28..glibc-2.28` and steps 1-5 have nothing to compare. **Staying on
+`glibc-2.28..glibc-2.28` and steps 1 and 2 have nothing to compare. **Staying on
 one RHEL major is not a control for this locale.**
 
 Full output:
@@ -150,9 +148,10 @@ Full output:
 
 Every other locale step 11 measured (`en_US`, `de_DE`, `fr_FR`, ...) sorts the
 same on both.
-Step 4 flags them too, and step 5 finds code changes in this pair, so the
-clean data diff does not clear them: real `sort`/PostgreSQL tests on RHEL8 and
-RHEL9 nodes and step 11's measurement do.
+Step 2 finds their rules the same, which does not clear them by itself:
+`localedef`'s code changed in this pair, and no step compares code. Real
+`sort`/PostgreSQL tests on RHEL8 and RHEL9 nodes and step 11's measurement
+clear them.
 
 ## Worked example: RHEL9 to RHEL10 (glibc 2.34 to 2.39)
 
@@ -168,8 +167,7 @@ Full output:
 
 ### `ber_DZ`, `kab_DZ` and `th_TH` — from the data diff
 
-**`th_TH`**, with its alias `thai`, is what step 2 lists; `ko_KR` is
-flagged again by step 4.
+**`th_TH`**, with its alias `thai`, is what step 2 lists.
 
 The files of `ber_DZ` and `kab_DZ` changed, and step 2 compares their rules
 and finds them the same: a [role swap](glossary.md) — the same collation
@@ -199,10 +197,10 @@ The SQL step 11 writes for this pair tests
 `th_TH.utf8` in PostgreSQL, and each server answers like its machine
 ([examples/README.md, under Command 3](../examples/README.md#command-3--the-sql-step-11-writes)).
 
-### `ko_KR` — flagged by step 4, cleared by measurement
+### `ko_KR` — cleared by measurement
 
-`ko_KR` is flagged by step 4 here too, and step 5 finds code changes between
-2.34 and 2.39 that it leaves to a reader of C. What clears it is measurement.
+Step 2 finds `ko_KR`'s rules the same here too, and no step compares
+`localedef`'s code. What clears it is measurement.
 Step 11 finds `ko_KR` unchanged, and ardentperf's glibc checksum for `ko`
 is the same on RHEL9 and RHEL10.
 

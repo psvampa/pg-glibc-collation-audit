@@ -120,7 +120,7 @@ reading before you run anything.
 The script measures every locale installed on the machine and shows how far
 it has got as it goes.*
 
-What the six extra checks answer, what goes into each machine's file and what
+What the extra checks answer, what goes into each machine's file and what
 the run says when it refuses one are in [docs/commands.md](docs/commands.md).
 What this form prints is in
 [examples/README.md, under Command 1 extended](examples/README.md#command-1-extended).
@@ -194,8 +194,9 @@ psql -f sql/collation_confirmation_template.sql   # edit placeholders first
 ```
 
 A source diff is an argument, not a proof of what actually runs in
-production. Run it on both the old and the new OS, for every locale the audit
-flagged.
+production. Run it on both the old and the new OS, for the locales
+[docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md#which-locales-to-run-it-for)
+names.
 
 With 1.b, step 11 writes SQL that tests the order, and in a UTF8 database
 the character rules, for you, with no editing;
@@ -222,16 +223,16 @@ A worked example for each pair is in
 |---|---|---|---|
 | `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | 🟢 No difference | step 2 — `sv_FI` only via `copy`; the second pair is cleared by step 11's measurement |
 | `or_IN` | 🔴 **Changed** | 🟢 No difference | step 2; the second pair is cleared by step 11's measurement |
-| `ko_KR` | 🔴 **Changed** | 🟢 No difference | step 4 flags it and **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs; the second pair is cleared by measurement |
+| `ko_KR` | 🔴 **Changed** | 🟢 No difference | **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs, and what changed is `localedef`'s code, which no step compares; the second pair is cleared by measurement |
 | `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | between two tags nothing compares it <sup>†</sup>; between the two builds step 2 lists it — the node-to-node check settles the data, step 11 or `sql/c_utf8_probe.sql` the order |
 | `th_TH` | 🟢 No difference | 🔴 **Changed** | step 2; the first pair is cleared by step 11's measurement |
-| `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | step 4 flags them; step 2 finds the same rules in both pairs, though over the second their files changed by a role swap; step 11's measurement finds both unchanged |
-| CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>the base table a locale inherits unless it<br>defines its own order | 🟢 No difference | 🟢 No difference | step 4 flagged it; step 5 says a diff can't clear it |
-| `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | step 4 flagged them via `iso14651_t1_common`; cleared by measurement |
-| everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | 🟢 No difference | 🟢 No difference | step 4 flags them and step 5 finds code changes in both pairs: step 11's measurement clears both |
+| `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | step 2 finds the same rules in both pairs, though over the second their files changed by a role swap; step 11's measurement finds both unchanged |
+| CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>the base table a locale inherits unless it<br>defines its own order | 🟢 No difference | 🟢 No difference | an ellipsis range: step 2 finds the same rules, which cannot clear it; cleared by measurement |
+| `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | they copy `iso14651_t1_common`'s ranges; cleared by measurement |
+| everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | 🟢 No difference | 🟢 No difference | step 2 finds the same rules, which cannot clear them alone; step 11's measurement clears both |
 
-🔴 reindex · 🟡 flagged and *not* cleared, treat as changed until tested ·
-🟢 flagged, but a targeted test or mechanism argument shows the order does not
+🔴 reindex · 🟡 *not* cleared, treat as changed until tested ·
+🟢 measured, or shown by a targeted test or a mechanism argument, not to
 move.
 `ko_KR` is the row a data-only audit gets wrong, and `C.UTF-8` the row no
 *tag* diff can reach.
@@ -276,6 +277,6 @@ short version:
 - [docs/limitations.md](docs/limitations.md) — the seven things to know before acting on a clean result
 - [docs/scope.md](docs/scope.md) — what it audits, and the `builtin` provider as a mitigation
 - [docs/requirements.md](docs/requirements.md) — what each run needs, on your machine and on each server, and the three setup traps
-- [docs/glossary.md](docs/glossary.md) — `copy` graph, blast radius, hunk, tier, ellipsis range, role swap, build id, measured order, level, contraction
+- [docs/glossary.md](docs/glossary.md) — `copy` graph, blast radius, ellipsis range, role swap, build id, measured order, level, contraction
 - [examples/](examples/README.md) — real output of every command, and which file is which
 - [tests/README.md](tests/README.md) — how to run the tests, what they cover, and what they do not

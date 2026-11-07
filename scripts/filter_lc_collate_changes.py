@@ -363,13 +363,14 @@ def step2_words(noun):
                   'changed_between')})
 
 
-# What this step does not compare, said once. The rules compare_rules reads
-# are statements; what localedef compiles them into and how strcoll walks
-# the result is code, which step 5 reads.
+# What this step does not compare. The rules compare_rules reads are
+# statements; what localedef compiles them into and how strcoll walks the
+# result is code, which no step compares: step 1's `!!` says so once
+# (glibc_locale_data.CODE_NOT_COMPARED), and this line points to it.
 NOT_COMPARED_HERE = (
     "Not compared here: the code that compiles and compares the rules "
-    "(localedef's and strcoll's), which step 5 reads; the character sets "
-    "are compared below.")
+    "(localedef's and strcoll's), as step 1 says; the character sets are "
+    "compared below.")
 
 
 def _fill(text, first='      ', rest=None):

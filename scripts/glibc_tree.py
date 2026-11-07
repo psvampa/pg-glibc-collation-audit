@@ -20,7 +20,7 @@ module answers from those runs and from nothing else (backlog 15.2):
     finish, and why. Such a locale is never reported as clear: the steps
     list it, with `!!`.
 
-Steps 1, 2, 4 and 9/10 read this. Steps 6 to 8, and the files step 2's
+Steps 1 and 2 read this. Steps 6 to 8, and the files step 2's
 check of character sets and transliterations (collation_keys) reads, still
 read with their own readers.
 """
@@ -908,7 +908,7 @@ def across(ids, load, b0, b1, cache_dir=None):
     has not, or gives another token (codepoint_collation from 2.35). Every
     run records whether it met such a byte (Run.met) and which words it
     looked up (Run.words), so the runs of the tree with b0 -- kept
-    already, as steps 1, 2 and 4 read them -- say which can differ; a run that
+    already, as steps 1 and 2 read them -- say which can differ; a run that
     met nothing either way is read the same with b1, step by step. Each of
     the others is computed whole with both Builds (same_run: every token
     of every LC_COLLATE statement) and listed when the two differ. A run

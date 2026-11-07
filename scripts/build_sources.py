@@ -4,9 +4,9 @@ checked against the build's binary packages.
 A RHEL or Rocky glibc build is upstream glibc plus the distro's patches,
 applied by rpmbuild's %prep. build() opens the build's SRPM, takes the inner
 tarball's localedata/ and locale/, applies the patches that touch them the
-way GNU patch does, and keeps the result in a cache. Steps 1 to 5 of
-the audit that read a side, run by audit.sh or on their own, read a build
-named on the command line through glibc_locale_data.side (build_side).
+way GNU patch does, and keeps the result in a cache. Steps 1 and 2 of
+the audit, run by audit.sh or on their own, read a build named on the
+command line through glibc_locale_data.side (build_side).
 
 It does not work out from the spec what rpm did; it reads what rpm wrote
 down, and checks against it:
@@ -86,11 +86,8 @@ DEFAULT_CACHE = os.path.join(_HERE, 'build-sources-cache')
 SCOPE = ('localedata/', 'locale/')
 
 NOT_CHECKED = (
-    "the compiler, and the build's patches to code outside localedata/ and "
-    'locale/: one to the own files of strcoll, strxfrm, wcscoll or wcsxfrm '
-    "under string/ and wcsmbs/ is named with the build's patches above, and "
-    'step 5 then gives no clean result; the others, such as those to the '
-    'strcmp that strcoll calls, are not compared',
+    "the compiler that built the binary packages, and the build's patches "
+    'to code, such as those to the strcmp that strcoll calls',
     "the SRPM's and the binary packages' GPG signatures (only rpm's own "
     'digests are checked)',
     'the host that built the binary packages is taken to read the spec as '
@@ -992,20 +989,19 @@ _HEADER_SHAPED = (b'--- ', b'+++ ', b'*** ', b'Index:', b'diff --git ',
                   b'Prereq:')
 _ALIAS = 'intl/locale.alias'
 
-# The code that turns locale data into weights reaches this audit two ways.
+# The code that turns locale data into weights. No step compares it since
+# step 5 was deleted (step 9.3): glibc_locale_data.CODE_NOT_COMPARED says so
+# on every run. These lists decide which of a build's patches the
+# provenance line names as changing strcoll's code (watched, apply_patch),
+# and, through watched(), which patches must be of a shape this reads: a
+# patch to one of these files that it cannot read makes the build Unread
+# (patch_unknowns, known_only), so the count never drops it in silence.
+# They are a hand list, not the include walk step 5 did: a patch to a file
+# outside them, such as el8's to locale/programs/charmap.c, is not counted.
 #
-# TIER1/TIER2 below are CURATED: a human ranking of what to read first. They are
-# no longer the ceiling of what gets read -- step 5's
-# diff_collation_code.reachable_from_entry_points() walks glibc's own #include
-# graph and everything it finds is reported too, under TIER 3. Before this, a
-# file absent from these lists was indistinguishable from a file that did not
-# change, and `locale/programs/linereader.h` (lr_getc) and
-# `locale/elem-hash.h` (elem_hash) both changed over 2.34..2.39 unseen.
-#
-# So do NOT add a path here just because it looks collation-related: if the
-# include walk already reaches it, listing it here only freezes by hand what the
-# walk derives. Add a path only when the walk STRUCTURALLY cannot reach it, and
-# say which blind spot it falls into. There are two, both marked below:
+# TIER1/TIER2 were a human ranking of what step 5 read first; each path that
+# its include walk structurally could not reach says which blind spot put it
+# here. There were two, both marked below:
 #
 #   (macro)  reached by a macro-computed #include, which a regex cannot resolve
 #   (TU)     a separately compiled translation unit with no header of its own,
@@ -1094,8 +1090,8 @@ TIER2 = [
 # them too, without one that moves an order (backlog 13.7).
 
 # The code strcoll and strxfrm run: the three lists above, which step 5
-# reads as glibc's collation code, and the four wrappers that call into it
-# and are in none of them.
+# read as glibc's collation code until step 9.3, and the four wrappers that
+# call into it and are in none of them.
 COLLATION_CODE = frozenset(ENTRY_POINTS + TIER1 + TIER2 + [
     'string/strcoll.c', 'string/strxfrm.c', 'wcsmbs/wcscoll.c',
     'wcsmbs/wcsxfrm.c'])

@@ -725,46 +725,6 @@ class AuditShPipesNothingIntoAQuietGrep(unittest.TestCase):
                 self.assertIsNotNone(shape.search(line))
 
 
-class Step5HunkCountsAgreeEverywhere(unittest.TestCase):
-    """Step 5's hunk count is published in three places in each transcript
-    of a pair: the step's own total, the summary's "step 5 found N" and the
-    summary's "N hunk(s) marked >>". Nothing tied them together. They moved
-    on 2026-09-05 (a third tier) and again on 2026-09-07 (the filter learned
-    to read context lines), and a page left behind is exactly what the
-    step-4 "2" was.
-
-    Both transcripts of each pair are read, the audit output and the tags-only
-    run, because they are regenerated apart. The tags-only counts (29, 55)
-    are asserted against the real clone in test_known_answers. The audit
-    output's (35, 43) are between each machine's build (7.6a): 35 is also
-    asserted against a run on the fixture builds in test_build_sources; 43
-    is checked here only, copy against copy.
-    """
-
-    # Between the tags (tags-only), and between each machine's build,
-    # which the extended examples' steps 1 to 5 read (7.6a).
-    EXAMPLES = {'rhel8-to-rhel9': {'tags-only': 29, 'audit-output': 35},
-                'rhel9-to-rhel10': {'tags-only': 55, 'audit-output': 43}}
-
-    def counts(self, filename):
-        text = read(os.path.join(REPO_ROOT, 'examples', filename))
-        return (
-            re.findall(r'(?m)^(\d+) substantive hunk\(s\) found', text)
-            + re.findall(r'step 5 found (\d+) substantive hunk', text)
-            + re.findall(r'(\d+) hunk\(s\) marked >> in step 5', text))
-
-    def test_each_example_states_one_count_in_three_places(self):
-        for name, expected in self.EXAMPLES.items():
-            for kind in ('audit-output', 'tags-only'):
-                filename = f'{name}-{kind}.txt'
-                with self.subTest(example=filename):
-                    got = self.counts(filename)
-                    self.assertEqual(
-                        len(got), 3,
-                        f'{filename}: found {got}, expected three copies')
-                    self.assertEqual(set(got), {str(expected[kind])}, got)
-
-
 class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     r"""A number the docs publish, tied to every page that states it and,
     where there is one, to the run it came from.
@@ -1014,7 +974,6 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
                 f'counts must be 1')
 
 
-
 class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
     """The mutation battery, in the repository instead of in a transcript.
 
@@ -1170,11 +1129,10 @@ class ASectionNeverWidensInSilence(unittest.TestCase):
     SHAPE = '{n} name(s), locale files and locale.alias aliases:'
     STEP_2 = ("== STEP 2  Which locales' sort rules changed\n"
               + '=' * 64)
-    STEP_4 = ('== STEP 4  Which locales a data diff can never clear\n'
-              + '=' * 64)
-    # Step 4 prints it for the 2.34 tag, and the node scan of the el9 node,
-    # built from that tag, prints it again word for word.
-    REPEATED = 'Additionally exposed via `copy` inheritance: {n}'
+    # Step 2 prints it for the two builds' charmaps, and step 8 prints it
+    # again word for word for the two machines' (step 9.3 deleted step 4,
+    # whose sentence this test used before).
+    REPEATED = 'UTF-8: {n} characters added.'
     PROBE = 'examples/c-utf8-probe-rhel8-vs-rhel9.txt'
 
     def check(self, ev, bare='400'):
@@ -1187,9 +1145,9 @@ class ASectionNeverWidensInSilence(unittest.TestCase):
 
     def test_the_cut_is_what_keeps_a_repeated_sentence_apart(self):
         with self.assertRaisesRegex(AssertionError, 'Both counts must be 1'):
-            self.check(Evidence(self.AUDIT, shape=self.REPEATED), '331')
+            self.check(Evidence(self.AUDIT, shape=self.REPEATED), '6485')
         self.check(Evidence(self.AUDIT, shape=self.REPEATED,
-                            section=self.STEP_4), '331')
+                            section=self.STEP_2), '6485')
 
     def test_a_missing_anchor_refuses(self):
         with self.assertRaisesRegex(AssertionError,
@@ -1241,7 +1199,7 @@ class TheBareFormAndTheMoveStillBite(unittest.TestCase):
     evidence check. Neither would be seen to break (false-negative-reviewer,
     2026-09-30), so each is driven here on the real transcript, next to a
     control that shows it still agrees where it should. The transcript states
-    328 once and 331 twice.
+    328 once and 335 twice.
     """
 
     AUDIT = 'examples/rhel8-to-rhel9-audit-output.txt'
@@ -1271,7 +1229,7 @@ class TheBareFormAndTheMoveStillBite(unittest.TestCase):
     def test_a_bare_figure_stated_twice_refuses_the_move(self):
         with self.assertRaisesRegex(AssertionError,
                                     'leaves the tie agreeing'):
-            self.move_row().check_moves(self.LABEL, '331',
+            self.move_row().check_moves(self.LABEL, '335',
                                         (Evidence(self.AUDIT),))
 
 
@@ -1499,10 +1457,6 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
                     "sort order?",
                     f"== STEP 8  NODE TO NODE  does {old}'s collation data "
                     f"differ from {new}'s?",
-                    f"== STEP 9  NODE ELLIPSIS  does {old}'s own locale data "
-                    "use ellipsis ranges?",
-                    f"== STEP 10  NODE ELLIPSIS  does {new}'s own locale data "
-                    "use ellipsis ranges?",
                     "== STEP 11  MEASURED ORDER  how each machine's own glibc "
                     "sorts every locale",
                     '== AUDIT SUMMARY'):
@@ -1521,34 +1475,6 @@ class TheExamplesCarryTheNodeSteps(unittest.TestCase):
                 self.assertIsNotNone(step8, text[-2000:])
                 self.assertIsNotNone(summary)
                 self.assertEqual(step8.group(1), summary.group(1))
-
-
-    def test_the_published_list_length_is_the_set_that_was_reported(self):
-        """"full list (N name(s))" against the two numbers printed above it.
-        The written list used to hold only the names SUPPORTED maps, so it was
-        narrower than the set the same paragraph reported -- on a node, by
-        exactly the locale the audit exists for. It holds the locales and the
-        aliases glibc's locale.alias gives them (backlog 13.1), and N is their
-        sum. The arithmetic is the check a reader can repeat."""
-        blocks = 0
-        for name in ('rhel8-to-rhel9-audit-output.txt',
-                     'rhel9-to-rhel10-audit-output.txt'):
-            text = read(os.path.join(REPO_ROOT, 'examples', name))
-            # Anchored line by line: a non-greedy `.*?` here would pair one
-            # block's count with the next block's list, which is how the first
-            # version of this test read 404 and 413 as the same paragraph.
-            for m in re.finditer(
-                    r'^Full set needing empirical confirmation: (\d+) '
-                    r'locale\(s\), and (\d+) more\n(?:[^\n]*\n){3}'
-                    r'  e\.g\. [^\n]*\n'
-                    r'  not in [^\n]*?: [^\n]+\n'
-                    r'  full list \((\d+) name\(s\)\):',
-                    text, re.M):
-                blocks += 1
-                locales, aliases, listed = m.group(1), m.group(2), m.group(3)
-                with self.subTest(example=name, listed=listed):
-                    self.assertEqual(int(listed), int(locales) + int(aliases))
-        self.assertEqual(blocks, 6, 'a step 4 block stopped being checked')
 
 
 def without_fences(text):

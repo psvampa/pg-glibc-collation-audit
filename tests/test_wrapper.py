@@ -21,7 +21,8 @@ import tempfile
 import unittest
 
 from _harness import (EXPECTED_SHA, MID, NEW, OLD, REPO_ROOT, SCRIPTS_DIR,
-                      backported_c, flat, locale_file, needs_clone,
+                      backported_c, deleted_steps_named, flat, locale_file,
+                      needs_clone,
                       run_wrapper, upstream_c, summary_block)
 
 import diff_distro_locales as dd
@@ -33,7 +34,7 @@ import locale_order as lom
 # the summary repeats it whole among its warnings.
 TAGS_FACT = ("!! Not checked for glibc-2.28 and glibc-2.34: they are upstream "
                "tags, which hold none of a distro's own locale files or "
-               "patches. Steps 1 to 5 read only what the tags hold.")
+               "patches. Steps 1 and 2 read only what the tags hold.")
 TAGS_NOTICE = (TAGS_FACT + " If the machines run RHEL 8, 9 or 10, name each "
                "side as its build instead, as rpm -q glibc prints it on the "
                "machine without the architecture (glibc-2.34-283.el9_8), or as "
@@ -42,7 +43,7 @@ TAGS_NOTICE = (TAGS_FACT + " If the machines run RHEL 8, 9 or 10, name each "
 # refuses.
 TAGS_NOTICE_FOLDERS = (TAGS_FACT + " Pass each machine's file with --old-node "
                        "and --new-node instead of every other --old-*/--new-* "
-                       "option: steps 1 to 5 then read the build each file "
+                       "option: steps 1 and 2 then read the build each file "
                        "names, if this run can read it.")
 from _harness import GLIBC_CLONE, Step2Report, swap_alpha_beta, tag_charmaps
 from test_locale_order import (CHANGED_8_TO_9, RHEL8, RHEL9, RHEL10,
@@ -149,11 +150,7 @@ USAGE = [
     '       build id too: a result is bound to the build it ran on.',
     '',
     '       Either side on its own adds that check for that side (step 6',
-    "       for old, step 7 for new), and scans that node's own data for",
-    '       ellipsis ranges (step 9 for old, step 10 for new) -- which is',
-    '       the only way that question is asked of a node supplied on its',
-    '       own, since step 4 scans the new TAG, which holds at most',
-    "       upstream's C and never speaks for what your node has.",
+    '       for old, step 7 for new).',
     '',
     '       Supply BOTH and the run also compares the two nodes to each',
     '       other (step 8).',
@@ -168,7 +165,7 @@ USAGE = [
     '       one file scripts/locale_order.py --extract wrote on that',
     '       machine, with its measurement, its build, its locale sources and',
     '       its charmaps (a file without them says why), and stands for all',
-    '       the options above. Steps 1 to 5 then read the build each file',
+    '       the options above. Steps 1 and 2 then read the build each file',
     '       names, in place of the tag (the side given is that build or its',
     '       tag).',
 ]
@@ -207,18 +204,6 @@ NODE_TO_NODE_NOT_RUN_BODY = [
     'every C.* collation, so no mismatch can ever fire.',
     'Then run sql/c_utf8_probe.sql on both nodes.',
 ]
-# The node's-own ellipsis scan block when no machine was given, whole. One
-# phrase of it was all a test read, and its closing sentence could go with
-# every test green (false-negative-reviewer, 2026-09-30).
-ELLIPSIS_NOT_RUN_BODY = [
-    'Pass --old-node and --new-node instead of every other --old-*/--new-*',
-    'option, or --old-locales-dir and --new-locales-dir with their build ids.',
-    "Step 4 above scanned the TAG, and a tag holds at most upstream's C:",
-    'the distros this audit targets ship their own C.UTF-8, so if step 4',
-    "named C at all, that verdict is evidence about upstream's file and",
-    "none about either node's. Nothing above says how either node's own",
-    'C.UTF-8 defines its order.',
-]
 # The steps 6 and 7 block when no machine was given, whole, like the others.
 DISTRO_NOT_RUN_BODY = [
     'Pass --old-node and --new-node instead of every other --old-*/--new-*',
@@ -229,7 +214,8 @@ DISTRO_NOT_RUN_BODY = [
 
 
 def step_text(out, n):
-    """What step `n` printed, from its banner to the next step's.
+    """What step `n` printed, from its banner to the next step's, or to
+    the summary's.
 
     Its banner must be a line exactly once, and a later banner must end it,
     so a missing step or a cut that would run to the end of the output fails
@@ -242,7 +228,7 @@ def step_text(out, n):
         raise AssertionError(f'the step {n} banner is a line {len(at)} '
                              f'time(s):\n{out}')
     for j in range(at[0] + 1, len(lines)):
-        if lines[j].startswith('== STEP '):
+        if lines[j].startswith(('== STEP ', '== AUDIT SUMMARY ')):
             return '\n'.join(lines[at[0]:j])
     raise AssertionError(f'no banner ends step {n}:\n{out}')
 
@@ -298,8 +284,66 @@ def distro_clean(tag, step, unread=('C',)):
     return body
 
 
+# Step 1's `!!` on the code no step compares (glibc_locale_data.
+# CODE_NOT_COMPARED), whitespace collapsed, up to the end of its first
+# sentence: what has to reach the reader on every route.
+CODE_NOT_COMPARED_HEAD = (
+    "!! Not compared on any route: the code that compiles and compares the "
+    "rules (localedef's and strcoll's, each build's patches to it "
+    "included).")
+
+
+class _CodeNotComparedAndNoDeletedStep:
+    """Two properties of every run, asserted on the routes the summary can
+    take: tags (Wrapper), one commit (WrapperEmptyPair), the two
+    measurements (WrapperMeasuredOrder) and the two machines' files
+    (WrapperNodeFiles); the runs on builds and on a tag and a build are
+    test_build_sources._AuditOnBuilds.
+
+    Step 9.3 deleted steps 4 and 5, which were what a run without the
+    machines had to say about localedef's and strcoll's code: ko_KR.utf8
+    moved between RHEL 8 and 9 through localedef's code, its file the same
+    in both tags. So step 1 says, on every route, that no step compares that
+    code, and the summary repeats it once, under its warnings. And nothing a
+    run prints or writes names a deleted step or its script: a sentence that
+    still points to step 4 or 5 sends the reader to an answer that is not
+    there. FILES_ARE_THIS_RUNS says whether the class's output folder holds
+    one run's files only."""
+
+    FILES_ARE_THIS_RUNS = True
+
+    def test_the_code_no_step_compares_is_said_once_in_the_summary(self):
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        summary = self.out.split('AUDIT SUMMARY', 1)[1]
+        warnings = summary.partition(
+            '-- Warnings the clean results above do NOT cover')
+        self.assertTrue(warnings[1], summary[-2000:])
+        self.assertEqual(flat(warnings[2]).count(CODE_NOT_COMPARED_HEAD), 1)
+        # Once, not also inside another block of the warnings.
+        self.assertEqual(flat(warnings[2]).count('Not compared on any route'),
+                         1)
+        self.assertNotIn('Not compared on any route', flat(warnings[0]))
+        # Step 1 printed it, once, before the summary repeated it.
+        self.assertEqual(flat(self.out.split('== STEP 2', 1)[0])
+                         .count(CODE_NOT_COMPARED_HEAD), 1)
+
+    def test_nothing_printed_or_written_names_a_deleted_step(self):
+        self.assertEqual(deleted_steps_named(self.out), [])
+        if not self.FILES_ARE_THIS_RUNS:
+            return
+        files = sorted(os.listdir(self.out_dir))
+        self.assertTrue(files)
+        for name in files:
+            path = os.path.join(self.out_dir, name)
+            if not os.path.isfile(path):
+                continue
+            self.assertEqual(deleted_steps_named(name), [], name)
+            with open(path, encoding='utf-8', errors='replace') as fh:
+                self.assertEqual(deleted_steps_named(fh.read()), [], name)
+
+
 @needs_clone
-class Wrapper(unittest.TestCase):
+class Wrapper(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
     """A pair with real findings: the wrapper must not change the answer."""
 
     @classmethod
@@ -312,29 +356,9 @@ class Wrapper(unittest.TestCase):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
 
     def test_exits_zero_on_a_pair_with_findings(self):
-        """A finding is not an error. Step 5 reports hunks and returns 0."""
+        """A finding is not an error. Step 2 reports locales whose rules
+        differ and returns 0."""
         self.assertEqual(self.rc, 0, self.out)
-
-    def test_step_4_scanned_the_new_tag(self):
-        """The same check as WrapperTagsRemoveALocale's, on the pair whose new
-        tag is not glibc-2.39: there the right tag and a hard-coded one are
-        the same string, so only this pair can tell them apart."""
-        self.assertEqual(self.rc, 0, self.out)
-        step4 = step_text(self.out, 4)
-        self.assertIn(f'\nFiles at {MID}: ', step4)
-        self.assertNotIn(f'Files at {OLD}', flat(step4))
-
-    def test_the_step_4_lines_say_how_to_read_their_list(self):
-        """The `hunks` branch of the step 4 summary lines, the one every
-        published example prints; WrapperEmptyPair holds the other branch
-        (backlog 13.1)."""
-        summary = self.out.split('AUDIT SUMMARY')[1]
-        block = summary.split('-- Needs an empirical test', 1)[1]
-        block = block.split('\n\n', 1)[0]
-        self.assertIn('step 5 found', block)
-        self.assertIn('A collation or a database uses one when its locale, '
-                      'without the part from the dot up to any @, is one of '
-                      'them.', flat(block))
 
     def test_answer_matches_the_published_result(self):
         """The published set for 2.28..2.34: locales, and the alias glibc gives
@@ -390,49 +414,9 @@ class Wrapper(unittest.TestCase):
         self.assertIn('Warnings the clean results above do NOT cover', summary)
         self.assertIn(TAGS_NOTICE, flat(summary))
 
-    def test_summary_does_not_decide_step_5_for_you(self):
-        """Step 5 reports; it does not decide. The summary must say so."""
-        summary = self.out[self.out.index('AUDIT SUMMARY'):]
-        self.assertIn('Not decided for you', summary)
-        self.assertIn('29 hunk(s)', summary)
-
-    def test_code_changes_name_the_byte_order_locales_too(self):
-        """Backlog 13.7. Step 4 leaves the locales glibc builds in byte order
-        off its list, and changed code can move them, so the hunks block
-        names them. glibc-2.34 builds none that way, and says so rather than
-        saying nothing; its list is written empty."""
-        self.assertEqual(self.rc, 0, self.out)
-        body = summary_block(self.out, '-- Needs an empirical test: step 5 '
-                                       'found 29 substantive hunk(s),')
-        self.assertIn(f'Step 4 leaves no locale out as built in byte order '
-                      f'at {MID}.', body)
-        with open(os.path.join(self.out_dir, 'step4_byte_order_locales.txt'),
-                  encoding='utf-8') as fh:
-            self.assertEqual(fh.read(), '')
-        decided = ' '.join(summary_block(self.out, '-- Not decided for you'))
-        self.assertIn("treat step 4's list, and the locales it leaves out as "
-                      "byte order, as unresolved", decided)
-        # Step 5 is the last step of a tags-only run: the summary ends it.
-        self.assertEqual(self.out.count('\n== STEP 5 '), 1)
-        self.assertEqual(self.out.count('\n== AUDIT SUMMARY'), 1)
-        step5 = self.out.split('\n== STEP 5 ')[1].split('\n== AUDIT SUMMARY')[0]
-        self.assertIn('and so does every locale it names as built in byte '
-                      'order.', flat(step5))
-
-    def test_the_backport_caveat_reaches_this_branch(self):
-        """An upstream diff cannot see a distro's patches, whatever step 5
-        found. The sentence lived in the `clean` branch alone, and all three
-        published runs take `hunks`, so no output this tool ever printed
-        carried it (backlog 1.14, measured 2026-09-20)."""
-        summary = flat(self.out[self.out.index('AUDIT SUMMARY'):])
-        self.assertIn("What a tag does not hold is under 'Not checked for', above.",
-                      summary)
-
     def test_next_step_hints_are_suppressed(self):
         """The steps' "run this next" hints name commands already run."""
         self.assertNotIn('Next: python3 filter_lc_collate_changes.py',
-                         self.out)
-        self.assertNotIn('python3 flag_algorithmic_ranges.py glibc-2.34\n',
                          self.out)
 
     def test_summary_says_node_to_node_was_NOT_RUN(self):
@@ -467,12 +451,6 @@ class Wrapper(unittest.TestCase):
         self.assertEqual(summary_block(self.out, NODE_TO_NODE_NOT_RUN),
                          NODE_TO_NODE_NOT_RUN_BODY)
 
-    def test_the_ellipsis_NOT_RUN_block_says_what_it_leaves_open(self):
-        """Absent is not empty: without either machine's files the block says
-        what a scan of the tag cannot clear, compared line for line."""
-        self.assertEqual(summary_block(self.out, ELLIPSIS_BOTH_NOT_RUN),
-                         ELLIPSIS_NOT_RUN_BODY)
-
     def test_what_the_tags_cannot_see_is_said_before_their_none(self):
         """Over 2.28..2.34 the tags remove nothing, and the
         upgrade removes en_US@ampm, a file only RHEL8 ships. A "none" as the
@@ -486,7 +464,7 @@ class Wrapper(unittest.TestCase):
         summary = self.out.split('AUDIT SUMMARY')[1]
         self.assertLess(summary.index('-- Reindex:'), summary.index(REMOVED))
         self.assertLess(summary.index(REMOVED),
-                        summary.index('-- Needs an empirical test'))
+                        summary.index(MEASURED_NOT_RUN))
 
 
 @needs_clone
@@ -543,7 +521,7 @@ class WrapperTakesTheKeyedListToReindex(unittest.TestCase):
 
 
 @needs_clone
-class WrapperEmptyPair(unittest.TestCase):
+class WrapperEmptyPair(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
     """A pair with no LC_COLLATE change at all.
 
     glibc-2.39 against itself: no new tag to pin, so EXPECTED_SHA and
@@ -581,15 +559,6 @@ class WrapperEmptyPair(unittest.TestCase):
             'none -- nothing was compared: the two tags are one commit or one',
             'source tree (see below)'])
 
-    def test_steps_4_and_5_still_ran(self):
-        """An empty step 2 is not the end of the audit.
-
-        Steps 4 and 5 cover what a data diff cannot settle, so skipping them
-        here would hide the only findings this pair could have.
-        """
-        self.assertIn('STEP 4', self.out)
-        self.assertIn('STEP 5', self.out)
-
     def test_empty_list_is_written_not_absent(self):
         """Written-and-empty is a different fact from missing.
 
@@ -601,30 +570,6 @@ class WrapperEmptyPair(unittest.TestCase):
         self.assertTrue(os.path.exists(path), self.out)
         with open(path, encoding='utf-8') as fh:
             self.assertEqual(fh.read().strip(), '')
-
-    def test_the_summary_does_not_deny_the_C_that_step_4_just_named(self):
-        """Backlog 1.17. Given neither node directory, the summary used to
-        justify its NOT RUN with "no tag of this pair holds
-        localedata/locales/C" -- true of 2.28..2.34 and false from 2.35 on.
-
-        This pair is glibc-2.39 against itself, where the file is at BOTH
-        tags: step 2 says nothing about it (present at the old tag, so it is
-        judged like any other file) and step 4 names it, so the old sentence
-        was false with nothing else in the summary to contradict it. The
-        premise is computed here rather than assumed, so a corpus that stops
-        holding the file fails this test instead of passing it vacuously.
-        """
-        at_new = g.run_git(['ls-tree', '--name-only', NEW, '--',
-                            f'{g.LOCALES_DIR}/C'], GLIBC_CLONE).stdout.strip()
-        self.assertTrue(at_new, f'{NEW} no longer holds the file this is about')
-        self.assertIn('can move them: C', self.out, 'step 4 did not name C')
-        summary = self.out.split('AUDIT SUMMARY')[1]
-        body = section_body(summary, "-- Node's own ellipsis scan: NOT RUN")
-        # The positive half is what keeps the negative one honest: assertNotIn
-        # on a phrase the block never contained would pass whatever the block
-        # said, which is how three tests in this suite came to guard nothing.
-        self.assertIn("a tag holds at most upstream's C", body)
-        self.assertNotIn('no tag of this pair holds', body)
 
     def test_one_tag_compared_with_itself_says_nothing_was_compared(self):
         """An intra-major upgrade -- RHEL 8.1 -> 8.10 -- is two builds of one
@@ -658,7 +603,7 @@ class WrapperEmptyPair(unittest.TestCase):
             "and says 'nothing changed' means 'nothing was compared'. For an",
             "intra-major upgrade, what can still show a change is the "
             "machines'",
-            "own files (steps 6 to 10), the measured order (step 11),",
+            "own files (steps 6 to 8), the measured order (step 11),",
             "sql/c_utf8_probe.sql and the confirmation on real nodes",
             "(docs/confirming-on-a-real-system.md).",
         ])
@@ -685,36 +630,6 @@ class WrapperEmptyPair(unittest.TestCase):
         self.assertNotIn('integer expression expected', self.out)
         self.assertIn('none -- nothing was compared', self.out)
 
-    def test_one_commit_leaves_step_4_unresolved(self):
-        """One tag against itself compares nothing, and step 5 used to print
-        its clean sentence over it, which the summary turned into "a clean
-        data diff is sufficient even for the locales step 4 flagged"
-        (false-negative-reviewer, 2026-09-30). It is not a clean result now,
-        and the summary says why. The clean branch is driven by
-        WrapperStep5Clean."""
-        summary = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
-        self.assertNotIn("step 2's comparison of rules is sufficient", summary)
-        self.assertIn('step 5 did NOT reach a clean result, so the locales '
-                      'step 4 flagged stay UNRESOLVED', summary)
-        self.assertIn('the two tags are one commit', summary)
-        # The caveat is true of this branch too: a run that compared nothing
-        # still cannot see a distro patch. It printed in the `clean` branch
-        # only until backlog 1.14 was fixed.
-        self.assertIn("What a tag does not hold is under 'Not checked for', above.",
-                      summary)
-
-    def test_the_step_4_lines_say_how_to_read_their_list(self):
-        """Reindex is "none" here, so the explanation printed under a
-        non-empty Reindex list is not printed. The step 4 lines carry the rule
-        themselves, and must not send the reader to that explanation, which
-        is not there (backlog 13.1)."""
-        summary = self.out.split('AUDIT SUMMARY')[1]
-        self.assertIn('none -- nothing was compared', summary)
-        self.assertIn('A collation or a database uses one when its locale, '
-                      'without the part from the dot up to any @, is one of '
-                      'them.', flat(summary))
-        self.assertNotIn('read as the Reindex list is', flat(summary))
-
 
 @needs_clone
 class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
@@ -725,9 +640,7 @@ class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
     the string comparison never fired: rc 0, no "nothing was compared", and a
     summary reading "none -- no locale\'s LC_COLLATE changed". That is the
     same-tag false negative reopened by spelling. Mutation: put the
-    text comparison back and this class fails. Step 5 asks git the same
-    question for its own verdict, and this is the class that fails if it
-    compares the two names as text instead.
+    text comparison back and this class fails.
     """
 
     @classmethod
@@ -748,10 +661,10 @@ class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
         self.assertIn("Everything above that compares the two tags and says "
                       "'nothing changed' means 'nothing was compared'", summary)
         # Compared as text, the tag and its sha are two commits, and step 5
-        # printed its clean sentence over this pair (false-negative-reviewer,
-        # 2026-09-30, measured with that mutant).
-        self.assertIn('step 5 did NOT reach a clean result', summary)
-        self.assertNotIn("step 2's comparison of rules is sufficient", summary)
+        # (deleted in step 9.3) printed its clean sentence over this pair
+        # (false-negative-reviewer, 2026-09-30). Reindex says so instead.
+        self.assertIn('none -- nothing was compared: the two tags are one '
+                      'commit or one source tree', summary)
 
 
 @needs_clone
@@ -760,10 +673,9 @@ class WrapperDirectionUndetermined(unittest.TestCase):
     other, and the newest glibc tag behind each one does not order them either
     -- a master snapshot against a backport branch off the same release, say.
     The wrapper cannot be pointed at a fabricated clone, so the order
-    subcommand is stood in for by a `python3` shim -- the pattern
-    WrapperStep5Unresolved uses for step 5 -- and every other invocation goes
-    to the real interpreter. Silence here would read as "the direction was
-    checked and is fine"."""
+    subcommand is stood in for by a `python3` shim, and every other
+    invocation goes to the real interpreter. Silence here would read as
+    "the direction was checked and is fine"."""
 
     def setUp(self):
         self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-undet-')
@@ -796,6 +708,13 @@ class WrapperDirectionUndetermined(unittest.TestCase):
         self.assertIn('nothing here checked that', summary)
         # Not the other state: an undetermined pair is not one commit.
         self.assertNotIn('One commit, compared with itself', summary)
+        # What a wrong way round does is said of step 2, the one step left
+        # that compares the two sides (it said "step 4 scanned" too until
+        # step 9.3).
+        self.assertIn('every list above is the wrong tag\'s: step 2 reports '
+                      'a locale deleted in the upgrade as a harmless '
+                      'addition.', summary)
+        self.assertEqual(deleted_steps_named(out), [])
 
     def test_reindex_keeps_its_sentence_when_the_pair_is_two_commits(self):
         """The other branch of the summary's empty Reindex. With the order
@@ -846,10 +765,6 @@ class WrapperDirectionUndetermined(unittest.TestCase):
         self.assertIn('are two commits of one source tree. Everything above '
                       "that compares the two tags and says 'nothing changed' "
                       "means 'nothing was compared'", summary)
-        # Step 5's list of reasons names this one too (false-negative-
-        # reviewer, round 2 of 7.1).
-        self.assertIn('the two tags are one commit or two commits of one '
-                      'source tree, or the step did not finish', summary)
         self.assertNotIn('One commit, compared with itself', summary)
 
 
@@ -875,7 +790,7 @@ class WrapperRefusesBadInput(unittest.TestCase):
     def test_the_usage_claims_no_single_step_for_C_UTF_8(self):
         """The usage text called step 8 "the only
         source-level evidence there is about C.UTF-8"; steps 6/7 read that
-        file and steps 9/10 scan it with one node alone."""
+        file with one node alone."""
         rc, out = run_wrapper(OLD, out_dir=self.out_dir)
         self.assertEqual(rc, 2)
         script = os.path.join(os.path.dirname(os.path.dirname(
@@ -884,11 +799,9 @@ class WrapperRefusesBadInput(unittest.TestCase):
                          .split('\n'), USAGE)
 
     def test_a_reversed_pair_is_refused_before_any_summary(self):
-        """"Nothing stopped a reversed pair." Reversed, all five steps run to
-        the end: step 4 scans the older
-        tag, so the locales added in the newer one -- ckb_IQ and mnw_MM, both
-        `copy "iso14651_t1"` -- leave the exposed set, and step 2 reports a
-        locale DELETED in the real upgrade as an addition it did not analyse.
+        """"Nothing stopped a reversed pair." Reversed, every step ran to
+        the end, and step 2 reports a locale DELETED in the real upgrade as an
+        addition it did not analyse.
         Nothing in the output said which direction it had been given."""
         rc, out = run_wrapper(MID, OLD, out_dir=self.out_dir)
         self.assertEqual(rc, 2, out)
@@ -1066,23 +979,6 @@ class WrapperNodeToNode(unittest.TestCase):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
         shutil.rmtree(cls.nodes, ignore_errors=True)
 
-    def test_code_changes_name_each_machines_byte_order_locales(self):
-        """Review of backlog 13.7. The tag has no C at glibc-2.34, and the
-        new machine builds one in byte order (codepoint_collation, as RHEL9
-        does): the hunks block names it from step 10's list, beside the tag's
-        "none", and the old machine's ellipsis-based C is not one."""
-        self.assertEqual(self.rc, 0, self.out)
-        body = ' '.join(summary_block(self.out, '-- Needs an empirical test: '
-                                                'step 5 found 29 substantive '
-                                                'hunk(s),'))
-        self.assertIn(f'Step 4 leaves no locale out as built in byte order at '
-                      f'{MID}.', body)
-        self.assertIn('Step 9 finds no locale built in byte order on '
-                      'build-old.', body)
-        self.assertIn('Step 10 finds locale(s) built in byte order on '
-                      'build-new.el9, which changed code can move too: C', body)
-        self.assertIn('Here C means C.UTF-8', body)
-
     def test_it_runs_and_logs_as_step_8(self):
         self.assertEqual(self.rc, 0, self.out)
         self.assertIn('NODE TO NODE', self.out)
@@ -1098,8 +994,8 @@ class WrapperNodeToNode(unittest.TestCase):
 
     def test_the_summary_relays_every_name_not_at_both_tags(self):
         """Every name step 8 found inside LC_COLLATE and not at both tags,
-        not only C's (backlog 6.3), and with steps 1 to 5 on the tags, what that
-        leaves out of Reindex and how to measure it."""
+        not only C's (backlog 6.3), and with steps 1 and 2 on the tags, what
+        that leaves out of Reindex and how to measure it."""
         block = summary_block(
             self.out.replace(self.out_dir, '<out>'),
             '-- Node-to-node locale data (build-old -> build-new.el9)')
@@ -1110,7 +1006,7 @@ class WrapperNodeToNode(unittest.TestCase):
         self.assertEqual(block[start:start + 7], [
             'Of the 4 that differ, not at both tags:',
             'C.UTF-8, zz_TWO',
-            'Steps 1 to 5 read the tags and compare none of these files, so',
+            'Steps 1 and 2 read the tags and compare none of these files, so',
             'Reindex above does not hold them: their order can change. Step 11',
             'measures their order: pass --old-node and --new-node. For C.UTF-8,',
             'sql/c_utf8_probe.sql measures it inside PostgreSQL, which reports',
@@ -1125,16 +1021,6 @@ class WrapperNodeToNode(unittest.TestCase):
         summary = self.out[self.out.index('AUDIT SUMMARY'):]
         self.assertIn(TAGS_NOTICE_FOLDERS, flat(summary))
         self.assertNotIn('name each side as its build', flat(self.out))
-
-    def test_the_ellipsis_scan_lines_for_each_node_are_printed(self):
-        """audit.sh's steps 9/10 block, one for each node, each with its
-        count of ellipsis-based locales."""
-        summary = self.out.split('AUDIT SUMMARY')[1]
-        self.assertIn("-- Node's own locale data, ellipsis scan (build-old)",
-                      summary)
-        self.assertIn("-- Node's own locale data, ellipsis scan (build-new.el9)",
-                      summary)
-        self.assertEqual(summary.count('ellipsis-based locale(s):'), 2)
 
     def test_the_blast_radius_of_the_differing_files_is_in_the_summary(self):
         """"Node-to-node did not close over the copy graph." The summary now
@@ -1180,59 +1066,6 @@ class WrapperNodeToNode(unittest.TestCase):
         self.assertEqual(removed_lines(self.out),
                          [f'none -- every file in {self.old_root} is also in '
                           f'{self.new_root}'])
-
-
-@needs_clone
-class WrapperNodesOnOneBuild(unittest.TestCase):
-    """Review of backlog 13.7. Two machines on one build, which step 8 calls
-    a valid control: steps 9 and 10 named their lists after the build alone,
-    so step 10's replaced step 9's and the summary read the new machine's
-    answer under the old machine's name -- "none" for an old machine whose C
-    is byte order. Here only the OLD side builds C in byte order."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-onebuild-')
-        cls.nodes = tempfile.mkdtemp(prefix='pg-glibc-wrapper-onebuild-trees-')
-        cls.old_root = dd.materialise_tag(GLIBC_CLONE, OLD,
-                                          os.path.join(cls.nodes, 'a'))
-        cls.new_root = dd.materialise_tag(GLIBC_CLONE, MID,
-                                          os.path.join(cls.nodes, 'b'))
-        for root, body in ((cls.old_root, upstream_c()),
-                           (cls.new_root, backported_c())):
-            with open(os.path.join(root, 'C'), 'w', encoding='utf-8') as fh:
-                fh.write(body)
-        cls.rc, cls.out = run_wrapper(
-            OLD, MID,
-            '--old-locales-dir', cls.old_root, '--old-build-id', 'same-build.el9',
-            '--new-locales-dir', cls.new_root, '--new-build-id', 'same-build.el9',
-            out_dir=cls.out_dir)
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.out_dir, ignore_errors=True)
-        shutil.rmtree(cls.nodes, ignore_errors=True)
-
-    def test_each_side_is_read_from_its_own_list(self):
-        self.assertEqual(self.rc, 0, self.out[-2000:])
-        body = ' '.join(summary_block(self.out, '-- Needs an empirical test: '
-                                                'step 5 found 29 substantive '
-                                                'hunk(s),'))
-        self.assertIn('Step 9 finds locale(s) built in byte order on '
-                      'same-build.el9, which changed code can move too: C', body)
-        self.assertIn('Step 10 finds no locale built in byte order on '
-                      'same-build.el9.', body)
-
-    def test_the_two_sides_write_two_files(self):
-        """Step 9's full list was overwritten the same way, before this
-        change; both lists now carry the side."""
-        self.assertEqual(self.rc, 0, self.out[-2000:])
-        for kind in ('exposed', 'byte_order'):
-            for side in ('old', 'new'):
-                with self.subTest(kind=kind, side=side):
-                    self.assertTrue(os.path.isfile(os.path.join(
-                        self.out_dir,
-                        f'step4_{kind}_locales.same-build.el9..{side}.txt')))
 
 
 @needs_clone
@@ -1306,35 +1139,6 @@ class WrapperTagsRemoveALocale(unittest.TestCase):
             self.out_dir, f'step2_removed_locales.{pair_slug(MID, NEW)}.txt'))
         self.assertNotIn('none', ' '.join(lines))
 
-    def test_code_changes_name_the_byte_order_locales_too(self):
-        """Backlog 13.7. glibc-2.39 builds C in byte order, so step 4 leaves
-        it off its list, and changed code can move it: the hunks block names
-        it, and says which C it means."""
-        self.assertEqual(self.rc, 0, self.out)
-        body = ' '.join(summary_block(self.out, '-- Needs an empirical test: '
-                                                'step 5 found 55 substantive '
-                                                'hunk(s),'))
-        self.assertIn('Also the locale(s) step 4 leaves out because glibc '
-                      'builds them in byte order, which changed code can move '
-                      'too: C', body)
-        self.assertIn('Here C means C.UTF-8 and its other spellings. A '
-                      'database or collation whose locale is exactly C or '
-                      'POSIX is compared by PostgreSQL itself, without glibc.',
-                      body)
-        with open(os.path.join(self.out_dir, 'step4_byte_order_locales.txt'),
-                  encoding='utf-8') as fh:
-            self.assertEqual(fh.read().split(), ['C'])
-
-    def test_step_4_scanned_the_new_tag(self):
-        """The premise of SkippingAReleaseReportsTheUnion's step 4 test, which
-        runs the step on its own and so cannot see what audit.sh passes it:
-        step 4 reads the NEW tag. Given the old one, the run still ends at
-        exit 0 with a plausible summary (the header of audit.sh records that
-        it once did), and the direct pair loses what was added on the way."""
-        self.assertEqual(self.rc, 0, self.out)
-        step4 = step_text(self.out, 4)
-        self.assertIn(f'\nFiles at {NEW}: ', step4)
-        self.assertNotIn(f'Files at {MID}', flat(step4))
 
 @needs_clone
 class WrapperNodesRemoveALocale(unittest.TestCase):
@@ -1495,7 +1299,7 @@ class WrapperNodeCopiesDisagreeWithTheTags(unittest.TestCase):
 
 @needs_clone
 class WrapperOneSideOnly(unittest.TestCase):
-    """Only --old-locales-dir: steps 6 and 9 run, 7, 8 and 10 do not, and the
+    """Only --old-locales-dir: step 6 runs, 7 and 8 do not, and the
     summary says which node-side questions went unasked. This branch of
     audit.sh had no test at all."""
 
@@ -1524,22 +1328,19 @@ class WrapperOneSideOnly(unittest.TestCase):
         self.assertIn('Pass --new-locales-dir with --new-build-id.', body)
         self.assertIn("the new machine's own patches", body)
 
-    def test_steps_6_and_9_run_and_7_8_10_do_not(self):
+    def test_step_6_runs_and_7_and_8_do_not(self):
         self.assertEqual(self.rc, 0, self.out)
         self.assertIn("DISTRO CHECK  do build-old's patches", self.out)
-        self.assertIn("NODE ELLIPSIS  does build-old's own locale data",
-                      self.out)
         self.assertNotIn('NODE TO NODE', self.out)
-        for n in (7, 8, 10):
+        self.assertNotIn('NODE ELLIPSIS', self.out)
+        for n in (7, 8):
             self.assertFalse(os.path.exists(os.path.join(
                 self.out_dir, f'step{n}.{pair_slug(OLD, MID)}.log')), n)
 
-    def test_the_summary_says_node_to_node_was_NOT_RUN_but_scans_the_old_node(self):
+    def test_the_summary_says_node_to_node_was_NOT_RUN(self):
         summary = self.out.split('AUDIT SUMMARY')[1]
         self.assertIn('-- Node-to-node locale data: NOT RUN', summary)
-        self.assertIn("-- Node's own locale data, ellipsis scan (build-old)",
-                      summary)
-        self.assertNotIn('ellipsis scan (build-new)', summary)
+        self.assertNotIn('ellipsis scan', flat(summary))
 
     def test_the_NOT_RUN_block_does_not_deny_the_scan_below_it(self):
         """Backlog 1.18. With one directory the block said
@@ -1547,25 +1348,6 @@ class WrapperOneSideOnly(unittest.TestCase):
         old node's scan covers its C a few lines further down."""
         self.assertEqual(summary_block(self.out, NODE_TO_NODE_NOT_RUN),
                          NODE_TO_NODE_NOT_RUN_BODY)
-
-    def test_the_side_that_was_not_scanned_says_NOT_RUN(self):
-        """Absent is not empty, one level below the node-to-node block.
-
-        The summary printed the old node's ellipsis verdict and simply left
-        the new node out -- and a section that is not there reads exactly
-        like a section with nothing to report. A one-sided run is a
-        supported shape (docs/commands.md), so
-        this was the reader's ordinary view, not a misuse (backlog 1.16).
-        """
-        summary = self.out.split('AUDIT SUMMARY')[1]
-        heading = "-- Node's own locale data, ellipsis scan: NOT RUN"
-        self.assertIn(heading, summary)
-        # On this block alone. The node-to-node NOT RUN above it names both
-        # flags, so either assertion below would be vacuous on the whole
-        # summary -- the first always true, the second always false.
-        body = section_body(summary, heading)
-        self.assertIn('--new-locales-dir', body)
-        self.assertNotIn('--old-locales-dir', body)
 
     def test_one_copy_is_not_enough_for_the_nodes_answer_on_removals(self):
         """Step 8 needs both copies, so the section takes the tags and says
@@ -1605,19 +1387,6 @@ class WrapperNewSideOnly(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
         shutil.rmtree(cls.nodes, ignore_errors=True)
-
-    def test_the_side_that_was_not_scanned_is_the_old_one(self):
-        self.assertEqual(self.rc, 0, self.out)
-        summary = self.out.split('AUDIT SUMMARY')[1]
-        heading = "-- Node's own locale data, ellipsis scan: NOT RUN"
-        self.assertIn(heading, summary)
-        body = section_body(summary, heading)
-        self.assertIn('--old-locales-dir', body)
-        self.assertNotIn('--new-locales-dir', body)
-        # And the side that DID run is still reported, under the heading that
-        # carries its build id -- the NOT RUN must not replace it.
-        self.assertIn("-- Node's own locale data, ellipsis scan (build-new)",
-                      summary)
 
     def test_one_copy_is_not_enough_for_the_nodes_answer_on_removals(self):
         """The mirror of WrapperOneSideOnly's test of the same name."""
@@ -1687,7 +1456,7 @@ class WrapperSideLostFiles:
     HEAD = re.compile(r'^!! (\d+) file\(s\) that (\S+) has under '
                       r'localedata/locales/ are missing from', re.M)
 
-    def test_both_steps_that_read_the_copy_say_so(self):
+    def test_the_step_that_reads_the_copy_says_so(self):
         self.assertEqual(self.rc, 0, self.out)
         for n in self.STEPS:
             with open(os.path.join(self.out_dir,
@@ -1744,12 +1513,12 @@ class WrapperSideLostFiles:
 
 @needs_clone
 class WrapperOldSideLostFiles(WrapperSideLostFiles, unittest.TestCase):
-    SIDE, TAG, STEPS = 'old', OLD, (6, 9)
+    SIDE, TAG, STEPS = 'old', OLD, (6,)
 
 
 @needs_clone
 class WrapperNewSideLostFiles(WrapperSideLostFiles, unittest.TestCase):
-    SIDE, TAG, STEPS = 'new', MID, (7, 10)
+    SIDE, TAG, STEPS = 'new', MID, (7,)
 
 
 @needs_clone
@@ -1854,265 +1623,8 @@ class WrapperStaleNodeList(unittest.TestCase):
 
 
 @needs_clone
-class WrapperStep5Unresolved(unittest.TestCase):
-    """"The summary contradicted step 5 when a tracked path vanished."
-
-    The summary read its hunk count from the line "N substantive hunk(s)
-    found". When step 5 refuses its read and has no hunk to report, it prints
-    "NOT a clean result" and no such line -- and `HUNKS=${HUNKS:-0}` turned
-    that absence into zero, which was the branch that said "a clean data diff
-    is sufficient even for the locales step 4 flagged". Step 5 said one
-    thing; the summary said the opposite, 300 lines lower.
-
-    The canned output below is not one the real script prints: a path that
-    vanishes brings a hunk of its own, its deletion, so its refusal always
-    carries a count (backlog 1.24; that case is
-    WrapperStep5UnresolvedWithHunks). The refusal at zero is real -- an empty
-    include walk, or a path misspelt or renamed away before both tags, when
-    nothing else changed -- and this class guards how the summary reads it.
-    So step 5 is stood in for by a `python3` shim on PATH that prints it,
-    with a vanished-path `!!` block whose first sentence and path line are
-    what test_known_answers ties to the real script on the reversed pair, and
-    hands every other step to the real interpreter.
-    """
-
-    CANNED = (
-        "Collation code changes between glibc-2.39 and glibc-2.39\n"
-        "\n"
-        "!! 1 tracked path(s) present at glibc-2.39 and GONE at glibc-2.39."
-        " Step 5's\n"
-        "   diff shows each one deleted, and nothing here compares it with"
-        " where its\n"
-        "   code went:\n"
-        "     locale/programs/ld-collate.c: ABSENT at glibc-2.39\n"
-        "   Find where each moved and add the new path to TIER1/TIER2 before"
-        " trusting\n"
-        "   this step's result.\n"
-        "\n"
-        "No substantive change in the files this audit could read.\n"
-        "This is NOT a clean result:\n"
-        "  - 1 tracked path(s) vanished before glibc-2.39\n"
-        "Resolve the paths listed above, then re-run.\n")
-
-    def setUp(self):
-        import sys
-        self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-vanished-')
-        self.addCleanup(shutil.rmtree, self.out_dir, ignore_errors=True)
-        shim_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-shim-')
-        self.addCleanup(shutil.rmtree, shim_dir, ignore_errors=True)
-        canned = os.path.join(shim_dir, 'step5.txt')
-        with open(canned, 'w', encoding='utf-8') as fh:
-            fh.write(self.CANNED)
-        shim = os.path.join(shim_dir, 'python3')
-        with open(shim, 'w', encoding='utf-8') as fh:
-            fh.write('#!/bin/sh\n'
-                     'case "$1" in\n'
-                     f'  *diff_collation_code.py) cat "{canned}"; exit 0 ;;\n'
-                     'esac\n'
-                     f'exec "{sys.executable}" "$@"\n')
-        os.chmod(shim, 0o755)
-        self.env = {'PATH': shim_dir + os.pathsep + os.environ.get('PATH', '')}
-
-    def test_a_vanished_path_leaves_step_4_unresolved(self):
-        rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
-                              env_extra=self.env)
-        self.assertEqual(rc, 0, out)
-        # Text only the canned output carries: the real step 5 also says "NOT
-        # a clean result" on one commit compared with itself.
-        self.assertIn('1 tracked path(s) vanished before glibc-2.39', out,
-                      'the shim did not run')
-        summary = out.split('AUDIT SUMMARY')[1]
-        flat = ' '.join(summary.split())
-        self.assertNotIn("step 2's comparison of rules is sufficient", flat)
-        self.assertNotIn('Nothing from step 5', flat)
-        self.assertIn('step 5 did NOT reach a clean result, so the locales '
-                      'step 4 flagged stay UNRESOLVED', flat)
-        self.assertIn('Step 5 reached no clean result', flat)
-        # The caveat is true of this branch too: the run that could not read
-        # the upstream code still cannot see a distro patch. It printed in the
-        # `clean` branch only until backlog 1.14 was fixed.
-        self.assertIn("What a tag does not hold is under 'Not checked for', above.",
-                      flat)
-
-    def test_the_vanished_path_is_repeated_in_the_warnings_block(self):
-        rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
-                              env_extra=self.env)
-        self.assertEqual(rc, 0, out)
-        warnings = out.split('-- Warnings the clean results above')[1]
-        self.assertIn('locale/programs/ld-collate.c: ABSENT at glibc-2.39',
-                      warnings)
-
-
-@needs_clone
-class WrapperStep5UnresolvedWithHunks(unittest.TestCase):
-    """Backlog 1.24, end to end: a tracked path step 5 could not read, on a
-    pair where it still finds hunks.
-
-    The summary used to say "step 5 found N substantive hunk(s)" and invite
-    reading them to clear step 4's list, though they came from an incomplete
-    read. Here step 5 is the real script over 2.28..2.34 with one path added
-    to TIER2, locale/C-translit.h, which glibc deleted inside that range, so
-    the vanished-path guard and the hunks both come from the clone. The shim
-    swaps nothing else.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        import sys
-        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-hunks5-')
-        cls.shim_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-shim-')
-        code = ("import os, sys; "
-                "sys.path.insert(0, os.path.dirname(sys.argv[1])); "
-                "import diff_collation_code as d; "
-                "d.TIER2 = d.TIER2 + ['locale/C-translit.h']; "
-                "sys.exit(d.main(sys.argv[2:]))")
-        shim = os.path.join(cls.shim_dir, 'python3')
-        with open(shim, 'w', encoding='utf-8') as fh:
-            fh.write('#!/bin/sh\n'
-                     'case "$1" in\n'
-                     f'  *diff_collation_code.py) exec "{sys.executable}" '
-                     f'-c "{code}" "$@" ;;\n'
-                     'esac\n'
-                     f'exec "{sys.executable}" "$@"\n')
-        os.chmod(shim, 0o755)
-        cls.rc, cls.out = run_wrapper(
-            OLD, MID, out_dir=cls.out_dir,
-            env_extra={'PATH': cls.shim_dir + os.pathsep
-                       + os.environ.get('PATH', '')})
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.out_dir, ignore_errors=True)
-        shutil.rmtree(cls.shim_dir, ignore_errors=True)
-
-    def test_the_injection_reached_a_count_above_zero(self):
-        """The control: the shim ran, the path vanished, and step 5 found
-        hunks. Without hunks this is the zero case WrapperStep5Unresolved
-        already covers."""
-        self.assertEqual(self.rc, 0, self.out[-2000:])
-        self.assertIn('locale/C-translit.h: ABSENT at glibc-2.34', self.out)
-        count = re.search(r'(?m)^(\d+) substantive hunk\(s\)', self.out)
-        self.assertIsNotNone(count, self.out[-2000:])
-        self.assertGreater(int(count.group(1)), 0)
-
-    def test_the_byte_order_locales_are_unresolved_too(self):
-        """Backlog 13.7: an unresolved step 5 leaves the locales step 4 calls
-        byte order unresolved as well. glibc-2.34 has none, and says so."""
-        self.assertEqual(self.rc, 0, self.out[-2000:])
-        body = summary_block(self.out, '-- Needs an empirical test: step 5 '
-                                       'did NOT reach a clean result, so')
-        self.assertIn(f'Step 4 leaves no locale out as built in byte order '
-                      f'at {MID}.', body)
-        decided = ' '.join(summary_block(self.out, '-- Not decided for you'))
-        self.assertIn("so step 4's list, and the locales it leaves out as "
-                      "byte order, are unresolved", decided)
-
-    def test_the_summary_does_not_offer_the_hunks_to_read(self):
-        self.assertEqual(self.rc, 0, self.out[-2000:])
-        summary = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
-        self.assertIn('step 5 did NOT reach a clean result, so the locales '
-                      'step 4 flagged stay UNRESOLVED', summary)
-        self.assertIn('Step 5 reached no clean result', summary)
-        self.assertNotIn('Needs an empirical test: step 5 found', summary)
-        self.assertNotIn('hunk(s) marked >> in step 5', summary)
-
-
-@needs_clone
-class WrapperStep5Clean(unittest.TestCase):
-    """The summary's clean step 5 branch, "step 2's comparison of rules is
-    sufficient".
-
-    One tag against itself was the one input the suite used to reach it, and
-    that is not a clean result any more: it compares nothing. No pinned pair of
-    two different tags has zero substantive hunks, so step 5 is stood in for
-    by a `python3` shim that prints the real script's clean sentence over
-    glibc-2.28..glibc-2.34, as WrapperStep5Unresolved does for its branch.
-    """
-
-    CANNED = (
-        "Collation code changes between glibc-2.28 and glibc-2.34\n"
-        "\n"
-        "No substantive collation code change. Every locale at both tags "
-        "that step 2\n"
-        "did not list is genuinely unaffected, including every locale that\n"
-        "flag_algorithmic_ranges.py lists -- step 2's comparison of rules is "
-        "sufficient\n"
-        "for this pair.\n")
-
-    @classmethod
-    def setUpClass(cls):
-        import sys
-        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-clean5-')
-        cls.shim_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-shim-')
-        canned = os.path.join(cls.shim_dir, 'step5.txt')
-        with open(canned, 'w', encoding='utf-8') as fh:
-            fh.write(cls.CANNED)
-        shim = os.path.join(cls.shim_dir, 'python3')
-        with open(shim, 'w', encoding='utf-8') as fh:
-            fh.write('#!/bin/sh\n'
-                     'case "$1" in\n'
-                     f'  *diff_collation_code.py) cat "{canned}"; exit 0 ;;\n'
-                     'esac\n'
-                     f'exec "{sys.executable}" "$@"\n')
-        os.chmod(shim, 0o755)
-        cls.rc, cls.out = run_wrapper(
-            OLD, MID, out_dir=cls.out_dir,
-            env_extra={'PATH': cls.shim_dir + os.pathsep
-                       + os.environ.get('PATH', '')})
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.out_dir, ignore_errors=True)
-        shutil.rmtree(cls.shim_dir, ignore_errors=True)
-
-    def test_the_clean_step_5_branch_is_the_one_printed(self):
-        """The summary must say "sufficient", and NOT the unresolved wording,
-        which is what an absent clean sentence produces."""
-        self.assertEqual(self.rc, 0, self.out[-2000:])
-        summary = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
-        # The real step 5 finds hunks on this pair, so this line is only
-        # printed when the shim ran.
-        self.assertIn("Step 5 found no substantive change, so step 2's "
-                      "comparison of rules is sufficient even for the "
-                      "locales step 4 flagged", summary)
-        self.assertIn('Nothing from step 5.', summary)
-        self.assertNotIn('did NOT reach a clean result', summary)
-        # The branch that always carried the tags caveat keeps it: the
-        # control for the tests that fail when it moves back into the case
-        # (backlog 1.14).
-        self.assertIn("What a tag does not hold is under 'Not checked for', above.",
-                      summary)
-
-    def test_the_canned_sentence_is_the_one_the_script_prints(self):
-        """The shim stands in for step 5, so what it prints is evidence only
-        while it is the real script's clean sentence. A rewording the copy
-        did not follow left this class green over a sentence no run prints:
-        reverting "at both tags", which keeps the locales a release adds out
-        of the clean verdict, reddened nothing (false-negative-reviewer,
-        2026-10-12). Read from the `total == 0` branch of
-        diff_collation_code.py, which must be plain prints of one string."""
-        path = os.path.join(SCRIPTS_DIR, 'diff_collation_code.py')
-        with open(path, encoding='utf-8') as fh:
-            tree = ast.parse(fh.read())
-        branches = [node for node in ast.walk(tree)
-                    if isinstance(node, ast.If)
-                    and ast.unparse(node.test) == 'total == 0']
-        self.assertEqual(len(branches), 1, 'the clean branch of step 5')
-        lines = []
-        for stmt in branches[0].body:
-            shown = ast.unparse(stmt)
-            self.assertIsInstance(stmt, ast.Expr, shown)
-            self.assertIsInstance(stmt.value, ast.Call, shown)
-            self.assertEqual(ast.unparse(stmt.value.func), 'print', shown)
-            self.assertEqual(len(stmt.value.args), 1, shown)
-            self.assertEqual(stmt.value.keywords, [], shown)
-            lines.append(ast.literal_eval(stmt.value.args[0]))
-        self.assertEqual(self.CANNED.split('\n\n', 1)[1],
-                         '\n'.join(lines) + '\n')
-
-
-@needs_clone
-class WrapperMeasuredOrder(unittest.TestCase):
+class WrapperMeasuredOrder(_CodeNotComparedAndNoDeletedStep,
+                           unittest.TestCase):
     """--old-order and --new-order on RHEL8 -> RHEL9: step 11 runs, and the
     summary names what each machine's own glibc says changed.
 
@@ -2200,7 +1712,7 @@ class WrapperMeasuredOrder(unittest.TestCase):
         self.assertLess(summary.index('-- Reindex:'), summary.index(REMOVED))
         self.assertLess(summary.index(REMOVED), summary.index(MEASURED))
         self.assertLess(summary.index(MEASURED),
-                        summary.index('-- Needs an empirical test'))
+                        summary.index('-- Distro patches, steps 6 and 7'))
         self.assertNotIn(MEASURED_NOT_RUN, summary)
 
     def test_reindex_says_where_the_measured_answer_is(self):
@@ -2507,8 +2019,6 @@ def build_of(measurement):
         return json.load(f)['glibc_build']
 
 
-ELLIPSIS_SIDE_NOT_RUN = "-- Node's own locale data, ellipsis scan: NOT RUN"
-ELLIPSIS_BOTH_NOT_RUN = "-- Node's own ellipsis scan: NOT RUN"
 COULD_NOT_COMPARE_NODES = 'error: step 11 could not compare the measurements in'
 
 
@@ -2584,11 +2094,14 @@ class WrapperNodePatchedInsideCollate(unittest.TestCase):
 
 
 @needs_clone
-class WrapperNodeFiles(unittest.TestCase):
+class WrapperNodeFiles(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
     """--old-node and --new-node on RHEL8 -> RHEL9 stand for the six options:
     the same files given as --*-locales-dir, --*-build-id and --*-order give
     the same run, line for line. Freezes what each node file is laid out as,
     side by side."""
+
+    # Two runs write to one folder.
+    FILES_ARE_THIS_RUNS = False
 
     @classmethod
     def setUpClass(cls):
@@ -2663,18 +2176,18 @@ class WrapperNodeFiles(unittest.TestCase):
 
     def test_every_section_ran(self):
         self.assertEqual(banners(self.out), {
-            'DISTRO CHECK': 2, 'NODE TO NODE': 1, 'NODE ELLIPSIS': 2,
+            'DISTRO CHECK': 2, 'NODE TO NODE': 1, 'NODE ELLIPSIS': 0,
             'MEASURED ORDER': 1})
         self.assertIn(f"== STEP 8  NODE TO NODE  does {build_of(RHEL8)}'s "
                       f"collation data differ from {build_of(RHEL9)}'s?",
                       self.out)
 
     def test_steps_6_to_11_carry_their_numbers(self):
-        """The numbers the docs use: 6 and 7 one side each, 8 both, 9 and
-        10 one side each, 11 the measured order."""
+        """The numbers the docs use: 6 and 7 one side each, 8 both, 11
+        the measured order. 9 and 10 were deleted in step 9.3 and their
+        numbers are not reused."""
         self.assertEqual(numbered(self.out), [
             (6, 'DISTRO CHECK'), (7, 'DISTRO CHECK'), (8, 'NODE TO NODE'),
-            (9, 'NODE ELLIPSIS'), (10, 'NODE ELLIPSIS'),
             (11, 'MEASURED ORDER')])
 
     def test_the_summary_names_the_fourteen_locales(self):
@@ -2715,7 +2228,7 @@ class WrapperNodeFiles(unittest.TestCase):
         # An empty search over the wrong directory would pass, so the files
         # that printed the advice must be among those read.
         self.assertTrue({'audit.sh', 'diff_distro_locales.py',
-                         'diff_node_locales.py', 'flag_algorithmic_ranges.py'}
+                         'diff_node_locales.py'}
                         <= {os.path.basename(path) for path in code})
         hits = []
         for path in code:
@@ -2768,32 +2281,16 @@ class NodeFileWithoutSources:
         builds = {'old': build_of(RHEL8), 'new': build_of(RHEL9)}
         have = 'new' if self.BARE == 'old' else 'old'
         self.assertEqual(banners(self.out), {
-            'DISTRO CHECK': 1, 'NODE TO NODE': 0, 'NODE ELLIPSIS': 1,
+            'DISTRO CHECK': 1, 'NODE TO NODE': 0, 'NODE ELLIPSIS': 0,
             'MEASURED ORDER': 1})
         self.assertIn(f"  DISTRO CHECK  do {builds[have]}'s", self.out)
-        self.assertIn(f"  NODE ELLIPSIS  does {builds[have]}'s", self.out)
 
     def test_the_steps_left_keep_their_numbers(self):
-        """A side left out takes its numbers with it: the new side alone is
-        still 7 and 10, never renumbered to 6 and 9."""
-        distro, ellipsis = (6, 9) if self.BARE == 'new' else (7, 10)
+        """A side left out takes its number with it: the new side alone is
+        still 7, never renumbered to 6."""
+        distro = 6 if self.BARE == 'new' else 7
         self.assertEqual(numbered(self.out), [
-            (distro, 'DISTRO CHECK'), (ellipsis, 'NODE ELLIPSIS'),
-            (11, 'MEASURED ORDER')])
-
-    def test_the_byte_order_note_names_the_side_not_scanned(self):
-        """Review of backlog 13.7: the side whose scan did not run gets a
-        line in the step-5 block too, rather than leaving that list to read
-        as complete."""
-        self.assertEqual(self.rc, 0, self.out[-2000:])
-        builds = {'old': build_of(RHEL8), 'new': build_of(RHEL9)}
-        n = 9 if self.BARE == 'old' else 10
-        body = ' '.join(summary_block(self.out, '-- Needs an empirical test: '
-                                                'step 5 found 29 substantive '
-                                                'hunk(s),'))
-        self.assertIn(f'Step {n} did not run on {builds[self.BARE]}, so '
-                      f'whether that machine builds a locale in byte order is '
-                      f'NOT KNOWN.', body)
+            (distro, 'DISTRO CHECK'), (11, 'MEASURED ORDER')])
 
     def test_the_distro_patch_block_says_which_file_and_why(self):
         builds = {'old': (build_of(RHEL8), OLD), 'new': (build_of(RHEL9), MID)}
@@ -2838,14 +2335,6 @@ class NodeFileWithoutSources:
             "of it is under '-- Measured order'. PostgreSQL reports "
             "collversion as NULL for every C.* collation, so no mismatch can "
             "ever fire. Then run sql/c_utf8_probe.sql on both nodes.")
-
-    def test_the_ellipsis_scan_says_which_file_and_why(self):
-        self.assertEqual(
-            section_body(self.summary, ELLIPSIS_SIDE_NOT_RUN),
-            f"{no_sources_text(self.bare)} So nothing above scans the "
-            f"{self.BARE} node's own locale data for ellipsis ranges. The "
-            "other node's scan does not answer for it, because each node has "
-            "its own locales.")
 
     def test_no_block_asks_for_the_options_the_files_replace(self):
         self.assertNotIn('Pass --', flat(self.summary))
@@ -3070,13 +2559,6 @@ class WrapperNodeFilesWithoutSources(unittest.TestCase):
             f'file at {OLD} is gone at {MID}')
         self.assertTrue(section_body(self.summary, NODE_TO_NODE_NOT_RUN)
                         .startswith(self.both + ' So nothing above compared'))
-        self.assertEqual(
-            section_body(self.summary, ELLIPSIS_BOTH_NOT_RUN),
-            f"{self.both} Step 4 above scanned the TAG, and a tag holds at "
-            "most upstream's C. The distros this audit targets ship their own "
-            "C.UTF-8, so if step 4 named C at all, that verdict is evidence "
-            "about upstream's file and none about either node's. Nothing "
-            "above says how either node's own C.UTF-8 defines its order.")
         self.assertNotIn('Pass --', flat(self.summary))
 
 

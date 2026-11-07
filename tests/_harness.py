@@ -141,8 +141,8 @@ _SKIP_NO_FLOOR_TAGS = (
 def fill_reader_cache():
     """Compute, with every processor, the localedef runs most of the suite
     asks scripts/reader_cache.py for: every locale of the five tags, and of
-    OLD and MID read as RHEL 9 reads them (codepoint_collation is a keyword
-    there), and what step 2 asks over the three fixture builds of
+    MID read as RHEL 9 reads it (codepoint_collation is a keyword there),
+    and what step 2 asks over the three fixture builds of
     tests/build_sources/.
     Most trees the tests build are one of these with a file or two changed,
     so after this they find nearly every run kept. Without it, the classes
@@ -173,13 +173,11 @@ def fill_reader_cache():
     # (step 2 reads glibc_tree.compare_rules), and its tests build trees of
     # their own. Filled, it cost up to 602 s of one processor whenever
     # glibc_tree.py or glibc_locale_data.py changed (measured 2026-11-07).
-    # OLD as RHEL 9 reads it: the tree test_wrapper.WrapperNodesOnOneBuild
-    # reads, with its own C (two machines on one el9 build). Left to that
-    # class, one processor, it ran past the 600 s limit on GitHub (PR #117).
-    if has_tags(OLD):
-        old9 = glibc_tree.build_at(GLIBC_CLONE, OLD, '.el9')
-        if not kept(OLD, old9):
-            glibc_tree.Tree.at_tag(GLIBC_CLONE, OLD, old9)
+    # OLD as RHEL 9 reads it was filled here for
+    # test_wrapper.WrapperNodesOnOneBuild (PR #117), which step 9.3 deleted
+    # with steps 9 and 10; no other test gives OLD's files an el9 build.
+    # MID as RHEL 9 reads it: the machines' folders the wrapper tests make
+    # from MID's files with an el9 build id (WrapperNodeToNode, step 8).
     if has_tags(MID):
         rhel9 = glibc_tree.build_at(GLIBC_CLONE, MID, '.el9')
         if not kept(MID, rhel9):
@@ -327,10 +325,10 @@ def run_step(script, *args, out_dir=None):
     """Run one audit script as a subprocess. Returns (exit_code, stdout+stderr).
 
     Memoised per (script, args, out_dir): the same step is asserted on from
-    several tests, and step 5 takes ~3.5s a call. Caching turns the suite from
-    ~40s into ~10s without any test losing its independence -- these scripts
-    are read-only against a fixed tag, so a second run cannot print anything
-    different.
+    several tests, and a step can take seconds a call. Caching turns the suite
+    from ~40s into ~10s without any test losing its independence -- these
+    scripts are read-only against a fixed tag, so a second run cannot print
+    anything different.
 
     Note that a cached call does NOT repeat the step's side effects. Step 2
     writes its locale list to out_dir (for audit.sh to read), so a test that
@@ -419,22 +417,21 @@ def flat(text):
     return ' '.join(text.split())
 
 
-def default_weight_section(out):
-    """(count, [names]) from step 4's default-weight section.
+# A step deleted in branch 9 (3 in step 9.2; 4, 5, 9 and 10 in step 9.3)
+# named in text the tool prints or writes, in any of the spellings the
+# deleted texts used: "step 4", "Steps 1 to 5", "steps 2 and 5",
+# "steps 9/10", "Steps 1-5", "steps 6 to 10". "step 9.3" is a step of
+# the plan, not of the run, and does not count. And the two scripts of
+# steps 4, 5, 9 and 10 by name.
+DELETED_STEP = re.compile(
+    r'\b[Ss]teps?\s+(?:\d+\s*(?:,|and|to|-|/)\s*)*(?:3|4|5|9|10)\b(?!\.\d)'
+    r'|flag_algorithmic_ranges|diff_collation_code')
 
-    Raises when the section is missing, because "no locale depends only on the
-    default weight" and "the section was never printed" are different facts.
-    The names line carries the first twelve; a count above that comes back
-    with the names it printed, and the caller decides what it can compare.
-    """
-    m = re.search(r"^Additionally exposed through localedef's default weight: "
-                  r"(\d+)\n {6}(.+)$", out, re.M)
-    if not m:
-        raise ValueError(f"no default-weight section in output:\n{out[:800]}")
-    names = m.group(2).split(', ')
-    if names[-1] == '...':
-        names = names[:-1]
-    return int(m.group(1)), names
+
+def deleted_steps_named(text):
+    """Every place `text`, whitespace collapsed, names a deleted step or
+    its script (DELETED_STEP)."""
+    return [m.group(0) for m in DELETED_STEP.finditer(flat(text))]
 
 
 class Step2Report:

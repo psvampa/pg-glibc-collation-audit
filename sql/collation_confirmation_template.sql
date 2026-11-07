@@ -5,9 +5,10 @@
 -- Run this SAME script on both nodes (old glibc / new glibc), then diff the
 -- two outputs with `diff`.
 --
--- Replace <LOCALE>/<value*> below with the locale(s) flagged by the audit and
--- with strings known (the characters step 2 names, and step 4's ranges)
--- to hit the specific rule that changed.
+-- Replace <LOCALE>/<value*> below with the locale(s) to run it for
+-- (docs/confirming-on-a-real-system.md, "Which locales to run it for") and
+-- with strings known (the characters step 2 or step 11 names) to hit the
+-- specific rule that changed.
 --
 -- Notes before you run it:
 --   * It DROPS AND RECREATES a table named collation_test in the current
@@ -34,8 +35,8 @@
 --     pg_collation_actual_version() exists since PG 10 and reports a libc
 --     version from 13 on.
 --   * Use the names docs/confirming-on-a-real-system.md says to run it for
---     ("Which locales to run it for"). The Reindex list and step 4's list
---     hold locales, not spellings (sv_SE, not sv_SE.utf8 or sv_SE.iso885915),
+--     ("Which locales to run it for"). The Reindex list holds locales,
+--     not spellings (sv_SE, not sv_SE.utf8 or sv_SE.iso885915),
 --     plus the aliases glibc's locale.alias gives them (swedish). The queries
 --     below read each collation's locale from collcollate, so every spelling
 --     and every encoding of one locale counts as that locale. Check
@@ -95,8 +96,8 @@ WHERE d.datname = current_database();
 -- the locale name without the part from the dot up to any @
 -- (localedata/Makefile builds every locale from that file). sv_SE.UTF-8,
 -- sv_SE.utf8 and sv_SE.iso885915 are all sv_SE. Compare it with the Reindex
--- list and step 4's list, which hold locales and the aliases glibc gives them
--- (swedish), not spellings. It is read from collcollate and datcollate, never
+-- list, which holds locales and the aliases glibc gives them (swedish), not
+-- spellings. It is read from collcollate and datcollate, never
 -- from collname. "sv_SE" is three collations, one per encoding, each loading
 -- a different locale name. The dot is written [.] and not with a backslash,
 -- which a server with standard_conforming_strings off reads as an escape.

@@ -23,25 +23,25 @@ psql -f sql/collation_confirmation_template.sql   # edit placeholders first
 
 ## Which locales to run it for
 
-Every locale step 2 lists for Reindex, and every locale step 4 flagged that
-step 5 does not [clear](limitations.md#step-5-reports-it-does-not-decide),
-whether or not step 2 lists it. When step 5 does not clear the code, add the
-locales step 4 leaves out as built in byte order, which the summary names. With
-command 1.b, add every locale steps 6 to 8 list, every locale step 11 reports
-as changed, every one it reports as not known to be unchanged, and every one it
-names in a line that begins "!! NOT checked whether", "!! Measured in part"
-or "!! Not compared by their sort tables". The lines that begin with
-`upper()`, `!! upper()`, `Character rules` or `!! Character rules`, and those
-on the decimals of `money`, are not about sort order, and the template does
-not confirm them. Nor does it confirm the order
-of the locales named in the line that begins "!! Not measured in a database of
-another encoding", even when step 11 reports them as changed
-([why](limitations.md#what-step-11-does-not-see)). Their UTF-8
-forms, such as `th_TH.utf8`, still go through it as above.
+Every locale step 2 lists for Reindex. That is not every locale whose order
+can change: no step compares `localedef`'s or `strcoll`'s
+[code](limitations.md#no-step-compares-localedefs-or-strcolls-code), and
+`ko_KR` changed that way between RHEL8 and RHEL9 with its rules the same.
+Command 1.b measures every locale on both machines; without it, also run the
+template for the locales your databases use. With command 1.b, add every
+locale steps 6 to 8 list, every locale step 11 reports as changed, every one
+it reports as not known to be unchanged, and every one it names in a line that
+begins "!! NOT checked whether", "!! Measured in part" or "!! Not compared by
+their sort tables". The lines that begin with `upper()`, `!! upper()`,
+`Character rules` or `!! Character rules`, and those on the decimals of
+`money`, are not about sort order, and the template does not confirm them. Nor
+does it confirm the order of the locales named in the line that begins "!! Not
+measured in a database of another encoding", even when step 11 reports them as
+changed ([why](limitations.md#what-step-11-does-not-see)). Their UTF-8 forms,
+such as `th_TH.utf8`, still go through it as above.
 
-Steps 9 and 10, in command 1.b, run step 4 again on each machine's own files,
-so the same rule holds for every locale they flag. They list `C.UTF-8` by its
-source name, `C`, and step 11 lists it as `C.utf8`. Whichever step names it,
+Steps 6 to 8, in command 1.b, list `C.UTF-8` by its source name, `C`, and
+step 11 lists it as `C.utf8`. Whichever step names it,
 [the probe](#the-cutf-8-probe) measures it instead of the template.
 
 ## Choosing the three values
@@ -83,8 +83,8 @@ failure this step exists to avoid. The characters, and what they print on each
 build, are in
 [results.md](results.md#the-ko_kr-mechanism-and-its-minimal-test-case).
 
-For a locale that only steps 4, 9 or 10 flagged, where step 11 names no
-characters, read its source and the files it copies. Two kinds of character
+For a locale no step names characters for, read its source and the files it
+copies. Two kinds of character
 can move there with no file changing: one inside an
 [ellipsis range](glossary.md), best taken at the range's boundary, and one the
 files do not list, which takes `localedef`'s default weight. Put one of each
@@ -100,9 +100,9 @@ Each of these makes a comparison agree with itself while proving nothing.
 Check `locale -a` first. If a locale is not generated, `sort` silently falls
 back to `C`, and two machines both missing it agree with each other
 perfectly. Check the exact name the test runs under, such as
-`sv_SE.utf8`. The Reindex list and step 4's list name [locales, not
-spellings](glossary.md). A name in `locale -a` belongs to a list when, without
-the part from the dot up to any `@`, it is one of that list's names
+`sv_SE.utf8`. The Reindex list names [locales, not
+spellings](glossary.md). A name in `locale -a` belongs to the list when, without
+the part from the dot up to any `@`, it is one of its names
 (`sv_SE.utf8` and `sv_SE.iso885915` both become `sv_SE`).
 
 Step 11, in command 1.b, catches half of this. It names every locale the old
@@ -154,7 +154,7 @@ Three things make it unlike the template.
   `LC_ALL=C` means the locale was not applied and the comparison proves
   nothing. For `C.UTF-8`, agreement with byte order is the fix. Two
   contradictory rules in one file get read in the wrong order.
-- **It is run even when the audit flagged nothing**, because steps 1 to 5
+- **It is run even when the audit flagged nothing**, because steps 1 and 2
   read source files and never measure how your machine sorts `C.UTF-8`.
 
 The probe refuses to run if `C.utf8` is not in `pg_collation`.

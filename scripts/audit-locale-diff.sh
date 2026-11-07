@@ -36,8 +36,8 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 # without the architecture (glibc-2.34-283.el9_8) is fetched, rebuilt from
 # its source RPM and made a commit of the clone again, and read by that
 # commit, never by a name. It also does what this script used to do here:
-# clone glibc when it is not there (full history, blobs on demand: step 5
-# asks `git log` about paths absent at both refs), fetch tags once when a
+# clone glibc when it is not there (full history, blobs on demand: step 2
+# asks git which tag holds a commit), fetch tags once when a
 # tag is missing, refuse a reversed pair unless --allow-reverse, print the
 # provenance -- the clone is a third-party mirror and a tag is a mutable
 # pointer -- and hold both sides to the corpus floor, so that an empty diff

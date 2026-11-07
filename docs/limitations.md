@@ -7,7 +7,7 @@ something it cannot see has changed.
 2. [Upstream tags are not your distro's glibc](#upstream-tags-are-not-your-distros-glibc)
 3. [Below glibc 2.24 the method rests on one measured pair](#below-glibc-224-the-method-rests-on-one-measured-pair)
 4. [A copied folder's character sets are not compared](#a-copied-folders-character-sets-are-not-compared)
-5. [Step 5 reports, it does not decide](#step-5-reports-it-does-not-decide)
+5. [No step compares localedef's or strcoll's code](#no-step-compares-localedefs-or-strcolls-code)
 6. [What step 11 does not see](#what-step-11-does-not-see)
 7. [`LC_CTYPE` is compared by step 11 alone](#lc_ctype-is-compared-by-step-11-alone)
 
@@ -50,10 +50,9 @@ builds".
 Give `audit.sh` one file from each machine and it reads the build each
 file names the same way, unless that build cannot be read, which the run
 says; each side is also checked against the version its distro started
-from, when its file holds the locale sources. What no file comparison of
-two tags reaches is a backported change to glibc's *code*, because the code
-is read between the two tags and nowhere else; reading builds reaches their
-code under `locale/` (above).
+from, when its file holds the locale sources. No file comparison reaches a
+backported change to glibc's *code*, between two tags or two builds
+([below](#no-step-compares-localedefs-or-strcolls-code)).
 
 Step 11 reaches it, because it measures the glibc actually installed, patches
 and all. For
@@ -90,20 +89,23 @@ character set, can move them with no rule changing. Steps 6 to 8 compare
 what a machine's own transliterations build from its file, and not from a
 copied folder.
 
-## Step 5 reports, it does not decide
+## No step compares localedef's or strcoll's code
 
-Step 5 shows you the changes to the C code that computes sort weights. It
-cannot tell a change that moves an order from one that moves nothing, so
-somebody has to read them. This is the one part of the method that is not
-mechanical.
+Step 2 compares the rules `localedef` reads, every `copy` followed. What
+`localedef` compiles them into, and how `strcoll` walks the result, is code,
+and no step compares it: not between two tags, not between two builds, and
+not a build's own patches to it. Step 1 says so on every run.
 
-If nobody on hand will read C, treat every locale step 4 flagged, and every
-one it leaves out as built in byte order, as unresolved and measure them
-instead. Step 11, in command 1.b, measures every locale it can
-on both machines, and
+That code can change an order with every locale file the same. Bug 22668,
+fixed in glibc 2.34, changed how `localedef` expands an ellipsis range, and
+`ko_KR` sorts differently between RHEL8 and RHEL9 with its file unchanged in
+both tags. Step 2 finds its rules the same, and without the machines' files
+nothing in the run names it.
+
+Step 11, in command 1.b, measures every locale it can on both machines, which
+is what that code does, and
 [confirming on the machines](confirming-on-a-real-system.md) measures inside
-PostgreSQL. Either path needs no source reading and is the stronger evidence
-anyway.
+PostgreSQL.
 
 ## What step 11 does not see
 
