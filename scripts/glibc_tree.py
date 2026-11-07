@@ -24,13 +24,14 @@ Steps 1 to 4 and 9/10 read this. Steps 6 to 8, and step 2's
 lc_collate_unread check and the files its check of character sets and
 transliterations (collation_keys) reads, still read with their own readers.
 """
+import collections
+import difflib
 import hashlib
 import json
 import operator
 import os
 import re
 
-import diff_distro_locales as dd
 import glibc_locale_data as g
 import glibc_reader as gr
 import reader_cache as rc
@@ -122,6 +123,7 @@ class Tree(object):
         self.build = build
         self._files = files
         self._decode = decode
+        self._cache_dir = cache_dir
         self._unresolved = None
         self._runs = {_name(k): v for k, v in rc.tree_runs(
             files, build, cache_dir).items()}
@@ -227,17 +229,17 @@ class Tree(object):
             if fatal is not None:
                 kind, what = fatal[0], fatal[1]
                 if kind == 'missing':
-                    file = '?' if what is None else dd.shown(_name(what))
+                    file = '?' if what is None else g.shown(_name(what))
                     out[name] = f"localedef cannot open {file}"
                 else:
                     out[name] = f"localedef stops ({kind})"
             elif unsettled:
                 f, line, why = unsettled[0]
-                out[name] = f"{dd.shown(f)}:{line}: {why}"
+                out[name] = f"{g.shown(f)}:{line}: {why}"
             elif cut:
                 f, line = cut[0]
                 out[name] = (f"localedef stops reading "
-                             f"{dd.shown(_name(f))} at line {line}, before "
+                             f"{g.shown(_name(f))} at line {line}, before "
                              f"the end of the file")
             elif collate is None and self.defines(name):
                 out[name] = "localedef stores no LC_COLLATE for it"
@@ -481,10 +483,10 @@ def _sources_hash(paths):
 
 # What _facts computes is kept under the hash of the code that computes it,
 # so a change to that code starts it from nothing as a change to the reader
-# does: this file, and diff_distro_locales.py, whose shown() writes the
-# names in the reasons Tree.unresolved gives and _facts keeps as text.
+# does: this file, and glibc_locale_data.py, whose shown() writes the names
+# in the reasons Tree.unresolved gives and _facts keeps as text.
 # .github/workflows/tests.yml keys its cache on the same files.
-_SELF_SOURCES = [os.path.abspath(__file__), os.path.abspath(dd.__file__)]
+_SELF_SOURCES = [os.path.abspath(__file__), os.path.abspath(g.__file__)]
 _SELF = _sources_hash(_SELF_SOURCES)
 
 
@@ -602,6 +604,274 @@ def same_run(files, name, b0, b1):
             if fields(x) != fields(y):
                 return False
     return True
+
+
+# -- the rules of each locale on two sides -------------------------------------
+
+SAME, DIFFERS, NOT_COMPARED = 'same', 'differs', 'not compared'
+
+# compare_rules' answer for one name.
+#
+#   state       SAME, DIFFERS or NOT_COMPARED.
+#   why         NOT_COMPARED: why, naming the side or sides. DIFFERS: None
+#               when `chars` holds the characters, else why they are not
+#               known. SAME: None.
+#   chars       DIFFERS: the code points the counted lines name (changed,
+#               or read otherwise; _changed), sorted, or None when they
+#               cannot be told; () when the counted lines name none.
+#               SAME: (). NOT_COMPARED: None.
+#   every_rule  DIFFERS: True when a counted line steers other lines (an
+#               instruction, Facts.instruction, or the first or last line
+#               of an LC_COLLATE section), or a line that did not change
+#               is inside LC_COLLATE on one side only: rules then move on
+#               lines that did not change, and `chars` are not all the
+#               characters that move (backlog 13.36). False otherwise.
+#
+# No field has a default: a Rules made without one fails where it is made.
+Rules = collections.namedtuple('Rules', 'state why chars every_rule')
+
+
+def compare_rules(old_tree, new_tree, aliases):
+    """{name: Rules} for every locale of two sides: every file of either
+    tree, and every alias of either side's locale.alias whose locale has a
+    file on one side at least.
+
+    `aliases` is (old, new), each side's {alias: locale} as
+    glibc_locale_data.locale_aliases reads it (swedish: sv_SE.ISO-8859-1);
+    the locale's file is glibc_locale_data.locale_source of it. An alias
+    spelled as its own file's name is that file, and is not listed again.
+    A dict is required for each side: a locale.alias that could not be
+    read is the caller's to refuse, never an empty map, which would drop
+    swedish and read as nothing to compare.
+
+    Each side's rules are the statements its localedef run accepted into
+    the LC_COLLATE it built, following every `copy` (reader_cache.rules):
+    compared without file names or line numbers, so rules that moved to
+    another file the locale copies, or a renamed file, are SAME. What is
+    checked first, and answered NOT_COMPARED, naming the side:
+      - no file for the name on a side, or an alias on one side only, or
+        an alias whose locale has no file on that side;
+      - a run the reader did not settle on either side (Tree.unresolved:
+        localedef does not finish, a place the reader cannot settle, a
+        file cut short, an LC_COLLATE that stores nothing). The reader's
+        doubt is never read past;
+      - an LC_COLLATE stored on one side only: localedef builds rules on
+        one side and none on the other.
+    Two runs that both store no LC_COLLATE are SAME: neither builds rules.
+
+    DIFFERS names the characters on the lines of the files whose
+    LC_COLLATE the run read that changed, or that did not change and the
+    two runs read otherwise (_changed): a line of the old file by what the
+    old run's reader named on it, and a line of the new file by what the
+    new run named (glibc_reader.Run.named_lines, kept as
+    reader_cache.char_maps). A file whose LC_COLLATE only one run read
+    counts whole, on that side. every_rule says when such a line steers
+    others. Not known (chars None, with why) when a counted line is one
+    the reader cannot name, a character map or a statement map is not
+    kept, or no line counts at all.
+
+    Not compared here: the code that compiles and compares the rules
+    (localedef's and strcoll's), and the charmap. glibc_reader reads no
+    charmap file and takes each <U....> as named, so a code point one
+    side's charmap lacks is not seen here; step 2's check of character
+    sets (collation_keys) reads the charmaps."""
+    old_al, new_al = aliases
+    if not isinstance(old_al, dict) or not isinstance(new_al, dict):
+        raise TypeError("compare_rules needs each side's locale.alias as a "
+                        "dict")
+    sides = ((old_tree, old_al, 'old'), (new_tree, new_al, 'new'))
+    out = {}
+    for name in sorted(set(old_tree.names) | set(new_tree.names)):
+        missing = [w for t, _, w in sides if name not in t._runs]
+        if missing:
+            out[name] = Rules(NOT_COMPARED, f"no file {g.shown(name)} on the "
+                              f"{missing[0]} side", None, False)
+        else:
+            out[name] = _compare_one(old_tree, name, new_tree, name)
+    alias_names = set()
+    for tree, al, _ in sides:
+        for a, target in al.items():
+            src = g.locale_source(target)
+            if a != src and a not in out and (src in old_tree._runs
+                                              or src in new_tree._runs):
+                alias_names.add(a)
+    for a in sorted(alias_names):
+        got, why = [], None
+        for tree, al, side in sides:
+            if a not in al:
+                why = f"an alias in the {_other(side)} side's locale.alias only"
+                break
+            src = g.locale_source(al[a])
+            if src not in tree._runs:
+                why = (f"locale.alias names {g.shown(al[a])}, which has no "
+                       f"file on the {side} side")
+                break
+            got.append(src)
+        out[a] = Rules(NOT_COMPARED, why, None, False) if why else \
+            _compare_one(old_tree, got[0], new_tree, got[1])
+    return out
+
+
+def _other(side):
+    return 'new' if side == 'old' else 'old'
+
+
+def _compare_one(old_tree, old_name, new_tree, new_name):
+    doubt = [(side, t.unresolved().get(n)) for t, n, side in (
+        (old_tree, old_name, 'old'), (new_tree, new_name, 'new'))]
+    doubt = [f"{side} side: {why}" for side, why in doubt if why is not None]
+    if doubt:
+        return Rules(NOT_COMPARED, '; '.join(doubt), None, False)
+    oc, nc = old_tree._collate(old_name), new_tree._collate(new_name)
+    if oc is None and nc is None:
+        return Rules(SAME, None, (), False)
+    if oc is None or nc is None:
+        return Rules(NOT_COMPARED, f"LC_COLLATE stored on the "
+                     f"{'new' if oc is None else 'old'} side only", None,
+                     False)
+    if oc[4] == nc[4]:
+        return Rules(SAME, None, (), False)
+    chars, every, why = _changed(old_tree, old_name, new_tree, new_name)
+    return Rules(DIFFERS, why, chars, every)
+
+
+def _read_collate(tree, name):
+    """({file: [(start, end)]} of the LC_COLLATE sections run(name) read
+    for their content, {file: [(first, last)]} of its instructions,
+    {file: map sha1})."""
+    _, reads, _, collate, _, named = tree._runs[name]
+    bounds = {}
+    for fr in reads:
+        for sec in fr[2]:
+            if sec[0] == 'LC_COLLATE' and sec[4]:
+                bounds.setdefault(_name(sec[1]), []).append((sec[2], sec[3]))
+    steer = {f: list(zip(flat[0::2], flat[1::2])) for f, flat in collate[3]}
+    return bounds, steer, dict(named[0])
+
+
+def _line_pairs(old_bytes, new_bytes):
+    """(old lines, new lines, pairs): the lines of each file that changed,
+    numbered from 1, and (old line, new line) of each line that did not.
+    A side that is None counts whole and pairs nothing."""
+    a = old_bytes.split(b'\n') if old_bytes is not None else []
+    b = new_bytes.split(b'\n') if new_bytes is not None else []
+    if old_bytes is None or new_bytes is None:
+        return range(1, len(a) + 1), range(1, len(b) + 1), []
+    old, new, pairs = [], [], []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+            None, a, b, autojunk=False).get_opcodes():
+        if tag == 'equal':
+            pairs.extend(zip(range(i1 + 1, i2 + 1), range(j1 + 1, j2 + 1)))
+        else:
+            old.extend(range(i1 + 1, i2 + 1))
+            new.extend(range(j1 + 1, j2 + 1))
+    return old, new, pairs
+
+
+class _Side(object):
+    """What one run read of each file, line by line: whether a line is in
+    an LC_COLLATE section it read, an instruction or a section's edge, and
+    what the reader named on it."""
+
+    def __init__(self, tree, name):
+        self.tree = tree
+        self.name = name
+        self.bounds, self.steer, self.maps = _read_collate(tree, name)
+        self._got = {}
+        self._lines = {}
+        self.line_maps = dict(tree._collate(name)[5])
+
+    def statements(self, f):
+        """{line: sha1} of the statements glibc accepted in `f` in this
+        run, by the line each starts on (reader_cache.statement_map); {}
+        for a file where none starts; None when the map is not kept."""
+        if f not in self._lines:
+            self._lines[f] = rc.statement_map(
+                self.line_maps[f], self.tree._cache_dir) \
+                if f in self.line_maps else {}
+        return self._lines[f]
+
+    def map(self, f):
+        """The character map of `f` in this run, or None when not kept."""
+        if f not in self._got:
+            self._got[f] = rc.char_map(self.maps[f], self.tree._cache_dir) \
+                if f in self.maps else None
+        return self._got[f]
+
+    def view(self, f, n):
+        """(inside, steers, names) of line `n` of `f`: names is the code
+        points the reader named there, () for none, None when it cannot
+        say or the map is not kept."""
+        inside = any(s <= n and (e is None or n <= e)
+                     for s, e in self.bounds.get(f, ()))
+        if not inside:
+            return False, False, ()
+        steers = any(a <= n <= b for a, b in self.steer.get(f, ())) or any(
+            n in (s, e) for s, e in self.bounds[f])
+        got = self.map(f)
+        if got is None or ('from' in got and n >= got['from']):
+            return True, steers, None
+        return True, steers, got.get(n, ())
+
+
+def _changed(old_tree, old_name, new_tree, new_name):
+    """(chars, every_rule, why) of compare_rules' DIFFERS.
+
+    A line counts when its bytes changed, and also when its bytes did not
+    and the two runs read it otherwise: inside LC_COLLATE on one side only,
+    an instruction or a section's edge on one side only, naming other
+    characters, or starting other accepted statements (every token but its
+    line, as reader_cache.rules compares them, read from each run's
+    statement map). That is the one rule for every way an unchanged line
+    is read otherwise (false-negative-reviewer, step 9.1, rounds 1 and 2):
+    a keyword one build's table has (codepoint_collation in the RHEL 9
+    build and not in glibc-2.34), a byte lr_getc reads otherwise across
+    glibc 2.36, an escape_char or comment_char line above LC_COLLATE that
+    changed. Each counted line's characters are named by the side that
+    reads it; a counted line that steers others, or an unchanged line
+    inside LC_COLLATE on one side only, sets every_rule."""
+    sides = (_Side(old_tree, old_name), _Side(new_tree, new_name))
+    files = sorted(set(sides[0].bounds) | set(sides[1].bounds))
+    found, every, unknown, any_line = set(), False, None, False
+
+    def count(side, f, n):
+        nonlocal every, unknown, any_line
+        inside, steers, names = side.view(f, n)
+        if not inside:
+            return
+        any_line = True
+        every = every or steers
+        if names is None:
+            unknown = unknown or (
+                f"the reader cannot name what line {n} of {g.shown(f)} "
+                f"names, or its character map is not kept")
+            return
+        found.update(names)
+    for f in files:
+        data = [s.tree._files.get(_key(f)) if f in s.bounds else None
+                for s in sides]
+        old_lines, new_lines, pairs = _line_pairs(*data)
+        for side, lines in zip(sides, (old_lines, new_lines)):
+            for n in lines:
+                count(side, f, n)
+        so, sn = sides[0].statements(f), sides[1].statements(f)
+        if pairs and (so is None or sn is None):
+            unknown = unknown or (f"the reader's statement map of "
+                                  f"{g.shown(f)} is not kept")
+            so, sn = so or {}, sn or {}
+        for i, j in pairs:
+            o, n = sides[0].view(f, i), sides[1].view(f, j)
+            if o != n or so.get(i) != sn.get(j):
+                every = every or o[0] != n[0]
+                count(sides[0], f, i)
+                count(sides[1], f, j)
+    if not any_line:
+        unknown = ("no line of LC_COLLATE changed, and none is read "
+                   "otherwise line by line: the same lines are read "
+                   "otherwise as a whole")
+    if unknown:
+        return None, every, unknown
+    return tuple(sorted(found)), every, None
 
 
 # -- what two builds read differently in one tree ------------------------------

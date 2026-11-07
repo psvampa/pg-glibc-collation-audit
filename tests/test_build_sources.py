@@ -1443,13 +1443,44 @@ class VerifiesAgainstTheBinaries(unittest.TestCase):
                 self.assertIn('zstd could not read a payload: broken',
                               str(cm.exception))
 
-    def test_the_cache_key_follows_diff_collation_code(self):
-        other = os.path.join(self.tmp, 'other.py')
-        with open(other, 'w') as fh:
-            fh.write('# another list\n')
-        before = bs._key()
-        with mock.patch.object(bs.dcc, '__file__', other):
-            self.assertNotEqual(bs._key(), before)
+    def test_the_cache_key_follows_the_list_of_strcoll_s_code(self):
+        """The list (ENTRY_POINTS, TIER1, TIER2 and the four wrappers) is
+        in build_sources.py since step 9.1, and the key hashes that file:
+        a kept tree is made again when the list changes, and not when
+        diff_collation_code.py, which branch 9 deletes, does. A key change
+        rebuilds a build already fetched from its kept SRPM and downloads
+        nothing (measured with the network refused: 1.9 s for
+        glibc-2.34-275.el9_8, handoff-9-2026-11-06/paso-9.1); a build
+        looked up in the mirror's metadata again reads primary.xml again
+        once, since the metadata is kept under the key too."""
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-key-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        for name in os.listdir(SCRIPTS_DIR):
+            if name.endswith('.py'):
+                shutil.copy(os.path.join(SCRIPTS_DIR, name), tmp)
+
+        def key():
+            p = subprocess.run(
+                [sys.executable, '-B', '-c', 'import sys; sys.path.insert('
+                 '0, %r); import build_sources; print(build_sources._key())'
+                 % tmp], capture_output=True, timeout=120, check=True)
+            return p.stdout.decode('ascii').strip()
+
+        def edit(name, old, new):
+            path = os.path.join(tmp, name)
+            with open(path) as fh:
+                text = fh.read()
+            self.assertEqual(1, text.count(old), (name, old))
+            with open(path, 'w') as fh:
+                fh.write(text.replace(old, new))
+        base = key()
+        self.assertEqual(bs._key(), base)
+        edit('diff_collation_code.py', 'TIER2 = bs.TIER2\n',
+             'TIER2 = bs.TIER2\n# another line\n')
+        self.assertEqual(base, key())
+        edit('build_sources.py', "    'locale/programs/ld-ctype.c',\n]",
+             "    'locale/programs/ld-ctype.c',\n    'locale/x.c',\n]")
+        self.assertNotEqual(base, key())
 
 
 # -- opening a source RPM ----------------------------------------------------

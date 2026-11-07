@@ -531,7 +531,7 @@ class CorpusFloorIsShared(unittest.TestCase):
         self.assertEqual(readers, {('glibc_locale_data.py', 'below_floor')})
         self.assertEqual(callers, {
             ('glibc_locale_data.py', '_require_corpus'),
-            ('diff_distro_locales.py', 'corpus_problem')})
+            ('glibc_locale_data.py', 'corpus_problem')})
 
     def test_the_floor_follows_the_constant(self):
         for floor in (7, 4321):
@@ -2865,27 +2865,27 @@ class CorpusGuard(unittest.TestCase):
     directory."""
 
     def test_expect_files_mismatch_is_refused(self):
-        self.assertIsNotNone(dd.corpus_problem(350, expect_files=353))
+        self.assertIsNotNone(g.corpus_problem(350, expect_files=353))
 
     def test_a_short_corpus_against_an_upstream_reference_is_refused(self):
-        self.assertIsNotNone(dd.corpus_problem(3, reference=353))
+        self.assertIsNotNone(g.corpus_problem(3, reference=353))
 
     def test_two_equally_truncated_sides_are_still_refused(self):
         """The trap node-to-node adds and node-vs-tag never had: with no
         upstream side there is nothing to take half of, three files intersect
         three files, and every one of them is identical. An absolute floor is
         the only thing standing between that and a flawless clean upgrade."""
-        self.assertIsNone(dd.corpus_problem(3))
-        self.assertIsNotNone(dd.corpus_problem(3, floored=True))
+        self.assertIsNone(g.corpus_problem(3))
+        self.assertIsNotNone(g.corpus_problem(3, floored=True))
 
     def test_a_real_corpus_passes_every_guard(self):
-        self.assertIsNone(dd.corpus_problem(353, expect_files=353,
+        self.assertIsNone(g.corpus_problem(353, expect_files=353,
                                             reference=355,
                                             floored=True))
 
     def test_the_message_says_why_it_refuses(self):
-        for problem in (dd.corpus_problem(3, reference=353),
-                        dd.corpus_problem(3, floored=True)):
+        for problem in (g.corpus_problem(3, reference=353),
+                        g.corpus_problem(3, floored=True)):
             self.assertIn('indistinguishable from a clean run', problem)
 
 

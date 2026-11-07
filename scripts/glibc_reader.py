@@ -27,18 +27,22 @@ It reads the way localedef reads, for one glibc BUILD, in layers:
      outcomes (a file it cannot open, a circular copy, a file copied twice
      into LC_COLLATE).
 
-Inside a section, every statement is read as its first token plus
-the rest of its logical line, which glibc drops with lr_ignore_rest. That is
-what most statement handlers end with, but not all: some leave the rest of
-the line to be read as further statements, and some read past the end of the
-line. Where this reader sees a shape on which that model can differ from the
-handler glibc runs, it says so in Run.unsettled rather than answer as if it
-had read it. In LC_COLLATE it follows collate_read's state as well: a
-statement glibc refuses in the state it comes in changes nothing
-(Collate.refused); a collating-element's `from` string is read translated,
-as collate_read reads it; and the characters each line names are the ones
-in its tokens (Collate.characters), as far as the reader is sure of the
-run (Run.named_lines).
+Inside a section, every statement is read as its first token plus the rest
+of its logical line, as if glibc dropped that rest with lr_ignore_rest.
+Many of glibc's handlers do not drop it. In LC_MONETARY at 2.39 the six
+text fields do (STR_ELEM, ld-monetary.c:596-621), while the two
+one-character fields and the 32 number fields leave the rest of the line
+to be read as further statements (STR_ELEM_WC and INT_ELEM, :630-690).
+There, a section read for another category than its own drops the rest of
+each such line (ignore_content, :634-638 and :676-680). Some handlers read
+past the end of the line. Where this reader sees a shape on which that
+model can differ from the handler glibc runs, it says so in Run.unsettled
+rather than answer as if it had read it. In LC_COLLATE it follows
+collate_read's state as well: a statement glibc refuses in the state it
+comes in changes nothing (Collate.refused); a collating-element's `from`
+string is read translated, as collate_read reads it; and the characters
+each line names are the ones in its tokens (Collate.characters), as far
+as the reader is sure of the run (Run.named_lines).
 
 The token layer is the one backlog 15.0 compared token by token with
 glibc's linereader.c compiled at glibc-2.28, 2.34 and 2.39, on every locale

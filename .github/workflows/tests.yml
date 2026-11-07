@@ -28,12 +28,14 @@ on:
 jobs:
   suite:
     runs-on: ubuntu-latest
-    # 45, not 20 or 30: the first run after a change to the reader computes
-    # its answers from nothing, and a run that times out saves no cache, so
-    # every run after it would start from nothing too. The first run of
-    # #103 was cancelled at 20 minutes; with step 2 reading through the
-    # reader, three such runs took 20 to 26 minutes (backlog 15.2 B3).
-    timeout-minutes: 45
+    # 75, not 20, 30 or 45: the first run after a change to the reader
+    # computes its answers from nothing, and a run that times out saves no
+    # cache, so every run after it would start from nothing too. The first
+    # run of #103 was cancelled at 20 minutes; with step 2 reading through
+    # the reader, three such runs took 20 to 26 minutes (backlog 15.2 B3).
+    # Step 9.1 keeps a sha1 of each line's statements too: its fill from
+    # nothing alone took 42.5 minutes, and the run was cancelled at 45.
+    timeout-minutes: 75
 
     steps:
       - uses: actions/checkout@v4
@@ -90,7 +92,7 @@ jobs:
         # and starts over. The key below says the same, so a run after such
         # a change restores nothing instead of a cache it would throw away.
         # What glibc_tree.py derives from the runs is kept under the hash of
-        # that file and of diff_distro_locales.py, whose shown() writes the
+        # that file and of glibc_locale_data.py, whose shown() writes the
         # names it keeps; the key names them too, and falls back to the runs
         # of the same reader, so after a change to those files alone one run
         # computes it again and saves it, instead of every run computing it
@@ -98,12 +100,13 @@ jobs:
         # what step 2 asks over the fixture builds of tests/build_sources/;
         # the key names those files, the test code that builds them and asks
         # (_harness.py, test_build_sources.py) and the scripts that decide
-        # what step 2 asks of a build, so a change to any of them is saved
+        # what step 2 asks of a build (node_charmaps.py holds part of step
+        # 2's check of character sets), so a change to any of them is saved
         # once instead of computed on every run (#145 changed three of them).
         uses: actions/cache@v4
         with:
           path: scripts/glibc-reader-cache
-          key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}-${{ hashFiles('scripts/glibc_tree.py', 'scripts/diff_distro_locales.py', 'scripts/filter_lc_collate_changes.py', 'scripts/glibc_locale_data.py', 'scripts/build_sources.py', 'tests/_harness.py', 'tests/test_build_sources.py', 'tests/build_sources/**') }}
+          key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}-${{ hashFiles('scripts/glibc_tree.py', 'scripts/filter_lc_collate_changes.py', 'scripts/node_charmaps.py', 'scripts/glibc_locale_data.py', 'scripts/build_sources.py', 'tests/_harness.py', 'tests/test_build_sources.py', 'tests/build_sources/**') }}
           restore-keys: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}
 
       - name: Fill the reader's answers before the suite

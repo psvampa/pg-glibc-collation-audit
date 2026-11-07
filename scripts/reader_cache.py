@@ -25,10 +25,13 @@ Why a kept answer is the answer:
 
 What is kept is run()'s answer without the tokens of each LC_COLLATE
 statement: those are megabytes per locale. The kept collate holds what the
-steps read from them (summary(), below). What each line names, which step
+steps read from them (summary(), below), and a sha1 of the statements glibc
+accepted, so that two sides' rules compare with no statement kept
+(rules()). What each line names, which step
 2 prints under a changed file, is kept apart, once per distinct map,
 named by its sha1 (char_maps): a copy in each run would be 150 MB a
-tree. The answers are
+tree. So are the statements each line starts, as sha1s
+(statement_map), in a directory of their own. The answers are
 written as JSON, not pickle, so a damaged or planted entry can be wrong
 data, never code; only its shape is checked.
 
@@ -39,6 +42,7 @@ and returned all the same.
 """
 import hashlib
 import json
+import operator
 import os
 import re
 import shutil
@@ -55,7 +59,7 @@ _POOL_FROM = 8
 
 
 def _version():
-    h = hashlib.sha1(b'reader_cache 1\0')
+    h = hashlib.sha1(b'reader_cache 2\0')
     for f in ('glibc_reader.py', 'reader_cache.py'):
         with open(os.path.join(_HERE, f), 'rb') as fh:
             h.update(fh.read())
@@ -155,7 +159,8 @@ def _summary(r):
     unsettled  (file, line, why), in order
     collate    None when Run.collate is (no LC_COLLATE stored, a fatal
                run, or one stopped where glibc reads outside an object),
-               else (counts, ranges, codepoint, instructions):
+               else (counts, ranges, codepoint, instructions, rules,
+               lines):
                  counts     (file, how many statements it gave), sorted
                  ranges     (file, line) of every token .., ... or ....
                             in a statement, sorted, each line once: the
@@ -172,6 +177,13 @@ def _summary(r):
                             stretches in every run that reads it made a
                             tree's answers much larger. What step 2 asks
                             of a changed line (backlog 13.36)
+                 rules      rules(): the sha1 of the statements glibc
+                            accepted, without file or line, which
+                            glibc_tree.compare_rules compares between two
+                            sides
+                 lines      (file, sha1) of each file's statement map
+                            (_rules), kept apart as the character maps
+                            are (statement_map)
     meets      (Run.met, Run.words sorted): what another build could read
                differently in this run (glibc_tree.across)
     named      (files, rest): Run.named_lines() as kept. files is (file,
@@ -192,6 +204,7 @@ def _summary(r):
         reads.append((fr.name, tuple(fr.directives), secs, fr.cut))
     files, rest = r.named_lines()
     collate, maps = None, _maps(files)
+    texts = {d: ('chars', text) for d, text in maps.values()}
     if r.collate is not None:
         counts, ranges, codepoint = {}, set(), []
         for fname, line, toks in r.collate.statements:
@@ -202,14 +215,73 @@ def _summary(r):
             if toks and toks[0].tok == 'kw' \
                     and toks[0].kwtok == 'tok_codepoint_collation':
                 codepoint.append((fname, line))
+        sha, lines = _rules(r.collate)
+        texts.update((d, ('lines', text)) for d, text in lines.values())
         collate = (tuple(sorted(counts.items())), tuple(sorted(ranges)),
-                   tuple(codepoint), _instructions(r.collate.instructions))
+                   tuple(codepoint), _instructions(r.collate.instructions),
+                   sha, tuple(sorted((f, d) for f, (d, _) in lines.items())))
     named = (tuple(sorted((f, d) for f, (d, _) in maps.items())), rest)
     return _canon((fatal, tuple(reads), tuple(r.unsettled), collate,
-                   (r.met, tuple(sorted(r.words))), named)), maps
+                   (r.met, tuple(sorted(r.words))), named)), texts
 
 
 _RANGES = frozenset(('ellipsis2', 'ellipsis3', 'ellipsis4'))
+
+
+def rules(collate):
+    """The sha1 of the statements glibc accepted into `collate` (a
+    glibc_reader.Collate), in reading order: every token of each, by every
+    field of glibc_reader.Tok but its line. A statement glibc refused in
+    its state is left out (Collate.refused): it changed nothing. No file
+    name and no line number goes in, so two sides whose LC_COLLATE holds
+    the same statements in the same order give one sha1 though a file was
+    renamed, a line moved or the rules moved to another file that the
+    locale copies (glibc_tree.compare_rules reads it). It says nothing of
+    a run this reader did not settle: a caller asks Tree.unresolved first.
+    Every field holds str, bytes, int, None or a list of tuples of those,
+    so the text hashed is the same in every process: each statement's
+    repr(), which escapes every newline, then a newline. The fields are
+    read from Tok.__slots__, so a field added to Tok is in the sha1 from
+    the start. Hashed one statement at a time, never as one list of them
+    all, which took far more time and memory to fill the cache
+    (handoff-9-2026-11-06/paso-9.1)."""
+    return _rules(collate)[0]
+
+
+def _rules(collate):
+    """(rules(collate), {file: (sha1, text)} of its statement maps): for
+    each file, the lines on which an accepted statement starts, each with
+    the sha1 of those statements, as rules() writes them. A flat JSON
+    list, line then sha1, kept once by the sha1 of its text, as the
+    character maps are (statement_map). glibc_tree.compare_rules compares
+    them for the lines that did not change between two sides: a line
+    whose statements differ was read otherwise there."""
+    h = hashlib.sha1()
+    refused = collate.refused
+    per = {}
+    for i, (fname, line, toks) in enumerate(collate.statements):
+        if i in refused:
+            continue
+        s = repr(tuple(map(_TOK, toks))).encode('utf-8', 'surrogateescape')
+        h.update(s)
+        h.update(b'\n')
+        at = per.setdefault(fname, {})
+        if line not in at:
+            at[line] = hashlib.sha1()
+        at[line].update(s)
+        at[line].update(b'\n')
+    out = {}
+    for fname, at in per.items():
+        flat = []
+        for line in sorted(at):
+            flat += (line, at[line].hexdigest())
+        text = json.dumps(flat, separators=(',', ':'))
+        out[fname] = (hashlib.sha1(text.encode('ascii')).hexdigest(), text)
+    return h.hexdigest(), out
+
+
+_TOK_FIELDS = tuple(f for f in gr.Tok.__slots__ if f != 'line')
+_TOK = operator.attrgetter(*_TOK_FIELDS)
 
 
 def join_spans(spans):
@@ -249,9 +321,10 @@ _WORK = {}
 
 def _one(name):
     """run() of one locale, every name it asked for with what it got, and
-    {sha1: text} of each character map this process has not given back
-    in this _compute (_SENT): a worker returns iso14651_t1_common's once,
-    not once per run."""
+    {sha1: (kind, text)} of each character map ('chars') and statement
+    map ('lines') this process has not given back in this _compute
+    (_SENT): a worker returns iso14651_t1_common's once, not once per
+    run."""
     files, ids, build = _WORK['files'], _WORK['ids'], _WORK['build']
     asked = {}
 
@@ -259,9 +332,9 @@ def _one(name):
         data = files.get(n)
         asked[n] = None if data is None else ids[n]
         return data
-    s, maps = _summary(gr.run(name, resolve, build))
+    s, texts = _summary(gr.run(name, resolve, build))
     new = {}
-    for d, text in maps.values():
+    for d, text in texts.items():
         if d not in _SENT:
             _SENT.add(d)
             new[d] = text
@@ -276,24 +349,28 @@ _MAPS = {}
 _SHA1 = re.compile(r'[0-9a-f]{40}')
 
 
-def _chars_dir(root):
-    return os.path.join(root, VERSION, 'chars')
+def _chars_dir(root, kind='chars'):
+    """Where maps of `kind` are kept: 'chars' for the character maps,
+    'lines' for the statement maps. Two directories, so that neither
+    reader ever opens, and removes as damaged, a map of the other kind."""
+    return os.path.join(root, VERSION, kind)
 
 
 def _keep_maps(root, new, writable):
-    """Keep each map of `new` ({sha1: text}) in this process, and on disk
-    under the reader's version when the directory can be written: written
-    when the file is not there or holds other text, so a damaged map is
-    replaced by the runs that compute it again."""
-    _TEXTS.update(new)
+    """Keep each map of `new` ({sha1: (kind, text)}) in this process, and
+    on disk under the reader's version, in its kind's directory, when the
+    directory can be written: written when the file is not there or holds
+    other text, so a damaged map is replaced by the runs that compute it
+    again."""
+    _TEXTS.update((sha, text) for sha, (_, text) in new.items())
     if not writable or not new:
         return
-    d = _chars_dir(root)
-    try:
-        os.makedirs(d, exist_ok=True)
-    except OSError:
-        return
-    for sha, text in new.items():
+    for sha, (kind, text) in new.items():
+        d = _chars_dir(root, kind)
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            return
         path = os.path.join(d, sha + '.json')
         try:
             with open(path, encoding='ascii') as fh:
@@ -314,14 +391,17 @@ def _keep_maps(root, new, writable):
 
 
 def _maps_kept(s, root):
-    """Is every character map summary `s` names here, in this process or
-    on disk? A run whose map is gone is computed again (tree_runs), never
-    read as one that names no character."""
-    return _kept_shas((sha for _, sha in s[5][0]), root)
+    """Is every character map and statement map summary `s` names here, in
+    this process or on disk? A run whose map is gone is computed again
+    (tree_runs), never read as one that names no character, or no
+    statement."""
+    return _kept_shas((sha for _, sha in s[5][0]), root) and (
+        s[3] is None or _kept_shas((sha for _, sha in s[3][5]), root,
+                                   'lines'))
 
 
-def _kept_shas(shas, root):
-    d = _chars_dir(root)
+def _kept_shas(shas, root, kind='chars'):
+    d = _chars_dir(root, kind)
     return all(sha in _TEXTS or os.path.isfile(os.path.join(d, sha + '.json'))
                for sha in shas)
 
@@ -333,6 +413,51 @@ def maps_kept(shas, cache_dir=None):
     root = cache_dir if cache_dir is not None else os.environ.get(
         'PG_GLIBC_READER_CACHE') or DEFAULT_DIR
     return _kept_shas(shas, root)
+
+
+def statement_map(sha, cache_dir=None):
+    """{line: sha1} of the statement map named `sha` (_rules), or None
+    when it cannot be read whole: not kept, damaged, or another shape. A
+    file that does not read whole is removed, as char_map removes one."""
+    got = _LINES.get(sha)
+    if got is not None:
+        return got
+    if not _SHA1.fullmatch(sha):
+        return None
+    text, path = _TEXTS.get(sha), None
+    if text is None:
+        root = cache_dir if cache_dir is not None else os.environ.get(
+            'PG_GLIBC_READER_CACHE') or DEFAULT_DIR
+        path = os.path.join(_chars_dir(root, 'lines'), sha + '.json')
+        try:
+            with open(path, 'rb') as fh:
+                text = fh.read().decode('latin-1')
+        except OSError:
+            return None
+    out = None
+    if hashlib.sha1(text.encode('latin-1')).hexdigest() == sha:
+        try:
+            flat = json.loads(text)
+        except ValueError:
+            flat = None
+        if isinstance(flat, list) and len(flat) % 2 == 0 and all(
+                isinstance(n, int) and not isinstance(n, bool)
+                and isinstance(d, str) and _SHA1.fullmatch(d)
+                for n, d in zip(flat[0::2], flat[1::2])) \
+                and len(set(flat[0::2])) == len(flat) // 2:
+            out = dict(zip(flat[0::2], flat[1::2]))
+    if out is None:
+        if path is not None:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        return None
+    _LINES[sha] = out
+    return out
+
+
+_LINES = {}
 
 
 def char_map(sha, cache_dir=None):
@@ -496,7 +621,12 @@ def _check(s):
             isinstance(u, tuple) and len(u) == 3 for u in unsettled):
         raise ValueError('bad unsettled')
     if collate is not None and not (
-            isinstance(collate, tuple) and len(collate) == 4
+            isinstance(collate, tuple) and len(collate) == 6
+            and isinstance(collate[4], str) and _SHA1.fullmatch(collate[4])
+            and isinstance(collate[5], tuple) and all(
+                isinstance(x, tuple) and len(x) == 2
+                and isinstance(x[0], str) and isinstance(x[1], str)
+                and _SHA1.fullmatch(x[1]) for x in collate[5])
             and all(isinstance(part, tuple) and all(
                 isinstance(x, tuple) and len(x) == 2
                 and isinstance(x[0], str) and isinstance(x[1], int)
