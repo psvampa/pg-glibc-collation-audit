@@ -108,7 +108,7 @@ Not compared, no file at glibc-2.39-128.el10_2 (1), listed under Removed in the 
    Any index using one of these will fail to sort on the new system at all.
 
 Character sets (localedata/charmaps/): 1 of the 30 that the 492 locale builds
-in SUPPORTED at both builds use differs between
+measured on both machines use differs between
 glibc-2.34-275.el9_8 and
 glibc-2.39-128.el10_2.
 UTF-8: 5954 characters added.
@@ -542,8 +542,8 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
    list (sv_SE.UTF-8, sv_SE.utf8 and sv_SE.iso885915 are all sv_SE). The
    list also holds the aliases glibc's locale.alias gives these locales.
    sql/collation_confirmation_template.sql reads collations the same way.
-     This list is from the builds. What each machine's own glibc says
-     is under '-- Measured order', below.
+     This list is from each machine's own locale sources. What each
+     machine's own glibc says is under '-- Measured order', below.
 
 -- Removed: locale files the old side has and the new side does not
      aa_ER@saaho
