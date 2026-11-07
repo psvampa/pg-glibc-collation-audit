@@ -1650,8 +1650,9 @@ class EveryLinkResolves(unittest.TestCase):
                 named.setdefault(rel, set()).add(
                     os.path.relpath(cand, REPO_ROOT))
         self.assertTrue(named, 'nothing names a file any more: pattern stale')
-        # Each half that names something today; examples/ is read too, but
-        # nothing names a file there as of 2026-09-27.
+        # Each half that names something today; examples/ is named too, by
+        # command 3's readings in examples/ (8.3), and test_confirm_sql
+        # holds those to the files.
         for kind in ('docs/', 'sql/', 'scripts/'):
             self.assertTrue(any(rel.startswith(kind) for rel in named),
                             f'nothing names a file under {kind} any more: '

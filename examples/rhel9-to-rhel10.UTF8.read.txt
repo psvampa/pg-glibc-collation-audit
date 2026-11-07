@@ -1,0 +1,17 @@
+$ python3 scripts/confirm_sql.py read examples/rhel9-to-rhel10.UTF8.sql examples/rhel9-to-rhel10.UTF8.el9.out examples/rhel9-to-rhel10.UTF8.el10.out
+SQL file: examples/rhel9-to-rhel10.UTF8.sql (UTF8 database; glibc-2.34-275.el9_8.x86_64 -> glibc-2.39-128.el10_2.x86_64)
+OLD output: examples/rhel9-to-rhel10.UTF8.el9.out, PostgreSQL 18.6, database encoding UTF8
+NEW output: examples/rhel9-to-rhel10.UTF8.el10.out, PostgreSQL 18.6, database encoding UTF8
+Confirmed in PostgreSQL: 32874 of 32874 tests answer like the old machine in examples/rhel9-to-rhel10.UTF8.el9.out and like the new one in examples/rhel9-to-rhel10.UTF8.el10.out.
+!! examples/rhel9-to-rhel10.UTF8.el9.out: uses a locale name the new machine does not have:
+     collation aa_ER.utf8@saaho: aa_ER.utf8@saaho
+     collation aa_ER@saaho: aa_ER@saaho
+!! This file confirms only the changes it tests; it does not say that anything else is unchanged. Not tested by it:
+     not tested: th_TH.utf8: the pairs that tell letters, accents and case apart are told apart differently themselves, which no test here checks
+     not tested: th_TH.utf8: 1,887 chain(s) of neighbours told apart differently at no level a measured pair compares
+     not tested: th_TH.utf8: 8,364 pair(s) of neighbours the measurement cannot decide
+     not tested: th_TH.utf8: 50,838 sequence(s) its compiled sort table names as changed, which no test here takes one by one
+     not checked in PostgreSQL by this file: aa_ER.utf8@saaho, aa_ER@saaho: it is not on the new machine
+     not checked in PostgreSQL by this file: th_TH, th_TH.tis620, thai: PostgreSQL imports no collation of its encoding, TIS-620
+     not tested: character rules (LC_CTYPE) of 487 more locale(s), not run one by one: step 11 found in each the changes it found in en_US.utf8, which this file tests (the LC_CTYPE group of step 11's characters file names them)
+     not tested: character rules (LC_CTYPE) in a database of any encoding but UTF8: no file tests them; step 11's report says what it found

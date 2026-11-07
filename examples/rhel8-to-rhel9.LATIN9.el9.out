@@ -1,0 +1,12 @@
+pg-glibc-audit confirmation|368b943372242c8fe9be952e60a7e4fe3dbbb39ad41d8221f61987314ec07194|LATIN9
+database encoding|LATIN9
+server|17.11 - Percona Server for PostgreSQL 17.11.1
+collation|sv_FI.iso885915@euro|usable|glibc 2.34
+test|1|sv_FI.iso885915@euro|<|old >, new <|measured on both machines|like the NEW machine
+collation|sv_FI@euro|usable|glibc 2.34
+test|1|sv_FI@euro|<|old >, new <|measured on both machines|like the NEW machine
+collation|sv_SE|usable|glibc 2.34
+test|1|sv_SE|<|old >, new <|measured on both machines|like the NEW machine
+collation|sv_SE.iso885915|usable|glibc 2.34
+test|1|sv_SE.iso885915|<|old >, new <|measured on both machines|like the NEW machine
+end|368b943372242c8fe9be952e60a7e4fe3dbbb39ad41d8221f61987314ec07194|4 tests

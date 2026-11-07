@@ -1,0 +1,13 @@
+$ python3 scripts/confirm_sql.py read examples/rhel8-to-rhel9.LATIN1.sql examples/rhel8-to-rhel9.LATIN1.el8.out examples/rhel8-to-rhel9.LATIN1.el9.out
+SQL file: examples/rhel8-to-rhel9.LATIN1.sql (LATIN1 database; glibc-2.28-251.el8_10.40.x86_64 -> glibc-2.34-275.el9_8.x86_64)
+OLD output: examples/rhel8-to-rhel9.LATIN1.el8.out, PostgreSQL 18.6, database encoding LATIN1
+NEW output: examples/rhel8-to-rhel9.LATIN1.el9.out, PostgreSQL 17.11 - Percona Server for PostgreSQL 17.11.1, database encoding LATIN1
+Confirmed in PostgreSQL: 5 of 5 tests answer like the old machine in examples/rhel8-to-rhel9.LATIN1.el8.out and like the new one in examples/rhel8-to-rhel9.LATIN1.el9.out.
+!! examples/rhel8-to-rhel9.LATIN1.el8.out: uses a locale name the new machine does not have:
+     collation en_US.utf8@ampm: en_US.utf8@ampm
+     collation en_US@ampm: en_US@ampm
+!! This file confirms only the changes it tests; it does not say that anything else is unchanged. Not tested by it:
+     not tested: sv_FI, sv_FI.iso88591, sv_SE, sv_SE.iso88591, swedish: 4 sequence(s) its compiled sort table names as changed, which no test here takes one by one
+     not checked in PostgreSQL by this file: en_US.utf8@ampm, en_US@ampm: it is not on the new machine
+     the locales of other encodings are in the files written beside this one: LATIN9, UTF8
+     not tested: character rules (LC_CTYPE) in a database of any encoding but UTF8: no file tests them; step 11's report says what it found

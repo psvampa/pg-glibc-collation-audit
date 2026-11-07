@@ -45,7 +45,10 @@ characters whose rules (LC_CTYPE) change.
 The SQL files under tests/confirm_sql/ are the ones the comparison writes
 today (WrittenFromTheRecordedMeasurements checks it byte for byte): an
 output names the file it answers by its id, a hash of the file, so a change
-to what the files say needs the outputs recorded again.
+to what the files say needs the outputs recorded again. Four of them, each
+with the two outputs of PostgreSQL 18.6 (UTF8) or of that environment
+(LATIN1, LATIN9) and the reader's reading of the two, are command 3's
+examples in examples/ (TheCommand3Examples).
 
 A refusal is asserted by its message, and every case of a refusal is a
 real output with the one thing the case names changed.
@@ -1182,6 +1185,80 @@ class NullVersion(unittest.TestCase):
         rc, stdout, stderr = read(sql('89', 'UTF8'), out('89', 'UTF8', 'el8'),
                                   out('89', 'UTF8', 'el9'))
         self.assertNotIn('two builds of one version', stdout)
+
+
+# --- the examples of command 3 ----------------------------------------------
+
+EXAMPLES = os.path.join(_harness.REPO_ROOT, 'examples')
+# (pair, encoding, where the old output was taken, where the new one was).
+EXAMPLE_RUNS = (('89', 'UTF8', 'el8', 'el9'), ('89', 'LATIN1', 'el8', 'el9'),
+                ('89', 'LATIN9', 'el8', 'el9'),
+                ('910', 'UTF8', 'el9', 'el10'))
+
+
+class TheCommand3Examples(unittest.TestCase):
+    """examples/ shows command 3 with the SQL files step 11 writes for the
+    two pairs, each beside the old and the new server's output and the
+    reading of the two, the command above what it printed. They are copies:
+    of the files tests/confirm_sql/ records, which
+    WrittenFromTheRecordedMeasurements holds to what the comparison writes
+    today, and of what confirm_sql.py read prints today. When either
+    changes, this fails, instead of keeping an example no run prints."""
+
+    @staticmethod
+    def runs():
+        """[(base name, [SQL, old output, new output])]."""
+        out = []
+        for pair, enc, old, new in EXAMPLE_RUNS:
+            base = f'{PAIRS[pair]}.{enc}'
+            out.append((base, [f'{base}.sql', f'{base}.{old}.out',
+                               f'{base}.{new}.out']))
+        return out
+
+    def test_each_file_is_the_one_recorded(self):
+        for base, names in self.runs():
+            for name in names:
+                with self.subTest(file=name):
+                    with open(os.path.join(EXAMPLES, name), 'rb') as a, \
+                            open(recorded(name), 'rb') as b:
+                        self.assertEqual(a.read(), b.read())
+
+    def test_each_reading_is_what_the_reader_prints_today(self):
+        for base, names in self.runs():
+            args = [f'examples/{x}' for x in names]
+            p = subprocess.run([sys.executable, SCRIPT, 'read', *args],
+                               cwd=_harness.REPO_ROOT, capture_output=True,
+                               text=True)
+            with self.subTest(file=base):
+                self.assertEqual((p.returncode, p.stderr), (0, ''))
+                self.assertIsNotNone(confirmed(p.stdout))
+                with open(os.path.join(EXAMPLES, f'{base}.read.txt'),
+                          encoding='utf-8') as f:
+                    self.assertEqual(
+                        f.read(), '$ python3 scripts/confirm_sql.py read '
+                        + ' '.join(args) + '\n' + p.stdout)
+
+    def test_examples_holds_these_files_and_names_each(self):
+        """No other file named after a pair and a dot beside them (the
+        hand-written rhel8-to-rhel9.sql was one), and examples/README.md
+        links each."""
+        want = {x for base, names in self.runs()
+                for x in names + [f'{base}.read.txt']}
+        got = {x for x in os.listdir(EXAMPLES)
+               if re.fullmatch(r'rhel\d+-to-rhel\d+\..+', x)}
+        self.assertEqual(got, want)
+        # Every SQL file recorded, which holds every file the comparison
+        # writes today (WrittenFromTheRecordedMeasurements), is one of them:
+        # a file of another encoding cannot be written without its example.
+        self.assertEqual(
+            {x[:-len('.gz')] for x in os.listdir(DATA)
+             if x.endswith('.sql.gz')},
+            {x for x in want if x.endswith('.sql')})
+        with open(os.path.join(EXAMPLES, 'README.md'), encoding='utf-8') as f:
+            readme = f.read()
+        for name in sorted(want):
+            with self.subTest(file=name):
+                self.assertIn(f']({name})', readme)
 
 
 if __name__ == '__main__':
