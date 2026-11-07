@@ -108,7 +108,7 @@ class Step1Templates(StepRun):
         count that moved without regenerating it goes red, as the blast
         radius does. Step 1 prints it; step 2 printed it too until it became
         the comparison of rules (9.2). The extended transcript compares each
-        machine's build in steps 1 to 5 (7.6a)."""
+        machine's own files in steps 1 and 2 (7.6a, 9.4a)."""
         label = r'(?m)^Locale files added, modified or deleted: (\d+)$'
         out = self.step('audit-locale-diff.sh', OLD, MID)
         self.assertEqual(re.findall(label, out), ['283'])

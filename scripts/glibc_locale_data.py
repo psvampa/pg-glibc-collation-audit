@@ -24,7 +24,9 @@ corpus are kept for a hand run:
           <old> <new>
       step 1's sides: each a tag of the clone, or a build named as
       glibc-2.34-283.el9_8, fetched and made a commit of the clone
-      (build_sources); checks the order and the floor, prints the
+      (build_sources), or, under audit.sh given each machine's file, made
+      a commit from that file with nothing fetched (machine_side, through
+      MACHINES_ENV); checks the order and the floor, prints the
       provenance, and writes to F the two refs the step reads; under
       audit.sh it also records each build's commit for the steps after
       it (SIDES_ENV)
@@ -34,11 +36,12 @@ corpus are kept for a hand run:
       (without_arch), kind `tag` or `build` (is_build_name); latest-elN is
       a build with a third field `latest`
   python3 glibc_locale_data.py machines --to F <old> <new> <old_build>
-          <new_build>
+          <new_build> <old_folder> <new_folder>
       for audit.sh, given each machine's file: <old_build> and <new_build>
-      are what `rpm -q glibc` printed on each; writes to F, a line each,
-      the side steps 1 and 2 read, its kind and its upstream tag, and
-      prints which each side reads
+      are what `rpm -q glibc` printed on each, each folder that file laid
+      out (whether it holds locales/, else the sources-not-included
+      reason); writes to F, a line each, the side steps 1 and 2 read, its
+      kind and its upstream tag, and prints which each side reads
   python3 glibc_locale_data.py typed-machines <old_build_id> <new_build_id>
       for audit.sh, given two --*-locales-dir: dies when the two typed
       build ids are the other way round (typed_machines_order); prints
@@ -1039,8 +1042,9 @@ _NOTHING_COMPARED_REST = (
     "that nothing was compared. The distro's own "
     "builds are where such a change lives. With each machine's file "
     "(--old-node and --new-node), step 11 measures how each machine "
-    "sorts, and steps 6 to 8 read its locale sources when the file "
-    "holds them; sql/c_utf8_probe.sql checks C.UTF-8 on each "
+    "sorts, and steps 1 and 2 compare the two machines' own locale "
+    "sources and steps 6 to 8 read them, when the files hold them; "
+    "sql/c_utf8_probe.sql checks C.UTF-8 on each "
     "machine. C.UTF-8's order moved in glibc-2.28-93.el8 with the "
     "upstream tag unchanged. See docs/results.md.")
 
@@ -1373,6 +1377,10 @@ def list_tree_ids(repo, tag, extra):
 # against, or None. prov is a build's provenance (build_sources: what was
 # fetched, checked and applied, its tag, its patches to strcoll's code),
 # None on a tag or a machine; no default, so a constructor cannot forget it.
+# A 'build' Side is also made from a machine's own file (machine_side: its
+# commit made from the file, build `<name>.src`, prov naming the machine's
+# folder, `rpm -q` word, measurement sha256, what was skipped and its
+# charmaps; is_machine).
 Side = collections.namedtuple(
     'Side', 'kind ref root build version paths ids skipped prov')
 
@@ -1536,8 +1544,8 @@ def machine_build(words):
 def machine_sides(given, words, no_sources=(None, None)):
     """What steps 1 and 2 read for each side when audit.sh is given each
     machine's file: [(name, kind, tag)], kind 'build' or 'tag', tag the
-    upstream tag of that side, which step 11 reads; and the lines to print,
-    `!!` blocks included.
+    upstream tag of that side, which steps 6, 7 and 11 read; and the lines
+    to print, `!!` blocks included.
 
     `given` are the two sides as typed, `words` what `rpm -q glibc` printed
     on each machine, `no_sources` for each side None when its file holds
@@ -1576,15 +1584,20 @@ def machine_sides(given, words, no_sources=(None, None)):
                 f"given is {typed}: give that build's tag, {tag}, or the "
                 f"build itself.")
         tags.append(tag)
+    import glibc_reader as gr
     unread = []
     for side, typed, b, why in zip(sides, given, builds, no_sources):
         # A side typed as the build itself asks for that build: one that
         # cannot be read is refused, as it is without a machine's file.
-        # Only a side typed as its tag reads the tag in its place.
+        # Only a side typed as its tag reads the tag in its place. A build
+        # of a RHEL major whose keyword tables this tool does not hold
+        # (glibc_reader.RHEL_BUILDS: 8, 9 and 10) is not read as one: its
+        # localedef could read words the tag's tables do not have.
         asked = without_arch(typed) == b
-        if not is_build_name(b):
-            why = ("the name does not read as a RHEL build, whose sources "
-                   "this tool reads")
+        major = (build_name(b) or (None, None, None))[2]
+        if not is_build_name(b) or f'rhel{major}' not in gr.RHEL_BUILDS:
+            why = ("the name does not read as a build of RHEL 8, 9 or 10, "
+                   "the releases whose localedef this tool reads")
         elif why is not None:
             why = f"it holds no locale sources, because {why}"
         else:
@@ -1722,14 +1735,6 @@ def _recorded(repo, name, built):
     and the SRPM's sha256). Dies when the file is missing, does not name
     the build, or names a commit that fails either check."""
     import build_sources as bs
-    path = os.environ[SIDES_ENV]
-    try:
-        with open(path, encoding='utf-8') as fh:
-            lines = fh.read().split('\n')
-    except OSError as e:
-        die(f"cannot read the build {name}: {SIDES_ENV} names {path}, where "
-            f"step 1 of this run records each build's commit, and it cannot "
-            f"be read ({e.strerror}).", 2)
     return _recorded_commit(
         repo, name, bs.commit_message(built),
         f"another build or another SRPM (its message does not name "
@@ -2014,7 +2019,11 @@ def build_side(repo, name, extra=(), make=False):
     Under audit.sh (SIDES_ENV set) a step after step 1 takes the commit
     step 1 made from that file (_recorded) instead of making it again.
     Step 1 passes `make`: it always makes the commit, and then records it
-    (write_recorded), so it never reads a file it has not written."""
+    (write_recorded), so it never reads a file it has not written.
+
+    When MACHINES_ENV names `name`, none of the above: the build is read
+    from the machines' own files (machine_side), nothing is fetched, and
+    the commit leaves locale/ as the tag's, so LINE_READER cannot differ."""
     import build_sources as bs
     parsed = build_name(name)
     folders = machine_folders(name) if parsed else []
@@ -3113,7 +3122,8 @@ def step1_sides(here, old, new, allow_reverse=False):
     pair, print the provenance, hold each side to the floor; and, which the
     bash did not, a `!!` for the sides read as tags (tag_sides_text). A build name
     (is_build_name) is never asked of git: build_side fetches it and makes
-    its commit again. latest-elN is refused (refuse_latest)."""
+    its commit again, or makes it from a machine's own file under audit.sh
+    (machine_side). latest-elN is refused (refuse_latest)."""
     refuse_latest((old, new))
     repo = os.path.join(here, 'glibc')
     if not os.path.isdir(repo):
@@ -3172,8 +3182,9 @@ def step1_sides(here, old, new, allow_reverse=False):
 # side read as a build (tag_sides_text): 'build' (name it), 'node' (the
 # locale folders or the measurements, which a build refuses: pass the
 # machines' files),
-# 'none' (a machine's file named a build this run could not read, and its
-# own `!!` says so). Unset, by hand: 'build'.
+# 'none' (a machine's file holds no locale sources or names a build that is
+# not of RHEL 8, 9 or 10, and its own `!!` says so). Unset, by hand:
+# 'build'.
 TAG_ASK_ENV = 'PG_GLIBC_AUDIT_TAG_ASK'
 
 
@@ -3260,10 +3271,9 @@ def report_machine_provenance(machines):
         if skipped:
             warn(f"{label(sd)}: {len(skipped)} entr"
                  f"{'y' if len(skipped) == 1 else 'ies'} of the machine's "
-                 f"files {'is' if len(skipped) == 1 else 'are'} not a "
-                 f"regular file and {'was' if len(skipped) == 1 else 'were'} "
-                 f"not read, so a locale that is, or copies, one of them is "
-                 f"not compared: "
+                 f"files {'was' if len(skipped) == 1 else 'were'} not read, "
+                 f"so a locale that is, or copies, one of them is not "
+                 f"compared: "
                  + ', '.join(f"{shown(e)} ({why})" for e, why in skipped)
                  + '.', split_words=False)
     warn(MACHINE_NOT_CHECKED, split_words=False)

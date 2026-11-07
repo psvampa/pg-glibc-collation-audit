@@ -19,7 +19,8 @@ nothing is compared and this step says so before anything else: the
 comparison of a tree with itself answers "the same" for every locale.
 
 It also compares, between the two sides, the charmaps the SUPPORTED builds
-use and the collating elements they build out of transliterations
+use (for two machines' own files, the builds measured on each machine) and
+the collating elements they build out of transliterations
 (collation_keys.py); what that check lists goes to Reindex too.
 
 Writes, each named for the pair: step2_changed_collate.<pair>.txt (Reindex:
@@ -33,7 +34,8 @@ Usage:
                                        [--allow-reverse]
   each a glibc tag, or a build named as `rpm -q glibc` names it
   without the architecture (glibc-2.34-283.el9_8),
-  fetched and read by its commit
+  fetched and read by its commit, or, under audit.sh given each machine's
+  file, read from that machine's file (glibc_locale_data.machine_side)
 
 Example:
   python3 filter_lc_collate_changes.py glibc-2.28 glibc-2.34
@@ -350,8 +352,13 @@ def check_charmaps(reads, repo, side_old, side_new, sup, already,
         # Asked when compare needs to know whether the two tags read bytes
         # alike (collation_keys._readers_differ).
         side.ask_utf8 = (lambda tag=side.tag: reads_utf8(repo, tag))
+    # Point 5 (a source no build uses, searched in a changed charmap) only
+    # for builds read from SUPPORTED: a machine's builds are what was
+    # measured on it, and a locale it does not build is not there for a
+    # database to use (collation_keys.compare, search_unbuilt).
     report = ck.compare(side_old, side_new, builds_old, builds_new,
-                        already_listed, read_more, fresh=False)
+                        already_listed, read_more, fresh=False,
+                        search_unbuilt=builds is None)
     print_charmap_report(report, old, new, words or STEP2_WORDS)
     return ck.listed_sources(report)
 
@@ -405,9 +412,21 @@ def machine_builds(repo, sides, aliases):
     return builds, unmapped, None
 
 
-def step2_words(noun):
+def step2_words(noun, machines=False):
     """STEP2_WORDS for two tags, else the same words naming the two sides
-    as `noun` says (glibc_locale_data.pair_noun)."""
+    as `noun` says (glibc_locale_data.pair_noun); for two machines' own
+    files, the builds are the ones measured on them (machine_builds), not
+    SUPPORTED's."""
+    if machines:
+        return STEP2_WORDS._replace(
+            builds="measured on both machines",
+            none_compared="No locale build is measured on both machines "
+                          "with its source file on both, so none was "
+                          "compared.",
+            not_compared="{n} locale build{s} measured on both machines "
+                         "{is_are} not compared: {its_their} source file is "
+                         "not on both.",
+            changed_between="between the machines")
     if noun == 'tags':
         return STEP2_WORDS
     return STEP2_WORDS._replace(**{
@@ -528,7 +547,8 @@ def print_added(added, renamed_from, supported, old_side, old_name,
             f"above, before treating these as out of scope.", '   '))
     else:
         # The old side is the build's own sources, distro patches and all,
-        # verified against its glibc-locale-source.
+        # verified against its glibc-locale-source, or a machine's own
+        # sources as its file holds them (glibc_locale_data.machine_side).
         print(_fill(f"{old_name}'s own locale sources do not have these "
                     f"files, so that build ships none of these locales.",
                     '   '))
@@ -577,8 +597,10 @@ def main(argv):
     ap = argparse.ArgumentParser(
         description="Compare the sort rules localedef builds for every "
                     "locale on the two sides, every copy followed, and the "
-                    "charmaps the SUPPORTED builds use and the collating "
-                    "elements they build out of transliterations.")
+                    "charmaps the SUPPORTED builds use (or, for two "
+                    "machines' own files, the builds measured on each) and "
+                    "the collating elements they build out of "
+                    "transliterations.")
     side_help = ("a glibc tag, or a build named as `rpm -q glibc` names it "
                  "(glibc-2.34-283.el9_8)")
     ap.add_argument('old_tag', help=side_help)
@@ -715,8 +737,8 @@ def _main(opts):
         print_listed(got, listed)
         if unread:
             print()
-            print(_fill(f"Not compared, not a regular file in a machine's "
-                        f"locale sources ({len(unread)}): "
+            print(_fill(f"Not compared, not read among a machine's locale "
+                        f"sources ({len(unread)}): "
                         + ', '.join(f"{g.shown(n)} ({'; '.join(w)})"
                                     for n, w in sorted(unread.items())),
                         '', '  '))
@@ -758,7 +780,8 @@ def _main(opts):
                             [f"{n}: {w}" for n, w in names_])
             keyed = (_charmaps_not_run(why) if why else
                      check_charmaps(charmap_reads, repo, side_old, side_new,
-                                    sup, already, step2_words(noun),
+                                    sup, already,
+                                    step2_words(noun, machines=True),
                                     builds=measured))
         else:
             keyed = check_charmaps(charmap_reads, repo, side_old, side_new,

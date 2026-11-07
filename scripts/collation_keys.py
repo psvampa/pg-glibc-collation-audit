@@ -2693,7 +2693,8 @@ def common_builds(old, new, builds_old, builds_new):
     # entry renamed between the tags (az_AZ.UTF-8 to az_AZ) is one build.
     # An entry that keeps its name and changes charmap is compared old
     # charmap against new. A build at one tag only is searched by point 5,
-    # in step 2 (steps 6 to 8 leave point 5 out, search_unbuilt=False).
+    # in step 2 between tags or builds (steps 6 to 8, and step 2 between two
+    # machines' own files, leave point 5 out, search_unbuilt=False).
     old_by, new_by = {}, {}
     for by, builds in ((old_by, builds_old), (new_by, builds_new)):
         for b in builds:

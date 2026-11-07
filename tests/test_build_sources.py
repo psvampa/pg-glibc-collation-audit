@@ -4043,7 +4043,7 @@ class MachineSides(unittest.TestCase):
         alma = 'glibc-2.39-128.el10_2.alma.1'
         said = self.refused(('glibc-2.34', alma), (W9, alma + '.x86_64'))
         self.assertIn('cannot read the build %s: the name does not read as '
-                      'a RHEL build' % alma, said)
+                      'a build of RHEL 8, 9 or 10' % alma, said)
 
     def test_a_name_that_is_no_rhel_build(self):
         """A build whose name Rocky's would not be (a suffix of another
@@ -4055,6 +4055,25 @@ class MachineSides(unittest.TestCase):
         self.assertEqual([s[1] for s in sides], ['tag', 'tag'])
         self.assertEqual(calls, [])
         self.assertIn(alma, flat('\n'.join(lines)))
+
+    def test_a_major_whose_tables_are_not_held(self):
+        """A RHEL 7 machine (the build reads as one, and glibc-2.17 is a tag
+        of the clone): its localedef's keyword tables are not among those
+        this tool holds (glibc_reader.RHEL_BUILDS), so its sources are not
+        read with the tag's alone, and both sides read their tags with the
+        `!!`; typed as the build itself, it is refused."""
+        el7 = 'glibc-2.17-326.el7_9.3'
+        (sides, lines), calls = self.sides(('glibc-2.17', 'glibc-2.28'),
+                                           (el7 + '.x86_64', W8))
+        self.assertEqual(sides, [('glibc-2.17', 'tag', 'glibc-2.17'),
+                                 ('glibc-2.28', 'tag', 'glibc-2.28')])
+        self.assertEqual(calls, [])
+        self.assertIn("The old machine's file names %s, which this run "
+                      "cannot read: the name does not read as a build of "
+                      "RHEL 8, 9 or 10" % el7, flat('\n'.join(lines)))
+        said = self.refused((el7, 'glibc-2.28'), (el7 + '.x86_64', W8))
+        self.assertIn('cannot read the build %s: the name does not read as '
+                      'a build of RHEL 8, 9 or 10' % el7, said)
 
 
 class WithoutTheArchitecture(unittest.TestCase):
@@ -4247,8 +4266,10 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
                       'and at %s,' % (B40, B275), flat(out))
         self.assertIn('AUDIT SUMMARY  %s -> %s' % (B40, B275), out)
         self.assertIn('C.UTF-8', summary_block(out, REINDEX))
-        self.assertIn('This list is from the builds.',
+        self.assertIn("This list is from each machine's own locale sources.",
                       flat(self.summary('read')))
+        self.assertNotIn('This list is from the builds.',
+                         flat(self.summary('read')))
         # Which locales each machine builds with UTF-8 comes from its
         # measurement, not from the tags' SUPPORTED, which lists no
         # C.UTF-8: the measured C.utf8 build is compared, by its measured
@@ -4262,6 +4283,9 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         self.assertIn('C.UTF-8 12 character(s) named by the lines',
                       flat(step2.split('Rules differ', 1)[1]))
         self.assertIn('C.utf8 (UTF-8): 1546 characters, named in C', step2)
+        # The character set check names where its builds come from.
+        self.assertIn('measured on both machines', flat(step2))
+        self.assertNotIn('in SUPPORTED at both', flat(step2))
         # SUPPORTED's note is not printed of a machine, and a file only the
         # new machine has is spelt as measured there: the measurement
         # lists none of these.

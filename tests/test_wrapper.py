@@ -2255,7 +2255,7 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
     def test_a_link_is_named_not_compared_never_added_or_removed(self):
         out = self.out('link')
         step2 = flat(self.step(out, 2))
-        self.assertIn("Not compared, not a regular file in a machine's locale "
+        self.assertIn("Not compared, not read among a machine's locale "
                       "sources (2): de_IT (symlink on the new machine), "
                       "zz_LINK (symlink on the new machine)", step2)
         listed = re.search(r'Listed for Reindex \(\d+\): ([^.]*?)(?: Not |$)',
@@ -2275,15 +2275,16 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
             gone = f.read()
         self.assertNotIn('de_IT', gone)
         self.assertNotIn('zz_LINK', gone)
+        unread_line = 'Not compared, not read among'
+        self.assertEqual(step2.count(unread_line), 1, step2)
         self.assertNotIn('de_IT', step2.split('Not compared, no file at')[-1]
-                         .split('Not compared, not a regular file')[0])
+                         .split(unread_line)[0])
         self.assertNotIn('zz_LINK', step2.split('Listed for Reindex')[0]
-                         .split('Not compared, not a regular file')[0])
+                         .split(unread_line)[0])
         step1 = flat(self.step(out, 1))
-        self.assertIn("2 entries of the machine's files are not a regular "
-                      "file and were not read, so a locale that is, or "
-                      "copies, one of them is not compared: de_IT (symlink), "
-                      "zz_LINK (symlink).", step1)
+        self.assertIn("2 entries of the machine's files were not read, so a "
+                      "locale that is, or copies, one of them is not "
+                      "compared: de_IT (symlink), zz_LINK (symlink).", step1)
 
     def test_two_builds_of_one_release_with_the_same_sources(self):
         out = self.out('same_sources')
@@ -2302,6 +2303,12 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
                       "and charmaps, so no locale's sort rules can differ "
                       "between them", block)
         self.assertNotIn("means 'nothing was compared'", block)
+        reindex = section_body(summary, '-- Reindex: sort order changes, '
+                                        'confirm then REINDEX')
+        self.assertTrue(reindex.startswith(
+            "none -- the two machines' files hold the same locale sources "
+            "and charmaps (see below)"), reindex)
+        self.assertNotIn('nothing was compared', reindex)
         self.assertNotIn('code under locale/', block)
         self.assertNotIn('cannot read', before)
 

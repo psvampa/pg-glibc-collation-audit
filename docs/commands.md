@@ -54,9 +54,10 @@ that machine. Steps 1 and 2 then read each machine's own locale sources
 and charmaps, which its file holds, as the build `rpm -q glibc` printed on
 that machine, in place of the tag, as in 1.a: the side you give is that
 build or its tag. Nothing is downloaded. When a file holds no locale
-sources, or names a build that is not RHEL's, and you gave its tag, both
-sides read their tags and the run says so before step 1; given as the build
-itself, it is refused, as in 1.a. The two files add the checks below.
+sources, or names a build that is not of RHEL 8, 9 or 10, and you gave its
+tag, both sides read their tags and the run says so before step 1; given as
+the build itself, it is refused, as in 1.a. The two files add the checks
+below.
 
 | The run's step | The question it answers |
 |---|---|
@@ -91,9 +92,9 @@ A file without the locale sources still holds the measurement and the build,
 because the extraction notes why the sources are missing and goes on. Step 11
 runs. Every summary block that needed those sources says `NOT RUN`, or `NOT
 CHECKED`, with the file's reason, such as `/usr/share/i18n/locales is empty`.
-A file without the charmaps is read the same way. Steps 6 to 8 say `NOT RUN`
-for the character sets, and step 11 says it did not check the strings it
-measured against them, each with the reason.
+A file without the charmaps is read the same way. Steps 2 and 6 to 8 say
+`NOT RUN` for the character sets, and step 11 says it did not check the
+strings it measured against them, each with the reason.
 
 **Steps 6 to 8 settle data, not order.** The weights are computed when the
 locale is built, so two machines can hold byte-identical files

@@ -31,7 +31,7 @@ and no warning will reach you.
 Naming the two builds instead of the tags (command 1.a) compares their own
 `C.UTF-8` files (step 2). Its order needs your machines: give `audit.sh`
 one file from each machine, as in command 1.b, and it compares the two
-machines' `C.UTF-8` files (step 8) and measures how each machine sorts it
+machines' `C.UTF-8` files (steps 2 and 8) and measures how each machine sorts it
 (step 11). [`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql) measures the
 order inside PostgreSQL, on the builds you actually run. What the file
 comparison and the probe found is in [results.md](results.md).
@@ -78,9 +78,10 @@ bytes change, or when the character appears or disappears. Step 2 compares,
 between the two glibc versions, the character sets the locales in SUPPORTED
 are built with, and lists the locales whose rules name a character the newer
 version added, removed or gave other bytes. A distro can patch the character
-sets it ships. Given the file from each machine, as in command 1.b, steps 6
-and 7 compare each machine's own with the version its distro started from,
-and step 8 compares the two machines'.
+sets it ships. Given the file from each machine, as in command 1.b, step 2
+compares the two machines' own character sets, for the locales measured on
+them; steps 6 and 7 compare each machine's own with the version its distro
+started from, and step 8 compares the two machines'.
 Given copied folders instead (`--old-locales-dir` and `--new-locales-dir`),
 they are not compared, and those steps say so.
 
