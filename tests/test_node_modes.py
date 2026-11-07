@@ -432,7 +432,7 @@ class NodeChecksCloseOverCopy(NodeCase):
         rc, text = self.node_to_node(old_root, new_root, OLD, MID)
         self.assertEqual(rc, 0, text)
         # or_IN and sv_SE differ; sv_FI and sv_FI@euro copy sv_SE -- the same
-        # answer step 3 gives for this pair, reached from the node side.
+        # answer step 2 gives for this pair, reached from the node side.
         self.assertIn(f'Additionally affected via `copy` inheritance at '
                       f'{MID}: 2 locale(s)', text)
         self.assertIn('via sv_SE: 2 locale(s)', text)
@@ -775,7 +775,7 @@ class DirectoryModeStepFour(NodeCase):
 
     def test_a_truncated_directory_cannot_report_no_ellipsis_locales(self):
         """A node without glibc-locale-source presents an empty directory, and
-        an empty scan prints "steps 1-3 are sufficient"."""
+        an empty scan prints "step 2 is sufficient"."""
         keep = sorted(os.listdir(_tree(MID)))[:3]
         rc, text = run('flag_algorithmic_ranges.py',
                        '--locales-dir', self.node(MID, 'n', keep=keep),
@@ -1110,7 +1110,7 @@ class DirectoryModeStepFour(NodeCase):
     def test_an_absent_copy_target_is_not_cleared_by_an_empty_ellipsis_scan(self):
         """The two reassuring things at once: nothing readable uses an
         ellipsis, and the one file that might have is the one the corpus does
-        not contain. "steps 1-3 are sufficient" must not be what comes out."""
+        not contain. "step 2 is sufficient" must not be what comes out."""
         flat_body = locale_file('order_start forward',
                                 '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
                                 'order_end')
@@ -1123,7 +1123,7 @@ class DirectoryModeStepFour(NodeCase):
                        '--build-id', 'fake', '--supported-tag', MID,
                        out_dir=self.out)
         self.assertEqual(rc, 0, text)
-        self.assertNotIn('steps 1-3 are sufficient', flat(text))
+        self.assertNotIn('step 2 is sufficient', flat(text))
         # Every other locale here takes the default weight (backlog 1.6), so
         # the sentence counts those and the unresolved ones together. Each
         # locale once: one reaching the absent target is in the `!!` block and
@@ -1135,8 +1135,8 @@ class DirectoryModeStepFour(NodeCase):
         default = default_weight_section(text)[0]
         self.assertEqual(default + unresolved, defined)
         self.assertIn(f'No locale uses ellipsis ranges here, but the '
-                      f'{defined} locale(s) above are NOT cleared by steps '
-                      f'1-3.', flat(text))
+                      f'{defined} locale(s) above are NOT cleared by step 2.',
+                      flat(text))
         # Opened at the path the output NAMES, not at one this test knows:
         # announcing a file nobody wrote sends the reader to "No such file",
         # and a test that looks elsewhere cannot tell.
@@ -1174,10 +1174,10 @@ class DirectoryModeStepFour(NodeCase):
                        '--build-id', 'fake', '--supported-tag', MID,
                        out_dir=self.out)
         self.assertEqual(rc, 0, text)
-        self.assertNotIn('steps 1-3 are sufficient', flat(text))
+        self.assertNotIn('step 2 is sufficient', flat(text))
         self.assertIn('Nothing that could be READ here uses an ellipsis range, '
                       'but the 342 locale(s) named above under `!!` were not '
-                      'read the way localedef reads them: steps 1-3 are NOT '
+                      'read the way localedef reads them: step 2 is NOT '
                       'sufficient for those', flat(text))
         self.assertNotIn('default weight', text)
 
@@ -1277,7 +1277,7 @@ class DirectoryModeStepFour(NodeCase):
 
     def test_a_directory_without_any_ellipsis_is_not_sufficient(self):
         """The most reassuring output this step had is "No locale uses
-        ellipsis ranges here; steps 1-3 are sufficient".
+        ellipsis ranges here; step 2 is sufficient".
 
         Since backlog 1.6 this input takes the default-weight path: with no
         ellipsis anywhere and no copy target missing, which is the shape a real
@@ -1294,16 +1294,16 @@ class DirectoryModeStepFour(NodeCase):
                        '--build-id', 'fake.el9',
                        '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 0, text)
-        self.assertNotIn('steps 1-3 are sufficient', flat(text))
+        self.assertNotIn('step 2 is sufficient', flat(text))
         default = default_weight_section(text)[0]
         self.assertEqual(default, int(re.search(
             r'of which (\d+) define LC_COLLATE', text).group(1)) - 1)
         self.assertIn(f'No locale uses ellipsis ranges here, but the {default} '
-                      f'locale(s) above are NOT cleared by steps 1-3.',
+                      f'locale(s) above are NOT cleared by step 2.',
                       flat(text))
 
     def test_an_all_codepoint_directory_is_the_one_clean_result(self):
-        """The only input left that earns "steps 1-3 are sufficient": every
+        """The only input left that earns "step 2 is sufficient": every
         locale declares codepoint_collation, so localedef has no range to
         expand and no default weight to give. No real corpus has this shape,
         so it is injected; without it the branch had no test once the input
@@ -1324,7 +1324,7 @@ class DirectoryModeStepFour(NodeCase):
                        '--build-id', 'fake.el9',
                        '--supported-tag', MID, out_dir=self.out)
         self.assertEqual(rc, 0, text)
-        self.assertIn('No locale uses ellipsis ranges here; steps 1-3 are '
+        self.assertIn('No locale uses ellipsis ranges here; step 2 is '
                       'sufficient.', text)
         self.assertNotIn('default weight', text)
         named = re.search(r'full list \((\d+) name\(s\)\): (\S+)', text)

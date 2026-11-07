@@ -169,19 +169,10 @@ def fill_reader_cache():
         if has_tags(tag) and not kept(tag, glibc_tree.build_at(GLIBC_CLONE,
                                                                tag)):
             glibc_tree.Tree.at_tag(GLIBC_CLONE, tag)
-    # What step 2 asks when a pair crosses glibc 2.36: every file the two
-    # tags' localedef read differently (glibc_tree.across), for the three
-    # such pairs the suite runs. Computed by every class at once, each one
-    # waited on the first and the whole suite took 512 s against 260 s
-    # (backlog 15.2 B3, measured on the Mac with nothing kept).
-    import filter_lc_collate_changes as f
-    for old, new in ((MID, NEW), (NEW, MID), (OLD, NEW)):
-        if not has_tags(old, new):
-            continue
-        builds = glibc_tree.builds_at(GLIBC_CLONE, [old, new])
-        paths, ids = g.list_tree_ids(GLIBC_CLONE, old, [])
-        f.read_across(GLIBC_CLONE, old, (builds[old], builds[new]), paths,
-                      ids)
+    # glibc_tree.across is not filled: since step 9.2 no step asks it
+    # (step 2 reads glibc_tree.compare_rules), and its tests build trees of
+    # their own. Filled, it cost up to 602 s of one processor whenever
+    # glibc_tree.py or glibc_locale_data.py changed (measured 2026-11-07).
     # OLD as RHEL 9 reads it: the tree test_wrapper.WrapperNodesOnOneBuild
     # reads, with its own C (two machines on one el9 build). Left to that
     # class, one processor, it ran past the 600 s limit on GitHub (PR #117).
@@ -258,7 +249,10 @@ def glibc_commit(base, files, tmp):
 def glibc_shaped(root, base=MID):
     """Make `root` a git repository whose first commit sits on `base`, a
     real glibc tag, and holds only what the fixture writes there plus
-    glibc's two keyword tables.
+    glibc's two keyword tables and the tag's intl/locale.alias. Step 2
+    reads the aliases at both sides, and compare_rules leaves out every
+    alias whose locale has no file on either side, which is all of them
+    unless the fixture writes a locale of that name.
 
     For a fabricated history that a step reads with glibc_reader: the step
     refuses a ref git cannot place before or after glibc's lr_getc fix,
@@ -293,7 +287,7 @@ def glibc_shaped(root, base=MID):
     git_('update-ref', 'HEAD', git_('rev-parse', base + '^{commit}'))
     git_('read-tree', '--empty')
     git_('checkout', base, '--', 'locale/programs/locfile-kw.gperf',
-         'locale/programs/charmap-kw.gperf')
+         'locale/programs/charmap-kw.gperf', 'intl/locale.alias')
 
 
 def needs_clone(cls):
@@ -441,6 +435,290 @@ def default_weight_section(out):
     if names[-1] == '...':
         names = names[:-1]
     return int(m.group(1)), names
+
+
+class Step2Report:
+    """What step 2 (filter_lc_collate_changes.py) printed, read strictly.
+
+    totals: (names, same, differ, not compared) from its first lines, or
+      None when it said nothing was compared (nothing holds why);
+    differs: {name: (chars, every)}, chars a list of code points when the
+      line lists them, an int when it counts them and names the file, None
+      when it says which characters is not known, () when it says the
+      lines name none; every is True under "every rule can change";
+    added: {name: what follows its arrow}, the not-compared files only the
+      new side has; removed: {name: its "(renamed to ...)" or ''};
+    listed: {name: why}, the `!!` block of names listed for Reindex;
+    reindex: the names of the "Listed for Reindex" line; unbuilt and
+      not_ascii: the two notes under it, as printed.
+
+    Every count a heading prints must equal the names under it, every line
+    of a block it reads must be one of the block's forms, and the totals
+    must add up: a block it cannot read raises, never reads as empty.
+    """
+
+    def __init__(self, out):
+        self.out = out
+        self.totals = self.nothing = None
+        self.differs, self.added, self.removed = {}, {}, {}
+        self.listed, self.reindex = {}, []
+        self.unbuilt, self.not_ascii = [], []
+        self.reindex_line = False
+        # A blank line ends a block, and so does the next heading: pair_check
+        # prints its `!!` right above the totals, with no blank line. The
+        # next block's indentation is kept.
+        out = re.sub(r'(?m)^(?=The sort rules localedef builds|Rules differ|'
+                     r'Not compared, no file at |!! Not compared, so listed|'
+                     r'Listed for Reindex \()', '\n', out)
+        paras = [p.strip('\n') for p in re.split(r'\n(?:[ \t]*\n)+', out)
+                 if p.strip()]
+        for para in paras:
+            lines = para.split('\n')
+            head = lines[0]
+            if head.startswith('The sort rules localedef builds'):
+                self._totals(para)
+            elif head == 'Rules differ: none.':
+                self._seen('differs')
+            elif head.startswith('Rules differ ('):
+                self._seen('differs')
+                self._differs(lines)
+            elif head.startswith('Not compared, no file at ') and \
+                    head.endswith('listed under Removed in the summary:'):
+                self._seen('removed')
+                self._removed(lines)
+            elif head.startswith('Not compared, no file at '):
+                self._seen('added')
+                self._added(lines)
+            elif head.startswith('!! Not compared, so listed for REINDEX ('):
+                self._seen('listed')
+                self._listed(lines)
+            elif head.startswith('Listed for Reindex ('):
+                self._seen('reindex')
+                self._reindex(lines)
+        # Printed right under pair_check's `!!`, with no blank line between.
+        nothing = re.findall(r'(?m)^Rules: not compared, (.+)$', out)
+        if len(nothing) > 1:
+            raise AssertionError('"Rules: not compared" printed twice')
+        self.nothing = nothing[0] if nothing else None
+        if self.nothing is not None and self.totals is not None:
+            raise AssertionError('step 2 printed its totals and "not '
+                                 'compared"')
+        if self.nothing is None and self.totals is None:
+            raise AssertionError(f'step 2 printed neither its totals nor '
+                                 f'"not compared":\n{out[:1500]}')
+        if self.totals is not None:
+            n, same, differ, nc = self.totals
+            if n != same + differ + nc:
+                raise AssertionError(f'step 2 totals do not add up: '
+                                     f'{self.totals}')
+            if differ != len(self.differs):
+                raise AssertionError(f'{differ} differ and {len(self.differs)}'
+                                     f' named under "Rules differ"')
+            named = len(self.added) + len(self.removed) + len(self.listed)
+            if nc != named:
+                raise AssertionError(f'{nc} not compared and {named} named '
+                                     f'under the not-compared headings')
+            if not self.reindex_line:
+                raise AssertionError('step 2 compared and printed no '
+                                     '"Listed for Reindex" line')
+
+    _once = None
+
+    def _seen(self, block):
+        self._once = self._once or set()
+        if block in self._once:
+            raise AssertionError(f'step 2 printed its {block} block twice')
+        self._once.add(block)
+
+    def _count(self, head):
+        m = re.search(r'\((\d+)\)', head)
+        if not m:
+            raise AssertionError(f'no count in {head!r}')
+        return int(m.group(1))
+
+    def _totals(self, para):
+        m = re.search(r'(\d+) name\(s\), locale files and locale\.alias '
+                      r'aliases: (\d+) the same, (\d+) differ, '
+                      r'(\d+) not compared\.', flat(para))
+        if not m:
+            raise AssertionError(f'unreadable step 2 totals: {para!r}')
+        self.totals = tuple(int(x) for x in m.groups())
+
+    def _differs(self, lines):
+        want = self._count(lines[0])
+        groups, names, desc = [], None, None
+        for line in lines[1:]:
+            if line.startswith('      '):
+                if names is None:
+                    raise AssertionError(f'a description with no names '
+                                         f'above it: {line!r}')
+                desc.append(line.strip())
+            elif line.startswith('  ') and not line.startswith('   '):
+                if desc:
+                    groups.append((names, desc))
+                    names, desc = None, None
+                names = (names or []) + [line.strip()]
+                desc = desc if desc is not None else []
+            else:
+                raise AssertionError(f'unexpected line under Rules differ: '
+                                     f'{line!r}')
+        if names is not None:
+            if not desc:
+                raise AssertionError(f'names with no description: {names}')
+            groups.append((names, desc))
+        for names, desc in groups:
+            text = flat(' '.join(desc))
+            every = False
+            tail = (', so every rule can change')
+            if text.endswith(tail):
+                every = True
+                text = text[:-len(tail)]
+                end = (' a changed line decides how other lines are read or '
+                       'where other rules sort')
+                if not text.endswith(end):
+                    raise AssertionError(f'unreadable every-rule line: '
+                                         f'{text!r}')
+                text = text[:-len(end)].strip()
+            if text.startswith('which characters is not known: '):
+                chars = None
+            elif text == 'the lines that count name no character':
+                chars = ()
+            elif text == '' and every:
+                raise AssertionError('an every-rule line with nothing '
+                                     'about the characters above it')
+            else:
+                m = re.fullmatch(r'(\d+) character\(s\) named by the lines '
+                                 r'that changed or are read otherwise; '
+                                 r'listed in (\S+)', text)
+                if m:
+                    chars = int(m.group(1))
+                else:
+                    m = re.fullmatch(r'characters in the changed rules '
+                                     r'\((\d+)\): (.+)', text)
+                    if not m:
+                        raise AssertionError(f'unreadable characters line: '
+                                             f'{text!r}')
+                    chars = [int(h, 16) for h in
+                             re.findall(r'U\+([0-9A-F]{4,6})', m.group(2))]
+                    if len(chars) != int(m.group(1)):
+                        raise AssertionError(f'says {m.group(1)} characters '
+                                             f'and prints {len(chars)}')
+            for name in ' '.join(names).split(', '):
+                if not name or name in self.differs:
+                    raise AssertionError(f'name {name!r} empty or twice')
+                self.differs[name] = (chars, every)
+        if len(self.differs) != want:
+            raise AssertionError(f'Rules differ ({want}) names '
+                                 f'{len(self.differs)}')
+
+    def _added(self, lines):
+        want = self._count(lines[0])
+        for line in lines[1:]:
+            if line.startswith('   ') and not line.startswith('    '):
+                continue        # the note under the names
+            m = re.fullmatch(r'  (\S+) -> (.+)', line)
+            if not m:
+                raise AssertionError(f'unexpected line under {lines[0]!r}: '
+                                     f'{line!r}')
+            self.added[m.group(1)] = m.group(2)
+        if len(self.added) != want:
+            raise AssertionError(f'{lines[0]!r} names {len(self.added)}')
+
+    def _removed(self, lines):
+        want = self._count(lines[0])
+        for line in lines[1:]:
+            if line.startswith('   ') and not line.startswith('    '):
+                continue
+            m = re.fullmatch(r'  (\S+)( \(renamed to \S+\))?', line)
+            if not m:
+                raise AssertionError(f'unexpected line under {lines[0]!r}: '
+                                     f'{line!r}')
+            self.removed[m.group(1)] = (m.group(2) or '').strip()
+        if len(self.removed) != want:
+            raise AssertionError(f'{lines[0]!r} names {len(self.removed)}')
+
+    def _listed(self, lines):
+        want = self._count(lines[0])
+        entries = []
+        for line in lines[1:]:
+            if line.startswith('     ') and not line.startswith('      '):
+                entries.append(line.strip())
+            elif line.startswith('       ') and entries:
+                entries[-1] += ' ' + line.strip()
+            elif line.startswith('   ') and not entries:
+                continue        # the heading's own wrapped lines
+            else:
+                raise AssertionError(f'unexpected line in the listed block: '
+                                     f'{line!r}')
+        for entry in entries:
+            names, sep, why = entry.partition(': ')
+            if not sep:
+                raise AssertionError(f'a listed entry with no reason: '
+                                     f'{entry!r}')
+            for name in names.split(', '):
+                if name in self.listed:
+                    raise AssertionError(f'{name} listed twice')
+                self.listed[name] = why
+        if len(self.listed) != want:
+            raise AssertionError(f'listed ({want}) names {len(self.listed)}')
+
+    def _reindex(self, lines):
+        self.reindex_line = True
+        want = self._count(lines[0])
+        part, notes = [lines[0].split(': ', 1)[1]], []
+        for line in lines[1:]:
+            if line.startswith('  Not in ') or line.startswith('  Not listed'):
+                notes.append([line.strip()])
+            elif line.startswith('  ') and notes:
+                notes[-1].append(line.strip())
+            elif line.startswith('  '):
+                part.append(line.strip())
+            else:
+                raise AssertionError(f'unexpected line under Listed for '
+                                     f'Reindex: {line!r}')
+        text = ' '.join(part)
+        self.reindex = [] if text == 'none' else text.split(', ')
+        if len(self.reindex) != want:
+            raise AssertionError(f'Listed for Reindex ({want}) names '
+                                 f'{len(self.reindex)}')
+        for note in notes:
+            text = ' '.join(note)
+            what, _, names = text.rpartition(': ')
+            if what.startswith('Not listed in localedata/SUPPORTED'):
+                self.unbuilt = names.split(', ')
+            elif what.startswith('Not listed: alias(es) whose name is not '
+                                 'ASCII'):
+                self.not_ascii = names.split(', ')
+            else:
+                raise AssertionError(f'unreadable note: {text!r}')
+
+
+def step2_characters_file(path):
+    """{name: (every rule can change, [code point, ...] or None)} from step
+    2's step2_rules_characters.<pair>.tsv. Refuses a header or a row of
+    another shape, and a name twice."""
+    with open(path, encoding='utf-8') as fh:
+        rows = fh.read().split('\n')
+    if rows[-1] == '':
+        rows.pop()
+    if not rows or rows[0] != ('# name\tstate\tevery rule can change\t'
+                               'characters'):
+        raise AssertionError(f'{path}: no header: {rows[:1]}')
+    got = {}
+    for row in rows[1:]:
+        cells = row.split('\t')
+        if (len(cells) != 4 or cells[1] != 'differs'
+                or cells[2] not in ('yes', 'no') or cells[0] in got):
+            raise AssertionError(f'{path}: unreadable row {row!r}')
+        if cells[3].startswith('not known: '):
+            chars = None
+        else:
+            chars = [int(c[2:], 16) for c in cells[3].split()]
+            if any(not re.fullmatch(r'U\+[0-9A-F]{4,}', c)
+                   for c in cells[3].split()):
+                raise AssertionError(f'{path}: unreadable characters {row!r}')
+        got[cells[0]] = (cells[2] == 'yes', chars)
+    return got
 
 
 def locale_file(*body, comment='%'):

@@ -18,8 +18,8 @@ that inherits it.
 **`copy` graph** — the inheritance graph formed by `copy "other_locale"`
 directives. A locale with no tailoring of its own just copies another's
 rules, so its real sort order changes whenever the copied locale's does —
-with no change to its own file, and so no appearance in a file diff. Step 3
-walks this graph.
+with no change to its own file, and so no appearance in a file diff. Step 2
+follows it when it compares each locale's rules.
 
 **blast radius** — how many locales inherit a given file through the `copy`
 graph. Step 1 prints it, so a one-line change to a template that 328 locales
@@ -44,7 +44,7 @@ locale's own source. Step 4 lists the locales that use these, and every
 other locale as well except one whose `LC_COLLATE` is `codepoint_collation`
 alone, or only a copy of a byte-order locale, because every character a
 locale does not list takes a default weight that a rule in `localedef`'s
-code picks, not the file. Steps 1 to 3 cannot clear any of them on data
+code picks, not the file. Steps 1 and 2 cannot clear any of them on data
 alone.
 
 **locale, in the Reindex and step 4 lists** — the locale a collation is built

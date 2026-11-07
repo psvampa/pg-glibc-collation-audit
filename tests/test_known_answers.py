@@ -20,8 +20,9 @@ import tempfile
 import unittest
 
 from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
-                       REPO_ROOT, SCRIPTS_DIR, default_weight_section, flat,
-                       needs_clone, needs_floor_pair, run_step)
+                       REPO_ROOT, SCRIPTS_DIR, Step2Report,
+                       default_weight_section, flat, needs_clone,
+                       needs_floor_pair, run_step, step2_characters_file)
 
 import glibc_locale_data as g
 import test_locale_order as tlo
@@ -32,93 +33,6 @@ def one_int(pattern, text, what):
     if not m:
         raise AssertionError(f"could not find {what} in output:\n{text[:800]}")
     return int(m.group(1))
-
-
-WARNING = ('could not identify which characters changed, but this locale '
-           'must be considered suspicious')
-
-
-# The line under a file that says its changed lines are not all that can
-# move (step 2, filter_lc_collate_changes.main), after the characters or
-# on its own.
-EVERY_RULE = re.compile(r'(those are the changed lines; )?(.+), so (any|every) '
-                        r'rule in it can (change|read differently)')
-
-
-def step2_characters(out):
-    """{locale: [code point, ...]} from step 2's LC_COLLATE list, or None for
-    a locale whose changed lines name no character it could identify: the
-    could-not-identify warning, or a line that every rule in it can change
-    with no list above it (step2_every_rule names those).
-
-    Refuses rather than guesses: the files it finds must number what the
-    header says, every line under a file must be part of one of the forms,
-    and a list must print as many entries as it says it has.
-    """
-    return {name: points for name, (points, _) in _step2_entries(out).items()}
-
-
-def step2_every_rule(out):
-    """The locales under which step 2 says every (or any) rule in the file
-    can change, sorted: its changed lines are not all that moves."""
-    return sorted(name for name, (_, every) in _step2_entries(out).items()
-                  if every)
-
-
-def _step2_entries(out):
-    """{locale: (points or None, the every-rule line or None)}."""
-    count = one_int(r'Files with changes inside LC_COLLATE: (\d+)', out,
-                    'the step 2 count')
-    block = out.split('Files with changes inside LC_COLLATE:')[1]
-    chunks, name = {}, None
-    for line in block.split('\n\n')[0].split('\n')[1:]:
-        m = re.match(r'^  localedata/locales/(\S+)$', line)
-        if m:
-            name = m.group(1)
-            chunks[name] = []
-        elif name is not None and line.startswith('      '):
-            chunks[name].append(line)
-        else:
-            raise AssertionError(f'unexpected line in step 2 list: {line!r}')
-    if len(chunks) != count:
-        raise AssertionError(f'step 2 says {count} files and lists '
-                             f'{len(chunks)}')
-    found = {}
-    for name, lines in chunks.items():
-        text = flat('\n'.join(lines))
-        if text == WARNING:
-            found[name] = (None, None)
-            continue
-        listed, sep, every = text.partition(' those are the changed lines; ')
-        if sep:
-            every = 'those are the changed lines; ' + every
-        elif not listed.startswith('characters in the changed rules'):
-            listed, every = None, listed
-        else:
-            every = None
-        if every is not None and not EVERY_RULE.fullmatch(every):
-            raise AssertionError(f'{name}: neither a character list, the '
-                                 f'warning nor an every-rule line: {text!r}')
-        if every is not None and (listed is None) == every.startswith(
-                'those are the changed lines; '):
-            raise AssertionError(f'{name}: "those are the changed lines" '
-                                 f'with no list, or a list without it: '
-                                 f'{text!r}')
-        if listed is None:
-            found[name] = (None, every)
-            continue
-        m = re.fullmatch(r'characters in the changed rules \((\d+)\): (.+)',
-                         listed)
-        if not m:
-            raise AssertionError(f'{name}: neither a character list nor the '
-                                 f'warning: {text!r}')
-        points = [int(h, 16)
-                  for h in re.findall(r'U\+([0-9A-F]{4,6})', m.group(2))]
-        if len(points) != int(m.group(1)):
-            raise AssertionError(f'{name}: says {m.group(1)} characters and '
-                                 f'prints {len(points)}')
-        found[name] = (points, every)
-    return found
 
 
 class StepRun(unittest.TestCase):
@@ -187,34 +101,104 @@ class Step1Templates(StepRun):
                             f'inherit iso14651_t1, not [{radius}]; '
                             f'regenerate it')
 
-
-@needs_clone
-class Step2Filter(StepRun):
-    EXPECTED = {(OLD, MID): (2, ['or_IN', 'sv_SE']),
-                (MID, NEW): (3, ['ber_DZ', 'kab_DZ', 'th_TH'])}
-
     def test_the_changed_file_count_published_for_the_pair(self):
         """283 is published for glibc 2.28 -> 2.34, and test_published_claims
         holds the pages that state it to the rhel8-to-rhel9 tags-only
         transcript. This holds that transcript, and the figure, to the run: a
         count that moved without regenerating it goes red, as the blast
-        radius does. The extended transcript compares each machine's build
-        in steps 1 to 5 (7.6a), not the two tags."""
-        label = (r'(?m)^Locale files changed between glibc-2\.28 and '
-                 r'glibc-2\.34: (\d+)$')
-        out = self.step('filter_lc_collate_changes.py', OLD, MID)
+        radius does. Step 1 prints it; step 2 printed it too until it became
+        the comparison of rules (9.2). The extended transcript compares each
+        machine's build in steps 1 to 5 (7.6a)."""
+        label = r'(?m)^Locale files added, modified or deleted: (\d+)$'
+        out = self.step('audit-locale-diff.sh', OLD, MID)
         self.assertEqual(re.findall(label, out), ['283'])
-        for kind in ('tags-only',):
-            name = f'examples/rhel8-to-rhel9-{kind}.txt'
-            with self.subTest(transcript=kind):
-                with open(os.path.join(REPO_ROOT, *name.split('/')),
-                          encoding='utf-8') as f:
-                    said = re.findall(label, f.read())
+        name = 'examples/rhel8-to-rhel9-tags-only.txt'
+        with open(os.path.join(REPO_ROOT, *name.split('/')),
+                  encoding='utf-8') as f:
+            said = re.findall(label, f.read())
+        self.assertEqual(said, ['283'],
+                         f'{name} prints {said} as the locale files added, '
+                         f'modified or deleted between glibc-2.28 and '
+                         f'glibc-2.34, not [283]; regenerate it')
+
+
+@needs_clone
+class Step2Compare(StepRun):
+    """Step 2 over the audited pairs: which locales' rules differ, the
+    totals, and what it lists for Reindex (step 9.2: the comparison of
+    rules, every copy followed, replaced the file diff and step 3's copy
+    walk). Measured on 2026-11-07 with the code of this step."""
+
+    # (names, same, differ, not compared), the names whose rules differ,
+    # and Reindex.
+    EXPECTED = {
+        (OLD, MID): ((398, 391, 5, 2),
+                     ['or_IN', 'sv_FI', 'sv_FI@euro', 'sv_SE', 'swedish']),
+        (MID, NEW): ((410, 395, 2, 13), ['th_TH', 'thai'])}
+
+    def report(self, old, new, *more):
+        return Step2Report(self.step('filter_lc_collate_changes.py', old,
+                                     new, *more))
+
+    def test_the_totals_and_the_locales_whose_rules_differ(self):
+        """sv_FI, sv_FI@euro and swedish differ because they copy sv_SE,
+        and thai is th_TH's alias: compare_rules follows every copy and
+        every alias, which step 3's copy walk used to add after step 2.
+        ber_DZ and kab_DZ, which step 2 listed over 2.34..2.39 because their
+        files changed, are the same: kab_DZ took ber_DZ's rules into its
+        own file, the same statements in the same order."""
+        for (old, new), (totals, names) in self.EXPECTED.items():
+            with self.subTest(pair=f'{old}..{new}'):
+                r = self.report(old, new)
+                self.assertEqual(r.totals, totals)
+                self.assertEqual(sorted(r.differs), names)
+                self.assertEqual(r.listed, {})
+                for name in ('ber_DZ', 'kab_DZ'):
+                    self.assertNotIn(name, r.differs)
+                    self.assertNotIn(name, r.added)
+                    self.assertNotIn(name, r.reindex)
+
+    def test_the_reindex_list_is_written_for_each_pair(self):
+        """audit.sh's summary reads this file. The file must exist --
+        reverting step 2's write fails here -- and it must be named for the
+        version pair, because this class runs step 2 for both pairs into one
+        scratch directory and a pair-agnostic name would have each run
+        clobber the last."""
+        for (old, new), (_, names) in self.EXPECTED.items():
+            with self.subTest(pair=f'{old}..{new}'):
+                self.report(old, new)
+                path = os.path.join(
+                    self.out_dir,
+                    f'step2_changed_collate.{g.pair_slug(old, new)}.txt')
+                self.assertTrue(os.path.exists(path), f'{path} missing')
+                with open(path, encoding='utf-8') as fh:
+                    written = [n.strip() for n in fh if n.strip()]
+                self.assertEqual(written, names)
+
+    def test_the_written_list_is_the_printed_one(self):
+        """Two representations of one list must not drift: what step 2
+        prints as "Listed for Reindex" and what the summary reads."""
+        for old, new in self.EXPECTED:
+            with self.subTest(pair=f'{old}..{new}'):
+                r = self.report(old, new)
+                path = os.path.join(
+                    self.out_dir,
+                    f'step2_changed_collate.{g.pair_slug(old, new)}.txt')
+                with open(path, encoding='utf-8') as fh:
+                    written = [n.strip() for n in fh if n.strip()]
+                self.assertEqual(r.reindex, written)
+
+    def test_the_list_holds_locales_not_spellings(self):
+        """Backlog 13.1. The list holds locales and the aliases glibc's
+        locale.alias gives them, and here no name with a codeset: every
+        spelling reaches its locale by glibc's rule, and a spelling in the
+        list would invite matching names one by one again."""
+        for old, new in self.EXPECTED:
+            with self.subTest(pair=f'{old}..{new}'):
+                r = self.report(old, new)
                 self.assertEqual(
-                    said, ['283'],
-                    f'{name} prints {said} as the locale files changed '
-                    f'between glibc-2.28 and glibc-2.34, not [283]; '
-                    f'regenerate it')
+                    [n for n in r.reindex if g.locale_source(n) != n], [])
+        self.assertIn('swedish', self.report(OLD, MID).reindex)
 
     def test_the_character_set_lines_published_for_each_pair(self):
         """Backlog 13.7, PR B. Over each audited pair step 2 compares the
@@ -222,9 +206,9 @@ class Step2Filter(StepRun):
         rules name a character they changed. K is exact, and checked by a
         brute-force expansion when it was written (2026-10-09): over
         2.34..2.39 GB18030 gains 24 characters and moves 6, 30 in all, where
-        the time-gate prototype counted 38. The four transcripts must print
-        the run's lines, so a figure that moves without regenerating them
-        goes red.
+        the time-gate prototype counted 38. The tags-only transcripts must
+        print the run's lines, so a figure that moves without regenerating
+        them goes red.
 
         PR C: the transliteration line under it. 24 collating elements of
         fi_FI, fi_FI@euro and uz_UZ in ISO-8859-1 and ISO-8859-15 depend on
@@ -270,88 +254,27 @@ class Step2Filter(StepRun):
                                                   f'the run\'s character set '
                                                   f'lines once; regenerate it')
 
-    def test_the_step_3_list_is_written_for_each_pair(self):
-        """audit.sh reads this file instead of the user retyping the names.
-
-        Two things are pinned. The file must exist -- reverting step 2's write
-        fails here -- and it must be named for the version pair, because this
-        class runs step 2 four times into one scratch directory and a
-        pair-agnostic name would have each run clobber the last. That is the
-        same collision that, in the shared /tmp default, would hand step 3 a
-        list belonging to a different pair.
-        """
-        import glibc_locale_data as g
-        for (old, new), (_, names) in self.EXPECTED.items():
-            with self.subTest(pair=f'{old}..{new}'):
-                self.step('filter_lc_collate_changes.py', old, new)
-                path = os.path.join(
-                    self.out_dir,
-                    f'step2_changed_collate.{g.pair_slug(old, new)}.txt')
-                self.assertTrue(os.path.exists(path), f'{path} missing')
-                with open(path, encoding='utf-8') as fh:
-                    written = sorted(n.strip() for n in fh if n.strip())
-                self.assertEqual(written, sorted(names))
-
-    def test_the_written_list_matches_the_printed_command(self):
-        """Two representations of one list must not drift.
-
-        Step 2 both prints a paste-ready step-3 command and writes the file
-        audit.sh reads. If those ever disagree, a hand-run audit and a wrapped
-        one silently audit different locale sets.
-        """
-        import glibc_locale_data as g
-        for (old, new), (_, names) in self.EXPECTED.items():
-            with self.subTest(pair=f'{old}..{new}'):
-                out = self.step('filter_lc_collate_changes.py', old, new)
-                m = re.search(r'resolve_copy_closure\.py \S+ (.+)$', out, re.M)
-                self.assertIsNotNone(m, 'no step-3 command printed')
-                printed = sorted(m.group(1).split())
-                path = os.path.join(
-                    self.out_dir,
-                    f'step2_changed_collate.{g.pair_slug(old, new)}.txt')
-                with open(path, encoding='utf-8') as fh:
-                    written = sorted(n.strip() for n in fh if n.strip())
-                self.assertEqual(printed, written)
-
-    def test_files_touching_lc_collate(self):
-        for (old, new), (count, names) in self.EXPECTED.items():
-            with self.subTest(pair=f'{old}..{new}'):
-                out = self.step('filter_lc_collate_changes.py', old, new)
-                self.assertEqual(
-                    one_int(r'(\d+) touch LC_COLLATE', out, 'the count'), count)
-                for name in names:
-                    self.assertIn(f'localedata/locales/{name}', out)
-
     def test_c_utf8_is_one_more_file_between_the_tags(self):
         """No list of what a distro ships (backlog 13.6, 7.7): over 2.28..2.34
         C is in neither tag, so step 2 says nothing of it and step 1's `!!`
         says what a tag does not hold; over 2.34..2.39 upstream adds it, and
-        it is listed with the other added files, whose sentence says an
-        added file can still exist on the old system. No `!!` says C.UTF-8's
+        it is named with the other files not compared for want of an old
+        one, whose sentence says an added file can still exist on the old
+        system, under the name `locale -a` shows. No `!!` says C.UTF-8's
         order can change: the old tag cannot say that, and on RHEL 9 and 10
         it does not."""
-        cases = (((OLD, MID), None),
-                 ((MID, NEW), '  localedata/locales/C -> C.utf8'))
-        for (old, new), added in cases:
+        for (old, new), added in (((OLD, MID), None), ((MID, NEW), 'C.utf8')):
             with self.subTest(pair=f'{old}..{new}'):
                 out = self.step('filter_lc_collate_changes.py', old, new)
+                r = Step2Report(out)
                 self.assertNotIn('!!', out)
                 self.assertNotIn('C.UTF-8', out)
-                lines = out.splitlines()
-                if added is None:
-                    self.assertFalse([ln for ln in lines if ln.strip()
-                                      .startswith('localedata/locales/C ')],
-                                     out)
-                    continue
-                head = [i for i, ln in enumerate(lines)
-                        if ln.startswith(f'Added at {new} (')]
-                self.assertEqual(len(head), 1, out)
-                body = lines[head[0]:]
-                body = body[:body.index('')] if '' in body else body
-                self.assertIn(added, body)
-                self.assertIn('Confirm with', flat('\n'.join(body)))
-
-
+                self.assertEqual(r.added.get('C'), added)
+                self.assertNotIn('C', r.differs)
+                self.assertNotIn('C', r.reindex)
+                if added:
+                    self.assertIn('Confirm with `locale -a` on the OLD '
+                                  'machine', flat(out))
 
     def test_the_false_blanket_claim_is_gone(self):
         """Added files used to be reported as unable to affect an existing
@@ -368,160 +291,128 @@ class Step2Filter(StepRun):
         """
         for old, new in ((OLD, MID), (MID, NEW)):
             with self.subTest(pair=f'{old}..{new}'):
-                out = ' '.join(
-                    self.step('filter_lc_collate_changes.py', old, new).split())
+                out = flat(self.step('filter_lc_collate_changes.py', old,
+                                     new))
                 self.assertIn('cannot affect an existing index ONLY IF', out)
                 self.assertNotIn('cannot affect an existing index.', out)
 
-    def test_the_files_with_no_collate_block_are_named_not_just_counted(self):
-        """A count alone leaves a reader unable to tell a transliteration
-        table from a locale that was skipped by mistake. And the line must
-        not say they cannot change an order: a collating element built out
-        of their transliterations can move (backlog 13.7, PR C)."""
-        out = flat(self.step('filter_lc_collate_changes.py', MID, NEW))
-        self.assertIn('no LC_COLLATE on either side, so no sort rules of '
-                      'their own; for what their transliterations build, see '
-                      'the transliteration lines below:', out)
-        self.assertNotIn('no sort order to change', out)
-        for name in ('i18n_ctype', 'translit_combining'):
-            self.assertIn(name, out)
-
-    def test_no_file_gains_a_collate_block_in_either_pair(self):
-        """Recorded as a measured fact: it has never happened between glibc
-        2.17 and 2.42. If this ever fails, a locale acquired collation rules
-        and that is a finding, not a bug in this test."""
+    def test_no_locale_is_left_uncompared_on_both_sides(self):
+        """Recorded as a measured fact: over both pairs every name with a
+        file on both sides is compared -- the reader settles every one and
+        no file gains or loses LC_COLLATE (it has never happened between
+        glibc 2.17 and 2.42). Every name not compared lacks a file on one
+        side. If this ever fails, a locale acquired or lost its sort rules,
+        or the reader met a shape it cannot settle, and that is a finding,
+        not a bug in this test."""
         for old, new in ((OLD, MID), (MID, NEW)):
             with self.subTest(pair=f'{old}..{new}'):
-                out = self.step('filter_lc_collate_changes.py', old, new)
-                self.assertNotIn('GAINED an LC_COLLATE block', out)
+                self.assertEqual(self.report(old, new).listed, {})
 
-    def test_a_pair_where_c_exists_at_the_old_tag_does_not_warn(self):
-        """Control: the warning must be about the old side being missing, not
-        about the name C. Pinned tags only: 2.39 against itself has the file
-        on both sides, and 2.39 -> 2.34, reversed, on the old side alone."""
-        for args in ((NEW, NEW), (NEW, MID, '--allow-reverse')):
-            with self.subTest(args=args):
-                out = self.step('filter_lc_collate_changes.py', *args)
-                self.assertNotIn('!! localedata/locales/C ', out)
+    def test_every_file_step_2_writes_is_named_for_the_pair(self):
+        """A file a run reads must have been written by this run, for this
+        pair: every file step 2 writes carries the pair in its name, the
+        characters file included (step 9.2 added it)."""
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-audit-test-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        rc, out = run_step('filter_lc_collate_changes.py', OLD, MID,
+                           out_dir=out_dir)
+        self.assertEqual(rc, 0, out)
+        slug = g.pair_slug(OLD, MID)
+        self.assertEqual(sorted(os.listdir(out_dir)), sorted(
+            [f'step2_{k}.{slug}.txt' for k in ('changed_collate',
+                                               'keyed_locales',
+                                               'removed_locales')]
+            + [f'step2_rules_characters.{slug}.tsv']))
+
+    def test_what_step_2_does_not_compare_is_said_once(self):
+        """NOT_COMPARED_HERE: the compiler and strcoll are step 5's, said in
+        one sentence, once."""
+        import filter_lc_collate_changes as f
+        out = flat(self.step('filter_lc_collate_changes.py', OLD, MID))
+        self.assertEqual(out.count(f.NOT_COMPARED_HERE), 1)
+        self.assertEqual(out.count('strcoll'), 1)
+
+    def test_a_reversed_pair_lists_c_as_removed_not_added(self):
+        """Control: the note of the files not compared for want of an old
+        one is about the old side being missing, not about the name C.
+        2.39 -> 2.34, reversed, has C on the old side alone; and 2.39
+        against itself compares nothing."""
+        r = self.report(NEW, MID, '--allow-reverse')
+        self.assertIn('C', r.removed)
+        self.assertNotIn('C', r.added)
+        self.assertEqual(self.report(NEW, NEW).nothing,
+                         'the two tags are one commit.')
 
 
 @needs_clone
 class Step2NamesTheCharacters(StepRun):
     """"Step 2 named the file and stopped". The
     confirmation template needs three test values, and reaching them meant a
-    `git diff` by hand; these pin what step 2 now prints instead."""
+    `git diff` by hand; these pin what step 2 prints instead. A list longer
+    than a line is written to step2_rules_characters.<pair>.tsv."""
+
+    def characters(self, old, new):
+        """(Step2Report, the characters file read whole), from one run in a
+        directory of its own: run_step is memoised and does not write
+        again."""
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-audit-test-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        rc, out = run_step('filter_lc_collate_changes.py', old, new,
+                           out_dir=out_dir)
+        self.assertEqual(rc, 0, out)
+        return Step2Report(out), step2_characters_file(os.path.join(
+            out_dir, f'step2_rules_characters.{g.pair_slug(old, new)}.tsv'))
 
     def test_sv_SE_names_W_and_w(self):
         """Two deleted weight lines over 2.28..2.34: `w` stops sorting as a
         variant of `v`. Measured on the fixtures, `va wa vb` on 2.28 and
-        `va vb wa` on 2.34."""
-        chars = step2_characters(
-            self.step('filter_lc_collate_changes.py', OLD, MID))
-        self.assertEqual(chars['sv_SE'], [0x57, 0x77])
+        `va vb wa` on 2.34. The three that copy sv_SE name the same two."""
+        r, rows = self.characters(OLD, MID)
+        for name in ('sv_FI', 'sv_FI@euro', 'sv_SE', 'swedish'):
+            with self.subTest(name=name):
+                self.assertEqual(r.differs[name], ([0x57, 0x77], False))
+                self.assertEqual(rows[name], (False, [0x57, 0x77]))
 
     def test_th_TH_names_the_five_leading_vowels(self):
         """Over 2.34..2.39 the deleted `collating-element` lines pair each of
         the five Thai leading vowels, U+0E40..U+0E44, with a consonant: that
-        is the rule that changed."""
-        chars = step2_characters(
-            self.step('filter_lc_collate_changes.py', MID, NEW))
-        self.assertLessEqual(set(range(0x0E40, 0x0E45)), set(chars['th_TH']))
+        is the rule that changed. The list is in the characters file, and
+        the line prints its count, the same number."""
+        r, rows = self.characters(MID, NEW)
+        every, chars = rows['th_TH']
+        self.assertTrue(every)
+        self.assertLessEqual(set(range(0x0E40, 0x0E45)), set(chars))
+        self.assertEqual(r.differs['th_TH'], (len(chars), True))
 
     def test_an_edited_instruction_says_every_rule_can_change(self):
         """Backlog 13.36: a changed reorder-after, collating-symbol,
         order_start or conditional inside LC_COLLATE moves rules on lines
-        that did not change. Measured by the false-negative-reviewer of
-        15.2 B3 on these pairs, from the diff: or_IN over 2.28..2.34, and
-        ber_DZ, kab_DZ and th_TH over 2.34..2.39; until then none of them
-        said it. The others name only rules."""
+        that did not change. or_IN over 2.28..2.34 (it stopped holding its
+        own table and copies the common one), and th_TH, with its alias
+        thai, over 2.34..2.39. The others name only rules."""
         for old, new, want in ((OLD, MID, ['or_IN']),
-                               (MID, NEW, ['ber_DZ', 'kab_DZ', 'th_TH'])):
+                               (MID, NEW, ['th_TH', 'thai'])):
             with self.subTest(pair=f'{old}..{new}'):
-                self.assertEqual(want, step2_every_rule(
-                    self.step('filter_lc_collate_changes.py', old, new)))
+                r, rows = self.characters(old, new)
+                self.assertEqual(want, sorted(n for n, (_, every) in
+                                              r.differs.items() if every))
+                self.assertEqual(want, sorted(n for n, (every, _) in
+                                              rows.items() if every))
 
-    def test_every_locale_flagged_on_the_audited_pairs_gets_characters(self):
-        """Measured: all five name at least one, so on these two pairs the
-        warning is a regression rather than a finding."""
+    def test_every_locale_that_differs_on_the_audited_pairs_names_some(self):
+        """Measured: all seven name at least one character, on the line or
+        in the file, and the file and the line agree on how many, so on
+        these two pairs "not known" or "name no character" is a regression
+        rather than a finding."""
         for old, new in ((OLD, MID), (MID, NEW)):
             with self.subTest(pair=f'{old}..{new}'):
-                chars = step2_characters(
-                    self.step('filter_lc_collate_changes.py', old, new))
-                for name, points in chars.items():
-                    self.assertTrue(points, f'{name} got the warning')
-
-
-@needs_clone
-class Step3Closure(StepRun):
-    def test_copy_closure_counts(self):
-        cases = ((MID, ['or_IN', 'sv_SE'], 4),
-                 (NEW, ['ber_DZ', 'kab_DZ', 'th_TH'], 3))
-        for tag, names, expected in cases:
-            with self.subTest(tag=tag):
-                out = self.step('resolve_copy_closure.py', tag, *names)
-                self.assertEqual(
-                    one_int(r'Full affected set \((\d+) locale', out, 'the set'),
-                    expected)
-
-    def test_sv_fi_is_reached_only_through_inheritance(self):
-        """sv_FI has no tailoring of its own; it copies sv_SE. A plain file
-        diff never flags it."""
-        out = self.step('resolve_copy_closure.py', MID, 'or_IN', 'sv_SE')
-        self.assertIn('sv_FI', out)
-        self.assertIn('sv_FI@euro', out)
-
-    def test_paths_are_accepted_as_well_as_bare_names(self):
-        """"resolve_copy_closure.py reported '0 additionally affected'
-        silently" when fed step 2's output verbatim -- step 2 prints paths and
-        this compared bare names. That dropped sv_FI from the result."""
-        out = self.step('resolve_copy_closure.py', MID,
-                        'localedata/locales/or_IN', 'localedata/locales/sv_SE')
-        self.assertEqual(
-            one_int(r'Full affected set \((\d+) locale', out, 'the set'), 4)
-        self.assertIn('sv_FI', out)
-
-    def test_an_unknown_locale_is_an_error_not_a_quiet_zero(self):
-        rc, out = run_step('resolve_copy_closure.py', MID, 'no_SUCH_locale',
-                           out_dir=self.out_dir)
-        self.assertNotEqual(rc, 0)
-
-    def test_the_list_holds_locales_not_spellings(self):
-        """Backlog 13.1. The list once held SUPPORTED's spellings (sv_SE,
-        sv_SE.utf8), and on the real machines the same locale is also
-        sv_SE.iso88591, sv_SE.iso885915 and swedish. It holds the locale and
-        the aliases glibc's locale.alias gives it, and here no name with a
-        codeset: every spelling reaches its locale by glibc's rule, and a
-        spelling in the list would invite matching names one by one again.
-        (A few aliases are spelled with one, ja_JP.ujis; none is sv_SE's.)"""
-        out_dir = tempfile.mkdtemp(prefix='pg-glibc-audit-test-')
-        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
-        rc, out = run_step('resolve_copy_closure.py', MID, 'sv_SE',
-                           out_dir=out_dir)
-        self.assertEqual(rc, 0, out)
-        with open(os.path.join(out_dir, 'step3_affected_locales.txt'),
-                  encoding='utf-8') as fh:
-            written = sorted(ln.strip() for ln in fh if ln.strip())
-        self.assertEqual(written, ['sv_FI', 'sv_FI@euro', 'sv_SE', 'swedish'])
-        self.assertEqual([n for n in written if g.locale_source(n) != n], [])
-        self.assertIn("Also named by glibc's locale.alias: swedish (sv_SE)",
-                      out)
-
-
-    def test_the_written_list_keeps_a_locale_SUPPORTED_does_not_name(self):
-        """Step 3's list is what audit.sh summarises and what a reader feeds to
-        the empirical test. Writing only the names SUPPORTED maps dropped every
-        affected locale it does not name -- the same line that dropped C from
-        step 4's list on a node that builds it. Both halves are asserted: the
-        locales SUPPORTED names must survive too, or the fix trades one
-        omission for another."""
-        out = self.step('resolve_copy_closure.py', MID, 'sv_SE',
-                        'cns11643_stroke')
-        self.assertIn('cns11643_stroke', out)
-        with open(os.path.join(self.out_dir, 'step3_affected_locales.txt'),
-                  encoding='utf-8') as fh:
-            written = [ln.strip() for ln in fh if ln.strip()]
-        self.assertIn('cns11643_stroke', written)
-        self.assertIn('sv_SE', written)
+                r, rows = self.characters(old, new)
+                self.assertEqual(sorted(rows), sorted(r.differs))
+                for name, (chars, _) in r.differs.items():
+                    self.assertTrue(chars, f'{name} names no character')
+                    self.assertEqual(
+                        len(chars) if isinstance(chars, list) else chars,
+                        len(rows[name][1]))
 
 
 @needs_clone
@@ -797,24 +688,6 @@ class Step5CollationCode(StepRun):
         self.assertNotIn('No substantive collation code change', out)
 
 
-@needs_clone
-class StepThreeKeyed(StepRun):
-    """resolve_copy_closure.py --keyed: the locales step 2's character set
-    check lists (backlog 13.7, PR B)."""
-
-    def test_an_unknown_keyed_name_is_refused_like_any_other(self):
-        rc, out = run_step('resolve_copy_closure.py', NEW, 'sv_SE', '--keyed',
-                           'no_such_locale', out_dir=self.out_dir)
-        self.assertEqual(rc, 2, out)
-        self.assertIn(f'not locale file(s) at {NEW}: no_such_locale', out)
-
-    def test_no_locale_at_all_is_refused(self):
-        rc, out = run_step('resolve_copy_closure.py', NEW,
-                           out_dir=self.out_dir)
-        self.assertEqual(rc, 2, out)
-        self.assertIn('no locale given', out)
-
-
 def _harness_scripts():
     from _harness import SCRIPTS_DIR
     return SCRIPTS_DIR
@@ -837,6 +710,10 @@ class BelowTheOldVersionFloor(StepRun):
     unaffected.
     """
 
+    def report(self):
+        return Step2Report(self.step('filter_lc_collate_changes.py',
+                                     FLOOR_OLD, FLOOR_NEW))
+
     def test_the_three_templates_are_in_the_copy_graph(self):
         """The root cause, asserted directly rather than through a count.
         These three are the highest fan-in files in the corpus; dropping them
@@ -847,20 +724,17 @@ class BelowTheOldVersionFloor(StepRun):
                      'iso14651_t1_pinyin'):
             self.assertTrue(tree.defines(tmpl),
                             f'{tmpl} defines no LC_COLLATE at {FLOOR_NEW} '
-                            f'to the copy chains steps 1 and 3 walk; a block '
+                            f'to the copy chains steps 1 and 2 walk; a block '
                             f'at byte 0 is not read any more')
 
-    def test_the_list_step_3_will_give_is_read_at_the_new_tag(self):
-        """The character set check skips what step 3 lists anyway, and
-        works that out on step 3's own tree: the new tag's files read with
-        the new tag's localedef. Read with the old tag's, the list could be
-        other than step 3's, and a list larger than step 3's hides a
-        finding (false-negative-reviewer, 15.2 B3)."""
+    def test_each_side_is_read_with_its_own_localedef(self):
+        """Step 2 compares the old tag's files read with the old tag's
+        localedef against the new tag's read with the new one's: a side read
+        with the other side's reader is not what either machine builds
+        (before 2.36, 0x1A and 0xFF end a file; false-negative-reviewer,
+        15.2 B3). Spied on Tree.at_tag, the one door to a tree."""
         out_dir = tempfile.mkdtemp(prefix='pg-glibc-floor-tree-')
         self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
-        # The spy takes every argument at_tag takes, and names its caller:
-        # glibc_tree.file_facts reads trees through at_tag too when its
-        # facts are not kept, and only new_tree's read is step 3's tree.
         code = ("import sys; sys.path.insert(0, %r)\n"
                 "import glibc_tree\n"
                 "real = glibc_tree.Tree.at_tag.__func__\n"
@@ -879,107 +753,33 @@ class BelowTheOldVersionFloor(StepRun):
         self.assertEqual(0, p.returncode, out[-2000:])
         # The label last and whole: an RHEL build's has blanks in it.
         trees = re.findall(r'^TREE (\S+) (\S+) (.+)$', out, re.M)
-        self.assertEqual([(FLOOR_NEW, FLOOR_NEW)],
-                         [(t, b) for c, t, b in trees if c == 'new_tree'],
+        self.assertEqual([(FLOOR_OLD, FLOOR_OLD), (FLOOR_NEW, FLOOR_NEW)],
+                         [(t, b) for c, t, b in trees if c == '_main'],
                          out[-2000:])
         self.assertEqual([], [t for t in trees if t[1] != t[2]])
 
-    def test_step_2_finds_seven_locales_touching_lc_collate(self):
-        """Six whose rules changed, and wal_ET, whose change glibc_reader
-        cannot place: it copies am_ET, which uses reorder-sections-after,
-        a statement the reader does not settle. Before step
-        2 read with the reader (15.2 B3) wal_ET was cleared as "does not
-        touch LC_COLLATE"; one it cannot settle is never cleared."""
-        out = self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW)
-        self.assertEqual(
-            one_int(r'Files with changes inside LC_COLLATE: (\d+)', out,
-                    'the step 2 count'),
-            7)
-        self.assertIn('!! 1 file(s) could not be read the way localedef '
-                      'reads them', flat(out))
-        for tag in (FLOOR_OLD, FLOOR_NEW):
-            self.assertIn(f'localedata/locales/wal_ET at {tag}: am_ET:584: '
-                          f'reorder-sections-after in LC_COLLATE',
-                          flat(out).replace('- ', '-'))
-
-    def test_the_floor_pair_names_characters_only_where_the_reader_is_sure(
-            self):
-        """The real case of a change whose lines name no character, one
-        whose reading is not settled, and files the reader cannot name.
-        None may read as an empty list, which would look like nothing to
-        test: wal_ET gets "could not identify", and hu_HU, whose changed
-        lines are instructions, that every rule in it can change (backlog
-        13.36). At glibc-2.12 and 2.17 the seventeen runs of am_ET, ber_MA
-        and the locales that copy them are unsettled at a
-        reorder-sections-after, after which glibc may read any file
-        through a `copy` (15.3 C2, round 3 of its review): dz_BT, fi_FI,
-        se_NO and ug_CN, which those runs do not begin, print no list,
-        each still with the sentence that every rule in it can change.
-        iso14651_t1_common is read to its end by their opening copies
-        before that place, and keeps its list."""
-        out = self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW)
-        chars = step2_characters(out)
-        self.assertEqual({'iso14651_t1_common'},
-                         {name for name, got in chars.items() if got})
-        self.assertEqual({'dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
-                          'se_NO', 'ug_CN', 'wal_ET'}, set(chars))
-        self.assertEqual(['dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
-                          'se_NO', 'ug_CN'], step2_every_rule(out))
-
-    def test_zh_CN_GB18030_names_206_characters_GB18030_changed(self):
-        """Backlog 13.7, PR B: the one pinned pair where a charmap change
-        reaches a build's rules. GB18030 changes 12,384 characters, and the
-        rules zh_CN.GB18030 reads name 206 of them, all in
-        iso14651_t1_common. That file also changed its own rules, so step 3
-        lists zh_CN anyway: counted, not repeated, and nothing goes to the
-        keyed list. With step 2's own names as the skip, instead of step 3's
-        closure, the time-gate prototype listed 287 sources here."""
-        out = self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW)
-        self.assertIn('GB18030: 12352 characters added, 24 removed, 8 given '
-                      'other bytes. UTF-8: 4357 characters added.', flat(out))
-        self.assertRegex(flat(out), r'step 3 lists anyway, whose LC_COLLATE '
-                                    r'names one of those characters or '
-                                    r'could not be compared \(1\): '
-                                    r'zh_CN\.GB18030 \(GB18030\): 206 '
-                                    r'characters, named in iso14651_t1_common')
-        path = os.path.join(
-            self.out_dir,
-            f'step2_keyed_locales.{g.pair_slug(FLOOR_OLD, FLOOR_NEW)}.txt')
-        with open(path, encoding='utf-8') as fh:
-            self.assertEqual(fh.read(), '')
-
-    def test_step_3_reaches_280_not_11(self):
-        """11 was what it reported with the three roots missing; 278 was the
-        figure after that fix and before `copy` targets written in glibc's
-        symbolic notation were decoded, which ky_KG and uk_UA are."""
-        out = self.step('resolve_copy_closure.py', FLOOR_NEW,
-                        'dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
-                        'se_NO', 'ug_CN')
-        self.assertEqual(
-            one_int(r'Full affected set \((\d+) locale', out, 'the set'),
-            280)
-
-    def test_steps_1_and_3_name_the_17_runs_the_reader_cannot_settle(self):
+    def test_the_totals_and_the_17_runs_the_reader_cannot_settle(self):
         """reorder-sections-after, which the reader does not settle, is
-        reached from am_ET and ber_MA by 17 locales at
-        glibc-2.17. Step 3 cannot tell whether those inherit from what
-        changed, so it lists them under a `!!` of their own; step 1 says its
-        counts may miss them (backlog 15.2)."""
-        out = self.step('resolve_copy_closure.py', FLOOR_NEW, 'sv_SE')
-        self.assertEqual(
-            one_int(r'(?m)^!! Could not be read the way localedef reads '
-                    r'them, so they are listed: (\d+)', out, 'the count'),
-            17)
-        full = re.search(r'^Full affected set \(\d+ locale source file\(s\)'
-                         r'\): (.+)$', out, re.M)
-        self.assertIsNotNone(full, out)
-        for name in ('am_ET', 'ber_MA', 'om_ET', 'sid_ET'):
-            self.assertIn(name, full.group(1).split(', '))
+        reached from am_ET and ber_MA by 17 locales at both tags. Step 2
+        cannot compare them, so it lists them for Reindex under a `!!` of
+        its own, the reason beside each group; step 1 says its counts may
+        miss them (backlog 15.2). wal_ET, cleared as "does not touch
+        LC_COLLATE" before step 2 read with the reader (15.2 B3), is one."""
+        r = self.report()
+        self.assertEqual(r.totals, (357, 52, 262, 43))
+        self.assertEqual(len(r.listed), 17)
+        self.assertEqual(r.listed['wal_ET'], 'both sides: am_ET:584: '
+                                             'reorder-sections-after in '
+                                             'LC_COLLATE')
+        self.assertEqual(r.listed['ber_MA'], 'both sides: ber_MA:75: '
+                                             'reorder-sections-after in '
+                                             'LC_COLLATE')
+        self.assertLessEqual(set(r.listed), set(r.reindex))
         # Indented past audit.sh's relay of `!!` blocks, which keeps the
         # lines under one that start with three spaces: the names reach the
         # summary, not only the count.
-        self.assertRegex(out, r'(?m)^     am_ET: am_ET:584: '
-                              r'reorder-sections-after in LC_COLLATE$')
+        self.assertRegex(r.out, r'(?m)^     ber_MA: both sides: ber_MA:75: '
+                                r'reorder-sections-after in LC_COLLATE$')
         rc, fan = run_step('glibc_locale_data.py', 'fanin', FLOOR_NEW)
         self.assertEqual(rc, 0, fan)
         self.assertEqual(
@@ -988,35 +788,102 @@ class BelowTheOldVersionFloor(StepRun):
                     fan, 'the count'),
             17)
 
-    def test_step_3_writes_its_280_files_and_24_aliases(self):
-        """The written list is the affected set and the aliases step 3 prints,
-        and nothing else (backlog 13.1; it held 409 SUPPORTED spellings and
-        five unmapped names, 414, until then). glibc-2.17's locale.alias also
-        carries two names in Latin-1 bytes, an alias each of fr_FR and nb_NO;
-        they are not written, and the step says so rather than dropping them
-        in silence or writing a name with U+FFFD in it."""
+    def test_one_commit_at_2_12_lists_nothing_it_doubts(self):
+        """One commit compared with itself compares nothing, and says so
+        before anything else: the 17 locales the reader cannot settle at
+        glibc-2.12 are not listed, nor is anything else, because nothing
+        was compared, which the summary says."""
+        r = Step2Report(self.step('filter_lc_collate_changes.py', FLOOR_OLD,
+                                  FLOOR_OLD))
+        self.assertEqual(r.nothing, 'the two tags are one commit.')
+        self.assertEqual((r.listed, r.reindex), ({}, []))
+
+    def test_the_26_files_2_12_lacks_are_not_compared_and_not_listed(self):
+        """A file the old tag lacks is not compared: there are no old rules
+        to compare with. Step 3 used to list ayc_PE, sw_KE and the 24 others
+        for Reindex because their files changed (were added); step 2 names
+        them, with the note that a distro may have shipped them earlier.
+        The note's two halves are both asserted."""
+        r = self.report()
+        self.assertEqual(len(r.added), 26)
+        for name in ('ayc_PE', 'sw_KE', 'yue_HK'):
+            self.assertIn(name, r.added)
+            self.assertNotIn(name, r.reindex)
+        self.assertEqual(set(r.added) & set(r.reindex), set())
+        self.assertIn('Confirm with `locale -a` on the OLD machine',
+                      flat(r.out))
+
+    def test_every_rule_can_change_in_each_of_the_262(self):
+        """At glibc 2.12 and 2.17 iso14651_t1_common changed, and every
+        locale whose rules differ copies it: every rule can change in each,
+        and each names its characters in the file rather than on the
+        line."""
+        r = self.report()
+        self.assertEqual(len(r.differs), 262)
+        self.assertEqual({every for _, every in r.differs.values()}, {True})
+        self.assertEqual(
+            [n for n, (chars, _) in r.differs.items()
+             if not isinstance(chars, int) or chars < 1], [])
+
+    def test_zh_CN_GB18030_names_206_characters_GB18030_changed(self):
+        """Backlog 13.7, PR B: the one pinned pair where a charmap change
+        reaches a build's rules. GB18030 changes 12,384 characters, and the
+        rules zh_CN.GB18030 reads name 206 of them, all in
+        iso14651_t1_common. zh_CN's rules differ anyway, so Reindex lists it
+        already: counted, not repeated, and nothing goes to the keyed list.
+        With step 2's own changed files as the skip, instead of what Reindex
+        lists, the time-gate prototype listed 287 sources here."""
+        out = self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW)
+        self.assertIn('GB18030: 12352 characters added, 24 removed, 8 given '
+                      'other bytes. UTF-8: 4357 characters added.', flat(out))
+        self.assertRegex(flat(out), r'Reindex lists anyway, whose LC_COLLATE '
+                                    r'names one of those characters or '
+                                    r'could not be compared \(1\): '
+                                    r'zh_CN\.GB18030 \(GB18030\): 206 '
+                                    r'characters, named in iso14651_t1_common')
+        self.assertIn('zh_CN', Step2Report(out).reindex)
+        path = os.path.join(
+            self.out_dir,
+            f'step2_keyed_locales.{g.pair_slug(FLOOR_OLD, FLOOR_NEW)}.txt')
+        with open(path, encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), '')
+
+    def test_reindex_writes_277_names_and_leaves_two_aliases_out(self):
+        """277 since step 9.2: the 262 that differ and the 17 not compared,
+        less the two non-ASCII aliases, bokm\\xe5l of nb_NO and
+        fran\\xe7ais of fr_FR, in Latin-1 bytes in glibc-2.17's
+        locale.alias: PostgreSQL never imports such a name as a collation.
+        They are not written, and the step says so rather than dropping
+        them in silence or writing a name with U+FFFD in it. Step 3's
+        figure was 280 locales and 24 aliases; 11 with the three roots
+        missing. What SUPPORTED does not build is listed and named under
+        its own note."""
         out_dir = tempfile.mkdtemp(prefix='pg-glibc-audit-test-')
         self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
-        rc, out = run_step('resolve_copy_closure.py', FLOOR_NEW,
-                           'dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
-                           'se_NO', 'ug_CN', out_dir=out_dir)
+        rc, out = run_step('filter_lc_collate_changes.py', FLOOR_OLD,
+                           FLOOR_NEW, out_dir=out_dir)
         self.assertEqual(rc, 0, out)
-        affected = re.search(r'^Full affected set \(\d+ locale source file'
-                             r'\(s\)\): (.+)$', out, re.M)
-        aliases = re.search(r"^Also named by glibc's locale.alias: (.+)$",
-                            out, re.M)
-        self.assertIsNotNone(affected, out)
-        self.assertIsNotNone(aliases, out)
-        affected = affected.group(1).split(', ')
-        aliases = [a.split(' (')[0] for a in aliases.group(1).split(', ')]
-        self.assertEqual((len(affected), len(aliases)), (280, 24))
-        with open(os.path.join(out_dir, 'step3_affected_locales.txt'),
-                  encoding='utf-8') as fh:
-            written = sorted(ln.strip() for ln in fh if ln.strip())
-        self.assertEqual(written, sorted(affected + aliases))
+        r = Step2Report(out)
+        self.assertEqual(len(r.reindex), 277)
+        # The two print escaped, as a terminal can carry them.
+        self.assertEqual(sorted(r.reindex),
+                         sorted((set(r.differs) | set(r.listed))
+                                - set(r.not_ascii)))
+        with open(os.path.join(
+                out_dir, f'step2_changed_collate.'
+                         f'{g.pair_slug(FLOOR_OLD, FLOOR_NEW)}.txt'),
+                encoding='utf-8') as fh:
+            written = [ln.strip() for ln in fh if ln.strip()]
+        self.assertEqual(written, r.reindex)
         self.assertTrue(all(n.isascii() for n in written))
-        self.assertIn('Not listed: an alias of fr_FR, nb_NO whose name is not '
-                      'ASCII', out)
+        self.assertEqual(r.not_ascii, ["'bokm\\ufffdl'", "'fran\\ufffdais'"])
+        self.assertEqual(r.unbuilt, ['el_GR@euro', 'iso14651_t1',
+                                     'iso14651_t1_common',
+                                     'iso14651_t1_pinyin'])
+        for name in ('en_US', 'de_DE', 'fr_FR', 'es_ES', 'it_IT', 'nl_NL',
+                     'pt_BR', 'ru_RU', 'sv_SE', 'zh_CN', 'zh_TW', 'ky_KG',
+                     'uk_UA'):
+            self.assertIn(name, r.reindex, f'{name} is not listed')
 
     def test_step_5_prints_68_hunks(self):
         """It was 63 until the two wide-char wrappers joined TIER 1: each
@@ -1078,16 +945,6 @@ class BelowTheOldVersionFloor(StepRun):
         self.assertIn('not listed: an alias of fr_FR, nb_NO whose name is not '
                       'ASCII', out)
 
-    def test_the_locales_the_bug_used_to_drop_are_reported(self):
-        """A count can be right for the wrong reason. These are examples of
-        what was silently dropped."""
-        out = self.step('resolve_copy_closure.py', FLOOR_NEW,
-                        'dz_BT', 'fi_FI', 'hu_HU', 'iso14651_t1_common',
-                        'se_NO', 'ug_CN')
-        for name in ('en_US', 'de_DE', 'fr_FR', 'es_ES', 'it_IT', 'nl_NL',
-                     'pt_BR', 'ru_RU', 'sv_SE', 'zh_CN', 'zh_TW'):
-            self.assertIn(name, out, f'{name} is not in the affected set')
-
 
 
 @needs_clone
@@ -1135,75 +992,47 @@ class SkippingAReleaseReportsTheUnion(StepRun):
     class is what keeps that true.
     """
 
+    def _step2(self, old, new):
+        """Step 2's report for the pair, read from stdout rather than from
+        step2_changed_collate.*.txt: run_step is memoised and a cached call
+        does not rewrite its files, so a second test reading that path could
+        assert on a previous pair's list."""
+        return Step2Report(self.step('filter_lc_collate_changes.py', old,
+                                     new))
+
     def _step2_names(self, old, new):
-        """The bare locale names step 2 reports as changed inside LC_COLLATE.
-
-        Parsed from stdout rather than read from step2_changed_collate.*.txt:
-        run_step is memoised and a cached call does not rewrite its files, so a
-        second test reading that path could assert on a previous pair's list.
-        """
-        out = self.step('filter_lc_collate_changes.py', old, new)
-        count = one_int(r'Files with changes inside LC_COLLATE: (\d+)', out,
-                        f'the step 2 count for {old}..{new}')
-        # Only the block under that header. Step 2 prints bare
-        # localedata/locales/ paths under "Deleted at NEW" too, and a regex
-        # over the whole output would fold a deletion into the changed set --
-        # unreachable on these three ranges today (no locale file is deleted
-        # in any of them), which is exactly when a parser like that survives.
-        block = out.split('Files with changes inside LC_COLLATE:')[1]
-        block = block.split('\n\n')[0]
-        names = re.findall(r'(?m)^  localedata/locales/(\S+)$', block)
-        self.assertEqual(len(names), count,
-                         f'{old}..{new}: step 2 says {count} files and names '
-                         f'{len(names)}; the header and the list disagree')
-        return set(names)
-
-    def _step3_generated(self, new, names):
-        """The names step 3 lists for an affected set: its locales, and the
-        aliases glibc's locale.alias gives them, read from what it prints."""
-        out = self.step('resolve_copy_closure.py', new, *sorted(names))
-        count = one_int(r'Full affected set \((\d+) locale', out,
-                        f'the affected set at {new}')
-        affected = re.search(r'^Full affected set \(\d+ locale source file'
-                             r'\(s\)\): (.+)$', out, re.M).group(1).split(', ')
-        self.assertEqual(len(affected), count,
-                         f'step 3 at {new} says {count} locales and prints '
-                         f'{len(affected)}')
-        aliases = re.search(r"^Also named by glibc's locale.alias: (.+)$", out,
-                            re.M)
-        named = ([a.split(' (')[0] for a in aliases.group(1).split(', ')]
-                 if aliases else [])
-        return set(affected) | set(named)
+        """The names whose rules step 2 says differ."""
+        return set(self._step2(old, new).differs)
 
     def test_step_2_is_the_exact_union_of_the_two_steps(self):
         first, second = self._step2_names(OLD, MID), self._step2_names(MID, NEW)
         direct = self._step2_names(OLD, NEW)
-        self.assertEqual(first, {'or_IN', 'sv_SE'})
-        self.assertEqual(second, {'ber_DZ', 'kab_DZ', 'th_TH'})
+        self.assertEqual(first, {'or_IN', 'sv_FI', 'sv_FI@euro', 'sv_SE',
+                                 'swedish'})
+        self.assertEqual(second, {'th_TH', 'thai'})
         self.assertEqual(
             direct, first | second,
             'the direct pair no longer reports the union of the two steps: '
             f'missing {sorted(first | second - direct)}, '
             f'extra {sorted(direct - (first | second))}')
 
-    def test_step_3_is_the_exact_union_of_the_two_steps(self):
+    def test_reindex_is_the_exact_union_of_the_two_steps(self):
         """The reindex verdict, which is what a reader acts on. Each side is
-        closed over the copy graph of ITS OWN new tag, which is why this is
-        asserted on what step 3 lists rather than on step 2's source files:
-        sv_FI and sv_FI@euro reach sv_SE at both 2.34 and 2.39. The list is
-        locales and their aliases (backlog 13.1)."""
-        first = self._step3_generated(MID, self._step2_names(OLD, MID))
-        second = self._step3_generated(NEW, self._step2_names(MID, NEW))
-        direct = self._step3_generated(NEW, self._step2_names(OLD, NEW))
+        compared with every copy followed at both of its tags, which is why
+        sv_FI and sv_FI@euro, which copy sv_SE, are on both lists. The list
+        is locales and their aliases (backlog 13.1)."""
+        first = set(self._step2(OLD, MID).reindex)
+        second = set(self._step2(MID, NEW).reindex)
+        direct = set(self._step2(OLD, NEW).reindex)
         self.assertEqual(first, {'or_IN', 'sv_FI', 'sv_FI@euro', 'sv_SE',
                                  'swedish'})
-        self.assertEqual(second, {'ber_DZ', 'kab_DZ', 'th_TH', 'thai'})
+        self.assertEqual(second, {'th_TH', 'thai'})
         self.assertEqual(
             direct, first | second,
             'the direct pair no longer reports the union: '
             f'missing {sorted(first | second - direct)}, '
             f'extra {sorted(direct - (first | second))}')
-        self.assertEqual(len(direct), 9)
+        self.assertEqual(len(direct), 7)
 
     def test_every_name_the_machines_measured_as_changed_is_on_the_list(self):
         """Backlog 13.1, the defect itself. Step 11 measured on the three
@@ -1213,13 +1042,11 @@ class SkippingAReleaseReportsTheUnion(StepRun):
         reaches it, as a locale by glibc's rule or as an alias. Two names are
         on no Reindex list by design, and this pins exactly those two:
         ko_KR.utf8 moved through localedef's code with its file unchanged, so
-        it is on step 4's list; C.utf8 is the distro's own file, which step 2
-        names under a `!!`."""
-        lists = ((tlo.CHANGED_8_TO_9,
-                  self._step3_generated(MID, self._step2_names(OLD, MID)),
+        it is on step 4's list; C.utf8 is the distro's own file, which no
+        tag holds, as step 1's `!!` says."""
+        lists = ((tlo.CHANGED_8_TO_9, set(self._step2(OLD, MID).reindex),
                   {'C.utf8', 'ko_KR.utf8'}),
-                 (tlo.CHANGED_9_TO_10,
-                  self._step3_generated(NEW, self._step2_names(MID, NEW)),
+                 (tlo.CHANGED_9_TO_10, set(self._step2(MID, NEW).reindex),
                   set()))
         for measured, listed, elsewhere in lists:
             with self.subTest(listed=sorted(listed)):
@@ -1321,9 +1148,9 @@ class SkippingAReleaseReportsTheUnion(StepRun):
 
         A file ADDED between 2.28 and 2.34 and then changed inside LC_COLLATE
         between 2.34 and 2.39 is in the second step's reindex list, and in the
-        direct run it is reported under "Added at glibc-2.39, not analysed for
-        a change of order" instead -- named either way, never silent, but
-        under a different heading, so the union would break. Two files fit the
+        direct run it is named as not compared for want of a file at
+        glibc-2.28 instead -- named either way, never silent, but under a
+        different heading, so the union would break. Two files fit the
         first half on this triple (ckb_IQ, mnw_MM) and neither changed inside
         LC_COLLATE. Without this, that day's failure would read as a lost
         locale.

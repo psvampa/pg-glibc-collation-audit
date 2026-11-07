@@ -526,8 +526,8 @@ STEP2_WORDS = Words(
     builds="in SUPPORTED at both tags",
     identical="are identical at {old} and {new}",
     between="between {old} and {new}",
-    listed_for="listed for step 3",
-    lists_anyway="step 3 lists anyway",
+    listed_for="listed for Reindex",
+    lists_anyway="Reindex lists anyway",
     none_compared="No locale build is in SUPPORTED at both tags with its "
                   "source file at both, so none was compared.",
     not_compared="{n} SUPPORTED entr{y_ies} at both tags {is_are} not "
@@ -663,7 +663,7 @@ def print_charmap_report(report, old, new, words=STEP2_WORDS):
             f"!! {len(distro)} locale(s) that SUPPORTED never builds in a "
             f"charmap that changed name one of the characters it changed. A "
             f"distro can build them in it (Red Hat builds en_US in "
-            f"ISO-8859-15), so they are listed for step 3:",
+            f"ISO-8859-15), so they are {w('listed_for')}:",
             width=78, subsequent_indent='   '))
         for f in distro:
             print(f"     {f.source} ({f.charmaps[1]}): {_chars_phrase(f)}")

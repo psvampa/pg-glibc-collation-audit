@@ -20,9 +20,9 @@ module answers from those runs and from nothing else (backlog 15.2):
     finish, and why. Such a locale is never reported as clear: the steps
     list it, with `!!`.
 
-Steps 1 to 4 and 9/10 read this. Steps 6 to 8, and step 2's
-lc_collate_unread check and the files its check of character sets and
-transliterations (collation_keys) reads, still read with their own readers.
+Steps 1, 2, 4 and 9/10 read this. Steps 6 to 8, and the files step 2's
+check of character sets and transliterations (collation_keys) reads, still
+read with their own readers.
 """
 import collections
 import difflib
@@ -333,10 +333,11 @@ class Tree(object):
         return 'explicit'
 
 
-# -- what step 2 asks of each file -------------------------------------------
+# -- what localedef reads in each file ---------------------------------------
+# No step asks it since step 9.2; kept, with its tests, for branches 12, 13.
 
 class Facts(object):
-    """How localedef reads one file of a tree, for step 2.
+    """How localedef reads one file of a tree.
 
     collate     [(start, end, comment, escape, run)]: every LC_COLLATE
                 section of this file that localedef read for its content,
@@ -537,10 +538,9 @@ def _load_facts(path, names, load):
 def file_facts(repo, tag, paths, ids, build, cache_dir=None):
     """{name: Facts} for every locale file at `tag` read for `build`.
 
-    `paths` and `ids` are list_tree_ids' answer for the tag, which step 2
-    has already, so a kept answer costs no file read: loading the whole
-    tree's runs for two tags cost each run of step 2 about 0.5 s (backlog
-    15.2 B3, measured). The answer
+    `paths` and `ids` are list_tree_ids' answer for the tag, so a kept
+    answer costs no file read (no step asks it since step 9.2). The
+    answer
     is derived from those runs and nothing else, kept next to them under
     the reader's version, the build and _SELF (the hash of _SELF_SOURCES);
     an entry that cannot be read, reads as another shape or other names,
@@ -908,7 +908,7 @@ def across(ids, load, b0, b1, cache_dir=None):
     has not, or gives another token (codepoint_collation from 2.35). Every
     run records whether it met such a byte (Run.met) and which words it
     looked up (Run.words), so the runs of the tree with b0 -- kept
-    already, as steps 1 to 4 read them -- say which can differ; a run that
+    already, as steps 1, 2 and 4 read them -- say which can differ; a run that
     met nothing either way is read the same with b1, step by step. Each of
     the others is computed whole with both Builds (same_run: every token
     of every LC_COLLATE statement) and listed when the two differ. A run

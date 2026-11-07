@@ -3,9 +3,8 @@
 # Run the whole glibc collation audit for one version pair.
 #
 # The steps exist because the method asks distinct questions, not because a
-# user should have to type one command per step. This runs them in order,
-# hands step 2's result to step 3 so nobody has to retype locale names, and
-# ends with a consolidated summary.
+# user should have to type one command per step. This runs them in order and
+# ends with a consolidated summary, whose Reindex list is step 2's.
 #
 # Usage:
 #   ./audit.sh <old> <new>
@@ -388,7 +387,9 @@ fi
 STEP2_LIST="$OUT_DIR/step2_changed_collate.$PAIR.txt"
 STEP2_REMOVED="$OUT_DIR/step2_removed_locales.$PAIR.txt"
 STEP2_KEYED="$OUT_DIR/step2_keyed_locales.$PAIR.txt"
-STEP3_LIST="$OUT_DIR/step3_affected_locales.txt"
+# Written by step 3 until step 9.2 merged it into step 2. Only removed
+# below, so that a list an earlier version left there is never read.
+OLD_STEP3_LIST="$OUT_DIR/step3_affected_locales.txt"
 STEP4_LIST="$OUT_DIR/step4_exposed_locales.txt"
 # The locales step 4 leaves off that list because glibc builds them in byte
 # order. Named where step 5 found code changes, which can move them too.
@@ -510,8 +511,8 @@ fi
 
 mkdir -p "$OUT_DIR"
 
-# Every file this script later READS must have been written by this run. Step 3
-# and step 4 use pair-agnostic names, so a leftover from a different pair would
+# Every file this script later READS must have been written by this run. Step 4
+# uses pair-agnostic names, so a leftover from a different pair would
 # otherwise be summarised as if it were this pair's answer -- the exact bug
 # filter_lc_collate_changes.py's docstring records having removed. Targeted
 # removal only: $OUT_DIR is user-supplied and is not ours to wipe.
@@ -524,7 +525,7 @@ mkdir -p "$OUT_DIR"
 # one of these nodes" when it read no node. The direction is conservative, which
 # is why it went unnoticed, but the statement is false and this file's rule is
 # that every file it reads was written by this run.
-rm -f "$STEP2_LIST" "$STEP2_REMOVED" "$STEP2_KEYED" "$STEP3_LIST" "$STEP4_LIST" \
+rm -f "$STEP2_LIST" "$STEP2_REMOVED" "$STEP2_KEYED" "$OLD_STEP3_LIST" "$STEP4_LIST" \
       "$STEP4_BYTE_ORDER" ${OLD_BYTE_ORDER:+"$OLD_BYTE_ORDER"} \
       ${NEW_BYTE_ORDER:+"$NEW_BYTE_ORDER"} \
       "$NEW_COPY_MISSING" "$OLD_DISTRO_LIST" "$NEW_DISTRO_LIST" \
@@ -540,7 +541,7 @@ rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
 # Step 11 is worked out before step 1, so that a measurement the comparison
 # refuses -- cut short, damaged, measured by another copy of locale_order.py
 # over other strings, or taken on another glibc than its tag -- stops the run
-# here instead of after the five steps. Its report is printed where step 11
+# here instead of after steps 1 to 5. Its report is printed where step 11
 # stands, below, and its summary at the end.
 #
 # Its log is not named step11.*.log on purpose: the warnings block at the end
@@ -603,7 +604,7 @@ run_step 1 "$SCRIPTS/audit-locale-diff.sh" "$OLD" "$NEW"
 # adding one more copy of their `!!` block. Two questions in one answer:
 #
 #   reversed -- step 1 has already exited 2 and this script stopped with it.
-#               Reversed, all five steps run to the end; the direction was
+#               Reversed, steps 1 to 5 run to the end; the direction was
 #               never compared at all.
 #   same     -- one commit, however each side is spelt (the second word is
 #               then `commit`). This used to be
@@ -623,9 +624,9 @@ NOTHING=${ORDER_WORDS#* }
 
 # A minor-version upgrade inside one RHEL major is two builds of the SAME
 # upstream release, so the steps that compare the two tags have nothing to
-# compare. Steps 1 to 3 report that nothing changed, and step 5 that nothing
-# was compared. That is not a clean result, and C.UTF-8 is the proof: its
-# order changed between RHEL 8.1 and 8.2, both of them upstream glibc 2.28.
+# compare. Step 1 reports that nothing changed, and steps 2 and 5 that
+# nothing was compared. That is not a clean result, and C.UTF-8 is the proof:
+# its order changed between RHEL 8.1 and 8.2, both of them upstream glibc 2.28.
 SAME_TAG=0
 case $NOTHING in
   commit|tree) SAME_TAG=1 ;;
@@ -659,7 +660,7 @@ case $ORDER in
     ;;
 esac
 
-banner "STEP 2  Which changes can reach sort order"
+banner "STEP 2  Which locales' sort rules changed"
 run_step 2 python3 "$SCRIPTS/filter_lc_collate_changes.py" "$OLD" "$NEW"
 
 # Absent is not empty. Step 2 writes these files whether or not it found
@@ -677,68 +678,10 @@ if [ ! -f "$STEP2_LIST" ] || [ ! -f "$STEP2_KEYED" ]; then
   exit 1
 fi
 
-# Read without a subshell and without mapfile -- macOS ships bash 3.2, and
-# requirements.md promises only "bash". The second list holds the locales
-# step 2's character set and transliteration checks list, which step 3 takes
-# after --keyed.
-STEP3_ARGS=()
-KEYED_ARGS=()
-for list in "$STEP2_LIST" "$STEP2_KEYED"; do
-  while IFS= read -r name; do
-    [ -n "$name" ] || continue
-    # These files live under a world-writable /tmp by default and become argv
-    # below. A pre-seeded line like `--repo /elsewhere` would silently point
-    # the audit at different source, so validate before trusting.
-    #
-    # Also unreachable today, and for a better reason: step 2 rewrites both
-    # files for THIS pair immediately above, so the only names that get here
-    # are the ones it just wrote. That property is what
-    # test_step_2_rewrites_the_list_so_a_seed_cannot_survive pins; this check
-    # is what stops the file being trusted if that ever changes.
-    case $name in
-      *[!A-Za-z0-9_.@+-]* | -*)
-        echo "error: refusing to pass '$name' from $list to step 3." >&2
-        echo "       That is not a locale file name. Delete the file and re-run." >&2
-        exit 1
-        ;;
-    esac
-    if [ "$list" = "$STEP2_LIST" ]; then
-      STEP3_ARGS+=("$name")
-    else
-      KEYED_ARGS+=("$name")
-    fi
-  done < "$list"
-done
-
-if [ ${#STEP3_ARGS[@]} -gt 0 ] || [ ${#KEYED_ARGS[@]} -gt 0 ]; then
-  # One array, never empty, because bash 3.2 under set -u calls an empty
-  # "${array[@]}" unbound.
-  STEP3_CALL=("$NEW")
-  if [ ${#STEP3_ARGS[@]} -gt 0 ]; then
-    STEP3_CALL+=("${STEP3_ARGS[@]}")
-  fi
-  if [ ${#KEYED_ARGS[@]} -gt 0 ]; then
-    STEP3_CALL+=(--keyed "${KEYED_ARGS[@]}")
-  fi
-  banner "STEP 3  Which locales inherit those changes"
-  run_step 3 python3 "$SCRIPTS/resolve_copy_closure.py" "${STEP3_CALL[@]}"
-else
-  banner "STEP 3  Skipped: step 2 gave it no locale"
-  echo "Nothing to close over the copy graph for this pair."
-  if [ "$NOTHING" = "commit" ]; then
-    echo "The two $NOUN are one commit, so nothing was compared and this is"
-    echo "NOT a clean result. Step 4's list, and the locales it leaves out as"
-    echo "built in byte order, still need confirming."
-  elif [ "$NOTHING" = "tree" ]; then
-    echo "The two refs are two commits of one source tree, so nothing was"
-    echo "compared and this is NOT a clean result. Step 4's list, and the"
-    echo "locales it leaves out as built in byte order, still need confirming."
-  else
-    echo "This is a real result, not a failure -- steps 4 and 5 still matter,"
-    echo "because they cover what a data diff cannot settle."
-  fi
-  : > "$STEP3_LIST"
-fi
+# Step 2's list is the summary's Reindex. Every name in it was just written
+# by step 2 for this pair (the absent check above), and it is printed, never
+# passed on as an argument: the name check that used to guard step 3's argv
+# is no longer needed.
 
 banner "STEP 4  Which locales a data diff can never clear"
 run_step 4 python3 "$SCRIPTS/flag_algorithmic_ranges.py" "$NEW"
@@ -746,7 +689,7 @@ run_step 4 python3 "$SCRIPTS/flag_algorithmic_ranges.py" "$NEW"
 banner "STEP 5  Did the code that computes weights change"
 run_step 5 python3 "$SCRIPTS/diff_collation_code.py" "$OLD" "$NEW"
 
-# Optional, and not part of the five-step method: steps 1-5 read only the
+# Optional, and not part of the source audit: steps 1 to 5 read only the
 # clone, while steps 6 to 11 need a node's files. They run only when you
 # supply them, and keep their numbers when a side is left out.
 if [ -n "$OLD_LOCALES" ]; then
@@ -960,11 +903,11 @@ banner "AUDIT SUMMARY  $OLD -> $NEW"
 
 echo
 echo "-- Reindex: sort order changes, confirm then REINDEX"
-if [ "$(count_lines "$STEP3_LIST")" -gt 0 ]; then
+if [ "$(count_lines "$STEP2_LIST")" -gt 0 ]; then
   # glibc's file C is C.UTF-8: PostgreSQL sorts a locale that is exactly C
   # without glibc. The list keeps C, which the SQL template reads as C.utf8.
-  sed 's/^C$/C.UTF-8/; s/^/     /' "$STEP3_LIST"
-  echo "   ($(count_lines "$STEP3_LIST") name(s); full list: $STEP3_LIST)"
+  sed 's/^C$/C.UTF-8/; s/^/     /' "$STEP2_LIST"
+  echo "   ($(count_lines "$STEP2_LIST") name(s); full list: $STEP2_LIST)"
   # Locales, not spellings (backlog 13.1): the names a machine and a database
   # use for one locale are many (sv_SE.utf8, sv_SE.iso885915, sv_SE.UTF-8),
   # and none of those lists can be complete. glibc's own rule takes each back
@@ -975,13 +918,19 @@ if [ "$(count_lines "$STEP3_LIST")" -gt 0 ]; then
   echo "   list (sv_SE.UTF-8, sv_SE.utf8 and sv_SE.iso885915 are all sv_SE). The"
   echo "   list also holds the aliases glibc's locale.alias gives these locales."
   echo "   sql/collation_confirmation_template.sql reads collations the same way."
-  if grep -qx C "$STEP3_LIST"; then
+  if grep -qx C "$STEP2_LIST"; then
     echo "   C.UTF-8 is glibc's locale file C, written C in the full list; C.utf8"
     echo "   and C.UTF-8 are its spellings. A collation or a database whose locale"
     echo "   is exactly C or POSIX is compared by PostgreSQL itself, without glibc."
   fi
 else
-  echo "     none -- no locale at both $NOUN changed in what step 2 compares"
+  if [ "$SAME_TAG" = 1 ]; then
+    echo "     none -- nothing was compared: the two $NOUN are one commit or one"
+    echo "     source tree (see below)"
+  else
+    echo "     none -- no locale whose rules step 2 compared differs, and step 2"
+    echo "     lists none it could not compare"
+  fi
 fi
 # With the two measurements the summary holds a second answer to the same
 # question, and this one comes first: it says where the other is, so that the
@@ -1161,13 +1110,14 @@ case $STEP5 in
   clean)
     if [ "$NOUN" = tags ]; then
       echo "-- Needs an empirical test: none on this evidence. Step 5 found no"
-      echo "   substantive change, so steps 1 to 3 are sufficient even for the"
-      echo "   locales step 4 flagged."
+      echo "   substantive change, so step 2's comparison of rules is sufficient"
+      echo "   even for the locales step 4 flagged."
     else
       # Step 5's own clean sentence between builds says what it covers.
       echo "-- Needs an empirical test: none on this evidence. Step 5 found no"
-      text="substantive change in the sources, so steps 1 to 3 are sufficient"
-      text="$text even for the locales step 4 flagged, as far as the sources go."
+      text="substantive change in the sources, so step 2's comparison of rules"
+      text="$text is sufficient even for the locales step 4 flagged, as far as"
+      text="$text the sources go."
       text="$text $NOT_READ, below."
       printf '%s\n' "$text" | fold -s -w 72 | sed 's/ *$//; s/^/   /'
     fi ;;

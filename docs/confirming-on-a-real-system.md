@@ -23,9 +23,9 @@ psql -f sql/collation_confirmation_template.sql   # edit placeholders first
 
 ## Which locales to run it for
 
-Every locale steps 1 to 3 flagged, and every locale step 4 flagged that step 5
-does not [clear](limitations.md#step-5-reports-it-does-not-decide), whether or
-not it showed up in steps 1 to 3. When step 5 does not clear the code, add the
+Every locale step 2 lists for Reindex, and every locale step 4 flagged that
+step 5 does not [clear](limitations.md#step-5-reports-it-does-not-decide),
+whether or not step 2 lists it. When step 5 does not clear the code, add the
 locales step 4 leaves out as built in byte order, which the summary names. With
 command 1.b, add every locale steps 6 to 8 list, every locale step 11 reports
 as changed, every one it reports as not known to be unchanged, and every one it
@@ -51,13 +51,13 @@ decides whether the run proves anything. They are not words in the language.
 They are the characters the rule that changed moves.
 
 Derive them from that rule. For a `localedef` change that means the boundaries
-of the affected range. Under each locale it flags, step 2 lists the characters
-its changed rules name, or says it could not identify them and that the locale
-must be considered suspicious, or, when the file is read with other comment or
-escape characters, is read differently by the two versions of glibc, may not
-be read as written, or has a changed line that decides how other lines are
-read or where other rules sort, that every rule in it can change.
-For a locale it lists
+of the affected range. Under each locale whose rules differ, step 2 names the
+characters the lines that changed name; or it says that which characters is
+not known, and why, or that those lines name no character. When a changed line
+decides how other lines are read or where other rules sort, it says that every
+rule can change and, when it knows them, gives the count of the characters the
+changed lines and the lines read otherwise name, with the list in the file it
+names. For a locale it lists
 because its character set changed, it prints which of the characters its rules
 name the character set changed, or why it could not compare them. For a locale
 it lists because a collating element, a combination of letters sorted as one,
@@ -67,12 +67,13 @@ whole element. Step 11, in
 command 1.b, names every character, other string and pair it found, in the
 file its summary names.
 
-Step 2's list is where to start, not proof that every character on it moved. A
+The characters step 2 names are where to start, not proof that every one of
+them moved. A
 rule that was rewritten names everything it touches, weights included, so
 three characters from the list that sort the same on both machines do not
-clear the locale. And when step 2 says every rule in a file can change, the
-list is not all the values to test. Read the file's rules, and those of the
-files it copies or that copy it.
+clear the locale. And when step 2 says every rule can change, the list is not
+all the values to test. Read the locale's rules, and those of the files it
+copies.
 
 The worked example is `ko_KR` between glibc 2.28 and 2.34, where the whole
 difference is the last syllable of the Hangul block against any Hanja.
@@ -82,10 +83,9 @@ failure this step exists to avoid. The characters, and what they print on each
 build, are in
 [results.md](results.md#the-ko_kr-mechanism-and-its-minimal-test-case).
 
-For a locale step 3 adds, start from the characters step 2 lists under the
-file step 3 says it reaches. For a locale that only steps 4, 9 or 10 flagged,
-where step 11 names no characters, read its source and the files it copies.
-Two kinds of character can move there with no file changing: one inside an
+For a locale that only steps 4, 9 or 10 flagged, where step 11 names no
+characters, read its source and the files it copies. Two kinds of character
+can move there with no file changing: one inside an
 [ellipsis range](glossary.md), best taken at the range's boundary, and one the
 files do not list, which takes `localedef`'s default weight. Put one of each
 kind the locale has in the three strings, and fill the rest with characters

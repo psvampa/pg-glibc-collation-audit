@@ -38,7 +38,7 @@ import time
 import unittest
 from unittest import mock
 
-from _harness import (GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR, flat,
+from _harness import (GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR, Step2Report, flat,
                       summary_block,
                       glibc_shaped, needs_clone)
 
@@ -2954,7 +2954,7 @@ class _StepsOnBuilds:
 
 @needs_clone
 class AStepReadsABuild(_StepsOnBuilds, unittest.TestCase):
-    """Steps 2, 3 and 4 on builds, and what every step refuses
+    """Steps 2 and 4 on builds, and what every step refuses
     (_StepsOnBuilds)."""
 
     def test_step_2_reads_two_builds_and_names_them(self):
@@ -2962,20 +2962,24 @@ class AStepReadsABuild(_StepsOnBuilds, unittest.TestCase):
                                         B275, B283)
         self.assertEqual(rc, 0, err[-2000:])
         self.assertNoCommitId(out, err, out_dir=d)
-        self.assertIn('Locale files changed between %s and %s: 2\n'
-                      % (B275, B283), out)
+        self.assertIn('The sort rules localedef builds for each locale at %s '
+                      'and at %s,' % (B275, B283), flat(out))
+        # xx_YY exists only in the build.
+        self.assertEqual(Step2Report(out).added,
+                         {'xx_YY': '(not in SUPPORTED)'})
         # Ordered by rpm: two builds of one version, which git cannot order.
         self.assertNotIn('DIRECTION', out + err)
         self.assertIn('SUPPORTED at both builds', flat(out))
         self.assertNotIn('both tags', flat(out))
         # The lists audit.sh reads are named for the builds.
         self.assertEqual(sorted(os.listdir(d)), sorted(
-            '%s.%s..%s.txt' % (k, B275, B283) for k in (
+            ['%s.%s..%s.txt' % (k, B275, B283) for k in (
                 'step2_changed_collate', 'step2_keyed_locales',
-                'step2_removed_locales')))
+                'step2_removed_locales')]
+            + ['step2_rules_characters.%s..%s.tsv' % (B275, B283)]))
         # An added file: the old build's own sources are the answer.
         self.assertIn("%s's own locale sources do not have these files, so "
-                      "that build ships none of these locales:" % B275,
+                      "that build ships none of these locales." % B275,
                       flat(out))
         self.assertNotIn('distros backport', out)
 
@@ -3006,8 +3010,9 @@ class AStepReadsABuild(_StepsOnBuilds, unittest.TestCase):
         rc, out, err, _ = self.run_step('filter_lc_collate_changes.py',
                                         B275, B275)
         self.assertEqual(rc, 0, err[-2000:])
-        self.assertIn('%s and %s are the same commit. Steps 1, 2 and 5 '
-                      'compare that commit against itself.' % (B275, B275),
+        self.assertIn('%s and %s are the same commit. Steps 1 and 5 '
+                      'compare that commit against itself, and step 2 '
+                      'compares nothing.' % (B275, B275),
                       flat(out + err))
         self.assertIn('the two builds are one commit.', flat(out))
 
@@ -3032,7 +3037,7 @@ class AStepReadsABuild(_StepsOnBuilds, unittest.TestCase):
                 self.assertEqual(rc, 2)
                 self.assertIn("cannot read the build %s: it changes glibc's "
                               "line reader (%s)" % (build, path), flat(err))
-                self.assertNotIn('Locale files changed', out)
+                self.assertNotIn('The sort rules localedef builds', out)
 
     def test_a_builds_commit_given_as_a_tag_is_refused_by_every_step(self):
         rc, _, err, _ = self.run_step('flag_algorithmic_ranges.py', B283)
@@ -3040,7 +3045,6 @@ class AStepReadsABuild(_StepsOnBuilds, unittest.TestCase):
         commit = _git_out(self.repo, 'rev-parse', bs.build_ref(B283))
         for script, args in (
                 ('filter_lc_collate_changes.py', (TAG, commit)),
-                ('resolve_copy_closure.py', (commit, 'sv_SE')),
                 ('flag_algorithmic_ranges.py', (commit,)),
                 ('diff_collation_code.py', (TAG, commit[:12]))):
             with self.subTest(script=script):
@@ -3051,26 +3055,14 @@ class AStepReadsABuild(_StepsOnBuilds, unittest.TestCase):
                 self.assertIn('Name the build itself '
                               '(glibc-2.34-283.el9_8) instead.', flat(err))
 
-    def test_steps_3_and_4_read_the_build_not_its_tag(self):
+    def test_step_4_reads_the_build_not_its_tag(self):
+        """xx_YY exists only in the build: one file more than the tag."""
         rc, out, err, _ = self.run_step('flag_algorithmic_ranges.py', B283)
         self.assertEqual(rc, 0, err[-2000:])
         self.assertNoCommitId(out, err)
         at_tag = len(_git_out(GLIBC_CLONE, 'ls-tree', '--name-only',
                               TAG + ':localedata/locales').split('\n'))
         self.assertIn('Files at %s: %d,' % (B283, at_tag + 1), out)
-        # xx_YY exists only in the build.
-        rc, out, err, _ = self.run_step('resolve_copy_closure.py', B283,
-                                        'xx_YY')
-        self.assertEqual(rc, 0, err[-2000:])
-        self.assertNoCommitId(out, err)
-        self.assertIn('Copy chains read at %s' % B283, out)
-        # A note on stderr names the build too.
-        rc, out, err, _ = self.run_step('resolve_copy_closure.py', B283,
-                                        'sv_SE', 'translit_combining')
-        self.assertEqual(rc, 0, err[-2000:])
-        self.assertIn('note: translit_combining have no LC_COLLATE block at '
-                      '%s;' % B283, flat(err))
-        self.assertNoCommitId(out, err)
 
     def test_a_reversed_pair_of_builds_names_builds(self):
         rc, out, err, _ = self.run_step('filter_lc_collate_changes.py',
@@ -3149,8 +3141,8 @@ class StepFiveReadsABuild(_StepsOnBuilds, unittest.TestCase):
                                         self.CLEAN)
         self.assertEqual(rc, 0, err[-2000:])
         self.assertIn("No substantive collation code change in the sources. "
-                      "Every locale at both builds that steps 2 and 3 did "
-                      "not list is unaffected as far as the sources go, "
+                      "Every locale at both builds that step 2 did not "
+                      "list is unaffected as far as the sources go, "
                       "including every locale that flag_algorithmic_ranges.py"
                       " lists. Not checked: what each build's compiler "
                       "made of those sources, and a build's patches to code "
@@ -3163,8 +3155,8 @@ class AStepReadsTheFixtureBuilds(unittest.TestCase):
     """Step 2 on the three real builds of the fixtures, rebuilt from
     tests/build_sources/ and the clone (fixture()), read by audit.sh's
     known answers: over RHEL 8 -> 9 the builds hold C.UTF-8's file on both
-    sides, so it is compared like any locale and changes, and en_US@ampm,
-    which only el8 ships, is deleted; over RHEL 9 -> 10 the C file is the
+    sides, so it is compared like any locale and differs, and en_US@ampm,
+    which only el8 ships, is deleted; over RHEL 9 -> 10 C's rules are the
     same and no `!!` says C.UTF-8 may change (backlog 13.6)."""
 
     @classmethod
@@ -3213,15 +3205,19 @@ class AStepReadsTheFixtureBuilds(unittest.TestCase):
         self.assertIn('en_US@ampm (deleted)', lines('removed_locales'))
         # Each build holds its own C: compared, not added, and nothing said
         # of a tag.
-        self.assertNotIn('localedata/locales/C ->', out)
+        report = Step2Report(out)
+        # Printed as C.UTF-8: glibc's file C is that locale (shown_name).
+        self.assertIn('C.UTF-8', report.differs)
+        self.assertNotIn('C', report.added)
         self.assertNotIn('Not checked for glibc-', out)
 
     def test_rhel9_to_rhel10(self):
         out, lines = self.step2(*(b for b, _ in FIXTURES[1:]))
-        self.assertNotIn('localedata/locales/C ->', out)
+        report = Step2Report(out)
+        self.assertNotIn('C', report.added)
+        self.assertNotIn('C', report.differs)
         self.assertNotIn('C.UTF-8', out)
-        self.assertEqual(lines('changed_collate'),
-                         ['ber_DZ', 'kab_DZ', 'th_TH'])
+        self.assertEqual(lines('changed_collate'), ['th_TH', 'thai'])
 
 
 
@@ -3725,9 +3721,9 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
         summary = flat(self.summary('clean'))
         self.assertIn('-- Needs an empirical test: none on this evidence. '
                       'Step 5 found no substantive change in the sources, so '
-                      'steps 1 to 3 are sufficient even for the locales step '
-                      '4 flagged, as far as the sources go. %s, below.'
-                      % NOT_READ, summary)
+                      "step 2's comparison of rules is sufficient even for "
+                      'the locales step 4 flagged, as far as the sources go. '
+                      '%s, below.' % NOT_READ, summary)
         self.assertNotIn('did NOT reach a clean result', summary)
 
     def test_a_patch_outside_locale_is_named_among_the_reasons(self):
@@ -3792,9 +3788,9 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
     def test_the_tag_side_alone_gets_the_tags_warning(self):
         """The old side is a tag and the new one a build: step 1's `!!`
         names the tag alone and asks for its build, the summary repeats it,
-        and C, which the build ships and the tag lacks, is an added file
-        whose sentence says it may exist on the old system. Nothing says
-        its order is settled (7.7)."""
+        and C, which the build ships and the tag lacks, is not compared for
+        want of an old file, under the sentence that says it may exist on
+        the old system. Nothing says its order is settled (7.7)."""
         out = self.run_of('tag_typed')
         notice = ("!! Not checked for %s: it is an upstream tag, which holds "
                   "none of a distro's own locale files or patches. Steps 1 to "
@@ -3805,24 +3801,27 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
                   "latest-el9 or latest-el10." % TAG)
         self.assertEqual(flat(out).count(notice), 2, out[-3000:])
         self.assertNotIn('Not checked for %s and' % TAG, out)
-        step2 = out.split('== STEP 2', 1)[1].split('== STEP 3', 1)[0]
-        self.assertIn('Added at %s (' % B275, step2)
-        added = step2.split('Added at %s (' % B275, 1)[1].split('\n\n', 1)[0]
-        self.assertIn('  localedata/locales/C -> ', added)
-        self.assertIn('An upstream source diff cannot establish that',
-                      flat(added))
+        step2 = out.split('== STEP 2', 1)[1].split('== STEP 4', 1)[0]
+        head = 'Not compared, no file at %s (' % TAG
+        self.assertIn(head, step2)
+        added = step2.split(head, 1)[1].split('\n\n', 1)[0]
+        self.assertIn('\n  C -> ', added)
+        self.assertIn('An upstream tag cannot establish that', flat(added))
+        self.assertNotIn('C', Step2Report(step2).differs)
 
     def test_a_build_then_a_tag_does_not_say_the_tag_removes_what_the_distro_ships(self):
         """16.78: over B40 -> TAG the new side is a tag, which cannot show
         what its distro ships, so a file the tag lacks is not said to fail
         on the new system for certain."""
         out = self.run_of('build_tag')
-        step2 = out.split('== STEP 2', 1)[1].split('== STEP 3', 1)[0]
-        deleted = step2.split('Deleted at %s (' % TAG, 1)[1].split('\n\n', 1)[0]
+        step2 = out.split('== STEP 2', 1)[1].split('== STEP 4', 1)[0]
+        head = 'Not compared, no file at %s (' % TAG
+        deleted = step2.split(head, 1)[1].split('\n\n', 1)[0]
         self.assertEqual(flat(deleted), flat(
-            "2). An index using one of these fails to sort on the new system "
-            "UNLESS its distro ships the file anyway, which an upstream tag "
-            "cannot show: localedata/locales/C localedata/locales/en_US@ampm"))
+            "2), listed under Removed in the summary: C en_US@ampm An index "
+            "using one of these fails to sort on the new system UNLESS its "
+            "distro ships the file anyway, which an upstream tag cannot "
+            "show."))
         self.assertNotIn('will fail to sort on the new system at all', step2)
 
     def test_a_tag_and_a_build_typed_is_the_tag_and_latest_run(self):
@@ -4239,8 +4238,8 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
             MACHINES + ' %s and %s, in place of glibc-2.28 and glibc-2.34. '
             '================================================================'
             % (B40, B275)))
-        self.assertIn('Locale files changed between %s and %s:' % (B40, B275),
-                      out)
+        self.assertIn('The sort rules localedef builds for each locale at %s '
+                      'and at %s,' % (B40, B275), flat(out))
         self.assertIn('AUDIT SUMMARY  %s -> %s' % (B40, B275), out)
         self.assertIn('C.UTF-8', summary_block(out, REINDEX))
         self.assertIn('This list is from the builds.',
@@ -4403,8 +4402,8 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         self.assertTrue(before.startswith("!! The old machine's file names "
                                           "%s, which this run" % B40), before)
         self.assertNotIn(MACHINES, out)
-        self.assertIn('Locale files changed between glibc-2.28 and '
-                      'glibc-2.34:', rest)
+        self.assertIn('The sort rules localedef builds for each locale at '
+                      'glibc-2.28 and at glibc-2.34,', flat(rest))
         self.assertIn('AUDIT SUMMARY  glibc-2.28 -> glibc-2.34', rest)
         warned = rest.split('-- Warnings the clean results above do NOT '
                             'cover', 1)[1]

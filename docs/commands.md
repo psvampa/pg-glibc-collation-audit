@@ -6,8 +6,9 @@ sorts. The second and third measure, inside PostgreSQL, what the first leaves
 open.
 
 **Commands are numbered here; steps are what a run prints.** A run of command
-1 does its own work in up to eleven steps, five without a machine's file and
-six more with a file from each machine, and those numbers are not these three.
+1 does its own work in steps numbered 1 to 11: 1, 2, 4 and 5 without a
+machine's file, and six more with a file from each machine. Those numbers
+are not these three.
 
 ## Command 1 — which locales the upgrade can affect
 
@@ -19,7 +20,7 @@ more checks.
 
 `./audit.sh <old> <new>`, given two tags, compares the two glibc versions as
 their maintainers published them, and needs nothing but this checkout. It
-runs five checks in order and ends with one summary.
+runs four checks in order and ends with one summary.
 
 Either side can name a RHEL build instead of a tag, as `rpm -q glibc` prints
 it without the architecture: `./audit.sh glibc-2.28-251.el8_10.40
@@ -34,21 +35,20 @@ before step 1 and reads from then on. With a build, only `--old-node` and
 | The run's step | The question it answers |
 |---|---|
 | 1 | which locale files changed between the two versions, and how far the change reaches |
-| 2 | which of those changes can reach sort order, which locales' rules name a character their character set added, removed or gave other bytes, and which locales build a collating element differently out of a transliteration |
-| 3 | which other locales inherit a change, because they copy from the file that changed |
+| 2 | which locales' sort rules differ between the two versions, every `copy` followed, which locales' rules name a character their character set added, removed or gave other bytes, and which locales build a collating element differently out of a transliteration |
 | 4 | which locales a comparison of files can never clear, because part of their order is computed later: the weights of abbreviated ranges, and the default weight of each character they do not list |
 | 5 | whether the code that computes those weights changed |
 
 What you get is a list to worry about. What you do **not** get is
 confirmation that a locale on the list really moved. A flagged locale can
-turn out not to move — `ber_DZ` and `kab_DZ` were flagged and the change was
-a role swap that leaves the order alone.
+turn out not to move — step 4 flags `zh_CN`, and step 11 measures its order
+unchanged on both pairs.
 
 ### 1.b — extended verification, against your two machines
 
 The same command, given one file from each machine with `--old-node` and
 `--new-node`. Each is the file `scripts/locale_order.py --extract` wrote on
-that machine. The five checks above then read the build each file names,
+that machine. The four checks above then read the build each file names,
 as `rpm -q glibc` printed it on that machine, in place of the tag, as in
 1.a: the side you give is that build or its tag. When a build cannot be
 read (a build whose spec the run does not know how to read, one Rocky

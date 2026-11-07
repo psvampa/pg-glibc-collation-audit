@@ -3,7 +3,7 @@
 Diff the glibc CODE that turns locale data into collation weights, between two
 tags.
 
-Steps 1-3 of this audit compare locale data files. That is not the whole
+Step 2 of this audit compares the locales' sort rules. That is not the whole
 input: identical locale data compiled by a different localedef, or compared by
 a different strcoll, can sort differently. Between glibc 2.28 (RHEL8) and 2.34
 (RHEL9) that is exactly what happened -- commit 82292c99b2 ("LC_COLLATE: Fix
@@ -94,7 +94,7 @@ def is_noise_line(line):
 
     and surviving hunks showed lines like `case tok_codepoint_collation:`
     without the `>>` marker a reader is told to scan for. In a tool whose
-    zero-hunk verdict is "every locale at both tags that steps 2 and 3 did
+    zero-hunk verdict is "every locale at both tags that step 2 did
     not list is genuinely unaffected", guessing wrong in that direction is the
     one failure that matters.
     """
@@ -797,8 +797,8 @@ def main(argv):
         # A build's sources, not what its compiler made of them.
         print(f"No substantive collation code change in the sources. "
               f"Every locale at both")
-        print(f"{noun} that steps 2 and 3 did not list is unaffected as "
-              f"far as the sources go,")
+        print(f"{noun} that step 2 did not list is unaffected as far as "
+              f"the sources go,")
         print("including every locale that flag_algorithmic_ranges.py "
               "lists. Not checked:")
         print("what each build's compiler made of those sources, and a "
@@ -807,11 +807,12 @@ def main(argv):
               "read.")
     elif total == 0:
         print("No substantive collation code change. Every locale at both "
-              "tags that steps 2")
-        print("and 3 did not list is genuinely unaffected, including every "
-              "locale that")
-        print("flag_algorithmic_ranges.py lists -- steps 1-3 are sufficient "
-              "for this pair.")
+              "tags that step 2")
+        print("did not list is genuinely unaffected, including every locale "
+              "that")
+        print("flag_algorithmic_ranges.py lists -- step 2's comparison of "
+              "rules is sufficient")
+        print("for this pair.")
     else:
         print(f"{total} substantive hunk(s) found. Locale data alone does not "
               f"settle this pair.")

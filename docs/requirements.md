@@ -22,7 +22,7 @@ another). Checking the charmaps of an el9 or el10 package needs Python 3.14
 or a `zstd` program; without one the run says the charmaps were not
 checked.
 
-Steps 1 to 4, and steps 9 and 10 of the extended run, work out how
+Steps 1, 2 and 4, and steps 9 and 10 of the extended run, work out how
 `localedef` reads every locale file of the versions they look at; step 2 looks
 at both. The first run for a version does that with one process per
 processor. `PG_GLIBC_READER_JOBS=1` keeps it to one process. The answers are

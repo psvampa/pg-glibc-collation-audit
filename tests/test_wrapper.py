@@ -44,7 +44,7 @@ TAGS_NOTICE_FOLDERS = (TAGS_FACT + " Pass each machine's file with --old-node "
                        "and --new-node instead of every other --old-*/--new-* "
                        "option: steps 1 to 5 then read the build each file "
                        "names, if this run can read it.")
-from _harness import GLIBC_CLONE, swap_alpha_beta, tag_charmaps
+from _harness import GLIBC_CLONE, Step2Report, swap_alpha_beta, tag_charmaps
 from test_locale_order import (CHANGED_8_TO_9, RHEL8, RHEL9, RHEL10,
                                changes_in, parse_characters, parse_summary,
                                trimmed)
@@ -324,17 +324,6 @@ class Wrapper(unittest.TestCase):
         self.assertIn(f'\nFiles at {MID}: ', step4)
         self.assertNotIn(f'Files at {OLD}', flat(step4))
 
-    def test_step_3_read_the_new_tag(self):
-        """The premise of SkippingAReleaseReportsTheUnion's step 3 test, which
-        runs the step on its own and so cannot see what audit.sh passes it:
-        step 3 closes over the NEW tag's copy graph. Given the old one, both
-        published pairs still print the same list (sv_FI copies sv_SE at 2.28
-        as at 2.34), so only the tag the step names tells the two apart."""
-        self.assertEqual(self.rc, 0, self.out)
-        step3 = step_text(self.out, 3)
-        self.assertIn(f'\nCopy chains read at {MID}\n', step3)
-        self.assertNotIn(f'Copy chains read at {OLD}', flat(step3))
-
     def test_the_step_4_lines_say_how_to_read_their_list(self):
         """The `hunks` branch of the step 4 summary lines, the one every
         published example prints; WrapperEmptyPair holds the other branch
@@ -352,11 +341,10 @@ class Wrapper(unittest.TestCase):
         one of them (backlog 13.1).
 
         examples/rhel8-to-rhel9-tags-only.txt prints these. A wrapper that
-        changes an answer is a bug, not a feature. This does not catch step 3
-        handed the old tag, whose set is the same at 2.28;
-        test_step_3_read_the_new_tag does.
+        changes an answer is a bug, not a feature.
         """
-        listed = os.path.join(self.out_dir, 'step3_affected_locales.txt')
+        listed = os.path.join(
+            self.out_dir, f'step2_changed_collate.{pair_slug(OLD, MID)}.txt')
         with open(listed, encoding='utf-8') as fh:
             names = sorted(n.strip() for n in fh if n.strip())
         self.assertEqual(names, ['or_IN', 'sv_FI', 'sv_FI@euro', 'sv_SE',
@@ -371,16 +359,15 @@ class Wrapper(unittest.TestCase):
             DISTRO_NOT_RUN_BODY)
 
     def test_sv_FI_reached_through_its_copy_of_sv_SE(self):
-        """Between 2.28 and 2.34 sv_FI's own file does not change; it is in
-        the output because step 3 followed its `copy "sv_SE"`. It cannot
-        tell which tag step 3 read, since sv_FI copies sv_SE at 2.28 too;
-        test_step_3_read_the_new_tag does.
-        """
-        self.assertIn('\n  sv_FI: copy "sv_SE" -> reaches sv_SE\n',
-                      step_text(self.out, 3))
+        """Between 2.28 and 2.34 sv_FI's own file does not change; its rules
+        differ because step 2 follows its `copy "sv_SE"`, and they name
+        sv_SE's two characters."""
+        self.assertEqual(Step2Report(step_text(self.out, 2)).differs['sv_FI'],
+                         ([0x57, 0x77], False))
 
-    def test_step_2_list_is_written_and_feeds_step_3(self):
-        """The handoff file exists, is named for the pair, and holds the names.
+    def test_step_2_list_is_written_and_feeds_the_summary(self):
+        """The file the summary's Reindex reads exists, is named for the
+        pair, and holds the names.
 
         Reverting step 2's write makes this fail with the file missing, which
         is the mutation test for that write.
@@ -390,7 +377,8 @@ class Wrapper(unittest.TestCase):
         self.assertTrue(os.path.exists(path), f"{path} missing\n{self.out}")
         with open(path, encoding='utf-8') as fh:
             self.assertEqual(sorted(n.strip() for n in fh if n.strip()),
-                             ['or_IN', 'sv_SE'])
+                             ['or_IN', 'sv_FI', 'sv_FI@euro', 'sv_SE',
+                              'swedish'])
 
     def test_summary_repeats_the_tags_warning_in_full(self):
         """A warning that scrolled past 400 lines ago was not delivered.
@@ -502,13 +490,13 @@ class Wrapper(unittest.TestCase):
 
 
 @needs_clone
-class WrapperHandsTheKeyedListToStepThree(unittest.TestCase):
-    """audit.sh passes step 2's second list -- the locales its character set
-    check lists (backlog 13.7, PR B) -- to step 3 after --keyed, and step 3's
-    result reaches the summary. No pinned pair lists a locale there, so the
-    list is injected: a sitecustomize on PYTHONPATH, which every Python the
-    run starts imports, makes step 2 write sv_SE into it. glibc-2.39 against
-    itself, so nothing else reaches step 3."""
+class WrapperTakesTheKeyedListToReindex(unittest.TestCase):
+    """What step 2's character set check lists (backlog 13.7, PR B) reaches
+    the summary's Reindex, beside the locales whose rules differ. No pinned
+    pair lists a locale there, so the check's answer is injected: a
+    sitecustomize on PYTHONPATH, which every Python the run starts imports,
+    makes collation_keys.listed_sources answer sv_SE. glibc-2.34 to 2.39,
+    where th_TH and thai differ and sv_SE does not."""
 
     @classmethod
     def setUpClass(cls):
@@ -519,36 +507,39 @@ class WrapperHandsTheKeyedListToStepThree(unittest.TestCase):
                   encoding='utf-8') as fh:
             fh.write(f"import sys\n"
                      f"sys.path.insert(0, {SCRIPTS_DIR!r})\n"
-                     f"import glibc_locale_data as g\n"
-                     f"real = g.write_list\n"
-                     f"def write_list(name, items):\n"
-                     f"    if name.startswith('step2_keyed_locales.'):\n"
-                     f"        items = ['sv_SE']\n"
-                     f"    return real(name, items)\n"
-                     f"g.write_list = write_list\n"
+                     f"import collation_keys as ck\n"
+                     f"ck.listed_sources = lambda report: ['sv_SE']\n"
                      f"del sys.path[0]\n")
-        cls.rc, cls.out = run_wrapper(NEW, NEW, out_dir=cls.out_dir,
+        cls.rc, cls.out = run_wrapper(MID, NEW, out_dir=cls.out_dir,
                                       env_extra={'PYTHONPATH': hook})
 
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
 
-    def test_step_3_runs_on_the_keyed_list_alone(self):
+    def test_step_2_writes_the_keyed_list_and_lists_it(self):
         self.assertEqual(self.rc, 0, self.out)
-        self.assertIn('STEP 3  Which locales inherit those changes', self.out)
-        self.assertIn('Directly changed (own LC_COLLATE diff): none', self.out)
-        self.assertIn('Listed by step 2 (character set or transliteration '
-                      'check): sv_SE', self.out)
+        path = os.path.join(
+            self.out_dir, f'step2_keyed_locales.{pair_slug(MID, NEW)}.txt')
+        with open(path, encoding='utf-8') as fh:
+            self.assertEqual(fh.read().split(), ['sv_SE'])
+        # swedish is sv_SE's alias (sv_SE.ISO-8859-1): it goes with it. Its
+        # rules are sv_SE's, the same at both tags, so compare_rules alone
+        # does not list it (false-negative-reviewer, 9.2).
+        self.assertEqual(Step2Report(step_text(self.out, 2)).reindex,
+                         ['sv_SE', 'swedish', 'th_TH', 'thai'])
 
     def test_the_keyed_locale_reaches_the_reindex_list_without_its_copiers(self):
-        """Step 2 followed every copy each listed build reads, at both
-        tags, so step 3 adds the keyed locales as they are: sv_FI copies
-        sv_SE and sorts by its own charmap, which step 2 compared for
-        sv_FI's own builds."""
+        """The character set check followed every copy each listed build
+        reads, at both tags, so the keyed locales are listed as they are,
+        with their aliases: sv_FI copies sv_SE and sorts by its own
+        charmap, which the check compared for sv_FI's own builds. The
+        summary's sentence that the list holds the aliases holds here."""
         names = summary_block(self.out, REINDEX)
         self.assertIn('sv_SE', names)
+        self.assertIn('swedish', names)
         self.assertNotIn('sv_FI', names)
+        self.assertIn('th_TH', names)
 
 
 @needs_clone
@@ -556,8 +547,8 @@ class WrapperEmptyPair(unittest.TestCase):
     """A pair with no LC_COLLATE change at all.
 
     glibc-2.39 against itself: no new tag to pin, so EXPECTED_SHA and
-    has_tags() stay as they are. Step 2 finds nothing, and step 3 must be
-    skipped rather than called with no locale -- it refuses that, exit 2.
+    has_tags() stay as they are. Step 2 compares nothing and says so, and
+    the summary's Reindex says nothing was compared.
     """
 
     @classmethod
@@ -572,30 +563,23 @@ class WrapperEmptyPair(unittest.TestCase):
     def test_exits_zero(self):
         self.assertEqual(self.rc, 0, self.out)
 
-    def test_step_3_was_skipped_not_called_empty(self):
-        """Delete the wrapper's empty-list guard and this fails.
-
-        Asserting rc == 0 alone would be vacuous: a wrapper that does not
-        propagate child status stays 0 with argparse's complaint on stderr.
-        So assert the complaint is absent, not just that the run was green.
-        """
+    def test_there_is_no_step_3(self):
+        """Step 9.2 made step 3's copy walk part of step 2: no banner, and
+        no step that refuses an empty list (argparse's complaint, exit 2,
+        which a wrapper that drops child status would hide at rc 0)."""
+        self.assertNotIn('== STEP 3', self.out)
         self.assertNotIn('the following arguments are required', self.out)
-        self.assertNotIn('no locale given', self.out)
-        self.assertIn('STEP 3  Skipped', self.out)
 
-    def test_step_3_says_nothing_was_compared(self):
-        """Skipped over an empty step 2, step 3 called that "a real result,
-        not a failure" over one commit compared with itself, where nothing
-        was compared (doc-sweep, 2026-09-30). The other branch is held by
-        WrapperDirectionUndetermined."""
-        step3 = flat(step_text(self.out, 3))
-        self.assertIn('The two tags are one commit, so nothing was compared',
-                      step3)
-        self.assertNotIn('a real result', step3)
-        # Backlog 13.7: what is left to confirm includes the locales step 4
-        # leaves out as built in byte order.
-        self.assertIn("Step 4's list, and the locales it leaves out as built "
-                      "in byte order, still need confirming.", step3)
+    def test_step_2_and_reindex_say_nothing_was_compared(self):
+        """Over one commit compared with itself, an empty list is not a
+        clean result: step 2 says nothing was compared, and so does the
+        summary's Reindex, whose other branch is WrapperDirectionUndetermined's
+        (doc-sweep, 2026-09-30, of step 3's notice then)."""
+        report = Step2Report(step_text(self.out, 2))
+        self.assertEqual(report.nothing, 'the two tags are one commit.')
+        self.assertEqual(summary_block(self.out, REINDEX), [
+            'none -- nothing was compared: the two tags are one commit or one',
+            'source tree (see below)'])
 
     def test_steps_4_and_5_still_ran(self):
         """An empty step 2 is not the end of the audit.
@@ -699,8 +683,7 @@ class WrapperEmptyPair(unittest.TestCase):
         clean run printed that error. Restore the old function and this fails.
         """
         self.assertNotIn('integer expression expected', self.out)
-        self.assertIn("none -- no locale at both tags changed in what step 2 "
-                      "compares", self.out)
+        self.assertIn('none -- nothing was compared', self.out)
 
     def test_one_commit_leaves_step_4_unresolved(self):
         """One tag against itself compares nothing, and step 5 used to print
@@ -710,7 +693,7 @@ class WrapperEmptyPair(unittest.TestCase):
         and the summary says why. The clean branch is driven by
         WrapperStep5Clean."""
         summary = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
-        self.assertNotIn('steps 1 to 3 are sufficient', summary)
+        self.assertNotIn("step 2's comparison of rules is sufficient", summary)
         self.assertIn('step 5 did NOT reach a clean result, so the locales '
                       'step 4 flagged stay UNRESOLVED', summary)
         self.assertIn('the two tags are one commit', summary)
@@ -726,7 +709,7 @@ class WrapperEmptyPair(unittest.TestCase):
         themselves, and must not send the reader to that explanation, which
         is not there (backlog 13.1)."""
         summary = self.out.split('AUDIT SUMMARY')[1]
-        self.assertIn('none -- no locale', summary)
+        self.assertIn('none -- nothing was compared', summary)
         self.assertIn('A collation or a database uses one when its locale, '
                       'without the part from the dot up to any @, is one of '
                       'them.', flat(summary))
@@ -768,7 +751,7 @@ class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
         # printed its clean sentence over this pair (false-negative-reviewer,
         # 2026-09-30, measured with that mutant).
         self.assertIn('step 5 did NOT reach a clean result', summary)
-        self.assertNotIn('steps 1 to 3 are sufficient', summary)
+        self.assertNotIn("step 2's comparison of rules is sufficient", summary)
 
 
 @needs_clone
@@ -814,17 +797,17 @@ class WrapperDirectionUndetermined(unittest.TestCase):
         # Not the other state: an undetermined pair is not one commit.
         self.assertNotIn('One commit, compared with itself', summary)
 
-    def test_step_3_keeps_its_sentence_when_the_pair_is_two_commits(self):
-        """The other branch of step 3's skip notice. With the order check
-        stood in for, the wrapper takes this pair for two commits, step 2
-        still finds nothing, and the notice must not say that nothing was
-        compared."""
+    def test_reindex_keeps_its_sentence_when_the_pair_is_two_commits(self):
+        """The other branch of the summary's empty Reindex. With the order
+        check stood in for, the wrapper takes this pair for two commits and
+        step 2 lists nothing: the line must not say that nothing was
+        compared, which is the one-commit branch."""
         rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
                               env_extra=self.env)
         self.assertEqual(rc, 0, out)
-        step3 = flat(step_text(out, 3))
-        self.assertIn('This is a real result, not a failure', step3)
-        self.assertNotIn('nothing was compared', step3)
+        self.assertEqual(summary_block(out, REINDEX), [
+            'none -- no locale whose rules step 2 compared differs, and step 2',
+            'lists none it could not compare'])
 
     def test_an_unrecognised_state_stops_the_run(self):
         """The branch that keeps the four states honest: a word the wrapper
@@ -847,17 +830,16 @@ class WrapperDirectionUndetermined(unittest.TestCase):
         """Two commits of one source tree that neither descends from the
         other, as a master commit and the same patch on a wip branch are in
         the clone (158e939a and 42f22e7c). Both states are said:
-        the direction was not established, and nothing was compared -- step
-        3's skip notice must not call the empty step 2 a real result
-        (false-negative-reviewer, round 1 of 7.1)."""
+        the direction was not established, and nothing was compared -- the
+        summary's Reindex must not call the empty list a real result
+        (false-negative-reviewer, round 1 of 7.1, of step 3's notice then).
+        """
         rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
                               env_extra=self.shim("'undetermined tree'"))
         self.assertEqual(rc, 0, out)
-        step3 = flat(step_text(out, 3))
-        self.assertIn('The two refs are two commits of one source tree, so '
-                      'nothing was compared and this is NOT a clean result.',
-                      step3)
-        self.assertNotIn('This is a real result', step3)
+        self.assertEqual(summary_block(out, REINDEX), [
+            'none -- nothing was compared: the two tags are one commit or one',
+            'source tree (see below)'])
         summary = flat(out.split('AUDIT SUMMARY')[1])
         self.assertIn('-- Direction of the pair: NOT ESTABLISHED', summary)
         self.assertIn('-- One source tree, compared with itself', summary)
@@ -984,22 +966,19 @@ class WrapperRefusesBadInput(unittest.TestCase):
         self.assertNotIn('STEP 1', out)
 
     def test_step_2_rewrites_the_list_so_a_seed_cannot_survive(self):
-        """This is the real protection on the files that become step 3's
-        argv.
+        """The protection on the files the summary reads from step 2.
 
         Step 2 writes both lists unconditionally for the pair being audited,
-        before step 3 reads them, so nothing a previous run or another process
-        left there can reach step 3. Revert either write and this fails: the
-        seeded line survives into the file and into the run.
-
-        audit.sh also validates each name and refuses anything that is not a
-        locale file name, but that guard is unreachable while this property
-        holds -- see the comment on it.
+        so nothing a previous run or another process left there reaches the
+        summary. Revert either write and this fails: the seeded line
+        survives into the file and into the run. (Until step 9.2 these
+        names became step 3's argv, and audit.sh also refused anything
+        that was not a locale file name; it now only prints them.)
         """
         import glibc_locale_data as g
         os.makedirs(self.out_dir, exist_ok=True)
-        # Both lists step 3 reads: the changed files and the locales the
-        # character set check lists (backlog 13.7, PR B).
+        # Both lists step 2 writes: Reindex and the locales the character
+        # set check lists (backlog 13.7, PR B).
         paths = [os.path.join(self.out_dir,
                               f'step2_{kind}.{g.pair_slug(NEW, NEW)}.txt')
                  for kind in ('changed_collate', 'keyed_locales')]
@@ -1022,10 +1001,9 @@ class WrapperRefusesBadInput(unittest.TestCase):
         then audit a pair that finds nothing: the stale locale must not appear
         as this pair's answer.
 
-        What makes that hold is that every file the summary reads is written
-        during this run -- step 3 by running, or by the skip branch truncating
-        it. audit.sh also removes them up front, which is belt and braces on
-        the same invariant.
+        Since step 9.2 no step writes it and the summary does not read it;
+        audit.sh still removes it up front, so a list an earlier version
+        left there is gone after the run.
         """
         os.makedirs(self.out_dir, exist_ok=True)
         stale = os.path.join(self.out_dir, 'step3_affected_locales.txt')
@@ -1048,6 +1026,7 @@ class WrapperRefusesBadInput(unittest.TestCase):
         rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir)
         self.assertEqual(rc, 0, out)
         self.assertNotIn('no_SUCH_locale', out)
+        self.assertFalse(os.path.exists(stale))
         self.assertFalse(os.path.exists(listed))
         self.assertEqual([x for x in sql if os.path.exists(x)], [])
 
@@ -1356,16 +1335,6 @@ class WrapperTagsRemoveALocale(unittest.TestCase):
         step4 = step_text(self.out, 4)
         self.assertIn(f'\nFiles at {NEW}: ', step4)
         self.assertNotIn(f'Files at {MID}', flat(step4))
-
-    def test_step_3_read_the_new_tag(self):
-        """The same check as Wrapper's, on the pair whose new tag is not
-        glibc-2.34: there the right tag and a hard-coded one are the same
-        string, so only this pair can tell them apart."""
-        self.assertEqual(self.rc, 0, self.out)
-        step3 = step_text(self.out, 3)
-        self.assertIn(f'\nCopy chains read at {NEW}\n', step3)
-        self.assertNotIn(f'Copy chains read at {MID}', flat(step3))
-
 
 @needs_clone
 class WrapperNodesRemoveALocale(unittest.TestCase):
@@ -1954,7 +1923,7 @@ class WrapperStep5Unresolved(unittest.TestCase):
                       'the shim did not run')
         summary = out.split('AUDIT SUMMARY')[1]
         flat = ' '.join(summary.split())
-        self.assertNotIn('steps 1 to 3 are sufficient', flat)
+        self.assertNotIn("step 2's comparison of rules is sufficient", flat)
         self.assertNotIn('Nothing from step 5', flat)
         self.assertIn('step 5 did NOT reach a clean result, so the locales '
                       'step 4 flagged stay UNRESOLVED', flat)
@@ -2050,7 +2019,8 @@ class WrapperStep5UnresolvedWithHunks(unittest.TestCase):
 
 @needs_clone
 class WrapperStep5Clean(unittest.TestCase):
-    """The summary's clean step 5 branch, "steps 1 to 3 are sufficient".
+    """The summary's clean step 5 branch, "step 2's comparison of rules is
+    sufficient".
 
     One tag against itself was the one input the suite used to reach it, and
     that is not a clean result any more: it compares nothing. No pinned pair of
@@ -2063,11 +2033,11 @@ class WrapperStep5Clean(unittest.TestCase):
         "Collation code changes between glibc-2.28 and glibc-2.34\n"
         "\n"
         "No substantive collation code change. Every locale at both tags "
-        "that steps 2\n"
-        "and 3 did not list is genuinely unaffected, including every locale "
-        "that\n"
-        "flag_algorithmic_ranges.py lists -- steps 1-3 are sufficient for "
-        "this pair.\n")
+        "that step 2\n"
+        "did not list is genuinely unaffected, including every locale that\n"
+        "flag_algorithmic_ranges.py lists -- step 2's comparison of rules is "
+        "sufficient\n"
+        "for this pair.\n")
 
     @classmethod
     def setUpClass(cls):
@@ -2102,9 +2072,9 @@ class WrapperStep5Clean(unittest.TestCase):
         summary = ' '.join(self.out.split('AUDIT SUMMARY')[1].split())
         # The real step 5 finds hunks on this pair, so this line is only
         # printed when the shim ran.
-        self.assertIn('Step 5 found no substantive change, so steps 1 to 3 '
-                      'are sufficient even for the locales step 4 flagged',
-                      summary)
+        self.assertIn("Step 5 found no substantive change, so step 2's "
+                      "comparison of rules is sufficient even for the "
+                      "locales step 4 flagged", summary)
         self.assertIn('Nothing from step 5.', summary)
         self.assertNotIn('did NOT reach a clean result', summary)
         # The branch that always carried the tags caveat keeps it: the

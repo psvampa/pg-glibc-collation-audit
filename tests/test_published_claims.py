@@ -883,10 +883,10 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
          r'|one line out of (\d+)',
          1,
          # The tags-only transcript: the extended one compares each
-         # machine's build in steps 1 to 5 (7.6a).
+         # machine's build in steps 1 to 5 (7.6a). Step 1's count; step 2
+         # printed it too until it became the comparison of rules (9.2).
          (Evidence('examples/rhel8-to-rhel9-tags-only.txt',
-                   shape='Locale files changed between glibc-2.28 and '
-                         'glibc-2.34: {n}'),)),
+                   shape='Locale files added, modified or deleted: {n}'),)),
     )
 
     @staticmethod
@@ -1165,10 +1165,10 @@ class ASectionNeverWidensInSilence(unittest.TestCase):
     """
 
     AUDIT = 'examples/rhel8-to-rhel9-audit-output.txt'
-    # Between the two machines' builds, which this transcript's step 2 reads.
-    SHAPE = ('Locale files changed between glibc-2.28-251.el8_10.40 and '
-             'glibc-2.34-275.el9_8: {n}')
-    STEP_2 = ('== STEP 2  Which changes can reach sort order\n'
+    # Between the two machines' builds, which this transcript's step 2
+    # reads: the names it compared (step 9.2).
+    SHAPE = '{n} name(s), locale files and locale.alias aliases:'
+    STEP_2 = ("== STEP 2  Which locales' sort rules changed\n"
               + '=' * 64)
     STEP_4 = ('== STEP 4  Which locales a data diff can never clear\n'
               + '=' * 64)
@@ -1177,7 +1177,7 @@ class ASectionNeverWidensInSilence(unittest.TestCase):
     REPEATED = 'Additionally exposed via `copy` inheritance: {n}'
     PROBE = 'examples/c-utf8-probe-rhel8-vs-rhel9.txt'
 
-    def check(self, ev, bare='275'):
+    def check(self, ev, bare='400'):
         row = AFigureStatedTwiceIsStatedOnce(
             'test_the_evidence_under_it_carries_the_same_number')
         row.check_evidence('a row written for this test', bare, ev)
