@@ -1618,8 +1618,7 @@ def parse_summary(text):
         count = 0
         at[0] += 1
     else:
-        count = int(take(r'     (\d+) locale\(s\) sort differently -- '
-                         r'reindex what uses them:')[1])
+        count = int(take(r'     (\d+) locale\(s\) sort differently:')[1])
         s['others_note'] = None
         while True:
             if line() == SUMMARY_FILE_LINE:

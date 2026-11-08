@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Step 2: compare the sort rules localedef builds for every locale on the two
-sides, every `copy` followed (glibc_tree.compare_rules), and list for
-Reindex the locales whose rules differ or could not be compared.
+sides, every `copy` followed (glibc_tree.compare_rules), and list, for the
+summary, the locales whose rules differ or could not be compared.
 
 Each name is a locale file of either side or an alias of either side's
 intl/locale.alias. Its answer is one of three: the same rules, rules that
@@ -21,13 +21,14 @@ comparison of a tree with itself answers "the same" for every locale.
 It also compares, between the two sides, the charmaps the SUPPORTED builds
 use (for two machines' own files, the builds measured on each machine) and
 the collating elements they build out of transliterations
-(collation_keys.py); what that check lists goes to Reindex too.
+(collation_keys.py); what that check lists goes to that list too.
 
-Writes, each named for the pair: step2_changed_collate.<pair>.txt (Reindex:
-the names listed), step2_keyed_locales.<pair>.txt (what the character set
-check lists), step2_removed_locales.<pair>.txt (files of the old side not on
-the new one), step2_rules_characters.<pair>.tsv (each name whose rules
-differ, and the characters named) and step2_rules_by_name.<pair>.json
+Writes, each named for the pair: step2_changed_collate.<pair>.txt (the
+names listed, which the summary prints), step2_keyed_locales.<pair>.txt
+(what the character set check lists), step2_removed_locales.<pair>.txt
+(files of the old side not on the new one),
+step2_rules_characters.<pair>.tsv (each name whose rules differ, and the
+characters named) and step2_rules_by_name.<pair>.json
 (what was compared and, for two machines' files whose sources it
 compared, the rules of every locale name measured on either machine,
 which audit.sh sets beside step 11's verdict: rules_by_name).
@@ -303,7 +304,8 @@ class CharmapReads:
 def check_charmaps(reads, repo, side_old, side_new, sup, already,
                    words=None, builds=None):
     """Run collation_keys.compare over the two sides, print what it found,
-    and return the source names it lists for Reindex. `already` is the set
+    and return the source names it lists for the summary. `already` is the
+    set
     of source names the comparison lists already (their rules differ or
     could not be compared), which the check does not list again. `builds`
     is [old, new] when the caller has them from the machines' measurements
@@ -576,7 +578,8 @@ def sort_out(got, old_tree, new_tree):
     sorted: the names whose rules differ; the not-compared FILES that only
     the new side has; those only the old side has; and every other name
     not compared (the reader in doubt, LC_COLLATE stored on one side, an
-    alias one side cannot resolve), which is listed for Reindex. Sorted by
+    alias one side cannot resolve), which is listed for the summary. Sorted
+    by
     which side has the file, never by the words of `why`."""
     differs, added, removed, listed = [], [], [], []
     old_files, new_files = set(old_tree.names), set(new_tree.names)
@@ -658,7 +661,8 @@ def print_added(added, renamed_from, supported, old_side, old_name,
         print(f"  {g.shown(name)} -> {tail}")
     if g._is_tag(old_side):
         print(_fill(
-            f"A file added at the new side cannot affect an existing index "
+            f"A file added at the new side cannot change what PostgreSQL "
+            f"already stored "
             f"ONLY IF the locale did not exist on the old system. An "
             f"upstream tag cannot establish that -- distros backport. "
             f"Confirm with `locale -a` on the OLD machine, under the names "
@@ -695,8 +699,8 @@ def print_c_utf8(sides, differs):
                     f"and a distro's build can ship its own, so C.UTF-8's "
                     f"sort rules were not compared. {C_NO_VERSION}", [])
     elif 'C' in differs:
-        _warn_block(f"C.UTF-8's sort rules differ, and it is listed for "
-                    f"Reindex. {C_NO_VERSION}", [])
+        _warn_block(f"C.UTF-8's sort rules differ, and it is listed in the "
+                    f"summary. {C_NO_VERSION}", [])
 
 
 def print_removed(removed, renamed_to, new_side, new_name):
@@ -710,12 +714,15 @@ def print_removed(removed, renamed_to, new_side, new_name):
                  if name in renamed_to else '')
         print(f"  {g.shown(name)}{extra}")
     if g._is_tag(new_side):
-        print(_fill("An index using one of these fails to sort on the new "
-                    "system UNLESS its distro ships the file anyway, which "
-                    "an upstream tag cannot show.", '   '))
+        print(_fill("Unless its distro ships the file anyway, which an "
+                    "upstream tag cannot show, on the new system a "
+                    "database whose locale is one of these does not "
+                    "connect, and a collation of one gives an error "
+                    "when it is used.", '   '))
     else:
-        print(_fill("Any index using one of these will fail to sort on the "
-                    "new system at all.", '   '))
+        print(_fill("On the new system, a database whose locale is one "
+                    "of these does not connect, and a collation of one "
+                    "gives an error when it is used.", '   '))
 
 
 def print_listed(got, listed):
@@ -730,10 +737,10 @@ def print_listed(got, listed):
                 why = 'both sides: ' + a
         whys.setdefault(why, []).append(name)
     _warn_block(
-        f"Not compared, so listed for REINDEX ({len(listed)}): the reader "
-        f"could not settle how localedef builds them, or LC_COLLATE is "
-        f"stored on one side only, or an alias does not resolve on both "
-        f"sides:",
+        f"Not compared, so listed in the summary ({len(listed)}): the "
+        f"reader could not settle how localedef builds them, or "
+        f"LC_COLLATE is stored on one side only, or an alias does not "
+        f"resolve on both sides:",
         [f"{', '.join(shown_name(n) for n in names)}: {why}"
          for why, names in whys.items()])
 
@@ -970,7 +977,7 @@ def _main(opts):
                                   keyed, unmapped) if machine else None)
 
         # The character set check names locale files; the aliases of each
-        # side's locale.alias that are built from one go to Reindex with it
+        # side's locale.alias that are built from one join the list with it
         # (swedish with sv_SE). compare_rules adds the aliases of what it
         # compares itself, but an alias of a keyed locale whose rules are the
         # same comes out "same" there (false-negative-reviewer, 9.2).
@@ -982,7 +989,7 @@ def _main(opts):
         not_ascii = [n for n in names if not n.isascii()]
         names = [n for n in names if n.isascii()]
         print()
-        print(_fill(f"Listed for Reindex ({len(names)}): "
+        print(_fill(f"Listed in the summary ({len(names)}): "
                     + (', '.join(shown_name(n) for n in names) or 'none'),
                     '', '  '))
         # SUPPORTED's note: a machine's file holds no SUPPORTED, and what a

@@ -4,7 +4,7 @@
 #
 # The steps exist because the method asks distinct questions, not because a
 # user should have to type one command per step. This runs them in order and
-# ends with a consolidated summary, whose Reindex list is step 2's.
+# ends with a consolidated summary, whose first list is step 2's.
 #
 # Usage:
 #   ./audit.sh <old> <new>
@@ -638,10 +638,9 @@ rules_beside() {
   fi
 }
 
-# Step 2's list is the summary's Reindex. Every name in it was just written
-# by step 2 for this pair (the absent check above), and it is printed, never
-# passed on as an argument: the name check that used to guard step 3's argv
-# is no longer needed.
+# Step 2's list is the summary's first block. Every name in it was just
+# written by step 2 for this pair (the absent check above), and it is
+# printed, never passed on as an argument.
 
 # Optional, and not part of the source audit: step 2 reads the clone and the
 # builds, or each machine's own locale sources from its file, while step 11
@@ -671,7 +670,7 @@ count_names() { [ -f "$1" ] || { echo 0; return; }; awk '!/^#/ && NF {n++} END {
 banner "AUDIT SUMMARY  $OLD -> $NEW"
 
 echo
-echo "-- Reindex: sort order changes, confirm then REINDEX"
+echo "-- Step 2: locales whose sort rules or character set differ, or that it could not compare"
 if [ "$(count_lines "$STEP2_LIST")" -gt 0 ]; then
   # glibc's file C is C.UTF-8: PostgreSQL sorts a locale that is exactly C
   # without glibc. The list keeps C, which the SQL template reads as C.utf8.
@@ -712,8 +711,8 @@ else
     echo "     none -- nothing was compared: the two $NOUN are one commit or one"
     echo "     source tree (see below)"
   else
-    echo "     none -- no locale whose rules step 2 compared differs, and step 2"
-    echo "     lists none it could not compare"
+    echo "     none -- of what step 2 compared, nothing differs; step 2, above,"
+    echo "     names what it did not compare"
   fi
 fi
 # With the two measurements the summary holds a second answer to the same
@@ -795,8 +794,8 @@ else
 fi
 
 # What each machine's own glibc says, beside what the tags say. Below Removed,
-# not above it: that section sits directly under Reindex on purpose, and this
-# block is long. Step 11 reads no locale source: over RHEL8 ->
+# not above it: that section sits directly under step 2's list on purpose,
+# and this block is long. Step 11 reads no locale source: over RHEL8 ->
 # RHEL9 it names ko_KR.utf8, whose file is byte-identical in both tags, and
 # eight Swedish locales in which no character moves. Absent is not empty:
 # without the two files this says NOT RUN.

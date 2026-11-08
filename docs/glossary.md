@@ -40,7 +40,7 @@ locale's own source. Step 2 compares the range as it is written, so it
 cannot see such a change, and no step compares `localedef`'s code; step 11
 measures what it produced.
 
-**locale, in the Reindex list** — the locale a collation is built
+**locale, in step 2's list** — the locale a collation is built
 from (`sv_SE`), not one way of writing it. `locale -a`, `pg_collation` and a
 database's own locale write one locale many ways (`sv_SE.utf8`,
 `sv_SE.iso885915`, `sv_SE.UTF-8`), and glibc builds all of them from one file,

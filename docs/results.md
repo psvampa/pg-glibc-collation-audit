@@ -27,7 +27,7 @@ The sections below are the evidence behind each row.
 
 ## How to read the verdicts
 
-- 🔴 **Changed** — sort order moves. Reindex.
+- 🔴 **Changed** — sort order moves.
 - 🟡 **Unresolved** — *not* cleared. Treat as changed until tested.
 - 🟢 **No difference** — measured, or shown by a targeted test or a
   mechanism argument, not to move.

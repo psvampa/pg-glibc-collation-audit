@@ -20,7 +20,8 @@ import shutil
 import tempfile
 import unittest
 
-from _harness import (COMPARED_BANNER, EXPECTED_SHA, MID, NEW, OLD,
+from _harness import (COMPARED_BANNER, STEP2_LISTED, SUMMARY_STEP2,
+                      EXPECTED_SHA, MID, NEW, OLD,
                       REPO_ROOT, SCRIPTS_DIR,
                       backported_c, before_compared, compared_text,
                       deleted_steps_named, flat, locale_file,
@@ -169,7 +170,7 @@ USAGE = [
     '       rules for it; otherwise one line says what step 2 compared.',
 ]
 
-REINDEX = '-- Reindex: sort order changes, confirm then REINDEX'
+REINDEX = SUMMARY_STEP2
 REINDEX_POINTER = [
     "This list is from the tags. What each machine's own glibc says",
     "is under '-- Measured order', below.",
@@ -458,7 +459,7 @@ class Wrapper(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
         """Directly under Reindex, above the long lists and the warnings: the
         defect was a finding nobody reading the summary would reach."""
         summary = self.out.split('AUDIT SUMMARY')[1]
-        self.assertLess(summary.index('-- Reindex:'), summary.index(REMOVED))
+        self.assertLess(summary.index(REINDEX), summary.index(REMOVED))
         self.assertLess(summary.index(REMOVED),
                         summary.index(MEASURED_NOT_RUN))
 
@@ -722,8 +723,8 @@ class WrapperDirectionUndetermined(unittest.TestCase):
                               env_extra=self.env)
         self.assertEqual(rc, 0, out)
         self.assertEqual(summary_block(out, REINDEX), [
-            'none -- no locale whose rules step 2 compared differs, and step 2',
-            'lists none it could not compare'])
+            'none -- of what step 2 compared, nothing differs; step 2, above,',
+            'names what it did not compare'])
 
     def test_an_unrecognised_state_stops_the_run(self):
         """The branch that keeps the four states honest: a word the wrapper
@@ -1078,7 +1079,7 @@ class WrapperMeasuredOrder(_CodeNotComparedAndNoDeletedStep,
         locale the upgrade deletes is on the first screen: this block is long,
         and above Removed it pushed that section down."""
         summary = self.out.split('AUDIT SUMMARY')[1]
-        self.assertLess(summary.index('-- Reindex:'), summary.index(REMOVED))
+        self.assertLess(summary.index(REINDEX), summary.index(REMOVED))
         self.assertLess(summary.index(REMOVED), summary.index(MEASURED))
         self.assertNotIn(MEASURED_NOT_RUN, summary)
 
@@ -1590,8 +1591,8 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
         self.assertIn("Not compared, not read among a machine's locale "
                       "sources (2): de_IT (symlink on the new machine), "
                       "zz_LINK (symlink on the new machine)", step2)
-        listed = re.search(r'Listed for Reindex \(\d+\): ([^.]*?)(?: Not |$)',
-                           step2)
+        listed = re.search(
+            r'Listed in the summary \(\d+\): ([^.]*?)(?: Not |$)', step2)
         self.assertTrue(listed, step2)
         names = listed.group(1).replace(',', ' ').split()
         for name in ('de_IT', 'zz_LINK'):
@@ -1610,7 +1611,7 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
         self.assertEqual(step2.count(unread_line), 1, step2)
         self.assertNotIn('de_IT', step2.split('Not compared, no file at')[-1]
                          .split(unread_line)[0])
-        self.assertNotIn('zz_LINK', step2.split('Listed for Reindex')[0]
+        self.assertNotIn('zz_LINK', step2.split(STEP2_LISTED)[0]
                          .split(unread_line)[0])
         skipped = ("2 entries of the machine's files were not read, so a "
                    "locale that is, or copies, one of them is not "
@@ -1640,8 +1641,7 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
                       "and charmaps, so no locale's sort rules can differ "
                       "between them", block)
         self.assertNotIn("means 'nothing was compared'", block)
-        reindex = section_body(summary, '-- Reindex: sort order changes, '
-                                        'confirm then REINDEX')
+        reindex = section_body(summary, REINDEX)
         self.assertTrue(reindex.startswith(
             "none -- the two machines' files hold the same locale sources "
             "and charmaps (see below)"), reindex)
@@ -1676,8 +1676,7 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
             r"the file was written by an --extract that did not pack",
             step2)), 2, step2)
         summary = out.split('AUDIT SUMMARY', 1)[1]
-        reindex = section_body(summary, '-- Reindex: sort order changes, '
-                                        'confirm then REINDEX')
+        reindex = section_body(summary, REINDEX)
         self.assertTrue(reindex.startswith(
             "none -- the two machines' files hold the same locale sources; "
             "their character sets were not compared (see below)"), reindex)

@@ -19,7 +19,8 @@ import unittest
 from unittest import mock
 
 from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
-                      SCRIPTS_DIR, Step2Report, deleted_steps_named, flat,
+                      SCRIPTS_DIR, STEP2_LISTED, Step2Report,
+                      deleted_steps_named, flat,
                       glibc_shaped, needs_clone, needs_floor_pair)
 
 import glibc_locale_data as g
@@ -841,7 +842,7 @@ class TheStepsRefuseAReversedPair(unittest.TestCase):
         self.assertIn('Swap the arguments', flat(out))
         self.assertNotIn('below the floor', out)
         self.assertNotIn('The sort rules localedef builds', out)
-        self.assertNotIn('Listed for Reindex', out)
+        self.assertNotIn(STEP2_LISTED, out)
 
     def test_the_forward_control_still_runs(self):
         """x, renamed y at t2: compared by name, y has no file at t1 and
@@ -1605,7 +1606,7 @@ class AGainedBlockThatNamesNoCharacter(unittest.TestCase):
     """A file that gains a block naming no character -- a bare `copy` --
     gained a sort order: it was once reported as "no character is named",
     which lost that. A locale whose LC_COLLATE is stored on one side only
-    is not compared, and is listed for Reindex under the `!!`, with the
+    is not compared, and is listed in the summary under the `!!`, with the
     side. Fabricated, because no file gains a block in a pinned pair."""
 
     def setUp(self):
@@ -1929,7 +1930,7 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
         self.assertNotEqual(rc, 0, out)
         self.assertIn(f'listed at {OLD} could not be read while building the '
                       f'transliteration check', flat(out))
-        self.assertNotIn('Listed for Reindex', out)
+        self.assertNotIn(STEP2_LISTED, out)
 
     def test_an_unreadable_old_locale_file_is_refused(self):
         rc, out = self.unreadable_locales_at(OLD)
@@ -1968,7 +1969,7 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
         self.assertIn(f'localedata/SUPPORTED does not exist at {MID}',
                       flat(out))
         self.assertNotIn('(not in SUPPORTED)', out)
-        self.assertNotIn('Listed for Reindex', out)
+        self.assertNotIn(STEP2_LISTED, out)
 
     def test_an_unreadable_charmap_is_refused(self):
         """UTF-8 differs between 2.28 and 2.34, so both copies are read. A
@@ -2377,7 +2378,7 @@ class StepTwoComparesCharmaps(unittest.TestCase):
                               r'set changed \(1\): \xe9 \(U\+00E9\)$')
         self.assertIn('ISO-8859-15: 1 character given other bytes. UTF-8: 1 '
                       'character added.', flat(out))
-        self.assertRegex(flat(out), r'Reindex lists anyway, whose '
+        self.assertRegex(flat(out), r'the summary lists anyway, whose '
                                     r'LC_COLLATE names one of those '
                                     r'characters or could not be compared '
                                     r'\(2\): loc_c\.UTF-8 \(UTF-8\)')
@@ -2397,7 +2398,7 @@ class StepTwoComparesCharmaps(unittest.TestCase):
         rc, out, listed = self.step2('t2', 't3')
         self.assertEqual(rc, 2, out)
         self.assertIn(f'{g.SUPPORTED} does not exist at t3', flat(out))
-        self.assertNotIn('Listed for Reindex', out)
+        self.assertNotIn(STEP2_LISTED, out)
         for new, why in (('t4', 'ISO-8859-15 at t4'),
                          ('t8', f'{g.SUPPORTED} at t8 lists no locale')):
             with self.subTest(new):
@@ -2501,7 +2502,7 @@ def make_unsettled_charmap_repo(root):
 
 @needs_clone
 class StepTwoListsWhatItCannotCompare(unittest.TestCase):
-    """A locale glibc_reader cannot settle is listed for Reindex by step 2
+    """A locale glibc_reader cannot settle is listed in the summary by step 2
     itself, whatever else changed. Before step 9.2 step 3 listed it, and ran
     only when step 2 gave it a name: with none, step 2 counted loc_a as
     listed by step 3 anyway, wrote no list, and the summary said "Reindex:
@@ -2521,7 +2522,7 @@ class StepTwoListsWhatItCannotCompare(unittest.TestCase):
 
     def test_with_nothing_else_changed_it_is_listed(self):
         """u2 changes UTF-8 alone: no locale's rules differ, and loc_a,
-        which the reader cannot settle, is listed for Reindex with its
+        which the reader cannot settle, is listed in the summary with its
         reason; the character set check counts it as listed anyway."""
         rc, out, listed = self.step2('u1', 'u2')
         self.assertEqual(rc, 0, out)
@@ -2530,7 +2531,7 @@ class StepTwoListsWhatItCannotCompare(unittest.TestCase):
         self.assertEqual(sorted(r.listed), ['loc_a'])
         self.assertEqual(r.reindex, ['loc_a'])
         self.assertEqual(listed, [])
-        self.assertRegex(flat(out), r'Reindex lists anyway, whose '
+        self.assertRegex(flat(out), r'the summary lists anyway, whose '
                                     r'LC_COLLATE names one of those '
                                     r'characters or could not be compared '
                                     r'\(1\): loc_a\.UTF-8 \(UTF-8\)')

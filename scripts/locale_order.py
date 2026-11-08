@@ -9298,8 +9298,7 @@ def summary_lines(old, new, groups, run, totals, characters_to=None,
     out += run('postgres libc above')
     count = sum(len(names) for names, brief in groups)
     if groups:
-        out.append(f'     {count} locale(s) sort differently -- reindex what '
-                   'uses them:')
+        out.append(f'     {count} locale(s) sort differently:')
         for names, brief in groups:
             # Wrapped at the same indent, as in the report, so that where the
             # names end and what moved begins is plain.

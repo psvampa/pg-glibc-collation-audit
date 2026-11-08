@@ -238,5 +238,5 @@ machine, the locale sources of the build it already runs; commands 2 and 3
 each create a test table of their own, and command 3 first imports the
 system's collations into PostgreSQL's catalog; the SQL files step 11 writes
 only read. Command 1 hands you a list,
-and in 1.b a measurement; commands 2 and 3 hand you measurements. The decision
-to reindex is yours.
+and in 1.b a measurement; commands 2 and 3 hand you measurements. What to do
+in your databases is yours to decide.

@@ -186,7 +186,7 @@ class StepTwoPrintsWhatCompareRulesAnswered(unittest.TestCase):
             'same, %d differ, 0 not compared.\n'
             % (len(differs), len(differs))
             + self.printed(f.print_differs, got, differs, '/out/chars.tsv')
-            + '\nListed for Reindex (0): none\n')
+            + '\n' + _harness.STEP2_LISTED + ' (0): none\n')
 
     def test_each_of_the_four_printings(self):
         got = {
@@ -262,8 +262,8 @@ class StepTwoPrintsWhatCompareRulesAnswered(unittest.TestCase):
                'b': self.R(nc, 'old side: r; new side: r', None, False),
                'c': self.R(nc, 'old side: r; new side: s', None, False)}
         text = self.printed(f.print_listed, got, ['a', 'b', 'c'])
-        self.assertTrue(text.startswith('\n!! Not compared, so listed for '
-                                        'REINDEX (3):'), text)
+        self.assertTrue(text.startswith(
+            '\n' + _harness.STEP2_NOT_COMPARED + '3):'), text)
         self.assertIn('\n     a, b: both sides: r\n', text)
         self.assertIn('\n     c: old side: r; new side: s\n', text)
 

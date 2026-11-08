@@ -39,7 +39,7 @@ both):
      and only where the comment is certain (confirmed_hit).
   4. A build is listed when a file its run reads (the source and what its
      LC_COLLATE copies) names a member of K of the build's charmap pair. A
-     build whose source step 2 lists for Reindex anyway -- its rules
+     build whose source step 2 lists anyway -- its rules
      differ, every copy followed, or could not be compared -- is counted,
      not repeated.
   5. A source SUPPORTED never builds in a changed charmap is searched the
@@ -2668,7 +2668,7 @@ Report = collections.namedtuple(
 Report.__doc__ = """not_run: None, or why nothing was compared. builds: how
 many builds were compared; charmaps: those they use; changed: [(old, new)]
 whose blobs differ; sizes: {pair: (size of K, added, removed), or None when
-the pair could not be compared}; found: [Found] listed for Reindex;
+the pair could not be compared}; found: [Found] listed in the summary;
 skipped: [Found] whose source step 2 lists anyway; not_compared: the
 SUPPORTED entries at both tags whose source is not at both; unsearched:
 [(charmap, reason)] changed charmaps where point 5 could not run;
@@ -2889,7 +2889,7 @@ def compare(old, new, builds_old, builds_new, already_listed,
 
 
 def listed_sources(report):
-    """The source names the report lists for Reindex, sorted."""
+    """The source names the report lists for the summary, sorted."""
     return sorted({f.source for f in report.found}
                   | {f.source for f in (report.translit.found
                                         if report.translit else ())})
