@@ -1293,7 +1293,7 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
             capture_output=True, text=True).stdout.strip()
 
     def step2(self, old, new, fix=None):
-        """(exit, Step2Report, the Reindex list written). `fix` moves
+        """(exit, Step2Report, the list step 2 wrote). `fix` moves
         LR_GETC_FIX to one of this history's commits, so that a tag can
         hold it."""
         out_dir = tempfile.mkdtemp(dir=self.tmp)

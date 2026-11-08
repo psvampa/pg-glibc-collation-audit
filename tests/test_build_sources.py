@@ -3706,8 +3706,8 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
         tested that). The provenance no longer counts such patches: the
         count said strcoll and left localedef's patches out (16.129). The
         summary's warnings say that each build's patches to that code are
-        compared by no step; Reindex, which reads only the rules, stays
-        clean."""
+        compared by no step; step 2's list, which reads only the rules,
+        stays clean."""
         out = self.run_of('outside')
         compared = flat(compared_text(out))
         self.assertIn('change localedata/ or locale/, applied in the order '
@@ -4120,7 +4120,7 @@ MACHINES = "Each machine's file names the build it runs: step 2 reads"
 class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
     """audit.sh glibc-2.28 glibc-2.34 with each machine's file, which holds
     the fixture build's locale sources and charmaps: the run reads
-    each machine's own files (C.UTF-8 joins the reindex list, as between
+    each machine's own files (C.UTF-8 joins step 2's list, as between
     the builds), and download nothing, so with the builds' cache empty and
     no mirror the run is the same; Removed reads step 2's list, under a
     sentence of machines; a file without sources makes both sides read
@@ -4260,7 +4260,7 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         """Each machine's file holds the build's locale sources and
         charmaps: the run reads them, as one commit of the clone per
         machine, and says so in the provenance under 'What was compared';
-        nothing is rebuilt from an SRPM. C.UTF-8 joins the reindex list, as
+        nothing is rebuilt from an SRPM. C.UTF-8 joins step 2's list, as
         between the builds."""
         out = self.run_of('read')
         self.assertEqual(flat(before_compared(out)), flat(

@@ -751,8 +751,8 @@ class Step2Report:
             elif line.startswith('  '):
                 part.append(line.strip())
             else:
-                raise AssertionError(f'unexpected line under Listed for '
-                                     f'Reindex: {line!r}')
+                raise AssertionError(f'unexpected line under '
+                                     f'{STEP2_LISTED}: {line!r}')
         text = ' '.join(part)
         self.reindex = [] if text == 'none' else text.split(', ')
         if len(self.reindex) != want:
