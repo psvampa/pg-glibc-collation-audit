@@ -82,7 +82,7 @@ Listed in the summary (2): th_TH, thai
 == AUDIT SUMMARY  glibc-2.34 -> glibc-2.39
 ================================================================
 
--- Step 2: locales whose sort rules or character set differ, or that it could not compare
+-- Listed by step 2
      th_TH
      thai
    (2 name(s); full list: /tmp/pg-glibc-collation-audit/step2_changed_collate.glibc-2.34..glibc-2.39.txt)

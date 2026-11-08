@@ -305,11 +305,10 @@ def check_charmaps(reads, repo, side_old, side_new, sup, already,
                    words=None, builds=None):
     """Run collation_keys.compare over the two sides, print what it found,
     and return the source names it lists for the summary. `already` is the
-    set
-    of source names the comparison lists already (their rules differ or
-    could not be compared), which the check does not list again. `builds`
-    is [old, new] when the caller has them from the machines' measurements
-    (machine_builds), in place of SUPPORTED's.
+    set of source names the comparison lists already (their rules differ
+    or could not be compared), which the check does not list again.
+    `builds` is [old, new] when the caller has them from the machines'
+    measurements (machine_builds), in place of SUPPORTED's.
 
     Returns (source names, why): why is the reason the check said NOT RUN,
     on each of its routes, else None, so that a caller never reads the
@@ -579,8 +578,7 @@ def sort_out(got, old_tree, new_tree):
     the new side has; those only the old side has; and every other name
     not compared (the reader in doubt, LC_COLLATE stored on one side, an
     alias one side cannot resolve), which is listed for the summary. Sorted
-    by
-    which side has the file, never by the words of `why`."""
+    by which side has the file, never by the words of `why`."""
     differs, added, removed, listed = [], [], [], []
     old_files, new_files = set(old_tree.names), set(new_tree.names)
     for name in sorted(got):

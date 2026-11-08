@@ -5,8 +5,8 @@
 Between two glibc versions — typically two RHEL major releases — **which
 specific locales change their sort order**, and which characters move, so that
 the change can be tested in PostgreSQL? A sort order change reaches more than
-indexes: measured on PostgreSQL 18, it leaves rows in the wrong range partition
-and makes a CHECK constraint reject a row it accepted before.
+indexes: it can leave rows in the wrong range partition and make a CHECK
+constraint reject a row it accepted before.
 
 **PostgreSQL will not tell you.** `pg_collation.collversion` stores glibc's
 version string, so it stays silent when a distro patches collation data

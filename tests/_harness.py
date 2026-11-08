@@ -511,8 +511,7 @@ def after_compared(out):
 # reddens the positive parsers instead of silencing a negative test.
 STEP2_LISTED = 'Listed in the summary'
 STEP2_NOT_COMPARED = '!! Not compared, so listed in the summary ('
-SUMMARY_STEP2 = ('-- Step 2: locales whose sort rules or character set differ, '
-                 'or that it could not compare')
+SUMMARY_STEP2 = '-- Listed by step 2'
 
 
 class Step2Report:

@@ -670,7 +670,7 @@ count_names() { [ -f "$1" ] || { echo 0; return; }; awk '!/^#/ && NF {n++} END {
 banner "AUDIT SUMMARY  $OLD -> $NEW"
 
 echo
-echo "-- Step 2: locales whose sort rules or character set differ, or that it could not compare"
+echo "-- Listed by step 2"
 if [ "$(count_lines "$STEP2_LIST")" -gt 0 ]; then
   # glibc's file C is C.UTF-8: PostgreSQL sorts a locale that is exactly C
   # without glibc. The list keeps C, which the SQL template reads as C.utf8.

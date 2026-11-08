@@ -284,7 +284,7 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
 == AUDIT SUMMARY  glibc-2.34-275.el9_8 -> glibc-2.39-128.el10_2
 ================================================================
 
--- Step 2: locales whose sort rules or character set differ, or that it could not compare
+-- Listed by step 2
      th_TH
      thai
    (2 name(s); full list: /tmp/pg-glibc-collation-audit/step2_changed_collate.glibc-2.34-275.el9_8..glibc-2.39-128.el10_2.txt)

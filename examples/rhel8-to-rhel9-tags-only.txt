@@ -67,7 +67,7 @@ Listed in the summary (5): or_IN, sv_FI, sv_FI@euro, sv_SE, swedish
 == AUDIT SUMMARY  glibc-2.28 -> glibc-2.34
 ================================================================
 
--- Step 2: locales whose sort rules or character set differ, or that it could not compare
+-- Listed by step 2
      or_IN
      sv_FI
      sv_FI@euro
