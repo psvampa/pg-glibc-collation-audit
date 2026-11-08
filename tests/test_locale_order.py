@@ -15879,7 +15879,7 @@ class RulesBesideTheVerdicts(unittest.TestCase):
             {'b': ['b', 'same', '', '-'],
              'n': ['n', 'not compared', 'no file n on the old side', '-']})
         self.assertEqual(got, {})
-        self.assertEqual(alone, [m.RULES_LEAD + ' none, no locale is named.'])
+        self.assertEqual(alone, [m.RULES_NONE])
 
     def test_a_group_never_mixes_two_answers(self):
         got, _ = self.lines(
@@ -15901,13 +15901,13 @@ class RulesBesideTheVerdicts(unittest.TestCase):
         got, alone = self.lines(
             {'x': ['changed', 'the order changes']},
             {'x': ['x', 'same', '', 'not compared']},
-            charmaps='a machine\'s file holds no charmaps')
+            charmaps='The file of the machine holds none.')
         self.assertEqual(got, {('x',): 'the order changes; its rules (step '
                                '2) do not; its character set (step 2): not '
                                'compared'})
         self.assertEqual(alone, [m.RULES_LEAD, 'Character sets (step 2): not '
-                                 'compared, a machine\'s file holds no '
-                                 'charmaps.'])
+                                 'compared. The file of the machine holds '
+                                 'none.'])
 
     def test_not_the_machines_is_one_line(self):
         """Step 2 compared the tags (a file holds no sources, its build is

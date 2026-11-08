@@ -99,11 +99,11 @@ locale is built, so two machines can hold byte-identical files
 and still sort differently. That is what step 11 measures, and commands 2 and
 3 measure inside PostgreSQL.
 
-With the two files, the summary sets the two answers side by side: under
-the measured order, each locale step 11 names, and whether step 2 found its
-rules changed. Over RHEL8 to RHEL9, `ko_KR.utf8` reads "the order changes;
-its rules (step 2) do not". The line says what changed, never why. Where
-step 2 compared the tags instead, one line says so and no locale gets one.
+With the two files, the run sets step 2's rules beside step 11's order,
+at the end of step 11 and under the measured order in the summary: each
+locale of the old machine that step 11 names, and whether step 2 found its
+rules changed. The line says what changed, never why. Where step 2 compared
+the tags, or compared nothing, one line says so and no locale gets one.
 
 **What step 11 names in a locale whose sort table changed.** Beside what it
 measured, the locale's line counts the sequences the table marks as changed,

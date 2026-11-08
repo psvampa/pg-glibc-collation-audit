@@ -9721,7 +9721,10 @@ def verdicts_by_name(changed, same, firm, unmeasured, refused, only_old,
     return out
 
 
-RULES_LEAD = 'Each locale step 11 names, beside its rules (step 2):'
+RULES_LEAD = ('Each locale of the old machine step 11 names, beside its '
+              'rules (step 2):')
+RULES_NONE = ('Step 11 names no locale of the old machine, so none is set '
+              'beside its rules (step 2).')
 
 
 def rules_beside(verdicts_path, rules_path, out_path):
@@ -9742,8 +9745,8 @@ def rules_beside(verdicts_path, rules_path, out_path):
     locale step 11 leaves unchanged for any text (firm) is only counted
     there, and gets a line only when its rules differ; one only on the new
     machine gets none (no database made on the old machine uses it). No
-    line names a cause: what no step compares is said once, in the run's
-    warnings."""
+    line names a cause: what no step compares is said elsewhere in the
+    run, never on these lines."""
     files = []
     for path, step in ((verdicts_path, 11), (rules_path, 2)):
         try:
@@ -9792,10 +9795,11 @@ def rules_beside(verdicts_path, rules_path, out_path):
                                       key=lambda kv: sorted(kv[1])):
                 lines.append((7, ', '.join(map(shown, names)) + ': ' + line))
         else:
-            lines.append((5, RULES_LEAD + ' none, no locale is named.'))
+            lines.append((5, RULES_NONE))
         if rules['charmaps']:
-            lines.append((5, 'Character sets (step 2): not compared, '
-                          f'{rules["charmaps"]}.'))
+            # step 2's reason is a sentence of its own (its NOT RUN).
+            lines.append((5, 'Character sets (step 2): not compared. '
+                          + rules['charmaps'].rstrip('.') + '.'))
     text = []
     for indent, line in lines:
         text += wrapped(line, indent, indent + 2)

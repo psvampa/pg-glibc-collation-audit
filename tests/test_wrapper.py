@@ -160,8 +160,10 @@ USAGE = [
     '       and download nothing. A file without the sources, or naming a',
     '       build that is not of RHEL 8, 9 or 10, makes both sides read',
     '       their tags when that side was given as its tag, and the run',
-    '       says so; given as the build itself, the run is refused. Each',
-    "       locale step 11 names is set beside step 2's rules for it.",
+    '       says so; given as the build itself, the run is refused. When',
+    "       steps 1 and 2 read the machines' own sources, each locale of",
+    "       the old machine step 11 names is set beside step 2's rules for",
+    '       it; otherwise one line says what step 2 compared.',
 ]
 
 REINDEX = '-- Reindex: sort order changes, confirm then REINDEX'
@@ -1667,6 +1669,13 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
                          step2)
         step1 = flat(self.step(out, 1))
         self.assertIn('charmaps none, because', step1)
+        # Beside step 11's verdict too, once, with step 2's reason.
+        got, alone = rules_beside(out)
+        self.assertEqual(alone[0], lom.RULES_LEAD)
+        self.assertEqual(len(alone), 2)
+        self.assertRegex(flat(alone[1]), r'^Character sets \(step 2\): not '
+                         r'compared\. The file of the machine that runs \S+ '
+                         r'holds no charmaps this reads, because ')
 
 
 class NodeFileWithoutSources:

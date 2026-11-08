@@ -404,7 +404,7 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
    code. Every locale found unchanged either has the same sort table on both,
    which is what glibc's comparison code reads, or compares bytes on both.
 
-     Each locale step 11 names, beside its rules (step 2):
+     Each locale of the old machine step 11 names, beside its rules (step 2):
        C.utf8, or_IN, or_IN.utf8, sv_FI, sv_FI.iso88591, sv_FI.iso885915@euro,
          sv_FI.utf8, sv_FI@euro, sv_SE, sv_SE.iso88591, sv_SE.iso885915,
          sv_SE.utf8, swedish: the order changes, and so do its rules (step 2)
@@ -685,7 +685,7 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
         table on both, which is what glibc's comparison code reads, or
         compares bytes on both.
      Full report: step 11 above.
-     Each locale step 11 names, beside its rules (step 2):
+     Each locale of the old machine step 11 names, beside its rules (step 2):
        C.utf8, or_IN, or_IN.utf8, sv_FI, sv_FI.iso88591, sv_FI.iso885915@euro,
          sv_FI.utf8, sv_FI@euro, sv_SE, sv_SE.iso88591, sv_SE.iso885915,
          sv_SE.utf8, swedish: the order changes, and so do its rules (step 2)

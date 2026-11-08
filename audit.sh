@@ -51,8 +51,10 @@
 # build. A file without the sources or the charmaps says why, and the run
 # repeats it where their checks would have answered. Only a node file carries
 # the charmaps, so only with these options does step 2 compare them and step
-# 11 check what it measured against them. With them, each locale step 11
-# names is set beside step 2's rules for it.
+# 11 check what it measured against them. When steps 1 and 2 read the
+# machines' own sources, each locale of the old machine step 11 names is
+# set beside step 2's rules for it; otherwise one line says what step 2
+# compared.
 #
 # Example (the names are examples -- `ldd --version` on each node gives the
 # tag, `rpm -q glibc` the build):
@@ -97,8 +99,10 @@ usage() {
   echo "       and download nothing. A file without the sources, or naming a" >&2
   echo "       build that is not of RHEL 8, 9 or 10, makes both sides read" >&2
   echo "       their tags when that side was given as its tag, and the run" >&2
-  echo "       says so; given as the build itself, the run is refused. Each" >&2
-  echo "       locale step 11 names is set beside step 2's rules for it." >&2
+  echo "       says so; given as the build itself, the run is refused. When" >&2
+  echo "       steps 1 and 2 read the machines' own sources, each locale of" >&2
+  echo "       the old machine step 11 names is set beside step 2's rules for" >&2
+  echo "       it; otherwise one line says what step 2 compared." >&2
   exit 2
 }
 
@@ -598,7 +602,8 @@ fi
 # Step 2's rules beside step 11's verdict, read from the two files this run
 # wrote, never worked out again (locale_order.rules_beside). Lines that
 # cannot be made are said where they would stand, with why: never step 11's
-# answer alone as if they had been.
+# answer alone as if they had been. Untested defence: both files are of
+# the same measurements, so no run the suite makes reaches NOT REPORTED.
 if [ -n "$OLD_ORDER" ]; then
   if ! python3 "$SCRIPTS/locale_order.py" --rules-beside "$VERDICTS" \
        "$RULES_FILE" "$CROSS" > "$CROSS_LOG" 2>&1; then
@@ -610,7 +615,7 @@ rules_beside() {
     cat "$CROSS"
   else
     echo "     NOT REPORTED -- step 2's rules could not be set beside each"
-    echo "     locale step 11 names:"
+    echo "     locale of the old machine step 11 names:"
     sed 's/^/       /' "$CROSS_LOG"
   fi
 }

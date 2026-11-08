@@ -2993,6 +2993,37 @@ def _bang_blocks(out):
 
 
 
+class CharmapCheckSaysWhyItDidNotRun(unittest.TestCase):
+    """check_charmaps returns, beside what it lists, the reason it said
+    NOT RUN, on each route: the report's own, and no build in common; and
+    None when it ran. The cross with step 11 prints it (9.4c,
+    false-negative-reviewer: two of its three routes gave none)."""
+
+    def run_check(self, report):
+        reads = mock.Mock()
+        side = lambda tag: mock.Mock(tag=tag)
+        with mock.patch.object(f.ck, 'compare', return_value=report), \
+                mock.patch.object(f.ck, 'listed_sources',
+                                  return_value=['sv_SE']), \
+                mock.patch.object(f, 'print_charmap_report'):
+            return f.check_charmaps(reads, None, side('o'), side('n'), {},
+                                    set(), builds=([], []))
+
+    def test_the_reports_own(self):
+        self.assertEqual(self.run_check(mock.Mock(not_run='a charmap is '
+                                                  'missing', builds=3)),
+                         (['sv_SE'], 'a charmap is missing'))
+
+    def test_no_build_in_common(self):
+        listed, why = self.run_check(mock.Mock(not_run=None, builds=0))
+        self.assertEqual(why, f.STEP2_WORDS.none_compared.format(
+            old='o', new='n'))
+
+    def test_it_ran(self):
+        self.assertEqual(self.run_check(mock.Mock(not_run=None, builds=3)),
+                         (['sv_SE'], None))
+
+
 class StepTwoRulesByMeasuredName(unittest.TestCase):
     """rules_by_name: step 2's rules for every locale name measured on
     either machine, the answer audit.sh sets beside step 11's verdict.
@@ -3072,6 +3103,15 @@ class StepTwoRulesByMeasuredName(unittest.TestCase):
         self.assertEqual(got['ko_KR.utf8'][3], 'changed')
         self.assertEqual(got['sv_SE.utf8'][3], '-')
         self.assertEqual(got['swedish'][3], 'not compared')
+
+    def test_an_alias_carries_its_files_charmap(self):
+        """swedish is a key of compare_rules (an alias) and is built from
+        sv_SE: the character set check, which lists files, lists it through
+        sv_SE, as step 2's Reindex does (false-negative-reviewer, 9.4c)."""
+        got = self.answer(['swedish', 'sv_SE.utf8'], ['C'], keyed=['sv_SE'])
+        self.assertEqual(got['swedish'], ['swedish', 'differs', '',
+                                          'changed'])
+        self.assertEqual(got['sv_SE.utf8'][3], 'changed')
 
     def test_a_state_it_does_not_know_is_refused(self):
         bad = self.got()
