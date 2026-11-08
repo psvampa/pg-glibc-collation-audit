@@ -176,8 +176,9 @@ def fill_reader_cache():
     # OLD as RHEL 9 reads it was filled here for
     # test_wrapper.WrapperNodesOnOneBuild (PR #117), which step 9.3 deleted
     # with steps 9 and 10; no other test gives OLD's files an el9 build.
-    # MID as RHEL 9 reads it: the machines' folders the wrapper tests make
-    # from MID's files with an el9 build id (WrapperNodeToNode, step 8).
+    # MID as RHEL 9 reads it: the machine files the wrapper tests make from
+    # MID's files with an el9 build, which steps 1 and 2 read as that build
+    # (WrapperMachinesReadTheirOwnFiles, NodeFileCharmaps).
     if has_tags(MID):
         rhel9 = glibc_tree.build_at(GLIBC_CLONE, MID, '.el9')
         if not kept(MID, rhel9):
@@ -403,10 +404,27 @@ def summary_block(out, heading):
     raise AssertionError(f'{heading!r} never ends:\n{summary}')
 
 
+def materialise_tag(repo, tag, dest):
+    """Extract localedata/locales at `tag` into `dest`, byte-exact, and
+    return the folder: a machine's locale sources as a test builds them.
+    git archive rather than read_blobs, so the files are the tag's bytes."""
+    p = subprocess.run(['git', 'archive', tag, 'localedata/locales'],
+                       cwd=repo, capture_output=True)
+    if p.returncode != 0:
+        raise AssertionError(f"git archive {tag} failed: "
+                             f"{p.stderr.decode('utf-8', 'replace').strip()}")
+    with tempfile.TemporaryFile() as fh:
+        fh.write(p.stdout)
+        fh.seek(0)
+        with tarfile.open(fileobj=fh, mode='r|') as tar:
+            tar.extractall(dest)
+    return os.path.join(dest, 'localedata', 'locales')
+
+
 def flat(text):
     """Output with every run of whitespace collapsed to one space.
 
-    dd.warn wraps at 78 columns, so a phrase of more than a few words is split
+    glibc_locale_data.warn wraps at 78 columns, so a phrase of more than a few words is split
     across lines. Asserting on the raw text makes a POSITIVE assertion brittle
     and -- far worse -- makes a NEGATIVE one vacuous: `assertNotIn` on a phrase
     that is always broken up passes whether the warning is printed or not.
@@ -417,15 +435,23 @@ def flat(text):
     return ' '.join(text.split())
 
 
-# A step deleted in branch 9 (3 in step 9.2; 4, 5, 9 and 10 in step 9.3)
-# named in text the tool prints or writes, in any of the spellings the
-# deleted texts used: "step 4", "Steps 1 to 5", "steps 2 and 5",
-# "steps 9/10", "Steps 1-5", "steps 6 to 10". "step 9.3" is a step of
-# the plan, not of the run, and does not count. And the two scripts of
-# steps 4, 5, 9 and 10 by name.
+# A step deleted in branch 9 (3 in step 9.2; 4, 5, 9 and 10 in step 9.3;
+# 6, 7 and 8 in step 9.4b) named in text the tool prints or writes, in any
+# of the spellings the deleted texts used: "step 4", "Steps 1 to 5",
+# "steps 2 and 5", "steps 9/10", "Steps 1-5", "steps 6 to 10", "steps 6
+# and 7". "step 9.3" is a step of the plan, not of the run, and does not
+# count. And the scripts of the deleted steps by name, and the names of the
+# lists steps 6 to 8 wrote, so that a leftover one is never taken for this
+# run's.
 DELETED_STEP = re.compile(
-    r'\b[Ss]teps?\s+(?:\d+\s*(?:,|and|to|-|/)\s*)*(?:3|4|5|9|10)\b(?!\.\d)'
-    r'|flag_algorithmic_ranges|diff_collation_code')
+    r'\b[Ss]teps?\s+(?:\d+\s*(?:,|and|to|-|/)\s*)*'
+    r'(?:3|4|5|6|7|8|9|10)\b(?!\.\d)'
+    r'|flag_algorithmic_ranges|diff_collation_code'
+    r'|diff_distro_locales|diff_node_locales'
+    r'|copy_missing\.|backports_inside_collate\.|distro_keyed_locales\.'
+    r'|node_collate_diffs\.|node_collate_inherited\.'
+    r'|node_removed_locales\.|node_removed_undetermined\.'
+    r'|node_keyed_locales\.')
 
 
 def deleted_steps_named(text):

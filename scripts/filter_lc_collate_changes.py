@@ -52,9 +52,9 @@ import glibc_locale_data as g
 import glibc_tree
 
 # The character set check's report, and the helpers it prints with,
-# live in node_charmaps.py, which outlives the steps that print them
-# from here (step 9.1). Named here as well: this step and its tests
-# use these names.
+# live in node_charmaps.py, which also reads a machine's charmaps for
+# this step and for step 11. Named here as well: this step and its
+# tests use these names.
 from node_charmaps import (
     print_characters, _named_under, reads_utf8, Words, STEP2_WORDS,
     _said, _charmaps_not_run, _warn_block, _CHANGED_IN_CHARMAP,
@@ -446,6 +446,19 @@ NOT_COMPARED_HERE = (
     "compared below.")
 
 
+# What PostgreSQL does with C.UTF-8, said once, by this step: a libc
+# collation or database whose locale is C, C.<anything> or POSIX gets no
+# version (pg_locale.c:1708-1724@REL_13_23, which also skips POSIX.<any>;
+# pg_locale.c:1671-1674@REL_14_19, :1697-1700@REL_16_10;
+# pg_locale_libc.c:663-665@REL_18_RC1), so nothing in PostgreSQL warns when
+# its order changes.
+C_NO_VERSION = (
+    "PostgreSQL records no collation version for a libc collation or "
+    "database whose locale is C, C.<anything> or POSIX, so no version "
+    "mismatch warns about C.UTF-8; sql/c_utf8_probe.sql, run on both "
+    "machines, compares its order inside PostgreSQL.")
+
+
 def _fill(text, first='      ', rest=None):
     return textwrap.fill(text, width=WIDTH, initial_indent=first,
                          subsequent_indent=first if rest is None else rest,
@@ -552,6 +565,27 @@ def print_added(added, renamed_from, supported, old_side, old_name,
         print(_fill(f"{old_name}'s own locale sources do not have these "
                     f"files, so that build ships none of these locales.",
                     '   '))
+
+
+def print_c_utf8(sides, differs):
+    """The `!!` for C.UTF-8 (glibc's file C), from the trees, never from a
+    list of what a distro ships: a tag side without the file, whose rules
+    were then not compared (a distro build can ship its own: Red Hat's for
+    RHEL 8, 9 and 10 do), or rules that differ. Nothing when C was compared
+    and is the same. Never says its order changes where nothing compared
+    it (#151: RHEL 9 and 10 ship one C). `sides` is ((side, tree, name),
+    (side, tree, name)), old first."""
+    lacking = [name for sd, tree, name in sides
+               if g._is_tag(sd) and 'C' not in tree.names]
+    if lacking:
+        _warn_block(f"{' and '.join(lacking)} "
+                    f"{'holds' if len(lacking) == 1 else 'hold'} no "
+                    f"localedata/locales/C, the file C.UTF-8 is built from, "
+                    f"and a distro's build can ship its own, so C.UTF-8's "
+                    f"sort rules were not compared. {C_NO_VERSION}", [])
+    elif 'C' in differs:
+        _warn_block(f"C.UTF-8's sort rules differ, and it is listed for "
+                    f"Reindex. {C_NO_VERSION}", [])
 
 
 def print_removed(removed, renamed_to, new_side, new_name):
@@ -682,9 +716,17 @@ def _main(opts):
         print(f"Rules: not compared, {what}.")
         if machine and not cm and nothing != 'commit':
             # Never "the same charmaps": a file without them left them out
-            # of its commit, and none was read.
+            # of its commit, and none was read. Each file's own reason,
+            # which no other line of the run carries for one tree.
             print("Character sets and transliterations: not compared, a "
                   "machine's file holds no charmaps this reads.")
+            said = set()
+            for sd in (old_side, new_side):
+                if sd.prov.get('charmaps') is None and g.label(sd) not in said:
+                    said.add(g.label(sd))
+                    print(_fill(f"The file of the machine that runs "
+                                f"{g.label(sd)} holds none, because "
+                                f"{sd.prov['charmaps_why']}.", '  '))
         else:
             print(f"Character sets and transliterations: not compared, "
                   f"{what}.")
@@ -753,6 +795,8 @@ def _main(opts):
                         + ', '.join(f"{g.shown(n)} ({'; '.join(w)})"
                                     for n, w in sorted(unread.items())),
                         '', '  '))
+        print_c_utf8(((old_side, old_tree, old_name),
+                      (new_side, new_tree, new_name)), differs)
 
         # The character set check, with what this step lists already. It
         # reads both texts of every content-changed file, in one batch with

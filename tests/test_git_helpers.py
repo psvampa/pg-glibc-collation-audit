@@ -144,23 +144,6 @@ class AShallowCloneCannotAnswerThis(unittest.TestCase):
         self.assertIn('reads its input as UTF-8', flat(out))
         self.assertNotIn('ANSWER', out)
 
-    def test_steps_6_to_8_name_themselves_in_the_refusal(self):
-        """node_charmaps asks the same question for a machine's tag, and
-        the refusal names the step that asked, not step 2."""
-        rc, out = in_subprocess(
-            "import filter_lc_collate_changes as f\n"
-            "class R:\n"
-            "    stdout = b'--is-shallow-repository\\n'\n"
-            "g.descends_from = lambda *a: False\n"
-            "real = g.run_git\n"
-            "g.run_git = lambda a, *rest, **k: (R() if a[:1] == ['rev-parse']\n"
-            "                                   else real(a, *rest, **k))\n"
-            "print('ANSWER', f.reads_utf8(%r, '%s', 'step 8'))"
-            % (self.repo, OLD))
-        self.assertNotEqual(rc, 0, out)
-        self.assertIn('whether this clone has the history step 8 needs is '
-                      'unknown', flat(out))
-        self.assertNotIn('ANSWER', out)
 
     def test_an_answer_that_is_neither_true_nor_false_is_not_read_as_deep(self):
         """`--is-shallow-repository` dates from git 2.15; an older `rev-parse`
@@ -2640,8 +2623,9 @@ class OneOrderForEverySide(unittest.TestCase):
         self.assertEqual(self.status(odd, odd), 'same')
 
     def test_equal_words_are_one_build_whatever_the_version_says(self):
-        """Step 8 knows a machine by the build id typed for it, and reads
-        the version from that id: a free-text id gives none. Two equal ids
+        """A machine known only by its measurement (step 11) has the build
+        id it recorded, and the version is read from that id: a free-text
+        id gives none. Two equal ids
         are still one build (backlog 16.62), where reading the version
         first called them undetermined."""
         self.assertEqual(self.status(build_side('same-build', None),
@@ -2650,34 +2634,7 @@ class OneOrderForEverySide(unittest.TestCase):
                                      build_side('other-build', None)),
                          'undetermined')
 
-    def test_typed_ids_name_every_id_whose_version_is_not_read(self):
-        """The `!!` of step 8 names each typed id it could not read a glibc
-        version from, so its reason is never "rpm cannot order them" when
-        what failed was the id (false-negative-reviewer, round 1 of 7.6b):
-        dnf repoquery prints the epoch (glibc-0:2.28-...), and a line of
-        another package can be copied by mistake."""
-        good = 'glibc-2.34-275.el9_8.x86_64'
-        for odd in ('el8-server', 'glibc-0:2.28-251.el8_10.40.x86_64',
-                    'glibc-common-2.34-275.el9_8.x86_64'):
-            with self.subTest(odd=odd):
-                self.assertEqual(g.typed_machines_order(odd, good),
-                                 ('undetermined', [odd]))
-                self.assertEqual(g.typed_machines_order(good, odd),
-                                 ('undetermined', [odd]))
 
-    def test_typed_ids_without_the_architecture_are_ordered(self):
-        """A build named without the architecture, Rocky's
-        (glibc-2.28-251.el8_10.40) and AlmaLinux 10's, whose release ends in
-        `.alma.1` (glibc-2.39-121.el10_2.alma.1, on repo.almalinux.org)."""
-        for old, new in (('glibc-2.28-251.el8_10.40', 'glibc-2.34-275.el9_8'),
-                         ('glibc-2.34-275.el9_8', 'glibc-2.34-283.el9_8'),
-                         ('glibc-2.34-275.el9_8',
-                          'glibc-2.39-121.el10_2.alma.1')):
-            with self.subTest(old=old, new=new):
-                self.assertEqual(g.typed_machines_order(old, new),
-                                 ('forward', []))
-                self.assertEqual(g.typed_machines_order(new, old, True),
-                                 ('reversed', []))
 
     def test_a_build_word_without_its_architecture_is_not_read(self):
         """build_parts reads the last dotted word as the architecture only
@@ -2741,15 +2698,10 @@ class OneOrderForEverySide(unittest.TestCase):
         self.assertEqual(self.status('backport', b28, repo), 'undetermined')
 
     def test_pair_order_is_order(self):
-        """pair_order, which require_pair_order and every step ask, takes
-        its answer from order: a planted answer reaches it."""
+        """pair_order, which every step asks, takes its answer from order:
+        a planted answer reaches it."""
         with mock.patch.object(g, 'order', return_value=('reversed', 'x')):
             self.assertEqual(g.pair_order(None, 'a', 'b'), ('reversed', 'x'))
-            err = io.StringIO()
-            with contextlib.redirect_stderr(err), \
-                    self.assertRaises(SystemExit):
-                g.require_pair_order(None, 'a', 'b')
-            self.assertIn('This pair is REVERSED', err.getvalue())
 
 
 class NothingComparedIsNotTheOrder(unittest.TestCase):
@@ -2922,12 +2874,13 @@ class Step2AsksWhetherAnythingIsCompared(unittest.TestCase):
 @needs_floor_pair
 class OneFloorForEverySide(unittest.TestCase):
     """Every side of every step is refused below one floor
-    (glibc_locale_data.below_floor, applied by side()), on the tag side and
-    on the machine side. With the floor moved to 300, glibc-2.12 (286 locale
-    files) is below it and glibc-2.17 (312) above, and a machine directory
-    of 299 files is below it and one of 300 above: each step is driven so
-    that exactly one side is short, and must refuse that side. A step that
-    kept a floor of its own on one side stays at 200 and runs on."""
+    (glibc_locale_data.below_floor, applied by side() and machine_side()),
+    on the tag side and on the machine side. With the floor moved to 300,
+    glibc-2.12 (286 locale files) is below it and glibc-2.17 (312) above,
+    and a machine's file of 299 locale files is below it and one of 300
+    above: each step is driven so that exactly one side is short, and must
+    refuse that side. A step that kept a floor of its own on one side stays
+    at 200 and runs on."""
 
     FLOOR = 300
 
@@ -2958,9 +2911,7 @@ class OneFloorForEverySide(unittest.TestCase):
 
     def test_the_tag_side_of_every_step(self):
         import filter_lc_collate_changes as f
-        import diff_distro_locales as dd
-        import diff_node_locales as nl
-        old, new, ok = FLOOR_OLD, FLOOR_NEW, self.dirs['ok']
+        old, new = FLOOR_OLD, FLOOR_NEW
         here = os.path.join(self.tmp, 'step1')
         if not os.path.isdir(here):
             os.mkdir(here)
@@ -2970,11 +2921,6 @@ class OneFloorForEverySide(unittest.TestCase):
             ('corpus subcommand', g._main, ['corpus', old, new]),
             ('1 fanin', g._main, ['fanin', old]),
             ('2', f.main, [old, new]),
-            ('6/7', dd.main, [old, '--locales-dir', ok, '--build-id', 'b']),
-            ('8', nl.main, ['--old-locales-dir', ok, '--old-build-id', 'o',
-                            '--new-locales-dir', self.dirs['okb'],
-                            '--new-build-id', 'n',
-                            '--old-tag', old, '--new-tag', new]),
         )
         for name, main, argv in steps:
             with self.subTest(step=name):
@@ -2983,31 +2929,32 @@ class OneFloorForEverySide(unittest.TestCase):
                               self.refusal(main, argv))
 
     def test_the_machine_side_of_every_step(self):
-        import diff_distro_locales as dd
-        import diff_node_locales as nl
-        ok, short = self.dirs['ok'], self.dirs['short']
-        steps = (
-            ('6/7', dd.main, [FLOOR_NEW, '--locales-dir', short,
-                              '--build-id', 'b'], '--locales-dir'),
-            ('8 old', nl.main, ['--old-locales-dir', short,
-                                '--old-build-id', 'o',
-                                '--new-locales-dir', ok,
-                                '--new-build-id', 'n'], '--old-locales-dir'),
-            ('8 new', nl.main, ['--old-locales-dir', ok, '--old-build-id', 'o',
-                                '--new-locales-dir', short,
-                                '--new-build-id', 'n'], '--new-locales-dir'),
-            ('8 both', nl.main, ['--old-locales-dir', ok,
-                                 '--old-build-id', 'o',
-                                 '--new-locales-dir', self.dirs['ok2'],
-                                 '--new-build-id', 'n'],
-             'the two node directories'),
-        )
-        for name, main, argv, what in steps:
-            with self.subTest(step=name):
-                shown = 150 if name == '8 both' else 299
-                self.assertIn(f'only {shown} file(s) to compare in {what}, '
-                              f'below the floor of {self.FLOOR}.',
-                              self.refusal(main, argv))
+        """A machine's file is read through its commit (machine_side), and
+        the commit is listed and held to the floor like a tag: 299 locale
+        files are refused, 300 are not. Steps 1 and 2 and step 1's fan-in
+        all reach a machine through this one function."""
+        for name, count in (('short', 299), ('ok', 300)):
+            folder = os.path.join(self.tmp, f'machine-{name}')
+            if not os.path.isdir(folder):
+                os.mkdir(folder)
+                shutil.copytree(self.dirs[name],
+                                os.path.join(folder, 'locales'))
+                with open(os.path.join(folder, 'locale_order.out'),
+                          'w') as fh:
+                    fh.write(f'a measurement of {name}\n')
+                with open(os.path.join(folder, 'build-id'), 'w') as fh:
+                    fh.write('glibc-2.17-326.el7.x86_64\n')
+            build = f'glibc-2.17-{300 + count}.el7'
+            with self.subTest(files=count):
+                if count < self.FLOOR:
+                    self.assertIn(
+                        f'only {count} file(s) under {g.LOCALES_DIR}/ at ',
+                        self.refusal(lambda argv: g.machine_side(*argv),
+                                     [GLIBC_CLONE, build, [folder]]))
+                    continue
+                with mock.patch.object(g, 'MIN_LOCALE_FILES', self.FLOOR):
+                    sd, _ = g.machine_side(GLIBC_CLONE, build, [folder])
+                self.assertEqual(len(sd.paths), count)
 
 
 if __name__ == '__main__':

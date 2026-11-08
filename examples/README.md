@@ -9,8 +9,8 @@ The two upgrades this project publishes results for, in two shapes.
 ### Command 1
 
 `./audit.sh <old> <new>` and nothing else. This is what you get from a
-checkout alone, and it is where the `NOT RUN` blocks appear, each saying
-what it did not cover rather than leaving the section out.
+checkout alone, and it is where the summary says what it did not cover
+(`NOT RUN`, `NOT CHECKED`) rather than leaving the section out.
 
 | File | |
 |---|---|
@@ -23,8 +23,8 @@ Raw output, start to finish, with nothing trimmed or annotated.
 
 The same command given one file from each machine, the one
 `scripts/locale_order.py --extract` wrote there, so steps 1 and 2 read each
-machine's own locale sources and charmaps and the node steps run instead of
-saying `NOT RUN`.
+machine's own locale sources and charmaps and step 11 measures both machines
+instead of saying `NOT RUN`.
 
 | File | |
 |---|---|

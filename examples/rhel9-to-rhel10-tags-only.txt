@@ -93,6 +93,13 @@ Not compared, no file at glibc-2.39 (1), listed under Removed in the summary:
    An index using one of these fails to sort on the new system UNLESS its
    distro ships the file anyway, which an upstream tag cannot show.
 
+!! glibc-2.34 holds no localedata/locales/C, the file C.UTF-8 is built from,
+   and a distro's build can ship its own, so C.UTF-8's sort rules were not
+   compared. PostgreSQL records no collation version for a libc collation or
+   database whose locale is C, C.<anything> or POSIX, so no version mismatch
+   warns about C.UTF-8; sql/c_utf8_probe.sql, run on both machines, compares
+   its order inside PostgreSQL.
+
 Character sets (localedata/charmaps/): 2 of the 30 that the 487 locale builds
 in SUPPORTED at both tags use differ between glibc-2.34 and glibc-2.39.
 GB18030: 24 characters added, 6 given other bytes. UTF-8: 5954 characters
@@ -119,8 +126,7 @@ Listed for Reindex (2): th_TH, thai
 
 -- Removed: locale files the old side has and the new side does not
      The tags cannot show what your distro adds or drops: NOT CHECKED.
-     Pass --old-node and --new-node instead of every other --old-*/--new-*
-     option, or --old-locales-dir and --new-locales-dir with their build ids.
+     Pass --old-node and --new-node, each machine's file, to check it.
      Between the tags, gone at glibc-2.39:
        aa_ER@saaho (renamed to ssy_ER)
    (1 name(s); full list: /tmp/pg-glibc-collation-audit/step2_removed_locales.glibc-2.34..glibc-2.39.txt)
@@ -136,20 +142,6 @@ Listed for Reindex (2): th_TH, thai
      converts its text, or compare what each machine's character rules
      (LC_CTYPE) answer.
 
--- Distro patches, steps 6 and 7: NOT RUN
-     Pass --old-node and --new-node instead of every other --old-*/--new-*
-     option, or --old-locales-dir and --new-locales-dir with their build ids.
-     So nothing above says whether either machine's own patches touch
-     sort order, which the tags cannot show.
-
--- Node-to-node locale data: NOT RUN
-     Pass --old-node and --new-node instead of every other --old-*/--new-*
-     option, or --old-locales-dir and --new-locales-dir with their build ids.
-     Without both, nothing above compared the two nodes' C.UTF-8
-     against each other, and PostgreSQL reports collversion as NULL for
-     every C.* collation, so no mismatch can ever fire.
-     Then run sql/c_utf8_probe.sql on both nodes.
-
 -- Warnings the clean results above do NOT cover
      !! Not checked for glibc-2.34 and glibc-2.39: they are upstream tags, which
         hold none of a distro's own locale files or patches. Steps 1 and 2 read
@@ -161,5 +153,11 @@ Listed for Reindex (2): th_TH, thai
         (localedef's and strcoll's, each build's patches to it included). Only step
         11 sees what it does, when it measures both machines;
         docs/confirming-on-a-real-system.md says how to confirm the order on them.
+     !! glibc-2.34 holds no localedata/locales/C, the file C.UTF-8 is built from,
+        and a distro's build can ship its own, so C.UTF-8's sort rules were not
+        compared. PostgreSQL records no collation version for a libc collation or
+        database whose locale is C, C.<anything> or POSIX, so no version mismatch
+        warns about C.UTF-8; sql/c_utf8_probe.sql, run on both machines, compares
+        its order inside PostgreSQL.
      (see docs/limitations.md)
 

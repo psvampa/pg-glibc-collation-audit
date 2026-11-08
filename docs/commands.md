@@ -6,9 +6,8 @@ sorts. The second and third measure, inside PostgreSQL, what the first leaves
 open.
 
 **Commands are numbered here; steps are what a run prints.** A run of command
-1 does its own work in steps numbered 1 to 11: 1 and 2 without a machine's
-file, and 6, 7, 8 and 11 with a file from each machine. Those numbers
-are not these three.
+1 does its own work in steps numbered 1, 2 and 11: 1 and 2 always, and 11
+with a file from each machine. Those numbers are not these three.
 
 ## Command 1 — which locales the upgrade can affect
 
@@ -56,22 +55,20 @@ that machine, in place of the tag, as in 1.a: the side you give is that
 build or its tag. Nothing is downloaded. When a file holds no locale
 sources, or names a build that is not of RHEL 8, 9 or 10, and you gave its
 tag, both sides read their tags and the run says so before step 1; given as
-the build itself, it is refused, as in 1.a. The two files add the checks
+the build itself, it is refused, as in 1.a. The two files add the step
 below.
 
 | The run's step | The question it answers |
 |---|---|
-| 6 and 7 | do the distro's patches on that machine touch sort order? One step per side |
-| 8 | does one machine's collation data differ from the other's? |
 | 11 | how does each machine's own glibc sort the locales installed on it, is each one's compiled sort table the same on both, and which characters and other strings moved between the two? |
 
-Three of those answer questions the upstream comparison cannot reach at all:
+With the files, the run answers questions the upstream comparison cannot
+reach at all:
 
-- **What your distro changed on its own.** Steps 6 and 7 compare a machine
-  against the version its distro started from.
-- **A locale your distro adds**, which the upstream version it started from
-  does not have. Step 8 compares one machine's copy of it with the other's,
-  and it needs both machines. `C.UTF-8` is that locale on RHEL8 and RHEL9, and
+- **What your distro changed on its own, and a locale it adds** that the
+  upstream version it started from does not have. Steps 1 and 2 compare the
+  two machines' own locale sources and charmaps, so such a patch or file is
+  compared like any other. `C.UTF-8` is such a locale on RHEL8 and RHEL9, and
   in a container it is usually the database collation.
 - **How each machine really sorts.** Step 11 reads no source. It asks each
   machine's glibc to order every character, and every lone byte, a database of
@@ -83,20 +80,19 @@ Three of those answer questions the upstream comparison cannot reach at all:
   the same glibc code on both. What it does not see, it prints beside its
   result.
 
-Leave the files out and the summary says `NOT RUN` for steps 6 and 7, step
-8 and step 11, and `NOT CHECKED` for what the distro adds or
-drops. They are not omitted, because a section that vanishes reads like a
-section that found nothing.
+Leave the files out and the summary says `NOT RUN` for step 11, and `NOT
+CHECKED` for what the distro adds or drops. They are not omitted, because a
+section that vanishes reads like a section that found nothing.
 
 A file without the locale sources still holds the measurement and the build,
 because the extraction notes why the sources are missing and goes on. Step 11
-runs. Every summary block that needed those sources says `NOT RUN`, or `NOT
-CHECKED`, with the file's reason, such as `/usr/share/i18n/locales is empty`.
-A file without the charmaps is read the same way. Steps 2 and 6 to 8 say
-`NOT RUN` for the character sets, and step 11 says it did not check the
-strings it measured against them, each with the reason.
+runs, and steps 1 and 2 read the tags, as above: the warning that says so
+carries the file's reason, such as `/usr/share/i18n/locales is empty`. A file
+without the charmaps is read the same way. Step 2 says `NOT RUN` for the
+character sets, and step 11 says it did not check the strings it measured
+against them, each with the reason.
 
-**Steps 6 to 8 settle data, not order.** The weights are computed when the
+**Steps 1 and 2 compare rules, not order.** The weights are computed when the
 locale is built, so two machines can hold byte-identical files
 and still sort differently. That is what step 11 measures, and commands 2 and
 3 measure inside PostgreSQL.
@@ -162,52 +158,14 @@ well.
 The two files go together, since one machine's file compares nothing, and
 they do not mix with the options of the next section.
 
-#### The checks from separate pieces
+#### The measurements alone
 
-`audit.sh` also takes the pieces of a node file one by one, for when you have
-them already, such as a copy of the locale folder taken from an image:
-`--old-locales-dir` and `--new-locales-dir`, each with its `--old-build-id` or
-`--new-build-id`, and `--old-order` and `--new-order`, each the output of a
-plain `python3 scripts/locale_order.py > old.out` on that machine. One check
-is not among them. Steps 2 and 6 to 8 compare the machines' character sets,
-and step 11 checks the strings it measured against them, only from a node
-file, because no piece carries the charmaps; from the pieces, steps 6 to 8
-and step 11 say so, and step 2 compares the tags'. Take a
-folder with `tar` over `ssh`, never `docker cp`, whose target `/tmp` in a
-container is a separate mount, so the copy silently does nothing. `rpm -q
-glibc` gives the build id, with or without the architecture (`...x86_64`).
-
-A copy taken this way carries no checksum, so the checks below are yours to
-make.
-
-The build ids are required, and the run orders the two machines by them:
-ids typed the other way round are refused before step 1, and when one is
-not read as the name of a glibc build, so the two cannot be ordered, a `!!`
-says so.
-
-**Check each copy against the machine it came from** — compare the names,
-`ls el8-locales` against `ls /usr/share/i18n/locales/` run there, not only the
-counts. The run does not compare against the machine. It refuses a copy only
-when it is too small to be one.
-
-What never arrived is named, not refused. When a copy lacks a file its
-published version has, steps 6 and 7 print a `!!` naming
-each one, and the summary repeats it. The run cannot tell a file the machine
-does not ship from one the copy lost, and the check above is what tells them
-apart. Step 8 lists what one copy lacks under `Only on the old node` or `Only
-on the new node`, where a failed transport reads exactly like a locale the
-upgrade removed or added.
-
-**Which printed count to check against matters.** The `Compared N file(s)`
-lines of steps 6 to 8 are intersections — with the published version for
-steps 6 and 7, with the other machine for step 8 — so they are never larger
-than the copy, and equality there does not mean the copy is complete. A
-`Compared` line adds back up to the copy's own count only together with the
-`absent upstream` or `only on the ... node` line printed beside it.
-
-Supply one side only and that side is still checked against its published
-version; the side you left out prints `NOT RUN` and names the flag that was
-missing.
+`audit.sh` also takes each machine's measurement on its own, for when you
+have it already: `--old-order` and `--new-order`, each the output of a plain
+`python3 scripts/locale_order.py > old.out` on that machine, given with two
+tags. Step 11 then compares the two measurements, and steps 1 and 2 read the
+tags. A measurement carries no charmaps, so step 11 does not check the
+strings it measured against them, and says so.
 
 ## Command 2 — whether `C.UTF-8`'s order changed
 
@@ -215,7 +173,7 @@ missing.
 needs PostgreSQL 15 or newer and no editing.
 
 This is the one locale 1.a cannot reach when its file is in neither version;
-1.b reaches it, in steps 8 and 11. PostgreSQL will not warn about it either.
+1.b reaches it, in steps 2 and 11. PostgreSQL will not warn about it either.
 It is needed when a database uses `C.UTF-8` — which in a container it usually
 does, without anyone having chosen it.
 

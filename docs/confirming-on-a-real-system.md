@@ -29,7 +29,7 @@ can change: no step compares `localedef`'s or `strcoll`'s
 `ko_KR` changed that way between RHEL8 and RHEL9 with its rules the same.
 Command 1.b measures every locale on both machines; without it, also run the
 template for the locales your databases use. With command 1.b, add every
-locale steps 6 to 8 list, every locale step 11 reports as changed, every one
+locale step 11 reports as changed, every one
 it reports as not known to be unchanged, and every one it names in a line that
 begins "!! NOT checked whether", "!! Measured in part" or "!! Not compared by
 their sort tables". The lines that begin with `upper()`, `!! upper()`,
@@ -40,8 +40,8 @@ measured in a database of another encoding", even when step 11 reports them as
 changed ([why](limitations.md#what-step-11-does-not-see)). Their UTF-8 forms,
 such as `th_TH.utf8`, still go through it as above.
 
-Steps 6 to 8, in command 1.b, list `C.UTF-8` by its source name, `C`, and
-step 11 lists it as `C.utf8`. Whichever step names it,
+Step 2's full list holds `C.UTF-8` under its source name, `C`, and step 11
+lists it as `C.utf8`. Whichever step names it,
 [the probe](#the-cutf-8-probe) measures it instead of the template.
 
 ## Choosing the three values

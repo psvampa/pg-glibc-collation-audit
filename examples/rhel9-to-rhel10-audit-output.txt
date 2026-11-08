@@ -120,233 +120,6 @@ glibc-2.39-128.el10_2.
 Listed for Reindex (2): th_TH, thai
 
 ================================================================
-== STEP 6  DISTRO CHECK  do glibc-2.34-275.el9_8.x86_64's patches touch sort order?
-================================================================
-Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
-  UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was NOT checked
-  NOTE: signatures were not checked. The commit ids above are what was actually read;
-        compare them against a source you trust (sourceware.org/git/glibc.git) if it matters.
-
-Node build under test: glibc-2.34-275.el9_8.x86_64
-Node locale sources:   /tmp/pg-glibc-collation-audit/node_file.glibc-2.34-275.el9_8..glibc-2.39-128.el10_2.old/locales
-
-Compared 355 file(s) against glibc-2.34:
-  identical:                 353
-  differ outside LC_COLLATE: 2
-  differ INSIDE LC_COLLATE:  0
-  no LC_COLLATE either side: 0
-  absent upstream:           1
-  absent on the node:        0
-  (2 of 355 differ in some way)
-
-No locale compared with glibc-2.34 differs inside LC_COLLATE.
-
-Absent upstream (1) -- backported locales this comparison is structurally blind to:
-  C: HAS ITS OWN TAILORING -- unauditable here
-
-Locale names measured on glibc-2.34-275.el9_8.x86_64: 869, built as 493 locale
-build(s) (C and POSIX are glibc's built-in locale, built from no charmap).
-
-Character sets (/usr/share/i18n/charmaps/): 1 of the 30 that the 493 locale
-builds on this machine use differs between this machine and glibc-2.34.
-GB18030: 24 characters added, 6 given other bytes.
-No build's LC_COLLATE names one of those characters.
-Transliteration (LC_CTYPE): 3 locale builds may build a collating element out
-of a transliteration, and nothing they read changed between glibc-2.34 and
-this machine.
-
-Character set result written to /tmp/pg-glibc-collation-audit/distro_keyed_locales.glibc-2.34..old.txt
-
-Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.glibc-2.34..old.txt
-
-!! This compares locale DATA. glibc's collation CODE, where Bug 22668 lives
-   (the change that reorders ko_KR), is compared by no step: step 1 says so.
-   The empirical check on real nodes measures the glibc actually installed,
-   patches and all: docs/confirming-on-a-real-system.md.
-
-================================================================
-== STEP 7  DISTRO CHECK  do glibc-2.39-128.el10_2.x86_64's patches touch sort order?
-================================================================
-Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
-  UNCHECKED glibc-2.39 = ef321e23c20e  gpg is not installed; the signature was NOT checked
-  NOTE: signatures were not checked. The commit ids above are what was actually read;
-        compare them against a source you trust (sourceware.org/git/glibc.git) if it matters.
-
-Node build under test: glibc-2.39-128.el10_2.x86_64
-Node locale sources:   /tmp/pg-glibc-collation-audit/node_file.glibc-2.34-275.el9_8..glibc-2.39-128.el10_2.new/locales
-
-Compared 366 file(s) against glibc-2.39:
-  identical:                 363
-  differ outside LC_COLLATE: 3
-  differ INSIDE LC_COLLATE:  0
-  no LC_COLLATE either side: 0
-  absent upstream:           0
-  absent on the node:        0
-  (3 of 366 differ in some way)
-
-No locale compared with glibc-2.39 differs inside LC_COLLATE.
-
-Locale names measured on glibc-2.39-128.el10_2.x86_64: 885, built as 501
-locale build(s) (C and POSIX are glibc's built-in locale, built from no
-charmap).
-
-Character sets (/usr/share/i18n/charmaps/): the 30 that the 501 locale builds
-on this machine use are identical on this machine and at glibc-2.39.
-Transliteration (LC_CTYPE): no character set and no locale file's LC_CTYPE
-changed between glibc-2.39 and this machine, so no collating element is built
-differently.
-
-Character set result written to /tmp/pg-glibc-collation-audit/distro_keyed_locales.glibc-2.39..new.txt
-
-Full result written to /tmp/pg-glibc-collation-audit/backports_inside_collate.glibc-2.39..new.txt
-
-!! This compares locale DATA. glibc's collation CODE, where Bug 22668 lives
-   (the change that reorders ko_KR), is compared by no step: step 1 says so.
-   The empirical check on real nodes measures the glibc actually installed,
-   patches and all: docs/confirming-on-a-real-system.md.
-
-================================================================
-== STEP 8  NODE TO NODE  does glibc-2.34-275.el9_8.x86_64's collation data differ from glibc-2.39-128.el10_2.x86_64's?
-================================================================
-Node-to-node comparison of locale SOURCES. Both sides are authoritative:
-  old: glibc-2.34-275.el9_8.x86_64
-       /tmp/pg-glibc-collation-audit/node_file.glibc-2.34-275.el9_8..glibc-2.39-128.el10_2.old/locales
-       356 file(s), 12762912 byte(s), fingerprint c23d60746558
-  new: glibc-2.39-128.el10_2.x86_64
-       /tmp/pg-glibc-collation-audit/node_file.glibc-2.34-275.el9_8..glibc-2.39-128.el10_2.new/locales
-       366 file(s), 12617788 byte(s), fingerprint b3bb1c5a5115
-
-Compared 355 file(s) present on both nodes:
-  identical:                  49
-  differ outside LC_COLLATE:  295
-  differ INSIDE LC_COLLATE:   3
-  no LC_COLLATE either node:  8
-  only on the old node:       1
-  only on the new node:       11
-
-Differ INSIDE LC_COLLATE (3) -- these two nodes do not carry the same collation rules:
-  ber_DZ  (both, differing, explicit -> copy-only)
-      --- glibc-2.34-275.el9_8.x86_64
-      +++ glibc-2.39-128.el10_2.x86_64
-      @@ -1,82 +1,3 @@
-       LC_COLLATE
-      -% The latin amazigh alphabet is:
-      -%
-      -% a ɛ b b* c č d ḍ e f g g* ğ h ḥ i j k k* l m n q q* gam gam* r ṛ s ṣ t ṭ u w x x* y z ẓ
-      -%
-      -% (What are the letters followed by a *???)
-      -%
-      -% CLDR does not yet have collation rules for this language.
-      -%
-      -
-      -% Looking at the above alphabet and the previously existing collation
-      -% rules in glibc for this language, I implement this in the following way:
-      -%
-      -% &A<ɛ<<<Ɛ
-      -% &C<č<<<Č
-      -% &D<ḍ<<<Ḍ
-      -% &G<ğ<<<Ğ
-      -% &H<ḥ<<<Ḥ
-      -% &Q<ɣ<<<Ɣ
-      -% &R<ṛ<<<Ṛ
-      -% &S<ṣ<<<Ṣ
-  kab_DZ  (both, differing, copy-only -> explicit)
-      --- glibc-2.34-275.el9_8.x86_64
-      +++ glibc-2.39-128.el10_2.x86_64
-      @@ -1,3 +1,82 @@
-       LC_COLLATE
-      -copy "ber_DZ"
-      +% The latin amazigh alphabet is:
-      +%
-      +% a ɛ b b* c č d ḍ e f g g* ğ h ḥ i j k k* l m n q q* gam gam* r ṛ s ṣ t ṭ u w x x* y z ẓ
-      +%
-      +% (What are the letters followed by a *???)
-      +%
-      +% CLDR does not yet have collation rules for this language.
-      +%
-      +
-      +% Looking at the above alphabet and the previously existing collation
-      +% rules in glibc for this language, I implement this in the following way:
-      +%
-      +% &A<ɛ<<<Ɛ
-      +% &C<č<<<Č
-      +% &D<ḍ<<<Ḍ
-      +% &G<ğ<<<Ğ
-      +% &H<ḥ<<<Ḥ
-      +% &Q<ɣ<<<Ɣ
-      +% &R<ṛ<<<Ṛ
-  th_TH  (both, differing, explicit on both)
-      --- glibc-2.34-275.el9_8.x86_64
-      +++ glibc-2.39-128.el10_2.x86_64
-      @@ -2,746 +2,92 @@
-       
-      -collating-element <ko-kai-e> from "<U0E40><U0E01>"
-      -collating-element <ko-kai-ae> from "<U0E41><U0E01>"
-      -collating-element <ko-kai-o> from "<U0E42><U0E01>"
-      -collating-element <ko-kai-ai-maimuan> from "<U0E43><U0E01>"
-      -collating-element <ko-kai-ai-maimalai> from "<U0E44><U0E01>"
-      +% Copy the template from ISO/IEC 14651
-      +copy "iso14651_t1"
-       
-      -collating-element <kho-khai-e> from "<U0E40><U0E02>"
-      -collating-element <kho-khai-ae> from "<U0E41><U0E02>"
-      -collating-element <kho-khai-o> from "<U0E42><U0E02>"
-      -collating-element <kho-khai-ai-maimuan> from "<U0E43><U0E02>"
-      -collating-element <kho-khai-ai-maimalai> from "<U0E44><U0E02>"
-      +% CLDR collation rules for Thai:
-      +% (see: https://github.com/unicode-org/cldr/blob/main/common/collation/th.xml)
-      +%
-      +%[normalization on]
-      +%[alternate shifted]
-      +%[reorder Thai]
-      +% #
-
-  All of those are at both tags, so a tag-to-tag diff compared them.
-
-Additionally affected via `copy` inheritance at glibc-2.39-128.el10_2.x86_64: 0 locale(s)
-  (no other locale copies any of those files)
-
-Only on the new node (11) -- locales this upgrade adds:
-  ab_GE: pure copy; inherits its order
-  crh_RU: weights spelled out in the file
-  gbm_IN: pure copy; inherits its order
-  kv_RU: pure copy; inherits its order
-  rif_MA: pure copy; inherits its order
-  ssy_ER: pure copy; inherits its order
-  su_ID: pure copy; inherits its order
-  syr: pure copy; inherits its order
-  tok: pure copy; inherits its order
-  translit_emojis: no LC_COLLATE block
-  zgh_MA: pure copy; inherits its order
-
-Only on the old node (1) -- locales this upgrade REMOVES. An index built on one of these does not just sort differently on the new node; the collation is gone:
-  aa_ER@saaho: pure copy; inherits its order
-
-Locale names measured on glibc-2.34-275.el9_8.x86_64: 869, built as 493 locale
-build(s) (C and POSIX are glibc's built-in locale, built from no charmap).
-Locale names measured on glibc-2.39-128.el10_2.x86_64: 885, built as 501
-locale build(s) (C and POSIX are glibc's built-in locale, built from no
-charmap).
-
-Character sets (/usr/share/i18n/charmaps/): 1 of the 30 that the 492 locale
-builds on both machines use differs between glibc-2.34-275.el9_8.x86_64 and
-glibc-2.39-128.el10_2.x86_64.
-UTF-8: 5954 characters added.
-No build's LC_COLLATE names one of those characters.
-Transliteration (LC_CTYPE): 24 collating elements of 3 locale builds depend on
-a transliteration; none is built differently on glibc-2.39-128.el10_2.x86_64.
-
-Character set result written to /tmp/pg-glibc-collation-audit/node_keyed_locales.glibc-2.34-275.el9_8.x86_64..glibc-2.39-128.el10_2.x86_64.txt
-
-Full result written to /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.34-275.el9_8.x86_64..glibc-2.39-128.el10_2.x86_64.txt
-
-!! This compares locale DATA. Identical data is NOT identical ORDER: the
-   weights for an ellipsis range are computed by localedef when the locale is
-   built, and that code differs between two glibc builds. Bug 22668 (commit
-   82292c99b2) changed exactly that and reordered ko_KR from a byte-identical
-   file. So a clean result here clears the data half and nothing else.
-
-================================================================
 == STEP 11  MEASURED ORDER  how each machine's own glibc sorts every locale
 ================================================================
 Old machine: glibc-2.34-275.el9_8.x86_64, 869 locale(s)
@@ -546,10 +319,12 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
      machine's own glibc says is under '-- Measured order', below.
 
 -- Removed: locale files the old side has and the new side does not
-     aa_ER@saaho
-   (1 name(s) on glibc-2.34-275.el9_8.x86_64 and not on glibc-2.39-128.el10_2.x86_64;
-   an index on one does not just sort differently; the collation is gone.
-   Full list: /tmp/pg-glibc-collation-audit/node_removed_locales.glibc-2.34-275.el9_8.x86_64..glibc-2.39-128.el10_2.x86_64.txt)
+     Each machine's locale files are its own locale sources as its file
+     holds them, checked against no package ('Not checked for these
+     machines', below).
+     Between the builds, gone at glibc-2.39-128.el10_2:
+       aa_ER@saaho (renamed to ssy_ER)
+   (1 name(s); full list: /tmp/pg-glibc-collation-audit/step2_removed_locales.glibc-2.34-275.el9_8..glibc-2.39-128.el10_2.txt)
 
 -- Measured order: each machine's own glibc
    (glibc-2.34-275.el9_8.x86_64 -> glibc-2.39-128.el10_2.x86_64)
@@ -688,32 +463,6 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
         compares bytes on both.
      Full report: step 11 above.
 
--- Distro patches, step 6 (glibc-2.34-275.el9_8.x86_64 against glibc-2.34)
-     No locale compared with glibc-2.34 differs inside LC_COLLATE.
-     Not compared, because glibc-2.34 lacks them, and with sort rules of
-     their own (step 6 above); steps 1 and 2 read them as files of
-     glibc-2.34-275.el9_8:
-       C
-     Character sets and transliterations, this machine against
-     glibc-2.34: nothing to add. No other locale's LC_COLLATE names a
-     character whose bytes differ, and no collating element is built
-     differently.
--- Distro patches, step 7 (glibc-2.39-128.el10_2.x86_64 against glibc-2.39)
-     No locale compared with glibc-2.39 differs inside LC_COLLATE.
-     Character sets and transliterations, this machine against
-     glibc-2.39: nothing to add. No other locale's LC_COLLATE names a
-     character whose bytes differ, and no collating element is built
-     differently.
-
--- Node-to-node locale data (glibc-2.34-275.el9_8.x86_64 -> glibc-2.39-128.el10_2.x86_64)
-     3 locale(s) differ inside LC_COLLATE between the two
-     nodes' OWN sources; full list: /tmp/pg-glibc-collation-audit/node_collate_diffs.glibc-2.34-275.el9_8.x86_64..glibc-2.39-128.el10_2.x86_64.txt
-     plus 0 locale(s) that inherit one of those files'
-     LC_COLLATE via copy on glibc-2.39-128.el10_2.x86_64; full list: /tmp/pg-glibc-collation-audit/node_collate_inherited.glibc-2.34-275.el9_8.x86_64..glibc-2.39-128.el10_2.x86_64.txt
-     Character sets and transliterations, between the two machines:
-     nothing to add. No other locale's LC_COLLATE names a character
-     whose bytes differ, and no collating element is built differently.
-
 -- Warnings the clean results above do NOT cover
      !! Not checked for these machines: their locale sources and charmaps are read
         as each machine's file holds them, with no check against the
@@ -728,14 +477,5 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
         (localedef's and strcoll's, each build's patches to it included). Only step
         11 sees what it does, when it measures both machines;
         docs/confirming-on-a-real-system.md says how to confirm the order on them.
-     !! This compares locale DATA. glibc's collation CODE, where Bug 22668 lives
-        (the change that reorders ko_KR), is compared by no step: step 1 says so.
-        The empirical check on real nodes measures the glibc actually installed,
-        patches and all: docs/confirming-on-a-real-system.md.
-     !! This compares locale DATA. Identical data is NOT identical ORDER: the
-        weights for an ellipsis range are computed by localedef when the locale is
-        built, and that code differs between two glibc builds. Bug 22668 (commit
-        82292c99b2) changed exactly that and reordered ko_KR from a byte-identical
-        file. So a clean result here clears the data half and nothing else.
      (see docs/limitations.md)
 

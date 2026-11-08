@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """
-Steps 6 to 8's comparison of the character sets a machine builds its locales
-with, and of the collating elements they build out of transliterations
-(backlog 13.7): collation_keys, the check step 2 makes between two tags, over
-a machine's own /usr/share/i18n/charmaps/ and locale sources. Step 2 itself
-reads which locales each machine builds through measured_builds when it is
-given two machines' own files. Steps 6 and 7
-compare a machine with the tag its glibc is built from, step 8 the two
-machines. Step 11 reads the same folder through CharmapsDir to check the
-strings it measured against it (locale_order.charmap_check).
+Reading a machine's own /usr/share/i18n/charmaps/ and its measurement, for
+two steps. Step 2, given two machines' own files, takes from measured_builds
+which locales each machine builds with which charmap (in place of the tag's
+SUPPORTED), and reads the charmaps of its machine commits through
+CharmapsDir; it also prints the character set check's report (backlog 13.7)
+with the functions below. Step 11 reads the same folder through CharmapsDir
+to check the strings it measured against it (locale_order.charmap_check).
 
 A distro can change a charmap without changing a locale file: Red Hat gives
 RHEL 8 and RHEL 9 the GB18030 of glibc 2.39, and RHEL 8 seven IBM charmaps of
@@ -47,17 +45,14 @@ A locale the machine does not build is not there for PostgreSQL to use: it
 imports collations from `locale -a` (collationcmds.c:868@REL_18_6), and
 CREATE DATABASE refuses a locale that does not exist (dbcommands.c:1067). So
 point 5 of collation_keys, the search for locales a distro could build in a
-changed charmap, is left out here.
+changed charmap, is left out for machines.
 
 Stated, not checked: each machine's localedef reads its files as the
 localedef of its tag does. True of RHEL 8, 9 and 10, whose reader files
 (linereader.c, locfile.c, ld-ctype.c, repertoire.c) are their tags' after
 the specs' patches; RHEL 9 lacks b15538d77c as glibc-2.34 does. So the
-comparison asks git about the tag (reads_utf8, below), as step 2 does.
-
-What this does not do: compare a copied folder (--locales-dir alone), which
-holds no charmaps and no measurement. Those runs keep their `!!` saying the
-character sets are not compared.
+comparison asks git about the tag (reads_utf8, below), as step 2 does for
+two tags.
 """
 import bz2
 import collections
@@ -72,8 +67,6 @@ import zlib
 import collation_keys as ck
 import glibc_locale_data as g
 
-# Where glibc-locale-source installs them on RHEL, for the printed lines.
-MACHINE_DIR = '/usr/share/i18n/charmaps/'
 
 # glibc's built-in locale: `locale -a` always lists both (locale.c:432-435@2.28)
 # and setlocale gives the built-in one for either name (findlocale.c:133-138).
@@ -354,119 +347,7 @@ def measured_builds(path, build_id, charmaps, aliases, tag, tag_ids):
     return Measured(builds, unmapped, len(locales))
 
 
-def read_texts(root, names, by_bytes):
-    """{name: text} for the locale files under `root`, decoded as
-    read_blobs_at decodes a blob (g.decoded). Files with equal bytes, here or
-    on the other side, get the one text object `by_bytes` keeps:
-    collation_keys passes over a file whose two texts are one object (as
-    step 2's shared texts are), and reads it otherwise."""
-    out = {}
-    for name in names:
-        with open(os.path.join(root, name), 'rb') as fh:
-            raw = fh.read()
-        text = by_bytes.get(raw)
-        if text is None:
-            text = by_bytes[raw] = g.decoded(raw)
-        out[name] = text
-    return out
-
-
-class _Texts(dict):
-    """A Side's charmap texts, read when first asked for."""
-
-    def __init__(self, load):
-        super().__init__()
-        self._load = load
-
-    def get(self, name, default=None):
-        if name not in self:
-            text = self._load(name)
-            if text is None:
-                return default
-            self[name] = text
-        return self[name]
-
-
-def _read_more(sides):
-    """compare's read_more: the charmaps it names, read now, so that its
-    0xFF gate sees them (collation_keys._ff_gate); every locale file is
-    read already."""
-    def read_more(charmaps, locales=False):
-        for side in sides:
-            for name in sorted(charmaps.get(side.tag, ())):
-                if name in side.charmap_oids:
-                    side.charmap_texts.get(name)
-    return read_more
-
-
-def _labels(old, new):
-    """Two names for two Sides; collation_keys keys its plan by them."""
-    return (old, new) if old != new else (f"{old} (old)", f"{new} (new)")
-
-
-Result = collections.namedtuple('Result', 'report old new measured')
-Result.__doc__ = """report: the collation_keys Report, or None with
-not_run; old, new: the Sides' names; measured: [Measured] per machine."""
-
-
-def against_tag(repo, tag, tag_root, tag_names, root, names, build_id,
-                charmaps_dir, measurement, listed, step):
-    """Steps 6 and 7: the machine's builds compared with themselves at
-    `tag`, the tag's locale files and charmaps against the machine's.
-    Unusable when the machine's files cannot be compared.
-
-    A locale file the tag lacks (C on RHEL 8 and 9, en_US@ampm on RHEL 8) is
-    read from the machine on both sides. No tag diff reads it, which the
-    step says above it, and what is asked here is whether the machine's
-    charmaps change what its rules resolve to: the same rules against the
-    tag's charmap and against the machine's answer that, where leaving the
-    build out would answer nothing."""
-    cms = CharmapsDir(charmaps_dir)
-    tag_oids = _tag_charmaps(repo, tag)
-    m = measured_builds(measurement, build_id, cms,
-                        g.locale_aliases(repo, tag), tag, tag_oids)
-    # A build in a charmap the tag lacks is the distro's own: no tag diff
-    # reads what it does to the characters the build's rules name.
-    absent = [b for b in m.builds if b.charmap not in tag_oids]
-    builds = [b for b in m.builds if b.charmap in tag_oids]
-    by_bytes = {}
-    old_label, new_label = _labels(tag, build_id)
-    used = sorted({b.charmap for b in builds})
-    oids = {c: cms.oid(c) for c in used}
-    differ = [c for c in used if oids[c] != tag_oids[c]]
-    paths = [f'{ck.CHARMAPS_DIR}/{c}' for c in differ]
-    (got, missing), = g.read_blobs_at(repo, [(tag, paths)])
-    g.require_read(tag, paths, missing, 'the character set check')
-    tag_texts = {p.rsplit('/', 1)[1]: t for p, t in got.items()}
-
-    def tag_charmap(c):
-        # A charmap with the machine's bytes is the machine's text, one
-        # object on both Sides.
-        if c not in tag_oids:
-            return None
-        if c in tag_texts:
-            return tag_texts[c]
-        if tag_oids[c] == oids.get(c):
-            return new.charmap_texts.get(c)
-        p = f'{ck.CHARMAPS_DIR}/{c}'
-        (one, gone), = g.read_blobs_at(repo, [(tag, [p])])
-        g.require_read(tag, [p], gone, 'the character set check')
-        return one[p]
-    node_texts = read_texts(root, names, by_bytes)
-    tag_texts_all = read_texts(tag_root, tag_names, by_bytes)
-    for n in names:
-        tag_texts_all.setdefault(n, node_texts[n])
-    old = ck.Side(old_label, set(tag_texts_all), tag_texts_all, tag_oids,
-                  _Texts(tag_charmap))
-    new = ck.Side(new_label, set(names), node_texts, oids, _Texts(cms.text))
-    old.ask_utf8 = new.ask_utf8 = _asked_once(repo, tag, step)
-    report = ck.compare(old, new, builds, builds, lambda: listed,
-                        _read_more((old, new)), search_unbuilt=False)
-    report = _with_absent(report, absent, tag, listed)
-    return Result(report, old_label, new_label, [m])
-
-
-# -- the character set check's report, shared with step 2 ------------------
+# -- the character set check's report, printed by step 2 -------------------
 
 def print_characters(chars, indent='      ', width=78,
                      label='characters in the changed rules'):
@@ -498,27 +379,24 @@ def _named_under(ids, directory):
             if p.startswith(prefix) and '/' not in p[len(prefix):]}
 
 
-def reads_utf8(repo, tag, step='step 2'):
+def reads_utf8(repo, tag):
     """Does `tag` hold collation_keys.UTF8_READER: True, False, or None when
     git cannot place it. A shallow clone can answer no, or nothing, for a
     tag that holds it, and _readers_differ would read two such sides as one
     reader (round 7 of the 13.7 review): it is refused, as step 5 refused
     it. A yes is a path git found in the history it has, so it stands on
-    any clone, and the check (a git process) is not paid for it. Steps 6
-    to 8 ask it of the tag a machine's glibc is built from (node_charmaps),
-    and name themselves in the refusal."""
+    any clone, and the check (a git process) is not paid for it. Step 2
+    asks it of each tag, and of the tag a machine's glibc is built from."""
     got = g.descends_from(repo, ck.UTF8_READER, tag)
     if got is not True:
         g.require_full_history(
-            repo, step, 'git cannot say which tag holds the commit from '
+            repo, 'step 2', 'git cannot say which tag holds the commit from '
             'which localedef reads its input as UTF-8')
     return got
 
 
-# What the character set check's lines say about the two sides, which are
-# two tags in step 2 and a machine and its tag, or two machines, in steps 6
-# to 8 (node_charmaps). Each is formatted with old= and new=, the Sides'
-# names.
+# What the character set check's lines say about the two sides of step 2.
+# Each is formatted with old= and new=, the Sides' names.
 Words = collections.namedtuple(
     'Words', 'subject label builds identical between listed_for '
              'lists_anyway none_compared not_compared changed_between at_new')
@@ -543,17 +421,15 @@ def _said(words, field, old, new, **more):
 
 
 def _charmaps_not_run(reason, subject=STEP2_WORDS.subject,
-                      label=STEP2_WORDS.label, split_words=True):
-    """The check's NOT RUN. `split_words=False` keeps a path in the reason
-    whole, as glibc_locale_data.warn does, so that it can be copied."""
+                      label=STEP2_WORDS.label):
+    """The check's NOT RUN."""
     print()
     print(textwrap.fill(
         f"NOT RUN: the comparison of {subject} ({label}). {reason}. A rule "
         f"that names a character whose bytes changed in its charmap, and a "
         f"collating element built out of a transliteration, are not covered "
         f"by this result.",
-        width=78, initial_indent='!! ', subsequent_indent='   ',
-        break_on_hyphens=split_words, break_long_words=split_words))
+        width=78, initial_indent='!! ', subsequent_indent='   '))
     return []
 
 
@@ -587,8 +463,7 @@ def _print_chars(f, indent='      '):
 
 
 def print_charmap_report(report, old, new, words=STEP2_WORDS):
-    """The character set check's lines in step 2's output, and in steps 6
-    to 8 with their own `words`."""
+    """The character set check's lines in step 2's output."""
     w = lambda field, **more: _said(words, field, old, new, **more)
     if report.not_run:
         _charmaps_not_run(report.not_run, w('subject'), w('label'))
@@ -763,150 +638,3 @@ def _tag_charmaps(repo, tag):
     return _named_under(ids, ck.CHARMAPS_DIR)
 
 
-def _asked_once(repo, tag, step):
-    """Side.ask_utf8 for the Sides read with `tag`'s localedef: git asked
-    once, whichever Side asks first."""
-    box = []
-
-    def ask():
-        if not box:
-            box.append(reads_utf8(repo, tag, step))
-        return box[0]
-    return ask
-
-
-def _with_absent(report, absent, tag, listed):
-    if not absent:
-        return report
-    extra = [ck.Found(b.source, b.entry, (b.charmap, b.charmap), set(), [],
-                      f"{tag} has no charmap {b.charmap}") for b in absent]
-    return report._replace(
-        found=report.found + [x for x in extra if x.source not in listed],
-        skipped=report.skipped + [x for x in extra if x.source in listed])
-
-
-def between_machines(repo, old_tag, new_tag, old_side, new_side,
-                     old_charmaps, new_charmaps, old_measurement,
-                     new_measurement, listed):
-    """Step 8: the builds both machines have, compared machine against
-    machine. old_side and new_side are diff_node_locales Sides."""
-    cms, meas = [], []
-    for side, cdir, mpath, tag in ((old_side, old_charmaps, old_measurement,
-                                    old_tag),
-                                   (new_side, new_charmaps, new_measurement,
-                                    new_tag)):
-        cm = CharmapsDir(cdir)
-        cms.append(cm)
-        meas.append(measured_builds(mpath, side.build_id, cm,
-                                    g.locale_aliases(repo, tag), tag,
-                                    _tag_charmaps(repo, tag)))
-    labels = _labels(old_side.build_id, new_side.build_id)
-    by_bytes, oids = {}, []
-    for cm, m in zip(cms, meas):
-        oids.append({c: cm.oid(c) for c in sorted({b.charmap
-                                                    for b in m.builds})})
-
-    def new_text(c):
-        # A charmap with the same bytes on both machines is one text
-        # object on both Sides.
-        if c in oids[0] and oids[0][c] == oids[1].get(c):
-            return old.charmap_texts.get(c)
-        return cms[1].text(c)
-    old = ck.Side(labels[0], set(old_side.names),
-                  read_texts(old_side.root, old_side.names, by_bytes),
-                  oids[0], _Texts(cms[0].text))
-    new = ck.Side(labels[1], set(new_side.names),
-                  read_texts(new_side.root, new_side.names, by_bytes),
-                  oids[1], _Texts(new_text))
-    if old_tag == new_tag:
-        old.ask_utf8 = new.ask_utf8 = _asked_once(repo, old_tag, 'step 8')
-    else:
-        old.ask_utf8 = _asked_once(repo, old_tag, 'step 8')
-        new.ask_utf8 = _asked_once(repo, new_tag, 'step 8')
-    report = ck.compare(old, new, meas[0].builds, meas[1].builds,
-                        lambda: listed, _read_more((old, new)),
-                        search_unbuilt=False)
-    return Result(report, labels[0], labels[1], meas)
-
-
-STEP67_WORDS = Words(
-    subject="the character sets {new} builds its locales with, against "
-            "{old}'s",
-    label=MACHINE_DIR,
-    builds="on this machine",
-    identical="are identical on this machine and at {old}",
-    between="between this machine and {old}",
-    listed_for="listed for the summary",
-    lists_anyway="this step lists above",
-    none_compared="No locale build on this machine could be compared.",
-    not_compared="{n} locale build{s} on this machine {is_are} not "
-                 "compared: {its_their} source file is not in the machine's "
-                 "locale sources.",
-    changed_between="between {old} and this machine",
-    at_new="on this machine")
-
-STEP8_WORDS = Words(
-    subject="the character sets the two machines build their locales with",
-    label=MACHINE_DIR,
-    builds="on both machines",
-    identical="are identical on {old} and {new}",
-    between="between {old} and {new}",
-    listed_for="listed for the summary",
-    lists_anyway="this step lists above",
-    none_compared="No locale build on both machines could be compared.",
-    not_compared="{n} locale build{s} on both machines {is_are} not "
-                 "compared: {its_their} source file is not on both.",
-    changed_between="between the two machines",
-    at_new="on {new}")
-
-
-def not_run(reason, words, old, new):
-    """The check's NOT RUN, in the step's words."""
-    _charmaps_not_run(reason, _said(words, 'subject', old, new),
-                        words.label, split_words=False)
-
-
-def print_result(result, words, machines):
-    """The check's lines in a step's output: what each machine's names come
-    to, then collation_keys' report. `machines` names each measured
-    machine, in the order of result.measured."""
-    print()
-    for name, m in zip(machines, result.measured):
-        print(textwrap.fill(
-            f"Locale names measured on {name}: {m.names}, built as "
-            f"{len(m.builds)} locale build(s) (C and POSIX are glibc's "
-            f"built-in locale, built from no charmap).", width=78))
-        if m.unmapped:
-            _warn_block(f"{len(m.unmapped)} locale name(s) on {name} could "
-                          f"not be traced to the charmap they are built "
-                          f"with, so their character set is not compared:",
-                          [f"{n}: {why}" for n, why in m.unmapped])
-    print_charmap_report(result.report, result.old, result.new, words)
-
-
-_PLAIN_NAME = re.compile(r'[A-Za-z0-9_@.+-]+')
-
-
-def listed(result):
-    """What the summary reads, sorted: the locales the check lists, those
-    whose builds it could not compare, and the names it could not trace to a
-    build, so that the summary never says there is nothing to add over a
-    locale nobody looked at. A name that is not a plain locale name is
-    written quoted (repr()), so that none reads as the list's header. None
-    when the check did not run, or compared no build and has nothing to
-    name: its NOT RUN is printed above, and the step then writes no list.
-    A machine whose every build uses a charmap its tag lacks compares none
-    and names them all."""
-    r = result.report
-    if r.not_run:
-        return None
-    # A build not compared is named by its locale, as the builds listed
-    # are; a name traced to no build has no locale but itself.
-    source = {b.entry: b.source for m in result.measured for b in m.builds}
-    names = set(ck.listed_sources(r))
-    names |= {source.get(e, e) for e in r.not_compared}
-    for m in result.measured:
-        names |= {n for n, _ in m.unmapped}
-    if not r.builds and not names:
-        return None
-    return sorted(n if _PLAIN_NAME.fullmatch(n) else repr(n) for n in names)

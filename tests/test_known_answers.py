@@ -24,6 +24,7 @@ from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
                        flat, needs_clone,
                        needs_floor_pair, run_step, step2_characters_file)
 
+import filter_lc_collate_changes as f
 import glibc_locale_data as g
 import test_locale_order as tlo
 
@@ -254,27 +255,35 @@ class Step2Compare(StepRun):
                                                   f'the run\'s character set '
                                                   f'lines once; regenerate it')
 
-    def test_c_utf8_is_one_more_file_between_the_tags(self):
-        """No list of what a distro ships (backlog 13.6, 7.7): over 2.28..2.34
-        C is in neither tag, so step 2 says nothing of it and step 1's `!!`
-        says what a tag does not hold; over 2.34..2.39 upstream adds it, and
-        it is named with the other files not compared for want of an old
-        one, whose sentence says an added file can still exist on the old
-        system, under the name `locale -a` shows. No `!!` says C.UTF-8's
-        order can change: the old tag cannot say that, and on RHEL 9 and 10
-        it does not."""
-        for (old, new), added in (((OLD, MID), None), ((MID, NEW), 'C.utf8')):
+    def test_c_utf8_is_named_not_compared_where_a_tag_has_no_file_c(self):
+        """No list of what a distro ships (backlog 13.6, 7.7, 16.123): the
+        `!!` comes from the trees. Over 2.28..2.34 neither tag holds
+        localedata/locales/C, over 2.34..2.39 the old one does not; step 2
+        names exactly those tags, says C.UTF-8's rules were not compared and
+        what PostgreSQL does with it, and never that its order changes: a
+        tag cannot say that, and on RHEL 9 and 10 it does not. It is the
+        step's only `!!` on these pairs. Over 2.34..2.39 C is also named
+        with the other files not compared for want of an old one."""
+        for (old, new), lacking, added in (
+                ((OLD, MID), f'{OLD} and {MID} hold', None),
+                ((MID, NEW), f'{MID} holds', 'C.utf8')):
             with self.subTest(pair=f'{old}..{new}'):
                 out = self.step('filter_lc_collate_changes.py', old, new)
                 r = Step2Report(out)
-                self.assertNotIn('!!', out)
-                self.assertNotIn('C.UTF-8', out)
+                said = flat(out)
+                self.assertEqual(out.count('!!'), 1, out)
+                self.assertEqual(said.count(
+                    f'!! {lacking} no localedata/locales/C, the file '
+                    f'C.UTF-8 is built from, and a distro\'s build can ship '
+                    f'its own, so C.UTF-8\'s sort rules were not compared. '
+                    f'{f.C_NO_VERSION}'), 1, out)
+                self.assertNotIn('differ, and it is listed', said)
                 self.assertEqual(r.added.get('C'), added)
                 self.assertNotIn('C', r.differs)
                 self.assertNotIn('C', r.reindex)
                 if added:
                     self.assertIn('Confirm with `locale -a` on the OLD '
-                                  'machine', flat(out))
+                                  'machine', said)
 
     def test_the_false_blanket_claim_is_gone(self):
         """Added files used to be reported as unable to affect an existing
@@ -415,23 +424,6 @@ class Step2NamesTheCharacters(StepRun):
 
 
 @needs_clone
-class Step4AlgorithmicRanges(StepRun):
-    def test_the_prose_above_the_keyword_does_not_count(self):
-        """Driven by the real file, not a fixture. glibc-2.39's C names
-        codepoint_collation in a comment above declaring it, so a
-        substring search reads the comment as the declaration -- and would
-        then report RHEL8's ellipsis-based C as byte order."""
-        path = f'{g.LOCALES_DIR}/C'
-        contents, missing = g.read_blobs(GLIBC_CLONE, NEW, [path])
-        self.assertEqual(missing, set())
-        text = contents[path]
-        self.assertIn("The keyword 'codepoint_collation'", text)
-        self.assertEqual(g.classify_collation_style(text), 'codepoint')
-        # And the prose alone, with the declaration removed, must not.
-        prose_only = text.replace('\ncodepoint_collation', '\n% removed')
-        self.assertNotEqual(g.classify_collation_style(prose_only), 'codepoint')
-
-
 def _harness_scripts():
     from _harness import SCRIPTS_DIR
     return SCRIPTS_DIR

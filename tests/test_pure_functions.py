@@ -23,8 +23,6 @@ from _harness import SCRIPTS_DIR, flat
 import glibc_locale_data as g
 import glibc_tree
 import filter_lc_collate_changes as f
-import diff_distro_locales as dd
-import diff_node_locales as nl
 import collation_keys as ck
 import node_charmaps as nc
 
@@ -35,77 +33,18 @@ def collate(*body):
                       'LC_COLLATE', *body, 'END LC_COLLATE', ''])
 
 
-class Ellipsis(unittest.TestCase):
-    """"flag_algorithmic_ranges.py matched one ellipsis form of four" and
-    "Step 4 cleared zh_CN and three siblings that it should have flagged"
-    (both deleted in step 9.3). glibc_locale_data.ellipsis_hits stays: step
-    8 reads ranges through it."""
-
-    def test_all_five_forms_glibc_accepts(self):
-        # linereader.c consumes one '.' before comparing the rest, so these are
-        # the five tokens: tok_ellipsis2/3/4 and the two (2) variants.
-        for form in ('..', '...', '....', '..(2)..', '....(2)....'):
-            with self.subTest(form=form):
-                hits = g.ellipsis_hits(f'<U4E00>{form}<U9FA5>')
-                self.assertEqual(len(hits), 1, f'{form} not matched')
-
-    def test_inline_form_is_matched(self):
-        """The inline form, as in iso14651_t1_common.
-
-        Anchoring the pattern to the start of a line missed every one of these.
-        """
-        block = 'collating-symbol <SAC00>..<SD7A3>  % Hangul syllables'
-        self.assertEqual(len(g.ellipsis_hits(block)), 1)
-
-    def test_line_leading_form_is_matched(self):
-        self.assertEqual(len(g.ellipsis_hits('.. ..;IGNORE;IGNORE;IGNORE')), 1)
-
-    def test_prose_in_a_comment_is_not_a_range(self):
-        """"2.28..2.34" in a comment is not an ellipsis range."""
-        self.assertEqual(g.ellipsis_hits('% changed over 2.28..2.34'), [])
-        self.assertEqual(g.ellipsis_hits('% and so on ...'), [])
-
-    def test_code_before_a_comment_still_counts(self):
-        block = '<UAC00>..<UD7A3>  % see 1.0...2.0 for prose'
-        self.assertEqual(len(g.ellipsis_hits(block)), 1)
-
-    def test_a_run_of_dots_yields_exactly_one_hit(self):
-        """'....' must not read as two '..'."""
-        self.assertEqual(len(g.ellipsis_hits('<A>....<B>')), 1)
-
-    def test_honours_a_declared_comment_char(self):
-        self.assertEqual(g.ellipsis_hits('# 2.28..2.34', comment_char='#'), [])
-
-    def test_a_run_longer_than_any_named_token_is_matched(self):
-        """This used to be a documented gap, and is now covered.
-
-        glibc tokenises '.....' as tok_ellipsis4 plus a stray '.', so the line
-        does use a range. Spelling out the five named forms matched none of
-        them, and the dot-boundary guards then rejected every starting offset,
-        so the line read as "no ellipsis here" -- a false clean in the one step
-        whose job is to refuse to clear a locale.
-        """
-        for run in ('.....', '......', '.......'):
-            with self.subTest(run=run):
-                self.assertEqual(len(g.ellipsis_hits(f'<A>{run}<B>')), 1)
-
-    def test_a_long_run_around_the_count_form_is_matched(self):
-        self.assertEqual(len(g.ellipsis_hits('<A>.....(2).....<B>')), 1)
-
-
 class CorpusFloorIsShared(unittest.TestCase):
-    """The node modes and the tag modes refuse the same size of corpus, and
-    the number is read in one place: glibc_locale_data.below_floor. That
+    """Every side refuses the same size of corpus, and the number is read in
+    one place: glibc_locale_data.below_floor. That
     every step's sides follow it is test_git_helpers.OneFloorForEverySide,
     on the clone; this class needs none."""
 
     def test_the_floor_is_read_in_one_place(self):
         """MIN_LOCALE_FILES is named by below_floor alone in scripts/, and
-        below_floor is called only by the two refusals that word it
-        (_require_corpus for a tag, corpus_problem for a directory). A
-        second number typed anywhere is a second floor: until 7.1 the node
-        modes took theirs from a --min-files default, and steps 6/7 had
-        none on the tag side."""
+        below_floor is called only by the refusal that words it
+        (_require_corpus, for every side that holds files). A second number
+        typed anywhere is a second floor: until 7.1 the node modes took
+        theirs from a --min-files default."""
         readers, callers = set(), set()
         for name in sorted(os.listdir(SCRIPTS_DIR)):
             if not name.endswith('.py'):
@@ -127,8 +66,7 @@ class CorpusFloorIsShared(unittest.TestCase):
                         callers.add((name, fn.name))
         self.assertEqual(readers, {('glibc_locale_data.py', 'below_floor')})
         self.assertEqual(callers, {
-            ('glibc_locale_data.py', '_require_corpus'),
-            ('glibc_locale_data.py', 'corpus_problem')})
+            ('glibc_locale_data.py', '_require_corpus')})
 
     def test_the_floor_follows_the_constant(self):
         for floor in (7, 4321):
@@ -137,97 +75,12 @@ class CorpusFloorIsShared(unittest.TestCase):
                 self.assertEqual(g.below_floor(floor - 1), floor)
                 self.assertIsNone(g.below_floor(floor))
 
-    def test_the_node_modes_refuse_below_the_shared_floor(self):
-        """The rest of the path, on the machine side: the directories of
-        diff_node_locales are built by
-        glibc_locale_data.side, which refuses below the floor before the
-        clone is looked for, so a truncated copy is refused for what it is
-        on a machine without one too. (Steps 6/7 look for the clone first:
-        they read the tag before the copy.)"""
-        base = tempfile.mkdtemp(prefix='pg-glibc-floor-')
-        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
-        for side in ('old', 'new'):
-            os.mkdir(os.path.join(base, side))
-            for i in range(3):
-                with open(os.path.join(base, side, f'x{i}'), 'w') as fh:
-                    fh.write('LC_CTYPE\nEND LC_CTYPE\n')
-        old, new = os.path.join(base, 'old'), os.path.join(base, 'new')
-        modes = (
-            ('diff_node_locales', nl.main,
-             ['--old-locales-dir', old, '--old-build-id', 'o',
-              '--new-locales-dir', new, '--new-build-id', 'n']),
-        )
-        # Both directions: a floor moved down and left behind by a mode is a
-        # drift too. OUT_DIR is base, so a mode that stopped refusing writes
-        # its lists there and not into the shared /tmp directory.
-        for name, main, argv in modes:
-            for floor in (4, 4321):
-                with self.subTest(mode=name, floor=floor):
-                    err = io.StringIO()
-                    with mock.patch.object(g, 'MIN_LOCALE_FILES', floor), \
-                            mock.patch.object(g, 'OUT_DIR', base), \
-                            mock.patch.object(g, 'find_repo', side_effect=(
-                                AssertionError('looked for the clone'))), \
-                            contextlib.redirect_stderr(err), \
-                            contextlib.redirect_stdout(io.StringIO()), \
-                            self.assertRaises(SystemExit) as cm:
-                        main(argv)
-                    self.assertEqual(cm.exception.code, 2)
-                    self.assertIn(f'below the floor of {floor}.',
-                                  flat(err.getvalue()))
 
     def test_the_floor_is_below_every_pinned_tag_and_measured_node(self):
         """286 is glibc-2.12, the smallest tag the suite pins; 355 the
         smallest measured node."""
         self.assertLess(g.MIN_LOCALE_FILES, 286)
         self.assertGreater(g.MIN_LOCALE_FILES, 3)
-
-
-class CopyGraph(unittest.TestCase):
-    """"resolve_copy_closure.py followed only the first copy per file" and
-    "inherited_from() reported a single inherited root"."""
-
-    def test_every_copy_is_returned_not_just_the_first(self):
-        """om_ET really does copy both am_ET and om_KE (verified at 2.39)."""
-        text = collate('copy "am_ET"', 'copy "om_KE"')
-        self.assertEqual(g.copy_targets(text), ['am_ET', 'om_KE'])
-
-    def test_copy_outside_the_collate_block_is_ignored(self):
-        text = ('LC_TIME\ncopy "en_US"\nEND LC_TIME\n'
-                + collate('copy "iso14651_t1"'))
-        self.assertEqual(g.copy_targets(text), ['iso14651_t1'])
-
-    def test_a_copy_with_no_blank_before_the_string_is_followed(self):
-        """Backlog 13.17: get_ident ends the word at the `"`
-        (linereader.c:580@2.39, the same at 2.28 and 2.34), so glibc reads
-        `copy"x"` as a copy of x, and the locale stayed out of step 3's
-        closure."""
-        self.assertEqual(g.copy_targets(collate('copy"iso14651_t1"')),
-                         ['iso14651_t1'])
-        self.assertEqual(g.copy_targets(collate('copy\v"iso14651_t1"')),
-                         ['iso14651_t1'])
-
-    def test_inherited_from_reports_every_root_reached(self):
-        """Not whichever root a depth-first walk happened to hit first."""
-        graph = {'root_a': [], 'root_b': [], 'mid': ['root_a', 'root_b'],
-                 'leaf': ['mid']}
-        got = g.inherited_from(graph, {'root_a', 'root_b'})
-        self.assertEqual(got['leaf'], ['root_a', 'root_b'])
-        self.assertEqual(got['mid'], ['root_a', 'root_b'])
-
-    def test_a_cycle_terminates(self):
-        graph = {'a': ['b'], 'b': ['a'], 'root': [], 'c': ['a', 'root']}
-        got = g.inherited_from(graph, {'root'})
-        self.assertEqual(sorted(got), ['c'])
-
-    def test_a_root_is_not_listed_as_inheriting_from_itself(self):
-        graph = {'root': [], 'child': ['root']}
-        self.assertNotIn('root', g.inherited_from(graph, {'root'}))
-
-    def test_transitive_inheritance_is_followed(self):
-        graph = {'root': [], 'a': ['root'], 'b': ['a'], 'c': ['b']}
-        self.assertEqual(sorted(g.inherited_from(graph, {'root'})),
-                         ['a', 'b', 'c'])
 
 
 class GeneratedNames(unittest.TestCase):
@@ -256,8 +109,8 @@ class GeneratedNames(unittest.TestCase):
 
 
 class CollateBounds(unittest.TestCase):
-    """Where the LC_COLLATE block starts and ends -- steps 6 to 8, and step
-    2's lc_collate_unread, place the block by these line numbers."""
+    """Where the LC_COLLATE block starts and ends -- lc_collate_unread,
+    kept for branches 12 and 13, places the block by these line numbers."""
 
     def test_finds_the_block(self):
         text = 'LC_TIME\nx\nEND LC_TIME\nLC_COLLATE\ncopy "a"\nEND LC_COLLATE\n'
@@ -273,22 +126,11 @@ class CollateBounds(unittest.TestCase):
     def test_no_block_returns_none(self):
         self.assertIsNone(g.collate_bounds('LC_TIME\nx\nEND LC_TIME\n'))
 
-    def test_block_on_the_very_first_line_is_found_by_both(self):
+    def test_a_block_on_the_very_first_line_is_found(self):
         """The glibc <= 2.23 shape, and the whole of the old 2.24 version
-        floor. collate_bounds always saw it; collate_block used a regex needing
-        a preceding newline and did not, which dropped the three master
-        templates from the copy graph. There is no asymmetry left to record --
-        both see it, and this asserts they agree."""
+        floor: a block at the very first line is found."""
         text = 'LC_COLLATE\ncopy "a"\nEND LC_COLLATE\n'
         self.assertEqual(g.collate_bounds(text), (1, 3))
-        self.assertEqual(g.collate_block(text), '\ncopy "a"')
-
-    def test_an_unterminated_block_reaches_collate_block_too(self):
-        """collate_bounds runs an unterminated block to the end of the file;
-        collate_block now inherits that instead of returning None. The
-        conservative direction: the locale stays in the copy graph."""
-        text = 'LC_COLLATE\ncopy "a"\n'
-        self.assertEqual(g.collate_block(text), '\ncopy "a"\n')
 
 
 class PrintCharacters(unittest.TestCase):
@@ -698,93 +540,6 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
             "AND d.datcollate NOT IN ('C', 'POSIX')) )")
 
 
-class CommentChar(unittest.TestCase):
-    def test_defaults_to_percent(self):
-        self.assertEqual(g.comment_char('LC_COLLATE\n'), '%')
-
-    def test_reads_a_declared_one(self):
-        self.assertEqual(g.comment_char('comment_char #\nLC_COLLATE\n'), '#')
-
-
-class DistroDiff(unittest.TestCase):
-    """diff_distro_locales.py: the distro-versus-upstream classifier.
-
-    Two of these guard silent-false-negative paths found while designing the
-    script -- both would have reported a clean result on data that differs.
-    """
-
-    def test_identical_bytes_are_identical(self):
-        b = collate('order_start forward', '<a>').encode()
-        self.assertEqual(dd.classify_distro_diff(b, b), 'identical')
-
-    def test_a_change_inside_the_block_is_a_collation_finding(self):
-        up = collate('order_start forward', '<a>').encode()
-        node = collate('order_start forward', '<b>').encode()
-        self.assertEqual(dd.classify_distro_diff(node, up), 'collate')
-
-    def test_a_change_outside_the_block_is_not(self):
-        """The Oriya/Odia case: or_IN differs from upstream 2.28 by one line in
-        LC_IDENTIFICATION, and must not read as a backported collation change."""
-        up = collate('<a>') + 'language "Oriya"\n'
-        node = collate('<a>') + 'language "Odia"\n'
-        self.assertEqual(dd.classify_distro_diff(node.encode(), up.encode()),
-                         'other')
-
-    def test_LC_COLLATE_at_byte_zero_still_has_a_block(self):
-        """glibc <= 2.23 writes the three master templates with LC_COLLATE on
-        the first byte. collate_block's regex needs a preceding newline and
-        returns None there, which would file iso14651_t1_common -- the highest
-        fan-in file in the corpus -- under 'no block on either side'."""
-        up = 'LC_COLLATE\n<a>\nEND LC_COLLATE\n'
-        node = 'LC_COLLATE\n<b>\nEND LC_COLLATE\n'
-        self.assertIsNotNone(dd.collate_text(up))
-        self.assertEqual(dd.classify_distro_diff(node.encode(), up.encode()),
-                         'collate')
-
-    def test_whitespace_inside_the_block_still_counts(self):
-        """Conservative on purpose: the script cannot tell a cosmetic patch
-        from a meaningful one, so it reports and prints the diff."""
-        up = collate('<a>').encode()
-        node = collate('<a> ').encode()
-        self.assertEqual(dd.classify_distro_diff(node, up), 'collate')
-
-    def test_whitespace_at_the_block_edges_still_counts(self):
-        """Guards against normalising the block before comparing -- a .strip()
-        would erase a difference on the LC_COLLATE or END LC_COLLATE line
-        itself, which is inside the block and therefore inside the answer."""
-        up = 'LC_COLLATE\n<a>\nEND LC_COLLATE\n'
-        node = 'LC_COLLATE\n<a>\nEND LC_COLLATE   \n'
-        self.assertEqual(dd.classify_distro_diff(node.encode(), up.encode()),
-                         'collate')
-
-    def test_a_comment_inside_the_block_still_counts(self):
-        up = collate('<a>').encode()
-        node = collate('% distro note', '<a>').encode()
-        self.assertEqual(dd.classify_distro_diff(node, up), 'collate')
-
-    def test_block_on_one_side_only_is_a_collation_difference(self):
-        with_block = collate('<a>').encode()
-        without = b'comment_char %\nLC_TIME\nEND LC_TIME\n'
-        self.assertEqual(dd.classify_distro_diff(with_block, without), 'collate')
-        self.assertEqual(dd.classify_distro_diff(without, with_block), 'collate')
-
-    def test_no_block_on_either_side_cannot_affect_sort_order(self):
-        up = b'comment_char %\nLC_CTYPE\ntranslit_start\nEND LC_CTYPE\n'
-        node = b'comment_char %\nLC_CTYPE\ntranslit_end\nEND LC_CTYPE\n'
-        self.assertEqual(dd.classify_distro_diff(node, up), 'no-collate')
-
-    def test_a_non_utf8_byte_is_not_swallowed(self):
-        """read_blobs decodes with errors='replace'. Two files differing only
-        in a byte that decodes to U+FFFD would compare EQUAL through it, which
-        is a false negative in the reassuring direction. This compares bytes."""
-        up = collate('<a>').encode() + b'\x80'
-        node = collate('<a>').encode() + b'\x81'
-        self.assertNotEqual(up, node)
-        self.assertEqual(up.decode('utf-8', 'replace'),
-                         node.decode('utf-8', 'replace'))   # the trap itself
-        self.assertNotEqual(dd.classify_distro_diff(node, up), 'identical')
-
-
 class ReadingCharsReadsLikeGlibc(unittest.TestCase):
     """The comment and escape characters a file is read with, found the way
     glibc's reader finds the directives, not by their spelling (review of
@@ -832,20 +587,6 @@ class ReadingCharsReadsLikeGlibc(unittest.TestCase):
         """Under `comment_char %` this line is a comment to glibc too."""
         self.assertEqual(g.reading_chars(self.hidden('% comment_char #\n')),
                          ('%', '/'))
-
-    def test_and_in_steps_6_to_8(self):
-        node = self.hidden('comment_c/har #\n')
-        self.assertEqual(dd.classify_distro_diff(node.encode(),
-                                                 self.BASE.encode()), 'collate')
-
-    def test_an_unsettled_side_is_named_as_such(self):
-        """describe_reading's other branch: the two lines must not claim the
-        same settled characters under a header saying they differ."""
-        node = self.hidden('comment_c/har #\n')
-        lines = dd.collate_diff_lines(self.BASE, node, 'up', 'node')
-        self.assertEqual(lines, [
-            'read with comment_char % and escape_char / at up',
-            'read with characters this tool cannot settle at node'])
 
 
 class LcCollateUnread(unittest.TestCase):
@@ -1065,597 +806,9 @@ class LcCollateUnread(unittest.TestCase):
                                               self.never))
 
 
-class DistroDiffReadingCharacters(unittest.TestCase):
-    """Backlog 13.7: the comment and escape characters a block is read with
-    are part of its rules, and they are declared outside it."""
-
-    UP = collate('<a>')
-
-    def test_the_same_block_read_otherwise_is_a_collation_finding(self):
-        node = self.UP.replace('comment_char %', 'comment_char #', 1)
-        self.assertEqual(dd.classify_distro_diff(node.encode(),
-                                                 self.UP.encode()), 'collate')
-
-    def test_the_diff_says_what_differs_when_the_block_does_not(self):
-        """The block diff is empty for such a file; alone it would print
-        nothing under a file reported as differing."""
-        node = self.UP.replace('escape_char /\n', '', 1)
-        lines = dd.collate_diff_lines(self.UP, node, 'up', 'node')
-        self.assertEqual(lines, [
-            'read with comment_char % and escape_char / at up',
-            'read with comment_char % and escape_char \\ at node'])
-
-    def test_the_side_is_named_read_differently(self):
-        tmp = tempfile.mkdtemp(prefix='pg-glibc-reading-tree-')
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        for side, text in (('a', self.UP),
-                           ('b', self.UP.replace('comment_char %',
-                                                 'comment_char #', 1))):
-            os.mkdir(os.path.join(tmp, side))
-            with open(os.path.join(tmp, side, 'xx'), 'w') as fh:
-                fh.write(text)
-        buckets, side, _ = dd.compare_trees(os.path.join(tmp, 'a'),
-                                            os.path.join(tmp, 'b'), ['xx'])
-        self.assertEqual(buckets['collate'], ['xx'])
-        self.assertEqual(side['xx'], 'both, read differently')
-
-    def test_the_control_identical_characters_add_nothing(self):
-        node = collate('<b>')
-        lines = dd.collate_diff_lines(self.UP, node, 'up', 'node')
-        self.assertFalse([ln for ln in lines if ln.startswith('read with')])
-
-
-class CollationStyle(unittest.TestCase):
-    """"Printed C.UTF-8 under 'cannot affect an existing index', then said
-    nothing about it at all on the other pair" -- false negative #1, and the
-    only one of the six the method could not see at all: the file is in
-    neither tag. classify_collation_style is what turns the hand-written
-    C.UTF-8 story into something the tool decides."""
-
-    def test_the_backported_C_is_ellipsis_based(self):
-        """RHEL8's C: six ellipsis ranges, so localedef computes every weight
-        and a data diff can never clear it. Measured on collaudit8."""
-        text = _harness.backported_c()
-        self.assertEqual(g.classify_collation_style(text), 'ellipsis')
-        self.assertEqual(len(g.ellipsis_hits(g.collate_text(text))), 6)
-
-    def test_the_2_35_C_is_byte_order_by_construction(self):
-        self.assertEqual(g.classify_collation_style(_harness.upstream_c()),
-                         'codepoint')
-
-    def test_the_word_in_a_comment_is_not_a_declaration(self):
-        """glibc-2.39:localedata/locales/C names codepoint_collation in prose
-        ABOVE the keyword. A substring search reads that comment as
-        a declaration -- and would then report RHEL8's ellipsis-based C as
-        byte order, clearing the one locale this exists to catch."""
-        prose = collate(
-            "% The keyword 'codepoint_collation' in any part of any LC_COLLATE",
-            '% immediately discards all collation information.',
-            '<U0000>', '..', '<U10FFFF>')
-        self.assertEqual(g.classify_collation_style(prose), 'ellipsis')
-
-    def test_a_declared_comment_char_is_honoured(self):
-        text = '\n'.join(['comment_char #', '', 'LC_COLLATE',
-                          '# codepoint_collation is only discussed here',
-                          '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
-                          'END LC_COLLATE', ''])
-        self.assertEqual(g.classify_collation_style(text), 'explicit')
-
-    def test_the_keyword_in_angle_brackets_is_a_symbol_not_a_declaration(self):
-        """glibc's lexer reads `<name>` as a collating symbol and never as this
-        keyword, so a file that names one this way declares nothing. Reading it
-        as a declaration clears the locale outright -- the single most
-        reassuring verdict this classifier has."""
-        symbol = collate('collating-symbol <codepoint_collation>',
-                         '<U0041> <U0041>;IGNORE;IGNORE;IGNORE')
-        self.assertEqual(g.classify_collation_style(symbol), 'explicit')
-        with_range = collate('collating-symbol <codepoint_collation>',
-                             '<U0000>', '..', '<U10FFFF>')
-        self.assertEqual(g.classify_collation_style(with_range), 'ellipsis')
-
-    def test_a_longer_word_ending_in_the_keyword_is_not_the_keyword(self):
-        self.assertEqual(
-            g.classify_collation_style(collate('no_codepoint_collation')),
-            'explicit')
-
-    def test_an_ellipsis_beside_the_keyword_is_not_byte_order(self):
-        """This test used to assert the opposite, on the strength of the
-        comment in glibc's C ("in any part of any LC_COLLATE immediately
-        discards all collation information"). Measured false (glibc study,
-        E5): beside a sort rule the keyword gives broken tables, not byte
-        order. Byte order is the keyword alone; beside a range the range is
-        what the warnings name."""
-        both = collate('codepoint_collation', '<U0000>', '..', '<U10FFFF>')
-        self.assertEqual(g.classify_collation_style(both), 'ellipsis')
-        self.assertFalse(g.declares_byte_order(both))
-
-    def test_a_symbolic_copy_target_is_the_locale_it_spells(self):
-        """`copy "<U0069><U0073><U006F>..."` is iso14651_t1 to localedef
-        (locale/programs/linereader.c decodes `<U....>` wherever it reads a
-        string), and was a name nothing matched here: ky_KG and uk_UA write it
-        that way at glibc-2.12 and 2.17, so both dropped out of the
-        iso14651_t1 closure and the floor pair reported them unaffected."""
-        escaped = ('<U0069><U0073><U006F><U0031><U0034><U0036><U0035>'
-                   '<U0031><U005F><U0074><U0031>')
-        self.assertEqual(g.copy_targets(collate(f'copy "{escaped}"')),
-                         ['iso14651_t1'])
-        self.assertEqual(g.copy_targets(collate('copy "iso14651_t1"')),
-                         ['iso14651_t1'])
-        graph = g.copy_graph_from_texts(
-            {'iso14651_t1': collate('<U0000>', '..', '<U10FFFF>'),
-             'ky_KG': collate(f'copy "{escaped}"')})
-        self.assertEqual(g.inherited_from(graph, {'iso14651_t1'}),
-                         {'ky_KG': ['iso14651_t1']})
-
-    def test_copy_only_and_explicit_are_distinguished(self):
-        self.assertEqual(g.classify_collation_style(collate('copy "iso14651_t1"')),
-                         'copy-only')
-        self.assertEqual(
-            g.classify_collation_style(collate('<U0041> <U0041>;IGNORE')),
-            'explicit')
-
-    def test_no_block_is_none(self):
-        self.assertEqual(g.classify_collation_style('LC_TIME\nEND LC_TIME\n'),
-                         'none')
-
-
 ISO_COPY = 'copy "iso14651_t1"'
 SORT_RULE = ('order_start forward', '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
              'order_end')
-
-
-class ByteOrderByConstruction(unittest.TestCase):
-    """Backlog 13.2: glibc builds byte order from `codepoint_collation` only
-    when it is the whole of LC_COLLATE. The number of sort rules is one
-    global for the localedef run and collate_output writes it before it
-    looks at the keyword (ld-collate.c:273, :2120@2.39). Each shape below
-    used to read as byte order here, which clears the locale outright. Those
-    named E5 or E6 were built with localedef on the three fixtures (glibc
-    study); the others are read from glibc's source, or refused because this
-    code cannot read them with certainty, which only keeps a locale listed."""
-
-    def not_byte_order(self, text):
-        self.assertFalse(g.declares_byte_order(text))
-        self.assertNotEqual(g.classify_collation_style(text), 'codepoint')
-        self.assertEqual(g.byte_order_locales({'X': text}), (set(), {}))
-
-    def test_the_keyword_alone_is_byte_order(self):
-        """The shape of C from glibc 2.35 and of RHEL9's and RHEL10's,
-        byte-identical (md5 850352c6). Indentation and blank lines are space
-        to glibc's reader, and so are the defaults `#` and `\\` when the file
-        declares no characters (linereader.c:79-80@2.39)."""
-        self.assertTrue(g.declares_byte_order(_harness.upstream_c()))
-        self.assertTrue(g.declares_byte_order(
-            collate('', '   codepoint_collation  ', '')))
-        bare = 'LC_COLLATE\n# a note\ncodepoint_collation\nEND LC_COLLATE\n'
-        self.assertTrue(g.declares_byte_order(bare))
-        self.assertEqual(g.byte_order_locales({'C': bare}), ({'C'}, {}))
-
-    def test_nothing_read_during_one_scan_answers_after_it(self):
-        """byte_order_locales reads each file once per call and keeps the
-        answer only for that call. Kept past it, a reader that can no longer
-        read the file still got the answer that clears the locale, which the
-        first version of this did (false-negative-reviewer, 2026-10-09)."""
-        bare = 'LC_COLLATE\ncodepoint_collation\nEND LC_COLLATE\n'
-        self.assertEqual(g.byte_order_locales({'C': bare}), ({'C'}, {}))
-        with mock.patch.object(g, '_glibc_chars', return_value=None):
-            self.assertFalse(g.declares_byte_order(bare))
-            self.assertEqual(g.byte_order_locales({'C': bare}), (set(), {}))
-
-    def test_a_sort_rule_beside_the_keyword_is_not_byte_order(self):
-        both = collate('codepoint_collation', *SORT_RULE)
-        self.not_byte_order(both)
-        self.assertEqual(g.classify_collation_style(both),
-                         'codepoint-not-alone')
-
-    def test_a_copy_beside_the_keyword_is_not_byte_order(self):
-        """E5: broken tables on RHEL9 and RHEL10, garbage from strcoll and a
-        crash; plain iso14651_t1 order on RHEL8. On the copy's own line (E6a)
-        localedef drops the keyword as trailing garbage."""
-        self.not_byte_order(collate(ISO_COPY, 'codepoint_collation'))
-        self.not_byte_order(collate(f'{ISO_COPY} codepoint_collation'))
-        # A comment after the copy is no error to glibc (lr_ignore_rest
-        # stops at it), so this is E5's shape too. A line is a comment only
-        # when it starts with the comment character.
-        self.not_byte_order(collate(f'{ISO_COPY} % the template',
-                                    'codepoint_collation'))
-        self.assertEqual(
-            g.classify_collation_style(collate(ISO_COPY, 'codepoint_collation')),
-            'codepoint-not-alone')
-
-    def test_the_keyword_in_a_skipped_branch_is_not_byte_order(self):
-        """E6b: skip_to reads nothing in a branch not taken."""
-        self.not_byte_order(collate(ISO_COPY, 'ifdef NEVER_DEFINED',
-                                    'codepoint_collation', 'endif'))
-
-    def test_the_keyword_glued_to_the_comment_char_is_not_byte_order(self):
-        """E6c: `%` inside a word starts no comment, so the line is one
-        unknown word and a syntax error."""
-        self.not_byte_order(collate(ISO_COPY, 'codepoint_collation%x'))
-
-    def test_a_continued_line_is_not_byte_order(self):
-        """E6d: a line ending in the escape character takes the next one with
-        it, and after a `copy` the keyword is then dropped as trailing
-        garbage. After the header it would be read as the header's rest
-        (from the source). After a comment glibc skips only that physical
-        line (linereader.c:222-229@2.39) and would still read the keyword;
-        refused anyway, because this code does not follow continued lines."""
-        self.not_byte_order(collate(f'{ISO_COPY} /', 'codepoint_collation'))
-        self.not_byte_order('\n'.join(['comment_char %', 'escape_char /', '',
-                                       'LC_COLLATE /', 'codepoint_collation',
-                                       'END LC_COLLATE', '']))
-        self.not_byte_order(collate('% a note /', 'codepoint_collation'))
-
-    def test_the_keyword_as_a_define_argument_is_not_byte_order(self):
-        """E6e, before and after the copy."""
-        self.not_byte_order(collate('define BYTE codepoint_collation',
-                                    ISO_COPY))
-        self.not_byte_order(collate(ISO_COPY,
-                                    'define BYTE codepoint_collation'))
-
-    def test_a_second_lc_collate_section_is_not_byte_order(self):
-        """locfile.c:179-180@2.39 hands every LC_COLLATE section of the file
-        to collate_read, so a sort rule in a second one is read in the same
-        run. Indented, too: glibc's reader skips the space."""
-        second = '\n'.join(['LC_COLLATE', *SORT_RULE, 'END LC_COLLATE', ''])
-        self.not_byte_order(_harness.upstream_c() + second)
-        self.not_byte_order(_harness.upstream_c() + '  ' + second)
-        # A header with more on its word is no header to glibc, so the one
-        # section it reads is the copy below (round 3 of
-        # false-negative-reviewer: no test held the exact-header guard).
-        self.not_byte_order('\n'.join(['comment_char %', 'escape_char /', '',
-                                       'LC_COLLATEX', 'codepoint_collation',
-                                       'END LC_COLLATE', '', 'LC_COLLATE',
-                                       ISO_COPY, 'END LC_COLLATE', '']))
-
-    def test_a_header_built_with_the_escape_character_is_not_byte_order(self):
-        """Inside a word glibc takes the character after the escape as it is
-        (get_ident, linereader.c:580-589@2.39), and a line ending in the
-        escape joins the next one on, so these open a second LC_COLLATE that
-        no search for the word sees. The copy in it then shares
-        iso14651_t1's rules with the keyword: E5's broken tables. Found by
-        false-negative-reviewer, which measured the tool declaring this C
-        byte order, the first two spellings in round 1 and the two that start
-        a line with the escape, or leave one behind, in round 2. lr_next
-        removes only the last escape of a line. glibc's own C writes no word
-        this way (2.35 to 2.42)."""
-        up = _harness.upstream_c()
-        for header in ('LC_COLL/ATE', 'LC_COL/\nLATE', '% a note /\nLC_COL/\nLATE',
-                       'LC_COL/\n/LATE', 'LC_COLL//\nATE', 'LC_/COLLATE',
-                       'LC/_COLLATE'):
-            with self.subTest(header=header):
-                hidden = f'{header}\n{ISO_COPY}\nEND LC_COLLATE\n\nLC_COLLATE\n'
-                self.not_byte_order(up.replace('LC_COLLATE\n', hidden, 1))
-        # The real C's comments write C/POSIX and glibc/locale: a comment is
-        # skipped whole, by glibc and here.
-        self.assertTrue(g.declares_byte_order(
-            up.replace('% locale to use', '% C/POSIX locale to use')))
-
-    def test_a_range_this_code_sees_wins_over_byte_order(self):
-        """With no comment_char directive glibc's comment character is `#`
-        and this code's ellipsis reader takes `%` (backlog 13.8), so a `#`
-        comment holding `..` is a range to the reader and a comment to
-        glibc. Before the two agreed, step 4 listed such a locale and named
-        it byte order on the next line, and a C copying it read "IS exposed"
-        and "byte order too" in one status. Found by false-negative-reviewer,
-        round 2. The range wins, which can only keep a locale listed."""
-        hashed = ('LC_COLLATE\n# U+0000..U+10FFFF sort by code point\n'
-                  'codepoint_collation\nEND LC_COLLATE\n')
-        self.assertTrue(g.ellipsis_hits(g.collate_text(hashed),
-                                        g.comment_char(hashed)))
-        self.not_byte_order(hashed)
-        self.assertEqual(g.classify_collation_style(hashed), 'ellipsis')
-        copier = 'LC_COLLATE\n# planes 0..16\ncopy "C"\nEND LC_COLLATE\n'
-        self.assertEqual(g.byte_order_locales(
-            {'C': _harness.upstream_c(), 'X': copier, 'Y': collate('copy "zz_ZZ"'),
-             'zz_ZZ': hashed}), ({'C'}, {}))
-        # The same disagreement over the keyword: a C that only copies a
-        # byte-order locale, under a `#` comment naming the keyword, read as
-        # 'codepoint-not-alone' and as a copy in one status (round 3).
-        named = ('LC_COLLATE\n# not codepoint_collation: a copy\n'
-                 'copy "zz_ZZ"\nEND LC_COLLATE\n')
-        self.assertEqual(g.classify_collation_style(named),
-                         'codepoint-not-alone')
-        self.assertEqual(g.byte_order_locales(
-            {'C': named, 'zz_ZZ': _harness.upstream_c()}), ({'zz_ZZ'}, {}))
-
-    def test_an_unterminated_block_is_not_byte_order(self):
-        text = '\n'.join(['comment_char %', 'escape_char /', '',
-                          'LC_COLLATE', 'codepoint_collation', ''])
-        self.not_byte_order(text)
-
-    def test_characters_read_without_certainty_are_not_byte_order(self):
-        """The comment and escape characters are read with certainty only
-        when the directives come first, with a value glibc's own files use.
-        Otherwise localedef may read them differently from this code: a
-        leading line continued into the directive swallows it, one inside a
-        section is a syntax error there, and glibc refuses `<` as an argument
-        (it reads as a symbol) and keeps `#`. Refused rather than guessed;
-        that can only keep a locale listed, never clear one. Repeated
-        directives at the top are read in order, as glibc does, unless one
-        ends in the escape character in force: glibc then reads its argument
-        from the next line (round 3 of false-negative-reviewer measured the
-        tool reading `\\` where glibc reads `/`, and clearing C). A trailing
-        space after the escape does not continue the line."""
-        block = ['', 'LC_COLLATE', '% note', 'codepoint_collation',
-                 'END LC_COLLATE', '']
-        self.assertTrue(g.declares_byte_order(
-            '\n'.join(['comment_char %', 'escape_char /', *block])))
-        self.assertTrue(g.declares_byte_order(
-            '\n'.join(['comment_char #', 'comment_char %', 'escape_char /',
-                       *block])))
-        self.assertFalse(g.declares_byte_order(
-            '\n'.join(['comment_char %', 'comment_char #', 'escape_char /',
-                       *block])))
-        self.not_byte_order('\n'.join(['% a note first \\', 'comment_char %',
-                                       'escape_char /', *block]))
-        self.not_byte_order('\n'.join(['escape_char /', 'LC_CTYPE',
-                                       'comment_char %', 'END LC_CTYPE',
-                                       *block]))
-        self.not_byte_order('\n'.join(['comment_char <', 'escape_char /', '',
-                                       'LC_COLLATE', '< note',
-                                       'codepoint_collation',
-                                       'END LC_COLLATE', '']))
-        hidden = ['', 'LC_COLL/ATE', 'order_start forward', '<U0041>',
-                  'order_end', 'END LC_COLLATE', '']
-        self.not_byte_order('\n'.join(['comment_char %', 'escape_char \\',
-                                       '/', *block, *hidden]))
-        self.not_byte_order('\n'.join(['comment_char %', 'escape_char /',
-                                       'escape_char /', '\\', *block,
-                                       *[h.replace('/', '\\') for h in hidden]]))
-        self.assertTrue(g.declares_byte_order(
-            '\n'.join(['comment_char %', 'escape_char \\ ', *block])))
-
-    def test_unicode_space_is_not_space_to_glibc(self):
-        """glibc's reader skips isspace in the C locale; U+00A0 is part of
-        the word for it, while Python's str.strip() removes it."""
-        self.not_byte_order(collate(' codepoint_collation'))
-
-    def test_a_copy_of_a_byte_order_locale_is_byte_order(self):
-        """Backlog 6.9. A copy and nothing else shares the copied locale's
-        data (ld-collate.c:1518-1521@2.39). Measured on RHEL9 and RHEL10:
-        `copy "C"`, a copy of that copy, and a copy of a file holding the
-        keyword alone compile byte-identical to the installed C.UTF-8."""
-        texts = {'C': _harness.upstream_c(),
-                 'X': collate('copy "C"'),
-                 'Y': collate('% via X', 'copy "X"'),
-                 'Z': collate('copy "<U0043>"')}
-        self.assertEqual(g.byte_order_locales(texts),
-                         ({'C'}, {'X': 'C', 'Y': 'X', 'Z': 'C'}))
-        self.assertEqual(g.classify_collation_style(texts['X']), 'copy-only')
-
-    def test_a_copy_with_no_blank_before_the_string_is_byte_order(self):
-        """Backlog 13.17: glibc reads `copy"C"` as `copy "C"`."""
-        texts = {'C': _harness.upstream_c(), 'X': collate('copy"C"')}
-        self.assertEqual(g.byte_order_locales(texts), ({'C'}, {'X': 'C'}))
-
-    def test_a_copy_with_anything_else_is_not_byte_order(self):
-        """Its own sort rule is read in the same run as the keyword, so the
-        tables break as in E5 (backlog 6.9's refresh)."""
-        texts = {'C': _harness.upstream_c(),
-                 'X': collate('copy "C"', *SORT_RULE),
-                 'Y': collate('copy "C"', ISO_COPY)}
-        self.assertEqual(g.byte_order_locales(texts), ({'C'}, {}))
-
-    def test_a_copy_that_cannot_resolve_is_not_byte_order(self):
-        """A missing target is exit 4 and a cycle exit 5 in localedef, and
-        a copy of RHEL8's C or of the keyword beside a copy is not byte
-        order either."""
-        texts = {'A': collate('copy "B"'), 'B': collate('copy "A"'),
-                 'M': collate('copy "no_such_locale"'),
-                 'C8': _harness.backported_c(),
-                 'R': collate('copy "C8"'),
-                 'N': collate(ISO_COPY, 'codepoint_collation'),
-                 'S': collate('copy "N"')}
-        self.assertEqual(g.byte_order_locales(texts), (set(), {}))
-
-
-class CopyGraphFromTexts(unittest.TestCase):
-    """"Discarded unreadable blobs, silently shrinking the copy graph" --
-    false negative #3. The graph is now built by one pure function whether the
-    corpus came from a tag or from a node's directory."""
-
-    def test_a_graph_from_texts_has_a_node_per_block(self):
-        texts = {'a': collate('copy "b"'),
-                 'b': collate('<U0041> <U0041>'),
-                 'c': 'LC_TIME\nEND LC_TIME\n'}
-        self.assertEqual(g.copy_graph_from_texts(texts), {'a': ['b'], 'b': []})
-
-    def test_a_template_opening_with_lc_collate_is_a_root_not_a_dropout(self):
-        """The glibc <=2.23 master templates open with LC_COLLATE at byte 0.
-        While collate_block missed those, copy_graph_from_texts skipped them
-        entirely, so the highest fan-in files in the corpus were not in the
-        graph and everything inheriting from them looked unaffected -- 11
-        locales reported on glibc-2.12..2.17 where there are 280."""
-        texts = {'iso14651_t1_common': 'LC_COLLATE\n<U0041> <U0041>\n'
-                                       'END LC_COLLATE\n',
-                 'en_US': collate('copy "iso14651_t1_common"')}
-        graph = g.copy_graph_from_texts(texts)
-        self.assertIn('iso14651_t1_common', graph)
-        self.assertEqual(g.inherited_from(graph, {'iso14651_t1_common'}),
-                         {'en_US': ['iso14651_t1_common']})
-
-    def test_a_node_only_file_participates_as_a_root(self):
-        """A node-only file is in no tag, so at a tag it can be neither a root
-        nor a target. Over a node's own corpus it is both."""
-        texts = {'C': _harness.backported_c(), 'zz_MADEUP': collate('copy "C"')}
-        graph = g.copy_graph_from_texts(texts)
-        self.assertEqual(g.inherited_from(graph, {'C'}), {'zz_MADEUP': ['C']})
-
-
-class NodeToNodeClassification(unittest.TestCase):
-    """classify_distro_diff, reused unchanged for two nodes. Only the labels
-    the caller puts on the sides change."""
-
-    def test_a_block_on_one_node_only_is_a_collate_finding(self):
-        with_block = collate('<U0041> <U0041>').encode()
-        without = b'comment_char %\nLC_TIME\nEND LC_TIME\n'
-        self.assertEqual(dd.classify_distro_diff(with_block, without), 'collate')
-        self.assertEqual(dd.classify_distro_diff(without, with_block), 'collate')
-
-    def test_it_is_symmetric(self):
-        a = collate('<U0041> <U0041>').encode()
-        b = collate('<U0042> <U0042>').encode()
-        self.assertEqual(dd.classify_distro_diff(a, b),
-                         dd.classify_distro_diff(b, a))
-
-    def test_a_non_utf8_difference_INSIDE_the_block_is_a_collate_finding(self):
-        """The existing bytes-not-text test puts the differing byte after END
-        LC_COLLATE, so it can only assert "not identical". Inside the block the
-        claim is stronger: a lossy decode would collapse both to U+FFFD, the
-        blocks would compare equal, and the verdict would drop from 'collate'
-        to 'other' -- a real sort-order change filed as a comment change."""
-        base = collate('<U0041> <U0041>;IGNORE % X')
-        a = base.replace('X', 'é').encode('latin-1')
-        b = base.replace('X', 'ü').encode('latin-1')
-        self.assertEqual(a.decode('utf-8', 'replace'),
-                         b.decode('utf-8', 'replace'))     # the trap itself
-        self.assertEqual(dd.classify_distro_diff(a, b), 'collate')
-
-
-class CorpusGuard(unittest.TestCase):
-    """"A half-copied directory would report '12 compared, 0 inside
-    LC_COLLATE', which is indistinguishable from a clean result." Pure, so
-    both truncation guards are checked with integers instead of a fabricated
-    directory."""
-
-    def test_expect_files_mismatch_is_refused(self):
-        self.assertIsNotNone(g.corpus_problem(350, expect_files=353))
-
-    def test_a_short_corpus_against_an_upstream_reference_is_refused(self):
-        self.assertIsNotNone(g.corpus_problem(3, reference=353))
-
-    def test_two_equally_truncated_sides_are_still_refused(self):
-        """The trap node-to-node adds and node-vs-tag never had: with no
-        upstream side there is nothing to take half of, three files intersect
-        three files, and every one of them is identical. An absolute floor is
-        the only thing standing between that and a flawless clean upgrade."""
-        self.assertIsNone(g.corpus_problem(3))
-        self.assertIsNotNone(g.corpus_problem(3, floored=True))
-
-    def test_a_real_corpus_passes_every_guard(self):
-        self.assertIsNone(g.corpus_problem(353, expect_files=353,
-                                            reference=355,
-                                            floored=True))
-
-    def test_the_message_says_why_it_refuses(self):
-        for problem in (g.corpus_problem(3, reference=353),
-                        g.corpus_problem(3, floored=True)):
-            self.assertIn('indistinguishable from a clean run', problem)
-
-
-class MissingFromCopy(unittest.TestCase):
-    """A copy that lost files above the half-of-the-tag refusal reported
-    "Nothing differs" and listed the rest with no `!!` (backlog 1.15). The
-    helper the node-reading steps share, driven with names
-    instead of a directory."""
-
-    def report(self, copy, tag, skipped=()):
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            missing = g.report_missing_from_copy(copy, tag, 'glibc-2.34',
-                                                 './el9-locales', skipped)
-        return missing, buf.getvalue()
-
-    def test_every_missing_file_is_named_under_a_warning(self):
-        missing, out = self.report(['a', 'b'], ['a', 'b', 'th_TH', 'c'])
-        self.assertEqual(missing, ['c', 'th_TH'])
-        self.assertTrue(out.startswith('!! 2 file(s) that glibc-2.34 has'),
-                        out)
-        self.assertIn('are missing from ./el9-locales: c, th_TH.', _harness.flat(out))
-        # Every line is part of the block the wrapper repeats: `!!` first,
-        # three-space continuation after, or the tail never reaches it.
-        for line in out.splitlines()[1:]:
-            self.assertTrue(line.startswith('   '), line)
-
-    def test_it_concludes_nothing_about_why(self):
-        """The first attempt at this fix told the reader the missing files
-        were locales the node does not ship -- measured false at 250 of 355
-        with a count the reader had asserted."""
-        _, out = self.report([], ['a'])
-        self.assertIn('cannot tell whether the machine does not ship them or '
-                      'the copy lost them', _harness.flat(out))
-
-    def test_a_file_held_but_not_read_is_named_apart(self):
-        """A tag file the copy holds as a symlink is not missing, and was not
-        read. Reported as missing, the count the reader was told to compare
-        matched (355 entries against 355) and cleared a th_TH never read.
-        Found by false-negative-reviewer on this fix."""
-        missing, out = self.report(['a'], ['a', 'th_TH'],
-                                   [('th_TH', 'symlink'), ('.x', 'dotfile')])
-        self.assertEqual(missing, ['th_TH'])
-        text = _harness.flat(out)
-        self.assertIn('are in ./el9-locales but were not read: '
-                      'th_TH (symlink).', text)
-        self.assertNotIn('are missing from', text)
-        self.assertNotIn('.x', text)
-        self.assertIn('Copy those again as regular files.', text)
-
-    def test_missing_and_not_read_together_are_both_named(self):
-        """The case no other test combines: a copy that lost files AND holds
-        a tag file as a symlink. Saying only the missing ones left th_TH in
-        step 6's plain "Skipped" list, which the summary does not collect
-        (false-negative-reviewer, second round)."""
-        missing, out = self.report(['a'], ['a', 'b', 'th_TH'],
-                                   [('th_TH', 'symlink')])
-        self.assertEqual(missing, ['b', 'th_TH'])
-        text = _harness.flat(out)
-        self.assertIn('are missing from ./el9-locales: b.', text)
-        self.assertIn('but were not read: th_TH (symlink).', text)
-        self.assertIn('Check on the machine whether', text)
-        self.assertIn('Copy those again as regular files.', text)
-
-    def test_it_advises_names_not_a_count(self):
-        """`ls | wc -l` counts what the steps skip, so it can match while a
-        file went unread; the advice names the files instead."""
-        _, out = self.report([], ['a'])
-        self.assertNotIn('wc -l', _harness.flat(out))
-        self.assertIn('Check on the machine whether /usr/share/i18n/locales/ '
-                      'has them.', _harness.flat(out))
-
-    def test_a_complete_copy_prints_nothing(self):
-        self.assertEqual(self.report(['a', 'b'], ['a', 'b']), ([], ''))
-
-    def test_files_the_tag_lacks_are_not_missing(self):
-        """The distro's own C is in the copy and in no 2.34 tag."""
-        self.assertEqual(self.report(['a', 'C'], ['a']), ([], ''))
-
-
-class SameTreeAndManifest(unittest.TestCase):
-    """Comparing a directory with itself, or two copies of one tar, reports
-    100% identical -- the most reassuring output the tool can print."""
-
-    def setUp(self):
-        self.base = tempfile.mkdtemp(prefix='pg-glibc-sametree-')
-        self.addCleanup(shutil.rmtree, self.base, ignore_errors=True)
-
-    def _dir(self, name, files=()):
-        path = os.path.join(self.base, name)
-        os.mkdir(path)
-        for fname, body in files:
-            with open(os.path.join(path, fname), 'w', encoding='utf-8') as fh:
-                fh.write(body)
-        return path
-
-    def test_the_same_directory_under_two_names_is_detected(self):
-        real = self._dir('real')
-        link = os.path.join(self.base, 'link')
-        os.symlink(real, link)
-        self.assertTrue(dd.same_tree(real, link))
-        self.assertTrue(dd.same_tree(real, os.path.join(real, '.')))
-        self.assertFalse(dd.same_tree(real, self._dir('other')))
-
-    def test_two_identical_trees_share_a_fingerprint(self):
-        files = (('C', _harness.backported_c()), ('en_US', collate('copy "x"')))
-        a, b = self._dir('a', files), self._dir('b', files)
-        self.assertEqual(dd.tree_manifest(a, ['C', 'en_US'])[2],
-                         dd.tree_manifest(b, ['C', 'en_US'])[2])
-
-    def test_a_different_size_changes_the_fingerprint(self):
-        a = self._dir('a', (('C', _harness.backported_c()),))
-        b = self._dir('b', (('C', _harness.upstream_c()),))
-        self.assertNotEqual(dd.tree_manifest(a, ['C'])[2],
-                            dd.tree_manifest(b, ['C'])[2])
 
 
 # --- step 2's character set check (backlog 13.7, PR B) ----------------------
@@ -1952,8 +1105,8 @@ class LcCollateSearch(unittest.TestCase):
         self.assertEqual(scan.copies, ('tmpl',))
 
     def test_a_copy_after_a_form_feed_is_followed(self):
-        """glibc_locale_data.copy_targets follows it (`\\s*`), and so does
-        glibc; the closure did not (false-negative-reviewer, round 3)."""
+        """glibc follows it; the closure did not (false-negative-reviewer,
+        round 3)."""
         self.assertEqual(ck.Scan(locale_text('\fcopy "tmpl"')).copies,
                          ('tmpl',))
 
@@ -3758,78 +2911,6 @@ class MachineBuilds(unittest.TestCase):
         with self.assertRaisesRegex(nc.Unusable, "taken on 'b-2', not on b-1"):
             self.built(self.measurement({'x': 'A'}, build='b-2'), c, {})
 
-    def test_equal_bytes_are_one_text_and_0xff_is_recorded(self):
-        for side in ('o', 'n'):
-            os.mkdir(os.path.join(self.root, side))
-            for name, body in (('same', b'same bytes\n'),
-                               ('ff', b'x\xffy\n')):
-                with open(os.path.join(self.root, side, name), 'wb') as fh:
-                    fh.write(body)
-        by_bytes = {}
-        o = nc.read_texts(os.path.join(self.root, 'o'), ['same', 'ff'],
-                          by_bytes)
-        n = nc.read_texts(os.path.join(self.root, 'n'), ['same', 'ff'],
-                          by_bytes)
-        self.assertIs(o['same'], n['same'])
-        self.assertIn(o['ff'], g.TEXTS_WITH_0XFF)
-        self.assertNotIn(o['same'], g.TEXTS_WITH_0XFF)
-
-
-class MachineListed(unittest.TestCase):
-    """What the summary reads of a machine check: never a list that reads
-    as nothing to add over a build or a name nobody compared."""
-
-    def report(self, **kw):
-        base = dict(not_run=None, builds=2, charmaps=[], changed=[],
-                    sizes={}, found=[], skipped=[], not_compared=[],
-                    unsearched=[], translit=None, translit_skipped=0)
-        base.update(kw)
-        return ck.Report(**base)
-
-    def test_what_was_listed_not_compared_or_not_traced(self):
-        found = ck.Found('loc_a', 'loc_a.utf8', ('UTF-8', 'UTF-8'), {0xE9},
-                         ['loc_a'], None)
-        r = nc.Result(self.report(found=[found],
-                                  not_compared=['x.utf8', 'y_YY.utf8']),
-                      'o', 'n', [nc.Measured(
-                          [ck.Build('x.utf8', 'x', 'UTF-8')],
-                          [('#odd', 'why'), ('ok_name', 'why')], 3)])
-        # x.utf8 by its locale; y_YY.utf8, which no build names, as itself.
-        self.assertEqual(nc.listed(r), sorted(['loc_a', 'x', 'y_YY.utf8',
-                                               "'#odd'", 'ok_name']))
-
-    def test_nothing_compared_writes_no_list(self):
-        for kw in ({'not_run': 'a reason'}, {'builds': 0}):
-            with self.subTest(**kw):
-                self.assertIsNone(nc.listed(nc.Result(
-                    self.report(**kw), 'o', 'n', [])))
-
-    def test_no_build_compared_still_lists_what_it_names(self):
-        """Every build in a charmap the tag lacks: none compared, all of
-        them named, and the summary must name them too."""
-        absent = ck.Found('de_DE', 'de_DE.x', ('X', 'X'), set(), [],
-                          'the tag has no charmap X')
-        self.assertEqual(nc.listed(nc.Result(
-            self.report(builds=0, found=[absent]), 'o', 'n', [])), ['de_DE'])
-
-
-class MachineReadsWhatItIsAskedFor(unittest.TestCase):
-    """compare's read_more, for a machine: the charmaps it names are read
-    then, so that the 0xFF gate that follows sees them
-    (collation_keys._ff_gate), not later, when a charmap is first used."""
-
-    def test_the_charmaps_named_are_read_now(self):
-        reads = []
-
-        def load(name):
-            reads.append(name)
-            return 'text of ' + name
-        a = ck.Side('a', set(), {}, {'X': '1', 'Y': '2'}, nc._Texts(load))
-        b = ck.Side('b', set(), {}, {'X': '1'}, nc._Texts(load))
-        nc._read_more((a, b))({'a': {'X', 'Y'}, 'b': {'X', 'Z'}})
-        self.assertEqual((sorted(a.charmap_texts), sorted(b.charmap_texts)),
-                         (['X', 'Y'], ['X']))
-        self.assertEqual(sorted(reads), ['X', 'X', 'Y'])
 
 
 class ChecksWithoutTheUnbuiltSearch(unittest.TestCase):
@@ -3852,8 +2933,8 @@ class ChecksWithoutTheUnbuiltSearch(unittest.TestCase):
 
 
 class ReadersShared(unittest.TestCase):
-    """Two Sides given one ask_utf8 are read by one localedef, as steps 6
-    and 7 read a machine and its tag; git is not asked."""
+    """Two Sides given one ask_utf8 are read by one localedef; git is not
+    asked."""
 
     def test_one_reader_is_not_asked_and_two_are(self):
         calls = []
@@ -3882,8 +2963,6 @@ class ReadingCharsOnce(unittest.TestCase):
                 text = locale_text('<U0041> IGNORE')
                 self.assertEqual(g.reading_chars(text),
                                  g.reading_chars(text))
-                # _collate_body asks through the same memo.
-                g._collate_body(text)
                 self.assertEqual(spy.call_count, 1)
             self.assertIs(g.reading_chars, real)
             with self.assertRaises(KeyError):
@@ -3899,23 +2978,6 @@ class DecodedTexts(unittest.TestCase):
         self.assertEqual(g.decoded(b'a\xc3\xa9'), 'a\u00e9')
         self.assertNotIn(g.decoded(b'plain text 13.7'), g.TEXTS_WITH_0XFF)
 
-
-class MachineNotRun(unittest.TestCase):
-    """A machine's NOT RUN keeps the node file's path whole, so it can be
-    copied; step 2's wraps as it always did."""
-
-    def test_a_path_with_hyphens_is_not_cut(self):
-        path = ('/very-long-folder-name/with-many-hyphens-in-it/'
-                'session-2026-09-25-locale-order/node.tar')
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            nc.not_run(f'{path} holds no charmaps', nc.STEP67_WORDS,
-                       'glibc-2.28', 'glibc-2.28-251.el8_10.40.x86_64')
-        self.assertIn(path, out.getvalue().split())
-        self.assertIn('NOT RUN: the comparison of the character sets '
-                      'glibc-2.28-251.el8_10.40.x86_64 builds its locales '
-                      "with, against glibc-2.28's (/usr/share/i18n/charmaps/).",
-                      flat(out.getvalue()))
 
 def _bang_blocks(out):
     blocks, cur = [], None

@@ -43,6 +43,7 @@ from _harness import (GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR, Step2Report,
                       glibc_shaped, needs_clone)
 
 import build_sources as bs
+import filter_lc_collate_changes as step2
 import glibc_locale_data as g
 
 DATA = os.path.join(TESTS_DIR, 'build_sources')
@@ -3156,8 +3157,12 @@ B40, B48 = 'glibc-2.28-251.el8_10.40', 'glibc-2.28-251.el8_10.48'
 B128 = 'glibc-2.39-128.el10_2'
 REINDEX = '-- Reindex: sort order changes, confirm then REINDEX'
 REMOVED = '-- Removed: locale files the old side has and the new side does not'
-DISTRO = '-- Distro patches, steps 6 and 7: NOT RUN'
-NODE = '-- Node-to-node locale data: NOT RUN'
+# Step 2's `!!` for C.UTF-8 (filter_lc_collate_changes.print_c_utf8), as the
+# summary's warnings repeat it, whitespace collapsed.
+C_NOT_COMPARED = ("!! {} holds no localedata/locales/C, the file C.UTF-8 is "
+                  "built from, and a distro's build can ship its own, so "
+                  "C.UTF-8's sort rules were not compared. ")
+C_DIFFERS = "!! C.UTF-8's sort rules differ, and it is listed for Reindex. "
 MEASURED = '-- Measured order: NOT RUN'
 DIRECTION = '-- Direction of the pair: NOT ESTABLISHED'
 NOT_READ = ("What this run does not read of a build is under 'Not checked "
@@ -3309,7 +3314,7 @@ class ResolvesTheLatestBuild(unittest.TestCase):
                                                   'glibc-2.39'))
 
     def test_a_step_checking_a_tag_refuses_it(self):
-        """check_refs called directly, as steps 6 to 10 and provenance do."""
+        """check_refs called directly, as provenance does."""
         with mock.patch.object(g, 'find_repo', return_value=self.tmp):
             self.refused_by_hand(lambda: g._main(['provenance',
                                                   'latest-el9']))
@@ -3595,20 +3600,15 @@ class AuditShReadsTheFixtureBuilds(_AuditOnBuilds, unittest.TestCase):
         self.assertNotIn('NOT CHECKED', ' '.join(body))
         self.assertNotIn('--old-node', ' '.join(body))
 
-    def test_the_not_run_blocks_speak_of_builds(self):
+    def test_the_summary_speaks_of_builds(self):
+        """Between the two builds C.UTF-8's rules are compared, and differ:
+        step 2 says PostgreSQL will not warn of it, once, and the summary
+        repeats it; nothing says it was not compared."""
         out = self.run_of('89')
-        self.assertEqual(' '.join(summary_block(out, DISTRO)),
-                         "Steps 6 and 7 compare a machine's own locale files "
-                         "with its upstream tag: pass --old-node and "
-                         "--new-node. %s, below." % NOT_READ)
-        self.assertEqual(' '.join(summary_block(out, NODE)),
-                         "Step 8 compares two machines' own locale files: "
-                         "pass --old-node and --new-node. "
-                         "Step 2 compared every locale file of the two "
-                         "builds, glibc's file C (C.UTF-8) as any other. "
-                         "PostgreSQL reports collversion as NULL for every "
-                         "C.* collation, so no mismatch can ever fire. Then "
-                         "run sql/c_utf8_probe.sql on both nodes.")
+        summary = flat(out.split('AUDIT SUMMARY', 1)[1])
+        self.assertEqual(summary.count(C_DIFFERS + step2.C_NO_VERSION), 1,
+                         summary)
+        self.assertNotIn('were not compared', summary)
         self.assertEqual(summary_block(out, MEASURED)[:2], [
             "Pass --old-node and --new-node, each machine's file written by",
             'scripts/locale_order.py --extract. Without them nothing above'])
@@ -3735,13 +3735,9 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
                          'as a build to check it. Between the sides: none -- '
                          'no locale file at %s is gone at %s'
                          % (TAG, B275, TAG, B275))
-        self.assertEqual(' '.join(summary_block(out, DISTRO)),
-                         "Steps 6 and 7 compare a machine's own locale files "
-                         "with its upstream tag: pass --old-node and "
-                         "--new-node. %s is an upstream "
-                         "tag, so nothing above says whether the old "
-                         "machine's own patches touch sort order: name that "
-                         "side as a build. %s, below." % (TAG, NOT_READ))
+        # The old side is the tag, which holds no file C (16.123).
+        self.assertEqual(flat(out.split('AUDIT SUMMARY', 1)[1]).count(
+            C_NOT_COMPARED.format(TAG) + step2.C_NO_VERSION), 1)
         self.assertEqual(' '.join(summary_block(out, DIRECTION)),
                          'One side is a tag and the other a build of the same '
                          'glibc release, and nothing here places a build '
@@ -3816,11 +3812,10 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
                          % TAG)
         self.assertIn('C.UTF-8 (deleted)', body)
         self.assertNotIn('C (deleted)', body)
-        self.assertIn("nothing above says whether the new machine's own "
-                      "patches touch sort order",
-                      ' '.join(summary_block(out, DISTRO)))
-        self.assertIn("nothing above compared the new machine's own C.UTF-8 "
-                      "with %s's" % B40, ' '.join(summary_block(out, NODE)))
+        # The new side is the tag, which holds no file C (16.123): the
+        # `!!` reads each side, not the old one alone.
+        self.assertEqual(flat(out.split('AUDIT SUMMARY', 1)[1]).count(
+            C_NOT_COMPARED.format(TAG) + step2.C_NO_VERSION), 1)
 
     def test_a_build_that_cannot_be_read_stops_the_run(self):
         rc, out = self.out['absent']
@@ -3851,13 +3846,10 @@ class AuditShRefusesAMachinesFilesWithABuild(unittest.TestCase):
 
     def test_each_option_is_refused(self):
         for args, build, said in (
-                (('--old-build-id', 'x'), B40, '--old-build-id is refused'),
-                (('--new-build-id', 'x'), B40, '--new-build-id is refused'),
-                (('--old-order', 'a', '--new-order', 'b',
-                  '--new-build-id', 'y'), B40,
-                 '--old-order, --new-order and --new-build-id are refused'),
-                (('--new-locales-dir', '/', '--new-build-id', 'y'), B40,
-                 '--new-locales-dir and --new-build-id are refused')):
+                (('--old-order', 'x'), B40, '--old-order is refused'),
+                (('--new-order', 'x'), B40, '--new-order is refused'),
+                (('--old-order', 'a', '--new-order', 'b'), B40,
+                 '--old-order and --new-order are refused')):
             with self.subTest(args=args):
                 said_all = self.refused(B40, B275, *args)
                 self.assertIn('error: %s is a build, and with a build '
@@ -3883,19 +3875,18 @@ class AuditShRefusesAMachinesFilesWithABuild(unittest.TestCase):
         self.assertIn("the old node's file could not be used", err)
 
     def test_the_tag_sides_options_are_refused_too(self):
-        said = self.refused(TAG, B275, '--old-locales-dir', '/',
-                            '--old-build-id', 'x')
+        said = self.refused(TAG, B275, '--old-order', 'x')
         self.assertIn('%s is a build' % B275, said)
-        self.assertIn('--old-locales-dir and --old-build-id are refused', said)
+        self.assertIn('--old-order is refused', said)
 
     def test_latest_is_refused_with_them_before_the_mirror_is_asked(self):
         """latest-elN is a build: the options are refused first, with a
         mirror that cannot be read, so nothing asked the network."""
-        said = self.refused('latest-el8', B275, '--old-build-id', 'x',
+        said = self.refused('latest-el8', B275, '--old-order', 'x',
                             mirror='file:///nowhere/')
         self.assertIn('error: latest-el8 is a build, and with a build '
                       "audit.sh reads a machine's files only from --old-node "
-                      'and --new-node: --old-build-id is refused.', said)
+                      'and --new-node: --old-order is refused.', said)
         self.assertNotIn('cannot resolve', said)
 
     def test_a_latest_that_cannot_be_resolved_stops_the_run(self):
@@ -4108,9 +4099,9 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
     the fixture build's locale sources and charmaps: steps 1 and 2 read
     each machine's own files (C.UTF-8 joins the reindex list, as between
     the builds), and download nothing, so with the builds' cache empty and
-    no mirror the run is the same; steps 6 and 7 compare each machine with
-    its tag; a file without sources makes both sides read their tags, with
-    the `!!`."""
+    no mirror the run is the same; Removed reads step 2's list, under a
+    sentence of machines; a file without sources makes both sides read
+    their tags, with the `!!`."""
 
     RUNS = {}
 
@@ -4210,7 +4201,7 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
                                inside=('de_DE', 'sv_SE'))
         new = cls.machine_file(B275, cut_few(RHEL9))
         # Machines without glibc-locale-source: their files hold no
-        # sources, and steps 6 and 7 do not run for them.
+        # sources, and both sides read their tags.
         bare_old = node_file('old.tar', cut_few(RHEL8), 'glibc-2.28',
                              sources=False)
         bare_new = node_file('new.tar', cut_few(RHEL9), 'glibc-2.34',
@@ -4274,7 +4265,11 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         # measurement, not from the tags' SUPPORTED, which lists no
         # C.UTF-8: the measured C.utf8 build is compared, by its measured
         # name.
-        step2 = out.split('== STEP 2', 1)[1].split('== STEP 6', 1)[0]
+        # Step 2 alone, cut at both ends: a missing banner would widen the
+        # cut to the rest of the run in silence.
+        self.assertEqual(out.count('== STEP 2'), 1)
+        self.assertEqual(out.count('== STEP 11'), 1)
+        step2 = out.split('== STEP 2', 1)[1].split('== STEP 11', 1)[0]
         # C, whose RHEL 9 file uses codepoint_collation, a keyword only the
         # build's table holds: read with that table (glibc_tree.build_at by
         # the build's name), its rules are compared and differ in 12
@@ -4315,51 +4310,30 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         self.assertEqual(body(out, 'unread'), body(read, 'read'))
         self.assertNotIn('which this run cannot read', out)
 
-    def test_steps_6_and_7_compare_each_machine_with_its_tag(self):
+    def test_removed_reads_step_2_under_a_sentence_of_machines(self):
+        """With machines, Removed is step 2's list between the two machine
+        commits, under a sentence that says what a machine's files are:
+        checked against no package, never "checked one by one" (that is a
+        build's)."""
         summary = self.summary('read')
-        for n, build, tag in ((6, W8, 'glibc-2.28'), (7, W9, 'glibc-2.34')):
-            with self.subTest(step=n):
-                self.assertIn('-- Distro patches, step %d (%s against %s)'
-                              % (n, build, tag), summary)
+        body = flat(' '.join(summary_block(summary, REMOVED)))
+        self.assertTrue(body.startswith(
+            "Each machine's locale files are its own locale sources as its "
+            "file holds them, checked against no package ('Not checked for "
+            "these machines', below)."), body)
+        self.assertNotIn('checked one by one', body)
+        self.assertIn('en_US@ampm (deleted)', body)
         self.assertNotIn('NOT REPORTED', summary)
-        self.assertNotIn('compared nothing', summary)
-        # Each file holds its build's charmaps, as --extract packs them: the
-        # character sets are compared in steps 6, 7 and 8.
-        for what in ('this machine against glibc-2.28',
-                     'this machine against glibc-2.34',
-                     'between the two machines'):
-            with self.subTest(charmaps=what):
-                said = re.findall(r'Character sets and transliterations, %s'
-                                  r': (\S+ \S+)' % re.escape(what),
-                                  flat(summary))
-                self.assertEqual(len(said), 1, (what, said))
-                # Both forms: "NOT RUN." and "NOT RUN -- step N compared
-                # nothing".
-                self.assertFalse(said[0].startswith('NOT RUN'), what)
-        # C, which neither tag has: read by steps 1 and 2 as a file of the
-        # build (examples/rhel8-to-rhel9-audit-output.txt prints it).
-        for n, build in ((6, B40), (7, B275)):
-            with self.subTest(step=n):
-                block = flat(' '.join(summary_block(
-                    summary, '-- Distro patches, step %d (%s against %s)'
-                    % (n, W8 if n == 6 else W9,
-                       'glibc-2.28' if n == 6 else 'glibc-2.34'))))
-                self.assertIn('their own (step %d above); steps 1 and 2 read '
-                              'them as files of %s: C' % (n, build), block)
+        self.assertNotIn('-- Distro patches', summary)
+        self.assertNotIn('-- Node-to-node', summary)
 
     def test_a_machines_own_patch_read_in_its_build(self):
         """The old machine's de_DE and sv_SE differ from glibc-2.28 inside
-        LC_COLLATE: its step 6 names them as that machine's own patches,
-        which steps 1 and 2 read in its own sources -- not "the tag diff",
-        which a run on builds has not -- and step 2, which reads the
-        machine's files and not the build's, finds de_DE's rules changed
-        against the new machine and lists it, with what copies it."""
+        LC_COLLATE, a patch of that machine's own: step 2, which reads the
+        machine's files and not the build's -- not "the tag diff", which a
+        run on builds has not -- finds their rules changed against the new
+        machine and lists them, with what copies them."""
         summary = self.summary('read')
-        self.assertEqual(summary_block(summary, '-- Distro patches, step 6 '
-                                       '(%s against glibc-2.28)' % W8)[:3], [
-            '2 locale(s) differ inside LC_COLLATE from glibc-2.28 -- this',
-            "machine's own patches, which steps 1 and 2 read in %s:" % B40,
-            'de_DE sv_SE'])
         self.assertNotIn('tag diff is NOT reading', flat(summary))
         reindex = summary_block(summary, REINDEX)
         for name in ('de_DE', 'sv_SE', 'C.UTF-8'):
@@ -4370,7 +4344,8 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         """The old machine's file holds no sources (glibc-locale-source not
         installed): no build is downloaded in its place, so steps 1 and 2
         read both tags, and one `!!` before step 1 says which machine and
-        the file's reason; step 6 says NOT RUN with that reason."""
+        the file's reason; Removed points to it, and the tags' C.UTF-8 `!!`
+        follows."""
         out = self.run_of('old_bare')
         before = flat(out.split('== STEP 1', 1)[0])
         self.assertTrue(before.startswith(
@@ -4383,12 +4358,12 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         self.assertIn('AUDIT SUMMARY  glibc-2.28 -> glibc-2.34', out)
         self.assertNotIn('Machine provenance', out)
         summary = self.summary('old_bare')
-        block = flat(' '.join(summary_block(
-            summary, '-- Distro patches, step 6: NOT RUN')))
-        self.assertIn('holds no locale sources.', block)
-        self.assertIn("So nothing above says whether the old machine's own "
-                      "patches touch sort order, which the tags cannot "
-                      "show.", block)
+        self.assertIn("A machine's file made both sides read their tags; "
+                      "why is the first warning below.",
+                      flat(' '.join(summary_block(summary, REMOVED))))
+        self.assertEqual(flat(summary).count(
+            C_NOT_COMPARED.format('glibc-2.28 and glibc-2.34').replace(
+                'holds', 'hold') + step2.C_NO_VERSION), 1)
         warned = flat(summary.split('-- Warnings the clean results above do '
                                     'NOT cover', 1)[1])
         self.assertIn("!! The old machine's file names %s, which this run "
@@ -4405,13 +4380,9 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
                                "run cannot read: it holds no locale sources"
                                % (side, build)).lower(), before.lower())
         summary = self.summary('bare')
-        distro = flat(' '.join(summary_block(summary, DISTRO)))
-        self.assertEqual(distro.count('holds no locale sources.'), 2, distro)
-        self.assertIn("So nothing above says whether either machine's own "
-                      "patches touch sort order, which the tags cannot "
-                      "show.", distro)
-        node = flat(' '.join(summary_block(summary, NODE)))
-        self.assertEqual(node.count('holds no locale sources.'), 2, node)
+        self.assertIn("A machine's file made both sides read their tags; "
+                      "why is the first warning below.",
+                      flat(' '.join(summary_block(summary, REMOVED))))
 
 
 if __name__ == '__main__':

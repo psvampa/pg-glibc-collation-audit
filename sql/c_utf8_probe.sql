@@ -7,16 +7,16 @@
 --
 -- Why C.UTF-8 gets its own file:
 --
---   * The source-diff audit cannot see it. localedata/locales/C exists
---     upstream only from glibc 2.35. RHEL8 and RHEL9 predate that and
---     ship one anyway, so for the RHEL8->RHEL9 pair it is in neither tag and
---     no tag-to-tag diff can compare it. (RHEL10 is glibc 2.39 and has
---     upstream's copy.) scripts/diff_node_locales.py compares the two nodes'
---     own copies and settles the DATA, not the order. Where a copy is not
---     byte order by construction, localedef computes part of the order
---     when the locale is built: the
---     weights of ellipsis ranges, as in RHEL8's copy, and the default weight
---     of every character a file does not list.
+--   * The tags cannot see it. localedata/locales/C exists upstream only
+--     from glibc 2.35. RHEL8 and RHEL9 predate that and ship one anyway, so
+--     for the RHEL8->RHEL9 pair it is in neither tag and no comparison of
+--     the tags can compare it. (RHEL10 is glibc 2.39 and has upstream's
+--     copy.) Given each machine's file or build, step 2 compares the two
+--     machines' own copies and settles their rules, not the order. Where a
+--     copy is not byte order by construction, localedef computes part of the
+--     order when the locale is built: the weights of ellipsis ranges, as in
+--     RHEL8's copy, and the default weight of every character a file does
+--     not list.
 --
 --   * PostgreSQL cannot warn either. Under the libc provider,
 --     get_collation_actual_version() returns NULL for "C", for "POSIX" and for

@@ -11,7 +11,7 @@ and the locale was reported unaffected. Everything here fails loudly instead,
 and blobs are read in a single `git cat-file --batch` stream.
 
 Also runnable directly; audit.sh and step 1 use fanin, sides, resolve,
-machines, typed-machines, latest, order and pair-slug, and provenance and
+machines, latest, order and pair-slug, and provenance and
 corpus are kept for a hand run:
   python3 glibc_locale_data.py fanin <tag> [changed_files.txt] [--as NAME]
   python3 glibc_locale_data.py provenance <tag> [<tag> ...]
@@ -42,10 +42,6 @@ corpus are kept for a hand run:
       out (whether it holds locales/, else the sources-not-included
       reason); writes to F, a line each, the side steps 1 and 2 read, its
       kind and its upstream tag, and prints which each side reads
-  python3 glibc_locale_data.py typed-machines <old_build_id> <new_build_id>
-      for audit.sh, given two --*-locales-dir: dies when the two typed
-      build ids are the other way round (typed_machines_order); prints
-      nothing
   python3 glibc_locale_data.py latest --to F <old> <new>
       for audit.sh, once: writes to F each side a line, latest-elN
       replaced by the newest build of RHEL N the mirror lists, and prints
@@ -87,11 +83,10 @@ def below_floor(count):
     """The floor, when `count` locale files are too few to be a glibc locale
     corpus; None when they are enough.
 
-    The one place that reads MIN_LOCALE_FILES. A tag side (side(), through
-    _require_corpus) and a machine's directory (corpus_problem, below) are
-    refused by the same number: two copies of it drift, and the node modes
-    used to take theirs from a --min-files whose default copied this
-    one."""
+    The one place that reads MIN_LOCALE_FILES. Every side that holds files
+    (side(), through _require_corpus: a tag, a build's commit or a
+    machine's commit) is refused by the same number: two copies of it
+    drift."""
     return MIN_LOCALE_FILES if count < MIN_LOCALE_FILES else None
 
 
@@ -137,43 +132,6 @@ def node_entries(root):
         else:
             names.append(entry)
     return names, skipped
-
-
-def corpus_problem(compared, expect_files=None, reference=None,
-                   floored=False, what='--locales-dir'):
-    """Why this corpus must not be reported on, or None if it is usable.
-
-    Pure -- counts in, a message or None out -- so the guard that decides
-    whether a whole result is publishable is testable without fabricating a
-    directory. Every branch exists because its failure mode reports ZERO
-    differences inside LC_COLLATE, which is indistinguishable from a clean run.
-
-    `reference` is an upstream file count, for a node compared against a tag.
-    `floored` applies the absolute minimum, glibc_locale_data.below_floor,
-    the one floor for every side (side() asks it of each machine's
-    directory, and step 8 of the two directories' common files): several
-    hundred files ship in glibc-locale-source, and a floor well below that
-    still catches a `docker cp` that landed three files, or a node without
-    the package at all. Two equally truncated directories agree perfectly,
-    and half of three is one.
-    """
-    if expect_files is not None and compared != expect_files:
-        return (f"compared {compared} file(s), expected {expect_files}. "
-                f"Refusing to report: a partial copy of the node's locales "
-                f"yields a clean-looking zero.")
-    if reference is not None and compared < reference // 2:
-        return (f"only {compared} of {reference} upstream file(s) are present "
-                f"in {what}. That is too few to be a real copy; a partial copy "
-                f"reports 0 differences inside LC_COLLATE, which is "
-                f"indistinguishable from a clean run.")
-    floor = below_floor(compared) if floored else None
-    if floor is not None:
-        return (f"only {compared} file(s) to compare in {what}, below the floor "
-                f"of {floor}. glibc-locale-source ships several hundred; this "
-                f"is a truncated copy or a node without the package. Refusing "
-                f"to report: too few files reports 0 differences inside "
-                f"LC_COLLATE, which is indistinguishable from a clean run.")
-    return None
 
 
 # Prepended to every git invocation. `git diff` obeys the user's config, and
@@ -252,45 +210,6 @@ DIFF_FLAGS = ['--text', '--no-textconv', '--no-ext-diff', '--no-color',
               '--inter-hunk-context=0', '--diff-algorithm=myers',
               '--indent-heuristic']
 
-# Does a line use an ellipsis range? A range like `<UAC00>`/`..`/`<UD7A3>` is
-# expanded algorithmically by localedef at build time, so the weights are NOT in
-# the locale source and a source diff cannot prove the locale's order is
-# unchanged.
-#
-# locale/programs/linereader.c accepts exactly five ellipsis tokens, having
-# already consumed one `.` before it compares the rest: `..`, `...`, `....`,
-# `..(2)..` and `....(2)....`. The count is always a literal 2, never an
-# arbitrary number. That list is worth keeping written down -- it is the part
-# that took reading glibc's tokeniser to learn.
-#
-# The pattern does not enumerate them, because every one is a run of two or more
-# dots and this only has to answer yes or no. Spelling out the five alternatives
-# also silently excluded anything longer: a run of five dots, which glibc reads
-# as `....` plus a stray `.`, matched no alternative and fell through the
-# dot-boundary guards as "no ellipsis here". Measured identical to the old
-# pattern across glibc 2.28, 2.34, 2.39 and 2.42 -- every dot run in the corpus
-# is length 2, so the alternatives were doing no work.
-#
-# It must NOT be anchored to the start of the line. The dominant form in glibc
-# is inline -- `collating-symbol <SAC00>..<SD7A3>` in iso14651_t1_common -- and
-# anchoring it missed every one of them.
-ELLIPSIS_RE = re.compile(r'(?<!\.)\.{2,}')
-
-# Locale files declare their comment character; every one in glibc uses `%`.
-# Prose in a comment ("2.28..2.34", "and so on ...") is not a range, so
-# comments are stripped before looking for one.
-_COMMENT_CHAR_RE = re.compile(r'^\s*comment_char\s+(\S)', re.M)
-
-# glibc's keyword for byte order (locale/programs/ld-collate.c, from 2.35;
-# RHEL9 backports it). This pattern only answers "does the file NAME the
-# keyword outside a comment", which is not "does the locale sort by bytes":
-# declares_byte_order answers that, and a file this matches and that does not
-# answer gets a style of its own. Matched as a whole token because the file
-# that declares it also DISCUSSES it in a comment. `<` and `>` are in the
-# guards because glibc's lexer reads `<name>` as a collating symbol and never
-# as this keyword.
-_CODEPOINT_RE = re.compile(
-    r'(?<![A-Za-z0-9_<])codepoint_collation(?![A-Za-z0-9_>])')
 
 # What localedef's line reader counts as space (isspace in the C locale).
 # Python's str.strip() also strips U+00A0 and other Unicode spaces, which
@@ -300,19 +219,6 @@ _SPACE = ' \t\n\r\f\v'
 # The two directives, in the one place declares_byte_order accepts them.
 _DIRECTIVE_RE = re.compile(r'(comment_char|escape_char)[ \t\r\f\v]+(\S)')
 
-# A physical line whose first word opens this category.
-_COLLATE_WORD_RE = re.compile(
-    r'^[ \t\r\f\v]*LC_COLLATE(?![A-Za-z0-9_])', re.M)
-
-# A character a word can hold on both sides of an escape.
-_WORD_CHAR = '[A-Za-z0-9_]'
-
-# A `copy` line and nothing else on it. No blank is needed before the
-# string: get_ident ends the word at a `"` (linereader.c:580@2.39, the same
-# at 2.28 and 2.34), so glibc reads `copy"x"` as a copy of x (backlog 13.17).
-_SOLE_COPY_RE = re.compile(r'copy[ \t\r\f\v]*"([^"]*)"')
-
-_COPY_RE = re.compile(r'^\s*copy\s*"([^"]+)"', re.M)
 
 # glibc's symbolic notation for a character. localedef decodes it wherever a
 # string is read (locale/programs/linereader.c, get_string), so
@@ -533,7 +439,7 @@ def warn(text, split_words=True):
     this repository has already paid for that: the suite's `flat()` exists
     because output wrapped at 78 columns made a negative assertion vacuous, and
     the wrapper's warnings block matches `^!!` followed by three-space
-    continuation lines. `diff_distro_locales.warn` is an alias for this.
+    continuation lines.
 
     `split_words=False` keeps a path or an option name whole: textwrap breaks
     at hyphens by default, and a temp directory's name printed as `pg-glibc-` /
@@ -547,59 +453,6 @@ def warn(text, split_words=True):
                         break_long_words=split_words))
 
 
-def report_missing_from_copy(copy_names, tag_names, tag, where, skipped=()):
-    """`!!` over the files `tag` has that a copy of a node's locales lacks.
-
-    `skipped` is node_entries' (entry, why) list. A tag file the copy holds
-    as a symlink or a directory is in the directory and was not read, which
-    is neither missing nor examined, so it is named apart: counting entries
-    would clear it (measured, th_TH as a symlink: 355 entries against the
-    tag's 355).
-
-    Returns every name it reported, sorted; prints nothing when there is none.
-    A copy that lost files in transit reported 0 differences inside
-    LC_COLLATE over what was left, and listed the rest as an ordinary finding
-    with no `!!`, so it reached the AUDIT SUMMARY in no form at all (backlog
-    1.15). Measured at 300 of glibc-2.34's 355 files: exit 0, "Nothing
-    differs", th_TH among the 55 lost. The measured nodes lack none of their
-    tag's files (el8 against 2.28, el9 against 2.34, el10 against 2.39), so on
-    a complete copy this prints nothing.
-
-    It concludes nothing about WHY a file is missing. A count the reader
-    asserts only proves the directory holds that many files, not that they
-    came from the node -- the conclusion a first attempt at this fix drew,
-    and a false negative of its own. It advises comparing names on the
-    machine rather than counts for the same reason. One text for steps 6
-    and 7 (and 9 and 10 until step 9.3), so the wrapper's summary, which
-    deduplicates identical blocks, prints it once.
-    """
-    why = dict(skipped)
-    unread = sorted((set(tag_names) & set(why)) - set(copy_names))
-    missing = sorted(set(tag_names) - set(copy_names) - set(unread))
-    said = []
-    if missing:
-        said.append(f"{len(missing)} file(s) that {tag} has under "
-                    f"{LOCALES_DIR}/ are missing from {where}: "
-                    f"{', '.join(missing)}.")
-    if unread:
-        said.append(f"{len(unread)} file(s) that {tag} has under "
-                    f"{LOCALES_DIR}/ are in {where} but were not read: "
-                    f"{', '.join(f'{n} ({why[n]})' for n in unread)}.")
-    if said:
-        said.append("The checks that read this directory skipped them, so "
-                    "they say nothing about those locales on this machine, "
-                    "nor about any locale that copies one of them.")
-    if missing:
-        said.append("This run cannot tell whether the machine does not ship "
-                    "them or the copy lost them. Check on the machine "
-                    "whether /usr/share/i18n/locales/ has them.")
-    if unread:
-        said.append("Copy those again as regular files.")
-    if said:
-        warn(' '.join(said), split_words=False)
-    return sorted(missing + unread)
-
-
 def require_full_history(repo, step, why):
     """Die unless git says this clone is not shallow; `why` says what the
     step could not tell on a shallow one. Only `true` and `false` are
@@ -607,7 +460,7 @@ def require_full_history(repo, step, why):
     `rev-parse` ECHOES an option it does not know and exits 0 -- which is
     not `true`, so the guard would be off with nothing said. "Could not
     ask" is its own case. Step 2 asks it when descends_from does not
-    answer yes (13.7 PR C), as steps 6 to 8 do (node_charmaps.reads_utf8)."""
+    answer yes (13.7 PR C, node_charmaps.reads_utf8)."""
     shallow = run_git(['rev-parse', '--is-shallow-repository'],
                       repo).stdout.strip()
     if shallow not in (b'true', b'false'):
@@ -891,8 +744,9 @@ def _order_by_git(repo, old, new, commits):
 def _order_by_build(lo, old, new):
     pair = f'the new build {label(new)} against the old build {label(old)}'
     # Equal words of equal versions are one build, a version that cannot be
-    # read included: step 8 knows a machine only by the build id typed for
-    # it, and a free-text id gives none (backlog 16.62). One side's version
+    # read included: a machine known only by its measurement (step 11) has
+    # the id it recorded, and a free-text id gives none (backlog 16.62). One
+    # side's version
     # missing is not that: nothing says the two are one.
     if old.build and old.build == new.build and old.version == new.version:
         return 'same', f'{pair}: the same words'
@@ -928,47 +782,6 @@ def _order_by_release(repo, lo, old, new):
     return 'undetermined', (f'{pair}: one release on both sides, or one that '
                             f'cannot be read, and nothing here places a build '
                             f'against a tag of its own release')
-
-
-def typed_machines_order(old_id, new_id, allow_reverse=False):
-    """order() of two machines known only by the build id typed for each
-    (--old-build-id and --new-build-id, given with --*-locales-dir): step 8
-    asks it, and audit.sh before step 1. Returns (status, unread), unread
-    the ids whose glibc version cannot be read from them.
-
-    Each version is read from its id: the words `rpm -q glibc` prints
-    (locale_order.build_parts), or one word glibc-<version>-<release>
-    named without the architecture (glibc-2.28-251.el8_10.40, as audit.sh's
-    usage types it; AlmaLinux 10's glibc-2.39-121.el10_2.alma.1), handed to
-    rpm's rule with the `.src` a build named from its SRPM carries
-    (build_sources.identity). An id is in unread when no glibc version
-    reads from it as numbers: free text, dnf's epoch form
-    (glibc-0:2.28-...), another package's line. Dies when the two are the
-    other way round,
-    unless `allow_reverse`: nothing else orders two directories, and given
-    reversed, step 8 read a locale the upgrade removes as one it adds
-    (backlog 16.61, measured: the fixtures' rhel9 and rhel8 directories
-    swapped, en_US@ampm out of the summary's Removed block, ckb_IQ and
-    mnw_MM in it, exit 0)."""
-    import locale_order as lo
-
-    def one(typed):
-        parts, word = lo.build_parts(typed), typed
-        if parts is None and re.fullmatch(r'glibc-\d[^\s-]*-\S+', typed or ''):
-            word = typed + '.src'
-            parts = lo.build_parts(word)
-        return Side('machine', None, None, word,
-                    'glibc ' + parts[0] if parts else None, None, None, (),
-                    None)
-    sides = [one(old_id), one(new_id)]
-    status, _ = order(None, *sides)
-    if status == 'reversed' and not allow_reverse:
-        die(f"--old-build-id {old_id} and --new-build-id {new_id} are the "
-            f"other way round: {old_id} is the newer build. Give the "
-            f"machine you upgrade FROM as --old-locales-dir and "
-            f"--old-build-id.")
-    return status, [t for t, s in zip((old_id, new_id), sides)
-                    if lo.version_tuple(s.version) is None]
 
 
 def pair_noun(old, new):
@@ -1061,14 +874,14 @@ _NOTHING_COMPARED_REST = (
     "builds are where such a change lives. With each machine's file "
     "(--old-node and --new-node), step 11 measures how each machine "
     "sorts, and steps 1 and 2 compare the two machines' own locale "
-    "sources and steps 6 to 8 read them, when the files hold them; "
+    "sources, when the files hold them; "
     "sql/c_utf8_probe.sql checks C.UTF-8 on each "
     "machine. C.UTF-8's order moved in glibc-2.28-93.el8 with the "
     "upstream tag unchanged. See docs/results.md.")
 
 
 def pair_check(repo, old, new, allow_reverse=False, commits=None):
-    """require_pair_order's work, and what it found: (status,
+    """The pair's order, and what it found: (status,
     nothing_compared's answer). The steps that skip a read, or refuse a
     clean verdict, when nothing was compared take the second; the
     direction is the first."""
@@ -1119,26 +932,6 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
              f"a deleted locale as a harmless addition. "
              f"Confirm which build is the older one.")
     return status, nothing
-
-
-def require_pair_order(repo, old, new, allow_reverse=False, commits=None):
-    """Refuse a reversed pair -- or say out loud that one was allowed.
-
-    Deciding what the pair IS (order) and deciding what to do about it are
-    different mistakes, so they are different functions with a test on each.
-
-    Silent only on a forward pair that compares something. It used to be
-    silent on 'same' as well, on the
-    grounds that audit.sh prints a block of its own for that case -- which
-    left a hand-run step (step 5, deleted in step 9.3) ending in a clean
-    sentence, rc 0, no `!!`: a clean verdict over a comparison that never
-    happened. The notice lives here now, in one copy for every entry point,
-    so under the wrapper every step that takes the pair prints it into its
-    own log -- steps 1 and 2 -- and the summary's warnings block repeats it
-    once. It is printed for two commits
-    of one source tree too (nothing_compared), whatever their order.
-    """
-    return pair_check(repo, old, new, allow_reverse, commits)[0]
 
 
 def verify_tag(repo, tag):
@@ -1259,8 +1052,8 @@ TEXTS_WITH_0XFF = set()
 def decoded(raw):
     """A locale or charmap file's bytes as the readers here take them:
     UTF-8 with errors='replace', and the text registered in TEXTS_WITH_0XFF
-    when the bytes held 0xFF. read_blobs_at decodes every blob this way, and
-    steps 6 to 8 a machine's files, so that collation_keys reads both
+    when the bytes held 0xFF. read_blobs_at decodes every blob this way, a
+    machine commit's included, so that collation_keys reads them all
     alike."""
     text = raw.decode('utf-8', 'replace')
     if b'\xff' in raw:
@@ -1388,12 +1181,10 @@ def list_tree_ids(repo, tag, extra):
 # One side of an audited pair. kind is 'tag' (a glibc ref of the clone:
 # ref, paths and ids), 'build' (a build named from its SRPM, made a commit
 # of the clone: ref is that commit, build Built.build, version 'glibc X.Y',
-# paths and ids as a tag's) or 'machine' (what a machine gave: its locale
-# directory in root, the names in paths and what was skipped; its glibc in
-# build, the words `rpm -q glibc` printed, and version, a measurement's
-# 'glibc X.Y'). A machine known only by its measurement has no root and no
-# paths. ref on a machine side is the upstream tag its files are read
-# against, or None. prov is a build's provenance (build_sources: what was
+# paths and ids as a tag's) or 'machine' (a machine known only by its
+# measurement, as step 11 knows it: its glibc in build, the words `rpm -q
+# glibc` printed, and version, the measurement's 'glibc X.Y'; no root, no
+# paths, no ref). prov is a build's provenance (build_sources: what was
 # fetched, checked and applied, its tag, its patches to strcoll's code),
 # None on a tag or a machine; no default, so a constructor cannot forget it.
 # A 'build' Side is also made from a machine's own file (machine_side: its
@@ -1404,13 +1195,12 @@ Side = collections.namedtuple(
     'Side', 'kind ref root build version paths ids skipped prov')
 
 
-def side(repo, ref=None, machine=None, extra=(), build=None, version=None,
-         what=None, named=None, make=False):
+def side(repo, ref=None, extra=(), build=None, version=None, named=None,
+         make=False):
     """The one function that builds a side of the pair, and applies the
     floor of locale files to it.
 
-    Where the side comes from, in this order: a machine's directory
-    (`machine`; `what` names it in a refusal), a build named as `rpm -q
+    Where the side comes from, in this order: a build named as `rpm -q
     glibc` names it without the architecture (`named`,
     glibc-2.34-283.el9_8: build_side), a machine known by its measurement
     only (`build` and `version`, no directory, so nothing to count), else
@@ -1430,16 +1220,7 @@ def side(repo, ref=None, machine=None, extra=(), build=None, version=None,
     git 2.54). A line that is not `<mode> <type> <id>` and a tab dies,
     because a path read without its id would compare as missing.
     """
-    if machine is not None:
-        names, skipped = node_entries(machine)
-        problem = corpus_problem(len(names), floored=True,
-                                 what=what or machine)
-        if problem:
-            die(problem)
-        return Side('machine', ref, machine, build, version, names, None,
-                    skipped, None)
-    if named is None and machine is None and build is None and \
-            is_build_name(ref):
+    if named is None and build is None and is_build_name(ref):
         # A build given where a tag goes (a step's argument): read as a
         # build, never asked of git by its name.
         named, ref = ref, None
@@ -1563,7 +1344,7 @@ def machine_build(words):
 def machine_sides(given, words, no_sources=(None, None)):
     """What steps 1 and 2 read for each side when audit.sh is given each
     machine's file: [(name, kind, tag)], kind 'build' or 'tag', tag the
-    upstream tag of that side, which steps 6, 7 and 11 read; and the lines
+    upstream tag of that side, which step 11 reads; and the lines
     to print, `!!` blocks included.
 
     `given` are the two sides as typed, `words` what `rpm -q glibc` printed
@@ -2146,46 +1927,6 @@ def name_commits(names):
             setattr(sys, attr, _Named(stream, _NAMES))
 
 
-def collate_block(text):
-    """The body of the LC_COLLATE...END LC_COLLATE block, or None.
-
-    Built on collate_bounds, which is line-based, rather than on a regex
-    requiring a newline before LC_COLLATE. That regex returned None for a file
-    opening with LC_COLLATE at byte 0, and glibc 2.23 and earlier write the
-    three master templates -- iso14651_t1, iso14651_t1_common and
-    iso14651_t1_pinyin, the highest fan-in files in the corpus -- exactly that
-    way. copy_graph_from_texts skips whatever this returns None for, so the
-    graph lost its three roots and the inheritance closure collapsed under it.
-    That was the whole of the glibc 2.24 version floor: on glibc-2.12..2.17
-    step 3 reported 11 affected locales where there are 280.
-
-    collate_text worked around the same regex. Fixing the function means the
-    next caller inherits the fix instead of having to know about the trap.
-
-    Returns the body WITHOUT the LC_COLLATE and END LC_COLLATE lines;
-    collate_text returns the block with them, and callers depend on that.
-
-    Unlike the regex this accepts an unterminated block, running it to the end
-    of the file, because collate_bounds does. That is the conservative
-    direction -- a locale stays in the copy graph rather than silently leaving
-    it -- and it makes the two agree. Measured over glibc-2.12, 2.17, 2.28,
-    2.34 and 2.39: the regex and this differ on exactly the three templates at
-    the first two tags, and on nothing at the last three.
-    """
-    bounds = collate_bounds(text)
-    if bounds is None:
-        return None
-    start, end = bounds
-    lines = text.split('\n')
-    head = lines[start - 1][len('LC_COLLATE'):]
-    # collate_bounds' end is the END LC_COLLATE line when there is one, and the
-    # file's last line of content when the block is unterminated. Drop it only
-    # in the first case, or an unterminated block loses its last line.
-    last = end - 1 if lines[end - 1].startswith('END LC_COLLATE') else end
-    body = lines[start:last]
-    return head + ('\n' + '\n'.join(body) if body else '')
-
-
 def collate_bounds(text):
     """1-based (start_line, end_line) of the LC_COLLATE block, or None.
 
@@ -2203,38 +1944,6 @@ def collate_bounds(text):
     return (start, len(lines)) if start is not None else None
 
 
-def collate_text(text):
-    """The LC_COLLATE block as text, its header and footer lines included.
-
-    Sliced from collate_bounds' line numbers.
-
-    Lived in diff_distro_locales.py until three callers needed it.
-    """
-    bounds = collate_bounds(text)
-    if bounds is None:
-        return None
-    start, end = bounds
-    return '\n'.join(text.split('\n')[start - 1:end])
-
-
-def ellipsis_hits(block, comment_char='%'):
-    """Lines of an LC_COLLATE block that use an algorithmic ellipsis range.
-
-    Returns the original lines, stripped, so the caller can show what it found.
-    """
-    hits = []
-    for line in block.split('\n'):
-        if ELLIPSIS_RE.search(line.split(comment_char)[0]):
-            hits.append(line.strip())
-    return hits
-
-
-def comment_char(text):
-    """The locale file's comment character, `%` unless it says otherwise."""
-    m = _COMMENT_CHAR_RE.search(text)
-    return m.group(1) if m else '%'
-
-
 def decode_symbolic(name):
     """`<U0069><U0073><U006F>` -> `iso`, and anything else unchanged.
 
@@ -2244,20 +1953,6 @@ def decode_symbolic(name):
     copies nothing reachable. Two files in the corpus do this.
     """
     return _UCHAR_RE.sub(lambda m: chr(int(m.group(1), 16)), name)
-
-
-def copy_targets(text):
-    """Every `copy "..."` target inside LC_COLLATE, in order.
-
-    All of them, not just the first: om_ET copies both am_ET and om_KE, and
-    taking only the first hides any change to the second. Symbolic spellings
-    are decoded, because localedef decodes them and the graph is a claim about
-    what localedef will build.
-    """
-    block = collate_block(text)
-    if block is None:
-        return []
-    return [decode_symbolic(t) for t in _COPY_RE.findall(block)]
 
 
 # Where get_ident (linereader.c, glibc-2.39) ends a word, besides EOF.
@@ -2389,8 +2084,8 @@ def reading_chars(text):
 def reading_chars_once():
     """For the length of the block, reading_chars answers each text once.
 
-    One run of steps 2, 6, 7 or 8 asks it of the same texts several times
-    (13.7 PR D). Each step's main wraps its run in this, and the reader is
+    One run of step 2 asks it of the same texts several times (13.7 PR D).
+    The step's main wraps its run in this, and the reader is
     restored on the way out, so nothing is kept past the run: a test that calls two
     steps in one process gets two fresh readings.
     """
@@ -2407,24 +2102,6 @@ def reading_chars_once():
         yield
     finally:
         reading_chars = real
-
-
-def reading_changed(old_text, new_text):
-    """Are the two texts read with different comment or escape characters?
-
-    A side the reader cannot settle counts as changed, because "could not
-    tell" must not clear a locale.
-    """
-    old, new = reading_chars(old_text), reading_chars(new_text)
-    return old is None or new is None or old != new
-
-
-def describe_reading(text, where):
-    """`comment_char % and escape_char / at <where>`, for a report line."""
-    chars = reading_chars(text)
-    if chars is None:
-        return f"characters this tool cannot settle at {where}"
-    return f"comment_char {chars[0]} and escape_char {chars[1]} at {where}"
 
 
 # The glibc commit from which lr_getc no longer reads 0x1A, or 0xFF through
@@ -2650,310 +2327,6 @@ def lc_collate_unread(text, early):
         return ("a 0x1A or 0xFF byte above the end of LC_COLLATE, which "
                 "glibc before 2.36 reads as the end of the file")
     return None
-
-
-def _escape_builds_a_word(lines, cc, ec):
-    """Can the escape character build a word out of pieces, outside a comment?
-
-    glibc's reader keeps a word going across it: inside a word the character
-    after the escape is taken as it is (get_ident, linereader.c:580-589@2.39),
-    and a line ending in the escape is joined to the next one with only that
-    last escape removed (lr_next :162-171, lr_getc linereader.h:125). So
-    `LC_COLL/ATE`, `LC_COL/` then `LATE`, `LC_COL/` then `/LATE`, or
-    `LC_COLL//` then `ATE` all open an LC_COLLATE section that a search for
-    the word cannot see, and a second section is read in the same run.
-
-    Lines are joined here the way lr_next joins them, and the join is refused
-    when it glues a word character to a word character, or when the joined
-    line holds the escape between two of them. Refused rather than reassembled:
-    no file that declares the keyword does either at any tag from 2.35 to
-    2.42 or on the RHEL8, RHEL9 and RHEL10 fixtures. A line opening with the
-    comment character is skipped whole by glibc, continued or not
-    (linereader.c:222-229), and so is skipped here when it opens a line.
-    """
-    word = re.compile(_WORD_CHAR)
-    joined = re.compile(_WORD_CHAR + re.escape(ec) + _WORD_CHAR)
-    cur = None
-    for line in lines:
-        if cur is None and line.strip(_SPACE).startswith(cc):
-            continue
-        if cur and line and word.fullmatch(cur[-1]) and word.match(line):
-            return True
-        cur = line if cur is None else cur + line
-        if line.endswith(ec):
-            cur = cur[:-len(ec)]
-            continue
-        if joined.search(cur):
-            return True
-        cur = None
-    return bool(cur) and joined.search(cur) is not None
-
-
-def _collate_body(text):
-    """(comment char, body lines) of an LC_COLLATE localedef reads with
-    certainty, or None.
-
-    Certain means: the characters are known (_glibc_chars); the file has one
-    line opening LC_COLLATE, at column 0, with nothing else on it, and no
-    word built with the escape character (_escape_builds_a_word) that could
-    open another, because a second one would be read too (locfile.c:179-180
-    hands every LC_COLLATE section to collate_read); the block ends at a bare
-    `END LC_COLLATE`; and no line from the header to that END ends in the
-    escape character, which joins it to the next line (linereader.c:162-171):
-    the header would swallow the first line of the block, a `copy` line the
-    line after it (ld-collate.c:2661@2.39, lr_ignore_rest).
-    """
-    lines = text.split('\n')
-    chars = reading_chars(text)
-    if chars is None or len(_COLLATE_WORD_RE.findall(text)) != 1:
-        return None
-    cc, ec = chars
-    if _escape_builds_a_word(lines, cc, ec):
-        return None
-    bounds = collate_bounds(text)
-    if bounds is None:
-        return None
-    start, end = bounds
-    if (lines[start - 1].strip(_SPACE) != 'LC_COLLATE'
-            or lines[end - 1].strip(_SPACE) != 'END LC_COLLATE'):
-        return None
-    if any(line.endswith(ec) for line in lines[start - 1:end]):
-        return None
-    return cc, lines[start:end - 1]
-
-
-def _content(text):
-    """The lines of the LC_COLLATE block that are not blank and not a
-    comment, stripped, or None when _collate_body cannot read it.
-
-    None too when this module's own ellipsis reader sees a range in the
-    block. That reader takes `%` as the comment character when a file
-    declares none, and glibc takes `#` (backlog 13.8), so a `#` comment
-    holding `..` is a range to one and a comment to the other. Where they
-    disagree the range wins: a locale is never both listed by this
-    module's ellipsis reader and called byte order beside it (step 8 reads
-    through both).
-
-    byte_order_locales asks this several times of each file, through
-    declares_byte_order, classify_collation_style and _sole_copy_target, so
-    for the length of that one call each text is read once and every caller
-    gets its own copy. Nothing is kept past the call: a helper patched
-    between two calls is never answered from before the patch, and a kept
-    answer here is the one that clears a locale.
-    """
-    memo = _CONTENT_MEMO
-    if memo is None:
-        content = _content_of(text)
-    else:
-        if text not in memo:
-            memo[text] = _content_of(text)
-        content = memo[text]
-    return None if content is None else list(content)
-
-
-_CONTENT_MEMO = None
-
-
-def _content_of(text):
-    frame = _collate_body(text)
-    if frame is None:
-        return None
-    if ellipsis_hits(collate_text(text), comment_char(text)):
-        return None
-    cc, body = frame
-    words = [line.strip(_SPACE) for line in body]
-    return tuple(w for w in words if w and not w.startswith(cc))
-
-
-def declares_byte_order(text):
-    """Does glibc build this locale in byte order from its own LC_COLLATE?
-
-    Only when `codepoint_collation` is the whole of the block, comments and
-    blank lines aside. The keyword sets a flag (ld-collate.c:2691-2692@2.39),
-    but the number of sort rules is one global for the whole localedef run
-    (:273), set by the first `order_start` or `reorder-sections-after` read in
-    it (:613-619, :3197-3202, :3678), and collate_output writes that global
-    before it looks at the flag (:2120-2123). Measured (glibc study, E5):
-    `copy "iso14651_t1"` plus the keyword compiles on RHEL9 and RHEL10 with no
-    message into tables whose strcoll returns garbage and crashes; on the same
-    line as the copy, inside an `ifdef`, glued to `%`, after a continued line
-    or as the argument of `define` the keyword does nothing (E6). Anything but
-    the keyword alone is therefore not byte order here, and the conservative
-    answer for a shape not read with certainty is False: the locale stays
-    listed.
-
-    The other categories of the file do not reach this. A file read for
-    LC_TIME or LC_CTYPE reads its LC_COLLATE with ignore_content
-    (locfile.c:53, :179-180), and `order_start` is skipped there
-    (ld-collate.c:3113-3117).
-
-    Where the build does not know the keyword (upstream before 2.35, RHEL8)
-    the keyword alone does not compile at all: "too many errors; giving up"
-    (ld-collate.c:1852@2.28), measured on glibc-2.28-251.el8_10.40. No
-    collation is built, so nothing can be sorted wrongly by it; PostgreSQL
-    refuses a collation whose locale the machine lacks ("could not create
-    locale", pg_locale.c:1445@REL_14_24, pg_locale_libc.c:831@REL_18_6).
-    """
-    return _content(text) == ['codepoint_collation']
-
-
-def _sole_copy_target(text):
-    """The locale this LC_COLLATE copies, when that copy is the whole block,
-    or None.
-
-    None too unless classify_collation_style also reads the file as nothing
-    but a copy. It strips comments with `%` when a file declares no comment
-    character, and glibc with `#` (backlog 13.8), so a `#` comment naming the
-    keyword made a C both 'codepoint-not-alone' and a copy of a byte-order
-    locale in one status. Every reader here has to agree before a copy
-    clears anything.
-    """
-    if classify_collation_style(text) != 'copy-only':
-        return None
-    content = _content(text)
-    if content is None or len(content) != 1:
-        return None
-    m = _SOLE_COPY_RE.fullmatch(content[0])
-    if m is None:
-        return None
-    target = decode_symbolic(m.group(1))
-    return target if re.fullmatch(r'[A-Za-z0-9_.@+-]+', target) else None
-
-
-def byte_order_locales(texts):
-    """({names that declare byte order}, {name: the locale it copies}).
-
-    The second part is backlog 6.9: a locale whose LC_COLLATE is a `copy` and
-    nothing else shares the copied locale's data (ld-collate.c:1518-1521@2.39,
-    first-statement copy), so copying one that declares byte order, directly
-    or through more such copies, reads no sort rule either. Measured on
-    glibc-2.34-275.el9_8 and glibc-2.39-128.el10_2: `copy "C"`, a copy of that
-    copy, and a copy of a file holding the keyword alone all compile
-    byte-identical to the installed C.UTF-8. A cycle or a target this corpus
-    lacks is not byte order: localedef refuses both (exit 5 and exit 4).
-    """
-    global _CONTENT_MEMO
-    outer = _CONTENT_MEMO
-    if outer is None:
-        _CONTENT_MEMO = {}
-    try:
-        return _byte_order_locales(texts)
-    finally:
-        if outer is None:
-            _CONTENT_MEMO = None
-
-
-def _byte_order_locales(texts):
-    declared = {name for name, text in texts.items()
-                if declares_byte_order(text)}
-    copies = {}
-    for name, text in texts.items():
-        target = _sole_copy_target(text)
-        if target is not None:
-            copies[name] = target
-    by_copy = {}
-    for name, target in copies.items():
-        seen, cur = {name}, target
-        while cur in copies and cur not in seen:
-            seen.add(cur)
-            cur = copies[cur]
-        if cur in declared:
-            by_copy[name] = target
-    return declared, by_copy
-
-
-def classify_collation_style(text):
-    """How does this locale's LC_COLLATE define its order? One of:
-
-      'none'      -- no LC_COLLATE block; no sort order of its own
-      'codepoint' -- `codepoint_collation` is the whole block
-                     (declares_byte_order). Byte order by construction, and
-                     nothing localedef does to ranges can move it. Upstream's
-                     C is this from glibc 2.35 on, and RHEL9's and RHEL10's.
-      'ellipsis'  -- uses ellipsis ranges, whose weights localedef computes at
-                     build time, so a data diff can never clear it. RHEL8's
-                     own C is this -- which is why C.UTF-8's order
-                     moved from RHEL8 to RHEL9 from a file no tag diff can see.
-      'codepoint-not-alone'
-                  -- names `codepoint_collation`, but declares_byte_order
-                     could not read it as the keyword alone: either glibc
-                     gives no byte order (a copied template or a sort rule
-                     beside it, the keyword in a branch not taken, ...) or
-                     this code cannot tell with certainty. Not cleared
-                     either way.
-      'copy-only' -- nothing but `copy`; its order is whatever it inherits
-      'explicit'  -- the weights are spelled out in this file
-
-    Precedence: 'ellipsis' outranks 'codepoint-not-alone', because both are
-    not cleared and the range is the reason the warnings already name; and
-    both outrank 'copy-only', because a copy cannot undo what this file adds.
-
-    Comments are stripped and the keyword is matched as a whole token.
-    glibc-2.39:localedata/locales/C names `codepoint_collation` in prose ABOVE
-    the declaration, so a substring search reads that comment as the keyword.
-    """
-    block = collate_text(text)
-    if block is None:
-        return 'none'
-    if declares_byte_order(text):
-        return 'codepoint'
-    cc = comment_char(text)
-    body = [line.split(cc)[0] for line in block.split('\n')
-            if not line.startswith(('LC_COLLATE', 'END LC_COLLATE'))]
-    if any(ELLIPSIS_RE.search(line) for line in body):
-        return 'ellipsis'
-    if any(_CODEPOINT_RE.search(line) for line in body):
-        return 'codepoint-not-alone'
-    content = [line.strip() for line in body if line.strip()]
-    if content and all(line.startswith('copy') for line in content):
-        return 'copy-only'
-    return 'explicit'
-
-
-def copy_graph_from_texts(texts):
-    """{name: [copy targets]} for every entry of `texts` defining LC_COLLATE.
-
-    Pure, so the graph can be built from a directory of locale sources
-    (steps 6 to 8) with one implementation. Keys are used
-    verbatim: pass the names the caller wants to see, not paths.
-
-    Locales with no `copy` map to an empty list, so the graph doubles as the set
-    of names that define collation in this corpus.
-    """
-    graph = {}
-    for name, text in texts.items():
-        if collate_block(text) is None:
-            continue
-        graph[name] = copy_targets(text)
-    return graph
-
-
-def inherited_from(graph, roots):
-    """{locale: [roots it inherits from]} for every locale reaching `roots`.
-
-    Walks all parents, not a single chain, and guards against cycles. Reports
-    EVERY root reached, not the first one a depth-first walk happens to find:
-    the traversal order is an artefact of `stack.pop()`, and attributing a
-    locale to an arbitrary one of several roots makes the "reaches X"
-    explanation untrue even when the affected set is right.
-    """
-    result = {}
-    for name in graph:
-        if name in roots:
-            continue
-        seen, stack, hits = set(), list(graph[name]), set()
-        while stack:
-            cur = stack.pop()
-            if cur in seen:
-                continue
-            seen.add(cur)
-            if cur in roots:
-                hits.add(cur)
-                continue
-            stack.extend(graph.get(cur, ()))
-        if hits:
-            result[name] = sorted(hits)
-    return result
 
 
 _CODESET_RE = re.compile(r'\.([^.@]+)(?=@|$)')
@@ -3429,16 +2802,6 @@ def _main(argv):
                 fh.write(f"{name}\t{kind}\t{tag}\n")
         for ln in lines:
             print(ln, flush=True)
-        return 0
-    if argv and argv[0] == 'typed-machines':
-        # audit.sh, given two --*-locales-dir, before step 1: dies when the
-        # two typed build ids are the other way round (typed_machines_order).
-        # Prints nothing: what step 8 says of their order is in its own log,
-        # which the warnings block repeats.
-        if len(argv) != 3:
-            die("usage: glibc_locale_data.py typed-machines <old_build_id> "
-                "<new_build_id>")
-        typed_machines_order(argv[1], argv[2])
         return 0
     if argv and argv[0] == 'latest':
         # audit.sh, once for the whole run: each latest-elN replaced by the

@@ -20,9 +20,8 @@ module answers from those runs and from nothing else (backlog 15.2):
     finish, and why. Such a locale is never reported as clear: the steps
     list it, with `!!`.
 
-Steps 1 and 2 read this. Steps 6 to 8, and the files step 2's
-check of character sets and transliterations (collation_keys) reads, still
-read with their own readers.
+Steps 1 and 2 read this. The files step 2's check of character sets and
+transliterations (collation_keys) reads are still read with its own reader.
 """
 import collections
 import difflib
@@ -140,19 +139,6 @@ class Tree(object):
         return cls(tag, files, build or build_at(repo, tag), g.decoded,
                    cache_dir)
 
-    @classmethod
-    def at_dir(cls, root, names, repo, tag, build_id):
-        """The files `names` of directory `root`, read for glibc at `tag`
-        with what the RHEL major `build_id` names adds. A name the
-        directory lacks is one localedef cannot open there."""
-        files = {}
-        for n in names:
-            with open(os.path.join(root, n), 'rb') as fh:
-                files[_key(n)] = fh.read()
-        return cls(f'{build_id} ({root})', files,
-                   build_at(repo, tag, build_id),
-                   lambda b: b.decode('utf-8', 'surrogateescape'))
-
     # -- one run ------------------------------------------------------------
 
     def _collate_sections(self, name):
@@ -192,9 +178,9 @@ class Tree(object):
 
     def roots(self, name, roots):
         """The members of `roots` that building `name` reaches through
-        `copy`, not counting those reached only through another member:
-        glibc_locale_data.inherited_from's rule, walked over the copies
-        run(name) read rather than over each file read alone."""
+        `copy`, not counting those reached only through another member,
+        walked over the copies run(name) read rather than over each file
+        read alone."""
         if name in roots:
             return []
         edges = {}
@@ -307,8 +293,8 @@ class Tree(object):
         return declared, by_copy
 
     def style(self, name):
-        """glibc_locale_data.classify_collation_style's answer, from what
-        localedef read: 'none', 'codepoint', 'ellipsis',
+        """The shape of the sort rules `name` builds, from what localedef
+        read: 'none', 'codepoint', 'ellipsis',
         'codepoint-not-alone', 'copy-only' or 'explicit'; or 'unread' when
         the run stopped or could not be settled, since what was not read
         has no shape to report (a `copy` that stops localedef hides every

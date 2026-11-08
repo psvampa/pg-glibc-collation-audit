@@ -25,8 +25,9 @@ and a step that settles one has to move it here.
 
 Below the oracle: what a Build keeps between runs and scripts/reader_cache.py
 keeps on disk give exactly what the reader computes without them (backlog
-15.2), and run() agrees with the line readers steps 6 to 8 still use on
-the LC_COLLATE bounds and copies of every locale file of the five tags,
+15.2), and run() agrees with a plain line reading (collate_bounds and
+_copy_targets, below) on the LC_COLLATE bounds and copies of every locale
+file of the five tags,
 which the cache makes cheap after the first time. Last, glibc_tree: the
 shapes those line readers got wrong, through steps 1 to 4, what step 2
 asks of each file (file_facts) and how it is kept, and its answers on the
@@ -1239,10 +1240,27 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
         self.assertIsNone(rc.char_map('../x', self.dir))
 
 
+# The `copy` lines of a file's LC_COLLATE block by their spelling: the line
+# reading of the copy graph steps 6 to 8 used until step 9.4b deleted them,
+# kept here as a yardstick for run() on files whose copies it spells plainly
+# (every locale file of the five tags). Symbolic names are decoded, as
+# localedef decodes them.
+_COPY_LINE = re.compile(r'^\s*copy\s*"([^"]+)"', re.M)
+
+
+def _copy_targets(text):
+    bounds = g.collate_bounds(text)
+    if bounds is None:
+        return []
+    start, end = bounds
+    body = '\n'.join(text.split('\n')[start:end - 1])
+    return [g.decode_symbolic(t) for t in _COPY_LINE.findall(body)]
+
+
 @needs_floor_pair
 class ReaderAgreesOnEveryRealFile(unittest.TestCase):
-    """run() against the line readers steps 6 to 8 use, over every locale
-    file of the five tags, each as the -i of a localedef run with its
+    """run() against a plain line reading (g.collate_bounds, _copy_targets),
+    over every locale file of the five tags, each as the -i of a localedef run with its
     copies found in the same tag: the same LC_COLLATE bounds and the same
     copies, no fatal run, and nothing unsettled but the known grammar
     (backlog 15.1 measured this outside the suite, 9.4 minutes on the Mac;
@@ -1288,8 +1306,8 @@ class ReaderAgreesOnEveryRealFile(unittest.TestCase):
                 cps += [n for n, _ in s[6]]
             cps = [c.decode('utf-8', 'replace') if c is not None else None
                    for c in cps]
-            if cps != g.copy_targets(text):
-                bad.append((name, 'copies', cps, g.copy_targets(text)))
+            if cps != _copy_targets(text):
+                bad.append((name, 'copies', cps, _copy_targets(text)))
         self.assertEqual([], bad)
         self.assertEqual(self.UNSETTLED.get(tag, {}), unsettled)
 
@@ -1356,20 +1374,6 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
                 self.assertEqual(['iso14651_t1'],
                                  self.tree.roots(name, {'iso14651_t1'}))
 
-    def test_the_old_readers_really_got_these_wrong(self):
-        """Control: each shape is one the line readers missed, so the test
-        above cannot pass by testing what they already got right."""
-        for name in ('zz_SP', 'zz_SW', 'zz_SS'):
-            with self.subTest(name):
-                text = _SHAPES[name].decode('ascii')
-                self.assertNotEqual(['iso14651_t1'], g.copy_targets(text))
-        self.assertIsNone(g.collate_block(_SHAPES['zz_IN'].decode('ascii')))
-        # 13.8 is the other direction: `%` taken for the comment made the
-        # `#` comment a range. Over-reporting, but not what glibc reads.
-        for n in ('zz_HC', 'zz_PC'):
-            text = _SHAPES[n].decode('ascii')
-            self.assertTrue(g.ellipsis_hits(g.collate_text(text),
-                                            g.comment_char(text)), n)
 
     def test_a_range_is_what_localedef_reads_as_one(self):
         self.assertEqual([], self.tree.ranges('zz_HC'))
@@ -3557,103 +3561,6 @@ class AcrossTheTwoReaders(unittest.TestCase):
             self.ask('r', files=other)
         self.assertIn('not the ones listed', err.getvalue())
 
-
-@needs_floor_pair
-class TreeAgreesWithTheOldReadersOnTheTags(unittest.TestCase):
-    """On the five tags, glibc_tree gives steps 1, 3 and 4 the answers the
-    line readers gave them, except where those read differently from
-    localedef, and those exceptions are named here: at 2.12 and 2.17 the
-    ranges in iso14651_t1_common are inside `#` comments (backlog 13.8), and
-    17 runs meet reorder-sections-after, which the reader does not settle.
-    Anything else that moves is a difference nobody
-    measured.
-
-    Step 2's view (glibc_tree.file_facts, backlog 15.2 B3) is held to the
-    line readers' collate_bounds and reading_chars the same way: on these
-    tags they agree on every file whose run is settled."""
-
-    KNOWN = {
-        FLOOR_OLD: {'only_old_ranges': {'iso14651_t1_common'},
-                    'lost_roots': {'iso14651_t1_pinyin', 'zh_CN'},
-                    'unresolved': 17},
-        FLOOR_NEW: {'only_old_ranges': {'iso14651_t1_common'},
-                    'lost_roots': {'iso14651_t1_pinyin', 'zh_CN'},
-                    'unresolved': 17},
-    }
-
-    def test_each_tag(self):
-        for tag in (FLOOR_OLD, FLOOR_NEW, OLD, MID, NEW):
-            with self.subTest(tag):
-                self.check(tag)
-
-    def check(self, tag):
-        import glibc_tree
-        known = self.KNOWN.get(tag, {})
-        tree = glibc_tree.Tree.at_tag(GLIBC_CLONE, tag)
-        _, data = _tag_files(tag)
-        texts = {n.decode('utf-8'): g.decoded(b) for n, b in data.items()}
-        self.assertEqual(sorted(texts), tree.names)
-        self.assertEqual(
-            {n for n, t in texts.items() if g.collate_block(t) is not None},
-            {n for n in tree.names if tree.defines(n)})
-        # What scan_ellipsis answered, from the pieces steps 6 to 8 still
-        # use (it was deleted with the last caller, backlog 15.2 B3).
-        old_ranges = {}
-        for n, t in texts.items():
-            block = g.collate_text(t)
-            hits = (g.ellipsis_hits(block, g.comment_char(t))
-                    if block is not None else [])
-            if hits:
-                old_ranges[n] = hits
-        new_ranges = {n: [t for _, t in tree.ranges(n)] for n in tree.names
-                      if tree.ranges(n)}
-        self.assertEqual(known.get('only_old_ranges', set()),
-                         set(old_ranges) - set(new_ranges))
-        self.assertEqual(set(), set(new_ranges) - set(old_ranges))
-        for n in new_ranges:
-            self.assertEqual(old_ranges[n], new_ranges[n], n)
-        graph = g.copy_graph_from_texts(texts)
-        old_in = g.inherited_from(graph, set(old_ranges))
-        new_in = {n: tree.roots(n, set(new_ranges)) for n in tree.names}
-        new_in = {n: r for n, r in new_in.items() if r}
-        self.assertEqual(known.get('lost_roots', set()),
-                         {n for n in old_in if old_in[n] != new_in.get(n)})
-        self.assertEqual(set(), set(new_in) - set(old_in))
-        self.assertEqual(g.byte_order_locales(texts), tree.byte_order())
-        self.assertEqual(known.get('unresolved', 0), len(tree.unresolved()))
-        self.assertEqual({}, tree.missing())
-        for name in graph:
-            if name not in tree.unresolved():
-                self.assertEqual(graph[name], tree.copies(name), name)
-            reach = set()
-            stack = list(graph[name])
-            while stack:
-                cur = stack.pop()
-                if cur not in reach and cur != name:
-                    reach.add(cur)
-                    stack.extend(graph.get(cur, ()))
-            if name not in tree.unresolved():
-                self.assertEqual(reach, tree.reach(name), name)
-        paths, ids = g.list_tree_ids(GLIBC_CLONE, tag, [])
-        facts = glibc_tree.file_facts(GLIBC_CLONE, tag, paths, ids,
-                                      tree.build)
-        self.assertEqual(set(texts), set(facts))
-        for name, text in texts.items():
-            got = facts[name]
-            self.assertEqual(tree.unresolved().get(name), got.unresolved)
-            if got.unresolved:
-                continue
-            ranges = sorted({(s, e) for s, e, _, _, _ in got.collate})
-            self.assertEqual(g.collate_bounds(text),
-                             ranges[0] if ranges else None, name)
-            self.assertLessEqual(len(ranges), 1, name)
-            # Every run that reads the file reads it with one pair: no file
-            # at these tags hides a directive from a run that copies it.
-            self.assertLessEqual(len(got.reading()), 1, name)
-            chars = g.reading_chars(text)
-            if got.collate and chars is not None:
-                self.assertEqual([tuple(ord(c) for c in chars)],
-                                 got.reading(), name)
 
 def _tag_files(tag):
     """(names in order, {name: bytes}) for localedata/locales at `tag`."""
