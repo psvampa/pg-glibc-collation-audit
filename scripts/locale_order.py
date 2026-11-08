@@ -9680,8 +9680,180 @@ def sql_paths(prefix, encoding):
     return f'{prefix}.{encoding}.sql'
 
 
+# Step 11's verdict for each locale, as its report states it: the states
+# verdicts_by_name gives, and the one that names no locale by name (a
+# locale its table or its bytes leave unchanged for any text is counted).
+VERDICTS = ('changed', 'firm', 'far', 'unmeasured', 'refused', 'only old',
+            'only new')
+
+
+def verdicts_by_name(changed, same, firm, unmeasured, refused, only_old,
+                     only_new, table_found):
+    """{locale: [state, words]}: compare()'s verdict for every locale of
+    either machine, taken from the lists its report is printed from, for
+    the cross with step 2's rules (rules_beside), which reads it and never
+    works it out again. words are step 11's own: what its report says of
+    the locale."""
+    only = {x for kind, d in table_found if kind == 'tables only'
+            for x in d['names']}
+    out = {}
+    for name in changed:
+        out[name] = ['changed', 'the order changes']
+    for name in same:
+        if name in firm:
+            out[name] = ['firm', 'built into glibc' if name in ('C', 'POSIX')
+                         else 'unchanged by its compiled sort table, which '
+                         'step 11 could not measure' if name in only
+                         else 'unchanged by its compiled sort table']
+        else:
+            out[name] = ['far', 'unchanged only as far as step 11 measured '
+                         'it']
+    for name in unmeasured:
+        out[name] = ['unmeasured', 'step 11 could not measure it']
+    for name, sides in refused.items():
+        where = ('both machines' if len(sides) == 2
+                 else f'the {next(iter(sides))} machine')
+        out[name] = ['refused', f'refused by glibc on {where}']
+    for name in only_old:
+        out[name] = ['only old', 'not on the new machine']
+    for name in only_new:
+        out[name] = ['only new', 'only on the new machine']
+    return out
+
+
+RULES_LEAD = 'Each locale step 11 names, beside its rules (step 2):'
+
+
+def rules_beside(verdicts_path, rules_path, out_path):
+    """Write the lines that set step 2's rules beside step 11's verdict,
+    one per group of locales with the same line, to OUT_PATH, for
+    audit.sh to print under step 11 and in its summary. Reads the two
+    files the steps wrote (compare's --verdicts-to, step 2's
+    step2_rules_by_name), refuses two that are not of the same two
+    measurements, and works neither answer out again.
+
+    Not compared is asked first: where step 2 compared nothing, or not the
+    two machines' own sources (the tags, when a file holds no sources or
+    its build is not of RHEL 8, 9 or 10; or no machine file at all), one
+    line says what step 2 compared and no locale gets a line. Otherwise
+    each locale step 11 names gets step 11's words first; 'the order
+    changes' only where step 11 says so, and under any other verdict the
+    rules are what is known beside it, which does not show the order. A
+    locale step 11 leaves unchanged for any text (firm) is only counted
+    there, and gets a line only when its rules differ; one only on the new
+    machine gets none (no database made on the old machine uses it). No
+    line names a cause: what no step compares is said once, in the run's
+    warnings."""
+    files = []
+    for path, step in ((verdicts_path, 11), (rules_path, 2)):
+        try:
+            with open(path, encoding='utf-8') as f:
+                data = json.load(f)
+        except (OSError, ValueError) as e:
+            die(f'cannot read step {step}\'s answers in {path}: {e}')
+        if not isinstance(data, dict) or data.get('step') != step:
+            die(f'{path} is not what step {step} writes')
+        files.append(data)
+    verdicts, rules = files
+    lines = []
+    if rules['nothing']:
+        lines.append((5, 'Rules (step 2) are not set beside each locale: '
+                      f'step 2 compared nothing, {rules["what"]}.'))
+    elif not rules['machines']:
+        a, b = rules['names']
+        lines.append((5, 'Rules (step 2) are not set beside each locale: '
+                      f'step 2 compared the {rules["compared"]} {a} and {b}, '
+                      'not the machines\' own locale sources.'))
+    else:
+        if rules['measurements'] != verdicts['measurements']:
+            die(f'{rules_path} and {verdicts_path} are of different '
+                'measurements, so step 2\'s rules cannot be set beside step '
+                '11\'s verdict')
+        said = {}
+        for name, (state, words) in sorted(verdicts['locales'].items()):
+            if state not in VERDICTS:
+                die(f'step 11 gave {name} the verdict {state!r}, which is '
+                    f'none of {", ".join(VERDICTS)}')
+            got = rules['locales'].get(name)
+            if got is None:
+                die(f'step 2 gave no rules for {name}, which step 11 '
+                    'measured')
+            key, rule, why, charmap = got
+            line = rule_line(state, words, rule, why, charmap)
+            if line:
+                said.setdefault(line, []).append(name)
+        missing = set(rules['locales']) - set(verdicts['locales'])
+        if missing:
+            die(f'step 2 gave rules for {", ".join(sorted(missing))}, which '
+                'step 11 did not measure')
+        if said:
+            lines.append((5, RULES_LEAD))
+            for line, names in sorted(said.items(),
+                                      key=lambda kv: sorted(kv[1])):
+                lines.append((7, ', '.join(map(shown, names)) + ': ' + line))
+        else:
+            lines.append((5, RULES_LEAD + ' none, no locale is named.'))
+        if rules['charmaps']:
+            lines.append((5, 'Character sets (step 2): not compared, '
+                          f'{rules["charmaps"]}.'))
+    text = []
+    for indent, line in lines:
+        text += wrapped(line, indent, indent + 2)
+    try:
+        with open(out_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(text) + '\n')
+    except OSError as e:
+        die(f'cannot write {out_path}: {e}')
+    return 0
+
+
+def rule_line(state, words, rule, why, charmap):
+    """The line rules_beside gives one locale, or None: step 11's verdict
+    STATE (its WORDS) and step 2's RULE (WHY, CHARMAP). Not compared is
+    asked first; each state of either side is named, with no catch-all."""
+    if rule == 'not compared':
+        known = f'rules (step 2): not compared, {why}'
+    elif rule == 'differs':
+        known = 'rules (step 2): differ'
+    elif rule == 'same':
+        known = 'rules (step 2): the same'
+    elif rule == 'built in':
+        known = f'rules (step 2): none, {why}'
+    else:
+        die(f'step 2 gave the rules state {rule!r}, which is none of not '
+            'compared, differs, same, built in')
+    if charmap == 'changed':
+        tail = '; a character its file\'s rules name changed in a charmap'
+    elif charmap == 'not compared':
+        tail = '; its character set (step 2): not compared'
+    elif charmap == '-':
+        tail = ''
+    else:
+        die(f'step 2 gave the charmap state {charmap!r}, which is none of '
+            'changed, not compared, -')
+    if state == 'changed':
+        if rule == 'differs':
+            return 'the order changes, and so do its rules (step 2)' + tail
+        if rule == 'same':
+            return 'the order changes; its rules (step 2) do not' + tail
+        return f'the order changes; {known}' + tail
+    if state == 'firm':
+        if rule == 'differs':
+            return f'{words}; its rules (step 2) differ' + tail
+        return None
+    if state == 'only new':
+        # No database made on the old machine can use it, and step 11
+        # says nothing of its order.
+        return None
+    if state in ('far', 'unmeasured', 'refused', 'only old'):
+        return f'{words}; {known}{tail}; this does not show the order'
+    die(f'step 11 gave the verdict {state!r}, which is none of '
+        f'{", ".join(VERDICTS)}')
+
+
 def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
-            charmaps=(('why', ALONE), ('why', ALONE)), sql_to=None):
+            charmaps=(('why', ALONE), ('why', ALONE)), sql_to=None,
+            verdicts_to=None):
     if sql_to:
         # A file an earlier run wrote under this prefix, for an encoding
         # this run writes none for, would read as this run's.
@@ -9694,15 +9866,17 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
                     os.remove(os.path.join(folder, entry))
         except OSError as e:
             die(f'cannot write {sql_to}.*.sql: {e}')
-    if characters_to:
-        # An earlier run's list under this name would read as this run's
+    for path in (characters_to, verdicts_to):
+        # An earlier run's file under this name would read as this run's
         # answer if this one is refused or gives up: it goes first.
+        if not path:
+            continue
         try:
-            os.remove(characters_to)
+            os.remove(path)
         except FileNotFoundError:
             pass
         except OSError as e:
-            die(f'cannot write {characters_to}: {e}')
+            die(f'cannot write {path}: {e}')
     digest = corpus_digest()
     old, old_raw = load(old_path, digest)
     new, new_raw = load(new_path, digest)
@@ -9873,6 +10047,11 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     # Every unchanged locale its table did not decide: step 11 measured a
     # sample, and the partly and in-part ones are among these.
     far = len([name for name in same if name not in firm])
+    # Each locale's verdict as the report states it, for the cross with
+    # step 2's rules (rules_beside): from the lists above, nothing worked
+    # out again.
+    verdicts = verdicts_by_name(changed, same, firm, unmeasured, refused,
+                                only_old, only_new, table_found)
     in_part = f' ({far} of them only as far as measured)' if far else ''
     in_refused = f'{len(refused)} refused by glibc, ' if refused else ''
     totals = (f'Of the {len(o)} locale(s) on the old machine: {len(changed)} '
@@ -10069,6 +10248,20 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
                 f.write(text)
         except OSError as e:
             give_up(f'cannot write {final}: {e}')
+    if verdicts_to:
+        # Each measurement's sha256, as step 2 records it for a machine's
+        # file (glibc_locale_data.machine_side), so that rules_beside never
+        # sets one run's rules beside another run's verdicts.
+        try:
+            with open(verdicts_to, 'w', encoding='utf-8') as f:
+                json.dump({'step': 11, 'measurements': [
+                    hashlib.sha256(raw).hexdigest()
+                    for raw in (old_raw, new_raw)], 'locales': verdicts},
+                    f, sort_keys=True)
+                f.write('\n')
+        except OSError as e:
+            give_up(f'cannot write {verdicts_to}: {e}')
+        written.append(verdicts_to)
     if summary_to:
         # Written before the report, so that a summary that cannot be written
         # stops the run with no report on the screen, like damage does.
@@ -10118,6 +10311,16 @@ def main():
                     help='with --compare: also write every character, other '
                          'string and pair found, by locale, to FILE '
                          '(tab-separated)')
+    ap.add_argument('--verdicts-to', metavar='FILE',
+                    help='with --compare: also write each locale\'s verdict '
+                         'to FILE (JSON), which --rules-beside sets beside '
+                         'step 2\'s rules')
+    ap.add_argument('--rules-beside', nargs=3,
+                    metavar=('VERDICTS', 'RULES', 'OUT'),
+                    help='write to OUT the lines that set step 2\'s rules '
+                         '(its step2_rules_by_name file) beside the '
+                         'verdicts --verdicts-to wrote, as audit.sh prints '
+                         'them')
     ap.add_argument('--sql-to', metavar='PREFIX',
                     help='with --compare: also write PREFIX.<ENCODING>.sql, '
                          'one SQL file per database encoding with the tests '
@@ -10153,19 +10356,23 @@ def main():
         charmaps.append(('dir', folder) if folder is not None
                         else ('why', why if why is not None else ALONE))
     if (args.tags or args.summary_to or args.characters_to or args.sql_to
-            or given) and not args.compare:
-        die('--tags, --summary-to, --characters-to, --sql-to and the '
-            'charmaps options go with --compare')
-    if sum(map(bool, (args.extract, args.compare, args.unpack))) > 1:
-        die('--extract, --compare and --unpack are three different runs; '
-            'give one')
+            or args.verdicts_to or given) and not args.compare:
+        die('--tags, --summary-to, --characters-to, --sql-to, --verdicts-to '
+            'and the charmaps options go with --compare')
+    if sum(map(bool, (args.extract, args.compare, args.unpack,
+                      args.rules_beside))) > 1:
+        die('--extract, --compare, --unpack and --rules-beside are four '
+            'different runs; give one')
+    if args.rules_beside:
+        return rules_beside(*args.rules_beside)
     if args.unpack:
         return unpack(*args.unpack)
     if args.compare:
         return compare(*args.compare, tags=args.tags,
                        summary_to=args.summary_to,
                        characters_to=args.characters_to,
-                       charmaps=tuple(charmaps), sql_to=args.sql_to)
+                       charmaps=tuple(charmaps), sql_to=args.sql_to,
+                       verdicts_to=args.verdicts_to)
     if args.jobs is not None and args.jobs < 1:
         die('--jobs must be at least 1')
     jobs = args.jobs or default_jobs()

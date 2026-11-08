@@ -49,7 +49,7 @@ from _harness import (GLIBC_CLONE, Step2Report, materialise_tag,
                       swap_alpha_beta, tag_charmaps)
 from test_locale_order import (CHANGED_8_TO_9, RHEL8, RHEL9, RHEL10,
                                changes_in, parse_characters, parse_summary,
-                               trimmed)
+                               parse_rules_beside, trimmed)
 
 
 # The classes that run audit.sh on the recorded measurements read them cut
@@ -160,7 +160,8 @@ USAGE = [
     '       and download nothing. A file without the sources, or naming a',
     '       build that is not of RHEL 8, 9 or 10, makes both sides read',
     '       their tags when that side was given as its tag, and the run',
-    '       says so; given as the build itself, the run is refused.',
+    '       says so; given as the build itself, the run is refused. Each',
+    "       locale step 11 names is set beside step 2's rules for it.",
 ]
 
 REINDEX = '-- Reindex: sort order changes, confirm then REINDEX'
@@ -207,6 +208,39 @@ def step_text(out, n):
         if lines[j].startswith(('== STEP ', '== AUDIT SUMMARY ')):
             return '\n'.join(lines[at[0]:j])
     raise AssertionError(f'no banner ends step {n}:\n{out}')
+
+
+def rules_beside(out):
+    """What the run printed of step 2's rules beside step 11's verdict, as
+    parse_rules_beside reads it: the lines under the Measured order footer
+    of the summary, which step 11's section must end with, the same (one
+    file, printed twice). Refuses a footer that is not there once."""
+    summary = out.split('AUDIT SUMMARY', 1)[-1]
+    lines = summary.splitlines()
+    at = [i for i, line in enumerate(lines) if line == MEASURED_FOOTER]
+    if len(at) != 1:
+        raise AssertionError(f'{MEASURED_FOOTER!r} is a whole line '
+                             f'{len(at)} time(s):\n{summary}')
+    body = []
+    for line in lines[at[0] + 1:]:
+        if not line.strip() or line.startswith('--'):
+            break
+        body.append(line)
+    text = '\n'.join(body) + '\n'
+    step11 = out.split('\n== STEP 11  MEASURED ORDER  ', 1)[1].split(
+        '\n== AUDIT SUMMARY', 1)[0]
+    step11 = step11.rsplit('\n' + '=' * 64, 1)[0]
+    if not body or not (step11.rstrip('\n') + '\n').endswith('\n' + text):
+        raise AssertionError(f'step 11 does not end with the lines the '
+                             f'summary prints:\n{text}\n---\n{step11[-2000:]}')
+    return parse_rules_beside(text)
+
+
+# The one line rules_beside prints where step 2 compared the two tags, not
+# the machines' own locale sources.
+RULES_OF_THE_TAGS = (f"Rules (step 2) are not set beside each locale: step "
+                     f"2 compared the tags {OLD} and {MID}, not the "
+                     f"machines' own locale sources.")
 
 
 def measured_block(out):
@@ -973,6 +1007,11 @@ class WrapperMeasuredOrder(_CodeNotComparedAndNoDeletedStep,
         self.assertEqual(summary['not_on_new'],
                          ['en_US.utf8@ampm', 'en_US@ampm'])
 
+    def test_no_rules_beside_each_locale_from_the_tags(self):
+        """With the measurements alone step 2 compares the tags, and no
+        locale gets their rules as if they were the machines'."""
+        self.assertEqual(rules_beside(self.out), ({}, [RULES_OF_THE_TAGS]))
+
     def test_the_charmaps_are_said_not_checked(self):
         """The --*-order options carry no charmaps: the summary says once
         that neither machine's were checked, and why."""
@@ -1319,6 +1358,33 @@ class WrapperNodeFiles(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
         summary = parse_summary(measured_block(self.out))
         self.assertEqual(set(summary['changes']), CHANGED_8_TO_9)
         self.assertNotIn('NOT RUN', self.out.split('AUDIT SUMMARY')[1])
+
+    def test_each_locale_beside_its_rules(self):
+        """Step 2's rules beside step 11's verdict, every locale step 11
+        names: or_IN's order changes with its rules, ko_KR.utf8's does
+        not, and the two RHEL9 removes get step 11's words first. The
+        stand-in sources are the tags', which hold no C: C.utf8's rules are
+        not compared, never "do not"."""
+        got, alone = rules_beside(self.out)
+        self.assertEqual(alone, [lom.RULES_LEAD])
+        by_name = {name: line for names, line in got.items()
+                   for name in names}
+        self.assertEqual(set(by_name), CHANGED_8_TO_9
+                         | {'en_US@ampm', 'en_US.utf8@ampm'})
+        changes = 'the order changes, and so do its rules (step 2)'
+        for name in ('or_IN', 'or_IN.utf8', 'sv_SE', 'swedish'):
+            self.assertEqual(by_name[name], changes)
+        self.assertEqual(by_name['ko_KR.utf8'],
+                         'the order changes; its rules (step 2) do not')
+        self.assertEqual(by_name['C.utf8'],
+                         'the order changes; rules (step 2): not compared, '
+                         'no locale file of that name')
+        # No stand-in holds the file en_US@ampm, Red Hat's (the recorded
+        # 8 -> 9 example names it "no file en_US@ampm on the new side").
+        self.assertEqual(
+            got[('en_US.utf8@ampm', 'en_US@ampm')],
+            'not on the new machine; rules (step 2): not compared, no locale '
+            'file of that name; this does not show the order')
 
     def test_no_step_sends_the_reader_to_the_package_changelog(self):
         """Steps 6 to 10, since deleted, suggested `rpm -q --changelog glibc | grep -i
@@ -1774,6 +1840,11 @@ class WrapperNodeFilesWithoutSources(unittest.TestCase):
         self.assertEqual(self.rc, 0, self.out[-2000:])
         self.assertEqual(banners(self.out), {'MEASURED ORDER': 1})
 
+    def test_no_rules_beside_each_locale_from_the_tags(self):
+        """Both sides read their tags because of the files: no locale gets
+        the tags' rules as if they were the machines'."""
+        self.assertEqual(rules_beside(self.out), ({}, [RULES_OF_THE_TAGS]))
+
 
     def test_removed_points_to_the_reason(self):
         """Both sides read their tags because of the files: Removed says
@@ -1822,6 +1893,11 @@ class WrapperOneTagFromTheFiles(unittest.TestCase):
             f"sql/c_utf8_probe.sql and the confirmation on real nodes "
             f"(docs/confirming-on-a-real-system.md).")
         self.assertIn(unread_side_text('old'), first_warning(summary))
+
+    def test_no_rules_beside_each_locale_of_one_commit(self):
+        self.assertEqual(rules_beside(self.out), ({}, [
+            'Rules (step 2) are not set beside each locale: step 2 compared '
+            'nothing, the two tags are one commit.']))
 
 
 @needs_clone
