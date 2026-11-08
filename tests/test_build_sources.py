@@ -3706,8 +3706,8 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
         tested that). The provenance no longer counts such patches: the
         count said strcoll and left localedef's patches out (16.129). The
         summary's warnings say that each build's patches to that code are
-        compared by no step; step 2's list, which reads only the rules,
-        stays clean."""
+        compared by no step; step 2, which reads only the rules, lists
+        nothing."""
         out = self.run_of('outside')
         compared = flat(compared_text(out))
         self.assertIn('change localedata/ or locale/, applied in the order '

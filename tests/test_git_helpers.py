@@ -1293,9 +1293,9 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
             capture_output=True, text=True).stdout.strip()
 
     def step2(self, old, new, fix=None):
-        """(exit, Step2Report, the list step 2 wrote). `fix` moves
-        LR_GETC_FIX to one of this history's commits, so that a tag can
-        hold it."""
+        """The Step2Report, after asserting exit 0 and that its list equals
+        the list step 2 wrote. `fix` moves LR_GETC_FIX to one of this
+        history's commits, so that a tag can hold it."""
         out_dir = tempfile.mkdtemp(dir=self.tmp)
         code = ("import sys; sys.path.insert(0, %r)\n"
                 "import glibc_locale_data as g\n" % SCRIPTS_DIR)
