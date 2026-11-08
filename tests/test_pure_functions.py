@@ -3107,7 +3107,7 @@ class StepTwoRulesByMeasuredName(unittest.TestCase):
     def test_an_alias_carries_its_files_charmap(self):
         """swedish is a key of compare_rules (an alias) and is built from
         sv_SE: the character set check, which lists files, lists it through
-        sv_SE, as step 2's Reindex does (false-negative-reviewer, 9.4c)."""
+        sv_SE, as step 2's list does (false-negative-reviewer, 9.4c)."""
         got = self.answer(['swedish', 'sv_SE.utf8'], ['C'], keyed=['sv_SE'])
         self.assertEqual(got['swedish'], ['swedish', 'differs', '',
                                           'changed'])

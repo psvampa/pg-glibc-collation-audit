@@ -161,9 +161,9 @@ USAGE = [
     '       build that is not of RHEL 8, 9 or 10, makes both sides read',
     '       their tags when that side was given as its tag, and the run',
     '       says so; given as the build itself, the run is refused. When',
-    "       steps 1 and 2 read the machines' own sources, each locale of",
-    "       the old machine step 11 names is set beside step 2's rules for",
-    '       it; otherwise one line says what step 2 compared.',
+    "       step 2 compares the two machines' own locale sources, each",
+    "       locale of the old machine step 11 names is set beside step 2's",
+    '       rules for it; otherwise one line says what step 2 compared.',
 ]
 
 REINDEX = '-- Reindex: sort order changes, confirm then REINDEX'

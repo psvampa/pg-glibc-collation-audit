@@ -9723,8 +9723,9 @@ def verdicts_by_name(changed, same, firm, unmeasured, refused, only_old,
 
 RULES_LEAD = ('Each locale of the old machine step 11 names, beside its '
               'rules (step 2):')
-RULES_NONE = ('Step 11 names no locale of the old machine, so none is set '
-              'beside its rules (step 2).')
+RULES_NONE = ('No locale of the old machine gets a line beside its rules '
+              '(step 2): step 11 leaves each one unchanged for any text, '
+              'and none has rules that differ.')
 
 
 def rules_beside(verdicts_path, rules_path, out_path):

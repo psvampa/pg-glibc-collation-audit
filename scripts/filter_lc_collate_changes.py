@@ -428,7 +428,7 @@ def rules_by_name(sides, aliases, got, unread, keyed, unmapped):
     file of that name" (a locale an admin built with localedef -i under a
     name of their own). charmap is 'changed' where the character set
     check lists the file the name is built from (KEYED holds files; an
-    alias such as swedish is built from sv_SE, as step 2's Reindex adds
+    alias such as swedish is built from sv_SE, as step 2's list adds
     it), 'not compared' where it could not trace the name to its charmap
     (UNMAPPED), else '-'."""
     import node_charmaps as nc
@@ -942,6 +942,10 @@ def _main(opts):
             keyed, cm_why = check_charmaps(charmap_reads, repo, side_old,
                                            side_new, sup, already,
                                            step2_words(noun))
+        # Untested at this call site: on two machines' files the check's
+        # own two NOT RUN (the report's, no build in common) were reached by
+        # no file here; check_charmaps' test holds each reason, and the one
+        # machine_builds gives is asserted on a real run (test_wrapper).
         write_rules_by_name(
             slug, noun, (old_name, new_name), machine, (old_side, new_side),
             charmaps=cm_why if machine else None,

@@ -51,10 +51,10 @@
 # build. A file without the sources or the charmaps says why, and the run
 # repeats it where their checks would have answered. Only a node file carries
 # the charmaps, so only with these options does step 2 compare them and step
-# 11 check what it measured against them. When steps 1 and 2 read the
-# machines' own sources, each locale of the old machine step 11 names is
-# set beside step 2's rules for it; otherwise one line says what step 2
-# compared.
+# 11 check what it measured against them. When step 2 compares the two
+# machines' own locale sources, each locale of the old machine step 11
+# names is set beside step 2's rules for it; otherwise one line says what
+# step 2 compared.
 #
 # Example (the names are examples -- `ldd --version` on each node gives the
 # tag, `rpm -q glibc` the build):
@@ -100,9 +100,9 @@ usage() {
   echo "       build that is not of RHEL 8, 9 or 10, makes both sides read" >&2
   echo "       their tags when that side was given as its tag, and the run" >&2
   echo "       says so; given as the build itself, the run is refused. When" >&2
-  echo "       steps 1 and 2 read the machines' own sources, each locale of" >&2
-  echo "       the old machine step 11 names is set beside step 2's rules for" >&2
-  echo "       it; otherwise one line says what step 2 compared." >&2
+  echo "       step 2 compares the two machines' own locale sources, each" >&2
+  echo "       locale of the old machine step 11 names is set beside step 2's" >&2
+  echo "       rules for it; otherwise one line says what step 2 compared." >&2
   exit 2
 }
 
