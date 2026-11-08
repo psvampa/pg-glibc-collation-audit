@@ -216,7 +216,7 @@ DIFF_FLAGS = ['--text', '--no-textconv', '--no-ext-diff', '--no-color',
 # glibc reads as part of a word.
 _SPACE = ' \t\n\r\f\v'
 
-# The two directives, in the one place declares_byte_order accepts them.
+# The two directives, in the one place _directive_words reads them.
 _DIRECTIVE_RE = re.compile(r'(comment_char|escape_char)[ \t\r\f\v]+(\S)')
 
 
@@ -2033,8 +2033,7 @@ def _glibc_chars(lines):
     line ending in the escape character in force when it is read is joined
     to the next line before its argument is (lr_next :162-171; locfile.c:126
     reads it with lr_token), so `escape_char \\` with `/` below it sets `/`.
-    Any of these shapes is None, which declares_byte_order reads as "not
-    byte order".
+    Any of these shapes is None: the characters are not known.
     """
     # A directive glibc reads that the line-by-line search below does not
     # see, or the other way round (_directive_words).
@@ -2572,8 +2571,7 @@ def step1_sides(here, old, new, allow_reverse=False):
 
 # How audit.sh tells step 1 what a reader of this run can do to have a
 # side read as a build (tag_sides_text): 'build' (name it), 'node' (the
-# locale folders or the measurements, which a build refuses: pass the
-# machines' files),
+# measurements, which a build refuses: pass the machines' files),
 # 'none' (a machine's file holds no locale sources or names a build that is
 # not of RHEL 8, 9 or 10, and its own `!!` says so). Unset, by hand:
 # 'build'.

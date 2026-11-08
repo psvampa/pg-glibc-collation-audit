@@ -157,7 +157,8 @@ ssh el9 sudo -n -u postgres python3 - --extract < scripts/locale_order.py > new.
   `python3 locale_order.py --extract > old.tar` there and bring the file back.
 - If the repository no longer has the sources of that exact build, dnf says
   "No match for argument" and changes nothing. A machine without the sources
-  still gives a file, and the summary says which checks did not run and why.
+  still gives a file; steps 1 and 2 then read the tags, and the run says so
+  and why.
 - The files are named for their role, old and new, not for their version, so
   two builds of the same release cannot overwrite each other.
 

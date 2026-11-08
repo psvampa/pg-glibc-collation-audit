@@ -119,9 +119,9 @@ Listed for Reindex (5): or_IN, sv_FI, sv_FI@euro, sv_SE, swedish
      Between the tags: none -- no locale file at glibc-2.28 is gone at glibc-2.34
 
 -- Measured order: NOT RUN
-     Pass --old-node and --new-node instead of every other --old-*/--new-*
-     option, or --old-order and --new-order, each written by
-     scripts/locale_order.py on that machine. Without them nothing above
+     Pass --old-node and --new-node, each machine's file, or --old-order
+     and --new-order, each written by scripts/locale_order.py on that
+     machine. Without them nothing above
      asked either machine's glibc how it sorts, and a locale whose files
      did not change can still sort differently. Nor did anything compare
      the decimals of money, check which C library PostgreSQL runs on

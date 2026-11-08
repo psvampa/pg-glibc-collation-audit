@@ -80,15 +80,17 @@ reach at all:
   the same glibc code on both. What it does not see, it prints beside its
   result.
 
-Leave the files out and the summary says `NOT RUN` for step 11, and `NOT
-CHECKED` for what the distro adds or drops. They are not omitted, because a
-section that vanishes reads like a section that found nothing.
+Leave the files and the measurements out and the summary says `NOT RUN`
+for step 11; given two tags, it also says `NOT CHECKED` for what the distro
+adds or drops. They are not omitted, because a section that vanishes reads
+like a section that found nothing.
 
 A file without the locale sources still holds the measurement and the build,
-because the extraction notes why the sources are missing and goes on. Step 11
-runs, and steps 1 and 2 read the tags, as above: the warning that says so
-carries the file's reason, such as `/usr/share/i18n/locales is empty`. A file
-without the charmaps is read the same way. Step 2 says `NOT RUN` for the
+because the extraction notes why the sources are missing and goes on. Steps
+1 and 2 then read the tags, or the run is refused when that side was given as
+the build itself, as above; the warning that says so carries the file's
+reason, such as `/usr/share/i18n/locales is empty`. A file without the
+charmaps is still read for its sources: step 2 says `NOT RUN` for the
 character sets, and step 11 says it did not check the strings it measured
 against them, each with the reason.
 

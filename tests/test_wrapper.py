@@ -40,8 +40,7 @@ TAGS_NOTICE = (TAGS_FACT + " If the machines run RHEL 8, 9 or 10, name each "
                "side as its build instead, as rpm -q glibc prints it on the "
                "machine without the architecture (glibc-2.34-283.el9_8), or as "
                "latest-el8, latest-el9 or latest-el10.")
-# The same with the locale folders or the measurements, which a build
-# refuses.
+# The same with the measurements, which a build refuses.
 TAGS_NOTICE_FOLDERS = (TAGS_FACT + " Pass each machine's file with --old-node "
                        "and --new-node instead of every other --old-*/--new-* "
                        "option: steps 1 and 2 then read each machine's own "
@@ -172,9 +171,9 @@ REINDEX_POINTER = [
 MEASURED = "-- Measured order: each machine's own glibc"
 MEASURED_NOT_RUN = '-- Measured order: NOT RUN'
 MEASURED_NOT_RUN_BODY = [
-    'Pass --old-node and --new-node instead of every other --old-*/--new-*',
-    'option, or --old-order and --new-order, each written by',
-    'scripts/locale_order.py on that machine. Without them nothing above',
+    "Pass --old-node and --new-node, each machine's file, or --old-order",
+    'and --new-order, each written by scripts/locale_order.py on that',
+    'machine. Without them nothing above',
     "asked either machine's glibc how it sorts, and a locale whose files",
     'did not change can still sort differently. Nor did anything compare',
     'the decimals of money, check which C library PostgreSQL runs on',
@@ -906,9 +905,9 @@ class WrapperTagsRemoveALocale(unittest.TestCase):
 
 
 @needs_clone
-class WrapperStaleNodeList(unittest.TestCase):
-    """Its own output directory: this run deliberately leaves the state the
-    other node-to-node tests read in a different one."""
+class WrapperStaleStepLog(unittest.TestCase):
+    """Its own output directory, so the stale log it plants reaches no other
+    test."""
 
 
     def test_a_previous_runs_step_log_does_not_supply_this_runs_warnings(self):
@@ -1788,6 +1787,41 @@ class WrapperNodeFilesWithoutSources(unittest.TestCase):
         for side in ('old', 'new'):
             self.assertIn(unread_side_text(side), first)
         self.assertNotIn('Pass --', flat(self.summary))
+
+
+@needs_clone
+class WrapperOneTagFromTheFiles(unittest.TestCase):
+    """Two machines of one RHEL 9 build whose files hold no sources, given
+    as its tag on both sides: both sides read that one tag, so nothing is
+    compared. The one-commit block must not send the reader to the files
+    already given; it points to the warning that says why they were not
+    read as the build (false-negative-reviewer, 9.4b)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-one-tag-')
+        old = node_file('one-old.tar', cut_few(RHEL9), MID, sources=False)
+        new = node_file('one-new.tar', cut_to_pair(RHEL9), MID, sources=False)
+        cls.rc, cls.out = run_wrapper(MID, MID, '--old-node', old,
+                                      '--new-node', new, out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_the_one_commit_block_points_to_why(self):
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        summary = self.out.split('AUDIT SUMMARY', 1)[1]
+        self.assertEqual(
+            section_body(summary, '-- One commit, compared with itself'),
+            f"{MID} -> {MID}. Everything above that compares the two tags "
+            f"and says 'nothing changed' means 'nothing was compared'. For "
+            f"an intra-major upgrade, what can still show a change is each "
+            f"machine's file read as its build (why these were not: the "
+            f"first warning below), the measured order (step 11), "
+            f"sql/c_utf8_probe.sql and the confirmation on real nodes "
+            f"(docs/confirming-on-a-real-system.md).")
+        self.assertIn(unread_side_text('old'), first_warning(summary))
 
 
 @needs_clone

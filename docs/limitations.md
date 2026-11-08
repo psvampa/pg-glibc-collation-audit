@@ -159,8 +159,8 @@ machine, where only a simulation was run, a machine on cgroup v1, and ARM.
 
 ## `LC_CTYPE` is compared by step 11 alone
 
-The other six sections are ways a sort-order change can be missed. This one
-is a whole category only one step compares.
+The other sections are ways a sort-order change can be missed. This one is
+a whole category only one step compares.
 
 `LC_COLLATE` decides sort order. `LC_CTYPE` decides `upper()`, `lower()`,
 `initcap()`, character classification and pattern matching, and under the

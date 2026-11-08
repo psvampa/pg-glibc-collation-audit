@@ -755,9 +755,9 @@ if [ -n "$OLD_ORDER" ]; then
 else
   echo "-- Measured order: NOT RUN"
   if [ "$NOUN" = tags ]; then
-    echo "     Pass --old-node and --new-node instead of every other --old-*/--new-*"
-    echo "     option, or --old-order and --new-order, each written by"
-    echo "     scripts/locale_order.py on that machine. Without them nothing above"
+    echo "     Pass --old-node and --new-node, each machine's file, or --old-order"
+    echo "     and --new-order, each written by scripts/locale_order.py on that"
+    echo "     machine. Without them nothing above"
   else
     echo "     Pass --old-node and --new-node, each machine's file written by"
     echo "     scripts/locale_order.py --extract. Without them nothing above"
@@ -859,8 +859,14 @@ elif [ "$SAME_TAG" = "1" ]; then
     echo "     above that compares the two tags"
   fi
   echo "     and says 'nothing changed' means 'nothing was compared'. For an"
-  echo "     intra-major upgrade, what can still show a change is each machine's"
-  echo "     own file (--old-node, --new-node), the measured order (step 11),"
+  if [ -n "$OLD_NODE" ]; then
+    echo "     intra-major upgrade, what can still show a change is each machine's"
+    echo "     file read as its build (why these were not: the first warning"
+    echo "     below), the measured order (step 11),"
+  else
+    echo "     intra-major upgrade, what can still show a change is each machine's"
+    echo "     own file (--old-node, --new-node), the measured order (step 11),"
+  fi
   echo "     sql/c_utf8_probe.sql and the confirmation on real nodes"
   echo "     (docs/confirming-on-a-real-system.md)."
 fi
