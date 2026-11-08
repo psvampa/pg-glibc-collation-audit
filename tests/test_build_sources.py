@@ -3309,7 +3309,7 @@ class ResolvesTheLatestBuild(unittest.TestCase):
                                                    'latest-el9'))
 
     def test_a_step_reading_its_sides_refuses_it(self):
-        """step_sides, the entry of steps 2 to 5."""
+        """step_sides, the entry of step 2."""
         self.refused_by_hand(lambda: g.step_sides(self.tmp, 'latest-el9',
                                                   'glibc-2.39'))
 
