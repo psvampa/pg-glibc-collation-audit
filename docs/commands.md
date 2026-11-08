@@ -81,8 +81,8 @@ reach at all:
   result.
 
 Leave the files and the measurements out and the summary says `NOT RUN`
-for step 11; given two tags, it also says `NOT CHECKED` for what the distro
-adds or drops. They are not omitted, because a section that vanishes reads
+for step 11; given a tag on either side, it also says `NOT CHECKED` for what
+that side's distro adds or drops. They are not omitted, because a section that vanishes reads
 like a section that found nothing.
 
 A file without the locale sources still holds the measurement and the build,

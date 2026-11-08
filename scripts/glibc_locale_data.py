@@ -216,7 +216,7 @@ DIFF_FLAGS = ['--text', '--no-textconv', '--no-ext-diff', '--no-color',
 # glibc reads as part of a word.
 _SPACE = ' \t\n\r\f\v'
 
-# The two directives, in the one place _directive_words reads them.
+# The two directives, in the one place _glibc_chars reads them.
 _DIRECTIVE_RE = re.compile(r'(comment_char|escape_char)[ \t\r\f\v]+(\S)')
 
 
