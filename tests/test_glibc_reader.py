@@ -1,5 +1,5 @@
 """scripts/glibc_reader.py, a reader of glibc's locale sources that follows
-localedef, held to glibc itself. Steps 1 to 4 and 9/10 read through it
+localedef, held to glibc itself. Step 2 reads through it
 (scripts/glibc_tree.py).
 
 The tool's reading of glibc's files used to be copied by hand into several
@@ -1691,6 +1691,35 @@ class StepsReadWhatLocaledefReads(unittest.TestCase):
         self.assertEqual({'zz_X': 'both sides: localedef cannot open '
                                   'zz_nope'}, report.listed)
         self.assertEqual(['zz_Y'], sorted(report.differs))
+
+    def test_step_2_names_an_added_locale_it_could_not_read(self):
+        """A file only the new side has, which localedef cannot build there
+        (its LC_CTYPE copies a file the tree lacks): step 2 names it among
+        the files the old side lacks, and says in a `!!` of its own, which
+        the summary repeats, that its rules there are not known. Step 1's
+        fan-in said so until step 9.5 deleted it (false-negative-reviewer,
+        9.5); zz_Y, added and read, is the control."""
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-steps-a-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        x = _HEAD + (b'LC_CTYPE\ncopy "zz_nope"\nEND LC_CTYPE\n'
+                     b'LC_COLLATE\ncopy "iso14651_t1"\nEND LC_COLLATE\n')
+        y = _HEAD + b'LC_COLLATE\ncopy "iso14651_t1"\nEND LC_COLLATE\n'
+        _, old = _harness.glibc_commit(NEW, {}, tmp)
+        repo, new = _harness.glibc_commit(old, {'zz_X': x, 'zz_Y': y}, tmp)
+        out = self.step('filter_lc_collate_changes.py', old, new,
+                        '--repo', repo)
+        report = _harness.Step2Report(out)
+        self.assertEqual(['zz_X', 'zz_Y'], sorted(report.added))
+        self.assertEqual({}, report.listed)
+        flat = _harness.flat(out)
+        # Read alone, as the summary repeats it among its warnings: it names
+        # its two sides, never a list above it.
+        self.assertEqual(1, flat.count('!! Sort rules not known, of the '
+                                       'locale files '))
+        self.assertIn('!! Sort rules not known, of the locale files at %s '
+                      'and not at %s (1), for the reason on each line: zz_X: '
+                      'localedef cannot open zz_nope' % (new, old), flat)
+        self.assertNotIn('zz_Y: ', flat)
 
 
 # A directive in LC_CTYPE after a `copy` of a file without LC_CTYPE: the

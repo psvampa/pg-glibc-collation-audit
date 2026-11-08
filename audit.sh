@@ -96,7 +96,7 @@ usage() {
   echo "       --*-order options. Step 2 then reads each machine's own" >&2
   echo "       locale sources and charmaps, as the build its file names, in" >&2
   echo "       place of the tag (the side given is that build or its tag)," >&2
-  echo "       and download nothing. A file without the sources, or naming a" >&2
+  echo "       and downloads nothing. A file without the sources, or naming a" >&2
   echo "       build that is not of RHEL 8, 9 or 10, makes both sides read" >&2
   echo "       their tags when that side was given as its tag, and the run" >&2
   echo "       says so; given as the build itself, the run is refused. When" >&2
@@ -361,9 +361,9 @@ OLD_STEP1_LIST="$OUT_DIR/changed_locales.txt"
 # The node files, laid out above (locale_order.py --unpack checks each one
 # whole), are moved here under a name for the pair, like every other file
 # this run reads, and stand for the --*-order options: the measurement
-# always; the sources and the charmaps when the file holds them, which steps
-# 1 and 2 read through MACHINES_FILE (a file without the sources was decided
-# above, and NODE_NOTE says why).
+# always; the sources and the charmaps when the file holds them, which the
+# sides and step 2 read through MACHINES_FILE (a file without the sources
+# was decided above, and NODE_NOTE says why).
 #
 # The charmaps also go to step 11, which checks the strings it measured
 # against them; a file without them says why, and step 11 prints that reason
@@ -936,10 +936,10 @@ fi
 # delivered, and these are the cases where a clean result means nothing.
 #
 # Deduplicated by whole block. The sides and step 2 each print the order
-# check's
-# `!!` for a pair they cannot order; printing it twice trains the reader to
-# skip the section, which costs more than the repetition buys. Identical text
-# only -- two warnings that differ by one word are two warnings.
+# check's `!!` for a pair they cannot order; printing it twice trains the
+# reader to skip the section, which costs more than the repetition buys.
+# Identical text only -- two warnings that differ by one word are two
+# warnings.
 WARNINGS=$(awk '
   function flush() {
     if (cur != "") { if (!(cur in seen)) { seen[cur] = 1; printf "%s", cur } }

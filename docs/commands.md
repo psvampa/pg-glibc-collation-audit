@@ -6,8 +6,9 @@ sorts. The second and third measure, inside PostgreSQL, what the first leaves
 open.
 
 **Commands are numbered here; steps are what a run prints.** A run of command
-1 does its own work in steps numbered 1, 2 and 11: 1 and 2 always, and 11
-with a file from each machine. Those numbers are not these three.
+1 says what it compared, then does its own work in steps numbered 2 and 11:
+2 always, and 11 with a measurement from each machine. Those numbers are not
+these three.
 
 ## Command 1 — which locales the upgrade can affect
 

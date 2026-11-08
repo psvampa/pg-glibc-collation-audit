@@ -160,7 +160,7 @@ USAGE = [
     "       --*-order options. Step 2 then reads each machine's own",
     '       locale sources and charmaps, as the build its file names, in',
     '       place of the tag (the side given is that build or its tag),',
-    '       and download nothing. A file without the sources, or naming a',
+    '       and downloads nothing. A file without the sources, or naming a',
     '       build that is not of RHEL 8, 9 or 10, makes both sides read',
     '       their tags when that side was given as its tag, and the run',
     '       says so; given as the build itself, the run is refused. When',

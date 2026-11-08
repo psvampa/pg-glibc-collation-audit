@@ -84,7 +84,8 @@ with is in
 
 `iso14651_t1`'s CJK range (U+4E00..U+9FA5) is an
 ellipsis range, whose weights `localedef` computes. That code changed in this
-pair (Bug 22668), so the same rules cannot clear those locales either.
+pair (Bug 22668), so the same rules cannot clear the locales that copy it
+either.
 
 Empirically they are fine. The range boundary (`一 龤 龥 龦`) sorts identically
 under `en_US` and `zh_TW` on glibc 2.28 and 2.34.
