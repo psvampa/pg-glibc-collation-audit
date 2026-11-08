@@ -74,12 +74,6 @@ it from glibc 2.35. RHEL9 backports that file, RHEL10 is glibc 2.39 and has it
 upstream, and RHEL8 ships Red Hat's own ellipsis-based file. It is the whole
 reason `C.UTF-8` changed across RHEL8→RHEL9.
 
-**node-to-node comparison** — comparing two nodes' own locale sources against
-each other, with no upstream tag in the middle
-(`scripts/diff_node_locales.py`, step 8 of `audit.sh`). Distinct from the
-node-versus-tag check, which asks "is the audit reading what this node runs?";
-this asks "did what the two nodes run actually change?"
-
 **the file from each machine** (a *node file*) — the one file
 `scripts/locale_order.py --extract` writes on a machine, and `audit.sh` reads
 with `--old-node` and `--new-node`. What it holds is in

@@ -80,6 +80,13 @@ Not compared, no file at glibc-2.28 (2):
    that -- distros backport. Confirm with `locale -a` on the OLD machine,
    under the names above, before treating these as out of scope.
 
+!! glibc-2.28 and glibc-2.34 hold no localedata/locales/C, the file C.UTF-8 is
+   built from, and a distro's build can ship its own, so C.UTF-8's sort rules
+   were not compared. PostgreSQL records no collation version for a libc
+   collation or database whose locale is C, C.<anything> or POSIX, so no
+   version mismatch warns about C.UTF-8; sql/c_utf8_probe.sql, run on both
+   machines, compares its order inside PostgreSQL.
+
 Character sets (localedata/charmaps/): 1 of the 30 that the 486 locale builds
 in SUPPORTED at both tags use differs between glibc-2.28 and glibc-2.34.
 UTF-8: 6485 characters added.
@@ -108,34 +115,19 @@ Listed for Reindex (5): or_IN, sv_FI, sv_FI@euro, sv_SE, swedish
 
 -- Removed: locale files the old side has and the new side does not
      The tags cannot show what your distro adds or drops: NOT CHECKED.
-     Pass --old-node and --new-node instead of every other --old-*/--new-*
-     option, or --old-locales-dir and --new-locales-dir with their build ids.
+     Pass --old-node and --new-node, each machine's file, to check it.
      Between the tags: none -- no locale file at glibc-2.28 is gone at glibc-2.34
 
 -- Measured order: NOT RUN
-     Pass --old-node and --new-node instead of every other --old-*/--new-*
-     option, or --old-order and --new-order, each written by
-     scripts/locale_order.py on that machine. Without them nothing above
+     Pass --old-node and --new-node, each machine's file, or --old-order
+     and --new-order, each written by scripts/locale_order.py on that
+     machine. Without them nothing above
      asked either machine's glibc how it sorts, and a locale whose files
      did not change can still sort differently. Nor did anything compare
      the decimals of money, check which C library PostgreSQL runs on
      either machine, check that each machine accepts every locale and
      converts its text, or compare what each machine's character rules
      (LC_CTYPE) answer.
-
--- Distro patches, steps 6 and 7: NOT RUN
-     Pass --old-node and --new-node instead of every other --old-*/--new-*
-     option, or --old-locales-dir and --new-locales-dir with their build ids.
-     So nothing above says whether either machine's own patches touch
-     sort order, which the tags cannot show.
-
--- Node-to-node locale data: NOT RUN
-     Pass --old-node and --new-node instead of every other --old-*/--new-*
-     option, or --old-locales-dir and --new-locales-dir with their build ids.
-     Without both, nothing above compared the two nodes' C.UTF-8
-     against each other, and PostgreSQL reports collversion as NULL for
-     every C.* collation, so no mismatch can ever fire.
-     Then run sql/c_utf8_probe.sql on both nodes.
 
 -- Warnings the clean results above do NOT cover
      !! Not checked for glibc-2.28 and glibc-2.34: they are upstream tags, which
@@ -148,5 +140,11 @@ Listed for Reindex (5): or_IN, sv_FI, sv_FI@euro, sv_SE, swedish
         (localedef's and strcoll's, each build's patches to it included). Only step
         11 sees what it does, when it measures both machines;
         docs/confirming-on-a-real-system.md says how to confirm the order on them.
+     !! glibc-2.28 and glibc-2.34 hold no localedata/locales/C, the file C.UTF-8 is
+        built from, and a distro's build can ship its own, so C.UTF-8's sort rules
+        were not compared. PostgreSQL records no collation version for a libc
+        collation or database whose locale is C, C.<anything> or POSIX, so no
+        version mismatch warns about C.UTF-8; sql/c_utf8_probe.sql, run on both
+        machines, compares its order inside PostgreSQL.
      (see docs/limitations.md)
 

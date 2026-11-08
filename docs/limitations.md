@@ -1,15 +1,14 @@
 # Known limitations
 
-Seven blind spots. Each one is a way this tool can report a clean result while
+The blind spots. Each one is a way this tool can report a clean result while
 something it cannot see has changed.
 
 1. [`C.UTF-8` is invisible to a tag diff](#cutf-8-is-invisible-to-a-tag-diff)
 2. [Upstream tags are not your distro's glibc](#upstream-tags-are-not-your-distros-glibc)
 3. [Below glibc 2.24 the method rests on one measured pair](#below-glibc-224-the-method-rests-on-one-measured-pair)
-4. [A copied folder's character sets are not compared](#a-copied-folders-character-sets-are-not-compared)
-5. [No step compares localedef's or strcoll's code](#no-step-compares-localedefs-or-strcolls-code)
-6. [What step 11 does not see](#what-step-11-does-not-see)
-7. [`LC_CTYPE` is compared by step 11 alone](#lc_ctype-is-compared-by-step-11-alone)
+4. [No step compares localedef's or strcoll's code](#no-step-compares-localedefs-or-strcolls-code)
+5. [What step 11 does not see](#what-step-11-does-not-see)
+6. [`LC_CTYPE` is compared by step 11 alone](#lc_ctype-is-compared-by-step-11-alone)
 
 ## `C.UTF-8` is invisible to a tag diff
 
@@ -17,7 +16,7 @@ Its source file exists upstream only from glibc 2.35, and RHEL8 and RHEL9 ship
 one anyway. Over RHEL8 to RHEL9 the file is therefore on both your machines and
 in neither tag. Over RHEL9 to RHEL10 the new tag holds upstream's copy and the
 old tag still has none. Either way the steps that read upstream source
-cannot see what your old machine runs.
+cannot see what your old machine runs; step 2 says so with a `!!`.
 
 It is worth knowing about because it is usually the default. Almost anywhere
 `initdb` runs in a container the database collation is `C.UTF-8`, so every
@@ -31,7 +30,7 @@ and no warning will reach you.
 Naming the two builds instead of the tags (command 1.a) compares their own
 `C.UTF-8` files (step 2). Its order needs your machines: give `audit.sh`
 one file from each machine, as in command 1.b, and it compares the two
-machines' `C.UTF-8` files (steps 2 and 8) and measures how each machine sorts it
+machines' `C.UTF-8` files (step 2) and measures how each machine sorts it
 (step 11). [`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql) measures the
 order inside PostgreSQL, on the builds you actually run. What the file
 comparison and the probe found is in [results.md](results.md).
@@ -50,9 +49,8 @@ builds".
 Give `audit.sh` one file from each machine and it reads each machine's own
 locale sources and charmaps, which the file holds, as that build's, unless
 a file holds none, which the run says; what it does not read of a machine,
-the run prints under "Not checked for these machines". Each side is also
-checked against the version its distro started from, when its file holds
-the locale sources. No file comparison reaches a
+the run prints under "Not checked for these machines". No file comparison
+reaches a
 backported change to glibc's *code*, between two tags or two builds
 ([below](#no-step-compares-localedefs-or-strcolls-code)).
 
@@ -69,28 +67,6 @@ no version guard. One pair is not every pair.
 
 If both your versions are that old, read the result as thinner evidence than
 the two RHEL pairs carry, and confirm it on the machines.
-
-## A copied folder's character sets are not compared
-
-A locale's character set (`localedata/charmaps/`) decides the bytes of every
-character its rules name, and an unchanged rule sorts differently when those
-bytes change, or when the character appears or disappears. Step 2 compares,
-between the two glibc versions, the character sets the locales in SUPPORTED
-are built with, and lists the locales whose rules name a character the newer
-version added, removed or gave other bytes. A distro can patch the character
-sets it ships. Given the file from each machine, as in command 1.b, step 2
-compares the two machines' own character sets, for the locales measured on
-them; steps 6 and 7 compare each machine's own with the version its distro
-started from, and step 8 compares the two machines'.
-Given copied folders instead (`--old-locales-dir` and `--new-locales-dir`),
-they are not compared, and steps 6 to 8 say so.
-
-Step 2 also compares, for the same builds, the collating elements a locale
-builds out of transliterations. localedef builds them for the characters a
-character set lacks, so a change to a transliteration file, or to the
-character set, can move them with no rule changing. Steps 6 to 8 compare
-what a machine's own transliterations build from its file, and not from a
-copied folder.
 
 ## No step compares localedef's or strcoll's code
 
@@ -183,8 +159,8 @@ machine, where only a simulation was run, a machine on cgroup v1, and ARM.
 
 ## `LC_CTYPE` is compared by step 11 alone
 
-The other six sections are ways a sort-order change can be missed. This one
-is a whole category only one step compares.
+The other sections are ways a sort-order change can be missed. This one is
+a whole category only one step compares.
 
 `LC_COLLATE` decides sort order. `LC_CTYPE` decides `upper()`, `lower()`,
 `initcap()`, character classification and pattern matching, and under the
@@ -202,8 +178,8 @@ Step 11, given both machines' files, compares what glibc's character rules
 answer and names the characters and bytes whose rules change. It says where it
 could not look.
 Nothing else here compares the character rules, neither a run without the two
-files nor steps 2 and 6 to 8, which read the transliterations of `LC_CTYPE`
-only for the collating elements they build, which are sort order. No verdict
+files nor step 2, which reads the transliterations of `LC_CTYPE` only for the
+collating elements they build, which are sort order. No verdict
 this project publishes says anything about them in either direction, including
 "unchanged".
 A 🟢 on the results table is a statement about sort order and nothing else. If

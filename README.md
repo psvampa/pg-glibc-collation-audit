@@ -157,7 +157,8 @@ ssh el9 sudo -n -u postgres python3 - --extract < scripts/locale_order.py > new.
   `python3 locale_order.py --extract > old.tar` there and bring the file back.
 - If the repository no longer has the sources of that exact build, dnf says
   "No match for argument" and changes nothing. A machine without the sources
-  still gives a file, and the summary says which checks did not run and why.
+  still gives a file; steps 1 and 2 then read the tags, and the run says so
+  and why.
 - The files are named for their role, old and new, not for their version, so
   two builds of the same release cannot overwrite each other.
 
@@ -224,7 +225,7 @@ A worked example for each pair is in
 | `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | 🟢 No difference | step 2 — `sv_FI` only via `copy`; the second pair is cleared by step 11's measurement |
 | `or_IN` | 🔴 **Changed** | 🟢 No difference | step 2; the second pair is cleared by step 11's measurement |
 | `ko_KR` | 🔴 **Changed** | 🟢 No difference | **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs, and what changed is `localedef`'s code, which no step compares; the second pair is cleared by measurement |
-| `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | between two tags nothing compares it <sup>†</sup>; between the two builds step 2 lists it — the node-to-node check settles the data, step 11 or `sql/c_utf8_probe.sql` the order |
+| `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | between two tags nothing compares it <sup>†</sup>; between the two builds step 2 lists it from their rules, and step 11 or `sql/c_utf8_probe.sql` settles the order |
 | `th_TH` | 🟢 No difference | 🔴 **Changed** | step 2; the first pair is cleared by step 11's measurement |
 | `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | step 2 finds the same rules in both pairs, though over the second their files changed by a role swap; step 11's measurement finds both unchanged |
 | CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>the base table a locale inherits unless it<br>defines its own order | 🟢 No difference | 🟢 No difference | an ellipsis range: step 2 finds the same rules, which cannot clear it; cleared by measurement |
@@ -262,8 +263,8 @@ full-text search read. In PostgreSQL terms the
 pairs named above.
 
 Full scope, including the `builtin` provider as a mitigation:
-[docs/scope.md](docs/scope.md). The seven things to know before acting on a
-clean result — `C.UTF-8` among them:
+[docs/scope.md](docs/scope.md). The things to know before acting on a clean
+result — `C.UTF-8` among them:
 [docs/limitations.md](docs/limitations.md).
 
 ## Documentation
@@ -274,7 +275,7 @@ short version:
 - [docs/commands.md](docs/commands.md) — what each command does, and what it leaves to the next
 - [docs/results.md](docs/results.md) — the evidence behind each verdict, both worked examples, tested-on
 - [docs/confirming-on-a-real-system.md](docs/confirming-on-a-real-system.md) — the empirical check
-- [docs/limitations.md](docs/limitations.md) — the seven things to know before acting on a clean result
+- [docs/limitations.md](docs/limitations.md) — the things to know before acting on a clean result
 - [docs/scope.md](docs/scope.md) — what it audits, and the `builtin` provider as a mitigation
 - [docs/requirements.md](docs/requirements.md) — what each run needs, on your machine and on each server, and the three setup traps
 - [docs/glossary.md](docs/glossary.md) — `copy` graph, blast radius, ellipsis range, role swap, build id, measured order, level, contraction

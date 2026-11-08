@@ -6082,8 +6082,8 @@ class ExtractPacksTheSources(unittest.TestCase):
         self.assertEqual(json.loads(members[-1][1]), manifest)
 
     def test_the_sources_are_copied_as_found(self):
-        """A link stays a link, as tar keeps it and the node checks report
-        it, and a link to a folder is not walked; a second name of one file
+        """A link stays a link, as tar keeps it and steps 1 and 2 name it,
+        and a link to a folder is not walked; a second name of one file
         carries the content; a folder is walked."""
         members = {i.name: (i, d) for i, d in members_of(self.packed()[0])}
         self.assertEqual(
@@ -6892,7 +6892,7 @@ class UnpackRefusesWhatItCannotTrust(unittest.TestCase):
     def test_a_write_that_goes_wrong_is_refused(self):
         """What reaches the disk is read back and held to the manifest's
         hashes: a copy that lost part of a file is refused instead of reaching
-        steps 6 to 10 as the machine's files."""
+        steps 1 and 2 as the machine's files."""
         fdopen = os.fdopen
 
         class Halving:

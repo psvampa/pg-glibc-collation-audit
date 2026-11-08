@@ -262,8 +262,9 @@ class TheProbeDescribesTheFileItProbes(unittest.TestCase):
         self.real = _harness.backported_c()
 
     def test_the_probe_lists_exactly_the_ranges_the_real_file_declares(self):
-        real_ranges = re.findall(r'<U([0-9A-F]+)>',
-                                 g.collate_text(self.real) or '')
+        start, end = g.collate_bounds(self.real)
+        block = '\n'.join(self.real.split('\n')[start:end - 1])
+        real_ranges = re.findall(r'<U([0-9A-F]+)>', block)
         # The header quotes them as `<U0000>..<UFFFF>` pairs, one per line.
         quoted = re.findall(r'<U([0-9A-F]+)>\.\.<U([0-9A-F]+)>', self.probe)
         self.assertEqual(len(quoted), 6,
@@ -736,8 +737,8 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     PUBLISHED. Ten of them became rows of this table, six tied that morning and
     four more later the same day; most have since come out. "As published" is
     the whole of it: two of those four, 335 and 342, were already asserted
-    against a live run by `test_known_answers` and `test_node_modes`, which
-    read the tool's OUTPUT. Neither compared the page with the run, so the page
+    against a live run by `test_known_answers` and the node tests of the
+    time, which read the tool's OUTPUT. Neither compared the page with the run, so the page
     was free to say anything. The ones that appear in more than one file are
     the ones that can drift -- a measurement quoted once is right or wrong,
     never inconsistent, which is why a row stated in a single file earns its
@@ -1130,10 +1131,12 @@ class ASectionNeverWidensInSilence(unittest.TestCase):
     SHAPE = '{n} name(s), locale files and locale.alias aliases:'
     STEP_2 = ("== STEP 2  Which locales' sort rules changed\n"
               + '=' * 64)
-    # Step 2 prints it for the two builds' charmaps, and step 8 prints it
-    # again word for word for the two machines' (step 9.3 deleted step 4,
-    # whose sentence this test used before).
-    REPEATED = 'UTF-8: {n} characters added.'
+    # Step 11 prints it in its report, and its summary block repeats it word
+    # for word (step 9.4b deleted step 8, and step 9.3 step 4, whose
+    # sentences this test used before).
+    REPEATED = 'Of the {n} locale(s) on the old machine:'
+    STEP_11 = ("== STEP 11  MEASURED ORDER  how each machine's own glibc "
+               "sorts every locale\n" + '=' * 64)
     PROBE = 'examples/c-utf8-probe-rhel8-vs-rhel9.txt'
 
     def check(self, ev, bare='400'):
@@ -1146,9 +1149,9 @@ class ASectionNeverWidensInSilence(unittest.TestCase):
 
     def test_the_cut_is_what_keeps_a_repeated_sentence_apart(self):
         with self.assertRaisesRegex(AssertionError, 'Both counts must be 1'):
-            self.check(Evidence(self.AUDIT, shape=self.REPEATED), '6485')
+            self.check(Evidence(self.AUDIT, shape=self.REPEATED), '867')
         self.check(Evidence(self.AUDIT, shape=self.REPEATED,
-                            section=self.STEP_2), '6485')
+                            section=self.STEP_11), '867')
 
     def test_a_missing_anchor_refuses(self):
         with self.assertRaisesRegex(AssertionError,
@@ -1429,53 +1432,31 @@ class TheVerdictTableIsTheSameInBothPlaces(unittest.TestCase):
                          table.split('\n'))
 
 
-class TheExamplesCarryTheNodeSteps(unittest.TestCase):
-    """Both worked examples carry the node steps and the full summary of a
-    run given both machines' files, so what the docs say about those steps can
-    be checked against real output. Until 2026-09-07 no example carried
-    them."""
-
-    # The builds as each machine's file names them: `rpm -q glibc`, the
-    # architecture included.
-    EXAMPLES = {
-        'rhel8-to-rhel9': ('glibc-2.28-251.el8_10.40.x86_64',
-                           'glibc-2.34-275.el9_8.x86_64'),
-        'rhel9-to-rhel10': ('glibc-2.34-275.el9_8.x86_64',
-                            'glibc-2.39-128.el10_2.x86_64'),
-    }
+class TheExamplesCarryTheMachineSteps(unittest.TestCase):
+    """Both worked examples given each machine's file carry every step such a
+    run prints and its full summary, so what the docs say about those steps
+    can be checked against real output; and no banner of a deleted step
+    (steps 3 to 10, branch 9)."""
 
     def example(self, name):
         return read(os.path.join(REPO_ROOT, 'examples',
                                  f'{name}-audit-output.txt'))
 
-    def test_every_node_step_banner_is_in_both_examples(self):
-        for name, (old, new) in self.EXAMPLES.items():
+    def test_every_step_banner_is_in_both_examples(self):
+        for name in ('rhel8-to-rhel9', 'rhel9-to-rhel10'):
             text = self.example(name)
             for banner in (
-                    f"== STEP 6  DISTRO CHECK  do {old}'s patches touch "
-                    "sort order?",
-                    f"== STEP 7  DISTRO CHECK  do {new}'s patches touch "
-                    "sort order?",
-                    f"== STEP 8  NODE TO NODE  does {old}'s collation data "
-                    f"differ from {new}'s?",
+                    "== STEP 1  What changed, and how far it reaches",
+                    "== STEP 2  Which locales' sort rules changed",
                     "== STEP 11  MEASURED ORDER  how each machine's own glibc "
                     "sorts every locale",
                     '== AUDIT SUMMARY'):
                 with self.subTest(example=name, banner=banner[:40]):
-                    self.assertIn(banner, text)
-
-    def test_the_summary_blast_radius_line_matches_step_8(self):
-        """The summary's "plus N locale(s) that inherit" is read from the list
-        step 8 writes; in the example, N must be the count step 8 printed."""
-        for name in self.EXAMPLES:
-            text = self.example(name)
-            step8 = re.search(r'Additionally affected via `copy` inheritance '
-                              r'at \S+: (\d+) locale', text)
-            summary = re.search(r'plus (\d+) locale\(s\) that inherit', text)
+                    self.assertEqual(text.count(banner), 1)
             with self.subTest(example=name):
-                self.assertIsNotNone(step8, text[-2000:])
-                self.assertIsNotNone(summary)
-                self.assertEqual(step8.group(1), summary.group(1))
+                self.assertEqual(
+                    re.findall(r'^== STEP (\d+)', text, re.M),
+                    ['1', '2', '11'])
 
 
 def without_fences(text):

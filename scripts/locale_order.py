@@ -3443,8 +3443,8 @@ def source_entries(directory):
     """Every entry under directory as (path relative to it, full path),
     parents first and each level sorted.
 
-    A link is an entry and is not followed, as tar keeps it; the node checks
-    that read the copy report links and folders rather than compare them.
+    A link is an entry and is not followed, as tar keeps it; steps 1 and 2,
+    which read the copy, name links and folders rather than compare them.
     Raises OSError on a folder it cannot list. A folder skipped here would be
     missing from the copy, and read on the other side as one the distro does
     not ship.
@@ -3692,8 +3692,8 @@ def unpack(path, dest):
         refuse('it says neither which locale sources it holds nor why it '
                'holds none')
     # The charmaps (13.7 PR D). A file written before --extract packed them
-    # has no entry: steps 6 to 8 then say the character sets were not
-    # compared, and why, rather than refuse a file that is whole.
+    # has no entry: step 2 then says the character sets were not compared,
+    # and why, rather than refuse a file that is whole.
     if 'charmaps' in manifest:
         charmaps = manifest['charmaps']
         cm_entries = (charmaps.get('entries') if isinstance(charmaps, dict)
@@ -3804,7 +3804,7 @@ def lay_out(packed, prefix, root, entries, path, dest):
                 with os.fdopen(fd, 'wb') as f:
                     f.write(content)
         # Read back from the disk and held to the manifest: a write that went
-        # wrong would otherwise reach steps 6 to 8 as the machine's files.
+        # wrong would otherwise reach steps 1 and 2 as the machine's files.
         written = on_disk(root)
     except OSError as e:
         die(f'cannot lay the file out in {dest}: {e}')
@@ -9357,8 +9357,8 @@ def charmap_check(data, charmaps):
 
     charmaps is ('dir', the folder --unpack laid them out in) or ('why', the
     reason the machine has none). A locale's charmap is the file whose
-    <code_set_name> is the codeset measured for it, as steps 6 to 8 read it
-    (node_charmaps; localedef stores that name as the locale's codeset,
+    <code_set_name> is the codeset measured for it, as step 2 reads it
+    (node_charmaps.measured_builds; localedef stores that name as the locale's codeset,
     ld-ctype.c:445@2.28), and every file that could declare the codeset is
     read with collation_keys.read_charmap: one that gives a character to a
     sequence the locale's list of strings lacks makes it measured in part.

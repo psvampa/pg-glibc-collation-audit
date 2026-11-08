@@ -2,8 +2,8 @@
 """
 Step 2's comparison of the character sets locales are built with, and of the
 collating elements they build out of transliterations, between two glibc
-tags (backlog 13.7). Steps 6 to 8 make the same comparison between a machine
-and its tag, or two machines, through node_charmaps.
+tags (backlog 13.7), or between two builds or two machines' own files
+(node_charmaps reads a machine's charmaps and which locales it builds).
 
 localedef resolves every character an LC_COLLATE block names through the
 charmap the locale is built with: the head of an order line, the members of a
@@ -2272,8 +2272,8 @@ def _readers_differ(old, new):
     hold UTF8_READER at all: then neither tag holds it, both read bytes the
     old way, and an unchanged file reads the same at both. TranslitRun
     still refuses a raw table at such a side (Side.reads_utf8 is None).
-    Two Sides given one ask_utf8 are read by one localedef, as steps 6 and
-    7 read a machine and its tag (node_charmaps), and git is not asked."""
+    Two Sides given one ask_utf8 are read by one localedef, and git is not
+    asked."""
     if old.ask_utf8 is not None and old.ask_utf8 is new.ask_utf8:
         return False
     return old.reads_utf8() is not new.reads_utf8()
@@ -2693,8 +2693,8 @@ def common_builds(old, new, builds_old, builds_new):
     # entry renamed between the tags (az_AZ.UTF-8 to az_AZ) is one build.
     # An entry that keeps its name and changes charmap is compared old
     # charmap against new. A build at one tag only is searched by point 5,
-    # in step 2 between tags or builds (steps 6 to 8, and step 2 between two
-    # machines' own files, leave point 5 out, search_unbuilt=False).
+    # in step 2 between tags or builds (step 2 between two machines' own
+    # files leaves point 5 out, search_unbuilt=False).
     old_by, new_by = {}, {}
     for by, builds in ((old_by, builds_old), (new_by, builds_new)):
         for b in builds:
