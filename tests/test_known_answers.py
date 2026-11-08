@@ -320,7 +320,7 @@ class Step2Compare(StepRun):
     def test_every_file_step_2_writes_is_named_for_the_pair(self):
         """A file a run reads must have been written by this run, for this
         pair: every file step 2 writes carries the pair in its name, the
-        characters file included (step 9.2 added it)."""
+        characters file and the rules by name included."""
         out_dir = tempfile.mkdtemp(prefix='pg-glibc-audit-test-')
         self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
         rc, out = run_step('filter_lc_collate_changes.py', OLD, MID,
@@ -331,7 +331,8 @@ class Step2Compare(StepRun):
             [f'step2_{k}.{slug}.txt' for k in ('changed_collate',
                                                'keyed_locales',
                                                'removed_locales')]
-            + [f'step2_rules_characters.{slug}.tsv']))
+            + [f'step2_rules_characters.{slug}.tsv',
+               f'step2_rules_by_name.{slug}.json']))
 
     def test_what_step_2_does_not_compare_is_said_once(self):
         """NOT_COMPARED_HERE: the code no step compares, pointed to once."""

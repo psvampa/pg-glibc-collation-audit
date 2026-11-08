@@ -3076,9 +3076,12 @@ class StepTwoRulesByMeasuredName(unittest.TestCase):
     def test_a_state_it_does_not_know_is_refused(self):
         bad = self.got()
         bad['ko_KR'] = self.R('similar', None, None, False)
-        with self.assertRaises(SystemExit), mock.patch('sys.stderr'):
-            f.rules_by_name((self.side(['ko_KR.utf8']), self.side([])),
+        with self.assertRaises(SystemExit), \
+                mock.patch('sys.stderr', new_callable=io.StringIO) as err:
+            f.rules_by_name((self.side(['ko_KR.utf8']), self.side(['C'])),
                             ({}, {}), bad, {}, (), ())
+        self.assertIn("compare_rules answered 'similar' for ko_KR",
+                      flat(err.getvalue()))
 
 
 if __name__ == '__main__':
