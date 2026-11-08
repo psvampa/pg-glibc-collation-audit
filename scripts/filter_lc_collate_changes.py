@@ -944,8 +944,9 @@ def _main(opts):
                                            step2_words(noun))
         # Untested at this call site: on two machines' files the check's
         # own two NOT RUN (the report's, no build in common) were reached by
-        # no file here; check_charmaps' test holds each reason, and the one
-        # machine_builds gives is asserted on a real run (test_wrapper).
+        # no file here; check_charmaps' test holds each reason, and
+        # machine_builds' reason for a file without charmaps is asserted on
+        # a real run (test_wrapper).
         write_rules_by_name(
             slug, noun, (old_name, new_name), machine, (old_side, new_side),
             charmaps=cm_why if machine else None,
