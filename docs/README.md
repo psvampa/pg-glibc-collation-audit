@@ -23,7 +23,7 @@
 | [scope.md](scope.md) | What this audits — `LC_COLLATE`, the decimals of `money`, what step 11 compares of `LC_CTYPE`, and the `libc` provider — and the `builtin` provider as a mitigation |
 | [limitations.md](limitations.md) | The things to know before acting on a clean result — `C.UTF-8` among them, what step 11 does not see, and `LC_CTYPE`, which only step 11 compares |
 | [requirements.md](requirements.md) | What each run needs, on your machine and on each server, and the three setup traps |
-| [glossary.md](glossary.md) | `copy` graph, blast radius, ellipsis range, role swap, build id, measured order, level, contraction |
+| [glossary.md](glossary.md) | `copy` graph, ellipsis range, role swap, build id, measured order, level, contraction |
 | [../examples/](../examples/README.md) | Real output of every command on both audited pairs, the SQL step 11 writes for each with both servers' outputs, and the `C.UTF-8` probe output |
 | [../tests/README.md](../tests/README.md) | What the test suite covers, and what it does not |
 

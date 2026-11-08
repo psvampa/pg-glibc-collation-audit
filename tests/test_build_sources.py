@@ -38,9 +38,10 @@ import time
 import unittest
 from unittest import mock
 
-from _harness import (GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR, Step2Report,
-                      deleted_steps_named, flat, summary_block,
-                      glibc_shaped, needs_clone)
+from _harness import (COMPARED_BANNER, GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR,
+                      Step2Report, after_compared, before_compared,
+                      compared_text, deleted_steps_named, flat,
+                      summary_block, glibc_shaped, needs_clone)
 
 import build_sources as bs
 import filter_lc_collate_changes as step2
@@ -2476,7 +2477,7 @@ class ABuildIsACommitOfTheClone(unittest.TestCase):
 
     def test_a_builds_commit_is_never_read_as_a_tag(self):
         """Every step resolves its refs with check_refs, which refuses a
-        commit build_commit made however it is spelt: the id step 1 prints,
+        commit build_commit made however it is spelt: the id the run prints,
         the ref under BUILD_REFS. Read as a tag, that commit is upstream's
         strcoll code with the build's patches nowhere."""
         import glibc_locale_data as g
@@ -2503,11 +2504,9 @@ class ABuildIsACommitOfTheClone(unittest.TestCase):
         self.assertIn('%s is a commit this tool made for a distro build'
                       % commit[:12], said)
         self.assertIn('fetching tags', out.getvalue() + said)
-        # The controls: tags pass, and step 1's fan-in reads the build.
+        # The control: tags pass.
         self.assertEqual(set(g.check_refs(self.repo, TAG, 'glibc-2.28')),
                          {TAG, 'glibc-2.28'})
-        self.assertEqual(g.check_refs(self.repo, commit, builds=True),
-                         {commit: commit})
 
     def test_the_tarball_is_compared_with_the_tag(self):
         base, alias = bs.scope_from_git(GLIBC_CLONE, TAG)
@@ -2591,7 +2590,7 @@ def _fill_build_cache(cache, mirror, name, tree, warned=()):
 
 @needs_clone
 class ABuildIsASide(unittest.TestCase):
-    """side(named=...) is a build, and step 1 reads one: fetched (here
+    """side(named=...) is a build, and the sides read one: fetched (here
     from a cache this test fills, so no network), made a commit of a clone
     of the test's own, listed and held to the floor; ordered by rpm; never
     replaced by its tag when it cannot be read."""
@@ -2674,11 +2673,11 @@ class ABuildIsASide(unittest.TestCase):
                                 '--verify', '--quiet', bs.build_ref(B275)],
                                capture_output=True).returncode, 0)
 
-    def test_step_1_reads_a_build_by_its_commit(self):
-        """audit-locale-diff.sh on two builds, in a folder whose glibc is a
-        repository of the test's own: the provenance of each build, the
-        diff and the fan-in read at the builds' commits, the fan-in named
-        by the build. The new build changes one locale file."""
+    def test_the_sides_read_a_build_by_its_commit(self):
+        """glibc_locale_data.py sides on two builds, in a folder whose glibc
+        is a repository of the test's own: the provenance of each build,
+        read at the builds' commits. The new build changes one locale
+        file."""
         here = os.path.join(self.dir, 'scripts')
         os.makedirs(here)
         for f in os.listdir(SCRIPTS_DIR):
@@ -2698,10 +2697,11 @@ class ABuildIsASide(unittest.TestCase):
                           ['!! charmaps NOT checked against '
                            'glibc-locale-source: no zstd reader'])
         env = dict(os.environ, PG_GLIBC_BUILD_SOURCES_CACHE=cache,
-                   PG_GLIBC_BUILD_MIRROR=mirror, PG_GLIBC_AUDIT_WRAPPED='',
+                   PG_GLIBC_BUILD_MIRROR=mirror,
                    PG_GLIBC_AUDIT_OUT=os.path.join(self.dir, 'out'))
-        step1 = os.path.join(here, 'audit-locale-diff.sh')
-        p = subprocess.run(['bash', step1, B275, B283], capture_output=True,
+        sides = [sys.executable, os.path.join(here, 'glibc_locale_data.py'),
+                 'sides']
+        p = subprocess.run([*sides, B275, B283], capture_output=True,
                            env=env)
         out = p.stdout.decode()
         self.assertEqual(p.returncode, 0, p.stderr.decode()[-2000:])
@@ -2713,9 +2713,6 @@ class ABuildIsASide(unittest.TestCase):
                           out)
         self.assertEqual(out.count('    checked: ' + bs.TARBALL_IS_TAG % TAG),
                          2)
-        self.assertIn('Locale files added, modified or deleted: 1\n', out)
-        self.assertIn('Collation templates by blast radius at %s ' % B283,
-                      out)
         self.assertIn("!! Not checked for these builds:", out)
         self.assertIn("checked above against the upstream tag",
                       flat(out))
@@ -2723,24 +2720,21 @@ class ABuildIsASide(unittest.TestCase):
         # A `!!` a build's check gave reaches the run, naming the build.
         self.assertIn('!! %s: charmaps NOT checked against '
                       'glibc-locale-source: no zstd reader' % B283, flat(out))
-        # The hint names the builds: each step after this one reads one.
-        self.assertIn('Next: python3 filter_lc_collate_changes.py %s %s\n'
-                      % (B275, B283), out)
-        # The commit step 1 made, given back to it as if it were a tag, on
-        # either side.
+        # The commit the sides made, given back as if it were a tag, on
+        # either side: refused by its message, before any provenance.
         for pair in ((TAG, commits[1][:12]), (commits[1][:12], TAG)):
             with self.subTest(pair=pair):
-                p = subprocess.run(['bash', step1, *pair],
+                p = subprocess.run([*sides, *pair],
                                    capture_output=True, env=env)
                 self.assertEqual(p.returncode, 2)
                 self.assertIn('%s is a commit this tool made for a distro '
                               'build' % commits[1][:12],
                               flat(p.stderr.decode()))
-                self.assertNotIn('Locale files added', p.stdout.decode())
+                self.assertNotIn('provenance', p.stdout.decode())
 
     def test_a_clone_without_the_builds_tag_fetches_it(self):
-        """A clone older than the build lacks the tag it is made on: step 1
-        fetches tags for it as it does for a tag argument, instead of
+        """A clone older than the build lacks the tag it is made on: the
+        sides fetch tags for it as it does for a tag argument, instead of
         refusing in the middle of the build."""
         here = os.path.join(self.dir, 'scripts')
         os.makedirs(here)
@@ -2752,7 +2746,7 @@ class ABuildIsASide(unittest.TestCase):
         _git_out(repo, 'remote', 'add', 'origin', GLIBC_CLONE)
         out = io.StringIO()
         with self.fake_fetch(), mock.patch('sys.stdout', out):
-            _, a, b = self.g.step1_sides(here, B275, B283)
+            _, a, b = self.g.compared_sides(here, B275, B283)
         self.assertIn('Refs not present locally: %s -- fetching tags...'
                       % TAG, out.getvalue())
         self.assertEqual(_git_out(repo, 'rev-parse', TAG + '^{commit}'), tag)
@@ -2760,7 +2754,7 @@ class ABuildIsASide(unittest.TestCase):
 
     def test_a_step_on_a_clone_without_the_builds_tag_fetches_it(self):
         """The same for a step run on its own: side() fetches the tag a
-        build is made on, as step 1 does, before making the commit."""
+        build is made on, as the sides do, before making the commit."""
         tag = _git_out(self.repo, 'rev-parse', TAG + '^{commit}')
         _git_out(self.repo, 'update-ref', '-d', 'refs/tags/' + TAG)
         _git_out(self.repo, 'update-ref', 'HEAD', 'glibc-2.28^{commit}')
@@ -2784,9 +2778,9 @@ class ABuildIsASide(unittest.TestCase):
                 fh.write(''.join(ln + '\n' for ln in lines))
         return mock.patch.dict(os.environ, {self.g.SIDES_ENV: path})
 
-    def test_a_step_takes_the_commit_step_1_recorded(self):
-        """Under audit.sh a step after step 1 reads the build's commit from
-        the file step 1 wrote and does not make it again: with build_commit
+    def test_a_step_takes_the_commit_the_sides_recorded(self):
+        """Under audit.sh a step after the sides reads the build's commit
+        from the file the sides wrote and does not make it again: with build_commit
         made to fail, the side still reads, at that commit."""
         with self.fake_fetch():
             made = self.g.side(self.repo, named=B275, make=True)
@@ -2795,7 +2789,7 @@ class ABuildIsASide(unittest.TestCase):
                                   side_effect=AssertionError('made again')):
             s = self.g.side(self.repo, B275)
         self.assertEqual((s.kind, s.ref), ('build', made.ref))
-        # Step 1 always makes it, the file there or not.
+        # The sides always make it, the file there or not.
         with self.fake_fetch(), self.recorded(None), \
                 mock.patch.object(bs, 'build_commit',
                                   wraps=bs.build_commit) as bc:
@@ -2828,9 +2822,9 @@ class ABuildIsASide(unittest.TestCase):
                               flat(err.getvalue()))
                 self.assertIn(said, flat(err.getvalue()))
 
-    def test_step_1_records_each_build_once(self):
+    def test_the_sides_record_each_build_once(self):
         """One build given as both sides is one line, which the steps after
-        step 1 then find once."""
+        the sides then find once."""
         with self.fake_fetch():
             s = self.g.side(self.repo, named=B275, make=True)
         with self.recorded([]):
@@ -2839,12 +2833,12 @@ class ABuildIsASide(unittest.TestCase):
                 self.assertEqual(fh.read(), '%s\t%s\n' % (B275, s.ref))
 
 
-def _fill_with_code(cache, mirror, name, tree, code=()):
+def _fill_with_code(cache, mirror, name, tree, code=(), warned=()):
     """_fill_build_cache, with the build's patches to strcoll's code in its
     provenance as build() records them ((patch, paths) pairs): none by
     default, where _fill_build_cache's placeholder names a path outside
-    localedata/ and locale/."""
-    _fill_build_cache(cache, mirror, name, tree)
+    localedata/ and locale/. `warned` is _fill_build_cache's."""
+    _fill_build_cache(cache, mirror, name, tree, warned)
     for where in os.listdir(cache):
         path = os.path.join(cache, where, 'provenance.json')
         if not os.path.isfile(path):
@@ -2940,8 +2934,7 @@ class _StepsOnBuilds:
     def run_step(self, script, *args):
         out = tempfile.mkdtemp(prefix='out_', dir=self.tmp)
         env = dict(os.environ, PG_GLIBC_BUILD_SOURCES_CACHE=self.cache,
-                   PG_GLIBC_BUILD_MIRROR=self.mirror, PG_GLIBC_AUDIT_OUT=out,
-                   PG_GLIBC_AUDIT_WRAPPED='')
+                   PG_GLIBC_BUILD_MIRROR=self.mirror, PG_GLIBC_AUDIT_OUT=out)
         p = subprocess.run(
             [sys.executable, os.path.join(SCRIPTS_DIR, script), *args,
              '--repo', self.repo], capture_output=True, env=env, cwd=self.tmp)
@@ -3006,8 +2999,10 @@ class AStepReadsABuild(_StepsOnBuilds, unittest.TestCase):
                 text = flat(out + err)
                 self.assertIn('%s and %s are two commits of one source tree'
                               % (B275, self.SAME), text)
-                self.assertIn('the two builds hold the same locale sources '
-                              'and the same code under locale/', text)
+                self.assertIn('Step 2 compares nothing: it would compare '
+                              'that tree against itself. The two builds '
+                              'hold the same locale sources and the same '
+                              'code under locale/', text)
                 self.assertNotIn("The distro's own builds", text)
                 self.assertNotIn('DIRECTION', text)
 
@@ -3015,9 +3010,9 @@ class AStepReadsABuild(_StepsOnBuilds, unittest.TestCase):
         rc, out, err, _ = self.run_step('filter_lc_collate_changes.py',
                                         B275, B275)
         self.assertEqual(rc, 0, err[-2000:])
-        self.assertIn('%s and %s are the same commit. Step 1 '
-                      'compares that commit against itself, and step 2 '
-                      'compares nothing.' % (B275, B275),
+        self.assertIn('%s and %s are the same commit. Step 2 '
+                      'compares nothing: it would compare that commit '
+                      'against itself.' % (B275, B275),
                       flat(out + err))
         self.assertIn('the two builds are one commit.', flat(out))
 
@@ -3139,7 +3134,7 @@ class AStepReadsTheFixtureBuilds(unittest.TestCase):
 
 
 def without_the_tags_notice(text):
-    """text without step 1's `!!` for the sides read as tags, at any indent:
+    """text without the `!!` for the sides read as tags, at any indent:
     it names latest-el8, latest-el9 and latest-el10 as forms a side can be
     typed in, which tests of what a run says it resolved must not count."""
     out, skip = [], None
@@ -3304,10 +3299,10 @@ class ResolvesTheLatestBuild(unittest.TestCase):
         self.assertEqual(cm.exception.code, 2)
         self.assertEqual(flat(err.getvalue()), 'error: ' + self.REFUSED)
 
-    def test_step_one_by_hand_refuses_it(self):
-        """step1_sides, before it clones or fetches anything."""
-        self.refused_by_hand(lambda: g.step1_sides(self.tmp, 'glibc-2.34',
-                                                   'latest-el9'))
+    def test_the_sides_by_hand_refuse_it(self):
+        """compared_sides, before it clones or fetches anything."""
+        self.refused_by_hand(lambda: g.compared_sides(self.tmp, 'glibc-2.34',
+                                                      'latest-el9'))
 
     def test_a_step_reading_its_sides_refuses_it(self):
         """step_sides, the entry of step 2."""
@@ -3407,13 +3402,12 @@ class _AuditOnBuilds:
         glibc_shaped(cls.repo, TAG)
         cls.cache = os.path.join(cls.tmp, 'cache')
         cls.mirror = cls.make_mirror()
-        for build, (tree, code) in cls.builds().items():
-            _fill_with_code(cls.cache, cls.mirror, build, tree, code)
+        for build, spec in cls.builds().items():
+            _fill_with_code(cls.cache, cls.mirror, build, *spec)
         env = dict(os.environ, PG_GLIBC_BUILD_SOURCES_CACHE=cls.cache,
                    PG_GLIBC_BUILD_MIRROR=cls.mirror,
                    PG_GLIBC_READER_CACHE=os.path.join(SCRIPTS_DIR,
                                                       'glibc-reader-cache'))
-        env.pop('PG_GLIBC_AUDIT_WRAPPED', None)
         env.pop('PG_GLIBC_AUDIT_SIDES', None)
         cls.out = {}
         for label, pair in cls.RUNS.items():
@@ -3452,11 +3446,11 @@ class _AuditOnBuilds:
         return self.run_of(label).split('AUDIT SUMMARY', 1)[1]
 
     def test_what_a_build_run_does_not_read_is_said_in_one_place(self):
-        """The one place is step 1's `!! Not checked for these builds`,
-        repeated once under the summary's warnings; no other block of the
-        summary restates it (four review rounds each found one more copy
-        that disagreed). The same for the code no step compares, step 1's
-        `!! Not compared on any route` (glibc_locale_data.CODE_NOT_COMPARED),
+        """The one place is the `!! Not checked for these builds` under
+        'What was compared', repeated once under the summary's warnings; no
+        other block of the summary restates it (four review rounds each
+        found one more copy that disagreed). The same for the code no step
+        compares, its `!! Not compared on any route` (glibc_locale_data.CODE_NOT_COMPARED),
         which names localedef and each build's patches to that code: step
         5 compared them until step 9.3, and the sentence that replaced it
         must not lose either. Read on every run of each class that reached
@@ -3469,13 +3463,13 @@ class _AuditOnBuilds:
             outside, head, warnings = summary.partition(
                 '-- Warnings the clean results above do NOT cover')
             self.assertTrue(head, label)
-            # Each run is one kind, by what step 1 names: builds rebuilt
-            # from their SRPM, machines read from their own files (each
-            # with its one place), or tags (neither).
-            step1 = out.split('== STEP 2', 1)[0]
+            # Each run is one kind, by what 'What was compared' names:
+            # builds rebuilt from their SRPM, machines read from their own
+            # files (each with its one place), or tags (neither).
+            compared = compared_text(out)
             kinds = [k for k, title in (('build', 'Build provenance'),
                                         ('machine', 'Machine provenance'))
-                     if title in step1]
+                     if title in compared]
             self.assertLessEqual(len(kinds), 1, label)
             kind = kinds[0] if kinds else 'tag'
             for k, said in (('build', '!! Not checked for these builds:'),
@@ -3522,7 +3516,7 @@ class AuditShReadsTheFixtureBuilds(_AuditOnBuilds, unittest.TestCase):
 
     def test_a_recorded_machine_is_read_as_its_build(self):
         """Each recorded machine's file (tests/locale_order/rhel*.extract)
-        made a commit as steps 1 and 2 make it (machine_commit): its
+        made a commit as the sides make it (machine_commit): its
         localedata/locales/ and localedata/charmaps/ are the very trees of
         its build's commit, rebuilt from the SRPM, and the reader reads it
         with the same keyword tables (one reader-cache Build). So the
@@ -3595,7 +3589,7 @@ class AuditShReadsTheFixtureBuilds(_AuditOnBuilds, unittest.TestCase):
         body = summary_block(self.run_of('89'), REMOVED)
         self.assertEqual(body[:4], [
             "Each build's locale files are the ones its glibc-locale-source",
-            'package installs, checked one by one (step 1).',
+            "package installs, checked one by one ('What was compared').",
             'Between the builds, gone at %s:' % B275,
             'en_US@ampm (deleted)'])
         self.assertNotIn('NOT CHECKED', ' '.join(body))
@@ -3639,6 +3633,11 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
     comment changed in sv_SE, and 284 with a change of
     ld-collate.c and a patch to strcoll's code outside locale/."""
 
+    # B48's check of its charmaps gave a `!!` (no zstd reader: a Python
+    # before 3.14 without the zstd program, on an el10 payload), which
+    # reaches the summary's warnings, naming the build.
+    ZSTD = ('!! charmaps NOT checked against glibc-locale-source: no zstd '
+            'reader')
     RUNS = {'tree': (B275, ONE_TREE), 'clean': (B40, B48),
             'outside': (B275, OUTSIDE), 'twice': (B275, B275)}
 
@@ -3652,7 +3651,8 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
             B275: (cls.tree(B275, B275), ()),
             ONE_TREE: (cls.tree(ONE_TREE, B275), ()),
             B40: (cls.tree(B40, B40), ()),
-            B48: (cls.tree(B48, B40, {sv: t40[sv][0] + b'% a build\n'}), ()),
+            B48: (cls.tree(B48, B40, {sv: t40[sv][0] + b'% a build\n'}), (),
+                  [cls.ZSTD]),
             OUTSIDE: (cls.tree(OUTSIDE, B275, {
                 ld: t275[ld][0] + b'int pg_glibc_audit_test_line;\n'}),
                 [('glibc-example.patch', ['string/strcoll_l.c'])])}
@@ -3675,8 +3675,20 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
         self.assertNotIn(DIRECTION, summary)
         self.assertEqual(deleted_steps_named(out), [])
 
+    def test_a_builds_own_warning_reaches_the_summary(self):
+        """A `!!` a build's check gave, printed under 'What was compared'
+        naming the build, is repeated among the summary's warnings."""
+        out = self.run_of('clean')
+        said = '!! %s: charmaps NOT checked against glibc-locale-source: ' \
+               'no zstd reader' % B48
+        self.assertEqual(flat(compared_text(out)).count(said), 1)
+        warnings = self.summary('clean').split(
+            '-- Warnings the clean results above do NOT cover', 1)
+        self.assertEqual(len(warnings), 2)
+        self.assertEqual(flat(warnings[1]).count(said), 1)
+
     def test_one_build_given_twice_is_one_commit(self):
-        """Step 1 records the build once, so the steps after it find it;
+        """The sides record the build once, so the steps after it find it;
         the summary says one build was given twice, and its ellipsis block
         names no other side (false-negative-reviewer, round 1)."""
         out = self.run_of('twice')
@@ -3689,13 +3701,17 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
     def test_a_patch_to_strcoll_outside_locale_is_named_and_not_compared(self):
         """A build's patch to strcoll's own code outside locale/: step 5
         refused its clean sentence over it until step 9.3 (StepFiveReadsABuild
-        tested that). Now the provenance names the patch, and the summary's
-        warnings say that each build's patches to that code are compared by
-        no step; Reindex, which reads only the rules, stays clean."""
+        tested that). The provenance no longer counts such patches: the
+        count said strcoll and left localedef's patches out (16.129). The
+        summary's warnings say that each build's patches to that code are
+        compared by no step; Reindex, which reads only the rules, stays
+        clean."""
         out = self.run_of('outside')
-        step1 = out.split('== STEP 2', 1)[0]
-        self.assertIn("1 change strcoll's code: glibc-example.patch",
-                      flat(step1))
+        compared = flat(compared_text(out))
+        self.assertIn('change localedata/ or locale/, applied in the order '
+                      'rpm recorded', compared)
+        self.assertNotIn("strcoll's code", compared)
+        self.assertNotIn('glibc-example.patch', compared)
         summary = self.summary('outside')
         warnings = flat(summary.split(
             '-- Warnings the clean results above do NOT cover', 1)[1])
@@ -3710,7 +3726,8 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
 @needs_clone
 class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
     """A tag on one side and a build on the other: each sentence speaks of
-    its side. And a build that cannot be read stops the run in step 1,
+    its side. And a build that cannot be read stops the run when the sides
+    are read,
     never replaced by its tag. The new side of tag_build is given as
     latest-el9, which the class's mirror resolves to B275: every sentence
     names the build, none the word given; tag_typed names B275 and its
@@ -3751,15 +3768,15 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
                          % B275)
 
     def test_the_tag_side_alone_gets_the_tags_warning(self):
-        """The old side is a tag and the new one a build: step 1's `!!`
+        """The old side is a tag and the new one a build: the `!!`
         names the tag alone and asks for its build, the summary repeats it,
         and C, which the build ships and the tag lacks, is not compared for
         want of an old file, under the sentence that says it may exist on
         the old system. Nothing says its order is settled (7.7)."""
         out = self.run_of('tag_typed')
         notice = ("!! Not checked for %s: it is an upstream tag, which holds "
-                  "none of a distro's own locale files or patches. Steps 1 and "
-                  "2 read only what that tag holds. If that machine runs "
+                  "none of a distro's own locale files or patches. Step 2 "
+                  "reads only what that tag holds. If that machine runs "
                   "RHEL 8, 9 or 10, name that side as its build instead, as "
                   "rpm -q glibc prints it on the machine without the "
                   "architecture (glibc-2.34-283.el9_8), or as latest-el8, "
@@ -3828,7 +3845,8 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
 
 class AuditShRefusesAMachinesFilesWithABuild(unittest.TestCase):
     """With a build on either side, every option that reads a machine's
-    files, but --old-node and --new-node, is refused before step 1, its
+    files, but --old-node and --new-node, is refused before the sides are
+    read, its
     pair given or not, on the tag's side of a mixed pair too."""
 
     def refused(self, *args, mirror=None):
@@ -3841,7 +3859,8 @@ class AuditShRefusesAMachinesFilesWithABuild(unittest.TestCase):
                                                  'audit.sh'), *args],
                            capture_output=True, env=env)
         self.assertEqual(p.returncode, 2, p.stderr.decode()[-2000:])
-        self.assertNotIn('STEP 1', p.stdout.decode())
+        self.assertNotIn(COMPARED_BANNER, p.stdout.decode())
+        self.assertNotIn('provenance', p.stdout.decode())
         self.assertEqual(os.listdir(out), [])
         return flat(p.stderr.decode())
 
@@ -3891,7 +3910,7 @@ class AuditShRefusesAMachinesFilesWithABuild(unittest.TestCase):
         self.assertNotIn('cannot resolve', said)
 
     def test_a_latest_that_cannot_be_resolved_stops_the_run(self):
-        """A mirror that cannot be read: the run stops before step 1 with
+        """A mirror that cannot be read: the run stops before the sides with
         the reason, and no side is read as a tag."""
         said = self.refused('latest-el8', 'latest-el9',
                             mirror='file:///nowhere/')
@@ -3907,7 +3926,7 @@ W8, W9 = B40 + '.x86_64', B275 + '.x86_64'
 
 class MachineSides(unittest.TestCase):
     """glibc_locale_data.machine_sides in this process, each rule on its own:
-    what steps 1 and 2 read when audit.sh is given each machine's file.
+    what the run reads when audit.sh is given each machine's file.
     build_sources.fetch_build is replaced by one that records its calls and
     fails, so that a side read by downloading its build shows."""
 
@@ -3938,7 +3957,7 @@ class MachineSides(unittest.TestCase):
                                  (B275, 'build', 'glibc-2.34')])
         self.assertEqual(calls, [])
         self.assertEqual(flat('\n'.join(lines)), flat(
-            "Each machine's file names the build it runs: steps 1 and 2 read "
+            "Each machine's file names the build it runs: step 2 reads "
             "%s and %s, in place of glibc-2.28 and glibc-2.34, from each "
             "machine's own locale sources." % (B40, B275)))
 
@@ -4004,7 +4023,7 @@ class MachineSides(unittest.TestCase):
         self.assertEqual(said, flat(
             "!! The new machine's file names %s, which this run cannot read: "
             "it holds no locale sources, because /usr/share/i18n/locales "
-            "does not exist. So steps 1 and 2 read the tags glibc-2.28 and "
+            "does not exist. So step 2 reads the tags glibc-2.28 and "
             "glibc-2.34, which hold neither build's patches." % B275))
 
     def test_two_files_without_sources_are_both_named(self):
@@ -4091,13 +4110,13 @@ class WithoutTheArchitecture(unittest.TestCase):
                 self.assertEqual(fh.read(), '%s\tbuild\nglibc-2.34\ttag\n' % B40)
 
 
-MACHINES = "Each machine's file names the build it runs: steps 1 and 2 read"
+MACHINES = "Each machine's file names the build it runs: step 2 reads"
 
 
 @needs_clone
 class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
     """audit.sh glibc-2.28 glibc-2.34 with each machine's file, which holds
-    the fixture build's locale sources and charmaps: steps 1 and 2 read
+    the fixture build's locale sources and charmaps: the run reads
     each machine's own files (C.UTF-8 joins the reindex list, as between
     the builds), and download nothing, so with the builds' cache empty and
     no mirror the run is the same; Removed reads step 2's list, under a
@@ -4225,7 +4244,6 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
                    PG_GLIBC_BUILD_MIRROR='file:///nowhere/',
                    PG_GLIBC_READER_CACHE=os.path.join(SCRIPTS_DIR,
                                                       'glibc-reader-cache'))
-        env.pop('PG_GLIBC_AUDIT_WRAPPED', None)
         env.pop('PG_GLIBC_AUDIT_SIDES', None)
         p = subprocess.run(['bash', os.path.join(cls.tmp, 'audit', 'audit.sh'),
                             *cls.RUNS['read']], cwd=cls.tmp,
@@ -4235,25 +4253,25 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         cls.unread = (p.returncode,
                       (p.stdout + p.stderr).decode('utf-8', 'replace'))
 
-    def test_steps_1_and_2_read_each_machines_own_sources(self):
+    def test_the_run_reads_each_machines_own_sources(self):
         """Each machine's file holds the build's locale sources and
-        charmaps: steps 1 and 2 read them, as one commit of the clone per
-        machine, and say so in step 1's provenance; nothing is rebuilt from
-        an SRPM. C.UTF-8 joins the reindex list, as between the builds."""
+        charmaps: the run reads them, as one commit of the clone per
+        machine, and says so in the provenance under 'What was compared';
+        nothing is rebuilt from an SRPM. C.UTF-8 joins the reindex list, as
+        between the builds."""
         out = self.run_of('read')
-        before, _, rest = out.partition('== STEP 1')
-        self.assertEqual(flat(before), flat(
+        self.assertEqual(flat(before_compared(out)), flat(
             MACHINES + " %s and %s, in place of glibc-2.28 and glibc-2.34, "
             "from each machine's own locale sources. "
             '================================================================'
             % (B40, B275)))
-        step1 = rest.split('== STEP 2', 1)[0]
-        self.assertIn('Machine provenance', step1)
-        self.assertNotIn('Build provenance', step1)
-        self.assertNotIn('SRPM', step1)
+        compared = compared_text(out)
+        self.assertIn('Machine provenance', compared)
+        self.assertNotIn('Build provenance', compared)
+        self.assertNotIn('SRPM', compared)
         for build, word in ((B40, W8), (B275, W9)):
             with self.subTest(build=build):
-                self.assertIn('rpm -q glibc   %s' % word, step1)
+                self.assertIn('rpm -q glibc   %s' % word, compared)
         self.assertIn('The sort rules localedef builds for each locale at %s '
                       'and at %s,' % (B40, B275), flat(out))
         self.assertIn('AUDIT SUMMARY  %s -> %s' % (B40, B275), out)
@@ -4298,8 +4316,8 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
 
     def test_nothing_is_downloaded(self):
         """The same files with no build to read (an empty build cache, no
-        mirror): the run is the same run, line for line from step 1's tag
-        provenance to the end, since a machine's own sources need no
+        mirror): the run is the same run, line for line from 'What was
+        compared' to the end, since a machine's own sources need no
         download."""
         rc, out = self.unread
         self.assertEqual(rc, 0, out[-3000:])
@@ -4307,7 +4325,7 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
 
         def body(text, label):
             text = text.replace(os.path.join(self.tmp, 'out', label), 'OUT')
-            return text.split('== STEP 1', 1)[1]
+            return after_compared(text)
         self.assertEqual(body(out, 'unread'), body(read, 'read'))
         self.assertNotIn('which this run cannot read', out)
 
@@ -4343,16 +4361,17 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
 
     def test_a_machine_without_its_sources(self):
         """The old machine's file holds no sources (glibc-locale-source not
-        installed): no build is downloaded in its place, so steps 1 and 2
-        read both tags, and one `!!` before step 1 says which machine and
+        installed): no build is downloaded in its place, so the run reads
+        both tags, and one `!!` before 'What was compared' says which
+        machine and
         the file's reason; Removed points to it, and the tags' C.UTF-8 `!!`
         follows."""
         out = self.run_of('old_bare')
-        before = flat(out.split('== STEP 1', 1)[0])
+        before = flat(before_compared(out))
         self.assertTrue(before.startswith(
             "!! The old machine's file names %s, which this run cannot read: "
             "it holds no locale sources, because" % B40), before)
-        self.assertIn('So steps 1 and 2 read the tags glibc-2.28 and '
+        self.assertIn('So step 2 reads the tags glibc-2.28 and '
                       "glibc-2.34, which hold neither build's patches.",
                       before)
         self.assertNotIn(B275 + ', which', before)
@@ -4373,7 +4392,7 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
 
     def test_two_machines_without_their_sources(self):
         out = self.run_of('bare')
-        before = flat(out.split('== STEP 1', 1)[0])
+        before = flat(before_compared(out))
         for side, build in (('old', B40), ('new', B275)):
             with self.subTest(side=side):
                 # The first is the sentence's start, capitalised.

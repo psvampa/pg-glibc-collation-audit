@@ -196,7 +196,7 @@ class UnreadableBlobsAreNotDropped(unittest.TestCase):
     # makes the guard observable.
 
     def test_the_tree_aborts_on_an_unreadable_blob(self):
-        """A dropped blob silently shrinks the copy chains steps 1 and 3
+        """A dropped blob silently shrinks the copy chains the steps
         walk (glibc_tree), and a smaller set yields a shorter affected-locale
         list -- the reassuring direction."""
         rc, out = in_subprocess(
@@ -777,7 +777,7 @@ class TheRealReleaseBranchIsOrderedCorrectly(unittest.TestCase):
                 self.skipTest(f'{ref} is not in the clone; both come with a '
                               f'plain `git clone` of the mirror and '
                               f'`fetch --tags`, which is what '
-                              f'audit-locale-diff.sh and CI both do')
+                              f'./audit.sh and CI both do')
 
     def test_a_backport_commit_is_older_than_the_next_release(self):
         status, detail = g.pair_order(GLIBC_CLONE, MID, self.REF)
@@ -861,10 +861,9 @@ class TheStepsRefuseAReversedPair(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertIn('!! ', out)
         self.assertIn('t1 and t1 are the same commit', flat(out))
-        self.assertIn("Step 1 can only report 'nothing changed', which",
-                      flat(out))
-        self.assertIn('step 2 reports that nothing was compared',
-                      flat(out))
+        self.assertIn('Step 2 compares nothing: it would compare upstream '
+                      'source against itself. A run on the tags says '
+                      'nothing about an intra-major upgrade', flat(out))
         self.assertEqual(Step2Report(out).nothing,
                          'the two tags are one commit.')
         # The notice names no step deleted in branch 9 (it named steps 4
@@ -963,43 +962,37 @@ class AMissingRefIsNamed(unittest.TestCase):
 
 
 @needs_clone
-class Step1RefusesAReversedPairBeforeReportingAnything(unittest.TestCase):
-    """Step 1 is the fourth entry point that takes a pair, and the first one
-    with a clone to ask: it does the cloning. Unguarded, a hand-run
-    `audit-locale-diff.sh glibc-2.34 glibc-2.28` printed a changed-file count,
-    three template verdicts and a fan-in computed at the tag that is actually
-    the older one -- all of it about the other direction, and none of it saying
-    so. Under audit.sh this is also what keeps a doomed run from printing
-    findings before the refusal."""
+class TheSidesRefuseAReversedPairBeforeReportingAnything(unittest.TestCase):
+    """The sides ('What was compared', glibc_locale_data.py sides) are the
+    first entry point that takes a pair with a clone to ask: they do the
+    cloning. Unguarded, a hand-run step 1 on glibc-2.34 glibc-2.28 printed
+    findings computed at the tag that is actually the older one -- all of
+    it about the other direction, and none of it saying so. Under audit.sh
+    this is also what keeps a doomed run from printing anything before the
+    refusal."""
 
     def setUp(self):
-        self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-step1-order-')
+        self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-sides-order-')
         self.addCleanup(shutil.rmtree, self.out_dir, ignore_errors=True)
         self.env = {'PG_GLIBC_AUDIT_OUT': self.out_dir}
 
     def test_it_refuses_and_reports_nothing(self):
-        rc, out = run_script('audit-locale-diff.sh', MID, OLD,
+        rc, out = run_script('glibc_locale_data.py', 'sides', MID, OLD,
                              env_extra=self.env)
         self.assertEqual(rc, 2, out)
         self.assertIn('This pair is REVERSED', flat(out))
-        self.assertNotIn('Locale files added, modified or deleted', out)
-        self.assertNotIn('Collation templates', out)
-
-    def test_allow_reverse_reports_and_says_the_pair_is_reversed(self):
-        rc, out = run_script('audit-locale-diff.sh', MID, OLD,
-                             '--allow-reverse', env_extra=self.env)
-        self.assertEqual(rc, 0, out)
-        self.assertIn('!! REVERSED PAIR', out)
-        self.assertIn('Locale files added, modified or deleted', out)
+        self.assertNotIn('provenance', out)
+        self.assertNotIn('!!', out)
 
     def test_the_forward_control_is_untouched(self):
         """The guard refuses a direction, and says nothing otherwise: the
         `!!` of a forward pair of tags are what a tag does not hold, which
         run by hand asks for the builds (glibc_locale_data.tag_sides_text),
         and the code no step compares (CODE_NOT_COMPARED)."""
-        rc, out = run_script('audit-locale-diff.sh', OLD, MID,
+        rc, out = run_script('glibc_locale_data.py', 'sides', OLD, MID,
                              env_extra=self.env)
         self.assertEqual(rc, 0, out)
+        self.assertIn('Tag provenance', out)
         self.assertEqual([ln for ln in out.splitlines() if '!!' in ln], [
             '!! Not checked for glibc-2.28 and glibc-2.34: they are upstream '
             'tags, which',
@@ -1008,11 +1001,16 @@ class Step1RefusesAReversedPairBeforeReportingAnything(unittest.TestCase):
         self.assertIn('name each side as its build instead', flat(out))
         self.assertNotIn('REVERSED', out)
 
-    def test_a_third_argument_that_is_not_the_flag_is_refused(self):
-        rc, out = run_script('audit-locale-diff.sh', OLD, MID, '--nonsense',
-                             env_extra=self.env)
-        self.assertEqual(rc, 2, out)
-        self.assertIn("unknown argument '--nonsense'", out)
+    def test_a_third_argument_is_refused(self):
+        """Two sides and nothing else; --allow-reverse, which step 1
+        took, is refused like any other word."""
+        for extra in ('--nonsense', '--allow-reverse'):
+            with self.subTest(extra=extra):
+                rc, out = run_script('glibc_locale_data.py', 'sides', MID,
+                                     OLD, extra, env_extra=self.env)
+                self.assertEqual(rc, 2, out)
+                self.assertEqual(out, 'error: usage: glibc_locale_data.py '
+                                      'sides <old> <new>\n')
 
 
 @needs_clone
@@ -1037,10 +1035,10 @@ class TagModeCorpusFloor(unittest.TestCase):
         self.assertIn('below the floor', out)
         self.assertNotIn('The sort rules localedef builds', out)
 
-    def test_step_1_refuses_too(self):
-        """Step 1 holds its tags to the floor in step1_sides, after the
-        provenance and before any diff; the corpus subcommand does the same
-        for any tags it is given."""
+    def test_the_sides_refuse_too(self):
+        """The sides hold their tags to the floor in compared_sides, after
+        the provenance; the corpus subcommand does the same for any tags it
+        is given."""
         repo = make_glibc_shaped_repo(self.tmp, n_files=3, rename=True,
                                       base=None)
         here = os.path.join(self.tmp, 'here')
@@ -1050,7 +1048,7 @@ class TagModeCorpusFloor(unittest.TestCase):
         with contextlib.redirect_stderr(err), \
                 contextlib.redirect_stdout(out), \
                 self.assertRaises(SystemExit) as cm:
-            g.step1_sides(here, 't1', 't2')
+            g.compared_sides(here, 't1', 't2')
         self.assertEqual(cm.exception.code, 2, err.getvalue())
         self.assertIn('below the floor', err.getvalue())
         self.assertIn('Tag provenance', out.getvalue())
@@ -1061,9 +1059,10 @@ class TagModeCorpusFloor(unittest.TestCase):
         self.assertEqual(p.returncode, 2, p.stderr)
         self.assertIn(b'below the floor', p.stderr)
 
-    def test_step_1_refuses_a_new_tag_below_the_floor(self):
+    def test_the_sides_refuse_a_new_tag_below_the_floor(self):
         """The other side: t1 holds a corpus above the floor, and t3, after it,
-        loses ten files. Every other step-1 case has the short tag first."""
+        loses ten files. Every other case of the sides has the short tag
+        first."""
         root = os.path.join(self.tmp, 'new-short')
         os.mkdir(root)
         make_glibc_shaped_repo(root, n_files=g.MIN_LOCALE_FILES, base=None)
@@ -1081,7 +1080,7 @@ class TagModeCorpusFloor(unittest.TestCase):
         with contextlib.redirect_stderr(err), \
                 contextlib.redirect_stdout(io.StringIO()), \
                 self.assertRaises(SystemExit) as cm:
-            g.step1_sides(here, 't1', 't3')
+            g.compared_sides(here, 't1', 't3')
         self.assertEqual(cm.exception.code, 2, err.getvalue())
         self.assertIn('at t3, below the floor', flat(err.getvalue()))
 
@@ -1516,7 +1515,7 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
         """Before the reader, a history that does not hold LR_GETC_FIX
         counted "cannot tell" as "predates" and went on. glibc_reader
         needs the answer to read 0x1A and 0xFF at all, and steps 1, 3 and
-        4 refuse such a tag already: so does step 2, before it judges
+        4 refused such a tag already: so does step 2, before it judges
         anything."""
         tmp = tempfile.mkdtemp(dir=self.tmp)
         repo = make_glibc_shaped_repo(tmp, n_files=g.MIN_LOCALE_FILES,
@@ -1745,7 +1744,8 @@ class UserGitConfigCannotChangeTheAnswer(unittest.TestCase):
     """"git diff respects the user's config": diff.noprefix broke the header
     regex (loudly), a low diff.renameLimit or diff.renames=false turned the
     one rename over 2.34..2.39 into delete+add (silently: the added file lands
-    in 'not analysed', and step 1's count reads 319 instead of 318), and
+    in 'not analysed', and a count of changed files reads 319 instead of
+    318), and
     color.ui=always put escape codes in the pipe. Measured, git 2.50. The
     steps now pin every one of those with -c; this runs them under the hostile
     config and asserts the output is the one the suite already trusts."""
@@ -1788,43 +1788,6 @@ class UserGitConfigCannotChangeTheAnswer(unittest.TestCase):
         self.assertEqual(Step2Report(hostile[1]).removed,
                          {'aa_ER@saaho': '(renamed to ssy_ER)'})
 
-    def test_the_template_verdict_does_not_trust_an_external_diff(self):
-        """`git diff --quiet` ignores an external helper -- unless the config
-        trusts its exit code, and then that exit code IS the verdict for the
-        three templates every other locale inherits from. No audited pair can
-        show it (all three are unchanged on both), so this asserts the two
-        halves separately: the flag defeats the hijack on a file that really
-        changed, and the script's probe carries the flag."""
-        hijack = dict(os.environ,
-                      GIT_EXTERNAL_DIFF='/usr/bin/true',
-                      GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE='true',
-                      GIT_NO_LAZY_FETCH='1')
-        sv_SE = 'localedata/locales/sv_SE'
-        hijacked = subprocess.run(
-            ['git', 'diff', '--quiet', f'{OLD}..{MID}', '--', sv_SE],
-            cwd=GLIBC_CLONE, capture_output=True, env=hijack)
-        if hijacked.returncode != 0:
-            self.skipTest('this git does not trust the helper exit code here')
-        guarded = subprocess.run(
-            ['git', 'diff', '--quiet', '--no-ext-diff', f'{OLD}..{MID}',
-             '--', sv_SE],
-            cwd=GLIBC_CLONE, capture_output=True, env=hijack)
-        self.assertNotEqual(guarded.returncode, 0,
-                            '--no-ext-diff did not defeat the hijack')
-        src = open(os.path.join(SCRIPTS_DIR, 'audit-locale-diff.sh'),
-                   encoding='utf-8').read()
-        self.assertIn('git diff --quiet --no-ext-diff', src,
-                      "step 1's template probe would take the helper's word")
-
-    def test_step_1_is_identical_under_the_hostile_config(self):
-        plain = run_script('audit-locale-diff.sh', MID, NEW,
-                           env_extra={'PG_GLIBC_AUDIT_OUT': self.out_a})
-        hostile = run_script('audit-locale-diff.sh', MID, NEW,
-                             env_extra={'PG_GLIBC_AUDIT_OUT': self.out_b,
-                                        'GIT_CONFIG_GLOBAL': self.cfg})
-        self.assertEqual(plain[0], 0, plain[1])
-        self.assertIn('Locale files added, modified or deleted: 318', plain[1])
-        self.assertEqual(hostile[1].replace(self.out_b, self.out_a), plain[1])
 
 
 @needs_clone
@@ -2708,8 +2671,7 @@ class NothingComparedIsNotTheOrder(unittest.TestCase):
     """Two commits of one source tree compare nothing, whatever their
     order: two builds of one glibc version with the same locale sources
     (measured 2026-11-02 for .40/.48, 275/283, 128/145) are in order by rpm,
-    and steps 1 and 5 would read a tree against itself, and step 2 compares
-    nothing. The clone holds
+    and step 2 would compare a tree against itself, which is nothing. The clone holds
     real ones too, on glibc's own branches. They keep the `!!`
     that one commit compared with itself gets (audit.sh's SAME_TAG), which
     the order alone would not give them: built here as a tag and an empty
@@ -2755,10 +2717,10 @@ class NothingComparedIsNotTheOrder(unittest.TestCase):
         self.assertEqual((status, nothing), ('forward', 'tree'))
         self.assertIn('!! t1 and t1b are two commits of one source tree.',
                       flat(out.getvalue()))
-        self.assertIn('Step 1 compares that tree against itself, and step 2 '
-                      'compares nothing.', flat(out.getvalue()))
-        self.assertIn('step 2 reports that nothing was compared',
-                      flat(out.getvalue()))
+        self.assertIn('Step 2 compares nothing: it would compare that tree '
+                      'against itself.', flat(out.getvalue()))
+        self.assertIn('A run on the tags says nothing about an intra-major '
+                      'upgrade', flat(out.getvalue()))
 
     def test_one_commit_still_says_so(self):
         self.assertEqual(g.nothing_compared(self.repo, 't1', 't1'), 'commit')
@@ -2912,14 +2874,14 @@ class OneFloorForEverySide(unittest.TestCase):
     def test_the_tag_side_of_every_step(self):
         import filter_lc_collate_changes as f
         old, new = FLOOR_OLD, FLOOR_NEW
-        here = os.path.join(self.tmp, 'step1')
+        here = os.path.join(self.tmp, 'sides')
         if not os.path.isdir(here):
             os.mkdir(here)
             os.symlink(GLIBC_CLONE, os.path.join(here, 'glibc'))
         steps = (
-            ('1', lambda argv: g.step1_sides(*argv), [here, old, new]),
+            ('the sides', lambda argv: g.compared_sides(*argv),
+             [here, old, new]),
             ('corpus subcommand', g._main, ['corpus', old, new]),
-            ('1 fanin', g._main, ['fanin', old]),
             ('2', f.main, [old, new]),
         )
         for name, main, argv in steps:
@@ -2931,8 +2893,8 @@ class OneFloorForEverySide(unittest.TestCase):
     def test_the_machine_side_of_every_step(self):
         """A machine's file is read through its commit (machine_side), and
         the commit is listed and held to the floor like a tag: 299 locale
-        files are refused, 300 are not. Steps 1 and 2 and step 1's fan-in
-        all reach a machine through this one function."""
+        files are refused, 300 are not. The sides and step 2 both reach a
+        machine through this one function."""
         for name, count in (('short', 299), ('ok', 300)):
             folder = os.path.join(self.tmp, f'machine-{name}')
             if not os.path.isdir(folder):

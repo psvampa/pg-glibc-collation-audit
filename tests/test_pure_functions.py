@@ -3124,5 +3124,32 @@ class StepTwoRulesByMeasuredName(unittest.TestCase):
                       flat(err.getvalue()))
 
 
+class ADeletedStepIsNamedInEverySpelling(unittest.TestCase):
+    """_harness.DELETED_STEP, which the runs and the examples are held to,
+    finds a deleted step in every spelling the deleted texts used, step 1
+    among them since step 9.5, and leaves alone what names no deleted
+    step: step 11, a step of the plan, the log 'What was compared' keeps
+    under step 1's name."""
+
+    def test_the_spellings(self):
+        for text, found in (
+                ('as step 1 says', ['step 1']),
+                ('Steps 1 and 2 read only what the tags hold', ['Steps 1']),
+                ('(step 1).', ['step 1']),
+                ('steps 1, 2 and 11', ['steps 1']),
+                ('Steps 1 to 5', ['Steps 1 to 5']),
+                ('step 4', ['step 4']),
+                ('run scripts/audit-locale-diff.sh first',
+                 ['audit-locale-diff']),
+                ('Full list in /tmp/x/changed_locales.txt',
+                 ['changed_locales.']),
+                ('Full report: step 11 above.', []),
+                ('step 9.3 deleted it', []),
+                ('step1.glibc-2.28..glibc-2.34.log', []),
+                ('step 2 reads the tags', [])):
+            with self.subTest(text=text):
+                self.assertEqual(_harness.deleted_steps_named(text), found)
+
+
 if __name__ == '__main__':
     unittest.main()

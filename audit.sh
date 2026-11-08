@@ -16,10 +16,10 @@
 # side then reads the build's own localedata/ and locale/, rebuilt from its
 # source RPM, in place of the tag. A side can also be latest-elN, for a machine
 # not installed yet: the newest build of RHEL N that Rocky Linux's mirror
-# lists, resolved once before anything else reads the sides, and named before
-# step 1. With a build, of the options below only --old-node and --new-node
+# lists, resolved once, and named, before anything else reads the sides. With
+# a build, of the options below only --old-node and --new-node
 # are read. Given each machine's file (--old-node, --new-node),
-# steps 1 and 2 read that machine's own locale sources and charmaps, as the
+# the run reads that machine's own locale sources and charmaps, as the
 # build the file names, in place of its tag; a file without the sources, or
 # naming a build that is not of RHEL 8, 9 or 10, makes both sides read their
 # tags when that side was given as its tag, and the run says so; given as
@@ -75,7 +75,7 @@ usage() {
   echo "       the node), or a build as \`rpm -q glibc\` names it without the" >&2
   echo "       architecture, rebuilt from its source RPM, or latest-elN for a" >&2
   echo "       machine not installed yet: the newest build of RHEL N on Rocky" >&2
-  echo "       Linux's mirror, named before step 1; with a build, only" >&2
+  echo "       Linux's mirror, named before anything is read; with a build, only" >&2
   echo "       --old-node and --new-node of the options below are read" >&2
   echo "       OLD first, NEW second: a reversed pair is refused, not" >&2
   echo "       answered. Distance is NOT checked: RHEL8 to RHEL10 is one" >&2
@@ -93,10 +93,10 @@ usage() {
   echo "       one file scripts/locale_order.py --extract wrote on that" >&2
   echo "       machine, with its measurement, its build, its locale sources and" >&2
   echo "       its charmaps (a file without them says why), and stands for the" >&2
-  echo "       --*-order options. Steps 1 and 2 then read each machine's own" >&2
+  echo "       --*-order options. Step 2 then reads each machine's own" >&2
   echo "       locale sources and charmaps, as the build its file names, in" >&2
   echo "       place of the tag (the side given is that build or its tag)," >&2
-  echo "       and download nothing. A file without the sources, or naming a" >&2
+  echo "       and downloads nothing. A file without the sources, or naming a" >&2
   echo "       build that is not of RHEL 8, 9 or 10, makes both sides read" >&2
   echo "       their tags when that side was given as its tag, and the run" >&2
   echo "       says so; given as the build itself, the run is refused. When" >&2
@@ -174,7 +174,8 @@ set_noun() {
 }
 set_noun
 # What a run does not read of a build is said in ONE place, the `!! Not
-# checked for these builds` step 1 prints (build_sources.NOT_CHECKED), which
+# checked for these builds` under 'What was compared'
+# (build_sources.NOT_CHECKED), which
 # the warnings block repeats; the summary's blocks point to it with this
 # sentence and never restate it.
 NOT_READ="What this run does not read of a build is under 'Not checked for"
@@ -231,14 +232,13 @@ if { [ -n "$OLD_NODE" ] && [ -z "$NEW_NODE" ]; } ||
   echo "       alone compares nothing" >&2
   exit 2
 fi
-# Mirror audit-locale-diff.sh exactly, and inherit the user's setting. Never
-# invent a private directory: the path is a documented knob, and the step
+# Inherit the user's setting. Never invent a private directory: the path is a documented knob, and the step
 # scripts resolve this same variable independently.
 OUT_DIR=${PG_GLIBC_AUDIT_OUT:-/tmp/pg-glibc-collation-audit}
 export PG_GLIBC_AUDIT_OUT="$OUT_DIR"
 
 # Each machine's file is checked and laid out here, before anything reads the
-# sides, because it names the build that machine runs, and steps 1 and 2 read
+# sides, because it names the build that machine runs, and the run reads
 # that build from the machine's own locale sources, which the file holds
 # (glibc_locale_data.machine_sides; nothing is downloaded): the side typed
 # must be that build or its tag. A file that holds no locale sources, or
@@ -306,10 +306,6 @@ fi
 # lines on stderr overtake the steps' `!!` warnings.
 export PYTHONUNBUFFERED=1
 
-# Tells the steps to drop their "run this next" hints, which name commands
-# this script has already run. Findings, counts and warnings are unaffected.
-export PG_GLIBC_AUDIT_WRAPPED=1
-
 # Every name below that a Python step also writes is spelled by the function
 # that step uses, never by a second spelling here. bash's own
 # ${x//[^A-Za-z0-9_.@+-]/_} replaces each byte of a character outside ASCII
@@ -318,8 +314,9 @@ export PG_GLIBC_AUDIT_WRAPPED=1
 slug() { python3 "$SCRIPTS/glibc_locale_data.py" pair-slug "$1" "$2"; }
 PAIR=$(slug "$OLD" "$NEW")
 
-# Where step 1 records the commit it made for each build, and the steps after
-# it take it from (glibc_locale_data.SIDES_ENV), instead of each making it
+# Where the sides ('What was compared', below) record the commit made for
+# each build, and the steps after them take it from
+# (glibc_locale_data.SIDES_ENV), instead of each making it
 # again: removed below with every other file this run reads, and exported to
 # this run's steps only.
 SIDES_FILE="$OUT_DIR/build_sides.$PAIR.txt"
@@ -330,7 +327,7 @@ export PG_GLIBC_AUDIT_SIDES="$SIDES_FILE"
 # only for a side read as its build; removed with every other file this run
 # reads.
 MACHINES_FILE="$OUT_DIR/machine_files.$PAIR.txt"
-# What step 1's `!!` for a side read as a tag asks for
+# What the `!!` for a side read as a tag asks for
 # (glibc_locale_data.TAG_ASK_ENV): with any option a build is refused with
 # (the list above), the machines' files; with a machine's file, a tag is
 # read only when a file holds no locale sources or names a build that is
@@ -356,13 +353,17 @@ OLD_STEP3_LIST="$OUT_DIR/step3_affected_locales.txt"
 # is never taken for this run's.
 OLD_STEP4_LIST="$OUT_DIR/step4_exposed_locales.txt"
 OLD_STEP4_BYTE_ORDER="$OUT_DIR/step4_byte_order_locales.txt"
+# Written by step 1 until step 9.5 made it 'What was compared', under a name
+# that carries no pair. Nothing reads it; removed below, so that a list an
+# earlier version left there is never taken for this run's.
+OLD_STEP1_LIST="$OUT_DIR/changed_locales.txt"
 
 # The node files, laid out above (locale_order.py --unpack checks each one
 # whole), are moved here under a name for the pair, like every other file
 # this run reads, and stand for the --*-order options: the measurement
-# always; the sources and the charmaps when the file holds them, which steps
-# 1 and 2 read through MACHINES_FILE (a file without the sources was decided
-# above, and NODE_NOTE says why).
+# always; the sources and the charmaps when the file holds them, which the
+# sides and step 2 read through MACHINES_FILE (a file without the sources
+# was decided above, and NODE_NOTE says why).
 #
 # The charmaps also go to step 11, which checks the strings it measured
 # against them; a file without them says why, and step 11 prints that reason
@@ -434,17 +435,18 @@ mkdir -p "$OUT_DIR"
 # unnoticed, but the statement is false and this file's rule is that every
 # file it reads was written by this run.
 rm -f "$STEP2_LIST" "$STEP2_REMOVED" "$STEP2_KEYED" "$OLD_STEP3_LIST" \
-      "$OLD_STEP4_LIST" "$OLD_STEP4_BYTE_ORDER" "$SIDES_FILE" "$RULES_FILE" \
+      "$OLD_STEP4_LIST" "$OLD_STEP4_BYTE_ORDER" "$OLD_STEP1_LIST" \
+      "$SIDES_FILE" "$RULES_FILE" \
       "$OUT_DIR/step2_rules_characters.$PAIR.tsv"
 rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
 # What the machines' files decided, for the warnings block below, which
 # repeats the `!!` blocks of every step*.$PAIR.log.
 [ -z "$NODE_NOTE" ] || printf '%s\n' "$NODE_NOTE" > "$OUT_DIR/step0.$PAIR.log"
 
-# Step 11 is worked out before step 1, so that a measurement the comparison
-# refuses -- cut short, damaged, measured by another copy of locale_order.py
-# over other strings, or taken on another glibc than its tag -- stops the run
-# here instead of after steps 1 and 2. Its report is printed where step 11
+# Step 11 is worked out before the sides are read, so that a measurement the
+# comparison refuses -- cut short, damaged, measured by another copy of
+# locale_order.py over other strings, or taken on another glibc than its
+# tag -- stops the run here instead of after them and step 2. Its report is printed where step 11
 # stands, below, and its summary at the end.
 #
 # Its log is not named step11.*.log on purpose: the warnings block at the end
@@ -504,19 +506,36 @@ run_step() {
   "$@" 2>&1 | tee "$log"
 }
 
-banner "STEP 1  What changed, and how far it reaches"
-run_step 1 "$SCRIPTS/audit-locale-diff.sh" "$OLD" "$NEW"
+# What was compared: each side, where it was read from, and what no step
+# reads (glibc_locale_data.compared_sides), with each machine's file named
+# as it was given. Its log keeps the name step 1's had: the warnings block
+# below repeats the `!!` blocks of every step*.$PAIR.log, and has to repeat
+# these (CODE_NOT_COMPARED is the one line that covers ko_KR without the
+# machines' files), after step0's, whose note is "the first warning below".
+# Never captured in a variable: a refusal (a reversed pair, a tag git does
+# not hold) is printed, and pipefail ends the run with it.
+compared() {
+  if [ -n "$OLD_NODE" ]; then
+    echo "Machines' files, as given:"
+    echo "  old  $OLD_NODE"
+    echo "  new  $NEW_NODE"
+  fi
+  python3 "$SCRIPTS/glibc_locale_data.py" sides "$OLD" "$NEW"
+}
+banner "WHAT WAS COMPARED"
+run_step 1 compared
 
-# Which pair this actually is, asked of git -- and asked HERE because step 1 is
-# what clones the repository and verifies both refs, so nothing before it can
-# ask git anything. Step 1 asks the same question first, and refuses there, so
+# Which pair this actually is, asked of git -- and asked HERE because the
+# sides are what clone the repository, verify both refs and record each
+# build's commit, so nothing before them can ask git anything. The sides ask
+# the same question first, and refuse there, so
 # that no finding is printed for a pair that is about to be rejected; step 2
 # asks it again for itself, and --quiet is what keeps this call from adding
 # one more copy of its `!!` block. Two questions in one answer:
 #
-#   reversed -- step 1 has already exited 2 and this script stopped with it.
-#               Reversed, steps 1 and 2 run to the end; the direction was
-#               never compared at all.
+#   reversed -- the sides have already exited 2 and this script stopped
+#               with them. Reversed, step 2 would run to the end; the
+#               direction was never compared at all.
 #   same     -- one commit, however each side is spelt (the second word is
 #               then `commit`). This used to be
 #               `[ "$OLD" = "$NEW" ]`, a comparison of TEXT, so
@@ -535,8 +554,7 @@ NOTHING=${ORDER_WORDS#* }
 
 # A minor-version upgrade inside one RHEL major is two builds of the SAME
 # upstream release, so the steps that compare the two tags have nothing to
-# compare. Step 1 reports that nothing changed, and step 2 that
-# nothing was compared. That is not a clean result, and C.UTF-8 is the proof:
+# compare. Step 2 reports that nothing was compared. That is not a clean result, and C.UTF-8 is the proof:
 # its order changed between RHEL 8.1 and 8.2, both of them upstream glibc 2.28.
 SAME_TAG=0
 case $NOTHING in
@@ -550,7 +568,7 @@ case $NOTHING in
 esac
 case $ORDER in
   # The `!!` block for this case comes from the order check that every step
-  # taking the pair runs -- steps 1 and 2 each print it -- so it
+  # taking the pair runs -- the sides and step 2 each print it -- so it
   # lands in their logs, which is where the warnings block at the bottom finds
   # it and repeats it once. It used to be echoed here, and then only the
   # wrapper said it: a hand-run step printed its clean sentence over a
@@ -565,7 +583,7 @@ case $ORDER in
   *)
     echo "error: the order check answered '$ORDER', which is none of the" >&2
     echo "       states this script handles (same, forward, undetermined;" >&2
-    echo "       a reversed pair never gets here, it exits 2 in step 1)." >&2
+    echo "       a reversed pair never gets here, the sides refuse it)." >&2
     echo "       Not continuing." >&2
     exit 1
     ;;
@@ -625,10 +643,11 @@ rules_beside() {
 # passed on as an argument: the name check that used to guard step 3's argv
 # is no longer needed.
 
-# Optional, and not part of the source audit: steps 1 and 2 read the clone
-# and the builds, or each machine's own locale sources from its file, while
-# step 11 needs each machine's measurement. It runs only when you supply
-# them. Every step keeps its number: steps 3 to 10 were deleted in branch 9.
+# Optional, and not part of the source audit: step 2 reads the clone and the
+# builds, or each machine's own locale sources from its file, while step 11
+# needs each machine's measurement. It runs only when you supply them. Every
+# step keeps its number: in branch 9 step 1 became 'What was compared', and
+# steps 3 to 10 were deleted.
 if [ -n "$OLD_ORDER" ]; then
   banner "STEP 11  MEASURED ORDER  how each machine's own glibc sorts every locale"
   cat "$ORDER_LOG"
@@ -731,7 +750,7 @@ if [ "$NOUN" = builds ] && [ -n "$OLD_NODE" ]; then
   echo "     machines', below)."
 elif [ "$NOUN" = builds ]; then
   echo "     Each build's locale files are the ones its glibc-locale-source"
-  echo "     package installs, checked one by one (step 1)."
+  echo "     package installs, checked one by one ('What was compared')."
 elif [ "$NOUN" = sides ]; then
   if [ "$TAG_SIDE" = old ]; then
     text="$TAG_NAME is an upstream tag, so what your old distro adds to it"
@@ -819,7 +838,7 @@ if [ "$ORDER" = "undetermined" ]; then
     echo "     Neither of $OLD and $NEW is an ancestor of the other, and the"
     echo "     glibc release behind each one does not put them in order either"
     echo "     -- so nothing here checked that $NEW is the newer of the two"
-    echo "     (step 1 prints which tag it found behind each). If they are"
+    echo "     ('What was compared' prints the commit behind each). If they are"
     echo "     the wrong way round, every list above is the wrong tag's: step 2"
     echo "     reports a locale deleted in the upgrade as a harmless addition."
     echo "     Confirm which build is older."
@@ -844,8 +863,8 @@ fi
 
 if [ "$SAME_TAG" = "1" ] && [ "$NOUN" != tags ]; then
   # What a build holds is its sources in localedata/ and locale/; what two
-  # machines' files hold is their locale sources and charmaps, which steps 1
-  # and 2 read in place of their builds'.
+  # machines' files hold is their locale sources and charmaps, which step 2
+  # reads in place of their builds'.
   echo
   if [ "$NOTHING" = "commit" ]; then
     echo "-- One commit, compared with itself"
@@ -863,11 +882,11 @@ if [ "$SAME_TAG" = "1" ] && [ "$NOUN" != tags ]; then
     if [ "$CM_NOT_READ" = 0 ]; then
       text="$OLD -> $NEW: the two machines' files hold the same locale sources"
       text="$text and charmaps, so no locale's sort rules can differ between"
-      text="$text them, and steps 1 and 2 had nothing to compare."
+      text="$text them, and step 2 had nothing to compare."
     else
       text="$OLD -> $NEW: the two machines' files hold the same locale sources,"
-      text="$text so no locale's sort rules can differ between them, and steps"
-      text="$text 1 and 2 had nothing to compare; their character sets were not"
+      text="$text so no locale's sort rules can differ between them, and step"
+      text="$text 2 had nothing to compare; their character sets were not"
       text="$text compared, as a file holds no charmaps this reads."
     fi
     text="$text What this run"
@@ -916,10 +935,11 @@ fi
 # Repeated verbatim. A warning that scrolled past 400 lines ago has not been
 # delivered, and these are the cases where a clean result means nothing.
 #
-# Deduplicated by whole block. Steps 1 and 2 each print the order check's
-# `!!` for a pair they cannot order; printing it twice trains the reader to
-# skip the section, which costs more than the repetition buys. Identical text
-# only -- two warnings that differ by one word are two warnings.
+# Deduplicated by whole block. The sides and step 2 each print the order
+# check's `!!` for a pair they cannot order; printing it twice trains the
+# reader to skip the section, which costs more than the repetition buys.
+# Identical text only -- two warnings that differ by one word are two
+# warnings.
 WARNINGS=$(awk '
   function flush() {
     if (cur != "") { if (!(cur in seen)) { seen[cur] = 1; printf "%s", cur } }

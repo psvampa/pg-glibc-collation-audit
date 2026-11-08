@@ -10,26 +10,23 @@ fetch on a `--filter=blob:none` clone silently dropped files from the analysis
 and the locale was reported unaffected. Everything here fails loudly instead,
 and blobs are read in a single `git cat-file --batch` stream.
 
-Also runnable directly; audit.sh and step 1 use fanin, sides, resolve,
-machines, latest, order and pair-slug, and provenance and
-corpus are kept for a hand run:
-  python3 glibc_locale_data.py fanin <tag> [changed_files.txt] [--as NAME]
+Also runnable directly; audit.sh uses sides, resolve, machines, latest,
+order and pair-slug, and provenance and corpus are kept for a hand run:
   python3 glibc_locale_data.py provenance <tag> [<tag> ...]
   python3 glibc_locale_data.py corpus <tag> [<tag> ...]
   python3 glibc_locale_data.py order [--allow-reverse] [--quiet] <old> <new>
       prints the direction (same, forward, reversed, undetermined) and
       whether nothing is compared (commit, tree, none)
   python3 glibc_locale_data.py pair-slug <old> <new>
-  python3 glibc_locale_data.py sides [--allow-reverse] --refs-file F
-          <old> <new>
-      step 1's sides: each a tag of the clone, or a build named as
+  python3 glibc_locale_data.py sides <old> <new>
+      what the run compares (compared_sides), printed under audit.sh's
+      "What was compared": each side a tag of the clone, or a build named as
       glibc-2.34-283.el9_8, fetched and made a commit of the clone
       (build_sources), or, under audit.sh given each machine's file, made
       a commit from that file with nothing fetched (machine_side, through
-      MACHINES_ENV); checks the order and the floor, prints the
-      provenance, and writes to F the two refs the step reads; under
-      audit.sh it also records each build's commit for the steps after
-      it (SIDES_ENV)
+      MACHINES_ENV); checks the order and the floor and prints the
+      provenance; under audit.sh it also records each build's commit for
+      the steps after it (SIDES_ENV)
   python3 glibc_locale_data.py resolve --to F <old> <new>
       for audit.sh, before anything runs: writes to F `<side>\t<kind>` a
       line each, the side without the architecture `rpm -q` prints
@@ -40,7 +37,7 @@ corpus are kept for a hand run:
       for audit.sh, given each machine's file: <old_build> and <new_build>
       are what `rpm -q glibc` printed on each, each folder that file laid
       out (whether it holds locales/, else the sources-not-included
-      reason); writes to F, a line each, the side steps 1 and 2 read, its
+      reason); writes to F, a line each, the side the run reads, its
       kind and its upstream tag, and prints which each side reads
   python3 glibc_locale_data.py latest --to F <old> <new>
       for audit.sh, once: writes to F each side a line, latest-elN
@@ -141,8 +138,8 @@ def node_entries(root):
 # regex in filter_lc_collate_changes.py expects (the step then dies, correctly,
 # with "the diff does not cover"); diff.renameLimit=1 turns the one rename into
 # delete+add with only a warning on stderr, so the added file lands in "not
-# analysed" -- silently; diff.renames=false does the same to step 1, whose
-# published count goes from 318 to 319; color.ui=always writes escape codes
+# analysed" -- silently; diff.renames=false does the same; color.ui=always
+# writes escape codes
 # into the pipe. -c on the command line outranks every configuration source.
 # diff.srcPrefix/dstPrefix replace the a/ b/ as noprefix does (git 2.54):
 # step 2 then died saying "Drop --diff-file" when none was passed. The two
@@ -237,11 +234,10 @@ def die(msg, code=2):
 def _is_glibc_clone(path):
     """Is `path` a git clone of glibc?
 
-    Asked of git, not of the filesystem. audit-locale-diff.sh clones with
+    Asked of git, not of the filesystem. compared_sides clones with
     `--no-checkout`, so the clone has no working tree at all and a
     `localedata/locales` directory never appears on disk -- every step used to
-    die with "run audit-locale-diff.sh first" on the very run that had just
-    cloned it.
+    die asking for the clone on the very run that had just made it.
     """
     if not os.path.isdir(path):
         return False
@@ -275,9 +271,8 @@ def find_repo(explicit=None):
         if _is_glibc_clone(c):
             return os.path.abspath(c)
     die("could not find the glibc clone (no git repository containing "
-        "localedata/locales among the paths tried). Run "
-        "scripts/audit-locale-diff.sh first, or pass "
-        "--repo <path-to-glibc-clone>.")
+        "localedata/locales among the paths tried). Run ./audit.sh "
+        "first, which makes it, or pass --repo <path-to-glibc-clone>.")
 
 
 def run_git(args, repo, allow_fail=False):
@@ -375,7 +370,7 @@ def resolve_commits(repo, refs):
     return found
 
 
-def check_refs(repo, *refs, builds=False):
+def check_refs(repo, *refs):
     """Verify every ref resolves, fetching tags once if some are missing.
 
     A stale clone from an earlier run simply does not have newer tags, and
@@ -383,15 +378,13 @@ def check_refs(repo, *refs, builds=False):
 
     Returns {ref: commit id}, read after any fetch, for pair_order to take
     instead of asking git again. A ref whose commit build_commit made is
-    refused (refuse_build_commits) unless `builds`, which only step 1's
-    fan-in passes, for the build it has just made.
+    refused (refuse_build_commits).
     """
     refuse_latest(refs)
     commits = resolve_commits(repo, refs)
     missing = [r for r in refs if r not in commits]
     if not missing:
-        if not builds:
-            refuse_build_commits(repo, commits)
+        refuse_build_commits(repo, commits)
         return commits
     print(f"note: {', '.join(missing)} not present in {repo}, fetching tags...",
           file=sys.stderr)
@@ -402,15 +395,14 @@ def check_refs(repo, *refs, builds=False):
     still = [r for r in refs if r not in commits]
     if still:
         die(f"unknown git ref(s) after fetching tags: {', '.join(still)}")
-    if not builds:
-        refuse_build_commits(repo, commits)
+    refuse_build_commits(repo, commits)
     return commits
 
 
 def refuse_build_commits(repo, commits):
     """Die when a ref of {ref: commit id} names a commit build_commit made
-    (its committer is BUILD_EMAIL), however it is spelt: its id as step 1
-    prints it, its ref under BUILD_REFS, an id from an older run. Read as a
+    (its committer is BUILD_EMAIL), however it is spelt: its id as the
+    run prints it, its ref under BUILD_REFS, an id from an older run. Read as a
     tag, such a commit is the upstream tag outside localedata/ and locale/,
     and the run then calls it an upstream tag and names none of the
     build's patches (false-negative-reviewer, round 1: `./audit.sh
@@ -820,10 +812,9 @@ def nothing_compared(repo, old, new, commits=None):
 # For two builds, or a tag and a build: what was not compared is what this
 # tool does not read of a build at all, not a distro's patches.
 _NOTHING_COMPARED_BUILDS = (
-    "Step 1 can only report 'nothing changed', and step 2 reports "
-    "that nothing was compared: the two {noun} hold the same locale "
+    "The two {noun} hold the same locale "
     "sources and the same code under locale/. What can still differ is "
-    "what this tool does not read of a build, which step 1 prints under "
+    "what this tool does not read of a build, which the run prints under "
     "'Not checked for these builds'. sql/c_utf8_probe.sql and "
     "docs/confirming-on-a-real-system.md check the order on the machines "
     "themselves.")
@@ -831,7 +822,8 @@ _NOTHING_COMPARED_BUILDS = (
 
 # For two machines' files (machine_side): the two hold the same locale
 # sources, and the same charmaps when both files hold them, which is a
-# result; what no step reads of a machine is said where step 1 names them.
+# result; what no step reads of a machine is said where the run names them
+# (report_machine_provenance).
 # A file without charmaps leaves them out of its commit (machine_commit), so
 # two such files of one source tree are one tree with no charmap read: the
 # sentence then says the character sets were not compared, never that they
@@ -841,14 +833,14 @@ def nothing_compared_machines(charmaps):
     both files hold charmaps this reads."""
     same = ("The two machines' files hold the same locale sources and "
             "charmaps, so no locale's sort rules can differ between them, "
-            "and steps 1 and 2 have nothing to compare."
+            "and step 2 has nothing to compare."
             if charmaps else
             "The two machines' files hold the same locale sources, so no "
-            "locale's sort rules can differ between them, and steps 1 and 2 "
-            "have nothing to compare; their character sets were not "
+            "locale's sort rules can differ between them, and step 2 "
+            "has nothing to compare; their character sets were not "
             "compared, as a file holds no charmaps this reads.")
     return (same + " What can still differ is what no step reads of a "
-            "machine, which step 1 prints under 'Not checked for these "
+            "machine, which the run prints under 'Not checked for these "
             "machines', and how each machine's glibc sorts, which step 11 "
             "measures. sql/c_utf8_probe.sql and "
             "docs/confirming-on-a-real-system.md check the order on the "
@@ -867,13 +859,11 @@ def is_machine(s):
 
 
 _NOTHING_COMPARED_REST = (
-    "Step 1 can only report "
-    "'nothing changed', which for an intra-major upgrade "
-    "(RHEL 8.1 -> 8.2, say) says nothing at all, and step 2 reports "
-    "that nothing was compared. The distro's own "
+    "A run on the tags says nothing about an intra-major upgrade "
+    "(RHEL 8.1 -> 8.2, say): the distro's own "
     "builds are where such a change lives. With each machine's file "
     "(--old-node and --new-node), step 11 measures how each machine "
-    "sorts, and steps 1 and 2 compare the two machines' own locale "
+    "sorts, and step 2 compares the two machines' own locale "
     "sources, when the files hold them; "
     "sql/c_utf8_probe.sql checks C.UTF-8 on each "
     "machine. C.UTF-8's order moved in glibc-2.28-93.el8 with the "
@@ -909,16 +899,16 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
     source = 'upstream source' if noun == 'tags' else 'that commit'
     old, new = label(old), label(new)
     if nothing == 'commit':
-        warn(f"{old} and {new} are the same commit. Step 1 compares "
-             f"{source} against itself, and step 2 compares nothing. {rest}",
+        warn(f"{old} and {new} are the same commit. Step 2 compares "
+             f"nothing: it would compare {source} against itself. {rest}",
              split_words=False)
     elif nothing == 'tree' and machines:
         warn(f"{old} and {new}: {rest[0].lower()}{rest[1:]}",
              split_words=False)
     elif nothing == 'tree':
-        warn(f"{old} and {new} are two commits of one source tree. Step 1 "
-             f"compares that tree against itself, and step 2 compares "
-             f"nothing. {rest}", split_words=False)
+        warn(f"{old} and {new} are two commits of one source tree. Step 2 "
+             f"compares nothing: it would compare that tree against "
+             f"itself. {rest}", split_words=False)
     if status == 'reversed':
         warn(f"REVERSED PAIR, allowed on request: {detail}. Every finding "
              f"below has old and new the other way round -- what reads as "
@@ -1208,7 +1198,7 @@ def side(repo, ref=None, extra=(), build=None, version=None, named=None,
     localedata/locales/ and the `extra` paths. `build=` is a machine's and
     `named=` a build's: two keywords, so that neither is ever read as the
     other, and both at once is refused. `make` is build_side's, which
-    step 1 passes.
+    compared_sides passes.
 
     The floor (below_floor) is applied here once for every side that holds
     files, so no step can refuse a smaller corpus on one side than on the
@@ -1336,13 +1326,13 @@ def machine_build(words):
         die("that machine's file names no glibc build")
     if len(set(got)) != 1:
         die(f"`rpm -q glibc` printed {words!r} on that machine: two builds, "
-            f"{' and '.join(sorted(set(got)))}, so which one steps 1 and 2 "
+            f"{' and '.join(sorted(set(got)))}, so which one the run "
             f"should read is not known.")
     return got[0]
 
 
 def machine_sides(given, words, no_sources=(None, None)):
-    """What steps 1 and 2 read for each side when audit.sh is given each
+    """What the run reads for each side when audit.sh is given each
     machine's file: [(name, kind, tag)], kind 'build' or 'tag', tag the
     upstream tag of that side, which step 11 reads; and the lines
     to print, `!!` blocks included.
@@ -1409,8 +1399,8 @@ def machine_sides(given, words, no_sources=(None, None)):
         lines = []
         if list(given) != builds:
             lines.append(textwrap.fill(
-                f"Each machine's file names the build it runs: steps 1 and 2 "
-                f"read {builds[0]} and {builds[1]}, in place of {given[0]} "
+                f"Each machine's file names the build it runs: step 2 "
+                f"reads {builds[0]} and {builds[1]}, in place of {given[0]} "
                 f"and {given[1]}, from each machine's own locale sources.",
                 width=78, break_long_words=False, break_on_hyphens=False))
         return [(b, 'build', t) for b, t in zip(builds, tags)], lines
@@ -1418,7 +1408,7 @@ def machine_sides(given, words, no_sources=(None, None)):
     said = '; and '.join(f"the {side} machine's file names {b}, which this "
                          f"run cannot read: {why}" for side, b, why in unread)
     with contextlib.redirect_stdout(out):
-        warn(f"{said[0].upper()}{said[1:]}. So steps 1 and 2 read the tags "
+        warn(f"{said[0].upper()}{said[1:]}. So step 2 reads the tags "
              f"{tags[0]} and {tags[1]}, which hold neither build's patches.",
              split_words=False)
     return [(t, 'tag', t) for t in tags], out.getvalue().rstrip('\n').split('\n')
@@ -1448,7 +1438,7 @@ def refuse_latest(names):
 def latest_line(name, got):
     """The line audit.sh prints for `name` (latest-elN) resolved to `got`
     (build_sources.Latest): which build, where and as of when. Printed once,
-    before step 1; neither the URL nor the date is ever cut, so the one can
+    before the sides are read; neither the URL nor the date is ever cut, so the one can
     be copied whole and the other read on one line."""
     stamp = got.timestamp or ''
     if stamp.isdigit():
@@ -1505,12 +1495,12 @@ def _need_tags(repo, tags):
             sys.exit(2)
 
 
-# Under audit.sh, the file where step 1 records the commit it made for each
-# build of the run, `<build>\t<commit>` a line; the steps after it take the
-# commit from there instead of making it again (0.46-0.61 s a side and a
-# step, against 0.06-0.08 s, measured 2026-11-03). audit.sh removes the file
-# before step 1 and exports its path to its steps only: a step run on its
-# own makes the commit.
+# Under audit.sh, the file where compared_sides records the commit it made
+# for each build of the run, `<build>\t<commit>` a line; the steps after it
+# take the commit from there instead of making it again (0.46-0.61 s a side
+# and a step, against 0.06-0.08 s, measured 2026-11-03). audit.sh removes the
+# file before the sides are read and exports its path to its steps only: a
+# step run on its own makes the commit.
 SIDES_ENV = 'PG_GLIBC_AUDIT_SIDES'
 
 
@@ -1529,7 +1519,7 @@ def write_recorded(builds):
 
 
 def _recorded(repo, name, built):
-    """The commit step 1 of this run made for `name`, from the file
+    """The commit compared_sides made in this run for `name`, from the file
     SIDES_ENV names, checked to be a commit build_commit made (its
     committer) for this very build (its message names the tag, the build
     and the SRPM's sha256). Dies when the file is missing, does not name
@@ -1551,12 +1541,12 @@ def _recorded_commit(repo, name, message, other):
             lines = fh.read().split('\n')
     except OSError as e:
         die(f"cannot read the build {name}: {SIDES_ENV} names {path}, where "
-            f"step 1 of this run records each build's commit, and it cannot "
+            f"this run records each build's commit, and it cannot "
             f"be read ({e.strerror}).", 2)
     found = [ln.split('\t')[1] for ln in lines
              if ln.count('\t') == 1 and ln.split('\t')[0] == name]
     if len(found) != 1:
-        die(f"cannot read the build {name}: {path}, where step 1 of this run "
+        die(f"cannot read the build {name}: {path}, where this run "
             f"records each build's commit, names it {len(found)} time(s).", 2)
     commit = found[0]
     out = run_git(['log', '-1', '--format=%ce%x00%B', commit],
@@ -1577,7 +1567,8 @@ def _recorded_commit(repo, name, message, other):
 # (`<build>\t<folder>` a line, the build as rpm -q glibc prints it without
 # the architecture). A step that reads that build reads the machine's own
 # locale sources from there (machine_side) and downloads nothing. audit.sh
-# writes it before step 1 and exports its path to its steps only.
+# writes it before the sides are read and exports its path to its steps
+# only.
 MACHINES_ENV = 'PG_GLIBC_AUDIT_MACHINES'
 MACHINE_REFS = 'refs/pg-glibc-audit/machines/'
 
@@ -1613,7 +1604,7 @@ def machine_folders(name):
 def machine_message(tag, name, sha):
     """The message of the commit made from a machine's own files: the tag
     it is made on, the build the machine runs and the sha256 of its
-    measurement, so two machines' commits are two commits and step 1's
+    measurement, so two machines' commits are two commits and the run's
     record can be checked against the machine it names."""
     return ('pg-glibc-audit: %s with localedata/locales/ and '
             'localedata/charmaps/ of the machine that runs %s\n\n'
@@ -1760,8 +1751,9 @@ def machine_side(repo, name, folders, extra=(), make=False):
     Two machines that run one build (both sides of a pair) are one side
     only when their files hold the same locale sources and charmaps; two
     machines of one build whose files differ die, since which of them a
-    step reads would be a guess. Under audit.sh a step after step 1 takes
-    the commit step 1 recorded (SIDES_ENV), checked against its message."""
+    step reads would be a guess. Under audit.sh a step after the sides
+    takes the commit compared_sides recorded (SIDES_ENV), checked against
+    its message."""
     parsed = build_name(name)
     tag = 'glibc-' + parsed[0]
     _need_tags(repo, [tag])
@@ -1816,9 +1808,10 @@ def build_side(repo, name, extra=(), make=False):
     reader (LINE_READER): how localedef reads 0x1A, 0xFF and UTF-8 is
     answered here by the tag's ancestry, which would not speak for it.
 
-    Under audit.sh (SIDES_ENV set) a step after step 1 takes the commit
-    step 1 made from that file (_recorded) instead of making it again.
-    Step 1 passes `make`: it always makes the commit, and then records it
+    Under audit.sh (SIDES_ENV set) a step after the sides takes the commit
+    compared_sides made from that file (_recorded) instead of making it
+    again. compared_sides passes `make`: it always makes the commit, and
+    then records it
     (write_recorded), so it never reads a file it has not written.
 
     When MACHINES_ENV names `name`, none of the above: the build is read
@@ -2466,17 +2459,6 @@ def parse_supported(text, tag):
 OUT_DIR = os.environ.get('PG_GLIBC_AUDIT_OUT', '/tmp/pg-glibc-collation-audit')
 
 
-def wrapped():
-    """True when audit.sh is driving this step, rather than a human.
-
-    The steps print a hint naming the command to run next, which is right for
-    a hand-run audit and wrong under the wrapper: it tells the reader to run a
-    step that has already run. Only the hints are suppressed -- never a
-    finding, a count or a warning.
-    """
-    return os.environ.get('PG_GLIBC_AUDIT_WRAPPED') == '1'
-
-
 def pair_slug(old_tag, new_tag):
     """Filename fragment identifying a version pair.
 
@@ -2505,13 +2487,13 @@ def write_list(name, items):
 MIRROR_URL = 'https://github.com/bminor/glibc.git'
 
 
-def step1_sides(here, old, new, allow_reverse=False):
-    """Step 1's two sides, (repo, old Side or tag, new Side or tag), and all
-    it used to do in bash before its first finding, with the same texts in
-    the same order for two tags: clone glibc into `here`/glibc when it is
-    not there, fetch tags once when a tag is missing, refuse a reversed
-    pair, print the provenance, hold each side to the floor; and, which the
-    bash did not, a `!!` for the sides read as tags (tag_sides_text). A build name
+def compared_sides(here, old, new):
+    """The run's two sides, (repo, old Side or tag, new Side or tag), and
+    what audit.sh prints of them under "What was compared": clone glibc
+    into `here`/glibc when it is not there, fetch tags once when a tag is
+    missing, refuse a reversed pair, print the provenance, a `!!` for the
+    sides read as tags (tag_sides_text) and one for what no step compares
+    (CODE_NOT_COMPARED), and hold each side to the floor. A build name
     (is_build_name) is never asked of git: build_side fetches it and makes
     its commit again, or makes it from a machine's own file under audit.sh
     (machine_side). latest-elN is refused (refuse_latest)."""
@@ -2537,7 +2519,7 @@ def step1_sides(here, old, new, allow_reverse=False):
         refuse_build_commits(repo, resolve_commits(repo, tags))
     sides = [n if n in tags else side(repo, n, make=True) for n in names]
     with contextlib.redirect_stdout(sys.stderr):
-        pair_check(repo, sides[0], sides[1], allow_reverse=allow_reverse)
+        pair_check(repo, sides[0], sides[1])
     builds = [sd for sd in sides if not _is_tag(sd)]
     # Under audit.sh, for the steps after this one (SIDES_ENV): after the
     # order check, so a refused pair records nothing.
@@ -2560,7 +2542,6 @@ def step1_sides(here, old, new, allow_reverse=False):
     if tags:
         warn(tag_sides_text(tags), split_words=False)
     warn(CODE_NOT_COMPARED, split_words=False)
-    print('---', flush=True)
     # The corpus floor: both tags must hold a real locale corpus, or the
     # diff is empty for a reason that has nothing to do with collation and
     # reads as "nothing changed". A build was held to it by build_side.
@@ -2569,7 +2550,7 @@ def step1_sides(here, old, new, allow_reverse=False):
     return repo, sides[0], sides[1]
 
 
-# How audit.sh tells step 1 what a reader of this run can do to have a
+# How audit.sh tells tag_sides_text what a reader of this run can do to have a
 # side read as a build (tag_sides_text): 'build' (name it), 'node' (the
 # measurements, which a build refuses: pass the machines' files),
 # 'none' (a machine's file holds no locale sources or names a build that is
@@ -2578,10 +2559,11 @@ def step1_sides(here, old, new, allow_reverse=False):
 TAG_ASK_ENV = 'PG_GLIBC_AUDIT_TAG_ASK'
 
 
-# What no comparison of sources reads, said once: step 1 prints it as a `!!`
-# on every run, whatever the sides are, and the summary repeats it from
-# step 1's log. Step 2 compares the rules localedef reads; what localedef
-# compiles them into and how strcoll walks the result is code, which two
+# What no comparison of sources reads, said once: compared_sides prints it as
+# a `!!` under "What was compared" on every run, whatever the sides are, and
+# the summary repeats it from that block's log (step1.<pair>.log). Step 2
+# compares the rules localedef reads; what localedef compiles them into and
+# how strcoll walks the result is code, which two
 # tags or two builds can change with every locale file the same (Bug 22668
 # reordered ko_KR between glibc 2.28 and 2.34, its file unchanged). Steps 4
 # and 5 looked at that code until step 9.3. With both machines' files, step
@@ -2595,9 +2577,9 @@ CODE_NOT_COMPARED = (
 
 
 def tag_sides_text(tags):
-    """The `!!` for the sides step 1 reads as upstream tags: what a tag
-    does not hold, said once here (the summary relays it from step 1's
-    log), and what to pass instead, by the route TAG_ASK_ENV names."""
+    """The `!!` for the sides read as upstream tags: what a tag does not
+    hold, said once here (the summary relays it from the log of "What was
+    compared"), and what to pass instead, by the route TAG_ASK_ENV names."""
     ask = os.environ.get(TAG_ASK_ENV) or 'build'
     if ask not in ('build', 'node', 'none'):
         die(f"{TAG_ASK_ENV}={ask!r} is not one of build, node, none.")
@@ -2605,7 +2587,7 @@ def tag_sides_text(tags):
     text = (f"Not checked for {' and '.join(tags)}: "
             f"{'it is an upstream tag' if one else 'they are upstream tags'}"
             f", which hold{'s' if one else ''} none of a distro's own locale "
-            f"files or patches. Steps 1 and 2 read only what "
+            f"files or patches. Step 2 reads only what "
             f"{'that tag holds' if one else 'the tags hold'}.")
     if ask == 'build':
         text += (f" If {'that machine runs' if one else 'the machines run'} "
@@ -2615,14 +2597,15 @@ def tag_sides_text(tags):
                  f"or as latest-el8, latest-el9 or latest-el10.")
     elif ask == 'node':
         text += (" Pass each machine's file with --old-node and --new-node "
-                 "instead of every other --old-*/--new-* option: steps 1 and 2 "
-                 "then read each machine's own locale sources, which its file "
-                 "holds.")
+                 "instead of every other --old-*/--new-* option: step 2 "
+                 "then reads each machine's own locale sources, which its "
+                 "file holds.")
     return text
 
 
 # What no step reads of a machine whose own files are read (machine_side),
-# said once, where step 1 names the machines; every other block points here.
+# said once, where "What was compared" names the machines; every other block
+# points here.
 MACHINE_NOT_CHECKED = (
     "Not checked for these machines: their locale sources and charmaps are "
     "read as each machine's file holds them, with no check against the "
@@ -2698,11 +2681,9 @@ def report_build_provenance(builds):
                 warned.append(f"{label(sd)}: {line[2:].strip()}")
             else:
                 print(f"    checked: {line}")
-        code = [c['patch'] for c in prov.get('collation_code_patches') or ()]
         text = (f"patches: {len(prov.get('applied') or ())} of the SRPM's "
                 f"{prov.get('patches')} change localedata/ or locale/, "
-                f"applied in the order rpm recorded; {len(code)} change "
-                f"strcoll's code" + (f": {', '.join(code)}" if code else ''))
+                f"applied in the order rpm recorded")
         print(textwrap.fill(text, width=78, initial_indent='    ',
                             subsequent_indent='             ',
                             break_on_hyphens=False, break_long_words=False))
@@ -2741,19 +2722,12 @@ def _main(argv):
         report_tag_provenance(repo, *argv[1:])
         return 0
     if argv and argv[0] == 'sides':
-        # Step 1's sides (step1_sides). Every human sentence goes where the
-        # bash it replaces sent it; the two refs the step reads go to the
-        # file --refs-file names, a line each: a tag's name, a build's
-        # commit.
-        allow = '--allow-reverse' in argv[1:]
-        rest = [a for a in argv[1:] if a != '--allow-reverse']
-        if len(rest) != 4 or rest[0] != '--refs-file':
-            die("usage: glibc_locale_data.py sides [--allow-reverse] "
-                "--refs-file <file> <old> <new>")
+        # What the run compares (compared_sides), which audit.sh prints
+        # under "What was compared", stdout and stderr into one log.
+        if len(argv) != 3:
+            die("usage: glibc_locale_data.py sides <old> <new>")
         here = os.path.dirname(os.path.abspath(__file__))
-        _, o, n = step1_sides(here, rest[2], rest[3], allow)
-        with open(rest[1], 'w') as fh:
-            fh.write(f"{_ref(o)}\n{_ref(n)}\n")
+        compared_sides(here, argv[1], argv[2])
         return 0
     if argv and argv[0] == 'resolve':
         # audit.sh, before anything runs: the kind of each side, by the one
@@ -2774,8 +2748,8 @@ def _main(argv):
                     fh.write(f"{bare}\t{kind}\n")
         return 0
     if argv and argv[0] == 'machines':
-        # audit.sh, given each machine's file, before step 1: which side
-        # steps 1 and 2 read (machine_sides), its kind and its tag, a line
+        # audit.sh, given each machine's file, before the sides are read:
+        # which side the run reads (machine_sides), its kind and its tag, a line
         # each in --to; what to say about it on stdout. Each machine's
         # laid-out file says whether it holds the locale sources, and why
         # not (sources-not-included).
@@ -2829,7 +2803,7 @@ def _main(argv):
         return 0
     if len(argv) >= 2 and argv[0] == 'corpus':
         # The corpus floor of the tags given, silent on success;
-        # list_locale_files dies otherwise. Step 1 applies it in step1_sides.
+        # list_locale_files dies otherwise. compared_sides applies it too.
         repo = find_repo()
         check_refs(repo, *argv[1:])
         for tag in argv[1:]:
@@ -2869,72 +2843,6 @@ def _main(argv):
         # compared" (SAME_TAG), whatever the first says: a pair of one tree
         # that git cannot order is both.
         print(status, nothing or 'none')
-        return 0
-    if len(argv) >= 2 and argv[0] == 'fanin':
-        repo = find_repo()
-        # --as NAME: the ref read is a build's commit, printed by its name.
-        shown = None
-        if len(argv) >= 4 and argv[-2] == '--as':
-            shown, argv = argv[-1], argv[:-2]
-        tag = argv[1]
-        check_refs(repo, tag, builds=shown is not None)
-        # Imported here: glibc_tree imports this module.
-        import glibc_tree
-        # Who inherits what, from what localedef reads to build each locale
-        # (glibc_tree), every `copy` followed the way glibc follows it.
-        # A machine's commit holds the tag's keyword tables, not the
-        # build's: read with what the build's RHEL major adds, as step 2
-        # reads it (one Build, one entry of the reader's cache).
-        build = (glibc_tree.build_at(repo, tag, shown)
-                 if shown and machine_folders(shown) else None)
-        tree = glibc_tree.Tree.at_tag(repo, tag, build)
-        # Every locale with an LC_COLLATE of its own first, in name order,
-        # so that equal counts print in the order they always have.
-        counts = {name: 0 for name in tree.names if tree.defines(name)}
-        for name in tree.names:
-            for f in tree.reach(name):
-                counts[f] = counts.get(f, 0) + 1
-        unresolved = tree.unresolved()
-        changed = None
-        if len(argv) >= 3:
-            with open(argv[2], encoding='utf-8') as fh:
-                changed = {os.path.basename(ln.strip())
-                           for ln in fh if ln.strip()}
-        print(f"Collation templates by blast radius at {shown or tag} "
-              f"(locales inheriting via `copy`):")
-        for name, n in sorted(counts.items(), key=lambda kv: -kv[1])[:10]:
-            if n == 0:
-                break
-            mark = ''
-            if changed is not None and name in changed:
-                mark = '  <== has some change in this version pair'
-            print(f"  {n:4d} locales inherit from {name}{mark}")
-        if unresolved:
-            print(f"!! {len(unresolved)} locale(s) could not be read the way "
-                  f"localedef reads them, so the counts above may miss what "
-                  f"they inherit: {', '.join(sorted(unresolved)[:12])}"
-                  f"{', ...' if len(unresolved) > 12 else ''}")
-        if changed is not None:
-            hot = sorted(((counts.get(c, 0), c) for c in changed
-                          if counts.get(c, 0) > 0), reverse=True)
-            print()
-            if not hot:
-                print("No changed file is inherited from by any other locale.")
-                return 0
-            # These files changed SOMEWHERE -- usually LC_TIME or LC_MONETARY.
-            # Step 2 decides which of them changed LC_COLLATE. Reported here
-            # only so that, if step 2 does flag one, its reach is already
-            # visible.
-            print(f"Changed files that others inherit from ({len(hot)}) -- "
-                  f"reach if the change turns out to be in LC_COLLATE.")
-            print("NOT a collation verdict: most of these changed LC_TIME or "
-                  "LC_MONETARY. Step 2 filters.")
-            for n, name in hot[:8]:
-                print(f"  {name}: {n} dependent locale(s)")
-            if len(hot) > 8:
-                rest = ', '.join(name for _, name in hot[8:])
-                print(f"  ... and {len(hot) - 8} more with 1-2 dependents: "
-                      f"{rest}")
         return 0
     print(__doc__.strip(), file=sys.stderr)
     return 2

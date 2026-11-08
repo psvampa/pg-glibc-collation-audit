@@ -30,7 +30,7 @@ import sys
 import unittest
 
 import _harness
-from _harness import REPO_ROOT, flat
+from _harness import COMPARED_BANNER, REPO_ROOT, deleted_steps_named, flat
 
 import glibc_locale_data as g
 
@@ -749,9 +749,8 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     group each, how many FILES must state it, and an `Evidence` per file whose
     transcript has to carry the same number -- a path alone for the bare
     check, or the sentence and, where a transcript repeats itself, the section
-    to read it in. The patterns run over `flat()` text, because one of these
-    sentences wraps inside its phrase, between `inherited by` and
-    `328 locales`, in docs/results.md.
+    to read it in. The patterns run over `flat()` text, because a sentence
+    can wrap inside its phrase.
 
     **Files, not mentions.** The floor counted occurrences until
     false-negative-reviewer measured what that allows: rewrite
@@ -829,26 +828,10 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
          r'or newer',
          4,
          ()),
-        # The shape ends at the newline because, in the transcript, the
-        # line above the one it matches names iso14651_t1_common and starts
-        # the same way. Without the newline the sentence is found twice and
-        # the row refuses. The tags-only transcript: the audit output prints
-        # the radius at the new machine's build (7.6a), another fact.
-        ('the locales that inherit iso14651_t1 at glibc 2.34',
-         r'inherited by (\d+) locales|template that (\d+) locales',
-         2,
-         (Evidence('examples/rhel8-to-rhel9-tags-only.txt',
-                   shape='{n} locales inherit from iso14651_t1\n'),)),
-        ('the locale files that differ between glibc 2.28 and 2.34',
-         r'(\d+) files that differ between (?:glibc )?2\.28 and 2\.34'
-         r'|one line out of (\d+)',
-         1,
-         # The tags-only transcript: the extended one compares each
-         # machine's own files in steps 1 and 2 (7.6a, 9.4a). Step 1's
-         # count; step 2 printed it too until it became the comparison of
-         # rules (9.2).
-         (Evidence('examples/rhel8-to-rhel9-tags-only.txt',
-                   shape='Locale files added, modified or deleted: {n}'),)),
+        # The locales that inherit iso14651_t1 (328) and the locale files
+        # that differ between glibc 2.28 and 2.34 (283) were rows here, held
+        # to step 1's output; step 9.5 deleted it, and the docs' sentences
+        # that stated them went with it, a count no run states.
     )
 
     @staticmethod
@@ -1163,8 +1146,9 @@ class ASectionNeverWidensInSilence(unittest.TestCase):
         with self.assertRaisesRegex(
                 AssertionError,
                 r'section anchor .* appears ([2-9]|\d{2,}) time\(s\)'):
+            # Said under 'What was compared' and repeated in the warnings.
             self.check(Evidence(self.AUDIT, shape=self.SHAPE,
-                                section='locales inherit from'))
+                                section='Not compared on any route'))
 
     def test_a_section_nothing_closes_refuses(self):
         # The probe transcripts print no `====` banner at all.
@@ -1203,7 +1187,7 @@ class TheBareFormAndTheMoveStillBite(unittest.TestCase):
     evidence check. Neither would be seen to break (false-negative-reviewer,
     2026-09-30), so each is driven here on the real transcript, next to a
     control that shows it still agrees where it should. The transcript states
-    328 once and 335 twice.
+    869 once (the new machine's locales, step 11) and 335 twice.
     """
 
     AUDIT = 'examples/rhel8-to-rhel9-audit-output.txt'
@@ -1218,7 +1202,7 @@ class TheBareFormAndTheMoveStillBite(unittest.TestCase):
             'test_moving_one_statement_of_a_figure_breaks_the_tie')
 
     def test_a_bare_figure_the_transcript_carries_agrees(self):
-        self.evidence_row().check_evidence(self.LABEL, '328',
+        self.evidence_row().check_evidence(self.LABEL, '869',
                                            Evidence(self.AUDIT))
 
     def test_a_bare_figure_the_transcript_lacks_refuses(self):
@@ -1228,7 +1212,7 @@ class TheBareFormAndTheMoveStillBite(unittest.TestCase):
                                                Evidence(self.AUDIT))
 
     def test_a_figure_stated_once_breaks_when_it_moves(self):
-        self.move_row().check_moves(self.LABEL, '328', (Evidence(self.AUDIT),))
+        self.move_row().check_moves(self.LABEL, '869', (Evidence(self.AUDIT),))
 
     def test_a_bare_figure_stated_twice_refuses_the_move(self):
         with self.assertRaisesRegex(AssertionError,
@@ -1435,8 +1419,8 @@ class TheVerdictTableIsTheSameInBothPlaces(unittest.TestCase):
 class TheExamplesCarryTheMachineSteps(unittest.TestCase):
     """Both worked examples given each machine's file carry every step such a
     run prints and its full summary, so what the docs say about those steps
-    can be checked against real output; and no banner of a deleted step
-    (steps 3 to 10, branch 9)."""
+    can be checked against real output; and no example names a deleted step
+    (steps 1 and 3 to 10, branch 9) or its script."""
 
     def example(self, name):
         return read(os.path.join(REPO_ROOT, 'examples',
@@ -1446,7 +1430,7 @@ class TheExamplesCarryTheMachineSteps(unittest.TestCase):
         for name in ('rhel8-to-rhel9', 'rhel9-to-rhel10'):
             text = self.example(name)
             for banner in (
-                    "== STEP 1  What changed, and how far it reaches",
+                    COMPARED_BANNER + '\n',
                     "== STEP 2  Which locales' sort rules changed",
                     "== STEP 11  MEASURED ORDER  how each machine's own glibc "
                     "sorts every locale",
@@ -1456,7 +1440,21 @@ class TheExamplesCarryTheMachineSteps(unittest.TestCase):
             with self.subTest(example=name):
                 self.assertEqual(
                     re.findall(r'^== STEP (\d+)', text, re.M),
-                    ['1', '2', '11'])
+                    ['2', '11'])
+                self.assertLess(text.index(COMPARED_BANNER + '\n'),
+                                text.index('== STEP 2 '))
+
+    def test_no_example_names_a_deleted_step(self):
+        """The four transcripts of the two pairs, with and without each
+        machine's file: a sentence that still points to a deleted step
+        sends the reader to an answer that is not there."""
+        for name in ('rhel8-to-rhel9', 'rhel9-to-rhel10'):
+            for kind in ('audit-output', 'tags-only'):
+                with self.subTest(example=f'{name}-{kind}'):
+                    text = read(os.path.join(REPO_ROOT, 'examples',
+                                             f'{name}-{kind}.txt'))
+                    self.assertIn(COMPARED_BANNER + '\n', text)
+                    self.assertEqual(deleted_steps_named(text), [])
 
 
 def without_fences(text):

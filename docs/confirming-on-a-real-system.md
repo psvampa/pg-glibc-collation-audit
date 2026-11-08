@@ -154,8 +154,8 @@ Three things make it unlike the template.
   `LC_ALL=C` means the locale was not applied and the comparison proves
   nothing. For `C.UTF-8`, agreement with byte order is the fix. Two
   contradictory rules in one file get read in the wrong order.
-- **It is run even when the audit flagged nothing**, because steps 1 and 2
-  read source files and never measure how your machine sorts `C.UTF-8`.
+- **It is run even when the audit flagged nothing**, because step 2
+  reads source files and never measures how your machine sorts `C.UTF-8`.
 
 The probe refuses to run if `C.utf8` is not in `pg_collation`.
 

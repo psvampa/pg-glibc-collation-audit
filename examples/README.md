@@ -22,7 +22,7 @@ Raw output, start to finish, with nothing trimmed or annotated.
 ### Command 1 extended
 
 The same command given one file from each machine, the one
-`scripts/locale_order.py --extract` wrote there, so steps 1 and 2 read each
+`scripts/locale_order.py --extract` wrote there, so the run reads each
 machine's own locale sources and charmaps and step 11 measures both machines
 instead of saying `NOT RUN`. The run then sets each locale of the old
 machine that step 11 names beside step 2's rules for it.

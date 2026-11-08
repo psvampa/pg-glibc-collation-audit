@@ -73,7 +73,8 @@ the two RHEL pairs carry, and confirm it on the machines.
 Step 2 compares the rules `localedef` reads, every `copy` followed. What
 `localedef` compiles them into, and how `strcoll` walks the result, is code,
 and no step compares it: not between two tags, not between two builds, and
-not a build's own patches to it. Step 1 says so on every run.
+not a build's own patches to it. Every run says so under *What was
+compared*.
 
 That code can change an order with every locale file the same. Bug 22668,
 fixed in glibc 2.34, changed how `localedef` expands an ellipsis range, and

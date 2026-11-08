@@ -1,5 +1,5 @@
 """scripts/glibc_reader.py, a reader of glibc's locale sources that follows
-localedef, held to glibc itself. Steps 1 to 4 and 9/10 read through it
+localedef, held to glibc itself. Step 2 reads through it
 (scripts/glibc_tree.py).
 
 The tool's reading of glibc's files used to be copied by hand into several
@@ -1370,7 +1370,9 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
             with self.subTest(name):
                 self.assertTrue(self.tree.defines(name))
                 self.assertEqual(['iso14651_t1'], self.tree.copies(name))
-                self.assertIn('iso14651_t1', self.tree.reach(name))
+                self.assertIn('iso14651_t1',
+                              {f for f, _ in
+                               self.tree._collate_sections(name)})
                 self.assertEqual(['iso14651_t1'],
                                  self.tree.roots(name, {'iso14651_t1'}))
 
@@ -1621,7 +1623,7 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
 
 @needs_clone
 class StepsReadWhatLocaledefReads(unittest.TestCase):
-    """The same shapes through steps 1, 2 and 4, on glibc-2.39 plus the
+    """The same shapes through step 2, on glibc-2.39 plus the
     files (a commit git can place, _harness.glibc_commit). Before backlog
     15.2 step 3 left all four copiers out of the set a change to
     iso14651_t1 affects: a reassuring answer about four locales that
@@ -1630,7 +1632,6 @@ class StepsReadWhatLocaledefReads(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp(prefix='pg-glibc-steps-')
-        cls.repo, cls.ref = _harness.glibc_commit(NEW, _SHAPES, cls.tmp)
         cls.out = os.path.join(cls.tmp, 'out')
         os.mkdir(cls.out)
 
@@ -1638,11 +1639,11 @@ class StepsReadWhatLocaledefReads(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    def step(self, script, *args, cwd=None):
+    def step(self, script, *args):
         env = dict(os.environ, PG_GLIBC_AUDIT_OUT=self.out)
         p = subprocess.run([sys.executable, os.path.join(
             _harness.SCRIPTS_DIR, script)] + list(args),
-            cwd=cwd or _harness.SCRIPTS_DIR, env=env, capture_output=True)
+            cwd=_harness.SCRIPTS_DIR, env=env, capture_output=True)
         out = (p.stdout + p.stderr).decode('utf-8', 'replace')
         self.assertEqual(0, p.returncode, out)
         return out
@@ -1691,13 +1692,34 @@ class StepsReadWhatLocaledefReads(unittest.TestCase):
                                   'zz_nope'}, report.listed)
         self.assertEqual(['zz_Y'], sorted(report.differs))
 
-    def test_step_1_counts_every_copier(self):
-        here = self.step('glibc_locale_data.py', 'fanin', self.ref,
-                         cwd=self.repo)
-        base = self.step('glibc_locale_data.py', 'fanin', NEW)
-        count = r'^\s+(\d+) locales inherit from iso14651_t1$'
-        self.assertEqual(int(re.search(count, base, re.M).group(1)) + 4,
-                         int(re.search(count, here, re.M).group(1)), here)
+    def test_step_2_names_an_added_locale_it_could_not_read(self):
+        """A file only the new side has, which localedef cannot build there
+        (its LC_CTYPE copies a file the tree lacks): step 2 names it among
+        the files the old side lacks, and says in a `!!` of its own, which
+        the summary repeats, that its rules there are not known. Step 1's
+        fan-in said so until step 9.5 deleted it (false-negative-reviewer,
+        9.5); zz_Y, added and read, is the control."""
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-steps-a-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        x = _HEAD + (b'LC_CTYPE\ncopy "zz_nope"\nEND LC_CTYPE\n'
+                     b'LC_COLLATE\ncopy "iso14651_t1"\nEND LC_COLLATE\n')
+        y = _HEAD + b'LC_COLLATE\ncopy "iso14651_t1"\nEND LC_COLLATE\n'
+        _, old = _harness.glibc_commit(NEW, {}, tmp)
+        repo, new = _harness.glibc_commit(old, {'zz_X': x, 'zz_Y': y}, tmp)
+        out = self.step('filter_lc_collate_changes.py', old, new,
+                        '--repo', repo)
+        report = _harness.Step2Report(out)
+        self.assertEqual(['zz_X', 'zz_Y'], sorted(report.added))
+        self.assertEqual({}, report.listed)
+        flat = _harness.flat(out)
+        # Read alone, as the summary repeats it among its warnings: it names
+        # its two sides, never a list above it.
+        self.assertEqual(1, flat.count('!! Sort rules not known, of the '
+                                       'locale files '))
+        self.assertIn('!! Sort rules not known, of the locale files at %s '
+                      'and not at %s (1), for the reason on each line: zz_X: '
+                      'localedef cannot open zz_nope' % (new, old), flat)
+        self.assertNotIn('zz_Y: ', flat)
 
 
 # A directive in LC_CTYPE after a `copy` of a file without LC_CTYPE: the

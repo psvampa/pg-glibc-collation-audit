@@ -29,13 +29,6 @@ import glibc_locale_data as g
 import test_locale_order as tlo
 
 
-def one_int(pattern, text, what):
-    m = re.search(pattern, text)
-    if not m:
-        raise AssertionError(f"could not find {what} in output:\n{text[:800]}")
-    return int(m.group(1))
-
-
 class StepRun(unittest.TestCase):
     """Base: a scratch output dir, so the suite never writes to the shared
     /tmp/pg-glibc-collation-audit that a real run uses."""
@@ -52,75 +45,6 @@ class StepRun(unittest.TestCase):
         rc, out = run_step(script, *args, out_dir=self.out_dir)
         self.assertEqual(rc, 0, f"{script} {' '.join(args)} exited {rc}:\n{out}")
         return out
-
-
-@needs_clone
-class Step1Templates(StepRun):
-    def test_each_template_gets_an_explicit_verdict(self):
-        """"audit-locale-diff.sh reported 'unchanged' as empty output", which
-        is indistinguishable from an error."""
-        out = self.step('audit-locale-diff.sh', MID, NEW)
-        for tmpl in ('iso14651_t1', 'iso14651_t1_common', 'iso14651_t1_pinyin'):
-            m = re.search(rf'^\s+{tmpl}\s+(CHANGED|UNCHANGED|ABSENT)',
-                          out, re.M)
-            self.assertIsNotNone(m, f'no verdict printed for {tmpl}')
-
-    def test_fan_in_names_iso14651_t1_not_only_common(self):
-        """It used to hardcode iso14651_t1_common as 'the master table' and
-        miss that iso14651_t1 is the one hundreds of locales inherit."""
-        out = self.step('audit-locale-diff.sh', MID, NEW)
-        self.assertRegex(out, r'\d+ locales inherit from iso14651_t1\b')
-
-    def test_the_blast_radius_published_for_both_tags(self):
-        """The docs say iso14651_t1 is inherited by 328 locales at 2.34, and
-        the examples print 338 at 2.39. Nothing asserted either against the
-        clone -- which is how the step-4 "2" rotted. Step 1 computes the radius
-        at the NEW tag. Both transcripts of each pair are read as well, so a
-        figure changed here without regenerating them goes red, and
-        test_published_claims holds the pages that state 328 to those
-        transcripts."""
-        for old, new, radius, pair in ((OLD, MID, 328, 'rhel8-to-rhel9'),
-                                       (MID, NEW, 338, 'rhel9-to-rhel10')):
-            with self.subTest(tag=new):
-                line = f'\n   {radius} locales inherit from iso14651_t1\n'
-                out = self.step('audit-locale-diff.sh', old, new)
-                self.assertIn(line, out)
-                for kind in ('audit-output', 'tags-only'):
-                    name = f'examples/{pair}-{kind}.txt'
-                    with self.subTest(transcript=kind):
-                        with open(os.path.join(REPO_ROOT, *name.split('/')),
-                                  encoding='utf-8') as f:
-                            # The tool may append its "<== has some
-                            # change" mark to the line; a copy carrying it
-                            # still counts.
-                            said = re.findall(
-                                r'(?m)^ +(\d+) locales inherit from '
-                                r'iso14651_t1(?:  <==[^\n]*)?$', f.read())
-                        self.assertEqual(
-                            said, [str(radius)],
-                            f'{name} prints {said} as the locales that '
-                            f'inherit iso14651_t1, not [{radius}]; '
-                            f'regenerate it')
-
-    def test_the_changed_file_count_published_for_the_pair(self):
-        """283 is published for glibc 2.28 -> 2.34, and test_published_claims
-        holds the pages that state it to the rhel8-to-rhel9 tags-only
-        transcript. This holds that transcript, and the figure, to the run: a
-        count that moved without regenerating it goes red, as the blast
-        radius does. Step 1 prints it; step 2 printed it too until it became
-        the comparison of rules (9.2). The extended transcript compares each
-        machine's own files in steps 1 and 2 (7.6a, 9.4a)."""
-        label = r'(?m)^Locale files added, modified or deleted: (\d+)$'
-        out = self.step('audit-locale-diff.sh', OLD, MID)
-        self.assertEqual(re.findall(label, out), ['283'])
-        name = 'examples/rhel8-to-rhel9-tags-only.txt'
-        with open(os.path.join(REPO_ROOT, *name.split('/')),
-                  encoding='utf-8') as f:
-            said = re.findall(label, f.read())
-        self.assertEqual(said, ['283'],
-                         f'{name} prints {said} as the locale files added, '
-                         f'modified or deleted between glibc-2.28 and '
-                         f'glibc-2.34, not [283]; regenerate it')
 
 
 @needs_clone
@@ -461,7 +385,7 @@ class BelowTheOldVersionFloor(StepRun):
                      'iso14651_t1_pinyin'):
             self.assertTrue(tree.defines(tmpl),
                             f'{tmpl} defines no LC_COLLATE at {FLOOR_NEW} '
-                            f'to the copy chains steps 1 and 2 walk; a block '
+                            f'to the copy chains step 2 walks; a block '
                             f'at byte 0 is not read any more')
 
     def test_each_side_is_read_with_its_own_localedef(self):
@@ -499,8 +423,7 @@ class BelowTheOldVersionFloor(StepRun):
         """reorder-sections-after, which the reader does not settle, is
         reached from am_ET and ber_MA by 17 locales at both tags. Step 2
         cannot compare them, so it lists them for Reindex under a `!!` of
-        its own, the reason beside each group; step 1 says its counts may
-        miss them (backlog 15.2). wal_ET, cleared as "does not touch
+        its own, the reason beside each group (backlog 15.2). wal_ET, cleared as "does not touch
         LC_COLLATE" before step 2 read with the reader (15.2 B3), is one."""
         r = self.report()
         self.assertEqual(r.totals, (357, 52, 262, 43))
@@ -517,13 +440,6 @@ class BelowTheOldVersionFloor(StepRun):
         # summary, not only the count.
         self.assertRegex(r.out, r'(?m)^     ber_MA: both sides: ber_MA:75: '
                                 r'reorder-sections-after in LC_COLLATE$')
-        rc, fan = run_step('glibc_locale_data.py', 'fanin', FLOOR_NEW)
-        self.assertEqual(rc, 0, fan)
-        self.assertEqual(
-            one_int(r'(?m)^!! (\d+) locale\(s\) could not be read the way '
-                    r'localedef reads them, so the counts above may miss',
-                    fan, 'the count'),
-            17)
 
     def test_one_commit_at_2_12_lists_nothing_it_doubts(self):
         """One commit compared with itself compares nothing, and says so
@@ -718,9 +634,10 @@ class SkippingAReleaseReportsTheUnion(StepRun):
         reaches it, as a locale by glibc's rule or as an alias. Two names are
         on no Reindex list by design, and this pins exactly those two:
         ko_KR.utf8 moved through localedef's code with its file unchanged,
-        which step 1's `!!` on the code says no step compares (step 4's list
-        named it until step 9.3); C.utf8 is the distro's own file, which no
-        tag holds, as step 1's `!!` on the tags says."""
+        which the `!!` on the code under 'What was compared' says no step
+        compares (step 4's list named it until step 9.3); C.utf8 is the
+        distro's own file, which no tag holds, as the `!!` on the tags
+        there says."""
         lists = ((tlo.CHANGED_8_TO_9, set(self._step2(OLD, MID).reindex),
                   {'C.utf8', 'ko_KR.utf8'}),
                  (tlo.CHANGED_9_TO_10, set(self._step2(MID, NEW).reindex),
@@ -730,11 +647,13 @@ class SkippingAReleaseReportsTheUnion(StepRun):
                 missed = {n for n in measured
                           if n not in listed and g.locale_source(n) not in listed}
                 self.assertEqual(missed, elsewhere)
-        # What covers ko_KR.utf8 now: the pair's step 1 says, as a `!!`,
-        # that localedef's code is compared by no step.
+        # What covers ko_KR.utf8 now: the pair's sides say, as a `!!`,
+        # that localedef's code is compared by no step (test_wrapper holds
+        # the summary to repeating it).
         self.assertIn("!! Not compared on any route: the code that compiles "
                       "and compares the rules (localedef's and strcoll's,",
-                      flat(self.step('audit-locale-diff.sh', OLD, MID)))
+                      flat(self.step('glibc_locale_data.py', 'sides', OLD,
+                                     MID)))
 
     def test_only_a_rename_differs_in_the_two_steps_and_not_end_to_end(self):
         """The one thing a two-endpoint diff structurally cannot see is a

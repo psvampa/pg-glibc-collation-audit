@@ -536,11 +536,13 @@ def step2_words(noun, machines=False):
 
 # What this step does not compare. The rules compare_rules reads are
 # statements; what localedef compiles them into and how strcoll walks the
-# result is code, which no step compares: step 1's `!!` says so once
-# (glibc_locale_data.CODE_NOT_COMPARED), and this line points to it.
+# result is code, which no step compares: a `!!` under "What was compared"
+# says so once (glibc_locale_data.CODE_NOT_COMPARED), and this line points to
+# it.
 NOT_COMPARED_HERE = (
     "Not compared here: the code that compiles and compares the rules "
-    "(localedef's and strcoll's), as step 1 says; the character sets are "
+    "(localedef's and strcoll's), as said under 'What was compared'; the "
+    "character sets are "
     "compared below.")
 
 
@@ -638,7 +640,12 @@ def characters_rows(got, differs):
 
 
 def print_added(added, renamed_from, supported, old_side, old_name,
-                missing='(not in SUPPORTED)'):
+                missing='(not in SUPPORTED)', unread=None, new_name=None):
+    """The not-compared files only the new side has. `unread` is {name:
+    why} for those of them glibc_tree.Tree.unresolved names at `new_name`,
+    each with its reason: said in a `!!` of its own, which the summary
+    repeats, since nothing else says so (step 1's fan-in did until step
+    9.5)."""
     if not added:
         return
     print()
@@ -663,6 +670,12 @@ def print_added(added, renamed_from, supported, old_side, old_name,
         print(_fill(f"{old_name}'s own locale sources do not have these "
                     f"files, so that build ships none of these locales.",
                     '   '))
+    if unread:
+        _warn_block(
+            f"Sort rules not known, of the locale files at {new_name} and "
+            f"not at {old_name} ({len(unread)}), for the reason on each "
+            f"line:",
+            [f"{g.shown(n)}: {unread[n]}" for n in added if n in unread])
 
 
 def print_c_utf8(sides, differs):
@@ -840,7 +853,7 @@ def _main(opts):
         builds = glibc_tree.builds_at(repo, [old, new], pre)
         # A machine's commit holds the tag's keyword tables, not its
         # build's: read with what the build's RHEL major adds
-        # (glibc_tree.build_at), as step 1's fan-in reads it.
+        # (glibc_tree.build_at).
         for sd in (old_side, new_side):
             if g.is_machine(sd):
                 builds[g._ref(sd)] = glibc_tree.build_at(
@@ -883,9 +896,12 @@ def _main(opts):
         print_differs(got, differs, tsv)
         g.write_list(f"step2_rules_characters.{slug}.tsv",
                      characters_rows(got, differs))
+        unresolved = new_tree.unresolved()
         print_added(added, renamed_from, supported[1], old_side, old_name,
                     '(not measured on that machine)' if machine
-                    else '(not in SUPPORTED)')
+                    else '(not in SUPPORTED)',
+                    {n: unresolved[n] for n in added if n in unresolved},
+                    new_name)
         print_removed(removed, renamed_to, new_side, new_name)
         print_listed(got, listed)
         if unread:
