@@ -2992,5 +2992,137 @@ def _bang_blocks(out):
     return [' '.join(x.strip() for x in b) for b in blocks]
 
 
+
+class CharmapCheckSaysWhyItDidNotRun(unittest.TestCase):
+    """check_charmaps returns, beside what it lists, the reason it said
+    NOT RUN, on each route: the report's own, and no build in common; and
+    None when it ran. The cross with step 11 prints it (9.4c,
+    false-negative-reviewer: two of its three routes gave none)."""
+
+    def run_check(self, report):
+        reads = mock.Mock()
+        side = lambda tag: mock.Mock(tag=tag)
+        with mock.patch.object(f.ck, 'compare', return_value=report), \
+                mock.patch.object(f.ck, 'listed_sources',
+                                  return_value=['sv_SE']), \
+                mock.patch.object(f, 'print_charmap_report'):
+            return f.check_charmaps(reads, None, side('o'), side('n'), {},
+                                    set(), builds=([], []))
+
+    def test_the_reports_own(self):
+        self.assertEqual(self.run_check(mock.Mock(not_run='a charmap is '
+                                                  'missing', builds=3)),
+                         (['sv_SE'], 'a charmap is missing'))
+
+    def test_no_build_in_common(self):
+        listed, why = self.run_check(mock.Mock(not_run=None, builds=0))
+        self.assertEqual(why, f.STEP2_WORDS.none_compared.format(
+            old='o', new='n'))
+
+    def test_it_ran(self):
+        self.assertEqual(self.run_check(mock.Mock(not_run=None, builds=3)),
+                         (['sv_SE'], None))
+
+
+class StepTwoRulesByMeasuredName(unittest.TestCase):
+    """rules_by_name: step 2's rules for every locale name measured on
+    either machine, the answer audit.sh sets beside step 11's verdict.
+    Each name goes to the name compare_rules answered for; C and POSIX are
+    glibc's built-in locale, never the files C and POSIX; an entry that was
+    not read is not compared whatever compare_rules says; a name no file
+    builds says so; the character set check is carried per name."""
+
+    def side(self, names):
+        folder = tempfile.mkdtemp(prefix='rules-by-name-')
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        with open(os.path.join(folder, 'locale_order.out'), 'w',
+                  encoding='ascii') as fh:
+            json.dump({'locales': dict.fromkeys(names, {})}, fh)
+        return mock.Mock(prov={'machine': folder})
+
+    R = glibc_tree.Rules
+
+    def got(self):
+        return {'C': self.R(glibc_tree.DIFFERS, None, (), False),
+                'POSIX': self.R(glibc_tree.SAME, None, None, False),
+                'sv_SE': self.R(glibc_tree.DIFFERS, None, (), False),
+                'swedish': self.R(glibc_tree.DIFFERS, None, (), False),
+                'ko_KR': self.R(glibc_tree.SAME, None, None, False),
+                'de_IT': self.R(glibc_tree.SAME, None, None, False),
+                'aa_ER@saaho': self.R(glibc_tree.NOT_COMPARED,
+                                      'no file aa_ER@saaho on the new side',
+                                      None, False)}
+
+    def answer(self, old, new, unread=None, keyed=(), unmapped=()):
+        aliases = ({'swedish': 'sv_SE.ISO-8859-1'},
+                   {'swedish': 'sv_SE.ISO-8859-1'})
+        return f.rules_by_name((self.side(old), self.side(new)), aliases,
+                               self.got(), unread or {}, keyed, unmapped)
+
+    def test_each_name_to_the_name_compare_rules_answered_for(self):
+        got = self.answer(['sv_SE.iso88591', 'swedish', 'ko_KR.utf8',
+                           'C.utf8', 'aa_ER.utf8@saaho'],
+                          ['sv_SE.utf8', 'ko_KR.euckr'])
+        self.assertEqual(got, {
+            'C.utf8': ['C', 'differs', '', '-'],
+            'aa_ER.utf8@saaho': ['aa_ER@saaho', 'not compared',
+                                 'no file aa_ER@saaho on the new side', '-'],
+            'ko_KR.euckr': ['ko_KR', 'same', '', '-'],
+            'ko_KR.utf8': ['ko_KR', 'same', '', '-'],
+            'sv_SE.iso88591': ['sv_SE', 'differs', '', '-'],
+            'sv_SE.utf8': ['sv_SE', 'differs', '', '-'],
+            'swedish': ['swedish', 'differs', '', '-']})
+
+    def test_c_and_posix_are_built_into_glibc(self):
+        """The file C is C.UTF-8's, and differs here: the built-in C must
+        not take its answer."""
+        got = self.answer(['C', 'POSIX'], ['C'])
+        for name in ('C', 'POSIX'):
+            self.assertEqual(got[name], [None, 'built in',
+                                         'built into glibc, no locale file',
+                                         '-'])
+
+    def test_a_name_no_file_builds(self):
+        got = self.answer(['mine.utf8'], ['ko_KR'])
+        self.assertEqual(got['mine.utf8'], ['mine', 'not compared',
+                                            'no locale file of that name',
+                                            '-'])
+
+    def test_an_entry_not_read_is_not_compared(self):
+        got = self.answer(['de_IT.utf8'], ['de_IT'],
+                          unread={'de_IT': ['symlink on the new machine']})
+        for name in ('de_IT.utf8', 'de_IT'):
+            self.assertEqual(got[name], [
+                'de_IT', 'not compared', "not read among the machines' "
+                'locale sources: symlink on the new machine', '-'])
+
+    def test_the_character_set_check_per_name(self):
+        got = self.answer(['ko_KR.utf8', 'sv_SE.utf8', 'swedish'], ['C'],
+                          keyed=['ko_KR'],
+                          unmapped=[('glibc-x', [('swedish', 'why')])])
+        self.assertEqual(got['ko_KR.utf8'][3], 'changed')
+        self.assertEqual(got['sv_SE.utf8'][3], '-')
+        self.assertEqual(got['swedish'][3], 'not compared')
+
+    def test_an_alias_carries_its_files_charmap(self):
+        """swedish is a key of compare_rules (an alias) and is built from
+        sv_SE: the character set check, which lists files, lists it through
+        sv_SE, as step 2's list does (false-negative-reviewer, 9.4c)."""
+        got = self.answer(['swedish', 'sv_SE.utf8'], ['C'], keyed=['sv_SE'])
+        self.assertEqual(got['swedish'], ['swedish', 'differs', '',
+                                          'changed'])
+        self.assertEqual(got['sv_SE.utf8'][3], 'changed')
+
+    def test_a_state_it_does_not_know_is_refused(self):
+        bad = self.got()
+        bad['ko_KR'] = self.R('similar', None, None, False)
+        with self.assertRaises(SystemExit), \
+                mock.patch('sys.stderr', new_callable=io.StringIO) as err:
+            f.rules_by_name((self.side(['ko_KR.utf8']), self.side(['C'])),
+                            ({}, {}), bad, {}, (), ())
+        self.assertIn("compare_rules answered 'similar' for ko_KR",
+                      flat(err.getvalue()))
+
+
 if __name__ == '__main__':
     unittest.main()

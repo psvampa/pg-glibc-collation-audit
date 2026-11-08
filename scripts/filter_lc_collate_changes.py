@@ -26,8 +26,11 @@ the collating elements they build out of transliterations
 Writes, each named for the pair: step2_changed_collate.<pair>.txt (Reindex:
 the names listed), step2_keyed_locales.<pair>.txt (what the character set
 check lists), step2_removed_locales.<pair>.txt (files of the old side not on
-the new one) and step2_rules_characters.<pair>.tsv (each name whose rules
-differ, and the characters named).
+the new one), step2_rules_characters.<pair>.tsv (each name whose rules
+differ, and the characters named) and step2_rules_by_name.<pair>.json
+(what was compared and, for two machines' files whose sources it
+compared, the rules of every locale name measured on either machine,
+which audit.sh sets beside step 11's verdict: rules_by_name).
 
 Usage:
   python3 filter_lc_collate_changes.py <old_tag> <new_tag> [--repo <path>]
@@ -304,7 +307,11 @@ def check_charmaps(reads, repo, side_old, side_new, sup, already,
     of source names the comparison lists already (their rules differ or
     could not be compared), which the check does not list again. `builds`
     is [old, new] when the caller has them from the machines' measurements
-    (machine_builds), in place of SUPPORTED's."""
+    (machine_builds), in place of SUPPORTED's.
+
+    Returns (source names, why): why is the reason the check said NOT RUN,
+    on each of its routes, else None, so that a caller never reads the
+    empty list of a check that did not run as one that found nothing."""
     old, new = side_old.tag, side_new.tag
     # The charmaps read ahead of time (CharmapReads.prefetch) are back by
     # now: the verdicts above took far longer than one `git cat-file`.
@@ -320,10 +327,11 @@ def check_charmaps(reads, repo, side_old, side_new, sup, already,
             builds_new = (ck.supported_builds(sup[new], new)
                           if sup[new] is not None else None)
         except ck.Unsettled as e:
-            return _charmaps_not_run(str(e))
+            return _charmaps_not_run(str(e)), str(e)
     if builds_old is None or builds_new is None:
         where = ' and '.join(t for t in (old, new) if sup[t] is None)
-        return _charmaps_not_run(f"{g.SUPPORTED} does not exist at {where}")
+        why = f"{g.SUPPORTED} does not exist at {where}"
+        return _charmaps_not_run(why), why
     by_entry = {b.entry: b.charmap for b in builds_old}
     cross = {(by_entry[b.entry], b.charmap) for b in builds_new
              if b.entry in by_entry and by_entry[b.entry] != b.charmap}
@@ -359,16 +367,19 @@ def check_charmaps(reads, repo, side_old, side_new, sup, already,
     report = ck.compare(side_old, side_new, builds_old, builds_new,
                         already_listed, read_more, fresh=False,
                         search_unbuilt=builds is None)
-    print_charmap_report(report, old, new, words or STEP2_WORDS)
-    return ck.listed_sources(report)
+    words = words or STEP2_WORDS
+    print_charmap_report(report, old, new, words)
+    # The two NOT RUN print_charmap_report says of the report itself.
+    why = (report.not_run if report.not_run
+           else _said(words, 'none_compared', old, new)
+           if not report.builds else None)
+    return ck.listed_sources(report), why
 
 
-def _measured(sd, aliases):
-    """{source name: [names measured on that machine]} for a side read
-    from a machine's own files (glibc_locale_data.machine_side): what
-    SUPPORTED says for a tag or a build, which a machine's file does not
-    hold. Each name goes to the locale file it is built from, through the
-    side's locale.alias, as measured_builds maps it."""
+def _measured_names(sd):
+    """The locale names measured on the machine a side reads (its file's
+    locale_order.out, glibc_locale_data.machine_side), sorted; refused
+    when the measurement cannot be read or lists none."""
     import json
     path = os.path.join(sd.prov['machine'], 'locale_order.out')
     try:
@@ -378,10 +389,97 @@ def _measured(sd, aliases):
         g.die(f"cannot read the measurement {path}: {e}")
     if not isinstance(locales, dict) or not locales:
         g.die(f"the measurement {path} lists no locale")
+    return sorted(locales)
+
+
+def _measured(sd, aliases):
+    """{source name: [names measured on that machine]} for a side read
+    from a machine's own files (glibc_locale_data.machine_side): what
+    SUPPORTED says for a tag or a build, which a machine's file does not
+    hold. Each name goes to the locale file it is built from, through the
+    side's locale.alias, as measured_builds maps it."""
     out = collections.defaultdict(list)
-    for name in sorted(locales):
+    for name in _measured_names(sd):
         out[g.locale_source(aliases.get(name, name))].append(name)
     return dict(out)
+
+
+# The states rules_by_name gives a measured name: compare_rules' three,
+# and glibc's built-in locale, which no file builds.
+BUILT_IN = 'built in'
+RULES_STATES = (glibc_tree.SAME, glibc_tree.DIFFERS, glibc_tree.NOT_COMPARED,
+                BUILT_IN)
+
+
+def rules_by_name(sides, aliases, got, unread, keyed, unmapped):
+    """{measured name: [key, state, why, charmap]}: step 2's rules for
+    every locale name measured on either machine, for the cross with step
+    11's verdict (locale_order.rules_beside), which takes it from here and
+    never works it out again.
+
+    key is the name compare_rules answered for: the name itself where
+    compare_rules has it (a locale file or a locale.alias alias), else the
+    file the name is built from through the side's locale.alias, as
+    _measured maps it. C and POSIX are glibc's built-in locale whatever a
+    machine holds (node_charmaps.BUILTIN), never the files C and POSIX:
+    the file C is C.UTF-8's. An entry of a machine's sources that was not
+    read is not compared, whatever compare_rules says of the name (it
+    never saw the file); a name no file builds is not compared, "no locale
+    file of that name" (a locale an admin built with localedef -i under a
+    name of their own). charmap is 'changed' where the character set
+    check lists the file the name is built from (KEYED holds files; an
+    alias such as swedish is built from sv_SE, as step 2's list adds
+    it), 'not compared' where it could not trace the name to its charmap
+    (UNMAPPED), else '-'."""
+    import node_charmaps as nc
+    untraced = {n for who, names_ in unmapped or () for n, w in names_}
+    keyed = set(keyed)
+    out = {}
+    for sd, al in zip(sides, aliases):
+        for name in _measured_names(sd):
+            if name in out:
+                continue
+            if name in nc.BUILTIN:
+                out[name] = [None, BUILT_IN,
+                             'built into glibc, no locale file', '-']
+                continue
+            source = g.locale_source(al.get(name, name))
+            key = name if name in got else source
+            if key in unread:
+                state = glibc_tree.NOT_COMPARED
+                why = ("not read among the machines' locale sources: "
+                       + '; '.join(unread[key]))
+            elif key in got:
+                state, why = got[key].state, got[key].why or ''
+            else:
+                state, why = glibc_tree.NOT_COMPARED, \
+                    'no locale file of that name'
+            if state not in RULES_STATES:
+                g.die(f"compare_rules answered {state!r} for {key}, which "
+                      f"is none of {', '.join(RULES_STATES)}")
+            charmap = ('changed' if key in keyed or source in keyed
+                       else 'not compared' if name in untraced else '-')
+            out[name] = [key, state, why, charmap]
+    return out
+
+
+def write_rules_by_name(slug, noun, names, machine, sides=(), nothing=None,
+                        what=None, charmaps=None, locales=None):
+    """Write step2_rules_by_name.<pair>.json, what step 2 compared and,
+    for two machines' files, its rules for every measured name: the file
+    locale_order.rules_beside reads beside step 11's verdict. Written on
+    every route, so that a missing file means step 2 did not get there.
+    measurements are the sha256 of each machine's measurement
+    (prov['measurement_sha256']), which step 11's verdicts carry too, so
+    that the two are never of two runs."""
+    import json
+    data = {'step': 2, 'compared': noun, 'names': list(names),
+            'machines': bool(machine), 'nothing': nothing, 'what': what,
+            'measurements': [sd.prov['measurement_sha256'] for sd in sides]
+            if machine else None,
+            'charmaps': charmaps, 'locales': locales}
+    g.write_list(f"step2_rules_by_name.{slug}.json",
+                 [json.dumps(data, sort_keys=True)])
 
 
 def machine_builds(repo, sides, aliases):
@@ -733,6 +831,8 @@ def _main(opts):
         names, keyed = [], []
         g.write_list(f"step2_rules_characters.{slug}.tsv",
                      characters_rows({}, []))
+        write_rules_by_name(slug, noun, (old_name, new_name), machine,
+                            (old_side, new_side), nothing, what)
     else:
         early = (predates_lr_getc_fix(repo, old),
                  predates_lr_getc_fix(repo, new))
@@ -833,14 +933,25 @@ def _main(opts):
                             f"built with, so their character set is not "
                             f"compared:",
                             [f"{n}: {w}" for n, w in names_])
-            keyed = (_charmaps_not_run(why) if why else
-                     check_charmaps(charmap_reads, repo, side_old, side_new,
-                                    sup, already,
-                                    step2_words(noun, machines=True),
-                                    builds=measured))
+            keyed, cm_why = ((_charmaps_not_run(why), why) if why else
+                             check_charmaps(charmap_reads, repo, side_old,
+                                            side_new, sup, already,
+                                            step2_words(noun, machines=True),
+                                            builds=measured))
         else:
-            keyed = check_charmaps(charmap_reads, repo, side_old, side_new,
-                                   sup, already, step2_words(noun))
+            keyed, cm_why = check_charmaps(charmap_reads, repo, side_old,
+                                           side_new, sup, already,
+                                           step2_words(noun))
+        # Untested at this call site: on two machines' files the check's
+        # own two NOT RUN (the report's, no build in common) were reached by
+        # no file here; check_charmaps' test holds each reason, and
+        # machine_builds' reason for a file without charmaps is asserted on
+        # a real run (test_wrapper).
+        write_rules_by_name(
+            slug, noun, (old_name, new_name), machine, (old_side, new_side),
+            charmaps=cm_why if machine else None,
+            locales=rules_by_name((old_side, new_side), aliases, got, unread,
+                                  keyed, unmapped) if machine else None)
 
         # The character set check names locale files; the aliases of each
         # side's locale.alias that are built from one go to Reindex with it

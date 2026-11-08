@@ -51,7 +51,10 @@
 # build. A file without the sources or the charmaps says why, and the run
 # repeats it where their checks would have answered. Only a node file carries
 # the charmaps, so only with these options does step 2 compare them and step
-# 11 check what it measured against them.
+# 11 check what it measured against them. When step 2 compares the two
+# machines' own locale sources, each locale of the old machine step 11
+# names is set beside step 2's rules for it; otherwise one line says what
+# step 2 compared.
 #
 # Example (the names are examples -- `ldd --version` on each node gives the
 # tag, `rpm -q glibc` the build):
@@ -96,7 +99,10 @@ usage() {
   echo "       and download nothing. A file without the sources, or naming a" >&2
   echo "       build that is not of RHEL 8, 9 or 10, makes both sides read" >&2
   echo "       their tags when that side was given as its tag, and the run" >&2
-  echo "       says so; given as the build itself, the run is refused." >&2
+  echo "       says so; given as the build itself, the run is refused. When" >&2
+  echo "       step 2 compares the two machines' own locale sources, each" >&2
+  echo "       locale of the old machine step 11 names is set beside step 2's" >&2
+  echo "       rules for it; otherwise one line says what step 2 compared." >&2
   exit 2
 }
 
@@ -339,6 +345,9 @@ fi
 STEP2_LIST="$OUT_DIR/step2_changed_collate.$PAIR.txt"
 STEP2_REMOVED="$OUT_DIR/step2_removed_locales.$PAIR.txt"
 STEP2_KEYED="$OUT_DIR/step2_keyed_locales.$PAIR.txt"
+# Step 2's rules for every locale name measured on either machine, which
+# the summary sets beside step 11's verdict (VERDICTS, below).
+RULES_FILE="$OUT_DIR/step2_rules_by_name.$PAIR.json"
 # Written by step 3 until step 9.2 merged it into step 2. Only removed
 # below, so that a list an earlier version left there is never read.
 OLD_STEP3_LIST="$OUT_DIR/step3_affected_locales.txt"
@@ -425,7 +434,8 @@ mkdir -p "$OUT_DIR"
 # unnoticed, but the statement is false and this file's rule is that every
 # file it reads was written by this run.
 rm -f "$STEP2_LIST" "$STEP2_REMOVED" "$STEP2_KEYED" "$OLD_STEP3_LIST" \
-      "$OLD_STEP4_LIST" "$OLD_STEP4_BYTE_ORDER" "$SIDES_FILE"
+      "$OLD_STEP4_LIST" "$OLD_STEP4_BYTE_ORDER" "$SIDES_FILE" "$RULES_FILE" \
+      "$OUT_DIR/step2_rules_characters.$PAIR.tsv"
 rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
 # What the machines' files decided, for the warnings block below, which
 # repeats the `!!` blocks of every step*.$PAIR.log.
@@ -450,12 +460,20 @@ ORDER_CHARACTERS="$OUT_DIR/measured_order_characters.$PAIR.tsv"
 # tests step 11 wrote; its report names each one and how to read the
 # two servers' outputs.
 ORDER_SQL="$OUT_DIR/measured_order_confirm.$PAIR"
-rm -f "$ORDER_LOG" "$ORDER_SUMMARY" "$ORDER_CHARACTERS" "$ORDER_SQL".*.sql
+# Step 11's verdict for each locale, which the lines of CROSS set beside
+# step 2's rules once step 2 has run; CROSS_LOG holds why, if they could
+# not be.
+VERDICTS="$OUT_DIR/measured_order_verdicts.$PAIR.json"
+CROSS="$OUT_DIR/measured_order_rules.$PAIR.txt"
+CROSS_LOG="$OUT_DIR/measured_order_rules.$PAIR.log"
+rm -f "$ORDER_LOG" "$ORDER_SUMMARY" "$ORDER_CHARACTERS" "$ORDER_SQL".*.sql \
+      "$VERDICTS" "$CROSS" "$CROSS_LOG"
 if [ -n "$OLD_ORDER" ]; then
   # From the --*-order options there are no charmaps, and step 11 says so.
   if ! python3 "$SCRIPTS/locale_order.py" --compare "$OLD_ORDER" "$NEW_ORDER" \
        --tags "$OLD_TAG" "$NEW_TAG" --summary-to "$ORDER_SUMMARY" \
        --characters-to "$ORDER_CHARACTERS" --sql-to "$ORDER_SQL" \
+       --verdicts-to "$VERDICTS" \
        ${ORDER_CM[@]+"${ORDER_CM[@]}"} \
        > "$ORDER_LOG" 2>&1; then
     cat "$ORDER_LOG" >&2
@@ -581,6 +599,27 @@ if [ ! -f "$STEP2_LIST" ] || [ ! -f "$STEP2_KEYED" ]; then
   exit 1
 fi
 
+# Step 2's rules beside step 11's verdict, read from the two files this run
+# wrote, never worked out again (locale_order.rules_beside). Lines that
+# cannot be made are said where they would stand, with why: never step 11's
+# answer alone as if they had been. Untested defence: both files are of
+# the same measurements, so no run the suite makes reaches NOT REPORTED.
+if [ -n "$OLD_ORDER" ]; then
+  if ! python3 "$SCRIPTS/locale_order.py" --rules-beside "$VERDICTS" \
+       "$RULES_FILE" "$CROSS" > "$CROSS_LOG" 2>&1; then
+    rm -f "$CROSS"
+  fi
+fi
+rules_beside() {
+  if [ -s "$CROSS" ]; then
+    cat "$CROSS"
+  else
+    echo "     NOT REPORTED -- step 2's rules could not be set beside each"
+    echo "     locale of the old machine step 11 names:"
+    sed 's/^/       /' "$CROSS_LOG"
+  fi
+}
+
 # Step 2's list is the summary's Reindex. Every name in it was just written
 # by step 2 for this pair (the absent check above), and it is printed, never
 # passed on as an argument: the name check that used to guard step 3's argv
@@ -593,6 +632,8 @@ fi
 if [ -n "$OLD_ORDER" ]; then
   banner "STEP 11  MEASURED ORDER  how each machine's own glibc sorts every locale"
   cat "$ORDER_LOG"
+  echo
+  rules_beside
 fi
 
 # ---------------------------------------------------------------- summary ----
@@ -746,6 +787,7 @@ if [ -n "$OLD_ORDER" ]; then
   if [ -s "$ORDER_SUMMARY" ]; then
     cat "$ORDER_SUMMARY"
     echo "     Full report: step 11 above."
+    rules_beside
   else
     # Unreachable as the step stands: step 11 writes its summary before its
     # report, and a step 11 that failed has already ended this script.

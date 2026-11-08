@@ -3174,21 +3174,55 @@ class SummaryForTheAudit(unittest.TestCase):
         cls.tmp = tempfile.mkdtemp(prefix='locale_order_summary_')
         cls.addClassCleanup(shutil.rmtree, cls.tmp)
         cls.summaries, cls.reports, cls.files = {}, {}, {}
+        cls.verdicts = {}
         for key, old, new in (('8-9', RHEL8, RHEL9), ('9-10', RHEL9, RHEL10)):
             path = os.path.join(cls.tmp, key)
             rc, out, err = run_compare(old, new, '--summary-to', path + '.txt',
-                                       '--characters-to', path + '.tsv')
+                                       '--characters-to', path + '.tsv',
+                                       '--verdicts-to', path + '.json')
             assert (rc, err) == (0, ''), err
             cls.reports[key] = parse_report(out)
             with open(path + '.txt', encoding='utf-8') as f:
                 cls.summaries[key] = parse_summary(f.read())
             with open(path + '.tsv', encoding='utf-8') as f:
                 cls.files[key] = parse_characters(f.read())
+            with open(path + '.json', encoding='utf-8') as f:
+                cls.verdicts[key] = json.load(f)
 
     def summary_and_report(self, key):
         self.assertEqual(self.reports[key]['characters_file'],
                          os.path.join(self.tmp, key + '.tsv'))
         return self.summaries[key], self.reports[key]
+
+    def test_the_verdicts_are_the_reports(self):
+        """--verdicts-to names every locale of either machine with the
+        verdict the report prints, by name: the fourteen changed of RHEL8 to
+        RHEL9 and the two it removes, each of 9 to 10's; and each
+        measurement's sha256, which step 2 records for a machine's file."""
+        for key, old, new in (('8-9', RHEL8, RHEL9), ('9-10', RHEL9, RHEL10)):
+            with self.subTest(pair=key):
+                got = self.verdicts[key]
+                shas, names = [], set()
+                for path in (old, new):
+                    with open(path, 'rb') as f:
+                        raw = f.read()
+                    shas.append(hashlib.sha256(raw).hexdigest())
+                    names |= set(json.loads(raw)['locales'])
+                self.assertEqual(got['step'], 11)
+                self.assertEqual(got['measurements'], shas)
+                self.assertEqual(set(got['locales']), names)
+                states = collections.defaultdict(set)
+                for name, (state, words) in got['locales'].items():
+                    states[state].add(name)
+                self.assertEqual(set(states) - set(m.VERDICTS), set())
+                self.assertEqual(states['changed'],
+                                 set(by_name(self.reports[key])))
+                self.assertEqual(states['only old'],
+                                 set(self.summaries[key]['not_on_new']))
+                self.assertEqual(got['locales']['C'],
+                                 ['firm', 'built into glibc'])
+        self.assertEqual(self.verdicts['8-9']['locales']['ko_KR.utf8'],
+                         ['changed', 'the order changes'])
 
     def assertSameAnswer(self, summary, report):
         changes = by_name(report)
@@ -6186,14 +6220,16 @@ class ExtractOnTheCommandLine(unittest.TestCase):
         self.assertEqual(p.returncode, 2)
         self.assertIn('writes a compressed file, not text', p.stderr.decode())
 
-    def test_the_three_runs_do_not_mix(self):
+    def test_the_four_runs_do_not_mix(self):
         for args in (('--extract', '--compare', RHEL8, RHEL9),
                      ('--extract', '--unpack', 'x', 'y'),
-                     ('--compare', RHEL8, RHEL9, '--unpack', 'x', 'y')):
+                     ('--compare', RHEL8, RHEL9, '--unpack', 'x', 'y'),
+                     ('--compare', RHEL8, RHEL9, '--rules-beside', 'x', 'y',
+                      'z')):
             with self.subTest(args=args):
                 rc, out, err = run_script(*args)
                 self.assertEqual(rc, 2)
-                self.assertIn('three different runs', err)
+                self.assertIn('different runs; give one', err)
                 self.assertEqual(out, '')
 
 
@@ -15688,6 +15724,247 @@ class CompareTakesTheOneOrder(unittest.TestCase):
         self.assertEqual(seen, [('machine', old['glibc_build'],
                                  old['glibc_version'], 'machine',
                                  new['glibc_build'], new['glibc_version'])])
+
+
+
+def parse_rules_beside(text):
+    """({(names,): line}, [lines that stand alone]) of what rules_beside
+    writes, read strictly: a line five columns in stands alone and goes on
+    seven in; under RULES_LEAD, each line seven in names a group and goes
+    on nine in. Anything else is refused."""
+    entries, alone, under = [], [], False
+    for line in text.splitlines():
+        width = len(line) - len(line.lstrip(' '))
+        if width == 5:
+            alone.append(line.strip())
+            under = alone[-1] == m.RULES_LEAD
+        elif width == 7 and under:
+            entries.append(line.strip())
+        elif width == 7 and alone:
+            alone[-1] += ' ' + line.strip()
+        elif width == 9 and under and entries:
+            entries[-1] += ' ' + line.strip()
+        else:
+            raise AssertionError(f'a line rules_beside does not write: '
+                                 f'{line!r}')
+    out = {}
+    for entry in entries:
+        names, said = entry.split(': ', 1)
+        out[tuple(names.split(', '))] = said
+    return out, alone
+
+
+class VerdictsByName(unittest.TestCase):
+    """verdicts_by_name gives each locale the verdict of the list compare()
+    printed it from, every state once, with step 11's own words; the pairs
+    recorded have none unchanged only as far as measured, none refused and
+    none not measured, so each is injected."""
+
+    def test_each_list_its_verdict(self):
+        got = m.verdicts_by_name(
+            changed=['or_IN'], same=['C', 'en_US', 'th_TH', 'xx_YY'],
+            firm={'C', 'en_US', 'th_TH'}, unmeasured=['ja_JP'],
+            refused={'ko_KR.euckr': {'new': ['LC_CTYPE']},
+                     'zh_TW.euctw': {'old': ['x'], 'new': ['x']}},
+            only_old=['en_US@ampm'], only_new=['ckb_IQ'],
+            table_found=[('tables only', {'names': ['th_TH']}),
+                         ('tables disagree', {'names': ['xx_YY']})])
+        self.assertEqual(got, {
+            'or_IN': ['changed', 'the order changes'],
+            'C': ['firm', 'built into glibc'],
+            'en_US': ['firm', 'unchanged by its compiled sort table'],
+            'th_TH': ['firm', 'unchanged by its compiled sort table, which '
+                      'step 11 could not measure'],
+            'xx_YY': ['far', 'unchanged only as far as step 11 measured it'],
+            'ja_JP': ['unmeasured', 'step 11 could not measure it'],
+            'ko_KR.euckr': ['refused', 'refused by glibc on the new machine'],
+            'zh_TW.euctw': ['refused', 'refused by glibc on both machines'],
+            'en_US@ampm': ['only old', 'not on the new machine'],
+            'ckb_IQ': ['only new', 'only on the new machine']})
+
+
+class RulesBesideTheVerdicts(unittest.TestCase):
+    """rules_beside sets step 2's rules beside step 11's verdict, from the
+    two files the steps wrote: not compared first, step 11's own words
+    first under every verdict but a change, one line per group of locales
+    whose line is the same, and a refusal for two files of two runs or a
+    state it does not know. In process: the two answers are injected, each
+    state of each side once."""
+
+    SHA = ['a' * 64, 'b' * 64]
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix='rules-beside-')
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+
+    def lines(self, verdicts, rules, **more):
+        """What rules_beside writes, as {names: line} below its lead, and
+        the lines that stand alone, after writing the two files."""
+        v = {'step': 11, 'measurements': self.SHA, 'locales': verdicts}
+        r = {'step': 2, 'compared': 'builds', 'names': ['o', 'n'],
+             'machines': True, 'nothing': None, 'what': None,
+             'measurements': self.SHA, 'charmaps': None, 'locales': rules}
+        r.update(more)
+        paths = [os.path.join(self.dir, x) for x in ('v.json', 'r.json',
+                                                     'out.txt')]
+        for path, data in zip(paths, (v, r)):
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f)
+        self.assertEqual(m.rules_beside(*paths), 0)
+        with open(paths[2], encoding='utf-8') as f:
+            return parse_rules_beside(f.read())
+
+    def refused(self, verdicts, rules, words, **more):
+        with self.assertRaises(SystemExit) as cm, \
+                unittest.mock.patch('sys.stderr') as err:
+            self.lines(verdicts, rules, **more)
+        self.assertEqual(cm.exception.code, 2)
+        said = ''.join(c.args[0] for c in err.write.call_args_list)
+        self.assertIn(words, flat(said))
+
+    def test_a_change_beside_each_rules_state(self):
+        got, alone = self.lines(
+            {'or_IN': ['changed', 'the order changes'],
+             'ko_KR.utf8': ['changed', 'the order changes'],
+             'mine': ['changed', 'the order changes']},
+            {'or_IN': ['or_IN', 'differs', '', '-'],
+             'ko_KR.utf8': ['ko_KR', 'same', '', '-'],
+             'mine': ['mine', 'not compared',
+                      'no locale file of that name', '-']})
+        self.assertEqual(got, {
+            ('ko_KR.utf8',): 'the order changes; its rules (step 2) do not',
+            ('mine',): 'the order changes; rules (step 2): not compared, no '
+                       'locale file of that name',
+            ('or_IN',): 'the order changes, and so do its rules (step 2)'})
+        self.assertEqual(alone, [m.RULES_LEAD])
+
+    def test_every_other_verdict_keeps_step_11s_words_first(self):
+        """'The order changes' only where step 11 says so: under any other
+        verdict the rules are what is known, beside step 11's words, and
+        do not show the order (review of the 9.4c plan, H1)."""
+        words = {'far': 'unchanged only as far as step 11 measured it',
+                 'unmeasured': 'step 11 could not measure it',
+                 'refused': 'refused by glibc on the new machine',
+                 'only old': 'not on the new machine'}
+        for state, said in words.items():
+            for rule, known in (('same', 'rules (step 2): the same'),
+                                ('differs', 'rules (step 2): differ'),
+                                ('not compared', 'rules (step 2): not '
+                                 'compared, no file x on the new side')):
+                with self.subTest(state=state, rule=rule):
+                    got, _ = self.lines(
+                        {'x': [state, said]},
+                        {'x': ['x', rule, 'no file x on the new side'
+                               if rule == 'not compared' else '', '-']})
+                    self.assertEqual(got, {('x',): f'{said}; {known}; this '
+                                           'does not show the order'})
+
+    def test_a_locale_unchanged_for_any_text_only_when_its_rules_differ(self):
+        got, alone = self.lines(
+            {'a': ['firm', 'unchanged by its compiled sort table'],
+             'b': ['firm', 'unchanged by its compiled sort table'],
+             'c': ['firm', 'unchanged by its compiled sort table'],
+             'C': ['firm', 'built into glibc']},
+            {'a': ['a', 'differs', '', '-'], 'b': ['b', 'same', '', '-'],
+             'c': ['c', 'not compared', 'why', '-'],
+             'C': [None, 'built in', 'built into glibc, no locale file',
+                   '-']})
+        self.assertEqual(got, {('a',): 'unchanged by its compiled sort '
+                                       'table; its rules (step 2) differ'})
+
+    def test_none_named(self):
+        got, alone = self.lines(
+            {'b': ['firm', 'unchanged by its compiled sort table'],
+             'n': ['only new', 'only on the new machine']},
+            {'b': ['b', 'same', '', '-'],
+             'n': ['n', 'not compared', 'no file n on the old side', '-']})
+        self.assertEqual(got, {})
+        self.assertEqual(alone, [m.RULES_NONE])
+
+    def test_a_group_never_mixes_two_answers(self):
+        got, _ = self.lines(
+            {x: ['changed', 'the order changes']
+             for x in ('sv_SE', 'swedish', 'sv_FI', 'ko_KR.utf8')},
+            {'sv_SE': ['sv_SE', 'differs', '', '-'],
+             'swedish': ['swedish', 'differs', '', '-'],
+             'sv_FI': ['sv_FI', 'differs', '', 'changed'],
+             'ko_KR.utf8': ['ko_KR', 'same', '', '-']})
+        self.assertEqual(got, {
+            ('ko_KR.utf8',): 'the order changes; its rules (step 2) do not',
+            ('sv_FI',): "the order changes, and so do its rules (step 2); a "
+                        "character its file's rules name changed in a "
+                        "charmap",
+            ('sv_SE', 'swedish'): 'the order changes, and so do its rules '
+                                  '(step 2)'})
+
+    def test_the_character_set_where_step_2_could_not_look(self):
+        got, alone = self.lines(
+            {'x': ['changed', 'the order changes']},
+            {'x': ['x', 'same', '', 'not compared']},
+            charmaps='The file of the machine holds none.')
+        self.assertEqual(got, {('x',): 'the order changes; its rules (step '
+                               '2) do not; its character set (step 2): not '
+                               'compared'})
+        self.assertEqual(alone, [m.RULES_LEAD, 'Character sets (step 2): not '
+                                 'compared. The file of the machine holds '
+                                 'none.'])
+
+    def test_not_the_machines_is_one_line(self):
+        """Step 2 compared the tags (a file holds no sources, its build is
+        not of RHEL 8, 9 or 10, or there is no machine file), or nothing:
+        one line, and no locale gets one."""
+        verdicts = {'x': ['changed', 'the order changes']}
+        for more, line in (
+                ({'machines': False, 'compared': 'tags',
+                  'names': ['glibc-2.28', 'glibc-2.34'], 'locales': None,
+                  'measurements': None},
+                 'Rules (step 2) are not set beside each locale: step 2 '
+                 'compared the tags glibc-2.28 and glibc-2.34, not the '
+                 "machines' own locale sources."),
+                ({'nothing': 'commit', 'what': 'the two tags are one commit',
+                  'machines': False, 'locales': None, 'measurements': None},
+                 'Rules (step 2) are not set beside each locale: step 2 '
+                 'compared nothing, the two tags are one commit.'),
+                ({'nothing': 'tree', 'what': "the two machines' files hold "
+                  'the same locale sources', 'locales': None},
+                 'Rules (step 2) are not set beside each locale: step 2 '
+                 "compared nothing, the two machines' files hold the same "
+                 'locale sources.')):
+            with self.subTest(line=line):
+                got, alone = self.lines(verdicts, {}, **more)
+                self.assertEqual((got, alone), ({}, [line]))
+
+    def test_two_runs_are_refused(self):
+        self.refused({'x': ['changed', 'the order changes']},
+                     {'x': ['x', 'same', '', '-']},
+                     'are of different measurements',
+                     measurements=['c' * 64, 'b' * 64])
+
+    def test_a_name_on_one_side_only_is_refused(self):
+        self.refused({'x': ['changed', 'the order changes']}, {},
+                     'step 2 gave no rules for x')
+        self.refused({'x': ['changed', 'the order changes']},
+                     {'x': ['x', 'same', '', '-'],
+                      'y': ['y', 'same', '', '-']},
+                     'step 2 gave rules for y')
+
+    def test_a_state_it_does_not_know_is_refused(self):
+        self.refused({'x': ['moved', 'it moved']},
+                     {'x': ['x', 'same', '', '-']}, "the verdict 'moved'")
+        self.refused({'x': ['changed', 'the order changes']},
+                     {'x': ['x', 'similar', '', '-']},
+                     "the rules state 'similar'")
+        self.refused({'x': ['changed', 'the order changes']},
+                     {'x': ['x', 'same', '', 'maybe']},
+                     "the charmap state 'maybe'")
+
+    def test_a_file_of_another_step_is_refused(self):
+        v = os.path.join(self.dir, 'v.json')
+        with open(v, 'w', encoding='utf-8') as f:
+            json.dump({'step': 2}, f)
+        with self.assertRaises(SystemExit), \
+                unittest.mock.patch('sys.stderr'):
+            m.rules_beside(v, v, os.path.join(self.dir, 'out.txt'))
 
 
 if __name__ == '__main__':

@@ -302,6 +302,13 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
    code. Every locale found unchanged either has the same sort table on both,
    which is what glibc's comparison code reads, or compares bytes on both.
 
+     Each locale of the old machine step 11 names, beside its rules (step 2):
+       aa_ER.utf8@saaho, aa_ER@saaho: not on the new machine; rules (step 2):
+         not compared, no file aa_ER@saaho on the new side; this does not show
+         the order
+       th_TH, th_TH.tis620, th_TH.utf8, thai: the order changes, and so do its
+         rules (step 2)
+
 ================================================================
 == AUDIT SUMMARY  glibc-2.34-275.el9_8 -> glibc-2.39-128.el10_2
 ================================================================
@@ -462,6 +469,12 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
         table on both, which is what glibc's comparison code reads, or
         compares bytes on both.
      Full report: step 11 above.
+     Each locale of the old machine step 11 names, beside its rules (step 2):
+       aa_ER.utf8@saaho, aa_ER@saaho: not on the new machine; rules (step 2):
+         not compared, no file aa_ER@saaho on the new side; this does not show
+         the order
+       th_TH, th_TH.tis620, th_TH.utf8, thai: the order changes, and so do its
+         rules (step 2)
 
 -- Warnings the clean results above do NOT cover
      !! Not checked for these machines: their locale sources and charmaps are read
