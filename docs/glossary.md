@@ -7,7 +7,7 @@ the file that happens to define it first.
 **`LC_COLLATE` block** — the section of a locale source file, from
 `LC_COLLATE` to `END LC_COLLATE`, that defines sort order. A locale file
 often changes without this block
-being touched: most of the 283 files that differ between glibc 2.28 and 2.34
+being touched: most of the files that differ between glibc 2.28 and 2.34
 changed only `LC_TIME` or `LC_MONETARY`.
 
 **collation template** — one of the three shared locale files most locales
@@ -20,10 +20,6 @@ directives. A locale with no tailoring of its own just copies another's
 rules, so its real sort order changes whenever the copied locale's does —
 with no change to its own file, and so no appearance in a file diff. Step 2
 follows it when it compares each locale's rules.
-
-**blast radius** — how many locales inherit a given file through the `copy`
-graph. Step 1 prints it, so a one-line change to a template that 328 locales
-inherit cannot read as one line out of 283.
 
 **`localedef`** — glibc's locale compiler. It turns locale source files into
 the binary locale the system loads. It is what expands ellipsis ranges and

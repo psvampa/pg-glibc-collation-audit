@@ -1,6 +1,6 @@
 
 ================================================================
-== STEP 1  What changed, and how far it reaches
+== WHAT WAS COMPARED
 ================================================================
 Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
   UNCHECKED glibc-2.28 = 3c03baca37fd  gpg is not installed; the signature was NOT checked
@@ -8,48 +8,15 @@ Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointe
   NOTE: signatures were not checked. The commit ids above are what was actually read;
         compare them against a source you trust (sourceware.org/git/glibc.git) if it matters.
 !! Not checked for glibc-2.28 and glibc-2.34: they are upstream tags, which
-   hold none of a distro's own locale files or patches. Steps 1 and 2 read
-   only what the tags hold. If the machines run RHEL 8, 9 or 10, name each
-   side as its build instead, as rpm -q glibc prints it on the machine without
-   the architecture (glibc-2.34-283.el9_8), or as latest-el8, latest-el9 or
+   hold none of a distro's own locale files or patches. Step 2 reads only what
+   the tags hold. If the machines run RHEL 8, 9 or 10, name each side as its
+   build instead, as rpm -q glibc prints it on the machine without the
+   architecture (glibc-2.34-283.el9_8), or as latest-el8, latest-el9 or
    latest-el10.
 !! Not compared on any route: the code that compiles and compares the rules
    (localedef's and strcoll's, each build's patches to it included). Only step
    11 sees what it does, when it measures both machines;
    docs/confirming-on-a-real-system.md says how to confirm the order on them.
----
-Locale files added, modified or deleted: 283
-Full list in /tmp/pg-glibc-collation-audit/changed_locales.txt
----
-Collation templates -- did they change?
-  iso14651_t1            UNCHANGED
-  iso14651_t1_common     UNCHANGED
-  iso14651_t1_pinyin     UNCHANGED
----
-Collation templates by blast radius at glibc-2.34 (locales inheriting via `copy`):
-   333 locales inherit from iso14651_t1_common
-   328 locales inherit from iso14651_t1
-    32 locales inherit from es_ES  <== has some change in this version pair
-    15 locales inherit from am_ET  <== has some change in this version pair
-     9 locales inherit from hi_IN  <== has some change in this version pair
-     7 locales inherit from ti_ER  <== has some change in this version pair
-     6 locales inherit from ca_ES  <== has some change in this version pair
-     5 locales inherit from en_DK  <== has some change in this version pair
-     4 locales inherit from hr_HR
-     2 locales inherit from da_DK
-
-Changed files that others inherit from (33) -- reach if the change turns out to be in LC_COLLATE.
-NOT a collation verdict: most of these changed LC_TIME or LC_MONETARY. Step 2 filters.
-  es_ES: 32 dependent locale(s)
-  am_ET: 15 dependent locale(s)
-  hi_IN: 9 dependent locale(s)
-  ti_ER: 7 dependent locale(s)
-  ca_ES: 6 dependent locale(s)
-  en_DK: 5 dependent locale(s)
-  sv_SE: 2 dependent locale(s)
-  so_SO: 2 dependent locale(s)
-  ... and 25 more with 1-2 dependents: nl_NL, ne_NP, fr_BE, en_ZA, en_CA, dz_BT, wa_BE, tr_TR, ta_IN, sq_AL, ru_RU, ks_IN, fr_FR, fil_PH, en_US, de_DE, de_CH, cs_CZ, crh_UA, br_FR, bo_CN, bn_IN, bho_IN, ber_DZ, aa_ER
----
 
 ================================================================
 == STEP 2  Which locales' sort rules changed
@@ -59,8 +26,8 @@ glibc-2.34, every `copy` followed, compared statement by statement:
   398 name(s), locale files and locale.alias aliases: 391 the same, 5 differ,
   2 not compared.
   Not compared here: the code that compiles and compares the rules
-  (localedef's and strcoll's), as step 1 says; the character sets are compared
-  below.
+  (localedef's and strcoll's), as said under 'What was compared'; the
+  character sets are compared below.
 
 Rules differ (5):
   or_IN
@@ -131,10 +98,10 @@ Listed for Reindex (5): or_IN, sv_FI, sv_FI@euro, sv_SE, swedish
 
 -- Warnings the clean results above do NOT cover
      !! Not checked for glibc-2.28 and glibc-2.34: they are upstream tags, which
-        hold none of a distro's own locale files or patches. Steps 1 and 2 read
-        only what the tags hold. If the machines run RHEL 8, 9 or 10, name each
-        side as its build instead, as rpm -q glibc prints it on the machine without
-        the architecture (glibc-2.34-283.el9_8), or as latest-el8, latest-el9 or
+        hold none of a distro's own locale files or patches. Step 2 reads only what
+        the tags hold. If the machines run RHEL 8, 9 or 10, name each side as its
+        build instead, as rpm -q glibc prints it on the machine without the
+        architecture (glibc-2.34-283.el9_8), or as latest-el8, latest-el9 or
         latest-el10.
      !! Not compared on any route: the code that compiles and compares the rules
         (localedef's and strcoll's, each build's patches to it included). Only step

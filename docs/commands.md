@@ -19,7 +19,8 @@ checks.
 
 `./audit.sh <old> <new>`, given two tags, compares the two glibc versions as
 their maintainers published them, and needs nothing but this checkout. It
-runs steps 1 and 2 in order and ends with one summary.
+says what it compares (*What was compared*: each side and where it was read
+from), runs step 2 and ends with one summary.
 
 Either side can name a RHEL build instead of a tag, as `rpm -q glibc` prints
 it without the architecture: `./audit.sh glibc-2.28-251.el8_10.40
@@ -28,16 +29,15 @@ of its packages from Rocky Linux's mirror, rebuilds its `localedata/` and
 `locale/`, and reads them instead of the tag. For a machine not installed
 yet, a side can be `latest-el10` (`latest-el<N>` for RHEL N): the newest
 build Rocky Linux's mirror lists for that release, whose name the run prints
-before step 1 and reads from then on. With a build, only `--old-node` and
+before anything else and reads from then on. With a build, only `--old-node` and
 `--new-node` of the options of 1.b are read.
 
 | The run's step | The question it answers |
 |---|---|
-| 1 | which locale files changed between the two versions, and how far the change reaches |
 | 2 | which locales' sort rules differ between the two versions, every `copy` followed, which locales' rules name a character their character set added, removed or gave other bytes, and which locales build a collating element differently out of a transliteration |
 
-Neither compares the code that compiles and compares the rules, `localedef`'s
-and `strcoll`'s; step 1 says so on every run
+It does not compare the code that compiles and compares the rules,
+`localedef`'s and `strcoll`'s; every run says so under *What was compared*
 ([limitations](limitations.md#no-step-compares-localedefs-or-strcolls-code)).
 
 What you get is a list to worry about. What you do **not** get is
@@ -49,12 +49,13 @@ and its order changed through `localedef`'s code.
 
 The same command, given one file from each machine with `--old-node` and
 `--new-node`. Each is the file `scripts/locale_order.py --extract` wrote on
-that machine. Steps 1 and 2 then read each machine's own locale sources
+that machine. The run then reads each machine's own locale sources
 and charmaps, which its file holds, as the build `rpm -q glibc` printed on
 that machine, in place of the tag, as in 1.a: the side you give is that
 build or its tag. Nothing is downloaded. When a file holds no locale
 sources, or names a build that is not of RHEL 8, 9 or 10, and you gave its
-tag, both sides read their tags and the run says so before step 1; given as
+tag, both sides read their tags and the run says so before anything else;
+given as
 the build itself, it is refused, as in 1.a. The two files add the step
 below.
 
@@ -66,7 +67,7 @@ With the files, the run answers questions the upstream comparison cannot
 reach at all:
 
 - **What your distro changed on its own, and a locale it adds** that the
-  upstream version it started from does not have. Steps 1 and 2 compare the
+  upstream version it started from does not have. Step 2 compares the
   two machines' own locale sources and charmaps, so such a patch or file is
   compared like any other. `C.UTF-8` is such a locale on RHEL8 and RHEL9, and
   in a container it is usually the database collation.
@@ -86,15 +87,15 @@ that side's distro changes. They are not omitted, because a section that
 vanishes reads like a section that found nothing.
 
 A file without the locale sources still holds the measurement and the build,
-because the extraction notes why the sources are missing and goes on. Steps
-1 and 2 then read the tags, or the run is refused when that side was given as
-the build itself, as above; the warning that says so carries the file's
+because the extraction notes why the sources are missing and goes on. Step 2
+then reads the tags, or the run is refused when that side was given as the
+build itself, as above; the warning that says so carries the file's
 reason, such as `/usr/share/i18n/locales is empty`. A file without the
 charmaps is still read for its sources: step 2 says `NOT RUN` for the
 character sets, and step 11 says it did not check the strings it measured
 against them, each with the reason.
 
-**Steps 1 and 2 compare rules, not order.** The weights are computed when the
+**Step 2 compares rules, not order.** The weights are computed when the
 locale is built, so two machines can hold byte-identical files
 and still sort differently. That is what step 11 measures, and commands 2 and
 3 measure inside PostgreSQL.
@@ -171,7 +172,7 @@ they do not mix with the options of the next section.
 `audit.sh` also takes each machine's measurement on its own, for when you
 have it already: `--old-order` and `--new-order`, each the output of a plain
 `python3 scripts/locale_order.py > old.out` on that machine, given with two
-tags. Step 11 then compares the two measurements, and steps 1 and 2 read the
+tags. Step 11 then compares the two measurements, and step 2 reads the
 tags. A measurement carries no charmaps, so step 11 does not check the
 strings it measured against them, and says so.
 

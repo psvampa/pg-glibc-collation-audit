@@ -1,10 +1,13 @@
-Each machine's file names the build it runs: steps 1 and 2 read
-glibc-2.34-275.el9_8 and glibc-2.39-128.el10_2, in place of glibc-2.34 and
-glibc-2.39, from each machine's own locale sources.
+Each machine's file names the build it runs: step 2 reads glibc-2.34-275.el9_8
+and glibc-2.39-128.el10_2, in place of glibc-2.34 and glibc-2.39, from each
+machine's own locale sources.
 
 ================================================================
-== STEP 1  What changed, and how far it reaches
+== WHAT WAS COMPARED
 ================================================================
+Machines' files, as given:
+  old  tests/locale_order/rhel9.extract.tar.gz
+  new  tests/locale_order/rhel10.extract.tar.gz
 Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
   UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was NOT checked
   UNCHECKED glibc-2.39 = ef321e23c20e  gpg is not installed; the signature was NOT checked
@@ -35,39 +38,6 @@ file, on its upstream tag above, as one commit of the clone; nothing downloaded)
    (localedef's and strcoll's, each build's patches to it included). Only step
    11 sees what it does, when it measures both machines;
    docs/confirming-on-a-real-system.md says how to confirm the order on them.
----
-Locale files added, modified or deleted: 317
-Full list in /tmp/pg-glibc-collation-audit/changed_locales.txt
----
-Collation templates -- did they change?
-  iso14651_t1            UNCHANGED
-  iso14651_t1_common     UNCHANGED
-  iso14651_t1_pinyin     UNCHANGED
----
-Collation templates by blast radius at glibc-2.39-128.el10_2 (locales inheriting via `copy`):
-   343 locales inherit from iso14651_t1_common
-   338 locales inherit from iso14651_t1
-    32 locales inherit from es_ES  <== has some change in this version pair
-    15 locales inherit from am_ET  <== has some change in this version pair
-    10 locales inherit from hi_IN  <== has some change in this version pair
-     7 locales inherit from ti_ER  <== has some change in this version pair
-     6 locales inherit from ca_ES  <== has some change in this version pair
-     5 locales inherit from en_DK  <== has some change in this version pair
-     4 locales inherit from hr_HR  <== has some change in this version pair
-     2 locales inherit from da_DK  <== has some change in this version pair
-
-Changed files that others inherit from (45) -- reach if the change turns out to be in LC_COLLATE.
-NOT a collation verdict: most of these changed LC_TIME or LC_MONETARY. Step 2 filters.
-  es_ES: 32 dependent locale(s)
-  am_ET: 15 dependent locale(s)
-  hi_IN: 10 dependent locale(s)
-  ti_ER: 7 dependent locale(s)
-  ca_ES: 6 dependent locale(s)
-  en_DK: 5 dependent locale(s)
-  hr_HR: 4 dependent locale(s)
-  sv_SE: 2 dependent locale(s)
-  ... and 37 more with 1-2 dependents: sr_RS, so_SO, nl_NL, ne_NP, fr_BE, en_ZA, en_GB, en_CA, dz_BT, da_DK, wa_BE, uz_UZ, tr_TR, ta_IN, sq_AL, ru_RU, om_KE, nb_NO, ks_IN, kab_DZ, ka_GE, gez_ER@abegede, fr_FR, fil_PH, fi_FI, fa_IR, en_US, de_DE, de_CH, cs_CZ, crh_UA, cns11643_stroke, br_FR, bo_CN, bn_IN, bho_IN, aa_ER
----
 
 ================================================================
 == STEP 2  Which locales' sort rules changed
@@ -77,8 +47,8 @@ glibc-2.39-128.el10_2, every `copy` followed, compared statement by statement:
   410 name(s), locale files and locale.alias aliases: 396 the same, 2 differ,
   12 not compared.
   Not compared here: the code that compiles and compares the rules
-  (localedef's and strcoll's), as step 1 says; the character sets are compared
-  below.
+  (localedef's and strcoll's), as said under 'What was compared'; the
+  character sets are compared below.
 
 Rules differ (2):
   th_TH, thai

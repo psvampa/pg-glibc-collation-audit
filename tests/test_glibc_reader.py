@@ -1370,7 +1370,9 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
             with self.subTest(name):
                 self.assertTrue(self.tree.defines(name))
                 self.assertEqual(['iso14651_t1'], self.tree.copies(name))
-                self.assertIn('iso14651_t1', self.tree.reach(name))
+                self.assertIn('iso14651_t1',
+                              {f for f, _ in
+                               self.tree._collate_sections(name)})
                 self.assertEqual(['iso14651_t1'],
                                  self.tree.roots(name, {'iso14651_t1'}))
 
@@ -1621,7 +1623,7 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
 
 @needs_clone
 class StepsReadWhatLocaledefReads(unittest.TestCase):
-    """The same shapes through steps 1, 2 and 4, on glibc-2.39 plus the
+    """The same shapes through step 2, on glibc-2.39 plus the
     files (a commit git can place, _harness.glibc_commit). Before backlog
     15.2 step 3 left all four copiers out of the set a change to
     iso14651_t1 affects: a reassuring answer about four locales that
@@ -1630,7 +1632,6 @@ class StepsReadWhatLocaledefReads(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp(prefix='pg-glibc-steps-')
-        cls.repo, cls.ref = _harness.glibc_commit(NEW, _SHAPES, cls.tmp)
         cls.out = os.path.join(cls.tmp, 'out')
         os.mkdir(cls.out)
 
@@ -1638,11 +1639,11 @@ class StepsReadWhatLocaledefReads(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    def step(self, script, *args, cwd=None):
+    def step(self, script, *args):
         env = dict(os.environ, PG_GLIBC_AUDIT_OUT=self.out)
         p = subprocess.run([sys.executable, os.path.join(
             _harness.SCRIPTS_DIR, script)] + list(args),
-            cwd=cwd or _harness.SCRIPTS_DIR, env=env, capture_output=True)
+            cwd=_harness.SCRIPTS_DIR, env=env, capture_output=True)
         out = (p.stdout + p.stderr).decode('utf-8', 'replace')
         self.assertEqual(0, p.returncode, out)
         return out
@@ -1690,14 +1691,6 @@ class StepsReadWhatLocaledefReads(unittest.TestCase):
         self.assertEqual({'zz_X': 'both sides: localedef cannot open '
                                   'zz_nope'}, report.listed)
         self.assertEqual(['zz_Y'], sorted(report.differs))
-
-    def test_step_1_counts_every_copier(self):
-        here = self.step('glibc_locale_data.py', 'fanin', self.ref,
-                         cwd=self.repo)
-        base = self.step('glibc_locale_data.py', 'fanin', NEW)
-        count = r'^\s+(\d+) locales inherit from iso14651_t1$'
-        self.assertEqual(int(re.search(count, base, re.M).group(1)) + 4,
-                         int(re.search(count, here, re.M).group(1)), here)
 
 
 # A directive in LC_CTYPE after a `copy` of a file without LC_CTYPE: the

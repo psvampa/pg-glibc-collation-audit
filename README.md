@@ -157,7 +157,7 @@ ssh el9 sudo -n -u postgres python3 - --extract < scripts/locale_order.py > new.
   `python3 locale_order.py --extract > old.tar` there and bring the file back.
 - If the repository no longer has the sources of that exact build, dnf says
   "No match for argument" and changes nothing. A machine without the sources
-  still gives a file; steps 1 and 2 then read the tags, and the run says so
+  still gives a file; step 2 then reads the tags, and the run says so
   and why.
 - The files are named for their role, old and new, not for their version, so
   two builds of the same release cannot overwrite each other.
@@ -278,6 +278,6 @@ short version:
 - [docs/limitations.md](docs/limitations.md) — the things to know before acting on a clean result
 - [docs/scope.md](docs/scope.md) — what it audits, and the `builtin` provider as a mitigation
 - [docs/requirements.md](docs/requirements.md) — what each run needs, on your machine and on each server, and the three setup traps
-- [docs/glossary.md](docs/glossary.md) — `copy` graph, blast radius, ellipsis range, role swap, build id, measured order, level, contraction
+- [docs/glossary.md](docs/glossary.md) — `copy` graph, ellipsis range, role swap, build id, measured order, level, contraction
 - [examples/](examples/README.md) — real output of every command, and which file is which
 - [tests/README.md](tests/README.md) — how to run the tests, what they cover, and what they do not

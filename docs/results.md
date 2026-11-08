@@ -82,7 +82,7 @@ with is in
 
 ### The CJK range — cleared by measurement
 
-`iso14651_t1`'s CJK range (U+4E00..U+9FA5), inherited by 328 locales, is an
+`iso14651_t1`'s CJK range (U+4E00..U+9FA5) is an
 ellipsis range, whose weights `localedef` computes. That code changed in this
 pair (Bug 22668), so the same rules cannot clear those locales either.
 
@@ -138,7 +138,7 @@ locale was not applied.
 unused took effect.
 
 Both sides of that upgrade are upstream glibc 2.28, so the tag pair is
-`glibc-2.28..glibc-2.28`, between whose tags steps 1 and 2 have nothing to
+`glibc-2.28..glibc-2.28`, between whose tags step 2 has nothing to
 compare. **Staying on
 one RHEL major is not a control for this locale.**
 

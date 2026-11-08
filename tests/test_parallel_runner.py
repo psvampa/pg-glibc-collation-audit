@@ -614,7 +614,6 @@ class TheSuiteDoesNotWriteWhereARealAuditReads(unittest.TestCase):
                                    'default could be read from it' % name)
             readers[name] = {m.group(1) for m in reads}
         self.assertEqual(sorted(readers), ['audit.sh',
-                                           'scripts/audit-locale-diff.sh',
                                            'scripts/glibc_locale_data.py'])
         for name, defaults in readers.items():
             self.assertEqual(defaults, {DEFAULT_OUT_DIR}, name)
@@ -630,7 +629,7 @@ class TheSuiteDoesNotWriteWhereARealAuditReads(unittest.TestCase):
             cwd=SCRIPTS_DIR, env=env, capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(p.stdout.strip(), DEFAULT_OUT_DIR)
-        for name in ('audit.sh', 'scripts/audit-locale-diff.sh'):
+        for name in ('audit.sh',):
             with open(os.path.join(REPO_ROOT, name), encoding='utf-8') as fh:
                 sets = [line for line in fh
                         if re.search(r'\bOUT_DIR=', line)]

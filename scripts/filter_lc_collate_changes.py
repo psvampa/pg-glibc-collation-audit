@@ -536,11 +536,13 @@ def step2_words(noun, machines=False):
 
 # What this step does not compare. The rules compare_rules reads are
 # statements; what localedef compiles them into and how strcoll walks the
-# result is code, which no step compares: step 1's `!!` says so once
-# (glibc_locale_data.CODE_NOT_COMPARED), and this line points to it.
+# result is code, which no step compares: a `!!` under "What was compared"
+# says so once (glibc_locale_data.CODE_NOT_COMPARED), and this line points to
+# it.
 NOT_COMPARED_HERE = (
     "Not compared here: the code that compiles and compares the rules "
-    "(localedef's and strcoll's), as step 1 says; the character sets are "
+    "(localedef's and strcoll's), as said under 'What was compared'; the "
+    "character sets are "
     "compared below.")
 
 
@@ -840,7 +842,7 @@ def _main(opts):
         builds = glibc_tree.builds_at(repo, [old, new], pre)
         # A machine's commit holds the tag's keyword tables, not its
         # build's: read with what the build's RHEL major adds
-        # (glibc_tree.build_at), as step 1's fan-in reads it.
+        # (glibc_tree.build_at).
         for sd in (old_side, new_side):
             if g.is_machine(sd):
                 builds[g._ref(sd)] = glibc_tree.build_at(

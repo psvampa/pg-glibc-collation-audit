@@ -23,8 +23,7 @@ SCRIPTS_DIR = os.path.join(REPO_ROOT, 'scripts')
 GLIBC_CLONE = os.path.join(SCRIPTS_DIR, 'glibc')
 
 # Where audit.sh and every step write when PG_GLIBC_AUDIT_OUT is unset.
-# audit.sh, scripts/audit-locale-diff.sh and glibc_locale_data.OUT_DIR each
-# spell it; test_parallel_runner ties every one of them to this name, because
+# audit.sh and glibc_locale_data.OUT_DIR each spell it; test_parallel_runner ties every one of them to this name, because
 # run_parallel watches this folder and a guard watching a folder nothing
 # writes to any more would pass for ever.
 DEFAULT_OUT_DIR = '/tmp/pg-glibc-collation-audit'
@@ -90,7 +89,8 @@ EXPECTED_SHA = {
 def have_clone():
     """Is there a usable glibc clone to run the git-backed layers against?
 
-    Asked of git, not of the filesystem: audit-locale-diff.sh clones with
+    Asked of git, not of the filesystem: glibc_locale_data.compared_sides
+    clones with
     --no-checkout, so localedata/locales never appears on disk.
 
     Asked once per process. Every decorated class of a module asks when the
@@ -127,7 +127,7 @@ def has_tags(*tags):
 
 
 _SKIP_NO_CLONE = (
-    "no glibc clone at scripts/glibc -- run scripts/audit-locale-diff.sh "
+    "no glibc clone at scripts/glibc -- run ./audit.sh "
     "glibc-2.28 glibc-2.34 first. The pure-function layer still runs.")
 _SKIP_NO_TAGS = (
     f"the glibc clone is missing one of {OLD}, {MID}, {NEW}; "
@@ -177,7 +177,7 @@ def fill_reader_cache():
     # test_wrapper.WrapperNodesOnOneBuild (PR #117), which step 9.3 deleted
     # with steps 9 and 10; no other test gives OLD's files an el9 build.
     # MID as RHEL 9 reads it: the machine files the wrapper tests make from
-    # MID's files with an el9 build, which steps 1 and 2 read as that build
+    # MID's files with an el9 build, which step 2 reads as that build
     # (WrapperMachinesReadTheirOwnFiles, NodeFileCharmaps).
     if has_tags(MID):
         rhel9 = glibc_tree.build_at(GLIBC_CLONE, MID, '.el9')
@@ -368,7 +368,6 @@ def run_wrapper(*args, out_dir=None, env_extra=None):
     env = dict(os.environ)
     if out_dir:
         env['PG_GLIBC_AUDIT_OUT'] = out_dir
-    env.pop('PG_GLIBC_AUDIT_WRAPPED', None)
     if env_extra:
         env.update(env_extra)
     p = subprocess.run([os.path.join(REPO_ROOT, 'audit.sh'), *args],
@@ -436,16 +435,19 @@ def flat(text):
 
 
 # A step deleted in branch 9 (3 in step 9.2; 4, 5, 9 and 10 in step 9.3;
-# 6, 7 and 8 in step 9.4b) named in text the tool prints or writes, in any
-# of the spellings the deleted texts used: "step 4", "Steps 1 to 5",
-# "steps 2 and 5", "steps 9/10", "Steps 1-5", "steps 6 to 10", "steps 6
-# and 7". "step 9.3" is a step of the plan, not of the run, and does not
-# count. And the scripts of the deleted steps by name, and the names of the
-# lists steps 6 to 8 wrote, so that a leftover one is never taken for this
-# run's.
+# 6, 7 and 8 in step 9.4b; 1 in step 9.5, which became 'What was compared')
+# named in text the tool prints or writes, in any of the spellings the
+# deleted texts used: "step 4", "Steps 1 to 5", "steps 2 and 5", "steps
+# 9/10", "Steps 1-5", "steps 6 to 10", "steps 6 and 7", "steps 1 and 2",
+# "step 1". "step 11" is not step 1, and "step 9.3" is a step of the plan,
+# not of the run: neither counts. Nor does the file name step1.<pair>.log,
+# which 'What was compared' keeps on purpose (audit.sh). And the scripts of
+# the deleted steps by name, and the names of the lists steps 1 and 6 to 8
+# wrote, so that a leftover one is never taken for this run's.
 DELETED_STEP = re.compile(
     r'\b[Ss]teps?\s+(?:\d+\s*(?:,|and|to|-|/)\s*)*'
-    r'(?:3|4|5|6|7|8|9|10)\b(?!\.\d)'
+    r'(?:1|3|4|5|6|7|8|9|10)\b(?!\.\d)'
+    r'|audit-locale-diff|changed_locales\.'
     r'|flag_algorithmic_ranges|diff_collation_code'
     r'|diff_distro_locales|diff_node_locales'
     r'|copy_missing\.|backports_inside_collate\.|distro_keyed_locales\.'
@@ -458,6 +460,50 @@ def deleted_steps_named(text):
     """Every place `text`, whitespace collapsed, names a deleted step or
     its script (DELETED_STEP)."""
     return [m.group(0) for m in DELETED_STEP.finditer(flat(text))]
+
+
+# The block audit.sh prints where step 1 stood until step 9.5: each side,
+# where it was read from, and what no step reads.
+COMPARED_BANNER = '== WHAT WAS COMPARED'
+
+
+def _compared_at(out):
+    """The index of the one line that is COMPARED_BANNER; refuses none
+    or two, so that a cut never runs from a banner that is not there."""
+    lines = out.split('\n')
+    at = [i for i, line in enumerate(lines) if line == COMPARED_BANNER]
+    if len(at) != 1:
+        raise AssertionError(f'{COMPARED_BANNER!r} is a line {len(at)} '
+                             f'time(s):\n{out[-3000:]}')
+    return lines, at[0]
+
+
+def compared_text(out):
+    """What audit.sh printed under 'What was compared', from the line
+    after its banner's closing rule to the next banner, which must be there
+    (a step's or the summary's)."""
+    lines, at = _compared_at(out)
+    for j in range(at + 2, len(lines)):
+        if lines[j].startswith(('== STEP ', '== AUDIT SUMMARY ')):
+            # The rule above the next banner, and the blank line above it,
+            # are the banner's.
+            return '\n'.join(lines[at + 2:j - 2])
+    raise AssertionError(f'no banner ends {COMPARED_BANNER!r}:\n'
+                         f'{out[-3000:]}')
+
+
+def before_compared(out):
+    """Everything audit.sh printed before 'What was compared', whose
+    banner must be a line exactly once."""
+    lines, at = _compared_at(out)
+    return '\n'.join(lines[:at])
+
+
+def after_compared(out):
+    """Everything from 'What was compared' to the end, its banner
+    included; the banner must be a line exactly once."""
+    lines, at = _compared_at(out)
+    return '\n'.join(lines[at:])
 
 
 class Step2Report:

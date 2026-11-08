@@ -3443,8 +3443,8 @@ def source_entries(directory):
     """Every entry under directory as (path relative to it, full path),
     parents first and each level sorted.
 
-    A link is an entry and is not followed, as tar keeps it; steps 1 and 2,
-    which read the copy, name links and folders rather than compare them.
+    A link is an entry and is not followed, as tar keeps it; the sides and
+    step 2, which read the copy, name links and folders rather than compare them.
     Raises OSError on a folder it cannot list. A folder skipped here would be
     missing from the copy, and read on the other side as one the distro does
     not ship.
@@ -3804,7 +3804,7 @@ def lay_out(packed, prefix, root, entries, path, dest):
                 with os.fdopen(fd, 'wb') as f:
                     f.write(content)
         # Read back from the disk and held to the manifest: a write that went
-        # wrong would otherwise reach steps 1 and 2 as the machine's files.
+        # wrong would otherwise reach step 2 as the machine's files.
         written = on_disk(root)
     except OSError as e:
         die(f'cannot lay the file out in {dest}: {e}')

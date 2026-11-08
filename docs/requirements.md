@@ -3,12 +3,12 @@
 What each run needs, and three setup traps that give a wrong answer without
 saying so.
 
-## For the source audit (steps 1 and 2)
+## For the source audit (step 2)
 
 `git`, `python3` 3.7 or newer (stdlib only), `bash`. Nothing else, and no
 PostgreSQL.
 
-Step 1 clones glibc from `github.com/bminor/glibc`, so it needs outbound
+The run clones glibc from `github.com/bminor/glibc`, so it needs outbound
 network the first time. The clone is `--filter=blob:none --no-checkout` and
 still comes to roughly **370 MB** on disk. Later runs reuse it.
 
@@ -20,18 +20,18 @@ as `latest-el<N>` on every run, to read which build is the newest
 another). Checking the charmaps of an el9 or el10 package needs Python 3.14
 or a `zstd` program; without one the run says the charmaps were not
 checked. A machine's file (`--old-node`, `--new-node`) needs no network
-beyond the clone: steps 1 and 2 read the locale sources it holds.
+beyond the clone: the run reads the locale sources it holds.
 
-Steps 1 and 2 work out how `localedef` reads every locale file of the
-versions they look at; step 2 looks at both. The first run for a version
+Step 2 works out how `localedef` reads every locale file of the two
+versions it compares. The first run for a version
 does that with one process per processor. `PG_GLIBC_READER_JOBS=1` keeps it
 to one process. The answers are kept in `scripts/glibc-reader-cache/`, and
 later runs read them instead.
 
-Step 1 also prints the commit id and GPG signature state behind each tag
-before diffing anything, and an invalid signature aborts the run. Without
-`gpg`, or without the signer's key, the signature is reported as not checked
-and the run continues.
+The run also prints, under *What was compared*, the commit id and GPG
+signature state behind each tag before step 2 compares anything, and an invalid
+signature aborts the run. Without `gpg`, or without the signer's key, the
+signature is reported as not checked and the run continues.
 
 ## For the extended run (1.b)
 
@@ -44,11 +44,11 @@ and the run continues.
 - **`rpm`.** The extraction reads the glibc build with `rpm -q glibc`, and
   `audit.sh` refuses a file that names none, so the machine has to be one
   that installs glibc from RPM.
-- **`glibc-locale-source` at the exact build the machine runs**, for steps 1
-  and 2, which read the machine's own locale sources and charmaps, and for
+- **`glibc-locale-source` at the exact build the machine runs**, for step
+  2, which reads the machine's own locale sources and charmaps, and for
   step 11's check of what it measured against the machine's character sets
   (trap 3, below). Without it the machine still gives a file, with the
-  measurement and the build; steps 1 and 2 then read the tags (given as its
+  measurement and the build; step 2 then reads the tags (given as its
   tag; given as the build itself, the run is refused), and the run says
   why.
 - **The language packs of the locales you care about.** The measurement
@@ -160,9 +160,9 @@ to.
 
 ## Which nodes need `glibc-locale-source`
 
-**Both of them**, for steps 1 and 2, which compare the two machines' own
+**Both of them**, for step 2, which compares the two machines' own
 locale sources and charmaps. A machine without the package still gives a
-file: steps 1 and 2 then read the tags (or the run is refused, when that side
+file: step 2 then reads the tags (or the run is refused, when that side
 is given as the build itself), and the run says why. Step 11 runs
 without it, and then says it did not check the strings it measured against
 that machine's character sets, which a locale its sort table decides does not
