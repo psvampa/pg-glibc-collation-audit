@@ -20,8 +20,9 @@ checks.
 
 `./audit.sh <old> <new>`, given two tags, compares the two glibc versions as
 their maintainers published them, and needs nothing but this checkout. It
-says what it compares (*What was compared*: each side and where it was read
-from), runs step 2 and ends with one summary.
+says what it compares (*What was compared*: each side, where it was read
+from, and where PostgreSQL warns about a collation's version between them),
+runs step 2 and ends with one summary.
 
 Either side can name a RHEL build instead of a tag, as `rpm -q glibc` prints
 it without the architecture: `./audit.sh glibc-2.28-251.el8_10.40

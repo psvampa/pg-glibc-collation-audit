@@ -44,7 +44,8 @@ from _harness import (COMPARED_BANNER, GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR,
                       compared_text, deleted_steps_named, flat,
                       summary_block, glibc_shaped, needs_clone,
                       assert_no_deleted_block, nothing_compared_lines,
-                      summary_warnings)
+                      summary_warnings, assert_collation_version,
+                      assert_no_route_looks, pg_version_of)
 
 import build_sources as bs
 import filter_lc_collate_changes as step2
@@ -3496,6 +3497,20 @@ class _AuditOnBuilds:
             for word in ('strcmp', 'compiler', 'wcsmbs', 'strcoll'):
                 self.assertNotIn(word, outside, label)
             self.assertEqual(deleted_steps_named(out), [], label)
+
+    def test_what_postgresql_warns_about_is_said_once(self):
+        """16.166 and 13.9 on every run of the class that reached the
+        summary: builds of two versions and of one (RHEL 9.x 275 -> 283,
+        8.10 .40 -> .48), a tag and a build of one release, the machines'
+        own files."""
+        ran = [label for label, (rc, _) in self.out.items() if rc == 0]
+        self.assertTrue(ran)
+        for label in ran:
+            out = self.run_of(label)
+            old, new = self.RUNS[label][:2]
+            assert_collation_version(self, out, pg_version_of(old),
+                                     pg_version_of(new), label)
+            assert_no_route_looks(self, out, label)
 
 
 @needs_clone

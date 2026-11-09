@@ -22,6 +22,8 @@ import unittest
 
 from _harness import (COMPARED_BANNER, STEP2_LISTED, SUMMARY_STEP2,
                       EXPECTED_SHA, MID, NEW, OLD,
+                      assert_collation_version, assert_no_route_looks,
+                      pg_version_of,
                       REPO_ROOT, SCRIPTS_DIR,
                       backported_c, before_compared, compared_text,
                       deleted_steps_named, flat, locale_file,
@@ -334,6 +336,18 @@ class _CodeNotComparedAndNoDeletedStep:
     one run's files only."""
 
     FILES_ARE_THIS_RUNS = True
+    # The class's two sides, whose glibc versions 'What was compared'
+    # compares as PostgreSQL does (16.166).
+    SIDES = (OLD, MID)
+
+    def test_what_postgresql_warns_about_is_said_once(self):
+        """16.166: one sentence for the pair, from each side's glibc
+        version; and 13.9: no route looks for a user's or an extension's
+        function, said once and repeated once by the summary."""
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        assert_collation_version(self, self.out,
+                                 *map(pg_version_of, self.SIDES))
+        assert_no_route_looks(self, self.out)
 
     def test_the_code_no_step_compares_is_said_once_in_the_summary(self):
         self.assertEqual(self.rc, 0, self.out[-2000:])
@@ -565,6 +579,8 @@ class WrapperEmptyPair(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
         cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-empty-')
         cls.rc, cls.out = run_wrapper(NEW, NEW, out_dir=cls.out_dir)
 
+    SIDES = (NEW, NEW)
+
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
@@ -714,6 +730,11 @@ class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
         # Step 2 says the same of the pair, two screens below.
         self.assertEqual(Step2Report(step_text(self.out, 2)).nothing,
                          'the two sides are one commit.')
+
+    def test_postgresql_warns_about_none_of_one_commit(self):
+        """The sha's version is read from version.h at that commit, as the
+        tag's is (16.166): one version, so the `!!`."""
+        assert_collation_version(self, self.out, '2.39', '2.39')
 
 
 @needs_clone

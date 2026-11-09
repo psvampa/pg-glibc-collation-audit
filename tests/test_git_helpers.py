@@ -19,7 +19,8 @@ import unittest
 from unittest import mock
 
 from _harness import (EXPECTED_SHA, FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID,
-                      NEW, OLD,
+                      NEW, OLD, PG_VERSION_DIFFER, PG_VERSION_SAME,
+                      PG_VERSION_UNKNOWN,
                       SCRIPTS_DIR, SIGNATURES_UNCHECKED, STEP2_LISTED,
                       Step2Report,
                       deleted_steps_named, flat,
@@ -59,6 +60,90 @@ class RefKindOnTheClone(unittest.TestCase):
                            (sha, 'commit'), (sha[:4], 'commit')):
             with self.subTest(ref=name):
                 self.assertEqual(g.ref_kind(GLIBC_CLONE, name), kind)
+
+
+@needs_clone
+class CollationVersionOfEachSide(unittest.TestCase):
+    """16.166: the glibc version PostgreSQL records for a libc collation is
+    gnu_get_libc_version(), glibc's VERSION, whole, compared with strcmp
+    (pg_locale_libc.c:669@REL_18_6, pg_locale.c:1649@REL_13_23). A tag or a
+    commit reads it from its version.h, so a development tag is not its
+    release; a build or a machine gives the 'glibc X.Y' of its name; a ref
+    with no VERSION gives None, which is said, never taken as equal."""
+
+    def test_a_tag_or_a_commit_reads_version_h_whole(self):
+        for ref, want in ((MID, '2.34'), ('glibc-2.39.9000', '2.39.9000'),
+                          (EXPECTED_SHA[NEW], '2.39'),
+                          ('origin/release/2.28/master', '2.28')):
+            with self.subTest(ref=ref):
+                self.assertEqual(g.side_glibc_version(GLIBC_CLONE, ref), want)
+
+    def test_a_build_or_a_machine_gives_the_version_of_its_name(self):
+        s = g.side(GLIBC_CLONE, build='glibc-2.34-275.el9_8.src',
+                   version='glibc 2.34')
+        self.assertEqual(g.side_glibc_version(GLIBC_CLONE, s), '2.34')
+
+    def _commit(self, tmp, version_h):
+        """A commit of a shared clone on glibc-2.34, its version.h replaced
+        by `version_h` (bytes), or removed when it is None."""
+        repo = os.path.join(tmp, 'glibc')
+        subprocess.run(['git', 'clone', '-q', '--shared', '--no-checkout',
+                        GLIBC_CLONE, repo], check=True)
+        env = dict(os.environ, GIT_INDEX_FILE=os.path.join(tmp, 'index'),
+                   GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid',
+                   GIT_COMMITTER_NAME='t',
+                   GIT_COMMITTER_EMAIL='t@example.invalid')
+
+        def git(*args, data=None):
+            return subprocess.run(['git', '-C', repo] + list(args), env=env,
+                                  input=data, stdout=subprocess.PIPE,
+                                  check=True).stdout.decode().strip()
+        git('read-tree', MID)
+        if version_h is None:
+            git('update-index', '--force-remove', 'version.h')
+        else:
+            oid = git('hash-object', '-w', '--stdin', data=version_h)
+            git('update-index', '--cacheinfo', f'100644,{oid},version.h')
+        tree = git('write-tree', '--missing-ok')
+        return repo, git('commit-tree', tree, '-p', f'{MID}^{{commit}}',
+                         '-m', 'version.h')
+
+    def test_a_ref_without_a_version_gives_none(self):
+        for body in (b'#define RELEASE "stable"\n', None):
+            with self.subTest(version_h=body), \
+                    tempfile.TemporaryDirectory() as tmp:
+                repo, commit = self._commit(tmp, body)
+                self.assertIsNone(g.side_glibc_version(repo, commit))
+
+    def said(self, old, new):
+        """What print_collation_version prints for sides whose versions are
+        `old` and `new` (None: none could be read), whitespace collapsed."""
+        versions = {'o': old, 'n': new}
+        buf = io.StringIO()
+        with mock.patch.object(g, 'side_glibc_version',
+                               side_effect=lambda repo, s: versions[s]), \
+                contextlib.redirect_stdout(buf):
+            g.print_collation_version(GLIBC_CLONE, 'o', 'n')
+        return flat(buf.getvalue())
+
+    def test_two_versions_say_where_postgresql_warns(self):
+        for old, new in (('2.28', '2.34'), ('2.34', '2.39'),
+                         ('2.34', '2.34.9000')):
+            with self.subTest(old=old, new=new):
+                self.assertEqual(self.said(old, new),
+                                 PG_VERSION_DIFFER.format(old=old, new=new))
+
+    def test_one_version_is_a_warning_that_postgresql_warns_of_none(self):
+        for v in ('2.28', '2.34'):
+            with self.subTest(v=v):
+                self.assertEqual(self.said(v, v), PG_VERSION_SAME.format(v=v))
+
+    def test_a_version_not_read_is_said_never_taken_as_equal(self):
+        for old, new, named in ((None, '2.34', 'o'), ('2.34', None, 'n'),
+                                (None, None, 'o, n')):
+            with self.subTest(old=old, new=new):
+                self.assertEqual(self.said(old, new),
+                                 f'{PG_VERSION_UNKNOWN}{named}.')
 
 
 @needs_clone

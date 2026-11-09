@@ -36,10 +36,21 @@ file, on its upstream tag above, as one commit of the clone; nothing downloaded)
    Red Hat's patches are known to add for that RHEL major, and how localedef
    reads the bytes 0x1A and 0xFF and UTF-8 input is answered by the tag's
    ancestry.
+glibc 2.28 on the old side, 2.34 on the new: the version a PostgreSQL that
+runs it records for a libc collation, where it records one. PostgreSQL 13 or
+later warns about a collation, and 15 or later about a database's default
+collation, where the version it recorded is not 2.34 (2.28 if it was recorded
+on the old side), whether that locale's order changed or not. Where it
+recorded 2.34, it does not warn, whatever changed: initdb and a restore on the
+new side record 2.34 for every collation, and pg_upgrade there for those of
+pg_catalog, for every collation from PostgreSQL 12 or older, and for a
+database's default from 14 or older.
 !! Not compared on any route: the code that compiles and compares the rules
    (localedef's and strcoll's, each build's patches to it included). Only step
    11 sees what it does, when it measures both machines;
    docs/confirming-on-a-real-system.md says how to confirm the order on them.
+   No route looks either for a function of a user or of an extension that
+   calls glibc's locale functions itself.
 
 ================================================================
 == STEP 2  Which locales' sort rules changed
@@ -690,6 +701,8 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
         (localedef's and strcoll's, each build's patches to it included). Only step
         11 sees what it does, when it measures both machines;
         docs/confirming-on-a-real-system.md says how to confirm the order on them.
+        No route looks either for a function of a user or of an extension that
+        calls glibc's locale functions itself.
      !! C.UTF-8's sort rules differ, and it is listed in the summary. PostgreSQL
         records no collation version for a libc collation or database whose locale
         is C, C.<anything> or POSIX, so no version mismatch warns about C.UTF-8;
