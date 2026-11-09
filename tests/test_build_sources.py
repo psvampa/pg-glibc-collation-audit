@@ -39,7 +39,7 @@ import unittest
 from unittest import mock
 
 from _harness import (COMPARED_BANNER, GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR,
-                      SUMMARY_STEP2,
+                      STEP2_C, SUMMARY_STEP2,
                       Step2Report, after_compared, before_compared,
                       compared_text, deleted_steps_named, flat,
                       summary_block, glibc_shaped, needs_clone,
@@ -3123,15 +3123,15 @@ class AStepReadsTheFixtureBuilds(unittest.TestCase):
         # of a tag.
         report = Step2Report(out)
         # Printed as C.UTF-8: glibc's file C is that locale (shown_name).
-        self.assertIn('C.UTF-8', report.differs)
-        self.assertNotIn('C', report.added)
+        self.assertIn(STEP2_C, report.differs)
+        self.assertNotIn(STEP2_C, report.added)
         self.assertNotIn('Not checked for glibc-', out)
 
     def test_rhel9_to_rhel10(self):
         out, lines = self.step2(*(b for b, _ in FIXTURES[1:]))
         report = Step2Report(out)
-        self.assertNotIn('C', report.added)
-        self.assertNotIn('C', report.differs)
+        self.assertNotIn(STEP2_C, report.added)
+        self.assertNotIn(STEP2_C, report.differs)
         self.assertNotIn('C.UTF-8', out)
         self.assertEqual(lines('changed_collate'), ['th_TH', 'thai'])
 
@@ -3672,6 +3672,10 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
                 noun='builds', one='build'))), 1, out)
         self.assertEqual(summary_block(out, REINDEX),
                          nothing_compared_lines('builds'))
+        # Step 2 names the two builds as builds, not as "refs" (16.174).
+        step2 = out.split('== STEP 2', 1)[1].partition('== AUDIT SUMMARY')[0]
+        self.assertEqual(Step2Report(step2).nothing,
+                         'the two builds are two commits of one source tree.')
         assert_no_deleted_block(self, out)
         self.assertNotIn('DIRECTION', out)
         self.assertEqual(deleted_steps_named(out), [])
@@ -3791,11 +3795,11 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
         # (`step2` is the step's text here, not the module.)
         import filter_lc_collate_changes as step2_mod
         report = Step2Report(step2)
-        self.assertEqual(report.added, {'C': 'C.UTF-8 !!'})
+        self.assertEqual(report.added, {STEP2_C: 'C.UTF-8 !!'})
         self.assertNotIn('Not compared, no file at %s (' % TAG, step2)
         self.assertEqual(flat(step2).count(
             C_NOT_COMPARED.format(TAG) + step2_mod.C_NO_VERSION), 1)
-        self.assertNotIn('C', report.differs)
+        self.assertNotIn(STEP2_C, report.differs)
 
     def test_a_build_then_a_tag_does_not_say_the_tag_removes_what_the_distro_ships(self):
         """16.78: over B40 -> TAG the new side is a tag, which cannot show
@@ -3808,8 +3812,9 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
         head = 'Not compared, no file at %s (' % TAG
         deleted = step2.split(head, 1)[1].split('\n\n', 1)[0]
         self.assertEqual(flat(deleted), flat(
-            "2), listed under Removed in the summary: C en_US@ampm Unless its "
-            "distro ships the file anyway, which an upstream tag cannot "
+            "2), listed under Removed in the summary: C.UTF-8 en_US@ampm "
+            "Unless its distro ships the file anyway, which an upstream tag "
+            "cannot "
             "show, on the new system a database whose locale is one of "
             "these does not connect, and a collation of one gives an error "
             "when it is used."))

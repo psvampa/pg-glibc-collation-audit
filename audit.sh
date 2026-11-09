@@ -50,8 +50,8 @@
 # holding its measurement, its locale sources, its charmaps and its glibc
 # build. A file without the sources or the charmaps says why, and the run
 # repeats it where their checks would have answered. Only a node file carries
-# the charmaps, so only with these options does step 2 compare them and step
-# 11 check what it measured against them. When step 2 compares the two
+# the machine's own charmaps, so only with these options does step 11 check
+# what it measured against them. When step 2 compares the two
 # machines' own locale sources, each locale of the old machine step 11
 # names is set beside step 2's rules for it; otherwise the run says what
 # step 2 compared.
@@ -129,6 +129,24 @@ while [ $# -gt 0 ]; do
     *) echo "error: unknown argument '$1'" >&2; usage ;;
   esac
 done
+# The Python steps need 3.7 (str.isascii, subprocess's capture_output); an
+# older python3 would stop the first of them with a traceback. Each refusal
+# below has its own message: a version that cannot be read is neither old
+# nor new.
+PY_VERSION=$(python3 -c \
+  'import sys; print("%d.%d" % sys.version_info[:2])') || {
+  echo "error: python3 did not run here; audit.sh needs python3 3.7" \
+    "or newer" >&2
+  exit 2; }
+case $PY_VERSION in
+  3.[7-9]|3.[1-9][0-9]|[4-9].*) ;;
+  [0-2].*|3.[0-6])
+    echo "error: audit.sh needs python3 3.7 or newer; python3 here is" \
+      "$PY_VERSION" >&2
+    exit 2 ;;
+  *) echo "error: could not read python3's version ('$PY_VERSION')" >&2
+     exit 2 ;;
+esac
 HERE=$(cd "$(dirname "$0")" && pwd)
 SCRIPTS="$HERE/scripts"
 

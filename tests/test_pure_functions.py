@@ -83,6 +83,39 @@ class CorpusFloorIsShared(unittest.TestCase):
         self.assertGreater(g.MIN_LOCALE_FILES, 3)
 
 
+class ScriptsParseOnTheOldestPythonTheyServe(unittest.TestCase):
+    """locale_order.py runs on the machine measured, where RHEL 8's
+    platform-python is 3.6 (README.md, docs/requirements.md); the rest runs
+    where audit.sh does, which refuses a python3 older than 3.7. From #154
+    to 10.2, two `:=` (3.8) made locale_order.py a SyntaxError on RHEL 8,
+    measured on collaudit8, while CI, on the newest Python, saw nothing.
+
+    ast.parse with feature_version refuses what the parser knows to be
+    newer: `:=`, positional-only parameters, match. It does not refuse
+    every newer form (f"{x=}", an f-string's own quotes nested inside it,
+    a parenthesised with), and it does not check the library a script calls
+    (str.isascii is 3.7); running --extract on the RHEL 8 fixture with
+    platform-python is the check of the whole. A Python too old to refuse
+    `:=` this way (3.9 accepts it) fails the control, so the test never
+    passes without having checked."""
+
+    OLDEST = {'locale_order.py': (3, 6)}
+
+    def test_the_parser_here_refuses_a_newer_form(self):
+        with self.assertRaises(SyntaxError):
+            ast.parse('(u := 1)', feature_version=(3, 7))
+
+    def test_every_script_parses_on_its_oldest_python(self):
+        names = sorted(n for n in os.listdir(SCRIPTS_DIR) if n.endswith('.py'))
+        self.assertIn('locale_order.py', names)
+        for name in names:
+            version = self.OLDEST.get(name, (3, 7))
+            with self.subTest(script=name, python=version), \
+                    open(os.path.join(SCRIPTS_DIR, name),
+                         encoding='utf-8') as fh:
+                ast.parse(fh.read(), filename=name, feature_version=version)
+
+
 class GeneratedNames(unittest.TestCase):
     """"locale -a does not spell locales the way the audit printed them".
 

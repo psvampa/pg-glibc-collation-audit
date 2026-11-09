@@ -593,6 +593,14 @@ class WrapperEmptyPair(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
         self.assertEqual(charmaps_state(self.out_dir),
                          {'state': 'one commit', 'why': None})
 
+    def test_tag_provenance_names_the_tag_once(self):
+        """The tag given twice is one tag: one line under 'Tag provenance',
+        whatever gpg answers on this machine (16.173)."""
+        lines = re.findall(r'(?m)^  (?:OK|INVALID|UNCHECKED|UNSIGNED) +'
+                           + re.escape(NEW) + ' = ',
+                           compared_text(self.out))
+        self.assertEqual(len(lines), 1, self.out)
+
     def test_empty_list_is_written_not_absent(self):
         """Written-and-empty is a different fact from missing.
 
@@ -690,6 +698,22 @@ class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
         # (false-negative-reviewer, 2026-09-30). Reindex says so instead.
         self.assertIn('none -- nothing was compared: the two tags are one '
                       'commit or one source tree', summary)
+
+    def test_the_sha_is_called_a_commit(self):
+        """The sha is a commit, not an upstream tag; the tag stays one
+        (16.155). Said once under 'What was compared' and once among the
+        summary's warnings."""
+        said = (f'Not checked for {NEW} and {EXPECTED_SHA[NEW]}: {NEW} is '
+                f'an upstream tag and {EXPECTED_SHA[NEW]} an upstream '
+                f'commit, which hold none of a distro\'s own locale files '
+                f'or patches. Step 2 reads only what they hold.')
+        self.assertEqual(flat(compared_text(self.out)).count(said), 1,
+                         self.out)
+        self.assertEqual(summary_warnings(self.out).count(said), 1, self.out)
+        self.assertNotIn('they are upstream tags', flat(self.out))
+        # Step 2 says the same of the pair, two screens below.
+        self.assertEqual(Step2Report(step_text(self.out, 2)).nothing,
+                         'the two sides are one commit.')
 
 
 @needs_clone
@@ -791,6 +815,48 @@ class WrapperRefusesBadInput(unittest.TestCase):
         self.assertNotIn('Tag provenance', out)
         self.assertNotIn('== STEP 2', out)
         self.assertNotIn('AUDIT SUMMARY', out)
+
+    def python3_saying(self, version):
+        """PATH with a python3 that prints `version` for audit.sh's version
+        question and runs the real interpreter for everything else."""
+        import sys
+        d = tempfile.mkdtemp(prefix='pg-glibc-wrapper-py-')
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        shim = os.path.join(d, 'python3')
+        with open(shim, 'w', encoding='utf-8') as fh:
+            fh.write('#!/bin/sh\n'
+                     'case "$2" in *sys.version_info*) '
+                     + (f'echo {version}; exit 0' if version else 'exit 1')
+                     + ' ;; esac\n'
+                     f'exec {sys.executable} "$@"\n')
+        os.chmod(shim, 0o755)
+        return {'PATH': d + os.pathsep + os.environ['PATH']}
+
+    def test_a_python3_older_than_3_7_is_refused_first(self):
+        """The steps need 3.7; an older python3 stopped the first of them
+        with a traceback (2.28). Refused before anything runs, by its
+        message, and nothing after it: the pair given is refused right
+        after the check, so a run that printed the message and went on
+        would print that refusal too. 3.7 and 3.10 (not a string order)
+        pass and reach it; a version that cannot be read, and a python3 that
+        does not run, are each said so."""
+        later = 'error: --old-node and --new-node go together'
+        for version, said in (
+                ('3.6', 'error: audit.sh needs python3 3.7 or newer; '
+                        'python3 here is 3.6'),
+                ('2.7', 'error: audit.sh needs python3 3.7 or newer; '
+                        'python3 here is 2.7'),
+                ('x', "error: could not read python3's version ('x')"),
+                (None, 'error: python3 did not run here; audit.sh needs '
+                       'python3 3.7 or newer'),
+                ('3.7', later), ('3.10', later)):
+            with self.subTest(version=version):
+                rc, out = run_wrapper(OLD, MID, '--old-node', 'x',
+                                      out_dir=self.out_dir,
+                                      env_extra=self.python3_saying(version))
+                self.assertEqual(rc, 2, out)
+                self.assertEqual(flat(out).count('error:'), 1, out)
+                self.assertIn(said, flat(out))
 
     def test_wrong_argc_is_exit_2(self):
         rc, out = run_wrapper(OLD, out_dir=self.out_dir)

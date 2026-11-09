@@ -114,10 +114,10 @@ a marked one, and names the first of them, "among them", never as a complete
 list. A name is a character (`W (U+0057)`), a run of consecutive characters
 (`U+0E01..U+0E3A`), a string of several (`U+0E40 U+0E01`), or, where the
 locale's encoding reads no character, its bytes. "And N more" counts names, so
-a run counts as one. Where the line names nothing, it says why: sort rules on
-one machine only, a change in bytes its record of the sequences does not keep
-or only in their numbering, a different number of levels, or sequences that
-could not be read.
+a run counts as one. Where the line names nothing, it says why: no levels on
+one machine (glibc then compares bytes there), a change in bytes its record of
+the sequences does not keep or only in their numbering, a different number of
+levels, or sequences that could not be read.
 The file the summary names holds every name, with how it was named.
 
 #### The file from each machine

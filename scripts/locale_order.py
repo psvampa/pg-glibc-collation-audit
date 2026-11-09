@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
 Measure how every locale on THIS machine sorts, or compare what two machines
-measured.
+measured. --extract packs the measurement with the machine's locale sources and
+charmaps, or the reason it could not, into the one file audit.sh reads
+(--old-node, --new-node).
 
 The other checks in this repository read locale SOURCES. A source is not the
 order: localedef computes weights when it builds a locale, so a byte-identical
@@ -93,6 +95,7 @@ read less reliably, so a change there may go unseen.
 Usage:
   python3 locale_order.py > old.out          # on each machine
   python3 locale_order.py --compare old.out new.out
+  python3 locale_order.py --extract > old.tar  # on each machine, for audit.sh
 
 On RHEL8 the python3 command comes in a package of its own (python36) and may
 be missing; /usr/libexec/platform-python, which dnf itself runs on, is always
@@ -103,7 +106,7 @@ Measuring needs Python 3.6 or newer and the language packs of the locales to
 be measured (on RHEL, glibc-all-langpacks or glibc-langpack-*). It needs no
 PostgreSQL and no root, and runs at low priority; to see PostgreSQL's
 processes it runs as root, or as their user where /proc does not hide other
-users' processes. Comparing needs only Python.
+users' processes. Comparing needs Python 3.7 or newer.
 """
 import argparse
 import array
@@ -655,9 +658,9 @@ def collate_view(loc):
 def collate_of(name):
     """({'state', ...}, record or None) of NAME's LC_COLLATE.
 
-    'builtin' for glibc's own C and POSIX (no file; 0 rules, strcmp:
+    'builtin' for glibc's own C and POSIX (no file; NRULES 0, strcmp:
     C-collate.c:108-111@2.28, :31-34@2.39). 'file' with the fingerprint,
-    the rule count and the reader's digest ('none' for 0 rules, which needs
+    the rule count and the reader's digest ('none' for NRULES 0, which needs
     no record). 'not read' with the reason. Never raises: a locale that was
     not read reaches the comparison as exactly that.
     """
@@ -2391,7 +2394,7 @@ def control_fingerprint():
     """What C and POSIX measure on every glibc: (order, pairs, probes).
 
     Both are the locale glibc carries inside itself (findlocale.c, from
-    2.12 to 2.39), with no rules, so strcoll is strcmp (strcoll_l.c, the
+    2.12 to 2.39), with no levels, so strcoll is strcmp (strcoll_l.c, the
     same versions), and its encoding has one byte per character, so the
     255 bytes are measured (stored_strings): every byte in byte order,
     every neighbour told apart as a different letter, the first pair of
@@ -5596,11 +5599,13 @@ def describe_change(old, new, o, n):
 # Printed under the report and the summary, and at the head of the
 # characters file, when a change names or counts a string that is not a
 # character (Naming): how such a string is named.
-OTHER_STRINGS = ('In the sort orders, a string that this comparison cannot '
-                 'name as a character of the locale\'s encoding is named by '
-                 'its bytes in hexadecimal: bytes 80 is the single byte 80, '
-                 'and bytes 80..FF every string of that length from the '
-                 'first to the last.')
+OTHER_STRINGS = ("In the sort orders, a string that this comparison cannot "
+                 "name as a character of the locale's encoding is named by "
+                 "its bytes in hexadecimal: bytes 80 is the single byte 80, "
+                 "and bytes F0 AB A0 C0 the single string of those four "
+                 "bytes. A range, such as bytes 80..FF or bytes F0 AB A0 "
+                 "C0..F0 AB A0 DF, is every string of that length from the "
+                 "first to the last.")
 # After OTHER_STRINGS, or alone, where a sort table names a string of
 # several characters.
 SEVERAL_CHARACTERS = ('A name of several code points, such as U+0063 U+0068 '
@@ -8115,6 +8120,17 @@ def table_same_items(old, new, name):
                 and a['fingerprint'] == b['fingerprint'])
 
 
+# Why a sort table that has no levels (NRULES 0: glibc's C and POSIX, a
+# locale without LC_COLLATE, and one of codepoint_collation, upstream since
+# 2.35 and in RHEL 9's 2.34 by backport) is
+# read as it is: strcoll is then strcmp (strcoll_l.c:270@2.28, :269@2.39).
+# "Levels", not "sort rules": step 2's rules are a locale file's LC_COLLATE
+# statements, which such a locale still has (C.UTF-8 on RHEL 9).
+NO_LEVELS_ONE = 'on one machine it has no levels, so glibc compares bytes there'
+NO_LEVELS_BOTH = ('no levels on either machine, so glibc compares bytes on '
+                  'both')
+
+
 def table_route(old, new, name):
     """(route, why) of one locale measured on both machines, by its sort
     table alone, where table_sides_why_not() is None:
@@ -8123,7 +8139,7 @@ def table_route(old, new, name):
                             same table, whose controls passed on both
                             machines;
       ('changed', why)      the six items differ (why None), or one machine
-                            compares bytes and the other has sort rules;
+                            compares bytes and the other has levels;
       ('not compared', why).
     The controls are looked up by the locale's own (table, encoding), as
     measure() keys them: a pair with no control is a table not checked,
@@ -8147,9 +8163,9 @@ def table_route(old, new, name):
     a, b = entries
     zero = [e['state'] == 'builtin' or e['nrules'] == 0 for e in entries]
     if all(zero):
-        return 'bytes', 'no sort rules on either machine'
+        return 'bytes', NO_LEVELS_BOTH
     if any(zero):
-        return 'changed', 'sort rules on one machine only'
+        return 'changed', NO_LEVELS_ONE
     if a['fingerprint'] != b['fingerprint']:
         return 'changed', None
     if a['table'] != b['table']:
@@ -8184,7 +8200,7 @@ def table_verdicts(old, new, both, refused, changed, same, unmeasured):
     of --sql-to take.
 
     C and POSIX are glibc's own locale whatever a machine holds
-    (findlocale.c:131-136@2.39, :133-138@2.28), which has no rules and
+    (findlocale.c:131-136@2.39, :133-138@2.28), which has no levels and
     compares bytes (C-collate.c:108-111@2.28, :31-34@2.39), so they are
     compared by that, never 'not compared'. A locale not compared keeps
     step 11's verdict, and an unchanged one is unchanged only as far as
@@ -8702,13 +8718,13 @@ def table_contraction_tests(o, n, seqs):
             return None
 
     def several(xs):
-        return sorted(s for s in xs if (u := text(s)) is not None
-                      and len(u) > 1)
+        return sorted(s for s in xs if text(s) is not None
+                      and len(text(s)) > 1)
 
     singles = sorted(
         {s for m_ in (o['map'], n['map']) for s in m_
-         if (u := text(s)) is not None and len(u) == 1
-         and not unicodedata.category(u).startswith('C')},
+         if text(s) is not None and len(text(s)) == 1
+         and not unicodedata.category(text(s)).startswith('C')},
         key=lambda s: (unicodedata.category(text(s))[0] not in 'LM',
                        ord(text(s))))
     by_block = {}
@@ -8874,14 +8890,14 @@ def tables_only_notes(items):
 
 # Printed instead of CLOSING when every unchanged locale was compared by its
 # sort table, which holds the contractions and what glibc ignores; C and
-# POSIX, and a locale of no sort rules, compare bytes on both.
+# POSIX, and a locale of no levels, compare bytes on both.
 CLOSING_TABLES = ('!! Not measured: whether the two machines compare strings '
                   'with the same glibc code. Every locale found unchanged '
                   'either has the same sort table on both, which is what '
                   'glibc\'s comparison code reads, or compares bytes on both.')
 # Printed instead of both when some unchanged locales were found so by an
 # identical sort table and others were not compared by theirs. One of no
-# sort rules, C and POSIX among them, compares bytes and reads no table.
+# levels, C and POSIX among them, compares bytes and reads no table.
 CLOSING_MIXED = ('!! Not measured: whether the two machines compare strings '
                  'with the same glibc code. Each locale found unchanged by its '
                  'sort table is so only if they do, since that table is what '
@@ -10144,7 +10160,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     # The sentence on rules of several letters stays while an unchanged
     # locale was not compared by its table; beside it, the one on the code
     # only while another is unchanged by an identical table, which glibc's
-    # code reads (one of no sort rules, 'bytes', C and POSIX among them,
+    # code reads (one of no levels, 'bytes', C and POSIX among them,
     # reads none).
     # Where every unchanged locale is firm, CLOSING_TABLES says both kinds.
     by_tables = any(table_route(old, new, x)[0] == 'identical'
@@ -10334,7 +10350,9 @@ def main():
     note = next((p for p in __doc__.split('\n\n') if p.startswith('On RHEL8')), None)
     ap = argparse.ArgumentParser(
         description='Measure how every locale on this machine sorts, or '
-                    'compare two\nmachines\' measurements.',
+                    'compare two\nmachines\' measurements. --extract packs '
+                    'the measurement with the\nmachine\'s locale sources and '
+                    'charmaps, or the reason it could not,\nfor audit.sh.',
         epilog=note, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--compare', nargs=2, metavar=('OLD', 'NEW'),
                     help='compare the outputs of two machines, the one you '

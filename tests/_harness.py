@@ -544,6 +544,9 @@ def after_compared(out):
 # parsers below and by the tests (16.122): one spelling, so a rewording
 # reddens the positive parsers instead of silencing a negative test.
 STEP2_LISTED = 'Listed in the summary'
+# How step 2 prints the locale built from glibc's file C, everywhere it
+# names it (filter_lc_collate_changes.shown_name); its files keep "C".
+STEP2_C = 'C.UTF-8'
 STEP2_NOT_COMPARED = '!! Not compared, so listed in the summary ('
 # Step 2's `!!` for the files only the new side has, when the old side is an
 # upstream tag (16.123); with a build or a machine there it is a plain
@@ -567,7 +570,8 @@ class Step2Report:
     added: {name: what follows its arrow}, the not-compared files only the
       new side has, as a plain block or as the `!!` block printed when the
       old side is a tag, whose C is said by the C.UTF-8 `!!` alone (C is
-      then added as 'C.UTF-8 !!' when that `!!` names the old side only);
+      then added under STEP2_C as 'C.UTF-8 !!' when that `!!` names the old
+      side only);
       added_warned: whether they came as the `!!` block;
       removed: {name: its "(renamed to ...)" or ''};
     listed: {name: why}, the `!!` block of names listed in the summary;
@@ -576,7 +580,9 @@ class Step2Report:
 
     Every count a heading prints must equal the names under it, every line
     of a block it reads must be one of the block's forms, and the totals
-    must add up: a block it cannot read raises, never reads as empty.
+    must add up: a block it cannot read raises, never reads as empty. A
+    name printed as a bare "C" raises too: step 2 prints that locale as
+    STEP2_C everywhere (16.139).
     """
 
     def __init__(self, out):
@@ -641,10 +647,18 @@ class Step2Report:
             old = self.sides[0]
             if re.search(r'(?m)^!! ' + re.escape(old) + r' holds no '
                          r'localedata/locales/C,', out):
-                if 'C' in self.added:
+                if STEP2_C in self.added:
                     raise AssertionError('C named among the added files '
                                          'and in the C.UTF-8 `!!`')
-                self.added['C'] = 'C.UTF-8 !!'
+                self.added[STEP2_C] = 'C.UTF-8 !!'
+        for what, names in (('added', self.added), ('removed', self.removed),
+                            ('differs', self.differs),
+                            ('listed', self.listed),
+                            ('listed in the summary', self.reindex),
+                            ('not in SUPPORTED', self.unbuilt)):
+            if 'C' in names:
+                raise AssertionError(f'step 2 printed a bare C among the '
+                                     f'{what} names, not {STEP2_C}')
         if self.totals is not None:
             n, same, differ, nc = self.totals
             if n != same + differ + nc:

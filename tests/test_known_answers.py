@@ -20,7 +20,7 @@ import tempfile
 import unittest
 
 from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
-                       REPO_ROOT, SCRIPTS_DIR, Step2Report,
+                       REPO_ROOT, SCRIPTS_DIR, STEP2_C, Step2Report,
                        flat, needs_clone,
                        needs_floor_pair, run_step, step2_characters_file)
 
@@ -198,16 +198,16 @@ class Step2Compare(StepRun):
                 said = flat(out)
                 self.assertEqual(out.count('!!'), 2, out)
                 self.assertTrue(r.added_warned, out)
-                self.assertNotIn('\n     C -> ', out)
+                self.assertNotIn(f'\n     {STEP2_C} -> ', out)
                 self.assertEqual(said.count(
                     f'!! {lacking} no localedata/locales/C, the file '
                     f'C.UTF-8 is built from, and a distro\'s build can ship '
                     f'its own, so C.UTF-8\'s sort rules were not compared. '
                     f'{f.C_NO_VERSION}'), 1, out)
                 self.assertNotIn('differ, and it is listed', said)
-                self.assertEqual(r.added.get('C'), added)
-                self.assertNotIn('C', r.differs)
-                self.assertNotIn('C', r.reindex)
+                self.assertEqual(r.added.get(STEP2_C), added)
+                self.assertNotIn(STEP2_C, r.differs)
+                self.assertNotIn(STEP2_C, r.reindex)
                 if added:
                     self.assertIn('Confirm with `locale -a` on the OLD '
                                   'machine', said)
@@ -276,8 +276,8 @@ class Step2Compare(StepRun):
         2.39 -> 2.34, reversed, has C on the old side alone; and 2.39
         against itself compares nothing."""
         r = self.report(NEW, MID, '--allow-reverse')
-        self.assertIn('C', r.removed)
-        self.assertNotIn('C', r.added)
+        self.assertIn(STEP2_C, r.removed)
+        self.assertNotIn(STEP2_C, r.added)
         self.assertEqual(self.report(NEW, NEW).nothing,
                          'the two tags are one commit.')
 

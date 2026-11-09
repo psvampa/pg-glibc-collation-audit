@@ -679,8 +679,8 @@ def print_added(added, renamed_from, supported, old_side, old_name,
         spelt = supported.get(name)
         tail = ', '.join(spelt) if spelt else missing
         if name in renamed_from:
-            tail += f"; renamed from {g.shown(renamed_from[name])}"
-        lines.append((name, f"{g.shown(name)} -> {tail}"))
+            tail += f"; renamed from {shown_name(renamed_from[name])}"
+        lines.append((name, f"{shown_name(name)} -> {tail}"))
     if g._is_tag(old_side):
         rest = [line for name, line in lines if name != 'C']
         if rest:
@@ -708,7 +708,7 @@ def print_added(added, renamed_from, supported, old_side, old_name,
             f"Sort rules not known, of the locale files at {new_name} and "
             f"not at {old_name} ({len(unread)}), for the reason on each "
             f"line:",
-            [f"{g.shown(n)}: {unread[n]}" for n in added if n in unread])
+            [f"{shown_name(n)}: {unread[n]}" for n in added if n in unread])
 
 
 def print_c_utf8(sides, differs):
@@ -739,9 +739,9 @@ def print_removed(removed, renamed_to, new_side, new_name):
     print(f"Not compared, no file at {new_name} ({len(removed)}), listed "
           f"under Removed in the summary:")
     for name in removed:
-        extra = (f" (renamed to {g.shown(renamed_to[name])})"
+        extra = (f" (renamed to {shown_name(renamed_to[name])})"
                  if name in renamed_to else '')
-        print(f"  {g.shown(name)}{extra}")
+        print(f"  {shown_name(name)}{extra}")
     if g._is_tag(new_side):
         print(_fill("Unless its distro ships the file anyway, which an "
                     "upstream tag cannot show, on the new system a "
@@ -856,12 +856,16 @@ def _main(opts):
         cm = machine and g.machines_charmaps(old_side, new_side)
         charmaps = {'state': 'one commit' if nothing == 'commit'
                     else 'one tree', 'why': None}
-        what = (f"the two {noun} are one commit" if nothing == 'commit'
+        # A commit given as a side is no tag (16.155): the pair is then two
+        # sides, as pair_check says it.
+        said = ('sides' if noun == 'tags' and 'commit' in (
+            g.ref_kind(repo, old), g.ref_kind(repo, new)) else noun)
+        what = (f"the two {said} are one commit" if nothing == 'commit'
                 else "the two machines' files hold the same locale sources "
                      "and charmaps" if cm
                 else "the two machines' files hold the same locale sources"
                 if machine
-                else "the two refs are two commits of one source tree")
+                else f"the two {said} are two commits of one source tree")
         print(f"Rules: not compared, {what}.")
         if machine and not cm and nothing != 'commit':
             # Never "the same charmaps": a file without them left them out
@@ -948,7 +952,7 @@ def _main(opts):
             print()
             print(_fill(f"Not compared, not read among a machine's locale "
                         f"sources ({len(unread)}): "
-                        + ', '.join(f"{g.shown(n)} ({'; '.join(w)})"
+                        + ', '.join(f"{shown_name(n)} ({'; '.join(w)})"
                                     for n, w in sorted(unread.items())),
                         '', '  '))
         print_c_utf8(((old_side, old_tree, old_name),
@@ -1039,7 +1043,7 @@ def _main(opts):
         if unbuilt:
             print(_fill("Not listed in localedata/SUPPORTED (not built by "
                         "default, so normally absent from `locale -a`): "
-                        + ', '.join(g.shown(n) for n in unbuilt), '  '))
+                        + ', '.join(shown_name(n) for n in unbuilt), '  '))
         if not_ascii:
             print(_fill("Not listed: alias(es) whose name is not ASCII; "
                         "PostgreSQL never imports such a name as a "

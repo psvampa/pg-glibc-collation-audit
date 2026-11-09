@@ -1393,7 +1393,7 @@ TABLE_REASON = (r'(?:on the (?:old|new) machine, |the (?:OLD|NEW) file holds |th
 # The lines of the verdict by the sort tables (table_verdicts, TableNaming).
 TABLE_PHRASE = (
     r'its compiled sort table changed(?:'
-    r': (sort rules on one machine only)'
+    r': (' + re.escape(m.NO_LEVELS_ONE) + r')'
     r'|: ((?:it marks|[\d,]+ appear only)[^;]*)'
     r'(?:; among them: (' + TABLE_ITEM + r'(?:, ' + TABLE_ITEM + r')*)'
     r'(?:, and ([\d,]+) more)?)?'
@@ -7386,6 +7386,29 @@ class OtherStringsNamedInTheOutputs(Checks):
         self.assertEqual(set(by_name(report)), {'th_TH'})
         self.assertEqual((report['others_note'], summary['others_note'],
                           rows.others_note), (m.OTHER_STRINGS,) * 3)
+
+    def test_no_name_in_the_note_is_cut_by_the_wrap(self):
+        """The note is printed through wrapped() at indent 0 (the report)
+        and 7 (the summary), alone or before SEVERAL_CHARACTERS: every name
+        it gives (bytes 80, bytes F0 AB A0 C0, a range of either) stays on
+        one line, whole, or a reader takes half a name for a whole one. The
+        wording decides it; no character protects it, since the characters
+        file prints the note as it is (16.36)."""
+        names = re.findall(r'bytes [0-9A-F]{2}(?: [0-9A-F]{2})*'
+                           r'(?:\.\.[0-9A-F]{2}(?: [0-9A-F]{2})*)?',
+                           m.OTHER_STRINGS)
+        self.assertEqual(names, ['bytes 80', 'bytes F0 AB A0 C0',
+                                 'bytes 80..FF',
+                                 'bytes F0 AB A0 C0..F0 AB A0 DF'])
+        notes = [n for n in NOTES if m.OTHER_STRINGS in n]
+        self.assertEqual(len(notes), 2)
+        for note in notes:
+            for indent in (0, 7):
+                with self.subTest(note=len(note), indent=indent):
+                    lines = m.wrapped(note, indent, indent)
+                    for name in names:
+                        self.assertTrue(any(name in ln for ln in lines),
+                                        (name, lines))
 
     def test_not_said_where_none_is(self):
         """sv_SE.utf8 alone, 8 -> 9: two characters moved, nothing else."""
@@ -14784,7 +14807,7 @@ class SortTablesCompared(Checks):
                       '11 saw no change in the strings it measured.',
                       ' '.join(self.printed.split()))
 
-    def test_sort_rules_on_one_machine_only(self):
+    def test_no_levels_on_one_machine(self):
         for side in ('old', 'new'):
             with self.subTest(side=side):
                 none = read_tables({'de_DE.utf8': {'nrules': 0,
@@ -14793,7 +14816,7 @@ class SortTablesCompared(Checks):
                 r, s, f = self.outputs(*(edits if side == 'old'
                                          else edits[::-1]))
                 self.assertEqual(by_name(r)['de_DE.utf8']['table'],
-                                 ('sort rules on one machine only',
+                                 (m.NO_LEVELS_ONE,
                                   'step 11 saw no change in the strings it '
                                   'measured'))
                 self.assertEqual(set(s['changes']), {'de_DE.utf8'})
