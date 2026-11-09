@@ -1593,6 +1593,25 @@ class ThePrivateRulesStayPrivate(unittest.TestCase):
                          f'private working files are tracked: {tracked}')
 
 
+class TheExamplesPrintStep11sWordsOfToday(unittest.TestCase):
+    """Nothing else ties the published examples to these two sentences of
+    step 11: an example left unregenerated after either changes would keep
+    the old words with every other test green (10.2). The note on names in
+    bytes is printed in the report and in the summary of both pairs; the
+    sort table without levels, C.utf8's, in both of 8 -> 9 only."""
+
+    def test_the_note_on_names_in_bytes_and_the_table_without_levels(self):
+        import locale_order as m
+        for pair, levels in (('rhel8-to-rhel9', 2), ('rhel9-to-rhel10', 0)):
+            path = os.path.join(REPO_ROOT, 'examples',
+                                f'{pair}-audit-output.txt')
+            with self.subTest(example=pair), \
+                    open(path, encoding='utf-8') as fh:
+                text = flat(fh.read())
+                self.assertEqual(text.count(flat(m.OTHER_STRINGS)), 2, path)
+                self.assertEqual(text.count(m.NO_LEVELS_ONE), levels, path)
+
+
 def recorded_measurements():
     """{'rhel8': path, ...}: the measurement inside each recorded --extract
     file, as test_locale_order unpacks it."""

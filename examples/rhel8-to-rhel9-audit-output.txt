@@ -112,7 +112,8 @@ Sort order CHANGED in 14 locale(s):
 
   C.utf8 (UTF-8)
     also, in PostgreSQL: database locale C.UTF-8
-    its compiled sort table changed: sort rules on one machine only.
+    its compiled sort table changed: on one machine it has no levels, so glibc
+      compares bytes there.
     135,360 characters and 8,531 other string(s) moved, too many to list here
     1,112,062 character(s) and 10,111 other string(s) sort differently against
       at least one other
@@ -192,9 +193,10 @@ Every character, other string and pair found, by locale:
   /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.28-251.el8_10.40..glibc-2.34-275.el9_8.tsv
 In the sort orders, a string that this comparison cannot name as a character
 of the locale's encoding is named by its bytes in hexadecimal: bytes 80 is the
-single byte 80, and bytes 80..FF every string of that length from the first to
-the last. A name of several code points, such as U+0063 U+0068 (ch), is one
-string of those characters, in that order.
+single byte 80, and bytes F0 AB A0 C0 the single string of those four bytes. A
+range, such as bytes 80..FF or bytes F0 AB A0 C0..F0 AB A0 DF, is every string
+of that length from the first to the last. A name of several code points, such
+as U+0063 U+0068 (ch), is one string of those characters, in that order.
 
 To confirm these changes in PostgreSQL, run each SQL file unchanged on both
 servers, in a database of its encoding (psql -X -d DATABASE -f FILE > old.out
@@ -423,12 +425,12 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
         how glibc sorts them in every version.
      14 locale(s) sort differently:
        C.utf8 (UTF-8)
-         its compiled sort table changed: sort rules on one machine only;
-           135,360 characters and 8,531 other string(s) moved; 1,122,173 sort
-           differently against another; pairs compared only by letters;
-           846,353 pairs told apart differently; among them 845,406
-           character(s) and 1,569 other string(s) that did not move; 2,721
-           more pair(s) the measurement cannot decide
+         its compiled sort table changed: on one machine it has no levels, so
+           glibc compares bytes there; 135,360 characters and 8,531 other
+           string(s) moved; 1,122,173 sort differently against another; pairs
+           compared only by letters; 846,353 pairs told apart differently;
+           among them 845,406 character(s) and 1,569 other string(s) that did
+           not move; 2,721 more pair(s) the measurement cannot decide
          also, in PostgreSQL: database locale C.UTF-8
        ko_KR.utf8 (UTF-8)
          its compiled sort table changed: it marks 1 sequence(s) as changed
@@ -484,10 +486,11 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
          /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.28-251.el8_10.40..glibc-2.34-275.el9_8.tsv
        In the sort orders, a string that this comparison cannot name as a
        character of the locale's encoding is named by its bytes in
-       hexadecimal: bytes 80 is the single byte 80, and bytes 80..FF every
-       string of that length from the first to the last. A name of several
-       code points, such as U+0063 U+0068 (ch), is one string of those
-       characters, in that order.
+       hexadecimal: bytes 80 is the single byte 80, and bytes F0 AB A0 C0 the
+       single string of those four bytes. A range, such as bytes 80..FF or
+       bytes F0 AB A0 C0..F0 AB A0 DF, is every string of that length from the
+       first to the last. A name of several code points, such as U+0063 U+0068
+       (ch), is one string of those characters, in that order.
      NOT known to be unchanged: 2 locale(s)
        not on the new machine, so a database or collation that uses one cannot
          use it there: en_US.utf8@ampm, en_US@ampm

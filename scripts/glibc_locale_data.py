@@ -714,7 +714,8 @@ def _order_by_git(repo, old, new, commits):
     if shas[0] == shas[1]:
         return 'same', f'{old} and {new} are one commit, {shas[0][:12]}'
 
-    pair = f'the new tag {new} against the old tag {old}'
+    pair = (f'the new {ref_kind(repo, new)} {new} against the old '
+            f'{ref_kind(repo, old)} {old}')
     if _is_ancestor(repo, shas[0], shas[1]):
         return 'forward', f'{pair}: {old} is an ancestor of {new}'
     if _is_ancestor(repo, shas[1], shas[0]):
@@ -917,6 +918,9 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
     elif status == 'undetermined':
         # The summary repeats this block at its end, and it is all the
         # summary says of the direction: "below" would be false there.
+        if noun == 'tags' and 'commit' in (ref_kind(repo, _ref(old)),
+                                           ref_kind(repo, _ref(new))):
+            one = 'side'
         warn(f"The DIRECTION of this pair could not be established: {detail}. "
              f"Nothing in this run has checked it: if the two arguments are "
              f"the wrong way round, every "
@@ -990,7 +994,7 @@ def report_tag_provenance(repo, *tags):
           "mutable pointer):")
     worst = 'good'
     unchecked = []
-    for tag in tags:
+    for tag in dict.fromkeys(tags):
         status, detail = verify_tag(repo, tag)
         sha = run_git(['rev-parse', f'{tag}^{{commit}}'], repo,
                       allow_fail=True).stdout.decode().strip()
@@ -2552,7 +2556,8 @@ def compared_sides(here, old, new):
         if rebuilt:
             report_build_provenance(rebuilt)
     if tags:
-        warn(tag_sides_text(tags), split_words=False)
+        warn(tag_sides_text(tags, [ref_kind(repo, t) for t in tags]),
+             split_words=False)
     warn(CODE_NOT_COMPARED, split_words=False)
     # The corpus floor: both tags must hold a real locale corpus, or the
     # diff is empty for a reason that has nothing to do with collation and
@@ -2588,7 +2593,17 @@ CODE_NOT_COMPARED = (
     "order on them.")
 
 
-def tag_sides_text(tags):
+def ref_kind(repo, name):
+    """'tag' for an annotated tag, 'commit' for any other side: by then the
+    name has resolved to a commit (resolve_commits, NAME^{commit}), and only
+    a tag object peels to a tag. An existence probe: `cat-file -t` refused a
+    short id that also matches a tree or a blob, which every step accepts."""
+    tag = run_git(['rev-parse', '--verify', '-q', f'{name}^{{tag}}'], repo,
+                  allow_fail=True)
+    return 'tag' if tag.returncode == 0 else 'commit'
+
+
+def tag_sides_text(tags, kinds=None):
     """The `!!` for the sides read as upstream tags: what a tag does not
     hold, said once here (the summary relays it from the log of "What was
     compared"), and what to pass instead, by the route TAG_ASK_ENV names."""
@@ -2596,11 +2611,19 @@ def tag_sides_text(tags):
     if ask not in ('build', 'node', 'none'):
         die(f"{TAG_ASK_ENV}={ask!r} is not one of build, node, none.")
     one = len(tags) == 1
-    text = (f"Not checked for {' and '.join(tags)}: "
-            f"{'it is an upstream tag' if one else 'they are upstream tags'}"
+    kinds = kinds or ['tag'] * len(tags)
+    if len(set(kinds)) == 1:
+        k = kinds[0]
+        what = (f"it is an upstream {k}" if one
+                else f"they are upstream {k}s")
+        read = f"that {k} holds" if one else f"the {k}s hold"
+    else:
+        what = (f"{tags[0]} is an upstream {kinds[0]} and {tags[1]} an "
+                f"upstream {kinds[1]}")
+        read = "they hold"
+    text = (f"Not checked for {' and '.join(tags)}: {what}"
             f", which hold{'s' if one else ''} none of a distro's own locale "
-            f"files or patches. Step 2 reads only what "
-            f"{'that tag holds' if one else 'the tags hold'}.")
+            f"files or patches. Step 2 reads only what {read}.")
     if ask == 'build':
         text += (f" If {'that machine runs' if one else 'the machines run'} "
                  f"RHEL 8, 9 or 10, name {'that side' if one else 'each side'} "

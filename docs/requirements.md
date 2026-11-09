@@ -90,8 +90,9 @@ the install.
 ### The machine that compares
 
 What the source audit needs, above. It reads the two files and needs no
-access to the machines. Comparing on a RHEL8 machine itself is not tested:
-`python3` may be missing there, and it is 3.6 when present.
+access to the machines. audit.sh refuses a `python3` older than 3.7. On a
+RHEL8 machine `python3` may be missing, and is 3.6 (the python36 module) by
+default.
 
 ## The test suite
 

@@ -18,7 +18,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
+from _harness import (EXPECTED_SHA, FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID,
+                      NEW, OLD,
                       SCRIPTS_DIR, SIGNATURES_UNCHECKED, STEP2_LISTED,
                       Step2Report,
                       deleted_steps_named, flat,
@@ -41,6 +42,23 @@ def in_subprocess(code):
     p = subprocess.run([sys.executable, '-c', boot + code],
                        capture_output=True, cwd=os.path.dirname(g.__file__))
     return p.returncode, (p.stdout + p.stderr).decode('utf-8', 'replace')
+
+
+@needs_clone
+class RefKindOnTheClone(unittest.TestCase):
+    """What a side is called (16.155), on refs of the clone a user can
+    pass: glibc's release and development tags are annotated tags; a branch
+    and a sha are commits, and so is a short id that also matches another
+    object of the clone (ae37 is glibc-2.34's commit and a tree's prefix,
+    which `cat-file -t` refused)."""
+
+    def test_each_kind_of_real_ref(self):
+        sha = EXPECTED_SHA[MID]
+        for name, kind in ((MID, 'tag'), ('glibc-2.39.9000', 'tag'),
+                           ('origin/release/2.28/master', 'commit'),
+                           (sha, 'commit'), (sha[:4], 'commit')):
+            with self.subTest(ref=name):
+                self.assertEqual(g.ref_kind(GLIBC_CLONE, name), kind)
 
 
 @needs_clone
@@ -866,8 +884,10 @@ class TheStepsRefuseAReversedPair(unittest.TestCase):
         self.assertIn('Step 2 compares nothing: it would compare upstream '
                       'source against itself. A run on the tags says '
                       'nothing about an intra-major upgrade', flat(out))
+        # The fixture's tags are lightweight: git calls them commits, and
+        # step 2 the pair two sides (16.155).
         self.assertEqual(Step2Report(out).nothing,
-                         'the two tags are one commit.')
+                         'the two sides are one commit.')
         # The notice names no step deleted in branch 9 (it named steps 4
         # and 5 until step 9.3).
         self.assertEqual(deleted_steps_named(out), [])
@@ -886,14 +906,28 @@ class TheStepsRefuseAReversedPair(unittest.TestCase):
         self.assertIn('!! The DIRECTION of this pair could not be', out)
         self.assertIn('neither is an ancestor of the other', flat(out))
         # The summary repeats this block at its end, and it is all the
-        # summary says of the direction (10.1): never "below", and the
-        # sides named by their kind, here two tags.
+        # summary says of the direction (10.1): never "below". Each side is
+        # named by what git says it is (16.155): the fixture's tags are
+        # lightweight, so git calls both commits, and the pair is two sides.
+        self.assertIn('the new commit unrelated against the old commit t1:',
+                      flat(out))
         self.assertIn('Nothing in this run has checked it: if the two '
                       'arguments are the wrong way round, every step still '
                       'runs, and step 2 reports a deleted locale as a '
-                      'harmless addition. Confirm which tag is the older '
+                      'harmless addition. Confirm which side is the older '
                       'one.', flat(out))
         self.assertNotIn('Nothing below', flat(out))
+        # The same two commits under annotated tags, as glibc's release
+        # tags are: then they are tags.
+        env = dict(os.environ, GIT_COMMITTER_NAME='t',
+                   GIT_COMMITTER_EMAIL='t@t')
+        for name, at in (('tA', 't1'), ('uA', 'unrelated')):
+            git(self.repo, 'tag', '-a', '-m', name, name, f'{at}^{{commit}}',
+                env=env)
+        rc, out = self.step2('tA', 'uA')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('the new tag uA against the old tag tA:', flat(out))
+        self.assertIn('Confirm which tag is the older one.', flat(out))
 
     def test_allow_reverse_runs_but_says_the_pair_is_reversed(self):
         """A deliberate reversed run is what the suite itself does on
@@ -2470,8 +2504,9 @@ class StepTwoComparesCharmaps(unittest.TestCase):
     def test_one_commit_twice_compares_nothing_and_says_so(self):
         rc, out, listed = self.step2('t2', 't2')
         self.assertEqual(rc, 0, out)
+        # t2 is a lightweight tag, a commit to git: two sides (16.155).
         self.assertIn('Character sets and transliterations: not compared, the '
-                      'two tags are one commit.', out)
+                      'two sides are one commit.', out)
         self.assertEqual(listed, [])
 
 
@@ -2835,14 +2870,15 @@ class Step2AsksWhetherAnythingIsCompared(unittest.TestCase):
 
     def test_one_tree_reads_no_supported(self):
         self.assertNotIn(('t1b', g.SUPPORTED), self.groups('t1', 't1b'))
+        # Lightweight tags, commits to git: two sides (16.155).
         self.assertIn('Character sets and transliterations: not compared, '
-                      'the two refs are two commits of one source tree.',
+                      'the two sides are two commits of one source tree.',
                       self.out)
 
     def test_one_commit_says_one_commit(self):
         self.groups('t1', 't1')
         self.assertIn('Character sets and transliterations: not compared, '
-                      'the two tags are one commit.', self.out)
+                      'the two sides are one commit.', self.out)
 
     def test_two_trees_read_it(self):
         """Control: the renamed pair is compared, and SUPPORTED is read."""
