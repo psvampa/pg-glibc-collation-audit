@@ -68,11 +68,13 @@ jobs:
         # test of step 2 there read them only if an earlier class had.
         # test_build_sources reads the whole of localedata/ and locale/ at
         # the three tags of the published pairs (scope_from_git): 743 blobs
-        # more, 17.5 MB, in the same request.
+        # more, 17.5 MB, in the same request. version.h is what
+        # glibc_locale_data.side_glibc_version reads of every tag side, in
+        # a test's own repository too, which cannot fetch it.
         run: |
           tags=$(cd tests && python3 -c "import _harness as h; print(h.FLOOR_OLD, h.FLOOR_NEW, h.OLD, h.MID, h.NEW)")
           three=$(cd tests && python3 -c "import _harness as h; print(h.OLD, h.MID, h.NEW)")
-          oids=$({ for t in $tags; do git -C scripts/glibc ls-tree -r "$t" localedata/locales locale/programs/locfile-kw.gperf locale/programs/charmap-kw.gperf localedata/SUPPORTED localedata/charmaps intl/locale.alias; done; for t in $three; do git -C scripts/glibc ls-tree -r "$t" localedata locale; done; } | awk '{print $3}' | sort -u)
+          oids=$({ for t in $tags; do git -C scripts/glibc ls-tree -r "$t" localedata/locales locale/programs/locfile-kw.gperf locale/programs/charmap-kw.gperf localedata/SUPPORTED localedata/charmaps intl/locale.alias version.h; done; for t in $three; do git -C scripts/glibc ls-tree -r "$t" localedata locale; done; } | awk '{print $3}' | sort -u)
           git -C scripts/glibc -c fetch.negotiationAlgorithm=noop fetch --quiet --no-tags --no-write-fetch-head origin $oids
 
       - name: Report tag provenance
