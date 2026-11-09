@@ -19,7 +19,8 @@ import unittest
 from unittest import mock
 
 from _harness import (FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID, NEW, OLD,
-                      SCRIPTS_DIR, STEP2_LISTED, Step2Report,
+                      SCRIPTS_DIR, SIGNATURES_UNCHECKED, STEP2_LISTED,
+                      Step2Report,
                       deleted_steps_named, flat,
                       glibc_shaped, needs_clone, needs_floor_pair)
 
@@ -875,15 +876,24 @@ class TheStepsRefuseAReversedPair(unittest.TestCase):
         """The fourth state at the call site. Not an error -- nothing below is
         wrong on its account -- but silence here reads as "the direction was
         checked", and this is the one branch where the tool cannot tell which
-        way round the pair is. The shim in test_wrapper stands in for the
-        wrapper's summary block and cannot reach this warning: it replaces the
-        very subcommand that prints it."""
+        way round the pair is. The shim in test_wrapper replaces the very
+        subcommand that prints this warning, so only this test reaches it;
+        the summary repeats it among its warnings."""
         add_unrelated_commit(self.repo, '2020-01-01T00:00:00+0000',
                              parent=MID)
         rc, out = self.step2('t1', 'unrelated')
         self.assertEqual(rc, 0, out)
         self.assertIn('!! The DIRECTION of this pair could not be', out)
         self.assertIn('neither is an ancestor of the other', flat(out))
+        # The summary repeats this block at its end, and it is all the
+        # summary says of the direction (10.1): never "below", and the
+        # sides named by their kind, here two tags.
+        self.assertIn('Nothing in this run has checked it: if the two '
+                      'arguments are the wrong way round, every step still '
+                      'runs, and step 2 reports a deleted locale as a '
+                      'harmless addition. Confirm which tag is the older '
+                      'one.', flat(out))
+        self.assertNotIn('Nothing below', flat(out))
 
     def test_allow_reverse_runs_but_says_the_pair_is_reversed(self):
         """A deliberate reversed run is what the suite itself does on
@@ -994,7 +1004,14 @@ class TheSidesRefuseAReversedPairBeforeReportingAnything(unittest.TestCase):
                              env_extra=self.env)
         self.assertEqual(rc, 0, out)
         self.assertIn('Tag provenance', out)
-        self.assertEqual([ln for ln in out.splitlines() if '!!' in ln], [
+        # The signatures' `!!` is printed where a tag's signature could not
+        # be checked (16.154), which depends on the machine's gpg and keys:
+        # it is there exactly when a tag's line says UNCHECKED or UNSIGNED.
+        warned = [ln for ln in out.splitlines() if '!!' in ln]
+        signed = [ln for ln in warned if ln.startswith(SIGNATURES_UNCHECKED)]
+        self.assertEqual(len(signed), 1 if re.search(
+            r'(?m)^  (UNCHECKED|UNSIGNED) ', out) else 0, out)
+        self.assertEqual([ln for ln in warned if ln not in signed], [
             '!! Not checked for glibc-2.28 and glibc-2.34: they are upstream '
             'tags, which',
             '!! Not compared on any route: the code that compiles and '

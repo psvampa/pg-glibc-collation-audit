@@ -1694,6 +1694,16 @@ def parse_summary(text):
         if (len(s['unmeasured']) + len(s['not_on_new'])
                 + len(s['refused'])) != int(mt[1]):
             fail(f'NOT known says {mt[1]}')
+    s['only_new'] = []
+    if line().startswith('     Only on the new machine: '):
+        mt = re.fullmatch(r'Only on the new machine: (\d+) locale\(s\), '
+                          r'which nothing made on the old machine uses: '
+                          r'(\S+(?:, \S+)*)', item(5, 7))
+        if not mt:
+            fail('unknown only-new line')
+        s['only_new'] = names_of(mt[2])
+        if len(s['only_new']) != int(mt[1]):
+            fail(f'only on the new machine says {mt[1]}')
     s['not_compared'], s['tables_only'] = {}, []
     if line().startswith('     !! Not compared by their sort tables'):
         mt = re.fullmatch(NOT_COMPARED_BRIEF, item(5, 8))
@@ -3248,6 +3258,9 @@ class SummaryForTheAudit(unittest.TestCase):
                          (report['old'][0], report['new'][0]))
         self.assertEqual(summary['unmeasured'], list(report['unmeasured']))
         self.assertEqual(summary['not_on_new'], report['not_on_new'])
+        # Named in the summary too, with why they change nothing made on
+        # the old machine (16.143).
+        self.assertEqual(summary['only_new'], report['only_new'])
         self.assertEqual(summary['partly'], list(report['partly']))
         self.assertEqual(summary['totals'], report['totals_line'])
         self.assertEqual(summary['warnings'], report['warnings'])
@@ -3257,6 +3270,8 @@ class SummaryForTheAudit(unittest.TestCase):
         summary, report = self.summary_and_report('8-9')
         self.assertSameAnswer(summary, report)
         self.assertEqual(set(summary['changes']), CHANGED_8_TO_9)
+        self.assertEqual(summary['only_new'], ['ckb_IQ', 'ckb_IQ.utf8',
+                                               'mnw_MM', 'mnw_MM.utf8'])
         self.assertIn('U+D7A3', summary['changes']['ko_KR.utf8']['brief'])
         # C.utf8 counts strings that are not characters, and the sort tables
         # name strings of several: the note on how both are named is under
@@ -15802,7 +15817,8 @@ class RulesBesideTheVerdicts(unittest.TestCase):
         v = {'step': 11, 'measurements': self.SHA, 'locales': verdicts}
         r = {'step': 2, 'compared': 'builds', 'names': ['o', 'n'],
              'machines': True, 'nothing': None, 'what': None,
-             'measurements': self.SHA, 'charmaps': None, 'locales': rules}
+             'measurements': self.SHA,
+             'charmaps': {'state': 'compared', 'why': None}, 'locales': rules}
         r.update(more)
         paths = [os.path.join(self.dir, x) for x in ('v.json', 'r.json',
                                                      'out.txt')]
@@ -15900,7 +15916,8 @@ class RulesBesideTheVerdicts(unittest.TestCase):
         got, alone = self.lines(
             {'x': ['changed', 'the order changes']},
             {'x': ['x', 'same', '', 'not compared']},
-            charmaps='The file of the machine holds none.')
+            charmaps={'state': 'not run',
+                      'why': 'The file of the machine holds none.'})
         self.assertEqual(got, {('x',): 'the order changes; its rules (step '
                                '2) do not; its character set (step 2): not '
                                'compared'})
@@ -15916,22 +15933,57 @@ class RulesBesideTheVerdicts(unittest.TestCase):
         for more, line in (
                 ({'machines': False, 'compared': 'tags',
                   'names': ['glibc-2.28', 'glibc-2.34'], 'locales': None,
-                  'measurements': None},
+                  'measurements': None,
+                  'charmaps': {'state': 'not run', 'why': 'no build'}},
                  'Rules (step 2) are not set beside each locale: step 2 '
                  'compared the tags glibc-2.28 and glibc-2.34, not the '
                  "machines' own locale sources."),
                 ({'nothing': 'commit', 'what': 'the two tags are one commit',
-                  'machines': False, 'locales': None, 'measurements': None},
+                  'machines': False, 'locales': None, 'measurements': None,
+                  'charmaps': {'state': 'one commit', 'why': None}},
                  'Rules (step 2) are not set beside each locale: step 2 '
                  'compared nothing, the two tags are one commit.'),
                 ({'nothing': 'tree', 'what': "the two machines' files hold "
-                  'the same locale sources', 'locales': None},
+                  'the same locale sources and charmaps', 'locales': None,
+                  'charmaps': {'state': 'one tree', 'why': None}},
                  'Rules (step 2) are not set beside each locale: step 2 '
                  "compared nothing, the two machines' files hold the same "
-                 'locale sources.')):
+                 'locale sources and charmaps.')):
             with self.subTest(line=line):
                 got, alone = self.lines(verdicts, {}, **more)
                 self.assertEqual((got, alone), ({}, [line]))
+
+    def test_one_tree_without_charmaps_says_they_were_not_compared(self):
+        """Two machines' files of one source tree that hold no charmaps:
+        none was read, never the same ones (2.1), with each file's reason,
+        beside the one line of what step 2 compared."""
+        got, alone = self.lines(
+            {'x': ['changed', 'the order changes']}, {},
+            nothing='tree', locales=None,
+            what="the two machines' files hold the same locale sources",
+            charmaps={'state': 'not read', 'why': ['Old holds none.',
+                                                   'New holds none.']})
+        self.assertEqual((got, alone), ({}, [
+            'Rules (step 2) are not set beside each locale: step 2 compared '
+            "nothing, the two machines' files hold the same locale sources.",
+            'Character sets (step 2): not compared. Old holds none. New '
+            'holds none.']))
+
+    def test_a_charmaps_state_it_does_not_know_is_refused(self):
+        """Asked before any line is written: a state outside the set, the
+        old bare reason, nothing at all, or a state another route gives."""
+        for charmaps in ({'state': 'checked', 'why': None},
+                         'The file of the machine holds none.', None,
+                         {'state': 'one tree', 'why': None}):
+            with self.subTest(charmaps=charmaps):
+                self.refused({'x': ['changed', 'the order changes']},
+                             {'x': ['x', 'same', '', '-']},
+                             "step 2's character set check ended in",
+                             charmaps=charmaps)
+        self.refused({'x': ['changed', 'the order changes']}, {},
+                     "step 2's character set check ended in",
+                     nothing='tree', locales=None, what='one tree',
+                     charmaps={'state': 'compared', 'why': None})
 
     def test_two_runs_are_refused(self):
         self.refused({'x': ['changed', 'the order changes']},

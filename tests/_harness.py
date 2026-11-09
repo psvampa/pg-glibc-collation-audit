@@ -403,6 +403,40 @@ def summary_block(out, heading):
     raise AssertionError(f'{heading!r} never ends:\n{summary}')
 
 
+# The summary's warnings block, whose `!!` blocks are each step's own,
+# repeated once (audit.sh's awk).
+SUMMARY_WARNINGS = '-- Warnings the clean results above do NOT cover'
+
+
+def summary_warnings(out):
+    """The summary's warnings block, whitespace collapsed; refused when the
+    run printed none (summary_block refuses a heading not there once)."""
+    return flat(' '.join(summary_block(out, SUMMARY_WARNINGS)))
+
+
+def nothing_compared_lines(noun):
+    """The summary's line under step 2's list when the two sides are one
+    commit or one source tree (10.1): the order check's `!!`, in the
+    warnings, says which, and what that leaves."""
+    return [f'none -- nothing was compared: the two {noun} are one commit '
+            f'or one',
+            'source tree (the warnings below say which, and what that '
+            'leaves)']
+
+
+# The headings of the summary blocks 10.1 deleted, each of which said the
+# order check's `!!` again in other words: none may come back.
+DELETED_SUMMARY_BLOCKS = ('-- One commit, compared with itself',
+                          '-- One source tree, compared with itself',
+                          '-- Direction of the pair: NOT ESTABLISHED')
+
+
+def assert_no_deleted_block(case, out):
+    summary = out.split('AUDIT SUMMARY', 1)[-1]
+    for heading in DELETED_SUMMARY_BLOCKS:
+        case.assertNotIn(heading, summary)
+
+
 def materialise_tag(repo, tag, dest):
     """Extract localedata/locales at `tag` into `dest`, byte-exact, and
     return the folder: a machine's locale sources as a test builds them.
@@ -511,7 +545,14 @@ def after_compared(out):
 # reddens the positive parsers instead of silencing a negative test.
 STEP2_LISTED = 'Listed in the summary'
 STEP2_NOT_COMPARED = '!! Not compared, so listed in the summary ('
+# Step 2's `!!` for the files only the new side has, when the old side is an
+# upstream tag (16.123); with a build or a machine there it is a plain
+# heading, without the `!! `.
+STEP2_ADDED = 'Not compared, no file at '
 SUMMARY_STEP2 = '-- Listed by step 2'
+# The `!!` report_tag_provenance prints where a tag's signature was not
+# checked (16.154), which the summary's warnings repeat.
+SIGNATURES_UNCHECKED = '!! Signatures NOT checked for '
 
 
 class Step2Report:
@@ -524,7 +565,11 @@ class Step2Report:
       when it says which characters is not known, () when it says the
       lines name none; every is True under "every rule can change";
     added: {name: what follows its arrow}, the not-compared files only the
-      new side has; removed: {name: its "(renamed to ...)" or ''};
+      new side has, as a plain block or as the `!!` block printed when the
+      old side is a tag, whose C is said by the C.UTF-8 `!!` alone (C is
+      then added as 'C.UTF-8 !!' when that `!!` names the old side only);
+      added_warned: whether they came as the `!!` block;
+      removed: {name: its "(renamed to ...)" or ''};
     listed: {name: why}, the `!!` block of names listed in the summary;
     reindex: the names of the "Listed in the summary" line; unbuilt and
       not_ascii: the two notes under it, as printed.
@@ -538,6 +583,8 @@ class Step2Report:
         self.out = out
         self.totals = self.nothing = None
         self.differs, self.added, self.removed = {}, {}, {}
+        self.added_warned = False
+        self.sides = None
         self.listed, self.reindex = {}, []
         self.unbuilt, self.not_ascii = [], []
         self.reindex_line = False
@@ -546,6 +593,7 @@ class Step2Report:
         # next block's indentation is kept.
         out = re.sub(r'(?m)^(?=The sort rules localedef builds|Rules differ|'
                      r'Not compared, no file at |!! Not compared, so listed|'
+                     r'!! Not compared, no file at |'
                      r'Listed in the summary \()', '\n', out)
         paras = [p.strip('\n') for p in re.split(r'\n(?:[ \t]*\n)+', out)
                  if p.strip()]
@@ -563,9 +611,12 @@ class Step2Report:
                     head.endswith('listed under Removed in the summary:'):
                 self._seen('removed')
                 self._removed(lines)
-            elif head.startswith('Not compared, no file at '):
+            elif head.startswith(STEP2_ADDED):
                 self._seen('added')
                 self._added(lines)
+            elif head.startswith('!! ' + STEP2_ADDED):
+                self._seen('added')
+                self._added_warned(lines)
             elif head.startswith(STEP2_NOT_COMPARED):
                 self._seen('listed')
                 self._listed(lines)
@@ -583,6 +634,17 @@ class Step2Report:
         if self.nothing is None and self.totals is None:
             raise AssertionError(f'step 2 printed neither its totals nor '
                                  f'"not compared":\n{out[:1500]}')
+        if self.totals is not None and self.sides:
+            # The C.UTF-8 `!!` of a tag without the file C: when it names
+            # the old side alone, C is a file only the new side has, which
+            # the `!!` of the added files leaves to it.
+            old = self.sides[0]
+            if re.search(r'(?m)^!! ' + re.escape(old) + r' holds no '
+                         r'localedata/locales/C,', out):
+                if 'C' in self.added:
+                    raise AssertionError('C named among the added files '
+                                         'and in the C.UTF-8 `!!`')
+                self.added['C'] = 'C.UTF-8 !!'
         if self.totals is not None:
             n, same, differ, nc = self.totals
             if n != same + differ + nc:
@@ -620,6 +682,11 @@ class Step2Report:
         if not m:
             raise AssertionError(f'unreadable step 2 totals: {para!r}')
         self.totals = tuple(int(x) for x in m.groups())
+        m = re.search(r'The sort rules localedef builds for each locale at '
+                      r'(\S+) and at (\S+?)[,:]', flat(para))
+        if not m:
+            raise AssertionError(f'step 2 totals name no sides: {para!r}')
+        self.sides = m.groups()
 
     def _differs(self, lines):
         want = self._count(lines[0])
@@ -697,6 +764,29 @@ class Step2Report:
             if not m:
                 raise AssertionError(f'unexpected line under {lines[0]!r}: '
                                      f'{line!r}')
+            self.added[m.group(1)] = m.group(2)
+        if len(self.added) != want:
+            raise AssertionError(f'{lines[0]!r} names {len(self.added)}')
+
+    def _added_warned(self, lines):
+        """The `!!` block: a heading wrapped at three blanks that ends in
+        ':', then one line per file at five (seven for a line that goes
+        on)."""
+        want = self._count(lines[0])
+        self.added_warned = True
+        at = 0
+        while not lines[at].endswith(':'):
+            at += 1
+            if at == len(lines) or not lines[at].startswith('   ') or \
+                    lines[at].startswith('     '):
+                raise AssertionError(f'unreadable heading {lines[0]!r}')
+        for line in lines[at + 1:]:
+            m = re.fullmatch(r'     (\S+) -> (.+)', line)
+            if not m:
+                raise AssertionError(f'unexpected line under {lines[0]!r}: '
+                                     f'{line!r}')
+            if m.group(1) in self.added:
+                raise AssertionError(f'{m.group(1)} named twice')
             self.added[m.group(1)] = m.group(2)
         if len(self.added) != want:
             raise AssertionError(f'{lines[0]!r} names {len(self.added)}')

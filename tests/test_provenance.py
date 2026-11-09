@@ -17,7 +17,8 @@ import subprocess
 import unittest
 
 from _harness import (EXPECTED_SHA, FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID,
-                       NEW, OLD, has_tags, needs_clone)
+                       NEW, OLD, SIGNATURES_UNCHECKED, flat, has_tags,
+                       needs_clone)
 
 import glibc_locale_data as g
 
@@ -122,6 +123,44 @@ class TagSignatures(unittest.TestCase):
             import io as _io
             with contextlib.redirect_stdout(_io.StringIO()):
                 g.report_tag_provenance(GLIBC_CLONE, NEW)   # must not raise
+        finally:
+            g.verify_tag = real
+
+    def test_a_signature_not_checked_is_a_warning(self):
+        """16.154: every status but good and bad is a `!!` block, which
+        the summary's warnings repeat: UNCHECKED (no gpg, no key) and
+        UNSIGNED (no signature, a commit) alike, each tag named once; good
+        prints none. Faked per status, in process: which one a machine
+        gives depends on its gpg and keys."""
+        import contextlib
+        import io as _io
+        real = g.verify_tag
+        try:
+            for status in ('no-gpg', 'no-key', 'unsigned', 'not-a-tag'):
+                with self.subTest(status=status):
+                    g.verify_tag = lambda repo, tag, s=status: (s, 'why')
+                    buf = _io.StringIO()
+                    with contextlib.redirect_stdout(buf):
+                        g.report_tag_provenance(GLIBC_CLONE, OLD, NEW, OLD)
+                    lines = buf.getvalue().splitlines()
+                    at = [i for i, ln in enumerate(lines)
+                          if ln.startswith('!!')]
+                    self.assertEqual(len(at), 1, lines)
+                    block = [lines[at[0]]]
+                    for ln in lines[at[0] + 1:]:
+                        if not ln.startswith('   '):
+                            break
+                        block.append(ln)
+                    self.assertTrue(flat(' '.join(block)).startswith(
+                        f'{SIGNATURES_UNCHECKED}{OLD}, {NEW} (why is on '
+                        f"each one's line under 'Tag provenance'"), block)
+                    self.assertIn('sourceware.org/git/glibc.git',
+                                  flat(' '.join(block)))
+            g.verify_tag = lambda repo, tag: ('good', 'signed')
+            buf = _io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                g.report_tag_provenance(GLIBC_CLONE, OLD, NEW)
+            self.assertNotIn('!!', buf.getvalue())
         finally:
             g.verify_tag = real
 

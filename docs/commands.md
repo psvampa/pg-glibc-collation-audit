@@ -105,7 +105,7 @@ With the two files, the run sets step 2's rules beside step 11's order,
 at the end of step 11 and under the measured order in the summary: each
 locale of the old machine that step 11 names, and whether step 2 found its
 rules changed. The line says what changed, never why. Where step 2 compared
-the tags, or compared nothing, one line says so and no locale gets one.
+the tags, or compared nothing, the run says so and no locale gets a line.
 
 **What step 11 names in a locale whose sort table changed.** Beside what it
 measured, the locale's line counts the sequences the table marks as changed,

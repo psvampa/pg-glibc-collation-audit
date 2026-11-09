@@ -9280,7 +9280,7 @@ def sql_lines(prefix, files, not_checked):
 
 
 def summary_lines(old, new, groups, run, totals, characters_to=None,
-                  note=None):
+                  note=None, only_new=()):
     """The report in brief, for the summary audit.sh prints at the end.
 
     Every locale is named, and so are the names PostgreSQL knows it by: a
@@ -9289,6 +9289,9 @@ def summary_lines(old, new, groups, run, totals, characters_to=None,
     characters' names and how each pair is told apart are in the report,
     and every one of them in the characters file, named under the changes.
     The report's warnings are here whole, so the summary needs no other copy.
+    A locale only on the new machine is named too, with why it changes
+    nothing made on the old machine (16.143), on a line of its own: never
+    under "NOT known to be unchanged" nor under "sort differently".
     """
     o, n = old['locales'], new['locales']
     out = [f'   ({machine_label(old)} -> {machine_label(new)})']
@@ -9322,6 +9325,15 @@ def summary_lines(old, new, groups, run, totals, characters_to=None,
     out += run('refused')
     out += run('not measured')
     out += run('not on the new machine')
+    if only_new:
+        # No database or collation of the old machine has a locale it
+        # lacks: createdb and initdb check it with setlocale
+        # (dbcommands.c:397-405@REL_13_23), a database opens only where it
+        # does (postinit.c:399-411), and CREATE COLLATION loads it
+        # (collationcmds.c:256-261).
+        out += wrapped(f'Only on the new machine: {len(only_new)} locale(s), '
+                       'which nothing made on the old machine uses: '
+                       + ', '.join(shown(name) for name in only_new), 5, 7)
     out += run('tables not compared')
     out += run('tables only')
     out += run('partly')
@@ -9682,6 +9694,14 @@ def sql_paths(prefix, encoding):
 # Step 11's verdict for each locale, as its report states it: the states
 # verdicts_by_name gives, and the one that names no locale by name (a
 # locale its table or its bytes leave unchanged for any text is counted).
+# What became of step 2's character set check, as step 2 writes it in
+# step2_rules_by_name (filter_lc_collate_changes.write_rules_by_name): the
+# check ran, it did not run (why), or there was nothing to compare, one
+# commit or one tree, whose charmaps one tree holds once, or one tree of two
+# machines' files that hold none this reads (why: each file's reason).
+CHARMAPS_STATES = ('compared', 'not run', 'one commit', 'one tree',
+                   'not read')
+
 VERDICTS = ('changed', 'firm', 'far', 'unmeasured', 'refused', 'only old',
             'only new')
 
@@ -9758,10 +9778,27 @@ def rules_beside(verdicts_path, rules_path, out_path):
             die(f'{path} is not what step {step} writes')
         files.append(data)
     verdicts, rules = files
+    cm = rules.get('charmaps')
+    # Its own name: the loop over the verdicts below has a `state` of its
+    # own, which once overwrote this one and lost the NOT RUN line.
+    cm_state = cm.get('state') if isinstance(cm, dict) else None
+    # Asked before any line is written, and of the route as well: one
+    # commit or one tree only where step 2 compared nothing, and the check
+    # ran or did not run only where it compared something.
+    if cm_state not in CHARMAPS_STATES or \
+            (cm_state in ('one commit', 'one tree', 'not read')) \
+            != bool(rules['nothing']):
+        die(f'{rules_path} says step 2\'s character set check ended in '
+            f'{cm!r}, which is none of {", ".join(CHARMAPS_STATES)} for '
+            'this route')
     lines = []
     if rules['nothing']:
         lines.append((5, 'Rules (step 2) are not set beside each locale: '
                       f'step 2 compared nothing, {rules["what"]}.'))
+        if cm_state == 'not read':
+            # One tree whose charmaps no file holds: never the same ones.
+            lines.append((5, 'Character sets (step 2): not compared. '
+                          + ' '.join(cm['why'])))
     elif not rules['machines']:
         a, b = rules['names']
         lines.append((5, 'Rules (step 2) are not set beside each locale: '
@@ -9796,10 +9833,10 @@ def rules_beside(verdicts_path, rules_path, out_path):
                 lines.append((7, ', '.join(map(shown, names)) + ': ' + line))
         else:
             lines.append((5, RULES_NONE))
-        if rules['charmaps']:
+        if cm_state == 'not run':
             # step 2's reason is a sentence of its own (its NOT RUN).
             lines.append((5, 'Character sets (step 2): not compared. '
-                          + rules['charmaps'].rstrip('.') + '.'))
+                          + cm['why'].rstrip('.') + '.'))
     text = []
     for indent, line in lines:
         text += wrapped(line, indent, indent + 2)
@@ -10171,7 +10208,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     if summary_to:
         brief = summary_lines(
             old, new, [(names, briefs[lines]) for lines, names in groups],
-            Drawn(found, SUMMARY, ctx), totals, characters_to, note)
+            Drawn(found, SUMMARY, ctx), totals, characters_to, note,
+            only_new)
     file_notes = []
     if characters_to:
         # The locales NOT known to be unchanged, and those unchanged only as

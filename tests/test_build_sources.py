@@ -42,7 +42,9 @@ from _harness import (COMPARED_BANNER, GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR,
                       SUMMARY_STEP2,
                       Step2Report, after_compared, before_compared,
                       compared_text, deleted_steps_named, flat,
-                      summary_block, glibc_shaped, needs_clone)
+                      summary_block, glibc_shaped, needs_clone,
+                      assert_no_deleted_block, nothing_compared_lines,
+                      summary_warnings)
 
 import build_sources as bs
 import filter_lc_collate_changes as step2
@@ -2974,7 +2976,7 @@ class AStepReadsABuild(_StepsOnBuilds, unittest.TestCase):
         self.assertEqual(sorted(os.listdir(d)), sorted(
             ['%s.%s..%s.txt' % (k, B275, B283) for k in (
                 'step2_changed_collate', 'step2_keyed_locales',
-                'step2_removed_locales')]
+                'step2_not_compared', 'step2_removed_locales')]
             + ['step2_rules_characters.%s..%s.tsv' % (B275, B283),
                'step2_rules_by_name.%s..%s.json' % (B275, B283)]))
         # An added file: the old build's own sources are the answer.
@@ -3162,9 +3164,6 @@ C_NOT_COMPARED = ("!! {} holds no localedata/locales/C, the file C.UTF-8 is "
 C_DIFFERS = ("!! C.UTF-8's sort rules differ, and it is listed in the "
              "summary. ")
 MEASURED = '-- Measured order: NOT RUN'
-DIRECTION = '-- Direction of the pair: NOT ESTABLISHED'
-NOT_READ = ("What this run does not read of a build is under 'Not checked "
-            "for these builds'")
 
 
 # -- latest-elN: the newest build of a release, resolved once by audit.sh ----
@@ -3663,18 +3662,18 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
         out = self.run_of('tree')
         self.assertIn('%s and %s are two commits of one source tree'
                       % (B275, ONE_TREE), flat(out))
-        self.assertEqual(' '.join(summary_block(
-            out, '-- One source tree, compared with itself')),
-            "%s -> %s are two commits of one source tree: the two builds "
-            "hold the same locale sources and the same code under locale/. "
-            "Everything above that compares the two builds and says "
-            "'nothing changed' means 'nothing was compared'. %s, below. "
-            "sql/c_utf8_probe.sql and docs/confirming-on-a-real-system.md "
-            "check the order on the machines themselves."
-            % (B275, ONE_TREE, NOT_READ))
-        summary = flat(out.split('AUDIT SUMMARY', 1)[1])
+        # The summary says it with the order check's `!!` alone, once,
+        # which names the builds and what this tool does not read of one
+        # (10.1 deleted the block that said it again in other words).
+        self.assertEqual(summary_warnings(out).count(flat(
+            "!! %s and %s are two commits of one source tree. Step 2 "
+            "compares nothing: it would compare that tree against itself. "
+            % (B275, ONE_TREE) + g._NOTHING_COMPARED_BUILDS.format(
+                noun='builds', one='build'))), 1, out)
+        self.assertEqual(summary_block(out, REINDEX),
+                         nothing_compared_lines('builds'))
+        assert_no_deleted_block(self, out)
         self.assertNotIn('DIRECTION', out)
-        self.assertNotIn(DIRECTION, summary)
         self.assertEqual(deleted_steps_named(out), [])
 
     def test_a_builds_own_warning_reaches_the_summary(self):
@@ -3694,11 +3693,11 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
         the summary says one build was given twice, and its ellipsis block
         names no other side (false-negative-reviewer, round 1)."""
         out = self.run_of('twice')
-        self.assertEqual(' '.join(summary_block(
-            out, '-- One commit, compared with itself')),
-            "%s -> %s: one build given twice. Everything above that compares "
-            "the two builds and says 'nothing changed' means 'nothing was "
-            "compared'." % (B275, B275))
+        self.assertEqual(summary_warnings(out).count(
+            '%s and %s are the same commit' % (B275, B275)), 1, out)
+        self.assertEqual(summary_block(out, REINDEX),
+                         nothing_compared_lines('builds'))
+        assert_no_deleted_block(self, out)
 
     def test_a_patch_to_strcoll_outside_locale_is_named_and_not_compared(self):
         """A build's patch to strcoll's own code outside locale/: step 5
@@ -3758,23 +3757,22 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
         # The old side is the tag, which holds no file C (16.123).
         self.assertEqual(flat(out.split('AUDIT SUMMARY', 1)[1]).count(
             C_NOT_COMPARED.format(TAG) + step2.C_NO_VERSION), 1)
-        self.assertEqual(' '.join(summary_block(out, DIRECTION)),
-                         'One side is a tag and the other a build of the same '
-                         'glibc release, and nothing here places a build '
-                         'against a tag of its own release -- so nothing here '
-                         'checked that %s is the newer of the two. If they are '
-                         'the wrong way round, every list above is the wrong '
-                         "side's: step 2 reports a "
-                         'locale deleted in the upgrade as a harmless '
-                         'addition. Confirm which side is older.'
-                         % B275)
+        # The order check's `!!` is all the summary says of the direction,
+        # once, true at the end of the run, naming the kind of the sides.
+        warnings = summary_warnings(out)
+        self.assertEqual(warnings.count(
+            '!! The DIRECTION of this pair could not be established'), 1, out)
+        self.assertIn('Nothing in this run has checked it', warnings)
+        self.assertIn('Confirm which side is the older one.', warnings)
+        assert_no_deleted_block(self, out)
 
     def test_the_tag_side_alone_gets_the_tags_warning(self):
         """The old side is a tag and the new one a build: the `!!`
         names the tag alone and asks for its build, the summary repeats it,
         and C, which the build ships and the tag lacks, is not compared for
-        want of an old file, under the sentence that says it may exist on
-        the old system. Nothing says its order is settled (7.7)."""
+        want of an old file: the C.UTF-8 `!!` alone says so (16.123), and
+        that a distro's build can ship its own. Nothing says its order is
+        settled (7.7)."""
         out = self.run_of('tag_typed')
         notice = ("!! Not checked for %s: it is an upstream tag, which holds "
                   "none of a distro's own locale files or patches. Step 2 "
@@ -3788,12 +3786,16 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
         step2, end, _ = out.split('== STEP 2', 1)[1].partition(
             '== AUDIT SUMMARY')
         self.assertTrue(end, 'no summary ends step 2')
-        head = 'Not compared, no file at %s (' % TAG
-        self.assertIn(head, step2)
-        added = step2.split(head, 1)[1].split('\n\n', 1)[0]
-        self.assertIn('\n  C -> ', added)
-        self.assertIn('An upstream tag cannot establish that', flat(added))
-        self.assertNotIn('C', Step2Report(step2).differs)
+        # C is the one file only the build has, and the C.UTF-8 `!!` is
+        # what says it, once: no list of added files is printed for it.
+        # (`step2` is the step's text here, not the module.)
+        import filter_lc_collate_changes as step2_mod
+        report = Step2Report(step2)
+        self.assertEqual(report.added, {'C': 'C.UTF-8 !!'})
+        self.assertNotIn('Not compared, no file at %s (' % TAG, step2)
+        self.assertEqual(flat(step2).count(
+            C_NOT_COMPARED.format(TAG) + step2_mod.C_NO_VERSION), 1)
+        self.assertNotIn('C', report.differs)
 
     def test_a_build_then_a_tag_does_not_say_the_tag_removes_what_the_distro_ships(self):
         """16.78: over B40 -> TAG the new side is a tag, which cannot show
@@ -4279,6 +4281,14 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
                       'and at %s,' % (B40, B275), flat(out))
         self.assertIn('AUDIT SUMMARY  %s -> %s' % (B40, B275), out)
         self.assertIn('C.UTF-8', summary_block(out, REINDEX))
+        # 16.169: what C.UTF-8 is, and that PostgreSQL compares exactly C
+        # and POSIX without glibc, under the list that names it, on this
+        # route too.
+        self.assertIn('C.UTF-8 is glibc\'s locale file C, written C in the '
+                      'full list; C.utf8 and C.UTF-8 are its spellings. A '
+                      'collation or a database whose locale is exactly C or '
+                      'POSIX is compared by PostgreSQL itself, without glibc.',
+                      ' '.join(summary_block(out, REINDEX)))
         self.assertIn("This list is from each machine's own locale sources.",
                       flat(self.summary('read')))
         self.assertNotIn('This list is from the builds.',
