@@ -204,6 +204,15 @@ class Step2Compare(StepRun):
                     f'C.UTF-8 is built from, and a distro\'s build can ship '
                     f'its own, so C.UTF-8\'s sort rules were not compared. '
                     f'{f.C_NO_VERSION}'), 1, out)
+                # The C fact as a literal, not read from the script: the
+                # sentence above follows C_NO_VERSION wherever it goes, and
+                # emptied, every test that names it stayed green
+                # (false-negative-reviewer, 10.3 plan).
+                self.assertEqual(said.count(
+                    'PostgreSQL records no collation version for a libc '
+                    'collation or database whose locale is C, C.<anything> '
+                    'or POSIX, so no version mismatch warns about '
+                    'C.UTF-8;'), 1, out)
                 self.assertNotIn('differ, and it is listed', said)
                 self.assertEqual(r.added.get(STEP2_C), added)
                 self.assertNotIn(STEP2_C, r.differs)

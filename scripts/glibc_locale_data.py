@@ -25,7 +25,8 @@ order and pair-slug, and provenance and corpus are kept for a hand run:
       (build_sources), or, under audit.sh given each machine's file, made
       a commit from that file with nothing fetched (machine_side, through
       MACHINES_ENV); checks the order and the floor and prints the
-      provenance; under audit.sh it also records each build's commit for
+      provenance and where PostgreSQL warns about a collation's version
+      between the sides; under audit.sh it also records each build's commit for
       the steps after it (SIDES_ENV)
   python3 glibc_locale_data.py resolve --to F <old> <new>
       for audit.sh, before anything runs: writes to F `<side>\t<kind>` a
@@ -2507,12 +2508,15 @@ def compared_sides(here, old, new):
     """The run's two sides, (repo, old Side or tag, new Side or tag), and
     what audit.sh prints of them under "What was compared": clone glibc
     into `here`/glibc when it is not there, fetch tags once when a tag is
-    missing, refuse a reversed pair, print the provenance, a `!!` for the
-    sides read as tags (tag_sides_text) and one for what no step compares
-    (CODE_NOT_COMPARED), and hold each side to the floor. A build name
-    (is_build_name) is never asked of git: build_side fetches it and makes
-    its commit again, or makes it from a machine's own file under audit.sh
-    (machine_side). latest-elN is refused (refuse_latest)."""
+    missing, refuse a reversed pair, print the provenance, where
+    PostgreSQL warns about a collation's version between the two sides
+    (print_collation_version, a `!!` when it never does or cannot be
+    told), a `!!` for the sides read as tags (tag_sides_text) and one for
+    what no step compares (CODE_NOT_COMPARED), and hold each side to the
+    floor. A build name (is_build_name) is never asked of git: build_side
+    fetches it and makes its commit again, or makes it from a machine's own
+    file under audit.sh (machine_side). latest-elN is refused
+    (refuse_latest)."""
     refuse_latest((old, new))
     repo = os.path.join(here, 'glibc')
     if not os.path.isdir(repo):
@@ -2555,6 +2559,7 @@ def compared_sides(here, old, new):
         rebuilt = [sd for sd in builds if not is_machine(sd)]
         if rebuilt:
             report_build_provenance(rebuilt)
+    print_collation_version(repo, sides[0], sides[1])
     if tags:
         warn(tag_sides_text(tags, [ref_kind(repo, t) for t in tags]),
              split_words=False)
@@ -2584,13 +2589,82 @@ TAG_ASK_ENV = 'PG_GLIBC_AUDIT_TAG_ASK'
 # tags or two builds can change with every locale file the same (Bug 22668
 # reordered ko_KR between glibc 2.28 and 2.34, its file unchanged). Steps 4
 # and 5 looked at that code until step 9.3. With both machines' files, step
-# 11 measures the order it produces.
+# 11 measures the order it produces. Nor does any route look for code of a
+# user or of an extension that calls glibc's locale functions itself: a
+# backend sets the database's LC_COLLATE and LC_CTYPE with setlocale
+# (postinit.c:420, :427@REL_18_6), so such a function in C gets them too.
 CODE_NOT_COMPARED = (
     "Not compared on any route: the code that compiles and compares the "
     "rules (localedef's and strcoll's, each build's patches to it "
     "included). Only step 11 sees what it does, when it measures both "
     "machines; docs/confirming-on-a-real-system.md says how to confirm the "
-    "order on them.")
+    "order on them. No route looks either for a function of a user or of "
+    "an extension that calls glibc's locale functions itself.")
+
+
+def side_glibc_version(repo, s):
+    """glibc's VERSION on side `s`, whole ("2.34", "2.34.9000"): the
+    string a PostgreSQL that runs that glibc records as a libc collation's
+    version, gnu_get_libc_version() (pg_locale_libc.c:669@REL_18_6). A tag
+    or a commit: version.h at that ref, probed for, then read as content
+    (run_git dies if it cannot). A build or a machine: the 'glibc X.Y' of
+    its name, the rpm Version, which load() holds to the machine's own
+    confstr. None when the ref has no version.h or no VERSION in it."""
+    if not _is_tag(s):
+        v = s.version or ''
+        return v[len('glibc '):] if v.startswith('glibc ') else None
+    spec = f'{_ref(s)}:version.h'
+    if run_git(['cat-file', '-e', spec], repo, allow_fail=True).returncode:
+        return None
+    out = run_git(['show', spec], repo).stdout
+    m = re.search(rb'^#define VERSION "([^"\n]+)"', out, re.M)
+    return m.group(1).decode('ascii', 'replace') if m else None
+
+
+def print_collation_version(repo, old, new):
+    """16.166: whether PostgreSQL warns about a collation's version, said
+    once for the pair. PostgreSQL records glibc's version for every libc
+    locale but C, C.* and POSIX, and warns where the recorded string is not
+    the one it now runs (strcmp): a named collation from 13
+    (pg_locale.c:1628-1659@REL_13_23), a database's default collation from
+    15 (postinit.c:440-480@REL_18_6). What it recorded under the new glibc
+    never warns: initdb's collations, a restore (pg_dump omits the version,
+    pg_dump.c:3426-3435, :15006-15011@REL_18_6), pg_upgrade's pg_catalog
+    collations (pg_dump leaves pg_catalog out, pg_dump.c:1570-1578@REL_13_23),
+    from 12 or older every collation (12 records none for libc,
+    pg_locale.c:1686-1713@REL_12_22; pg_dump carries only one recorded,
+    pg_dump.c:14136-14147@REL_13_23, and CREATE COLLATION takes the running
+    glibc's, collationcmds.c:237-238@REL_13_23) and, from 14 or older, its
+    database defaults (no datcollversion there, pg_dump.c:3293@REL_18_6;
+    createdb takes the running glibc's, dbcommands.c:1300-1316@REL_18_6).
+    So the line says where a warning comes from, and what records the
+    version that never warns."""
+    ov, nv = side_glibc_version(repo, old), side_glibc_version(repo, new)
+    if ov is None or nv is None:
+        which = ', '.join(_ref(s) if _is_tag(s) else s.build
+                          for s, v in ((old, ov), (new, nv)) if v is None)
+        warn("Whether PostgreSQL warns about a collation's version is NOT "
+             f"known: no glibc version could be read for {which}.",
+             split_words=False)
+    elif ov == nv:
+        warn("PostgreSQL warns about no libc collation between these two "
+             f"sides: both are glibc {nv}, the version a PostgreSQL that "
+             "runs it records for a collation and compares. Whatever this "
+             "run finds changed between them, PostgreSQL does not report.")
+    else:
+        print(textwrap.fill(
+            f"glibc {ov} on the old side, {nv} on the new: the version a "
+            "PostgreSQL that runs it records for a libc collation, where it "
+            "records one. PostgreSQL 13 or later warns about a collation, "
+            "and 15 or later about a database's default collation, where "
+            f"the version it recorded is not {nv} ({ov} if it was recorded "
+            "on the old side), whether that locale's order changed or not. "
+            f"Where it recorded {nv}, it does not warn, whatever changed: "
+            f"initdb and a restore on the new side record {nv} for every "
+            "collation, and pg_upgrade there for those of pg_catalog, for "
+            "every collation from PostgreSQL 12 or older, and for a "
+            "database's default from 14 or older.",
+            width=78))
 
 
 def ref_kind(repo, name):

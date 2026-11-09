@@ -556,6 +556,82 @@ SUMMARY_STEP2 = '-- Listed by step 2'
 # The `!!` report_tag_provenance prints where a tag's signature was not
 # checked (16.154), which the summary's warnings repeat.
 SIGNATURES_UNCHECKED = '!! Signatures NOT checked for '
+# What 'What was compared' says of PostgreSQL's collation version (16.166,
+# glibc_locale_data.print_collation_version), written here and never
+# imported from the script, so that a rewording reddens the tests instead of
+# being followed by them. Two sides of one glibc version: a `!!`, which the
+# summary's warnings repeat; two versions: a plain line, which they do not.
+PG_VERSION_SAME = (
+    "!! PostgreSQL warns about no libc collation between these two sides: "
+    "both are glibc {v}, the version a PostgreSQL that runs it records for a "
+    "collation and compares. Whatever this run finds changed between them, "
+    "PostgreSQL does not report.")
+PG_VERSION_DIFFER = (
+    "glibc {old} on the old side, {new} on the new: the version a PostgreSQL "
+    "that runs it records for a libc collation, where it records one. "
+    "PostgreSQL 13 or later warns about a collation, and 15 or later about a "
+    "database's default collation, where the version it recorded is not "
+    "{new} ({old} if it was recorded on the old side), whether that locale's "
+    "order changed or not. Where it recorded {new}, it does not warn, "
+    "whatever changed: initdb and a restore on the new side record {new} for "
+    "every collation, and pg_upgrade there for those of pg_catalog, for "
+    "every collation from PostgreSQL 12 or older, and for a database's "
+    "default from 14 or older.")
+PG_VERSION_UNKNOWN = ("!! Whether PostgreSQL warns about a collation's "
+                      "version is NOT known: no glibc version could be read "
+                      "for ")
+# Words only one of the three says, to count each across a whole run.
+_PG_VERSION_MARKS = {
+    'same': 'PostgreSQL warns about no libc collation',
+    'differ': 'records for a libc collation, where it records one',
+    'unknown': "Whether PostgreSQL warns about a collation's version",
+}
+# The sentence the `!! Not compared on any route` block ends with (13.9,
+# the P13 line): no route looks for a user's or an extension's function.
+NO_ROUTE_LOOKS = ("No route looks either for a function of a user or of an "
+                  "extension that calls glibc's locale functions itself.")
+
+
+def pg_version_of(name):
+    """The glibc version a test expects for a side it names: X.Y of a
+    release tag or a build (glibc-2.34, glibc-2.34-275.el9_8), and the
+    release latest-elN resolves to in the suite's mirrors."""
+    latest = {'latest-el8': '2.28', 'latest-el9': '2.34',
+              'latest-el10': '2.39'}
+    if name in latest:
+        return latest[name]
+    m = re.match(r'glibc-(\d+\.\d+)(?:$|-)', name)
+    if not m:
+        raise AssertionError(f'no version known for side {name!r}')
+    return m.group(1)
+
+
+def assert_collation_version(case, out, old, new, label=None):
+    """16.166 on one whole run whose sides are glibc `old` and `new`:
+    'What was compared' says once, in full, what PostgreSQL does about the
+    pair's collation version, and no other of the three sentences is said
+    anywhere; a `!!` (one version) is repeated once among the summary's
+    warnings, the plain line (two versions) never."""
+    kind = 'same' if old == new else 'differ'
+    want = (PG_VERSION_SAME.format(v=new) if kind == 'same' else
+            PG_VERSION_DIFFER.format(old=old, new=new))
+    case.assertEqual(flat(compared_text(out)).count(want), 1,
+                     (label, want, compared_text(out)[-3000:]))
+    for k, mark in _PG_VERSION_MARKS.items():
+        case.assertEqual(flat(out).count(mark),
+                         (2 if k == 'same' else 1) if k == kind else 0,
+                         (label, k))
+    case.assertEqual(summary_warnings(out).count(want),
+                     1 if kind == 'same' else 0, label)
+
+
+def assert_no_route_looks(case, out, label=None):
+    """13.9 on one whole run: the P13 sentence is said once under 'What was
+    compared', inside the `!! Not compared on any route` block, and once
+    among the summary's warnings, and nowhere else."""
+    case.assertEqual(flat(compared_text(out)).count(NO_ROUTE_LOOKS), 1, label)
+    case.assertEqual(summary_warnings(out).count(NO_ROUTE_LOOKS), 1, label)
+    case.assertEqual(flat(out).count(NO_ROUTE_LOOKS), 2, label)
 
 
 class Step2Report:

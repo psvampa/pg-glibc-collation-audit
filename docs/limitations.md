@@ -74,13 +74,14 @@ Step 2 compares the rules `localedef` reads, every `copy` followed. What
 `localedef` compiles them into, and how `strcoll` walks the result, is code,
 and no step compares it: not between two tags, not between two builds, and
 not a build's own patches to it. Every run says so under *What was
-compared*.
+compared*, and in the same warning that no route looks for a function of a
+user or of an extension that calls glibc's locale functions itself.
 
-That code can change an order with every locale file the same. Bug 22668,
-fixed in glibc 2.34, changed how `localedef` expands an ellipsis range, and
-`ko_KR` sorts differently between RHEL8 and RHEL9 with its file unchanged in
-both tags. Step 2 finds its rules the same, and without the machines' files
-nothing in the run names it.
+localedef's and strcoll's code can change an order with every locale file
+the same. Bug 22668, fixed in glibc 2.34, changed how `localedef` expands an
+ellipsis range, and `ko_KR` sorts differently between RHEL8 and RHEL9 with
+its file unchanged in both tags. Step 2 finds its rules the same, and without
+the machines' files nothing in the run names it.
 
 Step 11, in command 1.b, measures every locale it can on both machines, which
 is what that code does, and

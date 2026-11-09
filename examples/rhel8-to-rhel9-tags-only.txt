@@ -9,6 +9,15 @@ Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointe
    line under 'Tag provenance', in 'What was compared'). The commit ids
    printed there are what was read; compare them against a source you trust
    (sourceware.org/git/glibc.git) if it matters.
+glibc 2.28 on the old side, 2.34 on the new: the version a PostgreSQL that
+runs it records for a libc collation, where it records one. PostgreSQL 13 or
+later warns about a collation, and 15 or later about a database's default
+collation, where the version it recorded is not 2.34 (2.28 if it was recorded
+on the old side), whether that locale's order changed or not. Where it
+recorded 2.34, it does not warn, whatever changed: initdb and a restore on the
+new side record 2.34 for every collation, and pg_upgrade there for those of
+pg_catalog, for every collation from PostgreSQL 12 or older, and for a
+database's default from 14 or older.
 !! Not checked for glibc-2.28 and glibc-2.34: they are upstream tags, which
    hold none of a distro's own locale files or patches. Step 2 reads only what
    the tags hold. If the machines run RHEL 8, 9 or 10, name each side as its
@@ -19,6 +28,8 @@ Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointe
    (localedef's and strcoll's, each build's patches to it included). Only step
    11 sees what it does, when it measures both machines;
    docs/confirming-on-a-real-system.md says how to confirm the order on them.
+   No route looks either for a function of a user or of an extension that
+   calls glibc's locale functions itself.
 
 ================================================================
 == STEP 2  Which locales' sort rules changed
@@ -113,6 +124,8 @@ Listed in the summary (5): or_IN, sv_FI, sv_FI@euro, sv_SE, swedish
         (localedef's and strcoll's, each build's patches to it included). Only step
         11 sees what it does, when it measures both machines;
         docs/confirming-on-a-real-system.md says how to confirm the order on them.
+        No route looks either for a function of a user or of an extension that
+        calls glibc's locale functions itself.
      !! Not compared, no file at glibc-2.28 (2). A file added at the new side
         cannot change what PostgreSQL already stored ONLY IF the locale did not
         exist on the old system, and an upstream tag cannot establish that --

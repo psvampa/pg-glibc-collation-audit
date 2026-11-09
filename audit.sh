@@ -538,8 +538,9 @@ run_step() {
   "$@" 2>&1 | tee "$log"
 }
 
-# What was compared: each side, where it was read from, and what no step
-# reads (glibc_locale_data.compared_sides), with each machine's file named
+# What was compared: each side, where it was read from, where PostgreSQL
+# warns about a collation's version between them, and what no step reads
+# (glibc_locale_data.compared_sides), with each machine's file named
 # as it was given. Its log keeps the name step 1's had: the warnings block
 # below repeats the `!!` blocks of every step*.$PAIR.log, and has to repeat
 # these (CODE_NOT_COMPARED is the one line that covers ko_KR without the
