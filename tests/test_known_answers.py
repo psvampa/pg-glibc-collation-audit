@@ -102,7 +102,7 @@ class Step2Compare(StepRun):
 
     def test_the_written_list_is_the_printed_one(self):
         """Two representations of one list must not drift: what step 2
-        prints as "Listed for Reindex" and what the summary reads."""
+        prints as "Listed in the summary" and what the summary reads."""
         for old, new in self.EXPECTED:
             with self.subTest(pair=f'{old}..{new}'):
                 r = self.report(old, new)
@@ -226,8 +226,9 @@ class Step2Compare(StepRun):
             with self.subTest(pair=f'{old}..{new}'):
                 out = flat(self.step('filter_lc_collate_changes.py', old,
                                      new))
-                self.assertIn('cannot affect an existing index ONLY IF', out)
-                self.assertNotIn('cannot affect an existing index.', out)
+                self.assertIn('cannot change what PostgreSQL already stored '
+                              'ONLY IF', out)
+                self.assertNotIn('already stored.', out)
 
     def test_no_locale_is_left_uncompared_on_both_sides(self):
         """Recorded as a measured fact: over both pairs every name with a
@@ -489,9 +490,10 @@ class BelowTheOldVersionFloor(StepRun):
         out = self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW)
         self.assertIn('GB18030: 12352 characters added, 24 removed, 8 given '
                       'other bytes. UTF-8: 4357 characters added.', flat(out))
-        self.assertRegex(flat(out), r'Reindex lists anyway, whose LC_COLLATE '
-                                    r'names one of those characters or '
-                                    r'could not be compared \(1\): '
+        self.assertRegex(flat(out), r'the summary lists anyway, whose '
+                                    r'LC_COLLATE names one of those '
+                                    r'characters or could not be compared '
+                                    r'\(1\): '
                                     r'zh_CN\.GB18030 \(GB18030\): 206 '
                                     r'characters, named in iso14651_t1_common')
         self.assertIn('zh_CN', Step2Report(out).reindex)

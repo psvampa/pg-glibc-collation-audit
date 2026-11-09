@@ -42,10 +42,10 @@ Rules differ (5):
 Not compared, no file at glibc-2.28 (2):
   ckb_IQ -> ckb_IQ
   mnw_MM -> mnw_MM
-   A file added at the new side cannot affect an existing index ONLY IF the
-   locale did not exist on the old system. An upstream tag cannot establish
-   that -- distros backport. Confirm with `locale -a` on the OLD machine,
-   under the names above, before treating these as out of scope.
+   A file added at the new side cannot change what PostgreSQL already stored
+   ONLY IF the locale did not exist on the old system. An upstream tag cannot
+   establish that -- distros backport. Confirm with `locale -a` on the OLD
+   machine, under the names above, before treating these as out of scope.
 
 !! glibc-2.28 and glibc-2.34 hold no localedata/locales/C, the file C.UTF-8 is
    built from, and a distro's build can ship its own, so C.UTF-8's sort rules
@@ -61,13 +61,13 @@ No build's LC_COLLATE names one of those characters.
 Transliteration (LC_CTYPE): 24 collating elements of 3 locale builds depend on
 a transliteration; none is built differently at glibc-2.34.
 
-Listed for Reindex (5): or_IN, sv_FI, sv_FI@euro, sv_SE, swedish
+Listed in the summary (5): or_IN, sv_FI, sv_FI@euro, sv_SE, swedish
 
 ================================================================
 == AUDIT SUMMARY  glibc-2.28 -> glibc-2.34
 ================================================================
 
--- Reindex: sort order changes, confirm then REINDEX
+-- Listed by step 2
      or_IN
      sv_FI
      sv_FI@euro

@@ -506,6 +506,14 @@ def after_compared(out):
     return '\n'.join(lines[at:])
 
 
+# Step 2's and the summary's words for step 2's list, read by the
+# parsers below and by the tests (16.122): one spelling, so a rewording
+# reddens the positive parsers instead of silencing a negative test.
+STEP2_LISTED = 'Listed in the summary'
+STEP2_NOT_COMPARED = '!! Not compared, so listed in the summary ('
+SUMMARY_STEP2 = '-- Listed by step 2'
+
+
 class Step2Report:
     """What step 2 (filter_lc_collate_changes.py) printed, read strictly.
 
@@ -517,8 +525,8 @@ class Step2Report:
       lines name none; every is True under "every rule can change";
     added: {name: what follows its arrow}, the not-compared files only the
       new side has; removed: {name: its "(renamed to ...)" or ''};
-    listed: {name: why}, the `!!` block of names listed for Reindex;
-    reindex: the names of the "Listed for Reindex" line; unbuilt and
+    listed: {name: why}, the `!!` block of names listed in the summary;
+    reindex: the names of the "Listed in the summary" line; unbuilt and
       not_ascii: the two notes under it, as printed.
 
     Every count a heading prints must equal the names under it, every line
@@ -538,7 +546,7 @@ class Step2Report:
         # next block's indentation is kept.
         out = re.sub(r'(?m)^(?=The sort rules localedef builds|Rules differ|'
                      r'Not compared, no file at |!! Not compared, so listed|'
-                     r'Listed for Reindex \()', '\n', out)
+                     r'Listed in the summary \()', '\n', out)
         paras = [p.strip('\n') for p in re.split(r'\n(?:[ \t]*\n)+', out)
                  if p.strip()]
         for para in paras:
@@ -558,10 +566,10 @@ class Step2Report:
             elif head.startswith('Not compared, no file at '):
                 self._seen('added')
                 self._added(lines)
-            elif head.startswith('!! Not compared, so listed for REINDEX ('):
+            elif head.startswith(STEP2_NOT_COMPARED):
                 self._seen('listed')
                 self._listed(lines)
-            elif head.startswith('Listed for Reindex ('):
+            elif head.startswith(STEP2_LISTED + ' ('):
                 self._seen('reindex')
                 self._reindex(lines)
         # Printed right under pair_check's `!!`, with no blank line between.
@@ -589,7 +597,7 @@ class Step2Report:
                                      f'under the not-compared headings')
             if not self.reindex_line:
                 raise AssertionError('step 2 compared and printed no '
-                                     '"Listed for Reindex" line')
+                                     f'"{STEP2_LISTED}" line')
 
     _once = None
 
@@ -743,12 +751,12 @@ class Step2Report:
             elif line.startswith('  '):
                 part.append(line.strip())
             else:
-                raise AssertionError(f'unexpected line under Listed for '
-                                     f'Reindex: {line!r}')
+                raise AssertionError(f'unexpected line under '
+                                     f'{STEP2_LISTED}: {line!r}')
         text = ' '.join(part)
         self.reindex = [] if text == 'none' else text.split(', ')
         if len(self.reindex) != want:
-            raise AssertionError(f'Listed for Reindex ({want}) names '
+            raise AssertionError(f'{STEP2_LISTED} ({want}) names '
                                  f'{len(self.reindex)}')
         for note in notes:
             text = ' '.join(note)

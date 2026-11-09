@@ -3,9 +3,10 @@
 ## Summary
 
 Between two glibc versions — typically two RHEL major releases — **which
-specific locales change their sort order**, and therefore which PostgreSQL
-B-tree indexes on `text`/`varchar`/`char`/`citext` columns need a `REINDEX`
-after an OS upgrade or a physical migration?
+specific locales change their sort order**, and which characters move, so that
+the change can be tested in PostgreSQL? A sort order change reaches more than
+indexes: it can leave rows in the wrong range partition and make a CHECK
+constraint reject a row it accepted before.
 
 **PostgreSQL will not tell you.** `pg_collation.collversion` stores glibc's
 version string, so it stays silent when a distro patches collation data
@@ -232,7 +233,7 @@ A worked example for each pair is in
 | `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | they copy `iso14651_t1_common`'s ranges; cleared by measurement |
 | everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | 🟢 No difference | 🟢 No difference | step 2 finds the same rules, which cannot clear them alone; step 11's measurement clears both |
 
-🔴 reindex · 🟡 *not* cleared, treat as changed until tested ·
+🔴 sort order changes · 🟡 *not* cleared, treat as changed until tested ·
 🟢 measured, or shown by a targeted test or a mechanism argument, not to
 move.
 `ko_KR` is the row a data-only audit gets wrong, and `C.UTF-8` the row no

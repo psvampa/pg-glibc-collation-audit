@@ -23,7 +23,7 @@ psql -f sql/collation_confirmation_template.sql   # edit placeholders first
 
 ## Which locales to run it for
 
-Every locale step 2 lists for Reindex. That is not every locale whose order
+Every locale in step 2's list. That is not every locale whose order
 can change: no step compares `localedef`'s or `strcoll`'s
 [code](limitations.md#no-step-compares-localedefs-or-strcolls-code), and
 `ko_KR` changed that way between RHEL8 and RHEL9 with its rules the same.
@@ -100,7 +100,7 @@ Each of these makes a comparison agree with itself while proving nothing.
 Check `locale -a` first. If a locale is not generated, `sort` silently falls
 back to `C`, and two machines both missing it agree with each other
 perfectly. Check the exact name the test runs under, such as
-`sv_SE.utf8`. The Reindex list names [locales, not
+`sv_SE.utf8`. Step 2's list names [locales, not
 spellings](glossary.md). A name in `locale -a` belongs to the list when, without
 the part from the dot up to any `@`, it is one of its names
 (`sv_SE.utf8` and `sv_SE.iso885915` both become `sv_SE`).

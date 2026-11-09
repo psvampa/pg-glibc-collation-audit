@@ -75,9 +75,10 @@ Not compared, no file at glibc-2.28-251.el8_10.40 (2):
 
 Not compared, no file at glibc-2.34-275.el9_8 (1), listed under Removed in the summary:
   en_US@ampm
-   Any index using one of these will fail to sort on the new system at all.
+   On the new system, a database whose locale is one of these does not
+   connect, and a collation of one gives an error when it is used.
 
-!! C.UTF-8's sort rules differ, and it is listed for Reindex. PostgreSQL
+!! C.UTF-8's sort rules differ, and it is listed in the summary. PostgreSQL
    records no collation version for a libc collation or database whose locale
    is C, C.<anything> or POSIX, so no version mismatch warns about C.UTF-8;
    sql/c_utf8_probe.sql, run on both machines, compares its order inside
@@ -88,14 +89,14 @@ measured on both machines use differs between
 glibc-2.28-251.el8_10.40 and
 glibc-2.34-275.el9_8.
 UTF-8: 6485 characters added.
-Locale builds Reindex lists anyway, whose LC_COLLATE names one of those
+Locale builds the summary lists anyway, whose LC_COLLATE names one of those
 characters or could not be compared (1):
   C.utf8 (UTF-8): 1546 characters, named in C
 Transliteration (LC_CTYPE): 24 collating elements of 3 locale builds depend on
 a transliteration; none is built differently at
 glibc-2.34-275.el9_8.
 
-Listed for Reindex (6): C.UTF-8, or_IN, sv_FI, sv_FI@euro, sv_SE, swedish
+Listed in the summary (6): C.UTF-8, or_IN, sv_FI, sv_FI@euro, sv_SE, swedish
 
 ================================================================
 == STEP 11  MEASURED ORDER  how each machine's own glibc sorts every locale
@@ -387,7 +388,7 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
 == AUDIT SUMMARY  glibc-2.28-251.el8_10.40 -> glibc-2.34-275.el9_8
 ================================================================
 
--- Reindex: sort order changes, confirm then REINDEX
+-- Listed by step 2
      C.UTF-8
      or_IN
      sv_FI
@@ -418,7 +419,7 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
    (glibc-2.28-251.el8_10.40.x86_64 -> glibc-2.34-275.el9_8.x86_64)
      Control: C and POSIX measured as byte order on both machines, which is
         how glibc sorts them in every version.
-     14 locale(s) sort differently -- reindex what uses them:
+     14 locale(s) sort differently:
        C.utf8 (UTF-8)
          its compiled sort table changed: sort rules on one machine only;
            135,360 characters and 8,531 other string(s) moved; 1,122,173 sort
@@ -678,7 +679,7 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
         (localedef's and strcoll's, each build's patches to it included). Only step
         11 sees what it does, when it measures both machines;
         docs/confirming-on-a-real-system.md says how to confirm the order on them.
-     !! C.UTF-8's sort rules differ, and it is listed for Reindex. PostgreSQL
+     !! C.UTF-8's sort rules differ, and it is listed in the summary. PostgreSQL
         records no collation version for a libc collation or database whose locale
         is C, C.<anything> or POSIX, so no version mismatch warns about C.UTF-8;
         sql/c_utf8_probe.sql, run on both machines, compares its order inside

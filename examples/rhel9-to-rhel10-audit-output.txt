@@ -75,7 +75,8 @@ Not compared, no file at glibc-2.34-275.el9_8 (11):
 
 Not compared, no file at glibc-2.39-128.el10_2 (1), listed under Removed in the summary:
   aa_ER@saaho (renamed to ssy_ER)
-   Any index using one of these will fail to sort on the new system at all.
+   On the new system, a database whose locale is one of these does not
+   connect, and a collation of one gives an error when it is used.
 
 Character sets (localedata/charmaps/): 1 of the 30 that the 492 locale builds
 measured on both machines use differs between
@@ -87,7 +88,7 @@ Transliteration (LC_CTYPE): 24 collating elements of 3 locale builds depend on
 a transliteration; none is built differently at
 glibc-2.39-128.el10_2.
 
-Listed for Reindex (2): th_TH, thai
+Listed in the summary (2): th_TH, thai
 
 ================================================================
 == STEP 11  MEASURED ORDER  how each machine's own glibc sorts every locale
@@ -283,7 +284,7 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
 == AUDIT SUMMARY  glibc-2.34-275.el9_8 -> glibc-2.39-128.el10_2
 ================================================================
 
--- Reindex: sort order changes, confirm then REINDEX
+-- Listed by step 2
      th_TH
      thai
    (2 name(s); full list: /tmp/pg-glibc-collation-audit/step2_changed_collate.glibc-2.34-275.el9_8..glibc-2.39-128.el10_2.txt)
@@ -307,7 +308,7 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
    (glibc-2.34-275.el9_8.x86_64 -> glibc-2.39-128.el10_2.x86_64)
      Control: C and POSIX measured as byte order on both machines, which is
         how glibc sorts them in every version.
-     4 locale(s) sort differently -- reindex what uses them:
+     4 locale(s) sort differently:
        th_TH, th_TH.tis620, thai (TIS-620)
          its compiled sort table changed: it marks 475 sequence(s) as changed
            and 14 appear only in the new machine's table; among them:

@@ -406,8 +406,8 @@ STEP2_WORDS = Words(
     builds="in SUPPORTED at both tags",
     identical="are identical at {old} and {new}",
     between="between {old} and {new}",
-    listed_for="listed for Reindex",
-    lists_anyway="Reindex lists anyway",
+    listed_for="listed in the summary",
+    lists_anyway="the summary lists anyway",
     none_compared="No locale build is in SUPPORTED at both tags with its "
                   "source file at both, so none was compared.",
     not_compared="{n} SUPPORTED entr{y_ies} at both tags {is_are} not "

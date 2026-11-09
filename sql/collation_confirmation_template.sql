@@ -35,7 +35,7 @@
 --     pg_collation_actual_version() exists since PG 10 and reports a libc
 --     version from 13 on.
 --   * Use the names docs/confirming-on-a-real-system.md says to run it for
---     ("Which locales to run it for"). The Reindex list holds locales,
+--     ("Which locales to run it for"). Step 2's list holds locales,
 --     not spellings (sv_SE, not sv_SE.utf8 or sv_SE.iso885915),
 --     plus the aliases glibc's locale.alias gives them (swedish). The queries
 --     below read each collation's locale from collcollate, so every spelling
@@ -95,7 +95,7 @@ WHERE d.datname = current_database();
 -- `locale` is the locale each one is built from, by glibc's own rule. That is
 -- the locale name without the part from the dot up to any @
 -- (localedata/Makefile builds every locale from that file). sv_SE.UTF-8,
--- sv_SE.utf8 and sv_SE.iso885915 are all sv_SE. Compare it with the Reindex
+-- sv_SE.utf8 and sv_SE.iso885915 are all sv_SE. Compare it with step 2's
 -- list, which holds locales and the aliases glibc gives them (swedish), not
 -- spellings. It is read from collcollate and datcollate, never
 -- from collname. "sv_SE" is three collations, one per encoding, each loading

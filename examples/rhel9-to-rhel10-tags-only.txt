@@ -50,15 +50,16 @@ Not compared, no file at glibc-2.34 (12):
   tok -> tok
   translit_emojis -> (not in SUPPORTED)
   zgh_MA -> zgh_MA
-   A file added at the new side cannot affect an existing index ONLY IF the
-   locale did not exist on the old system. An upstream tag cannot establish
-   that -- distros backport. Confirm with `locale -a` on the OLD machine,
-   under the names above, before treating these as out of scope.
+   A file added at the new side cannot change what PostgreSQL already stored
+   ONLY IF the locale did not exist on the old system. An upstream tag cannot
+   establish that -- distros backport. Confirm with `locale -a` on the OLD
+   machine, under the names above, before treating these as out of scope.
 
 Not compared, no file at glibc-2.39 (1), listed under Removed in the summary:
   aa_ER@saaho (renamed to ssy_ER)
-   An index using one of these fails to sort on the new system UNLESS its
-   distro ships the file anyway, which an upstream tag cannot show.
+   Unless its distro ships the file anyway, which an upstream tag cannot show,
+   on the new system a database whose locale is one of these does not connect,
+   and a collation of one gives an error when it is used.
 
 !! glibc-2.34 holds no localedata/locales/C, the file C.UTF-8 is built from,
    and a distro's build can ship its own, so C.UTF-8's sort rules were not
@@ -75,13 +76,13 @@ No build's LC_COLLATE names one of those characters.
 Transliteration (LC_CTYPE): 24 collating elements of 3 locale builds depend on
 a transliteration; none is built differently at glibc-2.39.
 
-Listed for Reindex (2): th_TH, thai
+Listed in the summary (2): th_TH, thai
 
 ================================================================
 == AUDIT SUMMARY  glibc-2.34 -> glibc-2.39
 ================================================================
 
--- Reindex: sort order changes, confirm then REINDEX
+-- Listed by step 2
      th_TH
      thai
    (2 name(s); full list: /tmp/pg-glibc-collation-audit/step2_changed_collate.glibc-2.34..glibc-2.39.txt)

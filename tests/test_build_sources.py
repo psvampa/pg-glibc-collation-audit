@@ -39,6 +39,7 @@ import unittest
 from unittest import mock
 
 from _harness import (COMPARED_BANNER, GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR,
+                      SUMMARY_STEP2,
                       Step2Report, after_compared, before_compared,
                       compared_text, deleted_steps_named, flat,
                       summary_block, glibc_shaped, needs_clone)
@@ -3151,14 +3152,15 @@ def without_the_tags_notice(text):
 
 B40, B48 = 'glibc-2.28-251.el8_10.40', 'glibc-2.28-251.el8_10.48'
 B128 = 'glibc-2.39-128.el10_2'
-REINDEX = '-- Reindex: sort order changes, confirm then REINDEX'
+REINDEX = SUMMARY_STEP2
 REMOVED = '-- Removed: locale files the old side has and the new side does not'
 # Step 2's `!!` for C.UTF-8 (filter_lc_collate_changes.print_c_utf8), as the
 # summary's warnings repeat it, whitespace collapsed.
 C_NOT_COMPARED = ("!! {} holds no localedata/locales/C, the file C.UTF-8 is "
                   "built from, and a distro's build can ship its own, so "
                   "C.UTF-8's sort rules were not compared. ")
-C_DIFFERS = "!! C.UTF-8's sort rules differ, and it is listed for Reindex. "
+C_DIFFERS = ("!! C.UTF-8's sort rules differ, and it is listed in the "
+             "summary. ")
 MEASURED = '-- Measured order: NOT RUN'
 DIRECTION = '-- Direction of the pair: NOT ESTABLISHED'
 NOT_READ = ("What this run does not read of a build is under 'Not checked "
@@ -3704,8 +3706,8 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
         tested that). The provenance no longer counts such patches: the
         count said strcoll and left localedef's patches out (16.129). The
         summary's warnings say that each build's patches to that code are
-        compared by no step; Reindex, which reads only the rules, stays
-        clean."""
+        compared by no step; step 2, which reads only the rules, lists
+        nothing."""
         out = self.run_of('outside')
         compared = flat(compared_text(out))
         self.assertIn('change localedata/ or locale/, applied in the order '
@@ -3719,8 +3721,8 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
                       "and compares the rules (localedef's and strcoll's, "
                       "each build's patches to it included).", warnings)
         self.assertEqual(summary_block(summary, REINDEX), [
-            'none -- no locale whose rules step 2 compared differs, and step 2',
-            'lists none it could not compare'])
+            'none -- of what step 2 compared, nothing differs; step 2, above,',
+            'names what it did not compare'])
 
 
 @needs_clone
@@ -3804,11 +3806,12 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
         head = 'Not compared, no file at %s (' % TAG
         deleted = step2.split(head, 1)[1].split('\n\n', 1)[0]
         self.assertEqual(flat(deleted), flat(
-            "2), listed under Removed in the summary: C en_US@ampm An index "
-            "using one of these fails to sort on the new system UNLESS its "
+            "2), listed under Removed in the summary: C en_US@ampm Unless its "
             "distro ships the file anyway, which an upstream tag cannot "
-            "show."))
-        self.assertNotIn('will fail to sort on the new system at all', step2)
+            "show, on the new system a database whose locale is one of "
+            "these does not connect, and a collation of one gives an error "
+            "when it is used."))
+        self.assertNotIn('On the new system, a database', step2)
 
     def test_a_tag_and_a_build_typed_is_the_tag_and_latest_run(self):
         """Every block of the summary of TAG B275 is tag_build's, four of
@@ -4117,7 +4120,7 @@ MACHINES = "Each machine's file names the build it runs: step 2 reads"
 class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
     """audit.sh glibc-2.28 glibc-2.34 with each machine's file, which holds
     the fixture build's locale sources and charmaps: the run reads
-    each machine's own files (C.UTF-8 joins the reindex list, as between
+    each machine's own files (C.UTF-8 joins step 2's list, as between
     the builds), and download nothing, so with the builds' cache empty and
     no mirror the run is the same; Removed reads step 2's list, under a
     sentence of machines; a file without sources makes both sides read
@@ -4257,7 +4260,7 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         """Each machine's file holds the build's locale sources and
         charmaps: the run reads them, as one commit of the clone per
         machine, and says so in the provenance under 'What was compared';
-        nothing is rebuilt from an SRPM. C.UTF-8 joins the reindex list, as
+        nothing is rebuilt from an SRPM. C.UTF-8 joins step 2's list, as
         between the builds."""
         out = self.run_of('read')
         self.assertEqual(flat(before_compared(out)), flat(
@@ -4328,6 +4331,21 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
             return after_compared(text)
         self.assertEqual(body(out, 'unread'), body(read, 'read'))
         self.assertNotIn('which this run cannot read', out)
+
+    def test_a_removed_locale_says_what_postgresql_does_with_it(self):
+        """16.122: the new machine's sources lack en_US@ampm, and step 2
+        says what PostgreSQL does on that machine with a database or a
+        collation of it (postinit.c and pg_locale, REL_14_24, REL_18_6),
+        not what an index does; and not the tag's caveat, which a
+        machine does not need."""
+        out = self.run_of('read')
+        step2 = flat(out.split('== STEP 2', 1)[1].split(
+            '== AUDIT SUMMARY', 1)[0])
+        self.assertIn('en_US@ampm On the new system, a database whose '
+                      'locale is one of these does not connect, and a '
+                      'collation of one gives an error when it is used.',
+                      step2)
+        self.assertNotIn('Unless its distro ships the file', step2)
 
     def test_removed_reads_step_2_under_a_sentence_of_machines(self):
         """With machines, Removed is step 2's list between the two machine

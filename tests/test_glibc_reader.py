@@ -3146,7 +3146,7 @@ class _StepTwoNames(object):
     FILES: {name: (first version, second)}. Step 2 compares each locale
     (glibc_tree.compare_rules): a locale whose own run the reader is sure
     of names the characters its lines name, and one whose run it cannot
-    settle is not compared and listed for Reindex with the reason, whatever
+    settle is not compared and listed in the summary with the reason, whatever
     the locales it copies or that copy it say."""
 
     FILES = None
