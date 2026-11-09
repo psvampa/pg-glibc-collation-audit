@@ -185,17 +185,20 @@ class Step2Compare(StepRun):
         localedata/locales/C, over 2.34..2.39 the old one does not; step 2
         names exactly those tags, says C.UTF-8's rules were not compared and
         what PostgreSQL does with it, and never that its order changes: a
-        tag cannot say that, and on RHEL 9 and 10 it does not. It is the
-        step's only `!!` on these pairs. Over 2.34..2.39 C is also named
-        with the other files not compared for want of an old one."""
+        tag cannot say that, and on RHEL 9 and 10 it does not. The step's
+        other `!!` on these pairs is the files only the new tag has, from
+        which C is left out, since this `!!` says it (16.123): C is said
+        once, and the parser counts it as added from this `!!` alone."""
         for (old, new), lacking, added in (
                 ((OLD, MID), f'{OLD} and {MID} hold', None),
-                ((MID, NEW), f'{MID} holds', 'C.utf8')):
+                ((MID, NEW), f'{MID} holds', 'C.UTF-8 !!')):
             with self.subTest(pair=f'{old}..{new}'):
                 out = self.step('filter_lc_collate_changes.py', old, new)
                 r = Step2Report(out)
                 said = flat(out)
-                self.assertEqual(out.count('!!'), 1, out)
+                self.assertEqual(out.count('!!'), 2, out)
+                self.assertTrue(r.added_warned, out)
+                self.assertNotIn('\n     C -> ', out)
                 self.assertEqual(said.count(
                     f'!! {lacking} no localedata/locales/C, the file '
                     f'C.UTF-8 is built from, and a distro\'s build can ship '
@@ -255,6 +258,7 @@ class Step2Compare(StepRun):
         self.assertEqual(sorted(os.listdir(out_dir)), sorted(
             [f'step2_{k}.{slug}.txt' for k in ('changed_collate',
                                                'keyed_locales',
+                                               'not_compared',
                                                'removed_locales')]
             + [f'step2_rules_characters.{slug}.tsv',
                f'step2_rules_by_name.{slug}.json']))
@@ -531,6 +535,17 @@ class BelowTheOldVersionFloor(StepRun):
             written = [ln.strip() for ln in fh if ln.strip()]
         self.assertEqual(written, r.reindex)
         self.assertTrue(all(n.isascii() for n in written))
+        # 13.31: the names of the list step 2 could not compare, which the
+        # summary sets apart, are exactly the ASCII names of its `!!` "Not
+        # compared, so listed" (17 here: a tag side has no entry it could
+        # not read), never fewer (false-negative-reviewer, 10.1).
+        with open(os.path.join(
+                out_dir, f'step2_not_compared.'
+                         f'{g.pair_slug(FLOOR_OLD, FLOOR_NEW)}.txt'),
+                encoding='utf-8') as fh:
+            apart = [ln.strip() for ln in fh if ln.strip()]
+        self.assertEqual(len(r.listed), 17)
+        self.assertEqual(apart, sorted(n for n in r.listed if n.isascii()))
         self.assertEqual(r.not_ascii, ["'bokm\\ufffdl'", "'fran\\ufffdais'"])
         self.assertEqual(r.unbuilt, ['el_GR@euro', 'iso14651_t1',
                                      'iso14651_t1_common',

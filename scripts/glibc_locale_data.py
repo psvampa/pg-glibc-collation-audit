@@ -915,12 +915,14 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
              f"added was deleted in the real upgrade. Not an audit of an "
              f"upgrade.")
     elif status == 'undetermined':
+        # The summary repeats this block at its end, and it is all the
+        # summary says of the direction: "below" would be false there.
         warn(f"The DIRECTION of this pair could not be established: {detail}. "
-             f"Nothing below has checked it: if the two arguments are the "
-             f"wrong way round, every "
+             f"Nothing in this run has checked it: if the two arguments are "
+             f"the wrong way round, every "
              f"step still runs, and step 2 reports "
              f"a deleted locale as a harmless addition. "
-             f"Confirm which build is the older one.")
+             f"Confirm which {one} is the older one.")
     return status, nothing
 
 
@@ -987,6 +989,7 @@ def report_tag_provenance(repo, *tags):
     print("Tag provenance (this audit reads a third-party mirror; a tag is a "
           "mutable pointer):")
     worst = 'good'
+    unchecked = []
     for tag in tags:
         status, detail = verify_tag(repo, tag)
         sha = run_git(['rev-parse', f'{tag}^{{commit}}'], repo,
@@ -997,16 +1000,25 @@ def report_tag_provenance(repo, *tags):
         print(f"  {mark} {tag} = {sha[:12]}  {detail}")
         if status == 'bad':
             worst = 'bad'
-        elif status != 'good' and worst == 'good':
-            worst = status
+        elif status != 'good':
+            if worst == 'good':
+                worst = status
+            if tag not in unchecked:
+                unchecked.append(tag)
     if worst == 'bad':
         die("a tag's signature is INVALID. The source this would audit is not "
             "what the glibc maintainers released. Refusing to continue.")
-    if worst != 'good':
-        print("  NOTE: signatures were not checked. The commit ids above are "
-              "what was actually read;")
-        print("        compare them against a source you trust "
-              "(sourceware.org/git/glibc.git) if it matters.")
+    if unchecked:
+        # A `!!`, so that the summary's warnings repeat it (16.154): every
+        # status but good and bad, UNCHECKED (no gpg, no key) and UNSIGNED
+        # (no signature, or a commit given by its id) alike. A commit is no
+        # tag: "signatures", not "tag signatures".
+        warn(f"Signatures NOT checked for {', '.join(unchecked)} (why is on "
+             f"each one's line under 'Tag provenance', in 'What was "
+             f"compared'). The commit ids printed there are what was read; "
+             f"compare them against a source you trust "
+             f"(sourceware.org/git/glibc.git) if it matters.",
+             split_words=False)
 
 
 def read_blobs(repo, tag, paths, raw=False):

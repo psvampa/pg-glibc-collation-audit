@@ -53,7 +53,7 @@
 # the charmaps, so only with these options does step 2 compare them and step
 # 11 check what it measured against them. When step 2 compares the two
 # machines' own locale sources, each locale of the old machine step 11
-# names is set beside step 2's rules for it; otherwise one line says what
+# names is set beside step 2's rules for it; otherwise the run says what
 # step 2 compared.
 #
 # Example (the names are examples -- `ldd --version` on each node gives the
@@ -102,7 +102,7 @@ usage() {
   echo "       says so; given as the build itself, the run is refused. When" >&2
   echo "       step 2 compares the two machines' own locale sources, each" >&2
   echo "       locale of the old machine step 11 names is set beside step 2's" >&2
-  echo "       rules for it; otherwise one line says what step 2 compared." >&2
+  echo "       rules for it; otherwise the run says what step 2 compared." >&2
   exit 2
 }
 
@@ -139,8 +139,23 @@ SCRIPTS="$HERE/scripts"
 # is checked, so that a build given with a machine's files is refused first,
 # with that reason. latest-elN is a build too, and nothing here asks the
 # network what it is: that is done once, below, after that refusal.
+# What a run leaves when it ends, however it ends: its temporary files
+# gone, and, where step 11 had compared the two measurements and a later
+# step stopped the run before step 11's report was printed, where that
+# report is (16.144): it is worked out first (below), and printed only after
+# 'What was compared' and step 2. One function, set once, so that no trap
+# replaces another; it changes no exit code.
+RESOLVED=""; NODE_TMP=""; ORDER_UNPRINTED=""
+on_exit() {
+  [ -z "$RESOLVED" ] || rm -f "$RESOLVED"
+  [ -z "$NODE_TMP" ] || rm -rf "$NODE_TMP"
+  if [ -n "$ORDER_UNPRINTED" ]; then
+    echo "note: step 11 compared the two measurements before the run stopped;" >&2
+    echo "      its report, not printed above, is in $ORDER_UNPRINTED" >&2
+  fi
+}
+trap on_exit EXIT
 RESOLVED=$(mktemp "${TMPDIR:-/tmp}/pg-glibc-resolve.XXXXXX")
-trap 'rm -f "$RESOLVED"' EXIT
 python3 "$SCRIPTS/glibc_locale_data.py" resolve --to "$RESOLVED" "$OLD" "$NEW"
 # A build typed as `rpm -q glibc` prints it, with the architecture, is read
 # without it (glibc_locale_data.without_arch).
@@ -173,13 +188,6 @@ set_noun() {
   fi
 }
 set_noun
-# What a run does not read of a build is said in ONE place, the `!! Not
-# checked for these builds` under 'What was compared'
-# (build_sources.NOT_CHECKED), which
-# the warnings block repeats; the summary's blocks point to it with this
-# sentence and never restate it.
-NOT_READ="What this run does not read of a build is under 'Not checked for"
-NOT_READ="$NOT_READ these builds'"
 # With a build named on either side, the machine's files come only from
 # --old-node and --new-node: each of those names the build its
 # machine runs, and the measurement options say less. Either of them is
@@ -247,11 +255,11 @@ export PG_GLIBC_AUDIT_OUT="$OUT_DIR"
 # run is refused), and NODE_NOTE says so; the warnings block repeats it from the step0 log
 # written below. Laid out under a name of its own, and moved under the
 # pair's name once the pair is named.
-OLD_TAG=$OLD; NEW_TAG=$NEW; NODE_NOTE=""; NODE_TMP=""
+OLD_TAG=$OLD; NEW_TAG=$NEW; NODE_NOTE=""
 if [ -n "$OLD_NODE" ]; then
   mkdir -p "$OUT_DIR"
+  # Removed by on_exit, above.
   NODE_TMP=$(mktemp -d "$OUT_DIR/node_files.XXXXXX")
-  trap 'rm -f "$RESOLVED"; rm -rf "$NODE_TMP"' EXIT
   for side in old new; do
     if [ "$side" = old ]; then file=$OLD_NODE; else file=$NEW_NODE; fi
     if ! python3 "$SCRIPTS/locale_order.py" --unpack "$file" "$NODE_TMP/$side"; then
@@ -342,6 +350,9 @@ fi
 STEP2_LIST="$OUT_DIR/step2_changed_collate.$PAIR.txt"
 STEP2_REMOVED="$OUT_DIR/step2_removed_locales.$PAIR.txt"
 STEP2_KEYED="$OUT_DIR/step2_keyed_locales.$PAIR.txt"
+# The names of STEP2_LIST step 2 could not compare, each with its reason in
+# a `!!` the warnings block repeats; the summary sets them apart (13.31).
+STEP2_NOT_COMPARED="$OUT_DIR/step2_not_compared.$PAIR.txt"
 # Step 2's rules for every locale name measured on either machine, which
 # the summary sets beside step 11's verdict (VERDICTS, below).
 RULES_FILE="$OUT_DIR/step2_rules_by_name.$PAIR.json"
@@ -434,7 +445,8 @@ mkdir -p "$OUT_DIR"
 # run's finding. The direction can be conservative, which is how it once went
 # unnoticed, but the statement is false and this file's rule is that every
 # file it reads was written by this run.
-rm -f "$STEP2_LIST" "$STEP2_REMOVED" "$STEP2_KEYED" "$OLD_STEP3_LIST" \
+rm -f "$STEP2_LIST" "$STEP2_NOT_COMPARED" "$STEP2_REMOVED" "$STEP2_KEYED" \
+      "$OLD_STEP3_LIST" \
       "$OLD_STEP4_LIST" "$OLD_STEP4_BYTE_ORDER" "$OLD_STEP1_LIST" \
       "$SIDES_FILE" "$RULES_FILE" \
       "$OUT_DIR/step2_rules_characters.$PAIR.tsv"
@@ -489,6 +501,8 @@ if [ -n "$OLD_ORDER" ]; then
     fi
     exit 2
   fi
+  # Said by on_exit if the run stops before the report is printed below.
+  ORDER_UNPRINTED=$ORDER_LOG
 fi
 
 banner() {
@@ -591,17 +605,6 @@ esac
 
 banner "STEP 2  Which locales' sort rules changed"
 run_step 2 python3 "$SCRIPTS/filter_lc_collate_changes.py" "$OLD" "$NEW"
-# Two machines of one source tree: whether step 2 read their charmaps, as
-# step 2 says it (a file without them, or with a folder it cannot read
-# whole, left them out of its commit). The summary names the charmaps as
-# the same only when it did. Read from the file, not through a pipe.
-CM_NOT_READ=0
-said="Character sets and transliterations: not compared, a machine's file"
-said="$said holds no charmaps this reads."
-if grep -qF "$said" "$OUT_DIR/step2.$PAIR.log"; then
-  CM_NOT_READ=1
-fi
-
 # Absent is not empty. Step 2 writes these files whether or not it found
 # anything, so a missing file means step 2 did not get that far -- an error to
 # report, never an empty result to pass on as a clean audit.
@@ -610,8 +613,10 @@ fi
 # script. Kept because it is the difference between a wrong answer and an
 # error if step 2 ever stops writing, and the suite cannot reach it to prove
 # that -- so treat it as untested defence, not as a checked guarantee.
-if [ ! -f "$STEP2_LIST" ] || [ ! -f "$STEP2_KEYED" ]; then
-  echo "error: step 2 did not write both $STEP2_LIST and $STEP2_KEYED." >&2
+if [ ! -f "$STEP2_LIST" ] || [ ! -f "$STEP2_KEYED" ] \
+   || [ ! -f "$STEP2_NOT_COMPARED" ]; then
+  echo "error: step 2 did not write all of $STEP2_LIST, $STEP2_KEYED" >&2
+  echo "       and $STEP2_NOT_COMPARED." >&2
   echo "       Not continuing: an empty locale list would read as 'nothing" >&2
   echo "       changed'." >&2
   exit 1
@@ -650,6 +655,7 @@ rules_beside() {
 if [ -n "$OLD_ORDER" ]; then
   banner "STEP 11  MEASURED ORDER  how each machine's own glibc sorts every locale"
   cat "$ORDER_LOG"
+  ORDER_UNPRINTED=""
   echo
   rules_beside
 fi
@@ -671,11 +677,27 @@ banner "AUDIT SUMMARY  $OLD -> $NEW"
 
 echo
 echo "-- Listed by step 2"
-if [ "$(count_lines "$STEP2_LIST")" -gt 0 ]; then
+# Each count is assigned before it is tested: a count that fails inside
+# `[ ]` escapes set -e and falls through to "none".
+LISTED=$(count_lines "$STEP2_LIST")
+UNCOMPARED=$(count_lines "$STEP2_NOT_COMPARED")
+HAS_C=$(awk '$0 == "C" {n++} END {print n+0}' "$STEP2_LIST")
+if [ "$LISTED" -gt 0 ]; then
   # glibc's file C is C.UTF-8: PostgreSQL sorts a locale that is exactly C
   # without glibc. The list keeps C, which the SQL template reads as C.utf8.
-  sed 's/^C$/C.UTF-8/; s/^/     /' "$STEP2_LIST"
-  echo "   ($(count_lines "$STEP2_LIST") name(s); full list: $STEP2_LIST)"
+  # The names step 2 could not compare come apart, under a line that says
+  # why they are listed; their reasons are in the warnings, each in its own
+  # step's words (13.31).
+  awk -v skip="$STEP2_NOT_COMPARED" '
+    BEGIN { while ((getline l < skip) > 0) out[l] = 1 }
+    NF && !($0 in out)
+  ' "$STEP2_LIST" | sed 's/^C$/C.UTF-8/; s/^/     /'
+  if [ "$UNCOMPARED" -gt 0 ]; then
+    echo "   Listed because step 2 could not compare them (each one's reason"
+    echo "   is in the warnings below):"
+    sed 's/^C$/C.UTF-8/; s/^/     /' "$STEP2_NOT_COMPARED"
+  fi
+  echo "   ($LISTED name(s); full list: $STEP2_LIST)"
   # Locales, not spellings (backlog 13.1): the names a machine and a database
   # use for one locale are many (sv_SE.utf8, sv_SE.iso885915, sv_SE.UTF-8),
   # and none of those lists can be complete. glibc's own rule takes each back
@@ -686,34 +708,21 @@ if [ "$(count_lines "$STEP2_LIST")" -gt 0 ]; then
   echo "   list (sv_SE.UTF-8, sv_SE.utf8 and sv_SE.iso885915 are all sv_SE). The"
   echo "   list also holds the aliases glibc's locale.alias gives these locales."
   echo "   sql/collation_confirmation_template.sql reads collations the same way."
-  if grep -qx C "$STEP2_LIST"; then
+  if [ "$HAS_C" -gt 0 ]; then
     echo "   C.UTF-8 is glibc's locale file C, written C in the full list; C.utf8"
     echo "   and C.UTF-8 are its spellings. A collation or a database whose locale"
     echo "   is exactly C or POSIX is compared by PostgreSQL itself, without glibc."
   fi
+elif [ "$SAME_TAG" = 1 ]; then
+  # One commit or one source tree: the order check's `!!`, which every step
+  # taking the pair prints and the warnings block repeats once, says which,
+  # and, for two machines' files, whether their charmaps were read: this
+  # line never says it again in other words.
+  echo "     none -- nothing was compared: the two $NOUN are one commit or one"
+  echo "     source tree (the warnings below say which, and what that leaves)"
 else
-  if [ "$SAME_TAG" = 1 ] && [ -n "$OLD_NODE" ] && [ "$NOUN" = builds ] \
-     && [ "$NOTHING" = tree ]; then
-    # Two machines' own files, read and the same (see below). The NOUN test
-    # is unreachable as machine_sides stands (with machine files both sides
-    # are builds or both tags, and two tags are never NOTHING=tree); kept so
-    # a tag pair is never called "the two machines' files". The charmaps
-    # are named only when both files hold them: a file without them left
-    # them out of its commit, and none was read.
-    if [ "$CM_NOT_READ" = 0 ]; then
-      echo "     none -- the two machines' files hold the same locale sources and"
-      echo "     charmaps (see below)"
-    else
-      echo "     none -- the two machines' files hold the same locale sources;"
-      echo "     their character sets were not compared (see below)"
-    fi
-  elif [ "$SAME_TAG" = 1 ]; then
-    echo "     none -- nothing was compared: the two $NOUN are one commit or one"
-    echo "     source tree (see below)"
-  else
-    echo "     none -- of what step 2 compared, nothing differs; step 2, above,"
-    echo "     names what it did not compare"
-  fi
+  echo "     none -- of what step 2 compared, nothing differs; step 2, above,"
+  echo "     names what it did not compare"
 fi
 # With the two measurements the summary holds a second answer to the same
 # question, and this one comes first: it says where the other is, so that the
@@ -730,9 +739,8 @@ fi
 
 # What the upgrade removes. A locale that is gone is worse than one that sorts
 # differently. Whatever is built on it has no collation at all on the new
-# system. Step 2 says so in its own output, more than a hundred lines up, and
-# a reader of the summary alone must not conclude that the upgrade removes
-# nothing.
+# system. Step 2 says so in its own output, above, and a reader of the
+# summary alone must not conclude that the upgrade removes nothing.
 echo
 echo "-- Removed: locale files the old side has and the new side does not"
 # First, so it is never read as a footnote to a "none" below it. On RHEL8 ->
@@ -828,107 +836,6 @@ else
   echo "     either machine, check that each machine accepts every locale and"
   echo "     converts its text, or compare what each machine's character rules"
   echo "     (LC_CTYPE) answer."
-fi
-
-if [ "$ORDER" = "undetermined" ]; then
-  echo
-  echo "-- Direction of the pair: NOT ESTABLISHED"
-  if [ "$NOUN" = tags ]; then
-    echo "     Neither of $OLD and $NEW is an ancestor of the other, and the"
-    echo "     glibc release behind each one does not put them in order either"
-    echo "     -- so nothing here checked that $NEW is the newer of the two"
-    echo "     ('What was compared' prints the commit behind each). If they are"
-    echo "     the wrong way round, every list above is the wrong tag's: step 2"
-    echo "     reports a locale deleted in the upgrade as a harmless addition."
-    echo "     Confirm which build is older."
-  else
-    # order() puts a build against a tag by release, and two builds by rpm.
-    if [ "$NOUN" = sides ]; then
-      text="One side is a tag and the other a build of the same glibc release,"
-      text="$text and nothing here places a build against a tag of its own"
-      text="$text release"
-    else
-      # Unreachable for two names that read as builds: rpm orders them.
-      text="rpm's order of the two builds could not be read"
-    fi
-    text="$text -- so nothing here checked that $NEW is the newer of the two."
-    text="$text If they are the wrong way round, every list above is the wrong"
-    text="$text side's: step 2 reports a locale deleted"
-    text="$text in the upgrade as a harmless addition. Confirm which side is"
-    text="$text older."
-    printf '%s\n' "$text" | fold -s -w 70 | sed 's/ *$//; s/^/     /'
-  fi
-fi
-
-if [ "$SAME_TAG" = "1" ] && [ "$NOUN" != tags ]; then
-  # What a build holds is its sources in localedata/ and locale/; what two
-  # machines' files hold is their locale sources and charmaps, which step 2
-  # reads in place of their builds'.
-  echo
-  if [ "$NOTHING" = "commit" ]; then
-    echo "-- One commit, compared with itself"
-    if [ "$NOUN" = builds ]; then
-      text="$OLD -> $NEW: one build given twice."
-    else
-      # Unreachable: a build's commit is never its tag's.
-      text="$OLD -> $NEW are one commit."
-    fi
-    text="$text Everything above that compares the two $NOUN and says"
-    text="$text 'nothing changed' means 'nothing was compared'."
-  elif [ -n "$OLD_NODE" ]; then
-    # Two machines' files: their own sources were read, and are the same.
-    echo "-- One source tree, compared with itself"
-    if [ "$CM_NOT_READ" = 0 ]; then
-      text="$OLD -> $NEW: the two machines' files hold the same locale sources"
-      text="$text and charmaps, so no locale's sort rules can differ between"
-      text="$text them, and step 2 had nothing to compare."
-    else
-      text="$OLD -> $NEW: the two machines' files hold the same locale sources,"
-      text="$text so no locale's sort rules can differ between them, and step"
-      text="$text 2 had nothing to compare; their character sets were not"
-      text="$text compared, as a file holds no charmaps this reads."
-    fi
-    text="$text What this run"
-    text="$text does not read of a machine is under 'Not checked for these"
-    text="$text machines', below. What each machine's own glibc says is under"
-    text="$text '-- Measured order'. sql/c_utf8_probe.sql and"
-    text="$text docs/confirming-on-a-real-system.md check the order on the"
-    text="$text machines themselves."
-  else
-    echo "-- One source tree, compared with itself"
-    text="$OLD -> $NEW are two commits of one source tree: the two $NOUN hold"
-    text="$text the same locale sources and the same code under locale/."
-    text="$text Everything above that compares the two $NOUN and says 'nothing"
-    text="$text changed' means 'nothing was compared'. $NOT_READ, below."
-    if [ -n "$OLD_ORDER" ]; then
-      text="$text What each machine's own glibc says is under '-- Measured"
-      text="$text order'."
-    fi
-    text="$text sql/c_utf8_probe.sql and docs/confirming-on-a-real-system.md"
-    text="$text check the order on the machines themselves."
-  fi
-  printf '%s\n' "$text" | fold -s -w 70 | sed 's/ *$//; s/^/     /'
-elif [ "$SAME_TAG" = "1" ]; then
-  echo
-  if [ "$NOTHING" = "commit" ]; then
-    echo "-- One commit, compared with itself"
-    echo "     $OLD -> $NEW. Everything above that compares the two tags"
-  else
-    echo "-- One source tree, compared with itself"
-    echo "     $OLD -> $NEW are two commits of one source tree. Everything"
-    echo "     above that compares the two tags"
-  fi
-  echo "     and says 'nothing changed' means 'nothing was compared'. For an"
-  if [ -n "$OLD_NODE" ]; then
-    echo "     intra-major upgrade, what can still show a change is each machine's"
-    echo "     file read as its build (why these were not: the first warning"
-    echo "     below), the measured order (step 11),"
-  else
-    echo "     intra-major upgrade, what can still show a change is each machine's"
-    echo "     own file (--old-node, --new-node), the measured order (step 11),"
-  fi
-  echo "     sql/c_utf8_probe.sql and the confirmation on real nodes"
-  echo "     (docs/confirming-on-a-real-system.md)."
 fi
 
 # Repeated verbatim. A warning that scrolled past 400 lines ago has not been

@@ -160,6 +160,37 @@ class PrintCharacters(unittest.TestCase):
         self.assertLessEqual(max(len(line) for line in out.splitlines()), 78)
 
 
+class StepTwoWritesWhatBecameOfItsCharmapCheck(unittest.TestCase):
+    """2.1: step2_rules_by_name's charmaps is a closed state with the
+    reason that goes with it; write_rules_by_name refuses anything else,
+    before writing, with a message that names it."""
+
+    def refused(self, charmaps, words):
+        import contextlib
+        import io as _io
+        err = _io.StringIO()
+        with contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit):
+            f.write_rules_by_name('a..b', 'tags', ('a', 'b'), False,
+                                  charmaps)
+        self.assertIn(words, flat(err.getvalue()))
+
+    def test_a_state_outside_the_set(self):
+        self.refused({'state': 'checked', 'why': None},
+                     "step 2's character set check ended in 'checked', "
+                     "which is none of compared, not run, one commit, one "
+                     "tree, not read")
+
+    def test_a_reason_that_does_not_go_with_its_state(self):
+        for charmaps in ({'state': 'not run', 'why': None},
+                         {'state': 'compared', 'why': 'a reason'},
+                         {'state': 'not read', 'why': []},
+                         {'state': 'not read', 'why': 'one string'},
+                         {'state': 'one tree', 'why': ['a reason']}):
+            with self.subTest(charmaps=charmaps):
+                self.refused(charmaps, 'which does not go with it')
+
+
 class StepTwoPrintsWhatCompareRulesAnswered(unittest.TestCase):
     """Step 2's printing of glibc_tree.compare_rules' answers (step 9.2),
     driven with answers made by hand: two of the four ways the characters

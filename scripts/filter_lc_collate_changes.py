@@ -24,14 +24,16 @@ the collating elements they build out of transliterations
 (collation_keys.py); what that check lists goes to that list too.
 
 Writes, each named for the pair: step2_changed_collate.<pair>.txt (the
-names listed, which the summary prints), step2_keyed_locales.<pair>.txt
-(what the character set check lists), step2_removed_locales.<pair>.txt
-(files of the old side not on the new one),
-step2_rules_characters.<pair>.tsv (each name whose rules differ, and the
-characters named) and step2_rules_by_name.<pair>.json
-(what was compared and, for two machines' files whose sources it
-compared, the rules of every locale name measured on either machine,
-which audit.sh sets beside step 11's verdict: rules_by_name).
+names listed, which the summary prints), step2_not_compared.<pair>.txt
+(those of them it could not compare, which the summary sets apart),
+step2_keyed_locales.<pair>.txt (what the character set check lists),
+step2_removed_locales.<pair>.txt (files of the old side not on the new
+one), step2_rules_characters.<pair>.tsv (each name whose rules differ, and
+the characters named) and step2_rules_by_name.<pair>.json (what was
+compared, what became of the character set check, and, for two machines'
+files whose sources it compared, the rules of every locale name measured
+on either machine, which audit.sh sets beside step 11's verdict:
+rules_by_name).
 
 Usage:
   python3 filter_lc_collate_changes.py <old_tag> <new_tag> [--repo <path>]
@@ -464,16 +466,34 @@ def rules_by_name(sides, aliases, got, unread, keyed, unmapped):
     return out
 
 
-def write_rules_by_name(slug, noun, names, machine, sides=(), nothing=None,
-                        what=None, charmaps=None, locales=None):
+def write_rules_by_name(slug, noun, names, machine, charmaps, sides=(),
+                        nothing=None, what=None, locales=None):
     """Write step2_rules_by_name.<pair>.json, what step 2 compared and,
     for two machines' files, its rules for every measured name: the file
     locale_order.rules_beside reads beside step 11's verdict. Written on
     every route, so that a missing file means step 2 did not get there.
     measurements are the sha256 of each machine's measurement
     (prov['measurement_sha256']), which step 11's verdicts carry too, so
-    that the two are never of two runs."""
+    that the two are never of two runs.
+
+    charmaps is what became of the character set check on this route,
+    {'state': one of locale_order.CHARMAPS_STATES, 'why': ...}, a status
+    and never a boolean (2.1): 'compared' (the check ran; its own `!!`
+    say what it could not settle), 'not run' (why: its reason), 'one
+    commit' and 'one tree' (nothing to compare; the same tree holds the
+    same charmaps), 'not read' (one tree of two machines' files that hold
+    no charmaps this reads; why: each file's reason). A state outside the
+    set, or a why that does not go with it, is refused here."""
     import json
+    import locale_order as lo
+    state, why = charmaps.get('state'), charmaps.get('why')
+    if state not in lo.CHARMAPS_STATES:
+        g.die(f"step 2's character set check ended in {state!r}, which is "
+              f"none of {', '.join(lo.CHARMAPS_STATES)}")
+    if (why is None) != (state in ('compared', 'one commit', 'one tree')) \
+            or (state == 'not read' and not (isinstance(why, list) and why)):
+        g.die(f"step 2's character set check ended in {state!r} with the "
+              f"reason {why!r}, which does not go with it")
     data = {'step': 2, 'compared': noun, 'names': list(names),
             'machines': bool(machine), 'nothing': nothing, 'what': what,
             'measurements': [sd.prov['measurement_sha256'] for sd in sides]
@@ -646,26 +666,37 @@ def print_added(added, renamed_from, supported, old_side, old_name,
     why} for those of them glibc_tree.Tree.unresolved names at `new_name`,
     each with its reason: said in a `!!` of its own, which the summary
     repeats, since nothing else says so (step 1's fan-in did until step
-    9.5)."""
+    9.5).
+
+    With an upstream tag on the old side, whether the old system lacked
+    them is not known, so the list is a `!!` the summary repeats (16.123);
+    C is left to print_c_utf8's `!!`, which a tag without the file always
+    prints, so that the fact is said once."""
     if not added:
         return
-    print()
-    print(f"Not compared, no file at {old_name} ({len(added)}):")
+    lines = []
     for name in added:
         spelt = supported.get(name)
         tail = ', '.join(spelt) if spelt else missing
         if name in renamed_from:
             tail += f"; renamed from {g.shown(renamed_from[name])}"
-        print(f"  {g.shown(name)} -> {tail}")
+        lines.append((name, f"{g.shown(name)} -> {tail}"))
     if g._is_tag(old_side):
-        print(_fill(
-            f"A file added at the new side cannot change what PostgreSQL "
-            f"already stored "
-            f"ONLY IF the locale did not exist on the old system. An "
-            f"upstream tag cannot establish that -- distros backport. "
-            f"Confirm with `locale -a` on the OLD machine, under the names "
-            f"above, before treating these as out of scope.", '   '))
+        rest = [line for name, line in lines if name != 'C']
+        if rest:
+            _warn_block(
+                f"Not compared, no file at {old_name} ({len(rest)}). A file "
+                f"added at the new side cannot change what PostgreSQL "
+                f"already stored ONLY IF the locale did not exist on the old "
+                f"system, and an upstream tag cannot establish that -- "
+                f"distros backport. Confirm with `locale -a` on the OLD "
+                f"machine, under the names on each line, before treating "
+                f"these as out of scope:", rest)
     else:
+        print()
+        print(f"Not compared, no file at {old_name} ({len(added)}):")
+        for name, line in lines:
+            print(f"  {line}")
         # The old side is the build's own sources, distro patches and all,
         # verified against its glibc-locale-source, or a machine's own
         # sources as its file holds them (glibc_locale_data.machine_side).
@@ -823,6 +854,8 @@ def _main(opts):
         # A tree compared with itself answers "the same" for every locale
         # the reader settles: nothing was compared, and that is said first.
         cm = machine and g.machines_charmaps(old_side, new_side)
+        charmaps = {'state': 'one commit' if nothing == 'commit'
+                    else 'one tree', 'why': None}
         what = (f"the two {noun} are one commit" if nothing == 'commit'
                 else "the two machines' files hold the same locale sources "
                      "and charmaps" if cm
@@ -836,21 +869,23 @@ def _main(opts):
             # which no other line of the run carries for one tree.
             print("Character sets and transliterations: not compared, a "
                   "machine's file holds no charmaps this reads.")
-            said = set()
+            said, whys = set(), []
             for sd in (old_side, new_side):
                 if sd.prov.get('charmaps') is None and g.label(sd) not in said:
                     said.add(g.label(sd))
-                    print(_fill(f"The file of the machine that runs "
+                    whys.append(f"The file of the machine that runs "
                                 f"{g.label(sd)} holds none, because "
-                                f"{sd.prov['charmaps_why']}.", '  '))
+                                f"{sd.prov['charmaps_why']}.")
+                    print(_fill(whys[-1], '  '))
+            charmaps = {'state': 'not read', 'why': whys}
         else:
             print(f"Character sets and transliterations: not compared, "
                   f"{what}.")
-        names, keyed = [], []
+        names, keyed, not_compared = [], [], []
         g.write_list(f"step2_rules_characters.{slug}.tsv",
                      characters_rows({}, []))
         write_rules_by_name(slug, noun, (old_name, new_name), machine,
-                            (old_side, new_side), nothing, what)
+                            charmaps, (old_side, new_side), nothing, what)
     else:
         early = (predates_lr_getc_fix(repo, old),
                  predates_lr_getc_fix(repo, new))
@@ -969,8 +1004,9 @@ def _main(opts):
         # machine_builds' reason for a file without charmaps is asserted on
         # a real run (test_wrapper).
         write_rules_by_name(
-            slug, noun, (old_name, new_name), machine, (old_side, new_side),
-            charmaps=cm_why if machine else None,
+            slug, noun, (old_name, new_name), machine,
+            {'state': 'not run', 'why': cm_why} if cm_why
+            else {'state': 'compared', 'why': None}, (old_side, new_side),
             locales=rules_by_name((old_side, new_side), aliases, got, unread,
                                   keyed, unmapped) if machine else None)
 
@@ -986,6 +1022,11 @@ def _main(opts):
                        | keyed_aliases | set(unread))
         not_ascii = [n for n in names if not n.isascii()]
         names = [n for n in names if n.isascii()]
+        # The names of the list step 2 could not compare, each said with
+        # its reason in a `!!` (print_listed; glibc_locale_data's
+        # report_machine_provenance for an entry not read), so that the
+        # summary sets them apart from the rest of the list (13.31).
+        not_compared = [n for n in names if n in set(listed) | set(unread)]
         print()
         print(_fill(f"Listed in the summary ({len(names)}): "
                     + (', '.join(shown_name(n) for n in names) or 'none'),
@@ -1008,6 +1049,7 @@ def _main(opts):
     # Written whether or not they are empty, and named after the pair: an
     # empty file for THIS pair is a different fact from a leftover one.
     g.write_list(f"step2_changed_collate.{slug}.txt", names)
+    g.write_list(f"step2_not_compared.{slug}.txt", not_compared)
     g.write_list(f"step2_keyed_locales.{slug}.txt", keyed)
     g.write_list(f"step2_removed_locales.{slug}.txt",
                  [f"# locale files at {old_name} and not at {new_name}"]

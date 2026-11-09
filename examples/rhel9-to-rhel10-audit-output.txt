@@ -11,8 +11,10 @@ Machines' files, as given:
 Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
   UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was NOT checked
   UNCHECKED glibc-2.39 = ef321e23c20e  gpg is not installed; the signature was NOT checked
-  NOTE: signatures were not checked. The commit ids above are what was actually read;
-        compare them against a source you trust (sourceware.org/git/glibc.git) if it matters.
+!! Signatures NOT checked for glibc-2.34, glibc-2.39 (why is on each one's
+   line under 'Tag provenance', in 'What was compared'). The commit ids
+   printed there are what was read; compare them against a source you trust
+   (sourceware.org/git/glibc.git) if it matters.
 Machine provenance (each machine's own locale sources and charmaps, from its
 file, on its upstream tag above, as one commit of the clone; nothing downloaded):
   glibc-2.34-275.el9_8 = ee86fbe49d51, one parent: glibc-2.34
@@ -351,6 +353,10 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
      NOT known to be unchanged: 2 locale(s)
        not on the new machine, so a database or collation that uses one cannot
          use it there: aa_ER.utf8@saaho, aa_ER@saaho
+     Only on the new machine: 18 locale(s), which nothing made on the old
+       machine uses: crh_RU, crh_RU.utf8, gbm_IN, gbm_IN.utf8, kv_RU,
+       kv_RU.utf8, rif_MA, rif_MA.utf8, ssy_ER, ssy_ER.utf8, su_ID,
+       su_ID.utf8, syr, syr.utf8, tok, tok.utf8, zgh_MA, zgh_MA.utf8
      Of the 869 locale(s) on the old machine: 4 changed, 863 unchanged, 0 not
        measured, 2 not on the new machine.
      Decimals of money: the same in the 867 locale(s) measured on both
@@ -448,6 +454,10 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
          rules (step 2)
 
 -- Warnings the clean results above do NOT cover
+     !! Signatures NOT checked for glibc-2.34, glibc-2.39 (why is on each one's
+        line under 'Tag provenance', in 'What was compared'). The commit ids
+        printed there are what was read; compare them against a source you trust
+        (sourceware.org/git/glibc.git) if it matters.
      !! Not checked for these machines: their locale sources and charmaps are read
         as each machine's file holds them, with no check against the
         glibc-locale-source package they came from; localedata/SUPPORTED and

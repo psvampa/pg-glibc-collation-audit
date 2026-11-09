@@ -25,7 +25,8 @@ from _harness import (COMPARED_BANNER, STEP2_LISTED, SUMMARY_STEP2,
                       REPO_ROOT, SCRIPTS_DIR,
                       backported_c, before_compared, compared_text,
                       deleted_steps_named, flat, locale_file,
-                      needs_clone,
+                      needs_clone, assert_no_deleted_block,
+                      nothing_compared_lines, summary_warnings,
                       run_wrapper, upstream_c, summary_block)
 
 
@@ -95,6 +96,22 @@ def cut_few(path):
 
 def pair_slug(old, new):
     return f"{old}..{new}"
+
+
+def charmaps_state(out_dir):
+    """What step 2's step2_rules_by_name says became of its character set
+    check: the one file of the run, its 'charmaps' field."""
+    found = glob.glob(os.path.join(out_dir, 'step2_rules_by_name.*.json'))
+    if len(found) != 1:
+        raise AssertionError(f'step2_rules_by_name: {found}')
+    with open(found[0], encoding='utf-8') as fh:
+        return json.load(fh)['charmaps']
+
+
+# The `!!` step 2 prints for the files only the new side has when the old
+# side is an upstream tag (16.123), up to its count.
+ADDED_AT_OLD_TAG = ('!! Not compared, no file at {} ({}). A file added at '
+                    'the new side')
 
 
 def section_body(summary, heading):
@@ -167,7 +184,7 @@ USAGE = [
     '       says so; given as the build itself, the run is refused. When',
     "       step 2 compares the two machines' own locale sources, each",
     "       locale of the old machine step 11 names is set beside step 2's",
-    '       rules for it; otherwise one line says what step 2 compared.',
+    '       rules for it; otherwise the run says what step 2 compared.',
 ]
 
 REINDEX = SUMMARY_STEP2
@@ -385,6 +402,23 @@ class Wrapper(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
                                  'swedish'])
 
 
+    def test_the_names_with_no_file_at_the_old_tag_reach_the_warnings(self):
+        """An upstream tag cannot show that the old system lacked them
+        (16.123): step 2's `!!` names ckb_IQ and mnw_MM, and the summary
+        repeats it once, whole."""
+        warnings = summary_warnings(self.out)
+        head = flat(ADDED_AT_OLD_TAG.format(OLD, 2))
+        self.assertEqual(warnings.count(head), 1, self.out)
+        block = warnings.split(head, 1)[1].split(' !! ', 1)[0]
+        self.assertIn('ckb_IQ -> ckb_IQ mnw_MM -> mnw_MM', block)
+        self.assertIn('Confirm with `locale -a` on the OLD machine', block)
+
+    def test_the_character_set_check_is_written_as_compared(self):
+        """2.1: a state with its reason on every route, never a bare
+        null; over two tags the check ran."""
+        self.assertEqual(charmaps_state(self.out_dir),
+                         {'state': 'compared', 'why': None})
+
     def test_sv_FI_reached_through_its_copy_of_sv_SE(self):
         """Between 2.28 and 2.34 sv_FI's own file does not change; its rules
         differ because step 2 follows its `copy "sv_SE"`, and they name
@@ -552,9 +586,12 @@ class WrapperEmptyPair(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
         (doc-sweep, 2026-09-30, of step 3's notice then)."""
         report = Step2Report(step_text(self.out, 2))
         self.assertEqual(report.nothing, 'the two tags are one commit.')
-        self.assertEqual(summary_block(self.out, REINDEX), [
-            'none -- nothing was compared: the two tags are one commit or one',
-            'source tree (see below)'])
+        self.assertEqual(summary_block(self.out, REINDEX),
+                         nothing_compared_lines('tags'))
+
+    def test_the_character_set_check_is_written_as_one_commit(self):
+        self.assertEqual(charmaps_state(self.out_dir),
+                         {'state': 'one commit', 'why': None})
 
     def test_empty_list_is_written_not_absent(self):
         """Written-and-empty is a different fact from missing.
@@ -575,48 +612,39 @@ class WrapperEmptyPair(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
         across exactly such a bump
         (glibc-2.28-93.el8), so "nothing changed" here must not read as a
         clean result."""
-        # Through flat(): the notice is one `warn()` block now, wrapped at
-        # 78 columns, so the phrase is split across lines in the raw text.
+        # Through flat(): the notice is one `warn()` block, wrapped at 78
+        # columns, so the phrase is split across lines in the raw text.
         self.assertIn('are the same commit', flat(self.out))
-        self.assertIn('-- One commit, compared with itself', self.out)
-        # And it is repeated at the bottom, where a reader who scrolled past
-        # it will see it.
-        warnings = self.out.split('-- Warnings the clean results above')[1]
-        self.assertIn('are the same commit', flat(warnings))
-        # The whole sentence, whitespace collapsed. This used to assert the
-        # word "means", which every step's prose contains.
-        self.assertIn("Everything above that compares the two tags and says "
-                      "'nothing changed' means 'nothing was compared'", flat(self.out))
+        # Repeated at the bottom, where a reader who scrolled past it will
+        # see it, and once: the sides and step 2 each print it, and the
+        # warnings block keeps one of two identical blocks (16.168).
+        self.assertEqual(summary_warnings(self.out).count(
+            'are the same commit'), 1, self.out)
+        # And said nowhere else in the summary, in other words (10.1).
+        assert_no_deleted_block(self, self.out)
 
     def test_the_one_commit_notice_names_every_step_that_still_has_evidence(self):
         """The notice once said the evidence was "the node-to-node check
-        and sql/c_utf8_probe.sql, nothing else". Each machine's own file,
-        the measured order and the confirmation on real nodes can show a
-        change on this pair too, and a code change a distro backports inside
-        one major shows only on real nodes. Compared whole, so an "only"
-        cannot come back in other words."""
-        self.assertEqual(summary_block(self.out,
-                                       '-- One commit, compared with itself'), [
-            f"{NEW} -> {NEW}. Everything above that compares the two tags",
-            "and says 'nothing changed' means 'nothing was compared'. For an",
-            "intra-major upgrade, what can still show a change is each "
-            "machine's",
-            "own file (--old-node, --new-node), the measured order (step 11),",
-            "sql/c_utf8_probe.sql and the confirmation on real nodes",
-            "(docs/confirming-on-a-real-system.md).",
-        ])
+        and sql/c_utf8_probe.sql, nothing else". Each machine's own file
+        and the measured order can show a change on this pair too. The
+        summary says it with the order check's own `!!`, in its warnings,
+        compared whole, so an "only" cannot come back in other words."""
+        self.assertEqual(summary_warnings(self.out).count(flat(
+            f"!! {NEW} and {NEW} are the same commit. Step 2 compares "
+            f"nothing: it would compare upstream source against itself. "
+            f"{g._NOTHING_COMPARED_REST}")), 1, self.out)
 
     def test_the_removed_none_sits_above_the_one_commit_notice(self):
         """The tags' "none" is printed on one commit compared with itself
         too, and it is the notice below it, not the section, that says
-        nothing was compared -- the same arrangement as Reindex. This pins
-        the arrangement: the notice must come after the section."""
+        nothing was compared: the order check's `!!`, in the warnings. This
+        pins the arrangement: the notice must come after the section."""
         lines = removed_lines(self.out)
         self.assertEqual(lines[-1], f'Between the tags: none -- no locale '
                                     f'file at {NEW} is gone at {NEW}')
         summary = self.out.split('AUDIT SUMMARY')[1]
-        self.assertGreater(summary.index('-- One commit, compared with itself'),
-                           summary.index(REMOVED))
+        self.assertGreater(summary.index(WARNINGS), summary.index(REMOVED))
+        self.assertIn('are the same commit', summary_warnings(self.out))
 
     def test_the_summary_counts_without_a_shell_error(self):
         """count_lines was `grep -c . FILE || echo 0`. grep -c prints "0" AND
@@ -655,9 +683,8 @@ class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
         self.assertEqual(self.rc, 0, self.out)
         self.assertIn('are the same commit', flat(self.out))
         summary = flat(self.out.split('AUDIT SUMMARY')[1])
-        self.assertIn("-- One commit, compared with itself", summary)
-        self.assertIn("Everything above that compares the two tags and says "
-                      "'nothing changed' means 'nothing was compared'", summary)
+        self.assertEqual(summary_warnings(self.out).count(
+            'are the same commit'), 1, self.out)
         # Compared as text, the tag and its sha are two commits, and step 5
         # (deleted in step 9.3) printed its clean sentence over this pair
         # (false-negative-reviewer, 2026-09-30). Reindex says so instead.
@@ -696,23 +723,6 @@ class WrapperDirectionUndetermined(unittest.TestCase):
                      f'exec "{sys.executable}" "$@"\n')
         os.chmod(shim, 0o755)
         return {'PATH': shim_dir + os.pathsep + os.environ.get('PATH', '')}
-
-    def test_the_summary_says_the_direction_was_not_established(self):
-        rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
-                              env_extra=self.env)
-        self.assertEqual(rc, 0, out)
-        summary = flat(out.split('AUDIT SUMMARY')[1])
-        self.assertIn('-- Direction of the pair: NOT ESTABLISHED', summary)
-        self.assertIn('nothing here checked that', summary)
-        # Not the other state: an undetermined pair is not one commit.
-        self.assertNotIn('One commit, compared with itself', summary)
-        # What a wrong way round does is said of step 2, the one step left
-        # that compares the two sides (it said "step 4 scanned" too until
-        # step 9.3).
-        self.assertIn('every list above is the wrong tag\'s: step 2 reports '
-                      'a locale deleted in the upgrade as a harmless '
-                      'addition.', summary)
-        self.assertEqual(deleted_steps_named(out), [])
 
     def test_reindex_keeps_its_sentence_when_the_pair_is_two_commits(self):
         """The other branch of the summary's empty Reindex. With the order
@@ -754,16 +764,13 @@ class WrapperDirectionUndetermined(unittest.TestCase):
         rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
                               env_extra=self.shim("'undetermined tree'"))
         self.assertEqual(rc, 0, out)
-        self.assertEqual(summary_block(out, REINDEX), [
-            'none -- nothing was compared: the two tags are one commit or one',
-            'source tree (see below)'])
-        summary = flat(out.split('AUDIT SUMMARY')[1])
-        self.assertIn('-- Direction of the pair: NOT ESTABLISHED', summary)
-        self.assertIn('-- One source tree, compared with itself', summary)
-        self.assertIn('are two commits of one source tree. Everything above '
-                      "that compares the two tags and says 'nothing changed' "
-                      "means 'nothing was compared'", summary)
-        self.assertNotIn('One commit, compared with itself', summary)
+        # audit.sh's own decision: the line never calls the empty list a
+        # result. What the pair is, and that its direction is not known,
+        # the steps' `!!` say, which this shim cannot make them print
+        # (test_git_helpers and AuditShOnATagAndABuild hold them).
+        self.assertEqual(summary_block(out, REINDEX),
+                         nothing_compared_lines('tags'))
+        assert_no_deleted_block(self, out)
 
 
 @needs_clone
@@ -1009,6 +1016,12 @@ class WrapperMeasuredOrder(_CodeNotComparedAndNoDeletedStep,
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_a_run_that_prints_step_11_does_not_point_to_its_log(self):
+        """The control of WrapperNamesStep11sReportWhenALaterStepStops:
+        the report was printed, so nothing points to where it is."""
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        self.assertNotIn(STEP11_NOT_PRINTED, self.out)
 
     def test_the_tags_warning_asks_for_the_files_not_a_build(self):
         """A build is refused beside --old-order and --new-order, so the
@@ -1634,28 +1647,30 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
                       "same locale sources and charmaps, so no locale's sort "
                       "rules can differ between them",
                       flat(compared_text(out)))
-        summary = out.split('AUDIT SUMMARY', 1)[1]
-        block = section_body(summary, '-- One source tree, compared with '
-                                      'itself')
-        self.assertIn("the two machines' files hold the same locale sources "
-                      "and charmaps, so no locale's sort rules can differ "
-                      "between them", block)
-        self.assertNotIn("means 'nothing was compared'", block)
-        reindex = section_body(summary, REINDEX)
-        self.assertTrue(reindex.startswith(
-            "none -- the two machines' files hold the same locale sources "
-            "and charmaps (see below)"), reindex)
-        self.assertNotIn('nothing was compared', reindex)
-        self.assertNotIn('code under locale/', block)
+        # The summary says it with the order check's `!!` alone, once, and
+        # its line under step 2's list points there (10.1).
+        self.assertEqual(summary_warnings(out).count(
+            "the two machines' files hold the same locale sources and "
+            "charmaps, so no locale's sort rules can differ between them"),
+            1, out)
+        self.assertEqual(summary_block(out, REINDEX)[:2],
+                         nothing_compared_lines('builds'))
+        assert_no_deleted_block(self, out)
+        # One tree holds its charmaps once: no line of step 2's beside step
+        # 11's verdict says they were not compared.
+        self.assertEqual(rules_beside(out), ({}, [
+            "Rules (step 2) are not set beside each locale: step 2 compared "
+            "nothing, the two machines' files hold the same locale sources "
+            "and charmaps."]))
         self.assertNotIn('cannot read', before)
 
     def test_the_same_sources_without_charmaps_never_claim_the_charmaps(self):
         """Neither file holds charmaps, so no charmap was read: one source
         tree, said as the same locale sources, and the character sets as
-        not compared, under 'What was compared', in step 2, Reindex and the
-        block below it --
-        never "the same charmaps" (false-negative-reviewer and doc-sweep,
-        round 2)."""
+        not compared, under 'What was compared', in step 2, in the
+        summary's warnings (where its line under step 2's list points) and
+        in the line beside step 11's verdict -- never "the same charmaps"
+        (false-negative-reviewer and doc-sweep, round 2 of 9.4a)."""
         out = self.out('same_no_charmaps')
         self.assertNotIn('DIRECTION', flat(out))
         compared, step2 = (flat(compared_text(out)),
@@ -1677,13 +1692,23 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
             step2)), 2, step2)
         summary = out.split('AUDIT SUMMARY', 1)[1]
         reindex = section_body(summary, REINDEX)
-        self.assertTrue(reindex.startswith(
-            "none -- the two machines' files hold the same locale sources; "
-            "their character sets were not compared (see below)"), reindex)
-        block = section_body(summary, '-- One source tree, compared with '
-                                      'itself')
-        self.assertIn('their character sets were not compared', block)
-        for text in (compared, step2, reindex, block):
+        self.assertEqual(summary_block(out, REINDEX)[:2],
+                         nothing_compared_lines('builds'))
+        warnings = summary_warnings(out)
+        self.assertIn('their character sets were not compared', warnings)
+        # Beside step 11's verdict too (2.1): step 2's state for its
+        # charmaps is "not read", and the line gives each file's reason.
+        got, alone = rules_beside(out)
+        self.assertEqual(got, {})
+        self.assertEqual(len(alone), 2, alone)
+        self.assertEqual(len(re.findall(
+            r"The file of the machine that runs \S+ holds none, because "
+            r"the file was written by an --extract that did not pack",
+            flat(alone[1]))), 2, alone)
+        self.assertTrue(flat(alone[1]).startswith(
+            'Character sets (step 2): not compared. '), alone)
+        for text in (compared, step2, reindex, warnings, flat(' '.join(
+                alone))):
             with self.subTest(text=text[:40]):
                 self.assertNotIn('the same locale sources and charmaps',
                                  text)
@@ -1691,10 +1716,52 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
     def test_two_machines_of_one_build(self):
         out = self.out('one_build')
         summary = out.split('AUDIT SUMMARY', 1)[1]
-        self.assertIn('-- One commit, compared with itself', summary)
-        self.assertIn('one build given twice', flat(summary))
+        self.assertEqual(summary_block(out, REINDEX)[:2],
+                         nothing_compared_lines('builds'))
+        self.assertEqual(summary_warnings(out).count('are the same commit'),
+                         1, out)
+        assert_no_deleted_block(self, out)
         self.assertIn('!! Both machines run the same glibc build. This '
                       'compares two machines, not an upgrade.', flat(summary))
+
+    def test_each_route_writes_what_became_of_the_character_sets(self):
+        """2.1: a closed state with its reason on every route: the check
+        did not run (a file without charmaps), one tree whose charmaps are
+        read once, one tree whose charmaps no file holds (each file's
+        reason), one commit."""
+        state = {label: charmaps_state(self.runs[label][0])
+                 for label in self.runs}
+        self.assertEqual(state['link']['state'], 'not run')
+        self.assertRegex(state['link']['why'], r'^The file of the machine '
+                         r'that runs \S+ holds no charmaps this reads, '
+                         r'because ')
+        self.assertEqual(state['same_sources'],
+                         {'state': 'one tree', 'why': None})
+        self.assertEqual(state['one_build'],
+                         {'state': 'one commit', 'why': None})
+        self.assertEqual(state['same_no_charmaps']['state'], 'not read')
+        self.assertEqual(len(state['same_no_charmaps']['why']), 2)
+
+    def test_the_names_step_2_could_not_compare_come_apart(self):
+        """13.31: the two links step 2 did not read are listed apart,
+        under the line that says why, and the rest above it; the count is
+        the whole list's."""
+        out = self.out('link')
+        body = summary_block(out, REINDEX)
+        sub = ("Listed because step 2 could not compare them (each one's "
+               "reason is in the warnings below):")
+        at = [i for i in range(len(body) - 1)
+              if flat(body[i] + ' ' + body[i + 1]) == sub]
+        self.assertEqual(len(at), 1, body)
+        above, below = body[:at[0]], body[at[0] + 2:]
+        apart = below[:below.index(next(x for x in below
+                                        if x.startswith('(')))]
+        self.assertEqual(apart, ['de_IT', 'zz_LINK'])
+        self.assertTrue(above, body)
+        self.assertFalse({'de_IT', 'zz_LINK'} & set(above), body)
+        self.assertRegex(next(x for x in below if x.startswith('(')),
+                         r'^\(%d name\(s\); full list: ' %
+                         (len(above) + len(apart)))
 
     def test_a_file_without_charmaps(self):
         out = self.out('link')
@@ -1928,18 +1995,19 @@ class WrapperOneTagFromTheFiles(unittest.TestCase):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
 
     def test_the_one_commit_block_points_to_why(self):
+        """The warnings say both: why the files were not read as their
+        builds (the first one, step0's), and that the two tags are one
+        commit, with what can still show a change."""
         self.assertEqual(self.rc, 0, self.out[-2000:])
         summary = self.out.split('AUDIT SUMMARY', 1)[1]
-        self.assertEqual(
-            section_body(summary, '-- One commit, compared with itself'),
-            f"{MID} -> {MID}. Everything above that compares the two tags "
-            f"and says 'nothing changed' means 'nothing was compared'. For "
-            f"an intra-major upgrade, what can still show a change is each "
-            f"machine's file read as its build (why these were not: the "
-            f"first warning below), the measured order (step 11), "
-            f"sql/c_utf8_probe.sql and the confirmation on real nodes "
-            f"(docs/confirming-on-a-real-system.md).")
+        self.assertEqual(summary_block(self.out, REINDEX)[:2],
+                         nothing_compared_lines('tags'))
         self.assertIn(unread_side_text('old'), first_warning(summary))
+        self.assertEqual(summary_warnings(self.out).count(flat(
+            f"!! {MID} and {MID} are the same commit. Step 2 compares "
+            f"nothing: it would compare upstream source against itself. "
+            f"{g._NOTHING_COMPARED_REST}")), 1, self.out)
+        assert_no_deleted_block(self, self.out)
 
     def test_no_rules_beside_each_locale_of_one_commit(self):
         self.assertEqual(rules_beside(self.out), ({}, [
@@ -2056,6 +2124,96 @@ class WrapperNodeFileRefused(unittest.TestCase):
                                             '--new-node', rhel10)
         self.assertIn("the old side given is glibc-2.28: give that build's "
                       "tag, glibc-2.34", out)
+
+
+@needs_clone
+class WrapperWarningsKeepEachBlockOnce(unittest.TestCase):
+    """16.168: the summary repeats each `!!` block once, by the whole
+    block: two identical blocks are one warning, and two that open with the
+    same line and go on otherwise are two (a key on the `!!` line alone
+    would eat the second). No step prints such blocks on its own, so step
+    2's are injected by a sitecustomize on PYTHONPATH."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-dedup-')
+        hook = os.path.join(cls.out_dir, 'hook')
+        os.makedirs(hook)
+        with open(os.path.join(hook, 'sitecustomize.py'), 'w',
+                  encoding='utf-8') as fh:
+            fh.write("import sys\n"
+                     "if sys.argv[0].endswith(\n"
+                     "        'filter_lc_collate_changes.py'):\n"
+                     "    for tail in ('tail A.', 'tail A.', 'tail B.'):\n"
+                     "        print('!! Injected: one opening line.')\n"
+                     "        print('   ' + tail)\n"
+                     "        print()\n")
+        cls.rc, cls.out = run_wrapper(NEW, NEW, out_dir=cls.out_dir,
+                                      env_extra={'PYTHONPATH': hook})
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_identical_blocks_once_and_different_blocks_each(self):
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        self.assertEqual(step_text(self.out, 2).count(
+            '!! Injected: one opening line.'), 3)
+        warnings = summary_warnings(self.out)
+        self.assertEqual(warnings.count(
+            '!! Injected: one opening line. tail A.'), 1, warnings)
+        self.assertEqual(warnings.count(
+            '!! Injected: one opening line. tail B.'), 1, warnings)
+
+
+# What audit.sh says when a run stops after step 11 compared the two
+# measurements and before its report was printed (16.144).
+STEP11_NOT_PRINTED = ('note: step 11 compared the two measurements before '
+                      'the run stopped;')
+
+
+@needs_clone
+class WrapperNamesStep11sReportWhenALaterStepStops(unittest.TestCase):
+    """16.144: step 11 is worked out first and printed after 'What was
+    compared' and step 2. When either of those stops the run, the exit code
+    stays theirs, no summary is printed, and the run names step 11's
+    report, which it had written. Each stop injected by a sitecustomize:
+    the sides refusing (a first clone with no network, say), step 2
+    failing."""
+
+    def run_stopped(self, where):
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-stop11-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        hook = os.path.join(out_dir, 'hook')
+        os.makedirs(hook)
+        with open(os.path.join(hook, 'sitecustomize.py'), 'w',
+                  encoding='utf-8') as fh:
+            fh.write("import sys\n"
+                     f"if {where}:\n"
+                     "    sys.exit('injected: this step stops the run')\n")
+        rc, out = run_wrapper(OLD, MID, '--old-order', cut_few(RHEL8),
+                              '--new-order', cut_few(RHEL9),
+                              out_dir=out_dir,
+                              env_extra={'PYTHONPATH': hook})
+        return out_dir, rc, out
+
+    def test_each_stop_names_the_report(self):
+        for label, where in (
+                ('sides', "sys.argv[0].endswith('glibc_locale_data.py') "
+                          "and sys.argv[1:2] == ['sides']"),
+                ('step 2', "sys.argv[0].endswith("
+                           "'filter_lc_collate_changes.py')")):
+            with self.subTest(stop=label):
+                out_dir, rc, out = self.run_stopped(where)
+                self.assertNotEqual(rc, 0, out[-2000:])
+                self.assertIn('injected: this step stops the run', out)
+                self.assertNotIn('AUDIT SUMMARY', out)
+                self.assertNotIn('== STEP 11', out)
+                log = os.path.join(out_dir, 'measured_order.%s.log'
+                                   % pair_slug(OLD, MID))
+                self.assertTrue(os.path.getsize(log), out[-2000:])
+                self.assertIn(STEP11_NOT_PRINTED + ' its report, not '
+                              'printed above, is in ' + log, flat(out))
 
 
 if __name__ == '__main__':
