@@ -8,7 +8,6 @@
 #
 # Usage:
 #   ./audit.sh <old> <new>
-#              [--old-order FILE --new-order FILE]
 #              [--old-node FILE --new-node FILE]
 #
 # Each side is a glibc tag, or a build named as `rpm -q glibc` names it
@@ -16,9 +15,8 @@
 # side then reads the build's own localedata/ and locale/, rebuilt from its
 # source RPM, in place of the tag. A side can also be latest-elN, for a machine
 # not installed yet: the newest build of RHEL N that Rocky Linux's mirror
-# lists, resolved once, and named, before anything else reads the sides. With
-# a build, of the options below only --old-node and --new-node
-# are read. Given each machine's file (--old-node, --new-node),
+# lists, resolved once, and named, before anything else reads the sides.
+# Given each machine's file (--old-node, --new-node),
 # the run reads that machine's own locale sources and charmaps, as the
 # build the file names, in place of its tag; a file without the sources, or
 # naming a build that is not of RHEL 8, 9 or 10, makes both sides read their
@@ -39,19 +37,15 @@
 # 2.34..2.39 report, C.UTF-8 included, except that a locale renamed on the way
 # (aa_ER@saaho) is listed only as removed. One triple is not every triple.
 #
-# The --*-order options are optional, and go together. Each is what
-# scripts/locale_order.py wrote on that machine: how its own glibc sorts every
-# locale. Step 11 compares the two, so it answers from each machine's glibc
-# rather than from locale sources, compares each locale's compiled sort table,
-# and names the characters and other strings that moved.
-#
-# The --*-node options go together and stand for the --*-order options. Each
-# is the one file `scripts/locale_order.py --extract` wrote on that machine,
-# holding its measurement, its locale sources, its charmaps and its glibc
-# build. A file without the sources or the charmaps says why, and the run
-# repeats it where their checks would have answered. Only a node file carries
-# the machine's own charmaps, so only with these options does step 11 check
-# what it measured against them. When step 2 compares the two
+# The --*-node options are optional, and go together. Each is the one file
+# `scripts/locale_order.py --extract` wrote on that machine, holding its
+# measurement (how its own glibc sorts every locale), its locale sources, its
+# charmaps and its glibc build. A file without the sources or the charmaps
+# says why, and the run repeats it where their checks would have answered.
+# Step 11 compares the two measurements, so it answers from each machine's
+# glibc rather than from locale sources, compares each locale's compiled sort
+# table, names the characters and other strings that moved, and checks what
+# it measured against each machine's charmaps. When step 2 compares the two
 # machines' own locale sources, each locale of the old machine step 11
 # names is set beside step 2's rules for it; otherwise the run says what
 # step 2 compared.
@@ -59,14 +53,13 @@
 # Example (the names are examples -- `ldd --version` on each node gives the
 # tag, `rpm -q glibc` the build):
 #   ./audit.sh glibc-2.28 glibc-2.34
-#   ./audit.sh glibc-2.28 glibc-2.34 --old-order rhel8.out --new-order rhel9.out
+#   ./audit.sh glibc-2.28 glibc-2.34 --old-node old.tar --new-node new.tar
 #   ./audit.sh glibc-2.28-251.el8_10.40 glibc-2.34-275.el9_8
 #   ./audit.sh glibc-2.34-275.el9_8 latest-el10
 set -euo pipefail
 
 usage() {
   echo "usage: $0 <old> <new>" >&2
-  echo "         [--old-order FILE --new-order FILE]" >&2
   echo "         [--old-node FILE --new-node FILE]" >&2
   echo "       e.g. $0 glibc-2.28 glibc-2.34" >&2
   echo "            $0 glibc-2.28-251.el8_10.40 glibc-2.34-275.el9_8" >&2
@@ -75,34 +68,30 @@ usage() {
   echo "       the node), or a build as \`rpm -q glibc\` names it without the" >&2
   echo "       architecture, rebuilt from its source RPM, or latest-elN for a" >&2
   echo "       machine not installed yet: the newest build of RHEL N on Rocky" >&2
-  echo "       Linux's mirror, named before anything is read; with a build, only" >&2
-  echo "       --old-node and --new-node of the options below are read" >&2
+  echo "       Linux's mirror, named before anything is read." >&2
   echo "       OLD first, NEW second: a reversed pair is refused, not" >&2
   echo "       answered. Distance is NOT checked: RHEL8 to RHEL10 is one" >&2
   echo "       pair, glibc-2.28 glibc-2.39, not two runs added up. What" >&2
   echo "       that reports was measured with glibc-2.34 in the middle" >&2
   echo "       (docs/scope.md). Every --* option takes a value." >&2
   echo >&2
-  echo "       The --*-order options are OPTIONAL and go together: each is the" >&2
-  echo "       output of scripts/locale_order.py run on that machine, which" >&2
-  echo "       asks the machine's own glibc how every locale sorts (step 11)." >&2
-  echo "       It sees what a comparison of files cannot: a locale whose files" >&2
-  echo "       did not change can still sort differently." >&2
-  echo >&2
   echo "       The --*-node options are OPTIONAL and go together. Each is the" >&2
   echo "       one file scripts/locale_order.py --extract wrote on that" >&2
   echo "       machine, with its measurement, its build, its locale sources and" >&2
-  echo "       its charmaps (a file without them says why), and stands for the" >&2
-  echo "       --*-order options. Step 2 then reads each machine's own" >&2
-  echo "       locale sources and charmaps, as the build its file names, in" >&2
-  echo "       place of the tag (the side given is that build or its tag)," >&2
-  echo "       and downloads nothing. A file without the sources, or naming a" >&2
-  echo "       build that is not of RHEL 8, 9 or 10, makes both sides read" >&2
-  echo "       their tags when that side was given as its tag, and the run" >&2
-  echo "       says so; given as the build itself, the run is refused. When" >&2
-  echo "       step 2 compares the two machines' own locale sources, each" >&2
-  echo "       locale of the old machine step 11 names is set beside step 2's" >&2
-  echo "       rules for it; otherwise the run says what step 2 compared." >&2
+  echo "       its charmaps (a file without them says why). The measurement is" >&2
+  echo "       how the machine's own glibc sorts every locale, which step 11" >&2
+  echo "       compares: it sees what a comparison of files cannot, a locale" >&2
+  echo "       whose files did not change can still sort differently. Step 2" >&2
+  echo "       reads each machine's own locale sources and charmaps, as the" >&2
+  echo "       build its file names, in place of the tag (the side given is" >&2
+  echo "       that build or its tag), and downloads nothing. A file without" >&2
+  echo "       the sources, or naming a build that is not of RHEL 8, 9 or 10," >&2
+  echo "       makes both sides read their tags when that side was given as" >&2
+  echo "       its tag, and the run says so; given as the build itself, the" >&2
+  echo "       run is refused. When step 2 compares the two machines' own" >&2
+  echo "       locale sources, each locale of the old machine step 11 names is" >&2
+  echo "       set beside step 2's rules for it; otherwise the run says what" >&2
+  echo "       step 2 compared." >&2
   exit 2
 }
 
@@ -114,16 +103,16 @@ shift 2
 # Every option here takes a value, and `shift 2` with only one argument left
 # exits 1 under `set -e` printing NOTHING -- measured with an option as the
 # last word on the line. An empty value is refused for the same reason it is
-# not accepted from a file: `--old-order ""` leaves OLD_ORDER empty, which is
-# indistinguishable from not having asked for the measured order at all.
+# not accepted from a file: `--old-node ""` leaves OLD_NODE empty, which is
+# indistinguishable from not having passed the machine's file at all.
 needs_value() {
   [ -n "${2:-}" ] || { echo "error: $1 needs a value" >&2; usage; }
 }
+# OLD_ORDER and NEW_ORDER are not options: they are the measurements laid
+# out of the machines' files, below.
 OLD_ORDER=""; NEW_ORDER=""; OLD_NODE=""; NEW_NODE=""
 while [ $# -gt 0 ]; do
   case $1 in
-    --old-order)       needs_value "$@"; OLD_ORDER=$2;   shift 2 ;;
-    --new-order)       needs_value "$@"; NEW_ORDER=$2;   shift 2 ;;
     --old-node)        needs_value "$@"; OLD_NODE=$2;    shift 2 ;;
     --new-node)        needs_value "$@"; NEW_NODE=$2;    shift 2 ;;
     *) echo "error: unknown argument '$1'" >&2; usage ;;
@@ -154,10 +143,9 @@ SCRIPTS="$HERE/scripts"
 # its id or a branch), or a build named as `rpm -q glibc` names it
 # (glibc-2.34-275.el9_8), by the rule every step applies. The summary picks
 # its blocks by it: a block about what upstream source cannot show is false
-# of a build, whose own sources the steps read. Asked before any other option
-# is checked, so that a build given with a machine's files is refused first,
-# with that reason. latest-elN is a build too, and nothing here asks the
-# network what it is: that is done once, below, after that refusal.
+# of a build, whose own sources the steps read. latest-elN is a build too,
+# and nothing here asks the network what it is: that is done once, below,
+# after the machines' files are checked.
 # What a run leaves when it ends, however it ends: its temporary files
 # gone, and, where step 11 had compared the two measurements and a later
 # step stopped the run before step 11's report was printed, where that
@@ -208,52 +196,8 @@ set_noun() {
   fi
 }
 set_noun
-# With a build named on either side, the machine's files come only from
-# --old-node and --new-node: each of those names the build its
-# machine runs, and the measurement options say less. Either of them is
-# refused, on either side, with or without its pair.
-# Not arrays: bash 3.2 under set -u calls an empty one unbound.
-if [ "$NOUN" != tags ]; then
-  refused=""; n=0
-  for opt in old-order new-order; do
-    case $opt in
-      old-order) v=$OLD_ORDER ;; new-order) v=$NEW_ORDER ;;
-    esac
-    [ -n "$v" ] || continue
-    n=$((n + 1))
-    refused="$refused${refused:+|}--$opt"
-  done
-  if [ "$n" -gt 0 ]; then
-    if [ "$OLD_KIND" = build ]; then b=$OLD; else b=$NEW; fi
-    # "--a is", "--a and --b are", "--a, --b and --c are".
-    opts=""; i=0
-    IFS='|'
-    for o in $refused; do
-      i=$((i + 1))
-      if [ "$i" -eq 1 ]; then opts=$o
-      elif [ "$i" -eq "$n" ]; then opts="$opts and $o"
-      else opts="$opts, $o"; fi
-    done
-    unset IFS
-    if [ "$n" -eq 1 ]; then opts="$opts is"; else opts="$opts are"; fi
-    text="error: $b is a build, and with a build audit.sh reads a machine's"
-    text="$text files only from --old-node and --new-node: $opts refused."
-    text="$text Give those options with two tags, or each machine's file with"
-    text="$text --old-node and --new-node."
-    printf '%s\n' "$text" | fold -s -w 70 | sed 's/ *$//; 2,$s/^/       /' >&2
-    exit 2
-  fi
-fi
 
-# A node file already holds what the options below would give, so a run given
-# both would have two answers to one question; checked first, so that its
-# message is the one printed. And one machine's file compares nothing.
-if [ -n "$OLD_NODE$NEW_NODE" ] &&
-   [ -n "$OLD_ORDER$NEW_ORDER" ]; then
-  echo "error: --old-node and --new-node already hold the locale sources, the" >&2
-  echo "       builds and the measurements; give them without those options" >&2
-  exit 2
-fi
+# One machine's file compares nothing.
 if { [ -n "$OLD_NODE" ] && [ -z "$NEW_NODE" ]; } ||
    { [ -z "$OLD_NODE" ] && [ -n "$NEW_NODE" ]; }; then
   echo "error: --old-node and --new-node go together: one machine's file" >&2
@@ -321,15 +265,6 @@ if [ "$NOUN" = sides ]; then
   fi
 fi
 
-# One machine's measurement compares nothing, and a run that dropped the other
-# half in silence would end with a summary that reads as if it had.
-if { [ -n "$OLD_ORDER" ] && [ -z "$NEW_ORDER" ]; } ||
-   { [ -z "$OLD_ORDER" ] && [ -n "$NEW_ORDER" ]; }; then
-  echo "error: --old-order and --new-order go together: one machine's" >&2
-  echo "       measurement alone compares nothing" >&2
-  exit 2
-fi
-
 # Python block-buffers stdout when it is not a tty. Without this, the `note:`
 # lines on stderr overtake the steps' `!!` warnings.
 export PYTHONUNBUFFERED=1
@@ -356,14 +291,12 @@ export PG_GLIBC_AUDIT_SIDES="$SIDES_FILE"
 # reads.
 MACHINES_FILE="$OUT_DIR/machine_files.$PAIR.txt"
 # What the `!!` for a side read as a tag asks for
-# (glibc_locale_data.TAG_ASK_ENV): with any option a build is refused with
-# (the list above), the machines' files; with a machine's file, a tag is
-# read only when a file holds no locale sources or names a build that is
-# not of RHEL 8, 9 or 10, which NODE_NOTE says.
+# (glibc_locale_data.TAG_ASK_ENV): without the machines' files, a build;
+# with a machine's file, nothing, as a tag is then read only when a file
+# holds no locale sources or names a build that is not of RHEL 8, 9 or 10,
+# which NODE_NOTE says.
 if [ -n "$OLD_NODE" ]; then
   export PG_GLIBC_AUDIT_TAG_ASK=none
-elif [ -n "$OLD_ORDER$NEW_ORDER" ]; then
-  export PG_GLIBC_AUDIT_TAG_ASK=node
 else
   export PG_GLIBC_AUDIT_TAG_ASK=build
 fi
@@ -391,8 +324,8 @@ OLD_STEP1_LIST="$OUT_DIR/changed_locales.txt"
 
 # The node files, laid out above (locale_order.py --unpack checks each one
 # whole), are moved here under a name for the pair, like every other file
-# this run reads, and stand for the --*-order options: the measurement
-# always; the sources and the charmaps when the file holds them, which the
+# this run reads: the measurement always, which step 11 compares; the
+# sources and the charmaps when the file holds them, which the
 # sides and step 2 read through MACHINES_FILE (a file without the sources
 # was decided above, and NODE_NOTE says why).
 #
@@ -405,6 +338,10 @@ ORDER_CM=()
 # the reader's environment would send the steps to another run's folders).
 rm -f "$MACHINES_FILE"
 unset PG_GLIBC_AUDIT_MACHINES
+# Set below only once step 11 has compared the two measurements, for the
+# steps' `!!` that name step 11 (glibc_locale_data.STEP11_ENV); never the
+# reader's.
+unset PG_GLIBC_AUDIT_STEP11
 if [ -n "$OLD_NODE" ]; then
   mkdir -p "$OUT_DIR"
   for side in old new; do
@@ -476,10 +413,10 @@ rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
 [ -z "$NODE_NOTE" ] || printf '%s\n' "$NODE_NOTE" > "$OUT_DIR/step0.$PAIR.log"
 
 # Step 11 is worked out before the sides are read, so that a measurement the
-# comparison refuses -- cut short, damaged, measured by another copy of
-# locale_order.py over other strings, or taken on another glibc than its
-# tag -- stops the run here instead of after them and step 2. Its report is printed where step 11
-# stands, below, and its summary at the end.
+# comparison refuses -- measured by another copy of locale_order.py over other
+# strings, say; --unpack has already refused one cut short or damaged --
+# stops the run here instead of after them and step 2. Its report is printed
+# where step 11 stands, below, and its summary at the end.
 #
 # Its log is not named step11.*.log on purpose: the warnings block at the end
 # globs those to repeat their `!!` notices, and would repeat step 11's with
@@ -503,7 +440,6 @@ CROSS_LOG="$OUT_DIR/measured_order_rules.$PAIR.log"
 rm -f "$ORDER_LOG" "$ORDER_SUMMARY" "$ORDER_CHARACTERS" "$ORDER_SQL".*.sql \
       "$VERDICTS" "$CROSS" "$CROSS_LOG"
 if [ -n "$OLD_ORDER" ]; then
-  # From the --*-order options there are no charmaps, and step 11 says so.
   if ! python3 "$SCRIPTS/locale_order.py" --compare "$OLD_ORDER" "$NEW_ORDER" \
        --tags "$OLD_TAG" "$NEW_TAG" --summary-to "$ORDER_SUMMARY" \
        --characters-to "$ORDER_CHARACTERS" --sql-to "$ORDER_SQL" \
@@ -511,18 +447,15 @@ if [ -n "$OLD_ORDER" ]; then
        ${ORDER_CM[@]+"${ORDER_CM[@]}"} \
        > "$ORDER_LOG" 2>&1; then
     cat "$ORDER_LOG" >&2
-    if [ -n "$OLD_NODE" ]; then
-      # The message above names the measurement as laid out; the reader
-      # passed the two node files.
-      echo "error: step 11 could not compare the measurements in $OLD_NODE" >&2
-      echo "       and $NEW_NODE (above). Not continuing." >&2
-    else
-      echo "error: step 11 could not compare the two measurements (above). Not continuing." >&2
-    fi
+    # The message above names the measurement as laid out; the reader
+    # passed the two node files.
+    echo "error: step 11 could not compare the measurements in $OLD_NODE" >&2
+    echo "       and $NEW_NODE (above). Not continuing." >&2
     exit 2
   fi
   # Said by on_exit if the run stops before the report is printed below.
   ORDER_UNPRINTED=$ORDER_LOG
+  export PG_GLIBC_AUDIT_STEP11=1
 fi
 
 banner() {
@@ -586,8 +519,7 @@ run_step 1 compared
 ORDER_WORDS=$(python3 "$SCRIPTS/glibc_locale_data.py" order --quiet "$OLD" "$NEW")
 # Then three more: what each side is (tag, commit or build) and the word a
 # sentence about both uses (tags, builds or sides), apart from NOUN, the
-# route, which keeps a commit on the tags route (TAG_SIDE, Removed,
-# --old-order).
+# route, which keeps a commit on the tags route (TAG_SIDE, Removed).
 read -r ORDER NOTHING OLD_CLASS NEW_CLASS WORD EXTRA <<EOF
 $ORDER_WORDS
 EOF
@@ -766,9 +698,11 @@ else
 fi
 # With the two measurements the summary holds a second answer to the same
 # question, and this one comes first: it says where the other is, so that the
-# tags' list -- or their "none" -- is not read as the whole answer.
+# tags' list -- or their "none" -- is not read as the whole answer. The
+# machines' files give two builds, or two tags when a file holds no locale
+# sources or names a build that is not of RHEL 8, 9 or 10 (machine_sides).
 if [ -n "$OLD_ORDER" ]; then
-  if [ -n "$OLD_NODE" ] && [ "$NOUN" = builds ]; then
+  if [ "$NOUN" = builds ]; then
     echo "     This list is from each machine's own locale sources. What each"
     echo "     machine's own glibc says is under '-- Measured order', below."
   else
@@ -863,14 +797,8 @@ if [ -n "$OLD_ORDER" ]; then
   fi
 else
   echo "-- Measured order: NOT RUN"
-  if [ "$NOUN" = tags ]; then
-    echo "     Pass --old-node and --new-node, each machine's file, or --old-order"
-    echo "     and --new-order, each written by scripts/locale_order.py on that"
-    echo "     machine. Without them nothing above"
-  else
-    echo "     Pass --old-node and --new-node, each machine's file written by"
-    echo "     scripts/locale_order.py --extract. Without them nothing above"
-  fi
+  echo "     Pass --old-node and --new-node, each machine's file written by"
+  echo "     scripts/locale_order.py --extract. Without them nothing above"
   echo "     asked either machine's glibc how it sorts, and a locale whose files"
   echo "     did not change can still sort differently. Nor did anything compare"
   echo "     the decimals of money, check which C library PostgreSQL runs on"

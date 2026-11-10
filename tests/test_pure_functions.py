@@ -33,6 +33,61 @@ def collate(*body):
                       'LC_COLLATE', *body, 'END LC_COLLATE', ''])
 
 
+class WhatAuditShTellsTheSteps(unittest.TestCase):
+    """The two variables audit.sh exports for its steps' `!!`: a value it
+    never sets is refused by its message, never read as one it does."""
+
+    def refused(self, call):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit) as cm:
+            call()
+        self.assertEqual(cm.exception.code, 2)
+        return flat(err.getvalue())
+
+    def test_the_tags_warning_takes_build_or_none(self):
+        """'node' asked for the machines' files beside --old-order, deleted
+        in step 11.1."""
+        for ask, words in (('build', 'name that side as its build'),
+                           ('none', None)):
+            with self.subTest(ask=ask), \
+                    mock.patch.dict(os.environ, {g.TAG_ASK_ENV: ask}):
+                text = g.tag_sides_text(['glibc-2.28'])
+                if words:
+                    self.assertIn(words, text)
+                else:
+                    self.assertTrue(text.endswith(
+                        'Step 2 reads only what that tag holds.'), text)
+        with mock.patch.dict(os.environ, {g.TAG_ASK_ENV: 'node'}):
+            self.assertIn("PG_GLIBC_AUDIT_TAG_ASK='node' is not one of "
+                          "build, none.", self.refused(
+                              lambda: g.tag_sides_text(['glibc-2.28'])))
+
+    def test_step_11_is_one_or_unset(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop(g.STEP11_ENV, None)
+            self.assertFalse(g.step11_compared())
+            self.assertEqual(f.c_no_version(), f.C_NO_VERSION)
+        with mock.patch.dict(os.environ, {g.STEP11_ENV: '1'}):
+            self.assertTrue(g.step11_compared())
+            self.assertEqual(f.c_no_version(), f.C_NO_VERSION_STEP11)
+        for value in ('yes', '0', ''):
+            with self.subTest(value=value), \
+                    mock.patch.dict(os.environ, {g.STEP11_ENV: value}):
+                self.assertIn(f"PG_GLIBC_AUDIT_STEP11={value!r} is not 1",
+                              self.refused(g.step11_compared))
+
+    def test_the_C_UTF_8_sentence_with_step_11_keeps_the_probe(self):
+        """With step 11 the sentence says what step 11 measures, never what
+        it found, and still names the probe, the one check of C.UTF-8 inside
+        PostgreSQL where step 11's SQL tests none of it (16.210)."""
+        self.assertIn(g.STEP11_MEASURES, f.C_NO_VERSION_STEP11)
+        self.assertIn('sql/c_utf8_probe.sql, run on both machines, compares '
+                      "C.UTF-8's order inside PostgreSQL.",
+                      f.C_NO_VERSION_STEP11)
+        self.assertNotIn('step 11', f.C_NO_VERSION)
+
+
 class CorpusFloorIsShared(unittest.TestCase):
     """Every side refuses the same size of corpus, and the number is read in
     one place: glibc_locale_data.below_floor. That
