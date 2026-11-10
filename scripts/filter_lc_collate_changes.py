@@ -578,6 +578,22 @@ C_NO_VERSION = (
     "database whose locale is C, C.<anything> or POSIX, so no version "
     "mismatch warns about C.UTF-8; sql/c_utf8_probe.sql, run on both "
     "machines, compares its order inside PostgreSQL.")
+# The same once step 11 has compared the machines' measurements in this run
+# (g.step11_compared): it says what step 11 measures, never what step 11
+# found for C.utf8, which its own report says; the probe stays, the one
+# check of C.UTF-8's order inside PostgreSQL wherever the SQL step 11 writes
+# tests none of it.
+C_NO_VERSION_STEP11 = (
+    "PostgreSQL records no collation version for a libc collation or "
+    "database whose locale is C, C.<anything> or POSIX, so no version "
+    f"mismatch warns about C.UTF-8; {g.STEP11_MEASURES}, and "
+    "sql/c_utf8_probe.sql, run on both machines, compares C.UTF-8's order "
+    "inside PostgreSQL.")
+
+
+def c_no_version():
+    """C_NO_VERSION, or C_NO_VERSION_STEP11 when step 11 compared."""
+    return C_NO_VERSION_STEP11 if g.step11_compared() else C_NO_VERSION
 
 
 def _fill(text, first='      ', rest=None):
@@ -727,10 +743,10 @@ def print_c_utf8(sides, differs):
                     f"{'holds' if len(lacking) == 1 else 'hold'} no "
                     f"localedata/locales/C, the file C.UTF-8 is built from, "
                     f"and a distro's build can ship its own, so C.UTF-8's "
-                    f"sort rules were not compared. {C_NO_VERSION}", [])
+                    f"sort rules were not compared. {c_no_version()}", [])
     elif 'C' in differs:
         _warn_block(f"C.UTF-8's sort rules differ, and it is listed in the "
-                    f"summary. {C_NO_VERSION}", [])
+                    f"summary. {c_no_version()}", [])
 
 
 def print_removed(removed, renamed_to, new_side, new_name, named='tag'):

@@ -94,8 +94,9 @@ Not compared, no file at glibc-2.34-275.el9_8 (1), listed under Removed in the s
 !! C.UTF-8's sort rules differ, and it is listed in the summary. PostgreSQL
    records no collation version for a libc collation or database whose locale
    is C, C.<anything> or POSIX, so no version mismatch warns about C.UTF-8;
-   sql/c_utf8_probe.sql, run on both machines, compares its order inside
-   PostgreSQL.
+   step 11 measures how each machine's glibc sorts every locale its locale -a
+   lists, and sql/c_utf8_probe.sql, run on both machines, compares C.UTF-8's
+   order inside PostgreSQL.
 
 Character sets (localedata/charmaps/): 1 of the 30 that the 491 locale builds
 measured on both machines use differs between
@@ -706,7 +707,8 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
      !! C.UTF-8's sort rules differ, and it is listed in the summary. PostgreSQL
         records no collation version for a libc collation or database whose locale
         is C, C.<anything> or POSIX, so no version mismatch warns about C.UTF-8;
-        sql/c_utf8_probe.sql, run on both machines, compares its order inside
-        PostgreSQL.
+        step 11 measures how each machine's glibc sorts every locale its locale -a
+        lists, and sql/c_utf8_probe.sql, run on both machines, compares C.UTF-8's
+        order inside PostgreSQL.
      (see docs/limitations.md)
 

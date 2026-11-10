@@ -112,9 +112,8 @@ Listed in the summary (2): th_TH, thai
    (1 name(s); full list: /tmp/pg-glibc-collation-audit/step2_removed_locales.glibc-2.34..glibc-2.39.txt)
 
 -- Measured order: NOT RUN
-     Pass --old-node and --new-node, each machine's file, or --old-order
-     and --new-order, each written by scripts/locale_order.py on that
-     machine. Without them nothing above
+     Pass --old-node and --new-node, each machine's file written by
+     scripts/locale_order.py --extract. Without them nothing above
      asked either machine's glibc how it sorts, and a locale whose files
      did not change can still sort differently. Nor did anything compare
      the decimals of money, check which C library PostgreSQL runs on

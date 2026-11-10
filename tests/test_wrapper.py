@@ -47,11 +47,6 @@ TAGS_NOTICE = (TAGS_FACT + " If the machines run RHEL 8, 9 or 10, name each "
                "side as its build instead, as rpm -q glibc prints it on the "
                "machine without the architecture (glibc-2.34-283.el9_8), or as "
                "latest-el8, latest-el9 or latest-el10.")
-# The same with the measurements, which a build refuses.
-TAGS_NOTICE_FOLDERS = (TAGS_FACT + " Pass each machine's file with --old-node "
-                       "and --new-node instead of every other --old-*/--new-* "
-                       "option: step 2 then reads each machine's own "
-                       "locale sources, which its file holds.")
 from _harness import (GLIBC_CLONE, Step2Report, materialise_tag,
                       swap_alpha_beta, tag_charmaps)
 from test_locale_order import (CHANGED_8_TO_9, RHEL8, RHEL9, RHEL10,
@@ -150,7 +145,6 @@ NOTHING_GONE_OVER_OLD_MID = [
 # audit.sh's usage text, whole, with the script's own path as "audit.sh".
 USAGE = [
     'usage: audit.sh <old> <new>',
-    '         [--old-order FILE --new-order FILE]',
     '         [--old-node FILE --new-node FILE]',
     '       e.g. audit.sh glibc-2.28 glibc-2.34',
     '            audit.sh glibc-2.28-251.el8_10.40 glibc-2.34-275.el9_8',
@@ -159,34 +153,30 @@ USAGE = [
     '       the node), or a build as `rpm -q glibc` names it without the',
     '       architecture, rebuilt from its source RPM, or latest-elN for a',
     '       machine not installed yet: the newest build of RHEL N on Rocky',
-    "       Linux's mirror, named before anything is read; with a build, only",
-    '       --old-node and --new-node of the options below are read',
+    "       Linux's mirror, named before anything is read.",
     '       OLD first, NEW second: a reversed pair is refused, not',
     '       answered. Distance is NOT checked: RHEL8 to RHEL10 is one',
     '       pair, glibc-2.28 glibc-2.39, not two runs added up. What',
     '       that reports was measured with glibc-2.34 in the middle',
     '       (docs/scope.md). Every --* option takes a value.',
     '',
-    '       The --*-order options are OPTIONAL and go together: each is the',
-    '       output of scripts/locale_order.py run on that machine, which',
-    "       asks the machine's own glibc how every locale sorts (step 11).",
-    '       It sees what a comparison of files cannot: a locale whose files',
-    '       did not change can still sort differently.',
-    '',
     '       The --*-node options are OPTIONAL and go together. Each is the',
     '       one file scripts/locale_order.py --extract wrote on that',
     '       machine, with its measurement, its build, its locale sources and',
-    '       its charmaps (a file without them says why), and stands for the',
-    "       --*-order options. Step 2 then reads each machine's own",
-    '       locale sources and charmaps, as the build its file names, in',
-    '       place of the tag (the side given is that build or its tag),',
-    '       and downloads nothing. A file without the sources, or naming a',
-    '       build that is not of RHEL 8, 9 or 10, makes both sides read',
-    '       their tags when that side was given as its tag, and the run',
-    '       says so; given as the build itself, the run is refused. When',
-    "       step 2 compares the two machines' own locale sources, each",
-    "       locale of the old machine step 11 names is set beside step 2's",
-    '       rules for it; otherwise the run says what step 2 compared.',
+    '       its charmaps (a file without them says why). The measurement is',
+    "       how the machine's own glibc sorts every locale, which step 11",
+    '       compares: it sees what a comparison of files cannot, a locale',
+    '       whose files did not change can still sort differently. Step 2',
+    "       reads each machine's own locale sources and charmaps, as the",
+    '       build its file names, in place of the tag (the side given is',
+    '       that build or its tag), and downloads nothing. A file without',
+    '       the sources, or naming a build that is not of RHEL 8, 9 or 10,',
+    '       makes both sides read their tags when that side was given as',
+    '       its tag, and the run says so; given as the build itself, the',
+    "       run is refused. When step 2 compares the two machines' own",
+    '       locale sources, each locale of the old machine step 11 names is',
+    "       set beside step 2's rules for it; otherwise the run says what",
+    '       step 2 compared.',
 ]
 
 REINDEX = SUMMARY_STEP2
@@ -197,9 +187,8 @@ REINDEX_POINTER = [
 MEASURED = "-- Measured order: each machine's own glibc"
 MEASURED_NOT_RUN = '-- Measured order: NOT RUN'
 MEASURED_NOT_RUN_BODY = [
-    "Pass --old-node and --new-node, each machine's file, or --old-order",
-    'and --new-order, each written by scripts/locale_order.py on that',
-    'machine. Without them nothing above',
+    "Pass --old-node and --new-node, each machine's file written by",
+    'scripts/locale_order.py --extract. Without them nothing above',
     "asked either machine's glibc how it sorts, and a locale whose files",
     'did not change can still sort differently. Nor did anything compare',
     'the decimals of money, check which C library PostgreSQL runs on',
@@ -208,9 +197,6 @@ MEASURED_NOT_RUN_BODY = [
     '(LC_CTYPE) answer.',
 ]
 MEASURED_FOOTER = '     Full report: step 11 above.'
-# audit.sh's last word when step 11 exits non-zero: a refusal or a crash.
-COULD_NOT_COMPARE = ('error: step 11 could not compare the two measurements '
-                     '(above). Not continuing.')
 
 
 
@@ -319,10 +305,9 @@ CODE_NOT_COMPARED_HEAD = (
 
 class _CodeNotComparedAndNoDeletedStep:
     """Two properties of every run, asserted on the routes the summary can
-    take: tags (Wrapper), one commit (WrapperEmptyPair), the two
-    measurements (WrapperMeasuredOrder) and the two machines' files
-    (WrapperNodeFiles); the runs on builds and on a tag and a build are
-    test_build_sources._AuditOnBuilds.
+    take: tags (Wrapper), one commit (WrapperEmptyPair) and the two
+    machines' files (WrapperNodeFiles); the runs on builds and on a tag and
+    a build are test_build_sources._AuditOnBuilds.
 
     Step 9.3 deleted steps 4 and 5, which were what a run without the
     machines had to say about localedef's and strcoll's code: ko_KR.utf8
@@ -390,7 +375,12 @@ class Wrapper(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-')
-        cls.rc, cls.out = run_wrapper(OLD, MID, out_dir=cls.out_dir)
+        # Set as a reader's shell might have it: audit.sh unsets it, and
+        # only its own step 11 sets it, so the C.UTF-8 `!!` below must not
+        # say step 11 measured anything (test_C_UTF_8_is_flagged...).
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID, out_dir=cls.out_dir,
+            env_extra={g.STEP11_ENV: '1'})
 
     @classmethod
     def tearDownClass(cls):
@@ -957,10 +947,12 @@ class WrapperRefusesBadInput(unittest.TestCase):
 
     def test_the_folder_and_build_id_options_are_gone(self):
         """--*-locales-dir and --*-build-id fed steps 6 to 8, deleted in
-        step 9.4b: each is refused as an unknown argument, before anything
-        runs, never taken for an option that still exists."""
+        step 9.4b, and --*-order took a plain measurement, deleted in step
+        11.1: each is refused as an unknown argument, before anything runs,
+        never taken for an option that still exists."""
         for opt in ('--old-locales-dir', '--new-locales-dir',
-                    '--old-build-id', '--new-build-id'):
+                    '--old-build-id', '--new-build-id',
+                    '--old-order', '--new-order'):
             with self.subTest(opt=opt):
                 rc, out = run_wrapper(OLD, MID, opt, 'x',
                                       out_dir=self.out_dir)
@@ -974,10 +966,9 @@ class WrapperRefusesBadInput(unittest.TestCase):
         `set -e`: exit 1, no message at all. An empty value is refused for
         the same reason -- it leaves the variable unset, which is
         indistinguishable from never having asked for it."""
-        options = ('--old-order', '--new-order', '--old-node', '--new-node')
-        # Every branch of the case, not one of them: three of the four were
-        # once asserted by nothing, and a mutation to any of those three left
-        # the suite green.
+        options = ('--old-node', '--new-node')
+        # Every branch of the case, not one of them: a branch once asserted
+        # by nothing let a mutation to it leave the suite green.
         cases = [(opt,) for opt in options] + [(opt, '') for opt in options]
         for tail in cases:
             with self.subTest(args=tail):
@@ -1203,213 +1194,6 @@ class WrapperStaleStepLog(unittest.TestCase):
         self.assertNotIn('a warning from a run that read a node', out)
 
 
-@needs_clone
-class WrapperMeasuredOrder(_CodeNotComparedAndNoDeletedStep,
-                           unittest.TestCase):
-    """--old-order and --new-order on RHEL8 -> RHEL9: step 11 runs, and the
-    summary names what each machine's own glibc says changed.
-
-    Freezes the summary a reader acts on: the fourteen locales, and a
-    warnings block that does not repeat step 11's lists with the names cut
-    off from under them.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-order-')
-        cls.rc, cls.out = run_wrapper(OLD, MID,
-                                      '--old-order', cut_to_pair(RHEL8),
-                                      '--new-order', cut_to_pair(RHEL9),
-                                      out_dir=cls.out_dir)
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.out_dir, ignore_errors=True)
-
-    def test_a_run_that_prints_step_11_does_not_point_to_its_log(self):
-        """The control of WrapperNamesStep11sReportWhenALaterStepStops:
-        the report was printed, so nothing points to where it is."""
-        self.assertEqual(self.rc, 0, self.out[-2000:])
-        self.assertNotIn(STEP11_NOT_PRINTED, self.out)
-
-    def test_the_tags_warning_asks_for_the_files_not_a_build(self):
-        """A build is refused beside --old-order and --new-order, so the
-        `!!` for the two tags asks for the machines' files
-        (false-negative-reviewer, 7.7 round 1)."""
-        summary = self.out[self.out.index('AUDIT SUMMARY'):]
-        self.assertIn(TAGS_NOTICE_FOLDERS, flat(summary))
-        self.assertNotIn('name each side as its build', flat(self.out))
-
-    def test_step_11_runs(self):
-        self.assertEqual(self.rc, 0, self.out[-2000:])
-        self.assertEqual(self.out.count('\n== STEP 11  MEASURED ORDER  '), 1)
-        self.assertIn('Sort order CHANGED in 14 locale(s):',
-                      self.out.split('AUDIT SUMMARY')[0])
-
-    def test_the_summary_names_the_fourteen_locales(self):
-        summary = parse_summary(measured_block(self.out))
-        self.assertEqual(set(summary['changes']), CHANGED_8_TO_9)
-        self.assertEqual(summary['not_on_new'],
-                         ['en_US.utf8@ampm', 'en_US@ampm'])
-
-    def test_no_rules_beside_each_locale_from_the_tags(self):
-        """With the measurements alone step 2 compares the tags, and no
-        locale gets their rules as if they were the machines'."""
-        self.assertEqual(rules_beside(self.out), ({}, [RULES_OF_THE_TAGS]))
-
-    def test_the_charmaps_are_said_not_checked(self):
-        """The --*-order options carry no charmaps: the summary says once
-        that neither machine's were checked, and why."""
-        summary = parse_summary(measured_block(self.out))
-        self.assertEqual(summary['charmaps_unchecked'],
-                         [('either machine', lom.ALONE_BOTH,
-                           'unless the same table')])
-
-    def test_the_summary_names_this_runs_characters_file(self):
-        """Every character, other string and pair step 11 found, in a file
-        named for the pair in this run's output folder, holding all fourteen
-        locales."""
-        path = os.path.join(self.out_dir, 'measured_order_characters.'
-                            + pair_slug(OLD, MID) + '.tsv')
-        self.assertEqual(parse_summary(measured_block(self.out))['characters_file'],
-                         path)
-        with open(path, encoding='utf-8') as f:
-            names = set().union(*map(set, changes_in(parse_characters(f.read()))))
-        self.assertEqual(names, CHANGED_8_TO_9)
-
-    def test_step_11_names_this_runs_sql_files(self):
-        """One SQL file per database encoding, named for the pair in this
-        run's output folder, in step 11's block with the command that reads
-        two servers' outputs; nothing of them in the summary."""
-        step11 = self.out.split('\n== STEP 11  MEASURED ORDER  ')[1].split(
-            'AUDIT SUMMARY')[0]
-        named = re.findall(r'^  (\w+) database, [\d,]+ test\(s\):\n    (\S+)$',
-                           step11, re.M)
-        prefix = os.path.join(self.out_dir, 'measured_order_confirm.'
-                              + pair_slug(OLD, MID))
-        self.assertEqual(named, [(enc, f'{prefix}.{enc}.sql')
-                                 for enc in ('LATIN1', 'LATIN9', 'UTF8')])
-        for enc, path in named:
-            self.assertTrue(os.path.isfile(path), path)
-        self.assertIn('  python3 scripts/confirm_sql.py read FILE old.out '
-                      'new.out', step11.split('\n'))
-        self.assertNotIn('measured_order_confirm.',
-                         self.out[self.out.index('AUDIT SUMMARY'):])
-
-    def test_the_block_sits_under_removed(self):
-        """Removed stays directly under Reindex, where it was put so that a
-        locale the upgrade deletes is on the first screen: this block is long,
-        and above Removed it pushed that section down."""
-        summary = self.out.split('AUDIT SUMMARY')[1]
-        self.assertLess(summary.index(REINDEX), summary.index(REMOVED))
-        self.assertLess(summary.index(REMOVED), summary.index(MEASURED))
-        self.assertNotIn(MEASURED_NOT_RUN, summary)
-
-    def test_reindex_says_where_the_measured_answer_is(self):
-        """Reindex lists five names from the tags and comes first; the block
-        that lists fourteen from the machines is further down. Without a
-        pointer the five read as the whole answer. Between them, the five
-        lines that say how to read the list."""
-        body = summary_block(self.out, REINDEX)
-        self.assertEqual(body[-2:], REINDEX_POINTER)
-        self.assertEqual(len(body), 5 + 1 + 5 + 2)
-
-
-    def test_the_warnings_block_does_not_repeat_step_11(self):
-        """Its `!!` headers there would stand over lists the block does not
-        carry: "4 locale(s):" and nothing under it."""
-        warnings = flat(self.out.split('-- Warnings the clean results above '
-                                       'do NOT cover')[1])
-        for header in ('!! Could not be measured', '!! Not on the new machine',
-                       '!! Unchanged only as far as measured'):
-            with self.subTest(header=header):
-                self.assertNotIn(header, warnings)
-
-
-@needs_clone
-class WrapperMeasuredOrderRefused(unittest.TestCase):
-    """What step 11 is given is checked before the sides are read ('What
-    was compared'), and a refusal ends the run there: no step, no summary.
-
-    Freezes three ways a summary could read as if the order had been
-    measured when it was not: one machine's file alone, two files of another
-    upgrade, and a file cut short.
-    """
-
-    def setUp(self):
-        self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-order-bad-')
-        self.addCleanup(shutil.rmtree, self.out_dir, ignore_errors=True)
-
-    def assertRefusedBeforeTheSides(self, *args):
-        rc, out = run_wrapper(OLD, MID, *args, out_dir=self.out_dir)
-        self.assertEqual(rc, 2, out[-2000:])
-        self.assertNotIn(COMPARED_BANNER, out)
-        self.assertNotIn('Tag provenance', out)
-        self.assertNotIn('AUDIT SUMMARY', out)
-        return out
-
-    def test_the_old_file_alone(self):
-        out = self.assertRefusedBeforeTheSides('--old-order', cut_few(RHEL8))
-        self.assertIn('go together', out)
-
-    def test_the_new_file_alone(self):
-        out = self.assertRefusedBeforeTheSides('--new-order', cut_few(RHEL9))
-        self.assertIn('go together', out)
-
-    def test_the_files_of_another_upgrade(self):
-        out = self.assertRefusedBeforeTheSides('--old-order', cut_few(RHEL9),
-                                            '--new-order', cut_few(RHEL10))
-        self.assertIn('locale_order.py: ', out)
-        self.assertIn(COULD_NOT_COMPARE, out)
-
-    def test_a_file_cut_short(self):
-        """And a characters file an earlier run left is gone: a refused run
-        leaves nothing that reads as its list."""
-        cut = os.path.join(self.out_dir, 'cut.out')
-        with open(cut_few(RHEL9), encoding='utf-8') as f, \
-                open(cut, 'w', encoding='utf-8') as g_:
-            text = f.read()
-            g_.write(text[:len(text) // 3])
-        stale = os.path.join(self.out_dir, 'measured_order_characters.'
-                             + pair_slug(OLD, MID) + '.tsv')
-        sql = os.path.join(self.out_dir, 'measured_order_confirm.'
-                           + pair_slug(OLD, MID) + '.UTF8.sql')
-        for path in (stale, sql):
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write('left by an earlier run\n')
-        out = self.assertRefusedBeforeTheSides('--old-order', cut_few(RHEL8),
-                                            '--new-order', cut)
-        self.assertIn('locale_order.py: ', out)
-        self.assertIn(COULD_NOT_COMPARE, out)
-        self.assertFalse(os.path.exists(stale))
-        self.assertFalse(os.path.exists(sql))
-
-
-@needs_clone
-class WrapperMeasuredOrderUncheckedTag(unittest.TestCase):
-    """The old tag given as a commit id: nothing can say which glibc it is,
-    so the summary says the file was not checked against it, rather than
-    passing it as a match."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-order-sha-')
-        cls.rc, cls.out = run_wrapper(EXPECTED_SHA[OLD], MID,
-                                      '--old-order', cut_to_pair(RHEL8),
-                                      '--new-order', cut_to_pair(RHEL9),
-                                      out_dir=cls.out_dir)
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.out_dir, ignore_errors=True)
-
-    def test_the_summary_says_the_old_file_was_not_checked(self):
-        self.assertEqual(self.rc, 0, self.out[-2000:])
-        summary = parse_summary(measured_block(self.out))
-        self.assertEqual(summary['warnings'], ['OLD tag unchecked'])
-        self.assertEqual(set(summary['changes']), CHANGED_8_TO_9)
-
-
 # --- --old-node and --new-node -------------------------------------------------
 
 # Where a node file says its sources were not found. Short, so that the reason
@@ -1584,6 +1368,9 @@ class WrapperNodeFiles(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
         cls.rc, cls.out = run_wrapper(
             OLD, MID, '--old-node', cls.old_file, '--new-node', cls.new_file,
             out_dir=cls.out_dir)
+        # The two builds the files name, as audit.sh names the pair.
+        cls.pair = pair_slug(g.without_arch(build_of(RHEL8)),
+                             g.without_arch(build_of(RHEL9)))
 
     @classmethod
     def tearDownClass(cls):
@@ -1614,6 +1401,63 @@ class WrapperNodeFiles(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
         summary = parse_summary(measured_block(self.out))
         self.assertEqual(set(summary['changes']), CHANGED_8_TO_9)
         self.assertNotIn('NOT RUN', self.out.split('AUDIT SUMMARY')[1])
+
+    def test_a_run_that_prints_step_11_does_not_point_to_its_log(self):
+        """The control of WrapperNamesStep11sReportWhenALaterStepStops:
+        the report was printed, so nothing points to where it is."""
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        self.assertNotIn(STEP11_NOT_PRINTED, self.out)
+
+    def test_the_summary_names_this_runs_characters_file(self):
+        """Every character, other string and pair step 11 found, in a file
+        named for the pair in this run's output folder, holding all fourteen
+        locales."""
+        path = os.path.join(self.out_dir, 'measured_order_characters.'
+                            + self.pair + '.tsv')
+        self.assertEqual(
+            parse_summary(measured_block(self.out))['characters_file'], path)
+        with open(path, encoding='utf-8') as f:
+            names = set().union(*map(set, changes_in(parse_characters(
+                f.read()))))
+        self.assertEqual(names, CHANGED_8_TO_9)
+
+    def test_step_11_names_this_runs_sql_files(self):
+        """One SQL file per database encoding, named for the pair in this
+        run's output folder, in step 11's block with the command that reads
+        two servers' outputs; nothing of them in the summary."""
+        step11 = self.out.split('\n== STEP 11  MEASURED ORDER  ')[1].split(
+            'AUDIT SUMMARY')[0]
+        named = re.findall(r'^  (\w+) database, [\d,]+ test\(s\):\n    (\S+)$',
+                           step11, re.M)
+        prefix = os.path.join(self.out_dir, 'measured_order_confirm.'
+                              + self.pair)
+        self.assertEqual(named, [(enc, f'{prefix}.{enc}.sql')
+                                 for enc in ('LATIN1', 'LATIN9', 'UTF8')])
+        for enc, path in named:
+            self.assertTrue(os.path.isfile(path), path)
+        self.assertIn('  python3 scripts/confirm_sql.py read FILE old.out '
+                      'new.out', step11.split('\n'))
+        self.assertNotIn('measured_order_confirm.',
+                         self.out[self.out.index('AUDIT SUMMARY'):])
+
+    def test_the_block_sits_under_removed(self):
+        """Removed stays directly under step 2's list, where it was put so
+        that a locale the upgrade deletes is on the first screen: this block
+        is long, and above Removed it pushed that section down."""
+        summary = self.out.split('AUDIT SUMMARY')[1]
+        self.assertLess(summary.index(REINDEX), summary.index(REMOVED))
+        self.assertLess(summary.index(REMOVED), summary.index(MEASURED))
+        self.assertNotIn(MEASURED_NOT_RUN, summary)
+
+    def test_the_warnings_block_does_not_repeat_step_11(self):
+        """Its `!!` headers there would stand over lists the block does not
+        carry: "4 locale(s):" and nothing under it."""
+        warnings = flat(self.out.split('-- Warnings the clean results above '
+                                       'do NOT cover')[1])
+        for header in ('!! Could not be measured', '!! Not on the new machine',
+                       '!! Unchanged only as far as measured'):
+            with self.subTest(header=header):
+                self.assertNotIn(header, warnings)
 
     def test_each_locale_beside_its_rules(self):
         """Step 2's rules beside step 11's verdict, every locale step 11
@@ -2168,6 +2012,37 @@ class WrapperNodeFilesWithoutSources(unittest.TestCase):
         the tags' rules as if they were the machines'."""
         self.assertEqual(rules_beside(self.out), ({}, [RULES_OF_THE_TAGS]))
 
+    def test_the_tags_warning_asks_for_nothing(self):
+        """The files were given and hold no sources: the `!!` for the two
+        tags says what a tag does not hold and asks for nothing, never to
+        name each side as its build, which with these files is refused
+        (TAG_ASK none; false-negative-reviewer, 11.1)."""
+        summary = flat(self.summary)
+        self.assertIn(TAGS_FACT, summary)
+        self.assertNotIn('name each side as its build', flat(self.out))
+
+    def test_step_2s_list_says_where_the_measured_answer_is(self):
+        """Step 2's list, from the tags, comes first; the block that lists
+        what each machine's glibc says is further down. Without a pointer
+        the list reads as the whole answer. It names the tags, which both
+        sides read here, never the machines' own sources."""
+        body = summary_block(self.out, REINDEX)
+        self.assertEqual(body[-2:], REINDEX_POINTER)
+        self.assertEqual(len(body), 5 + 1 + 5 + 2)
+        self.assertNotIn("each machine's own locale sources", ' '.join(body))
+
+    def test_the_C_UTF_8_warning_names_step_11_and_the_probe(self):
+        """The tags hold no file C, so step 2 did not compare C.UTF-8; step
+        11 measured each machine, and the `!!` says so beside the probe,
+        once in the summary (16.210)."""
+        summary = flat(self.summary)
+        self.assertEqual(summary.count(
+            f"!! {OLD} and {MID} hold no localedata/locales/C, the file "
+            f"C.UTF-8 is built from, and a distro's build can ship its own, "
+            f"so C.UTF-8's sort rules were not compared. "
+            f"{step2.C_NO_VERSION_STEP11}"), 1, summary)
+        self.assertNotIn(step2.C_NO_VERSION, summary)
+
 
     def test_removed_points_to_the_reason(self):
         """Both sides read their tags because of the files: Removed says
@@ -2215,8 +2090,11 @@ class WrapperOneTagFromTheFiles(unittest.TestCase):
         self.assertEqual(summary_warnings(self.out).count(flat(
             f"!! {MID} and {MID} are the same commit. Step 2 compares "
             f"nothing: it would compare upstream source against itself. "
-            f"{g._NOTHING_COMPARED_REST.format(on='the tags')}")), 1,
+            f"{g._NOTHING_COMPARED_REST_STEP11.format(On='The tags')}")), 1,
             self.out)
+        # Step 11 ran: the files were given, and nothing asks for them.
+        self.assertNotIn('With each machine\'s file (--old-node',
+                         flat(self.out))
         assert_no_deleted_block(self, self.out)
 
     def test_no_rules_beside_each_locale_of_one_commit(self):
@@ -2259,15 +2137,6 @@ class WrapperNodeFileRefused(unittest.TestCase):
                 self.assertIn('--old-node and --new-node go together',
                               self.assertRefusedBeforeTheSides(*args))
 
-    def test_with_the_options_they_stand_for(self):
-        for extra in (('--old-order', cut_few(RHEL8)),
-                      ('--new-order', cut_few(RHEL9))):
-            for nodes in (('--old-node', self.old, '--new-node', self.new),
-                          ('--new-node', self.new)):
-                with self.subTest(extra=extra, nodes=nodes):
-                    self.assertIn('give them without those options',
-                                  self.assertRefusedBeforeTheSides(*nodes, *extra))
-
     def test_an_old_file_cut_short(self):
         cut = self.copy_of(self.old, cut=100000)
         out = self.assertRefusedBeforeTheSides('--old-node', cut,
@@ -2283,12 +2152,24 @@ class WrapperNodeFileRefused(unittest.TestCase):
         self.assertIn("the new node's file could not be used", out)
 
     def test_the_same_file_twice(self):
+        """Step 11 refuses, and the characters file and SQL an earlier run
+        left are gone: a refused run leaves nothing that reads as its
+        list."""
+        stale = os.path.join(self.out_dir, 'measured_order_characters.'
+                             + pair_slug(OLD, OLD) + '.tsv')
+        sql = os.path.join(self.out_dir, 'measured_order_confirm.'
+                           + pair_slug(OLD, OLD) + '.UTF8.sql')
+        for path in (stale, sql):
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('left by an earlier run\n')
         out = self.assertRefusedBeforeTheSides('--old-node', self.old,
                                             '--new-node', self.old,
                                             tags=(OLD, OLD))
         self.assertIn('the two files hold the same measurement', out)
         self.assertIn(f'{COULD_NOT_COMPARE_NODES} {self.old} and {self.old}',
                       out)
+        self.assertFalse(os.path.exists(stale))
+        self.assertFalse(os.path.exists(sql))
 
     def test_the_files_the_wrong_way_round(self):
         out = self.assertRefusedBeforeTheSides('--old-node', self.new,
@@ -2389,7 +2270,8 @@ class WrapperNamesStep11sReportWhenALaterStepStops(unittest.TestCase):
     stays theirs, no summary is printed, and the run names step 11's
     report, which it had written. Each stop injected by a sitecustomize:
     the sides refusing (a first clone with no network, say), step 2
-    failing."""
+    failing. The machines' files hold no sources, so the pair is the two
+    tags and the report is named for them."""
 
     def run_stopped(self, where):
         out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-stop11-')
@@ -2401,10 +2283,13 @@ class WrapperNamesStep11sReportWhenALaterStepStops(unittest.TestCase):
             fh.write("import sys\n"
                      f"if {where}:\n"
                      "    sys.exit('injected: this step stops the run')\n")
-        rc, out = run_wrapper(OLD, MID, '--old-order', cut_few(RHEL8),
-                              '--new-order', cut_few(RHEL9),
-                              out_dir=out_dir,
-                              env_extra={'PYTHONPATH': hook})
+        rc, out = run_wrapper(
+            OLD, MID,
+            '--old-node', node_file('old.tar', cut_few(RHEL8), OLD,
+                                    sources=False),
+            '--new-node', node_file('new.tar', cut_few(RHEL9), MID,
+                                    sources=False),
+            out_dir=out_dir, env_extra={'PYTHONPATH': hook})
         return out_dir, rc, out
 
     def test_each_stop_names_the_report(self):

@@ -7,7 +7,7 @@ open.
 
 **Commands are numbered here; steps are what a run prints.** A run of command
 1 says what it compared, then does its own work in steps numbered 2 and 11:
-2 always, and 11 with a measurement from each machine. Those numbers are not
+2 always, and 11 with each machine's file. Those numbers are not
 these three.
 
 ## Command 1 — which locales the upgrade can affect
@@ -31,8 +31,7 @@ of its packages from Rocky Linux's mirror, rebuilds its `localedata/` and
 `locale/`, and reads them instead of the tag. For a machine not installed
 yet, a side can be `latest-el10` (`latest-el<N>` for RHEL N): the newest
 build Rocky Linux's mirror lists for that release, whose name the run prints
-before anything else and reads from then on. With a build, only `--old-node` and
-`--new-node` of the options of 1.b are read.
+before anything else and reads from then on.
 
 | The run's step | The question it answers |
 |---|---|
@@ -83,7 +82,7 @@ reach at all:
   the same glibc code on both. What it does not see, it prints beside its
   result.
 
-Leave the files and the measurements out and the summary says `NOT RUN`
+Leave the files out and the summary says `NOT RUN`
 for step 11; given a tag on either side, it also says `NOT CHECKED` for what
 that side's distro changes. They are not omitted, because a section that
 vanishes reads like a section that found nothing.
@@ -166,17 +165,29 @@ For the first four, extract again with this checkout's
 back against the list, so a disk that renames or drops a file stops the run as
 well.
 
-The two files go together, since one machine's file compares nothing, and
-they do not mix with the options of the next section.
+The two files go together, since one machine's file compares nothing.
 
-#### The measurements alone
+#### A measurement you already have
 
-`audit.sh` also takes each machine's measurement on its own, for when you
-have it already: `--old-order` and `--new-order`, each the output of a plain
-`python3 scripts/locale_order.py > old.out` on that machine, given with two
-tags. Step 11 then compares the two measurements, and step 2 reads the
-tags. A measurement carries no charmaps, so step 11 does not check the
-strings it measured against them, and says so.
+`audit.sh` reads a machine's measurement only from the file `--extract`
+writes. If what you kept of a machine you have since upgraded is the output
+of a plain `python3 scripts/locale_order.py`, here `old-measurement.out`,
+step 11 compares it by hand with the new machine's file, laid out with
+`--unpack`:
+
+```sh
+python3 scripts/locale_order.py --unpack new.tar new
+python3 scripts/locale_order.py --compare old-measurement.out \
+    new/locale_order.out --tags glibc-2.28 glibc-2.34 \
+    --new-charmaps new/charmaps --summary-to summary.txt --sql-to confirm
+```
+
+`--tags` names the two glibc versions, so that a measurement taken on
+another glibc is refused; without it nothing checks that. `--sql-to` writes
+the `confirm.<ENCODING>.sql` files command 3 runs on both machines. The old
+measurement holds no charmaps, so step 11 checks only the new machine's,
+and says so. Step 2 is a run of its own: `./audit.sh` with each machine's
+build (1.a).
 
 ## Command 2 — whether `C.UTF-8`'s order changed
 

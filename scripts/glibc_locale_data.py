@@ -867,6 +867,29 @@ def is_machine(s):
             and bool(s.prov.get('machine')))
 
 
+# Whether step 11 compared the two machines' measurements in this run:
+# audit.sh unsets it before any step runs and sets it to
+# '1' only once step 11's comparison has ended with no error (step 11 runs
+# before every other step). Unset, by hand: no. What step 11 does is said in
+# STEP11_MEASURES, one sentence for every `!!` that names it.
+STEP11_ENV = 'PG_GLIBC_AUDIT_STEP11'
+STEP11_MEASURES = ("step 11 measures how each machine's glibc sorts every "
+                   "locale its locale -a lists")
+
+
+def step11_compared():
+    """Did step 11 compare the machines' measurements in this run
+    (STEP11_ENV)? Any value but unset or '1' is refused, never read as
+    either answer."""
+    v = os.environ.get(STEP11_ENV)
+    if v is None:
+        return False
+    if v != '1':
+        die(f"{STEP11_ENV}={v!r} is not 1; audit.sh sets it to 1 once step 11 "
+            f"has compared, and leaves it unset otherwise.")
+    return True
+
+
 _NOTHING_COMPARED_REST = (
     "A run on {on} says nothing about an intra-major upgrade "
     "(RHEL 8.1 -> 8.2, say): the distro's own "
@@ -876,6 +899,15 @@ _NOTHING_COMPARED_REST = (
     "sources, when the files hold them; "
     "sql/c_utf8_probe.sql checks C.UTF-8 on each "
     "machine. C.UTF-8's order moved in glibc-2.28-93.el8 with the "
+    "upstream tag unchanged. See docs/results.md.")
+# The same, once step 11 has compared: the machines' files were given, and
+# their reason for leaving step 2 on the tags is the run's first warning.
+_NOTHING_COMPARED_REST_STEP11 = (
+    "{On} say nothing about an intra-major upgrade "
+    "(RHEL 8.1 -> 8.2, say): the distro's own "
+    "builds are where such a change lives. " + STEP11_MEASURES[0].upper()
+    + STEP11_MEASURES[1:] + ", and sql/c_utf8_probe.sql checks C.UTF-8 on "
+    "each machine. C.UTF-8's order moved in glibc-2.28-93.el8 with the "
     "upstream tag unchanged. See docs/results.md.")
 
 
@@ -902,9 +934,10 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
     noun = pair_noun(old, new)
     one = ONE[word]
     machines = is_machine(old) and is_machine(new)
-    rest = (_NOTHING_COMPARED_REST.format(
-                on='the tags' if word == 'tags'
-                else 'upstream commits') if noun == 'tags' else
+    on = 'the tags' if word == 'tags' else 'upstream commits'
+    rest = ((_NOTHING_COMPARED_REST_STEP11.format(On=on[0].upper() + on[1:])
+             if step11_compared() else _NOTHING_COMPARED_REST.format(on=on))
+            if noun == 'tags' else
             nothing_compared_machines(machines_charmaps(old, new))
             if machines else
             _NOTHING_COMPARED_BUILDS.format(noun=noun, one=one))
@@ -2585,11 +2618,9 @@ def compared_sides(here, old, new):
 
 
 # How audit.sh tells tag_sides_text what a reader of this run can do to have a
-# side read as a build (tag_sides_text): 'build' (name it), 'node' (the
-# measurements, which a build refuses: pass the machines' files),
-# 'none' (a machine's file holds no locale sources or names a build that is
-# not of RHEL 8, 9 or 10, and its own `!!` says so). Unset, by hand:
-# 'build'.
+# side read as a build (tag_sides_text): 'build' (name it), or 'none' (a
+# machine's file holds no locale sources or names a build that is not of
+# RHEL 8, 9 or 10, and its own `!!` says so). Unset, by hand: 'build'.
 TAG_ASK_ENV = 'PG_GLIBC_AUDIT_TAG_ASK'
 
 
@@ -2733,8 +2764,8 @@ def tag_sides_text(tags, kinds=None):
     hold, said once here (the summary relays it from the log of "What was
     compared"), and what to pass instead, by the route TAG_ASK_ENV names."""
     ask = os.environ.get(TAG_ASK_ENV) or 'build'
-    if ask not in ('build', 'node', 'none'):
-        die(f"{TAG_ASK_ENV}={ask!r} is not one of build, node, none.")
+    if ask not in ('build', 'none'):
+        die(f"{TAG_ASK_ENV}={ask!r} is not one of build, none.")
     one = len(tags) == 1
     kinds = kinds or ['tag'] * len(tags)
     if len(set(kinds)) == 1:
@@ -2755,11 +2786,6 @@ def tag_sides_text(tags, kinds=None):
                  f"as its build instead, as rpm -q glibc prints it on the "
                  f"machine without the architecture (glibc-2.34-283.el9_8), "
                  f"or as latest-el8, latest-el9 or latest-el10.")
-    elif ask == 'node':
-        text += (" Pass each machine's file with --old-node and --new-node "
-                 "instead of every other --old-*/--new-* option: step 2 "
-                 "then reads each machine's own locale sources, which its "
-                 "file holds.")
     return text
 
 
@@ -2894,8 +2920,9 @@ def _main(argv):
         # rule every step applies (is_build_name), so that it picks each
         # sentence of its summary by what the side is. latest-elN is a
         # build, marked `latest` in a third field, and asks nothing of the
-        # network here: audit.sh refuses a machine's files with a build
-        # first, then has `latest` resolve it.
+        # network here: audit.sh lays out the machines' files first
+        # (machine_sides refuses latest-elN with them), then has `latest`
+        # resolve it.
         if len(argv) != 5 or argv[1] != '--to':
             die("usage: glibc_locale_data.py resolve --to <file> <old> <new>")
         with open(argv[2], 'w', encoding='utf-8') as fh:

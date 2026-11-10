@@ -3895,11 +3895,9 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
         self.assertNotIn('AUDIT SUMMARY', out)
 
 
-class AuditShRefusesAMachinesFilesWithABuild(unittest.TestCase):
-    """With a build on either side, every option that reads a machine's
-    files, but --old-node and --new-node, is refused before the sides are
-    read, its
-    pair given or not, on the tag's side of a mixed pair too."""
+class AuditShTakesAMachinesFilesWithABuild(unittest.TestCase):
+    """With a build on either side, --old-node and --new-node are read, and
+    what stops a run before the sides is said with its reason."""
 
     def refused(self, *args, mirror=None):
         out = tempfile.mkdtemp(prefix='audit_refuse_')
@@ -3916,21 +3914,6 @@ class AuditShRefusesAMachinesFilesWithABuild(unittest.TestCase):
         self.assertEqual(os.listdir(out), [])
         return flat(p.stderr.decode())
 
-    def test_each_option_is_refused(self):
-        for args, build, said in (
-                (('--old-order', 'x'), B40, '--old-order is refused'),
-                (('--new-order', 'x'), B40, '--new-order is refused'),
-                (('--old-order', 'a', '--new-order', 'b'), B40,
-                 '--old-order and --new-order are refused')):
-            with self.subTest(args=args):
-                said_all = self.refused(B40, B275, *args)
-                self.assertIn('error: %s is a build, and with a build '
-                              "audit.sh reads a machine's files only from "
-                              '--old-node and --new-node: %s. Give those '
-                              "options with two tags, or each machine's file "
-                              'with --old-node and --new-node.'
-                              % (build, said), said_all)
-
     def test_each_machines_file_is_not_refused(self):
         """--old-node and --new-node are read with a build: what stops this
         run is the file, which is not there, not the option."""
@@ -3943,23 +3926,7 @@ class AuditShRefusesAMachinesFilesWithABuild(unittest.TestCase):
                            env=dict(os.environ, PG_GLIBC_AUDIT_OUT=out))
         err = flat(p.stderr.decode())
         self.assertEqual(p.returncode, 2, err[-2000:])
-        self.assertNotIn('is a build, and with a build', err)
         self.assertIn("the old node's file could not be used", err)
-
-    def test_the_tag_sides_options_are_refused_too(self):
-        said = self.refused(TAG, B275, '--old-order', 'x')
-        self.assertIn('%s is a build' % B275, said)
-        self.assertIn('--old-order is refused', said)
-
-    def test_latest_is_refused_with_them_before_the_mirror_is_asked(self):
-        """latest-elN is a build: the options are refused first, with a
-        mirror that cannot be read, so nothing asked the network."""
-        said = self.refused('latest-el8', B275, '--old-order', 'x',
-                            mirror='file:///nowhere/')
-        self.assertIn('error: latest-el8 is a build, and with a build '
-                      "audit.sh reads a machine's files only from --old-node "
-                      'and --new-node: --old-order is refused.', said)
-        self.assertNotIn('cannot resolve', said)
 
     def test_a_latest_that_cannot_be_resolved_stops_the_run(self):
         """A mirror that cannot be read: the run stops before the sides with
@@ -4434,6 +4401,15 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn(name, reindex)
 
+    def test_the_C_UTF_8_warning_names_step_11_and_the_probe(self):
+        """C.UTF-8's rules differ between the machines' own sources, and
+        step 11 measured both machines: the `!!` says so beside the probe,
+        once in the summary (16.210)."""
+        summary = flat(self.summary('read'))
+        self.assertEqual(summary.count(C_DIFFERS + step2.C_NO_VERSION_STEP11),
+                         1, summary)
+        self.assertNotIn(step2.C_NO_VERSION, summary)
+
     def test_a_machine_without_its_sources(self):
         """The old machine's file holds no sources (glibc-locale-source not
         installed): no build is downloaded in its place, so the run reads
@@ -4456,9 +4432,11 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         self.assertIn("A machine's file made both sides read their tags; "
                       "why is the first warning below.",
                       flat(' '.join(summary_block(summary, REMOVED))))
+        # Step 11 measured both machines (16.210).
         self.assertEqual(flat(summary).count(
             C_NOT_COMPARED.format('glibc-2.28 and glibc-2.34').replace(
-                'holds', 'hold') + step2.C_NO_VERSION), 1)
+                'holds', 'hold') + step2.C_NO_VERSION_STEP11), 1)
+        self.assertNotIn(step2.C_NO_VERSION, flat(summary))
         warned = flat(summary.split('-- Warnings the clean results above do '
                                     'NOT cover', 1)[1])
         self.assertIn("!! The old machine's file names %s, which this run "
