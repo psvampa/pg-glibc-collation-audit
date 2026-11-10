@@ -1978,9 +1978,9 @@ class TranslitRun:
                     f"in a transliteration, which localedef reads as one "
                     f"character only from glibc 2.36 on (commit "
                     f"{UTF8_READER[:10]}), and "
-                    + ("this tag does not hold it" if utf8 is False else
-                       "this tool could not tell whether this tag holds "
-                       "it"))
+                    + (f"{self.side.tag} does not hold it" if utf8 is False
+                       else "this tool could not tell whether "
+                       f"{self.side.tag} holds it"))
         return ct
 
     def read(self, name, path=()):
@@ -2609,7 +2609,7 @@ def compare_translit(old, new, common, ks, bad, read_charmaps):
                               and elems[0].get(de) != elems[1].get(de)}
             if moved_elements:
                 raise Unsettled(f"collating elements that differ between "
-                                f"the tags in "
+                                f"the two sides in "
                                 f"{', '.join(sorted({d for d, _ in moved_elements}))}")
             todo = [(d, el, parts) for (d, el), parts in sorted(
                         elems[0].items())

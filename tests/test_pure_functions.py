@@ -2297,6 +2297,11 @@ class TranslitCompare(unittest.TestCase):
                                   for f in r.translit.found], [('M', 0)])
                 self.assertIn(why, r.translit.found[0].reason)
                 self.assertIn('raw non-ASCII', r.translit.found[0].reason)
+                # The side is named as the reason names it (16.183), never
+                # "this tag": a build or a commit is read here too.
+                self.assertRegex(r.translit.found[0].reason,
+                                 r'(and \S+ does not hold it|whether \S+ '
+                                 r'holds it)$')
         def commented(entry):
             return dict(self.BASE, D=ctype_text(
                 'copy "i18n"\n' + translit(entry + ' % ‘ -> x'), ELEMENT))
@@ -2538,7 +2543,8 @@ class TranslitCompare(unittest.TestCase):
             'collating element out of a transliteration is listed already, '
             'so none was compared.'))
         r = self.run_compare(self.BASE, new)
-        self.assertIn('differ between the tags', r.translit.found[0].reason)
+        self.assertIn('differ between the two sides',
+                      r.translit.found[0].reason)
 
     def test_a_build_step_3_lists_anyway_is_counted(self):
         """Counted, and its changed elements still in the printed total:

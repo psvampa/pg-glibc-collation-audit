@@ -15,8 +15,10 @@ order and pair-slug, and provenance and corpus are kept for a hand run:
   python3 glibc_locale_data.py provenance <tag> [<tag> ...]
   python3 glibc_locale_data.py corpus <tag> [<tag> ...]
   python3 glibc_locale_data.py order [--allow-reverse] [--quiet] <old> <new>
-      prints the direction (same, forward, reversed, undetermined) and
-      whether nothing is compared (commit, tree, none)
+      prints the direction (same, forward, reversed, undetermined),
+      whether nothing is compared (commit, tree, none), each side's class
+      (tag, commit, build; side_class) and the pair's word (tags, builds,
+      sides; pair_word)
   python3 glibc_locale_data.py pair-slug <old> <new>
   python3 glibc_locale_data.py sides <old> <new>
       what the run compares (compared_sides), printed under audit.sh's
@@ -420,7 +422,8 @@ def refuse_build_commits(repo, commits):
         if sha in made:
             die(f"{ref} is a commit this tool made for a distro build: "
                 f"outside localedata/ and locale/ it holds the upstream "
-                f"tag's tree, so read as a tag it hides the build's own "
+                f"tag's tree, so read as an upstream commit it hides the "
+                f"build's own "
                 f"patches. Name the build itself (glibc-2.34-283.el9_8) "
                 f"instead.")
 
@@ -773,15 +776,19 @@ def _order_by_release(repo, lo, old, new):
         return ('forward' if r_old < r_new else 'reversed'), (
             f'{pair}: release {r_old[0]}.{r_old[1]} against '
             f'{r_new[0]}.{r_new[1]}')
+    upstream = old if _is_tag(old) else new
     return 'undetermined', (f'{pair}: one release on both sides, or one that '
                             f'cannot be read, and nothing here places a build '
-                            f'against a tag of its own release')
+                            f'against a {ref_kind(repo, _ref(upstream))} of '
+                            f'its own release')
 
 
 def pair_noun(old, new):
-    """What the two sides are, as the word a sentence about both uses:
-    'tags' (two tags of the clone: each sentence as it has always been
-    printed), 'builds', or 'sides' (a tag and a build)."""
+    """The route the pair takes: 'tags' (two refs of the clone, a tag or a
+    commit each), 'builds', or 'sides' (a ref of the clone and a build). It
+    decides what each step reads and which block the summary prints; a
+    sentence names the sides by pair_word, which tells a commit from a
+    tag."""
     kinds = (_is_tag(old), _is_tag(new))
     return 'tags' if all(kinds) else 'sides' if any(kinds) else 'builds'
 
@@ -861,7 +868,7 @@ def is_machine(s):
 
 
 _NOTHING_COMPARED_REST = (
-    "A run on the tags says nothing about an intra-major upgrade "
+    "A run on {on} says nothing about an intra-major upgrade "
     "(RHEL 8.1 -> 8.2, say): the distro's own "
     "builds are where such a change lives. With each machine's file "
     "(--old-node and --new-node), step 11 measures how each machine "
@@ -878,7 +885,8 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
     clean verdict, when nothing was compared take the second; the
     direction is the first."""
     status, detail = pair_order(repo, old, new, commits)
-    one = ONE[pair_noun(old, new)]
+    word = pair_word(repo, old, new)
+    one = ONE[word]
     if status == 'reversed' and not allow_reverse:
         die(f"{detail}.\n"
             f"       This pair is REVERSED. Every step takes <old_{one}> "
@@ -892,9 +900,11 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
     # such pairs on glibc's own branches.
     nothing = nothing_compared(repo, old, new, commits)
     noun = pair_noun(old, new)
-    one = ONE[noun]
+    one = ONE[word]
     machines = is_machine(old) and is_machine(new)
-    rest = (_NOTHING_COMPARED_REST if noun == 'tags' else
+    rest = (_NOTHING_COMPARED_REST.format(
+                on='the tags' if word == 'tags'
+                else 'upstream commits') if noun == 'tags' else
             nothing_compared_machines(machines_charmaps(old, new))
             if machines else
             _NOTHING_COMPARED_BUILDS.format(noun=noun, one=one))
@@ -919,9 +929,6 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
     elif status == 'undetermined':
         # The summary repeats this block at its end, and it is all the
         # summary says of the direction: "below" would be false there.
-        if noun == 'tags' and 'commit' in (ref_kind(repo, _ref(old)),
-                                           ref_kind(repo, _ref(new))):
-            one = 'side'
         warn(f"The DIRECTION of this pair could not be established: {detail}. "
              f"Nothing in this run has checked it: if the two arguments are "
              f"the wrong way round, every "
@@ -1159,17 +1166,21 @@ def list_locale_files(repo, tag):
     return side(repo, tag).paths
 
 
-def _require_corpus(paths, tag, kind='tag'):
+def _require_corpus(paths, tag, kind='tag', repo=None):
     """Aborts below the floor. Every caller builds a result from this list,
     and a result built from nothing reads as "nothing changed", which is
     the reassuring direction. The node-reading modes had this guard from
-    the start; the tag modes did not."""
+    the start; the tag modes did not. A side of the clone is named by its
+    class (ref_kind), asked of `repo` only when the floor refuses it."""
     floor = below_floor(len(paths))
     if floor is not None:
+        if kind == 'tag' and repo is not None:
+            kind = ref_kind(repo, tag)
         die(f"only {len(paths)} file(s) under {LOCALES_DIR}/ at {tag}, below "
             f"the floor of {floor}. That is not a glibc locale "
-            + ("corpus -- a restructured tree, or a tag from before the "
-               "directory existed. " if kind == 'tag' else "corpus. ")
+            + (f"corpus -- a restructured tree, or a {kind} from before "
+               "the directory existed. " if kind in ('tag', 'commit')
+               else "corpus. ")
             + f"Refusing to report: an empty corpus reads "
             f"as 'nothing changed' and 'no locale uses ellipsis ranges', "
             f"which is indistinguishable from a clean run.")
@@ -1258,7 +1269,8 @@ def _listed(kind, repo, ref, extra, build=None, version=None, prov=None):
         ids[path] = fields[2]
         if path.startswith((LOCALES_DIR + '/', f'"{LOCALES_DIR}/')):
             paths.append(path)
-    _require_corpus(paths, ref if kind == 'tag' else _asked(build), kind)
+    _require_corpus(paths, ref if kind == 'tag' else _asked(build), kind,
+                    repo if kind == 'tag' else None)
     return Side(kind, ref, None, build, version, paths, ids, (), prov)
 
 
@@ -2561,7 +2573,7 @@ def compared_sides(here, old, new):
             report_build_provenance(rebuilt)
     print_collation_version(repo, sides[0], sides[1])
     if tags:
-        warn(tag_sides_text(tags, [ref_kind(repo, t) for t in tags]),
+        warn(tag_sides_text(tags, [side_class(repo, t) for t in tags]),
              split_words=False)
     warn(CODE_NOT_COMPARED, split_words=False)
     # The corpus floor: both tags must hold a real locale corpus, or the
@@ -2667,14 +2679,53 @@ def print_collation_version(repo, old, new):
             width=78))
 
 
+_REF_KINDS = {}
+
+
 def ref_kind(repo, name):
-    """'tag' for an annotated tag, 'commit' for any other side: by then the
-    name has resolved to a commit (resolve_commits, NAME^{commit}), and only
-    a tag object peels to a tag. An existence probe: `cat-file -t` refused a
-    short id that also matches a tree or a blob, which every step accepts."""
-    tag = run_git(['rev-parse', '--verify', '-q', f'{name}^{{tag}}'], repo,
-                  allow_fail=True)
-    return 'tag' if tag.returncode == 0 else 'commit'
+    """ref_kind_asked, once per repository and name in a process: every
+    step asks it of the same two sides several times."""
+    if (repo, name) not in _REF_KINDS:
+        _REF_KINDS[repo, name] = ref_kind_asked(repo, name)
+    return _REF_KINDS[repo, name]
+
+
+def ref_kind_asked(repo, name):
+    """'tag' for an annotated tag, named as a tag (glibc-2.34,
+    tags/glibc-2.34, refs/tags/glibc-2.34) or by its object's full id;
+    'commit' for any other ref that resolves to a commit (a sha, a branch,
+    a lightweight tag). A short hex id is a commit: git would read it as a
+    prefix of any object, and an id that also prefixes a tag object is
+    not the tag the user named. A name that resolves to no commit is
+    refused, never called a commit: the caller asks only after the sides
+    were checked and missing tags fetched."""
+    if run_git(['rev-parse', '--verify', '-q', f'{name}^{{tag}}'], repo,
+               allow_fail=True).returncode == 0:
+        full = run_git(['rev-parse', '--symbolic-full-name', name], repo,
+                       allow_fail=True)
+        if (full.stdout.decode('utf-8', 'replace').startswith('refs/tags/')
+                or re.fullmatch(r'[0-9a-fA-F]{40}', name)):
+            return 'tag'
+    if run_git(['rev-parse', '--verify', '-q', f'{name}^{{commit}}'], repo,
+               allow_fail=True).returncode:
+        die(f"{name} resolves to no commit in {repo}, so whether it is a "
+            f"tag or a commit cannot be said")
+    return 'commit'
+
+
+def side_class(repo, s):
+    """What a side is, as a sentence about it names it: 'tag', 'commit'
+    (any other ref of the clone) or 'build'. Apart from the route
+    (pair_noun, _is_tag), which keeps a commit on the tags route."""
+    return ref_kind(repo, _ref(s)) if _is_tag(s) else 'build'
+
+
+def pair_word(repo, old, new):
+    """The word a sentence about both sides uses: 'tags' only when both
+    are annotated tags, 'builds' when both are builds, else 'sides'."""
+    classes = {side_class(repo, old), side_class(repo, new)}
+    return ('tags' if classes == {'tag'} else
+            'builds' if classes == {'build'} else 'sides')
 
 
 def tag_sides_text(tags, kinds=None):
@@ -2920,7 +2971,7 @@ def _main(argv):
         return 0
     if argv and argv[0] == 'order':
         # The direction of the pair and whether it compares anything, for
-        # audit.sh. The two status WORDS are the only thing
+        # audit.sh. The status WORDS are the only thing
         # on stdout, because audit.sh captures them in a variable; every human
         # sentence goes to stderr. A forward pair that compares something
         # therefore adds nothing at all to the run's output, which is what
@@ -2940,7 +2991,7 @@ def _main(argv):
                 "[--quiet] <old> <new>")
         repo = find_repo()
         # A build is a Side, read by its commit and ordered by rpm; anything
-        # making it prints goes to stderr, so the two words stay alone.
+        # making it prints goes to stderr, so the words stay alone.
         with contextlib.redirect_stdout(sys.stderr):
             sides, commits = step_sides(repo, *names)
         sink = io.StringIO() if quiet else sys.stderr
@@ -2951,7 +3002,12 @@ def _main(argv):
         # (commit, tree or none). audit.sh reads the second for "nothing was
         # compared" (SAME_TAG), whatever the first says: a pair of one tree
         # that git cannot order is both.
-        print(status, nothing or 'none')
+        # Then each side's class and the pair's word (side_class,
+        # pair_word), which the summary's sentences use: asked here, after
+        # "What was compared" has cloned the repository and fetched missing
+        # tags, so a tag is never taken for a commit for not being there yet.
+        print(status, nothing or 'none', side_class(repo, sides[0]),
+              side_class(repo, sides[1]), pair_word(repo, *sides))
         return 0
     print(__doc__.strip(), file=sys.stderr)
     return 2

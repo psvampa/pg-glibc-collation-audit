@@ -656,7 +656,8 @@ class WrapperEmptyPair(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
         self.assertEqual(summary_warnings(self.out).count(flat(
             f"!! {NEW} and {NEW} are the same commit. Step 2 compares "
             f"nothing: it would compare upstream source against itself. "
-            f"{g._NOTHING_COMPARED_REST}")), 1, self.out)
+            f"{g._NOTHING_COMPARED_REST.format(on='the tags')}")), 1,
+            self.out)
 
     def test_the_removed_none_sits_above_the_one_commit_notice(self):
         """The tags' "none" is printed on one commit compared with itself
@@ -712,8 +713,24 @@ class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
         # Compared as text, the tag and its sha are two commits, and step 5
         # (deleted in step 9.3) printed its clean sentence over this pair
         # (false-negative-reviewer, 2026-09-30). Reindex says so instead.
-        self.assertIn('none -- nothing was compared: the two tags are one '
+        # A tag and a commit are two sides, not two tags (16.183).
+        self.assertIn('none -- nothing was compared: the two sides are one '
                       'commit or one source tree', summary)
+
+    def test_the_summary_calls_the_pair_two_sides(self):
+        """16.183: a tag and its sha are a tag and a commit, so the summary
+        names them as sides, and the order check's `!!` speaks of upstream
+        commits; once each among the warnings."""
+        self.assertEqual(removed_lines(self.out), [
+            'The sides cannot show what your distro adds or drops: '
+            'NOT CHECKED.',
+            "Pass --old-node and --new-node, each machine's file, to check "
+            "it.",
+            f'Between the sides: none -- no locale file at {NEW} is gone at '
+            f'{EXPECTED_SHA[NEW]}'])
+        self.assertEqual(summary_warnings(self.out).count(
+            'A run on upstream commits says nothing about an intra-major '
+            'upgrade'), 1, self.out)
 
     def test_the_sha_is_called_a_commit(self):
         """The sha is a commit, not an upstream tag; the tag stays one
@@ -750,7 +767,7 @@ class WrapperDirectionUndetermined(unittest.TestCase):
     def setUp(self):
         self.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-undet-')
         self.addCleanup(shutil.rmtree, self.out_dir, ignore_errors=True)
-        self.env = self.shim('undetermined none')
+        self.env = self.shim("'undetermined none tag tag tags'")
 
     def shim(self, answer):
         """PATH with a python3 that answers `answer` to the order check."""
@@ -785,7 +802,7 @@ class WrapperDirectionUndetermined(unittest.TestCase):
         """The branch that keeps the four states honest: a word the wrapper
         does not know means the check did not answer, and "the pair is in
         order" is the assumption that runs the audit against the wrong tag.
-        Each of the two words, apart."""
+        Each of the first two words, apart."""
         for answer, said in (('perhaps none', "answered 'perhaps'"),
                              ('forward perhaps', "answered 'forward perhaps', "
                                                  "whose second word"),
@@ -798,6 +815,22 @@ class WrapperDirectionUndetermined(unittest.TestCase):
                 self.assertIn(said, out)
                 self.assertNotIn('AUDIT SUMMARY', out)
 
+    def test_the_sides_words_are_checked(self):
+        """16.183: after its two words the order check gives each side's
+        class and the pair's word, which the summary's sentences use. Three
+        words out of place, one too few or one too many stop the run, after
+        the checks of the first two."""
+        for answer in ('forward none tags tag tags', 'forward none tag tag',
+                       'forward none tag commit tags',
+                       'forward none tag tag tags more'):
+            with self.subTest(answer=answer):
+                rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
+                                      env_extra=self.shim(repr(answer)))
+                self.assertNotEqual(rc, 0)
+                self.assertIn(f"answered '{answer}', whose last three words",
+                              out)
+                self.assertNotIn('AUDIT SUMMARY', out)
+
     def test_one_tree_git_cannot_order_compares_nothing(self):
         """Two commits of one source tree that neither descends from the
         other, as a master commit and the same patch on a wip branch are in
@@ -807,7 +840,8 @@ class WrapperDirectionUndetermined(unittest.TestCase):
         (false-negative-reviewer, round 1 of 7.1, of step 3's notice then).
         """
         rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
-                              env_extra=self.shim("'undetermined tree'"))
+                              env_extra=self.shim(
+                                  "'undetermined tree tag tag tags'"))
         self.assertEqual(rc, 0, out)
         # audit.sh's own decision: the line never calls the empty list a
         # result. What the pair is, and that its direction is not known,
@@ -904,6 +938,7 @@ class WrapperRefusesBadInput(unittest.TestCase):
         self.assertEqual(rc, 2, out)
         self.assertNotIn('AUDIT SUMMARY', out)
         self.assertIn('This pair is REVERSED', flat(out))
+        self.assertIn('Every step takes <old_tag> <new_tag>', flat(out))
         self.assertIn('Swap the arguments', flat(out))
         # The refusal told the reader to pass --allow-reverse, which audit.sh
         # refuses as an unknown argument (the next test).
@@ -1053,6 +1088,93 @@ class WrapperTagsRemoveALocale(unittest.TestCase):
         self.assertEqual(m.group(2), os.path.join(
             self.out_dir, f'step2_removed_locales.{pair_slug(MID, NEW)}.txt'))
         self.assertNotIn('none', ' '.join(lines))
+
+
+class _CommitSides:
+    """16.183: one side or both given by its commit id, over the pair whose
+    tags remove a locale file (WrapperTagsRemoveALocale). The route is the
+    tags', the words are the sides': each sentence about both says sides,
+    and each about one side names its class. SIDES is set by each
+    subclass."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-commit-')
+        cls.rc, cls.out = run_wrapper(*cls.SIDES, out_dir=cls.out_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_removed_names_the_sides(self):
+        self.assertEqual(self.rc, 0, self.out)
+        lines = removed_lines(self.out)
+        self.assertEqual(lines[:4], [
+            'The sides cannot show what your distro adds or drops: '
+            'NOT CHECKED.',
+            "Pass --old-node and --new-node, each machine's file, to check "
+            "it.",
+            f'Between the sides, gone at {self.SIDES[1]}:',
+            'aa_ER@saaho (renamed to ssy_ER)'])
+
+    def test_step_2_names_the_sides(self):
+        step2 = flat(self.out.split('== STEP 2', 1)[1].split(
+            'AUDIT SUMMARY', 1)[0])
+        self.assertIn('in SUPPORTED at both sides use differ between', step2)
+
+
+@needs_clone
+class WrapperCommitOnTheOldSide(_CommitSides, unittest.TestCase):
+    SIDES = (EXPECTED_SHA[MID], NEW)
+
+    def test_the_unproven_additions_name_the_old_commit(self):
+        """What only the new side has is not compared, in a `!!` naming the
+        old side as a commit, with its eleven names, once among the
+        warnings (the gate is _is_tag of the old side, false-negative-
+        reviewer F3)."""
+        sha = EXPECTED_SHA[MID]
+        warnings = summary_warnings(self.out)
+        self.assertEqual(warnings.count(
+            f'!! Not compared, no file at {sha} (11). A file added at the new '
+            'side cannot change what PostgreSQL already stored ONLY IF the '
+            'locale did not exist on the old system, and an upstream commit '
+            'cannot establish that -- distros backport.'), 1, self.out)
+        for line in ('ab_GE -> (not in SUPPORTED)',
+                     'ssy_ER -> ssy_ER; renamed from aa_ER@saaho',
+                     'zgh_MA -> zgh_MA'):
+            self.assertIn(line, warnings)
+        # C.UTF-8's `!!` names the old commit too (print_c_utf8's gate).
+        self.assertIn(f'!! {sha} holds no localedata/locales/C, the file '
+                      'C.UTF-8 is built from', warnings)
+
+    def test_the_new_tag_stays_a_tag(self):
+        """Control: the new side is a tag, and step 2 says so of it."""
+        self.assertIn('Unless its distro ships the file anyway, which an '
+                      'upstream tag cannot show', flat(self.out))
+
+
+@needs_clone
+class WrapperCommitOnTheNewSide(_CommitSides, unittest.TestCase):
+    SIDES = (MID, EXPECTED_SHA[NEW])
+
+    def test_the_removed_files_name_the_new_commit(self):
+        self.assertIn('Unless its distro ships the file anyway, which an '
+                      'upstream commit cannot show', flat(self.out))
+
+    def test_the_old_tag_stays_a_tag(self):
+        """Control: the old side is a tag, and the `!!` says so of it."""
+        self.assertIn(f'!! Not compared, no file at {MID} (11). A file added '
+                      'at the new side cannot change what PostgreSQL already '
+                      'stored ONLY IF the locale did not exist on the old '
+                      'system, and an upstream tag cannot establish that',
+                      summary_warnings(self.out))
+
+
+@needs_clone
+class WrapperCommitOnBothSides(_CommitSides, unittest.TestCase):
+    """Two commits: the one pair of classes no other run of audit.sh gives
+    (false-negative-reviewer, final round of 10.4)."""
+    SIDES = (EXPECTED_SHA[MID], EXPECTED_SHA[NEW])
 
 
 @needs_clone
@@ -2093,7 +2215,8 @@ class WrapperOneTagFromTheFiles(unittest.TestCase):
         self.assertEqual(summary_warnings(self.out).count(flat(
             f"!! {MID} and {MID} are the same commit. Step 2 compares "
             f"nothing: it would compare upstream source against itself. "
-            f"{g._NOTHING_COMPARED_REST}")), 1, self.out)
+            f"{g._NOTHING_COMPARED_REST.format(on='the tags')}")), 1,
+            self.out)
         assert_no_deleted_block(self, self.out)
 
     def test_no_rules_beside_each_locale_of_one_commit(self):
