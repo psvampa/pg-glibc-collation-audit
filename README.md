@@ -50,9 +50,9 @@ which sorts real strings on real nodes, and there are others.
 
 **For commands 2 and 3:**
 
-- for command 2, PostgreSQL 15 or newer on both servers
-- for command 3, PostgreSQL 14 or newer on both servers, and the language
-  packs of the locales to test, installed before `initdb`
+- for commands 2 and 3, PostgreSQL 14 or newer on both servers
+- for command 3, the language packs of the locales to test, installed
+  before `initdb`
 
 Why each one is needed, and the setup traps that give a wrong answer without
 saying so, are in [docs/requirements.md](docs/requirements.md).
@@ -163,11 +163,12 @@ ssh el9 sudo -n -u postgres python3 - --extract < scripts/locale_order.py > new.
   two builds of the same release cannot overwrite each other.
 
 **2 — Verifying whether `C.UTF-8`'s order changed.**
-*Only if a database uses `C.UTF-8` — in a container it usually does. Needs
-PostgreSQL 15 or newer on both nodes.*
+*Only if a database uses `C.UTF-8` — in a container it usually does.*
 
 ```sh
-psql -X -f sql/c_utf8_probe.sql > el8.out      # on each node, then diff
+# on each node, then diff
+psql -X -e -f sql/c_utf8_probe.sql > el8.out 2>&1 || echo '!! the probe stopped: read el8.out'
+grep -L '^=== done' el8.out el9.out    # names a file whose run did not finish
 diff el8.out el9.out
 ```
 

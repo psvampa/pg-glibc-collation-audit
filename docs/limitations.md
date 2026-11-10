@@ -29,10 +29,9 @@ and no warning will reach you.
 
 Naming the two builds instead of the tags (command 1.a) compares their own
 `C.UTF-8` files (step 2). Its order needs your machines: give `audit.sh`
-one file from each machine, as in command 1.b, and it compares the two
-machines' `C.UTF-8` files (step 2) and measures how each machine sorts it
-(step 11). [`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql) measures the
-order inside PostgreSQL, on the builds you actually run. What the file
+one file from each machine, as in command 1.b, and step 11 measures how each
+machine sorts it. [`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql) measures
+the order inside PostgreSQL, on the builds you actually run. What the file
 comparison and the probe found is in [results.md](results.md).
 
 ## Upstream tags are not your distro's glibc

@@ -39,6 +39,11 @@ EXAMPLE_8_9 = os.path.join(REPO_ROOT, 'examples',
                            'c-utf8-probe-rhel8-vs-rhel9.txt')
 EXAMPLE_9_10 = os.path.join(REPO_ROOT, 'examples',
                             'c-utf8-probe-rhel9-vs-rhel10.txt')
+# The probe's PostgreSQL 14 branch, which no published transcript shows: one
+# run of the probe as shipped in 11.3, `psql -X -e -f sql/c_utf8_probe.sql
+# 2>&1`, on PostgreSQL 14.24, glibc-2.34-284.el9_8.4, a database whose
+# default is en_US.UTF-8 (handoff of 11.3, m2).
+PROBE_PG14 = os.path.join(REPO_ROOT, 'tests', 'c_utf8_probe', 'pg14.el9.out')
 BUILDS = ('glibc-2.28-251.el8_10.40', 'glibc-2.34-275.el9_8',
           'glibc-2.39-128.el10_2')
 
@@ -310,8 +315,19 @@ class TheProbeDescribesTheFileItProbes(unittest.TestCase):
         self.assertIn('U+0000', self.probe)
 
     def test_the_row_count_assertion_matches_the_rows(self):
-        stated = int(re.search(r'IF n <> (\d+) THEN', self.probe).group(1))
-        self.assertEqual(stated, 41)
+        stated = re.findall(r'count\(\*\) = (\d+) AS c_utf8_probe_rows_ok',
+                            self.probe)
+        self.assertEqual(stated, ['41'])
+
+    def test_the_corpus_carries_the_collation_under_test(self):
+        """The corpus is no table any more, so nothing declares the column's
+        collation but this. Without it query 3, whose comparisons take the
+        column's collation, read the database default instead: measured in
+        step 11.3 (f1-M), U+007F < U+FFFF went from t to f in an en_US
+        database on PostgreSQL 14 to 18, and nothing changed in a C.UTF-8
+        one, which is the database the transcripts come from."""
+        corpus = self.probe.split('SELECT $corpus$')[1].split('$corpus$')[0]
+        self.assertEqual(corpus.count('w COLLATE pg_catalog."C.utf8" AS w'), 1)
 
 
 class ThePublishedOutputsMatchTheirProse(unittest.TestCase):
@@ -339,10 +355,12 @@ class ThePublishedOutputsMatchTheirProse(unittest.TestCase):
                                      f'{name} states the wrong position')
 
     def test_the_documented_number_of_moved_positions_matches_the_output(self):
-        differing = int(re.search(r'\|\s*(\d+)\s*$',
-                                  read(EXAMPLE_8_9).split(
-                                      'positions_differing')[1]
-                                  .split('(1 row)')[0].strip(), re.M).group(1))
+        table = re.findall(r'^ c_utf8_equals_byte_order \| '
+                           r'positions_differing\s*\n-+\+-+\n'
+                           r' ([tf]) +\| +(\d+)\n\(1 row\)$',
+                           read(EXAMPLE_8_9), re.M)
+        self.assertEqual(len(table), 1, 'query 2 table not read once')
+        differing = int(table[0][1])
         self.assertEqual(differing, 40)
         for name, text in docs().items():
             for m in re.finditer(r'(\d+) of (?:the )?41', text):
@@ -392,55 +410,766 @@ def node_output(text, name):
     return lines[psql[0] + 1:diff[0]]
 
 
-def query3_section(text):
-    """What lies between query 3's heading and query 4's, in the probe or in
-    a transcript. Refuses when either heading is not there exactly once."""
-    for mark in ('=== 3.', '=== 4.'):
-        if text.count(mark) != 1:
-            raise AssertionError(f'{mark!r} appears {text.count(mark)} times')
-    return text.split('=== 3.')[1].split('=== 4.')[0]
+def psql_script(text):
+    r"""What psql runs from `text`, in order, read by psql's own scanner
+    rules (src/fe_utils/psqlscan.l, REL_18_6) rather than by line shapes.
+
+    Returns [(kind, raw, words, refs)]: kind 'sql' for a statement sent to
+    the server, or the name of a backslash command ('echo', '!', 'set',
+    'gset', 'if', 'else', 'endif'). raw is the text as written: for a
+    statement, from its first token to its `;` (or to the `\gset` that
+    sends it), comments inside it kept, as psqlscan's {whitespace} rule
+    ECHOes them once the buffer holds something. words is raw with its `--`
+    comments dropped and its whitespace collapsed outside literals: the form
+    the pinned list holds, variables left as written. refs lists the
+    `:name` references of a statement as (offset in raw, name): psql
+    replaces each with the variable's value before sending
+    (psqlscan.l:717-761, the value pushed back and scanned again), and
+    `psql -e` echoes the replaced text.
+
+    A `;` ends a statement only outside a literal, a quoted identifier, a
+    dollar quote, a comment and parentheses, as in psqlscan. What this
+    reader cannot read the way psql does is refused, never guessed: a block
+    comment (psql reads it in an exclusive state where `;` and backslash
+    commands are only text), an E'' string, a quoted or tested variable
+    (`:'name'`, `:"name"`, `:{?name}`, psqlscan.l:763-775), a backslash
+    command this file does not model or a variable that changes what psql
+    echoes or prints, text after the last statement."""
+    items, i, n, start, depth, refs = [], 0, len(text), None, 0, []
+    word = re.compile(r'[A-Za-z_\x80-\U0010ffff][\w$\x80-\U0010ffff]*')
+
+    def close_quote(q, at):
+        j = at
+        while True:
+            j = text.find(q, j)
+            if j < 0:
+                raise AssertionError(f'unclosed {q} at offset {at}')
+            if text.startswith(q * 2, j):
+                j += 2
+                continue
+            return j + 1
+
+    def statement(end):
+        nonlocal start, refs
+        raw = text[start:end]
+        items.append(('sql', raw, sql_words(raw.rstrip(';')),
+                      [(at - start, name) for at, name in refs]))
+        start, refs = None, []
+
+    while i < n:
+        c = text[i]
+        if c.isspace():
+            i += 1
+        elif text.startswith('--', i):
+            i = text.find('\n', i) if '\n' in text[i:] else n
+        elif text.startswith('/*', i):
+            raise AssertionError(f'a block comment at offset {i}: psql reads '
+                                 f'what is inside it as text, never runs it')
+        elif c == '\\':
+            end = text.find('\n', i)
+            end = n if end < 0 else end
+            line = text[i:end]
+            name = re.match(r'\\(!|[a-z]+)', line)
+            name = name.group(1) if name else line[:2]
+            if start is not None:
+                if name != 'gset' or line.strip() != '\\gset':
+                    raise AssertionError(f'a psql command inside a statement: '
+                                         f'{line!r}')
+                statement(len(text[:i].rstrip()))
+            elif name not in ('echo', '!', 'set', 'if', 'else', 'endif'):
+                raise AssertionError(f'a psql command this test does not '
+                                     f'model: {line!r}')
+            elif name == 'set' and re.match(
+                    r'\\set\s+(ECHO|ECHO_HIDDEN|QUIET|SINGLELINE|SINGLESTEP|'
+                    r'FETCH_COUNT|SHOW_ALL_RESULTS)\b', line):
+                raise AssertionError(f'a variable that changes what psql '
+                                     f'echoes or prints: {line!r}')
+            items.append((name, line, line.strip(), []))
+            i = end
+        else:
+            if start is None:
+                start = i
+            m = word.match(text, i)
+            if m:
+                i = m.end()
+            elif c in '\'"':
+                if c == "'" and i and text[i - 1] in 'eE' and (
+                        i < 2 or not re.match(r'\w', text[i - 2])):
+                    raise AssertionError(f"an E'' string at offset {i}")
+                i = close_quote(c, i + 1)
+            elif c == '$':
+                m = re.compile(r'\$([A-Za-z_]\w*)?\$').match(text, i)
+                if not m:
+                    raise AssertionError(f'a $ this test cannot read at '
+                                         f'offset {i}')
+                j = text.find(m.group(0), m.end())
+                if j < 0:
+                    raise AssertionError(f'unclosed dollar quote at {i}')
+                i = j + len(m.group(0))
+            elif text.startswith('::', i):
+                i += 2
+            elif c == ':':
+                m = re.compile(r':([A-Za-z\x80-\xff_0-9]+)').match(text, i)
+                if not m:
+                    raise AssertionError(f'a quoted or tested psql variable '
+                                         f'at offset {i}: '
+                                         f'{text[i:i + 20]!r}')
+                refs.append((i, m.group(1)))
+                i = m.end()
+            elif c == '(':
+                depth, i = depth + 1, i + 1
+            elif c == ')':
+                depth, i = max(depth - 1, 0), i + 1
+            elif c == ';' and depth == 0:
+                statement(i + 1)
+                i += 1
+            else:
+                i += 1
+    if start is not None:
+        raise AssertionError('text after the last ; that psql would send '
+                             'unfinished: ' + text[start:start + 60])
+    return items
 
 
-class TheProbeTranscriptsComeFromTheProbe(unittest.TestCase):
-    """Nothing tied the published transcripts to the probe said to have
-    printed them. Measured by false-negative-reviewer on 2026-10-08: putting
-    the deleted query 6b back into one transcript, deleting query 3 from the
-    probe, or giving query 3 a third pair all left this module green. A
-    change to the probe has to bring its transcripts with it, re-run on the
-    machines, and this is what says so."""
+def sql_words(raw):
+    """`raw` with its comments dropped and each run of whitespace outside a
+    literal collapsed to one space. Inside a literal or a quoted identifier
+    a space is data ('U+007F  < U+FFFF' is a label psql prints), so it is
+    kept; a dollar-quoted body is read the same way."""
+    def one(m):
+        if m.group('lit'):
+            return m.group('lit')
+        if m.group('dol') is not None:
+            tag = m.group('tag')
+            return f'${tag}$ ' + sql_words(m.group('body')) + f' ${tag}$'
+        return ' '
+    # Twice: a comment between two runs of whitespace leaves two spaces.
+    pattern = (r"(?P<lit>'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\")"
+               r"|(?P<dol>\$(?P<tag>[A-Za-z_]\w*|)\$(?P<body>.*?)"
+               r"\$(?P=tag)\$)|--[^\n]*|\s+")
+    once = re.sub(pattern, one, raw, flags=re.S)
+    return re.sub(pattern, one, once, flags=re.S).strip()
 
-    def setUp(self):
-        self.probe = read(PROBE)
-        self.headings = re.findall(r"^\\echo '(.*)'$", self.probe, re.M)
-        self.assertTrue(self.headings, 'no \\echo heading read from the probe')
-        for heading in self.headings:
-            self.assertTrue(heading.startswith('=== '),
-                            f'a probe heading this test cannot place: '
-                            f'{heading!r}')
-        # The quoted labels only: the comment above the query names a pair
-        # too, unquoted.
-        self.pairs = [' '.join(p.split()) for p in re.findall(
-            r"'(U\+[0-9A-F]+ +< U\+[0-9A-F]+)'", query3_section(self.probe))]
-        self.assertTrue(self.pairs, 'no query 3 pair read from the probe')
 
-    def test_each_transcript_prints_the_probe_s_headings_in_order(self):
-        for path in (EXAMPLE_8_9, EXAMPLE_9_10):
+def gset_columns(raw):
+    """[(variable, value or None)] a `\\gset` query sets: one per item of
+    its select list, named by its AS alias (StoreQueryTuple,
+    src/bin/psql/common.c:803-850, REL_18_6, sets one variable per column
+    of its one row). The value is known here when the item is one literal
+    (a '' string or a dollar quote); otherwise it comes from the server and
+    the transcript names it. An item with no alias is refused: its column
+    name would be psql's guess."""
+    lits = r"'(?:[^']|'')*'|\$([A-Za-z_]\w*|)\$.*?\$\1\$"
+    words = re.sub(lits + r'|--[^\n]*', lambda m: m.group(0) if not
+                   m.group(0).startswith('--') else ' ' * len(m.group(0)),
+                   raw, flags=re.S)
+    hidden = re.sub(lits, lambda m: '\0' * len(m.group(0)), words, flags=re.S)
+    m = re.match(r'SELECT\s', hidden, re.I)
+    if not m:
+        raise AssertionError(f'a \\gset query this test cannot read: '
+                             f'{words[:60]!r}')
+    depth, cut, parts, at = 0, len(hidden), [], m.end()
+    for k in range(m.end(), len(hidden)):
+        ch = hidden[k]
+        depth += ch == '('
+        depth -= ch == ')'
+        if depth == 0 and ch == ',':
+            parts.append((at, k))
+            at = k + 1
+        if depth == 0 and re.match(r'\sFROM\b', hidden[k:], re.I):
+            cut = k
+            break
+    parts.append((at, cut))
+    out = []
+    for a, b in parts:
+        item = words[a:b].strip()
+        alias = re.search(r'\sAS\s+([A-Za-z_]\w*)$', item, re.I)
+        if not alias:
+            raise AssertionError(f'a \\gset column with no AS name: {item!r}')
+        expr = item[:alias.start()].strip()
+        lit = re.fullmatch(r"'((?:[^']|'')*)'|\$([A-Za-z_]\w*|)\$(.*)\$\2\$",
+                           expr, re.S)
+        value = None
+        if lit:
+            value = (lit.group(1).replace("''", "'") if lit.group(1)
+                     is not None else lit.group(3))
+        out.append((alias.group(1), value))
+    return out
+
+
+def echo_arguments(raw, values):
+    """What `\\echo` prints: its arguments joined by one space
+    (exec_command_echo, src/bin/psql/command.c:1566-1592, REL_18_6), a
+    quoted one unquoted ('' is ') and a `:name` replaced by its value
+    (psqlscanslash.l, xslasharg). A backslash in a quoted argument, or an
+    argument glued to another, is refused."""
+    rest, out = raw.strip()[len('\\echo'):], []
+    for m in re.finditer(r"\s+|'((?:[^'\\]|'')*)'(?=\s|$)|:([A-Za-z_]\w*)"
+                         r"(?=\s|$)|([^\s'\\:]+)(?=\s|$)|(.)", rest):
+        if m.group(0).isspace():
+            continue
+        if m.group(4) is not None:
+            raise AssertionError(f'an \\echo argument this test cannot '
+                                 f'read: {raw!r}')
+        if m.group(1) is not None:
+            out.append(m.group(1).replace("''", "'"))
+        elif m.group(2) is not None:
+            if m.group(2) not in values:
+                raise AssertionError(f'{raw!r} reads :{m.group(2)}, which '
+                                     f'nothing set')
+            out.append(values[m.group(2)])
+        else:
+            out.append(m.group(3))
+    return ' '.join(out)
+
+
+#: The tag psql prints for each kind of statement the probe runs
+#: (PostgreSQL's CommandTag, as psql prints it). A statement of another
+#: kind is refused until it is written here.
+TAGS = (('SELECT', None), ('WITH', None), ('SHOW', None), ('EXPLAIN', None),
+        ('SET', 'SET'), ('RESET', 'RESET'), ('DO', 'DO'),
+        ('DROP TABLE', 'DROP TABLE'), ('CREATE TABLE', 'CREATE TABLE'),
+        ('CREATE INDEX', 'CREATE INDEX'), ('INSERT', r'INSERT 0 \d+'))
+
+
+def expected_output(items, echo, branch):
+    r"""What psql prints for `items`, as events: ('echo', text) where `psql
+    -e` echoes a statement, its variables replaced; ('table',) for a
+    result; ('tag', regex) for a command tag; ('line', text) for an
+    `\echo`; ('shell',) for a `\!`. A `\gset` query prints nothing but its
+    echo (PrintQueryResult hands its row to StoreQueryTuple, and
+    PrintQueryStatus prints no tag for rows: common.c:1056-1057, 1002-1009,
+    REL_18_6). `branch` gives the value the server gave each variable a
+    `\gset` sets from a query this file cannot evaluate: True/False, or
+    text. A variable read and never set, or given but set by no `\gset`,
+    is refused; so is a `\gset` whose value the file holds and `branch`
+    restates."""
+    values, live, settable, events = {}, [True], set(), []
+    for k, (kind, raw, words, refs) in enumerate(items):
+        if kind == 'if':
+            var = re.fullmatch(r'\\if :([A-Za-z_]\w*)', words)
+            if not var:
+                raise AssertionError(f'an \\if this test cannot read: {raw!r}')
+            if var.group(1) not in values:
+                raise AssertionError(f'{raw!r} reads a variable nothing set '
+                                     f'or that no value was given for')
+            v = values[var.group(1)]
+            if v not in ('t', 'f'):
+                raise AssertionError(f'{raw!r}: {v!r} is not a boolean psql '
+                                     f'reads the same everywhere')
+            live.append(live[-1] and v == 't')
+            continue
+        if kind == 'else':
+            top = live.pop()
+            live.append(live[-1] and not top)
+            continue
+        if kind == 'endif':
+            live.pop()
+            continue
+        if kind == 'sql':
+            gset = k + 1 < len(items) and items[k + 1][0] == 'gset'
+            if gset:
+                for name, value in gset_columns(raw):
+                    settable.add(name)
+                    if not live[-1]:
+                        continue
+                    if value is not None:
+                        if name in branch:
+                            raise AssertionError(
+                                f'{name} is set from the file itself; the '
+                                f'transcript must not restate it')
+                        values[name] = value
+                    elif name in branch:
+                        b = branch[name]
+                        values[name] = (('t' if b else 'f')
+                                        if isinstance(b, bool) else str(b))
+        if not live[-1]:
+            continue
+        if kind == 'sql':
+            text, shift = raw, 0
+            for at, name in refs:
+                if name not in values:
+                    raise AssertionError(f':{name} is read before anything '
+                                         f'sets it, or no value was given')
+                value = values[name]
+                inner = psql_script(value + '\n;')
+                if len(inner) != 1 or inner[0][3]:
+                    raise AssertionError(f':{name} holds text psql would '
+                                         f'not send as one piece')
+                text = (text[:at + shift] + value
+                        + text[at + shift + 1 + len(name):])
+                shift += len(value) - 1 - len(name)
+            if echo:
+                events.append(('echo', text))
+            if gset:
+                continue
+            tag = [t for lead, t in TAGS
+                   if re.match(lead.replace(' ', r'\s+') + r'\b', words, re.I)]
+            if not tag:
+                raise AssertionError(f'a statement whose output this test '
+                                     f'does not know: {words[:60]!r}')
+            events.append(('table',) if tag[0] is None else ('tag', tag[0]))
+        elif kind == 'echo':
+            events.append(('line', echo_arguments(raw, values)))
+        elif kind == '!':
+            events.append(('shell',))
+    if len(live) != 1:
+        raise AssertionError('an \\if without its \\endif')
+    unknown = set(branch) - settable
+    if unknown:
+        raise AssertionError(f'values given for variables no \\gset sets: '
+                             f'{sorted(unknown)}')
+    return events
+
+
+def match_output(lines, events):
+    """None if `lines` is exactly what `events` print, else why not.
+    Every line is accounted for: an extra statement, table or line between
+    two expected ones is a mismatch, not something to skip."""
+    i = 0
+    for e, event in enumerate(events):
+        at = f'line {i + 1} ({event[0]} #{e})'
+        if event[0] == 'shell':
+            # What a shell command prints cannot be predicted, so each \!
+            # takes exactly one line, as each did on every published node.
+            # Skipping to the next expected line instead let any line stand
+            # in for the output (the label above them deleted, in 11.3's
+            # battery).
+            if i >= len(lines):
+                return f'{at}: the \\! printed nothing'
+            i += 1
+        elif event[0] == 'echo':
+            want = [ln.rstrip() for ln in event[1].split('\n')]
+            got = [ln.rstrip() for ln in lines[i:i + len(want)]]
+            if got != want:
+                k = next(k for k in range(len(want))
+                         if k >= len(got) or got[k] != want[k])
+                return (f'line {i + k + 1} (echo #{e}): echoed '
+                        f'{got[k] if k < len(got) else None!r}, the probe '
+                        f'runs {want[k]!r}')
+            i += len(want)
+        elif event[0] == 'line':
+            if lines[i:i + 1] != [event[1]]:
+                return f'{at}: {lines[i:i + 1]!r}, expected {event[1]!r}'
+            i += 1
+        elif event[0] == 'tag':
+            if not (i < len(lines) and re.fullmatch(event[1], lines[i])):
+                return f'{at}: {lines[i:i + 1]!r}, expected tag {event[1]!r}'
+            i += 1
+        else:
+            if not (i + 1 < len(lines) and lines[i].strip()
+                    and re.fullmatch(r'-+(\+-+)*', lines[i + 1])):
+                return f'{at}: no result table: {lines[i:i + 2]!r}'
+            j = i + 2
+            while j < len(lines) and not re.fullmatch(r'\((\d+) rows?\)',
+                                                      lines[j]):
+                j += 1
+            if j == len(lines):
+                return f'{at}: a table with no (N rows) line'
+            if int(re.search(r'\d+', lines[j]).group(0)) != j - i - 2:
+                return f'{at}: {lines[j]!r} under {j - i - 2} row line(s)'
+            if lines[j + 1:j + 2] != ['']:
+                return f'{at}: no blank line after {lines[j]!r}'
+            i = j + 2
+    rest = [ln for ln in lines[i:] if ln.strip()]
+    if rest:
+        return f'line {i + 1}: printed after the last statement: {rest[:2]!r}'
+    return None
+
+
+class TheProbeRunsWhatWasMeasured(unittest.TestCase):
+    r"""Everything sql/c_utf8_probe.sql makes psql do, pinned, and each
+    published transcript tied to it statement by statement.
+
+    Until step 11.3 the transcripts were tied to the probe only by its
+    `\echo` headings and query 3's labels: an EXPLAIN added before query 6,
+    query 5's verdict reworded, query 6's statements deleted under a heading
+    kept, all left this module green (measured in step 11.3's phase 0).
+    Forbidding the words of what went is the list that never closed in
+    13.1, so the whole sequence is pinned instead: each statement as written
+    (its `:name` variables too), its comments dropped and its whitespace
+    collapsed outside literals, and each backslash command as written. A
+    statement added, dropped, moved or changed fails here; a deliberate
+    change is run on PostgreSQL again and then written below, with the
+    transcripts recorded again from the same file.
+
+    Each transcript is then read line by line against what psql prints for
+    those items: the echo of every statement (`psql -e`), with each
+    variable replaced by the value psql would send, a table or the command
+    tag for each statement but a `\gset` one, which prints nothing, every
+    `\echo` line, nothing else. A value the file itself sets (the corpus)
+    is computed from the file; one the server gives (its version, the
+    corpus count) is named by the transcript, so a branch of an `\if` the
+    server did not take prints nothing.
+    """
+
+    #: Pinned from PostgreSQL: the statements of the probe whose `psql -X -e`
+    #: and plain runs on PostgreSQL 14.24 to 18.6 matched every line
+    #: (step 11.3, f1-M/out, 80 runs).
+    STATEMENTS = (
+        '\\set ON_ERROR_STOP on',
+        "\\echo '=== 0. node identity: a result is bound to the build it ran "
+        "on ==='",
+        "\\echo '--- the machine psql runs on (the three shell lines below "
+        "run there, not on the server):'",
+        "\\! rpm -q glibc 2>/dev/null || echo 'rpm not available -- record "
+        "the glibc build by hand'",
+        '\\! ldd --version | head -1',
+        "\\! locale -a | grep -ix 'c.utf8\\|c.utf-8' || echo '!! C.utf8 is "
+        "NOT in locale -a on this node'",
+        "\\echo '--- the server: its glibc release as PostgreSQL reports it "
+        '(one number for every build of that release; record the build by '
+        "hand)'",
+        'SELECT coalesce( (SELECT pg_collation_actual_version(oid) FROM '
+        "pg_collation WHERE collprovider = 'c' AND "
+        'pg_collation_actual_version(oid) IS NOT NULL ORDER BY collname '
+        "LIMIT 1), 'NOT KNOWN: no libc collation in this database reports a "
+        "version ' '(only C, POSIX and C.* locales are here); record the "
+        "server''s glibc by hand') AS server_glibc",
+        "\\echo '=== 0b. guards: without these, both nodes can agree for the "
+        "wrong reason ==='",
+        'SHOW server_encoding',
+        'SHOW standard_conforming_strings',
+        "DO $$ BEGIN IF current_setting('server_version_num')::int < 140000 "
+        "THEN RAISE EXCEPTION 'PostgreSQL % is older than 14, the oldest "
+        "version this probe was ' 'measured on.', "
+        "current_setting('server_version'); END IF; IF "
+        "current_setting('server_encoding') <> 'UTF8' THEN RAISE EXCEPTION "
+        "'server_encoding is %, not UTF8. Every comparison in this probe "
+        "would ' 'collapse to byte order and two nodes would agree while "
+        "proving nothing.', current_setting('server_encoding'); END IF; IF "
+        "current_setting('standard_conforming_strings') <> 'on' THEN RAISE "
+        "EXCEPTION 'standard_conforming_strings is off; the U&''\\+xxxxxx'' "
+        "literals below ' 'would not mean what they say.'; END IF; END $$",
+        'DO $$ DECLARE prov "char"; BEGIN SELECT collprovider INTO prov FROM '
+        "pg_collation WHERE collname = 'C.utf8' AND collnamespace = "
+        "'pg_catalog'::regnamespace; IF prov IS NULL THEN RAISE EXCEPTION "
+        "'no collation named C.utf8 in pg_catalog. Run ' 'SELECT "
+        "pg_import_system_collations(''pg_catalog''); as superuser.'; END "
+        "IF; IF prov <> 'c' THEN RAISE EXCEPTION 'the collation named C.utf8 "
+        "has provider %, not the libc provider ''c''. ' 'This probe measures "
+        "glibc; a builtin collation cannot change with it.', prov; END IF; "
+        'END $$',
+        "\\echo '=== 0c. the C-ish collations on this node, and their "
+        "versions ==='",
+        'SELECT collname, collprovider, collversion, '
+        'pg_collation_actual_version(oid) AS actual FROM pg_collation WHERE '
+        "collname IN ('C', 'POSIX', 'C.utf8', 'C.UTF-8', 'pg_c_utf8') AND "
+        "collnamespace = 'pg_catalog'::regnamespace ORDER BY collname",
+        'SELECT $corpus$ SELECT cp, kind, w COLLATE pg_catalog."C.utf8" AS w '
+        "FROM (VALUES ('U+0001', 'UTF-8 1-byte', U&'\\+000001'), ('U+0041', "
+        "'ASCII anchor A', U&'\\+000041'), ('U+005A', 'ASCII anchor Z', "
+        "U&'\\+00005A'), ('U+0061', 'ASCII anchor a', U&'\\+000061'), "
+        "('U+007F', 'UTF-8 1-byte last', U&'\\+00007F'), ('U+0080', 'UTF-8 "
+        "2-byte first', U&'\\+000080'), ('U+07FF', 'UTF-8 2-byte last', "
+        "U&'\\+0007FF'), ('U+0800', 'UTF-8 3-byte first', U&'\\+000800'), "
+        "('U+FFFF', 'plane 0 last (declared)', U&'\\+00FFFF'), ('U+10000', "
+        "'plane 1 first (declared)', U&'\\+010000'), ('U+1FFFF', 'plane 1 "
+        "last (declared)', U&'\\+01FFFF'), ('U+20000', 'plane 2 first "
+        "(declared)', U&'\\+020000'), ('U+2FFFF', 'plane 2 last (declared)', "
+        "U&'\\+02FFFF'), ('U+30000', 'plane 3 first (NO range)', "
+        "U&'\\+030000'), ('U+3FFFF', 'plane 3 last (NO range)', "
+        "U&'\\+03FFFF'), ('U+40000', 'plane 4 first (NO range)', "
+        "U&'\\+040000'), ('U+4FFFF', 'plane 4 last (NO range)', "
+        "U&'\\+04FFFF'), ('U+50000', 'plane 5 first (NO range)', "
+        "U&'\\+050000'), ('U+5FFFF', 'plane 5 last (NO range)', "
+        "U&'\\+05FFFF'), ('U+60000', 'plane 6 first (NO range)', "
+        "U&'\\+060000'), ('U+6FFFF', 'plane 6 last (NO range)', "
+        "U&'\\+06FFFF'), ('U+70000', 'plane 7 first (NO range)', "
+        "U&'\\+070000'), ('U+7FFFF', 'plane 7 last (NO range)', "
+        "U&'\\+07FFFF'), ('U+80000', 'plane 8 first (NO range)', "
+        "U&'\\+080000'), ('U+8FFFF', 'plane 8 last (NO range)', "
+        "U&'\\+08FFFF'), ('U+90000', 'plane 9 first (NO range)', "
+        "U&'\\+090000'), ('U+9FFFF', 'plane 9 last (NO range)', "
+        "U&'\\+09FFFF'), ('U+A0000', 'plane 10 first (NO range)', "
+        "U&'\\+0A0000'), ('U+AFFFF', 'plane 10 last (NO range)', "
+        "U&'\\+0AFFFF'), ('U+B0000', 'plane 11 first (NO range)', "
+        "U&'\\+0B0000'), ('U+BFFFF', 'plane 11 last (NO range)', "
+        "U&'\\+0BFFFF'), ('U+C0000', 'plane 12 first (NO range)', "
+        "U&'\\+0C0000'), ('U+CFFFF', 'plane 12 last (NO range)', "
+        "U&'\\+0CFFFF'), ('U+D0000', 'plane 13 first (NO range)', "
+        "U&'\\+0D0000'), ('U+DFFFF', 'plane 13 last (NO range)', "
+        "U&'\\+0DFFFF'), ('U+E0000', 'plane 14 first (declared)', "
+        "U&'\\+0E0000'), ('U+EFFFF', 'plane 14 last (declared)', "
+        "U&'\\+0EFFFF'), ('U+F0000', 'plane 15 first (declared)', "
+        "U&'\\+0F0000'), ('U+FFFFF', 'plane 15 last (declared)', "
+        "U&'\\+0FFFFF'), ('U+100000', 'plane 16 first (declared)', "
+        "U&'\\+100000'), ('U+10FFFF', 'plane 16 last (declared)', "
+        "U&'\\+10FFFF') ) AS v(cp, kind, w) $corpus$ AS c_utf8_probe_corpus",
+        '\\gset',
+        'SELECT count(*) AS c_utf8_probe_rows, count(*) = 41 AS '
+        'c_utf8_probe_rows_ok FROM (:c_utf8_probe_corpus) AS c',
+        '\\gset',
+        '\\if :c_utf8_probe_rows_ok',
+        '\\else',
+        "\\echo '!! the corpus is' :c_utf8_probe_rows 'row(s), expected 41.'",
+        "DO $$ BEGIN RAISE EXCEPTION 'corpus is not 41 rows. A value was "
+        "rejected or collapsed; ' 'the comparison below would be narrower "
+        "than the one this ' 'file documents.'; END $$",
+        '\\endif',
+        "\\echo '=== 1. the order C.utf8 produces on this node (diff this) "
+        "==='",
+        'WITH c_utf8_probe AS (:c_utf8_probe_corpus) SELECT row_number() '
+        'OVER (ORDER BY w COLLATE pg_catalog."C.utf8") AS pos, cp, kind FROM '
+        'c_utf8_probe ORDER BY pos',
+        "\\echo '=== 2. does C.utf8 equal byte order? READ BOTH CASES ==='",
+        'WITH c_utf8_probe AS (:c_utf8_probe_corpus), under_locale AS ( '
+        'SELECT cp, row_number() OVER (ORDER BY w COLLATE '
+        'pg_catalog."C.utf8") AS pos FROM c_utf8_probe ), under_bytes AS ( '
+        'SELECT cp, row_number() OVER (ORDER BY w COLLATE "C") AS pos FROM '
+        'c_utf8_probe ) SELECT bool_and(l.pos = b.pos) AS '
+        'c_utf8_equals_byte_order, count(*) FILTER (WHERE l.pos <> b.pos) AS '
+        'positions_differing FROM under_locale l JOIN under_bytes b USING '
+        '(cp)',
+        "\\echo '=== 3. the named pairs, so a diff says which side is which "
+        "==='",
+        'WITH c_utf8_probe AS (:c_utf8_probe_corpus) SELECT pair, holds FROM '
+        "( SELECT 1 AS n, 'U+007F  < U+FFFF' AS pair, (SELECT w FROM "
+        "c_utf8_probe WHERE cp = 'U+007F') < (SELECT w FROM c_utf8_probe "
+        "WHERE cp = 'U+FFFF') AS holds UNION ALL SELECT 2, 'U+07FF  < "
+        "U+FFFF', (SELECT w FROM c_utf8_probe WHERE cp = 'U+07FF') < (SELECT "
+        "w FROM c_utf8_probe WHERE cp = 'U+FFFF') ) t ORDER BY n",
+        "\\echo '=== 4. collversion asserted as expected-NULL ==='",
+        'SELECT collname, collversion, pg_collation_actual_version(oid) AS '
+        'actual, (collversion IS NULL AND pg_collation_actual_version(oid) '
+        'IS NULL) AS both_null_as_expected FROM pg_collation WHERE collname '
+        "= 'C.utf8' AND collprovider = 'c' AND collnamespace = "
+        "'pg_catalog'::regnamespace",
+        "SELECT current_setting('server_version_num')::int >= 150000 AS "
+        'c_utf8_probe_pg15',
+        '\\gset',
+        '\\if :c_utf8_probe_pg15',
+        'SELECT datname, datcollate, datcollversion, '
+        'pg_database_collation_actual_version(oid) AS actual, '
+        '(datcollversion IS NULL AND '
+        'pg_database_collation_actual_version(oid) IS NULL) AS '
+        "both_null_as_expected FROM pg_database WHERE datlocprovider = 'c' "
+        "AND datcollate ~ '^[Cc]\\.' ORDER BY datname",
+        '\\else',
+        'SELECT datname, datcollate FROM pg_database WHERE datcollate ~ '
+        "'^[Cc]\\.' ORDER BY datname",
+        "\\echo 'PostgreSQL 14 has no pg_database.datcollversion, so the "
+        "rows above carry no version to assert.'",
+        '\\endif',
+        "\\echo '=== 5. is THIS database exposed through its default "
+        "collation? ==='",
+        '\\if :c_utf8_probe_pg15',
+        'SELECT datname, datlocprovider, datcollate, CASE WHEN '
+        "datlocprovider <> 'c' THEN 'not libc' WHEN datcollate IN ('C', "
+        "'POSIX') THEN 'byte order' WHEN datcollate ~ '^[Cc]\\.' THEN "
+        "'EXPOSED via C.UTF-8, and no collversion can ever warn' ELSE "
+        "'EXPOSED via ' || datcollate END AS verdict FROM pg_database WHERE "
+        'datname = current_database()',
+        '\\else',
+        "SELECT datname, datcollate, CASE WHEN datcollate IN ('C', 'POSIX') "
+        "THEN 'byte order' WHEN datcollate ~ '^[Cc]\\.' THEN 'EXPOSED via "
+        "C.UTF-8, and no collversion can ever warn' ELSE 'EXPOSED via ' || "
+        'datcollate END AS verdict FROM pg_database WHERE datname = '
+        'current_database()',
+        '\\endif',
+        "\\echo '=== done. diff this output against the other node. ==='",
+    )
+
+    #: (transcript, captured with `psql -e`, the value its server gave each
+    #: variable a \gset sets from a query this file cannot evaluate). The
+    #: last is a whole run, not a transcript: the only one of the branch
+    #: PostgreSQL 14 takes.
+    TRANSCRIPTS = (
+        (EXAMPLE_8_9, True, {'c_utf8_probe_pg15': True,
+                             'c_utf8_probe_rows_ok': True,
+                             'c_utf8_probe_rows': 41}),
+        (EXAMPLE_9_10, True, {'c_utf8_probe_pg15': True,
+                              'c_utf8_probe_rows_ok': True,
+                              'c_utf8_probe_rows': 41}),
+        (PROBE_PG14, True, {'c_utf8_probe_pg15': False,
+                            'c_utf8_probe_rows_ok': True,
+                            'c_utf8_probe_rows': 41}))
+
+    def output_of(self, path):
+        """A transcript's first node, or a recorded run whole."""
+        name = os.path.basename(path)
+        if path == PROBE_PG14:
+            text = read(path)
+            self.assertTrue(text.endswith('\n'), name)
+            return text[:-1].split('\n')
+        return node_output(read(path), name)
+
+    def test_the_end_line_the_docs_check_for_is_the_last_and_only_one(self):
+        """README and confirming teach `grep -L '^=== done'` before the diff.
+        It names a file whose run stopped, since two runs stopped the same way
+        diff as alike. That holds only while the probe prints exactly one line
+        starting `=== done`, as its last item. In round 2 of 11.3
+        false-negative-reviewer showed that an earlier heading of that shape,
+        pinned and recorded, would leave this module green and a stopped run
+        unnamed. It is read in what psql prints, on each branch a record
+        takes, not in how the file spells it. An unquoted `\\echo === done`
+        prints the same line."""
+        items = psql_script(read(PROBE))
+        read_on = set()
+        for _, _, branch in self.TRANSCRIPTS:
+            with self.subTest(branch=branch):
+                self.assertIsNone(end_line_problem(items, branch))
+                read_on.add(branch['c_utf8_probe_pg15'])
+        self.assertEqual(read_on, {True, False})
+        for text, problem in (
+                ("\\echo '=== done'\n\\echo 'x'\n", 'not the last'),
+                ("\\echo === done early\n\\echo '=== done'\n",
+                 '2 printed lines start')):
+            with self.subTest(text=text):
+                self.assertIn(problem, end_line_problem(psql_script(text), {})
+                              or '')
+        for name in ('README.md', 'docs/confirming-on-a-real-system.md'):
+            with self.subTest(page=name):
+                text = read(os.path.join(REPO_ROOT, *name.split('/')))
+                self.assertEqual(re.findall(r"grep -L '([^']*)'", text),
+                                 ['^=== done'])
+
+    def test_the_branches_each_record_takes_are_both_branches(self):
+        """The \\if on the server's version has two branches, and the
+        records between them take both: a record dropped, or one recorded
+        again on the other side, would leave a branch tied to nothing."""
+        taken = {branch['c_utf8_probe_pg15'] for _, _, branch in
+                 self.TRANSCRIPTS}
+        self.assertEqual(taken, {True, False})
+
+    def test_the_probe_runs_these_statements_and_nothing_else(self):
+        self.assertEqual(tuple(item[2] for item in psql_script(read(PROBE))),
+                         self.STATEMENTS)
+
+    def test_each_transcript_prints_what_the_probe_runs(self):
+        items = psql_script(read(PROBE))
+        for path, echo, branch in self.TRANSCRIPTS:
             name = os.path.basename(path)
             with self.subTest(path=name):
-                printed = [line for line in node_output(read(path), name)
-                           if line.startswith('=== ')]
-                self.assertEqual(printed, self.headings)
+                why = match_output(self.output_of(path),
+                                   expected_output(items, echo, branch))
+                self.assertIsNone(why, f'{name} is not what the probe '
+                                       f'prints: {why}')
 
-    def test_each_transcript_prints_the_probe_s_query_3_pairs(self):
-        for path in (EXAMPLE_8_9, EXAMPLE_9_10):
-            name = os.path.basename(path)
-            with self.subTest(path=name):
-                section = query3_section(
-                    '\n'.join(node_output(read(path), name)))
-                printed = [' '.join(p.split()) for p in re.findall(
-                    r'^ (U\+[0-9A-F]+ +< U\+[0-9A-F]+) *\| [tf]$',
-                    section, re.M)]
-                self.assertEqual(printed, self.pairs)
+    def test_what_the_reader_refuses(self):
+        """The forms psql reads differently from a plain split, each
+        refused by its message (a refusal is asserted by its message)."""
+        for text, message in (
+                ('SELECT 1;\n/* SELECT 2; */\n', 'block comment'),
+                ("SELECT E'a';\n", "E'' string"),
+                ("SELECT :'x';\n", 'quoted or tested psql variable'),
+                ('SELECT :"x";\n', 'quoted or tested psql variable'),
+                ('SELECT :{?x};\n', 'quoted or tested psql variable'),
+                ('SELECT 1\n\\echo x\n;\n', 'inside a statement'),
+                ('SELECT 1 \\gset p_\n', 'inside a statement'),
+                ('\\o /dev/null\nSELECT 1;\n', 'does not model'),
+                ('\\set ECHO none\nSELECT 1;\n', 'changes what psql'),
+                ('SELECT 1;\nSELECT 2\n', 'after the last ;')):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(AssertionError,
+                                            re.escape(message)):
+                    psql_script(text)
+        for text, branch, message in (
+                ('SELECT * FROM :t;\n', {}, 'read before anything sets it'),
+                ('SELECT 1 AS a \\gset\n', {'b': True}, 'no \\gset sets'),
+                ("SELECT 'x' AS a \\gset\n", {'a': 'x'}, 'must not restate'),
+                ('SELECT 1 \\gset\n', {}, 'no AS name'),
+                ("SELECT $q$1; SELECT 2$q$ AS q \\gset\nSELECT :q;\n", {},
+                 'not send as one piece'),
+                ('SELECT 1 AS v \\gset\n\\if :v\n\\endif\n', {'v': 2},
+                 'not a boolean'),
+                ("\\echo 'a'b\n", {}, 'cannot read'),
+                ('\\echo :nope\n', {}, 'which nothing set')):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(AssertionError,
+                                            re.escape(message)):
+                    expected_output(psql_script(text), True, branch)
+
+    def test_the_cut_reads_what_psql_reads(self):
+        """The controls of the refusals: a `;` in a comment, a literal, a
+        dollar quote or parentheses ends nothing; two spaces in a literal
+        are kept; `::` is a cast; a variable stays as written in the pin;
+        a query sent by \\gset."""
+        got = [item[2] for item in psql_script(
+            "SELECT 'a;b'  -- c; d\n  , 1::int\nFROM t;\n"
+            "DO $$ BEGIN PERFORM 1; END $$;\n"
+            "CREATE RULE r AS ON INSERT TO t DO (SELECT 1; SELECT 2);\n"
+            "SELECT x AS 'U  1' \\gset\n"
+            "WITH c AS (:corpus) SELECT * FROM c;\n")]
+        self.assertEqual(got, ["SELECT 'a;b' , 1::int FROM t",
+                               'DO $$ BEGIN PERFORM 1; END $$',
+                               'CREATE RULE r AS ON INSERT TO t DO '
+                               '(SELECT 1; SELECT 2)',
+                               "SELECT x AS 'U  1'", '\\gset',
+                               'WITH c AS (:corpus) SELECT * FROM c'])
+
+    def test_a_variable_is_sent_and_echoed_as_its_value(self):
+        """A \\gset of a literal sets the variable to the literal's text,
+        and `psql -e` echoes the statement with that text in place of
+        `:name`; a \\gset prints nothing but its own echo; \\echo prints a
+        variable's value between its quoted arguments."""
+        items = psql_script("SELECT $c$\nVALUES (1)\n$c$ AS c,\n"
+                            "  'it''s' AS s \\gset\n"
+                            "WITH t AS (:c)\nSELECT * FROM t;\n"
+                            "\\echo 'say' :s 'won''t'\n")
+        table = [' column1 ', '---------', '       1', '(1 row)', '']
+        echoed = ['SELECT $c$', 'VALUES (1)', '$c$ AS c,', "  'it''s' AS s",
+                  'WITH t AS (', 'VALUES (1)', ')', 'SELECT * FROM t;']
+        self.assertIsNone(match_output(echoed + table + ["say it's won't"],
+                                       expected_output(items, True, {})))
+        self.assertIsNone(match_output(table + ["say it's won't"],
+                                       expected_output(items, False, {})))
+        self.assertIn("echoed 'WITH t AS (:c)'", match_output(
+            echoed[:4] + ['WITH t AS (:c)', 'SELECT * FROM t;'] + table
+            + ["say it's won't"], expected_output(items, True, {})) or '')
+
+    def test_an_if_prints_only_the_branch_its_server_took(self):
+        """The probe's transcripts come from one server each, so each shows
+        one branch of an \\if; this drives both, and the \\gset query that
+        sets the variable, which prints nothing but its echo."""
+        items = psql_script("SELECT v >= 15 AS new \\gset\n\\if :new\n"
+                            "SELECT 1;\n\\else\n\\echo 'old'\n\\endif\n"
+                            "\\echo 'end'\n")
+        table = [' ?column? ', '----------', '        1', '(1 row)', '']
+        for echo, lines_new, lines_old in (
+                (False, table + ['end'], ['old', 'end']),
+                (True, ['SELECT v >= 15 AS new', 'SELECT 1;'] + table
+                 + ['end'], ['SELECT v >= 15 AS new', 'old', 'end'])):
+            with self.subTest(echo=echo):
+                new = expected_output(items, echo, {'new': True})
+                old = expected_output(items, echo, {'new': False})
+                self.assertIsNone(match_output(lines_new, new))
+                self.assertIsNone(match_output(lines_old, old))
+                self.assertIsNotNone(match_output(lines_old, new))
+                self.assertIsNotNone(match_output(lines_new, old))
+
+    def test_what_a_transcript_cannot_hide(self):
+        """Each way a transcript can differ from what psql prints for the
+        probe, refused by its message: a wrong tag, a table whose count
+        is not its rows, a missing blank line, a line after the end, a \\!
+        that printed nothing or more than one line, an \\if with no value
+        given."""
+        items = psql_script("\\! date\n\\echo 'a'\nSET x = 1;\n"
+                            "SELECT 1\n  AS c;\n\\echo 'z'\n")
+        ev = expected_output(items, False, {})
+        good = ['Mon', 'a', 'SET', ' c ', '---', ' 1', '(1 row)', '', 'z']
+        self.assertIsNone(match_output(good, ev))
+        echoed = good[:2] + ['SET x = 1;'] + good[2:3] + [
+            'SELECT 1', '  AS c;'] + good[3:]
+        self.assertIsNone(match_output(echoed, expected_output(items, True,
+                                                               {})))
+        self.assertIn("echoed '  AS d;', the probe runs '  AS c;'",
+                      match_output(echoed[:5] + ['  AS d;'] + echoed[6:],
+                                   expected_output(items, True, {})) or '')
+        for lines, message in (
+                (good[:-1] + ['y'], "expected 'z'"),
+                (good[:3] + good[5:], 'no result table'),
+                (good[:2] + ['RESET'] + good[3:], "expected tag 'SET'"),
+                (good[:6] + ['(2 rows)'] + good[7:], 'under 1 row line'),
+                (good[:7] + good[8:], 'no blank line'),
+                (good + ['SET'], 'printed after the last statement'),
+                ([], 'the \\! printed nothing'),
+                (good[:1] + ['Tue'] + good[1:], "['Tue'], expected 'a'")):
+            with self.subTest(lines=lines):
+                self.assertIn(message, match_output(lines, ev) or '')
+        with self.assertRaisesRegex(AssertionError, 'no value was given'):
+            expected_output(psql_script("SELECT 1 AS v \\gset\n\\if :v\n"
+                                        "\\endif\n"), False, {})
 
 
 class TheDocsQuoteWhatTheToolsPrint(unittest.TestCase):
@@ -726,6 +1455,104 @@ class AuditShPipesNothingIntoAQuietGrep(unittest.TestCase):
                 self.assertIsNotNone(shape.search(line))
 
 
+class Place(collections.namedtuple('Place', 'path section start end')):
+    r"""Where a page states one command's PostgreSQL floor: in `path`, under
+    the heading line `section` (None: the text above the first `## `),
+    from the one match of the regex `start` (None: the section's first
+    paragraph) to the first match of `end` after it. The anchors name the
+    command and the part of the page, never the words of the sentence, so
+    a sentence reworded is still read, and one moved out of its place is
+    refused instead of counted for the other command."""
+
+
+def place_text(place):
+    return place_span(read(os.path.join(REPO_ROOT, *place.path.split('/'))),
+                      place)
+
+
+def place_span(text, place):
+    """The span of `place` in `text`, flat. Refuses a section missing or
+    doubled, a start missing or doubled, and an end that never comes: each
+    would otherwise read some other part of the page, or nothing."""
+    # Offsets kept: a `#` inside a fenced block is a shell comment.
+    blank = re.sub(r'```.*?```', lambda m: re.sub(r'[^\n]', ' ', m.group(0)),
+                   text, flags=re.S)
+    heads = list(re.finditer(r'^#+ .*$', blank, re.M))
+    if place.section is None:
+        lo = 0
+        hi = next((m.start() for m in heads if m.group(0).startswith('## ')),
+                  len(text))
+    else:
+        mine = [k for k, m in enumerate(heads)
+                if m.group(0) == place.section]
+        if len(mine) != 1:
+            raise AssertionError(f'{place.path}: heading {place.section!r} '
+                                 f'found {len(mine)} times, once expected')
+        lo = heads[mine[0]].end()
+        hi = (heads[mine[0] + 1].start() if mine[0] + 1 < len(heads)
+              else len(text))
+    region = text[lo:hi]
+    if place.start is None:
+        body = region.strip('\n')
+        if not body:
+            raise AssertionError(f'{place.path}: nothing under '
+                                 f'{place.section!r}')
+        return flat(body.split('\n\n')[0])
+    starts = list(re.finditer(place.start, region))
+    if len(starts) != 1:
+        raise AssertionError(f'{place.path}: {place.start!r} found '
+                             f'{len(starts)} times under {place.section!r}, '
+                             f'once expected')
+    end = re.compile(place.end).search(region, starts[0].end())
+    if not end:
+        raise AssertionError(f'{place.path}: nothing ends the span that '
+                             f'starts at {place.start!r}')
+    return flat(region[starts[0].start():end.start()])
+
+
+#: A PostgreSQL floor in any wording these pages use for one. Every match
+#: in the published pages must sit inside a place a row reads.
+FLOOR = r'(?:PostgreSQL|[Vv]ersion)\W+(\d+)(?:\.\d+)?\W+or (?:newer|later)'
+
+
+def end_line_problem(items, branch):
+    """None if exactly one `\\echo` line psql prints for `items` (with the
+    \\if values in `branch`) starts `=== done`, and it is the last thing
+    printed; else what is wrong. The docs' `grep -L '^=== done'` names a
+    stopped run only while that holds."""
+    events = expected_output(items, False, branch)
+    done = [event for event in events
+            if event[0] == 'line' and event[1].startswith('=== done')]
+    if len(done) != 1:
+        return f'{len(done)} printed lines start === done, one expected'
+    if events[-1] != done[0]:
+        return 'the === done line is not the last thing printed'
+    return None
+
+
+def floors_no_row_reads(pages, places, text_of):
+    """(page, floors it states, floors its places hold) for every page where
+    the two counts differ: a floor sentence outside every place is read by
+    no row. A place may state the floor of two commands and sit in both
+    rows; it is one statement on its page, so each place counts once."""
+    held = collections.Counter()
+    for place in places:
+        held[place.path] += len(re.findall(FLOOR, text_of(place)))
+    return [(name, len(re.findall(FLOOR, flat(text))), held[name])
+            for name, text in sorted(pages.items())
+            if len(re.findall(FLOOR, flat(text))) != held[name]]
+
+
+def floor_of(span):
+    """The one PostgreSQL version `span` names, in whatever words, or a
+    refusal: none, or two, is not one floor."""
+    found = re.findall(r'(?:PostgreSQL|[Vv]ersion)\W+(\d+)', span)
+    if len(found) != 1:
+        raise AssertionError(f'{len(found)} PostgreSQL version(s) where one '
+                             f'floor is expected: {found} in {span[:80]!r}')
+    return found[0]
+
+
 class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     r"""A number the docs publish, tied to every page that states it and,
     where there is one, to the run it came from.
@@ -820,21 +1647,23 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     """
 
     FIGURES = (
-        # "need", and a list item, since 2026-09-27: README's Prerequisites
-        # and confirming-on-a-real-system.md state it in those two shapes, and
-        # drifting either to 14 stayed green (false-negative-reviewer).
-        # Two floors: the probe reads pg_database columns new in 15, and the
-        # template, measured on 14 to 18, reads none. Each command is said in
-        # its own words, so neither row reads the other's.
-        ('the PostgreSQL floor of command 2, the C.UTF-8 probe',
-         r'(?:needs? |Needs? |\*\*|(?<!\S)- |command 2, )'
-         r'(?:PostgreSQL|version) (\d+) or newer',
-         4,
-         ()),
-        ('the PostgreSQL floor of command 3, the template',
-         r'(?:runs on |command 3, )PostgreSQL (\d+) or newer',
-         3,
-         ()),
+        # The two PostgreSQL floors are read where each page states them
+        # for that command (16.224): told apart by wording, command 2
+        # reworded as "runs on PostgreSQL 14 or newer" was counted as
+        # command 3's, and a page was counted once however many times it
+        # stated the floor. One sentence that gives the floor of both
+        # commands is a place in both rows.
+        ('the PostgreSQL floor of command 2, the C.UTF-8 probe', (
+            Place('README.md', '### Prerequisites',
+                  r'\n- for commands 2 and 3\b', r'\n(?:- |\n)'),
+            Place('docs/requirements.md', '## For the confirmation step',
+                  r'\b[Cc]ommands 2 and 3\b', r'\n\n')), None, ()),
+        ('the PostgreSQL floor of command 3, the template', (
+            Place('README.md', '### Prerequisites',
+                  r'\n- for commands 2 and 3\b', r'\n(?:- |\n)'),
+            Place('README.md', '### The commands', r'\*\*3 — ', r'```'),
+            Place('docs/requirements.md', '## For the confirmation step',
+                  r'\b[Cc]ommands 2 and 3\b', r'\n\n')), None, ()),
         # The locales that inherit iso14651_t1 (328) and the locale files
         # that differ between glibc 2.28 and 2.34 (283) were rows here, held
         # to step 1's output; step 9.5 deleted it, and the docs' sentences
@@ -848,6 +1677,12 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
     def test_every_page_that_states_it_states_the_same_one(self):
         for label, pattern, least, evidence in self.FIGURES:
             with self.subTest(figure=label):
+                if isinstance(pattern, tuple):
+                    self.assertIsNone(least, f'{label}: a row that names '
+                                      f'its places takes no file count')
+                    self.check_places(label, pattern)
+                    continue
+                self.assertIsInstance(least, int, label)
                 seen = {}
                 for name, text in sorted(docs().items()):
                     for found in re.finditer(pattern, flat(text)):
@@ -868,6 +1703,81 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
                     f'{label} is published as more than one number: '
                     + '; '.join(f'{value} in {", ".join(sorted(set(files)))}'
                                 for value, files in sorted(seen.items())))
+
+    def check_places(self, label, places, text_of=None):
+        """Each place states one number, and every place the same one.
+        `text_of` reads a place (place_text, the published page); the test
+        of this check hands it pages of its own."""
+        text_of = text_of or place_text
+        self.assertTrue(places, label)
+        seen = {}
+        for place in places:
+            try:
+                floor = floor_of(text_of(place))
+            except AssertionError as e:
+                self.fail(f'{label}: {place.path} under {place.section!r}: '
+                          f'{e}')
+            seen.setdefault(floor, []).append(place.path)
+        self.assertEqual(len(seen), 1, f'{label} is published as more than '
+                                       f'one number: {seen}')
+
+    def test_every_floor_the_pages_state_is_read_by_a_row(self):
+        """A floor sentence outside every place would be read by no row:
+        per page, the floors stated must be the ones its places hold."""
+        places = {place for _, pattern, _, _ in self.FIGURES
+                  if isinstance(pattern, tuple) for place in pattern}
+        self.assertTrue(places, 'no row names a place')
+        pages = {name.replace(os.sep, '/'): text
+                 for name, text in docs().items()}
+        self.assertEqual(floors_no_row_reads(pages, places, place_text), [])
+
+    def test_the_floor_checks_see_what_they_are_for(self):
+        """Both checks on pages of their own, since the published pages
+        agree and hold no stray floor, and so never reach the branch that
+        refuses (11.3's battery: dropping either refusal stayed green)."""
+        pages = {'p': '## A\n\n- for command 2, PostgreSQL 14 or newer\n'
+                      '\n## B\n\nIt needs PostgreSQL 15 or newer.\n'}
+
+        def text_of(place):
+            return place_span(pages[place.path], place)
+        two = (Place('p', '## A', r'\n- for command 2\b', r'\n(?:- |\n)'),
+               Place('p', '## B', None, None))
+        with self.assertRaisesRegex(AssertionError,
+                                    'published as more than one number'):
+            self.check_places('floor', two, text_of)
+        self.check_places('floor', two[:1], text_of)
+        self.assertEqual(floors_no_row_reads(pages, set(two), text_of), [])
+        stray = floors_no_row_reads(pages, set(two[:1]), text_of)
+        self.assertEqual(stray, [('p', 2, 1)])
+
+    def test_a_place_refuses_what_it_cannot_read(self):
+        """Each refusal of place_span and floor_of by its message, with the
+        control that reads the span."""
+        page = ('# T\n\nIntro.\n\n## A\n\n- for command 2, PostgreSQL 15 '
+                'or newer\n- other\n\n```sh\n# a comment\n```\n\n## B\n')
+        good = Place('p', '## A', r'\n- for command 2\b', r'\n(?:- |\n)')
+        self.assertEqual(place_span(page, good),
+                         '- for command 2, PostgreSQL 15 or newer')
+        self.assertEqual(place_span(page, Place('p', None, r'Intro', r'\n')),
+                         'Intro.')
+        self.assertEqual(place_span(page, Place('p', '## A', None, None)),
+                         '- for command 2, PostgreSQL 15 or newer - other')
+        for text, place, message in (
+                (page + '## A\n', good, 'found 2 times, once expected'),
+                (page, good._replace(start='command 9'), 'found 0 times'),
+                (page.replace('- other', '- for command 2 again'), good,
+                 'found 2 times under'),
+                (page, good._replace(end='NOPE'), 'nothing ends the span')):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(AssertionError, message):
+                    place_span(text, place)
+        self.assertEqual(floor_of('needs **version 15 or newer**'), '15')
+        for span in ('runs on PostgreSQL release 14', 'PostgreSQL 14 or '
+                     'newer, PostgreSQL 13 with a patch'):
+            with self.subTest(span=span):
+                with self.assertRaisesRegex(AssertionError,
+                                            'where one floor is expected'):
+                    floor_of(span)
 
     def test_the_evidence_under_it_carries_the_same_number(self):
         """The prose figure against the output it summarises, which is where

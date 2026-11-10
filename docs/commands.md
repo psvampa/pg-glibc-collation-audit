@@ -192,10 +192,10 @@ build (1.a).
 ## Command 2 — whether `C.UTF-8`'s order changed
 
 `sql/c_utf8_probe.sql`, run on each machine, the two outputs compared. It
-needs PostgreSQL 15 or newer and no editing.
+needs no editing.
 
 This is the one locale 1.a cannot reach when its file is in neither version;
-1.b reaches it, in steps 2 and 11. PostgreSQL will not warn about it either.
+1.b measures it, in step 11. PostgreSQL will not warn about it either.
 It is needed when a database uses `C.UTF-8` — which in a container it usually
 does, without anyone having chosen it.
 
@@ -240,9 +240,9 @@ list.
 
 None of them touches your data or your indexes, and none of them decides for
 you. What they do change is small and named: 1.b installs one package on each
-machine, the locale sources of the build it already runs; commands 2 and 3
-each create a test table of their own, and command 3 first imports the
-system's collations into PostgreSQL's catalog; the SQL files step 11 writes
-only read. Command 1 hands you a list,
+machine, the locale sources of the build it already runs; command 3
+creates a test table of its own and first imports the system's collations
+into PostgreSQL's catalog; command 2 and the SQL files step 11 writes only
+read. Command 1 hands you a list,
 and in 1.b a measurement; commands 2 and 3 hand you measurements. What to do
 in your databases is yours to decide.
