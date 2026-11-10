@@ -46,8 +46,7 @@ database's own locale write one locale many ways (`sv_SE.utf8`,
 `sv_SE.iso885915`, `sv_SE.UTF-8`), and glibc builds all of them from one file,
 named as the locale is without the part from the dot up to any `@`. The list
 also holds the aliases glibc's `locale.alias` gives these locales (`swedish`).
-`sql/collation_confirmation_template.sql` reads collations the same way. Its
-inventories show the locale of each collation they list, and its version query
+`sql/collation_confirmation_template.sql` reads collations the same way. It
 lists the collations each name in its list reaches.
 
 **`!!`** — a warning printed where a clean-looking result does not cover

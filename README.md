@@ -21,9 +21,8 @@ it, compares their compiled sort tables, and names the characters that moved.
 
 **This project does not set out to give a single, infallible answer.** It
 gives you a few simple ways to compare the source of two glibc versions —
-upstream, or the patched files a distro installs — to measure the resulting
-order on your own nodes, and to try to identify which of your objects may be
-affected.
+upstream, or the patched files a distro installs — and to measure the
+resulting order on your own nodes.
 
 Use it as a complement to what already exists, depending on what you need. One
 example is an empirical method such as
@@ -51,9 +50,9 @@ which sorts real strings on real nodes, and there are others.
 
 **For commands 2 and 3:**
 
-- PostgreSQL 15 or newer on both servers
-- for command 3, the language packs of the locales to test, installed before
-  `initdb`
+- for command 2, PostgreSQL 15 or newer on both servers
+- for command 3, PostgreSQL 14 or newer on both servers, and the language
+  packs of the locales to test, installed before `initdb`
 
 Why each one is needed, and the setup traps that give a wrong answer without
 saying so, are in [docs/requirements.md](docs/requirements.md).
@@ -187,9 +186,8 @@ What it prints on both pairs is in
 [examples/README.md, under Command 2](examples/README.md#command-2--the-cutf-8-probe).
 
 **3 — Confirming the order on your own builds.**
-*Optional. It sorts strings you choose inside PostgreSQL, and lists which of
-your objects are at stake. Needs PostgreSQL 15 or newer on both nodes, and
-editing the file first.*
+*Optional. It sorts strings you choose inside PostgreSQL. It runs on
+PostgreSQL 14 or newer on both nodes, and needs editing the file first.*
 
 ```sh
 psql -f sql/collation_confirmation_template.sql   # edit placeholders first
@@ -213,8 +211,6 @@ What this box leaves out is in
   anything at all
 - the three traps that make a comparison agree with itself while proving
   nothing
-- what it reports beyond indexes, text partition keys among them, which no
-  `REINDEX` fixes
 
 A worked example for each pair is in
 [examples/README.md, under Command 3](examples/README.md#command-3--the-sql-step-11-writes).

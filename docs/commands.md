@@ -211,16 +211,10 @@ is inverted. That, and how the probe differs from the template, are in
 `sql/collation_confirmation_template.sql`, edited first, run on both machines.
 Optional. This sorts strings you choose inside PostgreSQL.
 
-It does two separate jobs.
-
-**It measures the order** of three strings you supply, under a locale you
+It measures the order of three strings you supply, under a locale you
 name, on both machines. Choosing them decides whether the run proves
 anything; how to choose them is in
 [confirming-on-a-real-system.md](confirming-on-a-real-system.md#choosing-the-three-values).
-
-**It inventories your database**, which answers which objects of yours are
-at stake. That half needs no editing and no confirmation; what it lists is in
-[confirming-on-a-real-system.md](confirming-on-a-real-system.md#what-else-the-template-reports).
 
 **With the two machines' files, step 11 writes the SQL itself.** One file
 per database encoding, `measured_order_confirm.<pair>.<ENCODING>.sql` in the
@@ -240,7 +234,7 @@ in the new one. It refuses when a collation cannot be used, psql reports an
 error outside a collation's own check, or the glibc version PostgreSQL
 reports is not that machine's. It never says that a locale is unchanged:
 what the file does not test is listed in it, and the reader repeats the
-list. The list of your objects at stake still comes from the template.
+list.
 
 ## What none of the three does
 

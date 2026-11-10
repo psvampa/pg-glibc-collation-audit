@@ -490,39 +490,56 @@ class AliasesOf(unittest.TestCase):
 
 
 class TheTemplateComparesByGlibcsRule(unittest.TestCase):
-    """sql/collation_confirmation_template.sql reads each collation's locale,
-    and the database's own, as the locale it is built from, and its version
-    query matches the list's names by the same rule (backlog 13.1). Its
-    regular expression must be glibc_locale_data.locale_source, so this
-    reads it from the template and runs it over every collcollate PostgreSQL
-    imported on the three machines (tests/locale_order/*.pg_collation.txt),
-    plus the spellings a database's own locale takes. regexp_replace without
-    flags replaces the first match only, hence count=1."""
+    """sql/collation_confirmation_template.sql lists the collations built
+    from each locale on the list, and sorts the test values under one of
+    them (backlog 13.1, step 11.2). Its listing reads each collation's
+    locale from collcollate as the locale it is built from, and matches the
+    list's names by the same rule. That regular expression must be
+    glibc_locale_data.locale_source, so this reads it from the template and
+    runs it over every collcollate PostgreSQL imported on the three machines
+    (tests/locale_order/*.pg_collation.txt), plus spellings a name on the
+    list can take. regexp_replace without flags replaces the first match
+    only, hence count=1."""
+
+    # Each statement as it was run on PostgreSQL 14 to 18 (step 11.2), its
+    # comments stripped and its whitespace collapsed. A change to one is run
+    # on PostgreSQL again and then written here.
+    IMPORT = "SELECT pg_import_system_collations('pg_catalog')"
+    LISTING = (
+        "SELECT n AS listed, c.collname, c.collcollate, "
+        "pg_encoding_to_char(c.collencoding) AS encoding, c.collversion, "
+        "pg_collation_actual_version(c.oid) AS actual "
+        "FROM unnest(ARRAY['<LOCALE>']) AS n "
+        "LEFT JOIN pg_collation c ON c.collprovider = 'c' "
+        "AND lower(regexp_replace(c.collcollate, '[.][^@]*', '')) "
+        "= lower(regexp_replace(n COLLATE \"C\", '[.][^@]*', '')) "
+        "ORDER BY n COLLATE \"C\", c.collname, encoding")
+    TABLE = ("DROP TABLE IF EXISTS collation_test",
+             "CREATE TABLE collation_test (w text COLLATE \"<LOCALE>\")",
+             "INSERT INTO collation_test VALUES ('<value1>'), ('<value2>'), "
+             "('<value3>')",
+             "CREATE INDEX ON collation_test (w)")
+    HEADING = "\\echo '--- ORDER BY under <LOCALE> ---'"
+    SORT = ("SELECT ROW_NUMBER() OVER (ORDER BY w COLLATE \"<LOCALE>\", "
+            "w COLLATE \"C\") AS pos, w FROM collation_test ORDER BY pos")
 
     def test_the_template_s_regex_is_the_rule(self):
-        path = os.path.join(_harness.REPO_ROOT, 'sql',
-                            'collation_confirmation_template.sql')
-        with open(path, encoding='utf-8') as fh:
-            text = fh.read()
+        text = self.template()
         found = re.findall(r"regexp_replace\([^;]*?'([^']+)', ''\)", text,
                            re.S)
-        self.assertEqual(len(found), 3, found)
+        # The two sides of the listing's join. Read from what the collation
+        # loads, never from its name: "sv_SE" is three collations, and
+        # CREATE COLLATION mine (locale = 'sv_SE.utf8') is named mine.
+        self.assertEqual(len(found), 2, found)
         self.assertEqual(len(set(found)), 1, found)
-        # Read from what the collation loads, never from its name: "sv_SE"
-        # is three collations, and CREATE COLLATION mine (locale = 'sv_SE.utf8')
-        # is named mine.
-        self.assertIn("THEN d.datcollate\n                           ELSE "
-                      "c.collcollate END, '", text)
         # A server with standard_conforming_strings off reads a backslash in a
         # literal as an escape, and '\.' then matches any first character:
         # every name came back empty, measured on PostgreSQL 18.6.
         self.assertNotIn('\\', found[0])
-        # glibc reads an alias in any case (a database created as Swedish
-        # works and keeps that spelling, measured), so the version query
-        # lowers both sides.
-        # Both sides of the version query go through the rule, and lower()
-        # runs under C: under a Turkish locale lower('I') is a dotless i and
-        # or_IN matched nothing (measured on PostgreSQL 18.6).
+        # glibc reads an alias in any case (Swedish is swedish), so the
+        # listing lowers both sides, and lower() runs under C: under a
+        # Turkish locale lower('I') is a dotless i and or_IN matched nothing
+        # (measured on PostgreSQL 18.6).
         self.assertIn("lower(regexp_replace(c.collcollate, '", text)
         self.assertIn("lower(regexp_replace(n COLLATE \"C\", '", text)
         self.assertIn("FROM unnest(ARRAY['<LOCALE>']) AS n\nLEFT JOIN "
@@ -570,6 +587,33 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
         self.assertTrue(ends, f'no ; after {anchor!r}')
         return body[:ends[0]]
 
+    def statements(self, text):
+        """Everything psql runs from `text`, in order, whitespace collapsed:
+        each SQL statement up to its `;`, and each backslash command, which
+        psql reads to the end of its line. Comments are dropped as
+        PostgreSQL's scanner drops them, and a `;` inside a literal ends
+        nothing. A backslash command in the middle of a statement, or text
+        after the last `;`, is refused rather than guessed."""
+        code = self.code(text)
+        items, start = [], 0
+        for m in re.finditer(r"'(?:[^']|'')*'|;|^[ \t]*\\[^\n]*", code,
+                             re.M):
+            token = m.group(0)
+            if token == ';':
+                items.append(flat(code[start:m.start()]))
+            elif token.lstrip().startswith('\\'):
+                self.assertEqual(flat(code[start:m.start()]), '',
+                                 f'a psql command inside a statement: '
+                                 f'{token!r}')
+                items.append(flat(token))
+            else:
+                continue
+            start = m.end()
+        self.assertEqual(flat(code[start:]), '',
+                         'text after the last ; that psql would leave '
+                         'unrun or send unfinished')
+        return items
+
     def test_psql_runs_every_statement(self):
         """A statement inside a block comment, or after a `\\q`, is never run:
         psql's scanner reads a block comment in an exclusive state where `;`
@@ -582,81 +626,50 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
         self.assertNotRegex(code, r'/\*|\$')
         self.assertEqual(set(re.findall(r'\\[A-Za-z]+', code)), {'\\echo'})
 
+    def test_the_template_runs_these_statements_and_nothing_else(self):
+        """What the template runs, in order. Step 11.2 took out the lists of
+        indexes, partition keys, columns and constraints, the view they
+        read, the question about the database's default collation and both
+        collversion queries: the template lists the collations and sorts.
+        Forbidding the words of what went did not hold in 13.1 (a WHERE, a
+        second JOIN, a LIMIT, a comma join each passed in turn), so the whole
+        sequence is pinned: a statement added, dropped, moved or changed
+        fails here, and a deliberate change is run on PostgreSQL again and
+        then written above."""
+        self.assertEqual(self.statements(self.template()),
+                         [self.IMPORT, self.LISTING, *self.TABLE,
+                          self.HEADING, self.SORT])
+
     def test_the_version_query_is_the_one_measured(self):
-        """The version query, word for word, as it was run on PostgreSQL 18.6
-        (backlog 13.1). It starts from the list, so a name that matches no
-        collation still prints a row: a locale this database does not have,
-        or <LOCALE> left unreplaced. Both sides go through glibc's rule, and
-        lower() under C, so a spelling or an alias in another case matches
-        and a Turkish database loses nothing. Listing what must not appear did
-        not hold: a WHERE, a second JOIN, a LIMIT, a comma join to an empty
-        set each emptied a row and passed in turn. A change to this statement
-        is measured on PostgreSQL again and then written here."""
+        """The listing, word for word. It starts from the list, so a name
+        that matches no collation still prints a row: a locale this database
+        does not have, or <LOCALE> left unreplaced. Both sides go through
+        glibc's rule, and lower() under C, so a spelling or an alias in
+        another case matches and a Turkish database loses nothing. It
+        prints the glibc version recorded for each collation and the one the
+        server runs; they differ only where glibc changed after the version
+        was recorded, and equal ones prove nothing. Its ORDER BY reads the
+        names under C and
+        ends in the encoding: under the database's default collation th_TH
+        and its alias thai changed places between an en_US and a C.UTF-8
+        database, and the three collations named sv_SE (LATIN1, LATIN9,
+        UTF8), which tie on n and collname, changed order between databases
+        and between clusters (measured on PostgreSQL 14 to 18, step 11.2):
+        differences between two machines that are not glibc's."""
         self.assertEqual(
             flat(self.statement(self.template(), 'SELECT n AS listed')),
-            "SELECT n AS listed, c.collname, c.collcollate, "
-            "pg_encoding_to_char(c.collencoding) AS encoding, c.collversion "
-            "FROM unnest(ARRAY['<LOCALE>']) AS n "
-            "LEFT JOIN pg_collation c ON c.collprovider = 'c' "
-            "AND lower(regexp_replace(c.collcollate, '[.][^@]*', '')) "
-            "= lower(regexp_replace(n COLLATE \"C\", '[.][^@]*', '')) "
-            "ORDER BY n, c.collname")
+            self.LISTING)
 
-    def test_the_inventories_show_the_locale(self):
-        """The three inventories print each object's locale beside its
-        collation's name, read through the view from collcollate. The name
-        cannot be compared with the list: CREATE COLLATION mine (locale =
-        'sv_SE.utf8') shows as mine. The view is named five times: where it is
-        made, the three inventories and the CHECK/EXCLUDE review list, which
-        prints no collation. A new statement that reads it changes that
-        count, and has to be added here."""
-        text = self.template()
+    def test_the_sort_is_the_one_measured(self):
+        """The statement whose output the two machines' diff compares. The
+        position comes from the locale's order with C after it, which only
+        states the intent: PostgreSQL already breaks a strcoll tie by bytes
+        for every libc collation (varlena.c). A WHERE, a LIMIT or another
+        ORDER BY here changes or empties what both machines print alike,
+        and the diff agrees over nothing."""
         self.assertEqual(
-            len(re.findall(r'(?i)\bexposed_collation\b', self.code(text))), 5)
-        self.assertEqual(text.count('x.effective_collation'), 3)
-        for header in ("'--- indexes on non-C/POSIX libc collations ---'",
-                       "'--- partitioned tables keyed on a non-C/POSIX libc "
-                       "collation (REINDEX does NOT fix these) ---'",
-                       "'--- columns using a non-C/POSIX libc collation ---'"):
-            with self.subTest(header=header):
-                stmt = self.statement(text, '\\echo ' + header)
-                self.assertIn('\nFROM ', stmt)
-                columns = flat(stmt.split('\nFROM ', 1)[0])
-                self.assertIn('x.effective_collation', columns)
-                self.assertRegex(columns, r'\bx\.locale\b')
-
-    def test_the_view_is_the_one_measured(self):
-        """The view the three inventories read, word for word, as it was run
-        on PostgreSQL 18.6 (backlog 13.1).
-        - C and POSIX are recognised by collcollate, as PostgreSQL does
-          (pg_locale.c at REL_13_23 to REL_17_11, pg_locale_libc.c at
-          REL_18_6). By name, the view kept ucs_basic, libc with collcollate
-          C in 13 to 16, and dropped a collation named C that loads a real
-          locale.
-        - The second arm brings in every column with no COLLATE of its own,
-          the database default, which the template calls MOST text columns.
-        - `locale` is read from collcollate and datcollate, never collname.
-        Listing what must not appear did not hold: a condition added beside
-        the two arms emptied the inventories, four ways, and passed. A change
-        to this statement is measured on PostgreSQL again and then written
-        here."""
-        self.assertEqual(
-            flat(self.statement(
-                self.template(),
-                'CREATE OR REPLACE TEMP VIEW exposed_collation AS')),
-            "CREATE OR REPLACE TEMP VIEW exposed_collation AS "
-            "SELECT c.oid AS colloid, c.collname, "
-            "CASE WHEN c.collprovider = 'd' "
-            "THEN 'database default -> ' || d.datcollate "
-            "ELSE c.collname END AS effective_collation, "
-            "regexp_replace(CASE WHEN c.collprovider = 'd' THEN d.datcollate "
-            "ELSE c.collcollate END, '[.][^@]*', '') AS locale "
-            "FROM pg_collation c CROSS JOIN pg_database d "
-            "WHERE d.datname = current_database() "
-            "AND ( (c.collprovider = 'c' AND c.collcollate NOT IN "
-            "('C', 'POSIX')) "
-            "OR (c.collprovider = 'd' AND d.datlocprovider = 'c' "
-            "AND d.datcollate NOT IN ('C', 'POSIX')) )")
+            flat(self.statement(self.template(), 'SELECT ROW_NUMBER()')),
+            self.SORT)
 
 
 class ReadingCharsReadsLikeGlibc(unittest.TestCase):
