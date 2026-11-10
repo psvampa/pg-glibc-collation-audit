@@ -1,0 +1,438 @@
+=== 0. node identity: a result is bound to the build it ran on ===
+--- the machine psql runs on (the three shell lines below run there, not on the server):
+glibc-2.34-284.el9_8.4.x86_64
+ldd (GNU libc) 2.34
+C.utf8
+--- the server: its glibc release as PostgreSQL reports it (one number for every build of that release; record the build by hand)
+SELECT coalesce(
+         (SELECT pg_collation_actual_version(oid)
+          FROM pg_collation
+          WHERE collprovider = 'c'
+            AND pg_collation_actual_version(oid) IS NOT NULL
+          ORDER BY collname
+          LIMIT 1),
+         'NOT KNOWN: no libc collation in this database reports a version '
+         '(only C, POSIX and C.* locales are here); record the server''s glibc by hand')
+       AS server_glibc;
+ server_glibc 
+--------------
+ 2.34
+(1 row)
+
+=== 0b. guards: without these, both nodes can agree for the wrong reason ===
+SHOW server_encoding;
+ server_encoding 
+-----------------
+ UTF8
+(1 row)
+
+SHOW standard_conforming_strings;
+ standard_conforming_strings 
+-----------------------------
+ on
+(1 row)
+
+DO $$
+BEGIN
+  IF current_setting('server_version_num')::int < 140000 THEN
+    RAISE EXCEPTION
+      'PostgreSQL % is older than 14, the oldest version this probe was '
+      'measured on.', current_setting('server_version');
+  END IF;
+  IF current_setting('server_encoding') <> 'UTF8' THEN
+    RAISE EXCEPTION
+      'server_encoding is %, not UTF8. Every comparison in this probe would '
+      'collapse to byte order and two nodes would agree while proving nothing.',
+      current_setting('server_encoding');
+  END IF;
+  IF current_setting('standard_conforming_strings') <> 'on' THEN
+    RAISE EXCEPTION
+      'standard_conforming_strings is off; the U&''\+xxxxxx'' literals below '
+      'would not mean what they say.';
+  END IF;
+END $$;
+DO
+DO $$
+DECLARE prov "char";
+BEGIN
+  SELECT collprovider INTO prov
+  FROM pg_collation
+  WHERE collname = 'C.utf8'
+    AND collnamespace = 'pg_catalog'::regnamespace;
+  IF prov IS NULL THEN
+    RAISE EXCEPTION
+      'no collation named C.utf8 in pg_catalog. Run '
+      'SELECT pg_import_system_collations(''pg_catalog''); as superuser.';
+  END IF;
+  IF prov <> 'c' THEN
+    RAISE EXCEPTION
+      'the collation named C.utf8 has provider %, not the libc provider ''c''. '
+      'This probe measures glibc; a builtin collation cannot change with it.',
+      prov;
+  END IF;
+END $$;
+DO
+=== 0c. the C-ish collations on this node, and their versions ===
+SELECT collname, collprovider, collversion,
+       pg_collation_actual_version(oid) AS actual
+FROM pg_collation
+WHERE collname IN ('C', 'POSIX', 'C.utf8', 'C.UTF-8', 'pg_c_utf8')
+  AND collnamespace = 'pg_catalog'::regnamespace
+ORDER BY collname;
+ collname | collprovider | collversion | actual 
+----------+--------------+-------------+--------
+ C        | c            |             | 
+ C.utf8   | c            |             | 
+ POSIX    | c            |             | 
+(3 rows)
+
+SELECT $corpus$
+SELECT cp, kind, w COLLATE pg_catalog."C.utf8" AS w FROM (VALUES
+  ('U+0001',   'UTF-8 1-byte',              U&'\+000001'),
+  ('U+0041',   'ASCII anchor A',            U&'\+000041'),
+  ('U+005A',   'ASCII anchor Z',            U&'\+00005A'),
+  ('U+0061',   'ASCII anchor a',            U&'\+000061'),
+  ('U+007F',   'UTF-8 1-byte last',         U&'\+00007F'),
+  ('U+0080',   'UTF-8 2-byte first',        U&'\+000080'),
+  ('U+07FF',   'UTF-8 2-byte last',         U&'\+0007FF'),
+  ('U+0800',   'UTF-8 3-byte first',        U&'\+000800'),
+  ('U+FFFF',   'plane 0 last (declared)',   U&'\+00FFFF'),
+  ('U+10000',  'plane 1 first (declared)',  U&'\+010000'),
+  ('U+1FFFF',  'plane 1 last (declared)',   U&'\+01FFFF'),
+  ('U+20000',  'plane 2 first (declared)',  U&'\+020000'),
+  ('U+2FFFF',  'plane 2 last (declared)',   U&'\+02FFFF'),
+  ('U+30000',  'plane 3 first (NO range)',  U&'\+030000'),
+  ('U+3FFFF',  'plane 3 last (NO range)',   U&'\+03FFFF'),
+  ('U+40000',  'plane 4 first (NO range)',  U&'\+040000'),
+  ('U+4FFFF',  'plane 4 last (NO range)',   U&'\+04FFFF'),
+  ('U+50000',  'plane 5 first (NO range)',  U&'\+050000'),
+  ('U+5FFFF',  'plane 5 last (NO range)',   U&'\+05FFFF'),
+  ('U+60000',  'plane 6 first (NO range)',  U&'\+060000'),
+  ('U+6FFFF',  'plane 6 last (NO range)',   U&'\+06FFFF'),
+  ('U+70000',  'plane 7 first (NO range)',  U&'\+070000'),
+  ('U+7FFFF',  'plane 7 last (NO range)',   U&'\+07FFFF'),
+  ('U+80000',  'plane 8 first (NO range)',  U&'\+080000'),
+  ('U+8FFFF',  'plane 8 last (NO range)',   U&'\+08FFFF'),
+  ('U+90000',  'plane 9 first (NO range)',  U&'\+090000'),
+  ('U+9FFFF',  'plane 9 last (NO range)',   U&'\+09FFFF'),
+  ('U+A0000',  'plane 10 first (NO range)', U&'\+0A0000'),
+  ('U+AFFFF',  'plane 10 last (NO range)',  U&'\+0AFFFF'),
+  ('U+B0000',  'plane 11 first (NO range)', U&'\+0B0000'),
+  ('U+BFFFF',  'plane 11 last (NO range)',  U&'\+0BFFFF'),
+  ('U+C0000',  'plane 12 first (NO range)', U&'\+0C0000'),
+  ('U+CFFFF',  'plane 12 last (NO range)',  U&'\+0CFFFF'),
+  ('U+D0000',  'plane 13 first (NO range)', U&'\+0D0000'),
+  ('U+DFFFF',  'plane 13 last (NO range)',  U&'\+0DFFFF'),
+  ('U+E0000',  'plane 14 first (declared)', U&'\+0E0000'),
+  ('U+EFFFF',  'plane 14 last (declared)',  U&'\+0EFFFF'),
+  ('U+F0000',  'plane 15 first (declared)', U&'\+0F0000'),
+  ('U+FFFFF',  'plane 15 last (declared)',  U&'\+0FFFFF'),
+  ('U+100000', 'plane 16 first (declared)', U&'\+100000'),
+  ('U+10FFFF', 'plane 16 last (declared)',  U&'\+10FFFF')
+) AS v(cp, kind, w)
+$corpus$ AS c_utf8_probe_corpus 
+SELECT count(*) AS c_utf8_probe_rows, count(*) = 41 AS c_utf8_probe_rows_ok
+FROM (
+SELECT cp, kind, w COLLATE pg_catalog."C.utf8" AS w FROM (VALUES
+  ('U+0001',   'UTF-8 1-byte',              U&'\+000001'),
+  ('U+0041',   'ASCII anchor A',            U&'\+000041'),
+  ('U+005A',   'ASCII anchor Z',            U&'\+00005A'),
+  ('U+0061',   'ASCII anchor a',            U&'\+000061'),
+  ('U+007F',   'UTF-8 1-byte last',         U&'\+00007F'),
+  ('U+0080',   'UTF-8 2-byte first',        U&'\+000080'),
+  ('U+07FF',   'UTF-8 2-byte last',         U&'\+0007FF'),
+  ('U+0800',   'UTF-8 3-byte first',        U&'\+000800'),
+  ('U+FFFF',   'plane 0 last (declared)',   U&'\+00FFFF'),
+  ('U+10000',  'plane 1 first (declared)',  U&'\+010000'),
+  ('U+1FFFF',  'plane 1 last (declared)',   U&'\+01FFFF'),
+  ('U+20000',  'plane 2 first (declared)',  U&'\+020000'),
+  ('U+2FFFF',  'plane 2 last (declared)',   U&'\+02FFFF'),
+  ('U+30000',  'plane 3 first (NO range)',  U&'\+030000'),
+  ('U+3FFFF',  'plane 3 last (NO range)',   U&'\+03FFFF'),
+  ('U+40000',  'plane 4 first (NO range)',  U&'\+040000'),
+  ('U+4FFFF',  'plane 4 last (NO range)',   U&'\+04FFFF'),
+  ('U+50000',  'plane 5 first (NO range)',  U&'\+050000'),
+  ('U+5FFFF',  'plane 5 last (NO range)',   U&'\+05FFFF'),
+  ('U+60000',  'plane 6 first (NO range)',  U&'\+060000'),
+  ('U+6FFFF',  'plane 6 last (NO range)',   U&'\+06FFFF'),
+  ('U+70000',  'plane 7 first (NO range)',  U&'\+070000'),
+  ('U+7FFFF',  'plane 7 last (NO range)',   U&'\+07FFFF'),
+  ('U+80000',  'plane 8 first (NO range)',  U&'\+080000'),
+  ('U+8FFFF',  'plane 8 last (NO range)',   U&'\+08FFFF'),
+  ('U+90000',  'plane 9 first (NO range)',  U&'\+090000'),
+  ('U+9FFFF',  'plane 9 last (NO range)',   U&'\+09FFFF'),
+  ('U+A0000',  'plane 10 first (NO range)', U&'\+0A0000'),
+  ('U+AFFFF',  'plane 10 last (NO range)',  U&'\+0AFFFF'),
+  ('U+B0000',  'plane 11 first (NO range)', U&'\+0B0000'),
+  ('U+BFFFF',  'plane 11 last (NO range)',  U&'\+0BFFFF'),
+  ('U+C0000',  'plane 12 first (NO range)', U&'\+0C0000'),
+  ('U+CFFFF',  'plane 12 last (NO range)',  U&'\+0CFFFF'),
+  ('U+D0000',  'plane 13 first (NO range)', U&'\+0D0000'),
+  ('U+DFFFF',  'plane 13 last (NO range)',  U&'\+0DFFFF'),
+  ('U+E0000',  'plane 14 first (declared)', U&'\+0E0000'),
+  ('U+EFFFF',  'plane 14 last (declared)',  U&'\+0EFFFF'),
+  ('U+F0000',  'plane 15 first (declared)', U&'\+0F0000'),
+  ('U+FFFFF',  'plane 15 last (declared)',  U&'\+0FFFFF'),
+  ('U+100000', 'plane 16 first (declared)', U&'\+100000'),
+  ('U+10FFFF', 'plane 16 last (declared)',  U&'\+10FFFF')
+) AS v(cp, kind, w)
+) AS c 
+=== 1. the order C.utf8 produces on this node (diff this) ===
+WITH c_utf8_probe AS (
+SELECT cp, kind, w COLLATE pg_catalog."C.utf8" AS w FROM (VALUES
+  ('U+0001',   'UTF-8 1-byte',              U&'\+000001'),
+  ('U+0041',   'ASCII anchor A',            U&'\+000041'),
+  ('U+005A',   'ASCII anchor Z',            U&'\+00005A'),
+  ('U+0061',   'ASCII anchor a',            U&'\+000061'),
+  ('U+007F',   'UTF-8 1-byte last',         U&'\+00007F'),
+  ('U+0080',   'UTF-8 2-byte first',        U&'\+000080'),
+  ('U+07FF',   'UTF-8 2-byte last',         U&'\+0007FF'),
+  ('U+0800',   'UTF-8 3-byte first',        U&'\+000800'),
+  ('U+FFFF',   'plane 0 last (declared)',   U&'\+00FFFF'),
+  ('U+10000',  'plane 1 first (declared)',  U&'\+010000'),
+  ('U+1FFFF',  'plane 1 last (declared)',   U&'\+01FFFF'),
+  ('U+20000',  'plane 2 first (declared)',  U&'\+020000'),
+  ('U+2FFFF',  'plane 2 last (declared)',   U&'\+02FFFF'),
+  ('U+30000',  'plane 3 first (NO range)',  U&'\+030000'),
+  ('U+3FFFF',  'plane 3 last (NO range)',   U&'\+03FFFF'),
+  ('U+40000',  'plane 4 first (NO range)',  U&'\+040000'),
+  ('U+4FFFF',  'plane 4 last (NO range)',   U&'\+04FFFF'),
+  ('U+50000',  'plane 5 first (NO range)',  U&'\+050000'),
+  ('U+5FFFF',  'plane 5 last (NO range)',   U&'\+05FFFF'),
+  ('U+60000',  'plane 6 first (NO range)',  U&'\+060000'),
+  ('U+6FFFF',  'plane 6 last (NO range)',   U&'\+06FFFF'),
+  ('U+70000',  'plane 7 first (NO range)',  U&'\+070000'),
+  ('U+7FFFF',  'plane 7 last (NO range)',   U&'\+07FFFF'),
+  ('U+80000',  'plane 8 first (NO range)',  U&'\+080000'),
+  ('U+8FFFF',  'plane 8 last (NO range)',   U&'\+08FFFF'),
+  ('U+90000',  'plane 9 first (NO range)',  U&'\+090000'),
+  ('U+9FFFF',  'plane 9 last (NO range)',   U&'\+09FFFF'),
+  ('U+A0000',  'plane 10 first (NO range)', U&'\+0A0000'),
+  ('U+AFFFF',  'plane 10 last (NO range)',  U&'\+0AFFFF'),
+  ('U+B0000',  'plane 11 first (NO range)', U&'\+0B0000'),
+  ('U+BFFFF',  'plane 11 last (NO range)',  U&'\+0BFFFF'),
+  ('U+C0000',  'plane 12 first (NO range)', U&'\+0C0000'),
+  ('U+CFFFF',  'plane 12 last (NO range)',  U&'\+0CFFFF'),
+  ('U+D0000',  'plane 13 first (NO range)', U&'\+0D0000'),
+  ('U+DFFFF',  'plane 13 last (NO range)',  U&'\+0DFFFF'),
+  ('U+E0000',  'plane 14 first (declared)', U&'\+0E0000'),
+  ('U+EFFFF',  'plane 14 last (declared)',  U&'\+0EFFFF'),
+  ('U+F0000',  'plane 15 first (declared)', U&'\+0F0000'),
+  ('U+FFFFF',  'plane 15 last (declared)',  U&'\+0FFFFF'),
+  ('U+100000', 'plane 16 first (declared)', U&'\+100000'),
+  ('U+10FFFF', 'plane 16 last (declared)',  U&'\+10FFFF')
+) AS v(cp, kind, w)
+)
+SELECT row_number() OVER (ORDER BY w COLLATE pg_catalog."C.utf8") AS pos, cp, kind
+FROM c_utf8_probe
+ORDER BY pos;
+ pos |    cp    |           kind            
+-----+----------+---------------------------
+   1 | U+0001   | UTF-8 1-byte
+   2 | U+0041   | ASCII anchor A
+   3 | U+005A   | ASCII anchor Z
+   4 | U+0061   | ASCII anchor a
+   5 | U+007F   | UTF-8 1-byte last
+   6 | U+0080   | UTF-8 2-byte first
+   7 | U+07FF   | UTF-8 2-byte last
+   8 | U+0800   | UTF-8 3-byte first
+   9 | U+FFFF   | plane 0 last (declared)
+  10 | U+10000  | plane 1 first (declared)
+  11 | U+1FFFF  | plane 1 last (declared)
+  12 | U+20000  | plane 2 first (declared)
+  13 | U+2FFFF  | plane 2 last (declared)
+  14 | U+30000  | plane 3 first (NO range)
+  15 | U+3FFFF  | plane 3 last (NO range)
+  16 | U+40000  | plane 4 first (NO range)
+  17 | U+4FFFF  | plane 4 last (NO range)
+  18 | U+50000  | plane 5 first (NO range)
+  19 | U+5FFFF  | plane 5 last (NO range)
+  20 | U+60000  | plane 6 first (NO range)
+  21 | U+6FFFF  | plane 6 last (NO range)
+  22 | U+70000  | plane 7 first (NO range)
+  23 | U+7FFFF  | plane 7 last (NO range)
+  24 | U+80000  | plane 8 first (NO range)
+  25 | U+8FFFF  | plane 8 last (NO range)
+  26 | U+90000  | plane 9 first (NO range)
+  27 | U+9FFFF  | plane 9 last (NO range)
+  28 | U+A0000  | plane 10 first (NO range)
+  29 | U+AFFFF  | plane 10 last (NO range)
+  30 | U+B0000  | plane 11 first (NO range)
+  31 | U+BFFFF  | plane 11 last (NO range)
+  32 | U+C0000  | plane 12 first (NO range)
+  33 | U+CFFFF  | plane 12 last (NO range)
+  34 | U+D0000  | plane 13 first (NO range)
+  35 | U+DFFFF  | plane 13 last (NO range)
+  36 | U+E0000  | plane 14 first (declared)
+  37 | U+EFFFF  | plane 14 last (declared)
+  38 | U+F0000  | plane 15 first (declared)
+  39 | U+FFFFF  | plane 15 last (declared)
+  40 | U+100000 | plane 16 first (declared)
+  41 | U+10FFFF | plane 16 last (declared)
+(41 rows)
+
+=== 2. does C.utf8 equal byte order? READ BOTH CASES ===
+WITH c_utf8_probe AS (
+SELECT cp, kind, w COLLATE pg_catalog."C.utf8" AS w FROM (VALUES
+  ('U+0001',   'UTF-8 1-byte',              U&'\+000001'),
+  ('U+0041',   'ASCII anchor A',            U&'\+000041'),
+  ('U+005A',   'ASCII anchor Z',            U&'\+00005A'),
+  ('U+0061',   'ASCII anchor a',            U&'\+000061'),
+  ('U+007F',   'UTF-8 1-byte last',         U&'\+00007F'),
+  ('U+0080',   'UTF-8 2-byte first',        U&'\+000080'),
+  ('U+07FF',   'UTF-8 2-byte last',         U&'\+0007FF'),
+  ('U+0800',   'UTF-8 3-byte first',        U&'\+000800'),
+  ('U+FFFF',   'plane 0 last (declared)',   U&'\+00FFFF'),
+  ('U+10000',  'plane 1 first (declared)',  U&'\+010000'),
+  ('U+1FFFF',  'plane 1 last (declared)',   U&'\+01FFFF'),
+  ('U+20000',  'plane 2 first (declared)',  U&'\+020000'),
+  ('U+2FFFF',  'plane 2 last (declared)',   U&'\+02FFFF'),
+  ('U+30000',  'plane 3 first (NO range)',  U&'\+030000'),
+  ('U+3FFFF',  'plane 3 last (NO range)',   U&'\+03FFFF'),
+  ('U+40000',  'plane 4 first (NO range)',  U&'\+040000'),
+  ('U+4FFFF',  'plane 4 last (NO range)',   U&'\+04FFFF'),
+  ('U+50000',  'plane 5 first (NO range)',  U&'\+050000'),
+  ('U+5FFFF',  'plane 5 last (NO range)',   U&'\+05FFFF'),
+  ('U+60000',  'plane 6 first (NO range)',  U&'\+060000'),
+  ('U+6FFFF',  'plane 6 last (NO range)',   U&'\+06FFFF'),
+  ('U+70000',  'plane 7 first (NO range)',  U&'\+070000'),
+  ('U+7FFFF',  'plane 7 last (NO range)',   U&'\+07FFFF'),
+  ('U+80000',  'plane 8 first (NO range)',  U&'\+080000'),
+  ('U+8FFFF',  'plane 8 last (NO range)',   U&'\+08FFFF'),
+  ('U+90000',  'plane 9 first (NO range)',  U&'\+090000'),
+  ('U+9FFFF',  'plane 9 last (NO range)',   U&'\+09FFFF'),
+  ('U+A0000',  'plane 10 first (NO range)', U&'\+0A0000'),
+  ('U+AFFFF',  'plane 10 last (NO range)',  U&'\+0AFFFF'),
+  ('U+B0000',  'plane 11 first (NO range)', U&'\+0B0000'),
+  ('U+BFFFF',  'plane 11 last (NO range)',  U&'\+0BFFFF'),
+  ('U+C0000',  'plane 12 first (NO range)', U&'\+0C0000'),
+  ('U+CFFFF',  'plane 12 last (NO range)',  U&'\+0CFFFF'),
+  ('U+D0000',  'plane 13 first (NO range)', U&'\+0D0000'),
+  ('U+DFFFF',  'plane 13 last (NO range)',  U&'\+0DFFFF'),
+  ('U+E0000',  'plane 14 first (declared)', U&'\+0E0000'),
+  ('U+EFFFF',  'plane 14 last (declared)',  U&'\+0EFFFF'),
+  ('U+F0000',  'plane 15 first (declared)', U&'\+0F0000'),
+  ('U+FFFFF',  'plane 15 last (declared)',  U&'\+0FFFFF'),
+  ('U+100000', 'plane 16 first (declared)', U&'\+100000'),
+  ('U+10FFFF', 'plane 16 last (declared)',  U&'\+10FFFF')
+) AS v(cp, kind, w)
+),
+under_locale AS (
+  SELECT cp, row_number() OVER (ORDER BY w COLLATE pg_catalog."C.utf8") AS pos
+  FROM c_utf8_probe
+), under_bytes AS (
+  SELECT cp, row_number() OVER (ORDER BY w COLLATE "C") AS pos
+  FROM c_utf8_probe
+)
+SELECT bool_and(l.pos = b.pos)                        AS c_utf8_equals_byte_order,
+       count(*) FILTER (WHERE l.pos <> b.pos)         AS positions_differing
+FROM under_locale l JOIN under_bytes b USING (cp);
+ c_utf8_equals_byte_order | positions_differing 
+--------------------------+---------------------
+ t                        |                   0
+(1 row)
+
+=== 3. the named pairs, so a diff says which side is which ===
+WITH c_utf8_probe AS (
+SELECT cp, kind, w COLLATE pg_catalog."C.utf8" AS w FROM (VALUES
+  ('U+0001',   'UTF-8 1-byte',              U&'\+000001'),
+  ('U+0041',   'ASCII anchor A',            U&'\+000041'),
+  ('U+005A',   'ASCII anchor Z',            U&'\+00005A'),
+  ('U+0061',   'ASCII anchor a',            U&'\+000061'),
+  ('U+007F',   'UTF-8 1-byte last',         U&'\+00007F'),
+  ('U+0080',   'UTF-8 2-byte first',        U&'\+000080'),
+  ('U+07FF',   'UTF-8 2-byte last',         U&'\+0007FF'),
+  ('U+0800',   'UTF-8 3-byte first',        U&'\+000800'),
+  ('U+FFFF',   'plane 0 last (declared)',   U&'\+00FFFF'),
+  ('U+10000',  'plane 1 first (declared)',  U&'\+010000'),
+  ('U+1FFFF',  'plane 1 last (declared)',   U&'\+01FFFF'),
+  ('U+20000',  'plane 2 first (declared)',  U&'\+020000'),
+  ('U+2FFFF',  'plane 2 last (declared)',   U&'\+02FFFF'),
+  ('U+30000',  'plane 3 first (NO range)',  U&'\+030000'),
+  ('U+3FFFF',  'plane 3 last (NO range)',   U&'\+03FFFF'),
+  ('U+40000',  'plane 4 first (NO range)',  U&'\+040000'),
+  ('U+4FFFF',  'plane 4 last (NO range)',   U&'\+04FFFF'),
+  ('U+50000',  'plane 5 first (NO range)',  U&'\+050000'),
+  ('U+5FFFF',  'plane 5 last (NO range)',   U&'\+05FFFF'),
+  ('U+60000',  'plane 6 first (NO range)',  U&'\+060000'),
+  ('U+6FFFF',  'plane 6 last (NO range)',   U&'\+06FFFF'),
+  ('U+70000',  'plane 7 first (NO range)',  U&'\+070000'),
+  ('U+7FFFF',  'plane 7 last (NO range)',   U&'\+07FFFF'),
+  ('U+80000',  'plane 8 first (NO range)',  U&'\+080000'),
+  ('U+8FFFF',  'plane 8 last (NO range)',   U&'\+08FFFF'),
+  ('U+90000',  'plane 9 first (NO range)',  U&'\+090000'),
+  ('U+9FFFF',  'plane 9 last (NO range)',   U&'\+09FFFF'),
+  ('U+A0000',  'plane 10 first (NO range)', U&'\+0A0000'),
+  ('U+AFFFF',  'plane 10 last (NO range)',  U&'\+0AFFFF'),
+  ('U+B0000',  'plane 11 first (NO range)', U&'\+0B0000'),
+  ('U+BFFFF',  'plane 11 last (NO range)',  U&'\+0BFFFF'),
+  ('U+C0000',  'plane 12 first (NO range)', U&'\+0C0000'),
+  ('U+CFFFF',  'plane 12 last (NO range)',  U&'\+0CFFFF'),
+  ('U+D0000',  'plane 13 first (NO range)', U&'\+0D0000'),
+  ('U+DFFFF',  'plane 13 last (NO range)',  U&'\+0DFFFF'),
+  ('U+E0000',  'plane 14 first (declared)', U&'\+0E0000'),
+  ('U+EFFFF',  'plane 14 last (declared)',  U&'\+0EFFFF'),
+  ('U+F0000',  'plane 15 first (declared)', U&'\+0F0000'),
+  ('U+FFFFF',  'plane 15 last (declared)',  U&'\+0FFFFF'),
+  ('U+100000', 'plane 16 first (declared)', U&'\+100000'),
+  ('U+10FFFF', 'plane 16 last (declared)',  U&'\+10FFFF')
+) AS v(cp, kind, w)
+)
+SELECT pair, holds FROM (
+  SELECT 1 AS n, 'U+007F  < U+FFFF' AS pair,
+         (SELECT w FROM c_utf8_probe WHERE cp = 'U+007F')
+       < (SELECT w FROM c_utf8_probe WHERE cp = 'U+FFFF') AS holds
+  UNION ALL
+  SELECT 2, 'U+07FF  < U+FFFF',
+         (SELECT w FROM c_utf8_probe WHERE cp = 'U+07FF')
+       < (SELECT w FROM c_utf8_probe WHERE cp = 'U+FFFF')
+) t ORDER BY n;
+       pair       | holds 
+------------------+-------
+ U+007F  < U+FFFF | t
+ U+07FF  < U+FFFF | t
+(2 rows)
+
+=== 4. collversion asserted as expected-NULL ===
+SELECT collname,
+       collversion,
+       pg_collation_actual_version(oid) AS actual,
+       (collversion IS NULL AND pg_collation_actual_version(oid) IS NULL)
+         AS both_null_as_expected
+FROM pg_collation
+WHERE collname = 'C.utf8'
+  AND collprovider = 'c'
+  AND collnamespace = 'pg_catalog'::regnamespace;
+ collname | collversion | actual | both_null_as_expected 
+----------+-------------+--------+-----------------------
+ C.utf8   |             |        | t
+(1 row)
+
+SELECT current_setting('server_version_num')::int >= 150000 AS c_utf8_probe_pg15 
+SELECT datname, datcollate
+FROM pg_database
+WHERE datcollate ~ '^[Cc]\.'
+ORDER BY datname;
+ datname | datcollate 
+---------+------------
+ s113c   | C.UTF-8
+(1 row)
+
+PostgreSQL 14 has no pg_database.datcollversion, so the rows above carry no version to assert.
+=== 5. is THIS database exposed through its default collation? ===
+SELECT datname,
+       datcollate,
+       CASE
+         WHEN datcollate IN ('C', 'POSIX') THEN 'byte order'
+         WHEN datcollate ~ '^[Cc]\.' THEN
+           'EXPOSED via C.UTF-8, and no collversion can ever warn'
+         ELSE 'EXPOSED via ' || datcollate
+       END AS verdict
+FROM pg_database
+WHERE datname = current_database();
+ datname | datcollate  |         verdict         
+---------+-------------+-------------------------
+ s113u   | en_US.UTF-8 | EXPOSED via en_US.UTF-8
+(1 row)
+
+=== done. diff this output against the other node. ===

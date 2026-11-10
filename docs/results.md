@@ -160,8 +160,7 @@ clear them.
 `C.UTF-8` does not change across this pair. Both nodes'
 `/usr/share/i18n/locales/C` is byte-identical and declares
 `codepoint_collation`, so there is no expansion logic left for a `localedef`
-change to move, and the 41-code-point probe returns identical output on both
-nodes —
+change to move, and the probe's order is identical on both nodes —
 [`examples/c-utf8-probe-rhel9-vs-rhel10.txt`](../examples/c-utf8-probe-rhel9-vs-rhel10.txt).
 
 Full output:

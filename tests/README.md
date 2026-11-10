@@ -39,7 +39,8 @@ and CI, which clones glibc fresh, fails on any skip.
 - The SQL files, `sql/collation_confirmation_template.sql` and
   `sql/c_utf8_probe.sql`, are never run, because that needs PostgreSQL on
   two machines. Neither are the files step 11 writes: the suite reads
-  outputs PostgreSQL printed for them, recorded by hand (`confirm_sql/`).
+  outputs PostgreSQL printed for them, recorded by hand (`confirm_sql/`),
+  and so it does for the probe (its two examples, and `c_utf8_probe/`).
 - A real machine: what runs on one -- the half of `scripts/locale_order.py`
   that measures, and `tests/reader_oracle/measure.py run`, which compiles
   the reader's cases with `localedef` -- needs Linux with glibc. So does

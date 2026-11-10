@@ -101,12 +101,10 @@ What it covers, and what it does not, is in
 
 ## For the confirmation step
 
-A real PostgreSQL instance on each OS under test. Command 2,
-[`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql), needs **version 15 or
-newer**, because it reads `pg_database.datlocprovider` and `datcollversion`,
-which arrived in 15. Command 3,
+A real PostgreSQL instance on each OS under test. Commands 2 and 3,
+[`sql/c_utf8_probe.sql`](../sql/c_utf8_probe.sql) and
 [`sql/collation_confirmation_template.sql`](../sql/collation_confirmation_template.sql),
-runs on PostgreSQL 14 or newer, the oldest it was measured on.
+run on PostgreSQL 14 or newer, the oldest they were measured on.
 
 ### Install the langpacks before `initdb`
 

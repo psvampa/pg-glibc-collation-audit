@@ -42,8 +42,8 @@ prints as well as where the two builds part. Command 1 never measures this
 locale's order; Command 1 extended does, in step 11, and its result is in the
 extended outputs above.
 
-The RHEL9-against-RHEL10 diff is four lines, and all four are the node's own
-glibc version. Everything the probe measured is byte-identical.
+In the RHEL9-against-RHEL10 diff, every line is the node's own glibc
+version. Everything the probe measured is byte-identical.
 
 | File | |
 |---|---|

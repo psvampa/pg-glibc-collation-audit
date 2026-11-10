@@ -8,8 +8,6 @@ measures it too, through each machine's glibc and outside PostgreSQL
 
 It covers commands 2 and 3 of [the README](../README.md#the-commands). Before
 you run either, check the setup traps in [requirements.md](requirements.md).
-Command 2 needs PostgreSQL 15 or newer, and command 3 runs on PostgreSQL 14 or
-newer.
 
 ## What the template does
 
@@ -144,8 +142,17 @@ goes through `strcoll` like any other locale.
 template, and separate on purpose.
 
 ```sh
-psql -X -f sql/c_utf8_probe.sql > this-node.out   # on each machine, then diff
+# on each machine, then diff
+psql -X -e -f sql/c_utf8_probe.sql > this-node.out 2>&1 || echo '!! the probe stopped: read this-node.out'
+grep -L '^=== done' this-node.out other-node.out    # names a file whose run did not finish
+diff this-node.out other-node.out
 ```
+
+A run that stopped never reaches its last line, `=== done`, and two runs
+stopped the same way diff as alike. Two servers on different PostgreSQL major
+versions also differ in queries 0c, 4 and 5, which read PostgreSQL's own
+catalog; the order in queries 1 to 3 does not depend on the PostgreSQL
+version.
 
 Three things make it unlike the template.
 
@@ -155,10 +162,7 @@ Three things make it unlike the template.
   `LC_ALL=C` means the locale was not applied and the comparison proves
   nothing. For `C.UTF-8`, agreement with byte order is the fix. Two
   contradictory rules in one file get read in the wrong order.
-- **It is run even when the audit flagged nothing**, because step 2
-  reads source files and never measures how your machine sorts `C.UTF-8`.
-
-The probe refuses to run if `C.utf8` is not in `pg_collation`.
+- **It is run even when the audit flagged nothing.**
 
 ---
 

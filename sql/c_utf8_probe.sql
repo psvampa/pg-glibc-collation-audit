@@ -2,7 +2,7 @@
 --
 -- Run this SAME script, UNEDITED, on both nodes (old glibc / new glibc), then
 -- diff the two outputs. Unlike collation_confirmation_template.sql there are no
--- placeholders to fill in: the corpus below is derived from the rule that
+-- placeholders to fill in: the corpus below is fixed, taken from the rule that
 -- changes, not chosen per site.
 --
 -- Why C.UTF-8 gets its own file:
@@ -13,7 +13,9 @@
 --     the tags can compare it. (RHEL10 is glibc 2.39 and has upstream's
 --     copy.) Given the two builds, or each machine's file holding its
 --     locale sources, step 2 compares their own copies and settles their
---     rules, not the order. Where a
+--     rules, not the order. Given each machine's file, step 11 measures the
+--     order through each machine's glibc; this file measures it inside
+--     PostgreSQL. Where a
 --     copy is not byte order by construction, localedef computes part of the
 --     order when the locale is built: the weights of ellipsis ranges, as in
 --     RHEL8's copy, and the default weight of every character a file does
@@ -21,10 +23,9 @@
 --
 --   * PostgreSQL cannot warn either. Under the libc provider,
 --     get_collation_actual_version() returns NULL for "C", for "POSIX" and for
---     anything whose name STARTS WITH "C.". PG 13 chops the encoding suffix
---     and compares the rest to "c"; from PG 14 it is the
---     pg_strncasecmp("C.", ...) test (src/backend/utils/adt/pg_locale.c
---     through PG 17, pg_locale_libc.c from PG 18). So collversion and
+--     anything whose name STARTS WITH "C.". The test is
+--     pg_strncasecmp("C.", ...) (src/backend/utils/adt/pg_locale.c through
+--     PG 17, pg_locale_libc.c from PG 18). So collversion and
 --     datcollversion stay NULL and no mismatch check can ever fire.
 --
 --   * It is usually the DATABASE collation. initdb inherits the locale from
@@ -45,39 +46,64 @@
 -- glibc 2.35 on. Query 2 spells out how to read it.
 --
 -- Notes before you run it:
---   * DROPS AND RECREATES a table named c_utf8_probe. Point it at a scratch
---     database.
+--   * Writes nothing to the database: it creates no table and changes no
+--     data, so it runs in a read-only transaction (as every transaction on a
+--     hot standby is) and as a role that may not create anything. The corpus
+--     is held by psql, in the variable c_utf8_probe_corpus, and every query
+--     that needs it reads it.
 --   * Needs the collation to be named C.utf8 in pg_collation. If it is not,
 --     run SELECT pg_import_system_collations('pg_catalog'); as superuser.
---   * Needs PostgreSQL 15+ for datlocprovider, datcollversion and
---     pg_database_collation_actual_version(). On 13/14 delete query 5 and
---     the pg_database half of query 4; the pg_collation half works there,
---     since pg_collation_actual_version() reports a libc version from 13 on.
+--   * Runs unedited from PostgreSQL 14; it reads the server's version and
+--     picks the queries that version has. pg_database gained datlocprovider
+--     and datcollversion, and pg_database_collation_actual_version()
+--     appeared, in 15. On 14 the pg_database half of query 4 lists the C.*
+--     databases without a version, and one line says why; its pg_collation
+--     half runs, since pg_collation_actual_version() reports a libc version
+--     on 14. On 14 query 5 decides from datcollate alone: every
+--     database default there is libc. On 13 or older it stops at the
+--     guards, saying so.
 --   * Needs standard_conforming_strings on (the default) for the U&'\+xxxxxx'
 --     literals below. Checked, not assumed.
 \set ON_ERROR_STOP on
 
--- Notices are suppressed on purpose. "table c_utf8_probe does not exist,
--- skipping" fires only on the FIRST run on a node, so running this twice on
--- one node and once on the other makes the two outputs differ by a line that
--- has nothing to do with glibc. Measured on 2026-09-06 -- it interleaved into
--- the middle of query 3's heading. Errors are unaffected: ON_ERROR_STOP is on
--- and every guard below raises rather than notices.
-SET client_min_messages = warning;
-
 \echo '=== 0. node identity: a result is bound to the build it ran on ==='
+\echo '--- the machine psql runs on (the three shell lines below run there, not on the server):'
 \! rpm -q glibc 2>/dev/null || echo 'rpm not available -- record the glibc build by hand'
 \! ldd --version | head -1
 \! locale -a | grep -ix 'c.utf8\|c.utf-8' || echo '!! C.utf8 is NOT in locale -a on this node'
+\echo '--- the server: its glibc release as PostgreSQL reports it (one number for every build of that release; record the build by hand)'
+-- Answered by the server, not by psql's machine. For a libc collation whose
+-- locale is not C, POSIX or C.*, pg_collation_actual_version() returns
+-- gnu_get_libc_version() of the running server (pg_locale.c through PG 17,
+-- pg_locale_libc.c from PG 18). Every such collation gives the same string,
+-- and it is the release alone: "2.28" on every RHEL 8 build, before and
+-- after glibc-2.28-93.el8.
+SELECT coalesce(
+         (SELECT pg_collation_actual_version(oid)
+          FROM pg_collation
+          WHERE collprovider = 'c'
+            AND pg_collation_actual_version(oid) IS NOT NULL
+          ORDER BY collname
+          LIMIT 1),
+         'NOT KNOWN: no libc collation in this database reports a version '
+         '(only C, POSIX and C.* locales are here); record the server''s glibc by hand')
+       AS server_glibc;
 
 \echo '=== 0b. guards: without these, both nodes can agree for the wrong reason ==='
 SHOW server_encoding;
 SHOW standard_conforming_strings;
 
+-- Below PostgreSQL 14 the version queries below were never run, and what this
+-- file would print about them is not known to be true: it stops there.
 -- SQL_ASCII compares bytes for everything, so every query below would agree on
 -- any two nodes and mean nothing.
 DO $$
 BEGIN
+  IF current_setting('server_version_num')::int < 140000 THEN
+    RAISE EXCEPTION
+      'PostgreSQL % is older than 14, the oldest version this probe was '
+      'measured on.', current_setting('server_version');
+  END IF;
   IF current_setting('server_encoding') <> 'UTF8' THEN
     RAISE EXCEPTION
       'server_encoding is %, not UTF8. Every comparison in this probe would '
@@ -127,7 +153,7 @@ WHERE collname IN ('C', 'POSIX', 'C.utf8', 'C.UTF-8', 'pg_c_utf8')
   AND collnamespace = 'pg_catalog'::regnamespace
 ORDER BY collname;
 
--- THE CORPUS. Not a sample. It is derived from RHEL8's own
+-- THE CORPUS. Endpoints, taken from RHEL8's own
 -- localedata/locales/C, copied off a node (glibc-2.28-251.el8_10.40). This is
 -- what it actually declares:
 --
@@ -143,14 +169,21 @@ ORDER BY collname;
 --
 -- SIX ranges, not one per plane, and planes 3 through 13 are declared by NO
 -- range at all. On RHEL8 a code point gets a place in this order only where
--- the UTF-8 charmap gives its bytes; every other one -- whatever no range
--- covers, and some code points a range does cover -- sorts at the very front.
--- So the corpus is three things, and it is exhaustive over each:
+-- the UTF-8 charmap gives its correct bytes; every other one -- whatever no
+-- range covers, and some code points a range does cover -- sorts at the very
+-- front. So the corpus takes the endpoints of three things:
 --
 --   * the first and last code point of every DECLARED range;
 --   * the first and last code point of every plane declared by NO range;
 --   * the UTF-8 length boundaries, plus three ASCII anchors so a human can
 --     read the diff.
+--
+-- Endpoints tell WHETHER C.UTF-8's order differs between the two nodes, not
+-- which characters move: a code point between two endpoints is not probed.
+-- That was measured for the files the corpus comes from (RHEL8's C above,
+-- and the codepoint_collation of RHEL9 and RHEL10), not for a build before
+-- glibc-2.28-93.el8. Step 11, given each machine's file, names the
+-- characters that move.
 --
 -- One declared endpoint is absent, and it is the only exception: U+0000, plane
 -- 0's first. PostgreSQL `text` cannot hold a NUL byte. That is why the arithmetic
@@ -165,14 +198,14 @@ ORDER BY collname;
 -- Surrogates U+D800..U+DFFF are deliberately absent: they are not valid UTF-8
 -- and PostgreSQL rejects them. The U+xFFFF noncharacters ARE valid UTF-8 and
 -- were sorted successfully on both nodes when this was first measured.
-DROP TABLE IF EXISTS c_utf8_probe;
-CREATE TABLE c_utf8_probe (
-  cp   text PRIMARY KEY,
-  kind text NOT NULL,
-  w    text COLLATE "C.utf8" NOT NULL
-);
-
-INSERT INTO c_utf8_probe (cp, kind, w) VALUES
+--
+-- The query below stores the corpus in the psql variable
+-- c_utf8_probe_corpus (\gset prints nothing). Each query after it reads the
+-- corpus as WITH c_utf8_probe AS (:c_utf8_probe_corpus); psql pastes the
+-- text in before sending the query, so with -e each query shows it in full.
+-- Column w carries COLLATE pg_catalog."C.utf8", as a table column would.
+SELECT $corpus$
+SELECT cp, kind, w COLLATE pg_catalog."C.utf8" AS w FROM (VALUES
   ('U+0001',   'UTF-8 1-byte',              U&'\+000001'),
   ('U+0041',   'ASCII anchor A',            U&'\+000041'),
   ('U+005A',   'ASCII anchor Z',            U&'\+00005A'),
@@ -213,39 +246,46 @@ INSERT INTO c_utf8_probe (cp, kind, w) VALUES
   ('U+F0000',  'plane 15 first (declared)', U&'\+0F0000'),
   ('U+FFFFF',  'plane 15 last (declared)',  U&'\+0FFFFF'),
   ('U+100000', 'plane 16 first (declared)', U&'\+100000'),
-  ('U+10FFFF', 'plane 16 last (declared)',  U&'\+10FFFF');
+  ('U+10FFFF', 'plane 16 last (declared)',  U&'\+10FFFF')
+) AS v(cp, kind, w)
+$corpus$ AS c_utf8_probe_corpus \gset
 
 -- A silently dropped code point is the same class of error as a truncated
 -- locale directory: it makes the comparison narrower and the result cleaner.
+-- The count goes to psql; on anything but 41 the DO block below runs and
+-- stops the script.
+SELECT count(*) AS c_utf8_probe_rows, count(*) = 41 AS c_utf8_probe_rows_ok
+FROM (:c_utf8_probe_corpus) AS c \gset
+\if :c_utf8_probe_rows_ok
+\else
+\echo '!! the corpus is' :c_utf8_probe_rows 'row(s), expected 41.'
 DO $$
-DECLARE n int;
 BEGIN
-  SELECT count(*) INTO n FROM c_utf8_probe;
-  IF n <> 41 THEN
-    RAISE EXCEPTION 'corpus is % row(s), expected 41. A value was rejected or '
-                    'collapsed; the comparison below would be narrower than '
-                    'the one this file documents.', n;
-  END IF;
+  RAISE EXCEPTION 'corpus is not 41 rows. A value was rejected or collapsed; '
+                  'the comparison below would be narrower than the one this '
+                  'file documents.';
 END $$;
+\endif
 
 \echo '=== 1. the order C.utf8 produces on this node (diff this) ==='
 -- Single sort key. PostgreSQL breaks strcoll ties with strcmp for a
 -- deterministic collation, so the printed order is total either way -- which
 -- also means this query CANNOT see a tie.
-SELECT row_number() OVER (ORDER BY w COLLATE "C.utf8") AS pos, cp, kind
+WITH c_utf8_probe AS (:c_utf8_probe_corpus)
+SELECT row_number() OVER (ORDER BY w COLLATE pg_catalog."C.utf8") AS pos, cp, kind
 FROM c_utf8_probe
 ORDER BY pos;
 
 \echo '=== 2. does C.utf8 equal byte order? READ BOTH CASES ==='
 -- false -> C.UTF-8 is NOT code point order, as on RHEL8, whose C is Red Hat's
---          own; query 1 shows where it diverges. An index on this collation
---          moves on upgrade.
+--          own.
 -- true  -> code point order, which codepoint_collation gives by
 --          construction. DO NOT read this as "the locale was not applied" --
 --          for C.UTF-8 agreement with byte order IS the right answer, the
 --          opposite of the rule the rest of this project uses.
-WITH under_locale AS (
-  SELECT cp, row_number() OVER (ORDER BY w COLLATE "C.utf8") AS pos
+WITH c_utf8_probe AS (:c_utf8_probe_corpus),
+under_locale AS (
+  SELECT cp, row_number() OVER (ORDER BY w COLLATE pg_catalog."C.utf8") AS pos
   FROM c_utf8_probe
 ), under_bytes AS (
   SELECT cp, row_number() OVER (ORDER BY w COLLATE "C") AS pos
@@ -258,6 +298,7 @@ FROM under_locale l JOIN under_bytes b USING (cp);
 \echo '=== 3. the named pairs, so a diff says which side is which ==='
 -- U+007F < U+FFFF is THE measured inversion: false on glibc 2.28, true on
 -- 2.34.
+WITH c_utf8_probe AS (:c_utf8_probe_corpus)
 SELECT pair, holds FROM (
   SELECT 1 AS n, 'U+007F  < U+FFFF' AS pair,
          (SELECT w FROM c_utf8_probe WHERE cp = 'U+007F')
@@ -268,7 +309,7 @@ SELECT pair, holds FROM (
        < (SELECT w FROM c_utf8_probe WHERE cp = 'U+FFFF')
 ) t ORDER BY n;
 
-\echo '=== 4. collversion asserted as expected-NULL (PostgreSQL 15+) ==='
+\echo '=== 4. collversion asserted as expected-NULL ==='
 -- Not a mismatch check: a mismatch check can never fire for a C.* name, so
 -- running one here would be theatre. This asserts the blind spot instead. If
 -- both_null_as_expected ever comes back false, PostgreSQL changed its
@@ -284,6 +325,11 @@ WHERE collname = 'C.utf8'
   AND collprovider = 'c'
   AND collnamespace = 'pg_catalog'::regnamespace;
 
+-- The server's version picks the queries below: pg_database has
+-- datlocprovider and datcollversion, and pg_database_collation_actual_version()
+-- exists, from PostgreSQL 15.
+SELECT current_setting('server_version_num')::int >= 150000 AS c_utf8_probe_pg15 \gset
+\if :c_utf8_probe_pg15
 SELECT datname,
        datcollate,
        datcollversion,
@@ -293,12 +339,21 @@ SELECT datname,
          AS both_null_as_expected
 FROM pg_database
 WHERE datlocprovider = 'c'
-  AND datcollate ~ '^[Cc]\.';
+  AND datcollate ~ '^[Cc]\.'
+ORDER BY datname;
+\else
+SELECT datname, datcollate
+FROM pg_database
+WHERE datcollate ~ '^[Cc]\.'
+ORDER BY datname;
+\echo 'PostgreSQL 14 has no pg_database.datcollversion, so the rows above carry no version to assert.'
+\endif
 
 \echo '=== 5. is THIS database exposed through its default collation? ==='
 -- This query answers for the database default, because that is the way
 -- C.UTF-8 normally reaches your data: a text column with no explicit COLLATE
 -- resolves to pg_database.datcollate at runtime.
+\if :c_utf8_probe_pg15
 SELECT datname,
        datlocprovider,
        datcollate,
@@ -307,19 +362,22 @@ SELECT datname,
          WHEN datcollate IN ('C', 'POSIX') THEN 'byte order'
          WHEN datcollate ~ '^[Cc]\.' THEN
            'EXPOSED via C.UTF-8, and no collversion can ever warn'
-         ELSE 'EXPOSED via ' || datcollate || ' (collversion can warn)'
+         ELSE 'EXPOSED via ' || datcollate
        END AS verdict
 FROM pg_database
 WHERE datname = current_database();
-
-\echo '=== 6. the same order, read through a real btree index ==='
--- The question only matters because indexes store this order. Building one
--- makes that concrete rather than assumed.
-CREATE INDEX c_utf8_probe_w_idx ON c_utf8_probe (w);
-SET enable_seqscan = off;
-SELECT row_number() OVER (ORDER BY w) AS pos, cp
-FROM c_utf8_probe
-ORDER BY pos;
-RESET enable_seqscan;
+\else
+-- PostgreSQL 14 has no datlocprovider: every database default is libc.
+SELECT datname,
+       datcollate,
+       CASE
+         WHEN datcollate IN ('C', 'POSIX') THEN 'byte order'
+         WHEN datcollate ~ '^[Cc]\.' THEN
+           'EXPOSED via C.UTF-8, and no collversion can ever warn'
+         ELSE 'EXPOSED via ' || datcollate
+       END AS verdict
+FROM pg_database
+WHERE datname = current_database();
+\endif
 
 \echo '=== done. diff this output against the other node. ==='
