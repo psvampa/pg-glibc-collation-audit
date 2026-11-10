@@ -600,6 +600,8 @@ def pg_version_of(name):
               'latest-el10': '2.39'}
     if name in latest:
         return latest[name]
+    # A pinned tag's commit, given by its id, is that release (16.183).
+    name = {sha: tag for tag, sha in EXPECTED_SHA.items()}.get(name, name)
     m = re.match(r'glibc-(\d+\.\d+)(?:$|-)', name)
     if not m:
         raise AssertionError(f'no version known for side {name!r}')

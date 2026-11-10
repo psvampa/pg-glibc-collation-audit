@@ -533,7 +533,7 @@ def machine_builds(repo, sides, aliases):
 
 def step2_words(noun, machines=False):
     """STEP2_WORDS for two tags, else the same words naming the two sides
-    as `noun` says (glibc_locale_data.pair_noun); for two machines' own
+    as `noun` says (glibc_locale_data.pair_word); for two machines' own
     files, the builds are the ones measured on them (machine_builds), not
     SUPPORTED's."""
     if machines:
@@ -661,7 +661,8 @@ def characters_rows(got, differs):
 
 
 def print_added(added, renamed_from, supported, old_side, old_name,
-                missing='(not in SUPPORTED)', unread=None, new_name=None):
+                missing='(not in SUPPORTED)', unread=None, new_name=None,
+                named='tag'):
     """The not-compared files only the new side has. `unread` is {name:
     why} for those of them glibc_tree.Tree.unresolved names at `new_name`,
     each with its reason: said in a `!!` of its own, which the summary
@@ -688,7 +689,7 @@ def print_added(added, renamed_from, supported, old_side, old_name,
                 f"Not compared, no file at {old_name} ({len(rest)}). A file "
                 f"added at the new side cannot change what PostgreSQL "
                 f"already stored ONLY IF the locale did not exist on the old "
-                f"system, and an upstream tag cannot establish that -- "
+                f"system, and an upstream {named} cannot establish that -- "
                 f"distros backport. Confirm with `locale -a` on the OLD "
                 f"machine, under the names on each line, before treating "
                 f"these as out of scope:", rest)
@@ -732,7 +733,7 @@ def print_c_utf8(sides, differs):
                     f"summary. {C_NO_VERSION}", [])
 
 
-def print_removed(removed, renamed_to, new_side, new_name):
+def print_removed(removed, renamed_to, new_side, new_name, named='tag'):
     if not removed:
         return
     print()
@@ -744,7 +745,7 @@ def print_removed(removed, renamed_to, new_side, new_name):
         print(f"  {shown_name(name)}{extra}")
     if g._is_tag(new_side):
         print(_fill("Unless its distro ships the file anyway, which an "
-                    "upstream tag cannot show, on the new system a "
+                    f"upstream {named} cannot show, on the new system a "
                     "database whose locale is one of these does not "
                     "connect, and a collation of one gives an error "
                     "when it is used.", '   '))
@@ -858,8 +859,7 @@ def _main(opts):
                     else 'one tree', 'why': None}
         # A commit given as a side is no tag (16.155): the pair is then two
         # sides, as pair_check says it.
-        said = ('sides' if noun == 'tags' and 'commit' in (
-            g.ref_kind(repo, old), g.ref_kind(repo, new)) else noun)
+        said = g.pair_word(repo, old_side, new_side)
         what = (f"the two {said} are one commit" if nothing == 'commit'
                 else "the two machines' files hold the same locale sources "
                      "and charmaps" if cm
@@ -945,8 +945,9 @@ def _main(opts):
                     '(not measured on that machine)' if machine
                     else '(not in SUPPORTED)',
                     {n: unresolved[n] for n in added if n in unresolved},
-                    new_name)
-        print_removed(removed, renamed_to, new_side, new_name)
+                    new_name, g.side_class(repo, old_side))
+        print_removed(removed, renamed_to, new_side, new_name,
+                      g.side_class(repo, new_side))
         print_listed(got, listed)
         if unread:
             print()
@@ -1001,7 +1002,9 @@ def _main(opts):
         else:
             keyed, cm_why = check_charmaps(charmap_reads, repo, side_old,
                                            side_new, sup, already,
-                                           step2_words(noun))
+                                           step2_words(
+                                               g.pair_word(repo, old_side,
+                                                           new_side)))
         # Untested at this call site: on two machines' files the check's
         # own two NOT RUN (the report's, no build in common) were reached by
         # no file here; check_charmaps' test holds each reason, and

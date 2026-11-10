@@ -47,19 +47,35 @@ def in_subprocess(code):
 
 @needs_clone
 class RefKindOnTheClone(unittest.TestCase):
-    """What a side is called (16.155), on refs of the clone a user can
-    pass: glibc's release and development tags are annotated tags; a branch
-    and a sha are commits, and so is a short id that also matches another
-    object of the clone (ae37 is glibc-2.34's commit and a tree's prefix,
-    which `cat-file -t` refused)."""
+    """What a side is called (16.155, 16.183), on refs of the clone a user
+    can pass: glibc's release and development tags are annotated tags,
+    however they are named as a tag or by their object's whole id; a
+    branch and a sha are commits, and so is a short id that also matches
+    another object of the clone (ae37 is glibc-2.34's commit and a tree's
+    prefix, which `cat-file -t` refused), or that prefixes a tag object."""
 
     def test_each_kind_of_real_ref(self):
         sha = EXPECTED_SHA[MID]
+        tag_object = subprocess.run(
+            ['git', '-C', GLIBC_CLONE, 'rev-parse', MID], check=True,
+            capture_output=True, text=True).stdout.strip()
+        self.assertNotEqual(tag_object, sha)
         for name, kind in ((MID, 'tag'), ('glibc-2.39.9000', 'tag'),
+                           (f'tags/{MID}', 'tag'), (f'refs/tags/{MID}', 'tag'),
+                           (tag_object, 'tag'), (tag_object[:10], 'commit'),
                            ('origin/release/2.28/master', 'commit'),
                            (sha, 'commit'), (sha[:4], 'commit')):
             with self.subTest(ref=name):
                 self.assertEqual(g.ref_kind(GLIBC_CLONE, name), kind)
+
+    def test_a_name_that_resolves_to_nothing_is_refused(self):
+        """Never called a commit for not being there: the class is asked
+        after the sides were checked and missing tags fetched."""
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit):
+            g.ref_kind(GLIBC_CLONE, 'glibc-2.99')
+        self.assertIn('glibc-2.99 resolves to no commit', flat(err.getvalue()))
 
 
 @needs_clone
@@ -943,6 +959,8 @@ class TheStepsRefuseAReversedPair(unittest.TestCase):
         rc, out = self.step2('t2', 't1')
         self.assertEqual(rc, 2, out)
         self.assertIn('REVERSED', out)
+        # The fixture's tags are lightweight: commits, so sides (16.183).
+        self.assertIn('Every step takes <old_side> <new_side>', flat(out))
         self.assertIn('Swap the arguments', flat(out))
         self.assertNotIn('below the floor', out)
         self.assertNotIn('The sort rules localedef builds', out)
@@ -967,7 +985,7 @@ class TheStepsRefuseAReversedPair(unittest.TestCase):
         self.assertIn('!! ', out)
         self.assertIn('t1 and t1 are the same commit', flat(out))
         self.assertIn('Step 2 compares nothing: it would compare upstream '
-                      'source against itself. A run on the tags says '
+                      'source against itself. A run on upstream commits says '
                       'nothing about an intra-major upgrade', flat(out))
         # The fixture's tags are lightweight: git calls them commits, and
         # step 2 the pair two sides (16.155).
@@ -2444,7 +2462,8 @@ class StepTwoComparesTransliterations(unittest.TestCase):
         self.assertEqual(listed, [])
         self.assertIn('Transliteration (LC_CTYPE): 1 locale build may build '
                       'a collating element out of a transliteration, and '
-                      'nothing it reads changed between the tags.', flat(out))
+                      'nothing it reads changed between the sides.',
+                      flat(out))
         self.assertNotIn('built differently', flat(out))
 
 
@@ -2467,7 +2486,7 @@ class StepTwoNamesWhatItDidNotCompare(unittest.TestCase):
         self.assertTrue(any(b.startswith('!! NOT RUN: the comparison of the '
                                          'character sets') for b in blocks),
                         out)
-        self.assertIn('!! 2 SUPPORTED entries at both tags are not compared: '
+        self.assertIn('!! 2 SUPPORTED entries at both sides are not compared: '
                       'their source file is not at both. x.UTF-8, y.UTF-8',
                       blocks)
 
@@ -2826,7 +2845,9 @@ class NothingComparedIsNotTheOrder(unittest.TestCase):
 
     def word(self, *args):
         """What `glibc_locale_data.py order --quiet` prints for audit.sh:
-        the direction, and what nothing_compared answered."""
+        the direction, what nothing_compared answered, each side's class
+        and the pair's word (the fixture's tags are lightweight: commits,
+        so sides)."""
         out = io.StringIO()
         with mock.patch.object(g, 'find_repo', return_value=self.repo), \
                 contextlib.redirect_stdout(out):
@@ -2848,7 +2869,8 @@ class NothingComparedIsNotTheOrder(unittest.TestCase):
     def test_one_tree_in_order_compares_nothing(self):
         self.assertEqual(g.order(self.repo, 't1', 't1b')[0], 'forward')
         self.assertEqual(g.nothing_compared(self.repo, 't1', 't1b'), 'tree')
-        self.assertEqual(self.word('t1', 't1b'), 'forward tree')
+        self.assertEqual(self.word('t1', 't1b'),
+                         'forward tree commit commit sides')
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             status, nothing = g.pair_check(self.repo, 't1', 't1b')
@@ -2857,12 +2879,13 @@ class NothingComparedIsNotTheOrder(unittest.TestCase):
                       flat(out.getvalue()))
         self.assertIn('Step 2 compares nothing: it would compare that tree '
                       'against itself.', flat(out.getvalue()))
-        self.assertIn('A run on the tags says nothing about an intra-major '
-                      'upgrade', flat(out.getvalue()))
+        self.assertIn('A run on upstream commits says nothing about an '
+                      'intra-major upgrade', flat(out.getvalue()))
 
     def test_one_commit_still_says_so(self):
         self.assertEqual(g.nothing_compared(self.repo, 't1', 't1'), 'commit')
-        self.assertEqual(self.word('t1', 't1'), 'same commit')
+        self.assertEqual(self.word('t1', 't1'),
+                         'same commit commit commit sides')
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             g.pair_check(self.repo, 't1', 't1')
@@ -2871,7 +2894,8 @@ class NothingComparedIsNotTheOrder(unittest.TestCase):
     def test_two_trees_compare_something(self):
         """Control: t2 renames a file, so it is another tree."""
         self.assertIsNone(g.nothing_compared(self.repo, 't1', 't2'))
-        self.assertEqual(self.word('t1', 't2'), 'forward none')
+        self.assertEqual(self.word('t1', 't2'),
+                         'forward none commit commit sides')
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(g.pair_check(self.repo, 't1', 't2'),
@@ -2882,7 +2906,8 @@ class NothingComparedIsNotTheOrder(unittest.TestCase):
         """Both answers, apart: the direction is not known, and nothing is
         compared; audit.sh reads the second word for the latter."""
         o = self.orphan()
-        self.assertEqual(self.word('t1', o), 'undetermined tree')
+        self.assertEqual(self.word('t1', o),
+                         'undetermined tree commit commit sides')
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(g.pair_check(self.repo, 't1', o),
@@ -2899,7 +2924,7 @@ class NothingComparedIsNotTheOrder(unittest.TestCase):
         (false-negative-reviewer, round 1 of 7.1: step 5 printed its clean
         verdict over 9b3aac58 -> 7423da21 of the clone)."""
         self.assertEqual(self.word('--allow-reverse', 't1b', 't1'),
-                         'reversed tree')
+                         'reversed tree commit commit sides')
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(g.pair_check(self.repo, 't1b', 't1',
@@ -3025,9 +3050,27 @@ class OneFloorForEverySide(unittest.TestCase):
         )
         for name, main, argv in steps:
             with self.subTest(step=name):
+                said = self.refusal(main, argv)
                 self.assertIn(f'only 286 file(s) under {g.LOCALES_DIR}/ at '
                               f'{old}, below the floor of {self.FLOOR}.',
-                              self.refusal(main, argv))
+                              said)
+                self.assertIn('or a tag from before the directory existed',
+                              said)
+
+    def test_a_commit_side_is_named_a_commit(self):
+        """16.183: the same refusal of the same tree, given by its commit
+        id, names a commit."""
+        import filter_lc_collate_changes as f
+        old, new = EXPECTED_SHA[FLOOR_OLD], FLOOR_NEW
+        for name, main, argv in (('corpus subcommand', g._main,
+                                  ['corpus', old, new]),
+                                 ('2', f.main, [old, new])):
+            with self.subTest(step=name):
+                said = self.refusal(main, argv)
+                self.assertIn(f'at {old}, below the floor of {self.FLOOR}.',
+                              said)
+                self.assertIn('or a commit from before the directory '
+                              'existed', said)
 
     def test_the_machine_side_of_every_step(self):
         """A machine's file is read through its commit (machine_side), and

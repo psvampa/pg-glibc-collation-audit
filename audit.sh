@@ -150,9 +150,10 @@ esac
 HERE=$(cd "$(dirname "$0")" && pwd)
 SCRIPTS="$HERE/scripts"
 
-# What each side is: a glibc tag, or a build named as `rpm -q glibc` names it
+# What each side is: a ref of the glibc clone (a tag, or a commit given by
+# its id or a branch), or a build named as `rpm -q glibc` names it
 # (glibc-2.34-275.el9_8), by the rule every step applies. The summary picks
-# its sentences by it: a sentence about what "the tags" cannot show is false
+# its blocks by it: a block about what upstream source cannot show is false
 # of a build, whose own sources the steps read. Asked before any other option
 # is checked, so that a build given with a machine's files is refused first,
 # with that reason. latest-elN is a build too, and nothing here asks the
@@ -193,9 +194,10 @@ for kind in "$OLD_KIND" "$NEW_KIND"; do
       ;;
   esac
 done
-# The word a sentence about both sides uses (glibc_locale_data.pair_noun):
-# tags, builds, or sides (a tag and a build). Set again below once each
-# machine's file has said what its side is.
+# The route the pair takes (glibc_locale_data.pair_noun): tags (two refs of
+# the clone, a commit included), builds, or sides (a ref and a build). A
+# sentence names the sides by WORD instead, which the order check gives
+# below. Set again below once each machine's file has said what its side is.
 set_noun() {
   if [ "$OLD_KIND" = tag ] && [ "$NEW_KIND" = tag ]; then
     NOUN=tags
@@ -564,7 +566,7 @@ run_step 1 compared
 # the same question first, and refuse there, so
 # that no finding is printed for a pair that is about to be rejected; step 2
 # asks it again for itself, and --quiet is what keeps this call from adding
-# one more copy of its `!!` block. Two questions in one answer:
+# one more copy of its `!!` block. Questions in one answer:
 #
 #   reversed -- the sides have already exited 2 and this script stopped
 #               with them. Reversed, step 2 would run to the end; the
@@ -578,12 +580,17 @@ run_step 1 compared
 #
 # The second word says whether the pair compares anything at all: `commit`
 # (one commit), `tree` (two commits of one source tree, in whatever order;
-# the clone holds such pairs, not only fabricated ones) or `none`. Two
-# words on stdout and nothing else, so a forward pair adds nothing to the
-# output.
+# the clone holds such pairs, not only fabricated ones) or `none`. Then
+# three more, read below. Words on stdout and nothing else, so a forward
+# pair adds nothing to the output.
 ORDER_WORDS=$(python3 "$SCRIPTS/glibc_locale_data.py" order --quiet "$OLD" "$NEW")
-ORDER=${ORDER_WORDS%% *}
-NOTHING=${ORDER_WORDS#* }
+# Then three more: what each side is (tag, commit or build) and the word a
+# sentence about both uses (tags, builds or sides), apart from NOUN, the
+# route, which keeps a commit on the tags route (TAG_SIDE, Removed,
+# --old-order).
+read -r ORDER NOTHING OLD_CLASS NEW_CLASS WORD EXTRA <<EOF
+$ORDER_WORDS
+EOF
 
 # A minor-version upgrade inside one RHEL major is two builds of the SAME
 # upstream release, so the steps that compare the two tags have nothing to
@@ -618,6 +625,20 @@ case $ORDER in
     echo "       states this script handles (same, forward, undetermined;" >&2
     echo "       a reversed pair never gets here, the sides refuse it)." >&2
     echo "       Not continuing." >&2
+    exit 1
+    ;;
+esac
+# Each side's class, then the pair's word: one of the nine pairs
+# pair_word can answer, and nothing after them.
+case "$OLD_CLASS $NEW_CLASS $WORD/$EXTRA" in
+  "tag tag tags/"|"build build builds/") ;;
+  "tag build sides/"|"build tag sides/"|"commit build sides/") ;;
+  "build commit sides/"|"tag commit sides/"|"commit tag sides/") ;;
+  "commit commit sides/") ;;
+  *)
+    echo "error: the order check answered '$ORDER_WORDS', whose last three words" >&2
+    echo "       are not each side's class (tag, commit, build) and the pair's" >&2
+    echo "       word (tags, builds, sides). Not continuing." >&2
     exit 1
     ;;
 esac
@@ -737,7 +758,7 @@ elif [ "$SAME_TAG" = 1 ]; then
   # taking the pair prints and the warnings block repeats once, says which,
   # and, for two machines' files, whether their charmaps were read: this
   # line never says it again in other words.
-  echo "     none -- nothing was compared: the two $NOUN are one commit or one"
+  echo "     none -- nothing was compared: the two $WORD are one commit or one"
   echo "     source tree (the warnings below say which, and what that leaves)"
 else
   echo "     none -- of what step 2 compared, nothing differs; step 2, above,"
@@ -779,18 +800,19 @@ elif [ "$NOUN" = builds ]; then
   echo "     package installs, checked one by one ('What was compared')."
 elif [ "$NOUN" = sides ]; then
   if [ "$TAG_SIDE" = old ]; then
-    text="$TAG_NAME is an upstream tag, so what your old distro adds to it"
-    text="$text is NOT CHECKED: a file only that distro ships, and $NEW does"
-    text="$text not, is not listed. Name the old side as a build to check it."
+    text="$TAG_NAME is an upstream $OLD_CLASS, so what your old distro adds"
+    text="$text to it is NOT CHECKED: a file only that distro ships, and"
+    text="$text $NEW does not, is not listed. Name the old side as a build"
+    text="$text to check it."
   else
-    text="$TAG_NAME is an upstream tag, so what your new distro adds to it"
-    text="$text or drops is NOT CHECKED: a file listed below may still ship"
-    text="$text there, and one it drops is not listed. Name the new side as a"
-    text="$text build to check it."
+    text="$TAG_NAME is an upstream $NEW_CLASS, so what your new distro adds"
+    text="$text to it or drops is NOT CHECKED: a file listed below may still"
+    text="$text ship there, and one it drops is not listed. Name the new side"
+    text="$text as a build to check it."
   fi
   printf '%s\n' "$text" | fold -s -w 70 | sed 's/ *$//; s/^/     /'
 else
-  echo "     The tags cannot show what your distro adds or drops: NOT CHECKED."
+  echo "     The $WORD cannot show what your distro adds or drops: NOT CHECKED."
   if [ -n "$OLD_NODE" ]; then
     # Both sides read their tags because of a machine's file
     # (machine_sides), whose reason the run printed first and the warnings
@@ -810,14 +832,14 @@ fi
 if [ ! -f "$STEP2_REMOVED" ]; then
   # Unreachable as the step stands: step 2 writes this list on every run,
   # and a step 2 that failed has already ended this script under set -e.
-  echo "     Between the $NOUN: NOT REPORTED -- step 2 wrote no removal list."
+  echo "     Between the $WORD: NOT REPORTED -- step 2 wrote no removal list."
   echo "     Read its output above; do not read this as nothing removed"
 elif [ "$GONE" -gt 0 ]; then
-  echo "     Between the $NOUN, gone at $NEW:"
+  echo "     Between the $WORD, gone at $NEW:"
   awk '!/^#/ && NF' "$STEP2_REMOVED" | sed 's/^C /C.UTF-8 /; s/^/       /'
   echo "   ($GONE name(s); full list: $STEP2_REMOVED)"
 else
-  echo "     Between the $NOUN: none -- no locale file at $OLD is gone at $NEW"
+  echo "     Between the $WORD: none -- no locale file at $OLD is gone at $NEW"
 fi
 
 # What each machine's own glibc says, beside what the tags say. Below Removed,

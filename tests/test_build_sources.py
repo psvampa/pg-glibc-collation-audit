@@ -45,7 +45,8 @@ from _harness import (COMPARED_BANNER, GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR,
                       summary_block, glibc_shaped, needs_clone,
                       assert_no_deleted_block, nothing_compared_lines,
                       summary_warnings, assert_collation_version,
-                      assert_no_route_looks, pg_version_of)
+                      assert_no_route_looks, pg_version_of,
+                      EXPECTED_SHA)
 
 import build_sources as bs
 import filter_lc_collate_changes as step2
@@ -3754,7 +3755,9 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
     summary is tag_build's."""
 
     RUNS = {'tag_build': (TAG, 'latest-el9'), 'tag_typed': (TAG, B275),
-            'build_tag': (B40, TAG), 'absent': (B275, ABSENT)}
+            'build_tag': (B40, TAG), 'absent': (B275, ABSENT),
+            'sha_build': (EXPECTED_SHA[TAG], B275),
+            'build_sha': (B40, EXPECTED_SHA[TAG])}
     LISTS = {'pub/rocky/9': [('2.34', '275.el9_8')]}
 
     @classmethod
@@ -3783,7 +3786,31 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
             '!! The DIRECTION of this pair could not be established'), 1, out)
         self.assertIn('Nothing in this run has checked it', warnings)
         self.assertIn('Confirm which side is the older one.', warnings)
+        self.assertIn('nothing here places a build against a tag of its own '
+                      'release', warnings)
         assert_no_deleted_block(self, out)
+
+    def test_a_commit_and_a_build_name_the_commit(self):
+        """16.183: the tag's commit given by its id is a commit, in Removed
+        and in the order check's `!!`, on either side."""
+        sha = EXPECTED_SHA[TAG]
+        out = self.run_of('sha_build')
+        self.assertEqual(' '.join(summary_block(out, REMOVED)),
+                         '%s is an upstream commit, so what your old distro '
+                         'adds to it is NOT CHECKED: a file only that distro '
+                         'ships, and %s does not, is not listed. Name the old '
+                         'side as a build to check it. Between the sides: '
+                         'none -- no locale file at %s is gone at %s'
+                         % (sha, B275, sha, B275))
+        self.assertIn('nothing here places a build against a commit of its '
+                      'own release', summary_warnings(out))
+        # A 40-character id wraps the sentence over four lines, not three.
+        said = ('%s is an upstream commit, so what your new distro adds to '
+                'it or drops is NOT CHECKED: a file listed below may still '
+                'ship there, and one it drops is not listed. Name the new '
+                'side as a build to check it.' % sha)
+        body = ' '.join(summary_block(self.run_of('build_sha'), REMOVED))
+        self.assertEqual(body[:len(said)], said)
 
     def test_the_tag_side_alone_gets_the_tags_warning(self):
         """The old side is a tag and the new one a build: the `!!`
