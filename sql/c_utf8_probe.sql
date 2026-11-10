@@ -296,11 +296,9 @@ WHERE datlocprovider = 'c'
   AND datcollate ~ '^[Cc]\.';
 
 \echo '=== 5. is THIS database exposed through its default collation? ==='
--- The index / partition-key / column / constraint inventory lives in
--- sql/collation_confirmation_template.sql. This is only the one-line answer
--- for the database default, because that is the way C.UTF-8 normally reaches
--- your data: a text column with no explicit COLLATE resolves to
--- pg_database.datcollate at runtime.
+-- This query answers for the database default, because that is the way
+-- C.UTF-8 normally reaches your data: a text column with no explicit COLLATE
+-- resolves to pg_database.datcollate at runtime.
 SELECT datname,
        datlocprovider,
        datcollate,

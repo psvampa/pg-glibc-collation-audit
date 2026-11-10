@@ -15,10 +15,7 @@
 --     schema. Point it at a scratch database.
 --   * The first statement, pg_import_system_collations(), WRITES TO
 --     pg_catalog and needs superuser. It is idempotent and only adds
---     collations already present in `locale -a`, but it is a catalog change:
---     if you are running the inventory queries against production, run them
---     without that line and accept that a langpack installed after initdb
---     will be missing from pg_collation.
+--     collations already present in `locale -a`.
 --   * RESTART PostgreSQL after installing glibc-all-langpacks, BEFORE running
 --     this. The function takes its list from `locale -a` (a fresh subprocess,
 --     which sees the new locales) but checks each one inside the backend, and
@@ -27,19 +24,16 @@
 --     returns success while the locales that package added stay missing. A
 --     single glibc-langpack-<xx> installs its locales outside the archive and
 --     needs no restart.
---   * Needs PostgreSQL 15 or newer: it reads pg_database.datlocprovider and
---     datcollversion and calls pg_database_collation_actual_version(), all
---     new in 15. On 13/14, drop the datlocprovider conditions (no database
---     can use a non-libc provider there) and delete the database-default
---     half of the collversion block. Keep the named-collation half:
---     pg_collation_actual_version() exists since PG 10 and reports a libc
---     version from 13 on.
+--   * collversion and actual, in the collation listing below, are empty for
+--     a collation whose locale is C, C.* or POSIX, which PostgreSQL gives no
+--     version.
 --   * Use the names docs/confirming-on-a-real-system.md says to run it for
 --     ("Which locales to run it for"). Step 2's list holds locales,
 --     not spellings (sv_SE, not sv_SE.utf8 or sv_SE.iso885915),
---     plus the aliases glibc's locale.alias gives them (swedish). The queries
---     below read each collation's locale from collcollate, so every spelling
---     and every encoding of one locale counts as that locale. Check
+--     plus the aliases glibc's locale.alias gives them (swedish). The
+--     collation listing below reads each collation's locale from
+--     collcollate, so every spelling and every encoding of one locale counts
+--     as that locale. Check
 --     `locale -a` first, and in the COLLATE clauses below use a name that
 --     exists for this database's encoding. In a UTF8 database "sv_SE" is
 --     sv_SE.utf8.
@@ -52,96 +46,43 @@
 
 SELECT pg_import_system_collations('pg_catalog');
 
--- READ THIS FIRST. It changes how every inventory below reads.
---
--- A column declared `text` with no explicit COLLATE does not get a libc
--- collation. It gets OID 100, `default`, whose collprovider is 'd' -- a
--- pointer resolved at runtime from pg_database. In a typical database that is
--- MOST text columns, and in a container it is usually all of them, because
--- initdb inherits the locale from the environment and minimal images ship
--- LANG=C.UTF-8.
---
--- So the question "are the default-collated columns exposed to a glibc
--- collation change?" is answered here, once, and not per column. If
--- datlocprovider is 'c' and datcollate is anything other than C or POSIX,
--- every default-collated column in the database is exposed -- C.UTF-8 very
--- much included: PostgreSQL special-cases only the literal strings "C" and
--- "POSIX" to byte comparison
--- (src/backend/utils/adt/pg_locale.c through PG 17, pg_locale_libc.c from
--- PG 18), so libc C.UTF-8 goes through strcoll like any other locale.
-\echo '--- is the database default collation exposed? ---'
-SELECT d.datname,
-       d.datlocprovider AS provider,
-       d.datcollate,
-       CASE
-         WHEN d.datlocprovider <> 'c'
-           THEN 'not libc'
-         WHEN d.datcollate IN ('C', 'POSIX')
-           THEN 'byte order'
-         ELSE 'EXPOSED -- every column with no explicit COLLATE uses this'
-       END AS default_collation_status
-FROM pg_database d
-WHERE d.datname = current_database();
-
--- One definition of "exposed", used by every inventory below: an explicit
--- libc collation other than C/POSIX, OR the database default when that
--- resolves to one. Temporary and session-scoped -- it disappears when you
--- disconnect and changes nothing in the database.
---
--- C and POSIX are recognised by collcollate, the locale the collation
--- loads, not by its name. ucs_basic is a libc collation with collcollate C
--- in PostgreSQL 13 to 16, and so is any CREATE COLLATION x (locale = 'C').
---
--- `locale` is the locale each one is built from, by glibc's own rule. That is
--- the locale name without the part from the dot up to any @
+-- Lists every collation built from a locale on the audit's list, in every
+-- encoding, with the glibc version recorded when it was created or last
+-- refreshed (collversion) and the one this server runs (actual). They differ
+-- where glibc changed after that, as on an OS upgraded in place or a physical
+-- replica. Equal versions prove nothing, because most ways of creating or
+-- refreshing a collation under the new glibc record the new version. Both are
+-- glibc's release number only, so a distro patch that keeps the number
+-- changes neither. Put the names you are confirming in place of <LOCALE>. The
+-- query starts from the list, so a name that matches no collation still
+-- prints a row with nothing beside it. That happens for a locale this
+-- database does not have, for a name left unreplaced, and for a locale whose
+-- collations were never imported into pg_collation (the note on
+-- pg_import_system_collations, above). A collation's locale, by glibc's own
+-- rule, is its collcollate without the part from the dot up to any @
 -- (localedata/Makefile builds every locale from that file). sv_SE.UTF-8,
--- sv_SE.utf8 and sv_SE.iso885915 are all sv_SE. Compare it with step 2's
--- list, which holds locales and the aliases glibc gives them (swedish), not
--- spellings. It is read from collcollate and datcollate, never
--- from collname. "sv_SE" is three collations, one per encoding, each loading
--- a different locale name. The dot is written [.] and not with a backslash,
--- which a server with standard_conforming_strings off reads as an escape.
--- '\.' would then match any first character and empty every name. glibc reads
--- an alias in any case (Swedish is swedish), so the comparison below ignores
--- case.
-CREATE OR REPLACE TEMP VIEW exposed_collation AS
-SELECT c.oid AS colloid,
-       c.collname,
-       CASE WHEN c.collprovider = 'd'
-            THEN 'database default -> ' || d.datcollate
-            ELSE c.collname
-       END AS effective_collation,
-       regexp_replace(CASE WHEN c.collprovider = 'd' THEN d.datcollate
-                           ELSE c.collcollate END, '[.][^@]*', '') AS locale
-FROM pg_collation c
-CROSS JOIN pg_database d
-WHERE d.datname = current_database()
-  AND ( (c.collprovider = 'c' AND c.collcollate NOT IN ('C', 'POSIX'))
-     OR (c.collprovider = 'd' AND d.datlocprovider = 'c'
-         AND d.datcollate NOT IN ('C', 'POSIX')) );
-
--- Confirms which glibc version these collations were imported against. It
--- lists every collation built from a locale on the audit's list, in every
--- encoding. Put the names you are confirming in place of <LOCALE>. The query
--- starts from the list, so a name that matches no collation still prints a
--- row with nothing beside it. That happens for a locale this database does
--- not have, for a name left unreplaced, and for a locale whose collations
--- were never imported into pg_collation (the note on
--- pg_import_system_collations, above). Both sides go through the same rule,
--- so a spelling put on the list (sv_SE.utf8) matches too. lower() runs under
+-- sv_SE.utf8 and sv_SE.iso885915 are all sv_SE. Both sides go through the
+-- same rule, so a spelling put on the list (sv_SE.utf8) matches too. The dot
+-- is written [.] and not with a backslash, which a server with
+-- standard_conforming_strings off reads as an escape. '\.' would then match
+-- any first character and empty every name. glibc reads an alias in any case
+-- (Swedish is swedish), so the comparison ignores case. lower() runs under
 -- the C collation (catalog columns are C, and the list side says so), which
 -- changes ASCII letters only. Under a Turkish locale's own rules lower('I')
 -- is a dotless i, and before this query used C, or_IN, sv_FI and sv_FI@euro
 -- matched nothing in a Turkish database (measured, PostgreSQL 18.6). With C
--- they all match.
+-- they all match. The rows are ordered under C too, so two databases with
+-- different default collations print them in the same order, and by encoding,
+-- which tells apart the collations that share one name.
 SELECT n AS listed, c.collname, c.collcollate,
-       pg_encoding_to_char(c.collencoding) AS encoding, c.collversion
+       pg_encoding_to_char(c.collencoding) AS encoding, c.collversion,
+       pg_collation_actual_version(c.oid) AS actual
 FROM unnest(ARRAY['<LOCALE>']) AS n
 LEFT JOIN pg_collation c
   ON c.collprovider = 'c'
  AND lower(regexp_replace(c.collcollate, '[.][^@]*', ''))
    = lower(regexp_replace(n COLLATE "C", '[.][^@]*', ''))
-ORDER BY n, c.collname;
+ORDER BY n COLLATE "C", c.collname, encoding;
   -- e.g. ARRAY['sv_SE','sv_FI','sv_FI@euro','or_IN','swedish']
 
 DROP TABLE IF EXISTS collation_test;
@@ -181,126 +122,3 @@ SELECT ROW_NUMBER() OVER (ORDER BY w COLLATE "<LOCALE>", w COLLATE "C") AS pos,
        w
 FROM collation_test
 ORDER BY pos;
-
--- What is actually exposed: every index on a libc-provided, non-C/POSIX
--- collation. Run this on a real instance before a migration to know what you
--- would need to reindex if a locale turns out to be affected. The access
--- method is reported because a REINDEX is the fix for btree/gist ordering,
--- while hash and other AMs have different exposure.
-\echo '--- indexes on non-C/POSIX libc collations ---'
-SELECT i.indexrelid::regclass AS index_name,
-       i.indrelid::regclass   AS table_name,
-       am.amname              AS access_method,
-       x.effective_collation,
-       x.locale
-FROM pg_index i
-JOIN pg_class ir ON ir.oid = i.indexrelid
-JOIN pg_am am ON am.oid = ir.relam
-CROSS JOIN LATERAL unnest(i.indcollation::oid[]) AS ic(oid)
-JOIN exposed_collation x ON x.colloid = ic.oid
-WHERE ir.relnamespace NOT IN ('pg_catalog'::regnamespace,
-                              'information_schema'::regnamespace)
--- The expressions are repeated rather than ordering by the output aliases:
--- ORDER BY on a bare regclass sorts by OID, not by name, and `alias::text` is
--- an expression, so its names resolve against the FROM clause and not against
--- the SELECT list.
-ORDER BY i.indrelid::regclass::text, i.indexrelid::regclass::text;
-
--- The severe one, and the reason a REINDEX list is not the whole answer: a
--- text partition key is evaluated with a collation. If the collation changes,
--- rows can belong in a different partition than the one they are physically
--- stored in, and NO amount of reindexing fixes that -- the rows have to be
--- moved. Check this before you migrate, not after.
-\echo '--- partitioned tables keyed on a non-C/POSIX libc collation (REINDEX does NOT fix these) ---'
-SELECT pt.partrelid::regclass AS partitioned_table,
-       x.effective_collation,
-       x.locale,
-       pg_get_partkeydef(pt.partrelid) AS partition_key
-FROM pg_partitioned_table pt
-CROSS JOIN LATERAL unnest(pt.partcollation::oid[]) AS pc(oid)
-JOIN exposed_collation x ON x.colloid = pc.oid
-ORDER BY pt.partrelid::regclass::text;
-
--- Every column carrying such a collation, indexed or not. Anything comparing
--- these columns (a query plan, a constraint, a generated column, a
--- materialized view's stored order) inherits the change.
-\echo '--- columns using a non-C/POSIX libc collation ---'
-SELECT a.attrelid::regclass AS table_name,
-       a.attname            AS column_name,
-       t.typname            AS type,
-       x.effective_collation,
-       x.locale
-FROM pg_attribute a
-JOIN pg_class k ON k.oid = a.attrelid
-JOIN pg_type t ON t.oid = a.atttypid
-JOIN exposed_collation x ON x.colloid = a.attcollation
-WHERE a.attnum > 0
-  AND NOT a.attisdropped
-  AND k.relkind IN ('r', 'p', 'm', 'f')
-  AND k.relnamespace NOT IN ('pg_catalog'::regnamespace,
-                             'information_schema'::regnamespace)
-ORDER BY a.attrelid::regclass::text, a.attname;
-
--- CHECK and EXCLUDE constraints on tables holding such columns. Unlike indexes
--- and partition keys, a constraint does not record its collations in a
--- catalog column, so this cannot be answered precisely -- it is a
--- MANUAL REVIEW LIST. Read each definition and decide whether it does a text
--- comparison (a range check like `code BETWEEN 'a' AND 'm'`, an ordering
--- assertion) that the collation change would alter. A CHECK constraint is not
--- re-validated on upgrade, so a violated one stays silently violated.
-\echo '--- CHECK/EXCLUDE constraints to review by hand ---'
-SELECT con.conrelid::regclass AS table_name,
-       con.conname            AS constraint_name,
-       CASE con.contype WHEN 'c' THEN 'CHECK' WHEN 'x' THEN 'EXCLUDE' END AS kind,
-       pg_get_constraintdef(con.oid) AS definition
-FROM pg_constraint con
-JOIN pg_class kr ON kr.oid = con.conrelid
-WHERE con.contype IN ('c', 'x')
-  AND kr.relnamespace NOT IN ('pg_catalog'::regnamespace,
-                              'information_schema'::regnamespace)
-  AND EXISTS (
-        SELECT 1
-        FROM pg_attribute a
-        JOIN exposed_collation x ON x.colloid = a.attcollation
-        WHERE a.attrelid = con.conrelid
-          AND a.attnum > 0
-          AND NOT a.attisdropped)
-ORDER BY con.conrelid::regclass::text, con.conname;
-
--- PostgreSQL's own signal stays silent if a distro patches collation data
--- without moving the reported version -- which is why this audit exists.
--- The named-collation query needs PostgreSQL 13+ (libc collations are
--- versioned from 13); the database-default query needs 15+.
---
--- The blind spot that bites hardest here: neither this query
--- nor the one after it can ever report a C.* collation. Under the libc
--- provider, get_collation_actual_version() returns NULL for "C", for
--- "POSIX", and for anything whose name STARTS WITH "C.". PG 13 chops the
--- encoding suffix and compares the rest to "c"; from PG 14 it is the
--- pg_strncasecmp("C.", ...) test (src/backend/utils/adt/pg_locale.c through
--- PG 17, pg_locale_libc.c from PG 18). So collversion stays NULL, the
--- IS DISTINCT FROM never fires, and libc C.UTF-8 -- which the note at the top
--- of this file explains IS exposed, and which is the default in most
--- containers -- is invisible to both. For C.UTF-8 use sql/c_utf8_probe.sql:
--- it takes no editing, its corpus is derived from the ranges RHEL8's C
--- actually declares, and it carries the inverted control described in
--- the notes at the top of this file.
-\echo '--- collversion mismatch, named collations (PostgreSQL 13+) ---'
-SELECT collname, collversion, pg_collation_actual_version(oid) AS actual
-FROM pg_collation
-WHERE collprovider = 'c'
-  AND collversion IS DISTINCT FROM pg_collation_actual_version(oid);
-
--- The database default has its own version field, and pg_collation has no row
--- for it -- the query above cannot see it. This is the same blind spot the
--- inventories had: ask pg_database, not pg_collation. Same C.* caveat: a
--- database created with datcollate = C.UTF-8 under the libc provider carries
--- a NULL datcollversion and will never show up here.
-\echo '--- collversion mismatch, the database default (PostgreSQL 15+) ---'
-SELECT datname,
-       datcollate,
-       datcollversion,
-       pg_database_collation_actual_version(oid) AS actual
-FROM pg_database
-WHERE datlocprovider = 'c'
-  AND datcollversion IS DISTINCT FROM pg_database_collation_actual_version(oid);

@@ -823,10 +823,17 @@ class AFigureStatedTwiceIsStatedOnce(unittest.TestCase):
         # "need", and a list item, since 2026-09-27: README's Prerequisites
         # and confirming-on-a-real-system.md state it in those two shapes, and
         # drifting either to 14 stayed green (false-negative-reviewer).
-        ('the PostgreSQL floor the tool requires',
-         r'(?:needs? |Needs? |\*\*|(?<!\S)- )(?:PostgreSQL|version) (\d+) '
-         r'or newer',
+        # Two floors: the probe reads pg_database columns new in 15, and the
+        # template, measured on 14 to 18, reads none. Each command is said in
+        # its own words, so neither row reads the other's.
+        ('the PostgreSQL floor of command 2, the C.UTF-8 probe',
+         r'(?:needs? |Needs? |\*\*|(?<!\S)- |command 2, )'
+         r'(?:PostgreSQL|version) (\d+) or newer',
          4,
+         ()),
+        ('the PostgreSQL floor of command 3, the template',
+         r'(?:runs on |command 3, )PostgreSQL (\d+) or newer',
+         3,
          ()),
         # The locales that inherit iso14651_t1 (328) and the locale files
         # that differ between glibc 2.28 and 2.34 (283) were rows here, held
@@ -993,13 +1000,14 @@ class EveryTieWouldNoticeItsFigureMoving(unittest.TestCase):
     """
 
     #: Rows tied only to the other pages that state them. The PostgreSQL
-    #: floor is a requirement rather than a measurement. The 6,525 row was
+    #: floors are requirements rather than measurements. The 6,525 row was
     #: here until docs/limitations.md stopped publishing evidence; it was the
     #: one measured figure that could not be tied -- prose and no query
     #: output -- and with no page this layer reads stating it, there is
     #: nothing left for this class to compare.
     NO_RUN_BEHIND_THEM = (
-        'the PostgreSQL floor the tool requires',
+        'the PostgreSQL floor of command 2, the C.UTF-8 probe',
+        'the PostgreSQL floor of command 3, the template',
     )
 
     def rows(self):
