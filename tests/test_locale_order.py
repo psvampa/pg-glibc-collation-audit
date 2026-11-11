@@ -93,6 +93,57 @@ def unpacked_measurements():
 
 
 RHEL8, RHEL9, RHEL10 = unpacked_measurements()
+
+
+def machine_charmaps(n, names, dest):
+    """The charmaps NAMES of rhelN.extract.tar.gz in a new folder DEST, as
+    --unpack lays them out (NAME.gz): the machine's own files, so a test
+    names as audit.sh's run does. A name the file lacks raises."""
+    os.makedirs(dest)
+    want = {f'charmaps/{x}.gz' for x in names}
+    with tarfile.open(os.path.join(DATA, f'rhel{n}.extract.tar.gz'),
+                      'r:gz') as t:
+        for member in t:
+            if member.name in want:
+                with t.extractfile(member) as src, open(
+                        os.path.join(dest, os.path.basename(member.name)),
+                        'wb') as f:
+                    shutil.copyfileobj(src, f)
+                want.discard(member.name)
+    if want:
+        raise RuntimeError(f'rhel{n}.extract.tar.gz lacks {sorted(want)}')
+    return dest
+
+
+CHARMAP_LINE = re.compile(r'<U([0-9A-Fa-f]{4,8})>[ \t]+((?:/x[0-9a-fA-F]{2})+)')
+
+
+def charmap_oracle(text):
+    """{bytes: code point} of a charmap's single lines, read by this test's
+    own pattern and not by the code under test: the first line of a code
+    point wins (charmap.c:983-986@2.39) and bytes two code points claim
+    are left out. A range line raises: the oracle reads single lines."""
+    body = text.split('\nCHARMAP\n', 1)[1].split('\nEND CHARMAP', 1)[0]
+    seen, out, twice = set(), {}, set()
+    for line in body.split('\n'):
+        if not line.startswith('<U'):
+            continue
+        if '..' in line.split()[0]:
+            raise ValueError(f'a range line: {line!r}')
+        mt = CHARMAP_LINE.match(line)
+        if not mt:
+            raise ValueError(f'unread line: {line!r}')
+        cp = int(mt[1], 16)
+        if cp in seen:
+            continue
+        seen.add(cp)
+        b = bytes(int(h, 16) for h in mt[2].split('/x')[1:])
+        if b in out:
+            twice.add(b)
+        out[b] = cp
+    for b in twice:
+        del out[b]
+    return out
 # The files of the first format (locale_order/1) recorded before, byte for
 # byte: the same three measurements cut to what that format holds. A test
 # of a file of an earlier format, or of a locale no sort table decides,
@@ -1378,10 +1429,32 @@ NOT_CHECKED_WHOLE = (r"!! NOT checked whether the character sets of (either "
                      r"sequences that are not among the strings measured, "
                      r"because (.+)\. Where one does, a locale of that encoding "
                      r"is unchanged only as far as measured(, unless its sort "
-                     r"table found it unchanged)?\.")
+                     r"table found it unchanged)?\.( Without them, the strings "
+                     r"of the old machine's locales of an encoding other than "
+                     r"UTF-8 are named by their bytes\.)?")
 NOT_CHECKED_SOME = (r"!! NOT checked whether their character set gives a "
                     r"character to byte sequences that are not among the strings "
-                    r"measured, for (\d+) locale\(s\) of the (old|new) machine:")
+                    r"measured, for (\d+) locale\(s\) of the (old|new) machine"
+                    r"(; the strings of those of an encoding other than UTF-8 "
+                    r"are named by their bytes)?:")
+
+
+def charmaps_by_bytes(text):
+    """The side a charmaps-not-checked line says names its locales' strings
+    by their bytes ('either machine', 'the old machine', 'old'), or None;
+    refused on a line of the new machine alone, whose charmaps name
+    nothing (Names reads the old machine's)."""
+    whole = re.fullmatch(NOT_CHECKED_WHOLE, text)
+    if whole:
+        side, clause = whole[1], whole[4]
+    else:
+        some = re.match(NOT_CHECKED_SOME, text)
+        if not some:
+            raise ReportShapeError(f'unknown charmaps line: {text!r}')
+        side, clause = some[2], some[3]
+    if clause and side in ('new', 'the new machine'):
+        raise ReportShapeError(f'the new machine names by bytes: {text!r}')
+    return side if clause else None
 # A name the table gives inside a changed locale (table_naming): a character
 # with its glyph, a code point, a run, several code points, or bytes.
 TABLE_ITEM = (r'(?:\S+ \(U\+[0-9A-F]{4,6}\)|U\+[0-9A-F]{4,6}(?:\.\.U\+[0-9A-F]'
@@ -1730,9 +1803,11 @@ def parse_summary(text):
     if in_part is not None and not in_part.startswith(IN_PART_BRIEF):
         raise ReportShapeError(f'unknown measured-in-part line: {in_part!r}')
     s['in_part'] = names_of(in_part[len(IN_PART_BRIEF):]) if in_part else []
-    s['charmaps_unchecked'] = []
+    s['charmaps_unchecked'], s['charmaps_by_bytes'] = [], []
     while line().startswith('     !! NOT checked whether '):
-        s['charmaps_unchecked'].append(charmaps_unchecked(item(5, 8)))
+        text = item(5, 8)
+        s['charmaps_unchecked'].append(charmaps_unchecked(text))
+        s['charmaps_by_bytes'] += [x for x in [charmaps_by_bytes(text)] if x]
     s['totals'] = item(5, 7)
     if not (s['totals'] or '').startswith('Of the '):
         fail('expected the totals')
@@ -1966,9 +2041,10 @@ def parse_report(text):
                     (it[2], it[3], int(it[4]), seqs))
         if len(r['in_part']) != int(mt[1]):
             fail(f'measured in part says {mt[1]} and lists {len(r["in_part"])}')
-    r['charmaps_unchecked'] = []
+    r['charmaps_unchecked'], r['charmaps_by_bytes'] = [], []
     while line().startswith('!! NOT checked whether '):
         text = paragraph()
+        r['charmaps_by_bytes'] += [x for x in [charmaps_by_bytes(text)] if x]
         names = []
         while re.fullmatch(r'  \S.*', line()):
             first = line()
@@ -2393,13 +2469,14 @@ class Rhel8ToRhel9(unittest.TestCase):
         """Every character keeps its place and V and w stop being told apart
         like an accent: only strings of two letters sort differently (`va wa
         wb vc` becomes `va vc wa wb`). An order of single characters calls
-        these eight locales unchanged."""
+        these eight locales unchanged. Compared with no charmaps, so V and
+        w, in ISO-8859-1, are named by their bytes."""
         sv = self.changes['sv_SE']
         self.assertEqual(set(sv['names']), SWEDISH_LEGACY)
         self.assertEqual(sv['names']['sv_SE'], 'ISO-8859-1')
         self.assertEqual(sv['names']['sv_SE.iso885915'], 'ISO-8859-15')
         self.assertEqual(sv['moved'], [])
-        self.assertEqual(sv['pairs'], [(0x56, 0x77, 'like an accent',
+        self.assertEqual(sv['pairs'], [(b'V', b'w', 'like an accent',
                                         'as different letters')])
 
     def test_a_rewritten_order_is_counted(self):
@@ -2635,6 +2712,9 @@ def parse_characters(text):
     # The charmaps not checked, after the warnings and the control.
     out.charmaps_unchecked = [charmaps_unchecked(note) for note in notes
                               if note.startswith('!! NOT checked whether ')]
+    out.charmaps_by_bytes = [x for x in (
+        charmaps_by_bytes(note) for note in notes
+        if note.startswith('!! NOT checked whether ')) if x]
     # What the sort tables say beside the rows (table_verdicts).
     out.disagree, out.tables_only = [], []
     for note in [x for x in notes if x.startswith(('!! step 11 found a change',
@@ -3140,14 +3220,25 @@ def order_numbers(path, name):
 
 
 def order_names(path, name):
-    """Each place of that list as the outputs name its string: a character
-    as its code point, any other as its bytes (element())."""
+    """Each place of that list as the outputs name its string with no
+    charmap given, worked out here and not by the code under test: in
+    UTF-8 a sequence of one character as its code point, and any other
+    string, in any encoding, as its bytes."""
     data = LOADED[path] if path in LOADED else m.load(path, m.corpus_digest())[0]
     LOADED[path] = data
     r = data['locales'][name]
     strings = m.strings_of(data, r['corpus'])[0]
-    cps = m.names_for(strings, r['codeset']).cps
-    return [strings[i] if c is None else c for i, c in enumerate(cps)]
+
+    def named(s):
+        if r['codeset'] == 'UTF-8':
+            try:
+                text = s.decode('utf-8')
+            except UnicodeDecodeError:
+                return s
+            if len(text) == 1:
+                return ord(text)
+        return s
+    return [named(s) for s in strings]
 
 
 def order_of(path, name):
@@ -3376,8 +3467,8 @@ class SummaryForTheAudit(unittest.TestCase):
         """Counted a second way here: a character is in no reversed pair
         exactly when it stands at the same place in both orders and the
         characters before it are the same. ko_KR: the one that moved and the
-        4,888 it moved past; th_TH: 245 characters and the 9 bytes no
-        character of TIS-620 has (A0, DB to DE, FC to FF)."""
+        4,888 it moved past; th_TH: every byte 01 to FF but 30, the digit
+        0 (compared with no charmaps, so named by their bytes)."""
         for key, old, new, name, count in (
                 ('8-9', RHEL8, RHEL9, 'ko_KR.utf8', 4889),
                 ('9-10', RHEL9, RHEL10, 'th_TH', 254)):
@@ -3460,35 +3551,36 @@ class SummaryForTheAudit(unittest.TestCase):
     def test_swedish_V_and_w_with_their_test_pair(self):
         """"Vb" against "wa", measured on both machines. The sort table
         marks W and w as changed, and V and v compare differently against
-        them."""
+        them. Compared with no charmaps: named by their bytes."""
         for name in ('sv_SE', 'sv_SE.iso885915'):
             with self.subTest(locale=name):
                 table = [(r['chars'], r['kind']) for r in self.rows('8-9', name)
                          if r['finding'] == 'sort table changed'
                          and 'chars' in r]
-                self.assertEqual(table, [('U+0057', 'marked'),
-                                         ('U+0077', 'marked'),
-                                         ('U+0056', 'flip'),
-                                         ('U+0076', 'flip')])
+                self.assertEqual(table, [('bytes 57', 'marked'),
+                                         ('bytes 77', 'marked'),
+                                         ('bytes 56', 'flip'),
+                                         ('bytes 76', 'flip')])
                 rows = [r for r in self.rows('8-9', name)
                         if r['finding'] not in ('sorts differently',
                                                 'also in PostgreSQL',
                                                 'sort table changed')]
                 self.assertEqual(rows, [{
-                    'finding': 'told apart differently', 'chars': [0x56, 0x77],
+                    'finding': 'told apart differently', 'chars': [b'V', b'w'],
                     'how': ('like an accent', 'as different letters'),
-                    'test': ([0x56, 0x62], [0x77, 0x61]), 'before': '>',
+                    'test': ([b'V', b'b'], [b'w', b'a']), 'before': '>',
                     'now': '<', 'measured': 'on both machines'}])
 
     def test_the_contractions_the_sort_tables_name(self):
         """The sequences of several code points each sort table names, by
         how, counted from the file's rows: or_IN gains 868 on RHEL9, loses
         DDA and DDHA with NUKTA, and marks KA VIRAMA SSA as changed; on
-        RHEL10 each th_TH gains its own and marks 220 of a leading vowel
-        and a consonant."""
+        RHEL10 th_TH.utf8 gains 651 and marks 220 of a leading vowel and a
+        consonant. th_TH, in TIS-620, is compared here with no charmaps and
+        names none (NamedWithTheMachinesCharmaps names its own)."""
         for key, name, kinds in (
                 ('8-9', 'or_IN', {'new': 868, 'old': 2, 'marked': 1}),
-                ('9-10', 'th_TH', {'new': 14, 'marked': 220}),
+                ('9-10', 'th_TH', {}),
                 ('9-10', 'th_TH.utf8', {'new': 651, 'marked': 220})):
             with self.subTest(locale=name):
                 found = collections.Counter(
@@ -3592,18 +3684,19 @@ class SummaryForTheAudit(unittest.TestCase):
                 self.assertEqual(rows, [left_out] if left_out else [])
 
     def test_a_pair_measured_on_the_new_machine_reads_old_to_new(self):
-        """th_TH in TIS-620: the Thai baht sign and 0 are neighbours on RHEL10
-        only, told apart as different letters there and by less than a
-        letter between them on RHEL9: before is the old machine's."""
+        """th_TH in TIS-620: the Thai baht sign (DF) and 0 are neighbours on
+        RHEL10 only, told apart as different letters there and by less than
+        a letter between them on RHEL9: before is the old machine's.
+        Compared with no charmaps, so named by their bytes."""
         rows = [r for r in self.rows('9-10', 'th_TH')
                 if r['finding'] == 'told apart differently'
-                and r['chars'] == [0x0E3F, 0x30]]
+                and r['chars'] == [b'\xdf', b'0']]
         self.assertEqual(len(rows), 1)
         self.assertEqual(
             (rows[0]['how'], rows[0]['test'], rows[0]['before'], rows[0]['now'],
              rows[0]['measured']),
             (('by less than a letter', 'as different letters'),
-             ([0x0E3F, 0x62], [0x30, 0x61]), '>', '<',
+             ([b'\xdf', b'b'], [b'0', b'a']), '>', '<',
              'on the new machine; the old one by the characters between'))
 
     def test_each_kind_of_finding_is_counted_alike_in_the_three(self):
@@ -4934,33 +5027,127 @@ class SeparatorBetweenTheBytes(unittest.TestCase):
 
 
 class NamesOfStrings(unittest.TestCase):
-    """How the outputs name a string: as a character exactly where the tool
-    named that character before (corpus_for), any other by its bytes.
+    """How the outputs name a string: as the characters glibc reads it as,
+    and any other by its bytes. UTF-8 by rule; any other encoding by the
+    old machine's charmap, and by nothing without it.
 
-    Freezes two strings named alike, a string named as a character Python's
-    codec would write otherwise, a run that joins a character to bytes or
-    reads as covering strings it does not hold, and a chain listed out of
-    its order, which would name pairs that are not neighbours."""
+    Freezes two strings named alike, a string named as a character glibc's
+    charmap does not give it (TIS-620 80, which Python's codec reads as
+    U+0080), a run that joins a character to bytes or reads as covering
+    strings it does not hold, and a chain listed out of its order, which
+    would name pairs that are not neighbours."""
+
+    CHARMAPS = ('TIS-620', 'ARMSCII-8', 'VISCII', 'EUC-KR', 'EUC-JP',
+                'GB18030')
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='locale_order_names_')
+        cls.addClassCleanup(shutil.rmtree, cls.tmp)
+        cls.machine = m.MachineCharmaps(('dir', machine_charmaps(
+            9, cls.CHARMAPS, os.path.join(cls.tmp, 'cm9'))))
 
     def names(self, strings, codeset):
         return m.Naming(m.Names(sorted(strings), codeset))
 
     def test_a_character_where_the_tool_named_one(self):
+        """With no charmap, UTF-8 alone: an encoding Python reads (ISO-8859-1
+        E9, EUC-JP '~') is named by its bytes too."""
         for codeset, s, cp in (
                 ('UTF-8', b'\xc3\xa9', 0xE9), ('UTF-8', b'\x80', None),
-                ('UTF-8', b'\xf0\xab\xa0\xc0', None), ('ISO-8859-1', b'\xe9', 0xE9),
-                ('TIS-620', b'\xa0', None), ('TIS-620', b'\x80', 0x80),
-                # Python cannot read A4 D4 alone and writes U+3164 so.
-                ('EUC-KR', b'\xa4\xd4', 0x3164),
-                # PostgreSQL's U+327E; Python's codec has nothing there.
-                ('EUC-KR', b'\xa2\xe8', None),
-                # Read as '~', which Python writes 7E: not this string.
-                ('EUC-JP', b'\x8f\xa2\xb7', None), ('EUC-JP', b'~', 0x7E),
-                ('ARMSCII-8', b'a', 0x61), ('ARMSCII-8', b'\xae', None),
-                # No codec, and glibc's VISCII has letters at 02 and so on.
-                ('VISCII', b'\x02', None), ('VISCII', b'a', None)):
+                ('UTF-8', b'\xf0\xab\xa0\xc0', None),
+                ('ISO-8859-1', b'\xe9', None),
+                ('TIS-620', b'\xa0', None), ('TIS-620', b'\x80', None),
+                ('EUC-KR', b'\xa4\xd4', None), ('EUC-KR', b'\xa2\xe8', None),
+                ('EUC-JP', b'\x8f\xa2\xb7', None), ('EUC-JP', b'~', None),
+                ('ARMSCII-8', b'a', None), ('VISCII', b'\x02', None)):
             with self.subTest(codeset=codeset, string=s):
                 self.assertEqual(m.Names([s], codeset).code_point(s), cp)
+
+    def test_a_character_where_the_charmap_gives_one(self):
+        """With rhel9's own charmaps, each answer the line of glibc's file
+        gives (read with grep, handoff-12.1 fase2/t9_values.sh): TIS-620 has
+        nothing at 80, where Python reads U+0080; ARMSCII-8 gives AE to
+        U+2026, and A5 to U+0028, defined first at 28 (the first line
+        wins); VISCII's 02 is U+1EB2; EUC-KR A2 E8 is U+327E, which
+        Python's codec has not; EUC-JP 8F A2 B7 is U+FF5E; GB18030's range
+        line <U00020004>..<U0002000D> /x95/x32/x83/x30 gives its first and
+        last members, and 81 32 CE 39 is a single line, U+0E01."""
+        for codeset, s, cp in (
+                ('GB18030', bytes.fromhex('95328330'), 0x20004),
+                ('GB18030', bytes.fromhex('95328339'), 0x2000D),
+                ('GB18030', bytes.fromhex('8132ce39'), 0x0E01),
+                ('TIS-620', b'\x80', None), ('TIS-620', b'\xa1', 0x0E01),
+                ('ARMSCII-8', b'\xae', 0x2026), ('ARMSCII-8', b'(', 0x28),
+                ('ARMSCII-8', b'\xa5', None), ('VISCII', b'\x02', 0x1EB2),
+                ('EUC-KR', b'\xa2\xe8', 0x327E),
+                ('EUC-KR', b'\xa4\xd4', 0x3164),
+                ('EUC-JP', b'\x8f\xa2\xb7', 0xFF5E), ('EUC-JP', b'~', 0x7E)):
+            with self.subTest(codeset=codeset, string=s):
+                table = m.charmap_table(self.machine, codeset)
+                self.assertIsNotNone(table)
+                self.assertEqual(m.Names([s], codeset, table).code_point(s),
+                                 cp)
+
+    def test_no_two_strings_are_named_alike_with_the_charmap(self):
+        """ARMSCII-8 defines U+0028 twice (28 and A5): named once."""
+        for codeset, width in (('TIS-620', 1), ('ARMSCII-8', 1)):
+            with self.subTest(codeset=codeset):
+                strings = m.stored_strings(codeset, width)[0]
+                naming = m.Naming(m.Names(
+                    strings, codeset, m.charmap_table(self.machine, codeset)))
+                tokens = [naming.token(e) for e in range(len(strings))]
+                self.assertEqual(len(set(tokens)), len(tokens))
+
+    def test_a_sequence_cut_one_way_into_the_charmap(self):
+        """Names.points: several characters only where the bytes cut into
+        the charmap's sequences one way; a byte the charmap lacks, or two
+        cuts, is bytes. EUC-JP A1 A1 is U+3000 to Python, absent here."""
+        names = m.Names([], 'EUC-JP', {b'a': 0x61, b'\xa4\xa2': 0x3042})
+        self.assertEqual(names.points(b'\xa4\xa2a'), (0x3042, 0x61))
+        self.assertEqual(m.sequence_points(b'\xa4\xa2a', names), (0x3042, 0x61))
+        self.assertIsNone(m.sequence_points(b'\xa1\xa1a', names))
+        self.assertIsNone(names.code_point(b'\xa1\xa1'))
+        two = m.Names([], 'X', {b'a': 1, b'ab': 2, b'b': 3})
+        self.assertIsNone(two.points(b'ab'))
+        self.assertEqual(two.points(b'ba'), (3, 1))
+
+    def test_utf8_is_named_by_rule_whatever_the_charmap(self):
+        """glibc decodes UTF-8 with no charmap: a table given changes
+        nothing, and charmap_table gives none for it."""
+        strings = [b'A', b'\xc3\xa9', b'\xcd\xb8', b'\x80',
+                   b'\xf0\xab\xa0\xc0']
+        self.assertEqual(m.Names(strings, 'UTF-8', {b'A': 0x42}).cps,
+                         m.Names(strings, 'UTF-8').cps)
+        self.assertEqual(m.Names(strings, 'UTF-8').cps,
+                         [0x41, 0xE9, 0x378, None, None])
+        self.assertIsNone(m.charmap_table(self.machine, 'UTF-8'))
+
+    def test_bytes_two_characters_claim_name_neither(self):
+        """A charmap that gives 41 to both U+0041 and U+0042: which one
+        glibc reads is not settled here, so 41 is named by its bytes; its
+        other lines name as they say."""
+        root = os.path.join(self.tmp, 'twice')
+        os.mkdir(root)
+        with open(os.path.join(root, 'X-TWICE'), 'w', encoding='ascii') as f:
+            f.write('<code_set_name> X-TWICE\n<comment_char> %\n'
+                    '<escape_char> /\nCHARMAP\n'
+                    '<U0041>     /x41         LATIN CAPITAL LETTER A\n'
+                    '<U0042>     /x41         LATIN CAPITAL LETTER B\n'
+                    '<U0043>     /x43         LATIN CAPITAL LETTER C\n'
+                    'END CHARMAP\n')
+        table = m.MachineCharmaps(('dir', root)).table('X-TWICE')[0]
+        self.assertEqual(table, {b'C': 0x43})
+
+    def test_names_for_keeps_each_table_apart(self):
+        """The same list under one encoding, named with two tables and
+        with none: three answers, never the one asked first."""
+        strings = [b'\x80', b'\xa1']
+        one = m.names_for(strings, 'TIS-620', {b'\x80': 0x20AC})
+        two = m.names_for(strings, 'TIS-620', {b'\xa1': 0x0E01})
+        none = m.names_for(strings, 'TIS-620')
+        self.assertEqual((one.cps, two.cps, none.cps),
+                         ([0x20AC, None], [None, 0x0E01], [None, None]))
 
     def test_no_two_strings_are_named_alike(self):
         """Over each list the fixtures' locales are measured over."""
@@ -7359,12 +7546,12 @@ class OtherStringsNamedInTheOutputs(Checks):
     string is named under its locale's encoding, so two locales with the
     same bytes in the same order under two encodings are two groups."""
 
-    def outputs(self, old, new):
+    def outputs(self, old, new, *more):
         tag = self.id().rsplit('.', 1)[-1]
         summary = os.path.join(self.tmp, f'{tag}.sum')
         chars = os.path.join(self.tmp, f'{tag}.tsv')
         rc, out, err = run_compare(old, new, '--summary-to', summary,
-                                   '--characters-to', chars)
+                                   '--characters-to', chars, *more)
         self.assertEqual((rc, err), (0, ''))
         with open(summary, encoding='utf-8') as f:
             brief = parse_summary(f.read())
@@ -7429,8 +7616,9 @@ class OtherStringsNamedInTheOutputs(Checks):
 
     def test_named_under_each_encoding(self):
         """th_TH (TIS-620) 9 -> 10, and the same two measurements given a
-        second locale, ka_GE, under GEORGIAN-PS: byte C0, a character of
-        TIS-620 (U+0E40), is a byte there, so the two are named apart. The
+        second locale, ka_GE, under GEORGIAN-PS, with each machine's two
+        charmaps: byte C0 is U+0E40 in TIS-620 and U+10D0 in GEORGIAN-PS
+        (their lines in glibc's files), so the two are named apart. The
         first format, which reads no sort table: ka_GE's own would decide
         it."""
         def as_georgian(d):
@@ -7446,15 +7634,402 @@ class OtherStringsNamedInTheOutputs(Checks):
             d['content'] = m.content_digest(d)
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(json.dumps(d, sort_keys=True) + '\n')
-        report, summary, rows = self.outputs(old, new)
+        cms = [machine_charmaps(n, ('TIS-620', 'GEORGIAN-PS'),
+                                os.path.join(self.tmp, f'each-cm{n}'))
+               for n in (9, 10)]
+        report, summary, rows = self.outputs(
+            old, new, '--old-charmaps', cms[0], '--new-charmaps', cms[1])
         changes = by_name(report)
         self.assertIsNot(changes['th_TH'], changes['ka_GE'])
         moved = {name: characters_of(group, 'sorts differently')
                  for names_, group in rows.items() for name in names_
                  if name in ('th_TH', 'ka_GE')}
         self.assertIn(0x0E40, moved['th_TH'])
-        self.assertIn(b'\xc0', moved['ka_GE'])
-        self.assertNotIn(b'\xc0', moved['th_TH'])
+        self.assertIn(0x10D0, moved['ka_GE'])
+        self.assertNotIn(0x10D0, moved['th_TH'])
+        self.assertNotIn(0x0E40, moved['ka_GE'])
+
+
+def table_names(text):
+    """The strings a 'sort table changed' row names (TABLE_ITEM), as a set
+    of code points and bytes: each code point of a run or of several, and
+    the bytes of a name of bytes."""
+    if text.startswith('bytes '):
+        return {bytes.fromhex(text[len('bytes '):])}
+    mt = re.fullmatch(r'U\+([0-9A-F]+)\.\.U\+([0-9A-F]+)', text)
+    if mt:
+        return set(range(int(mt[1], 16), int(mt[2], 16) + 1))
+    found = re.findall(r'U\+([0-9A-F]{4,6})', text)
+    if not found:
+        raise ReportShapeError(f'unknown table name: {text!r}')
+    return {int(x, 16) for x in found}
+
+
+class NamedWithTheMachinesCharmaps(unittest.TestCase):
+    """th_TH, th_TH.tis620 and thai (TIS-620), RHEL 9 -> 10, cut to them
+    with C and POSIX, compared as audit.sh compares them: with each
+    machine's own TIS-620 charmap from its --extract file.
+
+    Freezes the names of a locale that is not UTF-8 as the old machine's
+    charmap gives them, on both routes (the changes, Naming; the sort
+    table's names, table_naming): TIS-620 has no character at 80 to 9F,
+    which Python's codec reads as U+0080..U+009F. The oracle is the same
+    file read by this test's own pattern (charmap_oracle). Without a
+    charmap the strings are named by their bytes, and the old machine's
+    line that gives the reason says so, once, in the report, the summary
+    and the characters file."""
+
+    TIS = ('C', 'POSIX', 'th_TH', 'th_TH.tis620', 'thai')
+    THAI = {'th_TH', 'th_TH.tis620', 'thai'}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='locale_order_charmap_names_')
+        cls.addClassCleanup(shutil.rmtree, cls.tmp)
+        cls.paths = {}
+        for n, base in ((9, RHEL9), (10, RHEL10)):
+            with open(base, encoding='utf-8') as f:
+                text = trimmed(f.read(), cls.TIS)
+            cls.paths[n] = os.path.join(cls.tmp, f'rhel{n}.out')
+            with open(cls.paths[n], 'w', encoding='utf-8') as f:
+                f.write(text)
+        cls.cm = {n: machine_charmaps(n, ('TIS-620',),
+                                      os.path.join(cls.tmp, f'cm{n}'))
+                  for n in (9, 10)}
+        with gzip.open(os.path.join(cls.cm[9], 'TIS-620.gz'), 'rt',
+                       encoding='latin-1') as f:
+            cls.tis = f.read()
+        cls.oracle = charmap_oracle(cls.tis)
+        cls.real = cls.outputs(cls, 'real', '--old-charmaps', cls.cm[9],
+                               '--new-charmaps', cls.cm[10])
+
+    def outputs(self, tag, *more):
+        summary = os.path.join(self.tmp, f'{tag}.sum')
+        chars = os.path.join(self.tmp, f'{tag}.tsv')
+        rc, out, err = run_compare(self.paths[9], self.paths[10],
+                                   '--summary-to', summary,
+                                   '--characters-to', chars, *more)
+        if (rc, err) != (0, ''):
+            raise AssertionError(f'--compare {tag}: {rc} {err}')
+        with open(summary, encoding='utf-8') as f:
+            brief = parse_summary(f.read())
+        with open(chars, encoding='utf-8') as f:
+            rows = parse_characters(f.read())
+        return parse_report(out), brief, rows
+
+    def folder(self, **files):
+        """A charmaps folder of plain files, NAME_X written NAME-X."""
+        root = os.path.join(self.tmp, self.id().rsplit('.', 1)[-1])
+        os.mkdir(root)
+        for name, text in files.items():
+            with open(os.path.join(root, name.replace('_', '-')), 'w',
+                      encoding='latin-1') as f:
+                f.write(text)
+        return root
+
+    def group(self, rows):
+        """Every row of the Thai locales, whichever label they are under."""
+        out = [r for names, g in rows.items() if self.THAI & set(names)
+               for r in g]
+        self.assertTrue(out)
+        return out
+
+    def named(self, rows):
+        """Every string the Thai locales' rows name, both routes."""
+        group = self.group(rows)
+        out = set(characters_of(group, 'sorts differently'))
+        table = set()
+        for r in group:
+            if r['finding'] != 'sort table changed':
+                continue
+            if 'chars' in r:
+                table |= table_names(r['chars'])
+            elif 'runs' in r:
+                for a, b in r['runs']:
+                    table.update(run_elements(a, b))
+            # else the row of the counts, which names nothing
+        self.assertTrue(out and table)
+        return out, table
+
+    def by_bytes(self, outputs):
+        """The side the three outputs say names by bytes, the same in all
+        three."""
+        report, brief, rows = outputs
+        self.assertEqual(report['charmaps_by_bytes'],
+                         brief['charmaps_by_bytes'])
+        self.assertEqual(report['charmaps_by_bytes'], rows.charmaps_by_bytes)
+        return report['charmaps_by_bytes']
+
+    def test_the_premise(self):
+        """glibc's TIS-620 gives no character to 41 of the bytes 01 to FF,
+        80 to 9F among them; Python's codec reads all 32 of those."""
+        absent = [b for b in range(1, 256) if bytes([b]) not in self.oracle]
+        self.assertEqual(len(absent), 41)
+        self.assertTrue(set(range(0x80, 0xA0)) <= set(absent))
+        self.assertEqual(bytes(range(0x80, 0xA0)).decode('tis-620'),
+                         ''.join(map(chr, range(0x80, 0xA0))))
+
+    def test_the_changes_counted_as_glibc_reads_them(self):
+        """Every string of TIS-620 changes but U+0030: 254, and the other
+        strings are exactly the bytes the charmap gives nothing."""
+        report, brief, rows = self.real
+        absent = [b for b in range(1, 256) if bytes([b]) not in self.oracle]
+        c = by_name(report)['th_TH']
+        self.assertEqual((c['reversed'], c['reversed_others']),
+                         (254, len(absent)))
+        self.assertEqual(self.by_bytes(self.real), [])
+
+    def test_every_name_is_the_charmaps(self):
+        """On both routes, a code point only where the file gives one, and
+        bytes only where it gives none; 80 to 9F among the sort table's
+        names, by their bytes."""
+        changes, table = self.named(self.real[2])
+        given = set(self.oracle.values())
+        for name in changes | table:
+            with self.subTest(name=name):
+                if isinstance(name, int):
+                    self.assertIn(name, given)
+                else:
+                    self.assertNotIn(name, self.oracle)
+        self.assertTrue({bytes([b]) for b in range(0x80, 0xA0)} <= table)
+        self.assertTrue({bytes([b]) for b in range(0x80, 0xA0)} <= changes)
+
+    def test_the_contractions_the_sort_table_names(self):
+        """Each th_TH gains its own 14 and marks 220 of a leading vowel and
+        a consonant, named from the charmap."""
+        found = collections.Counter(
+            r['kind'] for r in self.group(self.real[2])
+            if r['finding'] == 'sort table changed'
+            and re.fullmatch(SEVERAL, r.get('chars', '')))
+        self.assertEqual(dict(found), {'new': 14, 'marked': 220})
+
+    def test_a_pair_measured_on_the_new_machine_reads_old_to_new(self):
+        """The Thai baht sign and 0, neighbours on RHEL10 only, named from
+        the charmap (SummaryForTheAudit has them by their bytes)."""
+        rows = [r for r in self.group(self.real[2])
+                if r['finding'] == 'told apart differently'
+                and r['chars'] == [0x0E3F, 0x30]]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]['test'], rows[0]['before'], rows[0]['now']),
+                         (([0x0E3F, 0x62], [0x30, 0x61]), '>', '<'))
+
+    def euro_at_80(self):
+        return self.tis.replace('\nCHARMAP\n',
+                                '\nCHARMAP\n<U20AC>     /x80         EURO\n', 1)
+
+    def test_named_with_the_old_machines_charmap(self):
+        """Another server's TIS-620 that gives 80 to U+20AC, on the old
+        machine: 80 is named U+20AC."""
+        outputs = self.outputs(
+            'euro-old',
+            '--old-charmaps', self.folder(TIS_620=self.euro_at_80()),
+            '--new-charmaps', self.cm[10])
+        changes, table = self.named(outputs[2])
+        self.assertIn(0x20AC, changes | table)
+        self.assertNotIn(b'\x80', changes | table)
+
+    def test_not_with_the_new_machines_charmap(self):
+        """The same file on the new machine names nothing: the strings are
+        named under the old machine's encoding."""
+        outputs = self.outputs(
+            'euro-new', '--old-charmaps', self.cm[9],
+            '--new-charmaps', self.folder(TIS_620=self.euro_at_80()))
+        changes, table = self.named(outputs[2])
+        self.assertNotIn(0x20AC, changes | table)
+        self.assertIn(b'\x80', changes | table)
+        self.assertEqual(self.by_bytes(outputs), [])
+
+    def assert_only_bytes(self, outputs):
+        changes, table = self.named(outputs[2])
+        self.assertEqual([x for x in changes | table if isinstance(x, int)],
+                         [])
+
+    def test_with_no_charmaps_by_bytes_said_once(self):
+        """Neither file given: the line for either machine says so."""
+        outputs = self.outputs('none')
+        self.assert_only_bytes(outputs)
+        self.assertEqual(self.by_bytes(outputs), ['either machine'])
+
+    def test_with_no_charmaps_on_the_old_machine(self):
+        """--old-no-charmaps, as audit.sh passes a file that holds none."""
+        outputs = self.outputs('old-none', '--old-no-charmaps',
+                               'its file holds none',
+                               '--new-charmaps', self.cm[10])
+        self.assert_only_bytes(outputs)
+        self.assertEqual(self.by_bytes(outputs), ['the old machine'])
+
+    def test_with_no_charmaps_on_the_new_machine(self):
+        """The old machine's charmap names; the new machine's line says
+        nothing of names."""
+        outputs = self.outputs('new-none', '--old-charmaps', self.cm[9],
+                               '--new-no-charmaps', 'its file holds none')
+        self.assertEqual(self.by_bytes(outputs), [])
+        changes, table = self.named(outputs[2])
+        self.assertIn(0x0E01, changes | table)
+
+    def per_locale(self, folder, why):
+        """The reason each Thai locale was not checked on the old machine,
+        and its names by bytes."""
+        outputs = self.outputs(self.id().rsplit('.', 1)[-1],
+                               '--old-charmaps', folder,
+                               '--new-charmaps', self.cm[10])
+        self.assert_only_bytes(outputs)
+        self.assertEqual(self.by_bytes(outputs), ['old'])
+        old = [x for x in outputs[0]['charmaps_unchecked'] if x[0] == 'old']
+        self.assertEqual(len(old), 1)
+        self.assertEqual(set(old[0][2]), self.THAI)
+        for name in self.THAI:
+            self.assertRegex(old[0][2][name], why)
+
+    def test_no_charmap_declares_the_encoding(self):
+        root = os.path.join(self.tmp, 'latin1')
+        machine_charmaps(9, ('ISO-8859-1',), root)
+        self.per_locale(root, r'^no charmap on the machine declares its '
+                              r'encoding, TIS-620$')
+
+    def test_a_charmap_not_read_whole(self):
+        self.per_locale(
+            self.folder(TIS_620=self.tis + 'a line this does not read\n'),
+            r'^its charmap on the machine, TIS-620, cannot be read whole: ')
+
+    def test_two_files_declare_the_encoding(self):
+        """IBM1162 declares IBM1133 on every RHEL; here two TIS-620s."""
+        self.per_locale(self.folder(TIS_620=self.tis, TIS_620B=self.tis),
+                        r'^its encoding, TIS-620, is declared by TIS-620, '
+                        r'TIS-620B on the machine$')
+
+    def test_the_new_machines_line_never_says_it(self):
+        """The old machine names by bytes for each locale (no file declares
+        TIS-620) and the new machine has no charmaps: its line gives its
+        reason and nothing of names (charmaps_by_bytes refuses it)."""
+        root = os.path.join(self.tmp, 'latin1-new-none')
+        machine_charmaps(9, ('ISO-8859-1',), root)
+        outputs = self.outputs('new-none-old-latin1', '--old-charmaps', root,
+                               '--new-no-charmaps', 'its file holds none')
+        self.assertEqual(self.by_bytes(outputs), ['old'])
+        self.assertIn(('the new machine', 'its file holds none', None),
+                      outputs[0]['charmaps_unchecked'])
+
+    def test_the_new_machines_locales_line_never_says_it(self):
+        """The old machine names by bytes for each locale (no file declares
+        TIS-620) and the new machine leaves the same locales unchecked for
+        a reason of its own (two files declare it): only the old machine's
+        line says how they are named (charmaps_by_bytes refuses it on the
+        new machine's)."""
+        root = os.path.join(self.tmp, 'latin1-new-two')
+        machine_charmaps(9, ('ISO-8859-1',), root)
+        outputs = self.outputs(
+            'old-latin1-new-two', '--old-charmaps', root,
+            '--new-charmaps', self.folder(TIS_620=self.tis, TIS_620B=self.tis))
+        self.assertEqual(self.by_bytes(outputs), ['old'])
+        new = [x for x in outputs[0]['charmaps_unchecked'] if x[0] == 'new']
+        self.assertEqual(len(new), 1)
+        self.assertEqual(set(new[0][2]), self.THAI)
+
+    def test_a_changed_locale_step_11_did_not_measure_is_counted(self):
+        """compare's own list of the locales named by their bytes: the Thai
+        locales changed by their sort tables alone, step 11 having failed
+        on the old machine ('error', as another patch level can), are named
+        by their bytes, and the old machine's line says so, for the whole
+        machine and for each locale."""
+        with open(RHEL9, encoding='utf-8') as f:
+            d = json.load(f)
+        for name in self.THAI:
+            d['locales'][name] = {'codeset': d['locales'][name]['codeset'],
+                                  'error': 'measuring failed: MemoryError()'}
+        old = os.path.join(self.tmp, 'rhel9-thai-error.out')
+        with open(old, 'w', encoding='utf-8') as f:
+            f.write(trimmed(json.dumps(d), self.TIS))
+
+        def outputs(tag, *more):
+            saved = self.paths[9]
+            self.paths[9] = old
+            try:
+                return self.outputs(tag, *more)
+            finally:
+                self.paths[9] = saved
+        whole = outputs('error-old-none', '--old-no-charmaps',
+                        'its file holds none', '--new-charmaps', self.cm[10])
+        # Only the table names them: step 11 measured nothing to name.
+        table = set()
+        for r in self.group(whole[2]):
+            if r['finding'] == 'sort table changed' and 'chars' in r:
+                table |= table_names(r['chars'])
+        self.assertTrue(table)
+        self.assertEqual([x for x in table if isinstance(x, int)], [])
+        self.assertEqual(self.by_bytes(whole), ['the old machine'])
+        root = os.path.join(self.tmp, 'latin1-error')
+        machine_charmaps(9, ('ISO-8859-1',), root)
+        some = outputs('error-old-latin1', '--old-charmaps', root,
+                       '--new-charmaps', self.cm[10])
+        self.assertEqual(self.by_bytes(some), ['old'])
+        listed = [x for x in some[0]['charmaps_unchecked'] if x[0] == 'old']
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(set(listed[0][2]), self.THAI)
+
+    def test_a_locale_named_but_not_compared_is_listed(self):
+        """A locale named by its bytes that is not among those compared (no
+        locale was: here every other one its table decided), on the old
+        machine's line for each locale, with the reason its table has; and
+        one whose measurement holds no list for it ('error'), whose reason
+        comes from the table alone."""
+        root = os.path.join(self.tmp, 'latin1-unit')
+        machine_charmaps(9, ('ISO-8859-1',), root)
+        old = copy.deepcopy(m.load(self.paths[9], m.corpus_digest())[0])
+        new = m.load(self.paths[10], m.corpus_digest())[0]
+        old['locales']['thai'] = {'codeset': 'TIS-620', 'error': 'x'}
+        lacking, found = m.charmap_findings(
+            old, new, (('dir', root), ('dir', self.cm[10])), [],
+            firm=('th_TH.tis620',), named=('th_TH', 'thai'))
+        lines = [d for kind, d in found if kind == 'charmaps not checked']
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(charmaps_by_bytes(lines[0]['text']), 'old')
+        why = 'no charmap on the machine declares its encoding, TIS-620'
+        self.assertEqual(lines[0]['names'], [(['th_TH', 'thai'], why)])
+
+
+class EveryOneByteCharmapNamesAsItsFile(unittest.TestCase):
+    """The family of the names: every encoding of one byte per character a
+    locale is measured in on RHEL 8, 9 and 10, each with that machine's own
+    charmap. Each byte 01 to FF is named as the file's line says, read by
+    charmap_oracle, or by its bytes where the file has none. The encodings
+    of more than one byte are in NamesOfStrings."""
+
+    def test_each_byte_as_the_file_says(self):
+        tmp = tempfile.mkdtemp(prefix='locale_order_family_')
+        self.addCleanup(shutil.rmtree, tmp)
+        seen = 0
+        for n, path in ((8, RHEL8), (9, RHEL9), (10, RHEL10)):
+            if path not in LOADED:
+                LOADED[path] = m.load(path, m.corpus_digest())[0]
+            codesets = sorted({r.get('codeset') for name, r
+                               in LOADED[path]['locales'].items()
+                               if 'error' not in r
+                               and name not in ('C', 'POSIX')
+                               and r.get('codeset') != 'UTF-8'})
+            root = machine_charmaps(n, codesets, os.path.join(tmp, f'cm{n}'))
+            machine = m.MachineCharmaps(('dir', root))
+            for codeset in codesets:
+                with gzip.open(os.path.join(root, f'{codeset}.gz'), 'rt',
+                               encoding='latin-1') as f:
+                    text = f.read()
+                # One byte: no <mb_cur_max> above 1 (1 is glibc's default,
+                # charmap.c:336-337@2.39, and most such files leave it out).
+                wide = re.search(r'<mb_cur_max>[ \t]+(\d+)', text)
+                if wide and int(wide[1]) > 1:
+                    continue
+                oracle = charmap_oracle(text)
+                table = m.charmap_table(machine, codeset)
+                with self.subTest(machine=n, codeset=codeset):
+                    self.assertIsNotNone(table)
+                    names = m.Names([bytes([b]) for b in range(1, 256)],
+                                    codeset, table)
+                    self.assertEqual(names.cps, [oracle.get(bytes([b]))
+                                                 for b in range(1, 256)])
+                    seen += 1
+        # 21 on each machine: ARMSCII-8, CP1251, CP1255, GEORGIAN-PS, twelve
+        # ISO-8859, KOI8-R, KOI8-T, KOI8-U, PT154 and TIS-620.
+        self.assertEqual(seen, 3 * 21)
 
 
 class CharmapsCheckedInTheComparison(Checks):
@@ -7523,31 +8098,33 @@ class CharmapsCheckedInTheComparison(Checks):
                          [b'A', b'\xc3\xa9'])
         self.assertEqual(m.charmap_check(data, ('dir', root)), ({}, {}, None))
 
-    def test_every_file_that_declares_the_codeset_is_read(self):
+    def test_two_files_that_declare_the_codeset_leave_it_unchecked(self):
         """Two files declare UTF-8; the second gives a character to C0 80.
-        Which one built the locale is not known, so both are read."""
+        Which one built the locale is not known (node_charmaps.charmap_of,
+        the rule step 2 traces a machine's builds by), so neither is taken
+        and the locale is not checked, with both named."""
         root = self.charmaps('x', UTF_8=self.UTF8.format(extra=''),
                              UTF_8B=self.UTF8.format(extra=self.EXTRA))
         data = self.data({'en_US.utf8': {'codeset': 'UTF-8'}},
                          [b'A', b'\xc3\xa9'])
-        self.assertEqual(m.charmap_check(data, ('dir', root))[0],
-                         {'en_US.utf8': [('UTF-8B', [b'\xc0\x80'])]})
+        self.assertEqual(m.charmap_check(data, ('dir', root)), (
+            {}, {'en_US.utf8': 'its encoding, UTF-8, is declared by UTF-8, '
+                               'UTF-8B on the machine'}, None))
 
-    def test_a_file_that_could_declare_the_codeset_is_read(self):
+    def test_a_file_that_could_declare_the_codeset_leaves_it_unchecked(self):
         """A charmap whose prolog is not read whole (a line glibc skips, as
-        in MAC-CENTRALEUROPE) could declare UTF-8: it is read too, and,
-        unread, leaves the locales not checked."""
+        in MAC-CENTRALEUROPE) could declare UTF-8: which file built the
+        locale is not known, and it is not checked."""
         loose = self.UTF8.format(extra='').replace(
             'CHARMAP\n', '<comment> a line glibc skips\nCHARMAP\n', 1)
         root = self.charmaps('x', UTF_8=self.UTF8.format(extra=''),
                              LOOSE=loose)
         data = self.data({'en_US.utf8': {'codeset': 'UTF-8'}},
                          [b'A', b'\xc3\xa9'])
-        lacking, cannot, why = m.charmap_check(data, ('dir', root))
-        self.assertEqual((lacking, why), ({}, None))
-        self.assertRegex(cannot.get('en_US.utf8', ''),
-                         r'^its charmap on the machine, LOOSE, cannot be read '
-                         r'whole: ')
+        self.assertEqual(m.charmap_check(data, ('dir', root)), (
+            {}, {'en_US.utf8': 'its encoding, UTF-8, is declared by UTF-8 and '
+                               'could be declared by LOOSE, whose start this '
+                               'does not read whole, on the machine'}, None))
 
     def test_a_compressed_charmap_is_read(self):
         root = self.charmaps('x')
