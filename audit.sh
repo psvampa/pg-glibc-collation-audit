@@ -204,8 +204,8 @@ if { [ -n "$OLD_NODE" ] && [ -z "$NEW_NODE" ]; } ||
   echo "       alone compares nothing" >&2
   exit 2
 fi
-# Inherit the user's setting. Never invent a private directory: the path is a documented knob, and the step
-# scripts resolve this same variable independently.
+# Inherit the user's setting. Never invent a private directory. The step scripts resolve this same variable
+# independently.
 OUT_DIR=${PG_GLIBC_AUDIT_OUT:-/tmp/pg-glibc-collation-audit}
 export PG_GLIBC_AUDIT_OUT="$OUT_DIR"
 
@@ -656,7 +656,8 @@ UNCOMPARED=$(count_lines "$STEP2_NOT_COMPARED")
 HAS_C=$(awk '$0 == "C" {n++} END {print n+0}' "$STEP2_LIST")
 if [ "$LISTED" -gt 0 ]; then
   # glibc's file C is C.UTF-8: PostgreSQL sorts a locale that is exactly C
-  # without glibc. The list keeps C, which the SQL template reads as C.utf8.
+  # without glibc. The list keeps C; the SQL template's listing matches it to
+  # C and C.utf8 alike, and its sort stops on both and points to the probe.
   # The names step 2 could not compare come apart, under a line that says
   # why they are listed; their reasons are in the warnings, each in its own
   # step's words (13.31).

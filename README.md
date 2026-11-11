@@ -96,7 +96,8 @@ what it leaves to the next.
 
 `audit.sh` compares the two glibc versions and lists the locales whose sort
 order can change. It runs in two ways. 1.a needs only this checkout and reads
-glibc's published source. 1.b adds one file from each of your machines, and
+glibc's published source, so its list leaves out a locale whose order changed
+through glibc's code alone. 1.b adds one file from each of your machines, and
 with it checks what your distro changed on its own and measures how each
 machine's glibc actually sorts. Whenever you can run a command on both
 machines, 1.b is the stronger answer.
@@ -191,7 +192,10 @@ What it prints on both pairs is in
 PostgreSQL 14 or newer on both nodes, and needs editing the file first.*
 
 ```sh
-psql -f sql/collation_confirmation_template.sql   # edit placeholders first
+# edit the placeholders, then on each node, then diff
+psql -X -e -f sql/collation_confirmation_template.sql > el8.template.out 2>&1 || echo '!! the template stopped: read el8.template.out'
+grep -L '^=== done' el8.template.out el9.template.out    # names a file whose run did not finish
+diff el8.template.out el9.template.out
 ```
 
 A source diff is an argument, not a proof of what actually runs in
@@ -210,8 +214,7 @@ What this box leaves out is in
 - which locales exactly to run it for
 - which values to test with, the step that decides whether the run proves
   anything at all
-- the three traps that make a comparison agree with itself while proving
-  nothing
+- the three traps that change what a comparison proves
 
 A worked example for each pair is in
 [examples/README.md, under Command 3](examples/README.md#command-3--the-sql-step-11-writes).
@@ -230,9 +233,8 @@ A worked example for each pair is in
 | `zh_CN`, `cmn_TW`, `iso14651_t1_pinyin`,<br>`cns11643_stroke` | 🟢 No difference | 🟢 No difference | they copy `iso14651_t1_common`'s ranges; cleared by measurement |
 | everything else — `en_US`, `de_DE`,<br>`fr_FR`, … | 🟢 No difference | 🟢 No difference | step 2 finds the same rules, which cannot clear them alone; step 11's measurement clears both |
 
-🔴 sort order changes · 🟡 *not* cleared, treat as changed until tested ·
-🟢 measured, or shown by a targeted test or a mechanism argument, not to
-move.
+🔴 sort order changes · 🟢 measured, or shown by a targeted test or a
+mechanism argument, not to move.
 `ko_KR` is the row a data-only audit gets wrong, and `C.UTF-8` the row no
 *tag* diff can reach.
 
@@ -276,6 +278,6 @@ short version:
 - [docs/limitations.md](docs/limitations.md) — the things to know before acting on a clean result
 - [docs/scope.md](docs/scope.md) — what it audits, and the `builtin` provider as a mitigation
 - [docs/requirements.md](docs/requirements.md) — what each run needs, on your machine and on each server, and the three setup traps
-- [docs/glossary.md](docs/glossary.md) — `copy` graph, ellipsis range, role swap, build id, measured order, level, contraction
+- [docs/glossary.md](docs/glossary.md) — `copy` graph, ellipsis range, role swap, build, measured order, level, contraction
 - [examples/](examples/README.md) — real output of every command, and which file is which
 - [tests/README.md](tests/README.md) — how to run the tests, what they cover, and what they do not

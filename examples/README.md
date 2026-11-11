@@ -38,9 +38,9 @@ Raw output as well, taken on the builds the results page cites.
 
 The probe run unedited on both machines. Each file carries one node's output
 in full and then the `diff` against the other, so you can see what the probe
-prints as well as where the two builds part. Command 1 never measures this
-locale's order; Command 1 extended does, in step 11, and its result is in the
-extended outputs above.
+prints as well as where the two builds part. Command 1 without the machines'
+files never measures this locale's order; with them it does, in step 11, and
+its result is in the extended outputs above.
 
 In the RHEL9-against-RHEL10 diff, every line is the node's own glibc
 version. Everything the probe measured is byte-identical.

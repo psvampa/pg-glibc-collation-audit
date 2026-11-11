@@ -12,13 +12,23 @@ you run either, check the setup traps in [requirements.md](requirements.md).
 ## What the template does
 
 [`sql/collation_confirmation_template.sql`](../sql/collation_confirmation_template.sql)
-runs on both the old and the new machine, side by side. It imports system
-collations, builds a real index on a column using the flagged locale, and
-prints its `ORDER BY` output. You `diff` the two machines' outputs.
+runs on both the old and the new machine, side by side. Run as a superuser, it
+imports the system's collations. It lists those of the locales you name, and
+sorts three values you choose under one of them.
 
 ```sh
-psql -f sql/collation_confirmation_template.sql   # edit placeholders first
+# edit the placeholders, then on each machine, then diff
+psql -X -e -f sql/collation_confirmation_template.sql > this-node.template.out 2>&1 || echo '!! the template stopped: read this-node.template.out'
+grep -L '^=== done' this-node.template.out other-node.template.out    # names a file whose run did not finish
+diff this-node.template.out other-node.template.out
 ```
+
+The template and [the probe](#the-cutf-8-probe) both stop at their first error,
+and a run that stopped never reaches its last line, `=== done`. Two runs
+stopped the same way diff as alike, so the `grep -L` line is what shows them.
+The template also stops on a locale it cannot confirm, `C` and `POSIX`, which
+PostgreSQL compares without glibc, and `C.UTF-8`, which goes through the
+probe, and on a value still written as a placeholder.
 
 ## Which locales to run it for
 
@@ -30,10 +40,11 @@ Command 1.b measures every locale on both machines; without it, also run the
 template for the locales your databases use. With command 1.b, add every
 locale step 11 reports as changed, every one
 it reports as not known to be unchanged, and every one it names in a line that
-begins "!! NOT checked whether", "!! Measured in part" or "!! Not compared by
-their sort tables". The lines that begin with `upper()`, `!! upper()`,
-`Character rules` or `!! Character rules`, and those on the decimals of
-`money`, are not about sort order, and the template does not confirm them. Nor
+begins "!! NOT checked whether", "!! Measured in part", "!! Unchanged only as
+far as measured" or "!! Not compared by their sort tables". The lines that
+begin with `upper()`, `!! upper()`, `Character rules` or
+`!! Character rules`, and those on the decimals of `money`, are not about
+sort order, and the template does not confirm them. Nor
 does it confirm the order of the locales named in the line that begins "!! Not
 measured in a database of another encoding", even when step 11 reports them as
 changed ([why](limitations.md#what-step-11-does-not-see)). Their UTF-8 forms,
@@ -92,14 +103,16 @@ the files do list.
 
 ## Three traps
 
-Each of these makes a comparison agree with itself while proving nothing.
+Each of these changes what a comparison proves.
 
 ### The locale must actually be generated on both machines
 
-Check `locale -a` first. If a locale is not generated, `sort` silently falls
-back to `C`, and two machines both missing it agree with each other
-perfectly. Check the exact name the test runs under, such as
-`sv_SE.utf8`. Step 2's list names [locales, not
+Check `locale -a` first. A locale that is not generated, or not imported into
+PostgreSQL, has no collation there, and the template stops at `CREATE TABLE`
+with `collation ... does not exist`, the same way on two machines that both
+lack it ([what shows that](#what-the-template-does)). Check the exact name the
+test runs under,
+such as `sv_SE.utf8`. Step 2's list names [locales, not
 spellings](glossary.md). A name in `locale -a` belongs to the list when, without
 the part from the dot up to any `@`, it is one of its names
 (`sv_SE.utf8` and `sv_SE.iso885915` both become `sv_SE`).
@@ -148,11 +161,9 @@ grep -L '^=== done' this-node.out other-node.out    # names a file whose run did
 diff this-node.out other-node.out
 ```
 
-A run that stopped never reaches its last line, `=== done`, and two runs
-stopped the same way diff as alike. Two servers on different PostgreSQL major
-versions also differ in queries 0c, 4 and 5, which read PostgreSQL's own
-catalog; the order in queries 1 to 3 does not depend on the PostgreSQL
-version.
+Two servers on different PostgreSQL major versions also differ in queries 0c,
+4 and 5, which read PostgreSQL's own catalog; the order in queries 1 to 3 does
+not depend on the PostgreSQL version.
 
 Three things make it unlike the template.
 

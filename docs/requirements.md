@@ -111,8 +111,8 @@ run on PostgreSQL 14 or newer, the oldest they were measured on.
 Install the relevant `glibc-langpack-*` packages on each node first. If you
 install them *after* `initdb`, the collations will not exist yet and
 `CREATE TABLE ... COLLATE "sv_SE.utf8"` fails with `collation ... does not
-exist` — which is why the template calls `pg_import_system_collations()`
-before anything else.
+exist` — which is why the template, run as a superuser, calls
+`pg_import_system_collations()` before anything else.
 
 ### Trap 1: restart PostgreSQL after installing glibc-all-langpacks
 
@@ -166,8 +166,8 @@ that machine's character sets, which a locale its sort table decides does not
 need.
 
 `sql/c_utf8_probe.sql` needs neither langpacks nor that package — `C.utf8`
-exists on every node regardless — and it refuses to run if the collation is
-missing.
+exists on every node regardless — and it stops, saying why, when the
+collation or the server is not one it can measure.
 
 ---
 

@@ -241,8 +241,8 @@ list.
 None of them touches your data or your indexes, and none of them decides for
 you. What they do change is small and named: 1.b installs one package on each
 machine, the locale sources of the build it already runs; command 3
-creates a test table of its own and first imports the system's collations
-into PostgreSQL's catalog; command 2 and the SQL files step 11 writes only
-read. Command 1 hands you a list,
+creates a test table of its own and, run as a superuser, first imports the
+system's collations into PostgreSQL's catalog; command 2 and the SQL files
+step 11 writes only read. Command 1 hands you a list,
 and in 1.b a measurement; commands 2 and 3 hand you measurements. What to do
 in your databases is yours to decide.

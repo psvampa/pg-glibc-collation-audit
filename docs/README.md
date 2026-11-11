@@ -19,11 +19,11 @@
 |---|---|
 | [commands.md](commands.md) | What each of the three commands does, what command 1.b adds, the file it takes from each machine and when it refuses one, and how to compare a measurement you already have |
 | [results.md](results.md) | The evidence behind each verdict, both worked examples, and what was tested on which nodes |
-| [confirming-on-a-real-system.md](confirming-on-a-real-system.md) | Running the SQL template and the `C.UTF-8` probe on both nodes, choosing values that prove something, and the three traps that make a comparison lie |
+| [confirming-on-a-real-system.md](confirming-on-a-real-system.md) | Running the SQL template and the `C.UTF-8` probe on both nodes, choosing values that prove something, and the three traps that change what a comparison proves |
 | [scope.md](scope.md) | What this audits — `LC_COLLATE`, the decimals of `money`, what step 11 compares of `LC_CTYPE`, and the `libc` provider — and the `builtin` provider as a mitigation |
 | [limitations.md](limitations.md) | The things to know before acting on a clean result — `C.UTF-8` among them, what step 11 does not see, and `LC_CTYPE`, which only step 11 compares |
 | [requirements.md](requirements.md) | What each run needs, on your machine and on each server, and the three setup traps |
-| [glossary.md](glossary.md) | `copy` graph, ellipsis range, role swap, build id, measured order, level, contraction |
+| [glossary.md](glossary.md) | `copy` graph, ellipsis range, role swap, build, measured order, level, contraction |
 | [../examples/](../examples/README.md) | Real output of every command on both audited pairs, the SQL step 11 writes for each with both servers' outputs, and the `C.UTF-8` probe output |
 | [../tests/README.md](../tests/README.md) | What the test suite covers, and what it does not |
 
