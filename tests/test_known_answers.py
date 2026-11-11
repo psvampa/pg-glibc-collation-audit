@@ -50,12 +50,12 @@ class StepRun(unittest.TestCase):
 @needs_clone
 class Step2Compare(StepRun):
     """Step 2 over the audited pairs: which locales' rules differ, the
-    totals, and what it lists for Reindex (step 9.2: the comparison of
+    totals, and what it lists (step 9.2: the comparison of
     rules, every copy followed, replaced the file diff and step 3's copy
     walk). Measured on 2026-11-07 with the code of this step."""
 
     # (names, same, differ, not compared), the names whose rules differ,
-    # and Reindex.
+    # and step 2's list.
     EXPECTED = {
         (OLD, MID): ((398, 391, 5, 2),
                      ['or_IN', 'sv_FI', 'sv_FI@euro', 'sv_SE', 'swedish']),
@@ -278,6 +278,11 @@ class Step2Compare(StepRun):
         out = flat(self.step('filter_lc_collate_changes.py', OLD, MID))
         self.assertEqual(out.count(f.NOT_COMPARED_HERE), 1)
         self.assertEqual(out.count('strcoll'), 1)
+        # Counted against itself, any wording passes: it has to say that the
+        # code is not compared, whose code, and where that is said.
+        for part in ('Not compared here', "localedef's", "strcoll's",
+                     "'What was compared'"):
+            self.assertIn(part, f.NOT_COMPARED_HERE)
 
     def test_a_reversed_pair_lists_c_as_removed_not_added(self):
         """Control: the note of the files not compared for want of an old
@@ -436,7 +441,7 @@ class BelowTheOldVersionFloor(StepRun):
     def test_the_totals_and_the_17_runs_the_reader_cannot_settle(self):
         """reorder-sections-after, which the reader does not settle, is
         reached from am_ET and ber_MA by 17 locales at both tags. Step 2
-        cannot compare them, so it lists them for Reindex under a `!!` of
+        cannot compare them, so it lists them under a `!!` of
         its own, the reason beside each group (backlog 15.2). wal_ET, cleared as "does not touch
         LC_COLLATE" before step 2 read with the reader (15.2 B3), is one."""
         r = self.report()
@@ -468,7 +473,7 @@ class BelowTheOldVersionFloor(StepRun):
     def test_the_26_files_2_12_lacks_are_not_compared_and_not_listed(self):
         """A file the old tag lacks is not compared: there are no old rules
         to compare with. Step 3 used to list ayc_PE, sw_KE and the 24 others
-        for Reindex because their files changed (were added); step 2 names
+        because their files changed (were added); step 2 names
         them, with the note that a distro may have shipped them earlier.
         The note's two halves are both asserted."""
         r = self.report()
@@ -496,9 +501,9 @@ class BelowTheOldVersionFloor(StepRun):
         """Backlog 13.7, PR B: the one pinned pair where a charmap change
         reaches a build's rules. GB18030 changes 12,384 characters, and the
         rules zh_CN.GB18030 reads name 206 of them, all in
-        iso14651_t1_common. zh_CN's rules differ anyway, so Reindex lists it
+        iso14651_t1_common. zh_CN's rules differ anyway, so step 2 lists it
         already: counted, not repeated, and nothing goes to the keyed list.
-        With step 2's own changed files as the skip, instead of what Reindex
+        With step 2's own changed files as the skip, instead of what step 2
         lists, the time-gate prototype listed 287 sources here."""
         out = self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW)
         self.assertIn('GB18030: 12352 characters added, 24 removed, 8 given '
@@ -572,7 +577,7 @@ class EveryMeasuredNameReachesItsLocale(unittest.TestCase):
     through that tag's locale.alias when it is an alias, is a locale source
     file of the machine's tag, or one of the two the distro adds (C before
     glibc 2.35, en_US@ampm on RHEL8). A name the rule cannot take back to a
-    file is a name the Reindex list cannot cover (backlog 13.1)."""
+    file is a name step 2's list cannot cover (backlog 13.1)."""
 
     MACHINES = (('rhel8', OLD), ('rhel9', MID), ('rhel10', NEW))
     DISTRO_ONLY = {'C', 'en_US@ampm'}
@@ -635,7 +640,7 @@ class SkippingAReleaseReportsTheUnion(StepRun):
             f'extra {sorted(direct - (first | second))}')
 
     def test_reindex_is_the_exact_union_of_the_two_steps(self):
-        """The reindex verdict, which is what a reader acts on. Each side is
+        """Step 2's list, which is what a reader acts on. Each side is
         compared with every copy followed at both of its tags, which is why
         sv_FI and sv_FI@euro, which copy sv_SE, are on both lists. The list
         is locales and their aliases (backlog 13.1)."""
@@ -658,7 +663,7 @@ class SkippingAReleaseReportsTheUnion(StepRun):
         for RHEL8 -> RHEL9 that included sv_SE.iso885915, swedish and
         or_IN.utf8, which no line of the tags-only list reached. Each one now
         reaches it, as a locale by glibc's rule or as an alias. Two names are
-        on no Reindex list by design, and this pins exactly those two:
+        on no step 2 list by design, and this pins exactly those two:
         ko_KR.utf8 moved through localedef's code with its file unchanged,
         which the `!!` on the code under 'What was compared' says no step
         compares (step 4's list named it until step 9.3); C.utf8 is the
@@ -714,7 +719,7 @@ class SkippingAReleaseReportsTheUnion(StepRun):
         union failure names its own cause.
 
         A file ADDED between 2.28 and 2.34 and then changed inside LC_COLLATE
-        between 2.34 and 2.39 is in the second step's reindex list, and in the
+        between 2.34 and 2.39 is in the second hop's step 2 list, and in the
         direct run it is named as not compared for want of a file at
         glibc-2.28 instead -- named either way, never silent, but under a
         different heading, so the union would break. Two files fit the

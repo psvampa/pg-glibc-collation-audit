@@ -28,7 +28,6 @@ The sections below are the evidence behind each row.
 ## How to read the verdicts
 
 - 🔴 **Changed** — sort order moves.
-- 🟡 **Unresolved** — *not* cleared. Treat as changed until tested.
 - 🟢 **No difference** — measured, or shown by a targeted test or a
   mechanism argument, not to move.
 
@@ -38,7 +37,7 @@ Full output and the PostgreSQL confirmation files for this pair:
 [`examples/rhel8-to-rhel9-audit-output.txt`](../examples/rhel8-to-rhel9-audit-output.txt),
 [the SQL step 11 writes, with both servers' outputs](../examples/README.md#command-3--the-sql-step-11-writes).
 
-### `or_IN` and the Swedish locales — from the data diff
+### `or_IN` and the Swedish locales — from the locale data
 
 **`or_IN`, `sv_SE`, `sv_FI`, `sv_FI@euro`** change sort order between glibc
 2.28 and 2.34. `sv_FI` comes in only via inheritance from `sv_SE` and is
@@ -166,7 +165,7 @@ change to move, and the probe's order is identical on both nodes —
 Full output:
 [`examples/rhel9-to-rhel10-audit-output.txt`](../examples/rhel9-to-rhel10-audit-output.txt).
 
-### `ber_DZ`, `kab_DZ` and `th_TH` — from the data diff
+### `ber_DZ`, `kab_DZ` and `th_TH` — from the locale data
 
 **`th_TH`**, with its alias `thai`, is what step 2 lists.
 

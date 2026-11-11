@@ -431,7 +431,7 @@ class Wrapper(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
                          ([0x57, 0x77], False))
 
     def test_step_2_list_is_written_and_feeds_the_summary(self):
-        """The file the summary's Reindex reads exists, is named for the
+        """The file the summary's step 2 list reads exists, is named for the
         pair, and holds the names.
 
         Reverting step 2's write makes this fail with the file missing, which
@@ -494,8 +494,9 @@ class Wrapper(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
         self.assertEqual(removed_lines(self.out), NOTHING_GONE_OVER_OLD_MID)
 
     def test_the_removed_section_is_on_the_first_screen(self):
-        """Directly under Reindex, above the long lists and the warnings: the
-        defect was a finding nobody reading the summary would reach."""
+        """Directly under the summary's step 2 list, above the long lists and
+        the warnings: the defect was a finding nobody reading the summary
+        would reach."""
         summary = self.out.split('AUDIT SUMMARY')[1]
         self.assertLess(summary.index(REINDEX), summary.index(REMOVED))
         self.assertLess(summary.index(REMOVED),
@@ -505,7 +506,7 @@ class Wrapper(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
 @needs_clone
 class WrapperTakesTheKeyedListToReindex(unittest.TestCase):
     """What step 2's character set check lists (backlog 13.7, PR B) reaches
-    the summary's Reindex, beside the locales whose rules differ. No pinned
+    the summary's step 2 list, beside the locales whose rules differ. No pinned
     pair lists a locale there, so the check's answer is injected: a
     sitecustomize on PYTHONPATH, which every Python the run starts imports,
     makes collation_keys.listed_sources answer sv_SE. glibc-2.34 to 2.39,
@@ -561,7 +562,7 @@ class WrapperEmptyPair(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
 
     glibc-2.39 against itself: no new tag to pin, so EXPECTED_SHA and
     has_tags() stay as they are. Step 2 compares nothing and says so, and
-    the summary's Reindex says nothing was compared.
+    the summary's step 2 list says nothing was compared.
     """
 
     @classmethod
@@ -588,7 +589,8 @@ class WrapperEmptyPair(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
     def test_step_2_and_reindex_say_nothing_was_compared(self):
         """Over one commit compared with itself, an empty list is not a
         clean result: step 2 says nothing was compared, and so does the
-        summary's Reindex, whose other branch is WrapperDirectionUndetermined's
+        summary's step 2 list, whose other branch is
+        WrapperDirectionUndetermined's
         (doc-sweep, 2026-09-30, of step 3's notice then)."""
         report = Step2Report(step_text(self.out, 2))
         self.assertEqual(report.nothing, 'the two tags are one commit.')
@@ -702,7 +704,7 @@ class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
             'are the same commit'), 1, self.out)
         # Compared as text, the tag and its sha are two commits, and step 5
         # (deleted in step 9.3) printed its clean sentence over this pair
-        # (false-negative-reviewer, 2026-09-30). Reindex says so instead.
+        # (false-negative-reviewer, 2026-09-30). The summary says so instead.
         # A tag and a commit are two sides, not two tags (16.183).
         self.assertIn('none -- nothing was compared: the two sides are one '
                       'commit or one source tree', summary)
@@ -777,7 +779,7 @@ class WrapperDirectionUndetermined(unittest.TestCase):
         return {'PATH': shim_dir + os.pathsep + os.environ.get('PATH', '')}
 
     def test_reindex_keeps_its_sentence_when_the_pair_is_two_commits(self):
-        """The other branch of the summary's empty Reindex. With the order
+        """The other branch of the summary's empty step 2 list. With the order
         check stood in for, the wrapper takes this pair for two commits and
         step 2 lists nothing: the line must not say that nothing was
         compared, which is the one-commit branch."""
@@ -826,7 +828,7 @@ class WrapperDirectionUndetermined(unittest.TestCase):
         other, as a master commit and the same patch on a wip branch are in
         the clone (158e939a and 42f22e7c). Both states are said:
         the direction was not established, and nothing was compared -- the
-        summary's Reindex must not call the empty list a real result
+        summary's step 2 list must not call the empty list a real result
         (false-negative-reviewer, round 1 of 7.1, of step 3's notice then).
         """
         rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
@@ -991,8 +993,8 @@ class WrapperRefusesBadInput(unittest.TestCase):
         """
         import glibc_locale_data as g
         os.makedirs(self.out_dir, exist_ok=True)
-        # Both lists step 2 writes: Reindex and the locales the character
-        # set check lists (backlog 13.7, PR B).
+        # Both lists step 2 writes: the locales whose rules differ and the
+        # locales the character set check lists (backlog 13.7, PR B).
         paths = [os.path.join(self.out_dir,
                               f'step2_{kind}.{g.pair_slug(NEW, NEW)}.txt')
                  for kind in ('changed_collate', 'keyed_locales')]
@@ -1823,8 +1825,6 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
         self.assertRegex(step2, r'NOT RUN: the comparison of .*\. The file '
                                 r'of the machine that runs \S+ holds no '
                                 r'charmaps this reads, because ')
-        self.assertNotIn('Character sets and transliterations: nothing',
-                         step2)
         self.assertIn('charmaps none, because', flat(compared_text(out)))
         # Beside step 11's verdict too, once, with step 2's reason.
         got, alone = rules_beside(out)

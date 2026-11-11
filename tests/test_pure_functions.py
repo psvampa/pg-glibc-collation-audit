@@ -25,6 +25,7 @@ import glibc_tree
 import filter_lc_collate_changes as f
 import collation_keys as ck
 import node_charmaps as nc
+import test_published_claims as tpc
 
 
 def collate(*body):
@@ -501,10 +502,15 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
     list can take. regexp_replace without flags replaces the first match
     only, hence count=1."""
 
-    # Each statement as it was run on PostgreSQL 14 to 18 (step 11.2), its
-    # comments stripped and its whitespace collapsed. A change to one is run
-    # on PostgreSQL again and then written here.
+    # Each statement as it was run on PostgreSQL 14 to 18 (steps 11.2 and
+    # 11.4), its comments stripped and its whitespace collapsed outside
+    # literals (test_published_claims.psql_script). A change to one is run on
+    # PostgreSQL again and then written here.
+    STOP = '\\set ON_ERROR_STOP on'
+    SUPERUSER = ('SELECT rolsuper AS is_super FROM pg_roles WHERE rolname = '
+                 'current_user', '\\gset', '\\if :is_super')
     IMPORT = "SELECT pg_import_system_collations('pg_catalog')"
+    ENDIF = '\\endif'
     LISTING = (
         "SELECT n AS listed, c.collname, c.collcollate, "
         "pg_encoding_to_char(c.collencoding) AS encoding, c.collversion, "
@@ -514,14 +520,40 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
         "AND lower(regexp_replace(c.collcollate, '[.][^@]*', '')) "
         "= lower(regexp_replace(n COLLATE \"C\", '[.][^@]*', '')) "
         "ORDER BY n COLLATE \"C\", c.collname, encoding")
-    TABLE = ("DROP TABLE IF EXISTS collation_test",
+    TABLE = ("SET client_min_messages = warning",
+             "DROP TABLE IF EXISTS collation_test",
+             "RESET client_min_messages",
              "CREATE TABLE collation_test (w text COLLATE \"<LOCALE>\")",
              "INSERT INTO collation_test VALUES ('<value1>'), ('<value2>'), "
              "('<value3>')",
              "CREATE INDEX ON collation_test (w)")
+    # The guard after the INSERT (16.219): a column that is not under
+    # glibc's locale data, or values still the placeholders, stops the run.
+    GUARD = (
+        "DO $$ DECLARE prov \"char\"; loc text; cname text; left_over bigint; "
+        "BEGIN SELECT c.collprovider, c.collcollate, c.collname INTO prov, "
+        "loc, cname FROM pg_attribute a JOIN pg_collation c ON c.oid = "
+        "a.attcollation WHERE a.attrelid = 'collation_test'::regclass AND "
+        "a.attname = 'w'; IF prov IS DISTINCT FROM 'c' THEN RAISE EXCEPTION "
+        "'collation % has provider %, not libc; this template confirms "
+        "glibc''s ' 'order only.', cname, prov; END IF; IF loc IN ('C', "
+        "'POSIX') THEN RAISE EXCEPTION 'collation % is locale %, which "
+        "PostgreSQL compares without glibc. ' 'Step 2''s list writes C.UTF-8 "
+        "as C; run sql/c_utf8_probe.sql for it.', cname, loc; END IF; IF loc "
+        "~* '^c[.]' THEN RAISE EXCEPTION 'collation % is locale %, which "
+        "reads the opposite way; run ' 'sql/c_utf8_probe.sql for it.', "
+        "cname, loc; END IF; SELECT count(*) INTO left_over FROM "
+        "collation_test WHERE w ~ '^<value[0-9]+>$'; IF left_over > 0 THEN "
+        "RAISE EXCEPTION '% value(s) are still the <valueN> placeholders; "
+        "put the strings to ' 'compare in their place.', left_over; END IF; "
+        "END $$")
     HEADING = "\\echo '--- ORDER BY under <LOCALE> ---'"
-    SORT = ("SELECT ROW_NUMBER() OVER (ORDER BY w COLLATE \"<LOCALE>\", "
-            "w COLLATE \"C\") AS pos, w FROM collation_test ORDER BY pos")
+    # By the column, so under the collation the guard reads. A COLLATE of
+    # its own here could name another locale than the column's, and C there
+    # would sort by bytes past the guard.
+    SORT = ("SELECT ROW_NUMBER() OVER (ORDER BY w, w COLLATE \"C\") AS pos, "
+            "w FROM collation_test ORDER BY pos")
+    DONE = "\\echo '=== done. diff this output against the other node. ==='"
 
     def test_the_template_s_regex_is_the_rule(self):
         text = self.template()
@@ -587,44 +619,17 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
         self.assertTrue(ends, f'no ; after {anchor!r}')
         return body[:ends[0]]
 
-    def statements(self, text):
-        """Everything psql runs from `text`, in order, whitespace collapsed:
-        each SQL statement up to its `;`, and each backslash command, which
-        psql reads to the end of its line. Comments are dropped as
-        PostgreSQL's scanner drops them, and a `;` inside a literal ends
-        nothing. A backslash command in the middle of a statement, or text
-        after the last `;`, is refused rather than guessed."""
-        code = self.code(text)
-        items, start = [], 0
-        for m in re.finditer(r"'(?:[^']|'')*'|;|^[ \t]*\\[^\n]*", code,
-                             re.M):
-            token = m.group(0)
-            if token == ';':
-                items.append(flat(code[start:m.start()]))
-            elif token.lstrip().startswith('\\'):
-                self.assertEqual(flat(code[start:m.start()]), '',
-                                 f'a psql command inside a statement: '
-                                 f'{token!r}')
-                items.append(flat(token))
-            else:
-                continue
-            start = m.end()
-        self.assertEqual(flat(code[start:]), '',
-                         'text after the last ; that psql would leave '
-                         'unrun or send unfinished')
-        return items
-
     def test_psql_runs_every_statement(self):
         """A statement inside a block comment, or after a `\\q`, is never run:
         psql's scanner reads a block comment in an exclusive state where `;`
         and backslash commands are only text (src/fe_utils/psqlscan.l, `%x
         xc`, REL_18_6). Both machines then print nothing for it, the diff
         agrees, and every assertion here still reads the statement. So the
-        template's code holds no block comment, no dollar quote this file
-        cannot read, and no psql command but `\\echo`."""
-        code = re.sub(r"'(?:[^']|'')*'", "''", self.code(self.template()))
-        self.assertNotRegex(code, r'/\*|\$')
-        self.assertEqual(set(re.findall(r'\\[A-Za-z]+', code)), {'\\echo'})
+        template is read by psql's own rules (psql_script), which refuses a
+        block comment and every psql command it does not model, and holds no
+        psql command but the ones below."""
+        kinds = {kind for kind, _, _, _ in tpc.psql_script(self.template())}
+        self.assertEqual(kinds, {'sql', 'set', 'gset', 'if', 'endif', 'echo'})
 
     def test_the_template_runs_these_statements_and_nothing_else(self):
         """What the template runs, in order. Step 11.2 took out the lists of
@@ -636,9 +641,11 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
         sequence is pinned: a statement added, dropped, moved or changed
         fails here, and a deliberate change is run on PostgreSQL again and
         then written above."""
-        self.assertEqual(self.statements(self.template()),
-                         [self.IMPORT, self.LISTING, *self.TABLE,
-                          self.HEADING, self.SORT])
+        self.assertEqual(
+            [words for _, _, words, _ in tpc.psql_script(self.template())],
+            [self.STOP, *self.SUPERUSER, self.IMPORT, self.ENDIF,
+             self.LISTING, *self.TABLE, self.GUARD, self.HEADING, self.SORT,
+             self.DONE])
 
     def test_the_version_query_is_the_one_measured(self):
         """The listing, word for word. It starts from the list, so a name
@@ -662,7 +669,7 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
 
     def test_the_sort_is_the_one_measured(self):
         """The statement whose output the two machines' diff compares. The
-        position comes from the locale's order with C after it, which only
+        position comes from the column's order with C after it, which only
         states the intent: PostgreSQL already breaks a strcoll tie by bytes
         for every libc collation (varlena.c). A WHERE, a LIMIT or another
         ORDER BY here changes or empties what both machines print alike,
@@ -1417,7 +1424,7 @@ class CompareBuilds(unittest.TestCase):
                              ['loc_a.UTF-8/UTF-8'])
         self.assertEqual((r.changed, r.found), ([], []))
 
-    def test_a_build_step_3_lists_anyway_is_counted_not_repeated(self):
+    def test_a_build_listed_anyway_is_counted_not_repeated(self):
         r = self.run_compare({'loc_a': locale_text('<U00E9> IGNORE')},
                              {'UTF-8': self.UTF8_OLD}, {'UTF-8': self.UTF8_NEW},
                              ['loc_a.UTF-8/UTF-8'], listed={'loc_a'})
@@ -2614,7 +2621,7 @@ class TranslitCompare(unittest.TestCase):
         self.assertIn('differ between the two sides',
                       r.translit.found[0].reason)
 
-    def test_a_build_step_3_lists_anyway_is_counted(self):
+    def test_a_build_listed_anyway_is_counted(self):
         """Counted, and its changed elements still in the printed total:
         the line read "none is built differently" over it (reviewer of PR
         C)."""

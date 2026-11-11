@@ -2,8 +2,10 @@
 -- differently, once the source-diff audit (scripts/) has told you which
 -- locale identifiers to check on this OS/glibc version.
 --
--- Run this SAME script on both nodes (old glibc / new glibc), then diff the
--- two outputs with `diff`.
+-- Run this SAME script on both nodes (old glibc / new glibc), as
+-- docs/confirming-on-a-real-system.md shows, and diff the two outputs. It
+-- stops at its first error, and only a run that finished ends in a line that
+-- starts `=== done`.
 --
 -- Replace <LOCALE>/<value*> below with the locale(s) to run it for
 -- (docs/confirming-on-a-real-system.md, "Which locales to run it for") and
@@ -13,9 +15,10 @@
 -- Notes before you run it:
 --   * It DROPS AND RECREATES a table named collation_test in the current
 --     schema. Point it at a scratch database.
---   * The first statement, pg_import_system_collations(), WRITES TO
---     pg_catalog and needs superuser. It is idempotent and only adds
---     collations already present in `locale -a`.
+--   * Run as a superuser, it first calls pg_import_system_collations(),
+--     which WRITES TO pg_catalog. It is idempotent and only adds collations
+--     already present in `locale -a`. Run as any other role, it skips that
+--     call and uses the collations already there.
 --   * RESTART PostgreSQL after installing glibc-all-langpacks, BEFORE running
 --     this. The function takes its list from `locale -a` (a fresh subprocess,
 --     which sees the new locales) but checks each one inside the backend, and
@@ -34,7 +37,7 @@
 --     collation listing below reads each collation's locale from
 --     collcollate, so every spelling and every encoding of one locale counts
 --     as that locale. Check
---     `locale -a` first, and in the COLLATE clauses below use a name that
+--     `locale -a` first, and in CREATE TABLE's COLLATE below use a name that
 --     exists for this database's encoding. In a UTF8 database "sv_SE" is
 --     sv_SE.utf8.
 --   * ONE LOCALE INVERTS THE USUAL RULE: C.UTF-8. Agreement with LC_ALL=C is
@@ -42,9 +45,15 @@
 --     guarantees from 2.35 on -- so reading
 --     "it agrees with C, therefore it was not applied" is exactly
 --     backwards for that one locale. It has its own script for that reason:
---     sql/c_utf8_probe.sql. Do not fold it into this one.
+--     sql/c_utf8_probe.sql, and this one stops on it.
+\set ON_ERROR_STOP on
 
+-- Only a superuser may import. Any other role runs on the collations already
+-- in pg_catalog, and a locale missing there stops the run at CREATE TABLE.
+SELECT rolsuper AS is_super FROM pg_roles WHERE rolname = current_user \gset
+\if :is_super
 SELECT pg_import_system_collations('pg_catalog');
+\endif
 
 -- Lists every collation built from a locale on the audit's list, in every
 -- encoding, with the glibc version recorded when it was created or last
@@ -85,10 +94,50 @@ LEFT JOIN pg_collation c
 ORDER BY n COLLATE "C", c.collname, encoding;
   -- e.g. ARRAY['sv_SE','sv_FI','sv_FI@euro','or_IN','swedish']
 
+-- The NOTICE a missing table gives would print on a first run and not on the
+-- next, and two nodes run a different number of times would differ by it.
+SET client_min_messages = warning;
 DROP TABLE IF EXISTS collation_test;
+RESET client_min_messages;
 CREATE TABLE collation_test (w text COLLATE "<LOCALE>");
 INSERT INTO collation_test VALUES ('<value1>'), ('<value2>'), ('<value3>');
 CREATE INDEX ON collation_test (w);
+
+-- A run that sorted, but not through glibc's locale data, or not the strings
+-- chosen, would diff as alike on both nodes. PostgreSQL compares C and POSIX
+-- itself, and step 2's full list writes C.UTF-8 as C. C.UTF-8 reads the
+-- opposite way and has its own script. The patterns hold no backslash, so
+-- standard_conforming_strings does not change them.
+DO $$
+DECLARE prov "char"; loc text; cname text; left_over bigint;
+BEGIN
+  SELECT c.collprovider, c.collcollate, c.collname INTO prov, loc, cname
+  FROM pg_attribute a JOIN pg_collation c ON c.oid = a.attcollation
+  WHERE a.attrelid = 'collation_test'::regclass AND a.attname = 'w';
+  IF prov IS DISTINCT FROM 'c' THEN
+    RAISE EXCEPTION
+      'collation % has provider %, not libc; this template confirms glibc''s '
+      'order only.', cname, prov;
+  END IF;
+  IF loc IN ('C', 'POSIX') THEN
+    RAISE EXCEPTION
+      'collation % is locale %, which PostgreSQL compares without glibc. '
+      'Step 2''s list writes C.UTF-8 as C; run sql/c_utf8_probe.sql for it.',
+      cname, loc;
+  END IF;
+  IF loc ~* '^c[.]' THEN
+    RAISE EXCEPTION
+      'collation % is locale %, which reads the opposite way; run '
+      'sql/c_utf8_probe.sql for it.', cname, loc;
+  END IF;
+  SELECT count(*) INTO left_over FROM collation_test
+  WHERE w ~ '^<value[0-9]+>$';
+  IF left_over > 0 THEN
+    RAISE EXCEPTION
+      '% value(s) are still the <valueN> placeholders; put the strings to '
+      'compare in their place.', left_over;
+  END IF;
+END $$;
 
 -- The comparison itself. glibc's strcoll DOES report distinct strings as equal
 -- (measured on RHEL8/RHEL9: ~0.1% of random pairs under sv_SE/en_US/de_DE,
@@ -117,8 +166,10 @@ CREATE INDEX ON collation_test (w);
 -- sides byte-identical input.
 --
 -- The position column makes the diff point straight at the first divergence.
+-- It orders by the column itself, so under the collation the check above read.
 \echo '--- ORDER BY under <LOCALE> ---'
-SELECT ROW_NUMBER() OVER (ORDER BY w COLLATE "<LOCALE>", w COLLATE "C") AS pos,
+SELECT ROW_NUMBER() OVER (ORDER BY w, w COLLATE "C") AS pos,
        w
 FROM collation_test
 ORDER BY pos;
+\echo '=== done. diff this output against the other node. ==='

@@ -25,7 +25,7 @@ follows it when it compares each locale's rules.
 the binary locale the system loads. It is what expands ellipsis ranges and
 what normalises codeset spelling, so it is one of the inputs to sort order.
 
-**build id** — the exact glibc package a machine runs, as `rpm -q glibc`
+**build** — the exact glibc package a machine runs, as `rpm -q glibc`
 prints it, such as `glibc-2.28-251.el8_10.40`, with or without the
 architecture. Two builds of one glibc version can sort differently, because a
 distro patch can sit between them, as one did inside RHEL8 at

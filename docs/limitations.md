@@ -15,8 +15,8 @@ something it cannot see has changed.
 Its source file exists upstream only from glibc 2.35, and RHEL8 and RHEL9 ship
 one anyway. Over RHEL8 to RHEL9 the file is therefore on both your machines and
 in neither tag. Over RHEL9 to RHEL10 the new tag holds upstream's copy and the
-old tag still has none. Either way the steps that read upstream source
-cannot see what your old machine runs; step 2 says so with a `!!`.
+old tag still has none. Either way step 2, reading the tags, cannot see what
+your old machine runs, and says so with a `!!`.
 
 It is worth knowing about because it is usually the default. Almost anywhere
 `initdb` runs in a container the database collation is `C.UTF-8`, so every
@@ -152,8 +152,9 @@ as changed. It does not see:
 - a locale that is not installed, because it measures what `locale -a` lists
   and nothing else.
 
-Command 3 sorts strings you choose inside PostgreSQL, and reaches a rule that
-shows only in strings of several letters when the strings contain it.
+The template of command 3 sorts strings you choose inside PostgreSQL, and
+reaches a rule that shows only in strings of several letters when the
+strings contain it.
 
 Not tried yet, so a failure there would be new: Python 3.14 on a real
 machine, where only a simulation was run, a machine on cgroup v1, and ARM.

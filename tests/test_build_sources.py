@@ -3630,7 +3630,7 @@ class AuditShReadsTheFixtureBuilds(_AuditOnBuilds, unittest.TestCase):
     def test_rhel9_to_rhel10_says_nothing_of_upstreams_c_utf8(self):
         out = self.run_of('910')
         self.assertNotIn('Not checked for glibc-', out)
-        self.assertNotIn('localedata/locales/C ->', out)
+        self.assertNotRegex(out, r'(?m)^\s*C\.UTF-8 -> ')
         self.assertNotIn('ship their own', flat(out))
         self.assertNotIn('C.UTF-8', summary_block(out, REINDEX))
 

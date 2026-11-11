@@ -2366,7 +2366,7 @@ def make_translit_repo(root):
 class StepTwoComparesTransliterations(unittest.TestCase):
     """Step 2's transliteration check end to end on a repository built for
     it: the element uz_XX builds out of a transliteration, at both tags,
-    and what it adds to Reindex. With no charmap changed, the check knows
+    and what it adds to step 2's list. With no charmap changed, the check knows
     a locale file changed only from the texts step 2 reads of every file
     git lists as changed: given none, it said no LC_CTYPE changed over a
     changed translit_neutral (found writing step 9.2's tests)."""
@@ -2494,7 +2494,7 @@ class StepTwoNamesWhatItDidNotCompare(unittest.TestCase):
 @needs_clone
 class StepTwoComparesCharmaps(unittest.TestCase):
     """Step 2 end to end on a repository built for it: what goes to
-    Reindex through step2_keyed_locales.<pair>.txt, what it counts as
+    step 2's list through step2_keyed_locales.<pair>.txt, what it counts as
     listed anyway, and when it says NOT RUN instead of a clean line."""
 
     @classmethod
@@ -2523,7 +2523,7 @@ class StepTwoComparesCharmaps(unittest.TestCase):
         """loc_a and en_XX name U+00E9, which UTF-8 gains: listed, each with
         the character. They are found through ISO-8859-15 too, which
         SUPPORTED never builds them in and which moves U+00E9 (H3). loc_c
-        names it as well, and its own rules differ, so Reindex lists it
+        names it as well, and its own rules differ, so step 2 lists it
         anyway: counted, not repeated. loc_b and de_XX name only A."""
         rc, out, listed = self.step2('t1', 't2')
         self.assertEqual(rc, 0, out)
