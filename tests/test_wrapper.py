@@ -20,8 +20,8 @@ import shutil
 import tempfile
 import unittest
 
-from _harness import (COMPARED_BANNER, STEP2_LISTED, SUMMARY_STEP2,
-                      EXPECTED_SHA, MID, NEW, OLD,
+from _harness import (COMPARED_BANNER, DEFAULT_OUT_DIR, STEP2_LISTED,
+                      SUMMARY_STEP2, EXPECTED_SHA, MID, NEW, OLD,
                       assert_collation_version, assert_no_route_looks,
                       pg_version_of,
                       REPO_ROOT, SCRIPTS_DIR,
@@ -368,6 +368,37 @@ class _CodeNotComparedAndNoDeletedStep:
                 self.assertEqual(deleted_steps_named(fh.read()), [], name)
 
 
+# git's gpg.program set to a program that does not exist: git says "cannot
+# run gpg-...", which verify_tag reads as no-gpg, the state the examples were
+# written in. Without it the tag provenance lines depend on the machine: one
+# without gpg prints no-gpg, GitHub's runner has gpg without the glibc
+# maintainers' keys (no-key), and one with the keys prints no `!!` about the
+# signatures (its lines say OK).
+NO_GPG = {'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'gpg.program',
+          'GIT_CONFIG_VALUE_0': 'gpg-absent-for-the-tests'}
+
+
+def assert_prints_the_example(test, out, out_dir, name):
+    """examples/<name> is, byte for byte, what audit.sh printed (16.45).
+
+    Only the output folder differs: the run wrote to its own, the example
+    names the default one. A folder of 13 characters or more breaks no line
+    differently from the default's 29; mkdtemp's are 30 or more."""
+    test.assertGreaterEqual(len(out_dir), 13, out_dir)
+    test.assertIn(out_dir, out)
+    with open(os.path.join(REPO_ROOT, 'examples', name),
+              encoding='utf-8') as fh:
+        want = fh.read()
+    got = out.replace(out_dir, DEFAULT_OUT_DIR)
+    if got != want:
+        import difflib
+        test.fail(f'examples/{name} is not what audit.sh prints; regenerate '
+                  'it, or fix what changed the output:\n' + ''.join(
+                      list(difflib.unified_diff(
+                          want.splitlines(True), got.splitlines(True),
+                          f'examples/{name}', 'audit.sh', n=1))[:60]))
+
+
 @needs_clone
 class Wrapper(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
     """A pair with real findings: the wrapper must not change the answer."""
@@ -380,7 +411,13 @@ class Wrapper(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
         # say step 11 measured anything (test_C_UTF_8_is_flagged...).
         cls.rc, cls.out = run_wrapper(
             OLD, MID, out_dir=cls.out_dir,
-            env_extra={g.STEP11_ENV: '1'})
+            env_extra={g.STEP11_ENV: '1', **NO_GPG})
+
+    def test_prints_the_published_example_whole(self):
+        """examples/rhel8-to-rhel9-tags-only.txt is this run's output."""
+        self.assertEqual(self.rc, 0, self.out)
+        assert_prints_the_example(self, self.out, self.out_dir,
+                                  'rhel8-to-rhel9-tags-only.txt')
 
     @classmethod
     def tearDownClass(cls):
@@ -1062,11 +1099,18 @@ class WrapperTagsRemoveALocale(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-tagsgone-')
-        cls.rc, cls.out = run_wrapper(MID, NEW, out_dir=cls.out_dir)
+        cls.rc, cls.out = run_wrapper(MID, NEW, out_dir=cls.out_dir,
+                                      env_extra=NO_GPG)
 
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_prints_the_published_example_whole(self):
+        """examples/rhel9-to-rhel10-tags-only.txt is this run's output."""
+        self.assertEqual(self.rc, 0, self.out)
+        assert_prints_the_example(self, self.out, self.out_dir,
+                                  'rhel9-to-rhel10-tags-only.txt')
 
     def test_the_rename_away_is_named_with_where_it_went(self):
         self.assertEqual(self.rc, 0, self.out)
@@ -1081,6 +1125,48 @@ class WrapperTagsRemoveALocale(unittest.TestCase):
         self.assertEqual(m.group(2), os.path.join(
             self.out_dir, f'step2_removed_locales.{pair_slug(MID, NEW)}.txt'))
         self.assertNotIn('none', ' '.join(lines))
+
+
+class _PrintsTheMachinesExample:
+    """16.45: the example run with both machines' recorded files, whole.
+
+    The files are given as the example gives them, relative to the
+    checkout ("Machines' files, as given" prints them as typed). They hold
+    the trees of the three fixture builds, which _harness.fill_reader_cache
+    reads, so this run finds the reader's answers already kept."""
+    sides = ()
+    example = ''
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-example-')
+        old, new, old_file, new_file = cls.sides
+        cls.rc, cls.out = run_wrapper(
+            old, new, '--old-node', f'tests/locale_order/{old_file}',
+            '--new-node', f'tests/locale_order/{new_file}',
+            out_dir=cls.out_dir, env_extra=NO_GPG)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_prints_the_published_example_whole(self):
+        self.assertEqual(self.rc, 0, self.out)
+        assert_prints_the_example(self, self.out, self.out_dir, self.example)
+
+
+@needs_clone
+class PrintsTheRhel8ToRhel9Example(_PrintsTheMachinesExample,
+                                   unittest.TestCase):
+    sides = (OLD, MID, 'rhel8.extract.tar.gz', 'rhel9.extract.tar.gz')
+    example = 'rhel8-to-rhel9-audit-output.txt'
+
+
+@needs_clone
+class PrintsTheRhel9ToRhel10Example(_PrintsTheMachinesExample,
+                                    unittest.TestCase):
+    sides = (MID, NEW, 'rhel9.extract.tar.gz', 'rhel10.extract.tar.gz')
+    example = 'rhel9-to-rhel10-audit-output.txt'
 
 
 class _CommitSides:
