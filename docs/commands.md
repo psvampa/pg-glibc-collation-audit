@@ -112,12 +112,15 @@ measured, the locale's line counts the sequences the table marks as changed,
 those in one machine's table only, and those that compare differently against
 a marked one, and names the first of them, "among them", never as a complete
 list. A name is a character (`W (U+0057)`), a run of consecutive characters
-(`U+0E01..U+0E3A`), a string of several (`U+0E40 U+0E01`), or, where the
-locale's encoding reads no character, its bytes. "And N more" counts names, so
-a run counts as one. Where the line names nothing, it says why: no levels on
-one machine (glibc then compares bytes there), a change in bytes its record of
-the sequences does not keep or only in their numbering, a different number of
-levels, or sequences that could not be read.
+(`U+0E01..U+0E3A`), a string of several (`U+0E40 U+0E01`), or, where glibc
+reads no character, its bytes. Outside UTF-8, what glibc reads comes from the
+old machine's charmap: without it, every name in such a locale is its bytes,
+and the line that says the charmaps were not checked says so too. "And N
+more" counts names, so a run counts as one. Where the line names nothing, it
+says why: no levels on one machine (glibc then compares bytes there), a
+change in bytes its record of the sequences does not keep or only in their
+numbering, a different number of levels, or sequences that could not be
+read.
 The file the summary names holds every name, with how it was named.
 
 #### The file from each machine
@@ -186,8 +189,8 @@ python3 scripts/locale_order.py --compare old-measurement.out \
 another glibc is refused; without it nothing checks that. `--sql-to` writes
 the `confirm.<ENCODING>.sql` files command 3 runs on both machines. The old
 measurement holds no charmaps, so step 11 checks only the new machine's,
-and says so. Step 2 is a run of its own: `./audit.sh` with each machine's
-build (1.a).
+names the strings of a locale not in UTF-8 by their bytes, and says so.
+Step 2 is a run of its own: `./audit.sh` with each machine's build (1.a).
 
 ## Command 2 — whether `C.UTF-8`'s order changed
 

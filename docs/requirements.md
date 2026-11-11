@@ -47,10 +47,11 @@ signature is reported as not checked and the run continues.
 - **`glibc-locale-source` at the exact build the machine runs**, for step
   2, which reads the machine's own locale sources and charmaps, and for
   step 11's check of what it measured against the machine's character sets
-  (trap 3, below). Without it the machine still gives a file, with the
-  measurement and the build; step 2 then reads the tags (given as its
-  tag; given as the build itself, the run is refused), and the run says
-  why.
+  (trap 3, below) and, on the old machine, for the names step 11 gives the
+  strings of a locale not in UTF-8. Without it the machine still gives a
+  file, with the measurement and the build; step 2 then reads the tags
+  (given as its tag; given as the build itself, the run is refused), and
+  the run says why.
 - **The language packs of the locales you care about.** The measurement
   covers every locale `locale -a` lists and nothing else. A locale a database
   uses is installed already. On a stock RHEL image on EC2 that was English
@@ -163,7 +164,8 @@ file: step 2 then reads the tags (or the run is refused, when that side
 is given as the build itself), and the run says why. Step 11 runs
 without it, and then says it did not check the strings it measured against
 that machine's character sets, which a locale its sort table decides does not
-need.
+need; without it on the old machine, step 11 names the strings of a locale
+not in UTF-8 by their bytes.
 
 `sql/c_utf8_probe.sql` needs neither langpacks nor that package — `C.utf8`
 exists on every node regardless — and it stops, saying why, when the

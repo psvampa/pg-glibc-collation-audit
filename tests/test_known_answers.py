@@ -820,11 +820,12 @@ class CharmapOnlyIsTheCharmaps(unittest.TestCase):
         except LookupError:
             return False
 
-    def test_ascii_below_80_where_named_so(self):
-        """The encodings Python has no codec for that the comparison names
-        bytes 01 to 7F of as ASCII: glibc's charmaps give each of those
-        bytes its own code point, at the three tags."""
-        for name in sorted(tlo.m.ASCII_BELOW_80):
+    def test_ascii_below_80_where_encoder_writes_ascii(self):
+        """The encodings Python has no codec for of the fixtures' locales,
+        whose candidate pairs encoder() writes as ASCII: glibc's charmaps
+        give each of the bytes 01 to 7F its own code point, at the three
+        tags."""
+        for name in ('ARMSCII-8', 'EUC-TW', 'GEORGIAN-PS'):
             with self.subTest(charmap=name):
                 with self.assertRaises(LookupError):
                     tlo.m.codecs.lookup(name)

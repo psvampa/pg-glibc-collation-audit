@@ -44,11 +44,11 @@
 # says why, and the run repeats it where their checks would have answered.
 # Step 11 compares the two measurements, so it answers from each machine's
 # glibc rather than from locale sources, compares each locale's compiled sort
-# table, names the characters and other strings that moved, and checks what
-# it measured against each machine's charmaps. When step 2 compares the two
-# machines' own locale sources, each locale of the old machine step 11
-# names is set beside step 2's rules for it; otherwise the run says what
-# step 2 compared.
+# table, names the characters and other strings that moved (outside UTF-8,
+# by the old machine's charmaps), and checks what it measured against each
+# machine's charmaps. When step 2 compares the two machines' own locale
+# sources, each locale of the old machine step 11 names is set beside step
+# 2's rules for it; otherwise the run says what step 2 compared.
 #
 # Example (the names are examples -- `ldd --version` on each node gives the
 # tag, `rpm -q glibc` the build):
@@ -330,7 +330,8 @@ OLD_STEP1_LIST="$OUT_DIR/changed_locales.txt"
 # was decided above, and NODE_NOTE says why).
 #
 # The charmaps also go to step 11, which checks the strings it measured
-# against them; a file without them says why, and step 11 prints that reason
+# against them and names, by the old machine's, the strings of a locale not
+# in UTF-8; a file without them says why, and step 11 prints that reason
 # under its NOT checked.
 ORDER_CM=()
 # Never one an earlier run left: removed before the layout writes it, and

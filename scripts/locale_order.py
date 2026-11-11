@@ -81,7 +81,9 @@ measured. For every locale its table does not find unchanged, given each
 machine's charmaps (--old-charmaps and --new-charmaps; audit.sh passes those
 of a file --extract wrote), the comparison checks that every sequence they
 give a character is among the strings measured, and names a locale whose
-charmap gives one that is not as measured in part (charmap_check).
+charmap gives one that is not as measured in part (charmap_check). The old
+machine's charmaps also name the strings of a locale not in UTF-8, which
+are named by their bytes without them (Names).
 
 Not compared, in a locale whose table was not compared: a rule that shows
 only in strings of several letters, such as a contraction ("ch" sorted as one
@@ -2549,8 +2551,7 @@ def corpus_for(codeset):
     encodes in this encoding, in byte order; None when Python has no
     converter for it. stored_strings() takes the strings of an encoding of
     more than one byte that PostgreSQL allows only on the client from it,
-    postgres_use() its first character of more than one byte, and the
-    comparison the names of the characters (Names).
+    postgres_use() its first character of more than one byte.
 
     A character Python's codec cannot encode is left out, and so is a
     sequence it would build for one the encoding lacks (below). The digest
@@ -2638,9 +2639,10 @@ def encoder(codeset):
     """How a candidate pair's text becomes the locale's bytes: Python's codec
     of the encoding, or, where Python has none, ASCII alone, which is the
     bytes 01 to 7F of the three such encodings of the fixtures' locales
-    (ASCII_BELOW_80). In another such encoding the pair is still only a pair
-    of bytes that strcoll tells apart at its level, kept as bytes. Raises
-    UnicodeError for text it cannot encode."""
+    (tests/test_known_answers.py reads them in glibc's charmaps). In another
+    such encoding the pair is still only a pair of bytes that strcoll tells
+    apart at its level, kept as bytes. Raises UnicodeError for text it
+    cannot encode."""
     try:
         codec = codecs.lookup(codeset).name
     except LookupError:
@@ -4913,31 +4915,24 @@ def also_known_as(names, pg_names, locales):
     return ALSO + '; '.join(parts) if parts else None
 
 
-NAMES = {}   # per list of strings and encoding, a Names
-# The encodings Python has no codec for whose bytes 01 to 7F are ASCII in
-# glibc's charmaps of 2.28, 2.34 and 2.39 (tests/test_known_answers.py
-# reads them): the three of the fixtures' locales. Not VISCII, which has
-# letters at 02, 05, 06, 14, 19 and 1E.
-ASCII_BELOW_80 = frozenset(('EUC-TW', 'ARMSCII-8', 'GEORGIAN-PS'))
+NAMES = {}   # per list of strings, encoding and charmap table, a Names
 
 
 class Names:
     """How the comparison names the strings of one list (stored_strings)
-    under a locale of one encoding: a string the tool names as a character,
-    by that character, and any other by its bytes in hexadecimal ('bytes
-    80'). Worked out once per list and encoding (names_for).
+    under a locale of one encoding: a string glibc reads as characters, by
+    those characters, and any other by its bytes in hexadecimal ('bytes
+    80'). Worked out once per list, encoding and table (names_for).
 
-    A string is a character exactly where corpus_for() pairs those bytes
-    with one, the strings the tool measured as characters before it
-    measured stored_strings(): in UTF-8, a valid UTF-8 sequence; in another
-    encoding Python has a codec for, bytes that decode to one character
-    which encodes back to them, or, failing to decode, the bytes corpus_for
-    keeps for one (U+3164 in EUC-KR, A4 D4); in an encoding Python has no
-    codec for, a byte 01 to 7F as ASCII where glibc's charmap has ASCII
-    there (ASCII_BELOW_80), and nothing else. A lone byte the codec
-    cannot decode is never one: a codec of one byte per character decodes
-    every byte it encodes to. What names a string decides nothing: the
-    orders compare places in the list, the same on both machines.
+    What glibc reads (points): in UTF-8, a valid UTF-8 sequence, decoded as
+    glibc's converter for UTF-8 decodes it, by rule and with no charmap
+    (wcsmbsload.c:173-190, gconv_simple.c:717-801@2.39); in any other
+    encoding, the bytes cut one way only into sequences of CHARMAP, the
+    table of the old machine's charmap for the encoding
+    (MachineCharmaps.table), and nothing at all without that table, so no
+    string is named as a character glibc's charmap does not give it
+    (TIS-620 has none at 80 to 9F). What names a string decides nothing:
+    the orders compare places in the list, the same on both machines.
 
     The strings are listed characters first, by code point, then the
     others, shorter first and then by their bytes (rank); a run is
@@ -4946,14 +4941,12 @@ class Names:
     write a range.
     """
 
-    def __init__(self, strings, codeset):
+    def __init__(self, strings, codeset, charmap=None):
         self.strings = strings
         self.codeset = codeset
-        try:
-            self.codec = codecs.lookup(codeset).name
-        except (LookupError, TypeError):
-            self.codec = None
-        self.table = None
+        self.charmap = charmap if codeset != 'UTF-8' else None
+        self.longest = max(map(len, self.charmap), default=0) \
+            if self.charmap else 0
         cps = [self.code_point(s) for s in strings]
         chars = [i for i, c in enumerate(cps) if c is not None]
         chars.sort(key=cps.__getitem__)
@@ -4976,33 +4969,44 @@ class Names:
         self.follows = b'\0' + bytes(map((1).__eq__,
                                          map(operator.sub, keys[1:], keys)))
 
+    def points(self, s):
+        """The code points glibc reads these bytes as, or None: the one
+        place that decides it (code_point, sequence_points). Bytes that cut
+        into the charmap's sequences in more than one way are None too."""
+        if not s:
+            return None
+        if self.codeset == 'UTF-8':
+            try:
+                return tuple(map(ord, s.decode('utf-8')))
+            except UnicodeDecodeError:
+                return None
+        if not self.charmap:
+            return None
+        # ways[i]: (how many cuts of s[:i], up to 2; its points when one)
+        ways = [(1, ())] + [(0, None)] * len(s)
+        for i in range(1, len(s) + 1):
+            count, got = 0, None
+            for k in range(1, min(self.longest, i) + 1):
+                before = ways[i - k]
+                cp = self.charmap.get(s[i - k:i]) if before[0] else None
+                if cp is not None:
+                    count += before[0]
+                    got = before[1] + (cp,) if before[1] is not None else None
+            ways[i] = (min(count, 2), got if count == 1 else None)
+        return ways[-1][1] if ways[-1][0] == 1 else None
+
     def code_point(self, s):
-        """The character the tool names these bytes as, or None."""
-        if self.codec is None:
-            return (s[0] if len(s) == 1 and s[0] < 0x80
-                    and self.codeset in ASCII_BELOW_80 else None)
-        try:
-            text = s.decode(self.codec)
-        except UnicodeDecodeError:
-            text = None
-        if text is not None:
-            if len(text) == 1 and (self.codec == 'utf-8'
-                                   or text.encode(self.codec) == s):
-                return ord(text)
-            return None
-        if len(s) == 1 or self.codec == 'utf-8':
-            return None
-        if self.table is None:
-            corpus = corpus_for(self.codeset)
-            self.table = dict(zip(corpus[1], corpus[0])) if corpus else {}
-        return self.table.get(s)
+        """The character glibc reads these bytes as, or None."""
+        p = self.points(s)
+        return p[0] if p is not None and len(p) == 1 else None
 
 
-def names_for(strings, codeset):
-    key = (id(strings), codeset)
-    if key not in NAMES or NAMES[key][0] is not strings:
-        NAMES[key] = (strings, Names(strings, codeset))
-    return NAMES[key][1]
+def names_for(strings, codeset, charmap=None):
+    key = (id(strings), codeset, id(charmap))
+    got = NAMES.get(key)
+    if got is None or got[0] is not strings or got[1] is not charmap:
+        NAMES[key] = got = (strings, charmap, Names(strings, codeset, charmap))
+    return got[2]
 
 
 class Naming:
@@ -5578,15 +5582,17 @@ def printer(table, kind, part):
     return table[kind][part]
 
 
-def describe_change(old, new, o, n):
+def describe_change(old, new, o, n, charmaps=None):
     """(lines, phrase, rows, others, sql): what changed between two
     measurements of a locale, drawn from its findings for the report, the
     summary and the characters file, in which nothing is cut short;
     whether any of the three names or counts a string that is not a
     character; and its test pairs in bytes and its changes without one,
     for the SQL files (confirm_groups). The strings are named under the
-    old machine's encoding, the one a database made there holds."""
-    naming = Naming(names_for(strings_of(old, o['corpus'])[0], o['codeset']))
+    old machine's encoding, the one a database made there holds, with the
+    old machine's charmaps (CHARMAPS, a MachineCharmaps, or None)."""
+    naming = Naming(names_for(strings_of(old, o['corpus'])[0], o['codeset'],
+                              charmap_table(charmaps, o['codeset'])))
     lines, brief, rows, sql = [], [], [], []
     for kind, d in locale_findings(old, new, o, n, naming):
         lines += printer(LOCALE_KINDS, kind, REPORT)(d)
@@ -8180,9 +8186,11 @@ def table_route(old, new, name):
     return 'identical', None
 
 
-def table_verdicts(old, new, both, refused, changed, same, unmeasured):
+def table_verdicts(old, new, both, refused, changed, same, unmeasured,
+                   charmaps=None):
     """compare()'s lists after the sort tables: (changed, same, unmeasured,
-    firm, by_table, findings, naming).
+    firm, by_table, findings, naming). CHARMAPS: the old machine's
+    MachineCharmaps, which TableNaming names the sequences with.
 
     firm: the unchanged locales whose table says so, for any text.
     by_table: {locale: (why, what step 11 said, named)} of the changed
@@ -8225,7 +8233,7 @@ def table_verdicts(old, new, both, refused, changed, same, unmeasured):
             routes[name] = table_route(old, new, name)
     naming = TableNaming(old, new, [
         name for name, (route, why) in routes.items()
-        if route == 'changed' and why is None])
+        if route == 'changed' and why is None], charmaps)
     named = {name: naming(name) for name, (route, why) in routes.items()
              if route == 'changed' and why is None}
     # The same table, or a record that keeps every order, and a change step
@@ -8446,10 +8454,13 @@ class TableNaming:
     once, when a locale first needs them, keeping only those of the locales
     asked for; a side that cannot be opened gives its reason, and the locale
     names nothing but stays changed. What a locale gets depends only on its
-    two entries and encodings, so locales that share them share it."""
+    two entries and encodings, so locales that share them share it: one
+    instance names with one machine's charmaps, CHARMAPS (the old
+    machine's MachineCharmaps, or None for none)."""
 
-    def __init__(self, old, new, names):
+    def __init__(self, old, new, names, charmaps=None):
         """NAMES: every locale that will be asked for."""
+        self.charmaps = charmaps
         self.sides = (old, new)
         self.records = [None, None]
         self.parsed = {}
@@ -8545,7 +8556,8 @@ class TableNaming:
         seqs = table_sequences(o, n)
         self.seqs[a['table'], a['nrules'], b['table'], b['nrules'],
                   (codeset,)] = (o, n, seqs)
-        return table_naming(o, n, codeset, seqs)
+        return table_naming(o, n, codeset, seqs,
+                            charmap_table(self.charmaps, codeset))
 
     def tests(self, name):
         """([(a, b, old sign, new sign)], untested) for the SQL files of
@@ -8576,22 +8588,23 @@ def table_sequences(o, n):
     return marked, only_old, only_new, flips
 
 
-def table_naming(o, n, codeset, seqs=None):
+def table_naming(o, n, codeset, seqs=None, charmap=None):
     """(head, shown, rows, others) of two parsed records of the same number
     of rules: the counts, the first LIST_LIMIT names "among them", every
     name as (characters, how) for the characters file, and whether a name
     is bytes. Characters of consecutive code points are one run, as step
     11 writes them; a string of several characters is named by its code
-    points, and one the encoding reads as no character by its bytes
-    (Names). seqs: table_sequences(o, n), when already worked out."""
+    points, and one glibc reads as no character by its bytes (Names, with
+    CHARMAP, the old machine's table for codeset). seqs:
+    table_sequences(o, n), when already worked out."""
     marked, only_old, only_new, flips = seqs or table_sequences(o, n)
     if not (marked or only_old or only_new):
         return NAMED_NUMBERING, '', (), False
-    names = Names([], codeset)
+    names = Names([], codeset, charmap)
     items, others = [], False
     for kind, seqs in (('marked', marked), ('old', only_old),
                        ('new', only_new), ('flip', flips)):
-        # By code points where the encoding reads them, then the others by
+        # By code points where glibc reads them (Names), then the others by
         # their bytes; a run is single characters only.
         read = []
         for s in seqs:
@@ -8788,18 +8801,11 @@ def table_runs(xs, follows):
 
 
 def sequence_points(s, names):
-    """The code points of a sequence of several characters, where the
-    locale's encoding decodes it whole and back; None where it does not,
-    and it is named by its bytes."""
-    if names.codec is None:
-        return None
-    try:
-        text = s.decode(names.codec)
-    except UnicodeDecodeError:
-        return None
-    if names.codec != 'utf-8' and text.encode(names.codec) != s:
-        return None
-    return tuple(map(ord, text)) or None
+    """The code points of a sequence of several characters, as glibc reads
+    it (Names.points); None where it does not, and it is named by its
+    bytes."""
+    p = names.points(s)
+    return p if p is not None and len(p) > 1 else None
 
 
 def listed_names(names):
@@ -9375,6 +9381,115 @@ ALONE = ("the measurement came without its machine's charmaps; only the file "
          "scripts/locale_order.py --extract writes holds them")
 ALONE_BOTH = ("neither measurement came with its machine's charmaps; only the "
               "file scripts/locale_order.py --extract writes holds them")
+# What a charmap the old machine lacks does to the names (Names): added to
+# the old machine's line that gives the reason, for the whole machine or
+# for its locales (charmap_findings).
+NAMED_BY_BYTES_MACHINE = (" Without them, the strings of the old machine's "
+                          "locales of an encoding other than UTF-8 are named "
+                          "by their bytes.")
+NAMED_BY_BYTES_LOCALES = ("; the strings of those of an encoding other than "
+                          "UTF-8 are named by their bytes")
+
+
+class MachineCharmaps:
+    """One machine's charmaps as step 11 reads them, for the check of what
+    it measured (charmap_check) and for the names of the strings it
+    measured (Names): ('dir', the folder --unpack laid them out in) or
+    ('why', the reason the machine has none). Each charmap is read once.
+
+    A locale's charmap is the file whose <code_set_name> is the codeset
+    measured for it, by the rule step 2 traces a machine's builds with
+    (node_charmaps.charmap_of): one file declares it, and no file read in
+    part could, or no file is known. localedef stores that name as the
+    locale's codeset (ld-ctype.c:445@2.28)."""
+
+    def __init__(self, charmaps):
+        import node_charmaps as nc
+        kind, value = charmaps
+        self.why, self.cms, self.certain, self.loose = None, None, {}, {}
+        self.read, self.tables = {}, {}
+        if kind == 'why':
+            self.why = value
+            return
+        try:
+            self.cms = nc.CharmapsDir(value)
+            self.certain, self.loose = self.cms.codesets()
+        except nc.Unusable as e:
+            self.why = f'its charmaps cannot be read: {e}'
+
+    def charmap(self, codeset):
+        """(the charmap of a locale of CODESET, None), or (None, why not)."""
+        import node_charmaps as nc
+        charmap, files = nc.charmap_of(self.certain, self.loose, codeset)
+        if charmap is not None:
+            return charmap, None
+        if files:
+            sure = [f for f in files if f in self.certain.get(codeset, ())]
+            maybe = [f for f in files if f not in sure]
+            said = ([f'is declared by {", ".join(sure)}'] if sure else []) + (
+                [f'could be declared by {", ".join(maybe)}, whose start this '
+                 'does not read whole,'] if maybe else [])
+            return None, (f'its encoding, {codeset}, {" and ".join(said)} '
+                          'on the machine')
+        return None, ('no charmap on the machine declares its encoding, '
+                      f'{codeset}')
+
+    def parsed(self, charmap):
+        """collation_keys.read_charmap's Charmap, or why it was not read."""
+        if charmap not in self.read:
+            import collation_keys as ck
+            import node_charmaps as nc
+            try:
+                self.read[charmap] = ck.read_charmap(self.cms.text(charmap),
+                                                     charmap)
+            except (ck.Unsettled, nc.Unusable) as e:
+                self.read[charmap] = (f'its charmap on the machine, {charmap}, '
+                                      f'cannot be read whole: {e}')
+        return self.read[charmap]
+
+    def table(self, codeset):
+        """({bytes: code point}, None) of the charmap of a locale of
+        CODESET, or (None, why there is none). Each single line's bytes and
+        each member of each range; where a code point is defined twice the
+        first line wins, as in glibc's name table ("All later definitions
+        are simply discarded", charmap.c:983-986@2.39), and bytes that two
+        code points claim name neither."""
+        if self.why is not None:
+            return None, self.why
+        if codeset not in self.tables:
+            charmap, why = self.charmap(codeset)
+            cm = self.parsed(charmap) if why is None else None
+            if isinstance(cm, str):
+                why = cm
+            if why is not None:
+                self.tables[codeset] = None, why
+            else:
+                out, twice = {}, set()
+                for cp, k in cm.singles.items():
+                    b = bytes(int(h, 16) for h in k.split('/x')[1:])
+                    if out.get(b, cp) != cp:
+                        twice.add(b)
+                    out[b] = cp
+                for lo, hi, first, size in cm.ranges:
+                    for k in range(hi - lo + 1):
+                        b = (first + k).to_bytes(size, 'big')
+                        if out.get(b, lo + k) != lo + k:
+                            twice.add(b)
+                        out[b] = lo + k
+                for b in twice:
+                    del out[b]
+                self.tables[codeset] = out, None
+        return self.tables[codeset]
+
+
+def charmap_table(charmaps, codeset):
+    """The table Names reads a locale of CODESET with: the MachineCharmaps
+    CHARMAPS's for an encoding other than UTF-8, None for UTF-8, which
+    glibc decodes by rule, and None where there is none (named by bytes,
+    and the reason said by charmap_findings)."""
+    if charmaps is None or codeset == 'UTF-8':
+        return None
+    return charmaps.table(codeset)[0]
 
 
 def charmap_check(data, charmaps):
@@ -9382,65 +9497,47 @@ def charmap_check(data, charmaps):
     not hold: ({locale: [(charmap, [sequence])]}, {locale: why it was not
     checked}, why the machine was not checked at all, or None).
 
-    charmaps is ('dir', the folder --unpack laid them out in) or ('why', the
-    reason the machine has none). A locale's charmap is the file whose
-    <code_set_name> is the codeset measured for it, as step 2 reads it
-    (node_charmaps.measured_builds; localedef stores that name as the locale's codeset,
-    ld-ctype.c:445@2.28), and every file that could declare the codeset is
-    read with collation_keys.read_charmap: one that gives a character to a
-    sequence the locale's list of strings lacks makes it measured in part.
+    charmaps is a MachineCharmaps, or what one is made of. A locale's
+    charmap (MachineCharmaps.charmap) is read with
+    collation_keys.read_charmap: one that gives a character to a sequence
+    the locale's list of strings lacks makes it measured in part.
     stored_strings() builds the lists from the charmaps of glibc 2.28, 2.34
     and 2.39, and a distro patches the charmaps it ships (RHEL 8 and 9 carry
     the GB18030 of 2.39). A sequence holding NUL is left out: neither a C
     string nor a PostgreSQL text value holds it. C and POSIX are glibc's
     built-in locale, which no charmap builds (node_charmaps.BUILTIN).
     """
-    kind, value = charmaps
-    if kind == 'why':
-        return {}, {}, value
     import collation_keys as ck
     import node_charmaps as nc
-    try:
-        cms = nc.CharmapsDir(value)
-        certain, loose = cms.codesets()
-    except nc.Unusable as e:
-        return {}, {}, f'its charmaps cannot be read: {e}'
+    m = (charmaps if isinstance(charmaps, MachineCharmaps)
+         else MachineCharmaps(charmaps))
+    if m.why is not None:
+        return {}, {}, m.why
     by_list = {}
     for name, r in sorted(data['locales'].items()):
         if name not in nc.BUILTIN and 'error' not in r:
             by_list.setdefault((r['codeset'], r['corpus']), []).append(name)
-    lacking, unchecked, read = {}, {}, {}
+    lacking, unchecked, seqs = {}, {}, {}
     for (codeset, corpus), names in sorted(by_list.items()):
-        files = sorted(set(certain.get(codeset, ()))
-                       | {c for c, said in loose.items() if codeset in said})
-        if not files:
-            unchecked.update((n, 'no charmap on the machine declares its '
-                                 f'encoding, {codeset}') for n in names)
+        charmap, why = m.charmap(codeset)
+        cm = m.parsed(charmap) if why is None else None
+        if isinstance(cm, str):
+            why = cm
+        if why is not None:
+            unchecked.update((n, why) for n in names)
             continue
-        have = None
-        for charmap in files:
-            if charmap not in read:
-                try:
-                    read[charmap] = sorted(
-                        s for s in ck.sequences(ck.read_charmap(
-                            cms.text(charmap), charmap)) if b'\0' not in s)
-                except (ck.Unsettled, nc.Unusable) as e:
-                    read[charmap] = str(e)
-            if isinstance(read[charmap], str):
-                unchecked.update((n, f'its charmap on the machine, {charmap}, '
-                                     f'cannot be read whole: {read[charmap]}')
-                                 for n in names)
-                break
-            if have is None:
-                have = frozenset(strings_of(data, corpus)[0])
-            missing = [s for s in read[charmap] if s not in have]
-            if missing:
-                for n in names:
-                    lacking.setdefault(n, []).append((charmap, missing))
+        if charmap not in seqs:
+            seqs[charmap] = sorted(s for s in ck.sequences(cm)
+                                   if b'\0' not in s)
+        have = frozenset(strings_of(data, corpus)[0])
+        missing = [s for s in seqs[charmap] if s not in have]
+        if missing:
+            for n in names:
+                lacking.setdefault(n, []).append((charmap, missing))
     return lacking, unchecked, None
 
 
-def charmap_findings(old, new, charmaps, compared, firm=()):
+def charmap_findings(old, new, charmaps, compared, firm=(), named=()):
     """({locale: [(side, charmap, [sequence])]}, [(kind, data)]): what
     charmap_check finds on each machine for the locales compared, as the
     findings 'in part' and 'charmaps not checked'. A machine not checked at
@@ -9452,10 +9549,19 @@ def charmap_findings(old, new, charmaps, compared, firm=()):
     unchanged by their sort tables, which need no such check: the table
     decides for every string, and the 'charmaps checked' line, when there
     is one, says how many those are, C and POSIX aside (no charmap builds
-    them)."""
+    them). CHARMAPS: each machine's MachineCharmaps, or what one is made
+    of.
+
+    NAMED: the changed locales of an encoding other than UTF-8 the old
+    machine's charmaps cannot name (charmap_table): their strings are named
+    by their bytes, and the old machine's line that gives the reason, for
+    the machine or for each locale, says so; every one of them is listed
+    there, compared or not, since the reason no table names them is the
+    reason the check did not run (MachineCharmaps)."""
     import node_charmaps as nc
     other = sum(1 for name in firm if name not in nc.BUILTIN)
-    if not compared and other:
+    named = set(named)
+    if not compared and other and not named:
         return {}, [('charmaps checked', {
             'text': 'Character sets: not checked, and not needed: the '
                     f'{other} locale(s) found unchanged were found so by their '
@@ -9463,22 +9569,34 @@ def charmap_findings(old, new, charmaps, compared, firm=()):
             'warning': False})]
     lacking, found, whole = {}, [], []
     for side, data, how in (('old', old, charmaps[0]), ('new', new, charmaps[1])):
+        if not isinstance(how, MachineCharmaps):
+            how = MachineCharmaps(how)
         lacks, cannot, why = charmap_check(data, how)
         for name in compared:
             for charmap, seqs in lacks.get(name, ()):
                 lacking.setdefault(name, []).append((side, charmap, seqs))
         if why is not None:
             whole.append((side, why))
+        listed = set(compared) | (named if side == 'old' else set())
         by_why = {}
-        for name in sorted(compared):
+        for name in sorted(listed):
             if name in cannot:
                 by_why.setdefault(cannot[name], []).append(name)
+            elif name in named and side == 'old' and why is None:
+                # Not measured, so charmap_check read no list for it: the
+                # reason is the table's (the same rule).
+                by_why.setdefault(
+                    how.table(old['locales'][name].get('codeset'))[1],
+                    []).append(name)
         if by_why:
+            bytes_too = side == 'old' and any(
+                name in named for names in by_why.values() for name in names)
             found.append(('charmaps not checked', {
                 'text': '!! NOT checked whether their character set gives a '
                         'character to byte sequences that are not among the '
                         f'strings measured, for {sum(map(len, by_why.values()))} '
-                        f'locale(s) of the {side} machine:',
+                        f'locale(s) of the {side} machine'
+                        + (NAMED_BY_BYTES_LOCALES if bytes_too else '') + ':',
                 'names': sorted((names, why) for why, names in by_why.items())}))
     if [why for side, why in whole] == [ALONE, ALONE]:
         whole = [('either', ALONE_BOTH)]
@@ -9490,7 +9608,8 @@ def charmap_findings(old, new, charmaps, compared, firm=()):
                 f'strings measured, because {why.rstrip(".")}. Where one does, '
                 'a locale of that encoding is unchanged only as far as '
                 'measured' + (', unless its sort table found it unchanged.'
-                              if other else '.'),
+                              if other else '.')
+                + (NAMED_BY_BYTES_MACHINE if named and side != 'new' else ''),
         'names': []}) for side, why in whole]
     found += [('in part', {'name': name, 'sides': lacking[name]})
               for name in sorted(lacking)]
@@ -10015,9 +10134,12 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     # compared (table_verdicts); step 11's verdict stays where they could
     # not.
     measured11 = set(changed) | set(same)
+    # Each machine's charmaps, read once for the check of its strings and,
+    # the old one's, for the names (Names, under the old encoding).
+    machines = tuple(MachineCharmaps(c) for c in charmaps)
     (changed, same, unmeasured, firm, by_table, table_found,
      table_names) = table_verdicts(old, new, both, refused, changed, same,
-                                   unmeasured)
+                                   unmeasured, machines[0])
 
     # Locales whose measurements are the same on both sides changed the same
     # way, so each change is worked out once; then every locale whose change
@@ -10047,7 +10169,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
             lines, brief, found, named, sql = [], '', [], False, []
         else:
             lines, brief, found, named, sql = describe_change(
-                old, new, o[names[0]], n[names[0]])
+                old, new, o[names[0]], n[names[0]], machines[0])
         if table:
             more, phrase, counted = table_change_lines(*table)
             if sql_to and table[2] and table[2][2]:
@@ -10098,9 +10220,15 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     # Measured in part: a machine's charmap gives a character to sequences
     # its list of strings lacks. An unchanged one is unchanged only as far
     # as measured too.
+    # Named by their bytes: a changed locale of another encoding than UTF-8
+    # that the old machine's charmaps give no table for.
+    by_bytes = [name for name in changed
+                if o[name].get('codeset') != 'UTF-8'
+                and charmap_table(machines[0], o[name].get('codeset')) is None]
     lacking, beside = charmap_findings(
-        old, new, charmaps,
-        [x for x in changed + same if x in measured11 and x not in firm], firm)
+        old, new, machines,
+        [x for x in changed + same if x in measured11 and x not in firm], firm,
+        by_bytes)
     # Every unchanged locale its table did not decide: step 11 measured a
     # sample, and the partly and in-part ones are among these.
     far = len([name for name in same if name not in firm])
@@ -10391,7 +10519,9 @@ def main():
         cm.add_argument(f'--{side}-charmaps', metavar='DIR',
                         help=f'with --compare: the {side} machine\'s charmaps, '
                              'as --unpack lays them out, to check the strings '
-                             'it measured against')
+                             'it measured against'
+                             + ('; they also name the strings of a locale '
+                                'not in UTF-8' if side == 'old' else ''))
         cm.add_argument(f'--{side}-no-charmaps', metavar='WHY',
                         help=f'with --compare: why the {side} machine\'s '
                              'charmaps are not given, for the report')

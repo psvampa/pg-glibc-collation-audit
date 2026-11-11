@@ -279,6 +279,21 @@ def _entry(names, source):
     return min(own, key=lambda n: (n != source, len(n), n))
 
 
+def charmap_of(certain, loose, codeset):
+    """(the charmap a locale of CODESET was built from, []) or (None, the
+    files that could declare it: none, or several), from codesets()'s two
+    tables. Exactly one file whose prolog is read whole declares it, and
+    no loose file could: localedef stores the charmap's code_set_name as
+    the locale's codeset (ld-ctype.c:445@2.28), so with two candidates
+    the file is not known (IBM1162 declares IBM1133, and the two
+    differ)."""
+    files = certain.get(codeset, [])
+    maybe = sorted(c for c, names in loose.items() if codeset in names)
+    if len(files) == 1 and not maybe:
+        return files[0], []
+    return None, files + maybe
+
+
 def measured_builds(path, build_id, charmaps, aliases, tag, tag_ids):
     """Measured for the machine whose measurement is at `path`, whose glibc
     is built from `tag`; `tag_ids` are that tag's charmaps' blob ids.
@@ -332,16 +347,15 @@ def measured_builds(path, build_id, charmaps, aliases, tag, tag_ids):
         if not isinstance(codeset, str) or not codeset:
             unmapped.append((name, "its encoding was not measured"))
             continue
-        files = certain.get(codeset, [])
-        maybe = sorted(c for c, names in loose.items() if codeset in names)
-        if len(files) != 1 or maybe:
+        charmap, files = charmap_of(certain, loose, codeset)
+        if charmap is None:
             unmapped.append((name, (
                 f"its encoding {codeset} is declared by "
-                f"{', '.join(files + maybe)}") if files or maybe else
+                f"{', '.join(files)}") if files else
                 f"no charmap on the machine declares its encoding {codeset}"))
             continue
         source = g.locale_source(aliases.get(name, name))
-        by_build[(source, files[0])].append(name)
+        by_build[(source, charmap)].append(name)
     builds = [ck.Build(_entry(names, source), source, charmap)
               for (source, charmap), names in sorted(by_build.items())]
     return Measured(builds, unmapped, len(locales))
