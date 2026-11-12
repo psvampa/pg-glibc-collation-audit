@@ -4,9 +4,10 @@ checked against the build's binary packages.
 A RHEL or Rocky glibc build is upstream glibc plus the distro's patches,
 applied by rpmbuild's %prep. build() opens the build's SRPM, takes the inner
 tarball's localedata/ and locale/, applies the patches that touch them the
-way GNU patch does, and keeps the result in a cache. Steps 1 and 2 of
-the audit, run by audit.sh or on their own, read a build named on the
-command line through glibc_locale_data.side (build_side).
+way GNU patch does, and keeps the result in a cache. The sides of the
+audit ('What was compared', glibc_locale_data.compared_sides), the check
+of their order and step 2, run by audit.sh or on their own, read a build
+named on the command line through glibc_locale_data.side (build_side).
 
 It does not work out from the spec what rpm did; it reads what rpm wrote
 down, and checks against it:
@@ -38,9 +39,11 @@ the reason (Refused), and a refusal is never kept in the cache: a tree
 rebuilt from a guess would compare as that build's sources, and the tool
 would report on a build nobody made. It never falls back to the upstream tag.
 
-What it does not check is listed in every result: NOT_CHECKED, never a
-recipe, and the `!!` lines of `verified`; and, for a fetched build,
-provenance['fetched'].
+What it does not check is NOT_CHECKED, never a recipe, which audit.sh
+prints under 'What was compared' as one `!!` for the rebuilt builds
+(glibc_locale_data.report_build_provenance, which rewords its tarball
+item, and its GPG item for a fetched build), and the `!!` lines of
+`verified`; and, for a fetched build, provenance['fetched'].
 
 fetch_build() takes a build's name instead of its files: where_from()
 finds the SRPM and the two binary packages in a mirror's public metadata
@@ -118,19 +121,6 @@ KNOWN_RPM = ('4.14.3', '4.16.1.3', '4.19.1.1')
 class Refused(Exception):
     """These sources cannot be rebuilt the way rpm would; the message says
     why."""
-
-
-class Unread(Refused):
-    """A build this cannot read, with nothing found wrong in what it read:
-    its spec holds what known_only() does not know, the mirror does not
-    list it or no longer has it, lists it with no metadata to check it
-    against, or cannot be reached or stops answering in the middle of a
-    file. Every other refusal stops the run: a check that failed (a sha256,
-    a digest, a header), an answer of the mirror that is not a file (an
-    HTTP status), or what this does not read (an rpm version, a payload
-    compressor). audit.sh, given a machine's file and that machine's tag
-    as the side, reads the tags in place of a build that is Unread and
-    says so; a build named on the command line is refused either way."""
 
 
 # -- rpm files ---------------------------------------------------------------
@@ -269,7 +259,7 @@ def read_srpm(path):
             raise Refused('the SRPM holds %r twice' % name)
         files[name] = data
     info = {'name': hdr.get(_NAME), 'version': hdr.get(_VERSION),
-            'release': hdr.get(_RELEASE), 'payload_compressor': comp,
+            'release': hdr.get(_RELEASE),
             'srpm_sha256': _sha256_file(path)}
     return info, hdr, files
 
@@ -300,16 +290,16 @@ def identity(info):
 
 # -- what rpm recorded in the SRPM -------------------------------------------
 
-Record = collections.namedtuple('Record', 'order sources rpm_version tag')
+Record = collections.namedtuple('Record', 'order sources tag')
 
 
 def rpm_record(info, hdr, files):
-    """The patches in the order %autosetup applied them, the Sources, and
-    the rpm that wrote the SRPM, all from the SRPM's header. The payload
-    holds exactly the Sources, the Patches and glibc.spec: rpmbuild -bs
-    packs what it parsed and nothing else (build/files.c
-    processSourceFiles), so anything else means the header and the files
-    disagree."""
+    """The patches in the order %autosetup applied them and the Sources, from
+    the SRPM's header, once the rpm that wrote it is one this knows
+    (KNOWN_RPM). The payload holds exactly the Sources, the Patches and
+    glibc.spec: rpmbuild -bs packs what it parsed and nothing else
+    (build/files.c processSourceFiles), so anything else means the header and
+    the files disagree."""
     sources = hdr.get(_SOURCE)
     patches = hdr.get(_PATCH, [])
     if not isinstance(sources, list) or not sources:
@@ -335,8 +325,7 @@ def rpm_record(info, hdr, files):
     if ver not in KNOWN_RPM:
         raise Refused('the SRPM was written by rpm %r; this knows %s'
                       % (ver, ', '.join(KNOWN_RPM)))
-    return Record(list(reversed(patches)), list(sources), ver,
-                  identity(info)[2])
+    return Record(list(reversed(patches)), list(sources), identity(info)[2])
 
 
 # -- what rpm built from it: the binary packages ------------------------------
@@ -991,13 +980,10 @@ _ALIAS = 'intl/locale.alias'
 
 # The code that turns locale data into weights. No step compares it since
 # step 5 was deleted (step 9.3): glibc_locale_data.CODE_NOT_COMPARED says so
-# on every run. These lists decide which of a build's patches the
-# provenance line names as changing strcoll's code (watched, apply_patch),
-# and, through watched(), which patches must be of a shape this reads: a
-# patch to one of these files that it cannot read makes the build Unread
-# (patch_unknowns, known_only), so the count never drops it in silence.
-# They are a hand list, not the include walk step 5 did: a patch to a file
-# outside them, such as el8's to locale/programs/charmap.c, is not counted.
+# on every run. Through watched(), these lists decide which patches outside
+# localedata/ and locale/ must still be of a shape this reads: a patch to
+# one of these files that it cannot read refuses the build (patch_unknowns,
+# known_only). They are a hand list, not the include walk step 5 did.
 #
 # TIER1/TIER2 were a human ranking of what step 5 read first; each path that
 # its include walk structurally could not reach says which blind spot put it
@@ -1103,8 +1089,9 @@ def in_scope(path):
 
 
 def watched(path):
-    """A path the result reads or reports: localedata/ and locale/ (the
-    tree), intl/locale.alias (a side reads it), strcoll's code (listed)."""
+    """A path whose patches must be of a shape this reads: localedata/ and
+    locale/ (the tree), intl/locale.alias (a side reads it), strcoll's code
+    (no step compares it)."""
     return in_scope(path) or path == _ALIAS or path in COLLATION_CODE
 
 
@@ -1342,7 +1329,7 @@ def _touches(s, lines, path_is, line_names):
     header lines names one: a name this cannot read (`a//localedata/x`,
     `glibc-2.34.orig/localedata/x`) still reaches the file under GNU patch's
     -p1. apply_patch asks it of the folders, patch_unknowns of every path
-    the result reads."""
+    watched() names."""
     return any(path_is(p) for p in _section_paths(s)) or \
         any(line_names(lines[i]) for i in s['lines'])
 
@@ -1353,7 +1340,7 @@ def _touches_watched(s, lines):
 
 def patch_unknowns(name, data):
     """[(name, what)] for one patch: rpm would unpack it, or GNU patch would
-    read from it a section on a path the result reads that is not one of
+    read from it a section on a path watched() names that is not one of
     the shapes of the seven real builds (parse_patch), or a header-shaped
     line naming such a path that no such section holds (an indented,
     quoted or otherwise spelled diff GNU would still apply)."""
@@ -1459,14 +1446,13 @@ def apply_hunks(lines, hunks, where):
 
 def apply_patch(tree, name, data):
     """Apply the localedata/ and locale/ sections of one patch file to tree
-    ({path: (bytes, exec)}). Returns (paths changed, strcoll's code paths
-    the patch names). A section on those folders whose shape is not known
-    is refused; patch_unknowns says why in detail."""
-    changed, code = [], set()
+    ({path: (bytes, exec)}). Returns the paths changed. A section on those
+    folders whose shape is not known is refused; patch_unknowns says why in
+    detail."""
+    changed = []
     lines = _lines(data)
     for s in parse_patch(data):
         paths = _section_paths(s)
-        code.update(p for p in paths if p in COLLATION_CODE)
         if not _touches(s, lines, in_scope, _names_in_scope):
             continue
         if s['shape'] is None or s['broken'] or not in_scope(s['path'] or ''):
@@ -1490,7 +1476,7 @@ def apply_patch(tree, name, data):
         new = apply_hunks(cur, s['hunks'], '%s (%s)' % (p, name))
         tree[p] = (b''.join(new), exe)
         changed.append(p)
-    return changed, sorted(code)
+    return changed
 
 
 # -- the upstream tree -------------------------------------------------------
@@ -1579,26 +1565,19 @@ def rebuild(info, hdr, files, base):
     text = spec_text(files)
     record = rpm_record(info, hdr, files)
     tree = dict(base)
-    applied, collation = [], []
+    applied = []
     for pos, name in enumerate(record.order, 1):
-        changed, code = apply_patch(tree, name, files[name])
+        changed = apply_patch(tree, name, files[name])
         if changed:
             applied.append({'pos': pos, 'patch': name, 'paths': changed})
-        if code:
-            collation.append({'patch': name, 'paths': code})
     unknown = known_only(text, files, record, tree)
     if unknown:
-        raise Unread('%d thing(s) this does not know in %s; the first: '
+        raise Refused('%d thing(s) this does not know in %s; the first: '
                       '%s: %s' % ((len(unknown), build) + unknown[0]))
     return tree, {
         'build': build, 'version': version, 'tag': tag,
         'srpm_sha256': info.get('srpm_sha256'),
-        'payload_compressor': info.get('payload_compressor'),
-        'srpm_rpm_version': record.rpm_version,
-        'order_rule': "the SRPM header's PATCH list, reversed",
-        'patches': len(record.order), 'applied': applied,
-        'collation_code_patches': collation,
-        'not_checked': list(NOT_CHECKED)}
+        'patches': len(record.order), 'applied': applied}
 
 
 Built = collections.namedtuple('Built', 'tree build version tag provenance')
@@ -1730,12 +1709,12 @@ class _Absent(Exception):
 
 def _get(url):
     """The bytes at url. A 404 raises _Absent; every other failure is
-    Refused, never read as "not there". Of those, another HTTP status and a
-    URL urllib cannot open (a mirror named without its scheme) stop the run;
-    a mirror that cannot be reached or stops answering (a timeout, no
-    network, a body cut short, which http.client raises as IncompleteRead
-    before the length check below) is Unread. The length check is kept for
-    a reader that does not check Content-Length itself."""
+    Refused, never read as "not there": another HTTP status, a URL urllib
+    cannot open (a mirror named without its scheme), and a mirror that
+    cannot be reached or stops answering (a timeout, no network, a body cut
+    short, which http.client raises as IncompleteRead before the length
+    check below). The length check is kept for a reader that does not check
+    Content-Length itself."""
     try:
         with urllib.request.urlopen(url, timeout=TIMEOUT) as r:
             data = r.read()
@@ -1749,8 +1728,8 @@ def _get(url):
         # mirror named is wrong, which is not "cannot be reached".
         raise Refused('cannot open %s: %s' % (url, e))
     except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
-        raise Unread('could not read %s: %s'
-                     % (url, getattr(e, 'reason', e)))
+        raise Refused('could not read %s: %s'
+                      % (url, getattr(e, 'reason', e)))
     if length is not None and length.strip().isdigit() and \
             int(length) != len(data):
         raise Refused('%s was cut short: %d of %s bytes'
@@ -1984,13 +1963,13 @@ def where_from(name, mirror=None, cache=None):
             except _Absent:
                 continue
             if ('"%s"' % srpm).encode() in listing:
-                raise Unread('%s is published in %s%s with no metadata, so '
-                             'its sha256 cannot be checked'
-                             % (srpm, mirror, tree))
-    raise Unread('glibc-%s-%s is not in %s (looked in %s%s)'
-                 % (ver, rel, mirror, ', '.join(looked) or 'nothing',
-                    '; no metadata in ' + ', '.join(unread)
-                    if unread else ''))
+                raise Refused('%s is published in %s%s with no metadata, '
+                              'so its sha256 cannot be checked'
+                              % (srpm, mirror, tree))
+    raise Refused('glibc-%s-%s is not in %s (looked in %s%s)'
+                  % (ver, rel, mirror, ', '.join(looked) or 'nothing',
+                     '; no metadata in ' + ', '.join(unread)
+                     if unread else ''))
 
 
 def fetch(entry, cache=None):
@@ -2089,7 +2068,7 @@ def fetch_build(name, mirror=None, cache=None, repo=None):
             entries = entries or where_from(name, mirror, cache)
             paths = {k: fetch(entries[k], cache) for k in keys}
         except _Absent as e:
-            raise Unread('%s is not there any more' % e)
+            raise Refused('%s is not there any more' % e)
         _write_json(_remembered(cache, name),
                     {'mirror': mirror,
                      'files': {k: entries[k]._asdict() for k in keys}})
@@ -2147,9 +2126,8 @@ _COMMIT_ENV = {'GIT_AUTHOR_NAME': 'pg-glibc-audit',
 def build_ref(build):
     """The one name of a build's commit in the clone: under
     glibc_locale_data.BUILD_REFS, outside refs/tags, so `git describe`
-    never reads a build for a release, a bare name never finds it, and step
-    5 leaves it out of its search of the whole history (measured
-    2026-11-03 on a copy of the clone)."""
+    never reads a build for a release and a bare name never finds it
+    (measured 2026-11-03 on a copy of the clone)."""
     return g.BUILD_REFS + build
 
 
@@ -2265,8 +2243,8 @@ def build_commit(repo, built):
 def commit_message(built):
     """The message of the commit build_commit makes for `built`: its tag,
     the build and its SRPM's sha256. One spelling, which a step that takes
-    the commit step 1 made checks that commit against
-    (glibc_locale_data.build_side)."""
+    the commit the sides made ('What was compared') checks that commit
+    against (glibc_locale_data._recorded, through build_side)."""
     return ('pg-glibc-audit: %s with localedata/ and locale/ of %s\n\n'
             'SRPM sha256 %s\n' % (built.tag, built.build,
                                    built.provenance.get('srpm_sha256')))

@@ -54,20 +54,12 @@ import glibc_locale_data as g
 
 DATA = os.path.join(TESTS_DIR, 'build_sources')
 
-# What build_sources raises as Unread, by message: a build this cannot read
-# with nothing found wrong. Every other refusal is Refused, and a test of a
-# refusal asserts which of the two it is (assertRefusedAs).
-UNREAD = ('this does not know in', ' (looked in ', 'with no metadata, so its',
-          'is not there any more', 'could not read ')
-
 
 def assertRefusedAs(test, exc, why):
-    """`exc` is Unread when its message is one of UNREAD, else exactly
-    Refused; and it says `why`."""
+    """`exc` is exactly Refused, and it says `why`."""
     text = str(exc)
     test.assertIn(why, text)
-    unread = any(u in text for u in UNREAD)
-    test.assertIs(type(exc), bs.Unread if unread else bs.Refused, text)
+    test.assertIs(type(exc), bs.Refused, text)
 EXTRACT = os.path.join(TESTS_DIR, 'locale_order')
 FIXTURES = (('glibc-2.28-251.el8_10.40', 8), ('glibc-2.34-275.el9_8', 9),
             ('glibc-2.39-128.el10_2', 10))
@@ -95,8 +87,7 @@ def recorded(build):
         if hashlib.sha256(files[n]).hexdigest() != sha:
             raise AssertionError('%s/%s is not the file the SRPM holds'
                                  % (build, n))
-    info = {k: m[k] for k in ('name', 'version', 'release', 'srpm_sha256',
-                              'payload_compressor')}
+    info = {k: m[k] for k in ('name', 'version', 'release', 'srpm_sha256')}
     hdr = {bs._PATCH: list(m['header_patch']),
            bs._SOURCE: list(m['header_source']),
            bs._RPMVERSION: m['rpm_version']}
@@ -263,41 +254,10 @@ class RebuildsTheFixtureBuildsAsRpmDid(unittest.TestCase):
         # The whole item: the wording before step 9.3 ("patches to code
         # outside localedata/ and locale/") shares the strcmp clause and
         # read as if the code under locale/ were checked.
-        self.assertEqual(prov['not_checked'][0],
+        self.assertEqual(bs.NOT_CHECKED[0],
                          "the compiler that built the binary packages, and "
                          "the build's patches to code, such as those to the "
                          "strcmp that strcoll calls")
-
-    def test_patches_to_the_collation_code_are_listed(self):
-        """Per build, every recorded patch that names a file of the
-        collation code or the four wrappers, in the order rpm applied them:
-        the same list build() gives from the whole SRPM, where no other patch
-        names one (measured on the three)."""
-        want = {
-            'glibc-2.28-251.el8_10.40': [
-                ('glibc-rh827510.patch', ['locale/loadlocale.c']),
-                ('glibc-rh1691528-1.patch', ['locale/programs/ld-collate.c']),
-                ('glibc-rh1691528-2.patch', ['locale/programs/ld-collate.c']),
-                ('glibc-RHEL-72011-2.patch', ['locale/localeinfo.h']),
-                ('glibc-RHEL-72011-3.patch', ['locale/localeinfo.h'])],
-            'glibc-2.34-275.el9_8': [
-                ('glibc-rh827510.patch', ['locale/loadlocale.c']),
-                ('glibc-c-utf8-locale-1.patch', [
-                    'locale/C-collate-seq.c', 'locale/C-collate.c',
-                    'locale/programs/ld-collate.c',
-                    'locale/programs/locfile-kw.gperf']),
-                ('glibc-rh2149102.patch', ['locale/C-collate-seq.c']),
-                ('glibc-RHEL-72017-2.patch', ['locale/localeinfo.h']),
-                ('glibc-RHEL-72017-3.patch', ['locale/localeinfo.h'])],
-            'glibc-2.39-128.el10_2': [
-                ('glibc-rh827510.patch', ['locale/loadlocale.c']),
-                ('glibc-upstream-2.39-221.patch', ['locale/localeinfo.h']),
-                ('glibc-upstream-2.39-258.patch', ['locale/localeinfo.h'])]}
-        for build, _ in FIXTURES:
-            with self.subTest(build=build):
-                got = [(c['patch'], c['paths']) for c in
-                       fixture(build)[6]['collation_code_patches']]
-                self.assertEqual(got, want[build])
 
     def test_the_four_wrappers_are_in_the_three_tags(self):
         for build, _ in FIXTURES:
@@ -490,8 +450,13 @@ class RefusesTenInputsRpmBuiltOtherwise(unittest.TestCase):
         self.spec(files, bs.spec_text(files).replace(
             self.PG, '%{lua: rpm.define("_default_patch_flags '
             '--no-backup-if-mismatch -b -z .rpmkeep")}\n' + self.PG, 1))
-        self.refused(info, hdr, files, base,
-                     'a %{lua: block this does not know')
+        with self.assertRaises(bs.Refused) as cm:
+            bs.rebuild(info, hdr, files, base)
+        assertRefusedAs(self, cm.exception,
+                        'a %{lua: block this does not know')
+        # The count comes first, whatever known_only found.
+        self.assertIn(' thing(s) this does not know in ',
+                      str(cm.exception))
 
     def test_v4_the_prep_epilogue_redefined(self):
         """rpm ran it and changed SUPPORTED."""
@@ -820,8 +785,7 @@ class RecordsWhatRpmRecorded(unittest.TestCase):
     def test_the_order_is_the_list_reversed(self):
         r = bs.rpm_record(self.INFO, self.hdr(), self.files())
         self.assertEqual(r, bs.Record(['a.patch', 'b.patch'],
-                                      ['glibc-2.39.tar.xz'], '4.19.1.1',
-                                      'glibc-2.39'))
+                                      ['glibc-2.39.tar.xz'], 'glibc-2.39'))
 
     def test_the_payload_is_what_the_header_records(self):
         self.refused(self.hdr(), self.files('c.patch'),
@@ -1113,15 +1077,15 @@ class ReadsPatchesAsGnuPatchDoes(unittest.TestCase):
                 b'rename from elf/a\nrename to elf/b\n'
                 b'--- a/string/x\n+++ b/string/x\n@@ -1 +1 @@\n-q\n+r\n')
         self.assertEqual(bs.patch_unknowns('p.patch', data), [])
-        self.assertEqual(bs.apply_patch(tree, 'p.patch', data), ([], []))
+        self.assertEqual(bs.apply_patch(tree, 'p.patch', data), [])
         self.assertEqual(tree, {'locale/x': (b'a\n', False)})
 
-    def test_a_patch_to_strcolls_code_is_named(self):
+    def test_a_patch_to_strcolls_code_must_have_a_known_shape(self):
         data = (b'diff --git a/string/strcoll_l.c b/string/strcoll_l.c\n'
                 b'--- a/string/strcoll_l.c\n+++ b/string/strcoll_l.c\n'
                 b'@@ -1 +1 @@\n-a\n+b\n')
-        self.assertEqual(bs.apply_patch({}, 'p.patch', data),
-                         ([], ['string/strcoll_l.c']))
+        self.assertEqual(bs.patch_unknowns('p.patch', data), [])
+        self.assertEqual(bs.apply_patch({}, 'p.patch', data), [])
         self.unknown(data.replace(b'a/string', b'a//string'),
                      'this does not know')
 
@@ -1595,8 +1559,6 @@ class OpensASourceRpm(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(b.tree, 'elf')))
         self.assertFalse(os.path.exists(os.path.join(b.tree, 'intl')))
         self.assertEqual(len(b.provenance['verified']), 3)
-        self.assertEqual(b.provenance['order_rule'],
-                         "the SRPM header's PATCH list, reversed")
         with mock.patch.object(bs, 'read_srpm', side_effect=AssertionError):
             self.assertEqual(bs.build(self.srpm(), self.bins,
                                       cache=self.cache).tree, b.tree)
@@ -1711,7 +1673,7 @@ class OpensASourceRpm(unittest.TestCase):
                 files['glibc-2.39.tar.xz'] = small_tarball(members)
                 self.refused(self.srpm(files), why)
 
-    def test_a_patch_to_strcolls_code_is_listed(self):
+    def test_a_patch_that_also_changes_strcolls_code_is_accepted(self):
         files = small_srpm_files()
         files['one.patch'] += (b'diff --git a/string/strcoll_l.c '
                                b'b/string/strcoll_l.c\n'
@@ -1719,9 +1681,8 @@ class OpensASourceRpm(unittest.TestCase):
                                b'+++ b/string/strcoll_l.c\n'
                                b'@@ -1 +1 @@\n-a\n+b\n')
         b = bs.build(self.srpm(files), self.bins, cache=self.cache)
-        self.assertEqual(b.provenance['collation_code_patches'],
-                         [{'patch': 'one.patch',
-                           'paths': ['string/strcoll_l.c']}])
+        self.assertEqual([a['patch'] for a in b.provenance['applied']],
+                         ['one.patch'])
 
     def test_a_patch_that_does_not_apply(self):
         files = small_srpm_files()
@@ -2057,7 +2018,8 @@ class FetchesFromAMirror(unittest.TestCase):
         self.mirror.repo('pub/rocky/8', 'BaseOS/source/tree', [])
         self.mirror.repo('vault/rocky/8.4', 'BaseOS/source/tree', [])
         self.el8(['151.el8'], tree='vault/rocky/8.4-RC1')
-        self.refused(lambda: self.where('glibc-2.28-151.el8'), 'is not in')
+        self.refused(lambda: self.where('glibc-2.28-151.el8'),
+                     'is not in %s (looked in ' % M)
         self.assertFalse([u for u in self.mirror.asked
                           if 'RC1' in u or 'ISO' in u])
 
@@ -2130,10 +2092,9 @@ class FetchesFromAMirror(unittest.TestCase):
                                for u, d in self.mirror.files.items()
                                if u == self.mirror.asked[0]])
 
-    def test_a_listed_file_that_is_not_there_is_unread(self):
+    def test_a_listed_file_that_is_not_there_is_refused(self):
         """The metadata lists the build, and its SRPM is gone from the
-        mirror (a sync half done, a build moved): nothing was found wrong
-        in what was read, so the build is Unread."""
+        mirror (a sync half done, a build moved): refused, saying so."""
         self.el10()
         repo, row = self.placed['srpm']
         del self.mirror.files[M + 'pub/rocky/10/' + repo + '/' + row['href']]
@@ -2305,7 +2266,7 @@ class ReadsAUrl(unittest.TestCase):
             return urllib.error.HTTPError('u', code, 'x', {}, None)
         cases = ((err(404), bs._Absent, ''),
                  (err(503), bs.Refused, 'HTTP 503'),
-                 (urllib.error.URLError('timed out'), bs.Unread, 'timed out'),
+                 (urllib.error.URLError('timed out'), bs.Refused, 'timed out'),
                  (Resp(b'abc', '10'), bs.Refused, 'cut short: 3 of 10'))
         for answer, exc, why in cases:
             with self.subTest(why=why or '404'):
@@ -2320,8 +2281,8 @@ class ReadsAUrl(unittest.TestCase):
                                return_value=Resp(b'abc', '3')):
             self.assertEqual(bs._get('https://mirror.test/x'), b'abc')
         # A mirror named without its scheme: urllib cannot open it. The
-        # mirror named is wrong, which is a refusal, not "cannot be
-        # reached" (Unread): audit.sh does not read the tags over it.
+        # mirror named is wrong, and the refusal says "cannot open", not
+        # "could not read".
         with self.assertRaises(bs.Refused) as cm:
             bs._get('dl.rockylinux.org/vault/rocky/')
         self.assertIs(type(cm.exception), bs.Refused)
@@ -2365,7 +2326,7 @@ def _built(tree, name, tarball=True):
     prov = {'srpm_sha256': hashlib.sha256(name.encode()).hexdigest(),
             'verified': ['locale sources: 1, each the sha256 '
                          'glibc-locale-source records'],
-            'applied': [], 'patches': 0, 'collation_code_patches': []}
+            'applied': [], 'patches': 0}
     if tarball:
         prov['tarball'] = bs.TARBALL_IS_TAG % TAG
     return bs.Built(tree, name + '.src', 'glibc 2.34', TAG, prov)
@@ -2586,9 +2547,7 @@ def _fill_build_cache(cache, mirror, name, tree, warned=()):
             list(warned),
             'tarball': bs.TARBALL_IS_TAG % ('glibc-' + ver),
             'applied': [{'pos': 1, 'patch': 'a.patch', 'paths': ['x']}],
-            'patches': 2,
-            'collation_code_patches': [{'patch': 'a.patch',
-                                        'paths': ['x']}]}
+            'patches': 2}
     with open(os.path.join(where, 'provenance.json'), 'w') as fh:
         json.dump(prov, fh)
 
@@ -2838,46 +2797,22 @@ class ABuildIsASide(unittest.TestCase):
                 self.assertEqual(fh.read(), '%s\t%s\n' % (B275, s.ref))
 
 
-def _fill_with_code(cache, mirror, name, tree, code=(), warned=()):
-    """_fill_build_cache, with the build's patches to strcoll's code in its
-    provenance as build() records them ((patch, paths) pairs): none by
-    default, where _fill_build_cache's placeholder names a path outside
-    localedata/ and locale/. `warned` is _fill_build_cache's."""
-    _fill_build_cache(cache, mirror, name, tree, warned)
-    for where in os.listdir(cache):
-        path = os.path.join(cache, where, 'provenance.json')
-        if not os.path.isfile(path):
-            continue
-        with open(path) as fh:
-            prov = json.load(fh)
-        if prov['build'] != name + '.src':
-            continue
-        prov['collation_code_patches'] = [
-            {'patch': p, 'paths': list(paths)} for p, paths in code]
-        with open(path, 'w') as fh:
-            json.dump(prov, fh)
-        return
-    raise AssertionError('no kept tree for %s in %s' % (name, cache))
-
-
 _HEX40 = re.compile(r'\b[0-9a-f]{40}\b')
 ABSENT = 'glibc-2.34-286.el9_8'
 LD = 'locale/programs/ld-collate.c'
 
 
 class _StepsOnBuilds:
-    """Steps 2 to 5, run on their own, read a build named as `rpm -q glibc`
-    names it: fetched (from a cache this test fills, so no network), made a
-    commit of a repository of the test's own, read by that commit, ordered
-    by rpm, and printed by its name -- never its commit's id. Each build
-    here is glibc-2.34's own scope with one change: B283 changes sv_SE,
-    adds a locale file and changes a line of ld-collate.c; SAME holds
-    B275's tree under another release."""
+    """Step 2, run on its own, reads a build named as `rpm -q glibc` names it:
+    fetched (from a cache this test fills, so no network), made a commit of a
+    repository of the test's own, read by that commit, ordered by rpm, and
+    printed by its name -- never its commit's id. Each build here is
+    glibc-2.34's own scope with one change: B283 changes sv_SE, adds a locale
+    file and changes a line of ld-collate.c; SAME holds B275's tree under
+    another release."""
 
     SAME = 'glibc-2.34-284.el9_8'
     LR = 'glibc-2.34-285.el9_8'
-    CLEAN = 'glibc-2.34-287.el9_8'
-    OUT = 'glibc-2.34-288.el9_8'
     LRC = 'glibc-2.34-289.el9_8'
 
     @classmethod
@@ -2899,8 +2834,6 @@ class _StepsOnBuilds:
         cls.changed = _linked(cls.base, os.path.join(cls.tmp, 'changed'), {
             sv: sv_text + b'% a change of the build\n',
             LD: ld + b'int pg_glibc_audit_test_line;\n'})
-        cls.clean = _linked(cls.base, os.path.join(cls.tmp, 'clean'), {
-            sv: sv_text + b'% a change of the build\n'})
         added = os.path.join(cls.changed, 'localedata/locales/xx_YY')
         with open(added, 'wb') as fh:
             fh.write(sv_text)
@@ -2918,19 +2851,11 @@ class _StepsOnBuilds:
         glibc_shaped(cls.repo, TAG)
         cls.cache = os.path.join(cls.tmp, 'cache')
         cls.mirror = 'file:///nowhere/'
-        in_locale = [('glibc-rh827510.patch', ['locale/loadlocale.c'])]
-        _fill_with_code(cls.cache, cls.mirror, B275, cls.base, in_locale)
-        _fill_with_code(cls.cache, cls.mirror, B283, cls.changed,
-                        in_locale + [('glibc-c-utf8-locale-1.patch', [LD])])
-        _fill_with_code(cls.cache, cls.mirror, cls.SAME, cls.base,
-                        [('glibc-example.patch', ['string/strcoll_l.c'])])
-        _fill_with_code(cls.cache, cls.mirror, cls.LR, cls.reader)
-        _fill_with_code(cls.cache, cls.mirror, cls.CLEAN, cls.clean,
-                        in_locale)
-        _fill_with_code(cls.cache, cls.mirror, cls.OUT, cls.changed,
-                        in_locale + [('glibc-example.patch',
-                                      ['wcsmbs/wcscoll.c'])])
-        _fill_with_code(cls.cache, cls.mirror, cls.LRC, cls.reader_c)
+        _fill_build_cache(cls.cache, cls.mirror, B275, cls.base)
+        _fill_build_cache(cls.cache, cls.mirror, B283, cls.changed)
+        _fill_build_cache(cls.cache, cls.mirror, cls.SAME, cls.base)
+        _fill_build_cache(cls.cache, cls.mirror, cls.LR, cls.reader)
+        _fill_build_cache(cls.cache, cls.mirror, cls.LRC, cls.reader_c)
 
     @classmethod
     def tearDownClass(cls):
@@ -3093,7 +3018,7 @@ class AStepReadsTheFixtureBuilds(unittest.TestCase):
                 with open(full, 'wb') as fh:
                     fh.write(data)
                 os.chmod(full, 0o755 if exe else 0o644)
-            _fill_with_code(cls.cache, cls.mirror, build, d)
+            _fill_build_cache(cls.cache, cls.mirror, build, d)
 
     @classmethod
     def tearDownClass(cls):
@@ -3362,9 +3287,10 @@ class _AuditOnBuilds:
     of the test's own: audit.sh and a COPY of scripts/ (a linked script
     imports from the folder its link points to, measured 2026-11-03), a
     glibc of its own (glibc_shaped), a build cache filled with no network
-    (_fill_with_code) and the suite's reader cache, so that no run computes
+    (_fill_build_cache) and the suite's reader cache, so that no run computes
     the reader from nothing. Each class runs its pairs once (RUNS) and its
-    tests read the output. `builds()` returns {build: tree folder}."""
+    tests read the output. `builds()` returns {build: (tree folder,) or
+    (tree folder, warned)}, _fill_build_cache's arguments."""
 
     RUNS = {}
     # {tree: [(version, release), ...]} of the glibc SRPMs the class's
@@ -3406,7 +3332,7 @@ class _AuditOnBuilds:
         cls.cache = os.path.join(cls.tmp, 'cache')
         cls.mirror = cls.make_mirror()
         for build, spec in cls.builds().items():
-            _fill_with_code(cls.cache, cls.mirror, build, *spec)
+            _fill_build_cache(cls.cache, cls.mirror, build, *spec)
         env = dict(os.environ, PG_GLIBC_BUILD_SOURCES_CACHE=cls.cache,
                    PG_GLIBC_BUILD_MIRROR=cls.mirror,
                    PG_GLIBC_READER_CACHE=os.path.join(SCRIPTS_DIR,
@@ -3529,7 +3455,7 @@ class AuditShReadsTheFixtureBuilds(_AuditOnBuilds, unittest.TestCase):
 
     @classmethod
     def builds(cls):
-        return {b: (cls.tree(b, b), ()) for b in (B40, B275, B128)}
+        return {b: (cls.tree(b, b),) for b in (B40, B275, B128)}
 
     def test_a_recorded_machine_is_read_as_its_build(self):
         """Each recorded machine's file (tests/locale_order/rhel*.extract)
@@ -3640,7 +3566,7 @@ class AuditShReadsTheFixtureBuilds(_AuditOnBuilds, unittest.TestCase):
 
 
 ONE_TREE = 'glibc-2.34-283.el9_8'
-OUTSIDE = 'glibc-2.34-284.el9_8'
+LD_CHANGED = 'glibc-2.34-284.el9_8'
 
 
 @needs_clone
@@ -3648,7 +3574,7 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
     """Two builds of one version, made by the test: 283 with 275's tree
     (one source tree, as the real two are), .48 with .40's tree and a
     comment changed in sv_SE, and 284 with a change of
-    ld-collate.c and a patch to strcoll's code outside locale/."""
+    ld-collate.c."""
 
     # B48's check of its charmaps gave a `!!` (no zstd reader: a Python
     # before 3.14 without the zstd program, on an el10 payload), which
@@ -3656,7 +3582,7 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
     ZSTD = ('!! charmaps NOT checked against glibc-locale-source: no zstd '
             'reader')
     RUNS = {'tree': (B275, ONE_TREE), 'clean': (B40, B48),
-            'outside': (B275, OUTSIDE), 'twice': (B275, B275)}
+            'localedef': (B275, LD_CHANGED), 'twice': (B275, B275)}
 
     @classmethod
     def builds(cls):
@@ -3665,14 +3591,13 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
         t275 = fixture(B275)[5]
         t40 = fixture(B40)[5]
         return {
-            B275: (cls.tree(B275, B275), ()),
-            ONE_TREE: (cls.tree(ONE_TREE, B275), ()),
-            B40: (cls.tree(B40, B40), ()),
-            B48: (cls.tree(B48, B40, {sv: t40[sv][0] + b'% a build\n'}), (),
+            B275: (cls.tree(B275, B275),),
+            ONE_TREE: (cls.tree(ONE_TREE, B275),),
+            B40: (cls.tree(B40, B40),),
+            B48: (cls.tree(B48, B40, {sv: t40[sv][0] + b'% a build\n'}),
                   [cls.ZSTD]),
-            OUTSIDE: (cls.tree(OUTSIDE, B275, {
-                ld: t275[ld][0] + b'int pg_glibc_audit_test_line;\n'}),
-                [('glibc-example.patch', ['string/strcoll_l.c'])])}
+            LD_CHANGED: (cls.tree(LD_CHANGED, B275, {
+                ld: t275[ld][0] + b'int pg_glibc_audit_test_line;\n'}),)}
 
     def test_one_source_tree_compares_nothing_and_says_builds(self):
         out = self.run_of('tree')
@@ -3719,21 +3644,18 @@ class AuditShOnBuildsOfOneVersion(_AuditOnBuilds, unittest.TestCase):
                          nothing_compared_lines('builds'))
         assert_no_deleted_block(self, out)
 
-    def test_a_patch_to_strcoll_outside_locale_is_named_and_not_compared(self):
-        """A build's patch to strcoll's own code outside locale/: step 5
-        refused its clean sentence over it until step 9.3 (StepFiveReadsABuild
-        tested that). The provenance no longer counts such patches: the
-        count said strcoll and left localedef's patches out (16.129). The
-        summary's warnings say that each build's patches to that code are
-        compared by no step; step 2, which reads only the rules, lists
-        nothing."""
-        out = self.run_of('outside')
+    def test_a_change_to_localedefs_code_is_not_compared(self):
+        """A build that changes localedef's code (ld-collate.c, under
+        locale/), which no step compares since step 9.3: the summary's
+        warnings say that each build's patches to that code are compared
+        by no step; step 2, which reads only the rules, lists nothing.
+        'What was compared' names no patch to strcoll's code (16.129)."""
+        out = self.run_of('localedef')
         compared = flat(compared_text(out))
         self.assertIn('change localedata/ or locale/, applied in the order '
                       'rpm recorded', compared)
         self.assertNotIn("strcoll's code", compared)
-        self.assertNotIn('glibc-example.patch', compared)
-        summary = self.summary('outside')
+        summary = self.summary('localedef')
         warnings = flat(summary.split(
             '-- Warnings the clean results above do NOT cover', 1)[1])
         self.assertIn("!! Not compared on any route: the code that compiles "
@@ -3762,7 +3684,7 @@ class AuditShOnATagAndABuild(_AuditOnBuilds, unittest.TestCase):
 
     @classmethod
     def builds(cls):
-        return {b: (cls.tree(b, b), ()) for b in (B40, B275)}
+        return {b: (cls.tree(b, b),) for b in (B40, B275)}
 
     def test_an_old_tag_says_what_it_cannot_show(self):
         out = self.run_of('tag_build')
@@ -3954,7 +3876,7 @@ class MachineSides(unittest.TestCase):
 
         def fake(name, *a, **k):
             calls.append(name)
-            raise bs.Unread('this test downloads nothing')
+            raise bs.Refused('this test downloads nothing')
         with mock.patch.object(bs, 'fetch_build', fake):
             got = g.machine_sides(given, words, no_sources)
         return got, calls
@@ -4146,7 +4068,7 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
 
     @classmethod
     def builds(cls):
-        return {b: (cls.tree(b, b), ()) for b in (B40, B275)}
+        return {b: (cls.tree(b, b),) for b in (B40, B275)}
 
     # What a distro's patch inside LC_COLLATE looks like, the change
     # test_wrapper.WrapperNodePatchedInsideCollate makes: by injection,
