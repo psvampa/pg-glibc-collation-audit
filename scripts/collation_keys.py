@@ -644,13 +644,12 @@ def _lines_with(blk, needle):
 class Scan:
     """One locale text's LC_COLLATE, as far as the search needs it.
 
-    has_block: a line opening LC_COLLATE at column 0, as collate_bounds
-    reads it. block: from the line after it to the first END LC_COLLATE at
-    column 0, or the end of the file. What depends on the block alone is
-    read once per distinct block (Block): a file that changed outside
-    LC_COLLATE has the same block at both tags. odd: why the block cannot
-    be read with certainty when K is not empty, or None. The rest is
-    Block's, read with this file's comment character.
+    has_block: a line opening LC_COLLATE at column 0. block: from the line
+    after it to the first END LC_COLLATE at column 0, or the end of the file.
+    What depends on the block alone is read once per distinct block (Block): a
+    file that changed outside LC_COLLATE has the same block at both tags. odd:
+    why the block cannot be read with certainty when K is not empty, or None.
+    The rest is Block's, read with this file's comment character.
     """
 
     def __init__(self, text):

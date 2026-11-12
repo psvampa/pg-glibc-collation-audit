@@ -146,7 +146,7 @@ class TheProbeDescribesTheFileItProbes(unittest.TestCase):
         self.real = _harness.backported_c()
 
     def test_the_probe_lists_exactly_the_ranges_the_real_file_declares(self):
-        start, end = g.collate_bounds(self.real)
+        start, end = _harness.collate_bounds(self.real)
         block = '\n'.join(self.real.split('\n')[start:end - 1])
         real_ranges = re.findall(r'<U([0-9A-F]+)>', block)
         # The header quotes them as `<U0000>..<UFFFF>` pairs, one per line.

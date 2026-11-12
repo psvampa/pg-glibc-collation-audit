@@ -3,12 +3,12 @@
 Shared helpers for reading glibc locale data out of a git clone.
 
 The scripts in this directory need the same handful of primitives: locate the
-glibc clone, read blobs at a tag, find the LC_COLLATE block, and walk the
-`copy` graph. They used to each spawn one `git show` per locale file (~350
-subprocesses) with a 30s timeout and an ignored return code, so a slow blob
-fetch on a `--filter=blob:none` clone silently dropped files from the analysis
-and the locale was reported unaffected. Everything here fails loudly instead,
-and blobs are read in a single `git cat-file --batch` stream.
+glibc clone and read blobs at a tag. They used to each spawn one `git show`
+per locale file (~350 subprocesses) with a 30s timeout and an ignored return
+code, so a slow blob fetch on a `--filter=blob:none` clone silently dropped
+files from the analysis and the locale was reported unaffected. Everything
+here fails loudly instead, and blobs are read in a single
+`git cat-file --batch` stream.
 
 Also runnable directly; audit.sh uses sides, resolve, machines, latest,
 order and pair-slug, and provenance and corpus are kept for a hand run:
@@ -1079,8 +1079,7 @@ def read_blobs(repo, tag, paths, raw=False):
     answers "I do not have it" -- is printed by `cat-file --batch` as
     `<request> missing` at exit 0 (measured, git 2.50), the same line as a path
     that does not exist. A caller whose paths came from that tag's own tree
-    treats `missing` as a read that failed, as read_blobs_strict and
-    require_read do.
+    treats `missing` as a read that failed, as require_read does.
 
     raw=True gives each blob's bytes as they are, for glibc_reader, which
     reads bytes the way glibc does and never a decoded text.
@@ -1162,26 +1161,16 @@ def read_blobs_at(repo, groups, raw=False):
     return results
 
 
-def read_blobs_strict(repo, tag, paths, what):
-    """read_blobs, but every path MUST exist at `tag`; otherwise abort.
-
-    For callers whose path list came from the tree at this same tag, so a
-    missing blob is not "that file isn't there" but "I could not read what I
-    was just told exists". Dropping those silently shrinks whatever is built
-    from them -- the `copy` graph, the include walk -- and a smaller graph
-    yields a shorter affected-locale list, which is the reassuring direction.
-
-    `what` names what was being read, so the error says which analysis is
-    incomplete rather than just listing paths.
-    """
-    contents, missing = read_blobs(repo, tag, paths)
-    require_read(tag, paths, missing, what)
-    return contents
-
-
 def require_read(tag, paths, missing, what):
-    """read_blobs_strict's refusal, for a caller that read in a batch of its
-    own (read_blobs_at)."""
+    """Abort when a path in `paths`, listed from the tree at `tag`, came
+    back `missing` from read_blobs or read_blobs_at.
+
+    Such a path is not "that file isn't there" but "I could not read
+    what I was just told exists". Dropping it silently shrinks whatever
+    is built from the files -- the `copy` chains, the include walk --
+    and a smaller set yields a shorter affected-locale list, which is
+    the reassuring direction. `what` names what was being read, so the
+    error says which analysis is incomplete."""
     if missing:
         die(f"{len(missing)} of {len(paths)} file(s) listed at {tag} could not "
             f"be read while building {what}: "
@@ -1982,23 +1971,6 @@ def name_commits(names):
             setattr(sys, attr, _Named(stream, _NAMES))
 
 
-def collate_bounds(text):
-    """1-based (start_line, end_line) of the LC_COLLATE block, or None.
-
-    If the block is unterminated, end is the last line of the file, which keeps
-    the overlap test conservative (a change is more likely to be flagged).
-    """
-    lines = text.split('\n')
-    start = None
-    for idx, line in enumerate(lines, start=1):
-        if start is None:
-            if line.startswith('LC_COLLATE'):
-                start = idx
-        elif line.startswith('END LC_COLLATE'):
-            return start, idx
-    return (start, len(lines)) if start is not None else None
-
-
 def decode_symbolic(name):
     """`<U0069><U0073><U006F>` -> `iso`, and anything else unchanged.
 
@@ -2166,223 +2138,6 @@ def reading_chars_once():
 LR_GETC_FIX = '19d494445981a09503e4a0175732745c39dd7c21'
 
 
-# The words glibc's top-level reader opens a section with
-# (locfile.c:171-255@2.39). Any other word there is a syntax error, and the
-# line is dropped.
-_CATEGORIES = frozenset((
-    'LC_CTYPE', 'LC_COLLATE', 'LC_MONETARY', 'LC_NUMERIC', 'LC_TIME',
-    'LC_MESSAGES', 'LC_PAPER', 'LC_NAME', 'LC_ADDRESS', 'LC_TELEPHONE',
-    'LC_MEASUREMENT', 'LC_IDENTIFICATION'))
-
-
-def _first_word(s):
-    """The word get_ident reads at the start of `s`: up to a blank, `"`,
-    `;`, `<` or `,` (linereader.c:580-581@2.39, :552-553@2.28 and 2.34).
-    `END.LC_CTYPE` is one word to glibc, not END."""
-    i = 0
-    while i < len(s) and s[i] not in _IDENT_STOP:
-        i += 1
-    return s[:i]
-
-
-def _logical_lines(lines, comments, escapes):
-    """(text, complete) for each line glibc's reader reads out of `lines`,
-    blanks stripped from its start: a line ending in an escape is joined to
-    the next one (lr_next, linereader.c:162@2.39), and a line opening with
-    the comment character is dropped whole (lr_token, :221-229) unless the
-    characters are unsettled (more than one comment character) and it ends
-    in an escape. A line still joined when `lines` run out comes last, with
-    complete False. Blank lines are not given."""
-    settled = len(comments) == 1
-    logical, joined = '', False
-    for line in lines:
-        if not joined and line.lstrip(_SPACE).startswith(comments) \
-                and (settled or not line.endswith(escapes)):
-            continue
-        cont = line.endswith(escapes)
-        logical = (logical if joined else '') + (line[:-1] if cont else line)
-        joined = cont
-        if cont:
-            continue
-        s = logical.lstrip(_SPACE)
-        if s:
-            yield s, True
-    if joined:
-        yield logical.lstrip(_SPACE), False
-
-
-def _collate_below(lines, comments, escapes):
-    """Why the lines below the LC_COLLATE block may open it again, or None:
-    a line glibc reads whose first word is LC_COLLATE once lines are joined
-    (`LC_COLL/` then `ATE`), or a first word that holds the escape, which
-    this tool does not read (round 3 of the 13.18 review)."""
-    for s, _ in _logical_lines(lines, comments, escapes):
-        word = _first_word(s)
-        if word == 'LC_COLLATE' or any(e in word for e in escapes):
-            return ("a line below the LC_COLLATE block can open LC_COLLATE "
-                    "again, and glibc reads every such section into the "
-                    "same tables")
-    return None
-
-
-def _sections_above(lines, comments, escapes):
-    """Why the last of `lines`, the LC_COLLATE line, may not open a section,
-    or None: the lines above it read the way glibc's line reader reads them.
-
-    lr_next joins a line that ends in the escape character to the next one
-    (linereader.c:162@2.39), so the LC_COLLATE line continued from the line
-    above is part of that line. A section opened above and not closed by an
-    `END` that opens a line glibc reads is still open, and a category reader
-    takes the LC_COLLATE line as a syntax error inside it, then closes on
-    `END LC_COLLATE` whatever its argument (ld-identification.c:387-403,
-    ld-ctype.c:2820-2835@2.39): collate_read never runs, and collate_finish
-    only warns (ld-collate.c:1563-1568@2.34). An `END` is lost by being
-    commented out, deleted, or joined to the line above, and after a `copy`
-    line or `END` itself, lr_ignore_rest drops the whole joined line
-    (linereader.c:133-136; ld-ctype.c:2143@2.39). Inside LC_CTYPE, a
-    `translit_start` anywhere on a line is read until `translit_end` or the
-    end of the file, END LC_CTYPE included (ld-ctype.c:2625-2657@2.39): only
-    a line opening with `translit_end` leaves it here, though glibc can
-    leave it sooner. An LC_CTYPE `copy` with no string after it sends
-    ctype_read to skip_category, which stops at the END and leaves the word
-    after it to the top level (ld-ctype.c:2104-2122@2.39), so the LC_CTYPE
-    after END opens a section again. An LC_COLLATE section above the block
-    is a second one, which collate_read reads into the same tables
-    (collate_startup, ld-collate.c:1499@2.39).
-
-    Measured on glibc-2.34-283.el9_8 and glibc-2.39-142.el10_2 (2026-10-12,
-    localedef -c --no-archive): a commented-out END LC_CTYPE or
-    translit_end, an include or copy line ending in the escape above them,
-    `END.LC_CTYPE` and `copy i18n` each make localedef say "No definition
-    for LC_COLLATE category found" and write a 92-byte LC_COLLATE that does
-    not load, where the control writes 2.5 MB.
-
-    When the characters are settled, the directive lines that open the file
-    are read with the characters in force before them, which joins none of
-    them (glibc_locale_data._glibc_chars), and a line opening with the
-    comment character is dropped whole, continued or not (lr_token,
-    :221-229). When they are not settled, `comments` and `escapes` hold
-    both of each, and such a line that ends in an escape is joined: the
-    answer is then a guess in either direction. No step asks it since step
-    9.2, when step 2 began comparing each locale's rules
-    (glibc_tree.compare_rules); it is kept, with its tests, for branches 12
-    and 13.
-    A word built with an escape (get_ident keeps the character after one,
-    :580-589) is not read here: it is a reason too.
-    """
-    settled = len(comments) == 1
-    start = 0
-    if settled:
-        while start < len(lines) - 1 and (
-                not lines[start].strip(_SPACE)
-                or _first_word(lines[start].lstrip(_SPACE))
-                in ('comment_char', 'escape_char')):
-            start += 1
-    open_section, translit = None, False
-    for s, complete in _logical_lines(lines[start:-1], comments, escapes):
-        if not complete:
-            return ("the line above LC_COLLATE ends in the escape "
-                    "character, so glibc can read LC_COLLATE as part of "
-                    "that line")
-        word = _first_word(s)
-        if any(e in word for e in escapes):
-            return ("a word above LC_COLLATE holds the escape character, "
-                    "which this tool does not read")
-        if translit:
-            translit = word != 'translit_end'
-        elif word == 'END':
-            open_section = None
-        elif word == 'LC_COLLATE':
-            return ("a second LC_COLLATE section above the block, which "
-                    "glibc reads into the same tables")
-        elif open_section == 'LC_CTYPE' and word == 'copy' \
-                and not s[len(word):].lstrip(_SPACE).startswith('"'):
-            return ("an LC_CTYPE copy above LC_COLLATE with no string after "
-                    "it, after which glibc can read LC_COLLATE inside "
-                    "LC_CTYPE")
-        elif word in _CATEGORIES and open_section is None:
-            open_section = word
-        elif open_section == 'LC_CTYPE' and re.search(
-                r'(?<![A-Za-z0-9_])translit_start(?![A-Za-z0-9_])', s):
-            translit = True
-    if open_section:
-        inside = ' inside its translit_start' if translit else ''
-        return (f"{open_section}, opened above LC_COLLATE, has no END line "
-                f"glibc reads before it{inside}, so glibc can read LC_COLLATE "
-                f"inside {open_section}")
-    return None
-
-
-def byte_ends_it_early(text):
-    """Does a 0x1A or 0xFF byte sit above the end of the file's LC_COLLATE
-    block? Before LR_GETC_FIX, lr_getc reads either as EOF
-    (linereader.h:138@2.34): above the block, glibc never reaches it; inside
-    it, collate_read stops there (ld-collate.c:2662@2.34) and every rule
-    after the byte is lost. From 2.36 both are ordinary bytes. The 0xFF is
-    found through TEXTS_WITH_0XFF, since decoding made it a U+FFFD like any
-    byte that is not UTF-8, so every U+FFFD in that part counts. A byte on a
-    comment line, which glibc skips without lr_getc, counts too: it only
-    keeps a locale listed. False for a text with no block."""
-    bounds = collate_bounds(text)
-    if bounds is None:
-        return False
-    head = '\n'.join(text.split('\n')[:bounds[1]])
-    return '\x1a' in head or (text in TEXTS_WITH_0XFF and '\ufffd' in head)
-
-
-def lc_collate_unread(text, early):
-    """Why glibc may not read this file's LC_COLLATE block as written, or
-    None when none of the shapes below is there.
-
-    The block can be the same text at both tags and still not be read as
-    written, by what sits around it (backlog 13.18). The shapes, all read on
-    glibc's line reader at 2.28, 2.34 and 2.39:
-      - A line above holds only the escape character. lr_next leaves an
-        empty buffer, and lr_getc answers EOF from then on
-        (linereader.h:134@2.34).
-      - The LC_COLLATE line is continued from the line above, or a section
-        opened above it is never closed (_sections_above).
-      - A second LC_COLLATE section, above or below the block, spelled
-        plainly, indented or built across a line end (_sections_above,
-        _collate_below): glibc reads each such section into the same tables
-        (collate_startup, ld-collate.c:1499@2.39).
-      - Before LR_GETC_FIX, a 0x1A or 0xFF byte above the end of the block
-        (byte_ends_it_early).
-
-    Each is counted wherever glibc might be stopped by it. No step asks it
-    since step 9.2; it is kept, with its tests, for branches 12 and 13. No
-    locale file at glibc-2.12..2.42 holds any of
-    them (measured 2026-10-12).
-
-    The comment and escape characters are the ones reading_chars settles,
-    or both of each when it cannot. `early()` says whether the localedef
-    that reads the text predates LR_GETC_FIX: True, False, or None for
-    "cannot tell", which counts as yes. It is asked only for a text with
-    one of those bytes.
-
-    None for a text with no LC_COLLATE line, which this line search reads
-    only at the start of a line, is not a clean answer.
-    """
-    bounds = collate_bounds(text)
-    if bounds is None:
-        return None
-    lines = text.split('\n')[:bounds[0]]
-    chars = reading_chars(text)
-    comments, escapes = (((chars[0],), (chars[1],)) if chars is not None
-                         else (('%', '#'), ('/', '\\')))
-    if any(line in escapes for line in lines[:-1]):
-        return ("a line above LC_COLLATE holds only the escape character, "
-                "which glibc reads as the end of the file")
-    why = (_sections_above(lines, comments, escapes)
-           or _collate_below(text.split('\n')[bounds[1]:], comments, escapes))
-    if why:
-        return why
-    if byte_ends_it_early(text) and early() is not False:
-        return ("a 0x1A or 0xFF byte above the end of LC_COLLATE, which "
-                "glibc before 2.36 reads as the end of the file")
-    return None
-
-
 _CODESET_RE = re.compile(r'\.([^.@]+)(?=@|$)')
 _SOURCE_RE = re.compile(r'\.[^@]*')
 
@@ -2453,30 +2208,6 @@ def _aliases_reaching(sources, aliases):
     return {alias: locale_source(target) for alias, target in aliases.items()
             if locale_source(target) in sources
             and alias != locale_source(target)}
-
-
-def aliases_of(sources, aliases):
-    """{alias: source} for every alias whose locale is built from one of
-    `sources` (swedish -> sv_SE.ISO-8859-1 -> sv_SE). An alias spelled as its
-    own locale (ko_KR -> ko_KR.eucKR, ja_JP -> ja_JP.eucJP) is that locale's
-    name already, and is left out. So is an alias whose name is not ASCII,
-    which non_ascii_alias_targets names for the caller to say so."""
-    return {a: s for a, s in _aliases_reaching(sources, aliases).items()
-            if a.isascii()}
-
-
-def non_ascii_alias_targets(sources, aliases):
-    """The locales of `sources` that have an alias whose name is not ASCII.
-
-    Until glibc 2.22 locale.alias carried bokmal and francais spelled in
-    Latin-1 bytes; glibc removed them because they broke `locale -a`
-    (Bug 18412). read_blobs decodes such a byte to U+FFFD, so the name cannot
-    be written as it is, and PostgreSQL never imports a name that is not
-    ASCII as a collation (pg_import_system_collations). They are left out of
-    the list, and this is what lets the caller say so instead of dropping
-    them in silence."""
-    return sorted({s for a, s in _aliases_reaching(sources, aliases).items()
-                   if not a.isascii()})
 
 
 def supported_map(repo, tag):

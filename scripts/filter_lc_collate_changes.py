@@ -61,9 +61,8 @@ import glibc_tree
 # this step and for step 11. Named here as well: this step and its
 # tests use these names.
 from node_charmaps import (
-    print_characters, _named_under, reads_utf8, Words, STEP2_WORDS,
-    _said, _charmaps_not_run, _warn_block, _CHANGED_IN_CHARMAP,
-    _chars_phrase, _print_chars, print_charmap_report,
+    print_characters, _named_under, reads_utf8, STEP2_WORDS,
+    _said, _charmaps_not_run, _warn_block, print_charmap_report,
     print_translit_report)
 
 WIDTH = 78
@@ -900,7 +899,7 @@ def _main(opts):
         else:
             print(f"Character sets and transliterations: not compared, "
                   f"{what}.")
-        names, keyed, not_compared = [], [], []
+        names, not_compared = [], []
         g.write_list(f"step2_rules_characters.{slug}.tsv",
                      characters_rows({}, []))
         write_rules_by_name(slug, noun, (old_name, new_name), machine,

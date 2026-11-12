@@ -290,25 +290,12 @@ class AShallowCloneCannotAnswerThis(unittest.TestCase):
 
 @needs_clone
 class UnreadableBlobsAreNotDropped(unittest.TestCase):
-    """read_blobs_strict: paths that came out of the tree at this tag must all
-    be readable. Dropping one shrinks the copy graph or the include walk, and a
-    smaller graph yields a shorter affected-locale list."""
+    """require_read where the tree is read: paths that came out of the tree
+    at this tag must all be readable. Dropping one shrinks the copy chains
+    or the include walk, and a smaller set yields a shorter affected-locale
+    list."""
 
-    def test_aborts_and_names_the_path_it_could_not_read(self):
-        rc, out = in_subprocess(
-            "g.read_blobs_strict(repo, '%s',"
-            " ['localedata/locales/no-such-locale'], 'the copy graph')" % NEW)
-        self.assertNotEqual(rc, 0)
-        self.assertIn('no-such-locale', out)
-        self.assertIn('the copy graph', out, 'error does not say what broke')
-
-    def test_valid_paths_are_returned(self):
-        got = g.read_blobs_strict(GLIBC_CLONE, NEW,
-                                  ['localedata/locales/sv_SE'], 'a test')
-        self.assertIn('localedata/locales/sv_SE', got)
-        self.assertIn('LC_COLLATE', got['localedata/locales/sv_SE'])
-
-    # The two tests below assert the CALL SITES, not the helper. Mutation
+    # The test below asserts the CALL SITE, not the helper. Mutation
     # testing showed why: reverting the copy graph's read (build_copy_graph,
     # since replaced by glibc_tree.Tree.at_tag) to `contents, _ =
     # read_blobs(...)` left the whole suite green, because every path it reads
@@ -1395,8 +1382,8 @@ class ALineAboveLcCollateThatStopsGlibc(unittest.TestCase):
 
     # m at mm2 sets the escape to `!` and ends END LC_CTYPE with it: lr_next
     # joins the LC_COLLATE line to it and glibc reads no LC_COLLATE. The
-    # line search behind lc_collate_unread settles only `/` and `\` and does
-    # not see it; glibc_reader does (doc-sweep of 15.2 B3).
+    # line search step 2 used until step 9.2 settled only `/` and `\`
+    # and did not see it; glibc_reader does (doc-sweep of 15.2 B3).
     SWALLOW = (b'comment_char %%\nescape_char %s\nLC_CTYPE\ncopy "i18n"\n'
                b'END LC_CTYPE%s\nLC_COLLATE\ncopy "iso14651_t1"\n'
                b'END LC_COLLATE\n')
