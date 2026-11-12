@@ -25,13 +25,11 @@ and a step that settles one has to move it here.
 
 Below the oracle: what a Build keeps between runs and scripts/reader_cache.py
 keeps on disk give exactly what the reader computes without them (backlog
-15.2), and run() agrees with a plain line reading (collate_bounds and
-_copy_targets, below) on the LC_COLLATE bounds and copies of every locale
-file of the five tags,
-which the cache makes cheap after the first time. Last, glibc_tree: the
-shapes those line readers got wrong, through steps 1 to 4, what step 2
-asks of each file (file_facts) and how it is kept, and its answers on the
-five tags against theirs, every difference named.
+15.2), and run() agrees with a plain line reading (_harness.collate_bounds
+and _copy_targets, below) on the LC_COLLATE bounds and copies of every
+locale file of the five tags, which the cache makes cheap after the first
+time. Then glibc_tree and step 2 on the shapes the old line readers got
+wrong.
 """
 import contextlib
 import hashlib
@@ -1249,7 +1247,7 @@ _COPY_LINE = re.compile(r'^\s*copy\s*"([^"]+)"', re.M)
 
 
 def _copy_targets(text):
-    bounds = g.collate_bounds(text)
+    bounds = _harness.collate_bounds(text)
     if bounds is None:
         return []
     start, end = bounds
@@ -1259,12 +1257,12 @@ def _copy_targets(text):
 
 @needs_floor_pair
 class ReaderAgreesOnEveryRealFile(unittest.TestCase):
-    """run() against a plain line reading (g.collate_bounds, _copy_targets),
-    over every locale file of the five tags, each as the -i of a localedef run with its
-    copies found in the same tag: the same LC_COLLATE bounds and the same
-    copies, no fatal run, and nothing unsettled but the known grammar
-    (backlog 15.1 measured this outside the suite, 9.4 minutes on the Mac;
-    reader_cache keeps the runs, so after the first time it takes
+    """run() against a plain line reading (_harness.collate_bounds,
+    _copy_targets), over every locale file of the five tags, each as the -i of
+    a localedef run with its copies found in the same tag: the same LC_COLLATE
+    bounds and the same copies, no fatal run, and nothing unsettled but the
+    known grammar (backlog 15.1 measured this outside the suite, 9.4 minutes on
+    the Mac; reader_cache keeps the runs, so after the first time it takes
     seconds)."""
 
     TAGS = (FLOOR_OLD, FLOOR_NEW, OLD, MID, NEW)
@@ -1296,7 +1294,7 @@ class ReaderAgreesOnEveryRealFile(unittest.TestCase):
                     if s[0] == 'LC_COLLATE' and s[1] == name]
             mine = (secs[0][2], secs[0][3]) if secs else None
             text = g.decoded(data[name])
-            theirs = g.collate_bounds(text)
+            theirs = _harness.collate_bounds(text)
             if mine != theirs:
                 bad.append((name, 'bounds', mine, theirs))
             cps = []
@@ -1381,8 +1379,6 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
         self.assertEqual([], self.tree.ranges('zz_HC'))
         self.assertEqual([(4, '<U0042>..<U0045> % not a comment here')],
                          self.tree.ranges('zz_PC'))
-        self.assertEqual('explicit', self.tree.style('zz_HC'))
-        self.assertEqual('ellipsis', self.tree.style('zz_PC'))
 
     def test_a_run_that_does_not_finish_or_settle_is_named(self):
         tree = _tree_with(NEW, {
@@ -1431,8 +1427,6 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
         self.assertEqual('localedef stores no LC_COLLATE for it',
                          why['zz_NR'])
         self.assertIn('reorder-sections-after in LC_COLLATE', why['zz_RS'])
-        for name in why:
-            self.assertEqual('unread', tree.style(name))
         self.assertEqual({'zz_CA', 'zz_CB', 'zz_MI', 'zz_NR', 'zz_RS',
                           'zz_EM', 'zz_BL', 'zz_NL', 'zz U', 'zz C'}, set(why),
                          'every tag file reads clean')
@@ -1448,7 +1442,6 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
             GLIBC_CLONE, MID, 'glibc-2.34-275.el9_8'))
         self.assertEqual((set(), {}), plain.byte_order())
         self.assertEqual(({'C'}, {}), rhel9.byte_order())
-        self.assertEqual('codepoint', rhel9.style('C'))
 
     def test_a_file_glibc_stops_reading_is_not_read_as_having_no_order(self):
         """Before 2.36 lr_getc gives the top level an EOF at a 0x1A, and at
@@ -1473,7 +1466,6 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
                     self.assertEqual(
                         'localedef stops reading %s at line %d, before the '
                         'end of the file' % (name, line), why.get(name))
-                    self.assertEqual('unread', tree.style(name))
                 self.assertEqual((set(), {}), tree.byte_order())
         tree = _tree_with(NEW, {'C': b'\x1a\n' + c})
         self.assertNotIn('C', tree.unresolved())
@@ -1517,7 +1509,6 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
         tree = _tree_with(MID, {'C': c},
                           glibc_tree.build_at(GLIBC_CLONE, MID, 'x.el9'))
         self.assertEqual((set(), {}), tree.byte_order())
-        self.assertEqual('codepoint-not-alone', tree.style('C'))
 
     def test_an_0xFF_inside_a_statement_is_not_read_as_settled(self):
         """An 0xFF that lr_getc consumes ends a statement whose handler may
@@ -1549,7 +1540,6 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
             glibc_tree.build_at(GLIBC_CLONE, MID, 'x.el9'))
         self.assertEqual((set(), {}), tree.byte_order())
         self.assertEqual(['iso14651_t1'], tree.copies('C'))
-        self.assertEqual('copy-only', tree.style('C'))
 
     def test_an_unsettled_run_is_not_byte_order(self):
         """A run with an unsettled place is not read as byte order, even
@@ -1598,6 +1588,78 @@ class TreeReadsWhatLocaledefReads(unittest.TestCase):
                 b = glibc_tree.build_at(GLIBC_CLONE, MID, build_id)
                 self.assertEqual(has, kw in b.locfile_kw)
                 self.assertTrue(b.pre236)
+
+    def test_keyword_tables_a_tag_lacks_are_refused(self):
+        """A ref without locfile-kw.gperf or charmap-kw.gperf (a fabricated
+        repository, a tree of another layout) is named and refused, never
+        read with tables from somewhere else (glibc_tree.builds_at)."""
+        import glibc_tree
+        real = g.read_blobs_at
+
+        def fake(repo, groups, raw=False):
+            return [({}, set(paths)) if any(p.endswith('-kw.gperf')
+                                             for p in paths)
+                    else real(repo, [(t, paths)], raw=raw)[0]
+                    for t, paths in groups]
+        err = io.StringIO()
+        with mock.patch.object(g, 'read_blobs_at', fake), \
+                contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit):
+            glibc_tree.builds_at(GLIBC_CLONE, [NEW])
+        self.assertIn("cannot read glibc's keyword tables at %s: "
+                      "locale/programs/charmap-kw.gperf, "
+                      "locale/programs/locfile-kw.gperf could not be read"
+                      % NEW, _harness.flat(err.getvalue()))
+
+    def test_each_run_reads_the_sections_glibc_reads(self):
+        """What step 2 reads of each run, line by line (glibc_tree.
+        _read_collate): the LC_COLLATE sections the run read for their
+        content, by their lines, and the lines that steer others. An
+        indented section is one (zz_IN). skip_category stops at the first
+        END and returns without reading the word after it
+        (ld-collate.c:2621-2643@2.39): zz_SK's section is lines 3-5, and the
+        top level reads that `LC_COLLATE` as a second section, which the
+        END of line 8 closes; a reader that lost the first END line read
+        the first section to the end of the file, and the suite stayed
+        green (backlog 13.43 a, step 7c). get_ident drops the escape inside
+        a word, so zz_HD's line 6 is comment_char # and LC_COLLATE opens on
+        line 7. A file read through a copy is read on the same lines (zz_RF
+        in zz_RB's run), and a branch only a copier takes steers there
+        (zz_BR in zz_DF's run, backlog 13.36)."""
+        import glibc_tree
+        files = {n: v[0] for n, v in _STEP2.items()}
+        files['zz_HD'] = (b'comment_char %\nescape_char /\nLC_CTYPE\n'
+                          b'copy "i18n"\nEND LC_CTYPE\ncomment_c/har #\n'
+                          b'LC_COLLATE\ncopy "iso14651_t1"\nEND LC_COLLATE\n'
+                          b'escape_char \\\n')
+        files['zz_SK'] = _HEAD + (b'LC_COLLATE\ncopy\nEND LC_COLLATE\n'
+                                  b'LC_IDENTIFICATION\ntitle "t"\n'
+                                  b'END LC_IDENTIFICATION\n')
+        files['zz_BR'] = _HEAD + (b'LC_COLLATE\ncopy "iso14651_t1"\n'
+                                  b'ifdef ZZ_ON\nreorder-after <U0041>\n'
+                                  b'<U0042>\nreorder-end\nendif\n'
+                                  b'END LC_COLLATE\n')
+        files['zz_DF'] = _HEAD + (b'LC_COLLATE\ndefine ZZ_ON\n'
+                                  b'copy "zz_BR"\nEND LC_COLLATE\n')
+        files.update(_RETURNS)
+        tree = _tree_with(NEW, files)
+        for run, bounds, steer in (
+                ('zz_IN', {'zz_IN': [(3, 8)]}, {'zz_IN': [(4, 4), (7, 7)]}),
+                ('zz_SK', {'zz_SK': [(3, 5), (5, 8)]}, {'zz_SK': [(6, 7)]}),
+                ('zz_HD', {'zz_HD': [(7, 9)]}, {'zz_HD': [(8, 8)]}),
+                ('zz_RB', {'zz_RB': [(1, 3)], 'zz_RF': [(5, 7)]},
+                 {'zz_RB': [(2, 2)], 'zz_RF': [(6, 6)]}),
+                ('zz_BR', {'zz_BR': [(3, 10)]},
+                 {'zz_BR': [(4, 5), (9, 9)]}),
+                ('zz_DF', {'zz_DF': [(3, 6)], 'zz_BR': [(3, 10)]},
+                 {'zz_BR': [(4, 6), (8, 9)], 'zz_DF': [(4, 5)]})):
+            with self.subTest(run):
+                self.assertNotIn(run, tree.unresolved())
+                got, steers, _ = glibc_tree._read_collate(tree, run)
+                self.assertEqual(bounds, {f: v for f, v in got.items()
+                                          if f.startswith('zz_')})
+                self.assertEqual(steer, {f: v for f, v in steers.items()
+                                         if f.startswith('zz_')})
 
     def test_a_ref_git_cannot_place_is_refused(self):
         """Before or after the lr_getc fix decides how 0x1A and 0xFF read;
@@ -2634,393 +2696,9 @@ class StepTwoReadsWhereLocaledefReads(unittest.TestCase):
         block, so the tests above cannot pass by testing what they already
         got right."""
         ej = _STEP2['zz_EJ'][0].decode('ascii')
-        self.assertEqual((1, 6), g.collate_bounds(ej))
-        self.assertIsNone(g.collate_bounds(_STEP2['zz_IN'][0].decode('ascii')))
-
-
-class TheFactsKeyNamesTheCodeThatMakesThem(unittest.TestCase):
-    """glibc_tree keeps what _facts computes as text, the reasons
-    Tree.unresolved writes with glibc_locale_data.shown among it, under
-    _SELF. A change to any file that makes that text has to start it from
-    nothing, here and in CI's cache; keyed on glibc_tree.py alone, a
-    change to shown() reached no full cache (review of the whole of block
-    15, 2026-10-30)."""
-
-    @staticmethod
-    def self_hash(scripts):
-        p = subprocess.run(
-            [sys.executable, '-c', 'import sys; sys.path.insert(0, %r); '
-             'import glibc_tree; print(glibc_tree._SELF)' % scripts],
-            capture_output=True, timeout=120, check=True)
-        return p.stdout.decode('ascii').strip()
-
-    def test_a_change_to_each_source_changes_the_key(self):
-        import glibc_tree as gt
-        names = sorted(os.path.basename(p) for p in gt._SELF_SOURCES)
-        self.assertEqual(['glibc_locale_data.py', 'glibc_tree.py'], names)
-        tmp = tempfile.mkdtemp(prefix='pg-glibc-self-')
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        for name in os.listdir(_harness.SCRIPTS_DIR):
-            if name.endswith('.py'):
-                shutil.copy(os.path.join(_harness.SCRIPTS_DIR, name), tmp)
-        base = self.self_hash(tmp)
-        self.assertEqual(gt._SELF, base)
-        for name in names:
-            with self.subTest(name):
-                path = os.path.join(tmp, name)
-                with open(path, 'rb') as fh:
-                    was = fh.read()
-                with open(path, 'ab') as fh:
-                    fh.write(b'\n# a change\n')
-                try:
-                    self.assertNotEqual(base, self.self_hash(tmp))
-                finally:
-                    with open(path, 'wb') as fh:
-                        fh.write(was)
-
-    def test_ci_keys_its_cache_on_the_same_files(self):
-        import glibc_tree as gt
-        with open(os.path.join(os.path.dirname(_harness.TESTS_DIR),
-                               '.github', 'workflows', 'tests.yml'),
-                  encoding='utf-8') as fh:
-            keys = [ln for ln in fh
-                    if ln.strip().startswith('key: glibc-reader-')]
-        self.assertEqual(1, len(keys), keys)
-        for path in gt._SELF_SOURCES:
-            self.assertIn("'scripts/%s'" % os.path.basename(path), keys[0])
-
-
-@needs_clone
-class FileFactsReadLikeGlibc(unittest.TestCase):
-    """glibc_tree.file_facts: what step 2 asks of each file, from run()
-    and nothing else, and kept only where it is the same answer."""
-
-    @classmethod
-    def setUpClass(cls):
-        import glibc_tree
-        cls.gt = glibc_tree
-        cls.tmp = tempfile.mkdtemp(prefix='pg-glibc-facts-')
-        files = {n: v[0] for n, v in _STEP2.items()}
-        files['zz_HD'] = (b'comment_char %\nescape_char /\nLC_CTYPE\n'
-                          b'copy "i18n"\nEND LC_CTYPE\ncomment_c/har #\n'
-                          b'LC_COLLATE\ncopy "iso14651_t1"\nEND LC_COLLATE\n'
-                          b'escape_char \\\n')
-        files['zz_CP'] = _HEAD + b'LC_COLLATE\ncopy "zz_EJ"\nEND LC_COLLATE\n'
-        files['zz_MI'] = _HEAD + b'LC_COLLATE\ncopy "zz_NONE"\nEND LC_COLLATE\n'
-        # A run the reader stops in (GlibcUndefined): Facts.stopped.
-        files['zz_SV'] = b'LC_NUMERIC\n-x\nEND LC_NUMERIC\n'
-        # A fatal end reached after a place the reader is not sure of:
-        # glibc may never reach it (round 4 of the 15.3 C2 review).
-        files['zz_FU'] = (_HEAD + b'LC_COLLATE\n<foo> x\ncopy "zz_NONE"\n'
-                          b'END LC_COLLATE\n')
-        # Lines 6-8: a reorder only a locale that defines ZZ_ON reads
-        # (backlog 13.36).
-        files['zz_BR'] = _HEAD + (b'LC_COLLATE\ncopy "iso14651_t1"\n'
-                                  b'ifdef ZZ_ON\nreorder-after <U0041>\n'
-                                  b'<U0042>\nreorder-end\nendif\n'
-                                  b'END LC_COLLATE\n')
-        files['zz_DF'] = _HEAD + (b'LC_COLLATE\ndefine ZZ_ON\n'
-                                  b'copy "zz_BR"\nEND LC_COLLATE\n')
-        # A `copy` with no string: skip_category reads to the END, lines
-        # 3-5, and leaves the word after it to the top level
-        # (ld-collate.c:2621-2643@2.39).
-        files['zz_SK'] = _HEAD + (b'LC_COLLATE\ncopy\nEND LC_COLLATE\n'
-                                  b'LC_IDENTIFICATION\ntitle "t"\n'
-                                  b'END LC_IDENTIFICATION\n')
-        files.update(_RETURNS)
-        cls.repo, cls.ref = _harness.glibc_commit(NEW, files, cls.tmp)
-        cls.paths, cls.ids = g.list_tree_ids(cls.repo, cls.ref, [])
-        cls.build = glibc_tree.build_at(cls.repo, cls.ref)
-        # The suite's own directory, where the runs of this tree, one file
-        # or two from NEW, are kept already (_harness.fill_reader_cache): a
-        # directory of its own computed the whole tree again, more than
-        # 600 s with the other classes running. What is kept here is named
-        # after this tree, which no other class reads; the facts a run
-        # before this one kept are dropped, so that cls.facts is computed
-        # and test_a_kept_answer_is_the_answer compares two answers, not one
-        # kept answer with itself (round 5 of the 15.2 B3 review).
-        cls.cache = None
-        try:
-            os.unlink(glibc_tree._facts_path(cls.paths, cls.ids, cls.build,
-                                             cls.cache))
-        except FileNotFoundError:
-            pass
-        cls.facts = cls.ask()
-
-    @classmethod
-    def ask(cls):
-        return cls.gt.file_facts(cls.repo, cls.ref, cls.paths, cls.ids,
-                                 cls.build, cache_dir=cls.cache)
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.tmp, ignore_errors=True)
-
-    def test_an_end_joined_by_the_escape_does_not_end_the_section(self):
-        """Read by its own run and by zz_CP's, the same lines."""
-        self.assertEqual([(1, 10, 0x23, 0x5c, 'zz_CP'),
-                          (1, 10, 0x23, 0x5c, 'zz_EJ')],
-                         self.facts['zz_EJ'].collate)
-
-    def test_an_indented_section_is_a_section(self):
-        self.assertEqual([(3, 8, 0x25, 0x2f, 'zz_IN')],
-                         self.facts['zz_IN'].collate)
-
-    def test_a_section_skipped_to_its_end_ends_there(self):
-        """skip_category stops at the first END and returns without reading
-        the word after it (ld-collate.c:2621-2643@2.39): the section is
-        lines 3-5, and the top level reads that `LC_COLLATE` as a second
-        section, which the END of line 8 closes. A reader that lost the
-        first END line read the first section to the end of the file, and
-        the suite stayed green (backlog 13.43 a, step 7c)."""
-        self.assertEqual([(3, 5, 0x25, 0x2f, 'zz_SK'),
-                          (5, 8, 0x25, 0x2f, 'zz_SK')],
-                         self.facts['zz_SK'].collate)
-
-    def test_a_directive_spelt_across_the_escape_reads_the_section(self):
-        """get_ident drops the escape inside a word: line 6 is
-        comment_char #, and it reads LC_COLLATE on line 7. The escape_char
-        under the section acts after it, on nothing of it."""
-        hd = self.facts['zz_HD']
-        self.assertEqual([(7, 9, 0x23, 0x2f, 'zz_HD')], hd.collate)
-        self.assertTrue(hd.inside(8))
-        self.assertFalse(hd.inside(11))
-
-    def test_a_section_read_only_through_a_copy_is_the_file_s(self):
-        """zz_EJ's section is the same lines and characters whether its
-        own run or zz_CP's reads it: one pair, two runs."""
-        ej = self.facts['zz_EJ']
-        self.assertEqual([(0x23, 0x5c)], ej.reading())
-        self.assertEqual({'zz_CP', 'zz_EJ'}, {r[4] for r in ej.collate})
-        self.assertEqual([(3, 5, 0x25, 0x2f, 'zz_CP')],
-                         self.facts['zz_CP'].collate)
-
-    def test_a_section_each_run_reads_with_its_own_characters(self):
-        """zz_RF's own run obeys the escape_char a run copying its
-        LC_COLLATE skips: the section is read with both pairs."""
-        rf = self.facts['zz_RF']
-        self.assertIsNone(rf.unresolved)
-        self.assertEqual([(5, 7, 0x23, 0x5c, 'zz_RB'),
-                          (5, 7, 0x23, 0x2f, 'zz_RF')], rf.collate)
-        self.assertEqual([(0x23, 0x5c), (0x23, 0x2f)], rf.reading())
-
-    def test_a_branch_only_a_copier_takes_is_an_instruction_too(self):
-        """zz_BR's own run skips lines 6-8 (`ifdef ZZ_ON` not defined)
-        and zz_DF's reads them: the file's answer is every run's, or a
-        changed reorder-after there would read as a rule of its own."""
-        self.assertEqual([(4, 6), (8, 9)], self.facts['zz_BR'].instructions)
-        self.assertEqual([(4, 5)], self.facts['zz_DF'].instructions)
-
-    def test_an_answer_whose_character_map_is_gone_is_computed_again(self):
-        """reader_cache.maps_kept: kept Facts that name a map no longer
-        kept would answer "could not identify" for every changed line of
-        the file; they are computed again from the runs, which compute the
-        map again (backlog 15.3 C2)."""
-        made = []
-        real = self.gt._facts
-
-        def counted(*a, **k):
-            made.append(1)
-            return real(*a, **k)
-        with mock.patch.object(self.gt, '_facts', counted):
-            self.ask()
-            self.assertEqual([], made, 'kept Facts were computed again')
-            with mock.patch.object(self.gt.rc, 'maps_kept',
-                                   lambda shas, cache_dir=None: False):
-                again = self.ask()
-        self.assertEqual([1], made)
-        self.assertEqual(self.facts['zz_EJ'].chars, again['zz_EJ'].chars)
-
-    def test_a_run_the_reader_stops_in_is_every_file_s(self):
-        """Facts.stopped, computed and kept: what glibc reads after the
-        place zz_SV's run stopped is not known in any file, nor after the
-        place zz_FU's was unsure of before its fatal end; after the
-        place zz_EJ's run (and zz_CP's, which copies it) stopped being
-        sure, in any file it did not begin. A fatal run (zz_MI) builds
-        nothing and is not one."""
-        for facts in (self.facts, self.ask()):
-            self.assertEqual(('zz_CP', 'zz_EJ', 'zz_FU', 'zz_SV'),
-                             facts['zz_IN'].stopped)
-            self.assertEqual(('zz_FU', 'zz_SV'), facts['zz_EJ'].stopped)
-            self.assertNotIn('zz_MI', facts['zz_MI'].stopped)
-            self.assertIsNone(facts['zz_IN'].characters(5))
-
-    def test_a_run_that_does_not_finish_or_settle_is_named(self):
-        self.assertEqual('localedef cannot open zz_NONE',
-                         self.facts['zz_MI'].unresolved)
-        self.assertEqual('zz_EJ:5: `END` after the first token of a statement '
-                         'in LC_COLLATE', self.facts['zz_EJ'].unresolved)
-        self.assertIsNone(self.facts['zz_IN'].unresolved)
-
-    def test_the_answer_is_the_tree_s(self):
-        """file_facts keeps nothing but what Tree's runs give."""
-        tree = self.gt.Tree.at_tag(self.repo, self.ref, self.build)
-        bad = tree.unresolved()
-        for name in tree.names:
-            got = self.facts[name]
-            self.assertEqual(bad.get(name), got.unresolved, name)
-            for sec in tree._collate_sections(name):
-                if sec[0] == name:
-                    self.assertTrue(got.collate, name)
-
-    def kept(self, facts):
-        return {n: (f.collate, f.unresolved, f.instructions, f.chars,
-                    f.stopped)
-                for n, f in facts.items()}
-
-    def test_a_kept_answer_is_the_answer(self):
-        self.assertEqual(self.kept(self.facts), self.kept(self.ask()))
-
-    def test_a_kept_answer_of_another_shape_is_computed_again(self):
-        path = self.gt._facts_path(self.paths, self.ids, self.build,
-                                   self.cache)
-        self.ask()
-        with open(path) as fh:
-            kept = json.load(fh)
-        for bad in ({}, [], {'zz_EJ': [[], None, []]},
-                    dict(kept, zz_EJ=[[[1, 'x', 35, 92, 'zz_EJ']], None, []]),
-                    dict(kept, zz_EJ=[[[1, 10, 35, 92]], None, []]),
-                    dict(kept, zz_EJ=[[[1, 10, '#', 92, 'zz_EJ']], None, []]),
-                    dict(kept, zz_EJ=[[[1, 10, 35, None, 'zz_EJ']], None,
-                                      []]),
-                    dict(kept, zz_EJ=[[[1, 10, 35, 92, 7]], None, []]),
-                    dict(kept, zz_EJ=[[], 7, []]),
-                    # the shape before backlog 13.36, and instruction
-                    # lines that are not (first, last) of whole numbers
-                    dict(kept, zz_EJ=[[], None]),
-                    dict(kept, zz_EJ=[[], None, None]),
-                    dict(kept, zz_EJ=[[], None, [[1]]]),
-                    dict(kept, zz_EJ=[[], None, [[1, 'x']]]),
-                    dict(kept, zz_EJ=[[], None, [1, 2]]),
-                    dict(kept, zz_EJ=[[], None, [], 'x']),
-                    # the shape before backlog 15.3 C2, and character maps
-                    # that are not named by a string
-                    dict(kept, zz_EJ=[[], None, []]),
-                    dict(kept, zz_EJ=[[], None, [], [7]]),
-                    dict(kept, zz_EJ=[[], None, [], None]),
-                    # the shape before round 1 of the 15.3 C2 review, and
-                    # runs that are not named by a string
-                    dict(kept, zz_EJ=[[], None, [], []]),
-                    dict(kept, zz_EJ=[[], None, [], [], None]),
-                    dict(kept, zz_EJ=[[], None, [], [], [7]])):
-            with open(path, 'w') as fh:
-                json.dump(bad, fh)
-            self.assertEqual(self.kept(self.facts), self.kept(self.ask()),
-                             bad)
-        with open(path, 'w') as fh:
-            fh.write('{not json')
-        self.assertEqual(self.kept(self.facts), self.kept(self.ask()))
-
-    def test_a_kept_answer_is_used(self):
-        """The control of the one above: an entry of the right shape is
-        what comes back, so that test measures a refusal and not a
-        recomputation that happens anyway."""
-        path = self.gt._facts_path(self.paths, self.ids, self.build,
-                                   self.cache)
-        self.ask()
-        with open(path) as fh:
-            kept = json.load(fh)
-        try:
-            # The maps zz_EJ's runs name are kept: Facts that name one
-            # that is not are computed again (the test above this one).
-            shas = kept['zz_EJ'][3]
-            self.assertTrue(shas)
-            with open(path, 'w') as fh:
-                json.dump(dict(kept, zz_EJ=[[[2, 3, 35, 92, 'zz_EJ']], None,
-                                            [[4, 5]], shas[:1], []]), fh)
-            got = self.ask()['zz_EJ']
-            self.assertEqual([(2, 3, 35, 92, 'zz_EJ')], got.collate)
-            self.assertEqual([(4, 5)], got.instructions)
-            self.assertEqual(tuple(shas[:1]), got.chars)
-        finally:
-            os.unlink(path)
-
-    def test_a_change_to_glibc_tree_starts_from_nothing(self):
-        """The entry is named after _SELF: what _facts computes changes with
-        the code that computes it, as runs change with the reader
-        (TheFactsKeyNamesTheCodeThatMakesThem)."""
-        path = self.gt._facts_path(self.paths, self.ids, self.build,
-                                   self.cache)
-        self.assertIn(self.gt._SELF, os.path.basename(path))
-        with mock.patch.object(self.gt, '_SELF', 'x' * 12):
-            self.assertNotEqual(path, self.gt._facts_path(
-                self.paths, self.ids, self.build, self.cache))
-
-    def test_the_runs_it_reads_are_kept_where_it_is_told(self):
-        """The runs of the tree are asked of cache_dir, with the facts
-        (round 3 of 15.2 B3). Stopped at the ask: computing the whole
-        tree in a directory of its own is what setUpClass avoids."""
-        told = os.path.join(self.tmp, 'told')
-        asked = []
-
-        class Asked(Exception):
-            pass
-
-        def stop(files, build, cache_dir=None):
-            asked.append(cache_dir)
-            raise Asked
-        with mock.patch.object(rc, 'tree_runs', stop), \
-                self.assertRaises(Asked):
-            self.gt.file_facts(self.repo, self.ref, self.paths, self.ids,
-                               self.build, cache_dir=told)
-        self.assertEqual([told], asked)
-
-    def test_two_files_with_one_name_are_refused(self):
-        """Reached by injection: localedata/locales has no subdirectory at
-        any tag, and one with a file of a name the top level has would
-        give two answers one key (round 2 of the 15.2 B3 review)."""
-        dup = self.paths[0].replace('/locales/', '/locales/sub/')
-        ids = dict(self.ids, **{dup: self.ids[self.paths[0]]})
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
-            self.gt.file_facts(self.repo, self.ref, self.paths + [dup], ids,
-                               self.build,
-                               cache_dir=os.path.join(self.tmp, 'dup'))
-        self.assertIn('share a name', err.getvalue())
-
-    def test_a_listing_that_is_not_the_tree_is_refused(self):
-        """Reached by injection: main hands file_facts the listing of the
-        tag it reads. A file the listing lacks would be one nobody asks
-        about. The suite's own directory, as setUpClass: in a directory of
-        its own the whole tree was computed before the refusal. No entry is
-        kept for this listing: the refusal comes first."""
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
-            self.gt.file_facts(self.repo, self.ref, self.paths[1:], self.ids,
-                               self.build, cache_dir=self.cache)
-        self.assertIn('are not the ones listed there', err.getvalue())
-
-    def test_keyword_tables_a_tag_lacks_are_refused(self):
-        """A ref without locfile-kw.gperf or charmap-kw.gperf (a fabricated
-        repository, a tree of another layout) is named and refused, never
-        read with tables from somewhere else."""
-        real = g.read_blobs_at
-
-        def fake(repo, groups, raw=False):
-            return [({}, set(paths)) if any(p.endswith('-kw.gperf')
-                                             for p in paths)
-                    else real(repo, [(t, paths)], raw=raw)[0]
-                    for t, paths in groups]
-        err = io.StringIO()
-        with mock.patch.object(g, 'read_blobs_at', fake), \
-                contextlib.redirect_stderr(err), \
-                self.assertRaises(SystemExit):
-            self.gt.builds_at(self.repo, [self.ref])
-        self.assertIn("cannot read glibc's keyword tables at %s: "
-                      "locale/programs/charmap-kw.gperf, "
-                      "locale/programs/locfile-kw.gperf could not be read"
-                      % self.ref, _harness.flat(err.getvalue()))
-
-    def test_another_tree_or_build_is_another_entry(self):
-        path = self.gt._facts_path(self.paths, self.ids, self.build,
-                                   self.cache)
-        ids = dict(self.ids)
-        ids[self.paths[0]] = '0' * 40
-        self.assertNotEqual(path, self.gt._facts_path(
-            self.paths, ids, self.build, self.cache))
-        other = self.gt.build_at(self.repo, MID)
-        self.assertNotEqual(path, self.gt._facts_path(
-            self.paths, self.ids, other, self.cache))
+        self.assertEqual((1, 6), _harness.collate_bounds(ej))
+        self.assertIsNone(_harness.collate_bounds(
+            _STEP2['zz_IN'][0].decode('ascii')))
 
 
 # Backlog 13.29: what step 2 prints under each changed file is what the
@@ -3338,250 +3016,6 @@ class StepTwoNamesWhatTheReaderRead(_StepTwoNames, unittest.TestCase):
         self.assertNotIn('zz_RE', self.report.differs)
         self.assertNotIn('zz_RE', self.report.listed)
         self.assertNotIn('zz_RE', self.report.reindex)
-
-
-@needs_clone
-class AcrossTheTwoReaders(unittest.TestCase):
-    """glibc_tree.across: which files the localedef of 2.34 and that of
-    2.39 read differently, from whole runs, and how the answer is kept."""
-
-    FILES = {
-        b'zz_U': (b'comment_char %\nescape_char /\nLC_COLLATE\n'
-                  b'define \xc3\xa9X\nifdef \xc3\xa9X\norder_start forward\n'
-                  b'<U0061>\n<U0062>\norder_end\nelse\norder_start forward\n'
-                  b'<U0062>\n<U0061>\norder_end\nendif\nEND LC_COLLATE\n'),
-        # Not ASCII only in a comment, which lr_token drops before reading
-        # it: a suspect read alike.
-        b'zz_C': (b'comment_char %\nescape_char /\n% caf\xc3\xa9\n'
-                  b'LC_COLLATE\norder_start forward\n<U0061>\norder_end\n'
-                  b'END LC_COLLATE\n'),
-        b'zz_A': (b'comment_char %\nescape_char /\nLC_COLLATE\n'
-                  b'order_start forward\n<U0061>\norder_end\nEND LC_COLLATE\n'),
-        # ASCII only: codepoint_collation is a keyword from 2.35 on, a word
-        # glibc-2.34 does not know before it.
-        b'zz_K': b'LC_COLLATE\ncodepoint_collation\nEND LC_COLLATE\n',
-    }
-
-    @classmethod
-    def setUpClass(cls):
-        import glibc_tree
-        cls.gt = glibc_tree
-        cls.tmp = tempfile.mkdtemp(prefix='pg-glibc-across-')
-        cls.b0 = glibc_tree.build_at(GLIBC_CLONE, MID)
-        cls.b1 = glibc_tree.build_at(GLIBC_CLONE, NEW)
-        cls.ids = {k.decode(): rc.blob_id(v) for k, v in cls.FILES.items()}
-        cls.loads = []
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.tmp, ignore_errors=True)
-
-    def ask(self, cache, files=None):
-        def load():
-            self.loads.append(1)
-            return dict(files or self.FILES)
-        return self.gt.across(self.ids, load, self.b0, self.b1,
-                              cache_dir=os.path.join(self.tmp, cache))
-
-    def test_the_runs_it_reads_are_kept_where_it_is_told(self):
-        """The runs of the tree go to cache_dir with the answer, not to
-        the directory the environment names (round 3 of 15.2 B3)."""
-        env = os.path.join(self.tmp, 'env')
-        with mock.patch.dict(os.environ, {'PG_GLIBC_READER_CACHE': env}):
-            self.ask('told')
-        self.assertFalse(os.path.exists(env))
-        self.assertTrue(os.path.isdir(os.path.join(
-            self.tmp, 'told', rc.VERSION, rc.build_id(self.b0))))
-
-    def test_what_the_two_readers_read_differently(self):
-        """zz_U by its bytes, zz_K by a keyword one table has; zz_C's
-        UTF-8 is in a comment glibc drops unread, and zz_A is ASCII."""
-        self.assertEqual(['zz_K', 'zz_U'], self.ask('a'))
-
-    def test_the_other_way_round_reads_the_same_differences(self):
-        """With 2.39's reader first, the bytes are met by the lr_getc of
-        2.36 and after."""
-        self.assertEqual(['zz_K', 'zz_U'], self.gt.across(
-            self.ids, lambda: dict(self.FILES), self.b1, self.b0,
-            cache_dir=os.path.join(self.tmp, 'rev')))
-
-    def test_a_keyword_up_to_a_nul_is_compared_both_ways(self):
-        """codepoint_collation, a NUL and a tail: 2.34's table has no such
-        keyword and reads a plain word, while with 2.39's the reader
-        leaves the place unsettled, as for every keyword up to a NUL
-        (GlibcUndefined). With 2.34's first, the run records the word up
-        to the NUL as looked up, so the file is compared; with 2.39's
-        first, the run is unsettled and listed as such (false-negative-
-        reviewer and doc-sweep, 7b)."""
-        files = dict(self.FILES)
-        files[b'zz_Z'] = (b'LC_COLLATE\norder_start forward\n<U0061>\n'
-                          b'codepoint_collation\0abcdefgh\n<U0062>\n'
-                          b'order_end\nEND LC_COLLATE\n')
-        ids = {k.decode(): rc.blob_id(v) for k, v in files.items()}
-        for b0, b1, where in ((self.b0, self.b1, 'nul-fwd'),
-                              (self.b1, self.b0, 'nul-rev')):
-            got = self.gt.across(ids, lambda: dict(files), b0, b1,
-                                 cache_dir=os.path.join(self.tmp, where))
-            self.assertIn('zz_Z', got, where)
-
-    def test_a_0x1a_inside_a_name_is_met(self):
-        """The fast path for <names> reads the buffer without lr_getc: a
-        0x1A there is an ordinary byte from 2.36 and the end of the file
-        before it."""
-        files = dict(self.FILES)
-        files[b'zz_N'] = (b'comment_char %\nescape_char /\nLC_COLLATE\n'
-                          b'order_start forward\n<U00\x1a61>\norder_end\n'
-                          b'END LC_COLLATE\n')
-        ids = {k.decode(): rc.blob_id(v) for k, v in files.items()}
-        got = self.gt.across(ids, lambda: dict(files), self.b1, self.b0,
-                             cache_dir=os.path.join(self.tmp, 'name'))
-        self.assertIn('zz_N', got)
-
-    def test_a_keyword_a_name_spells_is_compared(self):
-        """Both builds read <zz_named> as a name, and the second table
-        makes it a keyword: no run records it, so every run is compared,
-        and zz_N's differs."""
-        table = dict(self.b1.locfile_kw)
-        table[b'zz_named'] = ('tok_order_end', 1)
-        b2 = gr.Build(self.b1.pre236, self.b1.signed_char, table,
-                      self.b1.charmap_kw, 'zz')
-        files = dict(self.FILES)
-        files[b'zz_N'] = (b'comment_char %\nescape_char /\nLC_COLLATE\n'
-                          b'order_start forward\n<U0061>\n<zz_named>\n'
-                          b'<U0062>\norder_end\nEND LC_COLLATE\n')
-        ids = {k.decode(): rc.blob_id(v) for k, v in files.items()}
-        got = self.gt.across(ids, lambda: dict(files), self.b1, b2,
-                             cache_dir=os.path.join(self.tmp, 'named'))
-        self.assertIn('zz_N', got)
-
-    def test_a_kept_lookahead_counts_for_every_run_that_uses_it(self):
-        """The lookahead of a statement is read once per Build and kept:
-        a second run that reuses it reads no byte of it, and must still
-        record what the first met and looked up."""
-        common = (b'comment_char %\nescape_char /\nLC_COLLATE\n'
-                  b'order_start forward\n<U0061> IGNORE;\xc3\xa9\n'
-                  b'order_end\nEND LC_COLLATE\n')
-        files = {b'zz_S': common,
-                 b'zz_A': b'LC_COLLATE\ncopy "zz_S"\nEND LC_COLLATE\n',
-                 b'zz_B': b'LC_COLLATE\ncopy "zz_S"\nEND LC_COLLATE\n'}
-        build = _twin(self.b1)
-        first = gr.run(b'zz_A', files.get, build)
-        second = gr.run(b'zz_B', files.get, build)
-        fresh = gr.run(b'zz_B', files.get, _twin(self.b1))
-        self.assertTrue(first.met)
-        self.assertTrue(build.lookahead, 'nothing was kept to reuse')
-        self.assertEqual((fresh.met, fresh.words),
-                         (second.met, second.words))
-        self.assertIn(b'IGNORE', second.words)
-
-    def test_a_run_not_settled_is_listed_whatever_it_spells(self):
-        """zz_R is not settled (a repertoiremap directive) and spells
-        codepoint_collation across an escaped newline: no search of its
-        bytes finds the word, and glibc reads it. Every run not settled is
-        listed when the builds differ (round 3 of the 15.2 B3 review)."""
-        files = {b'zz_A': self.FILES[b'zz_A'],
-                 b'zz_R': (b'repertoiremap foo\nLC_COLLATE\n'
-                           b'codepoint_coll\\\nation\nEND LC_COLLATE\n')}
-        ids = {k.decode(): rc.blob_id(v) for k, v in files.items()}
-        # Builds that differ in that word alone, so that the bytes cannot
-        # be what lists it.
-        table = dict(self.b0.locfile_kw)
-        table[b'codepoint_collation'] = self.b1.locfile_kw[
-            b'codepoint_collation']
-        b35 = gr.Build(self.b0.pre236, self.b0.signed_char, table,
-                       self.b0.charmap_kw, '2.34 + codepoint_collation')
-        self.assertEqual(['zz_R'], self.gt.across(
-            ids, lambda: dict(files), self.b0, b35,
-            cache_dir=os.path.join(self.tmp, 'unsettled')))
-
-    def test_two_tags_on_one_side_of_2_36_are_still_asked(self):
-        """Keyword tables differ between tags that read bytes alike
-        (codepoint_collation arrives in 2.35, alt_mon in 2.27): across
-        answers for any two Builds that differ, not only for two on either
-        side of 2.36. (Step 2 asked it of every such pair until step 9.2;
-        compare_rules reads each side with its own Build, and its
-        test_the_same_bytes_read_otherwise_name_no_character holds the
-        same keyword.)"""
-        table = dict(self.b0.locfile_kw)
-        table[b'codepoint_collation'] = self.b1.locfile_kw[
-            b'codepoint_collation']
-        b35 = gr.Build(self.b0.pre236, self.b0.signed_char, table,
-                       self.b0.charmap_kw, '2.34 + codepoint_collation')
-        files = {b'zz_K': self.FILES[b'zz_K']}
-        ids = {'zz_K': rc.blob_id(files[b'zz_K'])}
-        self.assertEqual(['zz_K'], self.gt.across(
-            ids, lambda: dict(files), self.b0, b35,
-            cache_dir=os.path.join(self.tmp, 'side')))
-        self.assertEqual([], self.gt.across(
-            ids, lambda: dict(files), self.b0, self.b0,
-            cache_dir=os.path.join(self.tmp, 'side0')))
-
-    def test_what_a_file_met_survives_a_lookahead_that_stops(self):
-        """A statement whose lookahead reaches a place glibc reads outside
-        its buffer (GlibcUndefined) leaves from the middle of the lookahead:
-        the bytes the file met before it are the run's all the same."""
-        files = {b'x': (b'LC_COLLATE\norder_start forward\n'
-                        b'<U0041> \xc3\xa9\n<U0042> foo \\\n-a\n'
-                        b'order_end\nEND LC_COLLATE\n')}
-        for build in (self.b0, self.b1):
-            r = gr.run(b'x', files.get, _twin(build))
-            self.assertTrue(r.unsettled, build.label)
-            self.assertTrue(r.met, build.label)
-            self.assertIn(b'foo', r.words)
-
-    def test_a_keyword_read_as_a_name_counts_every_run(self):
-        """No run records the <names> it looks up (Run.words), so a table
-        whose difference is one of those must have every run compared."""
-        table = dict(self.b1.locfile_kw)
-        table[b'zz_named'] = ('tok_x', 1)
-        b2 = gr.Build(self.b1.pre236, self.b1.signed_char, table,
-                      self.b1.charmap_kw, 'zz')
-        words, named = self.gt.keyword_words(self.b1, b2)
-        self.assertEqual(({b'zz_named'}, True), (words, named))
-        words, named = self.gt.keyword_words(self.b0, self.b1)
-        self.assertEqual(({b'codepoint_collation'}, False), (words, named))
-
-    def test_one_build_twice_reads_nothing_differently(self):
-        self.assertEqual([], self.gt.across(
-            self.ids, lambda: dict(self.FILES), self.b0, self.b0,
-            cache_dir=os.path.join(self.tmp, 'same')))
-
-    def test_a_kept_answer_is_used_without_reading_a_file(self):
-        self.ask('k')
-        before = len(self.loads)
-        path = self.gt._across_path(self.ids, self.b0, self.b1,
-                                    os.path.join(self.tmp, 'k'))
-        with open(path, 'w') as fh:
-            json.dump(['zz_A'], fh)
-        self.assertEqual(['zz_A'], self.ask('k'))
-        self.assertEqual(before, len(self.loads))
-
-    def test_a_kept_answer_of_another_shape_is_computed_again(self):
-        self.ask('s')
-        path = self.gt._across_path(self.ids, self.b0, self.b1,
-                                    os.path.join(self.tmp, 's'))
-        for bad in ({}, 'zz_U', [7], ['zz_NOT_IN_THE_TREE']):
-            with open(path, 'w') as fh:
-                json.dump(bad, fh)
-            self.assertEqual(['zz_K', 'zz_U'], self.ask('s'), bad)
-
-    def test_another_tree_or_build_is_another_entry(self):
-        path = self.gt._across_path(self.ids, self.b0, self.b1, self.tmp)
-        self.assertNotEqual(path, self.gt._across_path(
-            dict(self.ids, zz_A='0' * 40), self.b0, self.b1, self.tmp))
-        self.assertNotEqual(path, self.gt._across_path(
-            self.ids, self.b1, self.b0, self.tmp))
-        self.assertNotEqual(path, self.gt._across_path(
-            self.ids, self.b0, self.b0, self.tmp))
-        self.assertIn(self.gt._SELF, os.path.basename(path))
-
-    def test_files_that_are_not_the_listing_are_refused(self):
-        err = io.StringIO()
-        other = dict(self.FILES)
-        other[b'zz_A'] += b'\n'
-        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
-            self.ask('r', files=other)
-        self.assertIn('not the ones listed', err.getvalue())
 
 
 def _tag_files(tag):

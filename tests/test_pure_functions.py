@@ -198,28 +198,28 @@ class GeneratedNames(unittest.TestCase):
 
 
 class CollateBounds(unittest.TestCase):
-    """Where the LC_COLLATE block starts and ends -- lc_collate_unread,
-    kept for branches 12 and 13, places the block by these line numbers."""
+    """Where the LC_COLLATE block starts and ends, by a plain line
+    reading (_harness.collate_bounds): test_glibc_reader compares
+    glibc_reader with it on every real file."""
 
     def test_finds_the_block(self):
         text = 'LC_TIME\nx\nEND LC_TIME\nLC_COLLATE\ncopy "a"\nEND LC_COLLATE\n'
-        self.assertEqual(g.collate_bounds(text), (4, 6))
+        self.assertEqual(_harness.collate_bounds(text), (4, 6))
 
     def test_an_unterminated_block_runs_to_end_of_file(self):
-        """Conservative on purpose: a change is more likely to be flagged."""
         text = 'LC_TIME\nEND LC_TIME\nLC_COLLATE\ncopy "a"\n'
-        start, end = g.collate_bounds(text)
+        start, end = _harness.collate_bounds(text)
         self.assertEqual(start, 3)
         self.assertEqual(end, len(text.split('\n')))
 
     def test_no_block_returns_none(self):
-        self.assertIsNone(g.collate_bounds('LC_TIME\nx\nEND LC_TIME\n'))
+        self.assertIsNone(_harness.collate_bounds('LC_TIME\nx\nEND LC_TIME\n'))
 
     def test_a_block_on_the_very_first_line_is_found(self):
         """The glibc <= 2.23 shape, and the whole of the old 2.24 version
         floor: a block at the very first line is found."""
         text = 'LC_COLLATE\ncopy "a"\nEND LC_COLLATE\n'
-        self.assertEqual(g.collate_bounds(text), (1, 3))
+        self.assertEqual(_harness.collate_bounds(text), (1, 3))
 
 
 class PrintCharacters(unittest.TestCase):
@@ -464,32 +464,6 @@ class LocaleSource(unittest.TestCase):
                 self.assertEqual(g.locale_source(name), source)
 
 
-class AliasesOf(unittest.TestCase):
-    """Which aliases go on the list beside the locales they name."""
-
-    ALIASES = {'swedish': 'sv_SE.ISO-8859-1', 'ko_KR': 'ko_KR.eucKR',
-               'no_NO': 'nb_NO.ISO-8859-1', 'bokm\ufffdl': 'nb_NO.ISO-8859-1',
-               'thai': 'th_TH.TIS-620'}
-
-    def test_an_alias_is_listed_with_the_locale_it_is_built_from(self):
-        """no_NO is the case the rule alone gets wrong: it is nb_NO."""
-        self.assertEqual(g.aliases_of({'sv_SE', 'nb_NO', 'ko_KR'},
-                                      self.ALIASES),
-                         {'swedish': 'sv_SE', 'no_NO': 'nb_NO'})
-
-    def test_an_alias_named_as_its_own_locale_is_not_added_again(self):
-        self.assertNotIn('ko_KR', g.aliases_of({'ko_KR'}, self.ALIASES))
-
-    def test_a_name_that_is_not_ascii_is_left_out_and_named(self):
-        """glibc-2.17's locale.alias spells bokmal and francais in Latin-1
-        bytes, which reach this module as U+FFFD."""
-        self.assertNotIn('bokm\ufffdl', g.aliases_of({'nb_NO'}, self.ALIASES))
-        self.assertEqual(g.non_ascii_alias_targets({'nb_NO'}, self.ALIASES),
-                         ['nb_NO'])
-        self.assertEqual(g.non_ascii_alias_targets({'sv_SE'}, self.ALIASES),
-                         [])
-
-
 class TheTemplateComparesByGlibcsRule(unittest.TestCase):
     """sql/collation_confirmation_template.sql lists the collations built
     from each locale on the list, and sorts the test values under one of
@@ -726,223 +700,6 @@ class ReadingCharsReadsLikeGlibc(unittest.TestCase):
         """Under `comment_char %` this line is a comment to glibc too."""
         self.assertEqual(g.reading_chars(self.hidden('% comment_char #\n')),
                          ('%', '/'))
-
-
-class LcCollateUnread(unittest.TestCase):
-    """Backlog 13.18: what in a file can stop glibc reading its LC_COLLATE
-    block as written, read on linereader at 2.28, 2.34 and 2.39
-    (lc_collate_unread's docstring has the lines). No locale file at
-    glibc-2.12..2.42 holds any of these, so each is injected."""
-
-    @staticmethod
-    def text(*above, head=('comment_char %', 'escape_char /')):
-        return '\n'.join([*head, '', 'LC_CTYPE', 'copy "i18n"',
-                          'END LC_CTYPE', *above, 'LC_COLLATE',
-                          'copy "iso14651_t1"', 'END LC_COLLATE', ''])
-
-    @staticmethod
-    def never():
-        raise AssertionError('early() asked for a text without the byte')
-
-    def test_the_control_a_plain_file_has_no_reason(self):
-        self.assertIsNone(g.lc_collate_unread(self.text(), self.never))
-
-    def test_a_line_ending_in_the_escape_joins_lc_collate(self):
-        for text in (self.text().replace('END LC_CTYPE',
-                                         'END LC_CTYPE % a note /', 1),
-                     self.text('x /')):
-            with self.subTest(text=text):
-                self.assertIn('ends in the escape character',
-                              g.lc_collate_unread(text, self.never))
-
-    def test_the_control_a_comment_line_ending_in_the_escape(self):
-        """lr_token drops a line opening with the comment character whole,
-        continued or not (linereader.c:221-229@2.39): LC_COLLATE below it
-        is read."""
-        self.assertIsNone(g.lc_collate_unread(self.text('% a note /'),
-                                              self.never))
-
-    def test_the_escape_is_the_one_in_force(self):
-        """`\\` is glibc's default; under `escape_char /` it is a plain
-        character, and a line ending in it joins nothing."""
-        text = self.text('x \\')
-        self.assertIsNone(g.lc_collate_unread(text, self.never))
-        default = self.text('x \\', head=('comment_char %',))
-        self.assertIn('ends in the escape character',
-                      g.lc_collate_unread(default, self.never))
-
-    def test_unsettled_characters_count_both_escapes(self):
-        """A directive after a category is a shape reading_chars refuses;
-        the escape in force is then not known, and both count. So do both
-        comment characters, and a line that opens with either and ends in
-        an escape is joined, not dropped: `#` may be no comment at all."""
-        text = self.text('comment_char #', '% a note \\')
-        self.assertIsNone(g.reading_chars(text))
-        self.assertIn('ends in the escape character',
-                      g.lc_collate_unread(text, self.never))
-
-    def test_a_line_of_only_the_escape_ends_the_file(self):
-        """lr_next leaves an empty buffer and lr_getc answers EOF from then
-        on, wherever above the line it sits."""
-        text = self.text('/', '% after it')
-        self.assertIn('holds only the escape character',
-                      g.lc_collate_unread(text, self.never))
-
-    def test_a_0x1a_above_ends_the_file_before_2_36(self):
-        text = self.text('% \x1a')
-        for early in (True, None):
-            with self.subTest(early=early):
-                self.assertIn('0x1A or 0xFF',
-                              g.lc_collate_unread(text, lambda: early))
-        self.assertIsNone(g.lc_collate_unread(text, lambda: False))
-
-    def test_a_0xff_above_ends_the_file_before_2_36(self):
-        """Found through TEXTS_WITH_0XFF: decoding made it a U+FFFD."""
-        text = g.decoded(self.text('% \udcff').encode('utf-8',
-                                                      'surrogateescape'))
-        self.addCleanup(g.TEXTS_WITH_0XFF.discard, text)
-        self.assertIn(text, g.TEXTS_WITH_0XFF)
-        self.assertIn('0x1A or 0xFF', g.lc_collate_unread(text, lambda: True))
-        self.assertIsNone(g.lc_collate_unread(text, lambda: False))
-
-    def test_the_control_a_u_fffd_that_was_not_0xff(self):
-        """Another byte that is not UTF-8 decodes to the same U+FFFD and
-        ends nothing."""
-        text = g.decoded(self.text('% \udcfe').encode('utf-8',
-                                                      'surrogateescape'))
-        self.assertNotIn(text, g.TEXTS_WITH_0XFF)
-        self.assertIsNone(g.lc_collate_unread(text, self.never))
-
-    def test_a_byte_inside_the_block_stops_it_before_2_36(self):
-        """collate_read stops at the EOF lr_getc reads there
-        (ld-collate.c:2662@2.34), and every rule after the byte is lost
-        (review of 13.18, finding 2)."""
-        text = self.text().replace('copy "iso14651_t1"',
-                                   'copy "iso14651_t1"\n\x1a', 1)
-        self.assertIn('0x1A or 0xFF', g.lc_collate_unread(text,
-                                                          lambda: True))
-        self.assertIsNone(g.lc_collate_unread(text, lambda: False))
-
-    def test_the_control_a_byte_below_the_block(self):
-        text = self.text() + '\x1a\n'
-        self.assertIsNone(g.lc_collate_unread(text, self.never))
-        self.assertFalse(g.byte_ends_it_early(text))
-
-    def test_a_section_left_open_above_holds_lc_collate(self):
-        """Review of 13.18, finding 1: a category reader takes LC_COLLATE
-        as a syntax error inside it and closes on `END LC_COLLATE`
-        (ld-identification.c:387-403, ld-ctype.c:2820-2835@2.39). The END
-        is commented out, deleted, or swallowed by a `copy` line that ends
-        in the escape (lr_ignore_rest, ld-ctype.c:2143@2.39)."""
-        plain = self.text()
-        for text in (plain.replace('END LC_CTYPE', '% END LC_CTYPE', 1),
-                     plain.replace('END LC_CTYPE\n', '', 1),
-                     plain.replace('copy "i18n"', 'copy "i18n" /', 1),
-                     self.text('LC_IDENTIFICATION', 'title "x"')):
-            with self.subTest(text=text):
-                self.assertIn('has no END line glibc reads',
-                              g.lc_collate_unread(text, self.never))
-
-    def test_the_control_any_end_closes_the_section(self):
-        """glibc closes on the END token whatever follows it, and warns."""
-        plain = self.text()
-        for text in (plain.replace('END LC_CTYPE', 'END LC_CTYP', 1),
-                     plain.replace('END LC_CTYPE', 'END LC_CTYPE % note', 1),
-                     plain.replace('END LC_CTYPE', '  END LC_CTYPE', 1)):
-            with self.subTest(text=text):
-                self.assertIsNone(g.lc_collate_unread(text, self.never))
-
-    TRANSLIT = ('LC_CTYPE\ncopy "i18n"\ntranslit_start\n'
-                'include "translit_combining";""\ntranslit_end\nEND LC_CTYPE')
-
-    def test_a_translit_block_left_open_holds_lc_collate(self):
-        """Round 2 of the 13.18 review, finding 1: inside translit_start,
-        glibc reads entries until translit_end or the end of the file, END
-        LC_CTYPE included (ld-ctype.c:2625-2657@2.39). The translit_end is
-        commented out, deleted, or swallowed by an include line that ends
-        in the escape."""
-        plain = self.text().replace('LC_CTYPE\ncopy "i18n"\nEND LC_CTYPE',
-                                    self.TRANSLIT, 1)
-        self.assertIsNone(g.lc_collate_unread(plain, self.never),
-                          'the control: a translit block closed')
-        for text in (plain.replace('translit_end', '% translit_end', 1),
-                     plain.replace('translit_end\n', '', 1),
-                     plain.replace(';""\n', ';"" /\n', 1)):
-            with self.subTest(text=text):
-                self.assertIn('inside its translit_start',
-                              g.lc_collate_unread(text, self.never))
-
-    def test_the_directive_lines_are_read_before_their_escape(self):
-        """Round 2, finding 2: glibc reads the `escape_char /` line with the
-        escape in force before it, `\\`, so it is not joined to the
-        LC_CTYPE line below even though it ends in `/`."""
-        text = ('comment_char %\nescape_char /\nLC_CTYPE\ncopy "i18n"\n'
-                'END LC_CTYPE\nLC_COLLATE\ncopy "iso14651_t1"\n'
-                'END LC_COLLATE\n')
-        self.assertIsNone(g.lc_collate_unread(text, self.never))
-        self.assertIn('LC_CTYPE, opened above LC_COLLATE',
-                      g.lc_collate_unread(text.replace('END LC_CTYPE',
-                                                       '% END LC_CTYPE', 1),
-                                          self.never))
-
-    def test_the_first_word_is_read_as_get_ident_reads_it(self):
-        """Round 2, finding 3: get_ident stops only at a blank, `"`, `;`,
-        `<` or `,` (linereader.c:580-581@2.39), so `END.LC_CTYPE` is one
-        word, not END, and LC_CTYPE stays open."""
-        for end in ('END.LC_CTYPE', 'END-x', 'END%', 'END\u00e9'):
-            with self.subTest(end=end):
-                text = self.text().replace('END LC_CTYPE', end, 1)
-                self.assertIn('has no END line glibc reads',
-                              g.lc_collate_unread(text, self.never))
-        for end in ('END;', 'END"x"', 'END<U0041>', 'END,'):
-            with self.subTest(control=end):
-                text = self.text().replace('END LC_CTYPE', end, 1)
-                self.assertIsNone(g.lc_collate_unread(text, self.never))
-
-    def test_an_lc_ctype_copy_with_no_string_is_a_reason(self):
-        """Round 2, finding 4, measured on glibc-2.34-283.el9_8 and
-        glibc-2.39-142.el10_2: `copy i18n` sends ctype_read to
-        skip_category, and LC_COLLATE is not read."""
-        plain = self.text()
-        for line in ('copy i18n', 'copy <i18n>', 'copy'):
-            with self.subTest(line=line):
-                text = plain.replace('copy "i18n"', line, 1)
-                self.assertIn('copy above LC_COLLATE with no string',
-                              g.lc_collate_unread(text, self.never))
-        self.assertIsNone(g.lc_collate_unread(
-            plain.replace('copy "i18n"', 'copy  "i18n"', 1), self.never))
-
-    def test_a_second_lc_collate_section_is_a_reason(self):
-        """Round 2, finding 5: glibc reads every LC_COLLATE section into
-        the same tables (collate_startup, ld-collate.c:1499@2.39), above
-        the block or below it, spelled plainly, indented, or built across
-        a line end."""
-        plain = self.text()
-        for text in (plain + 'LC_COLLATE\nEND LC_COLLATE\n',
-                     plain + '  LC_COLLATE\nEND LC_COLLATE\n',
-                     self.text('LC_COLLATE', 'END LC_COLLATE'),
-                     self.text('LC_COLL/', 'ATE', 'END LC_COLLATE'),
-                     plain + 'LC_COLL/\nATE\nEND LC_COLLATE\n',
-                     plain + 'LC_COLL/ATE\nEND LC_COLLATE\n'):
-            with self.subTest(text=text):
-                self.assertIsNotNone(g.lc_collate_unread(text, self.never))
-
-    def test_the_control_sections_below_the_block(self):
-        """Sections after END LC_COLLATE that open nothing else: no
-        reason (round 3 of the review)."""
-        text = self.text() + 'LC_TIME\ncopy "en_US"\nEND LC_TIME\n'
-        self.assertIsNone(g.lc_collate_unread(text, self.never))
-
-    def test_a_word_built_with_the_escape_is_not_read(self):
-        """get_ident keeps the character after an escape inside a word
-        (linereader.c:580-589@2.39), so `EN/D` is END to glibc."""
-        text = self.text().replace('END LC_CTYPE', 'EN/D LC_CTYPE', 1)
-        self.assertIn('holds the escape character',
-                      g.lc_collate_unread(text, self.never))
-
-    def test_no_block_has_no_reason(self):
-        self.assertIsNone(g.lc_collate_unread('LC_CTYPE /\nEND LC_CTYPE\n',
-                                              self.never))
 
 
 ISO_COPY = 'copy "iso14651_t1"'

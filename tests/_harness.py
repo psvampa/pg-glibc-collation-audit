@@ -169,10 +169,6 @@ def fill_reader_cache():
         if has_tags(tag) and not kept(tag, glibc_tree.build_at(GLIBC_CLONE,
                                                                tag)):
             glibc_tree.Tree.at_tag(GLIBC_CLONE, tag)
-    # glibc_tree.across is not filled: since step 9.2 no step asks it
-    # (step 2 reads glibc_tree.compare_rules), and its tests build trees of
-    # their own. Filled, it cost up to 602 s of one processor whenever
-    # glibc_tree.py or glibc_locale_data.py changed (measured 2026-11-07).
     # OLD as RHEL 9 reads it was filled here for
     # test_wrapper.WrapperNodesOnOneBuild (PR #117), which step 9.3 deleted
     # with steps 9 and 10; no other test gives OLD's files an el9 build.
@@ -203,6 +199,24 @@ def fill_reader_cache():
                 cls('test_rhel8_to_rhel9').step2(old, new)
         finally:
             cls.tearDownClass()
+
+
+def collate_bounds(text):
+    """1-based (start_line, end_line) of the LC_COLLATE block as a plain
+    line reading finds it, or None: the first line that starts with
+    LC_COLLATE, to the first after it that starts with END LC_COLLATE,
+    or to the last line of the file. The tests compare glibc_reader
+    with it on every real file (test_glibc_reader) and read the
+    published files with it (test_published_claims)."""
+    lines = text.split('\n')
+    start = None
+    for idx, line in enumerate(lines, start=1):
+        if start is None:
+            if line.startswith('LC_COLLATE'):
+                start = idx
+        elif line.startswith('END LC_COLLATE'):
+            return start, idx
+    return (start, len(lines)) if start is not None else None
 
 
 def glibc_commit(base, files, tmp):

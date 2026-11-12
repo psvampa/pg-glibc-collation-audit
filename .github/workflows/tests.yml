@@ -93,18 +93,15 @@ jobs:
         # hash of the reader's own source, so a changed reader finds nothing
         # and starts over. The key below says the same, so a run after such
         # a change restores nothing instead of a cache it would throw away.
-        # What glibc_tree.py derives from the runs is kept under the hash of
-        # that file and of glibc_locale_data.py, whose shown() writes the
-        # names it keeps; the key names them too, and falls back to the runs
-        # of the same reader, so after a change to those files alone one run
-        # computes it again and saves it, instead of every run computing it
-        # and none saving it (backlog 15.2 B3). The step below also fills
-        # what step 2 asks over the fixture builds of tests/build_sources/;
-        # the key names those files, the test code that builds them and asks
-        # (_harness.py, test_build_sources.py) and the scripts that decide
-        # what step 2 asks of a build (node_charmaps.py holds part of step
-        # 2's check of character sets), so a change to any of them is saved
-        # once instead of computed on every run (#145 changed three of them).
+        # The step below also fills what step 2 asks over the fixture builds
+        # of tests/build_sources/; the second half of the key names those
+        # files, the test code that builds them and asks (_harness.py,
+        # test_build_sources.py) and the scripts that decide what step 2
+        # asks of a build (glibc_tree.py, filter_lc_collate_changes.py,
+        # glibc_locale_data.py, build_sources.py and node_charmaps.py, which
+        # holds part of step 2's check of character sets), and falls back
+        # to the runs of the same reader, so a change to any of them is
+        # saved once instead of computed on every run.
         uses: actions/cache@v4
         with:
           path: scripts/glibc-reader-cache
