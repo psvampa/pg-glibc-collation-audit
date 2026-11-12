@@ -477,7 +477,8 @@ def flat(text):
 # not of the run: neither counts. Nor does the file name step1.<pair>.log,
 # which 'What was compared' keeps on purpose (audit.sh). And the scripts of
 # the deleted steps by name, and the names of the lists steps 1 and 6 to 8
-# wrote, so that a leftover one is never taken for this run's.
+# wrote, and step 2's list of what the character set check listed until
+# step 12.4, so that a leftover one is never taken for this run's.
 DELETED_STEP = re.compile(
     r'\b[Ss]teps?\s+(?:\d+\s*(?:,|and|to|-|/)\s*)*'
     r'(?:1|3|4|5|6|7|8|9|10)\b(?!\.\d)'
@@ -487,7 +488,7 @@ DELETED_STEP = re.compile(
     r'|copy_missing\.|backports_inside_collate\.|distro_keyed_locales\.'
     r'|node_collate_diffs\.|node_collate_inherited\.'
     r'|node_removed_locales\.|node_removed_undetermined\.'
-    r'|node_keyed_locales\.')
+    r'|node_keyed_locales\.|step2_keyed_locales\.')
 
 
 def deleted_steps_named(text):

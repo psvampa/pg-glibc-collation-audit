@@ -26,7 +26,6 @@ the collating elements they build out of transliterations
 Writes, each named for the pair: step2_changed_collate.<pair>.txt (the
 names listed, which the summary prints), step2_not_compared.<pair>.txt
 (those of them it could not compare, which the summary sets apart),
-step2_keyed_locales.<pair>.txt (what the character set check lists),
 step2_removed_locales.<pair>.txt (files of the old side not on the new
 one), step2_rules_characters.<pair>.tsv (each name whose rules differ, and
 the characters named) and step2_rules_by_name.<pair>.json (what was
@@ -1073,7 +1072,6 @@ def _main(opts):
     # empty file for THIS pair is a different fact from a leftover one.
     g.write_list(f"step2_changed_collate.{slug}.txt", names)
     g.write_list(f"step2_not_compared.{slug}.txt", not_compared)
-    g.write_list(f"step2_keyed_locales.{slug}.txt", keyed)
     g.write_list(f"step2_removed_locales.{slug}.txt",
                  [f"# locale files at {old_name} and not at {new_name}"]
                  + [f"{name} ({how})" for name, how in removed_rows])
