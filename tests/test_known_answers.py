@@ -164,11 +164,9 @@ class Step2Compare(StepRun):
                               f'elements of 3 locale builds depend on a '
                               f'transliteration; none is built differently '
                               f'at {new}.', flat(block))
-                path = os.path.join(
-                    self.out_dir,
-                    f'step2_keyed_locales.{g.pair_slug(old, new)}.txt')
-                with open(path, encoding='utf-8') as fh:
-                    self.assertEqual(fh.read(), '')
+                r = Step2Report(out)
+                self.assertEqual(set(r.reindex) - set(r.differs)
+                                 - set(r.listed), set())
                 for kind in ('tags-only',):
                     name = f'examples/{pair}-{kind}.txt'
                     with self.subTest(transcript=kind):
@@ -266,7 +264,6 @@ class Step2Compare(StepRun):
         slug = g.pair_slug(OLD, MID)
         self.assertEqual(sorted(os.listdir(out_dir)), sorted(
             [f'step2_{k}.{slug}.txt' for k in ('changed_collate',
-                                               'keyed_locales',
                                                'not_compared',
                                                'removed_locales')]
             + [f'step2_rules_characters.{slug}.tsv',
@@ -502,7 +499,7 @@ class BelowTheOldVersionFloor(StepRun):
         reaches a build's rules. GB18030 changes 12,384 characters, and the
         rules zh_CN.GB18030 reads name 206 of them, all in
         iso14651_t1_common. zh_CN's rules differ anyway, so step 2 lists it
-        already: counted, not repeated, and nothing goes to the keyed list.
+        already: counted as listed anyway, and not repeated.
         With step 2's own changed files as the skip, instead of what step 2
         lists, the time-gate prototype listed 287 sources here."""
         out = self.step('filter_lc_collate_changes.py', FLOOR_OLD, FLOOR_NEW)
@@ -515,11 +512,9 @@ class BelowTheOldVersionFloor(StepRun):
                                     r'zh_CN\.GB18030 \(GB18030\): 206 '
                                     r'characters, named in iso14651_t1_common')
         self.assertIn('zh_CN', Step2Report(out).reindex)
-        path = os.path.join(
-            self.out_dir,
-            f'step2_keyed_locales.{g.pair_slug(FLOOR_OLD, FLOOR_NEW)}.txt')
-        with open(path, encoding='utf-8') as fh:
-            self.assertEqual(fh.read(), '')
+        r = Step2Report(out)
+        self.assertEqual(set(r.reindex) - set(r.differs) - set(r.listed),
+                         set())
 
     def test_reindex_writes_277_names_and_leaves_two_aliases_out(self):
         """277 since step 9.2: the 262 that differ and the 17 not compared,

@@ -2385,12 +2385,15 @@ class StepTwoComparesTransliterations(unittest.TestCase):
         rc, out = run_script('filter_lc_collate_changes.py', old, new,
                              '--repo', self.repo,
                              env_extra={'PG_GLIBC_AUDIT_OUT': out_dir})
-        path = os.path.join(out_dir,
-                            f'step2_keyed_locales.{g.pair_slug(old, new)}.txt')
+        # What the summary lists for the character set check alone: its
+        # names less those whose rules differ or that were not compared.
+        # None when step 2 refused or compared nothing: it printed no list.
         listed = None
-        if os.path.exists(path):
-            with open(path, encoding='utf-8') as fh:
-                listed = fh.read().split()
+        if rc == 0:
+            r = Step2Report(out)
+            if r.nothing is None:
+                listed = sorted(set(r.reindex) - set(r.differs)
+                                - set(r.listed))
         return rc, out, listed
 
     def test_a_transliteration_file_that_changes_is_found(self):
@@ -2494,7 +2497,7 @@ class StepTwoNamesWhatItDidNotCompare(unittest.TestCase):
 @needs_clone
 class StepTwoComparesCharmaps(unittest.TestCase):
     """Step 2 end to end on a repository built for it: what goes to
-    step 2's list through step2_keyed_locales.<pair>.txt, what it counts as
+    step 2's list, what it counts as
     listed anyway, and when it says NOT RUN instead of a clean line."""
 
     @classmethod
@@ -2511,12 +2514,15 @@ class StepTwoComparesCharmaps(unittest.TestCase):
         rc, out = run_script('filter_lc_collate_changes.py', old, new,
                              '--repo', self.repo,
                              env_extra={'PG_GLIBC_AUDIT_OUT': out_dir})
-        path = os.path.join(out_dir,
-                            f'step2_keyed_locales.{g.pair_slug(old, new)}.txt')
+        # What the summary lists for the character set check alone: its
+        # names less those whose rules differ or that were not compared.
+        # None when step 2 refused or compared nothing: it printed no list.
         listed = None
-        if os.path.exists(path):
-            with open(path, encoding='utf-8') as fh:
-                listed = fh.read().split()
+        if rc == 0:
+            r = Step2Report(out)
+            if r.nothing is None:
+                listed = sorted(set(r.reindex) - set(r.differs)
+                                - set(r.listed))
         return rc, out, listed
 
     def test_what_a_charmap_change_reaches_goes_to_reindex(self):
@@ -2611,7 +2617,7 @@ class StepTwoComparesCharmaps(unittest.TestCase):
         # t2 is a lightweight tag, a commit to git: two sides (16.155).
         self.assertIn('Character sets and transliterations: not compared, the '
                       'two sides are one commit.', out)
-        self.assertEqual(listed, [])
+        self.assertIsNone(listed)
 
 
 def make_unsettled_charmap_repo(root):

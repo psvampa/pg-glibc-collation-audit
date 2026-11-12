@@ -2977,7 +2977,7 @@ class AStepReadsABuild(_StepsOnBuilds, unittest.TestCase):
         # The lists audit.sh reads are named for the builds.
         self.assertEqual(sorted(os.listdir(d)), sorted(
             ['%s.%s..%s.txt' % (k, B275, B283) for k in (
-                'step2_changed_collate', 'step2_keyed_locales',
+                'step2_changed_collate',
                 'step2_not_compared', 'step2_removed_locales')]
             + ['step2_rules_characters.%s..%s.tsv' % (B275, B283),
                'step2_rules_by_name.%s..%s.json' % (B275, B283)]))

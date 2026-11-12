@@ -302,7 +302,10 @@ else
 fi
 STEP2_LIST="$OUT_DIR/step2_changed_collate.$PAIR.txt"
 STEP2_REMOVED="$OUT_DIR/step2_removed_locales.$PAIR.txt"
-STEP2_KEYED="$OUT_DIR/step2_keyed_locales.$PAIR.txt"
+# Written by step 2 until step 12.4: what the character set check listed,
+# which step 2's list holds. Nothing reads it; removed below, so that a
+# list an earlier version left there is never taken for this run's.
+OLD_STEP2_KEYED="$OUT_DIR/step2_keyed_locales.$PAIR.txt"
 # The names of STEP2_LIST step 2 could not compare, each with its reason in
 # a `!!` the warnings block repeats; the summary sets them apart (13.31).
 STEP2_NOT_COMPARED="$OUT_DIR/step2_not_compared.$PAIR.txt"
@@ -403,7 +406,7 @@ mkdir -p "$OUT_DIR"
 # run's finding. The direction can be conservative, which is how it once went
 # unnoticed, but the statement is false and this file's rule is that every
 # file it reads was written by this run.
-rm -f "$STEP2_LIST" "$STEP2_NOT_COMPARED" "$STEP2_REMOVED" "$STEP2_KEYED" \
+rm -f "$STEP2_LIST" "$STEP2_NOT_COMPARED" "$STEP2_REMOVED" "$OLD_STEP2_KEYED" \
       "$OLD_STEP3_LIST" \
       "$OLD_STEP4_LIST" "$OLD_STEP4_BYTE_ORDER" "$OLD_STEP1_LIST" \
       "$SIDES_FILE" "$RULES_FILE" \
@@ -586,9 +589,8 @@ run_step 2 python3 "$SCRIPTS/filter_lc_collate_changes.py" "$OLD" "$NEW"
 # script. Kept because it is the difference between a wrong answer and an
 # error if step 2 ever stops writing, and the suite cannot reach it to prove
 # that -- so treat it as untested defence, not as a checked guarantee.
-if [ ! -f "$STEP2_LIST" ] || [ ! -f "$STEP2_KEYED" ] \
-   || [ ! -f "$STEP2_NOT_COMPARED" ]; then
-  echo "error: step 2 did not write all of $STEP2_LIST, $STEP2_KEYED" >&2
+if [ ! -f "$STEP2_LIST" ] || [ ! -f "$STEP2_NOT_COMPARED" ]; then
+  echo "error: step 2 did not write both $STEP2_LIST" >&2
   echo "       and $STEP2_NOT_COMPARED." >&2
   echo "       Not continuing: an empty locale list would read as 'nothing" >&2
   echo "       changed'." >&2

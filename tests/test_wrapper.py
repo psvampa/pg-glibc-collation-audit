@@ -568,12 +568,8 @@ class WrapperTakesTheKeyedListToReindex(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
 
-    def test_step_2_writes_the_keyed_list_and_lists_it(self):
+    def test_step_2_lists_what_the_check_lists(self):
         self.assertEqual(self.rc, 0, self.out)
-        path = os.path.join(
-            self.out_dir, f'step2_keyed_locales.{pair_slug(MID, NEW)}.txt')
-        with open(path, encoding='utf-8') as fh:
-            self.assertEqual(fh.read().split(), ['sv_SE'])
         # swedish is sv_SE's alias (sv_SE.ISO-8859-1): it goes with it. Its
         # rules are sv_SE's, the same at both tags, so compare_rules alone
         # does not list it (false-negative-reviewer, 9.2).
@@ -1019,22 +1015,23 @@ class WrapperRefusesBadInput(unittest.TestCase):
 
 
     def test_step_2_rewrites_the_list_so_a_seed_cannot_survive(self):
-        """The protection on the files the summary reads from step 2.
+        """The protection on the list the summary reads from step 2.
 
-        Step 2 writes both lists unconditionally for the pair being audited,
-        so nothing a previous run or another process left there reaches the
-        summary. Revert either write and this fails: the seeded line
-        survives into the file and into the run. (Until step 9.2 these
-        names became step 3's argv, and audit.sh also refused anything
-        that was not a locale file name; it now only prints them.)
+        audit.sh removes step2_changed_collate.<pair>.txt before step 2
+        runs, and step 2 writes it unconditionally for the pair being
+        audited, so nothing a previous run or another process left there
+        reaches the summary. Revert the write and this fails: the run
+        stops at audit.sh's check after step 2. Revert the removal too and
+        the seeded line survives into the file and into the run. (Until
+        step 9.2 these names became step 3's argv, and audit.sh also
+        refused anything that was not a locale file name; it now only
+        prints them.)
         """
         import glibc_locale_data as g
         os.makedirs(self.out_dir, exist_ok=True)
-        # Both lists step 2 writes: the locales whose rules differ and the
-        # locales the character set check lists (backlog 13.7, PR B).
         paths = [os.path.join(self.out_dir,
                               f'step2_{kind}.{g.pair_slug(NEW, NEW)}.txt')
-                 for kind in ('changed_collate', 'keyed_locales')]
+                 for kind in ('changed_collate',)]
         for path in paths:
             with open(path, 'w', encoding='utf-8') as fh:
                 fh.write('--repo /nonexistent/elsewhere\n')
@@ -1058,7 +1055,8 @@ class WrapperRefusesBadInput(unittest.TestCase):
         Since step 9.2 no step writes it and the summary does not read it;
         audit.sh still removes it up front, so a list an earlier version
         left there is gone after the run. The same for changed_locales.txt
-        since step 9.5.
+        since step 9.5, and for step2_keyed_locales.<pair>.txt since step
+        12.4.
         """
         os.makedirs(self.out_dir, exist_ok=True)
         stale = os.path.join(self.out_dir, 'step3_affected_locales.txt')
@@ -1067,6 +1065,10 @@ class WrapperRefusesBadInput(unittest.TestCase):
         changed = os.path.join(self.out_dir, 'changed_locales.txt')
         with open(changed, 'w', encoding='utf-8') as fh:
             fh.write('localedata/locales/no_SUCH_locale\n')
+        keyed = os.path.join(self.out_dir, 'step2_keyed_locales.'
+                             + pair_slug(NEW, NEW) + '.txt')
+        with open(keyed, 'w', encoding='utf-8') as fh:
+            fh.write('no_SUCH_locale\n')
         # And step 11's list of characters, which a run given no measurements
         # never writes: only audit.sh's removal up front clears it, since
         # locale_order.py, which removes it too, does not run.
@@ -1086,6 +1088,7 @@ class WrapperRefusesBadInput(unittest.TestCase):
         self.assertNotIn('no_SUCH_locale', out)
         self.assertFalse(os.path.exists(stale))
         self.assertFalse(os.path.exists(changed))
+        self.assertFalse(os.path.exists(keyed))
         self.assertFalse(os.path.exists(listed))
         self.assertEqual([x for x in sql if os.path.exists(x)], [])
 
