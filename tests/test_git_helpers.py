@@ -45,6 +45,41 @@ def in_subprocess(code):
     return p.returncode, (p.stdout + p.stderr).decode('utf-8', 'replace')
 
 
+def commit_without(*paths):
+    """A repository whose commit HEAD~1 holds README and none of `paths`, a
+    real commit where those files are absent, for a refusal that must say
+    "does not exist" (a ref that does not resolve fails before that, in
+    ls-tree). HEAD adds the files, so a check that asked HEAD instead of
+    the ref it was handed would find them and say the read failed.
+    Returns the repository's path."""
+    repo = tempfile.mkdtemp(prefix='pg-glibc-without-')
+    with open(os.path.join(repo, 'README'), 'w') as fh:
+        fh.write('no ' + ' '.join(paths) + '\n')
+    git = ['git', '-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t',
+           '-c', 'commit.gpgsign=false']
+    subprocess.run(['git', 'init', '-q', repo], check=True)
+    subprocess.run(git + ['add', '-A'], check=True)
+    subprocess.run(git + ['commit', '-q', '-m', 'x'], check=True)
+    for path in paths:
+        os.makedirs(os.path.join(repo, os.path.dirname(path)), exist_ok=True)
+        with open(os.path.join(repo, path), 'w') as fh:
+            fh.write('# added after the commit the test asks about\n')
+    subprocess.run(git + ['add', '-A'], check=True)
+    subprocess.run(git + ['commit', '-q', '-m', 'y'], check=True)
+    return repo
+
+
+def unread_at(tag, path):
+    """in_subprocess code that makes read_blobs_at give `path` back
+    missing at `tag`, as git does under GIT_NO_LAZY_FETCH=1 on a
+    --filter=blob:none clone (16.46), and reads the rest for real."""
+    return ("real = g.read_blobs_at\n"
+            "g.read_blobs_at = lambda r, groups, raw=False: [\n"
+            "    ({}, set(paths)) if (t, paths) == (%r, [%r])\n"
+            "    else real(r, [(t, paths)], raw=raw)[0]\n"
+            "    for t, paths in groups]\n" % (tag, path))
+
+
 @needs_clone
 class RefKindOnTheClone(unittest.TestCase):
     """What a side is called (16.155, 16.183), on refs of the clone a user
@@ -370,13 +405,28 @@ class SupportedMap(unittest.TestCase):
     which made every locale print as 'not built by default'."""
 
     def test_aborts_when_supported_is_absent(self):
-        rc, out = in_subprocess("g.supported_map(repo, '%s')" % BAD)
+        repo = commit_without(g.SUPPORTED)
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        rc, out = in_subprocess("g.supported_map(%r, 'HEAD~1')" % repo)
         self.assertNotEqual(rc, 0)
         # The refusal itself, not any exit: until step 9.3 the helper
         # imported a module that no longer exists, and that import error
         # passed a test reading only the exit code.
-        self.assertIn('localedata/SUPPORTED does not exist at %s' % BAD,
+        self.assertIn('localedata/SUPPORTED does not exist at HEAD~1',
                       flat(out))
+
+    def test_a_supported_the_tree_lists_and_git_did_not_read(self):
+        """16.46: the tree at the tag lists SUPPORTED and the read came back
+        missing, so the file exists and the read failed; "does not exist"
+        would name the wrong cause."""
+        rc, out = in_subprocess(unread_at(NEW, g.SUPPORTED) +
+                                "g.supported_map(repo, %r)" % NEW)
+        self.assertNotEqual(rc, 0)
+        self.assertIn(f'listed at {NEW} could not be read while building '
+                      f'the list of locales built by default: '
+                      f'{g.SUPPORTED}.', flat(out))
+        self.assertIn('GIT_NO_LAZY_FETCH=1 is set', flat(out))
+        self.assertNotIn('does not exist', out)
 
     def test_maps_source_names_to_generated_names(self):
         got = g.supported_map(GLIBC_CLONE, NEW)
@@ -391,9 +441,41 @@ class LocaleAliases(unittest.TestCase):
     than read as "no aliases", which would drop swedish from the list."""
 
     def test_aborts_when_locale_alias_is_absent(self):
-        rc, out = in_subprocess("g.locale_aliases(repo, '%s')" % BAD)
+        repo = commit_without('intl/locale.alias')
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        rc, out = in_subprocess("g.locale_aliases(%r, 'HEAD~1')" % repo)
         self.assertNotEqual(rc, 0)
-        self.assertIn('intl/locale.alias does not exist', out)
+        self.assertIn('intl/locale.alias does not exist at HEAD~1', out)
+
+    def test_a_locale_alias_the_tree_lists_and_git_did_not_read(self):
+        """16.46, as for SUPPORTED: listed in the tree, read back missing."""
+        rc, out = in_subprocess(unread_at(NEW, 'intl/locale.alias') +
+                                "g.locale_aliases(repo, %r)" % NEW)
+        self.assertNotEqual(rc, 0)
+        self.assertIn(f'listed at {NEW} could not be read while building '
+                      f'the list of aliases glibc gives a locale: '
+                      f'intl/locale.alias.', flat(out))
+        self.assertNotIn('does not exist', out)
+
+    def test_two_names_one_byte_apart_stay_two(self):
+        """16.124: glibc reads locale.alias as bytes. Two aliases that differ
+        only in a byte that is not UTF-8 are two names; decoded with
+        errors='replace' they were one, the second overwriting the first.
+        Each keeps its byte (bokm\\xe5l, as glibc-2.12 spells it)."""
+        repo = tempfile.mkdtemp(prefix='pg-glibc-latin1-alias-')
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        os.makedirs(os.path.join(repo, 'intl'))
+        with open(os.path.join(repo, 'intl', 'locale.alias'), 'wb') as fh:
+            fh.write(b'bokm\xe5l nb_NO.ISO-8859-1\n'
+                     b'bokm\xe6l da_DK.ISO-8859-1\n')
+        git = ['git', '-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t',
+               '-c', 'commit.gpgsign=false']
+        subprocess.run(['git', 'init', '-q', repo], check=True)
+        subprocess.run(git + ['add', '-A'], check=True)
+        subprocess.run(git + ['commit', '-q', '-m', 'x'], check=True)
+        got = g.locale_aliases(repo, 'HEAD')
+        self.assertEqual(got, {'bokm\xe5l': 'nb_NO.ISO-8859-1',
+                               'bokm\xe6l': 'da_DK.ISO-8859-1'})
 
     def test_aborts_when_locale_alias_holds_no_alias(self):
         """A file that is there and holds nothing but comments is a reader or
@@ -423,6 +505,21 @@ class LocaleAliases(unittest.TestCase):
         self.assertEqual(got['thai'], 'th_TH.TIS-620')
         self.assertEqual(len(got), 45)
         self.assertEqual([a for a in got if a.startswith('#')], [])
+
+
+
+class OrderTakesTheCloneItIsGiven(unittest.TestCase):
+    """audit.sh hands `order` the clone compared_sides made (16.156). A
+    --repo with no path after it is a usage error: read as no --repo, it
+    would let find_repo pick a clone from the directory the user stands in,
+    the very thing --repo is there to stop."""
+
+    def test_repo_without_a_path_is_refused_with_the_usage(self):
+        rc, out = in_subprocess(
+            "g._main(['order', '--quiet', %r, %r, '--repo'])" % (OLD, MID))
+        self.assertEqual(rc, 2, out)
+        self.assertIn('usage: glibc_locale_data.py order [--allow-reverse] '
+                      '[--quiet] [--repo <path>] <old> <new>', flat(out))
 
 
 @needs_clone
@@ -2097,7 +2194,7 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
         those files would get the real file, which lacks both names, and
         print that line at exit 0; with the tag unpinned this test passed
         over it (false-negative-reviewer). Since step 9.2 the first read of
-        it is supported_map's, which refuses it as absent."""
+        it is supported_map's, which says the read failed (16.46)."""
         rc, out = in_subprocess(
             "import filter_lc_collate_changes as f\n"
             "real = g.read_blobs_at\n"
@@ -2107,8 +2204,10 @@ class StepTwoReadsTheDiffGitWouldPrintByDefault(unittest.TestCase):
             "    for tag, paths in groups]\n"
             "f.main([%r, %r, '--repo', repo])" % (MID, OLD, MID))
         self.assertNotEqual(rc, 0, out)
-        self.assertIn(f'localedata/SUPPORTED does not exist at {MID}',
-                      flat(out))
+        self.assertIn(f'listed at {MID} could not be read while building '
+                      f'the list of locales built by default: '
+                      f'localedata/SUPPORTED.', flat(out))
+        self.assertNotIn('does not exist', out)
         self.assertNotIn('(not in SUPPORTED)', out)
         self.assertNotIn(STEP2_LISTED, out)
 

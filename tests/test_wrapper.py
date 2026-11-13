@@ -2400,5 +2400,67 @@ class WrapperNamesStep11sReportWhenALaterStepStops(unittest.TestCase):
                               'printed above, is in ' + log, flat(out))
 
 
+@needs_clone
+class WrapperRunFromInsideAnotherClone(unittest.TestCase):
+    """16.156: audit.sh reads the clone 'What was compared' cloned and
+    fetched (scripts/glibc), whatever directory the user runs it from. Until
+    13.3 the order check and step 2 looked for a clone in the working
+    directory first (find_repo): run from inside the user's own glibc
+    checkout they read that one, and with each machine's file the run
+    stopped with git's "bad object" (the machines' commits are made in
+    scripts/glibc only); run from one of its subfolders, step 2 refused with
+    "only 0 file(s)".
+
+    The clone the run stands in is a user's older checkout, made before
+    glibc-2.34: a step that reads it fetches the tags into it and prints
+    that it does, whichever step it is. Read scripts/glibc and the run
+    prints the published example whole and writes nothing there. It is a
+    --shared clone of the suite's, whose origin is the suite's clone:
+    objects through alternates, a fetch reads the suite's clone, and
+    nothing the run might write reaches it."""
+
+    @classmethod
+    def setUpClass(cls):
+        import subprocess
+        cls.tmp = tempfile.mkdtemp(prefix='pg-glibc-other-clone-')
+        cls.out_dir = os.path.join(cls.tmp, 'out')
+        cls.other = os.path.join(cls.tmp, 'glibc')
+
+        def git(*args):
+            return subprocess.run(['git', '-C', cls.other, *args], check=True,
+                                  capture_output=True, text=True).stdout
+
+        subprocess.run(['git', 'clone', '-q', '--shared', '--no-checkout',
+                        GLIBC_CLONE, cls.other], check=True,
+                       capture_output=True)
+        newer = [t for t in git('tag', '-l', 'glibc-2.3[4-9]*',
+                                'glibc-2.4*').split('\n') if t]
+        assert MID in newer, newer
+        git('tag', '-d', *newer)
+        cls.refs_before = git('for-each-ref')
+        env = dict(os.environ, PG_GLIBC_AUDIT_OUT=cls.out_dir,
+                   **{g.STEP11_ENV: '1'}, **NO_GPG)
+        p = subprocess.run([os.path.join(REPO_ROOT, 'audit.sh'), OLD, MID],
+                           cwd=cls.other, env=env, capture_output=True)
+        cls.rc = p.returncode
+        cls.out = (p.stdout + p.stderr).decode('utf-8', 'replace')
+        cls.refs_after = git('for-each-ref')
+        cls.fetched = os.path.exists(os.path.join(cls.other, '.git',
+                                                  'FETCH_HEAD'))
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_prints_the_published_example_whole(self):
+        self.assertEqual(self.rc, 0, self.out)
+        assert_prints_the_example(self, self.out, self.out_dir,
+                                  'rhel8-to-rhel9-tags-only.txt')
+
+    def test_writes_nothing_in_the_clone_it_stands_in(self):
+        self.assertEqual(self.refs_after, self.refs_before)
+        self.assertFalse(self.fetched)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -14,7 +14,8 @@ Also runnable directly; audit.sh uses sides, resolve, machines, latest,
 order and pair-slug, and provenance and corpus are kept for a hand run:
   python3 glibc_locale_data.py provenance <tag> [<tag> ...]
   python3 glibc_locale_data.py corpus <tag> [<tag> ...]
-  python3 glibc_locale_data.py order [--allow-reverse] [--quiet] <old> <new>
+  python3 glibc_locale_data.py order [--allow-reverse] [--quiet]
+      [--repo <path>] <old> <new>
       prints the direction (same, forward, reversed, undetermined),
       whether nothing is compared (commit, tree, none), each side's class
       (tag, commit, build; side_class) and the pair's word (tags, builds,
@@ -975,9 +976,12 @@ def verify_tag(repo, tag):
     """Check a tag's GPG signature. Returns (status, detail).
 
     status is one of:
-      'good'      -- signature verified against a key in the local keyring
-      'bad'       -- signature present and INVALID. Stop.
+      'good'      -- git verify-tag accepts it: GOODSIG and exit 0
+      'bad'       -- signature present and INVALID (BADSIG). Stop.
       'no-key'    -- signed, but the signing key is not in the keyring
+      'unverifiable', 'revoked-key', 'expired-key', 'expired-sig',
+      'untrusted' -- gpg answered, git exits 1, and nothing says the
+                     source was altered: reported as UNCHECKED, the run goes on
       'no-gpg'    -- gpg is not installed, so nothing was checked
       'unsigned'  -- the tag carries no signature
       'not-a-tag' -- a lightweight tag or a commit; nothing to verify
@@ -1000,7 +1004,7 @@ def verify_tag(repo, tag):
     if kind.stdout.strip() != b'tag':
         return 'not-a-tag', 'lightweight tag or commit -- no signature to check'
 
-    body = run_git(['cat-file', 'tag', tag], repo, allow_fail=True).stdout
+    body = run_git(['cat-file', 'tag', tag], repo).stdout
     if b'-----BEGIN PGP SIGNATURE-----' not in body:
         return 'unsigned', 'the tag object carries no signature'
 
@@ -1014,12 +1018,36 @@ def verify_tag(repo, tag):
     err = p.stderr.decode('utf-8', 'replace')
     if 'cannot run gpg' in err or 'gpg: not found' in err:
         return 'no-gpg', 'gpg is not installed; the signature was NOT checked'
-    if 'NO_PUBKEY' in err or 'errsig' in err.lower():
-        return 'no-key', f'signed by {signer}, whose key is not in your keyring'
-    if 'BADSIG' in err or 'ERRSIG' in err:
+    # gpg's status keywords (gnupg doc/DETAILS), one per line after
+    # "[GNUPG:] ". Exactly one of GOODSIG, BADSIG, EXPSIG, EXPKEYSIG,
+    # REVKEYSIG or ERRSIG is given per signature, and VALIDSIG comes with the
+    # four that checked the math -- so VALIDSIG says nothing about whether
+    # git accepts the signature. git exits 0 only on GOODSIG with the trust
+    # gpg.minTrustLevel asks for (gpg-interface.c, check_signature).
+    said = {ln.split()[1] for ln in err.split('\n')
+            if ln.startswith('[GNUPG:] ') and len(ln.split()) > 1}
+    if 'BADSIG' in said:
         return 'bad', f'INVALID signature on {tag}'
-    if p.returncode == 0 or 'GOODSIG' in err or 'VALIDSIG' in err:
+    if 'NO_PUBKEY' in said:
+        return 'no-key', f'signed by {signer}, whose key is not in your keyring'
+    if 'ERRSIG' in said:
+        return 'unverifiable', (f'signed by {signer}; gpg could not check '
+                                f'the signature, and not for a missing key')
+    if 'REVKEYSIG' in said:
+        return 'revoked-key', (f'signed by {signer}, with a key that has '
+                               f'been revoked; git does not accept it')
+    if 'EXPKEYSIG' in said:
+        return 'expired-key', (f'signed by {signer}, with a key that has '
+                               f'expired; git does not accept it')
+    if 'EXPSIG' in said:
+        return 'expired-sig', (f'signed by {signer}; the signature has '
+                               f'expired; git does not accept it')
+    if 'GOODSIG' in said and p.returncode == 0:
         return 'good', f'signed by {signer}'
+    if 'GOODSIG' in said:
+        return 'untrusted', (f'signed by {signer}; gpg calls the signature '
+                             f'good, but git does not accept it '
+                             f'(gpg.minTrustLevel, for example)')
     return 'no-key', f'signed by {signer}; could not verify ({err.strip()[:80]})'
 
 
@@ -1037,11 +1065,13 @@ def report_tag_provenance(repo, *tags):
     unchecked = []
     for tag in dict.fromkeys(tags):
         status, detail = verify_tag(repo, tag)
-        sha = run_git(['rev-parse', f'{tag}^{{commit}}'], repo,
-                      allow_fail=True).stdout.decode().strip()
+        sha = run_git(['rev-parse', f'{tag}^{{commit}}'],
+                      repo).stdout.decode().strip()
         mark = {'good': 'OK      ', 'bad': 'INVALID ', 'no-key': 'UNCHECKED',
-                'no-gpg': 'UNCHECKED', 'unsigned': 'UNSIGNED',
-                'not-a-tag': 'UNSIGNED'}[status]
+                'no-gpg': 'UNCHECKED', 'unverifiable': 'UNCHECKED',
+                'revoked-key': 'UNCHECKED', 'expired-key': 'UNCHECKED',
+                'expired-sig': 'UNCHECKED', 'untrusted': 'UNCHECKED',
+                'unsigned': 'UNSIGNED', 'not-a-tag': 'UNSIGNED'}[status]
         print(f"  {mark} {tag} = {sha[:12]}  {detail}")
         if status == 'bad':
             worst = 'bad'
@@ -1055,9 +1085,10 @@ def report_tag_provenance(repo, *tags):
             "what the glibc maintainers released. Refusing to continue.")
     if unchecked:
         # A `!!`, so that the summary's warnings repeat it (16.154): every
-        # status but good and bad, UNCHECKED (no gpg, no key) and UNSIGNED
-        # (no signature, or a commit given by its id) alike. A commit is no
-        # tag: "signatures", not "tag signatures".
+        # status but good and bad, UNCHECKED (no gpg, no key, a signature
+        # git does not accept) and UNSIGNED (no signature, or a commit given
+        # by its id) alike. A commit is no tag: "signatures", not "tag
+        # signatures".
         warn(f"Signatures NOT checked for {', '.join(unchecked)} (why is on "
              f"each one's line under 'Tag provenance', in 'What was "
              f"compared'). The commit ids printed there are what was read; "
@@ -1178,7 +1209,23 @@ def require_read(tag, paths, missing, what):
             f"{', ...' if len(missing) > 5 else ''}.\n"
             f"       These came from the tree at {tag}, so they exist -- the "
             f"read failed. On a --filter=blob:none clone that usually means a "
-            f"fetch could not happen. Re-run with the promisor reachable.")
+            f"fetch could not happen, or that GIT_NO_LAZY_FETCH=1 is set. "
+            f"Re-run with the promisor reachable and that variable unset.")
+
+
+def require_absent(repo, tag, path, what):
+    """Abort through require_read when `path`, which read_blobs gave back
+    `missing`, is in the tree at `tag`; return when it is not.
+
+    read_blobs says `missing` both for a path the tag does not hold and for
+    a blob git did not fetch (GIT_NO_LAZY_FETCH=1 on a --filter=blob:none
+    clone, measured 2026-11-12 with git 2.54; a promisor that cannot be
+    reached fails the whole read instead). The tree objects are in such a
+    clone, so `git ls-tree` tells the two apart without a fetch, and only a
+    path it does not list may be called absent (16.46)."""
+    listed = run_git(['ls-tree', tag, '--', path], repo).stdout
+    if listed.strip():
+        require_read(tag, [path], {path}, what)
 
 
 def list_locale_files(repo, tag):
@@ -2186,18 +2233,27 @@ def locale_aliases(repo, tag):
     non-blank character is `#` is a comment, and an entry is the first two
     words of a line. A missing file is an error rather than no aliases: an
     empty map would drop swedish from the list and read as nothing to add.
+
+    glibc reads the file as bytes, words split at what C's isspace calls a
+    blank, which bytes.split() splits at too. The file of glibc-2.1.93 to
+    2.21 has two names in Latin-1 (bokm\xe5l, fran\xe7ais; none since 2.22,
+    measured over the clone's tags), so each word is decoded byte for byte:
+    the name keeps its bytes, and two names that differ in a byte that is
+    not UTF-8 stay two names (16.124).
     """
     path = 'intl/locale.alias'
-    contents, missing = read_blobs(repo, tag, [path])
+    contents, missing = read_blobs(repo, tag, [path], raw=True)
     if missing:
+        require_absent(repo, tag, path,
+                       'the list of aliases glibc gives a locale')
         die(f"{path} does not exist at {tag}; cannot name the aliases glibc "
             f"gives a locale (swedish for sv_SE).")
     out = {}
-    for line in contents[path].split('\n'):
+    for line in contents[path].split(b'\n'):
         words = line.split()
-        if len(words) < 2 or words[0].startswith('#'):
+        if len(words) < 2 or words[0].startswith(b'#'):
             continue
-        out[words[0]] = words[1]
+        out[words[0].decode('latin-1')] = words[1].decode('latin-1')
     if not out:
         die(f"{path} at {tag} holds no alias at all; that is a reader or a "
             f"corpus problem, not an answer.")
@@ -2219,7 +2275,10 @@ def supported_map(repo, tag):
     every name a locale takes: the archive and RHEL add others
     (sv_SE.iso885915), and locale.alias adds swedish (backlog 13.1).
     """
-    contents, _ = read_blobs(repo, tag, [SUPPORTED])
+    contents, missing = read_blobs(repo, tag, [SUPPORTED])
+    if missing:
+        require_absent(repo, tag, SUPPORTED,
+                       'the list of locales built by default')
     return parse_supported(contents.get(SUPPORTED), tag)
 
 
@@ -2740,14 +2799,23 @@ def _main(argv):
         # warnings block finds them. audit.sh asks only for the words, and one
         # more copy of a warning the reader has already seen teaches them to
         # skip the section.
-        allow = '--allow-reverse' in argv[1:]
-        quiet = '--quiet' in argv[1:]
-        names = [a for a in argv[1:]
+        # --repo: audit.sh names the clone compared_sides cloned and
+        # fetched (scripts/glibc), so that the directory the user stands in
+        # never picks another one; by hand, find_repo looks for it.
+        args = argv[1:]
+        explicit = None
+        if '--repo' in args:
+            i = args.index('--repo')
+            explicit = args[i + 1] if i + 1 < len(args) else ''
+            del args[i:i + 2]
+        allow = '--allow-reverse' in args
+        quiet = '--quiet' in args
+        names = [a for a in args
                  if a not in ('--allow-reverse', '--quiet')]
-        if len(names) != 2:
+        if len(names) != 2 or explicit == '':
             die("usage: glibc_locale_data.py order [--allow-reverse] "
-                "[--quiet] <old> <new>")
-        repo = find_repo()
+                "[--quiet] [--repo <path>] <old> <new>")
+        repo = find_repo(explicit)
         # A build is a Side, read by its commit and ordered by rpm; anything
         # making it prints goes to stderr, so the words stay alone.
         with contextlib.redirect_stdout(sys.stderr):

@@ -555,7 +555,7 @@ class BelowTheOldVersionFloor(StepRun):
             apart = [ln.strip() for ln in fh if ln.strip()]
         self.assertEqual(len(r.listed), 17)
         self.assertEqual(apart, sorted(n for n in r.listed if n.isascii()))
-        self.assertEqual(r.not_ascii, ["'bokm\\ufffdl'", "'fran\\ufffdais'"])
+        self.assertEqual(r.not_ascii, ["'bokm\\xe5l'", "'fran\\xe7ais'"])
         self.assertEqual(r.unbuilt, ['el_GR@euro', 'iso14651_t1',
                                      'iso14651_t1_common',
                                      'iso14651_t1_pinyin'])

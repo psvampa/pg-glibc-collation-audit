@@ -520,7 +520,8 @@ run_step 1 compared
 # the clone holds such pairs, not only fabricated ones) or `none`. Then
 # three more, read below. Words on stdout and nothing else, so a forward
 # pair adds nothing to the output.
-ORDER_WORDS=$(python3 "$SCRIPTS/glibc_locale_data.py" order --quiet "$OLD" "$NEW")
+ORDER_WORDS=$(python3 "$SCRIPTS/glibc_locale_data.py" order --quiet \
+  --repo "$SCRIPTS/glibc" "$OLD" "$NEW")
 # Then three more: what each side is (tag, commit or build) and the word a
 # sentence about both uses (tags, builds or sides), apart from NOUN, the
 # route, which keeps a commit on the tags route (TAG_SIDE, Removed).
@@ -580,7 +581,8 @@ case "$OLD_CLASS $NEW_CLASS $WORD/$EXTRA" in
 esac
 
 banner "STEP 2  Which locales' sort rules changed"
-run_step 2 python3 "$SCRIPTS/filter_lc_collate_changes.py" "$OLD" "$NEW"
+run_step 2 python3 "$SCRIPTS/filter_lc_collate_changes.py" \
+  --repo "$SCRIPTS/glibc" "$OLD" "$NEW"
 # Absent is not empty. Step 2 writes these files whether or not it found
 # anything, so a missing file means step 2 did not get that far -- an error to
 # report, never an empty result to pass on as a clean audit.

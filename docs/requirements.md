@@ -30,8 +30,9 @@ later runs read them instead.
 
 The run also prints, under *What was compared*, the commit id and GPG
 signature state behind each tag before step 2 compares anything, and an invalid
-signature aborts the run. Without `gpg`, or without the signer's key, the
-signature is reported as not checked and the run continues.
+signature aborts the run. Any other signature `git verify-tag` does not accept
+(without `gpg`, without the signer's key, or with a key that has expired or
+been revoked, for example) is reported as not checked and the run continues.
 
 ## For the extended run (1.b)
 

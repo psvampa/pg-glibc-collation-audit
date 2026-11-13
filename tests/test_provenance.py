@@ -136,14 +136,20 @@ class TagSignatures(unittest.TestCase):
         import io as _io
         real = g.verify_tag
         try:
-            for status in ('no-gpg', 'no-key', 'unsigned', 'not-a-tag'):
+            for status in ('no-gpg', 'no-key', 'unverifiable', 'revoked-key',
+                           'expired-key', 'expired-sig', 'untrusted',
+                           'unsigned', 'not-a-tag'):
                 with self.subTest(status=status):
                     g.verify_tag = lambda repo, tag, s=status: (s, 'why')
                     buf = _io.StringIO()
                     with contextlib.redirect_stdout(buf):
                         g.report_tag_provenance(GLIBC_CLONE, OLD, NEW, OLD)
                     lines = buf.getvalue().splitlines()
-                    at = [i for i, ln in enumerate(lines)
+                    mark = ('UNSIGNED' if status in ('unsigned', 'not-a-tag')
+                            else 'UNCHECKED')
+                    self.assertTrue(any(ln.startswith(f'  {mark} {OLD} = ')
+                                        for ln in lines), lines)
+                    at =[i for i, ln in enumerate(lines)
                           if ln.startswith('!!')]
                     self.assertEqual(len(at), 1, lines)
                     block = [lines[at[0]]]
@@ -176,6 +182,120 @@ class TagSignatures(unittest.TestCase):
         for tag in (OLD, NEW):
             self.assertIn(tag, out)
             self.assertIn(EXPECTED_SHA[tag][:12], out)
+
+
+# What `git verify-tag --raw` really wrote to stderr, and its exit code, on
+# Rocky 9.3 (git 2.52.0, gnupg2 2.3.3), 2026-11-12: glibc-2.39 and 2.12 with
+# the GNU keyring (ftp.gnu.org/gnu/gnu-keyring.gpg) imported; the others on
+# tags signed in the node with keys made for the case. el8 and el10 gave
+# the same keywords and exit codes.
+EL9_GLIBC_239_EXPKEYSIG = (1, (
+    b'[GNUPG:] NEWSIG\n'
+    b'[GNUPG:] KEYEXPIRED 1775499647\n'
+    b'[GNUPG:] KEYEXPIRED 1775499647\n'
+    b'[GNUPG:] KEYEXPIRED 1775499647\n'
+    b'[GNUPG:] KEYEXPIRED 1775499585\n'
+    b'[GNUPG:] KEYEXPIRED 1775499647\n'
+    b'[GNUPG:] KEYEXPIRED 1775499647\n'
+    b'[GNUPG:] KEYEXPIRED 1775499585\n'
+    b'[GNUPG:] KEY_CONSIDERED 35B17DF5752577CA0C541CEB94BFDF4484AD142F 0\n'
+    b'[GNUPG:] KEYEXPIRED 1775499585\n'
+    b'[GNUPG:] SIG_ID vu6pBlRb6bwvRtugD4rQcCyVPkY 2024-01-31 1706662099\n'
+    b'[GNUPG:] KEYEXPIRED 1775499647\n'
+    b'[GNUPG:] KEYEXPIRED 1775499647\n'
+    b'[GNUPG:] KEYEXPIRED 1775499647\n'
+    b'[GNUPG:] KEYEXPIRED 1775499585\n'
+    b'[GNUPG:] KEYEXPIRED 1775499647\n'
+    b'[GNUPG:] KEYEXPIRED 1775499647\n'
+    b'[GNUPG:] KEYEXPIRED 1775499585\n'
+    b'[GNUPG:] KEY_CONSIDERED 35B17DF5752577CA0C541CEB94BFDF4484AD142F 0\n'
+    b'[GNUPG:] EXPKEYSIG DC2B16215ED5412A Andreas K. Huettel (at work) '
+    b'<mail@akhuettel.de>\n'
+    b'[GNUPG:] NOTATION_NAME issuer-fpr@notations.openpgp.fifthhorseman.net\n'
+    b'[GNUPG:] NOTATION_FLAGS 0 1\n'
+    b'[GNUPG:] NOTATION_DATA FD19E6D31B192EE4DC63EAD3DC2B16215ED5412A\n'
+    b'[GNUPG:] VALIDSIG FD19E6D31B192EE4DC63EAD3DC2B16215ED5412A 2024-01-31 '
+    b'1706662099 0 4 0 1 10 00 35B17DF5752577CA0C541CEB94BFDF4484AD142F\n'
+    b'[GNUPG:] KEYEXPIRED 1775499647\n'
+    b'[GNUPG:] KEYEXPIRED 1775499647\n'
+    b'[GNUPG:] KEYEXPIRED 1775499647\n'
+    b'[GNUPG:] KEYEXPIRED 1775499585\n'
+    b'[GNUPG:] KEYEXPIRED 1775499647\n'
+    b'[GNUPG:] KEYEXPIRED 1775499647\n'
+    b'[GNUPG:] KEYEXPIRED 1775499585\n'
+    b'[GNUPG:] KEY_CONSIDERED 35B17DF5752577CA0C541CEB94BFDF4484AD142F 0\n'
+))
+
+EL9_REVKEYSIG = (1, (
+    b'[GNUPG:] NEWSIG\n'
+    b'[GNUPG:] KEY_CONSIDERED C32E696CAF14454F5EFB855D4200FA5DBC3B6C80 0\n'
+    b'[GNUPG:] SIG_ID M4oqlJBitDa9DzfJi3R91VZpumE 2026-11-12 1794522965\n'
+    b'[GNUPG:] KEY_CONSIDERED C32E696CAF14454F5EFB855D4200FA5DBC3B6C80 0\n'
+    b'[GNUPG:] REVKEYSIG 4200FA5DBC3B6C80 Revoked Key <rev@example.org>\n'
+    b'[GNUPG:] VALIDSIG C32E696CAF14454F5EFB855D4200FA5DBC3B6C80 2026-11-12 '
+    b'1794522965 0 4 0 1 8 00 C32E696CAF14454F5EFB855D4200FA5DBC3B6C80\n'
+    b'[GNUPG:] KEYREVOKED\n'
+    b'[GNUPG:] KEY_CONSIDERED C32E696CAF14454F5EFB855D4200FA5DBC3B6C80 0\n'
+    b'[GNUPG:] TRUST_UNDEFINED 0 pgp\n'
+))
+
+EL9_EXPSIG = (1, (
+    b'[GNUPG:] NEWSIG\n'
+    b'[GNUPG:] KEY_CONSIDERED 051E2E1040245FFF14CBBB406CD8334257E6FA0A 0\n'
+    b'[GNUPG:] SIG_ID Y6C9Wft9ujEo9fz+ZzYdelN29Mw 2024-02-01 1706745600\n'
+    b'[GNUPG:] KEY_CONSIDERED 051E2E1040245FFF14CBBB406CD8334257E6FA0A 0\n'
+    b'[GNUPG:] EXPSIG 6CD8334257E6FA0A Sigexp Key <sigexp@example.org>\n'
+    b'[GNUPG:] VALIDSIG 051E2E1040245FFF14CBBB406CD8334257E6FA0A 2024-02-01 '
+    b'1706745600 1706832000 4 0 1 8 00 '
+    b'051E2E1040245FFF14CBBB406CD8334257E6FA0A\n'
+    b'[GNUPG:] TRUST_UNDEFINED 0 pgp\n'
+))
+
+EL9_GOODSIG_UNTRUSTED = (1, (
+    b'[GNUPG:] NEWSIG\n'
+    b'[GNUPG:] KEY_CONSIDERED 49006F33144F944F1E1D732852141B257B602FE4 0\n'
+    b'[GNUPG:] SIG_ID GhQd/o+QtelfqPbRZED0YZ31has 2026-11-12 1794522965\n'
+    b'[GNUPG:] KEY_CONSIDERED 49006F33144F944F1E1D732852141B257B602FE4 0\n'
+    b'[GNUPG:] GOODSIG 52141B257B602FE4 Good Key <good@example.org>\n'
+    b'[GNUPG:] VALIDSIG 49006F33144F944F1E1D732852141B257B602FE4 2026-11-12 '
+    b'1794522965 0 4 0 1 8 00 49006F33144F944F1E1D732852141B257B602FE4\n'
+    b'[GNUPG:] TRUST_UNDEFINED 0 pgp\n'
+))
+
+EL9_GOODSIG_IMPORTED = (0, (
+    b'[GNUPG:] NEWSIG\n'
+    b'[GNUPG:] KEY_CONSIDERED 49006F33144F944F1E1D732852141B257B602FE4 0\n'
+    b'[GNUPG:] SIG_ID GhQd/o+QtelfqPbRZED0YZ31has 2026-11-12 1794522965\n'
+    b'[GNUPG:] KEY_CONSIDERED 49006F33144F944F1E1D732852141B257B602FE4 0\n'
+    b'[GNUPG:] GOODSIG 52141B257B602FE4 Good Key <good@example.org>\n'
+    b'[GNUPG:] VALIDSIG 49006F33144F944F1E1D732852141B257B602FE4 2026-11-12 '
+    b'1794522965 0 4 0 1 8 00 49006F33144F944F1E1D732852141B257B602FE4\n'
+    b'[GNUPG:] TRUST_UNDEFINED 0 pgp\n'
+))
+
+EL9_ERRSIG_MD5 = (1, (
+    b'[GNUPG:] NEWSIG\n'
+    b'[GNUPG:] KEY_CONSIDERED 35437666D6B8E4AE90C07DD91B34913BA2388C3E 0\n'
+    b'[GNUPG:] ERRSIG 1B34913BA2388C3E 1 1 00 1706745600 5 '
+    b'35437666D6B8E4AE90C07DD91B34913BA2388C3E\n'
+))
+
+EL9_GLIBC_212_NO_PUBKEY = (1, (
+    b'[GNUPG:] NEWSIG\n'
+    b'[GNUPG:] ERRSIG DA28C23A79FF4474 17 2 00 1272921158 9 -\n'
+    b'[GNUPG:] NO_PUBKEY DA28C23A79FF4474\n'
+))
+
+EL9_BADSIG = (1, (
+    b'[GNUPG:] NEWSIG\n'
+    b'[GNUPG:] KEY_CONSIDERED 49006F33144F944F1E1D732852141B257B602FE4 0\n'
+    b'[GNUPG:] KEY_CONSIDERED 49006F33144F944F1E1D732852141B257B602FE4 0\n'
+    b'[GNUPG:] BADSIG 52141B257B602FE4 Good Key <good@example.org>\n'
+))
+
+EL9_NO_GPG = (1, (
+    b'error: cannot run gpg: No such file or directory\n'
+))
 
 
 class VerifyTagClassification(unittest.TestCase):
@@ -235,9 +355,106 @@ class VerifyTagClassification(unittest.TestCase):
         self.assertEqual(status, 'good')
         self.assertIn('Andreas', detail)
 
+    def test_an_expired_key_is_unchecked_never_good(self):
+        """git exits 1 on EXPKEYSIG, and gpg gives VALIDSIG beside it: what
+        glibc-2.28, 2.34 and 2.39 give with the GNU keyring. Read as good
+        before, printed OK while git refused it."""
+        status, detail = self.drive(*EL9_GLIBC_239_EXPKEYSIG)
+        self.assertEqual(status, 'expired-key')
+        self.assertIn('expired', detail)
+
+    def test_a_revoked_key_is_unchecked_never_good_nor_bad(self):
+        status, detail = self.drive(*EL9_REVKEYSIG)
+        self.assertEqual(status, 'revoked-key')
+        self.assertIn('revoked', detail)
+
+    def test_an_expired_signature_is_unchecked_never_good(self):
+        status, _ = self.drive(*EL9_EXPSIG)
+        self.assertEqual(status, 'expired-sig')
+
+    def test_a_good_signature_git_refuses_is_unchecked(self):
+        """GOODSIG with exit 1: gpg.minTrustLevel=fully and a key of
+        undefined trust. The same stderr with exit 0 is good: the exit code
+        decides."""
+        status, _ = self.drive(*EL9_GOODSIG_UNTRUSTED)
+        self.assertEqual(status, 'untrusted')
+        status, _ = self.drive(0, EL9_GOODSIG_UNTRUSTED[1])
+        self.assertEqual(status, 'good')
+
+    def test_a_signature_gpg_cannot_check_is_not_called_a_missing_key(self):
+        """ERRSIG without NO_PUBKEY (an MD5 signature): the key is in the
+        keyring, so "not in your keyring" would be false."""
+        status, detail = self.drive(*EL9_ERRSIG_MD5)
+        self.assertEqual(status, 'unverifiable')
+        self.assertNotIn('keyring', detail)
+
+    def test_real_stderr_of_the_old_cases(self):
+        self.assertEqual(self.drive(*EL9_GOODSIG_IMPORTED)[0], 'good')
+        self.assertEqual(self.drive(*EL9_GLIBC_212_NO_PUBKEY)[0], 'no-key')
+        self.assertEqual(self.drive(*EL9_BADSIG)[0], 'bad')
+        self.assertEqual(self.drive(*EL9_NO_GPG)[0], 'no-gpg')
+
     def test_an_unsigned_tag_is_reported_as_unsigned(self):
         status, _ = self.drive(0, b'', signed=False)
         self.assertEqual(status, 'unsigned')
+
+
+
+@needs_clone
+class ProvenanceReadsWhatItPrints(unittest.TestCase):
+    """The two reads under 'Tag provenance' that used to run with
+    allow_fail (2.11): the commit id printed beside a tag, and the tag
+    object verify_tag reads its signature from. A git that fails on either
+    stops the run with git's message; it no longer prints a tag with no id,
+    or "the tag object carries no signature" over an object it could not
+    read. Faked at subprocess.run, so that run_git's own handling of a
+    failure is what runs; each fake answers the exact argv the code makes
+    and raises on anything else. Neither failure is reachable in a real run
+    (both refs are checked before), so this is the only place they run.
+    """
+
+    def run_faked(self, answers, call):
+        import contextlib
+        import io
+
+        def fake_run(argv, **kw):
+            for want, rc, out in answers:
+                if argv == ['git', *g.GIT_CONFIG_OVERRIDES, *want]:
+                    return subprocess.CompletedProcess(
+                        argv, rc, out, b'fatal: could not read it')
+            raise AssertionError(f'unexpected command: {argv}')
+
+        real_run = g.subprocess.run
+        g.subprocess.run = fake_run
+        buf, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), \
+                    contextlib.redirect_stderr(err):
+                with self.assertRaises(SystemExit) as caught:
+                    call()
+        finally:
+            g.subprocess.run = real_run
+        self.assertNotEqual(caught.exception.code, 0)
+        return buf.getvalue(), err.getvalue()
+
+    def test_a_commit_git_cannot_read_stops_the_run(self):
+        real_verify = g.verify_tag
+        g.verify_tag = lambda repo, tag: ('good', 'signed by someone')
+        try:
+            out, err = self.run_faked(
+                [(['rev-parse', f'{NEW}^{{commit}}'], 128, b'')],
+                lambda: g.report_tag_provenance('/no/glibc/clone/here', NEW))
+        finally:
+            g.verify_tag = real_verify
+        self.assertNotIn(f'{NEW} = ', out)
+        self.assertIn('rev-parse', err)
+
+    def test_a_tag_object_git_cannot_read_stops_the_run(self):
+        out, err = self.run_faked(
+            [(['cat-file', '-t', NEW], 0, b'tag\n'),
+             (['cat-file', 'tag', NEW], 128, b'')],
+            lambda: g.verify_tag('/no/glibc/clone/here', NEW))
+        self.assertIn('cat-file tag', flat(err))
 
 
 if __name__ == '__main__':
