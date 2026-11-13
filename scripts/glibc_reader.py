@@ -3,10 +3,9 @@
 The tool reads glibc's locale files to decide what changed between two
 versions. That reading used to be written by hand in several modules, each a
 little differently from the others and from glibc; every fix corrected one copy
-and the next review found its twin (backlog block 15). Steps 1 to 4 and
-9/10 read through this module (glibc_tree.py); steps 6 to 8, step 2's
-lc_collate_unread check and its check of character sets and
-transliterations (collation_keys) still read with readers of their own.
+and the next review found its twin (backlog block 15). Step 2 reads each
+locale's rules through this module (glibc_tree.py); its check of character
+sets and transliterations (collation_keys) reads with readers of its own.
 
 It reads the way localedef reads, for one glibc BUILD, in layers:
 
@@ -62,9 +61,11 @@ word that is a keyword up to a NUL byte: gperf's lookup can read past the
 keyword's text there, and what it finds is the binary's (GlibcUndefined
 again). A translated string holding a character the charmap lacks makes
 get_string try to transliterate it, which can load the file's own LC_CTYPE
-in the middle of the run (linereader.c:640-660@2.39). Charmaps are read in a
-later step of block 15; until then, where the reader sees an answer depend
-on whether the charmap has a character, it reports that place unsettled.
+in the middle of the run (linereader.c:640-660@2.39). This reader does not
+read charmaps: where it sees an answer depend on whether the charmap has a
+character, it reports that place unsettled, or leaves it to step 2's check
+of character sets and transliterations (collation_keys), as it does for the
+`from` string of a collating-element (statement_characters).
 Repertoire maps are not read either: a `repertoiremap` line that names a
 map, and an LC_COLLATE read with the map a translit include named, are
 reported unsettled. glibc keeps that map with the file the include queues,
@@ -72,7 +73,7 @@ when the include is what creates its entry, and hands it on to every file
 that file's copies create, and theirs in turn (an include passes its own);
 the reader follows it the same way (_Entry.repertoire).
 
-Written for Python 3.6, the oldest the fixtures run, with the standard
+Written for Python 3.7, the oldest audit.sh accepts, with the standard
 library only.
 """
 import bisect
@@ -180,12 +181,6 @@ class Build(object):
         b &= 0xff
         return b - 256 if (self.signed_char and b >= 0x80) else b
 
-    def byte_wide(self, b):
-        """The wide value glibc before 2.36 stores for a raw or escaped byte
-        b in a translated string: ADDWC ((uint32_t) ch), with ch the lr_getc
-        result (linereader.c:661-668@2.34)."""
-        return self.char_value(b) & 0xffffffff
-
     @staticmethod
     def parse_gperf(text):
         """{keyword: (token name, symname_or_ident)} from a gperf file's
@@ -287,10 +282,6 @@ LR_KEY_FIELDS = {
              'or of a GlibcUndefined, which leaves before anything is kept',
     'utf8': 'from build', 'kw': 'from build and table',
     'getc': 'from build', 'phys': 'from data', 'empty': 'from data',
-    'met': 'an answer, not an input: kept with each lookahead and added '
-           'back when one is used',
-    'words': 'an answer, not an input: kept with each lookahead and added '
-             'back when one is used',
 }
 
 
@@ -332,9 +323,6 @@ class LR(object):
         self.translate_strings = 1
         self.return_widestr = 0
         self.lineno = 1
-        # What another build could read differently (Run.met, Run.words).
-        self.met = False
-        self.words = set()
         if not self.phys:        # getdelim < 0: lr_create returns NULL
             self.buf = bytearray()
             self.bufact = 0
@@ -400,8 +388,6 @@ class LR(object):
             if self.bufact == 0:
                 return EOF_
         c = self.buf[self.idx]
-        if c >= 0x80 or c == 0x1a:
-            self.met = True
         self.idx += 1
         return c
 
@@ -413,8 +399,6 @@ class LR(object):
             if self.bufact == 0:
                 return EOF_
         c = self.buf[self.idx]
-        if c >= 0x80 or c == 0x1a:
-            self.met = True
         if c == 0x1a:
             return EOF_
         self.idx += 1
@@ -428,8 +412,6 @@ class LR(object):
             if self.bufact == 0:
                 return EOF_
         c = self.buf[self.idx]
-        if c >= 0x80 or c == 0x1a:
-            self.met = True
         if c == 0x1a:
             return EOF_
         self.idx += 1
@@ -653,9 +635,6 @@ class LR(object):
             return None
         end = m.start() + 1
         b = bytearray(self.buf[self.idx:end])
-        if not b.isascii() or 0x1a in b:
-            # What lr_getc would have flagged, byte by byte.
-            self.met = True
         self.idx = end
         return b, b[-1]
 
@@ -701,14 +680,10 @@ class LR(object):
             b.append(ch & 0xff)
         self.ungetc(ch)
         s = bytes(b)
-        self.words.add(s)
         if self.table == 'locfile' and 0 in s:
             # The words gperf may take for a keyword that is their prefix
             # (GlibcUndefined): only one of kind 0 makes a keyword token.
-            # The prefix is looked up too, so another build's table that
-            # gives it another entry reads the run differently (Run.words).
             pre = s[:s.index(0)]
-            self.words.add(pre)
             k = self.kw.get(pre)
             if k is not None and k[1] == 0:
                 raise GlibcUndefined(self.fname, line, _PAST_KEYWORD)
@@ -806,16 +781,22 @@ CATEGORIES = ('LC_CTYPE', 'LC_NUMERIC', 'LC_TIME', 'LC_COLLATE',
 _CAT_OF_TOK = {'tok_' + c.lower(): c for c in CATEGORIES}
 
 
-# Tokens that matter to the structure when a handler leaves them to be read
-# as a statement (see _Runner.statement).
+# Tokens that matter to the structure, or to whether localedef ends, when a
+# handler leaves them to be read as a statement (see _Runner.statement).
 _TAIL_KEYWORDS = {
     None: frozenset(('tok_end',)),
     'LC_COLLATE': frozenset(('tok_end', 'tok_copy', 'tok_define',
                              'tok_undef', 'tok_ifdef', 'tok_ifndef',
                              'tok_elifdef', 'tok_elifndef', 'tok_else',
                              'tok_endif')),
+    # charclass, charconv, class and map hand a name to strcmp
+    # (ctype_names); after the first token glibc may read them as a
+    # statement of their own (ctype_read breaks on an unknown word without
+    # reading the rest of its line, ld-ctype.c:2788-2818@2.39), with a
+    # name that may crash it (v110).
     'LC_CTYPE': frozenset(('tok_end', 'tok_translit_start',
-                           'tok_translit_end')),
+                           'tok_translit_end', 'tok_charclass',
+                           'tok_charconv', 'tok_class', 'tok_map')),
     # STR_ELEM and INT_ELEM leave the rest of their line (ld-time.c:849-909
     # @2.39), and an array keyword there reads on past the line, an END
     # below included (false-negative-reviewer, measured on el8/el9/el10).
@@ -823,6 +804,17 @@ _TAIL_KEYWORDS = {
                           'tok_mon', 'tok_am_pm', 'tok_alt_digits',
                           'tok_alt_mon', 'tok_ab_alt_mon')),
 }
+
+# The LC_CTYPE statements that hand a name to strcmp (ctype_names).
+_CTYPE_NAMED = frozenset(('tok_charclass', 'tok_charconv', 'tok_class',
+                          'tok_map'))
+
+
+def _null_string(t):
+    """A translated string get_string returns as NULL: a name the UTF-8
+    charmap lacks, or an illegal one."""
+    return any(k in ('illegal', 'name') for k, _ in t.items)
+
 
 # STRARR_ELEM fields of LC_TIME and their most values (ld-time.c:801-808).
 _TIME_ARRAYS = {'tok_abday': 7, 'tok_day': 7, 'tok_abmon': 12, 'tok_mon': 12,
@@ -939,8 +931,8 @@ class Collate(object):
         unread (ld-collate.c:3958-3960@2.34). A statement spans the lines
         from its first token to where the reader stood after it (`last`,
         which _Runner.instruction records), a string continued over an
-        escaped newline included. Step 2 prints them under each changed
-        file (backlog 13.29)."""
+        escaped newline included. Step 2 names them for each locale whose
+        rules differ (glibc_tree.compare_rules)."""
         out = {}
         for i, (fname, line, toks) in enumerate(self.statements):
             if i in self.refused or (self.unsure_from is not None
@@ -1062,21 +1054,6 @@ class Run(object):
     began      every file whose LC_COLLATE the run began to read, in order.
     finished   the files of `began` whose LC_COLLATE read had ended at
                unsure_at.
-    met        True when lr_getc read, or stopped at, a byte above 0x7F or
-               a 0x1A, in any file of the run: the only bytes the builds on
-               the two sides of glibc 2.36 read differently (lr_getc reads
-               0x1A, and 0xFF through a signed char, as the end of the file
-               before it; a token that opens with a byte above 0x7F is a
-               UTF-8 character from it). A run that met none reads alike
-               with both, step by step.
-    words      every bare word looked up in a keyword table (get_ident): a
-               build whose table gives one of them another entry reads the
-               run differently. A <name> is looked up too, for the
-               keywords read as one (k[1] == 1), and is not kept: there are
-               tens of thousands per run, and no locfile table of
-               glibc-2.12..2.39 has such a keyword; glibc_tree.across
-               treats every run as one to compare when two tables differ in
-               one.
     """
 
     def __init__(self):
@@ -1087,8 +1064,6 @@ class Run(object):
         self.unsure_at = None
         self.began = []
         self.finished = frozenset()
-        self.met = False
-        self.words = set()
 
     def named_lines(self):
         """What this run tells of the characters each line names, as
@@ -1263,8 +1238,8 @@ def statement_characters(toks):
         character. What a <U....> name gives the wide string is the code
         point written, before the charmap is asked (get_string,
         linereader.c:697-717@2.34); a code point the charmap lacks is then
-        transliterated, which this reader does not model (charmaps come
-        in backlog 15.6). Before 2.36 a byte above 0x7F is copied as it
+        transliterated, which this reader does not model (it reads no
+        charmap). Before 2.36 a byte above 0x7F is copied as it
         is, a byte and not a character (linereader.c:649-670@2.34;
         backlog 13.23): None. Under the UTF-8 charmap a symbolic name
         other than <U....> is not in the charmap (as copy_name).
@@ -1577,16 +1552,10 @@ class _Runner(object):
         collate = 'LC_COLLATE' in entry.needed - entry.avail
         if collate:
             self.out.began.append(lr.fname)
-        try:
-            got = self._locfile_read(lr, entry)
-            if collate:
-                self.done.append(lr.fname)
-            return got
-        finally:
-            # Also when the read ends in a _Stop, a GlibcHang or a
-            # GlibcUndefined: what it met is the run's.
-            self.out.met = self.out.met or lr.met
-            self.out.words |= lr.words
+        got = self._locfile_read(lr, entry)
+        if collate:
+            self.done.append(lr.fname)
+        return got
 
     def _locfile_read(self, lr, entry):
         mask = entry.needed - entry.avail
@@ -1707,10 +1676,11 @@ class _Runner(object):
         model can differ from the handler glibc runs:
           - a token after the first that matters to the structure if a
             handler leaves it to be read as a statement (END; in
-            LC_COLLATE a copy or a conditional; in LC_CTYPE translit_start
-            or translit_end). Several handlers do leave the rest of their
-            line (numeric's decimal_point, an unknown word in LC_CTYPE,
-            codepoint_collation ...);
+            LC_COLLATE a copy or a conditional; in LC_CTYPE translit_start,
+            translit_end, or a charclass, charconv, class or map whose name
+            may crash localedef). Several handlers do leave the rest of
+            their line (numeric's decimal_point, an unknown word in
+            LC_CTYPE, codepoint_collation ...);
           - tokens that run past the end of the logical line, as an
             unterminated string or <name does, swallowing its newline;
           - in LC_COLLATE, reorder-sections-after, whose handler can drop
@@ -1745,22 +1715,10 @@ class _Runner(object):
                lr.return_widestr, sec.category, element)
         kept = lr.build.lookahead.get(key)
         if kept is None:
-            met, words = lr.met, lr.words
-            lr.met, lr.words = False, set()
-            try:
-                kept = self._lookahead(lr, sec, element) \
-                    + (lr.met, frozenset(lr.words))
-            finally:
-                # A GlibcUndefined leaves from here: what the file met
-                # before the lookahead, and in it, is the run's all the same.
-                lr.met, lr.words = met or lr.met, words | lr.words
+            kept = self._lookahead(lr, sec, element)
             lr.build.lookahead[key] = kept
             lr.restore(snap)
-        rest, reasons, scanned, met, words = kept
-        # A kept lookahead read its bytes and words once, for every run
-        # that uses it: each run counts them as its own.
-        lr.met = lr.met or met
-        lr.words |= words
+        rest, reasons, scanned = kept
         toks.extend(rest)
         for why in reasons:
             self.unsettled(lr, t.line, why)
@@ -2436,6 +2394,10 @@ class _Runner(object):
                     and _kw(t, 'tok_translit_start'):
                 t = self.translit(lr, t, sec, entry)
                 continue
+            elif sec.category == 'LC_CTYPE' and not ignore \
+                    and t.tok == 'kw' and t.kwtok in _CTYPE_NAMED:
+                self.ctype_names(lr, t)
+                self.statement(lr, t, sec, None)
             elif sec.category == 'LC_CTYPE' and ignore and t.tok == 'kw' \
                     and t.kwtok in ('tok_charclass', 'tok_charconv'):
                 # No ignore_content test (ld-ctype.c:2177-2203@2.39, the
@@ -2461,6 +2423,38 @@ class _Runner(object):
             else:
                 self.statement(lr, t, sec, None)
             t = lr.token()
+
+    def ctype_names(self, lr, t):
+        """charclass and charconv hand each name of their `;` list, class
+        and map their first operand, to strcmp (ld-ctype.c:1124-1126,
+        :1151-1154, :2177-2234, :2510-2534@2.39, the same +-1 at 2.28 and
+        2.34). A translated string glibc reads as NULL there (a name the
+        charmap lacks, or an illegal or unterminated string: get_string,
+        linereader.c:983-992@2.39) is a segmentation fault, measured on
+        el8/el9/el10 (v74-v77, v79). Under the UTF-8 charmap a symbolic
+        name other than <U....> is never in it; a code point above U+007F
+        can be missing: unsettled."""
+        snap = lr.snapshot()
+        try:
+            while True:
+                nxt = lr.token()
+                if nxt.tok == 'string' and nxt.items is not None:
+                    if _null_string(nxt):
+                        raise _Stop(Fatal('crash', None, (lr.fname, t.line),
+                                          '%s with a string glibc reads as '
+                                          'NULL' % t.val))
+                    if any(k == 'ucp' and v >= 0x80 for k, v in nxt.items):
+                        self.unsettled(lr, t.line, 'a %s name holding a '
+                                       'character above U+007F, which glibc '
+                                       'looks up in the charmap' % t.val)
+                        return
+                elif nxt.tok != 'ident':
+                    return
+                if t.kwtok not in ('tok_charclass', 'tok_charconv') \
+                        or lr.token().tok != 'semicolon':
+                    return
+        finally:
+            lr.restore(snap)
 
     def time_array(self, lr, t, most):
         """STRARR_ELEM of time_read (ld-time.c:723-799@2.39, the same at
@@ -2546,7 +2540,7 @@ class _Runner(object):
                 # `include` there is queued (measured, el8/el9/el10). A
                 # character above U+007F can be missing from the charmap,
                 # which makes the string illegal; this reader does not read
-                # charmaps yet.
+                # charmaps.
                 self.unsettled(lr, now.line, 'a translit entry starting '
                                'with a string glibc may read as having no '
                                'value')
@@ -2574,8 +2568,8 @@ class _Runner(object):
         if rep_.tok == 'string' and any(k == 'ucp' and v >= 0x80
                                         for k, v in rep_.items or ()):
             # A character the charmap lacks makes the string NULL and the
-            # line a syntax error (measured, case c50); charmaps are read
-            # in a later step of block 15.
+            # line a syntax error (measured, case c50); this reader does
+            # not read charmaps.
             self.unsettled(lr, t.line, 'a translit include whose '
                            'repertoire name holds a character above U+007F')
         if name.tok == 'ident':

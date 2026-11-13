@@ -142,7 +142,7 @@ class Tree(object):
         """(file, copies) of every LC_COLLATE section run(name) read for
         its content, in reading order; copies are str names, the opening
         copy first."""
-        fatal, reads, unsettled, collate, _, _ = self._runs[name]
+        fatal, reads, unsettled, collate, _ = self._runs[name]
         out = []
         for fr in reads:
             for sec in fr[2]:
@@ -202,7 +202,7 @@ class Tree(object):
             return self._unresolved
         out = {}
         for name in self.names:
-            fatal, reads, unsettled, collate, _, _ = self._runs[name]
+            fatal, reads, unsettled, collate, _ = self._runs[name]
             cut = [(fr[0], fr[3]) for fr in reads if fr[3] is not None]
             if fatal is not None:
                 kind, what = fatal[0], fatal[1]
@@ -419,7 +419,7 @@ def _read_collate(tree, name):
     """({file: [(start, end)]} of the LC_COLLATE sections run(name) read
     for their content, {file: [(first, last)]} of its instructions,
     {file: map sha1})."""
-    _, reads, _, collate, _, named = tree._runs[name]
+    _, reads, _, collate, named = tree._runs[name]
     bounds = {}
     for fr in reads:
         for sec in fr[2]:

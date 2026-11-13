@@ -465,6 +465,58 @@ class ReaderFailureModes(unittest.TestCase):
                 with self.assertRaises(gr.ReaderError):
                     gr.Build.parse_gperf(bad)
 
+    def test_a_ctype_name_glibc_reads_as_null_is_a_crash(self):
+        """charclass and charconv hand each name of their list, class and
+        map their first operand, to strcmp (ld-ctype.c:1124-1126,
+        :1151-1154, :2177-2234, :2510-2534@2.39). A translated string glibc
+        reads as NULL there (a name the charmap lacks, or an unterminated
+        string) is a segmentation fault: localedef exited -11, with and
+        without -c, on el8, el9 and el10 (handoff-verificacion-101-2026-10-19,
+        collate/cmp_r1.txt v74-v77 and v79, cmp_r2.txt v110). After
+        LC_COLLATE no string is translated any more, and the same line
+        builds (v78); so does a name the charmap has (v111)."""
+        tail = oracle_cases.coll('a')
+        ctype = b'LC_CTYPE\n%s\nEND LC_CTYPE\n'
+        crash = [b'charclass "<foo>"', b'charconv "<foo>"',
+                 b'class "<foo>";<U0041>', b'map "<foo>";(<U0041>,<U0042>)',
+                 b'charclass "abc', b'charclass a;"<foo>"',
+                 b'charconv a;"<foo>"']
+        for name in ('rhel8', 'rhel9', 'rhel10'):
+            build = gr.rhel_build(GLIBC_CLONE, name)
+            for line in crash:
+                with self.subTest(name, line=line):
+                    r = self.run_one(ctype % line + tail, build)
+                    self.assertIsNotNone(r.fatal, 'read as if it built')
+                    self.assertEqual('crash', r.fatal.kind)
+                    self.assertIsNone(r.collate)
+            for line in (b'foo charclass "<foo>"',
+                         b'foo charclass a;"<foo>"',
+                         b'foo charconv a;"<foo>"',
+                         b'foo charclass "<U00E9>"',
+                         b'foo class "<U00E9>";<U0041>',
+                         b'foo map "<foo>";(<U0041>,<U0042>)'):
+                with self.subTest(name, line=line):
+                    r = self.run_one(ctype % line + tail, build)
+                    self.assertTrue(r.fatal is not None or r.unsettled,
+                                    'a ctype name after the first token '
+                                    'read as if it built')
+            with self.subTest(name, line='charclass <U00E9>'):
+                # A name above U+007F is in the UTF-8 charmap and may be
+                # missing from another: neither a crash nor a build.
+                for line in (b'charclass "<U00E9>"',
+                             b'charclass a;"<U00E9>"'):
+                    r = self.run_one(ctype % line + tail, build)
+                    self.assertIsNone(r.fatal)
+                    self.assertTrue(any('above U+007F' in u[2]
+                                        for u in r.unsettled), r.unsettled)
+            for text in (tail + ctype % b'charclass "<foo>"',
+                         ctype % b'charclass "<U0041>"' + tail):
+                with self.subTest(name, text=text):
+                    r = self.run_one(text, build)
+                    self.assertIsNone(r.fatal)
+                    self.assertEqual([], r.unsettled)
+                    self.assertIsNotNone(r.collate)
+
     def test_a_ref_the_clone_does_not_hold_is_refused(self):
         with self.assertRaisesRegex(gr.ReaderError, 'git show'):
             gr.Build.at(GLIBC_CLONE, 'glibc-0.0-no-such-tag', False)
@@ -1004,7 +1056,7 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
                    b'<U0044>..<U0045>\n<U0046> ...\n<U0047>..(2)..<U0048>\n'
                    b'END LC_COLLATE\n'),
             b'b': b'LC_COLLATE\ncodepoint_collation\nEND LC_COLLATE\n'}
-        fatal, _, unsettled, collate, _, named = self.kept(files)[b'a']
+        fatal, _, unsettled, collate, named = self.kept(files)[b'a']
         self.assertIsNone(fatal)
         counts, ranges, codepoint, steer = collate[:4]
         maps, rest = named
@@ -1039,7 +1091,7 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
         (Run.named_lines) kept as anything but (file, sha1) pairs and a
         bool."""
         s = self.kept(_small_tree())[b'a']
-        fatal, reads, unsettled, collate, meets, named = s
+        fatal, reads, unsettled, collate, named = s
         self.assertEqual(s, rc._check(s))
         self.assertTrue(named[0])
         for bad in (collate[:3], collate[:3] + ((('b', 2),),),
@@ -1051,7 +1103,7 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
                     collate + ((('b', 'a' * 40),), None)):
             with self.subTest(bad):
                 with self.assertRaises(ValueError):
-                    rc._check((fatal, reads, unsettled, bad, meets, named))
+                    rc._check((fatal, reads, unsettled, bad, named))
         for bad in ((), (named[0],), named + (False,),
                     ((('b', 'x' * 40),), False), ((('b', 7),), False),
                     (((7, 'a' * 40),), False), ((('b', 'A' * 40),), False),
@@ -1059,11 +1111,11 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
                     (named[0], None), (named[0], 1), (named[0], ('b',))):
             with self.subTest(bad):
                 with self.assertRaises(ValueError):
-                    rc._check((fatal, reads, unsettled, collate, meets, bad))
+                    rc._check((fatal, reads, unsettled, collate, bad))
         with self.assertRaises(ValueError):
-            rc._check(s[:5])
+            rc._check(s[:4])
         for ok in (((('b', 'a' * 40),), True), ((), False)):
-            ok = (fatal, reads, unsettled, collate, meets, ok)
+            ok = (fatal, reads, unsettled, collate, ok)
             self.assertEqual(ok, rc._check(ok))
 
     def test_a_name_is_never_served_another_names_run(self):
@@ -1169,12 +1221,12 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
         files = _small_tree()
         files[b'd'] = files[b'a']
         got = self.kept(files)
-        shas = {sha for s in got.values() for f, sha in s[5][0]
+        shas = {sha for s in got.values() for f, sha in s[4][0]
                 if f == 'b'}
         self.assertEqual(1, len(shas))
         self.assertEqual(sorted([shas.pop() + '.json', self.EMPTY]),
                          self.maps_on_disk())
-        sha = dict(got[b'a'][5][0])['b']
+        sha = dict(got[b'a'][4][0])['b']
         self.forget_maps()
         self.assertEqual({3: (0x41,)}, rc.char_map(sha, self.dir))
 
@@ -1183,7 +1235,7 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
         as a file whose lines name nothing."""
         files = _small_tree()
         want = self.kept(files)
-        name = dict(want[b'b'][5][0])['b'] + '.json'
+        name = dict(want[b'b'][4][0])['b'] + '.json'
         both = self.maps_on_disk()
         self.assertEqual(sorted([name, self.EMPTY]), both)
         os.unlink(os.path.join(rc._chars_dir(self.dir), name))
@@ -1198,7 +1250,7 @@ class ReaderCacheKeepsOnlyRunAnswers(unittest.TestCase):
         next reading computes it again."""
         files = _small_tree()
         want = self.kept(files)
-        name = dict(want[b'b'][5][0])['b'] + '.json'
+        name = dict(want[b'b'][4][0])['b'] + '.json'
         both = self.maps_on_disk()
         self.assertEqual(sorted([name, self.EMPTY]), both)
         path = os.path.join(rc._chars_dir(self.dir), name)
@@ -1285,7 +1337,7 @@ class ReaderAgreesOnEveryRealFile(unittest.TestCase):
         self.assertGreater(len(runs), 250)
         bad, unsettled = [], {}
         for name in names:
-            fatal, reads, uns, _, _, _ = runs[name]
+            fatal, reads, uns, _, _ = runs[name]
             if fatal is not None:
                 bad.append((name, 'fatal', fatal))
             for _, _, why in uns:
@@ -3535,7 +3587,7 @@ class RulesDigest(unittest.TestCase):
 
     def test_a_summary_kept_without_the_rules_is_refused(self):
         ok = (None, (), (), ((('a', 1),), (), (), (), 'f' * 40,
-                             (('a', 'e' * 40),)), (False, ()), ((), False))
+                             (('a', 'e' * 40),)), ((), False))
         self.assertEqual(ok, rc._check(ok))
         head = ok[3][:4]
         for bad in (head, head + ('f' * 40,), head + ('x', ()),
