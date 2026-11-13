@@ -28,8 +28,6 @@ from _harness import (EXPECTED_SHA, FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID,
 
 import glibc_locale_data as g
 
-BAD = 'no-such-tag-4c1f'
-
 
 def in_subprocess(code):
     """Run code that is expected to call die(); return (exit, output).

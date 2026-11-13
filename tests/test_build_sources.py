@@ -3282,6 +3282,33 @@ class ResolvesTheLatestBuild(unittest.TestCase):
                          (0, 'False\n', ''))
 
 
+def suite_reader_cache():
+    """The reader cache the suite was given (PG_GLIBC_READER_CACHE), else the
+    checkout's: where scripts/reader_cache.py would look from SCRIPTS_DIR.
+    audit.sh run from a copy of scripts/ looks next to the copy, where
+    nothing is kept, and would compute every answer cold (backlog 16.215:
+    until then this was the checkout's whatever the variable named)."""
+    return (os.environ.get('PG_GLIBC_READER_CACHE') or
+            os.path.join(SCRIPTS_DIR, 'glibc-reader-cache'))
+
+
+class TheBuildRunsReadTheSuitesReaderCache(unittest.TestCase):
+    """A battery that gives the suite a reader cache of its own (a mutant of
+    the reader, a copy of the tree) has these classes read that one, not the
+    checkout's, where another version of the reader prunes what it finds."""
+
+    def test_the_variable_is_read_first(self):
+        with mock.patch.dict(os.environ,
+                             {'PG_GLIBC_READER_CACHE': '/tmp/own-4c1f'}):
+            self.assertEqual(suite_reader_cache(), '/tmp/own-4c1f')
+
+    def test_without_it_the_checkouts(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop('PG_GLIBC_READER_CACHE', None)
+            self.assertEqual(suite_reader_cache(),
+                             os.path.join(SCRIPTS_DIR, 'glibc-reader-cache'))
+
+
 class _AuditOnBuilds:
     """audit.sh on builds named as `rpm -q glibc` names them, from a folder
     of the test's own: audit.sh and a COPY of scripts/ (a linked script
@@ -3335,8 +3362,7 @@ class _AuditOnBuilds:
             _fill_build_cache(cls.cache, cls.mirror, build, *spec)
         env = dict(os.environ, PG_GLIBC_BUILD_SOURCES_CACHE=cls.cache,
                    PG_GLIBC_BUILD_MIRROR=cls.mirror,
-                   PG_GLIBC_READER_CACHE=os.path.join(SCRIPTS_DIR,
-                                                      'glibc-reader-cache'))
+                   PG_GLIBC_READER_CACHE=suite_reader_cache())
         env.pop('PG_GLIBC_AUDIT_SIDES', None)
         cls.out = {}
         for label, pair in cls.RUNS.items():
@@ -4183,8 +4209,7 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         env = dict(os.environ, PG_GLIBC_AUDIT_OUT=out,
                    PG_GLIBC_BUILD_SOURCES_CACHE=os.path.join(cls.tmp, 'none'),
                    PG_GLIBC_BUILD_MIRROR='file:///nowhere/',
-                   PG_GLIBC_READER_CACHE=os.path.join(SCRIPTS_DIR,
-                                                      'glibc-reader-cache'))
+                   PG_GLIBC_READER_CACHE=suite_reader_cache())
         env.pop('PG_GLIBC_AUDIT_SIDES', None)
         p = subprocess.run(['bash', os.path.join(cls.tmp, 'audit', 'audit.sh'),
                             *cls.RUNS['read']], cwd=cls.tmp,

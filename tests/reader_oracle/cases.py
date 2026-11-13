@@ -29,9 +29,6 @@ Standard library only, Python 3.6.
 import hashlib
 import json
 
-FAMILIES = ('bytes', 'directives', 'tokens', 'sections', 'copy',
-            'statements')
-
 
 def marker_text(name):
     """The four bytes of marker `name`'s `from` string."""
@@ -318,12 +315,13 @@ def _cases():
         'a comment after the word')
     add('t26', T, b'LC_COLLATE\\\n' + body('a') + END,
         'the LC_COLLATE line continued onto the next')
-    # A keyword continued across an escaped newline: lr_next drops the
-    # escape and the newline (linereader.c:162-171@2.39) and lr_getc reads
-    # the next line on into the same word (linereader.h:125-138), so where the table has codepoint_collation (2.35, and RHEL 9 by a patch)
-    # it is read and no element is stored. glibc_tree.across matched the
-    # word in the file's text and missed this spelling (false-negative-
-    # reviewer, round 3 of 15.2 B3); t29 is the control.
+    # A keyword continued across an escaped newline: lr_next drops the escape
+    # and the newline (linereader.c:162-171@2.39) and lr_getc reads the next
+    # line on into the same word (linereader.h:125-138), so where the table has
+    # codepoint_collation (2.35, and RHEL 9 by a patch) it is read and no
+    # element is stored. A check that matched the word in the file's text
+    # missed this spelling (false-negative-reviewer, round 3 of 15.2 B3); t29
+    # is the control.
     cp = D('a') + ORDER_HEAD + O('a') + ORDER_TAIL + END
     add('t27', T, HEAD + b'codepoint_coll\\\nation\n' + cp,
         'codepoint_collation continued across the escape')

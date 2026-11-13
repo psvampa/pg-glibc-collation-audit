@@ -1291,63 +1291,6 @@ class WrapperStaleStepLog(unittest.TestCase):
 # wraps between words in the summary, and absent from every machine.
 NO_SOURCES_DIR = '/nonexistent-pg-glibc-audit/locales'
 
-# What a node file's character set check adds to a run (13.7 PR D), and the
-# notice a run without it prints instead.
-CHARMAPS_NOTICE = "!! A machine's own localedata/charmaps/ is NOT compared"
-KEYED_HEAD = '     Character sets and transliterations, '
-# Step 11's line when neither machine's charmaps are given (charmap_check).
-STEP_11_NOT_CHECKED = ('!! NOT checked whether the character sets of either '
-                       'machine')
-BEFORE_CHARMAPS = ("The file was written by an --extract that did not pack "
-                   "the machine's charmaps (/usr/share/i18n/charmaps); extract "
-                   "it again with this checkout's scripts/locale_order.py.")
-
-
-def _cut_blocks(lines, starts, indent):
-    """lines without the `!!` blocks whose first line is one of `starts`,
-    and how many came out. A block is its first line and every line after
-    it indented deeper than `indent`, as audit.sh's warnings block reads
-    it."""
-    out, cut, i = [], 0, 0
-    while i < len(lines):
-        if lines[i] in starts:
-            cut += 1
-            i += 1
-            while i < len(lines) and lines[i].startswith(indent + '   '):
-                i += 1
-            continue
-        out.append(lines[i])
-        i += 1
-    return out, cut
-
-
-def without_the_tags_notice(out):
-    """(out without the `!!` for the sides read as tags, under 'What was
-    compared' and among the summary's warnings, ((how many of each), what it
-    asked for: 'build', 'node', or '' for nothing))."""
-    lines = out.split('\n')
-    starts = {x for x in lines if x.startswith('!! Not checked for glibc-')}
-    blocks = []
-    for i, line in enumerate(lines):
-        if line.lstrip(' ').startswith('!! Not checked for glibc-'):
-            pad = line[:len(line) - len(line.lstrip(' '))] + '   '
-            j = i + 1
-            while j < len(lines) and lines[j].startswith(pad):
-                j += 1
-            blocks.append(flat('\n'.join(lines[i:j])))
-    ask = {('build' if 'name each side' in b or 'name that side' in b else
-            'node' if '--old-node' in b else '') for b in blocks}
-    if len(ask) != 1:
-        raise AssertionError(f'the tags warning asks for {ask}')
-    lines, top = _cut_blocks(lines, starts, '')
-    lines, warned = _cut_blocks(lines, {'     ' + x for x in starts}, '     ')
-    return '\n'.join(lines), ((top, warned), ask.pop())
-
-
-# Step 11's line when both machines' charmaps were checked and nothing found.
-STEP_11_CHECKED = "Character sets: every byte sequence that each machine's"
-
-
 NO_SOURCES_REASON = (f'{NO_SOURCES_DIR} does not exist; it comes with the '
                      'package glibc-locale-source.')
 _NODE_FILES = {}
