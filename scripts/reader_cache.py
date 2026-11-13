@@ -2,13 +2,12 @@
 
 glibc_reader.run() emulates one whole localedef run, the way glibc reads
 every file it reaches, and that costs about 0.2 s per locale: almost every
-locale reaches iso14651_t1_common, the largest file of the tree. Steps 1
-to 4, 9 and 10 ask it about every locale of a tag or of a node's directory
-(glibc_tree), step 2 of both tags, and the
-test suite runs them many times over the same trees, so the answers are kept
-on disk, in scripts/glibc-reader-cache/ next to this file, outside git
-(backlog 15.2). Nothing here reads a locale file differently: a kept answer
-is a run() answer, and it is used only where run() would give the same one.
+locale reaches iso14651_t1_common, the largest file of the tree. Step 2
+asks it about every locale of both sides (glibc_tree), and the test suite
+runs them many times over the same trees, so the answers are kept on disk,
+in scripts/glibc-reader-cache/ next to this file, outside git (backlog
+15.2). Nothing here reads a locale file differently: a kept answer is a
+run() answer, and it is used only where run() would give the same one.
 
 Why a kept answer is the answer:
   - A run reads nothing but what resolve() hands it, by name, and resolve
@@ -20,20 +19,19 @@ Why a kept answer is the answer:
     to either starts from nothing.
   - Under it, a hash of the build (its keyword tables, pre236, signed_char):
     another build never shares an answer.
-  - An entry that cannot be read, or reads as anything but the shape written
-    here, is computed again, never taken as empty or as no run.
+  - An entry that cannot be read, or whose shape _check refuses, is
+    computed again, never taken as empty or as no run.
 
 What is kept is run()'s answer without the tokens of each LC_COLLATE
-statement: those are megabytes per locale. The kept collate holds what the
-steps read from them (summary(), below), and a sha1 of the statements glibc
-accepted, so that two sides' rules compare with no statement kept
-(rules()). What each line names, which step
-2 prints under a changed file, is kept apart, once per distinct map,
-named by its sha1 (char_maps): a copy in each run would be 150 MB a
-tree. So are the statements each line starts, as sha1s
-(statement_map), in a directory of their own. The answers are
-written as JSON, not pickle, so a damaged or planted entry can be wrong
-data, never code; only its shape is checked.
+statement: those are megabytes per locale. The kept collate holds a summary
+of them (summary(), below), and a sha1 of the statements glibc accepted, so
+that two sides' rules compare with no statement kept (rules()). What each
+line names, which step 2 lists for each locale whose rules differ, is kept
+apart, once per distinct map, named by its sha1 (char_maps): a copy in each
+run would be 150 MB a tree. So are the statements each line starts, as
+sha1s (statement_map), in a directory of their own. The answers are written
+as JSON, not pickle, so a damaged or planted entry can be wrong data, never
+code; only its shape is checked.
 
 PG_GLIBC_READER_CACHE names another directory; PG_GLIBC_READER_JOBS caps the
 processes that compute what is missing (default: one per processor). A
@@ -70,8 +68,8 @@ VERSION = _version()
 
 
 def blob_id(data):
-    """git's id for these bytes as a blob, so a tag's file and a node's copy
-    of it are one id."""
+    """git's id for these bytes as a blob, so a tag's file and a machine's
+    copy of it are one id."""
     return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
 
 
@@ -112,7 +110,7 @@ def _dec(x):
 
 def summary(r):
     """run()'s answer as plain values: (fatal, reads, unsettled, collate,
-    meets, named). _summary's first half."""
+    named). _summary's first half."""
     return _summary(r)[0]
 
 
@@ -150,7 +148,7 @@ def _maps(files):
 def _summary(r):
     """(summary, char_maps(r)).
 
-    summary is (fatal, reads, unsettled, collate, meets, named).
+    summary is (fatal, reads, unsettled, collate, named).
 
     fatal      None, or (kind, name, where, detail)
     reads      one (name, directives, sections, cut) per file read, in
@@ -184,8 +182,6 @@ def _summary(r):
                  lines      (file, sha1) of each file's statement map
                             (_rules), kept apart as the character maps
                             are (statement_map)
-    meets      (Run.met, Run.words sorted): what another build could read
-               differently in this run (glibc_tree.across)
     named      (files, rest): Run.named_lines() as kept. files is (file,
                sha1) of each file's char_maps, sorted: the map itself is
                kept apart, once (char_map), and step 2 reads the
@@ -222,7 +218,7 @@ def _summary(r):
                    sha, tuple(sorted((f, d) for f, (d, _) in lines.items())))
     named = (tuple(sorted((f, d) for f, (d, _) in maps.items())), rest)
     return _canon((fatal, tuple(reads), tuple(r.unsettled), collate,
-                   (r.met, tuple(sorted(r.words))), named)), texts
+                   named)), texts
 
 
 _RANGES = frozenset(('ellipsis2', 'ellipsis3', 'ellipsis4'))
@@ -395,7 +391,7 @@ def _maps_kept(s, root):
     this process or on disk? A run whose map is gone is computed again
     (tree_runs), never read as one that names no character, or no
     statement."""
-    return _kept_shas((sha for _, sha in s[5][0]), root) and (
+    return _kept_shas((sha for _, sha in s[4][0]), root) and (
         s[3] is None or _kept_shas((sha for _, sha in s[3][5]), root,
                                    'lines'))
 
@@ -404,15 +400,6 @@ def _kept_shas(shas, root, kind='chars'):
     d = _chars_dir(root, kind)
     return all(sha in _TEXTS or os.path.isfile(os.path.join(d, sha + '.json'))
                for sha in shas)
-
-
-def maps_kept(shas, cache_dir=None):
-    """Is every character map named in `shas` kept (in this process or on
-    disk)? glibc_tree.file_facts computes its answer again when one is
-    not, which computes the runs, and so the map, again."""
-    root = cache_dir if cache_dir is not None else os.environ.get(
-        'PG_GLIBC_READER_CACHE') or DEFAULT_DIR
-    return _kept_shas(shas, root)
 
 
 def statement_map(sha, cache_dir=None):
@@ -603,9 +590,9 @@ def _tree_entry(path, files, root):
 
 def _check(s):
     """A kept summary, if it has the shape summary() writes; else raises."""
-    if not (isinstance(s, tuple) and len(s) == 6):
+    if not (isinstance(s, tuple) and len(s) == 5):
         raise ValueError('not a run summary')
-    fatal, reads, unsettled, collate, meets, named = s
+    fatal, reads, unsettled, collate, named = s
     if fatal is not None and not (isinstance(fatal, tuple)
                                   and len(fatal) == 4):
         raise ValueError('bad fatal')
@@ -638,10 +625,6 @@ def _check(s):
                 and all(isinstance(n, int) for n in x[1])
                 for x in collate[3])):
         raise ValueError('bad collate')
-    if not (isinstance(meets, tuple) and len(meets) == 2
-            and isinstance(meets[0], bool) and isinstance(meets[1], tuple)
-            and all(isinstance(w, bytes) for w in meets[1])):
-        raise ValueError('bad meets')
     if not (isinstance(named, tuple) and len(named) == 2
             and isinstance(named[0], tuple) and all(
                 isinstance(x, tuple) and len(x) == 2
