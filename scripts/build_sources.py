@@ -1010,10 +1010,7 @@ TIER1 = [
     # The wide-char comparison and sort-key wrappers: a handful of #defines
     # (`STRCMP __wcscmp`, `WEIGHT_H "../locale/weightwc.h"`) and then
     # `#include <string/strcoll_l.c>`. A change here moves wcscoll/wcsxfrm
-    # behaviour and nothing else. They are ENTRY_POINTS, and the walk subtracts
-    # its entry points from what it reports -- so until they were listed here
-    # they were checked for existence and never diffed. Measured over
-    # 2.28..2.39: copyright and URL lines only, so no verdict moved.
+    # behaviour and nothing else.
     'wcsmbs/wcscoll_l.c',
     'wcsmbs/wcsxfrm_l.c',
     # (macro) strcoll_l.c reaches the next two as `#include WEIGHT_H`, where

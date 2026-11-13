@@ -702,11 +702,6 @@ class ReadingCharsReadsLikeGlibc(unittest.TestCase):
                          ('%', '/'))
 
 
-ISO_COPY = 'copy "iso14651_t1"'
-SORT_RULE = ('order_start forward', '<U0041> <U0041>;IGNORE;IGNORE;IGNORE',
-             'order_end')
-
-
 # --- step 2's character set check (backlog 13.7, PR B) ----------------------
 
 _PROLOG = ('<code_set_name> TEST', '<comment_char> %', '<escape_char> /',

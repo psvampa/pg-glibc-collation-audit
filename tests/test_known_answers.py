@@ -364,12 +364,6 @@ class Step2NamesTheCharacters(StepRun):
                         len(rows[name][1]))
 
 
-@needs_clone
-def _harness_scripts():
-    from _harness import SCRIPTS_DIR
-    return SCRIPTS_DIR
-
-
 @needs_floor_pair
 class BelowTheOldVersionFloor(StepRun):
     """glibc-2.12 -> glibc-2.17, the pair docs/scope.md names.

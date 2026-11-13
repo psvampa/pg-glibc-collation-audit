@@ -33,7 +33,8 @@ different facts. So it is red whenever it cannot show that the suite ran:
     where the list is built;
   * discovering no test class at all, or a start directory that does not
     import, is FAILED;
-  * a shard that never finishes is FAILED, by name, at SHARD_TIMEOUT;
+  * a shard that never finishes is FAILED, by name, at SHARD_TIMEOUT, and
+    every process still in its process group is killed with it;
   * a class named on the command line that matches nothing is FAILED, rather
     than a green run of the empty selection.
 
@@ -70,8 +71,10 @@ import argparse
 import collections
 import os
 import re
+import signal
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -83,8 +86,8 @@ TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 # Measured, not chosen: see the module docstring.
 DEFAULT_WORKERS = 8
 
-# The slowest class takes about 35 s. A shard past this is hung, not slow, and
-# a hung shard that is waited on for ever is a suite that never says anything.
+# A shard past this is hung, not slow, and a hung shard that is waited on for
+# ever is a suite that never says anything.
 SHARD_TIMEOUT = 600
 
 # `unittest` writes its summary to stderr, and the two lines of it are
@@ -183,6 +186,86 @@ def select_units(units, names):
     return chosen
 
 
+# Each command the runner starts (a class, the reader fill) runs in a process
+# group of its own, so that a cut kills the whole group the command started
+# and not only the command (backlog 16.75: classes cut at SHARD_TIMEOUT left
+# their audit.sh and its step 2 running, orphaned). A group of its own also
+# keeps what a terminal sends to the runner's group (Ctrl-C, Ctrl-\, the
+# SIGHUP of a closed terminal or a dropped ssh) from reaching the commands,
+# so main() kills the groups still running when the run ends that way, and
+# no command starts after that. A SIGKILL cannot be caught: the groups then
+# outlive the runner.
+_GROUPS = set()
+_GROUPS_LOCK = threading.Lock()
+_STOPPING = []
+
+# After a kill, how long the output still in the pipes is waited for. A
+# process that left the group keeps them open, and waiting for it to end
+# would be the hang the cut is there to end.
+DRAIN_TIMEOUT = 5
+
+
+def run_group(cmd, timeout, **kwargs):
+    """(stdout, stderr, returncode) of cmd, the return code None when cmd ran
+    past `timeout`: then the whole process group cmd started is killed, and
+    what it had printed by then is kept."""
+    with _GROUPS_LOCK:
+        if _STOPPING:
+            raise KeyboardInterrupt('the runner is stopping')
+        p = subprocess.Popen(cmd, start_new_session=True, **kwargs)
+        _GROUPS.add(p.pid)
+    try:
+        try:
+            out, err = p.communicate(timeout=timeout)
+            return out, err, p.returncode
+        except subprocess.TimeoutExpired:
+            _kill_group(p.pid)
+            out, err = _drain(p)
+            return out, err, None
+        except BaseException:
+            _kill_group(p.pid)
+            p.wait()
+            raise
+    finally:
+        with _GROUPS_LOCK:
+            _GROUPS.discard(p.pid)
+
+
+def _drain(p):
+    """What a killed command printed: the rest of its pipes, or, when they
+    stay open past DRAIN_TIMEOUT, what was read before then."""
+    try:
+        out, err = p.communicate(timeout=DRAIN_TIMEOUT)
+    except subprocess.TimeoutExpired as exc:
+        out, err = exc.output, exc.stderr
+        for pipe in (p.stdout, p.stderr):
+            if pipe is not None:
+                pipe.close()
+        p.wait()
+    return out or b'', err or b''
+
+
+def _kill_group(pgid):
+    """SIGKILL to every process of the group. A group with nothing left to
+    kill answers ProcessLookupError once its leader is reaped, and on macOS
+    PermissionError while the leader is an unreaped zombie and the only
+    member (measured 2026-11-13, Python 3.14 on darwin): both mean the same,
+    nothing of the group is running."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def kill_groups():
+    """Kill every group still running, and start no command after this."""
+    with _GROUPS_LOCK:
+        _STOPPING.append(True)
+        groups = list(_GROUPS)
+    for pgid in groups:
+        _kill_group(pgid)
+
+
 def run_unit(name, tests_dir=TESTS_DIR, timeout=SHARD_TIMEOUT):
     """One class in its own `python3 -m unittest -q` process.
 
@@ -195,13 +278,10 @@ def run_unit(name, tests_dir=TESTS_DIR, timeout=SHARD_TIMEOUT):
         [tests_dir] + ([env['PYTHONPATH']] if env.get('PYTHONPATH') else []))
     started = time.time()
     note = ''
-    try:
-        p = subprocess.run([sys.executable, '-m', 'unittest', '-q', name],
-                           cwd=tests_dir, env=env, capture_output=True,
-                           timeout=timeout)
-        out, err, rc = p.stdout, p.stderr, p.returncode
-    except subprocess.TimeoutExpired as exc:
-        out, err = exc.stdout or b'', exc.stderr or b''
+    out, err, rc = run_group([sys.executable, '-m', 'unittest', '-q', name],
+                             timeout, cwd=tests_dir, env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if rc is None:
         note = '\nran past the %d s shard timeout and was killed\n' % timeout
         rc = 124
     out = out.decode('utf-8', 'replace')
@@ -399,21 +479,48 @@ def fill_reader(tests_dir=TESTS_DIR, timeout=SHARD_TIMEOUT):
     answer, so this is said and the run goes on."""
     env = dict(os.environ)
     env.setdefault('PG_GLIBC_READER_JOBS', str(os.cpu_count() or 1))
-    try:
-        p = subprocess.run(
-            [sys.executable, '-c',
-             'import _harness; _harness.fill_reader_cache()'],
-            cwd=tests_dir, env=env, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, timeout=timeout)
-    except subprocess.TimeoutExpired:
+    out, _, rc = run_group(
+        [sys.executable, '-c',
+         'import _harness; _harness.fill_reader_cache()'],
+        timeout, cwd=tests_dir, env=env, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT)
+    if rc is None:
         return 'it ran past %d s' % timeout
-    if p.returncode != 0:
-        tail = p.stdout.decode('utf-8', 'replace').strip().split('\n')[-1:]
-        return 'exit %d: %s' % (p.returncode, ' '.join(tail))
+    if rc != 0:
+        tail = out.decode('utf-8', 'replace').strip().split('\n')[-1:]
+        return 'exit %d: %s' % (rc, ' '.join(tail))
     return None
 
 
+# What ends a run besides Ctrl-C: a kill or a CI cancel (SIGTERM), a closed
+# terminal or a dropped ssh (SIGHUP), Ctrl-\ (SIGQUIT).
+ENDING_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
+
+
+def _terminated(signum, frame):
+    raise SystemExit(128 + signum)
+
+
 def main(argv=None):
+    """_main, with every group still running killed when the run ends by
+    Ctrl-C, by one of ENDING_SIGNALS (exit 128 + the signal) or by anything
+    else raised. A signal the run was started ignoring stays ignored: that
+    is how `nohup` asks a run to outlive its terminal."""
+    with _GROUPS_LOCK:
+        del _STOPPING[:]
+    previous = {s: signal.signal(s, _terminated) for s in ENDING_SIGNALS
+                if signal.getsignal(s) is not signal.SIG_IGN}
+    try:
+        return _main(argv)
+    except BaseException:
+        kill_groups()
+        raise
+    finally:
+        for s, handler in previous.items():
+            signal.signal(s, handler)
+
+
+def _main(argv=None):
     ap = argparse.ArgumentParser(
         description='Run the tests/ suite one process per TestCase class.')
     ap.add_argument('names', nargs='*',
@@ -448,7 +555,12 @@ def main(argv=None):
                           str(max(1, (os.cpu_count() or 1) // workers)))
     started = time.time()
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        shards = list(pool.map(lambda u: run_unit(u[0]), units))
+        try:
+            shards = list(pool.map(lambda u: run_unit(u[0]), units))
+        except BaseException:
+            kill_groups()
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
     seconds = time.time() - started
     touched = []
     try:

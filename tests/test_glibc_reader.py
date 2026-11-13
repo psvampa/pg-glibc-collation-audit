@@ -17,11 +17,10 @@ comparison needs no machine; an answer that is missing, damaged or recorded
 for other cases is a failure, never a skip. When cases.py changes, the
 corpus digest stops matching and the three files have to be measured again.
 
-The reader also says where it cannot answer (Run.unsettled): for the shapes
-it does not read the way glibc does, and where what localedef writes depends
-on -c. Which cases those are
-is pinned below, so a reader that stops answering anywhere else goes red,
-and a step that settles one has to move it here.
+The reader also says where it cannot answer (Run.unsettled): for the shapes it
+does not read the way glibc does, and where what localedef writes depends on
+-c. Which cases those are is pinned below, so a reader that stops answering
+anywhere else goes red, and a step that settles one has to move it here.
 
 Below the oracle: what a Build keeps between runs and scripts/reader_cache.py
 keeps on disk give exactly what the reader computes without them (backlog
@@ -124,11 +123,11 @@ _STATEMENTS = {'o14', 'o15', 'o16', 'o20', 'o21', 'o22', 'o23', 'o24', 'o25',
 # 2.36 it is a byte and the reader follows glibc.
 _EOF_MID_LINE = {'o55', 'o56'}
 # A translated copy or include name, or an include's repertoire name, that
-# holds a character above U+007F: whether the charmap has it decides
-# whether glibc reads the name, refuses it, or reads the file again for
-# LC_CTYPE (translate_unicode_codepoint, linereader.c:651@2.39), and the
-# reader reads no charmap (15.6). Symbolic in y and r on every build; from
-# 2.36 also raw bytes, which glibc decodes as UTF-8 there (u, r012, r027).
+# holds a character above U+007F: whether the charmap has it decides whether
+# glibc reads the name, refuses it, or reads the file again for LC_CTYPE
+# (translate_unicode_codepoint, linereader.c:651@2.39), and the reader reads no
+# charmap. Symbolic in y and r on every build; from 2.36 also raw bytes, which
+# glibc decodes as UTF-8 there (u, r012, r027).
 _CHARMAP_NAMES = {'y013', 'y015', 'y016', 'y018', 'r004', 'r019'}
 # An LC_COLLATE read with the repertoire map a translit include named, or
 # that a copy handed on, which glibc reads first and the reader does not
@@ -146,9 +145,8 @@ EXPECTED_UNSETTLED = {
                'u024', 'r012', 'r027'} | _LATER | _UNDEFINED
     | _MID_STATEMENT | _STATEMENTS | _CHARMAP_NAMES | _REPERTOIRE,
 }
-# Cases run under another charmap than UTF-8, the only one the reader
-# models (run()); they wait for the charmap reader (15.6) and are compared
-# by OracleFiles alone.
+# Cases run under another charmap than UTF-8, the only one the reader models
+# (run()); they are compared by OracleFiles alone.
 OTHER_CHARMAP = {'o34', 'o35'}
 def load_oracle(path):
     """The answers in `path`, checked whole: format, seal, the corpus they

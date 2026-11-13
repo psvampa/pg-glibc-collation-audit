@@ -26,7 +26,7 @@ _summary_is_red` is that test.
 
 No glibc clone needed: the shard results are fabricated, and the cases that
 run a real process use a module written into a temporary directory, the
-fastest module in the suite, or a one-line `python3 -c`.
+fastest module in the suite, or a short `python3 -c`.
 
 The suite also loses something quietly when a test writes where a real audit
 reads: `TheSuiteDoesNotWriteWhereARealAuditReads` guards the folder of its
@@ -38,6 +38,7 @@ import io
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -487,6 +488,229 @@ class TheReaderFillSaysWhenItDidNotFinish(unittest.TestCase):
                              rp.fill_reader(d))
             os.environ['PG_GLIBC_READER_JOBS'] = '2'
             self.assertEqual('exit 1: 2', rp.fill_reader(d))
+
+# A class, and a reader fill, that start a process of their own and then hang:
+# the process writes its pid to $PIDFILE and would outlive them by minutes.
+HANGING_CLASS = textwrap.dedent('''\
+    import os, subprocess, time, unittest
+    class K(unittest.TestCase):
+        def test_hang(self):
+            p = subprocess.Popen(['sleep', '300'], stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+            with open(os.environ['PIDFILE'], 'w') as fh:
+                fh.write(str(p.pid))
+            time.sleep(60)
+    ''')
+HANGING_FILL = textwrap.dedent('''\
+    import os, subprocess, time
+    def fill_reader_cache():
+        p = subprocess.Popen(['sleep', '300'], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        with open(os.environ['PIDFILE'], 'w') as fh:
+            fh.write(str(p.pid))
+        time.sleep(60)
+    ''')
+# run_parallel.main() over HANGING_CLASS alone, in a process of its own, so a
+# test can send it what a terminal or a CI cancel sends.
+INTERRUPTED_MAIN = textwrap.dedent('''\
+    import os, sys
+    import run_parallel as rp
+    d = sys.argv[1]
+    unit = rp.run_unit
+    rp.discover_units = lambda names=None: [('test_hang.K', 1)]
+    rp.run_unit = lambda name: unit(name, tests_dir=d)
+    rp.DEFAULT_OUT_DIR = os.path.join(d, 'out')
+    sys.exit(rp.main(['test_hang']))
+    ''')
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+class _WithAHangingProcess(unittest.TestCase):
+    """A temporary folder, $PIDFILE in it, and the process whose pid lands
+    there killed at cleanup whatever the test did."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp(prefix='pg-glibc-cut-')
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        self.pidfile = os.path.join(self.d, 'pid')
+        patch = mock.patch.dict(os.environ, {'PIDFILE': self.pidfile})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def started(self, wait=10):
+        """The pid the hanging process wrote, waiting up to `wait` s."""
+        deadline = time.time() + wait
+        while time.time() < deadline:
+            if os.path.exists(self.pidfile):
+                with open(self.pidfile) as fh:
+                    text = fh.read()
+                if text:
+                    pid = int(text)
+                    self.addCleanup(
+                        lambda: alive(pid) and os.kill(pid, signal.SIGKILL))
+                    return pid
+            time.sleep(0.05)
+        self.fail('the process the test starts never wrote its pid')
+
+    def gone(self, pid):
+        for _ in range(40):
+            if not alive(pid):
+                return True
+            time.sleep(0.05)
+        return False
+
+    def write(self, name, text):
+        with open(os.path.join(self.d, name), 'w') as fh:
+            fh.write(text)
+
+
+class ACutLeavesNothingRunning(_WithAHangingProcess):
+    """Backlog 16.75: subprocess.run(timeout=) kills the process it started
+    and nothing under it, so a class cut at SHARD_TIMEOUT left its audit.sh
+    and step 2 running, orphaned, and a fill cut at its limit left its
+    step 2. The cut kills the whole group the command started."""
+
+    def test_a_shard_cut_at_its_limit_leaves_nothing_running(self):
+        self.write('test_hang.py', HANGING_CLASS)
+        shard_ = rp.run_unit('test_hang.K', tests_dir=self.d, timeout=4)
+        self.assertEqual(shard_.returncode, 124, shard_.output)
+        self.assertTrue(self.gone(self.started(1)),
+                        'a process the shard started outlived the cut')
+
+    def test_a_fill_cut_at_its_limit_leaves_nothing_running(self):
+        self.write('_harness.py', HANGING_FILL)
+        self.assertEqual('it ran past 4 s', rp.fill_reader(self.d, timeout=4))
+        self.assertTrue(self.gone(self.started(1)),
+                        'a process the fill started outlived the cut')
+
+    def test_a_group_with_nothing_left_running_is_no_error(self):
+        """A command that ended on its own while the runner was being
+        interrupted: its group holds only its unreaped zombie, which macOS
+        answers with EPERM (measured 2026-11-13), and the kill of the other
+        groups must not stop there. Only macOS answers so: elsewhere this
+        passes whether or not EPERM is caught."""
+        p = subprocess.Popen([sys.executable, '-c', 'pass'],
+                             start_new_session=True)
+        self.addCleanup(p.wait)
+        time.sleep(1)
+        rp._kill_group(p.pid)
+
+
+class ACutDoesNotWaitForAProcessThatLeftTheGroup(_WithAHangingProcess):
+    """A process that starts a session of its own is out of the group the
+    cut kills, and it can hold the command's output open. Waiting for that
+    output to end would be the hang the cut is there to end: the cut keeps
+    what was printed and returns within DRAIN_TIMEOUT."""
+
+    def test_the_cut_returns_with_what_was_printed(self):
+        command = [sys.executable, '-c', textwrap.dedent('''\
+            import os, subprocess, sys, time
+            p = subprocess.Popen(['sleep', '300'], start_new_session=True)
+            with open(os.environ['PIDFILE'], 'w') as fh:
+                fh.write(str(p.pid))
+            print('printed before the cut', flush=True)
+            time.sleep(60)
+            ''')]
+        started = time.time()
+        with mock.patch.object(rp, 'DRAIN_TIMEOUT', 1):
+            out, _, rc = rp.run_group(command, 3, stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE)
+        took = time.time() - started
+        self.started(1)
+        self.assertIsNone(rc)
+        self.assertIn(b'printed before the cut', out)
+        self.assertLess(took, 15, 'the cut waited for the process that left '
+                                  'its group')
+
+
+class AnInterruptedRunLeavesNothingRunning(_WithAHangingProcess):
+    """The classes run in groups of their own, so what a terminal sends to
+    the runner's group (Ctrl-C, Ctrl-\\, the SIGHUP of a closed terminal or a
+    dropped ssh) no longer reaches them, and a SIGTERM to the runner never
+    did: the runner has to kill them itself, and end red. A signal the run
+    was started ignoring (`nohup`) stays ignored."""
+
+    def start(self, prefix=()):
+        """The runner over HANGING_CLASS, in a process group of its own, as a
+        terminal's foreground job is, once its class has started."""
+        self.write('test_hang.py', HANGING_CLASS)
+        self.write('driver.py', INTERRUPTED_MAIN)
+        env = dict(os.environ)
+        env['PYTHONPATH'] = os.pathsep.join([TESTS_DIR, self.d])
+        runner = subprocess.Popen(
+            [*prefix, sys.executable, os.path.join(self.d, 'driver.py'),
+             self.d],
+            env=env, start_new_session=True, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT)
+        self.addCleanup(lambda: runner.poll() is None and
+                        os.killpg(runner.pid, signal.SIGKILL))
+        return runner, self.started()
+
+    def ended(self, runner):
+        try:
+            out, _ = runner.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            self.fail('the interrupted runner did not end')
+        return runner.returncode, out.decode('utf-8', 'replace')
+
+    def interrupt(self, how):
+        runner, pid = self.start()
+        how(runner.pid)
+        return (*self.ended(runner), pid)
+
+    def test_a_run_started_with_nohup_outlives_a_closed_terminal(self):
+        """nohup starts the run with SIGHUP ignored, and that is a request
+        the runner keeps: the run and its classes go on."""
+        runner, pid = self.start(prefix=('nohup',))
+        os.killpg(runner.pid, signal.SIGHUP)
+        time.sleep(2)
+        self.assertIsNone(runner.poll(), 'a run under nohup ended on SIGHUP')
+        self.assertTrue(alive(pid), 'a class of a run under nohup was killed '
+                                    'on SIGHUP')
+        os.kill(runner.pid, signal.SIGTERM)
+        rc, out = self.ended(runner)
+        self.assertEqual(rc, 143, out)
+        self.assertTrue(self.gone(pid),
+                        'a process the class started outlived the SIGTERM')
+
+    def test_ctrl_c_ends_the_run_red_and_kills_the_classes(self):
+        # A terminal sends SIGINT to the foreground group: here, the runner's.
+        rc, out, pid = self.interrupt(
+            lambda runner: os.killpg(runner, signal.SIGINT))
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('KeyboardInterrupt', out)
+        self.assertTrue(self.gone(pid),
+                        'a process the class started outlived the Ctrl-C')
+
+    def test_sigterm_ends_the_run_as_143_and_kills_the_classes(self):
+        rc, out, pid = self.interrupt(
+            lambda runner: os.kill(runner, signal.SIGTERM))
+        self.assertEqual(rc, 143, out)
+        self.assertTrue(self.gone(pid),
+                        'a process the class started outlived the SIGTERM')
+
+    def test_a_closed_terminal_ends_the_run_and_kills_the_classes(self):
+        # A closed terminal or a dropped ssh: SIGHUP to the runner's group.
+        rc, out, pid = self.interrupt(
+            lambda runner: os.killpg(runner, signal.SIGHUP))
+        self.assertEqual(rc, 128 + signal.SIGHUP, out)
+        self.assertTrue(self.gone(pid),
+                        'a process the class started outlived the SIGHUP')
+
+    def test_ctrl_backslash_ends_the_run_and_kills_the_classes(self):
+        rc, out, pid = self.interrupt(
+            lambda runner: os.killpg(runner, signal.SIGQUIT))
+        self.assertEqual(rc, 128 + signal.SIGQUIT, out)
+        self.assertTrue(self.gone(pid),
+                        'a process the class started outlived the SIGQUIT')
+
 
 class TheRunnerRunsWhatItSaysItRan(unittest.TestCase):
     """End to end against the serial command on the same module: same tests,
