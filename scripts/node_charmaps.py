@@ -444,7 +444,6 @@ def _charmaps_not_run(reason, subject=STEP2_WORDS.subject,
         f"collating element built out of a transliteration, are not covered "
         f"by this result.",
         width=78, initial_indent='!! ', subsequent_indent='   '))
-    return []
 
 
 def _warn_block(head, items):

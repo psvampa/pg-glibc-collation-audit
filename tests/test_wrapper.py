@@ -546,8 +546,8 @@ class WrapperTakesTheKeyedListToReindex(unittest.TestCase):
     the summary's step 2 list, beside the locales whose rules differ. No pinned
     pair lists a locale there, so the check's answer is injected: a
     sitecustomize on PYTHONPATH, which every Python the run starts imports,
-    makes collation_keys.listed_sources answer sv_SE. glibc-2.34 to 2.39,
-    where th_TH and thai differ and sv_SE does not."""
+    makes collation_keys.listed_sources answer sv_SE, as changed.
+    glibc-2.34 to 2.39, where th_TH and thai differ and sv_SE does not."""
 
     @classmethod
     def setUpClass(cls):
@@ -559,7 +559,8 @@ class WrapperTakesTheKeyedListToReindex(unittest.TestCase):
             fh.write(f"import sys\n"
                      f"sys.path.insert(0, {SCRIPTS_DIR!r})\n"
                      f"import collation_keys as ck\n"
-                     f"ck.listed_sources = lambda report: ['sv_SE']\n"
+                     f"ck.listed_sources = lambda report: "
+                     f"{{'sv_SE': 'changed'}}\n"
                      f"del sys.path[0]\n")
         cls.rc, cls.out = run_wrapper(MID, NEW, out_dir=cls.out_dir,
                                       env_extra={'PYTHONPATH': hook})
@@ -587,6 +588,81 @@ class WrapperTakesTheKeyedListToReindex(unittest.TestCase):
         self.assertIn('swedish', names)
         self.assertNotIn('sv_FI', names)
         self.assertIn('th_TH', names)
+
+
+@needs_clone
+class WrapperSaysWhatTheCharmapCheckSettled(unittest.TestCase):
+    """What step 2's character set check settled of each source reaches
+    the summary and the cross with step 11 as it was settled: one it could
+    not compare is listed apart, under the line that says so, and its line
+    beside step 11's verdict says not compared; one whose collating element
+    a transliteration builds differently is said so, never as a charmap
+    (16.147, 16.316). No pinned pair has either, so the check's answer is
+    injected, as in WrapperTakesTheKeyedListToReindex, on the RHEL8 ->
+    RHEL9 machines' files of WrapperNodeFiles: ko_KR (rules the same,
+    ko_KR.utf8's order changes) not compared, C (C.utf8's order changes)
+    through a transliteration, and el_GR's transliterations not
+    compared."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-settled-')
+        hook = os.path.join(cls.out_dir, 'hook')
+        os.makedirs(hook)
+        with open(os.path.join(hook, 'sitecustomize.py'), 'w',
+                  encoding='utf-8') as fh:
+            fh.write(f"import sys\n"
+                     f"sys.path.insert(0, {SCRIPTS_DIR!r})\n"
+                     f"import collation_keys as ck\n"
+                     f"ck.listed_sources = lambda report: "
+                     f"{{'ko_KR': 'not compared', 'C': 'transliteration', "
+                     f"'el_GR': 'transliteration not compared'}}\n"
+                     f"del sys.path[0]\n")
+        old = node_file('old.tar', cut_to_pair(RHEL8), OLD)
+        new = node_file('new.tar', cut_to_pair(RHEL9), MID)
+        cls.rc, cls.out = run_wrapper(
+            OLD, MID, '--old-node', old, '--new-node', new,
+            out_dir=cls.out_dir, env_extra={'PYTHONPATH': hook})
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out_dir, ignore_errors=True)
+
+    def test_the_cross_says_what_was_settled(self):
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        got, alone = rules_beside(self.out)
+        by_name = {name: line for names, line in got.items()
+                   for name in names}
+        self.assertEqual(by_name['ko_KR.utf8'],
+                         'the order changes; its rules (step 2) do not; its '
+                         'character set (step 2): not compared')
+        self.assertEqual(by_name['C.utf8'],
+                         'the order changes; rules (step 2): not compared, '
+                         'no locale file of that name; a collating element '
+                         'it builds out of a transliteration is built '
+                         'differently (step 2)')
+        self.assertNotIn('changed in a charmap', flat(self.out))
+
+    def test_one_not_compared_is_listed_apart(self):
+        """In the summary, ko_KR and el_GR under the line that says step 2
+        could not compare them, with the aliases built from them, never
+        among the rest; C (C.UTF-8 there) above it."""
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        body = summary_block(self.out, REINDEX)
+        sub = ("Listed because step 2 could not compare them (the reason "
+               "for each one, or for the locale it is an alias of, is in the "
+               "warnings below):")
+        at = [i for i in range(len(body) - 1)
+              if flat(body[i] + ' ' + body[i + 1]) == sub]
+        self.assertEqual(len(at), 1, body)
+        above, below = body[:at[0]], body[at[0] + 2:]
+        apart = below[:below.index(next(x for x in below
+                                        if x.startswith('(')))]
+        # greek is el_GR's alias, korean and korean.euc ko_KR's.
+        self.assertEqual(apart, ['el_GR', 'greek', 'ko_KR', 'korean',
+                                 'korean.euc'])
+        self.assertIn('C.UTF-8', above)
+        self.assertFalse(set(apart) & set(above), body)
 
 
 @needs_clone
@@ -1835,8 +1911,9 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
         the whole list's."""
         out = self.out('link')
         body = summary_block(out, REINDEX)
-        sub = ("Listed because step 2 could not compare them (each one's "
-               "reason is in the warnings below):")
+        sub = ("Listed because step 2 could not compare them (the reason "
+               "for each one, or for the locale it is an alias of, is in the "
+               "warnings below):")
         at = [i for i in range(len(body) - 1)
               if flat(body[i] + ' ' + body[i + 1]) == sub]
         self.assertEqual(len(at), 1, body)

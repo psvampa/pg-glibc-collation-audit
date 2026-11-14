@@ -15179,11 +15179,13 @@ class SortTablesCompared(Checks):
     naming different locales."""
 
     def outputs(self, old_edits=(), new_edits=(), form=(m.FORMAT, m.FORMAT),
-                charmaps=None, parts=None, old_parts=None, sql=False):
+                charmaps=None, parts=None, old_parts=None, sql=False,
+                verdicts=False):
         """(report, summary, file) of RHEL9 -> RHEL10 with the edits, given
         CHARMAPS (a folder) as both machines' charmaps and PARTS (with_parts'
         arguments) to both machines' parts, OLD_PARTS instead to the old
-        machine's; with SQL, --sql-to as well, under self.sql_prefix."""
+        machine's; with SQL, --sql-to as well, under self.sql_prefix; with
+        VERDICTS, --verdicts-to as well, read into self.verdicts."""
         tag = self.id().rsplit('.', 1)[-1]
         old = self.made(RHEL9, 'old', with_parts(
             form=form[0], **((parts if old_parts is None else old_parts) or {})),
@@ -15199,13 +15201,19 @@ class SortTablesCompared(Checks):
                     ['--old-charmaps', charmaps, '--new-charmaps', charmaps]
                     if charmaps else []) + (
                     ['--sql-to', os.path.join(self.tmp, tag)] if sql
-                    else [])), \
+                    else []) + (
+                    ['--verdicts-to', os.path.join(self.tmp, f'{tag}.json')]
+                    if verdicts else [])), \
                 contextlib.redirect_stdout(stdout), \
                 contextlib.redirect_stderr(stderr):
             self.assertEqual(m.main(), 0)
         self.assertEqual(stderr.getvalue(), '')
         self.printed = stdout.getvalue()
         self.sql_prefix = os.path.join(self.tmp, tag)
+        if verdicts:
+            with open(os.path.join(self.tmp, f'{tag}.json'),
+                      encoding='utf-8') as f:
+                self.verdicts = json.load(f)['locales']
         with open(summary, encoding='utf-8') as f, \
                 open(chars, encoding='utf-8') as g:
             return (parse_report(stdout.getvalue()), parse_summary(f.read()),
@@ -15333,9 +15341,19 @@ class SortTablesCompared(Checks):
 
     def test_no_rules_on_either_machine(self):
         """A file of 0 rules compares bytes, like C, and needs no check:
-        the guard read the rule count from the file itself."""
+        the guard read the rule count from the file itself. Its verdict
+        says so, never "its compiled sort table", which it has none of
+        (16.189: C.utf8 on RHEL 9 and 10)."""
         none = {'de_DE.utf8': {'nrules': 0, 'table': 'none'}}
-        self.firm(self.outputs([read_tables(none)], [read_tables(none)]))
+        self.firm(self.outputs([read_tables(none)], [read_tables(none)],
+                               verdicts=True))
+        self.assertEqual(self.verdicts['de_DE.utf8'], [
+            'firm', 'unchanged, since it has no levels on either machine '
+            'and glibc compares bytes on both'])
+        self.assertEqual(self.verdicts['sv_SE.utf8'], [
+            'firm', 'unchanged by its compiled sort table'])
+        self.assertEqual(self.verdicts['C'], ['firm', 'built into glibc'])
+
 
     def test_a_changed_table_step_11_did_not_see(self):
         other = {'de_DE.utf8': {'fingerprint': 'f' * 64}}
@@ -15624,6 +15642,24 @@ class SortTablesCompared(Checks):
         self.assertEqual(r['totals']['partly'], 3)
         self.assertEqual(r['disagree'], [])
         self.assertEqual(r['closing'], m.CLOSING)
+
+
+class TheClosingNamesOnlyWhatIsThere(unittest.TestCase):
+    """closing_text: CLOSING_TABLES speaks of every locale found
+    unchanged, so it needs one (16.203: an all() over none is true);
+    CLOSING_MIXED where some were cleared by an identical table; CLOSING
+    otherwise. No measured pair has no unchanged locale (C and POSIX
+    always are), so the choice is asked here."""
+
+    def test_each_closing(self):
+        for same, firm, by_tables, closing in (
+                (['C', 'en_US'], {'C', 'en_US'}, True, m.CLOSING_TABLES),
+                (['C', 'en_US'], {'C'}, True, m.CLOSING_MIXED),
+                (['C', 'en_US'], {'C'}, False, m.CLOSING),
+                ([], set(), False, m.CLOSING)):
+            with self.subTest(same=same, firm=firm, by_tables=by_tables):
+                self.assertEqual(m.closing_text(same, firm, by_tables),
+                                 closing)
 
 
 def table_record(levels):
@@ -16376,19 +16412,28 @@ class VerdictsByName(unittest.TestCase):
 
     def test_each_list_its_verdict(self):
         got = m.verdicts_by_name(
-            changed=['or_IN'], same=['C', 'en_US', 'th_TH', 'xx_YY'],
-            firm={'C', 'en_US', 'th_TH'}, unmeasured=['ja_JP'],
+            changed=['or_IN'],
+            same=['C', 'en_US', 'th_TH', 'xx_YY', 'C.utf8', 'zz_NL'],
+            firm={'C', 'en_US', 'th_TH', 'C.utf8', 'zz_NL'},
+            unmeasured=['ja_JP'],
             refused={'ko_KR.euckr': {'new': ['LC_CTYPE']},
                      'zh_TW.euctw': {'old': ['x'], 'new': ['x']}},
             only_old=['en_US@ampm'], only_new=['ckb_IQ'],
-            table_found=[('tables only', {'names': ['th_TH']}),
-                         ('tables disagree', {'names': ['xx_YY']})])
+            table_found=[('tables only', {'names': ['th_TH', 'zz_NL']}),
+                         ('tables disagree', {'names': ['xx_YY']})],
+            by_bytes={'C.utf8', 'zz_NL'})
         self.assertEqual(got, {
             'or_IN': ['changed', 'the order changes'],
             'C': ['firm', 'built into glibc'],
             'en_US': ['firm', 'unchanged by its compiled sort table'],
             'th_TH': ['firm', 'unchanged by its compiled sort table, which '
                       'step 11 could not measure'],
+            # No levels on either machine: no table is read (16.189).
+            'C.utf8': ['firm', 'unchanged, since it has no levels on either '
+                       'machine and glibc compares bytes on both'],
+            'zz_NL': ['firm', 'unchanged, since it has no levels on either '
+                      'machine and glibc compares bytes on both; step 11 '
+                      'could not measure it'],
             'xx_YY': ['far', 'unchanged only as far as step 11 measured it'],
             'ja_JP': ['unmeasured', 'step 11 could not measure it'],
             'ko_KR.euckr': ['refused', 'refused by glibc on the new machine'],
@@ -16524,6 +16569,36 @@ class RulesBesideTheVerdicts(unittest.TestCase):
         self.assertEqual(alone, [m.RULES_LEAD, 'Character sets (step 2): not '
                                  'compared. The file of the machine holds '
                                  'none.'])
+
+    def test_each_state_of_the_character_set_check(self):
+        """What step 2's check settled of each locale, beside step 11's
+        verdict: a charmap that changed, a transliteration built
+        differently, and each of the two not compared, never the charmap's
+        words for the other three (16.147, 16.316)."""
+        tails = {
+            'changed': "; a character its file's rules name changed in a "
+                       "charmap",
+            'not compared': '; its character set (step 2): not compared',
+            'transliteration': '; a collating element it builds out of a '
+                               'transliteration is built differently (step '
+                               '2)',
+            'transliteration not compared': '; the collating elements it '
+                                            'builds out of transliterations '
+                                            '(step 2): not compared'}
+        for state, tail in tails.items():
+            with self.subTest(state=state):
+                got, _ = self.lines(
+                    {'x': ['changed', 'the order changes'],
+                     'y': ['far', 'unchanged only as far as step 11 '
+                           'measured it']},
+                    {'x': ['x', 'same', '', state],
+                     'y': ['y', 'same', '', state]})
+                self.assertEqual(got, {
+                    ('x',): 'the order changes; its rules (step 2) do not'
+                            + tail,
+                    ('y',): 'unchanged only as far as step 11 measured it; '
+                            'rules (step 2): the same' + tail
+                            + '; this does not show the order'})
 
     def test_not_the_machines_is_one_line(self):
         """Step 2 compared the tags (a file holds no sources, its build is

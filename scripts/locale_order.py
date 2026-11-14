@@ -5625,11 +5625,12 @@ def names_note(in_bytes, several):
                     + ([SEVERAL_CHARACTERS] if several else [])) or None
 
 
-# Printed under the report, the summary and the characters file while a
-# locale found unchanged was not compared by its sort table and none was found
-# unchanged by an identical one (CLOSING_MIXED when one was, CLOSING_TABLES
-# when every one was by its table or compares bytes): what two machines that
-# agree here can still disagree on.
+# Printed under the report, the summary and the characters file while no
+# locale is found unchanged, or one found unchanged was not compared by its
+# sort table and none was found unchanged by an identical one (CLOSING_MIXED
+# when one was, CLOSING_TABLES when every one was by its table or compares
+# bytes; closing_text): what two machines that agree here can still disagree
+# on.
 CLOSING = ('!! Not measured: a rule that shows only in strings of several '
            'letters, such as a contraction ("ch" sorted as one letter), an '
            'expansion (U+00DF, sharp s, sorted like "ss") or accents compared '
@@ -8894,9 +8895,9 @@ def tables_only_notes(items):
                                         for d in items for x in d['names'])]
 
 
-# Printed instead of CLOSING when every unchanged locale was compared by its
-# sort table, which holds the contractions and what glibc ignores; C and
-# POSIX, and a locale of no levels, compare bytes on both.
+# Printed instead of CLOSING when there is an unchanged locale and every one
+# was compared by its sort table, which holds the contractions and what glibc
+# ignores; C and POSIX, and a locale of no levels, compare bytes on both.
 CLOSING_TABLES = ('!! Not measured: whether the two machines compare strings '
                   'with the same glibc code. Every locale found unchanged '
                   'either has the same sort table on both, which is what '
@@ -8917,6 +8918,18 @@ CLOSING_MIXED = ('!! Not measured: whether the two machines compare strings '
                  'character counts for nothing at some level (glibc ignores it '
                  'there), how it is told apart from its neighbour is read less '
                  'reliably, so a change there may go unseen.')
+
+
+def closing_text(same, firm, by_tables):
+    """The closing of a run whose unchanged locales are SAME, FIRM those
+    its table decided for any text, BY_TABLES whether one of them has an
+    identical table: CLOSING_TABLES only where there is an unchanged locale
+    and every one is firm (an all() over none is true, and the sentence
+    speaks of them, 16.203), else CLOSING_MIXED where one of them has an
+    identical table (BY_TABLES), else CLOSING."""
+    if same and all(x in firm for x in same):
+        return CLOSING_TABLES
+    return CLOSING_MIXED if by_tables else CLOSING
 
 
 def run_findings(o, n, warnings, partly, unmeasured, only_old,
@@ -9842,21 +9855,29 @@ VERDICTS = ('changed', 'firm', 'far', 'unmeasured', 'refused', 'only old',
 
 
 def verdicts_by_name(changed, same, firm, unmeasured, refused, only_old,
-                     only_new, table_found):
+                     only_new, table_found, by_bytes):
     """{locale: [state, words]}: compare()'s verdict for every locale of
     either machine, taken from the lists its report is printed from, for
     the cross with step 2's rules (rules_beside), which reads it and never
     works it out again. words are step 11's own: what its report says of
-    the locale."""
+    the locale. BY_BYTES: the firm locales other than C and POSIX that
+    have no levels on either machine (table_route's 'bytes'), which read
+    no table, so their words never name one (16.189)."""
     only = {x for kind, d in table_found if kind == 'tables only'
             for x in d['names']}
     out = {}
     for name in changed:
         out[name] = ['changed', 'the order changes']
     for name in same:
-        if name in firm:
-            out[name] = ['firm', 'built into glibc' if name in ('C', 'POSIX')
-                         else 'unchanged by its compiled sort table, which '
+        if name in firm and name in ('C', 'POSIX'):
+            out[name] = ['firm', 'built into glibc']
+        elif name in firm and name in by_bytes:
+            out[name] = ['firm', 'unchanged, since it has no levels on '
+                         'either machine and glibc compares bytes on both'
+                         + ('; step 11 could not measure it' if name in only
+                            else '')]
+        elif name in firm:
+            out[name] = ['firm', 'unchanged by its compiled sort table, which '
                          'step 11 could not measure' if name in only
                          else 'unchanged by its compiled sort table']
         else:
@@ -10002,11 +10023,18 @@ def rule_line(state, words, rule, why, charmap):
         tail = '; a character its file\'s rules name changed in a charmap'
     elif charmap == 'not compared':
         tail = '; its character set (step 2): not compared'
+    elif charmap == 'transliteration':
+        tail = ('; a collating element it builds out of a transliteration '
+                'is built differently (step 2)')
+    elif charmap == 'transliteration not compared':
+        tail = ('; the collating elements it builds out of transliterations '
+                '(step 2): not compared')
     elif charmap == '-':
         tail = ''
     else:
         die(f'step 2 gave the charmap state {charmap!r}, which is none of '
-            'changed, not compared, -')
+            'changed, not compared, transliteration, transliteration not '
+            'compared, -')
     if state == 'changed':
         if rule == 'differs':
             return 'the order changes, and so do its rules (step 2)' + tail
@@ -10232,11 +10260,16 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     # Every unchanged locale its table did not decide: step 11 measured a
     # sample, and the partly and in-part ones are among these.
     far = len([name for name in same if name not in firm])
+    # The route of each firm locale's table, asked once: the bytes ones
+    # read no table (16.189), and an identical one picks the closing below.
+    routes = {x: table_route(old, new, x)[0] for x in firm
+              if x not in ('C', 'POSIX')}
     # Each locale's verdict as the report states it, for the cross with
     # step 2's rules (rules_beside): from the lists above, nothing worked
     # out again.
     verdicts = verdicts_by_name(changed, same, firm, unmeasured, refused,
-                                only_old, only_new, table_found)
+                                only_old, only_new, table_found,
+                                {x for x, r in routes.items() if r == 'bytes'})
     in_part = f' ({far} of them only as far as measured)' if far else ''
     in_refused = f'{len(refused)} refused by glibc, ' if refused else ''
     totals = (f'Of the {len(o)} locale(s) on the old machine: {len(changed)} '
@@ -10285,18 +10318,11 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     other = other_encoding_text(both + only_new, model, firm)
     if other:
         beside.append(('other encoding', {'text': other}))
-    # The sentence on rules of several letters stays while an unchanged
-    # locale was not compared by its table; beside it, the one on the code
-    # only while another is unchanged by an identical table, which glibc's
-    # code reads (one of no levels, 'bytes', C and POSIX among them,
-    # reads none).
-    # Where every unchanged locale is firm, CLOSING_TABLES says both kinds.
-    by_tables = any(table_route(old, new, x)[0] == 'identical'
-                    for x in firm if x not in ('C', 'POSIX'))
+    # closing_text picks CLOSING_TABLES, CLOSING_MIXED or CLOSING; the
+    # comments over the three say when.
+    by_tables = any(r == 'identical' for r in routes.values())
     found = run_findings(o, n, warnings, partly, unmeasured, only_old, checks,
-                         refused, beside,
-                         CLOSING_TABLES if all(x in firm for x in same)
-                         else CLOSING_MIXED if by_tables else CLOSING)
+                         refused, beside, closing_text(same, firm, by_tables))
     ctx = {'pg_names': pg_names, 'o': o, 'characters_to': characters_to}
 
     report = [f'Old machine: {machine_label(old)}, {len(old["locales"])} locale(s)',

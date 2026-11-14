@@ -346,9 +346,12 @@ class StepTwoPrintsWhatCompareRulesAnswered(unittest.TestCase):
 
     def test_the_characters_file_says_not_known_never_an_empty_list(self):
         got = {'aa': self.R(glibc_tree.DIFFERS, 'why', None, True),
-               'bb': self.R(glibc_tree.DIFFERS, None, (0x41,), False)}
-        self.assertEqual(f.characters_rows(got, ['aa', 'bb']), [
+               'bb': self.R(glibc_tree.DIFFERS, None, (0x41,), False),
+               'C': self.R(glibc_tree.DIFFERS, None, (0x42,), True)}
+        # glibc's file C is C.UTF-8, as the step prints it (16.185).
+        self.assertEqual(f.characters_rows(got, ['C', 'aa', 'bb']), [
             '# name\tstate\tevery rule can change\tcharacters',
+            'C.UTF-8\tdiffers\tyes\tU+0042',
             'aa\tdiffers\tyes\tnot known: why',
             'bb\tdiffers\tno\tU+0041'])
 
@@ -1148,7 +1151,7 @@ class CompareBuilds(unittest.TestCase):
                              ['loc_a.UTF-8/UTF-8', 'loc_b.UTF-8/UTF-8'])
         self.assertEqual([(f.source, f.chars, f.reason) for f in r.found],
                          [('loc_a', {0xE9}, None)])
-        self.assertEqual(ck.listed_sources(r), ['loc_a'])
+        self.assertEqual(ck.listed_sources(r), {'loc_a': 'changed'})
 
     def test_a_copier_is_listed_through_the_file_it_copies(self):
         r = self.run_compare({'loc_c': locale_text('copy "tmpl"'),
@@ -2046,7 +2049,7 @@ class TranslitCompare(unittest.TestCase):
         self.assertEqual([(f.source, f.changed, f.chars, f.via, f.reason)
                           for f in r.translit.found],
                          [('M', 1, {0x2BB}, ['D'], None)])
-        self.assertEqual(ck.listed_sources(r), ['M'])
+        self.assertEqual(ck.listed_sources(r), {'M': 'transliteration'})
 
     def test_a_change_in_the_source_s_lc_ctype_is_found(self):
         """H2: neither D nor anything its LC_CTYPE reaches changes; M's
@@ -2100,7 +2103,8 @@ class TranslitCompare(unittest.TestCase):
         self.assertEqual([(f.source, f.changed) for f in r.translit.found],
                          [('M', 0)])
         self.assertIn('raw non-ASCII', r.translit.found[0].reason)
-        self.assertEqual(ck.listed_sources(r), ['M'])
+        self.assertEqual(ck.listed_sources(r),
+                         {'M': 'transliteration not compared'})
 
     def test_a_raw_character_is_read_only_where_localedef_reads_utf8(self):
         """Before UTF8_READER (2.36) a raw head is bytes that make glibc
@@ -2331,7 +2335,8 @@ class TranslitCompare(unittest.TestCase):
             'copy "i18n"\n' + translit(GRAVE), 'copy "D"')))
         self.assertEqual(len(r.translit.found), 1)
         self.assertIn('translit_ignore', r.translit.found[0].reason)
-        self.assertEqual(ck.listed_sources(r), ['M'])
+        self.assertEqual(ck.listed_sources(r),
+                         {'M': 'transliteration not compared'})
         # Not counted among the compared, which the line above the `!!`
         # would otherwise call "none is built differently".
         self.assertEqual((r.translit.elements, r.translit.builds), (0, 0))
@@ -2381,7 +2386,7 @@ class TranslitCompare(unittest.TestCase):
                                            'copy "D"'))
         r = self.run_compare(self.BASE, new, listed=['M'])
         self.assertEqual((r.translit.found, r.translit_skipped), ([], 1))
-        self.assertEqual(ck.listed_sources(r), [])
+        self.assertEqual(ck.listed_sources(r), {})
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             f.print_translit_report(r, 't2')
@@ -2894,22 +2899,59 @@ class CharmapCheckSaysWhyItDidNotRun(unittest.TestCase):
     """check_charmaps returns, beside what it lists, the reason it said
     NOT RUN, on each route: the report's own, and no build in common; and
     None when it ran. The cross with step 11 prints it (9.4c,
-    false-negative-reviewer: two of its three routes gave none)."""
+    false-negative-reviewer: two of its three routes gave none). What it
+    lists is {source: what the check settled of it}, an empty one on the
+    routes where it did not run (17.2)."""
 
-    def run_check(self, report):
+    def run_check(self, report, listed=True):
         reads = mock.Mock()
         side = lambda tag: mock.Mock(tag=tag)
-        with mock.patch.object(f.ck, 'compare', return_value=report), \
-                mock.patch.object(f.ck, 'listed_sources',
-                                  return_value=['sv_SE']), \
-                mock.patch.object(f, 'print_charmap_report'):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(f.ck, 'compare',
+                                                  return_value=report))
+            if listed:
+                stack.enter_context(mock.patch.object(
+                    f.ck, 'listed_sources',
+                    return_value={'sv_SE': 'changed'}))
+            stack.enter_context(mock.patch.object(f, 'print_charmap_report'))
             return f.check_charmaps(reads, None, side('o'), side('n'), {},
                                     set(), builds=([], []))
 
     def test_the_reports_own(self):
         self.assertEqual(self.run_check(mock.Mock(not_run='a charmap is '
                                                   'missing', builds=3)),
-                         (['sv_SE'], 'a charmap is missing'))
+                         ({'sv_SE': 'changed'}, 'a charmap is missing'))
+
+    def test_its_own_not_run_lists_an_empty_dict(self):
+        """Its two NOT RUN before any comparison, SUPPORTED missing and a
+        SUPPORTED it cannot read: nothing listed, as a dict like every
+        other route's, with its reason."""
+        side = lambda tag: mock.Mock(tag=tag)
+        for sup, why in (
+                ({'o': None, 'n': None},
+                 f"{g.SUPPORTED} does not exist at o and n"),
+                ({'o': 'text', 'n': None},
+                 f"a line of {g.SUPPORTED} at o this tool does not read: "
+                 "'text'")):
+            with self.subTest(why=why), \
+                    mock.patch.object(f, '_charmaps_not_run') as said:
+                got = f.check_charmaps(mock.Mock(), None, side('o'),
+                                       side('n'), sup, set())
+                self.assertEqual(got, ({}, why))
+                said.assert_called_once_with(why)
+
+    def test_each_source_with_what_was_settled_of_it(self):
+        """The report's own findings, through collation_keys.listed_sources
+        unmocked: a build the check could not settle is 'not compared',
+        never 'changed' (16.147)."""
+        report = ck.Report(None, 3, ['UTF-8'], [('UTF-8', 'UTF-8')], {}, [
+            ck.Found('aa_XX', 'aa_XX.UTF-8', ('UTF-8', 'UTF-8'), {0x41},
+                     ['aa_XX'], None),
+            ck.Found('bb_XX', 'bb_XX.UTF-8', ('UTF-8', 'UTF-8'), set(), [],
+                     'bb_XX at t2 uses a `...` range')], [], [], [], None, 0)
+        self.assertEqual(self.run_check(report, listed=False),
+                         ({'aa_XX': 'changed', 'bb_XX': 'not compared'},
+                          None))
 
     def test_no_build_in_common(self):
         listed, why = self.run_check(mock.Mock(not_run=None, builds=0))
@@ -2918,7 +2960,126 @@ class CharmapCheckSaysWhyItDidNotRun(unittest.TestCase):
 
     def test_it_ran(self):
         self.assertEqual(self.run_check(mock.Mock(not_run=None, builds=3)),
-                         (['sv_SE'], None))
+                         ({'sv_SE': 'changed'}, None))
+
+
+class StepTwoSetsApartWhatItCouldNotCompare(unittest.TestCase):
+    """not_compared_names: the names of step 2's list it could not compare,
+    which the summary sets apart: what compare_rules did not compare, an
+    entry not read, a file whose character set or transliterations the
+    check could not settle, and the aliases built from that file, unless
+    the alias differs itself (it names another file at one side and was
+    compared: false-negative-reviewer, 17.2). A file the check settled, or
+    found changed, is not one of them (16.147)."""
+
+    def test_each_kind(self):
+        aliases = ({'ca': 'cc.UTF-8', 'xa': 'cc.ISO-8859-1',
+                    'ea': 'ee.UTF-8'},
+                   {'ca': 'cc.UTF-8', 'xa': 'zz.ISO-8859-1',
+                    'ea': 'ee.UTF-8'})
+        names = ['aa', 'bb', 'ca', 'cc', 'dd', 'ea', 'ee', 'ff', 'xa', 'zz']
+        got = f.not_compared_names(
+            names, listed=['aa'], unread={'bb': ['why']},
+            keyed={'cc': 'not compared', 'dd': 'transliteration not compared',
+                   'ee': 'changed', 'ff': 'transliteration'},
+            differs=['xa', 'zz'], aliases=aliases)
+        self.assertEqual(got, ['aa', 'bb', 'ca', 'cc', 'dd'])
+
+    def test_each_file_set_apart_has_its_warning(self):
+        """The summary says the reason for each name it sets apart, or for
+        the locale it is an alias of, is in the warnings: a file the check
+        could not settle comes from a Found or Translit with a reason, and
+        the check prints each as a `!!` that names its build. From a real
+        report through check_charmaps and its printer, unmocked
+        (false-negative-reviewer, 17.2, round 2)."""
+        P = ('UTF-8', 'UTF-8')
+        report = ck.Report(
+            None, 3, ['UTF-8'], [P], {P: (1, 0, 0)},
+            [ck.Found('bb_XX', 'bb_XX.UTF-8', P, set(), [],
+                      'bb_XX at t2 uses a `...` range'),
+             ck.Found('cc_XX', 'cc_XX.UTF-8', P, {0x41}, ['cc_XX'], None)],
+            [], [], [], ck.TranslitReport(0, 0, 0, [
+                ck.Translit('tt_XX', 'tt_XX.UTF-8', P, 0, set(), [],
+                            'a translit_ignore line')]), 0)
+        side = lambda tag: mock.Mock(tag=tag)
+        out = io.StringIO()
+        with mock.patch.object(f.ck, 'compare', return_value=report), \
+                contextlib.redirect_stdout(out):
+            keyed, why = f.check_charmaps(mock.Mock(), None, side('t1'),
+                                          side('t2'), {}, set(),
+                                          builds=([], []))
+        self.assertIsNone(why)
+        aliases = ({'bb_alias': 'bb_XX.UTF-8'}, {'bb_alias': 'bb_XX.UTF-8'})
+        names = sorted(set(keyed) | {'bb_alias'})
+        apart = f.not_compared_names(names, [], {}, keyed, [], aliases)
+        self.assertEqual(apart, ['bb_XX', 'bb_alias', 'tt_XX'])
+        blocks, block = [], None
+        for line in out.getvalue().split('\n'):
+            if line.startswith('!! '):
+                block = [line]
+                blocks.append(block)
+            elif block is not None and line.startswith('   '):
+                block.append(line)
+            else:
+                block = None
+        warned = ' '.join(' '.join(b) for b in blocks)
+        for name in apart:
+            source = g.locale_source(aliases[0].get(name, name))
+            with self.subTest(name=name):
+                self.assertRegex(warned, r'(?<![\w@.])%s\.UTF-8 \(UTF-8\): '
+                                 % re.escape(source))
+        # The file found changed is above, and named outside the warnings.
+        self.assertNotIn('cc_XX', apart)
+        self.assertNotIn('cc_XX', warned)
+
+
+class CharmapCheckNamesWhatItSettled(unittest.TestCase):
+    """collation_keys.listed_sources: each source the report lists, with
+    what the check settled of it (16.147, 16.316). A charmap that changed
+    a character its rules name, a collating element built differently out
+    of a transliteration, and each of the two not compared, are four
+    facts; a source with several gets the strongest, in that order."""
+
+    P = ('UTF-8', 'UTF-8')
+
+    def found(self, source, reason=None, entry=True):
+        return ck.Found(source, f'{source}.UTF-8' if entry else None, self.P,
+                        set() if reason else {0x41}, [], reason)
+
+    def translit(self, source, reason=None):
+        return ck.Translit(source, f'{source}.UTF-8', self.P,
+                           0 if reason else 1, set() if reason else {0x2BB},
+                           [] if reason else ['D'], reason)
+
+    def report(self, found, translit):
+        return ck.Report(None, 9, ['UTF-8'], [self.P], {}, found, [], [], [],
+                         ck.TranslitReport(1, 1, 0, translit)
+                         if translit is not None else None, 0)
+
+    def test_each_state_once(self):
+        got = ck.listed_sources(self.report(
+            [self.found('aa'), self.found('bb', 'a `...` range'),
+             self.found('dd', entry=False)],
+            [self.translit('tt'), self.translit('uu', 'a translit_ignore')]))
+        self.assertEqual(got, {'aa': 'changed', 'bb': 'not compared',
+                               'dd': 'changed', 'tt': 'transliteration',
+                               'uu': 'transliteration not compared'})
+
+    def test_the_strongest_of_several(self):
+        got = ck.listed_sources(self.report(
+            [self.found('p1', 'why'), self.found('p2'),
+             self.found('p2', 'why'), self.found('p3', 'why'),
+             self.found('p4', 'why')],
+            [self.translit('p1'), self.translit('p2'),
+             self.translit('p3', 'why'), self.translit('p5'),
+             self.translit('p5', 'why')]))
+        self.assertEqual(got, {'p1': 'transliteration', 'p2': 'changed',
+                               'p3': 'not compared', 'p4': 'not compared',
+                               'p5': 'transliteration'})
+
+    def test_no_transliteration_report(self):
+        self.assertEqual(ck.listed_sources(self.report(
+            [self.found('aa', 'why')], None)), {'aa': 'not compared'})
 
 
 class StepTwoRulesByMeasuredName(unittest.TestCase):
@@ -2950,11 +3111,12 @@ class StepTwoRulesByMeasuredName(unittest.TestCase):
                                       'no file aa_ER@saaho on the new side',
                                       None, False)}
 
-    def answer(self, old, new, unread=None, keyed=(), unmapped=()):
+    def answer(self, old, new, unread=None, keyed=None, unmapped=()):
         aliases = ({'swedish': 'sv_SE.ISO-8859-1'},
                    {'swedish': 'sv_SE.ISO-8859-1'})
         return f.rules_by_name((self.side(old), self.side(new)), aliases,
-                               self.got(), unread or {}, keyed, unmapped)
+                               self.got(), unread or {}, keyed or {},
+                               unmapped)
 
     def test_each_name_to_the_name_compare_rules_answered_for(self):
         got = self.answer(['sv_SE.iso88591', 'swedish', 'ko_KR.utf8',
@@ -2995,17 +3157,31 @@ class StepTwoRulesByMeasuredName(unittest.TestCase):
 
     def test_the_character_set_check_per_name(self):
         got = self.answer(['ko_KR.utf8', 'sv_SE.utf8', 'swedish'], ['C'],
-                          keyed=['ko_KR'],
+                          keyed={'ko_KR': 'changed'},
                           unmapped=[('glibc-x', [('swedish', 'why')])])
         self.assertEqual(got['ko_KR.utf8'][3], 'changed')
         self.assertEqual(got['sv_SE.utf8'][3], '-')
         self.assertEqual(got['swedish'][3], 'not compared')
 
+    def test_each_name_carries_what_the_check_settled(self):
+        """Not 'changed' for every source the check lists: one it could not
+        settle is not compared, and a transliteration is not a charmap
+        (16.147, 16.316)."""
+        for state in ('changed', 'not compared', 'transliteration',
+                      'transliteration not compared'):
+            with self.subTest(state=state):
+                got = self.answer(['ko_KR.utf8', 'swedish'], ['C'],
+                                  keyed={'ko_KR': state, 'sv_SE': state})
+                self.assertEqual(got['ko_KR.utf8'][3], state)
+                # swedish is built from sv_SE, which the check names.
+                self.assertEqual(got['swedish'][3], state)
+
     def test_an_alias_carries_its_files_charmap(self):
         """swedish is a key of compare_rules (an alias) and is built from
         sv_SE: the character set check, which lists files, lists it through
         sv_SE, as step 2's list does (false-negative-reviewer, 9.4c)."""
-        got = self.answer(['swedish', 'sv_SE.utf8'], ['C'], keyed=['sv_SE'])
+        got = self.answer(['swedish', 'sv_SE.utf8'], ['C'],
+                          keyed={'sv_SE': 'changed'})
         self.assertEqual(got['swedish'], ['swedish', 'differs', '',
                                           'changed'])
         self.assertEqual(got['sv_SE.utf8'][3], 'changed')
@@ -3016,7 +3192,7 @@ class StepTwoRulesByMeasuredName(unittest.TestCase):
         with self.assertRaises(SystemExit), \
                 mock.patch('sys.stderr', new_callable=io.StringIO) as err:
             f.rules_by_name((self.side(['ko_KR.utf8']), self.side(['C'])),
-                            ({}, {}), bad, {}, (), ())
+                            ({}, {}), bad, {}, {}, ())
         self.assertIn("compare_rules answered 'similar' for ko_KR",
                       flat(err.getvalue()))
 

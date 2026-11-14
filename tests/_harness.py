@@ -1281,7 +1281,8 @@ class Step2Report:
 def step2_characters_file(path):
     """{name: (every rule can change, [code point, ...] or None)} from step
     2's step2_rules_characters.<pair>.tsv. Refuses a header or a row of
-    another shape, and a name twice."""
+    another shape, a name twice, and a bare "C": step 2 names glibc's file
+    C as STEP2_C there too, as it prints it (16.185)."""
     with open(path, encoding='utf-8') as fh:
         rows = fh.read().split('\n')
     if rows[-1] == '':
@@ -1293,7 +1294,8 @@ def step2_characters_file(path):
     for row in rows[1:]:
         cells = row.split('\t')
         if (len(cells) != 4 or cells[1] != 'differs'
-                or cells[2] not in ('yes', 'no') or cells[0] in got):
+                or cells[2] not in ('yes', 'no') or cells[0] in got
+                or cells[0] == 'C'):
             raise AssertionError(f'{path}: unreadable row {row!r}')
         if cells[3].startswith('not known: '):
             chars = None

@@ -304,15 +304,18 @@ class CharmapReads:
 def check_charmaps(reads, repo, side_old, side_new, sup, already,
                    words=None, builds=None):
     """Run collation_keys.compare over the two sides, print what it found,
-    and return the source names it lists for the summary. `already` is the
-    set of source names the comparison lists already (their rules differ
-    or could not be compared), which the check does not list again.
+    and return the source names it lists for the summary, each with what it
+    settled of it (collation_keys.listed_sources: a charmap or a
+    transliteration that changed, or either not compared). `already` is
+    the set of source names the comparison lists already (their rules
+    differ or could not be compared), which the check does not list again.
     `builds` is [old, new] when the caller has them from the machines'
     measurements (machine_builds), in place of SUPPORTED's.
 
-    Returns (source names, why): why is the reason the check said NOT RUN,
-    on each of its routes, else None, so that a caller never reads the
-    empty list of a check that did not run as one that found nothing."""
+    Returns ({source name: state}, why): why is the reason the check said
+    NOT RUN, on each of its routes, else None, so that a caller never reads
+    the empty list of a check that did not run as one that found
+    nothing."""
     old, new = side_old.tag, side_new.tag
     # The charmaps read ahead of time (CharmapReads.prefetch) are back by
     # now: the verdicts above took far longer than one `git cat-file`.
@@ -328,11 +331,13 @@ def check_charmaps(reads, repo, side_old, side_new, sup, already,
             builds_new = (ck.supported_builds(sup[new], new)
                           if sup[new] is not None else None)
         except ck.Unsettled as e:
-            return _charmaps_not_run(str(e)), str(e)
+            _charmaps_not_run(str(e))
+            return {}, str(e)
     if builds_old is None or builds_new is None:
         where = ' and '.join(t for t in (old, new) if sup[t] is None)
         why = f"{g.SUPPORTED} does not exist at {where}"
-        return _charmaps_not_run(why), why
+        _charmaps_not_run(why)
+        return {}, why
     by_entry = {b.entry: b.charmap for b in builds_old}
     cross = {(by_entry[b.entry], b.charmap) for b in builds_new
              if b.entry in by_entry and by_entry[b.entry] != b.charmap}
@@ -427,14 +432,15 @@ def rules_by_name(sides, aliases, got, unread, keyed, unmapped):
     read is not compared, whatever compare_rules says of the name (it
     never saw the file); a name no file builds is not compared, "no locale
     file of that name" (a locale an admin built with localedef -i under a
-    name of their own). charmap is 'changed' where the character set
-    check lists the file the name is built from (KEYED holds files; an
-    alias such as swedish is built from sv_SE, as step 2's list adds
-    it), 'not compared' where it could not trace the name to its charmap
-    (UNMAPPED), else '-'."""
+    name of their own). charmap is what the character set check settled
+    of the file the name is built from, where it lists it (KEYED is
+    {file: one of collation_keys.LISTED_STATES}; an alias such as swedish
+    is built from sv_SE, as step 2's list adds it): 'changed', 'not
+    compared', 'transliteration' or 'transliteration not compared'
+    (16.147, 16.316); else 'not compared' where it could not trace the
+    name to its charmap (UNMAPPED); else '-'."""
     import node_charmaps as nc
     untraced = {n for who, names_ in unmapped or () for n, w in names_}
-    keyed = set(keyed)
     out = {}
     for sd, al in zip(sides, aliases):
         for name in _measured_names(sd):
@@ -458,8 +464,8 @@ def rules_by_name(sides, aliases, got, unread, keyed, unmapped):
             if state not in RULES_STATES:
                 g.die(f"compare_rules answered {state!r} for {key}, which "
                       f"is none of {', '.join(RULES_STATES)}")
-            charmap = ('changed' if key in keyed or source in keyed
-                       else 'not compared' if name in untraced else '-')
+            charmap = (keyed.get(key) or keyed.get(source)
+                       or ('not compared' if name in untraced else '-'))
             out[name] = [key, state, why, charmap]
     return out
 
@@ -499,6 +505,26 @@ def write_rules_by_name(slug, noun, names, machine, charmaps, sides=(),
             'charmaps': charmaps, 'locales': locales}
     g.write_list(f"step2_rules_by_name.{slug}.json",
                  [json.dumps(data, sort_keys=True)])
+
+
+def not_compared_names(names, listed, unread, keyed, differs, aliases):
+    """The names of step 2's list it could not compare, each said with its
+    reason in a `!!`: those compare_rules did not compare (print_listed),
+    an entry of a machine's sources not read (glibc_locale_data's
+    report_machine_provenance), and a file whose character set or
+    transliterations the check could not settle (KEYED's two not-compared
+    states, print_charmap_report), with the locale.alias aliases built from
+    it. The check never lists a file whose rules differ (compare() leaves
+    out `already`), but an alias can name another file at each side and
+    differ itself: it was compared, and is not one of these
+    (false-negative-reviewer, 17.2)."""
+    unsettled = {s for s, state in keyed.items()
+                 if state in ('not compared', 'transliteration not compared')}
+    reaching = set()
+    for al in aliases:
+        reaching |= set(g._aliases_reaching(unsettled, al))
+    apart = set(listed) | set(unread) | unsettled | (reaching - set(differs))
+    return [n for n in names if n in apart]
 
 
 def machine_builds(repo, sides, aliases):
@@ -669,7 +695,7 @@ def characters_rows(got, differs):
         r = got[name]
         chars = (f"not known: {r.why}" if r.chars is None else
                  ' '.join(f'U+{c:04X}' for c in r.chars))
-        rows.append(f"{g.shown(name)}\t{r.state}\t"
+        rows.append(f"{shown_name(name)}\t{r.state}\t"
                     f"{'yes' if r.every_rule else 'no'}\t{chars}")
     return rows
 
@@ -1008,11 +1034,13 @@ def _main(opts):
                             f"built with, so their character set is not "
                             f"compared:",
                             [f"{n}: {w}" for n, w in names_])
-            keyed, cm_why = ((_charmaps_not_run(why), why) if why else
-                             check_charmaps(charmap_reads, repo, side_old,
-                                            side_new, sup, already,
-                                            step2_words(noun, machines=True),
-                                            builds=measured))
+            if why:
+                _charmaps_not_run(why)
+                keyed, cm_why = {}, why
+            else:
+                keyed, cm_why = check_charmaps(
+                    charmap_reads, repo, side_old, side_new, sup, already,
+                    step2_words(noun, machines=True), builds=measured)
         else:
             keyed, cm_why = check_charmaps(charmap_reads, repo, side_old,
                                            side_new, sup, already,
@@ -1043,11 +1071,10 @@ def _main(opts):
                        | keyed_aliases | set(unread))
         not_ascii = [n for n in names if not n.isascii()]
         names = [n for n in names if n.isascii()]
-        # The names of the list step 2 could not compare, each said with
-        # its reason in a `!!` (print_listed; glibc_locale_data's
-        # report_machine_provenance for an entry not read), so that the
-        # summary sets them apart from the rest of the list (13.31).
-        not_compared = [n for n in names if n in set(listed) | set(unread)]
+        # The names of the list step 2 could not compare, which the summary
+        # sets apart from the rest of the list (13.31, 16.147).
+        not_compared = not_compared_names(names, listed, unread, keyed,
+                                          differs, aliases)
         print()
         print(_fill(f"Listed in the summary ({len(names)}): "
                     + (', '.join(shown_name(n) for n in names) or 'none'),

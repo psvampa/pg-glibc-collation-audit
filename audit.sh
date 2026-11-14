@@ -306,8 +306,9 @@ STEP2_REMOVED="$OUT_DIR/step2_removed_locales.$PAIR.txt"
 # which step 2's list holds. Nothing reads it; removed below, so that a
 # list an earlier version left there is never taken for this run's.
 OLD_STEP2_KEYED="$OUT_DIR/step2_keyed_locales.$PAIR.txt"
-# The names of STEP2_LIST step 2 could not compare, each with its reason in
-# a `!!` the warnings block repeats; the summary sets them apart (13.31).
+# The names of STEP2_LIST step 2 could not compare, each with its reason, or
+# that of the locale it is an alias of, in a `!!` the warnings block repeats;
+# the summary sets them apart (13.31, 17.2).
 STEP2_NOT_COMPARED="$OUT_DIR/step2_not_compared.$PAIR.txt"
 # Step 2's rules for every locale name measured on either machine, which
 # the summary sets beside step 11's verdict (VERDICTS, below).
@@ -665,14 +666,14 @@ if [ "$LISTED" -gt 0 ]; then
   # C and C.utf8 alike, and its sort stops on both and points to the probe.
   # The names step 2 could not compare come apart, under a line that says
   # why they are listed; their reasons are in the warnings, each in its own
-  # step's words (13.31).
+  # step's words, an alias's under the locale it is built from (13.31, 17.2).
   awk -v skip="$STEP2_NOT_COMPARED" '
     BEGIN { while ((getline l < skip) > 0) out[l] = 1 }
     NF && !($0 in out)
   ' "$STEP2_LIST" | sed 's/^C$/C.UTF-8/; s/^/     /'
   if [ "$UNCOMPARED" -gt 0 ]; then
-    echo "   Listed because step 2 could not compare them (each one's reason"
-    echo "   is in the warnings below):"
+    echo "   Listed because step 2 could not compare them (the reason for each"
+    echo "   one, or for the locale it is an alias of, is in the warnings below):"
     sed 's/^C$/C.UTF-8/; s/^/     /' "$STEP2_NOT_COMPARED"
   fi
   echo "   ($LISTED name(s); full list: $STEP2_LIST)"
