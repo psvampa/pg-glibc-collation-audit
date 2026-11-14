@@ -4,3 +4,4 @@ scripts/build-sources-cache/
 /tmp/
 __pycache__/
 .claude/
+tests/.class-times.json

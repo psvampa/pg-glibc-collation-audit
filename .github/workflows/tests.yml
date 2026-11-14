@@ -121,6 +121,19 @@ jobs:
           PG_GLIBC_READER_JOBS=$(nproc) python3 -c \
             "import _harness; _harness.fill_reader_cache()"
 
+      - name: Keep how long each class took, for the next run's order
+        # tests/run_parallel.py starts the slowest classes of the last whole
+        # run first, from this file; without it every class keeps discovery's
+        # order, which costs time and changes no result. The key is new on
+        # every run and attempt, so every one that passes saves it (the
+        # reader's cache above is saved only when its key changes); a pull
+        # request restores its own newest, or main's before it has one.
+        uses: actions/cache@v4
+        with:
+          path: tests/.class-times.json
+          key: class-times-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: class-times-
+
       - name: Say so if the documentation layer is switched off
         # Renaming that file out of `test*.py` removes its tests from the run
         # without producing a single skip, so the step below stays green and

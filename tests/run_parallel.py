@@ -2,14 +2,23 @@
 """The suite `unittest discover -s tests -t tests` runs, spread over processes.
 
 The same tests out of the same files, one process per TestCase class instead
-of one process for all of them. Measured on 2026-09-21, 14-core darwin:
-208 s serial, 47 s here.
+of one process for all of them.
 
-Why by class and not by test method, also measured that day: by class over 8
-workers, 47 s; by method, 68 s -- every extra process pays the interpreter
-start again and loses the `run_step` memo in `_harness.py`, which the tests of
-one class share. Over 14 workers, 46 s with every shard slowing down. Eight is
-the knee, so that is the default.
+Why by class and not by test method, measured on 2026-09-21 with that day's
+classes: by method was slower -- every extra process pays the
+interpreter start again and loses the `run_step` memo in `_harness.py`, which
+the tests of one class share.
+
+How many at once, measured again on 2026-11-13 on the same 14-processor Mac
+with today's classes, each of which keeps one processor busy: 6 workers
+160 s, 8 128 s, 10 108 s, 12 101 s, 14 99 s, the reader's cache full; 264 s
+against 232 s for 8 and 14 with it empty. So the default is one worker per
+processor. Eight, the default until then, left six of them idle.
+
+Each class starts in the order of how long it took in the last whole run,
+slowest first, and a class with no time first of all (`order_units`): started
+in discovery order, the classes holding a single test -- several of them a
+whole audit.sh -- came last, and the run ended waiting for them.
 
 The counts are the whole point. A parallel runner that loses a shard prints a
 green summary over tests nobody ran, which is this repository's defect class
@@ -69,6 +78,7 @@ Usage:
 """
 import argparse
 import collections
+import json
 import os
 import re
 import signal
@@ -84,7 +94,7 @@ from _harness import DEFAULT_OUT_DIR
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Measured, not chosen: see the module docstring.
-DEFAULT_WORKERS = 8
+DEFAULT_WORKERS = os.cpu_count() or 1
 
 # A shard past this is hung, not slow, and a hung shard that is waited on for
 # ever is a suite that never says anything.
@@ -119,7 +129,8 @@ class DiscoveryError(Exception):
 
 
 def discover_units(tests_dir=TESTS_DIR, names=None):
-    """[(dotted class name, tests in it)], biggest first.
+    """[(dotted class name, tests in it)], biggest first. The order the
+    classes start in is order_units', not this one.
 
     Raises DiscoveryError when a module failed to import. unittest turns that
     into a `_FailedTest` placeholder whose failure is only raised when it is
@@ -184,6 +195,58 @@ def select_units(units, names):
                 seen.add(unit[0])
                 chosen.append(unit)
     return chosen
+
+
+def times_path():
+    """Where the last whole run left how long each class took:
+    PG_GLIBC_CLASS_TIMES, or tests/.class-times.json (git ignores it)."""
+    return (os.environ.get('PG_GLIBC_CLASS_TIMES')
+            or os.path.join(TESTS_DIR, '.class-times.json'))
+
+
+def load_times(path):
+    """{class name: seconds} from the last whole run, or {} when there is
+    none or it cannot be read. Only the order of the classes comes from it,
+    never what runs or what is counted, so a file that is missing, broken or
+    stale costs time and nothing else."""
+    try:
+        with open(path, encoding='utf-8') as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: float(v) for k, v in data.items()
+            if isinstance(k, str) and isinstance(v, (int, float))
+            and not isinstance(v, bool)}
+
+
+def save_times(path, shards):
+    """Write how long each class took, for the next run's order. Written
+    whole, through a file of its own renamed over the old one, so two runs
+    at once never leave half a file."""
+    data = {s.name: round(s.seconds, 1) for s in shards}
+    tmp = '%s.%d.tmp' % (path, os.getpid())
+    try:
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            json.dump(data, fh, indent=0, sort_keys=True)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def order_units(units, times):
+    """The same units, the slowest of the last run first, so that the run
+    does not end waiting for one long class started last (measured
+    2026-11-13: audit.sh classes of 11 to 14 s were started last).
+    A class with no time -- new, renamed, or no file at all -- goes first,
+    in the order it came: it may be the slowest of all. Only the order
+    changes; every unit is there once."""
+    unknown = [u for u in units if u[0] not in times]
+    known = [u for u in units if u[0] in times]
+    known.sort(key=lambda u: -times[u[0]])
+    return unknown + known
 
 
 # Each command the runner starts (a class, the reader fill) runs in a process
@@ -553,6 +616,7 @@ def _main(argv=None):
     # would only fight over the processors.
     os.environ.setdefault('PG_GLIBC_READER_JOBS',
                           str(max(1, (os.cpu_count() or 1) // workers)))
+    units = order_units(units, load_times(times_path()))
     started = time.time()
     with ThreadPoolExecutor(max_workers=workers) as pool:
         try:
@@ -562,6 +626,14 @@ def _main(argv=None):
             pool.shutdown(wait=False, cancel_futures=True)
             raise
     seconds = time.time() - started
+    if not args.names:
+        # Only a whole run: a run of one class would leave the times of
+        # that class alone, and a test of this runner its made-up classes.
+        try:
+            save_times(times_path(), shards)
+        except OSError as exc:
+            print('note: could not keep the classes\' times for the next '
+                  'run\'s order (%s)' % exc, flush=True)
     touched = []
     try:
         after = watch(DEFAULT_OUT_DIR)
