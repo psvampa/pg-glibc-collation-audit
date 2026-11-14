@@ -1903,7 +1903,7 @@ class FetchesFromAMirror(unittest.TestCase):
         for served, want, size, why in cases:
             with self.subTest(why=why, want=want[:10]):
                 self.mirror.files[url] = served
-                entry = bs.Entry(url, want, size, 't', 'r', None)
+                entry = bs.Entry(url, want, size, 't', 'r', None, True)
                 self.refused(lambda: bs.fetch(entry, self.cache), why)
                 self.assertFalse(os.path.exists(
                     os.path.join(self.cache, 'downloads', want)))
@@ -1998,19 +1998,15 @@ class FetchesFromAMirror(unittest.TestCase):
                 self.refused(lambda: self.where('glibc-2.28-251.el8_10.48'),
                              'has no sha256, size or path this reads')
 
-    def test_a_folder_with_no_metadata(self):
-        """vault 9.3's shape: SRPMs under Packages/g/, no repodata. Its
-        build is refused by name; a build of a lower folder is still found
-        past it."""
+    def test_a_folder_with_no_metadata_is_passed_over(self):
+        """vault 9.3's shape, holding another build: a build of a lower
+        folder is still found past it."""
         for v in ('9', '9.4'):
             self.mirror.repo('pub/rocky/' + v if v == '9' else
                              'vault/rocky/' + v, 'BaseOS/source/tree', [])
         self.mirror.files[M + 'vault/rocky/9.3/BaseOS/source/tree/'
                           'Packages/g/'] = \
             b'<a href="glibc-2.34-83.el9.12.src.rpm">x</a>'
-        self.refused(lambda: self.where('glibc-2.34-83.el9.12'),
-                     'glibc-2.34-83.el9.12.src.rpm is published in '
-                     'https://mirror.test/vault/rocky/9.3 with no metadata')
         rows = [_row('glibc', 'src', '60.el9', ver='2.34')]
         self.mirror.repo('vault/rocky/9.2', 'BaseOS/source/tree', rows)
         self.mirror.repo('vault/rocky/9.2', 'BaseOS/x86_64/os',
@@ -2021,6 +2017,177 @@ class FetchesFromAMirror(unittest.TestCase):
                                ver='2.34')])
         self.assertEqual(self.where('glibc-2.34-60.el9')['srpm'].tree,
                          'vault/rocky/9.2')
+
+    def in_vault(self, shape, tree='vault/rocky/10.0'):
+        """The small build moved from pub/rocky/10 (whose source metadata
+        then lists nothing) to `tree`, its BaseOS/source/tree with no
+        metadata, and the SRPM published as Rocky's vault does it: 'devel'
+        (9.5), its SRPM row and file in devel/source/tree's metadata;
+        'listing' (9.3), the SRPM only under Packages/g/, named by the
+        folder's listing; 'devel-without' (a shape not seen), devel with
+        metadata that lists no glibc, and the SRPM in the listing."""
+        self.el10()
+        self.mirror.copy(M + 'pub/rocky/10/', M + tree + '/', move=True)
+        self.mirror.repo('pub/rocky/10', 'BaseOS/source/tree', [])
+        repo, row = self.placed['srpm']
+        base = M + tree + '/BaseOS/source/tree/'
+        for u in [u for u in self.mirror.files
+                  if u.startswith(base + 'repodata/')]:
+            del self.mirror.files[u]
+        data = self.mirror.files[base + row['href']]
+        if shape == 'devel':
+            del self.mirror.files[base + row['href']]
+            self.mirror.repo(tree, 'devel/source/tree', [row],
+                             [(row['href'], data)])
+        else:
+            if shape == 'devel-without':
+                self.mirror.repo(tree, 'devel/source/tree', [])
+            self.mirror.files[base + 'Packages/g/'] = (
+                '<a href="%s">x</a>' % row['href'].split('/')[-1]).encode()
+        return base + row['href'], data
+
+    def test_a_folder_with_no_source_metadata_but_devel(self):
+        """vault 9.5's shape: no metadata in BaseOS/source/tree, the SRPM
+        and its sha256 in devel/source/tree's. Found there, listed, and
+        built; the binary packages from the folder's x86_64 metadata."""
+        self.in_vault('devel')
+        got = bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        files = got.provenance['fetched']['files']
+        self.assertEqual((files['srpm']['repo'], files['srpm']['listed']),
+                         ('devel/source/tree', True))
+        self.assertIn('/vault/rocky/10.0/devel/source/tree/',
+                      files['srpm']['url'])
+        self.assertEqual(files['glibc-common']['repo'], 'BaseOS/x86_64/os')
+
+    def test_devel_is_never_read_where_baseos_has_metadata(self):
+        """The control: devel/source/tree has metadata almost everywhere
+        (pub/rocky/9's lists seven glibc SRPMs, measured 2026-11-14); a
+        folder whose BaseOS/source/tree has metadata is answered from it,
+        and devel is not asked."""
+        self.el10()
+        repo, row = self.placed['srpm']
+        self.mirror.repo('pub/rocky/10', 'devel/source/tree', [row])
+        got = self.where('glibc-2.39-1.el10')
+        self.assertEqual(got['srpm'].repo, 'BaseOS/source/tree')
+        self.assertFalse([u for u in self.mirror.asked if '/devel/' in u])
+
+    def test_an_srpm_only_a_listing_names(self):
+        """vault 9.3's shape: no source metadata in any repository, the
+        SRPM under Packages/g/. Taken from there, with the sha256 of the
+        file as downloaded (listed False), downloaded once; the binary
+        packages from the folder's metadata; read again with no network."""
+        url, data = self.in_vault('listing')
+        got = self.where('glibc-2.39-1.el10')
+        self.assertEqual(got['srpm'], bs.Entry(
+            url, hashlib.sha256(data).hexdigest(), len(data),
+            'vault/rocky/10.0', 'BaseOS/source/tree', None, False))
+        self.assertTrue(got['glibc-common'].listed)
+        self.mirror.asked[:] = []
+        built = bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        self.assertEqual(self.mirror.asked.count(url), 1)
+        self.assertIs(built.provenance['fetched']['files']['srpm']['listed'],
+                      False)
+        with mock.patch.object(bs, '_get', side_effect=AssertionError):
+            again = bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        self.assertIs(again.provenance['fetched']['files']['srpm']['listed'],
+                      False)
+
+    def test_a_listing_beside_devel_metadata_without_the_build(self):
+        """A folder whose devel/source/tree has metadata that does not list
+        the build, and whose listing does (a shape not seen): the two
+        disagree, and the build is refused, saying so, with nothing
+        downloaded (Pablo, 2026-11-14)."""
+        url, _ = self.in_vault('devel-without')
+        self.refused(lambda: self.where('glibc-2.39-1.el10'),
+                     'glibc-2.39-1.el10.src.rpm is published in %s'
+                     'vault/rocky/10.0, and its devel/source/tree metadata '
+                     'does not list it' % M)
+        self.assertNotIn(url, self.mirror.asked)
+
+    def test_an_srpm_a_listing_names_is_held_to_rpm_and_the_binaries(self):
+        """Nothing vouches for its sha256, so what checks it is checked:
+        another SRPM's bytes under its name, a file cut short (rpm's own
+        digests), a binary package built from another SRPM, and the file
+        gone from the folder (a 404 is a refusal, never "not there")."""
+        url, data = self.in_vault('listing')
+        bad = os.path.join(self.tmp, 'bad.src.rpm')
+        make_srpm(bad, small_srpm_files(), payload_sha='0' * 64)
+        with open(bad, 'rb') as fh:
+            self.mirror.files[url] = fh.read()
+        self.refused(lambda: bs.fetch_build('glibc-2.39-1.el10', M,
+                                            os.path.join(self.tmp, 'c1')),
+                     "the payload's SHA256 is missing or wrong")
+        self.mirror.files[url] = data[:-10]
+        self.refused(lambda: bs.fetch_build('glibc-2.39-1.el10', M,
+                                            os.path.join(self.tmp, 'c2')),
+                     "the payload's SHA256 is missing or wrong")
+        self.mirror.files[url] = data
+        tree = 'vault/rocky/10.0'
+        repo, row = self.placed['glibc-common']
+        base = self.mirror.repo(tree, repo, [dict(
+            row, sourcerpm='glibc-2.39-2.el10.src.rpm')])
+        self.refused(lambda: self.where('glibc-2.39-1.el10'),
+                     "is built from 'glibc-2.39-2.el10.src.rpm'")
+        self.mirror.repo(tree, repo, [row])
+        del self.mirror.files[url]
+        self.refused(lambda: self.where('glibc-2.39-1.el10'),
+                     url + ' is listed and is not there')
+
+    def test_a_record_kept_before_listed_reads_as_listed(self):
+        """A build remembered before Entry had 'listed' is read as it was
+        then: every sha256 from the metadata."""
+        self.el10()
+        bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        path = os.path.join(self.cache, 'builds', 'glibc-2.39-1.el10.json')
+        with open(path) as fh:
+            rec = json.load(fh)
+        for f in rec['files'].values():
+            del f['listed']
+        with open(path, 'w') as fh:
+            json.dump(rec, fh)
+        with mock.patch.object(bs, '_get', side_effect=AssertionError):
+            got = bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        self.assertTrue(all(f['listed'] for f in
+                            got.provenance['fetched']['files'].values()))
+
+    def test_what_other_versions_kept_is_removed(self):
+        """A tree and a primary's rows kept under another _key() are removed
+        when this version keeps one; today's, the downloads, the records,
+        a `.new-` folder another run is writing and any other name are
+        not."""
+        self.el10()
+        bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        key = bs._key()
+        other = ('0' if key[0] != '0' else '1') * 20
+        old_tree = os.path.join(self.cache, 'a' * 32 + '-' + other)
+        old_rows = os.path.join(self.cache, 'metadata',
+                                'b' * 64 + '-' + other + '.json')
+        kept = [os.path.join(self.cache, n) for n in os.listdir(self.cache)]
+        kept += [os.path.join(self.cache, 'metadata', n)
+                 for n in os.listdir(os.path.join(self.cache, 'metadata'))]
+        kept += [os.path.join(self.cache, '.new-xyz'),
+                 os.path.join(self.cache, 'notes')]
+        for d in (old_tree, kept[-2], kept[-1]):
+            os.makedirs(os.path.join(d, 'tree'))
+        with open(old_rows, 'w') as fh:
+            fh.write('{}')
+        # A tree is kept again (its own entry removed), and a primary's rows.
+        for n in os.listdir(self.cache):
+            if n.endswith('-' + key):
+                shutil.rmtree(os.path.join(self.cache, n))
+        bs.fetch_build('glibc-2.39-1.el10', M, self.cache)
+        self.assertFalse(os.path.exists(old_tree))
+        self.assertFalse(os.path.exists(old_rows))
+        for p in kept:
+            self.assertTrue(os.path.exists(p), p)
+        os.makedirs(os.path.join(old_tree, 'tree'))
+        shutil.rmtree(os.path.join(self.cache, 'metadata'))
+        os.makedirs(os.path.join(self.cache, 'metadata'))
+        with open(old_rows, 'w') as fh:
+            fh.write('{}')
+        self.where('glibc-2.39-1.el10')
+        self.assertFalse(os.path.exists(old_rows))
+        self.assertFalse(os.path.exists(old_tree))
 
     def test_the_flat_layout_of_8_3_and_8_4(self):
         self.mirror.repo('pub/rocky/8', 'BaseOS/source/tree', [])
@@ -2341,7 +2508,8 @@ def _built(tree, name, tarball=True):
     prov = {'srpm_sha256': hashlib.sha256(name.encode()).hexdigest(),
             'verified': ['locale sources: 1, each the sha256 '
                          'glibc-locale-source records'],
-            'applied': [], 'patches': 0}
+            'applied': [], 'patches': 0,
+            'files': sum(len(fs) for _, _, fs in os.walk(tree))}
     if tarball:
         prov['tarball'] = bs.TARBALL_IS_TAG % TAG
     return bs.Built(tree, name + '.src', 'glibc 2.34', TAG, prov)
@@ -2402,6 +2570,22 @@ class ABuildIsACommitOfTheClone(unittest.TestCase):
         self.assertEqual(_git_out(self.repo, 'describe', '--tags',
                                   '--abbrev=0', '--match', 'glibc-[0-9]*',
                                   commit), TAG)
+
+    def test_a_tree_that_changed_while_it_was_read_is_refused(self):
+        """A kept tree a file short of what it was kept with (another run
+        rebuilding it, or pruning it under another version's key, while
+        this one reads it): refused, no commit and no ref."""
+        built = _built(self.tree('t'), B275)
+        os.remove(os.path.join(built.tree, 'localedata/locales/sv_SE'))
+        with self.assertRaises(bs.Refused) as cm:
+            bs.build_commit(self.repo, built)
+        assertRefusedAs(self, cm.exception, 'the kept tree of %s.src holds '
+                        '%d file(s), not the %d it was kept with'
+                        % (B275, built.provenance['files'] - 1,
+                           built.provenance['files']))
+        self.assertNotEqual(subprocess.run(
+            ['git', '-C', self.repo, 'rev-parse', '--verify', '--quiet',
+             bs.build_ref(B275)], capture_output=True).returncode, 0)
 
     def test_a_ref_already_there_is_replaced_never_read(self):
         """An older run's commit of another tree, and a ref set by hand to
@@ -2565,6 +2749,58 @@ def _fill_build_cache(cache, mirror, name, tree, warned=()):
             'patches': 2}
     with open(os.path.join(where, 'provenance.json'), 'w') as fh:
         json.dump(prov, fh)
+
+
+class TheProvenanceSaysWhatNoMetadataGives(unittest.TestCase):
+    """report_build_provenance for a build whose SRPM no metadata gives a
+    sha256 (vault 9.3's, taken from a listing): the line under its sha256
+    and the `!!` say so, naming the build and the folder; a build whose
+    every file is listed says neither (the control)."""
+
+    MIRROR = 'https://dl.rockylinux.org/'
+    TREE = 'vault/rocky/9.3'
+    NAME = 'glibc-2.34-83.el9.7'
+
+    def side(self, listed):
+        files = {}
+        for key, repo in (('srpm', 'BaseOS/source/tree'),
+                          ('glibc-locale-source', 'AppStream/x86_64/os'),
+                          ('glibc-common', 'BaseOS/x86_64/os')):
+            files[key] = bs.Entry(
+                '%s%s/%s/Packages/g/%s.rpm' % (self.MIRROR, self.TREE, repo,
+                                               key),
+                hashlib.sha256(key.encode()).hexdigest(), 1, self.TREE,
+                repo, None, listed or key != 'srpm')._asdict()
+        prov = {'tag': 'glibc-2.34', 'tarball': bs.TARBALL_IS_TAG
+                % 'glibc-2.34', 'verified': [], 'applied': [], 'patches': 0,
+                'fetched': {'note': bs.FETCHED_NOTE, 'files': files}}
+        return g.Side('build', 'c' * 40, None, self.NAME + '.src', None,
+                      None, None, None, prov)
+
+    def report(self, listed):
+        out = io.StringIO()
+        with mock.patch('sys.stdout', out):
+            g.report_build_provenance([self.side(listed)])
+        return out.getvalue()
+
+    def test_an_srpm_no_metadata_gives_a_sha256_for(self):
+        out = self.report(False)
+        sha = hashlib.sha256(b'srpm').hexdigest()
+        self.assertIn('%s sha256 %s\n%s no metadata gives this sha256: it '
+                      "is the file's as downloaded\n" % (' ' * 24, sha,
+                                                          ' ' * 24), out)
+        self.assertEqual(out.count('no metadata gives this sha256'), 1)
+        self.assertIn("whose sha256 is the only check on each file, but for "
+                      "the SRPM of %s, whose sha256 no metadata gives "
+                      "(%s%s publishes no source metadata): only rpm's own "
+                      "digests check that file;"
+                      % (self.NAME, self.MIRROR, self.TREE), flat(out))
+
+    def test_a_build_whose_every_file_is_listed(self):
+        out = flat(self.report(True))
+        self.assertIn('whose sha256 is the only check on each file;', out)
+        self.assertNotIn('no metadata gives', out)
+        self.assertNotIn('but for the SRPM', out)
 
 
 @needs_clone
