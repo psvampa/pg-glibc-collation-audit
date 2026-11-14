@@ -301,11 +301,12 @@ class Step2NamesTheCharacters(StepRun):
     than a line is written to step2_rules_characters.<pair>.tsv."""
 
     def characters(self, old, new):
-        """(Step2Report, the characters file read whole), from one run in a
-        directory of its own: run_step is memoised and does not write
-        again."""
-        out_dir = tempfile.mkdtemp(prefix='pg-glibc-audit-test-')
-        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        """(Step2Report, the characters file read whole), from the class's
+        one run of the pair, in a directory of the pair's own: run_step is
+        memoised and does not write again, so the file read is the one the
+        run whose output is parsed wrote."""
+        out_dir = os.path.join(self.out_dir, g.pair_slug(old, new))
+        os.makedirs(out_dir, exist_ok=True)
         rc, out = run_step('filter_lc_collate_changes.py', old, new,
                            out_dir=out_dir)
         self.assertEqual(rc, 0, out)
@@ -520,8 +521,9 @@ class BelowTheOldVersionFloor(StepRun):
         figure was 280 locales and 24 aliases; 11 with the three roots
         missing. What SUPPORTED does not build is listed and named under
         its own note."""
-        out_dir = tempfile.mkdtemp(prefix='pg-glibc-audit-test-')
-        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        # The class's run of the pair, whose output report() parses: the
+        # files below are the ones that run wrote (run_step's docstring).
+        out_dir = self.out_dir
         rc, out = run_step('filter_lc_collate_changes.py', FLOOR_OLD,
                            FLOOR_NEW, out_dir=out_dir)
         self.assertEqual(rc, 0, out)

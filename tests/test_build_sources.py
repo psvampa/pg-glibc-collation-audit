@@ -43,6 +43,7 @@ from _harness import (COMPARED_BANNER, GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR,
                       Step2Report, after_compared, before_compared,
                       compared_text, deleted_steps_named, flat,
                       summary_block, glibc_shaped, needs_clone,
+                      needs_floor_pair,
                       assert_no_deleted_block, nothing_compared_lines,
                       summary_warnings, assert_collation_version,
                       assert_no_route_looks, pg_version_of,
@@ -3024,15 +3025,24 @@ class AStepReadsTheFixtureBuilds(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, True)
 
+    # The command and environment of step 2, which _harness's fill replaces
+    # in a class of its own to start the same script on its spy, with its
+    # share of the processors (_harness._step2_pair).
+    def step2_command(self, script, old, new):
+        return [sys.executable, script, old, new, '--repo', self.repo]
+
+    def step2_environ(self, env):
+        return env
+
     def step2(self, old, new):
         out = tempfile.mkdtemp(prefix='out_', dir=self.tmp)
         env = dict(os.environ, PG_GLIBC_BUILD_SOURCES_CACHE=self.cache,
                    PG_GLIBC_BUILD_MIRROR=self.mirror, PG_GLIBC_AUDIT_OUT=out)
         p = subprocess.run(
-            [sys.executable,
-             os.path.join(SCRIPTS_DIR, 'filter_lc_collate_changes.py'),
-             old, new, '--repo', self.repo], capture_output=True, env=env,
-            cwd=self.tmp)
+            self.step2_command(
+                os.path.join(SCRIPTS_DIR, 'filter_lc_collate_changes.py'),
+                old, new), capture_output=True,
+            env=self.step2_environ(env), cwd=self.tmp)
         self.assertEqual(p.returncode, 0, p.stderr.decode()[-2000:])
 
         def lines(kind):
@@ -4403,6 +4413,341 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         self.assertIn("A machine's file made both sides read their tags; "
                       "why is the first warning below.",
                       flat(' '.join(summary_block(summary, REMOVED))))
+
+
+@needs_clone
+class TheFillSkipsStep2OnlyWhenItsRecordHolds(unittest.TestCase):
+    """_harness.fill_reader_cache skips step 2 over the fixture builds only
+    when its record holds -- it names every step 2 part, every input it
+    names has its bytes and every tree step 2 asked is kept. A record that
+    does not hold runs step 2 again: only time is at stake, never an
+    answer."""
+
+    def setUp(self):
+        import _harness
+        import glibc_reader as gr
+        import reader_cache as rc
+        self.h, self.rc = _harness, rc
+        self.dir = tempfile.mkdtemp(prefix='pg-glibc-fill-record-')
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        env = mock.patch.dict(os.environ, {'PG_GLIBC_READER_CACHE': self.dir,
+                                           'PG_GLIBC_READER_JOBS': '1'})
+        env.start()
+        self.addCleanup(env.stop)
+        self.build = gr.Build.at(GLIBC_CLONE, 'glibc-2.39', False)
+        self.files = {
+            b'a': b'LC_COLLATE\ncopy "b"\nEND LC_COLLATE\n',
+            b'b': (b'LC_COLLATE\norder_start forward\n<U0041>\norder_end\n'
+                   b'END LC_COLLATE\n')}
+        rc.tree_runs(self.files, self.build)
+        b = self.build
+
+        def lst(x):
+            return [lst(v) for v in x] if isinstance(x, (list, tuple)) else (
+                x.decode('latin-1') if isinstance(x, bytes) else x)
+        self.tree = ['s1', sorted([k.decode('latin-1'), rc.blob_id(v)]
+                                  for k, v in self.files.items()),
+                     [b.pre236, b.signed_char,
+                      lst(sorted(b.locfile_kw.items())),
+                      lst(sorted(b.charmap_kw.items()))], rc.build_id(b)]
+        self.module = os.path.realpath(os.path.join(SCRIPTS_DIR,
+                                                    'glibc_tree.py'))
+        self.write(self.h._fill_inputs([self.module]))
+
+    def write(self, inputs, trees=None):
+        # One kept tree for each step 2 part, as a whole fill records them.
+        every = [[p] + self.tree[1:] for p in sorted(self.h.FILL_PARTS)
+                 if self.h._is_step2(p)]
+        with open(self.h.fill_record_path(), 'w', encoding='utf-8') as fh:
+            json.dump({'inputs': inputs,
+                       'trees': every if trees is None else trees}, fh)
+
+    def test_a_record_of_kept_trees_and_same_inputs_holds(self):
+        self.assertTrue(self.h.fill_record_holds())
+
+    def test_a_tree_no_longer_kept_does_not_hold(self):
+        for d, _, names in os.walk(self.dir):
+            for n in names:
+                if n.startswith('tree-'):
+                    os.remove(os.path.join(d, n))
+        self.assertFalse(self.h.fill_record_holds())
+
+    def real_inputs(self):
+        """A repository of its own for the record's inputs, with one module
+        and one file of tests/build_sources/ whose bytes a test changes;
+        the record of them holds before any change."""
+        root = os.path.realpath(os.path.join(self.dir, 'repo'))
+        module = os.path.join(root, 'scripts', 'm.py')
+        fixture = os.path.join(root, 'tests', 'build_sources', 'f')
+        for path in (module, fixture):
+            os.makedirs(os.path.dirname(path))
+            with open(path, 'w') as fh:
+                fh.write('x\n')
+        for name, value in (('REPO_ROOT', root),
+                            ('TESTS_DIR', os.path.join(root, 'tests'))):
+            patch = mock.patch.object(self.h, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.write(self.h._fill_inputs([module]))
+        self.assertTrue(self.h.fill_record_holds())
+        return module, fixture
+
+    def test_a_module_with_other_bytes_does_not_hold(self):
+        module, _ = self.real_inputs()
+        with open(module, 'a') as fh:
+            fh.write('y\n')
+        self.assertFalse(self.h.fill_record_holds())
+
+    def test_a_fixture_file_changed_does_not_hold(self):
+        _, fixture = self.real_inputs()
+        with open(fixture, 'a') as fh:
+            fh.write('y\n')
+        self.assertFalse(self.h.fill_record_holds())
+
+    def test_a_fixture_file_added_does_not_hold(self):
+        _, fixture = self.real_inputs()
+        with open(fixture + '2', 'w') as fh:
+            fh.write('x\n')
+        self.assertFalse(self.h.fill_record_holds())
+
+    def test_another_commit_of_a_tag_does_not_hold(self):
+        self.real_inputs()
+        with mock.patch.object(self.h, 'OLD', self.h.MID):
+            self.assertFalse(self.h.fill_record_holds())
+
+    def test_a_record_without_every_pair_does_not_hold(self):
+        self.write(self.h._fill_inputs([self.module]), trees=[self.tree])
+        self.assertFalse(self.h.fill_record_holds())
+
+    def test_no_record_an_empty_or_unreadable_one_does_not_hold(self):
+        self.write(self.h._fill_inputs([self.module]), trees=[])
+        self.assertFalse(self.h.fill_record_holds())
+        with open(self.h.fill_record_path(), 'w') as fh:
+            fh.write('{')
+        self.assertFalse(self.h.fill_record_holds())
+        os.remove(self.h.fill_record_path())
+        self.assertFalse(self.h.fill_record_holds())
+
+    def test_step_2_runs_unless_the_record_holds(self):
+        for holds, runs in ((True, []), (False, [0, 1])):
+            with self.subTest(holds=holds):
+                called = []
+                with mock.patch.object(self.h, 'fill_record_holds',
+                                       lambda path=None: holds), \
+                        mock.patch.object(self.h, '_step2_pair',
+                                          lambda i, jobs: called.append(i)
+                                          or {'asked': [None], 'modules': []}):
+                    self.h.fill_reader_cache(parts={'s1', 's2'})
+                self.assertEqual(sorted(called), runs)
+
+
+@needs_clone
+@needs_floor_pair
+class TheFillRecordsEveryTreeStep2Asks(unittest.TestCase):
+    """The real step 2 over the fixture builds, by the fill's own path (its
+    two parts on run_parts, each class on the spy), with the suite's reader
+    cache: the record names both sides of both pairs, el8 -> el9 and el9 ->
+    el10, each kept. A spy that lost a tree would let the fill skip a tree no
+    one computed. And the parts the fill may run at once never write other
+    trees into one build directory of the cache (_harness.FILL_PARTS)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import _harness
+        path = _harness.fill_record_path()
+        try:
+            before = os.stat(path).st_ino
+        except FileNotFoundError:
+            before = None
+        with mock.patch.object(_harness, 'fill_record_holds',
+                               lambda path=None: False), \
+                mock.patch.object(_harness, 'write_fill_record',
+                                  wraps=_harness.write_fill_record) as write:
+            _harness.fill_reader_cache(parts={'s1', 's2'})
+        cls.writes = write.call_args_list
+        # The record is written to a file of its own and renamed over the
+        # old one, so a record this class wrote is a new inode.
+        cls.renamed = os.stat(path).st_ino != before
+        with open(path, encoding='utf-8') as fh:
+            cls.rec = json.load(fh)
+
+    def test_the_record_read_is_the_one_this_fill_wrote(self):
+        self.assertEqual(len(self.writes), 1)
+        self.assertTrue(self.renamed)
+
+    def test_every_module_a_spy_saw_is_an_input(self):
+        import _harness
+        root = os.path.realpath(_harness.REPO_ROOT)
+        seen = {os.path.relpath(m, root)
+                for part in self.writes[0].args[0].values()
+                for m in part['modules']}
+        self.assertIn(os.path.join('scripts', 'filter_lc_collate_changes.py'),
+                      seen)
+        self.assertEqual(seen - set(self.rec['inputs']), set())
+
+    def test_both_sides_of_both_pairs_are_recorded_and_kept(self):
+        import _harness
+        self.assertEqual(sorted(p for p, _, _, _ in self.rec['trees']),
+                         ['s1', 's1', 's2', 's2'])
+        self.assertEqual(len({bid for _, _, _, bid in self.rec['trees']}), 3)
+        self.assertTrue(_harness.fill_record_holds())
+
+    def test_parts_that_may_run_at_once_write_other_directories(self):
+        """Measured, not written: each tag part's directory is
+        reader_cache.build_id of its build, each step 2 part's the ones its
+        spy saw. Two parts neither of which waits for the other, through
+        any chain, share a directory only for the same tree."""
+        import _harness as h
+        import glibc_locale_data as g
+        import reader_cache as rc
+        writes = {}
+        for part in h.FILL_PARTS:
+            if h._is_step2(part):
+                writes[part] = {(bid, frozenset(map(tuple, ids)))
+                                for p, ids, _, bid in self.rec['trees']
+                                if p == part}
+            else:
+                tag, build = h._tag_part(part)
+                paths, ids = g.list_tree_ids(GLIBC_CLONE, tag, [])
+                writes[part] = {(rc.build_id(build), frozenset(
+                    (os.path.basename(p), ids[p]) for p in paths))}
+
+        def trees(part, d):
+            return {t for x, t in writes[part] if x == d}
+        after = {}
+
+        def waits(p):
+            if p not in after:
+                after[p] = set()
+                for w in h.FILL_PARTS[p][1]:
+                    after[p] |= {w} | waits(w)
+            return after[p]
+        clash = []
+        for a in sorted(writes):
+            for b in sorted(writes):
+                if a < b and a not in waits(b) and b not in waits(a):
+                    for d in {x for x, _ in writes[a]} & {
+                            x for x, _ in writes[b]}:
+                        if len(trees(a, d) | trees(b, d)) != 1:
+                            clash.append((a, b, d))
+        self.assertEqual(clash, [])
+        # And no wait costs time for nothing: each joins two parts that
+        # write other trees into one directory.
+        idle = []
+        for part, (_, ws) in h.FILL_PARTS.items():
+            for w in ws:
+                if part in writes and w in writes and not any(
+                        trees(part, d) != trees(w, d)
+                        for d in {x for x, _ in writes[part]} & {
+                            x for x, _ in writes[w]}):
+                    idle.append((part, w))
+        self.assertEqual(idle, [])
+
+
+class TheFillPlanAndItsParts(unittest.TestCase):
+    """_harness.fill_plan and run_parts, with parts that only sleep: every
+    part once, each after the parts it waits for, never more processors in
+    use than n, a failed part fails the fill, and parts that can never start
+    fail it instead of waiting for ever. No clone, no reader."""
+
+    def run_plan(self, n, slow=()):
+        import threading
+        import _harness as h
+        lock = threading.Lock()
+        log, use = [], {'now': 0, 'most': 0}
+
+        def start(part, jobs):
+            with lock:
+                use['now'] += jobs
+                use['most'] = max(use['most'], use['now'])
+                log.append(('start', part, time.monotonic()))
+            time.sleep(0.03 if part in slow else 0.005)
+            with lock:
+                use['now'] -= jobs
+                log.append(('end', part, time.monotonic()))
+        waits = {p: w for p, (_, w) in h.FILL_PARTS.items()}
+        most = h.run_parts(h.fill_plan(n), waits, n, start)
+        return log, use['most'], most
+
+    def test_every_part_once_with_one_to_n_processors(self):
+        import _harness as h
+        for n in range(1, 65):
+            plan = h.fill_plan(n)
+            self.assertEqual(sorted(p for p, _ in plan), sorted(h.FILL_PARTS))
+            self.assertEqual([j for _, j in plan if not 1 <= j <= n], [], n)
+        for part, (_, waits) in h.FILL_PARTS.items():
+            self.assertEqual(set(waits) - set(h.FILL_PARTS), set(), part)
+
+    def test_the_step_2_parts_are_the_pairs_of_fixtures(self):
+        import _harness as h
+        self.assertEqual(sorted(h.FILL_PARTS[p][0] for p in h.FILL_PARTS
+                                if h._is_step2(p)),
+                         list(range(len(FIXTURES) - 1)))
+
+    def test_never_more_than_n_and_each_after_what_it_waits_for(self):
+        import _harness as h
+        for n in (1, 2, 3, 4, 5, 14, 16):
+            with self.subTest(n=n):
+                log, seen, most = self.run_plan(n, slow=('2.28', 'el9'))
+                self.assertLessEqual(seen, n)
+                self.assertEqual(seen, most)
+                starts = [p for k, p, _ in log if k == 'start']
+                self.assertEqual(sorted(starts), sorted(h.FILL_PARTS))
+                at = {(k, p): t for k, p, t in log}
+                late = [(p, w) for p, (_, ws) in h.FILL_PARTS.items()
+                        for w in ws if at['start', p] < at['end', w]]
+                self.assertEqual(late, [])
+        # Above four processors two parts run at once.
+        self.assertGreater(self.run_plan(14, slow=('2.28', 'el9'))[1], 7)
+
+    def test_a_failed_part_fails_the_fill_and_what_waits_never_starts(self):
+        import threading
+        import _harness as h
+        started = []
+
+        def start(part, jobs):
+            started.append(part)
+            if part == '2.28':
+                raise ValueError('broken')
+            time.sleep(0.01)
+        before = threading.active_count()
+        waits = {p: w for p, (_, w) in h.FILL_PARTS.items()}
+        with self.assertRaises(RuntimeError) as cm:
+            h.run_parts(h.fill_plan(1), waits, 1, start)
+        self.assertIn('2.28 (ValueError: broken)', str(cm.exception))
+        self.assertEqual(started, ['2.28'])
+        self.assertEqual(threading.active_count(), before)
+
+    def test_a_task_that_exits_non_zero_fails_the_fill(self):
+        import _harness as h
+        with mock.patch.object(h, 'FILL_TASK',
+                               'import sys; sys.exit(3)  # %r'), \
+                mock.patch.object(h, 'write_fill_record',
+                                  side_effect=AssertionError):
+            with self.assertRaises(RuntimeError) as cm:
+                h._fill_parts([('2.12', 1)], 1)
+        self.assertIn('2.12 (CalledProcessError', str(cm.exception))
+
+    def test_parts_that_can_never_start_fail_instead_of_waiting(self):
+        import threading
+        import _harness as h
+        for todo, waits in (([('a', 1), ('b', 1)], {'a': ('b',),
+                                                    'b': ('a',)}),
+                            ([('a', 3)], {})):
+            with self.subTest(todo=todo):
+                got = []
+
+                def go():
+                    try:
+                        h.run_parts(todo, waits, 2, lambda p, j: None)
+                    except RuntimeError as exc:
+                        got.append(str(exc))
+                th = threading.Thread(target=go, daemon=True)
+                th.start()
+                th.join(5)
+                self.assertFalse(th.is_alive())
+                self.assertEqual(len(got), 1)
+                self.assertIn('cannot start', got[0])
 
 
 if __name__ == '__main__':

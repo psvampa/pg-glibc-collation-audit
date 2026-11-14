@@ -113,8 +113,9 @@ jobs:
         # 600 s limit per process. Here, after a change to the reader, it
         # ran past that (#103's first run), and the classes then computed
         # the trees one processor each. As a step of its own it has no such
-        # limit and all four processors. With the cache full it still runs
-        # step 2 over the fixture builds, about 12 s on the Mac, and the
+        # limit and all four processors. With the cache full and the record
+        # of what step 2 over the fixture builds asked still holding
+        # (_harness.fill_record_holds), it reads nothing again, and the
         # runner then finds every tree kept.
         run: |
           cd tests

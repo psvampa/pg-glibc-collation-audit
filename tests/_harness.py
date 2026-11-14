@@ -138,7 +138,7 @@ _SKIP_NO_FLOOR_TAGS = (
 
 
 
-def fill_reader_cache():
+def fill_reader_cache(parts=None):
     """Compute, with every processor, the localedef runs most of the suite
     asks scripts/reader_cache.py for: every locale of the five tags, and of
     MID read as RHEL 9 reads it (codepoint_collation is a keyword there),
@@ -151,54 +151,365 @@ def fill_reader_cache():
     600 s limit and the job past 20 minutes (backlog 15.2, measured
     2026-10-14). Changes no answer: a kept run is the run.
 
+    The parts (FILL_PARTS) run at once on the processors reader_cache gives
+    its own runs (rc._jobs: PG_GLIBC_READER_JOBS, or one per processor),
+    in fill_plan's order, each after the parts it waits for. A tag whose
+    tree is kept is not read again, and step 2 is not run again while its
+    record holds (fill_record_holds). `parts` limits the fill to those
+    parts, for the tests of the fill.
+
     tests/run_parallel.py calls this before the classes start. Without a
     usable clone it does nothing; the tests that need one skip."""
     if not have_clone():
         return
-    import glibc_locale_data as g
-    import glibc_tree
     import reader_cache as rc
+    step2_done = not has_tags(OLD, MID, NEW) or fill_record_holds()
+    todo = [(p, j) for p, j in fill_plan(rc._jobs())
+            if (parts is None or p in parts) and not (
+                step2_done if _is_step2(p) else _tag_part_done(p))]
+    if todo:
+        _fill_parts(todo, rc._jobs())
 
-    def kept(tag, build):
-        # From the listing alone, so a full cache costs a git ls-tree per
-        # tree and no file read: 0.75 s where reading them took 2.4 s.
-        paths, ids = g.list_tree_ids(GLIBC_CLONE, tag, [])
-        return rc.kept_tree({os.path.basename(p).encode(
-            'utf-8', 'surrogateescape'): ids[p] for p in paths}, build)
-    for tag in (FLOOR_OLD, FLOOR_NEW, OLD, MID, NEW):
-        if has_tags(tag) and not kept(tag, glibc_tree.build_at(GLIBC_CLONE,
-                                                               tag)):
-            glibc_tree.Tree.at_tag(GLIBC_CLONE, tag)
-    # OLD as RHEL 9 reads it was filled here for
-    # test_wrapper.WrapperNodesOnOneBuild (PR #117), which step 9.3 deleted
-    # with steps 9 and 10; no other test gives OLD's files an el9 build.
-    # MID as RHEL 9 reads it: the machine files the wrapper tests make from
-    # MID's files with an el9 build, which step 2 reads as that build
-    # (WrapperMachinesReadTheirOwnFiles, NodeFileCharmaps).
-    if has_tags(MID):
-        rhel9 = glibc_tree.build_at(GLIBC_CLONE, MID, '.el9')
-        if not kept(MID, rhel9):
-            paths = g.list_locale_files(GLIBC_CLONE, MID)
-            contents, missing = g.read_blobs(GLIBC_CLONE, MID, paths,
-                                             raw=True)
-            g.require_read(MID, paths, missing, 'the locale files')
-            files = {os.path.basename(p).encode('utf-8', 'surrogateescape'):
-                     v for p, v in contents.items()}
-            glibc_tree.Tree(MID, files, rhel9, g.decoded)
-    # Step 2 over the three fixture builds, el8 -> el9 -> el10, as
-    # test_build_sources.AStepReadsTheFixtureBuilds runs it, by that class's
-    # own code. None of their trees is one of the tags above, and on GitHub
-    # each class gets one processor: with nothing kept the class ran past
-    # the 600 s limit there (main after #145, 2026-11-04).
-    if has_tags(OLD, MID, NEW):
-        import test_build_sources as tb
-        cls = tb.AStepReadsTheFixtureBuilds
-        cls.setUpClass()
+
+# The parts of the fill: a tag's tree read for a build (the tag's own, or
+# with what a RHEL major adds), or step 2 over one pair of FIXTURES; and the
+# parts each waits for.
+#  - The five tags, each for its own build.
+#  - MID as RHEL 9 reads it (codepoint_collation is a keyword there): the
+#    machine files the wrapper tests make from MID's files with an el9
+#    build, which step 2 reads as that build (WrapperMachinesReadTheirOwnFiles,
+#    NodeFileCharmaps).
+#  - Step 2 over the three fixture builds, el8 -> el9 -> el10, as
+#    test_build_sources.AStepReadsTheFixtureBuilds runs it, by that class's
+#    own code. None of their trees is one of the tags above, and on GitHub
+#    each class gets one processor: with nothing kept the class ran past
+#    the 600 s limit there (main after #145, 2026-11-04).
+# A locale's run file in the reader's cache keeps up to 32 candidates and
+# is read, added to and written back by the part that computes it
+# (reader_cache.tree_runs, under a lock per tree only), so two parts that
+# write other trees into one build directory at once can leave one's
+# candidates out: a later tree that would have found one computes it again.
+# Only time is at stake, never an answer. So the parts that may run at once
+# write other directories, or one same tree, and every wait below is
+# between two parts that write other trees into one directory:
+# test_build_sources.TheFillRecordsEveryTreeStep2Asks derives the
+# directories from reader_cache.build_id and the record, and fails on
+# either.
+FILL_PARTS = {
+    '2.12': ((FLOOR_OLD, None), ()),
+    '2.17': ((FLOOR_NEW, None), ('2.12',)),
+    '2.28': ((OLD, None), ()),
+    '2.34': ((MID, None), ('2.28',)),
+    'el9': ((MID, '.el9'), ()),
+    '2.39': ((NEW, None), ()),
+    's1': (0, ('2.28', '2.34', 'el9')),
+    's2': (1, ('2.39', 'el9')),
+}
+
+
+def _is_step2(part):
+    return isinstance(FILL_PARTS[part][0], int)
+
+
+def fill_plan(n):
+    """[(part, processors)] for n processors, in the order the fill starts
+    them, two at a time above four processors: the order measured fastest
+    in step 13.6, against one part after another, with the cache empty and
+    with it full. Every part of FILL_PARTS once, each given 1 to n
+    processors."""
+    if n <= 4:
+        plan = [('2.28', n), ('2.34', n), ('el9', n), ('2.39', n - 1),
+                ('s1', 1), ('2.12', 1), ('s2', 1), ('2.17', n - 1)]
+    else:
+        h = n // 2
+        plan = [('2.28', h), ('el9', n - h), ('2.34', h), ('2.39', n - h),
+                ('s1', h), ('s2', n - h), ('2.12', h), ('2.17', h)]
+    return [(p, max(1, min(n, j))) for p, j in plan]
+
+
+def _tag_part(part):
+    """(tag, Build) of a tag part."""
+    import glibc_tree
+    tag, rhel = FILL_PARTS[part][0]
+    return tag, glibc_tree.build_at(GLIBC_CLONE, tag, rhel)
+
+
+def _tag_part_done(part):
+    """No such tag in the clone, or its tree is kept for the part's build:
+    from the listing alone, so a full cache costs a git ls-tree per tree and
+    no file read (0.75 s where reading them took 2.4 s)."""
+    import glibc_locale_data as g
+    import reader_cache as rc
+    if not has_tags(FILL_PARTS[part][0][0]):
+        return True
+    tag, build = _tag_part(part)
+    paths, ids = g.list_tree_ids(GLIBC_CLONE, tag, [])
+    return rc.kept_tree({os.path.basename(p).encode(
+        'utf-8', 'surrogateescape'): ids[p] for p in paths}, build)
+
+
+def fill_tag_part(part):
+    """Every locale of a tag part's tree, read for its build: what the fill
+    runs in a process of its own (FILL_TASK)."""
+    import glibc_tree
+    tag, build = _tag_part(part)
+    glibc_tree.Tree.at_tag(GLIBC_CLONE, tag, build)
+
+
+FILL_TASK = 'import _harness; _harness.fill_tag_part(%r)'
+
+
+def run_parts(todo, waits, n, start):
+    """Run start(part, jobs) for each (part, jobs) of `todo`, in order, each
+    in a thread of its own, a part once every part it waits for has ended
+    (a part not in `todo` is done already), and never more than n jobs at
+    once. Returns the most jobs that were in use at once.
+
+    A part that raises stops further starts; the parts already running are
+    waited for, then RuntimeError names each failed part. Parts that can no
+    longer start (they wait for each other, or for more than n) raise too,
+    instead of waiting for ever."""
+    import threading
+    left = list(todo)
+    names = {p for p, _ in todo}
+    cv = threading.Condition()
+    st = {'free': n, 'ended': set(), 'failed': [], 'most': 0}
+
+    def run(part, jobs):
+        why = None
         try:
-            for (old, _), (new, _) in zip(tb.FIXTURES, tb.FIXTURES[1:]):
-                cls('test_rhel8_to_rhel9').step2(old, new)
-        finally:
-            cls.tearDownClass()
+            start(part, jobs)
+        except BaseException as exc:  # noqa: B902 -- named below
+            why = '%s (%s: %s)' % (part, type(exc).__name__, exc)
+        with cv:
+            st['free'] += jobs
+            st['ended'].add(part)
+            if why:
+                st['failed'].append(why)
+            cv.notify_all()
+
+    threads = []
+    try:
+        with cv:
+            while left and not st['failed']:
+                for i, (part, jobs) in enumerate(left):
+                    if jobs <= st['free'] and all(
+                            w in st['ended'] or w not in names
+                            for w in waits.get(part, ())):
+                        st['free'] -= jobs
+                        st['most'] = max(st['most'], n - st['free'])
+                        th = threading.Thread(target=run, args=(part, jobs),
+                                              name='fill ' + part)
+                        th.start()
+                        threads.append(th)
+                        del left[i]
+                        break
+                else:
+                    if st['free'] == n:
+                        st['failed'].append('%s cannot start' % ', '.join(
+                            p for p, _ in left))
+                        break
+                    cv.wait()
+    finally:
+        for th in threads:
+            th.join()
+    if st['failed']:
+        raise RuntimeError('a part of the fill failed: '
+                           + '; '.join(st['failed']))
+    return st['most']
+
+
+def _fill_parts(todo, n):
+    """The parts of `todo` on run_parts: a tag in a process of its own
+    (FILL_TASK), in this process's group so that the runner's cut ends it;
+    a pair of step 2 by _step2_pair. Then the record, when step 2 ran."""
+    spied = {}
+
+    def start(part, jobs):
+        if _is_step2(part):
+            spied[part] = _step2_pair(FILL_PARTS[part][0], jobs)
+        else:
+            subprocess.run([sys.executable, '-c', FILL_TASK % part],
+                           cwd=TESTS_DIR, check=True, env=dict(
+                               os.environ, PG_GLIBC_READER_JOBS=str(jobs)))
+    run_parts(todo, {p: w for p, (_, w) in FILL_PARTS.items()}, n, start)
+    if spied:
+        write_fill_record(spied)
+
+
+def _step2_pair(i, jobs):
+    """What the spy saw of step 2 over FIXTURES[i] -> FIXTURES[i + 1], run by
+    test_build_sources.AStepReadsTheFixtureBuilds' own code in a class of
+    its own (its own repository, builds and output folder), its process
+    started on STEP2_SPY with `jobs` processors."""
+    import json
+    import test_build_sources as tb
+    base = tb.AStepReadsTheFixtureBuilds
+
+    def command(self, script, old, new):
+        return [sys.executable, '-c', STEP2_SPY, SCRIPTS_DIR,
+                os.path.realpath(REPO_ROOT), self.spy, script] + \
+            base.step2_command(self, script, old, new)[2:]
+
+    def environ(self, env):
+        return dict(base.step2_environ(self, env),
+                    PG_GLIBC_READER_JOBS=str(jobs))
+    cls = type('FillPair%d' % i, (base,), {'step2_command': command,
+                                           'step2_environ': environ})
+    cls.setUpClass()
+    try:
+        cls.spy = os.path.join(cls.tmp, 'spy.json')
+        (old, _), (new, _) = tb.FIXTURES[i], tb.FIXTURES[i + 1]
+        cls('test_rhel8_to_rhel9').step2(old, new)
+        with open(cls.spy, encoding='utf-8') as fh:
+            return json.load(fh)
+    finally:
+        cls.tearDownClass()
+
+
+# The record of what step 2 over the fixture builds asked the reader, kept
+# beside the reader's answers. With it, a fill whose every asked tree is
+# kept, and whose inputs are what they were when the record was made, skips
+# step 2: only the time of asking again is saved, never an answer. The
+# inputs are not a list: they are the repository's modules that the fill
+# and the step 2 processes imported, their bytes, the whole of
+# tests/build_sources/ and the commits of the three tags.
+FILL_RECORD = 'fill-fixture-step2.json'
+
+# Runs step 2 as the class runs it, with reader_cache.tree_runs spied: every
+# tree asked (names and blob ids, the build's fields) and every module of the
+# repository the process imported are written to `record` at exit.
+STEP2_SPY = r"""
+import atexit, json, os, runpy, sys
+scripts, root, record, script = sys.argv[1:5]
+sys.argv = [script] + sys.argv[5:]
+sys.path.insert(0, scripts)
+import reader_cache as rc
+real, asked = rc.tree_runs, []
+def lst(x):
+    return [lst(v) for v in x] if isinstance(x, (list, tuple)) else (
+        x.decode('latin-1') if isinstance(x, bytes) else x)
+def spy(files, build, cache_dir=None):
+    asked.append(None if cache_dir is not None else [
+        sorted([k.decode('latin-1'), rc.blob_id(v)] for k, v in files.items()),
+        [bool(build.pre236), bool(build.signed_char),
+         lst(sorted(build.locfile_kw.items())),
+         lst(sorted(build.charmap_kw.items()))], rc.build_id(build)])
+    return real(files, build, cache_dir)
+rc.tree_runs = spy
+def dump():
+    mods = sorted({os.path.realpath(m.__file__) for m in list(sys.modules.values())
+                   if getattr(m, '__file__', None)} | {os.path.realpath(script)})
+    with open(record, 'w') as fh:
+        json.dump({'asked': asked, 'modules': [m for m in mods
+                   if m.startswith(root + os.sep)]}, fh)
+atexit.register(dump)
+runpy.run_path(script, run_name='__main__')
+"""
+
+
+def _fill_build(fields):
+    """A stand-in with the four fields reader_cache.build_id reads, from the
+    record's JSON: bytes back from latin-1, lists back to tuples."""
+    import types
+
+    def kw(items):
+        return {k.encode('latin-1'): tuple(v) for k, v in items}
+    pre236, signed, lk, ck = fields
+    return types.SimpleNamespace(pre236=pre236, signed_char=signed,
+                                 locfile_kw=kw(lk), charmap_kw=kw(ck))
+
+
+def _fill_inputs(modules):
+    """{what: sha1} of every input the record holds the fill to."""
+    import hashlib
+
+    def sha(path):
+        with open(path, 'rb') as fh:
+            return hashlib.sha1(fh.read()).hexdigest()
+    real = os.path.realpath(REPO_ROOT)
+    out = {os.path.relpath(m, real): sha(m) for m in sorted(modules)}
+    h = hashlib.sha1()
+    top = os.path.join(TESTS_DIR, 'build_sources')
+    for d, dirs, files in sorted(os.walk(top)):
+        dirs.sort()
+        for f in sorted(files):
+            p = os.path.join(d, f)
+            h.update(os.path.relpath(p, top).encode('utf-8', 'surrogateescape')
+                     + b'\0' + sha(p).encode('ascii') + b'\0')
+    out['tests/build_sources/'] = h.hexdigest()
+    p = subprocess.run(['git', 'rev-parse'] + ['%s^{commit}' % t for t in
+                                               (OLD, MID, NEW)],
+                       cwd=GLIBC_CLONE, capture_output=True, check=True)
+    out['tags'] = p.stdout.decode('ascii').split()
+    return out
+
+
+def fill_record_path():
+    import reader_cache as rc
+    root = os.environ.get('PG_GLIBC_READER_CACHE') or rc.DEFAULT_DIR
+    return os.path.join(root, rc.VERSION, FILL_RECORD)
+
+
+def _fill_kept(rec):
+    """Every tree the record lists is kept, for the build it names."""
+    import reader_cache as rc
+    for _, ids, fields, bid in rec['trees']:
+        build = _fill_build(fields)
+        if rc.build_id(build) != bid or not rc.kept_tree(
+                {k.encode('latin-1'): v for k, v in ids}, build):
+            return False
+    return True
+
+
+def fill_record_holds(path=None):
+    """True only when the record exists, holds every step 2 part of
+    FILL_PARTS, every input it names has the bytes it had, and every tree
+    step 2 asked is kept. Anything else, including a record that does not
+    read, is False: step 2 then runs."""
+    import json
+    path = path or fill_record_path()
+    try:
+        with open(path, encoding='utf-8') as fh:
+            rec = json.load(fh)
+        modules = [os.path.join(os.path.realpath(REPO_ROOT), m)
+                   for m in rec['inputs']
+                   if m not in ('tests/build_sources/', 'tags')]
+        if {t[0] for t in rec['trees']} != {
+                p for p in FILL_PARTS if _is_step2(p)}:
+            return False
+        if _fill_inputs(modules) != rec['inputs']:
+            return False
+        return _fill_kept(rec)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError,
+            subprocess.CalledProcessError):
+        return False
+
+
+def write_fill_record(spied):
+    """Write the record of {part: what its spy saw}, only when every tree
+    it lists is kept and no spy saw a tree asked with a cache of its own;
+    through reader_cache's own writer (a file of this process's own, renamed
+    over the record). Returns False when it does not write for one of those
+    reasons. A write that fails leaves the record as it was, which holds
+    only for the inputs and trees it names; the function returns True even
+    then."""
+    import reader_cache as rc
+    trees = []
+    modules = {os.path.realpath(m.__file__) for m in list(sys.modules.values())
+               if getattr(m, '__file__', None)}
+    for part in sorted(spied):
+        if None in spied[part]['asked']:
+            return False
+        trees += [[part] + t for t in spied[part]['asked']]
+        modules |= set(spied[part]['modules'])
+    root = os.path.realpath(REPO_ROOT) + os.sep
+    rec = {'trees': trees, 'inputs': _fill_inputs(
+        {m for m in modules if m.startswith(root)})}
+    if not _fill_kept(rec):
+        return False
+    rc._write_json(fill_record_path(), rec)
+    return True
 
 
 def collate_bounds(text):
