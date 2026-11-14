@@ -811,6 +811,12 @@ class ReadsRealOutputs(unittest.TestCase):
         # C.utf8: PostgreSQL gives no version, said for each output.
         self.assertEqual(len(re.findall(r'gives no glibc version for collation '
                                         r'C\.utf8', stdout)), 2)
+        # 16.196/16.274: C has none either; PostgreSQL 13 is outside the
+        # project (14 and later).
+        self.assertEqual(stdout.count('C.utf8 (it gives none for C, C.* and '
+                                      'POSIX), so its version is not '
+                                      'checked'), 2)
+        self.assertNotIn('PostgreSQL 13', stdout)
 
     def test_rhel9_to_rhel10_on_postgresql_18(self):
         rc, stdout, stderr = read(sql('910', 'UTF8'),

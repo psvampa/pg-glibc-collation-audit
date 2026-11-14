@@ -7114,7 +7114,7 @@ def use_texts(model):
                     'upper case glibc gives some characters, which upper() and '
                     'initcap() read, or their lower case, which lower(), initcap(), '
                     'ILIKE, full-text search and pg_trgm read. upper(), lower() and '
-                    'initcap() do not check that conversion: PostgreSQL 13 to 17 '
+                    'initcap() do not check that conversion: PostgreSQL 14 to 17 '
                     'return empty text or other bytes, which ILIKE then compares, '
                     'while full-text search and pg_trgm stop with "ERROR: '
                     'conversion from wchar_t to server encoding failed"; on '
@@ -7831,7 +7831,7 @@ def ctype_byte_finding(got, group):
             'character, SQL_ASCII too, reads them in upper(), lower(), '
             'initcap(), ILIKE, regular expressions and full-text search. A '
             'database of any other encoding, UTF8 too, reads every byte in '
-            'fuzzystrmatch and, on PostgreSQL 13 to 17, in ltree\'s labels, and '
+            'fuzzystrmatch and, on PostgreSQL 14 to 18.1, in ltree\'s labels, and '
             'reads the ASCII bytes in the character tests of full-text search, '
             'ltree and pg_trgm and, except in UTF8, in regular expressions:')
     return {'head': head, 'items': [f'byte {b:02X}: {words}' for b, words, _ in got],

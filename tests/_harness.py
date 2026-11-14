@@ -895,7 +895,7 @@ PG_VERSION_SAME = (
 PG_VERSION_DIFFER = (
     "glibc {old} on the old side, {new} on the new: the version a PostgreSQL "
     "that runs it records for a libc collation, where it records one. "
-    "PostgreSQL 13 or later warns about a collation, and 15 or later about a "
+    "PostgreSQL warns about a collation, and PostgreSQL 15 or later about a "
     "database's default collation, where the version it recorded is not "
     "{new} ({old} if it was recorded on the old side), whether that locale's "
     "order changed or not. Where it recorded {new}, it does not warn, "
