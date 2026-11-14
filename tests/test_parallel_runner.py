@@ -35,6 +35,7 @@ own each test process gets and the runner's check on the default one.
 import ast
 import contextlib
 import io
+import json
 import os
 import re
 import shutil
@@ -930,6 +931,10 @@ class TheSuiteDoesNotWriteWhereARealAuditReads(unittest.TestCase):
         # answers first; the real fill_reader computes them for the suite,
         # work no test here is about. main() also sets PG_GLIBC_READER_JOBS
         # for its shards, and the tests after these must not inherit it.
+        # A whole run keeps the classes' times: these made-up ones go to a
+        # folder of their own, not to the suite's file nor the watched one.
+        times = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, times, True)
         out = io.StringIO()
         with mock.patch.object(rp, 'DEFAULT_OUT_DIR', folder or self.tmp), \
                 mock.patch.object(rp, 'discover_units',
@@ -937,7 +942,8 @@ class TheSuiteDoesNotWriteWhereARealAuditReads(unittest.TestCase):
                 mock.patch.object(rp, 'run_unit', run_unit), \
                 mock.patch.object(rp, 'watch', watch), \
                 mock.patch.object(rp, 'fill_reader', fill), \
-                mock.patch.dict(os.environ), \
+                mock.patch.dict(os.environ, {'PG_GLIBC_CLASS_TIMES':
+                                             os.path.join(times, 't.json')}), \
                 contextlib.redirect_stdout(out):
             code = rp.main([])
         return code, out.getvalue()
@@ -1055,6 +1061,105 @@ class TheSuiteDoesNotWriteWhereARealAuditReads(unittest.TestCase):
         self.assertIn('    filled.txt', text)
         self.assertRegex(text, r'(?m)^FAILED \(default output folder '
                                r'changed=2\)$')
+
+
+class TheSlowestClassStartsFirst(unittest.TestCase):
+    """The order the classes start in comes from the last whole run's times.
+    It changes how long a run takes, never what runs or what is counted, so
+    the guards here are that every class is still there once, that a class
+    with no time is not left for last, and that a file that cannot be read
+    is no order at all rather than a crash."""
+
+    UNITS = [('m.Big', 9), ('m.Mid', 5), ('m.New', 3), ('m.Small', 1)]
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.path = os.path.join(self.tmp, 'times.json')
+
+    def test_the_slowest_of_the_last_run_starts_first(self):
+        times = {'m.Big': 1.0, 'm.Mid': 3.0, 'm.Small': 40.0}
+        order = [u[0] for u in rp.order_units(self.UNITS, times)]
+        self.assertEqual(order[1:], ['m.Small', 'm.Mid', 'm.Big'])
+
+    def test_a_class_with_no_time_starts_before_all_the_others(self):
+        """A new or renamed class may be the slowest of all; left to the
+        end it is the wait this order is there to remove."""
+        times = {'m.Big': 1.0, 'm.Mid': 3.0, 'm.Small': 40.0}
+        order = [u[0] for u in rp.order_units(self.UNITS, times)]
+        self.assertEqual(order[0], 'm.New')
+
+    def test_every_class_is_still_there_once(self):
+        for times in ({}, {'m.Big': 2.0}, {'m.Gone': 5.0, 'm.Mid': 1.0},
+                      dict.fromkeys(['m.Big', 'm.Mid', 'm.New', 'm.Small'],
+                                    1.0)):
+            with self.subTest(times=times):
+                got = rp.order_units(self.UNITS, times)
+                self.assertEqual(sorted(got), sorted(self.UNITS))
+
+    def test_with_no_times_the_order_is_discoverys(self):
+        self.assertEqual(rp.order_units(self.UNITS, {}), self.UNITS)
+
+    def test_a_file_that_is_missing_or_broken_is_no_order(self):
+        self.assertEqual(rp.load_times(self.path), {})
+        for text in ('{"m.Big": ', '[1, 2]', '{"m.Big": "slow", '
+                     '"m.Mid": true, "m.Small": 4}'):
+            with self.subTest(text=text):
+                with open(self.path, 'w') as fh:
+                    fh.write(text)
+                got = rp.load_times(self.path)
+                self.assertEqual(got, {'m.Small': 4.0} if 'Small' in text
+                                 else {})
+
+    def test_what_save_writes_load_reads(self):
+        rp.save_times(self.path, [rp.Shard('m.Big', 0, 12.34, '', ''),
+                                  rp.Shard('m.Small', 0, 0.5, '', '')])
+        self.assertEqual(rp.load_times(self.path),
+                         {'m.Big': 12.3, 'm.Small': 0.5})
+        self.assertEqual(os.listdir(self.tmp), ['times.json'])
+
+    def _run(self, argv, times=None):
+        if times is not None:
+            with open(self.path, 'w') as fh:
+                json.dump(times, fh)
+        started = []
+
+        def run_unit(name):
+            started.append(name)
+            return shard(name)
+        out = io.StringIO()
+        watched = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, watched, True)
+        with mock.patch.object(rp, 'DEFAULT_OUT_DIR', watched), \
+                mock.patch.object(rp, 'discover_units',
+                                  lambda names=None: [(n, 1) for n, _ in
+                                                      self.UNITS]), \
+                mock.patch.object(rp, 'run_unit', run_unit), \
+                mock.patch.object(rp, 'fill_reader', lambda: None), \
+                mock.patch.dict(os.environ, {'PG_GLIBC_CLASS_TIMES':
+                                             self.path}), \
+                contextlib.redirect_stdout(out):
+            code = rp.main(['-j', '1'] + argv)
+        return code, out.getvalue(), started
+
+    def test_main_starts_the_classes_in_that_order(self):
+        code, text, started = self._run(
+            [], {'m.Big': 1.0, 'm.Mid': 3.0, 'm.Small': 40.0})
+        self.assertEqual(code, 0, text)
+        self.assertEqual(started, ['m.New', 'm.Small', 'm.Mid', 'm.Big'])
+
+    def test_a_whole_run_keeps_each_class_time_for_the_next(self):
+        code, text, _ = self._run([])
+        self.assertEqual(code, 0, text)
+        self.assertEqual(sorted(rp.load_times(self.path)),
+                         ['m.Big', 'm.Mid', 'm.New', 'm.Small'])
+
+    def test_a_run_of_named_classes_keeps_no_times(self):
+        """A test of this runner runs made-up classes by name; they must
+        not become the suite's order."""
+        code, text, _ = self._run(['m'])
+        self.assertEqual(code, 0, text)
+        self.assertFalse(os.path.exists(self.path))
 
 
 class AGreenRunIsStillGreen(unittest.TestCase):
