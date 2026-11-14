@@ -50,7 +50,10 @@ finds the SRPM and the two binary packages in a mirror's public metadata
 (repomd.xml, then primary.xml), fetch() downloads each and compares it with
 the sha256 the metadata records, and build() does the rest; given the
 glibc clone, build() also compares the SRPM's tarball with the upstream tag
-(tarball_is_tag). latest() names a major version's newest build.
+(tarball_is_tag). An SRPM published in a folder with no source metadata
+(vault 9.3) is the one exception: its sha256 is the file's as downloaded
+(Entry.listed false), and rpm's own digests are its check. latest() names
+a major version's newest build.
 
 build_commit() makes a build a commit of the clone, again on every call: one
 parent, the upstream tag, and the tag's tree with localedata/ and locale/
@@ -58,7 +61,9 @@ the build's, under build_ref(), outside refs/tags.
 
 PG_GLIBC_BUILD_SOURCES_CACHE names the cache directory (default
 scripts/build-sources-cache/, outside git), and PG_GLIBC_BUILD_MIRROR the
-mirror (default Rocky Linux's, ROCKY).
+mirror (default Rocky Linux's, ROCKY). The rebuilt trees and the primary
+rows other versions of this module kept there are removed when this one
+keeps one (_prune); the downloads and builds/ are kept.
 """
 import bz2
 import collections
@@ -1595,6 +1600,38 @@ def _key():
     return h.hexdigest()[:20]
 
 
+_KEPT_TREE = re.compile(r'[0-9a-f]{32}-([0-9a-f]{20})')
+_KEPT_ROWS = re.compile(r'[0-9a-f]{64}-([0-9a-f]{20})\.json')
+
+
+def _prune(cache, key):
+    """Remove what other versions of this module kept in `cache`: a tree
+    (build) or a primary's rows (_rows) under another _key() can never be
+    read again by this version. Only names of exactly those shapes are
+    touched; the downloads, the records of builds/ and a `.new-` folder
+    another run is writing are not, and a failure leaves what it could not
+    remove. A run of this version or a later one reading a tree removed
+    here is refused by build_commit, which counts what it read."""
+    for folder, shape in ((cache, _KEPT_TREE),
+                          (os.path.join(cache, 'metadata'), _KEPT_ROWS)):
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            continue
+        for n in names:
+            m = shape.fullmatch(n)
+            if not m or m.group(1) == key:
+                continue
+            path = os.path.join(folder, n)
+            if shape is _KEPT_TREE:
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+
 def build(srpm, binaries, cache=None, repo=None):
     """The build's rebuilt localedata/ and locale/, from the SRPM at `srpm`,
     checked against the build's binary packages ({'glibc-locale-source':
@@ -1617,8 +1654,9 @@ def build(srpm, binaries, cache=None, repo=None):
                       'against' % missing[0])
     sha = _sha256_file(srpm)
     shas = [_sha256_file(binaries[n]) for n in names]
+    key = _key()
     where = os.path.join(cache, hashlib.sha256(
-        ' '.join([sha] + shas).encode()).hexdigest()[:32] + '-' + _key())
+        ' '.join([sha] + shas).encode()).hexdigest()[:32] + '-' + key)
     kept = _kept(where, sha, shas)
     if kept and (repo is None or kept.provenance.get('tarball')):
         return kept
@@ -1655,6 +1693,7 @@ def build(srpm, binaries, cache=None, repo=None):
         shutil.rmtree(where, ignore_errors=True)
         raise Refused('the tree just kept at %s does not read back whole'
                       % where)
+    _prune(cache, key)
     return kept
 
 
@@ -1682,13 +1721,24 @@ def _kept(where, sha, shas):
 # el9 and el10, glibc-common in BaseOS; every row sha256, every binary's
 # sourcerpm its build's SRPM; package paths come in two layouts (Packages/g/
 # and, on 8.3 and 8.4, Packages/), so a URL is always the metadata's href,
-# never made from the name; vault 9.3 and 9.5 publish the SRPMs with no
-# metadata, and those builds are refused.
+# never made from the name. Vault 9.3 and 9.5 have no metadata in
+# BaseOS/source/tree (measured again 2026-11-14): 9.5's devel/source/tree
+# lists the same three SRPMs, the same files, with their sha256, and is
+# read in its place (_DEVEL_REPO); 9.3 has source metadata in no
+# repository, and its two SRPMs are taken from the folder's listing, each
+# with the sha256 of the file as downloaded (Entry.listed false). Their
+# binary packages are in that folder's x86_64 metadata, as everywhere.
 
 ROCKY = 'https://dl.rockylinux.org/'
 TIMEOUT = 120
 _SOURCE_REPO = 'BaseOS/source/tree'
-# (key, rpm name, arch, the repositories it can be in): one row per file.
+# Read for an SRPM only in a folder whose _SOURCE_REPO has no metadata:
+# devel/source/tree has metadata in almost every folder (pub/rocky/9's
+# lists seven glibc SRPMs too, measured 2026-11-14), so it is never one of
+# PACKAGES' repositories, where it would list each SRPM twice.
+_DEVEL_REPO = 'devel/source/tree'
+# (key, rpm name, arch, the repositories it can be in): one row per file;
+# the SRPM is also read from _DEVEL_REPO or a listing (where_from).
 PACKAGES = (('srpm', 'glibc', 'src', (_SOURCE_REPO,)),
             ('glibc-locale-source', 'glibc-locale-source', 'x86_64',
              ('BaseOS/x86_64/os', 'AppStream/x86_64/os')),
@@ -1699,9 +1749,14 @@ _PRI = '{http://linux.duke.edu/metadata/common}'
 _RPMNS = '{http://linux.duke.edu/metadata/rpm}'
 _SHA = re.compile(r'^[0-9a-f]{64}$')
 FETCHED_NOTE = ("each file's sha256 is the one the mirror's metadata "
-                "records; the metadata's GPG signature is not checked")
+                "records, but a file whose 'listed' is false: no metadata "
+                "gives its sha256, which is the file's as downloaded; the "
+                "metadata's GPG signature is not checked")
 
-Entry = collections.namedtuple('Entry', 'url sha256 size tree repo timestamp')
+# listed: False for an SRPM no metadata gives a sha256 for (where_from).
+# No default: an Entry made without saying would claim a metadata's sha256.
+Entry = collections.namedtuple('Entry',
+                               'url sha256 size tree repo timestamp listed')
 Latest = collections.namedtuple('Latest', 'build mirror tree timestamp')
 
 
@@ -1858,7 +1913,8 @@ def _rows(mirror, tree, repo, cache):
             or not _safe_href(href):
         raise Refused('%srepodata/repomd.xml does not give primary.xml a '
                       'sha256 and a path this reads' % base)
-    where = os.path.join(cache, 'metadata', '%s-%s.json' % (sha, _key()))
+    key = _key()
+    where = os.path.join(cache, 'metadata', '%s-%s.json' % (sha, key))
     kept = _read_json(where)
     if isinstance(kept, dict) and kept.get('complete') is True and \
             kept.get('primary_sha256') == sha and \
@@ -1875,6 +1931,7 @@ def _rows(mirror, tree, repo, cache):
     out = {'rows': _parse_primary(data, base + href), 'primary_sha256': sha,
            'timestamp': _text(prim[0], _RMD + 'timestamp'), 'complete': True}
     _write_json(where, out)
+    _prune(cache, key)
     return out
 
 
@@ -1911,27 +1968,29 @@ def _is(row, name, arch, ver, rel):
 def where_from(name, mirror=None, cache=None):
     """{key of PACKAGES: Entry} for the build `name`: the one place that
     decides where each of its three files comes from and with which sha256.
-    The tree is the first whose source metadata lists exactly this SRPM; the
-    two binary packages come from that same tree, one row each, built from
-    it. A tree with no metadata is passed over while looking, and named if
-    the build turns out to be published there."""
+    The tree is the first whose source metadata lists exactly this SRPM:
+    _SOURCE_REPO's, or _DEVEL_REPO's when _SOURCE_REPO has none (vault 9.5);
+    the two binary packages come from that same tree, one row each, built
+    from it. When no metadata of any tree lists the SRPM, a tree whose
+    _SOURCE_REPO has no metadata is looked at again: if its Packages/
+    listing names the SRPM and its _DEVEL_REPO has no metadata either
+    (vault 9.3), the SRPM is taken from there with
+    the sha256 of the file as downloaded (listed False, the file kept for
+    fetch()), and the binary packages from that tree's metadata as anywhere
+    else. A listing that names it in a tree whose _DEVEL_REPO metadata does
+    not list it (a shape not seen) is refused: the metadata there and the
+    listing disagree."""
     ver, rel, major, minor = _ask(name)
     mirror, cache = _mirror(mirror), _cache(cache)
-    unread, looked = [], []
+    unread, looked, bare = [], [], []
     srpm = 'glibc-%s-%s.src.rpm' % (ver, rel)
-    for tree in _trees(mirror, major, minor):
-        src = _rows(mirror, tree, _SOURCE_REPO, cache)
-        if src is None:
-            unread.append(tree)
-            continue
-        looked.append(tree)
-        if not any(_is(r, 'glibc', 'src', ver, rel) for r in src['rows']):
-            continue
+
+    def entries(tree, packages, srepo, src):
         out = {}
-        for key, rpm, arch, repos in PACKAGES:
+        for key, rpm, arch, repos in packages:
             hits = []
-            for repo in repos:
-                got = src if repo == _SOURCE_REPO else \
+            for repo in ((srepo,) if key == 'srpm' else repos):
+                got = src if key == 'srpm' else \
                     _rows(mirror, tree, repo, cache)
                 if got is None:
                     raise Refused('%s%s/%s has no metadata to find %s of '
@@ -1956,30 +2015,73 @@ def where_from(name, mirror=None, cache=None):
                                                    ver, rel, arch))
             out[key] = Entry(mirror + tree + '/' + repo + '/' + r['href'],
                              r['sha256'], int(size), tree, repo,
-                             got.get('timestamp'))
+                             got.get('timestamp'), True)
         return out
-    for tree in unread:
+
+    for tree in _trees(mirror, major, minor):
+        srepo, src = _SOURCE_REPO, _rows(mirror, tree, _SOURCE_REPO, cache)
+        if src is None:
+            # Its listing is searched below, if no metadata lists the build.
+            bare.append(tree)
+            srepo, src = _DEVEL_REPO, _rows(mirror, tree, _DEVEL_REPO, cache)
+        if src is None:
+            unread.append(tree)
+            continue
+        looked.append(tree)
+        if any(_is(r, 'glibc', 'src', ver, rel) for r in src['rows']):
+            return entries(tree, PACKAGES, srepo, src)
+    for tree in bare:
         for sub in ('Packages/g/', 'Packages/'):
+            base = mirror + tree + '/' + _SOURCE_REPO + '/' + sub
             try:
-                listing = _get(mirror + tree + '/' + _SOURCE_REPO + '/' + sub)
+                listing = _get(base)
             except _Absent:
                 continue
-            if ('"%s"' % srpm).encode() in listing:
-                raise Refused('%s is published in %s%s with no metadata, '
-                              'so its sha256 cannot be checked'
-                              % (srpm, mirror, tree))
+            if ('"%s"' % srpm).encode() not in listing:
+                continue
+            if tree in looked:
+                raise Refused('%s is published in %s%s, and its %s metadata '
+                              'does not list it' % (srpm, mirror, tree,
+                                                    _DEVEL_REPO))
+            out = entries(tree, PACKAGES[1:], None, None)
+            try:
+                data = _get(base + srpm)
+            except _Absent:
+                raise Refused('%s%s is listed and is not there (a mirror in '
+                              'the middle of a sync?)' % (base, srpm))
+            out['srpm'] = Entry(base + srpm, _keep_download(cache, data),
+                                len(data), tree, _SOURCE_REPO, None, False)
+            return out
     raise Refused('glibc-%s-%s is not in %s (looked in %s%s)'
                   % (ver, rel, mirror, ', '.join(looked) or 'nothing',
                      '; no metadata in ' + ', '.join(unread)
                      if unread else ''))
 
 
+def _keep_download(cache, data):
+    """Keep `data` in the cache's downloads, whole or not at all, under its
+    sha256, which is returned."""
+    folder = os.path.join(_cache(cache), 'downloads')
+    sha = hashlib.sha256(data).hexdigest()
+    os.makedirs(folder, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix='.new-', dir=folder)
+    try:
+        with os.fdopen(fd, 'wb') as fh:
+            fh.write(data)
+        os.rename(tmp, os.path.join(folder, sha))
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    return sha
+
+
 def fetch(entry, cache=None):
     """The path of entry's file in the cache, downloaded if it is not there
-    and compared with the size and sha256 the metadata records; a kept file
-    that no longer has that sha256 is downloaded again."""
-    folder = os.path.join(_cache(cache), 'downloads')
-    path = os.path.join(folder, entry.sha256)
+    and compared with the size and sha256 the entry records (the metadata's,
+    or for an entry not listed, the file's when first downloaded); a kept
+    file that no longer has that sha256 is downloaded again."""
+    path = os.path.join(_cache(cache), 'downloads', entry.sha256)
     if os.path.exists(path):
         if os.path.getsize(path) == entry.size and \
                 _sha256_file(path) == entry.sha256:
@@ -1988,19 +2090,12 @@ def fetch(entry, cache=None):
     data = _get(entry.url)
     got = hashlib.sha256(data).hexdigest()
     if len(data) != entry.size or got != entry.sha256:
-        raise Refused('%s is not the file the metadata records: %d bytes, '
-                      'sha256 %s; the metadata says %d bytes, %s'
-                      % (entry.url, len(data), got, entry.size, entry.sha256))
-    os.makedirs(folder, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix='.new-', dir=folder)
-    try:
-        with os.fdopen(fd, 'wb') as fh:
-            fh.write(data)
-        os.rename(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.remove(tmp)
-        raise
+        said = ('the metadata records', 'the metadata says') if entry.listed \
+            else ('first downloaded from there', 'that one was')
+        raise Refused('%s is not the file %s: %d bytes, sha256 %s; %s %d '
+                      'bytes, %s' % (entry.url, said[0], len(data), got,
+                                     said[1], entry.size, entry.sha256))
+    _keep_download(cache, data)
     return path
 
 
@@ -2021,15 +2116,18 @@ def _recall(cache, name, keys):
         return None
     except (OSError, ValueError) as e:
         raise Refused('%s cannot be read (%s); remove it to fetch %s from '
-                      'the metadata again' % (path, e, name))
+                      'the mirror again' % (path, e, name))
     try:
         files = rec['files']
         if sorted(files) != sorted(keys):
             raise KeyError(sorted(files))
-        return rec['mirror'], {k: Entry(**files[k]) for k in keys}
+        # A record kept before Entry had 'listed' is read as True, which it
+        # was: every SRPM it could hold came from a metadata.
+        return rec['mirror'], {k: Entry(**dict({'listed': True}, **files[k]))
+                               for k in keys}
     except (KeyError, TypeError) as e:
         raise Refused('%s does not hold what this remembers of a build (%s); '
-                      'remove it to fetch %s from the metadata again'
+                      'remove it to fetch %s from the mirror again'
                       % (path, e, name))
 
 
@@ -2037,13 +2135,13 @@ def fetch_build(name, mirror=None, cache=None, repo=None):
     """build() of the build named `name` (glibc-2.34-283.el9_8), its three
     files fetched from the mirror, and `repo` handed on to it. The first
     time, where_from() reads the mirror's metadata and the sha256 it gives
-    each file are remembered;
-    afterwards the kept files are checked against them with no network. A
-    file that is missing or no longer has its sha256 is downloaded again
-    from the remembered URL; the metadata is read again only when that
-    fails or another mirror is named, and it must then give the same
-    sha256. Refused unless the build rebuilt is exactly the one asked
-    for."""
+    each file are remembered (for an SRPM no metadata lists, the file's as
+    first downloaded); afterwards the kept files are checked against them
+    with no network. A file that is missing or no longer has its sha256 is
+    downloaded again from the remembered URL; where_from() is asked again
+    only when that fails or another mirror is named, and it must then give
+    the same sha256. Refused unless the build rebuilt is exactly the one
+    asked for."""
     ver, rel, _, _ = _ask(name)
     cache, mirror = _cache(cache), _mirror(mirror)
     keys = [p[0] for p in PACKAGES]
@@ -2184,13 +2282,23 @@ def build_commit(repo, built):
     Whatever ref of that name was there before -- an older run's, or one
     put there by hand -- is never read: the ref is set to the commit made
     now. What it made is checked before the ref is set: one parent, the
-    tag; nothing outside localedata/ and locale/ different from the tag."""
+    tag; nothing outside localedata/ and locale/ different from the tag.
+    The files read must be as many as the tree was kept with
+    (provenance['files']), or it is refused."""
     files = []
     for top, _, names in os.walk(built.tree):
         for n in names:
             full = os.path.join(top, n)
             files.append((os.path.relpath(full, built.tree), full))
     files.sort()
+    # os.walk passes over a folder that is gone: a tree removed or rebuilt
+    # while it is read (another run rebuilding it, or pruning it under
+    # another version's key) would give a commit with fewer files, silently.
+    if len(files) != built.provenance.get('files'):
+        raise Refused('the kept tree of %s holds %d file(s), not the %r it '
+                      'was kept with: it changed while this run read it'
+                      % (built.build, len(files),
+                         built.provenance.get('files')))
     ids = _git(repo, ['hash-object', '-w', '--no-filters', '--stdin-paths'],
                ''.join(f + '\n' for _, f in files).encode()).decode().split()
     if len(ids) != len(files):

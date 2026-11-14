@@ -2676,7 +2676,7 @@ def report_build_provenance(builds):
     print("localedata/ and locale/ from its source RPM, as one commit of the "
           "clone):")
     fetched = False
-    warned = []
+    warned, unlisted = [], []
     for sd in builds:
         prov = sd.prov
         print(f"  {label(sd)} = {sd.ref[:12]}, one parent: {prov['tag']}")
@@ -2689,6 +2689,14 @@ def report_build_provenance(builds):
             if e:
                 print(f"    {title:<20} {e['url']}")
                 print(f"    {'':<20} sha256 {e['sha256']}")
+                if e.get('listed') is False:
+                    # build_sources.where_from: a folder with no source
+                    # metadata (vault 9.3), the SRPM taken from its listing.
+                    print(f"    {'':<20} no metadata gives this sha256: it "
+                          f"is the file's as downloaded")
+                    unlisted.append(
+                        (label(sd), e['url'].split(e['tree'] + '/')[0]
+                         + e['tree']))
         print(f"    checked: {prov['tarball']}")
         for line in prov.get('verified') or ():
             if line.startswith('!!'):
@@ -2714,6 +2722,15 @@ def report_build_provenance(builds):
     if fetched:
         items[gpg[0]] += (", and the mirror metadata's, whose sha256 is the "
                           "only check on each file")
+        if unlisted:
+            many = len(unlisted) > 1
+            items[gpg[0]] += (
+                f", but for the SRPM{'s' if many else ''} of "
+                + ' and '.join(f"{b}, whose sha256 no metadata gives ({where}"
+                               f" publishes no source metadata)"
+                               for b, where in unlisted)
+                + f": only rpm's own digests check "
+                f"{'those files' if many else 'that file'}")
     items[tarball[0]] = ("localedata/SUPPORTED and locale/ are in no binary "
                          "package: they are the SRPM's tarball, checked above "
                          "against the upstream tag, and its patches")
