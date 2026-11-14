@@ -259,6 +259,18 @@ class RebuildsTheFixtureBuildsAsRpmDid(unittest.TestCase):
                          "the compiler that built the binary packages, and "
                          "the build's patches to code, such as those to the "
                          "strcmp that strcoll calls")
+        # The Lua item says what known_only does with a Lua Source (a fixed
+        # list, refused when it holds one), not which builds it was first
+        # measured on: it is printed on every run of any build (16.104).
+        lua = [t for t in bs.NOT_CHECKED if 'patch-git.lua' in t]
+        self.assertEqual(lua, [
+            'the Lua rpm runs while it reads the spec beyond the blocks of '
+            'the spec, which are pinned: a Lua Source such as patch-git.lua, '
+            'which changes in every build, is searched only for a fixed list '
+            "of ways of changing macros, the environment or rpm's table of "
+            'patches (rpm.define, posix.setenv and the like), and the build '
+            'is refused when it holds one; a way that search does not list '
+            'goes unseen'])
 
     def test_the_four_wrappers_are_in_the_three_tags(self):
         for build, _ in FIXTURES:
@@ -537,7 +549,8 @@ class RefusesTenInputsRpmBuiltOtherwise(unittest.TestCase):
         self.with_patch(hdr, files, 'zz-quoted.patch')
         self.refused(info, hdr, files, base,
                      'zz-quoted.patch: line 6 reads to GNU patch as a header '
-                     'on a path the result reads')
+                     "on localedata/, locale/, intl/locale.alias or strcoll's "
+                     'code')
 
     def test_a_patchlist_under_ifarch(self):
         """rpm 4.16 reads a %patchlist and the %ifarch inside it, so the arch
@@ -1054,7 +1067,8 @@ class ReadsPatchesAsGnuPatchDoes(unittest.TestCase):
 
     def test_an_index_line_beside_a_section_on_the_folders(self):
         self.unknown(b'Index: elf/x\n' + _case([], '@@ -0,0 +1 @@\n+b\n')[1],
-                     'an Index: line beside')
+                     'an Index: line beside a section on localedata/, '
+                     "locale/, intl/locale.alias or strcoll's code")
 
     def test_creating_a_file_that_exists(self):
         """el10's rpm passes -f, and GNU patch then writes over it."""

@@ -98,9 +98,10 @@ NOT_CHECKED = (
     'redhat-rpm-config macros)',
     'the Lua rpm runs while it reads the spec beyond the blocks of the '
     'spec, which are pinned: a Lua Source such as patch-git.lua, which '
-    'changes in every build, is read only for the ways of changing '
-    "macros, the environment or rpm's table of patches the seven "
-    'builds were measured without',
+    'changes in every build, is searched only for a fixed list of ways of '
+    "changing macros, the environment or rpm's table of patches "
+    '(rpm.define, posix.setenv and the like), and the build is refused '
+    'when it holds one; a way that search does not list goes unseen',
     'localedata/SUPPORTED and locale/ are in no binary package: they are the '
     "SRPM's tarball and its patches; the tarball is compared with the "
     "upstream tag only when the build is made with the clone (provenance "
@@ -897,8 +898,8 @@ def known_only(text, files, record, tree):
                     % m.group(1).strip()))
     # A Lua file the spec runs (patch-git.lua, through dofile) changes from
     # build to build, so it cannot be pinned; it is read for _LUA_DEFINES,
-    # none of which the five real ones holds. What else it does is in
-    # NOT_CHECKED.
+    # and a build whose Lua file holds one is refused. What else it does is
+    # in NOT_CHECKED.
     for name in record.sources:
         if name.endswith('.lua'):
             m = _LUA_DEFINES.search(files[name].decode('utf-8', 'replace'))
@@ -1029,7 +1030,7 @@ TIER1 = [
     # `#include "C-collate-seq.c"`, so tracking only ld-collate.c showed the
     # include line and none of the 100 lines of weights behind it. Both change
     # over 2.34..2.39 -- the RHEL9-to-RHEL10 pair.
-    # (TU) C-collate.c has no header; the walk cannot reach it.
+    # (TU) C-collate.c has no header; step 5's walk could not reach it.
     'locale/C-collate.c',
     'locale/C-collate-seq.c',
 ]
@@ -1044,16 +1045,16 @@ TIER2 = [
     'locale/loadlocale.c',            # reads the compiled tables back in
     'locale/localeinfo.h',            # the structs those tables live in
     # The keyword table is generated from this by gperf. The generated
-    # locfile-kw.h, which the walk does not reach, is a machine-built hash
-    # table whose hunks are unreadable. This is the source they mean, one
-    # line per keyword.
+    # locfile-kw.h, which step 5's walk did not reach, is a machine-built
+    # hash table whose hunks are unreadable. This is the source they mean,
+    # one line per keyword.
     'locale/programs/locfile-kw.gperf',
     # (TU) find_translit. A `collating-element ... from "..."` string naming a
     # character the charmap lacks is completed through LC_CTYPE's translit
     # table, and the element exists or not by its answer: uz_UZ's "g'"
     # contraction in ISO-8859-1 is made that way (backlog 13.7). Declared in
-    # locfile.h, which the walk reaches, and defined here, which has no
-    # header of its own.
+    # locfile.h, which step 5's walk reached, and defined here, which has
+    # no header of its own.
     'locale/programs/ld-ctype.c',
 ]
 
@@ -1090,6 +1091,10 @@ def watched(path):
     locale/ (the tree), intl/locale.alias (a side reads it), strcoll's code
     (no step compares it)."""
     return in_scope(path) or path == _ALIAS or path in COLLATION_CODE
+
+
+# What watched() names, as patch_unknowns' messages say it.
+WATCHED_SAID = "localedata/, locale/, intl/locale.alias or strcoll's code"
 
 
 def _names_in_scope(line):
@@ -1368,11 +1373,11 @@ def patch_unknowns(name, data):
         if h.startswith(b'Index:'):
             index = True
         if i not in claimed and _names_watched(h):
-            out.append((name, 'line %d reads to GNU patch as a header on a '
-                        'path the result reads: %r' % (i + 1, h[:80])))
+            out.append((name, 'line %d reads to GNU patch as a header on '
+                        '%s: %r' % (i + 1, WATCHED_SAID, h[:80])))
     if index and any(_touches_watched(s, lines) for s in sections):
-        out.append((name, 'an Index: line beside a section on a path the '
-                    'result reads'))
+        out.append((name, 'an Index: line beside a section on '
+                    + WATCHED_SAID))
     hunks = data.count(b'\n@@ -') + data.startswith(b'@@ -')
     if hunks != sum(len(s['hunks']) for s in sections):
         out.append((name, 'hunk headers this does not read as unified diff'))
