@@ -3144,8 +3144,10 @@ class OneFloorForEverySide(unittest.TestCase):
                 self.assertIn(f'only 286 file(s) under {g.LOCALES_DIR}/ at '
                               f'{old}, below the floor of {self.FLOOR}.',
                               said)
-                self.assertIn('or a tag from before the directory existed',
-                              said)
+                self.assertIn('or a tag of an old glibc whose locale '
+                              'sources were fewer, or not there yet.',
+                              flat(said))
+                self.assertNotIn('before the directory existed', flat(said))
 
     def test_a_commit_side_is_named_a_commit(self):
         """16.183: the same refusal of the same tree, given by its commit
@@ -3159,8 +3161,10 @@ class OneFloorForEverySide(unittest.TestCase):
                 said = self.refusal(main, argv)
                 self.assertIn(f'at {old}, below the floor of {self.FLOOR}.',
                               said)
-                self.assertIn('or a commit from before the directory '
-                              'existed', said)
+                self.assertIn('or a commit of an old glibc whose locale '
+                              'sources were fewer, or not there yet.',
+                              flat(said))
+                self.assertNotIn('before the directory existed', flat(said))
 
     def test_the_machine_side_of_every_step(self):
         """A machine's file is read through its commit (machine_side), and

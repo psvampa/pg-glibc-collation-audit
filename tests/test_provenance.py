@@ -286,6 +286,17 @@ EL9_GLIBC_212_NO_PUBKEY = (1, (
     b'[GNUPG:] NO_PUBKEY DA28C23A79FF4474\n'
 ))
 
+# glibc-2.39 with an empty keyring, the same node and gpg, 2026-11-14
+# (handoff-17-2026-11-14, report A): ERRSIG and NO_PUBKEY name the subkey
+# that signed, DC2B16215ED5412A, the id EXPKEYSIG gives with the GNU
+# keyring above; field 7 is the subkey's fingerprint, not the primary's.
+EL9_GLIBC_239_NO_PUBKEY = (1, (
+    b'[GNUPG:] NEWSIG\n'
+    b'[GNUPG:] ERRSIG DC2B16215ED5412A 1 10 00 1706662099 9 '
+    b'FD19E6D31B192EE4DC63EAD3DC2B16215ED5412A\n'
+    b'[GNUPG:] NO_PUBKEY DC2B16215ED5412A\n'
+))
+
 EL9_BADSIG = (1, (
     b'[GNUPG:] NEWSIG\n'
     b'[GNUPG:] KEY_CONSIDERED 49006F33144F944F1E1D732852141B257B602FE4 0\n'
@@ -308,7 +319,9 @@ class VerifyTagClassification(unittest.TestCase):
     gpg was missing left every other test passing.
     """
 
-    def drive(self, verify_rc, verify_stderr, signed=True):
+    TAGGED = 'the tag names Andreas K. Huettel <x@example.org> as its tagger'
+
+    def drive(self, verify_rc, verify_stderr, signed=True, tagger=True):
         real = g.run_git
 
         class Fake:
@@ -316,7 +329,9 @@ class VerifyTagClassification(unittest.TestCase):
                 self.returncode, self.stdout, self.stderr = rc, out, err
 
         body = (b'object ef321e\ntype commit\ntag glibc-2.39\n'
-                b'tagger Andreas K. Huettel <x@example.org> 1706662000 +0100\n\n'
+                + (b'tagger Andreas K. Huettel <x@example.org> 1706662000 '
+                   b'+0100\n' if tagger else b'')
+                + b'\n'
                 + (b'-----BEGIN PGP SIGNATURE-----\n' if signed else b''))
 
         def fake(args, repo, allow_fail=False):
@@ -353,7 +368,86 @@ class VerifyTagClassification(unittest.TestCase):
         status, detail = self.drive(0, b'[GNUPG:] GOODSIG ABC123 Andreas\n'
                                        b'[GNUPG:] VALIDSIG ABC123')
         self.assertEqual(status, 'good')
-        self.assertIn('Andreas', detail)
+        self.assertEqual(detail, 'good signature from key ABC123; '
+                                 + self.TAGGED)
+
+    def test_the_key_and_the_tagger_are_said_apart(self):
+        """16.286: the tagger line is the tag's own text, which nothing
+        checks; gpg names the key. A key whose user id is someone else
+        (a tag remade with another key, measured in c17gpg) says the key,
+        the tagger as the tag's claim, and never the user id, which is
+        the reader's keyring's and differs from one machine to the next."""
+        status, detail = self.drive(0, (
+            b'[GNUPG:] NEWSIG\n'
+            b'[GNUPG:] GOODSIG 52141B257B602FE4 Someone Else <y@example.org>\n'
+            b'[GNUPG:] VALIDSIG 49006F33144F944F1E1D732852141B257B602FE4 '
+            b'2026-11-12 1794522965 0 4 0 1 8 00 '
+            b'49006F33144F944F1E1D732852141B257B602FE4\n'))
+        self.assertEqual(status, 'good')
+        self.assertEqual(detail, 'good signature from key 52141B257B602FE4; '
+                                 + self.TAGGED)
+        self.assertNotIn('Someone Else', detail)
+        self.assertNotIn('signed by', detail)
+
+    def test_a_subkey_is_named_the_same_with_and_without_the_keyring(self):
+        """glibc-2.39 is signed with a subkey: EXPKEYSIG (GNU keyring) and
+        ERRSIG/NO_PUBKEY (no keyring) name DC2B16215ED5412A, and the line
+        names it in both, never the primary key VALIDSIG ends with."""
+        expired = self.drive(*EL9_GLIBC_239_EXPKEYSIG)
+        missing = self.drive(*EL9_GLIBC_239_NO_PUBKEY)
+        self.assertEqual(expired, (
+            'expired-key', 'signed with key DC2B16215ED5412A, which has '
+            'expired; git does not accept it; ' + self.TAGGED))
+        self.assertEqual(missing, (
+            'no-key', 'signed with key DC2B16215ED5412A, which is not in '
+            'your keyring; ' + self.TAGGED))
+        for _, detail in (expired, missing):
+            self.assertNotIn('35B17DF5', detail)
+            self.assertNotIn('FD19E6D3', detail)
+
+    def test_an_old_signature_without_a_fingerprint_names_its_key_id(self):
+        """glibc-2.12's ERRSIG has "-" where a newer gpg line has the
+        fingerprint: the long key id is still there."""
+        self.assertEqual(self.drive(*EL9_GLIBC_212_NO_PUBKEY), (
+            'no-key', 'signed with key DA28C23A79FF4474, which is not in '
+            'your keyring; ' + self.TAGGED))
+
+    def test_a_fingerprint_is_named_by_its_long_key_id(self):
+        """gnupg's DETAILS: GOODSIG and the others may give the fingerprint
+        instead of the long key id. Its last 16 digits are that id, so the
+        same key reads the same with a gpg that gives either."""
+        status, detail = self.drive(0, (
+            b'[GNUPG:] GOODSIG 49006F33144F944F1E1D732852141B257B602FE4 '
+            b'Good Key <good@example.org>\n'))
+        self.assertEqual((status, detail), (
+            'good', 'good signature from key 52141B257B602FE4; '
+                    + self.TAGGED))
+
+    def test_a_tag_without_a_tagger_says_so(self):
+        status, detail = self.drive(*EL9_GLIBC_212_NO_PUBKEY, tagger=False)
+        self.assertEqual((status, detail), (
+            'no-key', 'signed with key DA28C23A79FF4474, which is not in '
+            'your keyring; the tag names no tagger'))
+
+    def test_every_other_state_names_the_key_and_the_tagger(self):
+        cases = (
+            (EL9_REVKEYSIG, 'revoked-key', 'signed with key 4200FA5DBC3B6C80, '
+             'which has been revoked; git does not accept it'),
+            (EL9_EXPSIG, 'expired-sig', 'signed with key 6CD8334257E6FA0A; '
+             'the signature has expired; git does not accept it'),
+            (EL9_GOODSIG_UNTRUSTED, 'untrusted', 'signed with key '
+             '52141B257B602FE4; gpg calls the signature good, but git does '
+             'not accept it (gpg.minTrustLevel, for example)'),
+            (EL9_ERRSIG_MD5, 'unverifiable', 'signed with key '
+             '1B34913BA2388C3E; gpg could not check the signature, and not '
+             'for a missing key'),
+            ((1, b'gpg: something this tool does not know\n'), 'no-key',
+             'could not verify (gpg: something this tool does not know)'),
+        )
+        for (rc, err), status, said in cases:
+            with self.subTest(status=status):
+                self.assertEqual(self.drive(rc, err),
+                                 (status, said + '; ' + self.TAGGED))
 
     def test_an_expired_key_is_unchecked_never_good(self):
         """git exits 1 on EXPKEYSIG, and gpg gives VALIDSIG beside it: what

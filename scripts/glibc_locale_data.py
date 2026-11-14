@@ -74,9 +74,9 @@ BUILD_EMAIL = 'pg-glibc-audit@invalid'
 # The five pinned tags carry 286 (2.12), 312 (2.17), 353 (2.28), 355 (2.34) and
 # 366 (2.39). Read by below_floor alone, which side() applies to every side,
 # a tag's or a machine's. The tag modes once did not check at all, so a tag
-# whose tree lacks localedata/locales/ -- a restructured checkout, a tag from
-# before the directory existed -- produced "0 files changed", "No locale uses
-# ellipsis ranges here" and exit 0.
+# whose tree lacks localedata/locales/ or holds too few files -- a
+# restructured checkout, a tag of an old glibc -- produced "0 files
+# changed", "No locale uses ellipsis ranges here" and exit 0.
 MIN_LOCALE_FILES = 200
 
 
@@ -1008,10 +1008,13 @@ def verify_tag(repo, tag):
     if b'-----BEGIN PGP SIGNATURE-----' not in body:
         return 'unsigned', 'the tag object carries no signature'
 
-    signer = ''
+    # The tagger is the tag's own text, which nothing checks: it is said
+    # apart from the key gpg names, never as who signed (16.286).
+    tagged = 'the tag names no tagger'
     for line in body.decode('utf-8', 'replace').split('\n'):
         if line.startswith('tagger '):
-            signer = line[len('tagger '):].rsplit(' ', 2)[0]
+            tagged = (f"the tag names {line[len('tagger '):].rsplit(' ', 2)[0]}"
+                      ' as its tagger')
             break
 
     p = run_git(['verify-tag', '--raw', tag], repo, allow_fail=True)
@@ -1024,31 +1027,64 @@ def verify_tag(repo, tag):
     # four that checked the math -- so VALIDSIG says nothing about whether
     # git accepts the signature. git exits 0 only on GOODSIG with the trust
     # gpg.minTrustLevel asks for (gpg-interface.c, check_signature).
-    said = {ln.split()[1] for ln in err.split('\n')
-            if ln.startswith('[GNUPG:] ') and len(ln.split()) > 1}
+    lines = [ln.split() for ln in err.split('\n')
+             if ln.startswith('[GNUPG:] ') and len(ln.split()) > 1]
+    said = {fields[1] for fields in lines}
+    key = signing_key(lines)
     if 'BADSIG' in said:
         return 'bad', f'INVALID signature on {tag}'
     if 'NO_PUBKEY' in said:
-        return 'no-key', f'signed by {signer}, whose key is not in your keyring'
+        return 'no-key', (f'signed with {key}, which is not in your '
+                          f'keyring; {tagged}')
     if 'ERRSIG' in said:
-        return 'unverifiable', (f'signed by {signer}; gpg could not check '
-                                f'the signature, and not for a missing key')
+        return 'unverifiable', (f'signed with {key}; gpg could not check '
+                                f'the signature, and not for a missing key; '
+                                f'{tagged}')
     if 'REVKEYSIG' in said:
-        return 'revoked-key', (f'signed by {signer}, with a key that has '
-                               f'been revoked; git does not accept it')
+        return 'revoked-key', (f'signed with {key}, which has been revoked; '
+                               f'git does not accept it; {tagged}')
     if 'EXPKEYSIG' in said:
-        return 'expired-key', (f'signed by {signer}, with a key that has '
-                               f'expired; git does not accept it')
+        return 'expired-key', (f'signed with {key}, which has expired; git '
+                               f'does not accept it; {tagged}')
     if 'EXPSIG' in said:
-        return 'expired-sig', (f'signed by {signer}; the signature has '
-                               f'expired; git does not accept it')
+        return 'expired-sig', (f'signed with {key}; the signature has '
+                               f'expired; git does not accept it; {tagged}')
     if 'GOODSIG' in said and p.returncode == 0:
-        return 'good', f'signed by {signer}'
+        return 'good', f'good signature from {key}; {tagged}'
     if 'GOODSIG' in said:
-        return 'untrusted', (f'signed by {signer}; gpg calls the signature '
+        return 'untrusted', (f'signed with {key}; gpg calls the signature '
                              f'good, but git does not accept it '
-                             f'(gpg.minTrustLevel, for example)')
-    return 'no-key', f'signed by {signer}; could not verify ({err.strip()[:80]})'
+                             f'(gpg.minTrustLevel, for example); {tagged}')
+    return 'no-key', f'could not verify ({err.strip()[:80]}); {tagged}'
+
+
+# The status keywords that name the key of a signature (gnupg doc/DETAILS):
+# the first argument of each is the signing key's long id, or its
+# fingerprint "if it is available". NO_PUBKEY comes with ERRSIG.
+_KEY_NAMING = ('GOODSIG', 'EXPSIG', 'EXPKEYSIG', 'REVKEYSIG', 'BADSIG',
+               'ERRSIG', 'NO_PUBKEY')
+
+
+def signing_key(lines):
+    """'key <long id>' of the key that made the signature, from gpg's
+    status lines (each split on whitespace, "[GNUPG:]" first).
+
+    The long id, because it is what every state gives: with the key in the
+    keyring EXPKEYSIG and GOODSIG name it, without the key ERRSIG and
+    NO_PUBKEY do, and the same tag then reads the same key on every machine
+    (glibc-2.39: the subkey DC2B16215ED5412A in both; VALIDSIG's last field
+    is the primary key, given only with the keyring). A v4 fingerprint, which
+    gpg may give instead, ends in that id. An old signature has no
+    fingerprint at all (ERRSIG's last field "-", glibc-2.12) and still has
+    the id. When no line names one, it says so rather than print nothing."""
+    for word in _KEY_NAMING:
+        for fields in lines:
+            if fields[1] == word and len(fields) > 2:
+                key = fields[2]
+                if re.fullmatch(r'[0-9A-Fa-f]{40}', key):
+                    key = key[-16:]
+                return f'key {key}'
+    return 'a key gpg did not name'
 
 
 def report_tag_provenance(repo, *tags):
@@ -1247,8 +1283,9 @@ def _require_corpus(paths, tag, kind='tag', repo=None):
             kind = ref_kind(repo, tag)
         die(f"only {len(paths)} file(s) under {LOCALES_DIR}/ at {tag}, below "
             f"the floor of {floor}. That is not a glibc locale "
-            + (f"corpus -- a restructured tree, or a {kind} from before "
-               "the directory existed. " if kind in ('tag', 'commit')
+            + (f"corpus -- a restructured tree, or a {kind} of an old "
+               "glibc whose locale sources were fewer, or not there yet. "
+               if kind in ('tag', 'commit')
                else "corpus. ")
             + f"Refusing to report: an empty corpus reads "
             f"as 'nothing changed' and 'no locale uses ellipsis ranges', "
@@ -2458,8 +2495,8 @@ def print_collation_version(repo, old, new):
     """16.166: whether PostgreSQL warns about a collation's version, said
     once for the pair. PostgreSQL records glibc's version for every libc
     locale but C, C.* and POSIX, and warns where the recorded string is not
-    the one it now runs (strcmp): a named collation from 13
-    (pg_locale.c:1628-1659@REL_13_23), a database's default collation from
+    the one it now runs (strcmp): a named collation
+    (pg_locale.c:1596-1629@REL_14_25), a database's default collation from
     15 (postinit.c:440-480@REL_18_6). What it recorded under the new glibc
     never warns: initdb's collations, a restore (pg_dump omits the version,
     pg_dump.c:3426-3435, :15006-15011@REL_18_6), pg_upgrade's pg_catalog
@@ -2488,8 +2525,9 @@ def print_collation_version(repo, old, new):
         print(textwrap.fill(
             f"glibc {ov} on the old side, {nv} on the new: the version a "
             "PostgreSQL that runs it records for a libc collation, where it "
-            "records one. PostgreSQL 13 or later warns about a collation, "
-            "and 15 or later about a database's default collation, where "
+            "records one. PostgreSQL warns about a collation, and "
+            "PostgreSQL 15 or later about a database's default collation, "
+            "where "
             f"the version it recorded is not {nv} ({ov} if it was recorded "
             "on the old side), whether that locale's order changed or not. "
             f"Where it recorded {nv}, it does not warn, whatever changed: "

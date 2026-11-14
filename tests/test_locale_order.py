@@ -750,7 +750,7 @@ def ctype_kind(text):
                       r'them in upper\(\), lower\(\), initcap\(\), ILIKE, regular '
                       r'expressions and full-text search\. A database of any other '
                       r'encoding, UTF8 too, reads every byte in fuzzystrmatch and, '
-                      r'on PostgreSQL 13 to 17, in ltree\'s labels, and reads the '
+                      r'on PostgreSQL 14 to 18\.1, in ltree\'s labels, and reads the '
                       r'ASCII bytes in the character tests of full-text search, '
                       r'ltree and pg_trgm and, except in UTF8, in regular '
                       r'expressions: (.+)\.', text)
@@ -1089,7 +1089,7 @@ def use_kind(text):
                       r'initcap\(\) read, or their lower case, which lower\(\), '
                       r'initcap\(\), ILIKE, full-text search and pg_trgm read\. '
                       r'upper\(\), lower\(\) and '
-                      r'initcap\(\) do not check that conversion: PostgreSQL 13 '
+                      r'initcap\(\) do not check that conversion: PostgreSQL 14 '
                       r'to 17 return empty text or other bytes, which ILIKE then '
                       r'compares, while full-text search and pg_trgm stop with '
                       r'"ERROR: conversion from wchar_t to server encoding '

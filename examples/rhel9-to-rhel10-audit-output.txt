@@ -37,8 +37,8 @@ file, on its upstream tag above, as one commit of the clone; nothing downloaded)
    reads the bytes 0x1A and 0xFF and UTF-8 input is answered by the tag's
    ancestry.
 glibc 2.34 on the old side, 2.39 on the new: the version a PostgreSQL that
-runs it records for a libc collation, where it records one. PostgreSQL 13 or
-later warns about a collation, and 15 or later about a database's default
+runs it records for a libc collation, where it records one. PostgreSQL warns
+about a collation, and PostgreSQL 15 or later about a database's default
 collation, where the version it recorded is not 2.39 (2.34 if it was recorded
 on the old side), whether that locale's order changed or not. Where it
 recorded 2.39, it does not warn, whatever changed: initdb and a restore on the

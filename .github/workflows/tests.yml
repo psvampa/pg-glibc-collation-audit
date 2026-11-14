@@ -99,13 +99,15 @@ jobs:
         # test_build_sources.py) and the scripts that decide what step 2
         # asks of a build (glibc_tree.py, filter_lc_collate_changes.py,
         # glibc_locale_data.py, build_sources.py and node_charmaps.py, which
-        # holds part of step 2's check of character sets), and falls back
+        # holds part of step 2's check of character sets, with
+        # collation_keys.py and locale_order.py, which step 2 imports: all
+        # of them in the fill's record), and falls back
         # to the runs of the same reader, so a change to any of them is
         # saved once instead of computed on every run.
         uses: actions/cache@v4
         with:
           path: scripts/glibc-reader-cache
-          key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}-${{ hashFiles('scripts/glibc_tree.py', 'scripts/filter_lc_collate_changes.py', 'scripts/node_charmaps.py', 'scripts/glibc_locale_data.py', 'scripts/build_sources.py', 'tests/_harness.py', 'tests/test_build_sources.py', 'tests/build_sources/**') }}
+          key: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}-${{ hashFiles('scripts/glibc_tree.py', 'scripts/filter_lc_collate_changes.py', 'scripts/node_charmaps.py', 'scripts/glibc_locale_data.py', 'scripts/build_sources.py', 'scripts/collation_keys.py', 'scripts/locale_order.py', 'tests/_harness.py', 'tests/test_build_sources.py', 'tests/build_sources/**') }}
           restore-keys: glibc-reader-${{ hashFiles('scripts/glibc_reader.py', 'scripts/reader_cache.py') }}
 
       - name: Fill the reader's answers before the suite

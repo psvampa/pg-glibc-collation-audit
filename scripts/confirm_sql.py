@@ -625,8 +625,8 @@ def read(sql_path, old_path, new_path):
                 if got[1] is None:
                     notes.append(f'{out.path}: PostgreSQL gives no glibc '
                                  f'version for collation {name} (it gives none '
-                                 'for C.* and POSIX, nor before PostgreSQL '
-                                 '13), so its version is not checked')
+                                 'for C, C.* and POSIX), so its version is '
+                                 'not checked')
                 elif wanted is None:
                     notes.append(f'{out.path}: collation {name} reports glibc '
                                  f'{got[1]}; the {out.side} machine\'s version '
