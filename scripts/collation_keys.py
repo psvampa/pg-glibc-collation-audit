@@ -2887,8 +2887,27 @@ def compare(old, new, builds_old, builds_new, already_listed,
                   not_compared, unsearched, translit, tskipped)
 
 
+# What the check settled of a source it lists, strongest first: a charmap
+# that changed a character its rules name, a collating element built
+# differently out of a transliteration, and each of the two it could not
+# settle (16.147, 16.316). A source the report lists more than once (two
+# charmaps, or both points) takes the strongest.
+LISTED_STATES = ('changed', 'transliteration', 'not compared',
+                 'transliteration not compared')
+
+
 def listed_sources(report):
-    """The source names the report lists for the summary, sorted."""
-    return sorted({f.source for f in report.found}
-                  | {f.source for f in (report.translit.found
-                                        if report.translit else ())})
+    """{source name: one of LISTED_STATES}, every source the report lists
+    for the summary, with what the check settled of it."""
+    got = [(f.source, 'not compared' if f.reason else 'changed')
+           for f in report.found]
+    got += [(f.source, 'transliteration not compared' if f.reason
+             else 'transliteration')
+            for f in (report.translit.found if report.translit else ())]
+    out = {}
+    for source, state in got:
+        if (source not in out
+                or LISTED_STATES.index(state) < LISTED_STATES.index(
+                    out[source])):
+            out[source] = state
+    return out

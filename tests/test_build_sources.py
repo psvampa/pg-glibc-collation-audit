@@ -40,7 +40,7 @@ from unittest import mock
 
 from _harness import (COMPARED_BANNER, GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR,
                       STEP2_C, SUMMARY_STEP2,
-                      Step2Report, after_compared, before_compared,
+                      Step2Report, after_compared, step2_characters_file, before_compared,
                       compared_text, deleted_steps_named, flat,
                       summary_block, glibc_shaped, needs_clone,
                       needs_floor_pair,
@@ -3046,6 +3046,9 @@ class AStepReadsTheFixtureBuilds(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr.decode()[-2000:])
 
         def lines(kind):
+            if kind == 'rules_characters':
+                return step2_characters_file(os.path.join(
+                    out, 'step2_rules_characters.%s..%s.tsv' % (old, new)))
             with open(os.path.join(out, 'step2_%s.%s..%s.txt'
                                    % (kind, old, new))) as fh:
                 return [ln.strip() for ln in fh
@@ -3063,6 +3066,9 @@ class AStepReadsTheFixtureBuilds(unittest.TestCase):
         self.assertIn(STEP2_C, report.differs)
         self.assertNotIn(STEP2_C, report.added)
         self.assertNotIn('Not checked for glibc-', out)
+        # The characters file names it as printed, never a bare C (16.185;
+        # step2_characters_file refuses one).
+        self.assertIn(STEP2_C, lines('rules_characters'))
 
     def test_rhel9_to_rhel10(self):
         out, lines = self.step2(*(b for b, _ in FIXTURES[1:]))
