@@ -47,7 +47,7 @@ from _harness import (COMPARED_BANNER, GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR,
                       assert_no_deleted_block, nothing_compared_lines,
                       summary_warnings, assert_collation_version,
                       assert_no_route_looks, pg_version_of,
-                      EXPECTED_SHA)
+                      EXPECTED_SHA, wide_lines)
 
 import build_sources as bs
 import filter_lc_collate_changes as step2
@@ -3312,6 +3312,9 @@ class AStepReadsTheFixtureBuilds(unittest.TestCase):
         # Each build holds its own C: compared, not added, and nothing said
         # of a tag.
         report = Step2Report(out)
+        self.assertIn('en_US@ampm', report.removed)
+        # Wrapped at 78 with a build's long name (16.186).
+        self.assertEqual(wide_lines(out), [])
         # Printed as C.UTF-8: glibc's file C is that locale (shown_name).
         self.assertIn(STEP2_C, report.differs)
         self.assertNotIn(STEP2_C, report.added)
@@ -3323,6 +3326,7 @@ class AStepReadsTheFixtureBuilds(unittest.TestCase):
     def test_rhel9_to_rhel10(self):
         out, lines = self.step2(*(b for b, _ in FIXTURES[1:]))
         report = Step2Report(out)
+        self.assertEqual(wide_lines(out), [])
         self.assertNotIn(STEP2_C, report.added)
         self.assertNotIn(STEP2_C, report.differs)
         self.assertNotIn('C.UTF-8', out)
@@ -3684,6 +3688,8 @@ class _AuditOnBuilds:
             outside, head, warnings = summary.partition(
                 '-- Warnings the clean results above do NOT cover')
             self.assertTrue(head, label)
+            # Each `!!` as its step wrapped it, at 78 (16.200).
+            self.assertEqual(wide_lines(summary), [], label)
             # Each run is one kind, by what 'What was compared' names:
             # builds rebuilt from their SRPM, machines read from their own
             # files (each with its one place), or tags (neither).

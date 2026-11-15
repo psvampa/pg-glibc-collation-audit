@@ -3191,6 +3191,11 @@ def fork_pool(jobs):
     return ProcessPoolExecutor(jobs)
 
 
+# What measure() says, in place of advising a smaller --jobs, when the run
+# that stopped had one process (16.59).
+ONE_JOB = ', and this run measured with one process already'
+
+
 def measure(jobs):
     """This machine's measurement as (the text of its file, what that holds,
     seconds taken).
@@ -3269,14 +3274,21 @@ def measure(jobs):
             forward, back = round_trip_parts(uses, pool.map)
             collate = collate_part(collate_entries, collate_records,
                                    collate_reps, pool.map)
-        money = money_digits(names)
     except NotPutBack as e:
-        die(f'{e}; nothing was written: run again with a smaller --jobs')
+        die(f'{e}; nothing was written'
+            + (': run again with a smaller --jobs' if jobs > 1 else ONE_JOB))
     except BrokenProcessPool:
         # A process killed from outside, most often for want of memory. The
         # pool reports it rather than waiting forever for its answer.
         die('a measuring process was killed before it finished, most likely '
-            'for lack of memory; run again with a smaller --jobs')
+            'for lack of memory'
+            + ('; run again with a smaller --jobs' if jobs > 1 else ONE_JOB))
+    # money_digits runs in this process after the pool's processes are
+    # gone, so a smaller --jobs would change nothing here (16.59).
+    try:
+        money = money_digits(names)
+    except NotPutBack as e:
+        die(f'{e}; nothing was written')
     out = {
         'format': FORMAT,
         'parts': list(PARTS[FORMAT]),
