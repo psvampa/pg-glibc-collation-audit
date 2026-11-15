@@ -12349,8 +12349,55 @@ class CtypeErrnoAndRestore(unittest.TestCase):
                 self.assertRaises(SystemExit) as stop:
             m.measure(1)
         self.assertEqual(stop.exception.code, 2)
+        # One process already: no smaller --jobs to advise (16.59).
         self.assertIn('glibc could not set LC_CTYPE back to x; nothing was '
-                      'written: run again with a smaller --jobs', err.getvalue())
+                      'written, and this run measured with one process '
+                      'already\n', err.getvalue())
+        self.assertNotIn('--jobs', err.getvalue())
+
+    def measure_stopped(self, jobs, raised):
+        """What measure(jobs) says when its pool raises `raised`."""
+        class Pool:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def map(self, fn, items):
+                raise raised
+
+        err = io.StringIO()
+        with unittest.mock.patch.multiple(
+                m, libc_version=lambda: 'glibc 2.34', list_locales=lambda: ['a'],
+                glibc_build=lambda: 'glibc-2.34-1.el9.x86_64', UTF8_BYTES=None,
+                fork_pool=lambda jobs: Pool()), \
+                unittest.mock.patch.object(m.os, 'nice'), \
+                unittest.mock.patch.object(m.sys, 'stderr', err), \
+                self.assertRaises(SystemExit) as stop:
+            m.measure(jobs)
+        self.assertEqual(stop.exception.code, 2)
+        return err.getvalue().split('\n', 1)[1]
+
+    def test_a_smaller_jobs_only_where_there_is_one(self):
+        """16.59: with one process the run says so instead of advising a
+        smaller --jobs; with two, the advice stays."""
+        killed = ('locale_order.py: a measuring process was killed before it '
+                  'finished, most likely for lack of memory')
+        why = 'glibc could not set LC_CTYPE back to x'
+        put = f'locale_order.py: {why}; nothing was written'
+        for jobs, raised, want in (
+                (1, m.BrokenProcessPool(), killed + m.ONE_JOB),
+                (2, m.BrokenProcessPool(),
+                 killed + '; run again with a smaller --jobs'),
+                (1, m.NotPutBack(why), put + m.ONE_JOB),
+                (2, m.NotPutBack(why),
+                 put + ': run again with a smaller --jobs')):
+            with self.subTest(jobs=jobs, raised=type(raised).__name__):
+                self.assertEqual(self.measure_stopped(jobs, raised),
+                                 want + '\n')
+        self.assertEqual(m.ONE_JOB,
+                         ', and this run measured with one process already')
 
     def test_measure_stops_with_why_after_the_pool(self):
         """The decimals of money are read in this process, after the
@@ -12371,10 +12418,13 @@ class CtypeErrnoAndRestore(unittest.TestCase):
                 unittest.mock.patch.object(m.os, 'nice'), \
                 unittest.mock.patch.object(m.sys, 'stderr', err), \
                 self.assertRaises(SystemExit) as stop:
-            m.measure(1)
+            # Two processes: once they are gone, no number of them is
+            # advised (16.59).
+            m.measure(2)
         self.assertEqual(stop.exception.code, 2)
-        self.assertIn('glibc could not set LC_MONETARY back to x; nothing was '
-                      'written', err.getvalue())
+        self.assertTrue(err.getvalue().endswith(
+            'locale_order.py: glibc could not set LC_MONETARY back to x; '
+            'nothing was written\n'), err.getvalue())
 
 
 # --- what glibc's converter of each encoding gives -----------------------------

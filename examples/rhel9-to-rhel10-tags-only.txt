@@ -122,43 +122,43 @@ Listed in the summary (2): th_TH, thai
      (LC_CTYPE) answer.
 
 -- Warnings the clean results above do NOT cover
-     !! Signatures NOT checked for glibc-2.34, glibc-2.39 (why is on each one's
-        line under 'Tag provenance', in 'What was compared'). The commit ids
-        printed there are what was read; compare them against a source you trust
-        (sourceware.org/git/glibc.git) if it matters.
-     !! Not checked for glibc-2.34 and glibc-2.39: they are upstream tags, which
-        hold none of a distro's own locale files or patches. Step 2 reads only what
-        the tags hold. If the machines run RHEL 8, 9 or 10, name each side as its
-        build instead, as rpm -q glibc prints it on the machine without the
-        architecture (glibc-2.34-283.el9_8), or as latest-el8, latest-el9 or
-        latest-el10.
-     !! Not compared on any route: the code that compiles and compares the rules
-        (localedef's and strcoll's, each build's patches to it included). Only step
-        11 sees what it does, when it measures both machines;
-        docs/confirming-on-a-real-system.md says how to confirm the order on them.
-        No route looks either for a function of a user or of an extension that
-        calls glibc's locale functions itself.
-     !! Not compared, no file at glibc-2.34 (11). A file added at the new side
-        cannot change what PostgreSQL already stored ONLY IF the locale did not
-        exist on the old system, and an upstream tag cannot establish that --
-        distros backport. Confirm with `locale -a` on the OLD machine, under the
-        names on each line, before treating these as out of scope:
-          ab_GE -> (not in SUPPORTED)
-          crh_RU -> crh_RU
-          gbm_IN -> gbm_IN
-          kv_RU -> kv_RU
-          rif_MA -> rif_MA
-          ssy_ER -> ssy_ER; renamed from aa_ER@saaho
-          su_ID -> su_ID
-          syr -> syr
-          tok -> tok
-          translit_emojis -> (not in SUPPORTED)
-          zgh_MA -> zgh_MA
-     !! glibc-2.34 holds no localedata/locales/C, the file C.UTF-8 is built from,
-        and a distro's build can ship its own, so C.UTF-8's sort rules were not
-        compared. PostgreSQL records no collation version for a libc collation or
-        database whose locale is C, C.<anything> or POSIX, so no version mismatch
-        warns about C.UTF-8; sql/c_utf8_probe.sql, run on both machines, compares
-        its order inside PostgreSQL.
-     (see docs/limitations.md)
+!! Signatures NOT checked for glibc-2.34, glibc-2.39 (why is on each one's
+   line under 'Tag provenance', in 'What was compared'). The commit ids
+   printed there are what was read; compare them against a source you trust
+   (sourceware.org/git/glibc.git) if it matters.
+!! Not checked for glibc-2.34 and glibc-2.39: they are upstream tags, which
+   hold none of a distro's own locale files or patches. Step 2 reads only what
+   the tags hold. If the machines run RHEL 8, 9 or 10, name each side as its
+   build instead, as rpm -q glibc prints it on the machine without the
+   architecture (glibc-2.34-283.el9_8), or as latest-el8, latest-el9 or
+   latest-el10.
+!! Not compared on any route: the code that compiles and compares the rules
+   (localedef's and strcoll's, each build's patches to it included). Only step
+   11 sees what it does, when it measures both machines;
+   docs/confirming-on-a-real-system.md says how to confirm the order on them.
+   No route looks either for a function of a user or of an extension that
+   calls glibc's locale functions itself.
+!! Not compared, no file at glibc-2.34 (11). A file added at the new side
+   cannot change what PostgreSQL already stored ONLY IF the locale did not
+   exist on the old system, and an upstream tag cannot establish that --
+   distros backport. Confirm with `locale -a` on the OLD machine, under the
+   names on each line, before treating these as out of scope:
+     ab_GE -> (not in SUPPORTED)
+     crh_RU -> crh_RU
+     gbm_IN -> gbm_IN
+     kv_RU -> kv_RU
+     rif_MA -> rif_MA
+     ssy_ER -> ssy_ER; renamed from aa_ER@saaho
+     su_ID -> su_ID
+     syr -> syr
+     tok -> tok
+     translit_emojis -> (not in SUPPORTED)
+     zgh_MA -> zgh_MA
+!! glibc-2.34 holds no localedata/locales/C, the file C.UTF-8 is built from,
+   and a distro's build can ship its own, so C.UTF-8's sort rules were not
+   compared. PostgreSQL records no collation version for a libc collation or
+   database whose locale is C, C.<anything> or POSIX, so no version mismatch
+   warns about C.UTF-8; sql/c_utf8_probe.sql, run on both machines, compares
+   its order inside PostgreSQL.
+(see docs/limitations.md)
 

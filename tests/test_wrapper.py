@@ -17,6 +17,9 @@ import json
 import os
 import re
 import shutil
+import signal
+import socket
+import subprocess
 import tempfile
 import unittest
 
@@ -29,7 +32,8 @@ from _harness import (COMPARED_BANNER, DEFAULT_OUT_DIR, STEP2_LISTED,
                       deleted_steps_named, flat, locale_file,
                       needs_clone, assert_no_deleted_block,
                       nothing_compared_lines, summary_warnings,
-                      run_wrapper, upstream_c, summary_block)
+                      run_wrapper, upstream_c, summary_block,
+                      wide_lines)
 
 
 import filter_lc_collate_changes as step2
@@ -112,7 +116,7 @@ ADDED_AT_OLD_TAG = ('!! Not compared, no file at {} ({}). A file added at '
 
 
 def section_body(summary, heading):
-    """The indented body under a summary heading, whitespace collapsed.
+    """The body under a summary heading, whitespace collapsed.
 
     Stops at the next heading as well as at a blank line: on a run given the
     NEW directory alone, the scan of the side that ran follows the NOT RUN
@@ -134,11 +138,23 @@ MACHINE_FILE_MADE_TAGS = ("A machine's file made both sides read their tags; "
                           "why is the first warning below.")
 NOT_CHECKED = ('The tags cannot show what your distro adds or drops: '
                'NOT CHECKED.')
+# What a run that stops before it writes in its output folder says of the
+# files there (16.211), with that folder.
+LEFT_NOTHING = ('This run left nothing in {}; none of the files there is '
+                'from this run.')
+
+
+def nothing_gone(word, old, new):
+    """Removed's "none", as its two lines (under 78 columns with builds)."""
+    return [f'Between the {word}: none -- no locale file at {old}',
+            f'is gone at {new}']
+
+
 # The whole section over 2.28..2.34 given the tags alone.
 NOTHING_GONE_OVER_OLD_MID = [
     NOT_CHECKED,
     "Pass --old-node and --new-node, each machine's file, to check it.",
-    f'Between the tags: none -- no locale file at {OLD} is gone at {MID}',
+    *nothing_gone('tags', OLD, MID),
 ]
 
 
@@ -397,6 +413,10 @@ def assert_prints_the_example(test, out, out_dir, name):
                       list(difflib.unified_diff(
                           want.splitlines(True), got.splitlines(True),
                           f'examples/{name}', 'audit.sh', n=1))[:60]))
+    # Step 2 and the summary fit in 78 columns, the summary's warnings as
+    # each step wrapped them (16.186, 16.200).
+    test.assertEqual(wide_lines(step_text(got, 2)), [], name)
+    test.assertEqual(wide_lines(got.split('AUDIT SUMMARY', 1)[1]), [], name)
 
 
 @needs_clone
@@ -766,8 +786,7 @@ class WrapperEmptyPair(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
         nothing was compared: the order check's `!!`, in the warnings. This
         pins the arrangement: the notice must come after the section."""
         lines = removed_lines(self.out)
-        self.assertEqual(lines[-1], f'Between the tags: none -- no locale '
-                                    f'file at {NEW} is gone at {NEW}')
+        self.assertEqual(lines[-2:], nothing_gone('tags', NEW, NEW))
         summary = self.out.split('AUDIT SUMMARY')[1]
         self.assertGreater(summary.index(WARNINGS), summary.index(REMOVED))
         self.assertIn('are the same commit', summary_warnings(self.out))
@@ -827,8 +846,7 @@ class WrapperSameCommitSpeltTwoWays(unittest.TestCase):
             'NOT CHECKED.',
             "Pass --old-node and --new-node, each machine's file, to check "
             "it.",
-            f'Between the sides: none -- no locale file at {NEW} is gone at '
-            f'{EXPECTED_SHA[NEW]}'])
+            *nothing_gone('sides', NEW, EXPECTED_SHA[NEW])])
         self.assertEqual(summary_warnings(self.out).count(
             'A run on upstream commits says nothing about an intra-major '
             'upgrade'), 1, self.out)
@@ -1824,6 +1842,8 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
         self.assertIn('Rules: not compared, the two machines\' files hold '
                       'the same locale sources and charmaps.',
                       flat(self.step(out, 2)))
+        # 87 and 117 characters unwrapped (16.186).
+        self.assertEqual(wide_lines(self.step(out, 2)), [])
         self.assertIn("glibc-2.34-283.el9_8: the two machines' files hold the "
                       "same locale sources and charmaps, so no locale's sort "
                       "rules can differ between them",
@@ -1865,6 +1885,8 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
                       "same locale sources.", step2)
         self.assertIn("Character sets and transliterations: not compared, a "
                       "machine's file holds no charmaps this reads.", step2)
+        # 97 characters unwrapped (16.186).
+        self.assertEqual(wide_lines(self.step(out, 2)), [])
         # Each file's own reason, which no other line of a one-tree run
         # carries: one line per machine, the two builds being two.
         self.assertEqual(len(re.findall(
@@ -2231,6 +2253,53 @@ class WrapperOneTagFromTheFiles(unittest.TestCase):
 
 
 @needs_clone
+class WrapperCutShortBeforeItWrites(unittest.TestCase):
+    """A run cut short by SIGTERM (a kill) while
+    latest-elN waits for the mirror has written nothing in its folder, and
+    says so: bash 3.2 hands the EXIT trap 0 after SIGTERM, so the sentence
+    may not hang on the exit code (16.211)."""
+
+    def test_sigterm_while_the_mirror_does_not_answer(self):
+        out_dir = tempfile.mkdtemp(prefix='pg-glibc-wrapper-cut-')
+        self.addCleanup(shutil.rmtree, out_dir, ignore_errors=True)
+        earlier = os.path.join(out_dir, 'left-by-an-earlier-run.txt')
+        with open(earlier, 'w', encoding='utf-8') as f:
+            f.write('earlier\n')
+        server = socket.socket()
+        self.addCleanup(server.close)
+        server.bind(('127.0.0.1', 0))
+        server.listen(1)
+        server.settimeout(120)
+        env = dict(os.environ, PG_GLIBC_AUDIT_OUT=out_dir,
+                   PG_GLIBC_BUILD_MIRROR='http://127.0.0.1:%d/'
+                   % server.getsockname()[1],
+                   PG_GLIBC_BUILD_SOURCES_CACHE=os.path.join(out_dir + '-c'))
+        self.addCleanup(shutil.rmtree, out_dir + '-c', ignore_errors=True)
+        p = subprocess.Popen([os.path.join(REPO_ROOT, 'audit.sh'), OLD,
+                              'latest-el9'], cwd=REPO_ROOT, env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             start_new_session=True)
+        try:
+            # The run is waiting for the mirror's answer, which never comes.
+            conn, _ = server.accept()
+            self.addCleanup(conn.close)
+            os.killpg(p.pid, signal.SIGTERM)
+            got = p.communicate(timeout=60)[0].decode('utf-8', 'replace')
+        finally:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            p.wait()
+        # Killed by the signal; or bash's 128 + 15, as some bash report it.
+        self.assertIn(p.returncode, (-signal.SIGTERM, 128 + signal.SIGTERM),
+                      got)
+        self.assertEqual(os.listdir(out_dir), [os.path.basename(earlier)])
+        self.assertEqual(flat(got).count(LEFT_NOTHING.format(out_dir)), 1,
+                         got)
+
+
+@needs_clone
 class WrapperNodeFileRefused(unittest.TestCase):
     """A node file that cannot be trusted, or node files given the wrong way,
     stop the run before the sides are read ('What was compared'): no step,
@@ -2242,12 +2311,30 @@ class WrapperNodeFileRefused(unittest.TestCase):
         self.old = node_file('old.tar', cut_few(RHEL8), OLD, sources=False)
         self.new = node_file('new.tar', cut_few(RHEL9), MID, sources=False)
 
-    def assertRefusedBeforeTheSides(self, *args, tags=(OLD, MID)):
+    def assertRefusedBeforeTheSides(self, *args, tags=(OLD, MID),
+                                    untouched=True):
+        """The run is refused, and a file already in its folder (an earlier
+        run's, or the user's) is still there; a run refused before it wrote
+        there says that none of the files there is its own, one refused
+        after it (untouched=False) does not (16.211)."""
+        earlier = os.path.join(self.out_dir, 'step2_changed_collate.'
+                               'glibc-2.28-1.el8..glibc-2.34-1.el9.txt')
+        with open(earlier, 'w', encoding='utf-8') as f:
+            f.write('left by an earlier run\n')
+        before = set(os.listdir(self.out_dir))
         rc, out = run_wrapper(*tags, *args, out_dir=self.out_dir)
+        if untouched:
+            # What the sentence says: the run left nothing there.
+            self.assertEqual(set(os.listdir(self.out_dir)), before)
         self.assertEqual(rc, 2, out[-2000:])
         self.assertNotIn(COMPARED_BANNER, out)
         self.assertNotIn('Tag provenance', out)
         self.assertNotIn('AUDIT SUMMARY', out)
+        self.assertTrue(os.path.exists(earlier))
+        self.assertEqual(flat(out).count(LEFT_NOTHING.format(self.out_dir)),
+                         1 if untouched else 0, out[-2000:])
+        self.assertEqual(flat(out).count('This run left nothing'),
+                         1 if untouched else 0)
         return flat(out)
 
     def copy_of(self, path, prefix=b'', cut=None):
@@ -2291,12 +2378,21 @@ class WrapperNodeFileRefused(unittest.TestCase):
                 f.write('left by an earlier run\n')
         out = self.assertRefusedBeforeTheSides('--old-node', self.old,
                                             '--new-node', self.old,
-                                            tags=(OLD, OLD))
+                                            tags=(OLD, OLD), untouched=False)
         self.assertIn('the two files hold the same measurement', out)
         self.assertIn(f'{COULD_NOT_COMPARE_NODES} {self.old} and {self.old}',
                       out)
         self.assertFalse(os.path.exists(stale))
         self.assertFalse(os.path.exists(sql))
+
+    def test_latest_with_the_machines_files(self):
+        """A side typed as latest-elN stands for a machine not installed
+        yet; the machine's file names the build it runs."""
+        out = self.assertRefusedBeforeTheSides('--old-node', self.old,
+                                            '--new-node', self.new,
+                                            tags=(OLD, 'latest-el9'))
+        self.assertIn('latest-el9 stands for a machine not installed yet',
+                      out)
 
     def test_the_files_the_wrong_way_round(self):
         out = self.assertRefusedBeforeTheSides('--old-node', self.new,

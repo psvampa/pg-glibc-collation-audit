@@ -793,6 +793,15 @@ def flat(text):
     return ' '.join(text.split())
 
 
+def wide_lines(text):
+    """The lines of text longer than 78 characters that a wrap could have
+    broken (16.186, 16.200). A line holding a word of 40 characters or more
+    (a path, a commit id) is left out. Counts characters, not terminal
+    columns."""
+    return [line for line in text.split('\n')
+            if len(line) > 78 and not any(len(w) >= 40 for w in line.split())]
+
+
 # A step deleted in branch 9 (3 in step 9.2; 4, 5, 9 and 10 in step 9.3;
 # 6, 7 and 8 in step 9.4b; 1 in step 9.5, which became 'What was compared')
 # named in text the tool prints or writes, in any of the spellings the
@@ -1005,6 +1014,15 @@ class Step2Report:
                      r'Not compared, no file at |!! Not compared, so listed|'
                      r'!! Not compared, no file at |'
                      r'Listed in the summary \()', '\n', out)
+        # These three headings are wrapped at 78, going on at three blanks
+        # (16.186), and read here as one line each: the removed heading
+        # then still ends in its colon. The names under them are at two.
+        joined = None
+        while joined != out:
+            joined, out = out, re.sub(
+                r'(?m)^((?:Not compared, no file at |Rules: not compared, |'
+                r'Character sets and transliterations: not compared, )'
+                r'[^\n]*)\n   (?=\S)', r'\1 ', out)
         paras = [p.strip('\n') for p in re.split(r'\n(?:[ \t]*\n)+', out)
                  if p.strip()]
         for para in paras:

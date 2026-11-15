@@ -784,8 +784,8 @@ def print_removed(removed, renamed_to, new_side, new_name, named='tag'):
     if not removed:
         return
     print()
-    print(f"Not compared, no file at {new_name} ({len(removed)}), listed "
-          f"under Removed in the summary:")
+    print(_fill(f"Not compared, no file at {new_name} ({len(removed)}), "
+                f"listed under Removed in the summary:", '', '   '))
     for name in removed:
         extra = (f" (renamed to {shown_name(renamed_to[name])})"
                  if name in renamed_to else '')
@@ -913,13 +913,14 @@ def _main(opts):
                 else "the two machines' files hold the same locale sources"
                 if machine
                 else f"the two {said} are two commits of one source tree")
-        print(f"Rules: not compared, {what}.")
+        print(_fill(f"Rules: not compared, {what}.", '', '   '))
         if machine and not cm and nothing != 'commit':
             # Never "the same charmaps": a file without them left them out
             # of its commit, and none was read. Each file's own reason,
             # which no other line of the run carries for one tree.
-            print("Character sets and transliterations: not compared, a "
-                  "machine's file holds no charmaps this reads.")
+            print(_fill("Character sets and transliterations: not "
+                        "compared, a machine's file holds no charmaps this "
+                        "reads.", '', '   '))
             said, whys = set(), []
             for sd in (old_side, new_side):
                 if sd.prov.get('charmaps') is None and g.label(sd) not in said:
@@ -930,8 +931,8 @@ def _main(opts):
                     print(_fill(whys[-1], '  '))
             charmaps = {'state': 'not read', 'why': whys}
         else:
-            print(f"Character sets and transliterations: not compared, "
-                  f"{what}.")
+            print(_fill(f"Character sets and transliterations: not "
+                        f"compared, {what}.", '', '   '))
         names, not_compared = [], []
         g.write_list(f"step2_rules_characters.{slug}.tsv",
                      characters_rows({}, []))

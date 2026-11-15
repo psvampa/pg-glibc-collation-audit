@@ -86,7 +86,8 @@ Not compared, no file at glibc-2.34-275.el9_8 (11):
    glibc-2.34-275.el9_8's own locale sources do not have these files, so that
    build ships none of these locales.
 
-Not compared, no file at glibc-2.39-128.el10_2 (1), listed under Removed in the summary:
+Not compared, no file at glibc-2.39-128.el10_2 (1), listed under Removed in
+   the summary:
   aa_ER@saaho (renamed to ssy_ER)
    On the new system, a database whose locale is one of these does not
    connect, and a collation of one gives an error when it is used.
@@ -474,24 +475,24 @@ Character rules (LC_CTYPE): not compared in C and POSIX, which PostgreSQL
          rules (step 2)
 
 -- Warnings the clean results above do NOT cover
-     !! Signatures NOT checked for glibc-2.34, glibc-2.39 (why is on each one's
-        line under 'Tag provenance', in 'What was compared'). The commit ids
-        printed there are what was read; compare them against a source you trust
-        (sourceware.org/git/glibc.git) if it matters.
-     !! Not checked for these machines: their locale sources and charmaps are read
-        as each machine's file holds them, with no check against the
-        glibc-locale-source package they came from; localedata/SUPPORTED and
-        intl/locale.alias are the upstream tag's, as a machine's file holds neither
-        (step 2 takes which locales each machine builds with each charmap from its
-        measurement instead); localedef's keyword tables are the tag's with what
-        Red Hat's patches are known to add for that RHEL major, and how localedef
-        reads the bytes 0x1A and 0xFF and UTF-8 input is answered by the tag's
-        ancestry.
-     !! Not compared on any route: the code that compiles and compares the rules
-        (localedef's and strcoll's, each build's patches to it included). Only step
-        11 sees what it does, when it measures both machines;
-        docs/confirming-on-a-real-system.md says how to confirm the order on them.
-        No route looks either for a function of a user or of an extension that
-        calls glibc's locale functions itself.
-     (see docs/limitations.md)
+!! Signatures NOT checked for glibc-2.34, glibc-2.39 (why is on each one's
+   line under 'Tag provenance', in 'What was compared'). The commit ids
+   printed there are what was read; compare them against a source you trust
+   (sourceware.org/git/glibc.git) if it matters.
+!! Not checked for these machines: their locale sources and charmaps are read
+   as each machine's file holds them, with no check against the
+   glibc-locale-source package they came from; localedata/SUPPORTED and
+   intl/locale.alias are the upstream tag's, as a machine's file holds neither
+   (step 2 takes which locales each machine builds with each charmap from its
+   measurement instead); localedef's keyword tables are the tag's with what
+   Red Hat's patches are known to add for that RHEL major, and how localedef
+   reads the bytes 0x1A and 0xFF and UTF-8 input is answered by the tag's
+   ancestry.
+!! Not compared on any route: the code that compiles and compares the rules
+   (localedef's and strcoll's, each build's patches to it included). Only step
+   11 sees what it does, when it measures both machines;
+   docs/confirming-on-a-real-system.md says how to confirm the order on them.
+   No route looks either for a function of a user or of an extension that
+   calls glibc's locale functions itself.
+(see docs/limitations.md)
 

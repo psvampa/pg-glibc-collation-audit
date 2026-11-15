@@ -138,6 +138,10 @@ case $PY_VERSION in
 esac
 HERE=$(cd "$(dirname "$0")" && pwd)
 SCRIPTS="$HERE/scripts"
+# Inherit the user's setting. Never invent a private directory. The step scripts resolve this same variable
+# independently.
+OUT_DIR=${PG_GLIBC_AUDIT_OUT:-/tmp/pg-glibc-collation-audit}
+export PG_GLIBC_AUDIT_OUT="$OUT_DIR"
 
 # What each side is: a ref of the glibc clone (a tag, or a commit given by
 # its id or a branch), or a build named as `rpm -q glibc` names it
@@ -152,10 +156,26 @@ SCRIPTS="$HERE/scripts"
 # report is (16.144): it is worked out first (below), and printed only after
 # 'What was compared' and step 2. One function, set once, so that no trap
 # replaces another; it changes no exit code.
+#
+# A run that stops before it writes in $OUT_DIR anything that outlives it
+# (the machines' files are laid out there under a temporary name, which
+# this function removes) -- refused for a machine's file cut short, the two
+# files the other way round, a side that is not the build its file names,
+# or cut short itself -- leaves whatever is there as it was: an earlier
+# run's files, of whichever pair, or the user's own. It removes none of
+# them, and says that none is its own (16.211). UNTOUCHED_OUT is cleared at
+# the first file it removes or writes there, under the pair's name, and no
+# run ends well before that. The exit code is not asked: bash 3.2 hands
+# this function 0 after a SIGTERM or a SIGHUP.
+UNTOUCHED_OUT=1
 RESOLVED=""; NODE_TMP=""; ORDER_UNPRINTED=""
 on_exit() {
   [ -z "$RESOLVED" ] || rm -f "$RESOLVED"
   [ -z "$NODE_TMP" ] || rm -rf "$NODE_TMP"
+  if [ -n "$UNTOUCHED_OUT" ]; then
+    echo "       This run left nothing in $OUT_DIR;" >&2
+    echo "       none of the files there is from this run." >&2
+  fi
   if [ -n "$ORDER_UNPRINTED" ]; then
     echo "note: step 11 compared the two measurements before the run stopped;" >&2
     echo "      its report, not printed above, is in $ORDER_UNPRINTED" >&2
@@ -204,10 +224,6 @@ if { [ -n "$OLD_NODE" ] && [ -z "$NEW_NODE" ]; } ||
   echo "       alone compares nothing" >&2
   exit 2
 fi
-# Inherit the user's setting. Never invent a private directory. The step scripts resolve this same variable
-# independently.
-OUT_DIR=${PG_GLIBC_AUDIT_OUT:-/tmp/pg-glibc-collation-audit}
-export PG_GLIBC_AUDIT_OUT="$OUT_DIR"
 
 # Each machine's file is checked and laid out here, before anything reads the
 # sides, because it names the build that machine runs, and the run reads
@@ -338,6 +354,9 @@ OLD_STEP1_LIST="$OUT_DIR/changed_locales.txt"
 # in UTF-8; a file without them says why, and step 11 prints that reason
 # under its NOT checked.
 ORDER_CM=()
+# From here the run removes and writes in $OUT_DIR under the pair's name
+# (on_exit, above).
+UNTOUCHED_OUT=""
 # Never one an earlier run left: removed before the layout writes it, and
 # the variable is exported only when this run wrote the file (a value from
 # the reader's environment would send the steps to another run's folders).
@@ -780,7 +799,8 @@ elif [ "$GONE" -gt 0 ]; then
   awk '!/^#/ && NF' "$STEP2_REMOVED" | sed 's/^C /C.UTF-8 /; s/^/       /'
   echo "   ($GONE name(s); full list: $STEP2_REMOVED)"
 else
-  echo "     Between the $WORD: none -- no locale file at $OLD is gone at $NEW"
+  echo "     Between the $WORD: none -- no locale file at $OLD"
+  echo "     is gone at $NEW"
 fi
 
 # What each machine's own glibc says, beside what the tags say. Below Removed,
@@ -839,8 +859,8 @@ if [ -n "$WARNINGS" ]; then
   # Whole block, not just the `!!` line. These warnings wrap onto indented
   # continuation lines, and the first line alone stops before the part that
   # says why the clean result does not cover the locale.
-  printf '%s\n' "$WARNINGS" | sed 's/^/     /'
-  echo "     (see docs/limitations.md)"
+  printf '%s\n' "$WARNINGS"
+  echo "(see docs/limitations.md)"
 fi
 
 echo

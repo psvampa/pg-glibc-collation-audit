@@ -24,7 +24,8 @@ from _harness import (EXPECTED_SHA, FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID,
                       SCRIPTS_DIR, SIGNATURES_UNCHECKED, STEP2_LISTED,
                       Step2Report,
                       deleted_steps_named, flat,
-                      glibc_shaped, needs_clone, needs_floor_pair)
+                      glibc_shaped, needs_clone, needs_floor_pair,
+                      wide_lines)
 
 import glibc_locale_data as g
 
@@ -2700,7 +2701,9 @@ class StepTwoComparesCharmaps(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         # t2 is a lightweight tag, a commit to git: two sides (16.155).
         self.assertIn('Character sets and transliterations: not compared, the '
-                      'two sides are one commit.', out)
+                      'two sides are one commit.', flat(out))
+        # 80 characters unwrapped (16.186).
+        self.assertEqual(wide_lines(out), [])
         self.assertIsNone(listed)
 
 
