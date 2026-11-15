@@ -164,7 +164,8 @@ ssh el9 sudo -n -u postgres python3 - --extract < scripts/locale_order.py > new.
   two builds of the same release cannot overwrite each other.
 
 **2 — Verifying whether `C.UTF-8`'s order changed.**
-*Only if a database uses `C.UTF-8` — in a container it usually does.*
+*Only if a database uses `C.UTF-8`, or a column, an index or an expression
+names it with `COLLATE` — in a container the database usually does.*
 
 ```sh
 # on each node, then diff
@@ -226,7 +227,7 @@ A worked example for each pair is in
 | `sv_SE`, `sv_FI`, `sv_FI@euro` | 🔴 **Changed** | 🟢 No difference | step 2 — `sv_FI` only via `copy`; the second pair is cleared by step 11's measurement |
 | `or_IN` | 🔴 **Changed** | 🟢 No difference | step 2; the second pair is cleared by step 11's measurement |
 | `ko_KR` | 🔴 **Changed** | 🟢 No difference | **step 11** measures it — its `LC_COLLATE` is unchanged in *both* pairs, and what changed is `localedef`'s code, which no step compares; the second pair is cleared by measurement |
-| `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | between two tags nothing compares it <sup>†</sup>; between the two builds step 2 lists it from their rules, and step 11 or `sql/c_utf8_probe.sql` settles the order |
+| `C.UTF-8` | 🔴 **Changed** | 🟢 No difference | between two tags nothing compares it <sup>†</sup>; between the two builds of the first pair step 2 lists it from their rules, and step 11 or `sql/c_utf8_probe.sql` settles the order |
 | `th_TH` | 🟢 No difference | 🔴 **Changed** | step 2; the first pair is cleared by step 11's measurement |
 | `ber_DZ`, `kab_DZ` | 🟢 No difference | 🟢 No difference | step 2 finds the same rules in both pairs, though over the second their files changed by a role swap; step 11's measurement finds both unchanged |
 | CJK range U+4E00–U+9FA5 in `iso14651_t1`,<br>the base table a locale inherits unless it<br>defines its own order | 🟢 No difference | 🟢 No difference | an ellipsis range: step 2 finds the same rules, which cannot clear it; cleared by measurement |

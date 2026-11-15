@@ -200,8 +200,9 @@ needs no editing.
 
 This is the one locale 1.a cannot reach when its file is in neither version;
 1.b measures it, in step 11. PostgreSQL will not warn about it either.
-It is needed when a database uses `C.UTF-8` — which in a container it usually
-does, without anyone having chosen it.
+It is needed when a database uses `C.UTF-8`, or a column, an index or an
+expression names it with `COLLATE` — which in a container the database
+usually does, without anyone having chosen it.
 
 Like step 11, this **measures the order**, but inside PostgreSQL. It sorts on
 the machine as it actually runs and compares the two results.

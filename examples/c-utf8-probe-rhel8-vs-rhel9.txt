@@ -429,7 +429,8 @@ ORDER BY datname;
  template1 | C.UTF-8    |                |        | t
 (3 rows)
 
-=== 5. is THIS database exposed through its default collation? ===
+=== 5. is each database exposed through its default collation? ===
+A COLLATE naming C.utf8 on a column, index or expression is not looked at here.
 SELECT datname,
        datlocprovider,
        datcollate,
@@ -441,11 +442,13 @@ SELECT datname,
          ELSE 'EXPOSED via ' || datcollate
        END AS verdict
 FROM pg_database
-WHERE datname = current_database();
- datname  | datlocprovider | datcollate |                        verdict                        
-----------+----------------+------------+-------------------------------------------------------
- postgres | c              | C.UTF-8    | EXPOSED via C.UTF-8, and no collversion can ever warn
-(1 row)
+ORDER BY datname;
+  datname  | datlocprovider | datcollate |                        verdict                        
+-----------+----------------+------------+-------------------------------------------------------
+ postgres  | c              | C.UTF-8    | EXPOSED via C.UTF-8, and no collversion can ever warn
+ template0 | c              | C.UTF-8    | EXPOSED via C.UTF-8, and no collversion can ever warn
+ template1 | c              | C.UTF-8    | EXPOSED via C.UTF-8, and no collversion can ever warn
+(3 rows)
 
 === done. diff this output against the other node. ===
 

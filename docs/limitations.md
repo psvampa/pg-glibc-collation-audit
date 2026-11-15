@@ -136,8 +136,10 @@ as changed. It does not see:
   glibc orders those bytes alike on both. Otherwise the run does not
   identify which strings sort differently there, and a locale it reports
   unchanged is not shown to sort the same there.
-  Command 3 does not confirm that order either. The run names each such
-  locale, with what it measured of how its bytes convert;
+  Command 3 does not confirm that order either. PostgreSQL imports no
+  collation for these locales, and in a UTF8 database the collation named
+  `th_TH` is `th_TH.utf8`, another locale. The run names each such locale,
+  with what it measured of how its bytes convert;
 - a sequence of bytes that no character set of glibc 2.28, 2.34 or 2.39
   gives a character, such as one a later glibc or a distro's patch adds. The
   sequences those three releases give a character, and that are not UTF-8,

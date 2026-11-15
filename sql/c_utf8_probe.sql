@@ -120,9 +120,9 @@ END $$;
 -- The collation under test must be the LIBC one. PostgreSQL 17 added a
 -- BUILTIN provider whose C.UTF-8 (pg_c_utf8) is version-independent by
 -- design: measuring that would make both nodes agree for a reason that has
--- nothing to do with glibc. It is also the recommended mitigation -- see
--- docs/scope.md -- which is exactly why it must not be mistaken for the thing
--- being measured.
+-- nothing to do with glibc. docs/scope.md names it as a way around the
+-- C.UTF-8 limitation, which is exactly why it must not be mistaken for the
+-- thing being measured.
 DO $$
 DECLARE prov "char";
 BEGIN
@@ -349,10 +349,13 @@ ORDER BY datname;
 \echo 'PostgreSQL 14 has no pg_database.datcollversion, so the rows above carry no version to assert.'
 \endif
 
-\echo '=== 5. is THIS database exposed through its default collation? ==='
--- This query answers for the database default, because that is the way
+\echo '=== 5. is each database exposed through its default collation? ==='
+-- One row for every database of the server, whichever one psql connected
+-- to. It answers for each database's default, because that is the way
 -- C.UTF-8 normally reaches your data: a text column with no explicit COLLATE
--- resolves to pg_database.datcollate at runtime.
+-- resolves to pg_database.datcollate at runtime. The line below says what
+-- it does not look at, so that the output says it too.
+\echo 'A COLLATE naming C.utf8 on a column, index or expression is not looked at here.'
 \if :c_utf8_probe_pg15
 SELECT datname,
        datlocprovider,
@@ -365,7 +368,7 @@ SELECT datname,
          ELSE 'EXPOSED via ' || datcollate
        END AS verdict
 FROM pg_database
-WHERE datname = current_database();
+ORDER BY datname;
 \else
 -- PostgreSQL 14 has no datlocprovider: every database default is libc.
 SELECT datname,
@@ -377,7 +380,7 @@ SELECT datname,
          ELSE 'EXPOSED via ' || datcollate
        END AS verdict
 FROM pg_database
-WHERE datname = current_database();
+ORDER BY datname;
 \endif
 
 \echo '=== done. diff this output against the other node. ==='

@@ -14,7 +14,8 @@
 --
 -- Notes before you run it:
 --   * It DROPS AND RECREATES a table named collation_test in the current
---     schema. Point it at a scratch database.
+--     schema of the database psql connects to (the one -d names, or psql's
+--     default). Run it where no table of yours has that name.
 --   * Run as a superuser, it first calls pg_import_system_collations(),
 --     which WRITES TO pg_catalog. It is idempotent and only adds collations
 --     already present in `locale -a`. Run as any other role, it skips that
@@ -50,10 +51,15 @@
 
 -- Only a superuser may import. Any other role runs on the collations already
 -- in pg_catalog, and a locale missing there stops the run at CREATE TABLE.
-SELECT rolsuper AS is_super FROM pg_roles WHERE rolname = current_user \gset
-\if :is_super
-SELECT pg_import_system_collations('pg_catalog');
-\endif
+-- The import runs inside DO, so that it prints the same lines whoever runs
+-- it and however many collations it adds: neither is a difference between
+-- the two glibc versions, and the diff shows only what is.
+DO $$
+BEGIN
+  IF (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
+    PERFORM pg_import_system_collations('pg_catalog');
+  END IF;
+END $$;
 
 -- Lists every collation built from a locale on the audit's list, in every
 -- encoding, with the glibc version recorded when it was created or last
