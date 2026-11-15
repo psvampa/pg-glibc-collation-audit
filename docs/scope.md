@@ -47,19 +47,23 @@ a claim about every older glibc. See
 
 ## The `builtin` provider
 
-The `builtin` provider (PG 17+) implements `C` and `C.UTF-8` inside
-PostgreSQL, in code-point order. So:
+The `builtin` provider (PostgreSQL 17 and later) implements `C` and
+`C.UTF-8` inside PostgreSQL, in code-point order. So:
 
 ```sh
 initdb --locale-provider=builtin --locale=C.UTF-8
 ```
 
-is the mitigation if
+is a mitigation if
 [the `C.UTF-8` limitation](limitations.md#cutf-8-is-invisible-to-a-tag-diff)
-is what you are worried about.
+is what you are worried about. It takes the database's default collation
+off glibc. A column, an index or an expression that names a `libc`
+collation with `COLLATE` still sorts through glibc. And the database's
+`LC_CTYPE`, which that command sets to `C.UTF-8`, is still glibc's. Some
+functions read it, full-text search among them.
 
-Note that `initdb` still defaults to `libc` in PG 16, 17 and 18, so you have
-to ask for `builtin`.
+Note that `initdb` still defaults to `libc` in PostgreSQL 17 and 18, so you
+have to ask for `builtin`.
 
 ---
 

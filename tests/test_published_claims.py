@@ -834,21 +834,22 @@ class TheProbeRunsWhatWasMeasured(unittest.TestCase):
         "\\echo 'PostgreSQL 14 has no pg_database.datcollversion, so the "
         "rows above carry no version to assert.'",
         '\\endif',
-        "\\echo '=== 5. is THIS database exposed through its default "
+        "\\echo '=== 5. is each database exposed through its default "
         "collation? ==='",
+        "\\echo 'A COLLATE naming C.utf8 on a column, index or expression "
+        "is not looked at here.'",
         '\\if :c_utf8_probe_pg15',
         'SELECT datname, datlocprovider, datcollate, CASE WHEN '
         "datlocprovider <> 'c' THEN 'not libc' WHEN datcollate IN ('C', "
         "'POSIX') THEN 'byte order' WHEN datcollate ~ '^[Cc]\\.' THEN "
         "'EXPOSED via C.UTF-8, and no collversion can ever warn' ELSE "
-        "'EXPOSED via ' || datcollate END AS verdict FROM pg_database WHERE "
-        'datname = current_database()',
+        "'EXPOSED via ' || datcollate END AS verdict FROM pg_database "
+        'ORDER BY datname',
         '\\else',
         "SELECT datname, datcollate, CASE WHEN datcollate IN ('C', 'POSIX') "
         "THEN 'byte order' WHEN datcollate ~ '^[Cc]\\.' THEN 'EXPOSED via "
         "C.UTF-8, and no collversion can ever warn' ELSE 'EXPOSED via ' || "
-        'datcollate END AS verdict FROM pg_database WHERE datname = '
-        'current_database()',
+        'datcollate END AS verdict FROM pg_database ORDER BY datname',
         '\\endif',
         "\\echo '=== done. diff this output against the other node. ==='",
     )
@@ -1072,10 +1073,7 @@ class EachRecipeNamesAStoppedRun(unittest.TestCase):
 
     def test_the_template_prints_one_end_line_its_last(self):
         items = psql_script(read(TEMPLATE))
-        for superuser in (True, False):
-            with self.subTest(is_super=superuser):
-                self.assertIsNone(
-                    end_line_problem(items, {'is_super': superuser}))
+        self.assertIsNone(end_line_problem(items, {}))
 
     def test_each_page_teaches_each_file_this_way(self):
         for name in ('README.md', 'docs/confirming-on-a-real-system.md'):

@@ -1,6 +1,6 @@
 === 0. node identity: a result is bound to the build it ran on ===
 --- the machine psql runs on (the three shell lines below run there, not on the server):
-glibc-2.34-284.el9_8.4.x86_64
+glibc-2.34-275.el9_8.x86_64
 ldd (GNU libc) 2.34
 C.utf8
 --- the server: its glibc release as PostgreSQL reports it (one number for every build of that release; record the build by hand)
@@ -415,11 +415,12 @@ WHERE datcollate ~ '^[Cc]\.'
 ORDER BY datname;
  datname | datcollate 
 ---------+------------
- s113c   | C.UTF-8
+ app     | C.UTF-8
 (1 row)
 
 PostgreSQL 14 has no pg_database.datcollversion, so the rows above carry no version to assert.
-=== 5. is THIS database exposed through its default collation? ===
+=== 5. is each database exposed through its default collation? ===
+A COLLATE naming C.utf8 on a column, index or expression is not looked at here.
 SELECT datname,
        datcollate,
        CASE
@@ -429,10 +430,13 @@ SELECT datname,
          ELSE 'EXPOSED via ' || datcollate
        END AS verdict
 FROM pg_database
-WHERE datname = current_database();
- datname | datcollate  |         verdict         
----------+-------------+-------------------------
- s113u   | en_US.UTF-8 | EXPOSED via en_US.UTF-8
-(1 row)
+ORDER BY datname;
+  datname  | datcollate  |                        verdict                        
+-----------+-------------+-------------------------------------------------------
+ app       | C.UTF-8     | EXPOSED via C.UTF-8, and no collversion can ever warn
+ postgres  | en_US.UTF-8 | EXPOSED via en_US.UTF-8
+ template0 | en_US.UTF-8 | EXPOSED via en_US.UTF-8
+ template1 | en_US.UTF-8 | EXPOSED via en_US.UTF-8
+(4 rows)
 
 === done. diff this output against the other node. ===

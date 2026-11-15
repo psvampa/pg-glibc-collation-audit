@@ -484,10 +484,9 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
     # literals (test_published_claims.psql_script). A change to one is run on
     # PostgreSQL again and then written here.
     STOP = '\\set ON_ERROR_STOP on'
-    SUPERUSER = ('SELECT rolsuper AS is_super FROM pg_roles WHERE rolname = '
-                 'current_user', '\\gset', '\\if :is_super')
-    IMPORT = "SELECT pg_import_system_collations('pg_catalog')"
-    ENDIF = '\\endif'
+    IMPORT = ("DO $$ BEGIN IF (SELECT rolsuper FROM pg_roles WHERE rolname "
+              "= current_user) THEN PERFORM "
+              "pg_import_system_collations('pg_catalog'); END IF; END $$")
     LISTING = (
         "SELECT n AS listed, c.collname, c.collcollate, "
         "pg_encoding_to_char(c.collencoding) AS encoding, c.collversion, "
@@ -606,7 +605,7 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
         block comment and every psql command it does not model, and holds no
         psql command but the ones below."""
         kinds = {kind for kind, _, _, _ in tpc.psql_script(self.template())}
-        self.assertEqual(kinds, {'sql', 'set', 'gset', 'if', 'endif', 'echo'})
+        self.assertEqual(kinds, {'sql', 'set', 'echo'})
 
     def test_the_template_runs_these_statements_and_nothing_else(self):
         """What the template runs, in order. Step 11.2 took out the lists of
@@ -620,7 +619,7 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
         then written above."""
         self.assertEqual(
             [words for _, _, words, _ in tpc.psql_script(self.template())],
-            [self.STOP, *self.SUPERUSER, self.IMPORT, self.ENDIF,
+            [self.STOP, self.IMPORT,
              self.LISTING, *self.TABLE, self.GUARD, self.HEADING, self.SORT,
              self.DONE])
 

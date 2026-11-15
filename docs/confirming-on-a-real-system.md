@@ -110,11 +110,13 @@ Each of these changes what a comparison proves.
 Check `locale -a` first. A locale that is not generated, or not imported into
 PostgreSQL, has no collation there, and the template stops at `CREATE TABLE`
 with `collation ... does not exist`, the same way on two machines that both
-lack it ([what shows that](#what-the-template-does)). Check the exact name the
-test runs under,
-such as `sv_SE.utf8`. Step 2's list names [locales, not
-spellings](glossary.md). A name in `locale -a` belongs to the list when, without
-the part from the dot up to any `@`, it is one of its names
+lack it ([what shows that](#what-the-template-does)). A collation imported
+while the locale was there, and still in PostgreSQL after the locale left
+`locale -a` (its language pack removed, say), stops it later, at `CREATE
+INDEX`, with `could not create locale`. Check the exact name the test runs
+under, such as `sv_SE.utf8`. Step 2's list names [locales, not
+spellings](glossary.md). A name in `locale -a` belongs to the list when,
+without the part from the dot up to any `@`, it is one of its names
 (`sv_SE.utf8` and `sv_SE.iso885915` both become `sv_SE`).
 
 Step 11, in command 1.b, catches half of this. It names every locale the old
@@ -162,8 +164,10 @@ diff this-node.out other-node.out
 ```
 
 Two servers on different PostgreSQL major versions also differ in queries 0c,
-4 and 5, which read PostgreSQL's own catalog; the order in queries 1 to 3 does
-not depend on the PostgreSQL version.
+4 and 5. Two that hold different databases, by name or by default
+collation, differ in query 5, and in query 4 where their libc `C.UTF-8`
+databases differ. Those queries read PostgreSQL's own catalog; the order in
+queries 1 to 3 depends on neither.
 
 Three things make it unlike the template.
 
