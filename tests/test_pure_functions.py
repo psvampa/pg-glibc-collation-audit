@@ -1344,7 +1344,8 @@ class CharmapReportLines(unittest.TestCase):
         base = dict(not_run=None, builds=2, charmaps=['UTF-8'],
                     changed=[('UTF-8', 'UTF-8')],
                     sizes={('UTF-8', 'UTF-8'): (1, 1, 0)}, found=[],
-                    skipped=[], not_compared=[], unsearched=[])
+                    skipped=[], not_compared=[], unsearched=[],
+                    translit=None, translit_skipped=[])
         base.update(fields)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -2013,6 +2014,32 @@ class TranslitCtype(unittest.TestCase):
                 ck.elements_of(ck.Scan(ctype_text(None, line)))
 
 
+class WhatTheCheckLeavesOut(unittest.TestCase):
+    """collation_keys.left_out, 16.322: what the character set check lists
+    and what it leaves out because step 2 lists it already, which step
+    11's cross is still told (listed_sources(skipped=True)); a
+    transliteration is left out where step 2 lists its source, and where
+    the check lists its build already (false-negative-reviewer, round
+    1)."""
+
+    P = ('UTF-8', 'UTF-8')
+
+    def test_each_left_out_is_kept(self):
+        aa = ck.Found('aa', 'aa.UTF-8', self.P, set(), [], 'a `...` range')
+        cc = ck.Found('cc', 'cc.UTF-8', self.P, {0x41}, ['cc'], None)
+        t_aa = ck.Translit('aa', 'aa.UTF-8', self.P, 1, {0x42}, [], None)
+        t_bb = ck.Translit('bb', 'bb.UTF-8', self.P, 1, {0x43}, [], None)
+        t_cc = ck.Translit('cc', 'cc.UTF-8', self.P, 1, {0x44}, [], None)
+        found, skipped, kept, tskipped = ck.left_out(
+            [aa, cc], [t_aa, t_bb, t_cc], {'cc'})
+        self.assertEqual((found, skipped, kept, tskipped),
+                         ([aa], [cc], [t_bb], [t_aa, t_cc]))
+
+    def test_nothing_listed_leaves_nothing_out(self):
+        t_bb = ck.Translit('bb', 'bb.UTF-8', self.P, 1, {0x43}, [], None)
+        self.assertEqual(ck.left_out([], [t_bb], set()), ([], [], [t_bb], []))
+
+
 class TranslitCompare(unittest.TestCase):
     """compare()'s point 6 over two Sides: when it compares, what it lists,
     and what it does not settle."""
@@ -2365,8 +2392,9 @@ class TranslitCompare(unittest.TestCase):
                 'order_start', 'collating-element <y> from "h<U02BB>"\n'
                 'order_start')))
         r = self.run_compare(self.BASE, new, listed=['M'])
-        self.assertEqual((r.translit.found, r.translit_skipped,
-                          r.translit.elements), ([], 1, 0))
+        self.assertEqual((r.translit.found, [x.source for x in
+                                              r.translit_skipped],
+                          r.translit.elements), ([], ['M'], 0))
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             f.print_translit_report(r, 't2')
@@ -2385,8 +2413,12 @@ class TranslitCompare(unittest.TestCase):
         new = dict(self.BASE, M=ctype_text('copy "i18n"\n' + translit(GRAVE),
                                            'copy "D"'))
         r = self.run_compare(self.BASE, new, listed=['M'])
-        self.assertEqual((r.translit.found, r.translit_skipped), ([], 1))
+        self.assertEqual((r.translit.found,
+                          [x.source for x in r.translit_skipped]), ([], ['M']))
         self.assertEqual(ck.listed_sources(r), {})
+        # What step 11's cross is told of M (16.322).
+        self.assertEqual(ck.listed_sources(r, skipped=True),
+                         {'M': 'transliteration'})
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             f.print_translit_report(r, 't2')
@@ -2518,9 +2550,9 @@ class CtypeMoved(unittest.TestCase):
 class TranslitReportLines(unittest.TestCase):
     """Lines print_translit_report writes."""
 
-    def lines(self, translit, skipped=0, builds=2):
+    def lines(self, translit, builds=2):
         r = ck.Report(None, builds, ['TEST'], [], {}, [], [], [], [],
-                      translit, skipped)
+                      translit, [])
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             f.print_translit_report(r, 't2')
@@ -2898,7 +2930,9 @@ def _bang_blocks(out):
 class CharmapCheckSaysWhyItDidNotRun(unittest.TestCase):
     """check_charmaps returns, beside what it lists, the reason it said
     NOT RUN, on each route: the report's own, and no build in common; and
-    None when it ran. The cross with step 11 prints it (9.4c,
+    None when it ran; and, third, what it settled of every source, those
+    it left out because step 2 lists them already included (16.322). The
+    cross with step 11 prints it (9.4c,
     false-negative-reviewer: two of its three routes gave none). What it
     lists is {source: what the check settled of it}, an empty one on the
     routes where it did not run (17.2)."""
@@ -2920,7 +2954,8 @@ class CharmapCheckSaysWhyItDidNotRun(unittest.TestCase):
     def test_the_reports_own(self):
         self.assertEqual(self.run_check(mock.Mock(not_run='a charmap is '
                                                   'missing', builds=3)),
-                         ({'sv_SE': 'changed'}, 'a charmap is missing'))
+                         ({'sv_SE': 'changed'}, 'a charmap is missing',
+                          {'sv_SE': 'changed'}))
 
     def test_its_own_not_run_lists_an_empty_dict(self):
         """Its two NOT RUN before any comparison, SUPPORTED missing and a
@@ -2937,30 +2972,42 @@ class CharmapCheckSaysWhyItDidNotRun(unittest.TestCase):
                     mock.patch.object(f, '_charmaps_not_run') as said:
                 got = f.check_charmaps(mock.Mock(), None, side('o'),
                                        side('n'), sup, set())
-                self.assertEqual(got, ({}, why))
+                self.assertEqual(got, ({}, why, {}))
                 said.assert_called_once_with(why)
 
     def test_each_source_with_what_was_settled_of_it(self):
         """The report's own findings, through collation_keys.listed_sources
         unmocked: a build the check could not settle is 'not compared',
-        never 'changed' (16.147)."""
-        report = ck.Report(None, 3, ['UTF-8'], [('UTF-8', 'UTF-8')], {}, [
-            ck.Found('aa_XX', 'aa_XX.UTF-8', ('UTF-8', 'UTF-8'), {0x41},
-                     ['aa_XX'], None),
-            ck.Found('bb_XX', 'bb_XX.UTF-8', ('UTF-8', 'UTF-8'), set(), [],
-                     'bb_XX at t2 uses a `...` range')], [], [], [], None, 0)
+        never 'changed' (16.147). What it left out because step 2 lists
+        it already is in the third value only, which step 11's cross
+        reads, never in what the check lists (16.322): C, whose rules
+        name a character a charmap changed, as on RHEL 8 -> 9; dd_XX, not
+        compared; and a transliteration of ee_XX."""
+        P = ('UTF-8', 'UTF-8')
+        report = ck.Report(None, 3, ['UTF-8'], [P], {}, [
+            ck.Found('aa_XX', 'aa_XX.UTF-8', P, {0x41}, ['aa_XX'], None),
+            ck.Found('bb_XX', 'bb_XX.UTF-8', P, set(), [],
+                     'bb_XX at t2 uses a `...` range')], [
+            ck.Found('C', 'C.utf8', P, {0x42}, ['C'], None),
+            ck.Found('dd_XX', 'dd_XX.UTF-8', P, set(), [],
+                     'dd_XX at t2 uses a `...` range')], [], [], None, [
+            ck.Translit('ee_XX', 'ee_XX.UTF-8', P, 1, {0x43}, [], None)])
         self.assertEqual(self.run_check(report, listed=False),
                          ({'aa_XX': 'changed', 'bb_XX': 'not compared'},
-                          None))
+                          None,
+                          {'aa_XX': 'changed', 'bb_XX': 'not compared',
+                           'C': 'changed', 'dd_XX': 'not compared',
+                           'ee_XX': 'transliteration'}))
 
     def test_no_build_in_common(self):
-        listed, why = self.run_check(mock.Mock(not_run=None, builds=0))
+        listed, why, settled = self.run_check(mock.Mock(not_run=None,
+                                                        builds=0))
         self.assertEqual(why, f.STEP2_WORDS.none_compared.format(
             old='o', new='n'))
 
     def test_it_ran(self):
         self.assertEqual(self.run_check(mock.Mock(not_run=None, builds=3)),
-                         ({'sv_SE': 'changed'}, None))
+                         ({'sv_SE': 'changed'}, None, {'sv_SE': 'changed'}))
 
 
 class StepTwoSetsApartWhatItCouldNotCompare(unittest.TestCase):
@@ -3000,14 +3047,14 @@ class StepTwoSetsApartWhatItCouldNotCompare(unittest.TestCase):
              ck.Found('cc_XX', 'cc_XX.UTF-8', P, {0x41}, ['cc_XX'], None)],
             [], [], [], ck.TranslitReport(0, 0, 0, [
                 ck.Translit('tt_XX', 'tt_XX.UTF-8', P, 0, set(), [],
-                            'a translit_ignore line')]), 0)
+                            'a translit_ignore line')]), [])
         side = lambda tag: mock.Mock(tag=tag)
         out = io.StringIO()
         with mock.patch.object(f.ck, 'compare', return_value=report), \
                 contextlib.redirect_stdout(out):
-            keyed, why = f.check_charmaps(mock.Mock(), None, side('t1'),
-                                          side('t2'), {}, set(),
-                                          builds=([], []))
+            keyed, why, settled = f.check_charmaps(
+                mock.Mock(), None, side('t1'), side('t2'), {}, set(),
+                builds=([], []))
         self.assertIsNone(why)
         aliases = ({'bb_alias': 'bb_XX.UTF-8'}, {'bb_alias': 'bb_XX.UTF-8'})
         names = sorted(set(keyed) | {'bb_alias'})
@@ -3054,7 +3101,7 @@ class CharmapCheckNamesWhatItSettled(unittest.TestCase):
     def report(self, found, translit):
         return ck.Report(None, 9, ['UTF-8'], [self.P], {}, found, [], [], [],
                          ck.TranslitReport(1, 1, 0, translit)
-                         if translit is not None else None, 0)
+                         if translit is not None else None, [])
 
     def test_each_state_once(self):
         got = ck.listed_sources(self.report(

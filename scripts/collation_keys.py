@@ -2662,8 +2662,7 @@ settled, or None."""
 
 Report = collections.namedtuple(
     'Report', 'not_run builds charmaps changed sizes found skipped '
-              'not_compared unsearched translit translit_skipped',
-    defaults=(None, 0))
+              'not_compared unsearched translit translit_skipped')
 Report.__doc__ = """not_run: None, or why nothing was compared. builds: how
 many builds were compared; charmaps: those they use; changed: [(old, new)]
 whose blobs differ; sizes: {pair: (size of K, added, removed), or None when
@@ -2674,7 +2673,8 @@ SUPPORTED entries at both tags whose source is not at both; unsearched:
 translit: the TranslitReport of point 6, None when no charmap changed, no
 LC_CTYPE is read differently (ctype_moved) and both tags read bytes alike
 (_readers_differ), its found without the builds step 2 lists
-anyway, or `found` lists; translit_skipped: how many of those."""
+anyway, or `found` lists; translit_skipped: those builds' [Translit],
+with no default, so that no route can leave them out."""
 
 
 def reset():
@@ -2742,7 +2742,7 @@ def compare(old, new, builds_old, builds_new, already_listed,
     if missing:
         return Report(f"{g.SUPPORTED} names charmaps that are not there: "
                       f"{', '.join(missing)}", len(common), used, [], {}, [],
-                      [], not_compared, [], None, 0)
+                      [], not_compared, [], None, [])
 
     pairs = sorted({(a.charmap, b.charmap) for a, b in common})
     changed = [p for p in pairs
@@ -2872,19 +2872,31 @@ def compare(old, new, builds_old, builds_new, already_listed,
             read_more({}, locales=True)
         translit = compare_translit(old, new, common, ks, bad, read_more)
 
-    skipped, tskipped = [], 0
+    skipped, tskipped = [], []
     if found or (translit and translit.found):
-        listed = already_listed()
-        skipped = [f for f in found if f.source in listed]
-        found = [f for f in found if f.source not in listed]
+        found, skipped, kept, tskipped = left_out(
+            found, translit.found if translit else [], already_listed())
         if translit:
-            entries = {f.entry for f in found if f.entry}
-            kept = [f for f in translit.found if f.source not in listed
-                    and f.entry not in entries]
-            tskipped = len(translit.found) - len(kept)
             translit = translit._replace(found=kept)
     return Report(None, len(common), used, changed, sizes, found, skipped,
                   not_compared, unsearched, translit, tskipped)
+
+
+def left_out(found, translit_found, listed):
+    """(found, skipped, kept, translit skipped): what the check lists
+    and what it leaves out because step 2 lists it already (LISTED, the
+    sources whose rules differ or could not be compared), of what the
+    check found of the charmaps (FOUND) and of the transliterations
+    (TRANSLIT_FOUND). A transliteration is left out too where the check
+    still lists its build (what it keeps of FOUND, after LISTED is taken
+    out). What is left out is returned too, for step 11's cross
+    (listed_sources(skipped=True), 16.322)."""
+    skipped = [f for f in found if f.source in listed]
+    found = [f for f in found if f.source not in listed]
+    entries = {f.entry for f in found if f.entry}
+    kept = [f for f in translit_found if f.source not in listed
+            and f.entry not in entries]
+    return found, skipped, kept, [f for f in translit_found if f not in kept]
 
 
 # What the check settled of a source it lists, strongest first: a charmap
@@ -2896,14 +2908,18 @@ LISTED_STATES = ('changed', 'transliteration', 'not compared',
                  'transliteration not compared')
 
 
-def listed_sources(report):
+def listed_sources(report, skipped=False):
     """{source name: one of LISTED_STATES}, every source the report lists
-    for the summary, with what the check settled of it."""
+    for the summary, with what the check settled of it; with SKIPPED, also
+    what it left out because step 2 lists the source already or, for a
+    transliteration, because the report lists its build already
+    (left_out), each source taking its strongest state."""
     got = [(f.source, 'not compared' if f.reason else 'changed')
-           for f in report.found]
+           for f in report.found + (report.skipped if skipped else [])]
     got += [(f.source, 'transliteration not compared' if f.reason
              else 'transliteration')
-            for f in (report.translit.found if report.translit else ())]
+            for f in ((report.translit.found if report.translit else [])
+                      + (list(report.translit_skipped) if skipped else []))]
     out = {}
     for source, state in got:
         if (source not in out

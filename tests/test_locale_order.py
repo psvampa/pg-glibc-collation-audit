@@ -718,6 +718,13 @@ def ctype_kind(text):
             raise ReportShapeError(f'which locales, unsaid or wrong: {text!r}')
         return 'ctype', {'same': mt[1], 'count': int(mt[3]), 'other': bool(mt[2]),
                          'utf8': bool(mt[4])}
+    # The built-in locales left out (13.66): their names, as the line
+    # gives them.
+    mt = re.fullmatch(CTYPE + r': not compared in (C and POSIX|C|POSIX), '
+                      r'which PostgreSQL handles itself or asks of glibc\'s '
+                      r'built-in locale, not of a locale file\.', text)
+    if mt:
+        return 'ctype', {'builtin': mt[1].split(' and ')}
     mt = re.fullmatch(CTYPE + r' of each character: not compared in (\d+) '
                       r'locale\(s\) of an encoding no UTF8 database can use; a '
                       r'database that can use them reads their rules byte '
@@ -1456,9 +1463,30 @@ def charmaps_by_bytes(text):
         raise ReportShapeError(f'the new machine names by bytes: {text!r}')
     return side if clause else None
 # A name the table gives inside a changed locale (table_naming): a character
-# with its glyph, a code point, a run, several code points, or bytes.
+# with its glyph, a code point, a run, several code points, or bytes, a
+# string of them or a range of strings of one length (16.249).
 TABLE_ITEM = (r'(?:\S+ \(U\+[0-9A-F]{4,6}\)|U\+[0-9A-F]{4,6}(?:\.\.U\+[0-9A-F]'
-              r'{4,6}|(?: U\+[0-9A-F]{4,6})+)?|bytes [0-9A-F]{2}(?: [0-9A-F]{2})*)')
+              r'{4,6}|(?: U\+[0-9A-F]{4,6})+)?|bytes [0-9A-F]{2}(?: [0-9A-F]{2})*'
+              r'(?:\.\.[0-9A-F]{2}(?: [0-9A-F]{2})*)?)')
+
+
+def byte_range(text):
+    """'bytes 80' as [b'\\x80'], 'bytes 80..82' as [b'\\x80', b'\\x81',
+    b'\\x82']: every string of one length from the first to the last, as
+    the characters file defines a range; refused when the two ends differ
+    in length or the range goes down."""
+    mt = re.fullmatch(r'bytes ((?:[0-9A-F]{2} )*[0-9A-F]{2})'
+                      r'(?:\.\.((?:[0-9A-F]{2} )*[0-9A-F]{2}))?', text)
+    if not mt:
+        raise ReportShapeError(f'unknown bytes: {text!r}')
+    first = bytes.fromhex(mt[1])
+    last = bytes.fromhex(mt[2]) if mt[2] else first
+    a, b = int.from_bytes(first, 'big'), int.from_bytes(last, 'big')
+    if len(first) != len(last) or b < a or (mt[2] and a == b):
+        raise ReportShapeError(f'not a range of strings of one length: {text!r}')
+    return [x.to_bytes(len(first), 'big') for x in range(a, b + 1)]
+
+
 # Why a side's table cannot be named (TableNaming.record), joined by '; '.
 TABLE_REASON = (r'(?:on the (?:old|new) machine, |the (?:OLD|NEW) file holds |the '
                 r'packed tables of the (?:OLD|NEW) file |the record (?:of|stored '
@@ -1729,6 +1757,7 @@ def parse_summary(text):
     if len(s['changes']) != count:
         fail(f'{count} changed and {len(s["changes"])} named')
     s['unmeasured'], s['not_on_new'], s['unmeasured_also'] = [], [], None
+    s['not_on_new_also'] = None
     s['refused'], s['refused_also'] = {}, []
     mt = re.fullmatch(r'     NOT known to be unchanged: (\d+) locale\(s\)',
                       line())
@@ -1761,6 +1790,11 @@ def parse_summary(text):
             listed = item(7, 9)
         if listed and listed.startswith(NOT_ON_NEW):
             s['not_on_new'] = names_of(listed[len(NOT_ON_NEW):])
+            also = item(9, 11)
+            if also is not None:
+                if not also.startswith('also, in PostgreSQL: '):
+                    fail('expected the PostgreSQL names')
+                s['not_on_new_also'] = parse_also(also)
             listed = None
         if listed is not None:
             raise ReportShapeError(f'unknown not-known item: {listed!r}')
@@ -2109,11 +2143,20 @@ def parse_report(text):
         if len(r['unmeasured']) != count:
             fail(f'not measured says {count} and lists {len(r["unmeasured"])}')
 
-    r['not_on_new'] = []
+    r['not_on_new'], r['not_on_new_also'] = [], {}
     if line().startswith('!! Not on the new machine'):
         count = int(re.match(r'!! Not on the new machine, so NOT known to be '
                              r'unchanged: (\d+) locale', paragraph())[1])
-        r['not_on_new'] = listed(count, 'not on the new machine')
+        # Each name, and under it the names PostgreSQL knows it by (16.50).
+        while re.fullmatch(r'  \S+', line()):
+            r['not_on_new'].append(line().strip())
+            at[0] += 1
+            also_ = also()
+            if also_ is not None:
+                r['not_on_new_also'][r['not_on_new'][-1]] = also_
+        if len(r['not_on_new']) != count:
+            fail(f'not on the new machine says {count} and lists '
+                 f'{len(r["not_on_new"])}')
     count = int(take(r'Only on the new machine: (\d+) locale\(s\)\.')[1])
     r['only_new'] = listed(count, 'only on the new machine')
     take('')
@@ -2663,13 +2706,27 @@ def tokens(text):
     return [element(t) for t in found]
 
 
-def parse_test(text):
-    """'U+0030 U+0041 / U+0B66 U+0061' as ([0x30, 0x41], [0xB66, 0x61]); a
-    string that is not a character is its bytes."""
+def parse_test(text, parts):
+    """'U+0030 / U+0B66' as ([0x30], [0xB66]); with PARTS, each string is
+    three parts joined by ' + ', the middle one the separator, as in
+    'U+0030 + bytes 01 01 + U+0041 / U+0B66 + bytes 01 01 + U+0061', read
+    as ([0x30, 0x41], [0xB66, 0x61]): the separator is checked and left
+    out. A string that is not a character is its bytes."""
     halves = text.split(' / ')
     if len(halves) != 2:
         raise ReportShapeError(f'unknown test pair: {text!r}')
-    return tuple(tokens(half) for half in halves)
+    out = []
+    for half in halves:
+        pieces = half.split(' + ')
+        if not parts:
+            if len(pieces) != 1:
+                raise ReportShapeError(f'parts where none belong: {text!r}')
+            out.append(tokens(half))
+            continue
+        if len(pieces) != 3 or pieces[1] != 'bytes 01 01':
+            raise ReportShapeError(f'not two parts and the separator: {text!r}')
+        out.append(tokens(pieces[0]) + tokens(pieces[2]))
+    return tuple(out)
 
 
 class CharactersFile(dict):
@@ -2686,8 +2743,11 @@ def parse_characters(text):
     if lines[-1] != '':
         raise ReportShapeError('the characters file does not end in a newline')
     lines.pop()
+    # The note on names, where the file needs it, then what the columns
+    # hold (16.187).
     first = re.fullmatch(r'# Step 11, .+ -> .+: every character, other string '
-                         r'and pair found, by locale\.(?: (.+))?', lines[0])
+                         r'and pair found, by locale\.(?: (.+))? '
+                         + re.escape(m.COLUMNS), lines[0])
     if not first or first[1] not in (None,) + NOTES:
         raise ReportShapeError(f'unknown first line: {lines[0]!r}')
     if lines[1] != 'locales\tfinding\tcharacters\thow\ttest\tbefore\tnow\tmeasured':
@@ -2990,7 +3050,8 @@ def parse_characters(text):
                 raise ReportShapeError(f'characters line {n}: {line!r}')
             row['how'] = tuple(pair)
         if test != '-':
-            row['test'] = parse_test(test)
+            row['test'] = parse_test(
+                test, parts=finding == 'told apart differently')
             if before not in ('<', '>') or now not in ('<', '>') or before == now:
                 raise ReportShapeError(f'characters line {n}: {line!r}')
             row['before'], row['now'] = before, now
@@ -3179,7 +3240,7 @@ def file_of(rows, label='x', warnings=(), closing=m.CLOSING):
     """The text of a characters file holding rows (cells) under one label,
     as compare() writes one."""
     lines = ['# Step 11, a -> b: every character, other string and pair found, '
-             'by locale.',
+             'by locale. ' + m.COLUMNS,
              'locales\tfinding\tcharacters\thow\ttest\tbefore\tnow\tmeasured']
     lines += [label + '\t' + '\t'.join(row) for row in rows]
     lines += ['# ' + text for text in list(warnings) + [closing]]
@@ -3435,6 +3496,91 @@ class SummaryForTheAudit(unittest.TestCase):
                 for name, entry in report['unmeasured'].items():
                     self.assertEqual(rows[name]['why'], 'both machines: '
                                      + entry['why']['both machines'])
+
+    def test_a_locale_not_on_the_new_machine_has_its_postgresql_names(self):
+        """16.50: a locale missing on the new machine is looked up by the
+        name a database uses too, so the report says that name under the
+        locale and the summary under its list, as the characters file's
+        row says it (also_rows, its own route). On RHEL 8 -> 9 one of the
+        two has a name of its own in PostgreSQL, en_US.utf8@ampm's
+        database locale; on RHEL 9 -> 10, aa_ER.utf8@saaho's."""
+        for key, named in (('8-9', {'en_US.utf8@ampm'}),
+                           ('9-10', {'aa_ER.utf8@saaho'})):
+            with self.subTest(pair=key):
+                summary, report = self.summary_and_report(key)
+                in_file = {names[0]: row['also']
+                           for names, rows in self.files[key].items()
+                           if names[0] in report['not_on_new']
+                           for row in rows
+                           if row['finding'] == 'also in PostgreSQL'}
+                self.assertEqual(set(in_file), named)
+                self.assertEqual(report['not_on_new_also'], in_file)
+                self.assertEqual(summary['not_on_new'], report['not_on_new'])
+                self.assertEqual(summary['not_on_new_also'],
+                                 in_file[next(iter(named))])
+
+    def test_the_bytes_a_sort_table_names_are_in_ranges(self):
+        """16.249: the strings a changed sort table names by their bytes
+        are one row per range, never a row per byte: or_IN's 128 single
+        bytes on RHEL 8 -> 9, th_TH.utf8's 128 on 9 -> 10 (th_TH's, named
+        with its charmap: NamedWithTheMachinesCharmaps). Read from the
+        rows: no two rows of a group and a kind could be one range, and
+        the ranges hold every byte they held one by one."""
+        expected = {('8-9', ('or_IN', 'or_IN.utf8')): ['bytes 80..FF'],
+                    ('9-10', ('th_TH.utf8',)): ['bytes 80..FF']}
+        seen = {}
+        for key in self.files:
+            for names, rows in self.files[key].items():
+                named = [r for r in rows if r['finding'] == 'sort table changed'
+                         and 'kind' in r and r['chars'].startswith('bytes ')]
+                if named:
+                    seen[key, names] = [r['chars'] for r in named]
+                for a, b in zip(named, named[1:]):
+                    if a['kind'] != b['kind']:
+                        continue
+                    last, first = byte_range(a['chars'])[-1], \
+                        byte_range(b['chars'])[0]
+                    with self.subTest(pair=key, locales=names, at=b['chars']):
+                        self.assertFalse(
+                            len(last) == len(first) and
+                            int.from_bytes(first, 'big')
+                            == int.from_bytes(last, 'big') + 1)
+        # Without the machines' charmaps, as here, more groups are named by
+        # bytes (sv_SE's ISO-8859-1, th_TH's TIS-620); those above are what
+        # audit.sh writes too, with them.
+        self.assertEqual({k: seen.get(k) for k in expected}, expected)
+        self.assertEqual([sum(len(byte_range(x)) for x in v)
+                          for v in expected.values()], [128, 128])
+
+    def test_the_first_line_says_what_the_columns_hold(self):
+        """16.187: the file's first line says what test, before and now
+        hold, the separator among the parts of a test string as the
+        measurement put it (SEPARATOR), and the row pairs changed; and the
+        rows bear it out: each told-apart pair names that separator (the
+        reader checks it and leaves it out), each pair has a sign on each
+        side, and each pair changed row is there in both pairs."""
+        sep = 'bytes ' + m.spaced(m.SEPARATOR)
+        for key in self.files:
+            with self.subTest(pair=key):
+                with open(os.path.join(self.tmp, key + '.tsv'),
+                          encoding='utf-8') as f:
+                    first = f.readline()
+                for words in ('Where the column test holds two strings, '
+                              'a / b,',
+                              'before and now say how a sorts against b',
+                              '(< before it, > after it)', f'the {sep} ',
+                              'The row pairs changed'):
+                    self.assertIn(words, flat(first))
+                rows = [r for group in self.files[key].values()
+                        for r in group]
+                told = [r for r in rows
+                        if r['finding'] == 'told apart differently'
+                        and r['test']]
+                self.assertTrue(told)
+                self.assertTrue(all(r['before'] in '<>' and r['now'] in '<>'
+                                    for r in rows if r['test']))
+                self.assertTrue([r for r in rows
+                                 if r['finding'] == 'pairs changed'])
 
     def test_a_cut_file_is_refused(self):
         """The end line counts the rows: a file cut on a row boundary, which
@@ -5816,12 +5962,26 @@ class Pieces(unittest.TestCase):
             m.test_pair(e(0x30), e(0xB66), self.rel('accent', (0, 2)),
                         self.rel('less', (0, 2)), '61.62> 30.E0ADA6> 61.41>',
                         (0, 2), naming),
-            ('U+0030 U+0041', 'U+0B66 U+0061', '<', '>'))
+            ('U+0030 + bytes 01 01 + U+0041', 'U+0B66 + bytes 01 01 + U+0061',
+             '<', '>'))
+        # The separator the cell names is the one the measurement put
+        # between a string and its probe (apart(), test_bytes), so the
+        # cell rebuilds the bytes compared (16.187).
+        cell = m.test_pair(e(0x30), e(0xB66), self.rel('accent', (0, 2)),
+                           self.rel('less', (0, 2)), '61.62> 30.E0ADA6> 61.41>',
+                           (0, 2), naming)
+        compared = m.test_bytes(e(0x30), e(0xB66), self.rel('accent', (0, 2)),
+                                self.rel('less', (0, 2)),
+                                '61.62> 30.E0ADA6> 61.41>', (0, 2), strings)
+        for half, parts in zip(cell[:2], compared[:2]):
+            self.assertEqual(half.split(' + ')[1],
+                             'bytes ' + m.spaced(parts[1]))
         # From the end of the string where the level is read from the end.
         self.assertEqual(
             m.test_pair(e(0x56), e(0x77), self.rel('accent'), self.rel('letters'),
                         '61.62< 61.C3A1> 61.41>', self.ALL, naming),
-            ('U+0062 U+0056', 'U+0061 U+0077', '>', '<'))
+            ('U+0062 + bytes 01 01 + U+0056', 'U+0061 + bytes 01 01 + U+0077',
+             '>', '<'))
         self.assertIsNone(m.test_pair(e(0x56), e(0x77), self.rel('tie'),
                                       self.rel('less'), '61.62> 61.C3A1> 61.41>',
                                       self.ALL, naming))
@@ -5829,7 +5989,24 @@ class Pieces(unittest.TestCase):
         self.assertEqual(
             m.test_pair(e(0x56), e(0x77), self.rel('accent'), self.rel('letters'),
                         '80.62< 61.C3A1> 61.41>', self.ALL, naming),
-            ('U+0062 U+0056', 'bytes 80 U+0077', '>', '<'))
+            ('U+0062 + bytes 01 01 + U+0056',
+             'bytes 80 + bytes 01 01 + U+0077', '>', '<'))
+
+    def test_bytes_named_in_ranges(self):
+        """16.249: strings of one length whose values follow one another
+        are one range, across a byte that carries (A0 FF, A1 00); a gap, a
+        change of length or a lone string ends one."""
+        b = bytes.fromhex
+        self.assertEqual(m.byte_runs([b('80'), b('81'), b('82'), b('84'),
+                                      b('FF'), b('A0FF'), b('A100'),
+                                      b('A102')]),
+                         ['bytes 80..82', 'bytes 84', 'bytes FF',
+                          'bytes A0 FF..A1 00', 'bytes A1 02'])
+        # FF and 0100 are one apart as numbers, never as strings of one
+        # length.
+        self.assertEqual(m.byte_runs([b('FF'), b('0100')]),
+                         ['bytes FF', 'bytes 01 00'])
+        self.assertEqual(m.byte_runs([]), [])
 
     def permutations(self):
         """200 small orders, each a few moves and reversals away from the
@@ -5988,6 +6165,26 @@ class FindingKinds(unittest.TestCase):
                     self.assertEqual(len(how), parts)
                     self.assertTrue(all(map(callable, how)))
 
+    def test_a_missing_locale_of_a_client_only_encoding(self):
+        """16.50, false-negative-reviewer round 1: a locale missing on the
+        new machine (a RHEL 8 with glibc-langpack-zh, a RHEL 9 without)
+        whose encoding PostgreSQL allows only on the client: where a
+        database can use it is said from the OLD machine's encoding, in
+        the report and in the summary, never as a database locale of its
+        own."""
+        o = {'zh_CN.gb18030': {'codeset': 'GB18030'},
+             'zh_CN.utf8': {'codeset': 'UTF-8'}}
+        ctx = {'pg_names': m.postgres_names(o), 'o': o}
+        items = [{'name': 'zh_CN.gb18030'}]
+        said = ('also, in PostgreSQL: this name, also spelt zh_CN.GB18030, '
+                'only in a SQL_ASCII database, as its locale or in CREATE '
+                'COLLATION, which only initdb or a superuser can set')
+        report = flat(' '.join(m.only_old_lines(items, ctx)))
+        self.assertIn('zh_CN.gb18030 ' + said, report)
+        summary = flat(' '.join(m.only_old_summary(items, ctx)))
+        self.assertTrue(summary.endswith(': zh_CN.gb18030 ' + said), summary)
+        self.assertNotIn('database locale', report + summary)
+
     def test_a_kind_with_no_entry_raises(self):
         """Rather than be left out of an output: a new kind of finding
         with no way to be printed, and a kind one output never takes."""
@@ -5997,7 +6194,8 @@ class FindingKinds(unittest.TestCase):
         with self.assertRaises(LookupError):
             m.Drawn([('a new kind', {})], m.REPORT)
         run = m.Drawn([('closing', {'text': m.CLOSING}),
-                       ('not on the new machine', {'name': 'x'})], m.REPORT)
+                       ('not on the new machine', {'name': 'x'})], m.REPORT,
+                      {'pg_names': {}, 'o': {}})
         run('closing')
         with self.assertRaises(LookupError):
             run.done()
@@ -7451,10 +7649,12 @@ STORED_9_TO_10 = [
 # The clean line of FEW: four UTF-8 locales, and C and POSIX of one byte.
 USE_FEW = ('use', {'converts': 4, 'one byte': 2, 'left out': {}})
 # And of their character rules: the four besides C and POSIX on one table.
+# C and POSIX, left out, are named on a line of their own (13.66).
 CTYPE_FEW = [('ctype', {'same': 'character', 'count': 4, 'other': False,
                         'utf8': True}),
              ('ctype', {'same': 'byte', 'count': 4, 'other': False,
-                        'utf8': False})]
+                        'utf8': False}),
+             ('ctype', {'builtin': ['C', 'POSIX']})]
 
 
 # Kept of each machine by the classes below, as the machines measured them:
@@ -7653,9 +7853,9 @@ class OtherStringsNamedInTheOutputs(Checks):
 def table_names(text):
     """The strings a 'sort table changed' row names (TABLE_ITEM), as a set
     of code points and bytes: each code point of a run or of several, and
-    the bytes of a name of bytes."""
+    the bytes of a name of bytes, or of every string of a range of them."""
     if text.startswith('bytes '):
-        return {bytes.fromhex(text[len('bytes '):])}
+        return set(byte_range(text))
     mt = re.fullmatch(r'U\+([0-9A-F]+)\.\.U\+([0-9A-F]+)', text)
     if mt:
         return set(range(int(mt[1], 16), int(mt[2], 16) + 1))
@@ -7759,6 +7959,20 @@ class NamedWithTheMachinesCharmaps(unittest.TestCase):
                          brief['charmaps_by_bytes'])
         self.assertEqual(report['charmaps_by_bytes'], rows.charmaps_by_bytes)
         return report['charmaps_by_bytes']
+
+    def test_the_bytes_are_named_in_ranges(self):
+        """16.249: the 41 bytes TIS-620 gives no character, which th_TH's
+        sort table names, are three rows, one per range of bytes that
+        follow one another, not 41."""
+        report, brief, rows = self.real
+        named = [r['chars'] for r in self.group(rows)
+                 if r['finding'] == 'sort table changed'
+                 and r.get('chars', '').startswith('bytes ')]
+        self.assertEqual(named, ['bytes 80..A0', 'bytes DB..DE',
+                                 'bytes FC..FF'])
+        held = [x for r in named for x in byte_range(r)]
+        self.assertEqual(len(held), 41)
+        self.assertFalse(set(held) & set(self.oracle))
 
     def test_the_premise(self):
         """glibc's TIS-620 gives no character to 41 of the bytes 01 to FF,
@@ -10751,8 +10965,11 @@ class CtypeCompared(Checks):
     def every(self, table, byte=SMALL_BYTES):
         return {name: (table, byte) for name in FOUR}
 
+    # C and POSIX, which every pair holds, said apart (13.66).
+    BUILTIN = {'builtin': ['C', 'POSIX']}
     SAME = [{'same': 'character', 'count': 4, 'other': False, 'utf8': True},
-            {'same': 'byte', 'count': 4, 'other': False, 'utf8': False}]
+            {'same': 'byte', 'count': 4, 'other': False, 'utf8': False},
+            BUILTIN]
 
     def test_the_same_rules(self):
         self.assertEqual(self.ctype(*self.pair(self.every(BASE), self.every(BASE))),
@@ -10765,7 +10982,8 @@ class CtypeCompared(Checks):
             {'all': 4, 'change': 'character', 'count': 1,
              'classified': {0x1063: 'punctuation -> letter'}, 'other': 0},
             {'where': 'character'},
-            {'same': 'byte', 'count': 4, 'other': False, 'utf8': False}])
+            {'same': 'byte', 'count': 4, 'other': False, 'utf8': False},
+            self.BUILTIN])
 
     def test_an_unclassified_character_is_counted_not_named(self):
         """U+AB69, which glibc 2.28 does not classify: regular expressions,
@@ -10902,7 +11120,8 @@ class CtypeCompared(Checks):
         self.assertEqual([found[0]['names'], found[1:]], [['sv_SE.utf8'], [
             {'where': 'character'},
             {'same': 'character', 'count': 3, 'other': True, 'utf8': True},
-            {'same': 'byte', 'count': 4, 'other': False, 'utf8': False}]])
+            {'same': 'byte', 'count': 4, 'other': False, 'utf8': False},
+            self.BUILTIN]])
 
     def test_bytes(self):
         """A database of one byte per character reads the byte tables; a
@@ -10915,7 +11134,8 @@ class CtypeCompared(Checks):
             {'all': 4, 'change': 'byte', 'count': 1,
              'bytes': {0xB5: 'no class -> letter, gains the capital 0xCC'}},
             {'where': 'byte'},
-            {'same': 'character', 'count': 4, 'other': False, 'utf8': True}])
+            {'same': 'character', 'count': 4, 'other': False, 'utf8': True},
+            self.BUILTIN])
         self.assertEqual([(r['chars'], r['how']) for r in rows[('LC_CTYPE_group_1',)]],
                          [('byte B5', 'upper: itself -> CC; classes: none -> alpha')])
 
@@ -10964,6 +11184,7 @@ class CtypeCompared(Checks):
         self.assertEqual(found, [
             {'same': 'character', 'count': 3, 'other': False, 'utf8': True},
             {'same': 'byte', 'count': 3, 'other': False, 'utf8': False},
+            self.BUILTIN,
             {'unknown': {'de_DE.utf8': {'both machines': 'x'}}}])
         found = self.ctype(*self.pair(
             self.every(BASE), self.every(BASE),
@@ -10997,6 +11218,7 @@ class CtypeCompared(Checks):
         self.assertEqual(self.ctype(old, new), [
             {'same': 'character', 'count': 3, 'other': False, 'utf8': True},
             {'same': 'byte', 'count': 3, 'other': False, 'utf8': False},
+            self.BUILTIN,
             {'unknown': {'de_DE.utf8': {'old machine': 'unsupported locale setting'}}}])
 
     def test_a_refused_locale_is_named_as_refused(self):
@@ -11018,9 +11240,20 @@ class CtypeCompared(Checks):
                 self.assertNotIn('unknown', [k for d in found for k in d])
 
     def test_c_and_posix_are_not_compared(self):
-        """PostgreSQL handles them itself: four compared of FEW's six."""
-        found = self.ctype(*self.pair(self.every(BASE), self.every(BASE)))
-        self.assertEqual([d['count'] for d in found], [4, 4])
+        """PostgreSQL handles them itself, or asks glibc's built-in locale:
+        four compared of FEW's six, and the two left out named in each
+        output, read from the lines themselves (13.66)."""
+        report, summary, rows = self.outputs(*self.pair(self.every(BASE),
+                                                        self.every(BASE)))
+        for where, checks in (('report', report['checks']),
+                              ('summary', summary['checks']),
+                              ('characters file', rows.checks)):
+            with self.subTest(where=where):
+                found = [d for kind, d in checks if kind == 'ctype']
+                self.assertEqual([d['count'] for d in found if 'count' in d],
+                                 [4, 4])
+                self.assertEqual([d['builtin'] for d in found
+                                  if 'builtin' in d], [['C', 'POSIX']])
 
     def test_a_locale_on_one_machine_only(self):
         def dropped(d):
@@ -11055,6 +11288,7 @@ class CtypeCompared(Checks):
             {'where': 'character and byte'},
             {'same': 'character', 'count': 2, 'other': True, 'utf8': True},
             {'same': 'byte', 'count': 2, 'other': True, 'utf8': False},
+            self.BUILTIN,
             {'unknown': {'sv_SE.utf8': {'new machine': 'x'}}}])
 
     def test_where_the_characters_are(self):
@@ -15878,13 +16112,15 @@ class SortTablesNamed(Checks):
             self.assertEqual(len(rows), len(named['items']) + named['more'])
             self.assertLessEqual(len(named['items']), m.LIST_LIMIT)
             # Each kind's count is the sequences of its rows, a run counted
-            # whole.
+            # whole, of code points or of bytes.
             counts = collections.Counter()
             for x in rows:
                 run = re.fullmatch(r'U\+([0-9A-F]+)\.\.U\+([0-9A-F]+)',
                                    x['chars'])
-                counts[x['kind']] += (int(run[2], 16) - int(run[1], 16) + 1
-                                      if run else 1)
+                counts[x['kind']] += (
+                    int(run[2], 16) - int(run[1], 16) + 1 if run
+                    else len(byte_range(x['chars']))
+                    if x['chars'].startswith('bytes ') else 1)
             self.assertEqual({k: v for k, v in named['counts'].items() if v},
                              dict(counts))
         else:

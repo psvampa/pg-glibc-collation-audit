@@ -312,10 +312,15 @@ def check_charmaps(reads, repo, side_old, side_new, sup, already,
     `builds` is [old, new] when the caller has them from the machines'
     measurements (machine_builds), in place of SUPPORTED's.
 
-    Returns ({source name: state}, why): why is the reason the check said
-    NOT RUN, on each of its routes, else None, so that a caller never reads
-    the empty list of a check that did not run as one that found
-    nothing."""
+    Returns ({source name: state}, why, {source name: state}): why is the
+    reason the check said NOT RUN, on each of its routes, else None, so
+    that a caller never reads the empty list of a check that did not run
+    as one that found nothing. The third holds every source the check
+    found something of, those it left out included, because step 2 lists
+    them already (`already`) or, for a transliteration, because it lists
+    the build already (listed_sources(skipped=True), each source in its
+    strongest state); step 11's cross says it beside each locale
+    (rules_by_name, 16.322). The first stays what the check lists."""
     old, new = side_old.tag, side_new.tag
     # The charmaps read ahead of time (CharmapReads.prefetch) are back by
     # now: the verdicts above took far longer than one `git cat-file`.
@@ -332,12 +337,12 @@ def check_charmaps(reads, repo, side_old, side_new, sup, already,
                           if sup[new] is not None else None)
         except ck.Unsettled as e:
             _charmaps_not_run(str(e))
-            return {}, str(e)
+            return {}, str(e), {}
     if builds_old is None or builds_new is None:
         where = ' and '.join(t for t in (old, new) if sup[t] is None)
         why = f"{g.SUPPORTED} does not exist at {where}"
         _charmaps_not_run(why)
-        return {}, why
+        return {}, why, {}
     by_entry = {b.entry: b.charmap for b in builds_old}
     cross = {(by_entry[b.entry], b.charmap) for b in builds_new
              if b.entry in by_entry and by_entry[b.entry] != b.charmap}
@@ -379,7 +384,8 @@ def check_charmaps(reads, repo, side_old, side_new, sup, already,
     why = (report.not_run if report.not_run
            else _said(words, 'none_compared', old, new)
            if not report.builds else None)
-    return ck.listed_sources(report), why
+    return (ck.listed_sources(report), why,
+            ck.listed_sources(report, skipped=True))
 
 
 def _measured_names(sd):
@@ -433,10 +439,11 @@ def rules_by_name(sides, aliases, got, unread, keyed, unmapped):
     never saw the file); a name no file builds is not compared, "no locale
     file of that name" (a locale an admin built with localedef -i under a
     name of their own). charmap is what the character set check settled
-    of the file the name is built from, where it lists it (KEYED is
-    {file: one of collation_keys.LISTED_STATES}; an alias such as swedish
-    is built from sv_SE, as step 2's list adds it): 'changed', 'not
-    compared', 'transliteration' or 'transliteration not compared'
+    of the file the name is built from, including a file it left out
+    because step 2 lists it already (KEYED is check_charmaps' third
+    value, {file: one of collation_keys.LISTED_STATES}; an alias such
+    as swedish is built from sv_SE, as step 2's list adds it): 'changed',
+    'not compared', 'transliteration' or 'transliteration not compared'
     (16.147, 16.316); else 'not compared' where it could not trace the
     name to its charmap (UNMAPPED); else '-'."""
     import node_charmaps as nc
@@ -1036,17 +1043,15 @@ def _main(opts):
                             [f"{n}: {w}" for n, w in names_])
             if why:
                 _charmaps_not_run(why)
-                keyed, cm_why = {}, why
+                keyed, cm_why, settled = {}, why, {}
             else:
-                keyed, cm_why = check_charmaps(
+                keyed, cm_why, settled = check_charmaps(
                     charmap_reads, repo, side_old, side_new, sup, already,
                     step2_words(noun, machines=True), builds=measured)
         else:
-            keyed, cm_why = check_charmaps(charmap_reads, repo, side_old,
-                                           side_new, sup, already,
-                                           step2_words(
-                                               g.pair_word(repo, old_side,
-                                                           new_side)))
+            keyed, cm_why, settled = check_charmaps(
+                charmap_reads, repo, side_old, side_new, sup, already,
+                step2_words(g.pair_word(repo, old_side, new_side)))
         # Untested at this call site: on two machines' files the check's
         # own two NOT RUN (the report's, no build in common) were reached by
         # no file here; check_charmaps' test holds each reason, and
@@ -1057,7 +1062,7 @@ def _main(opts):
             {'state': 'not run', 'why': cm_why} if cm_why
             else {'state': 'compared', 'why': None}, (old_side, new_side),
             locales=rules_by_name((old_side, new_side), aliases, got, unread,
-                                  keyed, unmapped) if machine else None)
+                                  settled, unmapped) if machine else None)
 
         # The character set check names locale files; the aliases of each
         # side's locale.alias that are built from one join the list with it
