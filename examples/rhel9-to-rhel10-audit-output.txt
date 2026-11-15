@@ -122,7 +122,7 @@ Sort order CHANGED in 4 locale(s):
       U+0E40 U+0E03, U+0E40 U+0E04, U+0E40 U+0E05, U+0E40 U+0E06,
       U+0E40 U+0E07, U+0E40 U+0E08, U+0E40 U+0E09, U+0E40 U+0E0A,
       U+0E40 U+0E0B, U+0E40 U+0E0C, U+0E40 U+0E0D, U+0E40 U+0E0E,
-      U+0E40 U+0E0F, U+0E40 U+0E10, U+0E40 U+0E11, and 263 more.
+      U+0E40 U+0E0F, U+0E40 U+0E10, U+0E40 U+0E11, and 225 more.
     88 characters moved: U+0002..U+0020, U+0023..U+0027, U+002C..U+002F,
       U+003A..U+003B, U+003F..U+0060, U+007B, U+007D..U+007F, U+0E2F, U+0E3A,
       U+0E3F, U+0E46, U+0E4C, U+0E4F, U+0E5A..U+0E5B
@@ -145,7 +145,7 @@ Sort order CHANGED in 4 locale(s):
       U+0E40 U+0E02, U+0E40 U+0E03, U+0E40 U+0E04, U+0E40 U+0E05,
       U+0E40 U+0E06, U+0E40 U+0E07, U+0E40 U+0E08, U+0E40 U+0E09,
       U+0E40 U+0E0A, U+0E40 U+0E0B, U+0E40 U+0E0C, U+0E40 U+0E0D,
-      U+0E40 U+0E0E, U+0E40 U+0E0F, U+0E40 U+0E10, U+0E40 U+0E11, and 1,666
+      U+0E40 U+0E0E, U+0E40 U+0E0F, U+0E40 U+0E10, U+0E40 U+0E11, and 1,539
       more.
     50,584 characters moved, too many to list here
     1,112,062 character(s) and 10,111 other string(s) sort differently against
@@ -184,6 +184,7 @@ Unchanged: 863 locale(s).
    database or collation that uses one cannot use it on the new machine. If a
    language pack is missing, install it and measure the new machine again.
   aa_ER.utf8@saaho
+    also, in PostgreSQL: database locale aa_ER.UTF-8@saaho
   aa_ER@saaho
 Only on the new machine: 18 locale(s).
   crh_RU
@@ -264,6 +265,8 @@ Character rules (LC_CTYPE) of each character: not compared in 377 locale(s) of
    their rules byte by byte, or, in EUC, as the line on EUC says.
 Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
    compared on both machines.
+Character rules (LC_CTYPE): not compared in C and POSIX, which PostgreSQL
+   handles itself or asks of glibc's built-in locale, not of a locale file.
 !! Character rules (LC_CTYPE) in an EUC_JP, EUC_KR, EUC_CN or EUC_TW database:
    the same for ASCII, the only text compared, in 14 locale(s), since neither
    machine's glibc can convert their encoding; the line on upper(), lower()
@@ -330,7 +333,7 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
            U+0E40 U+0E02, U+0E40 U+0E03, U+0E40 U+0E04, U+0E40 U+0E05,
            U+0E40 U+0E06, U+0E40 U+0E07, U+0E40 U+0E08, U+0E40 U+0E09,
            U+0E40 U+0E0A, U+0E40 U+0E0B, U+0E40 U+0E0C, U+0E40 U+0E0D,
-           U+0E40 U+0E0E, U+0E40 U+0E0F, U+0E40 U+0E10, U+0E40 U+0E11, and 263
+           U+0E40 U+0E0E, U+0E40 U+0E0F, U+0E40 U+0E10, U+0E40 U+0E11, and 225
            more; 88 characters moved; 254 sort differently against another;
            the pairs that tell letters, accents and case apart are told apart
            differently themselves; pairs compared only by letters; 31 pairs
@@ -346,7 +349,7 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
            U+0E40 U+0E06, U+0E40 U+0E07, U+0E40 U+0E08, U+0E40 U+0E09,
            U+0E40 U+0E0A, U+0E40 U+0E0B, U+0E40 U+0E0C, U+0E40 U+0E0D,
            U+0E40 U+0E0E, U+0E40 U+0E0F, U+0E40 U+0E10, U+0E40 U+0E11, and
-           1,666 more; 50,584 characters moved; 1,122,173 sort differently
+           1,539 more; 50,584 characters moved; 1,122,173 sort differently
            against another; the pairs that tell letters, accents and case
            apart are told apart differently themselves; pairs compared only by
            letters; 45,693 pairs told apart differently; among them 1
@@ -366,6 +369,7 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
      NOT known to be unchanged: 2 locale(s)
        not on the new machine, so a database or collation that uses one cannot
          use it there: aa_ER.utf8@saaho, aa_ER@saaho
+         also, in PostgreSQL: database locale aa_ER.UTF-8@saaho
      Only on the new machine: 18 locale(s), which nothing made on the old
        machine uses: crh_RU, crh_RU.utf8, gbm_IN, gbm_IN.utf8, kv_RU,
        kv_RU.utf8, rif_MA, rif_MA.utf8, ssy_ER, ssy_ER.utf8, su_ID,
@@ -434,6 +438,9 @@ Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
         EUC says.
      Character rules (LC_CTYPE) of each byte: the same in the 865 locale(s)
         compared on both machines.
+     Character rules (LC_CTYPE): not compared in C and POSIX, which PostgreSQL
+        handles itself or asks of glibc's built-in locale, not of a locale
+        file.
      !! Character rules (LC_CTYPE) in an EUC_JP, EUC_KR, EUC_CN or EUC_TW
         database: the same for ASCII, the only text compared, in 14 locale(s),
         since neither machine's glibc can convert their encoding; the line on

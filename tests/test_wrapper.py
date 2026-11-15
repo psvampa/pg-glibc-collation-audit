@@ -559,7 +559,7 @@ class WrapperTakesTheKeyedListToReindex(unittest.TestCase):
             fh.write(f"import sys\n"
                      f"sys.path.insert(0, {SCRIPTS_DIR!r})\n"
                      f"import collation_keys as ck\n"
-                     f"ck.listed_sources = lambda report: "
+                     f"ck.listed_sources = lambda report, skipped=False: "
                      f"{{'sv_SE': 'changed'}}\n"
                      f"del sys.path[0]\n")
         cls.rc, cls.out = run_wrapper(MID, NEW, out_dir=cls.out_dir,
@@ -614,7 +614,7 @@ class WrapperSaysWhatTheCharmapCheckSettled(unittest.TestCase):
             fh.write(f"import sys\n"
                      f"sys.path.insert(0, {SCRIPTS_DIR!r})\n"
                      f"import collation_keys as ck\n"
-                     f"ck.listed_sources = lambda report: "
+                     f"ck.listed_sources = lambda report, skipped=False: "
                      f"{{'ko_KR': 'not compared', 'C': 'transliteration', "
                      f"'el_GR': 'transliteration not compared'}}\n"
                      f"del sys.path[0]\n")
@@ -1239,6 +1239,24 @@ class PrintsTheRhel8ToRhel9Example(_PrintsTheMachinesExample,
                                    unittest.TestCase):
     sides = (OLD, MID, 'rhel8.extract.tar.gz', 'rhel9.extract.tar.gz')
     example = 'rhel8-to-rhel9-audit-output.txt'
+
+    def test_the_cross_says_what_step_2_settled_of_c_utf8(self):
+        """16.322: step 2's character set check finds a character C's rules
+        name changed in UTF-8 and leaves C.utf8 out of its own list, since
+        step 2 lists it already (its rules differ); the cross with step 11
+        still says what it found, and of no locale it did not find."""
+        self.assertEqual(self.rc, 0, self.out[-2000:])
+        self.assertIn('C.utf8 (UTF-8): 1546 characters, named in C',
+                      flat(step_text(self.out, 2)))
+        got, alone = rules_beside(self.out)
+        by_name = {name: line for names, line in got.items()
+                   for name in names}
+        self.assertEqual(by_name['C.utf8'],
+                         'the order changes, and so do its rules (step 2); a '
+                         "character its file's rules name changed in a "
+                         'charmap')
+        self.assertEqual([n for n, line in by_name.items()
+                          if 'charmap' in line], ['C.utf8'])
 
 
 @needs_clone

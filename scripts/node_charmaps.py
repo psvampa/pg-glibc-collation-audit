@@ -610,7 +610,7 @@ def print_translit_report(report, new, words=STEP2_WORDS, old=None):
         line = ("Transliteration (LC_CTYPE): no compared locale build "
                 "builds a collating element out of a transliteration.")
     elif not unsettled:
-        k = report.translit_skipped
+        k = len(report.translit_skipped)
         line = (f"Transliteration (LC_CTYPE): the {k} locale build"
                 f"{'s' if k != 1 else ''} that may build a collating "
                 f"element out of a transliteration "
@@ -632,7 +632,7 @@ def print_translit_report(report, new, words=STEP2_WORDS, old=None):
                               for c in sorted(f.chars)],
                              indent='      ', label='transliterated characters')
     if report.translit_skipped and (t.elements or t.unmoved or unsettled):
-        n = report.translit_skipped
+        n = len(report.translit_skipped)
         print(textwrap.fill(
             f"{n} more locale build{'s' if n != 1 else ''} with collating "
             f"elements built differently, or not compared, "

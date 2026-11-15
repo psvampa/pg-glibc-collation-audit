@@ -4865,7 +4865,8 @@ def postgres_reach(codeset):
 
 
 def also_known_as(names, pg_names, locales):
-    """What else a PostgreSQL user may call the locales of one change, and,
+    """What else a PostgreSQL user may call the locales of one change or
+    of one finding (not measured, refused, not on the new machine), and,
     for those PostgreSQL never imports, where a database or CREATE COLLATION
     can use them."""
     aliases, spellings = {}, []
@@ -5186,18 +5187,22 @@ def test_level(before, now, probes, levels):
 
 def test_pair(x, y, before, now, probes, levels, naming):
     """(string a, string b, sign before, sign now) that shows a level change
-    between the strings x and y, each string as the tokens of its two
-    parts, or None when no level compared shows it."""
+    between the strings x and y, or None when no level compared shows it.
+    Each string is three parts joined by ' + ', in the order apart()
+    compares them: the string measured, SEPARATOR's bytes and one string
+    of the probe's pair, or the probe's string first where the level is
+    compared from the end (16.187)."""
     got = test_level(before, now, probes, levels)
     if got is None:
         return None
     lo, hi, prepend, k = got
     lo_, hi_ = naming.token_of(lo), naming.token_of(hi)
     x_, y_ = naming.token(x), naming.token(y)
+    sep = 'bytes ' + spaced(SEPARATOR)
     if prepend:
-        a, b = f'{hi_} {x_}', f'{lo_} {y_}'
+        a, b = f'{hi_} + {sep} + {x_}', f'{lo_} + {sep} + {y_}'
     else:
-        a, b = f'{x_} {hi_}', f'{y_} {lo_}'
+        a, b = f'{x_} + {sep} + {hi_}', f'{y_} + {sep} + {lo_}'
     return (a, b, '<' if before >> (1 + k) & 1 else '>',
             '<' if now >> (1 + k) & 1 else '>')
 
@@ -7436,15 +7441,16 @@ def ctype_texts(old, new, names, refused, model):
     PostgreSQL 17 and 18). The characters are compared only in the locales a
     UTF8 database can use, the bytes in all.
 
-    C and POSIX are not compared: PostgreSQL handles them itself. A locale
-    glibc refused on either side is named as that (TextModel.refused); one
-    whose rules either side could not measure is named with why, never
-    counted as the same; one on the new machine only has nothing to be
-    compared with. A database of EUC_JP, EUC_KR, EUC_CN or EUC_TW hands
-    glibc the characters glibc's converter makes of its text, so its
-    locales are compared on those, from each machine's converter part
-    (euc_texts). Which locales a UTF8 database can use, and each machine's
-    tables, are the model's (TextModel)."""
+    C and POSIX are not compared, and where the rules are compared a line
+    says so: PostgreSQL handles them itself or asks glibc's built-in locale,
+    never a locale file. A locale glibc refused on either side is named as
+    that (TextModel.refused); one whose rules either side could not measure
+    is named with why, never counted as the same; one on the new machine
+    only has nothing to be compared with. A database of EUC_JP, EUC_KR,
+    EUC_CN or EUC_TW hands glibc the characters glibc's converter makes of
+    its text, so its locales are compared on those, from each machine's
+    converter part (euc_texts). Which locales a UTF8 database can use, and
+    each machine's tables, are the model's (TextModel)."""
     earlier = [side for side, data in zip(('OLD', 'NEW'), (old, new))
                if 'ctype' not in data['held']]
     if earlier:
@@ -7497,6 +7503,7 @@ def ctype_texts(old, new, names, refused, model):
             elsewhere.append(name)
         byte_pairs.setdefault((keys[0][1], keys[1][1]), []).append(name)
     found, rows, sames = [], [], []
+    builtin = [n for n in ('C', 'POSIX') if n in names and n not in refused]
     sql = {'groups': [], 'why': None, 'unknown': sorted(unknown)}
     for what, pairs, changes in (
             ('character', wide_pairs, ctype_wide_changes),
@@ -7537,6 +7544,11 @@ def ctype_texts(old, new, names, refused, model):
                                   f'{"other " if groups else ""}{same} '
                                   'locale(s) compared on both machines'
                                   f'{UTF8_USE if what == "character" else ""}.'})
+        if what == 'byte' and builtin:
+            sames.append({'text': f'{CTYPE_LINE}: not compared in '
+                                  f'{" and ".join(builtin)}, which PostgreSQL '
+                                  "handles itself or asks of glibc's built-in "
+                                  'locale, not of a locale file.'})
         if what == 'character' and elsewhere:
             sames.append({'text': f'{CTYPE_LINE} of each character: not compared '
                                   f'in {len(elsewhere)} locale(s) of an encoding '
@@ -8596,7 +8608,8 @@ def table_naming(o, n, codeset, seqs=None, charmap=None):
     is bytes. Characters of consecutive code points are one run, as step
     11 writes them; a string of several characters is named by its code
     points, and one glibc reads as no character by its bytes (Names, with
-    CHARMAP, the old machine's table for codeset). seqs:
+    CHARMAP, the old machine's table for codeset), those of one length that
+    follow one another as a range (byte_runs). seqs:
     table_sequences(o, n), when already worked out."""
     marked, only_old, only_new, flips = seqs or table_sequences(o, n)
     if not (marked or only_old or only_new):
@@ -8624,18 +8637,22 @@ def table_naming(o, n, codeset, seqs=None, charmap=None):
                     run = f'U+{first:04X}..U+{last:04X}'
                     items.append((kind, run, run))
             singles.clear()
+        raw = []
         for cps, s in read:
             if cps is not None and len(cps) == 1:
                 singles.append(cps[0])
                 continue
             flush()
             if cps is None:
-                others = True
-                text = f'bytes {spaced(s)}'
-            else:
-                text = ' '.join(f'U+{c:04X}' for c in cps)
+                raw.append(s)
+                continue
+            text = ' '.join(f'U+{c:04X}' for c in cps)
             items.append((kind, text.replace(' ', '\0'), text))
         flush()
+        # Strings glibc reads as no character, by their bytes, in ranges.
+        for text in byte_runs(raw):
+            others = True
+            items.append((kind, text.replace(' ', '\0'), text))
     parts = []
     if marked:
         parts.append(f'it marks {len(marked):,} sequence(s) as changed')
@@ -8799,6 +8816,20 @@ def table_runs(xs, follows):
         else:
             out.append([x, x])
     return [tuple(r) for r in out]
+
+
+def byte_runs(strings):
+    """The sorted byte STRINGS as names, 'bytes 80' or a range 'bytes
+    80..FF': strings of one length whose values follow one another are one
+    range, every string of that length from the first to the last, as the
+    report's Naming writes them and its note on names defines them
+    (16.249)."""
+    def follows(a, b):
+        return (len(a) == len(b)
+                and int.from_bytes(b, 'big') == int.from_bytes(a, 'big') + 1)
+    return [f'bytes {spaced(first)}'
+            + (f'..{spaced(last)}' if last != first else '')
+            for first, last in table_runs(strings, follows)]
 
 
 def sequence_points(s, names):
@@ -9138,20 +9169,30 @@ def unmeasured_rows(items):
 def only_old_lines(items, ctx):
     # Not measured on the new machine is not measured: a machine missing
     # its language packs would otherwise look like a clean upgrade.
-    return [textwrap.fill(
+    out = [textwrap.fill(
         f'!! Not on the new machine, so NOT known to be unchanged: '
         f'{len(items)} locale(s). Either the upgrade removes them or '
         'their language pack is not installed there; a database or '
         'collation that uses one cannot use it on the new machine. If a '
         'language pack is missing, install it and measure the new machine '
-        'again.', width=78, subsequent_indent='   ')] + [
-        f'  {shown(d["name"])}' for d in items]
+        'again.', width=78, subsequent_indent='   ')]
+    for d in items:
+        out.append(f'  {shown(d["name"])}')
+        also = also_known_as([d['name']], ctx['pg_names'], ctx['o'])
+        if also:
+            out.append(filled(also, 4, 6))
+    return out
 
 
 def only_old_summary(items, ctx):
-    return wrapped('not on the new machine, so a database or collation that '
-                   'uses one cannot use it there: '
-                   + ', '.join(shown(d['name']) for d in items), 7, 9)
+    names = [d['name'] for d in items]
+    out = wrapped('not on the new machine, so a database or collation that '
+                  'uses one cannot use it there: '
+                  + ', '.join(map(shown, names)), 7, 9)
+    also = also_known_as(names, ctx['pg_names'], ctx['o'])
+    if also:
+        out += wrapped(also, 9, 11)
+    return out
 
 
 def only_old_rows(items):
@@ -9277,6 +9318,19 @@ def tag_version(tag):
 
 
 ALSO = 'also, in PostgreSQL: '
+
+# What the characters file's columns test, before and now hold, and its row
+# "pairs changed" (told_apart_rows, moved_rows, probes_rows).
+COLUMNS = ('Where the column test holds two strings, a / b, their order '
+           'shows the change, and before and now say how a sorts against b '
+           'on the old and the new machine (< before it, > after it). A '
+           'string written in parts joined by + is those parts in that '
+           'order: one of the strings measured and one string of the pair '
+           'that measures the level at which the change shows, with the '
+           'bytes 01 01 between them that keep them apart; the string of '
+           'the pair comes first where that level is compared from the end. '
+           'The row pairs changed gives those pairs on each machine, for '
+           "letters, accents and case, where the two machines' pairs differ.")
 
 
 def also_rows(names, pg_names, locales):
@@ -10441,7 +10495,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
                 f.write(f'# Step 11, {machine_label(old)} -> {machine_label(new)}: '
                         'every character, other string and pair found, by '
                         'locale.' + (' ' + note if note else '')
-                        + '\n')
+                        + ' ' + COLUMNS + '\n')
                 f.write('locales\tfinding\tcharacters\thow\ttest\tbefore\tnow\tmeasured\n')
                 count = 0
                 for names, found_rows in sorted(rows):

@@ -159,8 +159,8 @@ Sort order CHANGED in 14 locale(s):
       U+0B0F..U+0B10, U+0B13..U+0B15, U+0B15 U+0B4D U+0B37, U+0B16..U+0B28,
       U+0B2A..U+0B30, U+0B32..U+0B33, U+0B36..U+0B39, U+0B3C..U+0B43,
       U+0B47..U+0B48, U+0B4B..U+0B4D, U+0B56..U+0B57, U+0B5C..U+0B5D,
-      U+0B5F..U+0B61, U+0B66..U+0B70, bytes 80, bytes 81, bytes 82, and 1,671
-      more.
+      U+0B5F..U+0B61, U+0B66..U+0B70, bytes 80..FF, U+0B21 U+0B3C,
+      U+0B22 U+0B3C, and 1,544 more.
     50,554 characters moved, too many to list here
     all 1,112,063 character(s) and 10,111 other string(s) sort differently
       against at least one other
@@ -229,6 +229,7 @@ Unchanged: 851 locale(s).
    database or collation that uses one cannot use it on the new machine. If a
    language pack is missing, install it and measure the new machine again.
   en_US.utf8@ampm
+    also, in PostgreSQL: database locale en_US.UTF-8@ampm
   en_US@ampm
 Only on the new machine: 4 locale(s).
   ckb_IQ
@@ -362,6 +363,8 @@ Character rules (LC_CTYPE) of each character: not compared in 377 locale(s) of
    their rules byte by byte, or, in EUC, as the line on EUC says.
 Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
    compared on both machines.
+Character rules (LC_CTYPE): not compared in C and POSIX, which PostgreSQL
+   handles itself or asks of glibc's built-in locale, not of a locale file.
 !! Character rules (LC_CTYPE) in an EUC_JP, EUC_KR, EUC_CN or EUC_TW database:
    the same for ASCII, the only text compared, in 14 locale(s), since the new
    machine's glibc cannot convert their encoding; the line on upper(), lower()
@@ -392,13 +395,15 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
    which is what glibc's comparison code reads, or compares bytes on both.
 
      Each locale of the old machine step 11 names, beside its rules (step 2):
-       C.utf8, or_IN, or_IN.utf8, sv_FI, sv_FI.iso88591, sv_FI.iso885915@euro,
-         sv_FI.utf8, sv_FI@euro, sv_SE, sv_SE.iso88591, sv_SE.iso885915,
-         sv_SE.utf8, swedish: the order changes, and so do its rules (step 2)
+       C.utf8: the order changes, and so do its rules (step 2); a character
+         its file's rules name changed in a charmap
        en_US.utf8@ampm, en_US@ampm: not on the new machine; rules (step 2):
          not compared, no file en_US@ampm on the new side; this does not show
          the order
        ko_KR.utf8: the order changes; its rules (step 2) do not
+       or_IN, or_IN.utf8, sv_FI, sv_FI.iso88591, sv_FI.iso885915@euro,
+         sv_FI.utf8, sv_FI@euro, sv_SE, sv_SE.iso88591, sv_SE.iso885915,
+         sv_SE.utf8, swedish: the order changes, and so do its rules (step 2)
 
 ================================================================
 == AUDIT SUMMARY  glibc-2.28-251.el8_10.40 -> glibc-2.34-275.el9_8
@@ -464,12 +469,12 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
            U+0B15 U+0B4D U+0B37, U+0B16..U+0B28, U+0B2A..U+0B30,
            U+0B32..U+0B33, U+0B36..U+0B39, U+0B3C..U+0B43, U+0B47..U+0B48,
            U+0B4B..U+0B4D, U+0B56..U+0B57, U+0B5C..U+0B5D, U+0B5F..U+0B61,
-           U+0B66..U+0B70, bytes 80, bytes 81, bytes 82, and 1,671 more;
-           50,554 characters moved; 1,122,174 sort differently against
-           another; the pairs that tell letters, accents and case apart are
-           told apart differently themselves; pairs compared only by letters
-           and case; 46,136 pairs told apart differently; among them 37
-           character(s) that did not move: U+0009..U+000D, U+0020..U+0022,
+           U+0B66..U+0B70, bytes 80..FF, U+0B21 U+0B3C, U+0B22 U+0B3C, and
+           1,544 more; 50,554 characters moved; 1,122,174 sort differently
+           against another; the pairs that tell letters, accents and case
+           apart are told apart differently themselves; pairs compared only by
+           letters and case; 46,136 pairs told apart differently; among them
+           37 character(s) that did not move: U+0009..U+000D, U+0020..U+0022,
            U+0028..U+002B, U+0030..U+0039, U+003C..U+003E, U+007C, U+007E,
            U+0B66..U+0B6F; 8,406 more pair(s) the measurement cannot decide
          also, in PostgreSQL: database locale or_IN.UTF-8
@@ -506,6 +511,7 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
      NOT known to be unchanged: 2 locale(s)
        not on the new machine, so a database or collation that uses one cannot
          use it there: en_US.utf8@ampm, en_US@ampm
+         also, in PostgreSQL: database locale en_US.UTF-8@ampm
      Only on the new machine: 4 locale(s), which nothing made on the old
        machine uses: ckb_IQ, ckb_IQ.utf8, mnw_MM, mnw_MM.utf8
      Of the 867 locale(s) on the old machine: 14 changed, 851 unchanged, 0 not
@@ -643,6 +649,9 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
         EUC says.
      Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
         compared on both machines.
+     Character rules (LC_CTYPE): not compared in C and POSIX, which PostgreSQL
+        handles itself or asks of glibc's built-in locale, not of a locale
+        file.
      !! Character rules (LC_CTYPE) in an EUC_JP, EUC_KR, EUC_CN or EUC_TW
         database: the same for ASCII, the only text compared, in 14 locale(s),
         since the new machine's glibc cannot convert their encoding; the line
@@ -676,13 +685,15 @@ Character rules (LC_CTYPE) of each byte: the same in the 863 locale(s)
         compares bytes on both.
      Full report: step 11 above.
      Each locale of the old machine step 11 names, beside its rules (step 2):
-       C.utf8, or_IN, or_IN.utf8, sv_FI, sv_FI.iso88591, sv_FI.iso885915@euro,
-         sv_FI.utf8, sv_FI@euro, sv_SE, sv_SE.iso88591, sv_SE.iso885915,
-         sv_SE.utf8, swedish: the order changes, and so do its rules (step 2)
+       C.utf8: the order changes, and so do its rules (step 2); a character
+         its file's rules name changed in a charmap
        en_US.utf8@ampm, en_US@ampm: not on the new machine; rules (step 2):
          not compared, no file en_US@ampm on the new side; this does not show
          the order
        ko_KR.utf8: the order changes; its rules (step 2) do not
+       or_IN, or_IN.utf8, sv_FI, sv_FI.iso88591, sv_FI.iso885915@euro,
+         sv_FI.utf8, sv_FI@euro, sv_SE, sv_SE.iso88591, sv_SE.iso885915,
+         sv_SE.utf8, swedish: the order changes, and so do its rules (step 2)
 
 -- Warnings the clean results above do NOT cover
      !! Signatures NOT checked for glibc-2.28, glibc-2.34 (why is on each one's

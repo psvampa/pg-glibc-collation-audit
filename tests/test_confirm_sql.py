@@ -271,28 +271,31 @@ class WrittenFromTheRecordedMeasurements(unittest.TestCase):
     def test_every_pair_is_one_the_characters_file_names(self):
         """The pairs of the UTF8 file of 8 -> 9, against the test column
         of the characters file the same comparison writes, read the other
-        way: tokens to bytes, the two parts joined as step 11 measured
-        them. The file's strings carry a space where the measurement had
-        SEPARATOR, so the file is never what the SQL is made from."""
+        way: tokens to bytes, the parts joined by ' + ' as written, the
+        separator among them as its bytes (16.187), so the file's cell is
+        the bytes step 11 measured. The file is never what the SQL is made
+        from."""
         chars = os.path.join(self.dir, 'chars.89.tsv')
         self.assertEqual(self.runs['89'][0], 0)
 
         def to_bytes(text):
-            parts, tokens = [], text.split(' ')
-            i = 0
-            while i < len(tokens):
-                if tokens[i].startswith('U+'):
-                    parts.append(chr(int(tokens[i][2:], 16)).encode('utf-8'))
-                    i += 1
-                else:
-                    self.assertEqual(tokens[i], 'bytes')
-                    j = i + 1
-                    while j < len(tokens) and re.fullmatch('[0-9A-F]{2}',
-                                                           tokens[j]):
-                        j += 1
-                    parts.append(bytes.fromhex(''.join(tokens[i + 1:j])))
-                    i = j
-            return m.SEPARATOR.join(parts)
+            parts = []
+            for piece in text.split(' + '):
+                tokens = piece.split(' ')
+                i = 0
+                while i < len(tokens):
+                    if tokens[i].startswith('U+'):
+                        parts.append(chr(int(tokens[i][2:], 16)).encode('utf-8'))
+                        i += 1
+                    else:
+                        self.assertEqual(tokens[i], 'bytes')
+                        j = i + 1
+                        while j < len(tokens) and re.fullmatch('[0-9A-F]{2}',
+                                                               tokens[j]):
+                            j += 1
+                        parts.append(bytes.fromhex(''.join(tokens[i + 1:j])))
+                        i = j
+            return b''.join(parts)
 
         from_file, unstorable = set(), 0
         with open(chars, encoding='utf-8') as f:
@@ -393,8 +396,15 @@ class WrittenFromTheRecordedMeasurements(unittest.TestCase):
                         or cols[2] == '-':
                     continue
                 run = re.fullmatch(r'U\+(\w+)\.\.U\+(\w+)', cols[2])
+                # A range of bytes is every string of its length between
+                # its ends (16.249).
+                runb = re.fullmatch(r'bytes ([0-9A-F ]+)\.\.([0-9A-F ]+)',
+                                    cols[2])
                 named += (int(run.group(2), 16) - int(run.group(1), 16) + 1
-                          if run else 1)
+                          if run else
+                          int(runb.group(2).replace(' ', ''), 16)
+                          - int(runb.group(1).replace(' ', ''), 16) + 1
+                          if runb else 1)
             tested = len(self.rows_of(pair).get((name, 'table'), ()))
             with self.subTest(group=group):
                 self.assertIn(f'not tested: {label}: {named - tested:,} '
