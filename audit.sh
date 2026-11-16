@@ -150,12 +150,13 @@ export PG_GLIBC_AUDIT_OUT="$OUT_DIR"
 # of a build, whose own sources the steps read. latest-elN is a build too,
 # and nothing here asks the network what it is: that is done once, below,
 # after the machines' files are checked.
-# What a run leaves when it ends, however it ends: its temporary files
-# gone, and, where step 11 had compared the two measurements and a later
-# step stopped the run before step 11's report was printed, where that
-# report is (16.144): it is worked out first (below), and printed only after
-# 'What was compared' and step 2. One function, set once, so that no trap
-# replaces another; it changes no exit code.
+# What a run leaves when it ends, however it ends (but by SIGKILL, or by
+# SIGQUIT, Ctrl-\, which end bash without running this function): its
+# temporary files gone, and, where step 11 had compared the two
+# measurements and a later step stopped the run before step 11's report was
+# printed, where that report is (16.144): it is worked out first (below),
+# and printed only after 'What was compared' and step 2. One function, set
+# once, so that no trap replaces another; it changes no exit code.
 #
 # A run that stops before it writes in $OUT_DIR anything that outlives it
 # (the machines' files are laid out there under a temporary name, which
@@ -163,10 +164,21 @@ export PG_GLIBC_AUDIT_OUT="$OUT_DIR"
 # files the other way round, a side that is not the build its file names,
 # or cut short itself -- leaves whatever is there as it was: an earlier
 # run's files, of whichever pair, or the user's own. It removes none of
-# them, and says that none is its own (16.211). UNTOUCHED_OUT is cleared at
-# the first file it removes or writes there, under the pair's name, and no
-# run ends well before that. The exit code is not asked: bash 3.2 hands
-# this function 0 after a SIGTERM or a SIGHUP.
+# them, and, when this function runs, says that none is its own (16.211).
+# UNTOUCHED_OUT is cleared at the first file it removes or writes there,
+# under the pair's name, and no run ends well before that. The exit code is
+# not asked: bash 3.2 hands this function 0 after a SIGTERM or a SIGHUP.
+#
+# Until then a SIGTERM or a SIGHUP sent to this script alone (kill <pid>,
+# pkill -f audit.sh) reaches no step it runs, and bash used to end at once
+# and run this function while the step went on: --unpack laid its side out
+# again in NODE_TMP after it had been removed, and the run said it had left
+# nothing there (16.339); resolve wrote RESOLVED again. So bash takes both
+# signals until UNTOUCHED_OUT is cleared, runs the trap once the step under
+# way has ended (measured: about 0.3 s for --unpack), and ends by the same
+# signal. latest-elN, which waits on the mirror, is stopped instead, below.
+# A signal to the whole group (Ctrl-C, a closed terminal) ends the step too,
+# as before; one ignored when the run started (nohup) stays ignored.
 UNTOUCHED_OUT=1
 RESOLVED=""; NODE_TMP=""; ORDER_UNPRINTED=""
 on_exit() {
@@ -182,6 +194,8 @@ on_exit() {
   fi
 }
 trap on_exit EXIT
+trap 'trap - TERM; kill -TERM $$' TERM
+trap 'trap - HUP; kill -HUP $$' HUP
 RESOLVED=$(mktemp "${TMPDIR:-/tmp}/pg-glibc-resolve.XXXXXX")
 python3 "$SCRIPTS/glibc_locale_data.py" resolve --to "$RESOLVED" "$OLD" "$NEW"
 # A build typed as `rpm -q glibc` prints it, with the architecture, is read
@@ -262,8 +276,38 @@ fi
 # that every file, step and sentence below reads the name and the run is the
 # one that name would give. The line saying which build it took is printed
 # here and nowhere else. A side that cannot be resolved stops the run.
+#
+# The mirror can take as long as it likes to answer, and a kill must not wait
+# for it: latest runs in the background, and a signal stops it, waits for it
+# and ends the run by that signal. A step in the background ignores SIGINT
+# and SIGQUIT (Ctrl-C, Ctrl-\), so those are taken here too. The traps are
+# set before the step starts, and stop_latest takes the step from `jobs -p`
+# when LATEST is not set yet: it lists the step from the moment bash starts
+# it, and nothing before (this is the only step run in the background). Not
+# $!: under set -u it is an error until a step has run in the background,
+# and so is ${!:-} (measured on bash 3.2), and the run would end with 0.
 if [ -n "$OLD_LATEST$NEW_LATEST" ]; then
-  python3 "$SCRIPTS/glibc_locale_data.py" latest --to "$RESOLVED" "$OLD" "$NEW"
+  LATEST=""
+  stop_latest() {
+    trap - "$1"
+    local pid=${LATEST:-$(jobs -p)}
+    if [ -n "$pid" ]; then
+      kill -TERM "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+    kill -"$1" $$
+  }
+  trap 'stop_latest TERM' TERM
+  trap 'stop_latest HUP' HUP
+  trap 'stop_latest INT' INT
+  trap 'stop_latest QUIT' QUIT
+  python3 "$SCRIPTS/glibc_locale_data.py" latest --to "$RESOLVED" "$OLD" "$NEW" &
+  LATEST=$!
+  wait "$LATEST"
+  LATEST=""
+  trap 'trap - TERM; kill -TERM $$' TERM
+  trap 'trap - HUP; kill -HUP $$' HUP
+  trap - INT QUIT
   OLD=$(sed -n 1p "$RESOLVED"); NEW=$(sed -n 2p "$RESOLVED")
   if [ -z "$OLD" ] || [ -z "$NEW" ]; then
     echo "error: latest-elN came back as no build name. Not continuing." >&2
@@ -355,8 +399,9 @@ OLD_STEP1_LIST="$OUT_DIR/changed_locales.txt"
 # under its NOT checked.
 ORDER_CM=()
 # From here the run removes and writes in $OUT_DIR under the pair's name
-# (on_exit, above).
+# (on_exit, above), and a signal ends it at once again.
 UNTOUCHED_OUT=""
+trap - TERM HUP
 # Never one an earlier run left: removed before the layout writes it, and
 # the variable is exported only when this run wrote the file (a value from
 # the reader's environment would send the steps to another run's folders).
@@ -461,8 +506,13 @@ ORDER_SQL="$OUT_DIR/measured_order_confirm.$PAIR"
 VERDICTS="$OUT_DIR/measured_order_verdicts.$PAIR.json"
 CROSS="$OUT_DIR/measured_order_rules.$PAIR.txt"
 CROSS_LOG="$OUT_DIR/measured_order_rules.$PAIR.log"
-rm -f "$ORDER_LOG" "$ORDER_SUMMARY" "$ORDER_CHARACTERS" "$ORDER_SQL".*.sql \
+rm -f "$ORDER_LOG" "$ORDER_SUMMARY" "$ORDER_CHARACTERS" \
       "$VERDICTS" "$CROSS" "$CROSS_LOG"
+# This pair's SQL files, by the rule step 11 writes them with: not
+# "$ORDER_SQL".*.sql, which also took those of another pair of the same old
+# side whose new side is this one's with ".N" after it, as builds are named
+# (16.109).
+python3 "$SCRIPTS/locale_order.py" --remove-sql "$ORDER_SQL"
 if [ -n "$OLD_ORDER" ]; then
   if ! python3 "$SCRIPTS/locale_order.py" --compare "$OLD_ORDER" "$NEW_ORDER" \
        --tags "$OLD_TAG" "$NEW_TAG" --summary-to "$ORDER_SUMMARY" \

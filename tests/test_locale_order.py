@@ -6619,12 +6619,13 @@ class ExtractOnTheCommandLine(unittest.TestCase):
         self.assertEqual(p.returncode, 2)
         self.assertIn('writes a compressed file, not text', p.stderr.decode())
 
-    def test_the_four_runs_do_not_mix(self):
+    def test_the_runs_do_not_mix(self):
         for args in (('--extract', '--compare', RHEL8, RHEL9),
                      ('--extract', '--unpack', 'x', 'y'),
                      ('--compare', RHEL8, RHEL9, '--unpack', 'x', 'y'),
                      ('--compare', RHEL8, RHEL9, '--rules-beside', 'x', 'y',
-                      'z')):
+                      'z'),
+                     ('--remove-sql', 'x', '--unpack', 'x', 'y')):
             with self.subTest(args=args):
                 rc, out, err = run_script(*args)
                 self.assertEqual(rc, 2)

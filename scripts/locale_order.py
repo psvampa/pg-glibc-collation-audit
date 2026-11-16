@@ -9905,6 +9905,24 @@ def sql_paths(prefix, encoding):
     return f'{prefix}.{encoding}.sql'
 
 
+def remove_sql(prefix):
+    """Remove the files sql_paths names under prefix, for every encoding,
+    and the .partial a run cut short leaves beside each: a file an earlier
+    run wrote there, for an encoding this run writes none for, would read
+    as this run's. One encoding name and nothing else between prefix and
+    .sql: another pair of the same old side whose new side is this one's
+    with ".N" after it (builds are named so) shares the prefix and a dot,
+    and its files are not this run's to remove (16.109). Every encoding a
+    file is written for, a value of collation_keys.SERVER_ENCODINGS, is of
+    [A-Z0-9_]."""
+    folder = os.path.dirname(prefix) or '.'
+    base = os.path.basename(prefix)
+    for entry in os.listdir(folder):
+        if re.fullmatch(re.escape(base) + r'\.[A-Z0-9_]+\.sql(\.partial)?',
+                        entry):
+            os.remove(os.path.join(folder, entry))
+
+
 # Step 11's verdict for each locale, as its report states it: the states
 # verdicts_by_name gives, and the one that names no locale by name (a
 # locale its table or its bytes leave unchanged for any text is counted).
@@ -10125,15 +10143,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
             charmaps=(('why', ALONE), ('why', ALONE)), sql_to=None,
             verdicts_to=None):
     if sql_to:
-        # A file an earlier run wrote under this prefix, for an encoding
-        # this run writes none for, would read as this run's.
-        folder = os.path.dirname(sql_to) or '.'
-        base = os.path.basename(sql_to)
         try:
-            for entry in os.listdir(folder):
-                if re.fullmatch(re.escape(base) + r'\.[A-Z0-9_]+\.sql'
-                                r'(\.partial)?', entry):
-                    os.remove(os.path.join(folder, entry))
+            remove_sql(sql_to)
         except OSError as e:
             die(f'cannot write {sql_to}.*.sql: {e}')
     for path in (characters_to, verdicts_to):
@@ -10627,6 +10638,9 @@ def main():
     ap.add_argument('--unpack', nargs=2, metavar=('FILE', 'DIR'),
                     help='check a file --extract wrote and lay it out in DIR, '
                          'which must not exist, for audit.sh')
+    ap.add_argument('--remove-sql', metavar='PREFIX',
+                    help='remove the SQL files --sql-to PREFIX writes, and '
+                         'nothing else, for audit.sh')
     args = ap.parse_args()
     charmaps, given = [], False
     for side in ('old', 'new'):
@@ -10642,9 +10656,15 @@ def main():
         die('--tags, --summary-to, --characters-to, --sql-to, --verdicts-to '
             'and the charmaps options go with --compare')
     if sum(map(bool, (args.extract, args.compare, args.unpack,
-                      args.rules_beside))) > 1:
-        die('--extract, --compare, --unpack and --rules-beside are four '
-            'different runs; give one')
+                      args.rules_beside, args.remove_sql))) > 1:
+        die('--extract, --compare, --unpack, --rules-beside and --remove-sql '
+            'are five different runs; give one')
+    if args.remove_sql:
+        try:
+            remove_sql(args.remove_sql)
+        except OSError as e:
+            die(f'cannot remove {args.remove_sql}.*.sql: {e}')
+        return 0
     if args.rules_beside:
         return rules_beside(*args.rules_beside)
     if args.unpack:
