@@ -2755,13 +2755,25 @@ class TheProvenanceSaysWhatNoMetadataGives(unittest.TestCase):
     """report_build_provenance for a build whose SRPM no metadata gives a
     sha256 (vault 9.3's, taken from a listing): the line under its sha256
     and the `!!` say so, naming the build and the folder; a build whose
-    every file is listed says neither (the control)."""
+    every file is listed says neither (the control). Either way the `!!`
+    says what is checked in place of the GPG signatures, rpm's own digests
+    and the sha256 the metadata records, and calls neither the only check
+    (16.325)."""
 
     MIRROR = 'https://dl.rockylinux.org/'
     TREE = 'vault/rocky/9.3'
     NAME = 'glibc-2.34-83.el9.7'
+    OTHER = 'glibc-2.34-83.el9.12'
+    CHECKED = ("GPG signatures (rpm's own digests in each file are "
+               "checked), and the mirror metadata's (the sha256 it records "
+               "for each file is checked)")
 
-    def side(self, listed):
+    def assertNoOnly(self, out):
+        """out is flat(); the two words 16.325 removed."""
+        self.assertNotIn("only rpm's own digests", out)
+        self.assertNotIn('only check on each file', out)
+
+    def side(self, listed, name=NAME):
         files = {}
         for key, repo in (('srpm', 'BaseOS/source/tree'),
                           ('glibc-locale-source', 'AppStream/x86_64/os'),
@@ -2774,13 +2786,14 @@ class TheProvenanceSaysWhatNoMetadataGives(unittest.TestCase):
         prov = {'tag': 'glibc-2.34', 'tarball': bs.TARBALL_IS_TAG
                 % 'glibc-2.34', 'verified': [], 'applied': [], 'patches': 0,
                 'fetched': {'note': bs.FETCHED_NOTE, 'files': files}}
-        return g.Side('build', 'c' * 40, None, self.NAME + '.src', None,
+        return g.Side('build', 'c' * 40, None, name + '.src', None,
                       None, None, None, prov)
 
-    def report(self, listed):
+    def report(self, listed, *names):
         out = io.StringIO()
         with mock.patch('sys.stdout', out):
-            g.report_build_provenance([self.side(listed)])
+            g.report_build_provenance(
+                [self.side(listed, n) for n in names or (self.NAME,)])
         return out.getvalue()
 
     def test_an_srpm_no_metadata_gives_a_sha256_for(self):
@@ -2790,17 +2803,28 @@ class TheProvenanceSaysWhatNoMetadataGives(unittest.TestCase):
                       "is the file's as downloaded\n" % (' ' * 24, sha,
                                                           ' ' * 24), out)
         self.assertEqual(out.count('no metadata gives this sha256'), 1)
-        self.assertIn("whose sha256 is the only check on each file, but for "
-                      "the SRPM of %s, whose sha256 no metadata gives "
-                      "(%s%s publishes no source metadata): only rpm's own "
-                      "digests check that file;"
+        self.assertIn(self.CHECKED + ", but no metadata gives one for the "
+                      "SRPM of %s (%s%s publishes no source metadata): its "
+                      "sha256 is the file's as downloaded;"
                       % (self.NAME, self.MIRROR, self.TREE), flat(out))
+        self.assertNoOnly(flat(out))
+
+    def test_two_srpms_no_metadata_gives_a_sha256_for(self):
+        out = flat(self.report(False, self.NAME, self.OTHER))
+        where = self.MIRROR + self.TREE
+        self.assertIn(self.CHECKED + ", but no metadata gives one for the "
+                      "SRPMs of %s (%s publishes no source metadata) and %s "
+                      "(%s publishes no source metadata): each one's sha256 "
+                      "is the file's as downloaded;"
+                      % (self.NAME, where, self.OTHER, where), out)
+        self.assertNoOnly(out)
 
     def test_a_build_whose_every_file_is_listed(self):
         out = flat(self.report(True))
-        self.assertIn('whose sha256 is the only check on each file;', out)
+        self.assertIn(self.CHECKED + ';', out)
         self.assertNotIn('no metadata gives', out)
-        self.assertNotIn('but for the SRPM', out)
+        self.assertNotIn('as downloaded', out)
+        self.assertNoOnly(out)
 
 
 @needs_clone

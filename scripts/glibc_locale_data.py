@@ -2720,17 +2720,17 @@ def report_build_provenance(builds):
             "and the tarball once each, so what was not checked cannot be "
             "said.")
     if fetched:
-        items[gpg[0]] += (", and the mirror metadata's, whose sha256 is the "
-                          "only check on each file")
+        items[gpg[0]] += (", and the mirror metadata's (the sha256 it "
+                          "records for each file is checked)")
         if unlisted:
             many = len(unlisted) > 1
+            whose = "each one's" if many else 'its'
             items[gpg[0]] += (
-                f", but for the SRPM{'s' if many else ''} of "
-                + ' and '.join(f"{b}, whose sha256 no metadata gives ({where}"
-                               f" publishes no source metadata)"
-                               for b, where in unlisted)
-                + f": only rpm's own digests check "
-                f"{'those files' if many else 'that file'}")
+                f", but no metadata gives one for the "
+                f"SRPM{'s' if many else ''} of "
+                + ' and '.join(f"{b} ({where} publishes no source "
+                               f"metadata)" for b, where in unlisted)
+                + f": {whose} sha256 is the file's as downloaded")
     items[tarball[0]] = ("localedata/SUPPORTED and locale/ are in no binary "
                          "package: they are the SRPM's tarball, checked above "
                          "against the upstream tag, and its patches")

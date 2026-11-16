@@ -52,8 +52,7 @@ the sha256 the metadata records, and build() does the rest; given the
 glibc clone, build() also compares the SRPM's tarball with the upstream tag
 (tarball_is_tag). An SRPM published in a folder with no source metadata
 (vault 9.3) is the one exception: its sha256 is the file's as downloaded
-(Entry.listed false), and rpm's own digests are its check. latest() names
-a major version's newest build.
+(Entry.listed false). latest() names a major version's newest build.
 
 build_commit() makes a build a commit of the clone, again on every call: one
 parent, the upstream tag, and the tag's tree with localedata/ and locale/
@@ -96,8 +95,8 @@ SCOPE = ('localedata/', 'locale/')
 NOT_CHECKED = (
     "the compiler that built the binary packages, and the build's patches "
     'to code, such as those to the strcmp that strcoll calls',
-    "the SRPM's and the binary packages' GPG signatures (only rpm's own "
-    'digests are checked)',
+    "the SRPM's and the binary packages' GPG signatures (rpm's own "
+    'digests in each file are checked)',
     'the host that built the binary packages is taken to read the spec as '
     'the host that built the SRPM did (its architecture, its rpm and '
     'redhat-rpm-config macros)',
