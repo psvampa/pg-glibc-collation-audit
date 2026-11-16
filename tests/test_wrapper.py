@@ -2314,8 +2314,9 @@ class WrapperKilledAlone(unittest.TestCase):
     step it runs. Before the run writes in its folder it waits for the local
     step under way, so that step cannot lay a file out again after on_exit
     removed it (16.339), and stops latest-elN, which may wait on the mirror
-    for minutes; either way it then ends by that signal and no process of
-    the run is left. Once it writes, a kill ends it at once, as before.
+    for minutes; either way it then ends by that signal (bash 5 ends a
+    SIGQUIT there with 131) and no process of the run is left. Once it
+    writes, a kill ends it at once, as before.
 
     A python3 earlier in PATH holds the step named until the test lets it
     go, so the signal lands while that step runs, every time."""
@@ -2390,7 +2391,7 @@ class WrapperKilledAlone(unittest.TestCase):
             time.sleep(0.05)
         return True
 
-    def assertEndsBy(self, p, sig, out, tmp, sentence=True):
+    def assertEndsBy(self, p, sig, out, tmp, sentence=True, codes=None):
         try:
             p.wait(timeout=120)
         except subprocess.TimeoutExpired:
@@ -2405,8 +2406,9 @@ class WrapperKilledAlone(unittest.TestCase):
                 pass
         got = p.stdout.read().decode('utf-8', 'replace')
         self.assertFalse(left, 'a process of the run was left: ' + got)
-        # Ended by the signal itself, as a run cut short ends today.
-        self.assertEqual(p.returncode, -sig, got)
+        # Ended by the signal itself, as a run cut short ends today, or by
+        # one of the codes the caller gives.
+        self.assertIn(p.returncode, codes or (-sig,), got)
         self.assertEqual(os.listdir(out), ['left-by-an-earlier-run.txt'], got)
         if sentence:
             self.assertEqual(os.listdir(tmp), [], got)
@@ -2459,10 +2461,21 @@ class WrapperKilledAlone(unittest.TestCase):
                 conn, _ = server.accept()
                 self.addCleanup(conn.close)
                 (os.killpg if group else os.kill)(p.pid, sig)
-                # SIGQUIT ends bash without its EXIT trap, as it does today:
-                # neither the sentence nor the removal of its TMPDIR file.
-                self.assertEndsBy(p, sig, out, tmp,
-                                  sentence=sig != signal.SIGQUIT)
+                if sig != signal.SIGQUIT:
+                    self.assertEndsBy(p, sig, out, tmp)
+                    continue
+                # SIGQUIT ends macOS's bash 3.2 by the signal without its
+                # EXIT trap: no sentence and its TMPDIR file left, as
+                # today. bash 5 (CI, Linux) exits 131 and runs the trap,
+                # which then says the sentence and removes that file.
+                got = self.assertEndsBy(p, sig, out, tmp, sentence=False,
+                                        codes=(-sig, 128 + sig))
+                said = flat(got).count(LEFT_NOTHING.format(out))
+                if p.returncode == -sig:
+                    self.assertEqual(said, 0, got)
+                else:
+                    self.assertEqual(said, 1, got)
+                    self.assertEqual(os.listdir(tmp), [], got)
 
     def test_once_the_run_writes_a_kill_ends_it_at_once(self):
         """Past the stretch where it waits, audit.sh does not wait for the

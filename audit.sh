@@ -151,7 +151,7 @@ export PG_GLIBC_AUDIT_OUT="$OUT_DIR"
 # and nothing here asks the network what it is: that is done once, below,
 # after the machines' files are checked.
 # What a run leaves when it ends, however it ends (but by SIGKILL, or by
-# SIGQUIT, Ctrl-\, which end bash without running this function): its
+# SIGQUIT, Ctrl-\, which can end bash without running this function): its
 # temporary files gone, and, where step 11 had compared the two
 # measurements and a later step stopped the run before step 11's report was
 # printed, where that report is (16.144): it is worked out first (below),
