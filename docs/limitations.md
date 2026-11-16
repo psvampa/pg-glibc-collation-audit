@@ -9,6 +9,7 @@ something it cannot see has changed.
 4. [No step compares localedef's or strcoll's code](#no-step-compares-localedefs-or-strcolls-code)
 5. [What step 11 does not see](#what-step-11-does-not-see)
 6. [`LC_CTYPE` is compared by step 11 alone](#lc_ctype-is-compared-by-step-11-alone)
+7. [A locale you compiled yourself is read as glibc's](#a-locale-you-compiled-yourself-is-read-as-glibcs)
 
 ## `C.UTF-8` is invisible to a tag diff
 
@@ -196,6 +197,17 @@ The remaining categories (`LC_NUMERIC`, `LC_TIME`, `LC_MONETARY`,
 message text rather than index order. The one exception is the number of
 decimals of the `money` type, from `LC_MONETARY`, which changes what a stored
 value means: step 11 compares it on both machines.
+
+## A locale you compiled yourself is read as glibc's
+
+The name of a locale is traced to the file it is built from as glibc's
+own build does: the name without the part from the dot up to any @.
+A locale compiled with `localedef -i` from a file of your own, under a name
+that reads as one of glibc's files (`sv_SE.custom`, say, which reads as
+`sv_SE`), is taken for that file: step 2's list, and the rules set beside
+step 11's verdict, speak of glibc's file, not of the one you compiled. A
+compiled locale does not record which file it was compiled from. Step 11's
+verdict, and command 3, sort with the locale as you compiled it.
 
 ---
 
