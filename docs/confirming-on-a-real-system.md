@@ -108,9 +108,10 @@ Each of these changes what a comparison proves.
 ### The locale must actually be generated on both machines
 
 Check `locale -a` first. A locale that is not generated, or not imported into
-PostgreSQL, has no collation there, and the template stops at `CREATE TABLE`
-with `collation ... does not exist`, the same way on two machines that both
-lack it ([what shows that](#what-the-template-does)). A collation imported
+PostgreSQL, has no collation there, and the template stops at
+`CREATE TEMPORARY TABLE` with `collation ... does not exist`, the same way
+on two machines that both lack it
+([what shows that](#what-the-template-does)). A collation imported
 while the locale was there, and still in PostgreSQL after the locale left
 `locale -a` (its language pack removed, say), stops it later, at `CREATE
 INDEX`, with `could not create locale`. Check the exact name the test runs

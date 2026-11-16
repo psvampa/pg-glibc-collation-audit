@@ -506,12 +506,13 @@ def echo_arguments(raw, values):
     return ' '.join(out)
 
 
-#: The tag psql prints for each kind of statement the probe runs
-#: (PostgreSQL's CommandTag, as psql prints it). A statement of another
-#: kind is refused until it is written here.
+#: The tag psql prints for each kind of statement the probe and the
+#: template run (PostgreSQL's CommandTag, as psql prints it). A statement
+#: of another kind is refused until it is written here.
 TAGS = (('SELECT', None), ('WITH', None), ('SHOW', None), ('EXPLAIN', None),
         ('SET', 'SET'), ('RESET', 'RESET'), ('DO', 'DO'),
         ('DROP TABLE', 'DROP TABLE'), ('CREATE TABLE', 'CREATE TABLE'),
+        ('CREATE TEMPORARY TABLE', 'CREATE TABLE'),
         ('CREATE INDEX', 'CREATE INDEX'), ('INSERT', r'INSERT 0 \d+'))
 
 
