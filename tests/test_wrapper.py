@@ -21,6 +21,7 @@ import signal
 import socket
 import subprocess
 import tempfile
+import time
 import unittest
 
 from _harness import (COMPARED_BANNER, DEFAULT_OUT_DIR, STEP2_LISTED,
@@ -1170,11 +1171,18 @@ class WrapperRefusesBadInput(unittest.TestCase):
                               + pair_slug(NEW, NEW) + '.tsv')
         with open(listed, 'w', encoding='utf-8') as fh:
             fh.write('left by an earlier run\n')
-        # And its SQL files, one per database encoding.
+        # And its SQL files, one per database encoding, and one a run cut
+        # short left half written.
         sql = [os.path.join(self.out_dir, 'measured_order_confirm.'
-                            + pair_slug(NEW, NEW) + f'.{enc}.sql')
-               for enc in ('UTF8', 'LATIN1')]
-        for path in sql:
+                            + pair_slug(NEW, NEW) + f'.{enc}')
+               for enc in ('UTF8.sql', 'LATIN1.sql', 'EUC_JP.sql',
+                           'LATIN9.sql.partial')]
+        # Not those of another pair of the same old side whose new side is
+        # this one's with ".N" after it, as builds are named (16.109).
+        other = [os.path.join(self.out_dir, 'measured_order_confirm.'
+                              + pair_slug(NEW, NEW + '.4') + f'.{enc}.sql')
+                 for enc in ('UTF8', 'LATIN1')]
+        for path in sql + other:
             with open(path, 'w', encoding='utf-8') as fh:
                 fh.write('left by an earlier run\n')
         rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir)
@@ -1185,6 +1193,7 @@ class WrapperRefusesBadInput(unittest.TestCase):
         self.assertFalse(os.path.exists(keyed))
         self.assertFalse(os.path.exists(listed))
         self.assertEqual([x for x in sql if os.path.exists(x)], [])
+        self.assertEqual([x for x in other if os.path.exists(x)], other)
 
 
 @needs_clone
@@ -2297,6 +2306,191 @@ class WrapperCutShortBeforeItWrites(unittest.TestCase):
         self.assertEqual(os.listdir(out_dir), [os.path.basename(earlier)])
         self.assertEqual(flat(got).count(LEFT_NOTHING.format(out_dir)), 1,
                          got)
+
+
+@needs_clone
+class WrapperKilledAlone(unittest.TestCase):
+    """A signal to audit.sh alone (kill <pid>, pkill -f audit.sh) reaches no
+    step it runs. Before the run writes in its folder it waits for the local
+    step under way, so that step cannot lay a file out again after on_exit
+    removed it (16.339), and stops latest-elN, which may wait on the mirror
+    for minutes; either way it then ends by that signal (bash 5 ends a
+    SIGQUIT there with 131) and no process of the run is left. Once it
+    writes, a kill ends it at once, as before.
+
+    A python3 earlier in PATH holds the step named until the test lets it
+    go, so the signal lands while that step runs, every time."""
+
+    HOLD = ('#!/bin/sh\n'
+            'if printf \'%s\\n\' "$*" | grep -qE -- "$HOLD_WHAT"; then\n'
+            '  : > "$HOLD_DIR/held"\n'
+            '  while [ ! -e "$HOLD_DIR/go" ]; do sleep 0.02; done\n'
+            'fi\n'
+            'exec "$REAL_PYTHON3" "$@"\n')
+
+    @classmethod
+    def setUpClass(cls):
+        cls.old = node_file('old.tar', cut_few(RHEL8), OLD, sources=False)
+        cls.new = node_file('new.tar', cut_few(RHEL9), MID, sources=False)
+
+    def start(self, args, hold='^$', env_extra=None):
+        """audit.sh in a process group of its own, a step held; the folders
+        it writes in (its output folder and TMPDIR) and the hold's."""
+        work = tempfile.mkdtemp(prefix='pg-glibc-wrapper-killed-')
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        out, tmp, bin_ = (os.path.join(work, d) for d in ('out', 'tmp', 'bin'))
+        for d in (out, tmp, bin_):
+            os.makedirs(d)
+        with open(os.path.join(out, 'left-by-an-earlier-run.txt'), 'w',
+                  encoding='utf-8') as f:
+            f.write('earlier\n')
+        fake = os.path.join(bin_, 'python3')
+        with open(fake, 'w', encoding='utf-8') as f:
+            f.write(self.HOLD)
+        os.chmod(fake, 0o755)
+        env = dict(os.environ, PG_GLIBC_AUDIT_OUT=out, TMPDIR=tmp,
+                   PATH=bin_ + os.pathsep + os.environ['PATH'],
+                   HOLD_WHAT=hold, HOLD_DIR=work,
+                   REAL_PYTHON3=shutil.which('python3'),
+                   **(env_extra or {}))
+        p = subprocess.Popen([os.path.join(REPO_ROOT, 'audit.sh'), *args],
+                             cwd=REPO_ROOT, env=env, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, start_new_session=True)
+
+        def stop():
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                # PermissionError: see run_left.
+                pass
+            p.wait()
+            p.stdout.close()
+        self.addCleanup(stop)
+        return p, work, out, tmp
+
+    def wait_held(self, p, work):
+        deadline = time.monotonic() + 120
+        while not os.path.exists(os.path.join(work, 'held')):
+            if p.poll() is not None:
+                self.fail('the run ended before the step was held: '
+                          + p.stdout.read().decode('utf-8', 'replace'))
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.02)
+
+    def run_left(self, p, seconds):
+        """Whether a process of the run is still there after `seconds`.
+
+        macOS answers EPERM, not ESRCH, while the group's last process has
+        ended and is not yet reaped (measured 2026-11-16): none is running."""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(p.pid, 0)
+            except (ProcessLookupError, PermissionError):
+                return False
+            time.sleep(0.05)
+        return True
+
+    def assertEndsBy(self, p, sig, out, tmp, sentence=True, codes=None):
+        try:
+            p.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            self.fail('audit.sh did not end')
+        # A process the run left holds its output open: stopped first, so
+        # that the output can be read and the failure says what it printed.
+        left = self.run_left(p, 10)
+        if left:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        got = p.stdout.read().decode('utf-8', 'replace')
+        self.assertFalse(left, 'a process of the run was left: ' + got)
+        # Ended by the signal itself, as a run cut short ends today, or by
+        # one of the codes the caller gives.
+        self.assertIn(p.returncode, codes or (-sig,), got)
+        self.assertEqual(os.listdir(out), ['left-by-an-earlier-run.txt'], got)
+        if sentence:
+            self.assertEqual(os.listdir(tmp), [], got)
+            self.assertEqual(flat(got).count(LEFT_NOTHING.format(out)), 1, got)
+        return got
+
+    def test_while_each_machines_file_is_laid_out(self):
+        for side, name, sig in (('old', 'old', signal.SIGTERM),
+                                ('new', 'new', signal.SIGHUP)):
+            with self.subTest(side=side, signal=sig.name):
+                p, work, out, tmp = self.start(
+                    (OLD, MID, '--old-node', self.old, '--new-node', self.new),
+                    hold=r'--unpack \S*/' + name + r'\.tar ')
+                self.wait_held(p, work)
+                os.kill(p.pid, sig)
+                time.sleep(0.5)
+                open(os.path.join(work, 'go'), 'w').close()
+                self.assertEndsBy(p, sig, out, tmp)
+
+    def test_while_the_sides_are_resolved(self):
+        """resolve writes its file in TMPDIR, which on_exit removes."""
+        p, work, out, tmp = self.start((OLD, MID),
+                                       hold='glibc_locale_data.py resolve ')
+        self.wait_held(p, work)
+        os.kill(p.pid, signal.SIGTERM)
+        time.sleep(0.5)
+        open(os.path.join(work, 'go'), 'w').close()
+        self.assertEndsBy(p, signal.SIGTERM, out, tmp)
+
+    def test_while_latest_waits_on_a_mirror_that_does_not_answer(self):
+        """The kill does not wait on the mirror, and the step asking it is
+        stopped: no process of the run is left to print after the prompt.
+        Ctrl-C and Ctrl-\\ reach the whole group, and a step run in the
+        background ignores both: audit.sh stops it itself."""
+        for sig, group in ((signal.SIGTERM, False), (signal.SIGHUP, False),
+                           (signal.SIGINT, True), (signal.SIGQUIT, True)):
+            with self.subTest(signal=sig.name, group=group):
+                server = socket.socket()
+                self.addCleanup(server.close)
+                server.bind(('127.0.0.1', 0))
+                server.listen(1)
+                server.settimeout(120)
+                cache = tempfile.mkdtemp(prefix='pg-glibc-wrapper-killed-c-')
+                self.addCleanup(shutil.rmtree, cache, ignore_errors=True)
+                p, work, out, tmp = self.start(
+                    (OLD, 'latest-el9'), env_extra={
+                        'PG_GLIBC_BUILD_MIRROR': 'http://127.0.0.1:%d/'
+                        % server.getsockname()[1],
+                        'PG_GLIBC_BUILD_SOURCES_CACHE': cache})
+                conn, _ = server.accept()
+                self.addCleanup(conn.close)
+                (os.killpg if group else os.kill)(p.pid, sig)
+                if sig != signal.SIGQUIT:
+                    self.assertEndsBy(p, sig, out, tmp)
+                    continue
+                # SIGQUIT ends macOS's bash 3.2 by the signal without its
+                # EXIT trap: no sentence and its TMPDIR file left, as
+                # today. bash 5 (CI, Linux) exits 131 and runs the trap,
+                # which then says the sentence and removes that file.
+                got = self.assertEndsBy(p, sig, out, tmp, sentence=False,
+                                        codes=(-sig, 128 + sig))
+                said = flat(got).count(LEFT_NOTHING.format(out))
+                if p.returncode == -sig:
+                    self.assertEqual(said, 0, got)
+                else:
+                    self.assertEqual(said, 1, got)
+                    self.assertEqual(os.listdir(tmp), [], got)
+
+    def test_once_the_run_writes_a_kill_ends_it_at_once(self):
+        """Past the stretch where it waits, audit.sh does not wait for the
+        step under way (here step 11): it ends when the signal comes."""
+        p, work, out, tmp = self.start(
+            (OLD, MID, '--old-node', self.old, '--new-node', self.new),
+            hold=r'locale_order\.py --compare ')
+        self.wait_held(p, work)
+        os.kill(p.pid, signal.SIGTERM)
+        try:
+            got = p.communicate(timeout=10)[0].decode('utf-8', 'replace')
+        except subprocess.TimeoutExpired:
+            self.fail('audit.sh waited for the step under way')
+        self.assertEqual(p.returncode, -signal.SIGTERM, got)
+        self.assertNotIn('This run left nothing', flat(got))
 
 
 @needs_clone
