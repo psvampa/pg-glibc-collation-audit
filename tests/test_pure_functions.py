@@ -497,20 +497,22 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
         "= lower(regexp_replace(n COLLATE \"C\", '[.][^@]*', '')) "
         "ORDER BY n COLLATE \"C\", c.collname, encoding")
     TABLE = ("SET client_min_messages = warning",
-             "DROP TABLE IF EXISTS collation_test",
+             "DROP TABLE IF EXISTS pg_temp.collation_test",
              "RESET client_min_messages",
-             "CREATE TABLE collation_test (w text COLLATE \"<LOCALE>\")",
-             "INSERT INTO collation_test VALUES ('<value1>'), ('<value2>'), "
-             "('<value3>')",
-             "CREATE INDEX ON collation_test (w)")
+             "CREATE TEMPORARY TABLE pg_temp.collation_test "
+             "(w text COLLATE \"<LOCALE>\")",
+             "INSERT INTO pg_temp.collation_test VALUES ('<value1>'), "
+             "('<value2>'), ('<value3>')",
+             "CREATE INDEX ON pg_temp.collation_test (w)")
     # The guard after the INSERT (16.219): a column that is not under
     # glibc's locale data, or values still the placeholders, stops the run.
     GUARD = (
         "DO $$ DECLARE prov \"char\"; loc text; cname text; left_over bigint; "
         "BEGIN SELECT c.collprovider, c.collcollate, c.collname INTO prov, "
         "loc, cname FROM pg_attribute a JOIN pg_collation c ON c.oid = "
-        "a.attcollation WHERE a.attrelid = 'collation_test'::regclass AND "
-        "a.attname = 'w'; IF prov IS DISTINCT FROM 'c' THEN RAISE EXCEPTION "
+        "a.attcollation WHERE a.attrelid = 'pg_temp.collation_test'::regclass "
+        "AND a.attname = 'w'; IF prov IS DISTINCT FROM 'c' THEN RAISE "
+        "EXCEPTION "
         "'collation % has provider %, not libc; this template confirms "
         "glibc''s ' 'order only.', cname, prov; END IF; IF loc IN ('C', "
         "'POSIX') THEN RAISE EXCEPTION 'collation % is locale %, which "
@@ -519,8 +521,8 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
         "~* '^c[.]' THEN RAISE EXCEPTION 'collation % is locale %, which "
         "reads the opposite way; run ' 'sql/c_utf8_probe.sql for it.', "
         "cname, loc; END IF; SELECT count(*) INTO left_over FROM "
-        "collation_test WHERE w ~ '^<value[0-9]+>$'; IF left_over > 0 THEN "
-        "RAISE EXCEPTION '% value(s) are still the <valueN> placeholders; "
+        "pg_temp.collation_test WHERE w ~ '^<value[0-9]+>$'; IF left_over > 0 "
+        "THEN RAISE EXCEPTION '% value(s) are still the <valueN> placeholders; "
         "put the strings to ' 'compare in their place.', left_over; END IF; "
         "END $$")
     HEADING = "\\echo '--- ORDER BY under <LOCALE> ---'"
@@ -528,7 +530,7 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
     # its own here could name another locale than the column's, and C there
     # would sort by bytes past the guard.
     SORT = ("SELECT ROW_NUMBER() OVER (ORDER BY w, w COLLATE \"C\") AS pos, "
-            "w FROM collation_test ORDER BY pos")
+            "w FROM pg_temp.collation_test ORDER BY pos")
     DONE = "\\echo '=== done. diff this output against the other node. ==='"
 
     def test_the_template_s_regex_is_the_rule(self):
@@ -622,6 +624,22 @@ class TheTemplateComparesByGlibcsRule(unittest.TestCase):
             [self.STOP, self.IMPORT,
              self.LISTING, *self.TABLE, self.GUARD, self.HEADING, self.SORT,
              self.DONE])
+
+    def test_every_mention_of_the_table_names_pg_temp(self):
+        """16.341: `DROP TABLE IF EXISTS collation_test` looked the name up
+        in the whole search_path (RelnameGetRelid, namespace.c, REL_14 to
+        REL_18), and with `search_path = app, public` it dropped a user's
+        public.collation_test, its row with it (measured on PostgreSQL 14 to
+        18, handoff-19.1-2026-11-15). Named pg_temp, each statement reaches
+        this session's own temporary schema and nothing else
+        (LookupExplicitNamespace); left bare, a statement could still reach a
+        user's table of that name, even one in a schema listed before
+        pg_temp. So every mention in the code, comments aside, is
+        pg_temp.collation_test, and there are seven: the DROP, the CREATE,
+        the INSERT, the index, and the guard's two and the sort's reads."""
+        code = self.code(self.template())
+        prefixes = re.findall(r'([\w.]*)\bcollation_test\b', code)
+        self.assertEqual(prefixes, ['pg_temp.'] * 7)
 
     def test_the_version_query_is_the_one_measured(self):
         """The listing, word for word. It starts from the list, so a name

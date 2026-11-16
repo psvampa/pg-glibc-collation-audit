@@ -13,9 +13,10 @@
 -- specific rule that changed.
 --
 -- Notes before you run it:
---   * It DROPS AND RECREATES a table named collation_test in the current
---     schema of the database psql connects to (the one -d names, or psql's
---     default). Run it where no table of yours has that name.
+--   * It sorts in a TEMPORARY table, pg_temp.collation_test, which only
+--     this psql session sees and PostgreSQL drops when the session ends.
+--     Every statement names pg_temp, so no table of yours is read, changed
+--     or dropped, whatever its name or schema.
 --   * Run as a superuser, it first calls pg_import_system_collations(),
 --     which WRITES TO pg_catalog. It is idempotent and only adds collations
 --     already present in `locale -a`. Run as any other role, it skips that
@@ -38,9 +39,9 @@
 --     collation listing below reads each collation's locale from
 --     collcollate, so every spelling and every encoding of one locale counts
 --     as that locale. Check
---     `locale -a` first, and in CREATE TABLE's COLLATE below use a name that
---     exists for this database's encoding. In a UTF8 database "sv_SE" is
---     sv_SE.utf8.
+--     `locale -a` first, and in CREATE TEMPORARY TABLE's COLLATE below use a
+--     name that exists for this database's encoding. In a UTF8 database
+--     "sv_SE" is sv_SE.utf8.
 --   * ONE LOCALE INVERTS THE USUAL RULE: C.UTF-8. Agreement with LC_ALL=C is
 --     the CORRECT answer there -- it is what upstream's codepoint_collation
 --     guarantees from 2.35 on -- so reading
@@ -50,7 +51,8 @@
 \set ON_ERROR_STOP on
 
 -- Only a superuser may import. Any other role runs on the collations already
--- in pg_catalog, and a locale missing there stops the run at CREATE TABLE.
+-- in pg_catalog, and a locale missing there stops the run at CREATE
+-- TEMPORARY TABLE.
 -- The import runs inside DO, so that it prints the same lines whoever runs
 -- it and however many collations it adds: neither is a difference between
 -- the two glibc versions, and the diff shows only what is.
@@ -100,14 +102,16 @@ LEFT JOIN pg_collation c
 ORDER BY n COLLATE "C", c.collname, encoding;
   -- e.g. ARRAY['sv_SE','sv_FI','sv_FI@euro','or_IN','swedish']
 
--- The NOTICE a missing table gives would print on a first run and not on the
--- next, and two nodes run a different number of times would differ by it.
+-- The DROP lets the script run twice in one session. The NOTICE a missing
+-- table gives would print in a new session and not in one that already ran
+-- the script, and two nodes run differently would differ by it.
 SET client_min_messages = warning;
-DROP TABLE IF EXISTS collation_test;
+DROP TABLE IF EXISTS pg_temp.collation_test;
 RESET client_min_messages;
-CREATE TABLE collation_test (w text COLLATE "<LOCALE>");
-INSERT INTO collation_test VALUES ('<value1>'), ('<value2>'), ('<value3>');
-CREATE INDEX ON collation_test (w);
+CREATE TEMPORARY TABLE pg_temp.collation_test (w text COLLATE "<LOCALE>");
+INSERT INTO pg_temp.collation_test
+  VALUES ('<value1>'), ('<value2>'), ('<value3>');
+CREATE INDEX ON pg_temp.collation_test (w);
 
 -- A run that sorted, but not through glibc's locale data, or not the strings
 -- chosen, would diff as alike on both nodes. PostgreSQL compares C and POSIX
@@ -119,7 +123,7 @@ DECLARE prov "char"; loc text; cname text; left_over bigint;
 BEGIN
   SELECT c.collprovider, c.collcollate, c.collname INTO prov, loc, cname
   FROM pg_attribute a JOIN pg_collation c ON c.oid = a.attcollation
-  WHERE a.attrelid = 'collation_test'::regclass AND a.attname = 'w';
+  WHERE a.attrelid = 'pg_temp.collation_test'::regclass AND a.attname = 'w';
   IF prov IS DISTINCT FROM 'c' THEN
     RAISE EXCEPTION
       'collation % has provider %, not libc; this template confirms glibc''s '
@@ -136,7 +140,7 @@ BEGIN
       'collation % is locale %, which reads the opposite way; run '
       'sql/c_utf8_probe.sql for it.', cname, loc;
   END IF;
-  SELECT count(*) INTO left_over FROM collation_test
+  SELECT count(*) INTO left_over FROM pg_temp.collation_test
   WHERE w ~ '^<value[0-9]+>$';
   IF left_over > 0 THEN
     RAISE EXCEPTION
@@ -176,6 +180,6 @@ END $$;
 \echo '--- ORDER BY under <LOCALE> ---'
 SELECT ROW_NUMBER() OVER (ORDER BY w, w COLLATE "C") AS pos,
        w
-FROM collation_test
+FROM pg_temp.collation_test
 ORDER BY pos;
 \echo '=== done. diff this output against the other node. ==='
