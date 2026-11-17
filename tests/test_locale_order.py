@@ -575,24 +575,36 @@ def check_kind(text):
     mt = re.fullmatch(r'!! Decimals of money NOT checked: ' + EARLIER_FILES, text)
     if mt:
         return 'money', {'earlier': earlier_sides(mt, 1, None, 3)}
+    # 16.328: C and POSIX, where either is among the locales, are said to
+    # be in neither count: the names, or [] where the line says nothing.
+    builtin = (r"(?: (C and POSIX) are not counted: they are built into "
+               r"glibc, from no charmap\.| (C|POSIX) is not counted: it is "
+               r"built into glibc, from no charmap\.)?")
+
+    def aside(mt, at):
+        return (mt[at].split(' and ') if mt[at] else
+                [mt[at + 1]] if mt[at + 1] else [])
     mt = re.fullmatch(r"Character sets: every byte sequence that each "
                       r"machine's charmaps give a character, in the (\d+) "
-                      r"locale\(s\) compared, is among the strings measured\.",
-                      text)
+                      r"locale\(s\) compared, is among the strings measured\."
+                      + builtin, text)
     if mt:
-        return 'charmaps', {'checked': int(mt[1])}
+        return 'charmaps', {'checked': int(mt[1]), 'builtin': aside(mt, 2)}
     mt = re.fullmatch(r"Character sets: every byte sequence that each "
                       r"machine's charmaps give a character is among the strings "
                       r"measured, in the (\d+) locale\(s\) checked\. The (\d+) "
                       r"locale\(s\) unchanged by their sort tables need no such "
-                      r"check: the table decides for every string\.", text)
+                      r"check: the table decides for every string\." + builtin,
+                      text)
     if mt:
-        return 'charmaps', {'checked': int(mt[1]), 'by_table': int(mt[2])}
+        return 'charmaps', {'checked': int(mt[1]), 'by_table': int(mt[2]),
+                            'builtin': aside(mt, 3)}
     mt = re.fullmatch(r"Character sets: not checked, and not needed: the (\d+) "
                       r"locale\(s\) found unchanged were found so by their sort "
-                      r"tables, which decide for every string\.", text)
+                      r"tables, which decide for every string\." + builtin, text)
     if mt:
-        return 'charmaps', {'checked': 0, 'by_table': int(mt[1])}
+        return 'charmaps', {'checked': 0, 'by_table': int(mt[1]),
+                            'builtin': aside(mt, 2)}
     mt = re.fullmatch(r'PostgreSQL on the ' + SIDE + r' machine: (\d+) '
                       r'process\(es\) named postgres or postmaster, all running '
                       r'the C library measured there\.', text)
@@ -1947,7 +1959,7 @@ def parse_report(text):
         # its count, or none and why, and what no file checks.
         if not line().startswith((SQL_LINE, NO_SQL_LINE)):
             return
-        got = {'files': [], 'not_checked': []}
+        got = {'files': [], 'not_checked': [], 'also': []}
         if line().startswith(SQL_LINE):
             for want in SQL_HEAD:
                 take(re.escape(want))
@@ -1962,9 +1974,11 @@ def parse_report(text):
                 take(re.escape(want))
         while line().startswith('Not checked in PostgreSQL by these files: '):
             text = [take(r'(Not checked in PostgreSQL by these files: .*)')[1]]
-            while line().startswith('  '):
+            while line().startswith('  ') and not line().startswith('    '):
                 text.append(take(r'  (\S.*)')[1])
             got['not_checked'].append(' '.join(text))
+            # What else PostgreSQL calls those locales, four in (16.327).
+            got['also'].append(also())
         take('')
         r['sql'] = got
 
@@ -2732,7 +2746,8 @@ def parse_test(text, parts):
 class CharactersFile(dict):
     """{locales (sorted tuple): [row]}, with the notes under the rows:
     .warnings, their kinds as warning_kind() names them, .checks, as
-    check_kind() reads them, and .closing."""
+    check_kind() reads them, .closing, and .explained, the kinds of row
+    whose before and now the first line explains (16.330)."""
 
 
 def parse_characters(text):
@@ -2747,9 +2762,20 @@ def parse_characters(text):
     # hold (16.187).
     first = re.fullmatch(r'# Step 11, .+ -> .+: every character, other string '
                          r'and pair found, by locale\.(?: (.+))? '
-                         + re.escape(m.COLUMNS), lines[0])
+                         + re.escape(m.COLUMNS) + r'((?: In a row .+)?)',
+                         lines[0])
     if not first or first[1] not in (None,) + NOTES:
         raise ReportShapeError(f'unknown first line: {lines[0]!r}')
+    # Then what before and now hold in each kind of row the file has that
+    # is not a pair of strings, and in no other (16.330).
+    kinds = {line.split('\t')[1] for line in lines[2:]
+             if not line.startswith('# ') and line.count('\t') == 7}
+    explained = [kind for kind, _ in m.COLUMN_WORDS if kind in kinds]
+    if first[2] != ''.join(' ' + words for kind, words in m.COLUMN_WORDS
+                           if kind in kinds):
+        raise ReportShapeError(f'the first line does not say what before and '
+                               f'now hold in exactly the rows {explained}: '
+                               f'{first[2]!r}')
     if lines[1] != 'locales\tfinding\tcharacters\thow\ttest\tbefore\tnow\tmeasured':
         raise ReportShapeError(f'unknown column line: {lines[1]!r}')
     # The last line counts the rows above it: a file cut anywhere says so.
@@ -2765,6 +2791,7 @@ def parse_characters(text):
         raise ReportShapeError('the characters file has no closing note')
     out = CharactersFile()
     out.others_note = first[1]
+    out.explained = explained
     out.ctype_groups = {}
     out.use_groups = {}
     out.back_groups = {}
@@ -3240,7 +3267,9 @@ def file_of(rows, label='x', warnings=(), closing=m.CLOSING):
     """The text of a characters file holding rows (cells) under one label,
     as compare() writes one."""
     lines = ['# Step 11, a -> b: every character, other string and pair found, '
-             'by locale. ' + m.COLUMNS,
+             'by locale. ' + m.COLUMNS + ''.join(
+                 ' ' + words for kind, words in m.COLUMN_WORDS
+                 if any(row[0] == kind for row in rows)),
              'locales\tfinding\tcharacters\thow\ttest\tbefore\tnow\tmeasured']
     lines += [label + '\t' + '\t'.join(row) for row in rows]
     lines += ['# ' + text for text in list(warnings) + [closing]]
@@ -3581,6 +3610,49 @@ class SummaryForTheAudit(unittest.TestCase):
                                     for r in rows if r['test']))
                 self.assertTrue([r for r in rows
                                  if r['finding'] == 'pairs changed'])
+
+    def test_the_first_line_says_what_the_other_rows_hold(self):
+        """16.330: the words before and now hold in the rows that are not a
+        pair of strings, for the kinds of row each file has: on 8->9 the
+        three, on 9->10 no row of what upper() or lower() gives back; and
+        the rows hold no other words."""
+        words = {
+            'LC_CTYPE changed': ('In a row LC_CTYPE changed, before says',
+                                 '(classified) or neither (not classified), '
+                                 'and is - in a row of a byte',
+                                 # - in a row of a byte, which the reader
+                                 # requires there and refuses in a row of
+                                 # a character.
+                                 {'classified', 'not classified', '-'},
+                                 {None}),
+            'upper/lower/ILIKE error': (
+                'In a row upper/lower/ILIKE error, before and now say',
+                'converts, error (it refuses them) or not measured',
+                {'converts', 'error', 'not measured'},
+                {'converts', 'error', 'not measured'}),
+            'upper/lower back error': (
+                'In a row upper/lower back error, before and now say',
+                'turned back into bytes, not turned back, not read',
+                {'turned back', 'not turned back', 'not read', 'not measured'},
+                {'turned back', 'not turned back', 'not read',
+                 'not measured'})}
+        for key, kinds in (('8-9', list(words)),
+                           ('9-10', ['LC_CTYPE changed',
+                                     'upper/lower/ILIKE error'])):
+            with self.subTest(pair=key):
+                with open(os.path.join(self.tmp, key + '.tsv'),
+                          encoding='utf-8') as f:
+                    first = flat(f.readline())
+                self.assertEqual(self.files[key].explained, kinds)
+                rows = [r for group in self.files[key].values()
+                        for r in group]
+                for kind, (lead, values, before, now) in words.items():
+                    got = [r for r in rows if r['finding'] == kind]
+                    self.assertEqual(lead in first, kind in kinds, kind)
+                    self.assertEqual(values in first, kind in kinds, kind)
+                    self.assertEqual(bool(got), kind in kinds, kind)
+                    self.assertLessEqual({r['before'] for r in got}, before)
+                    self.assertLessEqual({r['now'] for r in got}, now)
 
     def test_a_cut_file_is_refused(self):
         """The end line counts the rows: a file cut on a row boundary, which
@@ -5512,6 +5584,44 @@ class WherePostgresUsesALocale(unittest.TestCase):
     def also(self, names):
         return m.also_known_as(names, m.postgres_names(self.LOCALES),
                                self.LOCALES)
+
+    def test_the_line_under_what_no_sql_file_checks(self):
+        """16.327: an entry of what no SQL file checks names its locales as
+        a SQL file writes them; the line under it is also_known_as of those
+        locales, none where it names no locale, and the report prints it
+        four in, under the entry."""
+        thai = ['th_TH', 'th_TH.tis620', 'thai']
+        every = 'the character rules (LC_CTYPE) of every locale'
+        pg = m.postgres_names(self.LOCALES)
+        self.assertEqual(m.also_of_written(thai, pg, self.LOCALES),
+                         self.also(thai))
+        self.assertIsNotNone(self.also(thai))
+        self.assertIsNone(m.also_of_written([every], pg, self.LOCALES))
+        self.assertEqual(m.also_of_written(['ko_KR.utf8', every], pg,
+                                           self.LOCALES),
+                         self.also(['ko_KR.utf8']))
+        # A name a SQL file writes quoted, with escapes, is found again.
+        odd = 'ko_KR.utf8@café'
+        locales = {**self.LOCALES, odd: {'codeset': 'UTF-8'}}
+        self.assertNotEqual(m.ascii_name(odd), odd)
+        self.assertEqual(
+            m.also_of_written([m.ascii_name(odd)], m.postgres_names(locales),
+                              locales),
+            m.also_known_as([odd], m.postgres_names(locales), locales))
+        lines = m.sql_lines('p', [], [(thai, 'a reason'), ([every], 'why')],
+                            lambda names: m.also_of_written(names, pg,
+                                                            self.LOCALES))
+        at = lines.index('Not checked in PostgreSQL by these files: th_TH, '
+                         'th_TH.tis620, thai: a reason.')
+        below = lines[at + 1].split('\n')
+        self.assertTrue(below[0].startswith('    ' + m.ALSO), lines)
+        self.assertTrue(len(below) > 1 and all(
+            re.match(r'      \S', x) for x in below[1:]), below)
+        self.assertEqual(' '.join(x.strip() for x in below), self.also(thai))
+        # The entry that names no locale has no line under it.
+        self.assertEqual(' '.join(x.strip() for x in lines[at + 2:]),
+                         'Not checked in PostgreSQL by these files: the '
+                         'character rules (LC_CTYPE) of every locale: why.')
 
     def test_the_reach_of_each_kind_of_encoding(self):
         for codeset, reach in (
@@ -8439,7 +8549,8 @@ class CharmapsCheckedInTheComparison(Checks):
         report, brief, rows = self.outputs('--old-charmaps', old,
                                            '--new-charmaps', new)
         for checks in (report['checks'], brief['checks'], rows.checks):
-            self.assertIn(('charmaps', {'checked': 4}), checks)
+            self.assertIn(('charmaps', {'checked': 4,
+                                        'builtin': ['C', 'POSIX']}), checks)
         self.assertEqual((report['in_part'], report['charmaps_unchecked']),
                          ({}, []))
         new = self.charmaps('found', UTF_8=self.UTF8.format(extra=self.EXTRA))
@@ -8465,7 +8576,33 @@ class CharmapsCheckedInTheComparison(Checks):
         self.assertEqual([(k, d['text']) for k, d in found], [(
             'charmaps checked', "Character sets: every byte sequence that each "
             "machine's charmaps give a character, in the 1 locale(s) compared, "
-            "is among the strings measured.")])
+            "is among the strings measured. C is not counted: it is built into "
+            "glibc, from no charmap.")])
+
+    def test_c_and_posix_are_said_only_where_they_are(self):
+        """16.328: the counts leave out C and POSIX, and the line says so
+        for those among the locales compared or decided by their tables,
+        and for no other: the line of each kind, read by check_kind."""
+        root = self.charmaps('x', UTF_8=self.UTF8.format(extra=''))
+        data = self.data({n: {'codeset': 'UTF-8'} for n in (
+            'en_US.utf8', 'de_DE.utf8', 'C', 'POSIX')}, [b'A', b'\xc3\xa9'])
+        for compared, firm, want in (
+                (['en_US.utf8'], [], ({'checked': 1}, [])),
+                (['en_US.utf8', 'C'], ['POSIX', 'de_DE.utf8'],
+                 ({'checked': 1, 'by_table': 1}, ['C', 'POSIX'])),
+                (['en_US.utf8'], ['POSIX', 'de_DE.utf8'],
+                 ({'checked': 1, 'by_table': 1}, ['POSIX'])),
+                ([], ['C', 'POSIX', 'de_DE.utf8'],
+                 ({'checked': 0, 'by_table': 1}, ['C', 'POSIX'])),
+                ([], ['de_DE.utf8'], ({'checked': 0, 'by_table': 1}, []))):
+            with self.subTest(compared=compared, firm=firm):
+                _, found = m.charmap_findings(
+                    data, data, (('dir', root),) * 2, compared, firm=firm)
+                (kind, d), = found
+                self.assertEqual(kind, 'charmaps checked')
+                counts, builtin = want
+                self.assertEqual(check_kind(d['text']),
+                                 ('charmaps', {**counts, 'builtin': builtin}))
 
     def test_the_outputs_say_what_was_not_checked(self):
         """One machine given no charmaps, with its reason, and on the other
@@ -15544,10 +15681,9 @@ class SortTablesCompared(Checks):
         r, s, f = outs
         self.assertEqual(r['unchanged'], 6)
         # No locale needs its charmaps checked, and the line says why.
-        self.assertIn(('charmaps', {'checked': 0, 'by_table': 4}),
-                      r['checks'])
-        self.assertIn(('charmaps', {'checked': 0, 'by_table': 4}),
-                      s['checks'])
+        for out in (r['checks'], s['checks']):
+            self.assertIn(('charmaps', {'checked': 0, 'by_table': 4,
+                                        'builtin': ['C', 'POSIX']}), out)
 
     def test_the_character_sets_where_the_tables_decide_some(self):
         """Given charmaps, the check runs on the locale its table did not
@@ -15561,7 +15697,8 @@ class SortTablesCompared(Checks):
                                charmaps=root)
         self.assertEqual(set(by_name(r)), {'de_DE.utf8'})
         for out in (r['checks'], s['checks'], f.checks):
-            self.assertIn(('charmaps', {'checked': 1, 'by_table': 3}), out)
+            self.assertIn(('charmaps', {'checked': 1, 'by_table': 3,
+                                        'builtin': ['C', 'POSIX']}), out)
         self.assertEqual(r['charmaps_unchecked'], [])
 
     def test_a_locale_not_measured_is_named_by_the_sql_files(self):
@@ -15581,6 +15718,15 @@ class SortTablesCompared(Checks):
         self.assertIn('Not checked in PostgreSQL by these files: ja_JP.utf8: '
                       'step 11 could not measure it on both machines.',
                       ' '.join(self.printed.split()))
+        # 16.327: and under it, what else PostgreSQL calls it, as the
+        # report says it under the same name elsewhere.
+        sql = r['sql']
+        at = sql['not_checked'].index(
+            'Not checked in PostgreSQL by these files: ja_JP.utf8: step 11 '
+            'could not measure it on both machines.')
+        self.assertEqual(sql['also'][at], {
+            'aliases': {'UTF-8': ['ja_JP']}, 'spellings': ['ja_JP.UTF-8']})
+        self.assertEqual(sql['also'][at], r['unmeasured']['ja_JP.utf8']['also'])
 
     def test_no_locale_decided_and_none_to_check(self):
         """Every locale but C and POSIX unmeasured and not compared: no
@@ -16840,7 +16986,7 @@ class RulesBesideTheVerdicts(unittest.TestCase):
             ('ko_KR.utf8',): 'the order changes; its rules (step 2) do not',
             ('sv_FI',): "the order changes, and so do its rules (step 2); a "
                         "character its file's rules name changed in a "
-                        "charmap",
+                        "charmap (step 2)",
             ('sv_SE', 'swedish'): 'the order changes, and so do its rules '
                                   '(step 2)'})
 
@@ -16864,7 +17010,7 @@ class RulesBesideTheVerdicts(unittest.TestCase):
         words for the other three (16.147, 16.316)."""
         tails = {
             'changed': "; a character its file's rules name changed in a "
-                       "charmap",
+                       "charmap (step 2)",
             'not compared': '; its character set (step 2): not compared',
             'transliteration': '; a collating element it builds out of a '
                                'transliteration is built differently (step '

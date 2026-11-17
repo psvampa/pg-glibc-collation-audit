@@ -1281,7 +1281,7 @@ class PrintsTheRhel8ToRhel9Example(_PrintsTheMachinesExample,
         self.assertEqual(by_name['C.utf8'],
                          'the order changes, and so do its rules (step 2); a '
                          "character its file's rules name changed in a "
-                         'charmap')
+                         'charmap (step 2)')
         self.assertEqual([n for n, line in by_name.items()
                           if 'charmap' in line], ['C.utf8'])
 

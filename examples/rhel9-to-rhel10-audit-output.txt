@@ -176,8 +176,11 @@ servers, in a database of its encoding (psql -X -d DATABASE -f FILE > old.out
     /tmp/pg-glibc-collation-audit/measured_order_confirm.glibc-2.34-275.el9_8..glibc-2.39-128.el10_2.UTF8.sql
 Not checked in PostgreSQL by these files: aa_ER.utf8@saaho, aa_ER@saaho: it is
   not on the new machine.
+    also, in PostgreSQL: database locale aa_ER.UTF-8@saaho
 Not checked in PostgreSQL by these files: th_TH, th_TH.tis620, thai:
   PostgreSQL imports no collation of its encoding, TIS-620.
+    also, in PostgreSQL: database locale th_TH.TIS-620; these names in a
+      database of any encoding, as its locale or in CREATE COLLATION
 
 Unchanged: 863 locale(s).
 !! Not on the new machine, so NOT known to be unchanged: 2 locale(s). Either
@@ -212,7 +215,8 @@ Decimals of money: the same in the 867 locale(s) measured on both machines.
 Character sets: every byte sequence that each machine's charmaps give a
    character is among the strings measured, in the 4 locale(s) checked. The
    861 locale(s) unchanged by their sort tables need no such check: the table
-   decides for every string.
+   decides for every string. C and POSIX are not counted: they are built into
+   glibc, from no charmap.
 PostgreSQL on the OLD machine: 10 process(es) named postgres or postmaster,
    all running the C library measured there.
 PostgreSQL on the NEW machine: 10 process(es) named postgres or postmaster,
@@ -382,7 +386,8 @@ Character rules (LC_CTYPE): not compared in C and POSIX, which PostgreSQL
      Character sets: every byte sequence that each machine's charmaps give a
         character is among the strings measured, in the 4 locale(s) checked.
         The 861 locale(s) unchanged by their sort tables need no such check:
-        the table decides for every string.
+        the table decides for every string. C and POSIX are not counted: they
+        are built into glibc, from no charmap.
      PostgreSQL on the OLD machine: 10 process(es) named postgres or
         postmaster, all running the C library measured there.
      PostgreSQL on the NEW machine: 10 process(es) named postgres or
