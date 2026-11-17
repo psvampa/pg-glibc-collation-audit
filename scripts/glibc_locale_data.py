@@ -1095,8 +1095,8 @@ def report_tag_provenance(repo, *tags):
     tampering, and refusing to run without gpg would make the tool unusable on
     a stock container for no gain in truth.
     """
-    print("Tag provenance (this audit reads a third-party mirror; a tag is a "
-          "mutable pointer):")
+    print(textwrap.fill("Tag provenance (this audit reads a third-party "
+                        "mirror; a tag is a mutable pointer):", width=78))
     worst = 'good'
     unchecked = []
     for tag in dict.fromkeys(tags):
@@ -1108,7 +1108,9 @@ def report_tag_provenance(repo, *tags):
                 'revoked-key': 'UNCHECKED', 'expired-key': 'UNCHECKED',
                 'expired-sig': 'UNCHECKED', 'untrusted': 'UNCHECKED',
                 'unsigned': 'UNSIGNED', 'not-a-tag': 'UNSIGNED'}[status]
-        print(f"  {mark} {tag} = {sha[:12]}  {detail}")
+        print(textwrap.fill(f"{mark} {tag} = {sha[:12]}  {detail}", width=78,
+                            initial_indent='  ', subsequent_indent='    ',
+                            break_long_words=False, break_on_hyphens=False))
         if status == 'bad':
             worst = 'bad'
         elif status != 'good':
@@ -2636,10 +2638,10 @@ def report_machine_provenance(machines):
     """Print, for each Side read from a machine's own files, which file and
     what it held; a `!!` for the entries of its sources that were not read;
     one `!!` for what no step reads of a machine (MACHINE_NOT_CHECKED)."""
-    print("Machine provenance (each machine's own locale sources and charmaps, "
-          "from its")
-    print("file, on its upstream tag above, as one commit of the clone; "
-          "nothing downloaded):")
+    print(textwrap.fill("Machine provenance (each machine's own locale "
+                        "sources and charmaps, from its file, on its upstream "
+                        "tag above, as one commit of the clone; nothing "
+                        "downloaded):", width=78))
     for sd in machines:
         prov = sd.prov
         print(f"  {label(sd)} = {sd.ref[:12]}, one parent: {prov['tag']}")
@@ -2664,6 +2666,13 @@ def report_machine_provenance(machines):
                  + ', '.join(f"{shown(e)} ({why})" for e, why in skipped)
                  + '.', split_words=False)
     warn(MACHINE_NOT_CHECKED, split_words=False)
+
+
+def _checked(text):
+    """A "checked:" line of the build provenance, cut at 78 columns."""
+    return textwrap.fill(f"checked: {text}", width=78, initial_indent='    ',
+                         subsequent_indent=' ' * 13, break_long_words=False,
+                         break_on_hyphens=False)
 
 
 def report_build_provenance(builds):
@@ -2692,17 +2701,20 @@ def report_build_provenance(builds):
                 if e.get('listed') is False:
                     # build_sources.where_from: a folder with no source
                     # metadata (vault 9.3), the SRPM taken from its listing.
-                    print(f"    {'':<20} no metadata gives this sha256: it "
-                          f"is the file's as downloaded")
+                    print(textwrap.fill(
+                        "no metadata gives this sha256: it is the file's as "
+                        "downloaded", width=78, initial_indent=' ' * 25,
+                        subsequent_indent=' ' * 25))
                     unlisted.append(
                         (label(sd), e['url'].split(e['tree'] + '/')[0]
                          + e['tree']))
-        print(f"    checked: {prov['tarball']}")
+        # Cut at 78 columns under "checked:" (16.335).
+        print(_checked(prov['tarball']))
         for line in prov.get('verified') or ():
             if line.startswith('!!'):
                 warned.append(f"{label(sd)}: {line[2:].strip()}")
             else:
-                print(f"    checked: {line}")
+                print(_checked(line))
         text = (f"patches: {len(prov.get('applied') or ())} of the SRPM's "
                 f"{prov.get('patches')} change localedata/ or locale/, "
                 f"applied in the order rpm recorded")

@@ -18,7 +18,7 @@ import unittest
 
 from _harness import (EXPECTED_SHA, FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID,
                        NEW, OLD, SIGNATURES_UNCHECKED, flat, has_tags,
-                       needs_clone)
+                       needs_clone, wide_lines)
 
 import glibc_locale_data as g
 
@@ -549,6 +549,53 @@ class ProvenanceReadsWhatItPrints(unittest.TestCase):
              (['cat-file', 'tag', NEW], 128, b'')],
             lambda: g.verify_tag('/no/glibc/clone/here', NEW))
         self.assertIn('cat-file tag', flat(err))
+
+
+class TagProvenanceFitsTheTerminal(unittest.TestCase):
+    """'Tag provenance' and each tag's line are cut at 78 columns, the
+    state's words kept (16.335). gpg's answers are faked, as a stock
+    machine with gpg and without the glibc maintainers' key gives them;
+    the examples are written without gpg."""
+
+    SHA = '3c03baca37fd' + '0' * 28
+    DETAIL = ('signed with key DC2B16215ED5412A, which is not in your '
+              'keyring; the tag names Andreas K. Huettel <x@example.org> as '
+              'its tagger')
+
+    def printed(self):
+        import contextlib
+        import io
+        from unittest import mock
+
+        class Fake:
+            stdout = (self.SHA + '\n').encode()
+
+        def fake_git(args, repo, allow_fail=False):
+            if args == ['rev-parse', f'{NEW}^{{commit}}']:
+                return Fake()
+            raise AssertionError(f'unexpected git command: {args}')
+
+        buf = io.StringIO()
+        with mock.patch.object(g, 'verify_tag',
+                               return_value=('no-key', self.DETAIL)), \
+                mock.patch.object(g, 'run_git', fake_git), \
+                contextlib.redirect_stdout(buf):
+            g.report_tag_provenance('/no/glibc/clone/here', NEW)
+        return buf.getvalue()
+
+    def test_every_line_fits_and_says_all_it_said(self):
+        out = self.printed()
+        self.assertEqual(wide_lines(out), [])
+        head, tag_line = out.split('\n  UNCHECKED ', 1)
+        self.assertEqual(flat(head), 'Tag provenance (this audit reads a '
+                         'third-party mirror; a tag is a mutable pointer):')
+        tag_line = tag_line.split('\n!! ', 1)[0]
+        self.assertEqual(flat(tag_line),
+                         f'{NEW} = {self.SHA[:12]} {self.DETAIL}')
+        # The line is cut, its rest indented under its state.
+        self.assertGreater(tag_line.count('\n'), 0)
+        self.assertTrue(all(x.startswith('    ')
+                            for x in tag_line.split('\n')[1:]), tag_line)
 
 
 if __name__ == '__main__':

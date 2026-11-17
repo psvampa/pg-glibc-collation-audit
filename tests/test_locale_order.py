@@ -55,6 +55,7 @@ import tarfile
 import tempfile
 import textwrap
 import types
+import unicodedata
 import unittest
 import unittest.mock
 import zlib
@@ -1670,6 +1671,11 @@ def parse_summary(text):
     As strict as parse_report: every line is accounted for, and a count
     that disagrees with the names under it raises.
     """
+    # Every line fits in 78 terminal columns, but one with a path (16.336,
+    # 16.337).
+    wide = _harness.wide_lines(text)
+    if wide:
+        raise ReportShapeError(f'summary lines wider than 78 columns: {wide!r}')
     lines = text.split('\n')
     if lines[-1] == '':
         lines.pop()
@@ -1881,6 +1887,11 @@ def parse_report(text):
     read returns the part before it, and a test reading that part passes
     whatever came after.
     """
+    # Every line fits in 78 terminal columns, but one with a path (16.336,
+    # 16.337).
+    wide = _harness.wide_lines(text)
+    if wide:
+        raise ReportShapeError(f'report lines wider than 78 columns: {wide!r}')
     lines = text.split('\n')
     if lines[-1] == '':
         lines.pop()
@@ -2140,17 +2151,25 @@ def parse_report(text):
         count = int(take(r'!! Could not be measured, so NOT known to be '
                          r'unchanged: (\d+) locale\(s\):')[1])
         while re.fullmatch(r'  \S.*', line()):
+            # Each wraps onto lines indented by four (16.336), which are
+            # not the line of the names PostgreSQL knows it by.
+            text = line()
+            follow = at[0] + 1
+            while re.fullmatch(r'    \S.*', lines[follow]) and not \
+                    lines[follow].startswith('    also, in PostgreSQL: '):
+                text += ' ' + lines[follow].strip()
+                follow += 1
             mt = re.fullmatch(r'  (\S+) \((both machines|old machine|new '
-                              r'machine)\): (.+)', line())
+                              r'machine)\): (.+)', text)
             if mt:
                 name, side, reason = mt[1], mt[2], mt[3]
             elif re.fullmatch(r'  \S+: measured over different strings on '
-                              r'the two machines .+', line()):
-                name, side, reason = (line().split()[0][:-1], 'both machines',
+                              r'the two machines .+', text):
+                name, side, reason = (text.split()[0][:-1], 'both machines',
                                       'different strings')
             else:
                 fail('unknown not-measured line')
-            at[0] += 1
+            at[0] = follow
             entry = r['unmeasured'].setdefault(name, {'why': {}, 'also': None})
             entry['why'][side] = reason
             entry['also'] = also() or entry['also']
@@ -2174,6 +2193,12 @@ def parse_report(text):
     count = int(take(r'Only on the new machine: (\d+) locale\(s\)\.')[1])
     r['only_new'] = listed(count, 'only on the new machine')
     take('')
+    # The totals wrap onto lines indented by three (16.336).
+    follow = at[0] + 1
+    while re.fullmatch(r'   \S.*', lines[follow]):
+        follow += 1
+    lines[at[0]:follow] = [' '.join([lines[at[0]]] + [
+        x.strip() for x in lines[at[0] + 1:follow]])]
     mt = take(r'Of the (\d+) locale\(s\) on the old machine: (\d+) changed, '
               r'(\d+) unchanged(?: \((\d+) of them only as far as measured\))?, '
               r'(\d+) not measured, (?:([1-9]\d*) refused by glibc, )?(\d+) not '
@@ -2286,7 +2311,9 @@ def parse_details(details):
                                    f'{run_count(out["moved_runs"])}')
     elif listed:
         count, others = counted(listed)
-        items, rest = rest[:count], rest[count:]
+        items = []
+        while rest and len(items) < count:
+            items.append(wrapped_line(rest.pop(0), 4))
         out['moved'] = []
         for item in items:
             if not item.startswith('  '):
@@ -2308,6 +2335,15 @@ def parse_details(details):
         out['all_reversed'] = bool(mt[1])
         out['reversed'], out['reversed_others'] = counted(mt, 2)
         rest.pop(0)
+    if rest and rest[0].startswith('the pairs that tell '):
+        # The heading wraps onto lines indented by two, up to its colon;
+        # before and now onto lines indented by four.
+        while not rest[0].endswith(':') and len(rest) > 1 and \
+                re.fullmatch(r'  \S.*', rest[1]):
+            rest[0] += ' ' + rest.pop(1).strip()
+        for i in (1, 2):
+            while len(rest) > i + 1 and re.fullmatch(r'    \S.*', rest[i + 1]):
+                rest[i] += ' ' + rest.pop(i + 1).strip()
     if rest and rest[0] == ('the pairs that tell letters, accents and case '
                             'apart here are told apart differently themselves:'):
         before = re.fullmatch(r'  before: (.+)', rest[1] if len(rest) > 1 else '')
@@ -2337,7 +2373,10 @@ def parse_details(details):
         rest.pop(0)
     elif listed:
         count = int(listed[1])
-        items, rest = rest[1:1 + count], rest[1 + count:]
+        rest.pop(0)
+        items = []
+        while rest and len(items) < count:
+            items.append(wrapped_line(rest.pop(0), 4))
         out['pairs'] = []
         for item in items:
             mt = re.fullmatch(rf'  {CHARACTER} and {CHARACTER}: before '
@@ -2361,6 +2400,8 @@ def parse_details(details):
             if run_count(out['still']) != out['still_count']:
                 raise ReportShapeError(f'did not move says {mt[1]} and its runs '
                                        f'hold {run_count(out["still"])}')
+    if rest and re.fullmatch(r'[\d,]+ more pair\(s\) may .*', rest[0]):
+        rest.insert(0, wrapped_line(rest.pop(0), 2))
     mt = rest and re.fullmatch(r'([\d,]+) more pair\(s\) may be told apart '
                                r'differently; what was measured cannot decide',
                                rest[0])
@@ -17124,6 +17165,101 @@ class RulesBesideTheVerdicts(unittest.TestCase):
         with self.assertRaises(SystemExit), \
                 unittest.mock.patch('sys.stderr'):
             m.rules_beside(v, v, os.path.join(self.dir, 'out.txt'))
+
+
+class WrapsByColumns(unittest.TestCase):
+    """wrap_columns cuts at terminal columns, where a CJK character takes
+    two (16.337), and gives exactly what textwrap gives on text without
+    one, so that no other line of the output moves. The report's lines
+    that real data can make wider than 78 columns, and that no recorded
+    measurement does, are cut too (16.336)."""
+
+    # Runs of four ideographs, as a run of strings is named, and code points.
+    CJK = ', '.join(f'{"".join(chr(0x4E00 + 4 * i + k) for k in range(4))} '
+                    f'(U+{0x4E00 + 4 * i:04X})' for i in range(40))
+
+    def test_wide_characters_never_pass_the_width(self):
+        for width in (40, 74, 78):
+            lines = m.wrap_columns(self.CJK, width, initial_indent=' ' * 9,
+                                   subsequent_indent=' ' * 11)
+            self.assertLessEqual(max(map(_harness.columns, lines)), width)
+            self.assertEqual(' '.join(x.strip() for x in lines), self.CJK)
+        # Cut by characters, the same text passes the tool's width.
+        self.assertGreater(max(map(_harness.columns, textwrap.wrap(
+            self.CJK, 78, initial_indent=' ' * 9,
+            subsequent_indent=' ' * 11))), 78)
+
+    def test_text_without_wide_characters_is_cut_as_textwrap_cuts_it(self):
+        texts = ['Of the 867 locale(s) on the old machine: 14 changed, 851 '
+                 'unchanged, 0 not measured, 2 not on the new machine.',
+                 'V (U+0056) and w\0(U+0077): before like an accent, now as '
+                 'different letters', 'x' * 100 + ' y']
+        for text in texts:
+            for kw in ({}, {'break_long_words': False},
+                       {'initial_indent': '    ', 'subsequent_indent': '  ',
+                        'break_on_hyphens': False}):
+                self.assertEqual(m.wrap_columns(text, 74, **kw),
+                                 textwrap.wrap(text, 74, **kw))
+                self.assertEqual(m.fill_columns(text, 74, **kw),
+                                 textwrap.fill(text, 74, **kw))
+
+    def test_a_moved_character_with_a_long_name_fits(self):
+        """Its name is printed whole, and the longest in Unicode does not fit
+        on one line (16.336)."""
+        longest = max(range(0x110000),
+                      key=lambda c: len(unicodedata.name(chr(c), '')))
+
+        class Naming:
+            def counted(self, moved):
+                return f'{len(moved)} character(s)'
+
+            long = staticmethod(m.character)
+
+        lines = m.moved_lines({'moved': [longest, 0x57], 'runs': [],
+                               'naming': Naming()})
+        self.assertEqual(_harness.wide_lines(
+            '\n'.join('    ' + x for x in lines)), [])
+        self.assertGreater(len(lines), 3, lines)
+        self.assertIn(m.character(longest), flat(' '.join(lines)))
+
+    def test_a_pair_of_long_strings_fits_and_neither_is_cut(self):
+        """Strings of several bytes are named by their bytes; a pair of them
+        is cut at 78 columns, never inside one of the two (16.336)."""
+        # The second would straddle column 78, cut by its words.
+        first = 'bytes E0 A4 95 E0 A5 8D E0 A4 B7 E0 A5 80 E0 A4 82'
+        second = 'bytes E0 A4 9C E0 A5 8D E0 A4 9E'
+
+        class Naming:
+            def short(self, e):
+                return (first, second)[e]
+
+        lines = m.told_apart_lines({'naming': Naming(), 'count': 1,
+                                    'levels': (0, 1, 2),
+                                    'pairs': [(0, 1, 0b0001, 0b0011)]})
+        self.assertEqual(_harness.wide_lines(
+            '\n'.join('    ' + x for x in lines)), [])
+        self.assertGreater(len(lines), 2, lines)
+        for s in (first, second):
+            self.assertTrue(any(s in x for x in lines), (s, lines))
+
+    def test_a_locale_that_could_not_be_measured_fits(self):
+        """The measurement's own reason is printed whole, cut at 78
+        columns, on one machine and on both (16.336)."""
+        error = ('strcoll puts 3 neighbouring pair(s) of its own order the '
+                 'other way round, so it gives no one order to measure')
+        items = [{'name': 'ja_JP.eucjp', 'old': {'error': error}, 'new': {}},
+                 {'name': 'ko_KR.euckr', 'old': {'error': error},
+                  'new': {'error': error}}]
+        out = '\n'.join(m.unmeasured_lines(items, {'pg_names': {}, 'o': {}}))
+        self.assertEqual(_harness.wide_lines(out), [])
+        self.assertIn(f'ja_JP.eucjp (old machine): {error}', flat(out))
+        self.assertIn(f'ko_KR.euckr (both machines): {error}', flat(out))
+
+    def test_a_control_character_in_the_text_is_kept(self):
+        text = '\x01\x02 ' + self.CJK
+        lines = m.wrap_columns(text, 78)
+        self.assertEqual(' '.join(lines), text)
+        self.assertLessEqual(max(map(_harness.columns, lines)), 78)
 
 
 if __name__ == '__main__':

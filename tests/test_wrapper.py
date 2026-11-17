@@ -414,10 +414,10 @@ def assert_prints_the_example(test, out, out_dir, name):
                       list(difflib.unified_diff(
                           want.splitlines(True), got.splitlines(True),
                           f'examples/{name}', 'audit.sh', n=1))[:60]))
-    # Step 2 and the summary fit in 78 columns, the summary's warnings as
-    # each step wrapped them (16.186, 16.200).
-    test.assertEqual(wide_lines(step_text(got, 2)), [], name)
-    test.assertEqual(wide_lines(got.split('AUDIT SUMMARY', 1)[1]), [], name)
+    # Every line fits in 78 terminal columns, the summary's warnings as each
+    # step wrapped them, but a line with a path or a sha256 (16.186, 16.200,
+    # 16.335-16.337).
+    test.assertEqual(wide_lines(got), [], name)
 
 
 @needs_clone
@@ -1284,6 +1284,24 @@ class PrintsTheRhel8ToRhel9Example(_PrintsTheMachinesExample,
                          'charmap (step 2)')
         self.assertEqual([n for n, line in by_name.items()
                           if 'charmap' in line], ['C.utf8'])
+
+    def test_a_character_is_never_cut_from_its_code_point(self):
+        """In what a sort table names "among them", in step 11's report and
+        in the summary, a character and its "(U+...)" stay on one line
+        (16.337): no line under the paragraph's first starts with one."""
+        lines = self.out.split('\n')
+        paragraphs = 0
+        for i, line in enumerate(lines):
+            if 'its compiled sort table changed' not in line:
+                continue
+            paragraphs += 1
+            more = ' ' * (len(line) - len(line.lstrip()) + 2)
+            for x in lines[i + 1:]:
+                if not (len(x) > len(more) and x.startswith(more)
+                        and x[len(more)] != " "):
+                    break
+                self.assertFalse(x.lstrip().startswith('(U+'), (line, x))
+        self.assertGreaterEqual(paragraphs, 4)
 
 
 @needs_clone

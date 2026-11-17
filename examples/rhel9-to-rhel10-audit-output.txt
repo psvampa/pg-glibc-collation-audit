@@ -8,15 +8,19 @@ machine's own locale sources.
 Machines' files, as given:
   old  tests/locale_order/rhel9.extract.tar.gz
   new  tests/locale_order/rhel10.extract.tar.gz
-Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
-  UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was NOT checked
-  UNCHECKED glibc-2.39 = ef321e23c20e  gpg is not installed; the signature was NOT checked
+Tag provenance (this audit reads a third-party mirror; a tag is a mutable
+pointer):
+  UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was
+    NOT checked
+  UNCHECKED glibc-2.39 = ef321e23c20e  gpg is not installed; the signature was
+    NOT checked
 !! Signatures NOT checked for glibc-2.34, glibc-2.39 (why is on each one's
    line under 'Tag provenance', in 'What was compared'). The commit ids
    printed there are what was read; compare them against a source you trust
    (sourceware.org/git/glibc.git) if it matters.
 Machine provenance (each machine's own locale sources and charmaps, from its
-file, on its upstream tag above, as one commit of the clone; nothing downloaded):
+file, on its upstream tag above, as one commit of the clone; nothing
+downloaded):
   glibc-2.34-275.el9_8 = ee86fbe49d51, one parent: glibc-2.34
     rpm -q glibc   glibc-2.34-275.el9_8.x86_64
     measurement    sha256 c7ef613b81f12827f4c01289e034bbaa1199756dcce7a30414e64e43a4bfcbae
@@ -129,13 +133,15 @@ Sort order CHANGED in 4 locale(s):
       U+0E3F, U+0E46, U+0E4C, U+0E4F, U+0E5A..U+0E5B
     213 character(s) and 41 other string(s) sort differently against at least
       one other
-    the pairs that tell letters, accents and case apart here are told apart differently themselves:
+    the pairs that tell letters, accents and case apart here are told apart
+      differently themselves:
       before: letters a/b, accent bytes FF/_, case A/a
       now:    letters a/b, accent U+0E4E/U+0E47, case a/A
       so pairs are compared only by letters
     31 pairs told apart differently, too many to list here
       among them 1 character(s) that did not move: U+0030
-    60 more pair(s) may be told apart differently; what was measured cannot decide
+    60 more pair(s) may be told apart differently; what was measured cannot
+      decide
 
   th_TH.utf8 (UTF-8)
     also, in PostgreSQL: collation "th_TH" where the database encoding is
@@ -151,13 +157,15 @@ Sort order CHANGED in 4 locale(s):
     50,584 characters moved, too many to list here
     1,112,062 character(s) and 10,111 other string(s) sort differently against
       at least one other
-    the pairs that tell letters, accents and case apart here are told apart differently themselves:
+    the pairs that tell letters, accents and case apart here are told apart
+      differently themselves:
       before: letters a/b, accent U+10FFFF/_, case A/a
       now:    letters a/b, accent a/á, case a/A
       so pairs are compared only by letters
     45,693 pairs told apart differently, too many to list here
       among them 1 character(s) that did not move: U+0030
-    8,364 more pair(s) may be told apart differently; what was measured cannot decide
+    8,364 more pair(s) may be told apart differently; what was measured cannot
+      decide
 
 Every character, other string and pair found, by locale:
   /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.34-275.el9_8..glibc-2.39-128.el10_2.tsv
@@ -210,7 +218,8 @@ Only on the new machine: 18 locale(s).
   zgh_MA
   zgh_MA.utf8
 
-Of the 869 locale(s) on the old machine: 4 changed, 863 unchanged, 0 not measured, 2 not on the new machine.
+Of the 869 locale(s) on the old machine: 4 changed, 863 unchanged, 0 not
+   measured, 2 not on the new machine.
 Decimals of money: the same in the 867 locale(s) measured on both machines.
 Character sets: every byte sequence that each machine's charmaps give a
    character is among the strings measured, in the 4 locale(s) checked. The

@@ -8,15 +8,19 @@ glibc-2.34, from each machine's own locale sources.
 Machines' files, as given:
   old  tests/locale_order/rhel8.extract.tar.gz
   new  tests/locale_order/rhel9.extract.tar.gz
-Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
-  UNCHECKED glibc-2.28 = 3c03baca37fd  gpg is not installed; the signature was NOT checked
-  UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was NOT checked
+Tag provenance (this audit reads a third-party mirror; a tag is a mutable
+pointer):
+  UNCHECKED glibc-2.28 = 3c03baca37fd  gpg is not installed; the signature was
+    NOT checked
+  UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was
+    NOT checked
 !! Signatures NOT checked for glibc-2.28, glibc-2.34 (why is on each one's
    line under 'Tag provenance', in 'What was compared'). The commit ids
    printed there are what was read; compare them against a source you trust
    (sourceware.org/git/glibc.git) if it matters.
 Machine provenance (each machine's own locale sources and charmaps, from its
-file, on its upstream tag above, as one commit of the clone; nothing downloaded):
+file, on its upstream tag above, as one commit of the clone; nothing
+downloaded):
   glibc-2.28-251.el8_10.40 = f1bee415843d, one parent: glibc-2.28
     rpm -q glibc   glibc-2.28-251.el8_10.40.x86_64
     measurement    sha256 78fa02b6f413f30abc026c49596b226cd8f1b034b4aa860053bcc5189508e5cf
@@ -134,23 +138,25 @@ Sort order CHANGED in 14 locale(s):
     846,353 pairs told apart differently, too many to list here
       among them 845,406 character(s) and 1,569 other string(s) that did not
         move, too many to list here
-    2,721 more pair(s) may be told apart differently; what was measured cannot decide
+    2,721 more pair(s) may be told apart differently; what was measured cannot
+      decide
 
   ko_KR.utf8 (UTF-8)
     also, in PostgreSQL: collation "ko_KR" where the database encoding is
       UTF-8; database locale ko_KR.UTF-8
     its compiled sort table changed: it marks 1 sequence(s) as changed and
       4,888 more compare differently against one marked as changed; among
-      them: 힣 (U+D7A3), U+4E00..U+4E01, 七 (U+4E03), U+4E07..U+4E0B, 不
-      (U+4E0D), 丑 (U+4E11), U+4E14..U+4E16, U+4E18..U+4E19, 丞 (U+4E1E), 中
-      (U+4E2D), 串 (U+4E32), U+4E38..U+4E39, 主 (U+4E3B), U+4E42..U+4E43, 久
-      (U+4E45), 之 (U+4E4B), U+4E4D..U+4E4F, 乖 (U+4E56), U+4E58..U+4E59,
+      them: 힣 (U+D7A3), U+4E00..U+4E01, 七 (U+4E03), U+4E07..U+4E0B,
+      不 (U+4E0D), 丑 (U+4E11), U+4E14..U+4E16, U+4E18..U+4E19, 丞 (U+4E1E),
+      中 (U+4E2D), 串 (U+4E32), U+4E38..U+4E39, 主 (U+4E3B), U+4E42..U+4E43,
+      久 (U+4E45), 之 (U+4E4B), U+4E4D..U+4E4F, 乖 (U+4E56), U+4E58..U+4E59,
       U+4E5D..U+4E5F, and 3,238 more.
     1 character(s) moved:
       힣 (U+D7A3 HANGUL SYLLABLE HIH)
     4,889 character(s) sort differently against at least one other
     pairs are compared only by letters: no pair measured accents and case
-    2 more pair(s) may be told apart differently; what was measured cannot decide
+    2 more pair(s) may be told apart differently; what was measured cannot
+      decide
 
   or_IN, or_IN.utf8 (UTF-8)
     also, in PostgreSQL: database locale or_IN.UTF-8
@@ -165,7 +171,8 @@ Sort order CHANGED in 14 locale(s):
     50,554 characters moved, too many to list here
     all 1,112,063 character(s) and 10,111 other string(s) sort differently
       against at least one other
-    the pairs that tell letters, accents and case apart here are told apart differently themselves:
+    the pairs that tell letters, accents and case apart here are told apart
+      differently themselves:
       before: letters a/b, accent 0/୦, case a/A
       now:    letters a/b, accent a/á, case a/A
       so pairs are compared only by letters and case
@@ -173,7 +180,8 @@ Sort order CHANGED in 14 locale(s):
       among them 37 character(s) that did not move: U+0009..U+000D,
         U+0020..U+0022, U+0028..U+002B, U+0030..U+0039, U+003C..U+003E,
         U+007C, U+007E, U+0B66..U+0B6F
-    8,406 more pair(s) may be told apart differently; what was measured cannot decide
+    8,406 more pair(s) may be told apart differently; what was measured cannot
+      decide
 
   sv_FI, sv_FI.iso88591, sv_SE, sv_SE.iso88591, swedish (ISO-8859-1);
   sv_FI.iso885915@euro, sv_FI@euro, sv_SE.iso885915 (ISO-8859-15)
@@ -181,26 +189,28 @@ Sort order CHANGED in 14 locale(s):
       ISO-8859-15; database locales sv_FI.ISO-8859-1, sv_FI.ISO-8859-15@euro,
       sv_SE.ISO-8859-1, sv_SE.ISO-8859-15
     its compiled sort table changed: it marks 2 sequence(s) as changed and 2
-      more compare differently against one marked as changed; among them: W
-      (U+0057), w (U+0077), V (U+0056), v (U+0076).
+      more compare differently against one marked as changed; among them:
+      W (U+0057), w (U+0077), V (U+0056), v (U+0076).
     no character moved
     1 pair(s) told apart differently:
-      V (U+0056) and w (U+0077): before like an accent, now as different letters
+      V (U+0056) and w (U+0077): before like an accent, now as different
+        letters
 
   sv_FI.utf8, sv_SE.utf8 (UTF-8)
     also, in PostgreSQL: collations "sv_FI", "sv_SE" where the database
       encoding is UTF-8; database locales sv_FI.UTF-8, sv_SE.UTF-8
     its compiled sort table changed: it marks 2 sequence(s) as changed and 123
-      more compare differently against one marked as changed; among them: W
-      (U+0057), w (U+0077), V (U+0056), v (U+0076), U+0174..U+0175, Ʋ
-      (U+01B2), Ʌ (U+0245), U+028B..U+028C, ʷ (U+02B7), U+036E, ᴠ (U+1D20), ᵂ
-      (U+1D42), ᵛ (U+1D5B), ᵥ (U+1D65), ᶌ (U+1D8C), U+1DB9..U+1DBA, U+1DF1,
+      more compare differently against one marked as changed; among them:
+      W (U+0057), w (U+0077), V (U+0056), v (U+0076), U+0174..U+0175,
+      Ʋ (U+01B2), Ʌ (U+0245), U+028B..U+028C, ʷ (U+02B7), U+036E, ᴠ (U+1D20),
+      ᵂ (U+1D42), ᵛ (U+1D5B), ᵥ (U+1D65), ᶌ (U+1D8C), U+1DB9..U+1DBA, U+1DF1,
       U+1E7C..U+1E89, ẘ (U+1E98), U+1EFC..U+1EFD, and 44 more.
     2 character(s) moved:
       W (U+0057 LATIN CAPITAL LETTER W)
       w (U+0077 LATIN SMALL LETTER W)
     44 character(s) sort differently against at least one other
-    7 more pair(s) may be told apart differently; what was measured cannot decide
+    7 more pair(s) may be told apart differently; what was measured cannot
+      decide
 
 Every character, other string and pair found, by locale:
   /tmp/pg-glibc-collation-audit/measured_order_characters.glibc-2.28-251.el8_10.40..glibc-2.34-275.el9_8.tsv
@@ -239,7 +249,8 @@ Only on the new machine: 4 locale(s).
   mnw_MM
   mnw_MM.utf8
 
-Of the 867 locale(s) on the old machine: 14 changed, 851 unchanged, 0 not measured, 2 not on the new machine.
+Of the 867 locale(s) on the old machine: 14 changed, 851 unchanged, 0 not
+   measured, 2 not on the new machine.
 Decimals of money: the same in the 865 locale(s) measured on both machines.
 Character sets: every byte sequence that each machine's charmaps give a
    character is among the strings measured, in the 14 locale(s) checked. The
@@ -455,10 +466,11 @@ Character rules (LC_CTYPE): not compared in C and POSIX, which PostgreSQL
        ko_KR.utf8 (UTF-8)
          its compiled sort table changed: it marks 1 sequence(s) as changed
            and 4,888 more compare differently against one marked as changed;
-           among them: 힣 (U+D7A3), U+4E00..U+4E01, 七 (U+4E03), U+4E07..U+4E0B,
-           不 (U+4E0D), 丑 (U+4E11), U+4E14..U+4E16, U+4E18..U+4E19, 丞 (U+4E1E),
-           中 (U+4E2D), 串 (U+4E32), U+4E38..U+4E39, 主 (U+4E3B), U+4E42..U+4E43,
-           久 (U+4E45), 之 (U+4E4B), U+4E4D..U+4E4F, 乖 (U+4E56), U+4E58..U+4E59,
+           among them: 힣 (U+D7A3), U+4E00..U+4E01, 七 (U+4E03),
+           U+4E07..U+4E0B, 不 (U+4E0D), 丑 (U+4E11), U+4E14..U+4E16,
+           U+4E18..U+4E19, 丞 (U+4E1E), 中 (U+4E2D), 串 (U+4E32),
+           U+4E38..U+4E39, 主 (U+4E3B), U+4E42..U+4E43, 久 (U+4E45),
+           之 (U+4E4B), U+4E4D..U+4E4F, 乖 (U+4E56), U+4E58..U+4E59,
            U+4E5D..U+4E5F, and 3,238 more; 1 character(s) moved: 힣 (U+D7A3);
            4,889 sort differently against another; pairs compared only by
            letters; 2 more pair(s) the measurement cannot decide

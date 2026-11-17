@@ -5157,10 +5157,42 @@ def code_point_runs(cps):
     return runs
 
 
+def columns(text):
+    """The terminal columns text takes: 2 for a wide or full-width
+    character (Unicode East Asian Width W or F, such as 七 or 힣), 0 for a
+    combining mark, 1 for the rest."""
+    return sum(0 if unicodedata.combining(c) else
+               2 if unicodedata.east_asian_width(c) in 'WF' else 1
+               for c in text)
+
+
+def wrap_columns(text, width=70, **kw):
+    """textwrap.wrap, with width in terminal columns rather than
+    characters: each wide character carries a pad that textwrap counts and
+    the lines drop (16.337). The pad is a control character the text does
+    not hold; a text that holds all eight is cut by characters, as
+    textwrap cuts it. A combining mark still counts one, which can only
+    make a line shorter. A word of wide characters wider than the line,
+    cut inside (break_long_words), can leave a line one column too wide:
+    nothing this tool prints holds such a word."""
+    pad = next((c for c in '\x01\x02\x03\x04\x05\x06\x07\x08'
+                if c not in text), None)
+    if pad is None:
+        return textwrap.wrap(text, width, **kw)
+    padded = ''.join(c + pad if unicodedata.east_asian_width(c) in 'WF'
+                     else c for c in text)
+    return [line.replace(pad, '') for line in textwrap.wrap(padded, width, **kw)]
+
+
+def fill_columns(text, width=70, **kw):
+    """textwrap.fill, in terminal columns (wrap_columns)."""
+    return '\n'.join(wrap_columns(text, width, **kw))
+
+
 def report_lines(text, indent):
     """A line of a change, cut to fit the report beside its four spaces, and
     never inside a run of strings (Naming.runs_text, whole)."""
-    return [line.replace('\0', ' ') for line in textwrap.wrap(
+    return [line.replace('\0', ' ') for line in wrap_columns(
         text, width=74, initial_indent=indent, subsequent_indent=indent + '  ',
         break_on_hyphens=False, break_long_words=False)]
 
@@ -5357,7 +5389,7 @@ def moved_lines(d):
         return ['no character moved']
     if len(moved) <= LIST_LIMIT:
         return ([f'{nm.counted(moved)} moved:']
-                + [f'  {nm.long(c)}' for c in moved])
+                + [line for c in moved for line in report_lines(nm.long(c), '  ')])
     if len(runs) <= LIST_LIMIT:
         return report_lines(f'{nm.counted(moved, "characters")} moved: '
                             f'{nm.runs_text(runs, whole=True)}', '')
@@ -5423,9 +5455,11 @@ PROBES_CHANGED = ('the pairs that tell letters, accents and case apart here '
 
 
 def probes_lines(d):
-    return [PROBES_CHANGED + ':',
-            f'  before: {readable_probes(d["before"], d["naming"])}',
-            f'  now:    {readable_probes(d["now"], d["naming"])}']
+    return (report_lines(PROBES_CHANGED + ':', '')
+            + report_lines(f'before: {readable_probes(d["before"], d["naming"])}',
+                           '  ')
+            + report_lines(f'now:    {readable_probes(d["now"], d["naming"])}',
+                           '  '))
 
 
 def probes_brief(d):
@@ -5480,11 +5514,13 @@ def told_apart_lines(d):
     if d['pairs'] is None:
         return [f'{d["count"]:,} pairs told apart differently, too many to '
                 'list here']
+    # A string is never cut from its code point (NUL, as runs_text).
     return ([f'{d["count"]} pair(s) told apart differently:']
-            + [f'  {nm.short(x)} and {nm.short(y)}: before '
-               f'{relation_words(before, d["levels"])}, now '
-               f'{relation_words(now, d["levels"])}'
-               for x, y, before, now in d['pairs']])
+            + [line for x, y, before, now in d['pairs'] for line in report_lines(
+                f'{nm.short(x).replace(" ", chr(0))} and '
+                f'{nm.short(y).replace(" ", chr(0))}: before '
+                f'{relation_words(before, d["levels"])}, now '
+                f'{relation_words(now, d["levels"])}', '  ')])
 
 
 def told_apart_brief(d):
@@ -5553,8 +5589,8 @@ def still_sql(d):
 
 
 def undecided_lines(d):
-    return [f'{len(d["pairs"]):,} more pair(s) may be told apart differently; '
-            'what was measured cannot decide']
+    return report_lines(f'{len(d["pairs"]):,} more pair(s) may be told apart '
+                        'differently; what was measured cannot decide', '')
 
 
 def undecided_brief(d):
@@ -5834,8 +5870,8 @@ def refused_sides(d):
 
 
 def refused_lines(items, ctx):
-    out = [textwrap.fill(REFUSED.format(len(items)), width=78,
-                         subsequent_indent='   ', break_on_hyphens=False)]
+    out = [fill_columns(REFUSED.format(len(items)), width=78,
+                        subsequent_indent='   ', break_on_hyphens=False)]
     for d in items:
         for where, cats in refused_sides(d):
             out.append(f'  {shown(d["name"])} ({where}): '
@@ -8076,9 +8112,9 @@ def whole_words(text, indent, more):
     """wrapped(), but a word longer than the line, such as the path of the
     characters file audit.sh names, stays whole on a line of its own: cut,
     it could not be copied."""
-    return textwrap.wrap(text, width=78, initial_indent=' ' * indent,
-                         subsequent_indent=' ' * more, break_on_hyphens=False,
-                         break_long_words=False)
+    return wrap_columns(text, width=78, initial_indent=' ' * indent,
+                        subsequent_indent=' ' * more, break_on_hyphens=False,
+                        break_long_words=False)
 
 
 def other_encoding_lines(items, ctx):
@@ -8337,7 +8373,7 @@ def table_change_lines(why, s11, named=None):
     text += shown_ + (f'; {said}' if said else '')
     # Printed four columns in, like the lines of the change under it; a name
     # of several words keeps its words on one line (NUL, as runs_text).
-    return ([line.replace('\0', ' ') for line in textwrap.wrap(
+    return ([line.replace('\0', ' ') for line in wrap_columns(
         text + '.', width=74, subsequent_indent='  ', break_on_hyphens=False,
         break_long_words=False)], text, counted.replace('\0', ' '))
 
@@ -8642,7 +8678,8 @@ def table_naming(o, n, codeset, seqs=None, charmap=None):
         def flush():
             for first, last in table_runs(singles, lambda a, b: b == a + 1):
                 if first == last:
-                    items.append((kind, short_character(first),
+                    # Never cut from its code point (NUL, as below).
+                    items.append((kind, short_character(first).replace(' ', '\0'),
                                   f'U+{first:04X}'))
                 else:
                     run = f'U+{first:04X}..U+{last:04X}'
@@ -8859,7 +8896,7 @@ def listed_names(names):
 
 def tables_not_compared_lines(items, ctx):
     total = sum(len(d['names']) for d in items)
-    out = [textwrap.fill(
+    out = [fill_columns(
         f'!! Not compared by their sort tables: {total} locale(s). Each keeps '
         'step 11\'s verdict, and an unchanged one is unchanged only as far as '
         'step 11 measured:', width=78, subsequent_indent='   ')]
@@ -8891,7 +8928,7 @@ def tables_not_compared_rows(items):
 
 def tables_disagree_lines(items, ctx):
     names = [x for d in items for x in d['names']]
-    return [textwrap.fill(
+    return [fill_columns(
         f'!! Step 11 found a change in {len(names)} locale(s) whose sort tables '
         'find no change of order. With the same glibc code that cannot happen, so '
         'the two machines compare with different code, and no locale is taken '
@@ -8918,7 +8955,7 @@ def tables_disagree_notes(items):
 
 def tables_only_lines(items, ctx):
     names = [x for d in items for x in d['names']]
-    return [textwrap.fill(
+    return [fill_columns(
         f'Unchanged by their sort tables although step 11 could not measure '
         f'them: {len(names)} locale(s). Nothing in this run checks that the '
         'two machines compare them with the same glibc code:', width=78,
@@ -9005,18 +9042,18 @@ def run_findings(o, n, warnings, partly, unmeasured, only_old,
 def wrapped(text, indent, more):
     """text cut at 78 columns, never inside a run of strings
     (Naming.runs_text, whole)."""
-    return [line.replace('\0', ' ') for line in textwrap.wrap(
+    return [line.replace('\0', ' ') for line in wrap_columns(
         text, width=78, initial_indent=' ' * indent,
         subsequent_indent=' ' * more, break_on_hyphens=False)]
 
 
 def filled(text, indent=0, more=3):
-    return textwrap.fill(text, width=78, initial_indent=' ' * indent,
-                         subsequent_indent=' ' * more, break_on_hyphens=False)
+    return fill_columns(text, width=78, initial_indent=' ' * indent,
+                        subsequent_indent=' ' * more, break_on_hyphens=False)
 
 
 def warning_lines(items, ctx):
-    return [textwrap.fill(d['text'], width=78, subsequent_indent='   ')
+    return [fill_columns(d['text'], width=78, subsequent_indent='   ')
             if d['wrap'] else d['text'] for d in items]
 
 
@@ -9029,7 +9066,7 @@ def notes(items):
 
 
 def partly_lines(items, ctx):
-    return [textwrap.fill(
+    return [fill_columns(
         f'!! Unchanged only as far as measured: {len(items)} of them. In '
         'each, the pairs of neighbours counted in brackets were not measured '
         'at every level, so a change in how they are told apart would not '
@@ -9065,7 +9102,7 @@ def such_as(seqs):
 
 def in_part_lines(items, ctx):
     where = ctx.get('characters_to')
-    out = [textwrap.fill(
+    out = [fill_columns(
         f'!! Measured in part: {len(items)} locale(s). The machine\'s '
         'character set gives a character to byte sequences that are not '
         'among the strings measured, so a change in where those sort would '
@@ -9135,16 +9172,18 @@ def unmeasured_lines(items, ctx):
         name, o_, n_ = d['name'], d['old'], d['new']
         before, now = o_.get('error'), n_.get('error')
         if not before and not now:
-            out.append(f'  {shown(name)}: measured over different strings on '
-                       f'the two machines ({o_["chars"]:,} as {o_["codeset"]}, '
-                       f'then {n_["chars"]:,} as {n_["codeset"]}), so the '
-                       'orders cannot be compared')
+            out.append(filled(f'{shown(name)}: measured over different '
+                              f'strings on the two machines ({o_["chars"]:,} '
+                              f'as {o_["codeset"]}, then {n_["chars"]:,} as '
+                              f'{n_["codeset"]}), so the orders cannot be '
+                              'compared', 2, 4))
         elif before == now:
-            out.append(f'  {shown(name)} (both machines): {before}')
+            out.append(filled(f'{shown(name)} (both machines): {before}', 2, 4))
         else:
             for side, error in (('old', before), ('new', now)):
                 if error:
-                    out.append(f'  {shown(name)} ({side} machine): {error}')
+                    out.append(filled(f'{shown(name)} ({side} machine): '
+                                      f'{error}', 2, 4))
         also = also_known_as([name], ctx['pg_names'], ctx['o'])
         if also:
             out.append(filled(also, 4, 6))
@@ -9180,7 +9219,7 @@ def unmeasured_rows(items):
 def only_old_lines(items, ctx):
     # Not measured on the new machine is not measured: a machine missing
     # its language packs would otherwise look like a clean upgrade.
-    out = [textwrap.fill(
+    out = [fill_columns(
         f'!! Not on the new machine, so NOT known to be unchanged: '
         f'{len(items)} locale(s). Either the upgrade removes them or '
         'their language pack is not installed there; a database or '
@@ -9244,7 +9283,7 @@ def use_notes(items):
 
 
 def closing_lines(items, ctx):
-    return [textwrap.fill(d['text'], width=78, subsequent_indent='   ')
+    return [fill_columns(d['text'], width=78, subsequent_indent='   ')
             for d in items]
 
 
@@ -10394,7 +10433,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     warnings = []   # (text, wrapped in the report)
     if direction == 'same':
         warnings.append(('!! Both machines run the same glibc build. This '
-                         'compares two machines, not an upgrade.', False))
+                         'compares two machines, not an upgrade.', True))
     elif direction == 'undetermined':
         warnings.append((
             f'!! Both machines run {old["glibc_version"]} and the build of at '
@@ -10481,7 +10520,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     report += run('not on the new machine')
     report.append(f'Only on the new machine: {len(only_new)} locale(s).')
     report += [f'  {shown(name)}' for name in only_new]
-    report += ['', totals]
+    report += ['', filled(totals, 0, 3)]
     report += run('money')
     report += run('charmaps checked')
     report += run('postgres libc')

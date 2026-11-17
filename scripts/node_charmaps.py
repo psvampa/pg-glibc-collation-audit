@@ -371,10 +371,11 @@ def print_characters(chars, indent='      ', width=78,
     entries = [f'U+{c:X}' if isinstance(c, int)
                else f'{c} (U+{ord(c):04X})' if c.isprintable()
                and not c.isspace() else f'U+{ord(c):04X}' for c in chars]
+    from locale_order import columns
     line = f'{indent}{label} ({len(chars)}):'
     sep = ' '
     for entry in entries:
-        if len(line) + len(sep) + len(entry) > width:
+        if columns(line) + len(sep) + columns(entry) > width:
             print(line)
             line = indent + entry
         else:

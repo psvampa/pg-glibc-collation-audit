@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import unicodedata
 import unittest
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -793,13 +794,22 @@ def flat(text):
     return ' '.join(text.split())
 
 
+def columns(text):
+    """The terminal columns text takes: 2 for a wide or full-width
+    character (East Asian Width W or F, such as 七), 0 for a combining
+    mark, 1 for the rest. Written here and not imported, so that a fault
+    in the scripts' own count cannot hide from the tests (16.337)."""
+    return sum(0 if unicodedata.combining(c) else
+               2 if unicodedata.east_asian_width(c) in 'WF' else 1
+               for c in text)
+
+
 def wide_lines(text):
-    """The lines of text longer than 78 characters that a wrap could have
-    broken (16.186, 16.200). A line holding a word of 40 characters or more
-    (a path, a commit id) is left out. Counts characters, not terminal
-    columns."""
+    """The lines of text wider than 78 terminal columns that a wrap could
+    have broken (16.186, 16.200, 16.337). A line holding a word of 40
+    characters or more (a path, a commit id, a sha256) is left out."""
     return [line for line in text.split('\n')
-            if len(line) > 78 and not any(len(w) >= 40 for w in line.split())]
+            if columns(line) > 78 and not any(len(w) >= 40 for w in line.split())]
 
 
 # A step deleted in branch 9 (3 in step 9.2; 4, 5, 9 and 10 in step 9.3;
