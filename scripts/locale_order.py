@@ -4878,9 +4878,8 @@ def postgres_reach(codeset):
 
 def also_known_as(names, pg_names, locales):
     """What else a PostgreSQL user may call the locales of one change or
-    of one finding (not measured, refused, not on the new machine), and,
-    for those PostgreSQL never imports, where a database or CREATE COLLATION
-    can use them."""
+    of one finding, and, for those PostgreSQL never imports, where a
+    database or CREATE COLLATION can use them."""
     aliases, spellings = {}, []
     elsewhere = {'anywhere': ([], []), 'superuser': ([], [])}
     for name in sorted(names):
@@ -9345,6 +9344,24 @@ COLUMNS = ('Where the column test holds two strings, a / b, their order '
            "letters, accents and case, where the two machines' pairs differ.")
 
 
+# What before and now hold in the rows whose finding is not a pair of
+# strings, each said only where the file has such a row.
+COLUMN_WORDS = (
+    ('LC_CTYPE changed', 'In a row LC_CTYPE changed, before says whether the '
+     "old machine's tables gave the character a case or a class "
+     '(classified) or neither (not classified), and is - in a row of a '
+     'byte; how says what changes.'),
+    ('upper/lower/ILIKE error', 'In a row upper/lower/ILIKE error, before '
+     "and now say what glibc's converter does with those bytes on the old "
+     'and the new machine: converts, error (it refuses them) or not '
+     'measured.'),
+    ('upper/lower back error', 'In a row upper/lower back error, before and '
+     "now say what glibc's converter does on the old and the new machine "
+     'with what how names: turned back into bytes, not turned back, not '
+     "read (that machine's converter does not read the character out of "
+     "such a database's bytes) or not measured."))
+
+
 def also_rows(names, pg_names, locales):
     """The file's row of the other names PostgreSQL knows a group by, the
     text the report prints under its heading; none when there is none."""
@@ -9355,9 +9372,11 @@ def also_rows(names, pg_names, locales):
              '-', '-', '-', '-')]
 
 
-def sql_lines(prefix, files, not_checked):
+def sql_lines(prefix, files, not_checked, also=lambda names: None):
     """What the report says of the SQL files: each one, how to run and read
-    it, and what no file tests; or why none was written."""
+    it, and what no file tests, with what else PostgreSQL calls those
+    locales (ALSO, from the names as written there); or why none was
+    written."""
     out = []
     if files:
         out.append('To confirm these changes in PostgreSQL, run each SQL file '
@@ -9377,6 +9396,9 @@ def sql_lines(prefix, files, not_checked):
     for names, why in not_checked:
         out += wrapped(f'Not checked in PostgreSQL by these files: '
                        f'{", ".join(names)}: {why}.', 0, 2)
+        said = also(names)
+        if said:
+            out.append(filled(said, 4, 6))
     return out
 
 
@@ -9640,11 +9662,18 @@ def charmap_findings(old, new, charmaps, compared, firm=(), named=()):
     import node_charmaps as nc
     other = sum(1 for name in firm if name not in nc.BUILTIN)
     named = set(named)
+    # C and POSIX are glibc's built-in locale: neither count holds them.
+    builtin = [x for x in nc.BUILTIN if x in firm or x in compared]
+    aside = (f' {" and ".join(builtin)} '
+             f'{"is" if len(builtin) == 1 else "are"} not counted: '
+             f'{"it is" if len(builtin) == 1 else "they are"} built into '
+             'glibc, from no charmap.'
+             if builtin else '')
     if not compared and other and not named:
         return {}, [('charmaps checked', {
             'text': 'Character sets: not checked, and not needed: the '
                     f'{other} locale(s) found unchanged were found so by their '
-                    'sort tables, which decide for every string.',
+                    'sort tables, which decide for every string.' + aside,
             'warning': False})]
     lacking, found, whole = {}, [], []
     for side, data, how in (('old', old, charmaps[0]), ('new', new, charmaps[1])):
@@ -9699,12 +9728,12 @@ def charmap_findings(old, new, charmaps, compared, firm=(), named=()):
                     'charmaps give a character is among the strings measured, '
                     f'in the {checked} locale(s) checked. The {other} '
                     'locale(s) unchanged by their sort tables need no such '
-                    'check: the table decides for every string.')
+                    'check: the table decides for every string.' + aside)
         else:
             text = ('Character sets: every byte sequence that each machine\'s '
                     'charmaps give a character, in the '
                     f'{checked} locale(s) compared, is among the strings '
-                    'measured.')
+                    'measured.' + aside)
         found.append(('charmaps checked', {'text': text, 'warning': False}))
     return lacking, found
 
@@ -9739,6 +9768,15 @@ def ascii_name(name):
     """A locale name as ASCII, for a SQL file: as it is, or quoted with
     escapes."""
     return name if name.isascii() else json.dumps(shown(name))
+
+
+def also_of_written(names, pg_names, locales):
+    """also_known_as of the locales an entry of confirm_groups' not_checked
+    names, written as ascii_name writes them; None where it names none of
+    LOCALES (the character rules of every locale)."""
+    written = {ascii_name(x): x for x in locales}
+    known = [written[x] for x in names if x in written]
+    return also_known_as(known, pg_names, locales) if known else None
 
 
 def confirm_groups(groups, pg_names, old, new, only_old, unknown=(),
@@ -10104,7 +10142,8 @@ def rule_line(state, words, rule, why, charmap):
         die(f'step 2 gave the rules state {rule!r}, which is none of not '
             'compared, differs, same, built in')
     if charmap == 'changed':
-        tail = '; a character its file\'s rules name changed in a charmap'
+        tail = ('; a character its file\'s rules name changed in a charmap '
+                '(step 2)')
     elif charmap == 'not compared':
         tail = '; its character set (step 2): not compared'
     elif charmap == 'transliteration':
@@ -10428,7 +10467,9 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
         if note:
             report += wrapped(note, 0, 0)
     if sql_to:
-        report += [''] + sql_lines(sql_to, sql_files, sql_not_checked)
+        report += [''] + sql_lines(
+            sql_to, sql_files, sql_not_checked,
+            lambda names: also_of_written(names, pg_names, o))
     report += ['', f'Unchanged: {len(same)} locale(s).']
     report += run('tables only')
     report += run('tables not compared')
@@ -10518,7 +10559,10 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
                 f.write(f'# Step 11, {machine_label(old)} -> {machine_label(new)}: '
                         'every character, other string and pair found, by '
                         'locale.' + (' ' + note if note else '')
-                        + ' ' + COLUMNS + '\n')
+                        + ' ' + COLUMNS + ''.join(
+                            ' ' + words for kind, words in COLUMN_WORDS
+                            if any(r[0] == kind for _, found_rows in rows
+                                   for r in found_rows)) + '\n')
                 f.write('locales\tfinding\tcharacters\thow\ttest\tbefore\tnow\tmeasured\n')
                 count = 0
                 for names, found_rows in sorted(rows):

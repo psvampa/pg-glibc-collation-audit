@@ -223,6 +223,7 @@ servers, in a database of its encoding (psql -X -d DATABASE -f FILE > old.out
     /tmp/pg-glibc-collation-audit/measured_order_confirm.glibc-2.28-251.el8_10.40..glibc-2.34-275.el9_8.UTF8.sql
 Not checked in PostgreSQL by these files: en_US.utf8@ampm, en_US@ampm: it is
   not on the new machine.
+    also, in PostgreSQL: database locale en_US.UTF-8@ampm
 
 Unchanged: 851 locale(s).
 !! Not on the new machine, so NOT known to be unchanged: 2 locale(s). Either
@@ -243,7 +244,8 @@ Decimals of money: the same in the 865 locale(s) measured on both machines.
 Character sets: every byte sequence that each machine's charmaps give a
    character is among the strings measured, in the 14 locale(s) checked. The
    849 locale(s) unchanged by their sort tables need no such check: the table
-   decides for every string.
+   decides for every string. C and POSIX are not counted: they are built into
+   glibc, from no charmap.
 PostgreSQL on the OLD machine: 10 process(es) named postgres or postmaster,
    all running the C library measured there.
 PostgreSQL on the NEW machine: 10 process(es) named postgres or postmaster,
@@ -397,7 +399,7 @@ Character rules (LC_CTYPE): not compared in C and POSIX, which PostgreSQL
 
      Each locale of the old machine step 11 names, beside its rules (step 2):
        C.utf8: the order changes, and so do its rules (step 2); a character
-         its file's rules name changed in a charmap
+         its file's rules name changed in a charmap (step 2)
        en_US.utf8@ampm, en_US@ampm: not on the new machine; rules (step 2):
          not compared, no file en_US@ampm on the new side; this does not show
          the order
@@ -522,7 +524,8 @@ Character rules (LC_CTYPE): not compared in C and POSIX, which PostgreSQL
      Character sets: every byte sequence that each machine's charmaps give a
         character is among the strings measured, in the 14 locale(s) checked.
         The 849 locale(s) unchanged by their sort tables need no such check:
-        the table decides for every string.
+        the table decides for every string. C and POSIX are not counted: they
+        are built into glibc, from no charmap.
      PostgreSQL on the OLD machine: 10 process(es) named postgres or
         postmaster, all running the C library measured there.
      PostgreSQL on the NEW machine: 10 process(es) named postgres or
@@ -687,7 +690,7 @@ Character rules (LC_CTYPE): not compared in C and POSIX, which PostgreSQL
      Full report: step 11 above.
      Each locale of the old machine step 11 names, beside its rules (step 2):
        C.utf8: the order changes, and so do its rules (step 2); a character
-         its file's rules name changed in a charmap
+         its file's rules name changed in a charmap (step 2)
        en_US.utf8@ampm, en_US@ampm: not on the new machine; rules (step 2):
          not compared, no file en_US@ampm on the new side; this does not show
          the order
