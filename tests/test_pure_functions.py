@@ -248,6 +248,16 @@ class PrintCharacters(unittest.TestCase):
             [(c, f'{ord(c):04X}') for c in chars])
         self.assertLessEqual(max(len(line) for line in out.splitlines()), 78)
 
+    def test_wide_characters_are_counted_by_the_columns_they_take(self):
+        """A CJK character takes two columns on a terminal (16.337)."""
+        chars = [chr(0x4E00 + i) for i in range(60)]
+        out = self.printed(chars)
+        self.assertEqual(
+            re.findall(r'(\S) \(U\+([0-9A-F]{4,6})\)', out),
+            [(c, f'{ord(c):04X}') for c in chars])
+        self.assertEqual(_harness.wide_lines(out), [])
+        self.assertGreater(max(map(_harness.columns, out.splitlines())), 60)
+
 
 class StepTwoWritesWhatBecameOfItsCharmapCheck(unittest.TestCase):
     """2.1: step2_rules_by_name's charmaps is a closed state with the

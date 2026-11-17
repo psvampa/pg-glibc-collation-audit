@@ -2799,15 +2799,38 @@ class TheProvenanceSaysWhatNoMetadataGives(unittest.TestCase):
     def test_an_srpm_no_metadata_gives_a_sha256_for(self):
         out = self.report(False)
         sha = hashlib.sha256(b'srpm').hexdigest()
+        # Cut at 78 columns under the sha256 it is about (16.335).
         self.assertIn('%s sha256 %s\n%s no metadata gives this sha256: it '
-                      "is the file's as downloaded\n" % (' ' * 24, sha,
-                                                          ' ' * 24), out)
+                      "is the file's as\n%s downloaded\n"
+                      % (' ' * 24, sha, ' ' * 24, ' ' * 24), out)
+        self.assertEqual(wide_lines(out), [])
         self.assertEqual(out.count('no metadata gives this sha256'), 1)
         self.assertIn(self.CHECKED + ", but no metadata gives one for the "
                       "SRPM of %s (%s%s publishes no source metadata): its "
                       "sha256 is the file's as downloaded;"
                       % (self.NAME, self.MIRROR, self.TREE), flat(out))
         self.assertNoOnly(flat(out))
+
+    def test_the_checked_lines_are_cut_under_checked(self):
+        """What check_locales and check_charmaps say of a real build
+        (glibc-locale-source-2.28-251.el8_10.40) is cut at 78 columns,
+        its rest under the text after "checked:" (16.335)."""
+        said = ['locale sources: 355, each the sha256 '
+                'glibc-locale-source-2.28-251.el8_10.40 records',
+                'charmaps: 233, each the one '
+                'glibc-locale-source-2.28-251.el8_10.40 installs']
+        sd = self.side(True)
+        sd.prov['verified'] = list(said)
+        out = io.StringIO()
+        with mock.patch('sys.stdout', out):
+            g.report_build_provenance([sd])
+        out = out.getvalue()
+        self.assertEqual(wide_lines(out), [])
+        for text in said:
+            self.assertIn(f'checked: {text}', flat(out))
+        self.assertIn('\n    checked: locale sources: 355, each the sha256\n'
+                      + ' ' * 13 + 'glibc-locale-source-2.28-251.el8_10.40 '
+                      'records\n', out)
 
     def test_two_srpms_no_metadata_gives_a_sha256_for(self):
         out = flat(self.report(False, self.NAME, self.OTHER))

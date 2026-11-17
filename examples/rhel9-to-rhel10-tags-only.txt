@@ -2,9 +2,12 @@
 ================================================================
 == WHAT WAS COMPARED
 ================================================================
-Tag provenance (this audit reads a third-party mirror; a tag is a mutable pointer):
-  UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was NOT checked
-  UNCHECKED glibc-2.39 = ef321e23c20e  gpg is not installed; the signature was NOT checked
+Tag provenance (this audit reads a third-party mirror; a tag is a mutable
+pointer):
+  UNCHECKED glibc-2.34 = ae37d06c7d12  gpg is not installed; the signature was
+    NOT checked
+  UNCHECKED glibc-2.39 = ef321e23c20e  gpg is not installed; the signature was
+    NOT checked
 !! Signatures NOT checked for glibc-2.34, glibc-2.39 (why is on each one's
    line under 'Tag provenance', in 'What was compared'). The commit ids
    printed there are what was read; compare them against a source you trust
