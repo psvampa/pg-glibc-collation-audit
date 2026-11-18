@@ -126,11 +126,36 @@ def mutant(path, change, name):
     return dest
 
 
+def joined(text):
+    """What read printed, with each line it cut at 78 columns joined back
+    to the line it continues: a line indented by 3 (under a line of its
+    own), 4 (under a refusal) or 7 spaces (under a name or a note)."""
+    out = []
+    for line in text.split('\n'):
+        lead = len(line) - len(line.lstrip(' '))
+        if out and line.strip() and lead in (3, 4, 7):
+            out[-1] += ' ' + line.strip()
+        else:
+            out.append(line)
+    return '\n'.join(out)
+
+
 def read(sql_path, old, new):
-    """(exit status, stdout, stderr) of `confirm_sql.py read`."""
-    p = subprocess.run([sys.executable, SCRIPT, 'read', sql_path, old, new],
+    """(exit status, stdout, stderr) of `confirm_sql.py read`, each
+    joined(); no line of either is wider than 78 columns, but one holding
+    a word of 40 characters or more (16.355)."""
+    # Run from _TMP, where the files are, with short paths: a path of 40
+    # characters or more (the Mac's temporary directory) would exempt its
+    # line from the width check.
+    args = [os.path.relpath(x, _TMP) if x.startswith(_TMP + os.sep) else x
+            for x in (sql_path, old, new)]
+    p = subprocess.run([sys.executable, SCRIPT, 'read', *args], cwd=_TMP,
                        capture_output=True, text=True)
-    return p.returncode, p.stdout, p.stderr
+    wide = _harness.wide_lines(p.stdout) + _harness.wide_lines(p.stderr)
+    if wide:
+        raise AssertionError(f'read printed {len(wide)} line(s) wider than 78 '
+                             f'columns: {wide}')
+    return p.returncode, joined(p.stdout), joined(p.stderr)
 
 
 def refusals(stdout):
@@ -844,7 +869,7 @@ class ReadsRealOutputs(unittest.TestCase):
                     out('89', 'UTF8', f'node1.pg{pg}'))
                 self.assertEqual((rc, confirmed(stdout)), (0, (38761, 38761)))
                 warned = re.findall(r'^!! .*node1\.pg\d+\.out: PostgreSQL '
-                                    r'warned: psql:<stdin>:\d+: WARNING:  '
+                                    r'warned: psql:<stdin>:\d+: WARNING: +'
                                     r'01000: collation "([^"]+)" has version '
                                     r'mismatch', stdout, re.M)
                 self.assertEqual(sorted(warned), [
@@ -886,15 +911,16 @@ class ReadsRealOutputs(unittest.TestCase):
                                   out('89', 'UTF8', 'es.el9'))
         self.assertEqual((rc, confirmed(stdout)), (0, (38761, 38761)))
         warned = re.findall(r'^!! .*es\.el9\.out: PostgreSQL warned: '
-                            r'psql:/tmp/confirm 8\.1\.sql:\d+: WARNING:  01000: '
-                            r'el ordenamiento \(collation\) .([^ ]+). tiene una '
-                            r'discordancia de versi.n / DETALLE:  ', stdout,
+                            r'psql:/tmp/confirm 8\.1\.sql:\d+: WARNING: +'
+                            r'01000: el ordenamiento \(collation\) .([^ ]+). '
+                            r'tiene una discordancia de versi.n / DETALLE: +',
+                            stdout,
                             re.M)
         self.assertEqual(sorted(warned), [
             'en_US.utf8', 'ko_KR', 'ko_KR.utf8', 'or_IN', 'or_IN.utf8',
             'sv_FI', 'sv_FI.utf8', 'sv_SE', 'sv_SE.utf8'])
         self.assertEqual(len(re.findall(r'^!! .*es\.el9\.out: psql printed '
-                                        r'before the file ran: WARNING:  '
+                                        r'before the file ran: WARNING: +'
                                         r'database "postgres" ', stdout,
                                         re.M)), 1)
 
@@ -918,12 +944,168 @@ class ReadsRealOutputs(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIsNone(confirmed(stdout))
         cannot = re.findall(r'collation (\S+) CANNOT BE USED: psql:<stdin>:'
-                            r'\d+: ERROR:  22023: could not create locale ',
+                            r'\d+: ERROR: +22023: could not create locale ',
                             stdout)
         self.assertEqual(sorted(cannot), [
             'ko_KR', 'ko_KR.utf8', 'or_IN', 'or_IN.utf8', 'sv_FI',
             'sv_FI.utf8', 'sv_SE', 'sv_SE.utf8'])
         self.assertEqual(len(refusals(stdout)), 8)
+
+
+class ReadsALongPath(unittest.TestCase):
+    """A path is printed whole, so it can be copied (16.355): one longer
+    than a line (a server's output kept deep in a home directory; the
+    suite's own temporary paths are shorter than a line on Linux), and one
+    with spaces (an iCloud Drive folder, or the file psql was given). One
+    that begins a line stays after the label or the !! that names it.
+    Asserted on the output as printed; joined() only gives the count each
+    name must match, and that it is there."""
+
+    def test_a_path_longer_than_a_line_is_never_cut(self):
+        where = os.path.join(_TMP, 'kept-from-the-servers-' + 'x' * 60)
+        os.makedirs(where, exist_ok=True)
+        paths = []
+        for src in (sql('89', 'UTF8'), out('89', 'UTF8', 'el8'),
+                    out('89', 'UTF8', 'el9')):
+            paths.append(os.path.join(where, os.path.basename(src)))
+            shutil.copyfile(src, paths[-1])
+        self.assertTrue(all(len(x) > 78 for x in paths))
+        p = subprocess.run([sys.executable, SCRIPT, 'read', *paths],
+                           capture_output=True, text=True)
+        self.assertEqual((p.returncode, _harness.wide_lines(p.stdout)),
+                         (0, []))
+        lines = p.stdout.split('\n')
+        self.assertIn(f'SQL file: {paths[0]}', lines)
+        self.assertIn(f'OLD output: {paths[1]},', lines)
+        self.assertIn(f'NEW output: {paths[2]},', lines)
+        # el8: no version for C.utf8, and the names it uses that 2.34
+        # lacks; el9: no version for C.utf8.
+        for x, n in ((paths[1], 2), (paths[2], 1)):
+            self.assertEqual(lines.count(f'!! {x}:'), n, p.stdout)
+        self.assertEqual(sum(line.count(x) for line in lines for x in paths),
+                         sum(joined(p.stdout).count(x) for x in paths))
+
+    def whole(self, args, names):
+        """Run read from _TMP on args; each of names is on one line as
+        often as in the output joined, and found at least once. A name is
+        one word to the width check, so a name of 40 characters or more
+        lets its line pass 78."""
+        p = subprocess.run([sys.executable, SCRIPT, 'read', *args],
+                           cwd=_TMP, capture_output=True, text=True)
+        for text in (p.stdout, p.stderr):
+            unspaced = text
+            for name in names:
+                unspaced = unspaced.replace(name, name.replace(' ', '_'))
+            self.assertEqual(_harness.wide_lines(unspaced), [])
+            for name in names:
+                with self.subTest(name=name):
+                    self.assertEqual(
+                        sum(line.count(name) for line in text.split('\n')),
+                        joined(text).count(name), text)
+        self.assertTrue(all(name in joined(p.stdout + p.stderr)
+                            for name in names))
+        return p
+
+    def test_a_path_with_spaces_is_never_cut(self):
+        where = os.path.join('glibc upgrade', 'kept from the servers')
+        os.makedirs(os.path.join(_TMP, where), exist_ok=True)
+        paths = []
+        for src in (sql('89', 'UTF8'), out('89', 'UTF8', 'el8'),
+                    out('89', 'UTF8', 'es.el9')):
+            paths.append(os.path.join(where, os.path.basename(src)))
+            shutil.copyfile(src, os.path.join(_TMP, paths[-1]))
+        # Confirmed, with the warnings of the file psql was given as
+        # "/tmp/confirm 8.1.sql": in this folder, and beside the SQL file,
+        # where the cut falls on that space unless it is kept.
+        given = 'psql:/tmp/confirm 8.1.sql:'
+        p = self.whole(paths, paths + [given])
+        self.assertEqual(p.returncode, 0, p.stdout)
+        p = self.whole([os.path.basename(x) for x in paths], [given])
+        self.assertEqual(p.returncode, 0, p.stdout)
+        # Refused: the two outputs the other way round.
+        p = self.whole([paths[0], paths[2], paths[1]], paths)
+        self.assertEqual(p.returncode, 1, p.stdout)
+        # The SQL file is not there.
+        missing = os.path.join(where, 'not there.sql')
+        p = self.whole([missing, paths[1], paths[2]], [missing])
+        self.assertEqual(p.returncode, 2, p.stderr)
+
+    def test_psql_names_its_file_in_a_line_of_its_own(self):
+        """The server lost halfway through the run: psql's own lines, not
+        a server's message, name the file it was given; quoted in the
+        refusal, it is not cut at its space."""
+        with open(out('89', 'UTF8', 'el8'), encoding='utf-8') as f:
+            head = f.read().split('\n')[:600]
+        lost = ['psql:/tmp/confirm 8.1.sql:612: server closed the '
+                'connection unexpectedly',
+                '\tThis probably means the server terminated abnormally',
+                '\tbefore or while processing the request.',
+                'psql:/tmp/confirm 8.1.sql:612: error: connection to server '
+                'was lost']
+        with open(os.path.join(_TMP, 'o.out'), 'w', encoding='utf-8') as f:
+            f.write('\n'.join(head + lost) + '\n')
+        p = self.whole([os.path.basename(sql('89', 'UTF8')), 'o.out',
+                        os.path.basename(out('89', 'UTF8', 'el9'))],
+                       ['psql:/tmp/confirm 8.1.sql:612:'])
+        self.assertEqual(p.returncode, 1, p.stdout)
+
+
+class RefusesTheSqlFile(unittest.TestCase):
+    """A SQL file read cannot take is refused on stderr, exit 2, with
+    nothing on stdout, by the message that says why; each message within
+    78 columns (16.355). Each case is the LATIN1 file of 8 -> 9 changed in
+    the one way it names."""
+
+    OLD = NEW = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.SQL = sql('89', 'LATIN1')
+        cls.OLD = out('89', 'LATIN1', 'el8')
+        cls.NEW = out('89', 'LATIN1', 'el9')
+        with open(cls.SQL, encoding='ascii') as f:
+            cls.TEXT = f.read()
+
+    def written(self, name, text):
+        path = os.path.join(_TMP, name)
+        with open(path, 'wb') as f:
+            f.write(text)
+        return path
+
+    def refused(self, path, message):
+        rc, stdout, stderr = read(path, self.OLD, self.NEW)
+        self.assertEqual((rc, stdout), (2, ''))
+        self.assertRegex(stderr, '^confirm_sql.py: ' + message + '\n$')
+
+    def test_a_file_that_is_not_there(self):
+        self.refused(os.path.join(_TMP, 'not-there.sql'),
+                     r"cannot read not-there\.sql: \[Errno 2\] No such file "
+                     r"or directory: 'not-there\.sql'")
+
+    def test_a_file_not_in_ascii(self):
+        self.refused(self.written('not-ascii.sql', b'\xff\n'),
+                     r'not-ascii\.sql is not a file confirm_sql\.py wrote: it '
+                     r'is not ASCII')
+
+    def test_another_file(self):
+        self.refused(self.written('another.sql', b'SELECT 1;\n'),
+                     r'another\.sql is not a file confirm_sql\.py wrote')
+
+    def test_a_file_cut_short(self):
+        cut = self.TEXT[:len(self.TEXT) // 2]
+        self.refused(self.written('cut-short.sql', cut.encode('ascii')),
+                     r'cut-short\.sql is not the file confirm_sql\.py wrote: '
+                     r'its text does not match its id \(cut short or edited\)')
+
+    def test_a_file_without_its_end(self):
+        """Its id taken again over what is left: no longer the file the
+        id says, but whole only if its tests and its end agree."""
+        ident = c.Sql(self.SQL).ident
+        cut = self.TEXT[:len(self.TEXT) // 2].replace(ident, c.PLACEHOLDER)
+        cut = cut.replace(c.PLACEHOLDER, c.hashlib.sha256(
+            cut.encode('ascii')).hexdigest(), 1)
+        self.refused(self.written('no-end.sql', cut.encode('ascii')),
+                     r'no-end\.sql is not a whole file confirm_sql\.py wrote')
 
 
 # --- the reader's refusals, each a real output with one thing changed ------
@@ -1035,7 +1217,7 @@ class Refuses(unittest.TestCase):
                 '57014: canceling statement due to user request\n', 1)
         self.refused(mutant(self.OLD, error, 'error.out'), self.NEW,
                      r'psql reported an error outside the check of a '
-                     r'collation: psql:<stdin>:12: ERROR:  57014: canceling')
+                     r'collation: psql:<stdin>:12: ERROR: +57014: canceling')
 
     def test_an_error_in_another_language(self):
         """The severity in the server's language (FEHLER): an error by its
@@ -1046,7 +1228,7 @@ class Refuses(unittest.TestCase):
                 '57014: storniere Anfrage wegen Benutzeraufforderung\n', 1)
         self.refused(mutant(self.OLD, error, 'fehler.out'), self.NEW,
                      r'psql reported an error outside the check of a '
-                     r'collation: psql:<stdin>:12: FEHLER:  57014: ')
+                     r'collation: psql:<stdin>:12: FEHLER: +57014: ')
 
     def test_a_line_the_file_does_not_print(self):
         def line(text):
