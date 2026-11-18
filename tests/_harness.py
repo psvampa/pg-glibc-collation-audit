@@ -685,8 +685,11 @@ def run_step(script, *args, out_dir=None):
     return _STEP_CACHE[key]
 
 
-def run_wrapper(*args, out_dir=None, env_extra=None):
+def run_wrapper(*args, out_dir=None, env_extra=None, check=True):
     """Run ./audit.sh as a subprocess. Returns (exit_code, stdout+stderr).
+    check=False leaves check_report to the caller: only for a run whose
+    steps a test made contradict each other, which no real run does, and
+    whose test asserts that check_report refuses it.
 
     Deliberately NOT memoised: every wrapper test asserts on the files the run
     leaves in out_dir, and a cached call would skip writing them.
@@ -698,7 +701,193 @@ def run_wrapper(*args, out_dir=None, env_extra=None):
         env.update(env_extra)
     p = subprocess.run([os.path.join(REPO_ROOT, 'audit.sh'), *args],
                        cwd=REPO_ROOT, env=env, capture_output=True)
-    return p.returncode, (p.stdout + p.stderr).decode('utf-8', 'replace')
+    out = (p.stdout + p.stderr).decode('utf-8', 'replace')
+    if check:
+        check_report(p.returncode, out, env['PG_GLIBC_AUDIT_OUT'])
+    return p.returncode, out
+
+
+# The summary's headings that check_report reads, as audit.sh prints them.
+LISTED = '-- Listed by step 2'
+REMOVED_HEADING = ('-- Removed: locale files the old side has and the new '
+                   'side does not')
+MEASURED_RUN = "-- Measured order: each machine's own glibc"
+MEASURED_NOT_RUN = '-- Measured order: NOT RUN'
+
+
+def _summary_names(lines, end):
+    """The names printed one per line before a line starting with one of
+    END, and the rest; C.UTF-8 read back as glibc's file C."""
+    names = []
+    for at, line in enumerate(lines):
+        if line.startswith(end):
+            return names, lines[at:]
+        names.append('C' if line == 'C.UTF-8' else line)
+    raise AssertionError(f'no line starting with {end!r}: {lines!r}')
+
+
+def check_report(returncode, out, out_dir):
+    """A run that printed its summary wrote report.<pair>.json, which
+    report_data.load reads whole, and whose facts are the ones the run
+    printed: step 2's names, compared and not, or that it compared
+    nothing; whether its character set check ran; the Removed rows and
+    where they come from; whether step 11 ran and whether its rules were
+    set beside. A run that printed the summary and has no data file fails
+    here, whatever its exit code. No run leaves a report.*.partial.
+    Called on the runs of run_wrapper (the one with check=False asserts
+    that this refuses it), _AuditOnBuilds and the two other runs that
+    reach the summary (test_wrapper, test_build_sources), with no run of
+    its own, until the text is turned off (branch 24 of the plan).
+    A run that stopped before the summary is not checked here beyond the
+    .partial."""
+    import glibc_locale_data
+    import report_data
+    names = os.listdir(out_dir) if os.path.isdir(out_dir) else []
+    partial = [n for n in names
+               if n.startswith('report.') and n.endswith('.partial')]
+    if partial:
+        raise AssertionError(f'a run left {partial} in {out_dir}')
+    reports = [n for n in names
+               if n.startswith('report.') and n.endswith('.json')]
+    m = re.search(r'^== AUDIT SUMMARY  (.+) -> (.+)$', out, re.M)
+    if not m:
+        return
+    path = os.path.join(out_dir, 'report.%s.json'
+                        % glibc_locale_data.pair_slug(m[1], m[2]))
+    if not os.path.isfile(path):
+        raise AssertionError(f'summary printed, exit {returncode}, and no '
+                             f'{path}; written: {reports}')
+    r = report_data.load(path)
+    s2 = r['step2']
+    # Step 2's list.
+    body = summary_block(out, LISTED)
+    listed = s2['listed']
+    if listed['state'] == 'not reported':
+        raise AssertionError(f'{path}: step 2 list {listed!r}, but audit.sh '
+                             'went on')
+    if listed['state'] == 'not compared':
+        if not body or not body[0].startswith('none -- nothing was '
+                                              'compared'):
+            raise AssertionError(f'{path}: step 2 compared nothing, summary '
+                                 f'says {body[:1]!r}')
+        total = None
+    else:
+        total = len(listed['compared']) + len(listed['not_compared'])
+    if total is None:
+        pass
+    elif total:
+        shown, rest = _summary_names(body, ('Listed because', '('))
+        if shown != listed['compared']:
+            raise AssertionError(f'summary lists {shown!r}, {path} '
+                                 f'{listed["compared"]!r}')
+        if listed['not_compared']:
+            if rest[:1] != ['Listed because step 2 could not compare them '
+                            '(the reason for each']:
+                raise AssertionError(f'no not-compared lines: {rest!r}')
+            shown, rest = _summary_names(rest[2:], ('(',))
+            if shown != listed['not_compared']:
+                raise AssertionError(f'summary does not compare {shown!r}, '
+                                     f'{path} {listed["not_compared"]!r}')
+        if not rest[0].startswith(f'({total} name(s); full list: '):
+            raise AssertionError(f'{total} names, summary says {rest[0]!r}')
+    elif not body or not body[0].startswith(
+            'none -- of what step 2 compared, nothing differs'):
+        raise AssertionError(f'{path}: no names, summary says {body[:1]!r}')
+    # What step 2 printed of what it compared, and of its character set
+    # check, against step2_rules_by_name as the data file holds it.
+    rb = s2['rules_by_name']
+    if rb['state'] != 'reported':
+        raise AssertionError(f'{path}: step 2 rules by name {rb!r}')
+    step2 = flat(out.split('\n== STEP 2 ', 1)[1].split('\n== ', 1)[0]) \
+        if '\n== STEP 2 ' in out else ''
+    nothing = rb['nothing']
+    said = (f"Rules: not compared, {nothing['what']}." in step2
+            if nothing['state'] != 'something compared' else
+            'Rules: not compared,' not in step2)
+    if not said:
+        raise AssertionError(f'{path}: step 2 nothing {nothing!r}, step 2 '
+                             'printed otherwise')
+    state = rb['charmaps']['state']
+    printed = {
+        'compared': 'Character sets (' in step2,
+        'not run': '!! NOT RUN: the comparison of' in step2,
+        'not read': ("Character sets and transliterations: not compared, a "
+                     "machine's file holds no charmaps this reads.") in step2,
+    }
+    printed['one commit'] = printed['one tree'] = (
+        f"Character sets and transliterations: not compared, "
+        f"{nothing.get('what')}." in step2)
+    if not printed[state] or (state != 'not run'
+                              and printed['not run']):
+        raise AssertionError(f'{path}: charmaps {state!r}, step 2 printed '
+                             f'{printed!r}')
+    # Two machines' own sources read: the route the summary names.
+    machines = (r['run']['machines']['state'] == 'given'
+                and r['run']['route'] == 'builds')
+    if rb['machines'] != machines:
+        raise AssertionError(f'{path}: step 2 machines={rb["machines"]}, '
+                             f'run {r["run"]["route"]!r} with machines '
+                             f'{r["run"]["machines"]["state"]!r}')
+    # Removed.
+    body = summary_block(out, REMOVED_HEADING)
+    removed = s2['removed']
+    first = ' '.join(body)
+    source = ('machine sources' if first.startswith("Each machine's locale")
+              else 'build packages' if first.startswith("Each build's locale")
+              else 'old side is a tag' if 'what your old distro adds' in first
+              else 'new side is a tag' if 'what your new distro adds' in first
+              else "tags, because of a machine's file"
+              if "A machine's file made both sides read their tags" in first
+              else 'tags' if 'cannot show what your distro adds' in first
+              else None)
+    if removed['state'] == 'not reported':
+        if 'NOT REPORTED -- step 2 wrote no removal list' not in first:
+            raise AssertionError(f'{path}: removed not reported, summary '
+                                 f'{body!r}')
+    else:
+        if source != removed['source']:
+            raise AssertionError(f'summary reads as {source!r}, {path} says '
+                                 f'{removed["source"]!r}: {body!r}')
+        rows = [f"{x['name']} (deleted)" if x['how'] == 'deleted' else
+                f"{x['name']} (renamed to {x['to']})"
+                for x in removed['rows']]
+        rows = ['C.UTF-8 ' + x[2:] if x.startswith('C ') else x
+                for x in rows]
+        heads = [i for i, x in enumerate(body) if x.startswith('Between the ')]
+        if len(heads) != 1:
+            raise AssertionError(f'Removed has {len(heads)} Between lines')
+        after = body[heads[0]:]
+        if rows:
+            if not after[0].endswith(':') or \
+                    after[1:1 + len(rows)] != rows or \
+                    not after[1 + len(rows)].startswith(
+                        f'({len(rows)} name(s); full list: '):
+                raise AssertionError(f'{path} removes {rows!r}, summary '
+                                     f'says {after!r}')
+        elif ': none -- ' not in after[0]:
+            raise AssertionError(f'{path} removes nothing, summary says '
+                                 f'{after!r}')
+    # Step 11, and its rules beside step 2's.
+    s11 = r['step11']['state']
+    summary = out.split('AUDIT SUMMARY', 1)[-1].splitlines()
+    ran = (MEASURED_RUN in summary, MEASURED_NOT_RUN in summary)
+    if ran != {'not run': (False, True)}.get(s11, (True, False)):
+        raise AssertionError(f'{path}: step 11 {s11!r}, summary headings '
+                             f'{ran!r}')
+    if s11 == 'reported':
+        beside = r['step11']['rules_beside']['state']
+        tail = flat(out.split('AUDIT SUMMARY', 1)[-1])
+        said = ('not reported' if "NOT REPORTED -- step 2's rules could not "
+                "be set beside" in tail else
+                'not set beside' if 'Rules (step 2) are not set beside each '
+                'locale:' in tail else 'set beside')
+        if said != beside:
+            raise AssertionError(f'{path}: rules beside {beside!r}, summary '
+                                 f'reads {said!r}')
+        if beside == 'not set beside' and \
+                r['step11']['rules_beside']['why'] + '.' not in tail:
+            raise AssertionError(f'{path}: why {r["step11"]["rules_beside"]!r}'
+                                 ' is not what the summary says')
 
 
 # --- fixtures for C.UTF-8 ----------------------------------------------------

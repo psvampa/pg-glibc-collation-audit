@@ -477,6 +477,11 @@ rm -f "$STEP2_LIST" "$STEP2_NOT_COMPARED" "$STEP2_REMOVED" "$OLD_STEP2_KEYED" \
       "$SIDES_FILE" "$RULES_FILE" \
       "$OUT_DIR/step2_rules_characters.$PAIR.tsv"
 rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
+# The run's data file (scripts/report_data.py), written at the end from the
+# files this run's steps write: one left by an earlier run is never this
+# run's.
+REPORT_DATA="$OUT_DIR/report.$PAIR.json"
+rm -f "$REPORT_DATA" "$REPORT_DATA.partial"
 # What the machines' files decided, for the warnings block below, which
 # repeats the `!!` blocks of every step*.$PAIR.log.
 [ -z "$NODE_NOTE" ] || printf '%s\n' "$NODE_NOTE" > "$OUT_DIR/step0.$PAIR.log"
@@ -912,5 +917,16 @@ if [ -n "$WARNINGS" ]; then
   printf '%s\n' "$WARNINGS"
   echo "(see docs/limitations.md)"
 fi
+
+# The run's data file, beside the text, from the files the steps wrote and
+# the words above that only this script holds. Prints nothing when it is
+# written; when it cannot be, says why on stderr and the run fails, so that
+# a run never ends with no data file and exit 0.
+python3 "$SCRIPTS/report_data.py" --out-dir "$OUT_DIR" --pair "$PAIR" \
+  --old "$OLD" --new "$NEW" --route "$NOUN" \
+  --order-words "$ORDER $NOTHING $OLD_CLASS $NEW_CLASS $WORD" \
+  ${OLD_NODE:+--old-node "$OLD_NODE" --new-node "$NEW_NODE"} \
+  ${TAG_SIDE:+--tag-side "$TAG_SIDE"} \
+  ${OLD_ORDER:+--step11}
 
 echo

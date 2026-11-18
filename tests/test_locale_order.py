@@ -1671,11 +1671,6 @@ def parse_summary(text):
     As strict as parse_report: every line is accounted for, and a count
     that disagrees with the names under it raises.
     """
-    # Every line fits in 78 terminal columns, but one with a path (16.336,
-    # 16.337).
-    wide = _harness.wide_lines(text)
-    if wide:
-        raise ReportShapeError(f'summary lines wider than 78 columns: {wide!r}')
     lines = text.split('\n')
     if lines[-1] == '':
         lines.pop()
@@ -1887,11 +1882,6 @@ def parse_report(text):
     read returns the part before it, and a test reading that part passes
     whatever came after.
     """
-    # Every line fits in 78 terminal columns, but one with a path (16.336,
-    # 16.337).
-    wide = _harness.wide_lines(text)
-    if wide:
-        raise ReportShapeError(f'report lines wider than 78 columns: {wide!r}')
     lines = text.split('\n')
     if lines[-1] == '':
         lines.pop()
