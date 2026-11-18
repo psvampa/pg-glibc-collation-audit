@@ -416,6 +416,18 @@ def assert_prints_the_example(test, out, out_dir, name):
                           f'examples/{name}', 'audit.sh', n=1))[:60]))
 
 
+def warnings_data(out_dir, step):
+    """The `!!` of a step as the run's data file holds them, (kind, data)
+    each, or the step's state when it was not reported."""
+    import report_data
+    [name] = [n for n in os.listdir(out_dir)
+              if n.startswith('report.') and n.endswith('.json')]
+    w = report_data.load(os.path.join(out_dir, name))['warnings'][step]
+    if w['state'] != 'reported':
+        return w['state']
+    return [(i['kind'], i['data']) for i in w['items']]
+
+
 @needs_clone
 class Wrapper(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
     """A pair with real findings: the wrapper must not change the answer."""
@@ -429,6 +441,42 @@ class Wrapper(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
         cls.rc, cls.out = run_wrapper(
             OLD, MID, out_dir=cls.out_dir,
             env_extra={g.STEP11_ENV: '1', **NO_GPG})
+
+    def test_the_warnings_of_steps_0_and_1_as_data(self):
+        """Step 0 did not run (no machine files); step 1's three `!!`,
+        each its kind and data. Step 11 set in the reader's shell is not
+        this run's: code_not_compared says it did not measure."""
+        self.assertEqual(warnings_data(self.out_dir, 'step0'), 'not run')
+        self.assertEqual(warnings_data(self.out_dir, 'step1'), [
+            ('signatures_unchecked',
+             {'refs': [{'ref': OLD, 'status': 'no-gpg'},
+                       {'ref': MID, 'status': 'no-gpg'}]}),
+            ('sides_read_as_tags',
+             {'refs': [OLD, MID], 'classes': ['tag', 'tag'],
+              'ask': 'build'}),
+            ('code_not_compared', {'step11': False})])
+        # Step 2 writes no warnings file while only some of its `!!` are
+        # data (audit.sh's WARNING_STEPS): a part would read as all.
+        self.assertEqual(glob.glob(os.path.join(
+            self.out_dir, 'step2.*.warnings.jsonl')), [])
+
+    def test_check_report_holds_each_warning_to_the_log(self):
+        """The same run with a warning dropped from its data file:
+        check_report refuses it (a copy of the folder; the run's own is
+        left as it is)."""
+        import json
+        tmp = tempfile.mkdtemp(prefix='pg-glibc-wrapper-dropped-')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        copy = os.path.join(tmp, 'out')
+        shutil.copytree(self.out_dir, copy)
+        path = os.path.join(copy, f'report.{pair_slug(OLD, MID)}.json')
+        with open(path, encoding='utf-8') as f:
+            r = json.load(f)
+        r['warnings']['step1']['items'].pop()
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(r, f)
+        with self.assertRaises(AssertionError):
+            check_report(self.rc, self.out, copy)
 
     def test_prints_the_published_example_whole(self):
         """examples/rhel8-to-rhel9-tags-only.txt is this run's output."""
@@ -1421,9 +1469,18 @@ class WrapperStaleStepLog(unittest.TestCase):
         with open(stale, 'w', encoding='utf-8') as fh:
             fh.write('!! a warning from a run that read a node\n'
                      '   with its indented continuation line\n')
+        # And the same warning as data, in the file a step of an earlier
+        # run wrote beside its log: check_report (run_wrapper) holds the
+        # data file's warnings to this run's blocks, one by one.
+        with open(os.path.join(out_dir, f'step1.{NEW}..{NEW}.warnings.jsonl'),
+                  'w', encoding='utf-8') as fh:
+            fh.write('{"kind": "machine_not_checked", "data": {}, '
+                     '"text": "!! a warning from a run that read a node"}\n')
         rc, out = run_wrapper(NEW, NEW, out_dir=out_dir)
         self.assertEqual(rc, 0, out)
         self.assertNotIn('a warning from a run that read a node', out)
+        self.assertNotIn('machine_not_checked',
+                         [k for k, _ in warnings_data(out_dir, 'step1')])
 
 
 # --- --old-node and --new-node -------------------------------------------------
@@ -1551,6 +1608,17 @@ class WrapperNodeFiles(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.out_dir, ignore_errors=True)
 
+
+    def test_the_warnings_of_steps_0_and_1_as_data(self):
+        """Step 0 ran and printed none; step 1's `!!` with their data, step
+        11 having measured both machines."""
+        self.assertEqual(warnings_data(self.out_dir, 'step0'), [])
+        got = warnings_data(self.out_dir, 'step1')
+        self.assertEqual([k for k, _ in got],
+                         ['signatures_unchecked', 'machine_not_checked',
+                          'code_not_compared'])
+        self.assertEqual(got[1:], [('machine_not_checked', {}),
+                                   ('code_not_compared', {'step11': True})])
 
     def test_every_section_ran(self):
         self.assertEqual(banners(self.out), {'MEASURED ORDER': 1})
@@ -1858,6 +1926,14 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
                    "locale that is, or copies, one of them is not "
                    "compared: de_IT (symlink), zz_LINK (symlink).")
         self.assertIn(skipped, flat(compared_text(out)))
+        # As data: the two entries and why, of the machine the text names.
+        [data] = [d for k, d in warnings_data(self.runs['link'][0], 'step1')
+                  if k == 'machine_entries_skipped']
+        self.assertEqual(data['entries'], [
+            {'entry': 'de_IT', 'why': 'symlink'},
+            {'entry': 'zz_LINK', 'why': 'symlink'}])
+        self.assertIn(f"{data['machine']}: {skipped}",
+                      flat(compared_text(out)))
         # A `!!`, so the summary repeats it among its warnings.
         warnings = out.split('AUDIT SUMMARY', 1)[1].split(
             '-- Warnings the clean results above do NOT cover', 1)
@@ -1891,6 +1967,11 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
             "nothing, the two machines' files hold the same locale sources "
             "and charmaps."]))
         self.assertNotIn('cannot read', before)
+        # As data: one tree, both files with their charmaps read.
+        self.assertEqual(
+            [(k, d['charmaps']) for k, d in
+             warnings_data(self.runs['same_sources'][0], 'step1')
+             if k == 'same_tree_machines'], [('same_tree_machines', True)])
 
     def test_the_same_sources_without_charmaps_never_claim_the_charmaps(self):
         """Neither file holds charmaps, so no charmap was read: one source
@@ -1940,6 +2021,11 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
             with self.subTest(text=text[:40]):
                 self.assertNotIn('the same locale sources and charmaps',
                                  text)
+        # Nor the data: one tree, no charmap read.
+        self.assertEqual(
+            [(k, d['charmaps']) for k, d in
+             warnings_data(self.runs['same_no_charmaps'][0], 'step1')
+             if k == 'same_tree_machines'], [('same_tree_machines', False)])
 
     def test_two_machines_of_one_build(self):
         out = self.out('one_build')
@@ -2059,6 +2145,18 @@ class NodeFileWithoutSources:
 
     def test_no_block_asks_for_the_options_the_files_replace(self):
         self.assertNotIn('Pass --', flat(self.summary))
+
+    def test_step0s_warning_as_data(self):
+        """The side whose file holds no sources, and the two tags read."""
+        [(kind, data)] = warnings_data(self.out_dir, 'step0')
+        self.assertEqual(kind, 'machine_falls_back_to_tags')
+        self.assertEqual([u['side'] for u in data['unread']], [self.BARE])
+        self.assertEqual(data['tags'], [OLD, MID])
+        # And step 1's: the tags read, asking for no build, which the
+        # machines' files already name.
+        [ask] = [d['ask'] for k, d in warnings_data(self.out_dir, 'step1')
+                 if k == 'sides_read_as_tags']
+        self.assertEqual(ask, 'none')
 
 
 @needs_clone

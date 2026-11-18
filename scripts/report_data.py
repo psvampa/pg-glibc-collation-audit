@@ -7,9 +7,12 @@ Every section is always there. What a run did not do is a state with its
 reason, never an absent key or a null, so that a reader cannot take "this
 was not looked at" for "nothing was found". What the steps hold today
 only inside a sentence (step 2's totals and character sets, step 11's
-counts and findings, the provenance of each side, the `!!` notices) is
-'not yet reported': a later step of the work turns each one into data
-(branch 24 of the plan).
+counts and findings, the provenance of each side, the `!!` notices of
+steps 2 and 11) is 'not yet reported': a later step of the work turns
+each one into data (branch 24 of the plan). The `!!` notices of steps 0
+and 1 are data: a file beside each step's log holds them (step 0's
+copied there by audit.sh), and KINDS gives each kind its list and its
+short title.
 
 load() is the strict reader: a key missing or added, or a state outside
 its list, is an error, never a default.
@@ -380,6 +383,209 @@ def step11_section(a, by_name):
     }
 
 
+# ---------------------------------------------------------------- warnings
+
+# The two lists a `!!` goes to: what changed between the two sides or
+# what PostgreSQL will not report between them, and what this run could
+# not check.
+WARNING_CLASSES = ('change', 'not checked')
+WARNING_KEYS = ['kind', 'class', 'title', 'data', 'text']
+
+
+def _is_str(v):
+    return isinstance(v, str) and v != ''
+
+
+def _is_bool(v):
+    return isinstance(v, bool)
+
+
+def _is_strs(v):
+    return isinstance(v, list) and bool(v) and all(_is_str(x) for x in v)
+
+
+def _objects(**spec):
+    """A list, not empty, of objects with exactly spec's keys."""
+    def check(v):
+        return (isinstance(v, list) and bool(v)
+                and all(isinstance(o, dict) and set(o) == set(spec)
+                        and all(spec[k](o[k]) for k in spec) for o in v))
+    return check
+
+
+def _one_of_f(*allowed):
+    return lambda v: v in allowed
+
+
+# verify_tag's statuses but good and bad, each with what the title says.
+SIGNATURE_WHY = {
+    'no-gpg': 'gpg is not installed',
+    'no-key': 'not verified: no signing key, or gpg failed',
+    'unverifiable': 'gpg could not check the signature',
+    'revoked-key': 'the signing key is revoked',
+    'expired-key': 'the signing key has expired',
+    'expired-sig': 'the signature has expired',
+    'untrusted': 'the signing key is not trusted',
+    'unsigned': 'not signed',
+    'not-a-tag': 'a commit or a lightweight tag, which carries no signature',
+}
+
+
+def _signatures_title(d):
+    refs = [r['ref'] for r in d['refs']]
+    whys = list(dict.fromkeys(SIGNATURE_WHY[r['status']] for r in d['refs']))
+    what = ('Signatures' if any(r['status'] == 'not-a-tag'
+                                for r in d['refs']) else 'Tag signatures')
+    return f"{what} of {', '.join(refs)} ({'; '.join(whys)})"
+
+
+def _fallback_title(d):
+    u = d['unread']
+    if len(u) == 1:
+        return (f"The {u[0]['side']} machine's build {u[0]['build']} could "
+                f"not be read; step 2 read the tags")
+    return "Neither machine's build could be read; step 2 read the tags"
+
+
+def _tags_title(d):
+    refs, classes = d['refs'], d['classes']
+    one = len(refs) == 1
+    if len(set(classes)) == 1:
+        k = classes[0]
+        what = f'is an upstream {k}' if one else f'are upstream {k}s'
+    else:
+        what = (f'are an upstream {classes[0]} and an upstream '
+                f'{classes[1]}')
+    return (f"The distro's own locale files and patches "
+            f"({' and '.join(refs)} {what})")
+
+
+def _skipped_title(d):
+    n = len(d['entries'])
+    return (f"{n} entr{'y' if n == 1 else 'ies'} of {d['machine']}'s files "
+            f"not read")
+
+
+_PAIR = {'old': _is_str, 'new': _is_str}
+# Every kind of `!!` the steps write as data: its list, the exact keys of
+# its data with a check for each value, and its short title, made from the
+# data alone. A kind not here, or data of another shape, is refused.
+KINDS = {
+    'same_commit': (
+        'not checked', _PAIR,
+        lambda d: f"Nothing compared: {d['old']} and {d['new']} are the "
+                  f"same commit"),
+    'same_tree_machines': (
+        'not checked', {**_PAIR, 'charmaps': _is_bool},
+        lambda d: "Nothing compared: the two machines hold the same locale "
+                  "sources"),
+    'same_tree': (
+        'not checked', _PAIR,
+        lambda d: f"Nothing compared: {d['old']} and {d['new']} are one "
+                  f"source tree"),
+    'reversed_allowed': (
+        'not checked', {**_PAIR, 'detail': _is_str},
+        lambda d: "Old and new run the other way round, on request"),
+    'direction_undetermined': (
+        'not checked', {**_PAIR, 'detail': _is_str},
+        lambda d: f"Which of {d['old']} and {d['new']} is the older one"),
+    'signatures_unchecked': (
+        'not checked',
+        {'refs': _objects(ref=_is_str,
+                          status=_one_of_f(*SIGNATURE_WHY))},
+        _signatures_title),
+    'machine_falls_back_to_tags': (
+        'not checked',
+        {'unread': _objects(side=_one_of_f('old', 'new'), build=_is_str,
+                            why=_is_str),
+         'tags': lambda v: _is_strs(v) and len(v) == 2},
+        _fallback_title),
+    'sides_read_as_tags': (
+        'not checked',
+        {'refs': _is_strs,
+         'classes': lambda v: _is_strs(v) and set(v) <= {'tag', 'commit'},
+         'ask': _one_of_f('build', 'none')},
+        _tags_title),
+    'code_not_compared': (
+        'not checked', {'step11': _is_bool},
+        lambda d: "glibc's code that compiles and compares the rules"),
+    'collation_version_unknown': (
+        'not checked', {'sides': _is_strs},
+        lambda d: f"Whether PostgreSQL warns about a collation's version "
+                  f"(no glibc version for {', '.join(d['sides'])})"),
+    'collation_version_same': (
+        'change', {'version': _is_str},
+        lambda d: f"PostgreSQL will not warn: both sides are glibc "
+                  f"{d['version']}"),
+    'machine_entries_skipped': (
+        'not checked',
+        {'machine': _is_str,
+         'entries': _objects(entry=_is_str, why=_is_str)},
+        _skipped_title),
+    'machine_not_checked': (
+        'not checked', {},
+        lambda d: "The machines' locale sources against the package they "
+                  "came from"),
+    'build_charmaps_unchecked': (
+        'not checked',
+        {'build': _is_str, 'package': _is_str, 'why': _is_str},
+        lambda d: f"The character sets of {d['build']} against its "
+                  f"package"),
+    'build_not_checked': (
+        'not checked',
+        {'metadata': _is_bool,
+         'unlisted': lambda v: v == [] or _objects(build=_is_str,
+                                                   folder=_is_str)(v)},
+        lambda d: "The builds' compiler, code patches and GPG signatures"),
+}
+
+
+def warning_item(where, kind, data, text):
+    """The item of a `!!` written as (kind, data, text): checked against
+    KINDS, with its list and its title."""
+    if kind not in KINDS:
+        raise ReportError(f'{where}: a warning of unknown kind {kind!r}')
+    cls, spec, title = KINDS[kind]
+    if not isinstance(data, dict) or set(data) != set(spec):
+        raise ReportError(f'{where}: {kind} data {data!r} has not the keys '
+                          f'{sorted(spec)}')
+    for k, ok in spec.items():
+        if not ok(data[k]):
+            raise ReportError(f'{where}: {kind} data {k} is {data[k]!r}')
+    if not (isinstance(text, str) and text.startswith('!! ')):
+        raise ReportError(f'{where}: {kind} text {text!r} is not a !! block')
+    return {'kind': kind, 'class': cls, 'title': title(data), 'data': data,
+            'text': text}
+
+
+def step_warnings(path):
+    """The `!!` a step wrote beside its log (glibc_locale_data.
+    record_warning), one JSON object a line; no file is 'not reported'."""
+    if not os.path.isfile(path):
+        return not_reported(path)
+    items = []
+    for i, line in enumerate(_lines(path), 1):
+        where = f'{path}:{i}'
+        try:
+            w = json.loads(line)
+        except ValueError as e:
+            raise ReportError(f'{where}: not JSON: {e}')
+        if not isinstance(w, dict) or set(w) != {'kind', 'data', 'text'}:
+            raise ReportError(f'{where}: not a warning: {line!r}')
+        items.append(warning_item(where, w['kind'], w['data'], w['text']))
+    return {'state': 'reported', 'items': items}
+
+
+def warnings_section(a):
+    """Steps 0 and 1 from their files (step 0 runs only for the machines'
+    files); steps 2 and 11 not yet."""
+    f = lambda n: _file(a.out_dir, f'step{n}.{a.pair}.warnings.jsonl')
+    step0 = (step_warnings(f(0)) if a.old_node else
+             {'state': 'not run', 'why': 'no --old-node and --new-node'})
+    return {'step0': step0, 'step1': step_warnings(f(1)),
+            'step2': NOT_YET, 'step11': NOT_YET}
+
+
 # ---------------------------------------------------------------- whole
 
 def build(a):
@@ -392,7 +598,7 @@ def build(a):
         'compared': NOT_YET,
         'step2': step2,
         'step11': step11_section(a, step2['rules_by_name']),
-        'warnings': NOT_YET,
+        'warnings': warnings_section(a),
     }
 
 
@@ -479,7 +685,30 @@ def load(path):
     _stated('run.machines', run['machines'], ('given', 'not given'),
             {'given': ['old', 'new'], 'not given': ['why']})
     _not_yet('compared', r['compared'])
-    _not_yet('warnings', r['warnings'])
+    w = r['warnings']
+    _keys('warnings', w, ['step0', 'step1', 'step2', 'step11'])
+
+    def items(where, o):
+        _keys(where, o, ['state', 'items'])
+        if not isinstance(o['items'], list):
+            raise ReportError(f'{where}.items is not a list')
+        for i, it in enumerate(o['items']):
+            _keys(f'{where}.items[{i}]', it, WARNING_KEYS)
+            if warning_item(f'{where}.items[{i}]', it['kind'], it['data'],
+                            it['text']) != it:
+                raise ReportError(f'{where}.items[{i}]: its list or title '
+                                  f'is not its kind\'s: {it!r}')
+    wr = {'reported': items, 'not reported': ['why']}
+    _stated('warnings.step0', w['step0'],
+            ('reported', 'not run', 'not reported'),
+            {**wr, 'not run': ['why']})
+    if (w['step0']['state'] == 'not run') != (run['machines']['state']
+                                               == 'not given'):
+        raise ReportError('warnings.step0 is not run exactly when no '
+                          'machine files were given')
+    _stated('warnings.step1', w['step1'], ('reported', 'not reported'), wr)
+    _not_yet('warnings.step2', w['step2'])
+    _not_yet('warnings.step11', w['step11'])
 
     s2 = r['step2']
     _keys('step2', s2, ['listed', 'removed', 'rules_by_name',
