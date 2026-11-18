@@ -81,8 +81,9 @@ NORM = ("CASE WHEN {x} ~ '^[^@.]*[.]' THEN substring({x} from '^[^@.]*') "
         "coalesce(substring({x} from '@.*$'), '') ELSE {x} END")
 
 
-def die(msg):
-    sys.stderr.write(f'confirm_sql.py: {msg}\n')
+def die(msg, path):
+    """Refuse the SQL file at path, which msg names."""
+    say('confirm_sql.py: ', msg, file=sys.stderr, keep=(path,))
     sys.exit(2)
 
 
@@ -324,21 +325,22 @@ class Sql:
             with open(path, 'rb') as f:
                 raw = f.read()
         except OSError as e:
-            die(f'cannot read {path}: {e}')
+            die(f'cannot read {path}: {e}', path)
         try:
             text = raw.decode('ascii')
         except UnicodeDecodeError:
-            die(f'{path} is not a file confirm_sql.py wrote: it is not ASCII')
+            die(f'{path} is not a file confirm_sql.py wrote: it is not '
+                'ASCII', path)
         lines = text.split('\n')
         m = re.fullmatch(r'-- id: ([0-9a-f]{64})', lines[1] if len(lines) > 1
                          else '')
         if not lines[0].startswith('-- ' + FORMAT) or not m:
-            die(f'{path} is not a file confirm_sql.py wrote')
+            die(f'{path} is not a file confirm_sql.py wrote', path)
         self.ident = m.group(1)
         if hashlib.sha256(text.replace(self.ident, PLACEHOLDER)
                           .encode('ascii')).hexdigest() != self.ident:
             die(f'{path} is not the file confirm_sql.py wrote: its text does '
-                'not match its id (cut short or edited)')
+                'not match its id (cut short or edited)', path)
         self.path = path
         self.encoding = None
         self.machines = {}
@@ -381,7 +383,7 @@ class Sql:
         tests = sum(len(t) for line_, t in self.collations.values())
         if (self.encoding is None or set(self.machines) != {'old', 'new'}
                 or self.end != tests):
-            die(f'{path} is not a whole file confirm_sql.py wrote')
+            die(f'{path} is not a whole file confirm_sql.py wrote', path)
         self.tests = tests
         self.checks = {line_: name
                        for name, (line_, t) in self.collations.items()}
@@ -410,6 +412,7 @@ class Out:
         self.answers = {}        # (name, id): result
         self.gone = []
         self.before = []         # what psql printed before the file ran
+        self.files = set()       # the files psql names in its lines
         self.headers = 0
         self.ends = 0
         try:
@@ -428,6 +431,12 @@ class Out:
         message = None          # the message the lines under it belong to
         unknown = []
         for line in lines:
+            # Each message psql prints while it runs a file begins with
+            # "psql:FILE:LINE: ", never translated: a server's message, and
+            # psql's own (a connection lost halfway).
+            named = re.match(r'psql:(.*?):\d+: ', line)
+            if named:
+                self.files.add(named.group(1))
             fields = line.split('|')
             head = fields[0]
             if len(fields) > 1 and head in RECORDS:
@@ -579,6 +588,28 @@ def ranges(ids):
     return ', '.join(runs)
 
 
+def say(first, text, more=3, file=None, keep=()):
+    """Print first + text to file (stdout by default), within 78 terminal
+    columns (locale_order.wrap_columns: a wide character takes two), the
+    lines after the first indented by more spaces (16.355). Never cut
+    inside a word, nor at a space of a path in keep (unless the text holds
+    all four private-use characters that stand for those spaces): a path
+    is printed whole, so it can be copied. A word or kept path too wide
+    for any line goes whole on a line past 78: on the line of first when
+    it begins the text, else on a line of its own."""
+    import locale_order
+    pad = next((c for c in '\ue000\ue001\ue002\ue003' if c not in text), None)
+    if pad is not None:
+        for name in sorted(keep, key=len, reverse=True):
+            text = text.replace(name, name.replace(' ', pad))
+    for line in locale_order.wrap_columns(
+            text, width=78, initial_indent=first,
+            subsequent_indent=' ' * more, break_on_hyphens=False,
+            break_long_words=False):
+        print(line if pad is None else line.replace(pad, ' '),
+              file=file or sys.stdout)
+
+
 def read(sql_path, old_path, new_path):
     """Read the old and new servers' outputs of sql_path; print what they
     confirm, or every reason they confirm nothing. 0 when confirmed, 1
@@ -642,45 +673,53 @@ def read(sql_path, old_path, new_path):
                          ' two builds of one version cannot be told apart '
                          'from SQL, so which server ran which build is not '
                          'checked.')
-    print(f'SQL file: {sql.path} ({sql.encoding} database; '
-          f'{sql.machines["old"][0]} -> {sql.machines["new"][0]})')
+    keep = {sql_path, old_path, new_path, sql.path}
+    for out in outs:
+        keep |= out.files
+
+    def tell(first, text, more=3):
+        say(first, text, more, keep=keep)
+
+    tell('SQL file: ', f'{sql.path} ({sql.encoding} database; '
+         f'{sql.machines["old"][0]} -> {sql.machines["new"][0]})')
     for out in outs:
         if out.server:
-            print(f'{out.side.upper()} output: {out.path}, PostgreSQL '
-                  f'{out.server}, database encoding {out.encoding}')
+            tell(f'{out.side.upper()} output: ', f'{out.path}, PostgreSQL '
+                 f'{out.server}, database encoding {out.encoding}')
     if problems:
-        print(f'REFUSED: these outputs do not confirm {sql.path}:')
+        tell('REFUSED: ', f'these outputs do not confirm {sql.path}:')
         for p in problems:
-            print(f'  {p}')
+            tell('  ', p, 4)
         code = 1
     else:
-        print(f'Confirmed in PostgreSQL: {sql.tests} of {sql.tests} tests '
-              f'answer like the old machine in {old_path} and like the new '
-              f'one in {new_path}.')
+        tell('Confirmed in PostgreSQL: ', f'{sql.tests} of {sql.tests} '
+             f'tests answer like the old machine in {old_path} and like the '
+             f'new one in {new_path}.')
         code = 0
     for out in outs:
         if out.before:
-            print(f'!! {out.path}: psql printed before the file ran: '
-                  + ' / '.join(out.before))
+            tell('!! ', f'{out.path}: psql printed before the file ran: '
+                 + ' / '.join(out.before))
         seen = set()
         for message in out.warnings:
             key = tuple(message)
             if key in seen:
                 continue
             seen.add(key)
-            print(f'!! {out.path}: PostgreSQL warned: ' + ' / '.join(message))
+            tell('!! ', f'{out.path}: PostgreSQL warned: '
+                 + ' / '.join(message))
     for note in notes:
-        print(f'!! {note}')
+        tell('!! ', note)
     for out in outs:
         if out.gone:
-            print(f'!! {out.path}: uses a locale name the new machine does not '
-                  'have:')
+            tell('!! ', f'{out.path}: uses a locale name the new machine '
+                 'does not have:')
             for item in out.gone:
-                print(f'     {item}')
-    print('!! This file confirms only the changes it tests; it does not '
-          'say that anything else is unchanged. Not tested by it:')
+                tell('     ', item, 7)
+    tell('!! ', 'This file confirms only the changes it tests; it does not '
+         'say that anything else is unchanged. Not tested by it:')
     for note in sql.notes:
-        print(f'     {note}')
+        tell('     ', note, 7)
     return code
 
 
