@@ -47,7 +47,7 @@ from _harness import (COMPARED_BANNER, GLIBC_CLONE, SCRIPTS_DIR, TESTS_DIR,
                       assert_no_deleted_block, nothing_compared_lines,
                       summary_warnings, assert_collation_version,
                       assert_no_route_looks, pg_version_of,
-                      EXPECTED_SHA, wide_lines)
+                      EXPECTED_SHA, check_report, wide_lines)
 
 import build_sources as bs
 import filter_lc_collate_changes as step2
@@ -3691,6 +3691,7 @@ class _AuditOnBuilds:
             cls.out[label] = (p.returncode,
                               (p.stdout + p.stderr).decode('utf-8',
                                                            'replace'))
+            check_report(*cls.out[label], out)
 
     @classmethod
     def tearDownClass(cls):
@@ -4537,6 +4538,7 @@ class AuditShReadsEachMachinesBuild(_AuditOnBuilds, unittest.TestCase):
         # which test_nothing_is_downloaded compares with cls.out['read'].
         cls.unread = (p.returncode,
                       (p.stdout + p.stderr).decode('utf-8', 'replace'))
+        check_report(*cls.unread, out)
 
     def test_the_run_reads_each_machines_own_sources(self):
         """Each machine's file holds the build's locale sources and

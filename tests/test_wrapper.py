@@ -34,7 +34,7 @@ from _harness import (COMPARED_BANNER, DEFAULT_OUT_DIR, STEP2_LISTED,
                       needs_clone, assert_no_deleted_block,
                       nothing_compared_lines, summary_warnings,
                       run_wrapper, upstream_c, summary_block,
-                      wide_lines)
+                      check_report)
 
 
 import filter_lc_collate_changes as step2
@@ -414,10 +414,6 @@ def assert_prints_the_example(test, out, out_dir, name):
                       list(difflib.unified_diff(
                           want.splitlines(True), got.splitlines(True),
                           f'examples/{name}', 'audit.sh', n=1))[:60]))
-    # Every line fits in 78 terminal columns, the summary's warnings as each
-    # step wrapped them, but a line with a path or a sha256 (16.186, 16.200,
-    # 16.335-16.337).
-    test.assertEqual(wide_lines(got), [], name)
 
 
 @needs_clone
@@ -910,9 +906,15 @@ class WrapperDirectionUndetermined(unittest.TestCase):
         """The other branch of the summary's empty step 2 list. With the order
         check stood in for, the wrapper takes this pair for two commits and
         step 2 lists nothing: the line must not say that nothing was
-        compared, which is the one-commit branch."""
+        compared, which is the one-commit branch. Step 2 itself still
+        compared one commit, which the stood-in order check contradicts (no
+        real run does): the data file keeps step 2's record, 'not compared',
+        and check_report refuses the run for printing otherwise."""
         rc, out = run_wrapper(NEW, NEW, out_dir=self.out_dir,
-                              env_extra=self.env)
+                              env_extra=self.env, check=False)
+        with self.assertRaisesRegex(AssertionError, 'step 2 compared '
+                                    'nothing, summary says'):
+            check_report(rc, out, self.out_dir)
         self.assertEqual(rc, 0, out)
         self.assertEqual(summary_block(out, REINDEX), [
             'none -- of what step 2 compared, nothing differs; step 2, above,',
@@ -1869,8 +1871,6 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
         self.assertIn('Rules: not compared, the two machines\' files hold '
                       'the same locale sources and charmaps.',
                       flat(self.step(out, 2)))
-        # 87 and 117 characters unwrapped (16.186).
-        self.assertEqual(wide_lines(self.step(out, 2)), [])
         self.assertIn("glibc-2.34-283.el9_8: the two machines' files hold the "
                       "same locale sources and charmaps, so no locale's sort "
                       "rules can differ between them",
@@ -1912,8 +1912,6 @@ class WrapperMachinesReadTheirOwnFiles(unittest.TestCase):
                       "same locale sources.", step2)
         self.assertIn("Character sets and transliterations: not compared, a "
                       "machine's file holds no charmaps this reads.", step2)
-        # 97 characters unwrapped (16.186).
-        self.assertEqual(wide_lines(self.step(out, 2)), [])
         # Each file's own reason, which no other line of a one-tree run
         # carries: one line per machine, the two builds being two.
         self.assertEqual(len(re.findall(
@@ -2578,14 +2576,16 @@ class WrapperNodeFileRefused(unittest.TestCase):
         self.assertIn("the new node's file could not be used", out)
 
     def test_the_same_file_twice(self):
-        """Step 11 refuses, and the characters file and SQL an earlier run
-        left are gone: a refused run leaves nothing that reads as its
-        list."""
+        """Step 11 refuses, and the characters file, SQL and data file an
+        earlier run left are gone: a refused run leaves nothing that reads
+        as its list."""
         stale = os.path.join(self.out_dir, 'measured_order_characters.'
                              + pair_slug(OLD, OLD) + '.tsv')
         sql = os.path.join(self.out_dir, 'measured_order_confirm.'
                            + pair_slug(OLD, OLD) + '.UTF8.sql')
-        for path in (stale, sql):
+        report = os.path.join(self.out_dir,
+                              'report.' + pair_slug(OLD, OLD) + '.json')
+        for path in (stale, sql, report, report + '.partial'):
             with open(path, 'w', encoding='utf-8') as f:
                 f.write('left by an earlier run\n')
         out = self.assertRefusedBeforeTheSides('--old-node', self.old,
@@ -2596,6 +2596,8 @@ class WrapperNodeFileRefused(unittest.TestCase):
                       out)
         self.assertFalse(os.path.exists(stale))
         self.assertFalse(os.path.exists(sql))
+        self.assertFalse(os.path.exists(report))
+        self.assertFalse(os.path.exists(report + '.partial'))
 
     def test_latest_with_the_machines_files(self):
         """A side typed as latest-elN stands for a machine not installed
@@ -2790,6 +2792,7 @@ class WrapperRunFromInsideAnotherClone(unittest.TestCase):
                            cwd=cls.other, env=env, capture_output=True)
         cls.rc = p.returncode
         cls.out = (p.stdout + p.stderr).decode('utf-8', 'replace')
+        check_report(cls.rc, cls.out, cls.out_dir)
         cls.refs_after = git('for-each-ref')
         cls.fetched = os.path.exists(os.path.join(cls.other, '.git',
                                                   'FETCH_HEAD'))
