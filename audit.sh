@@ -180,9 +180,10 @@ export PG_GLIBC_AUDIT_OUT="$OUT_DIR"
 # A signal to the whole group (Ctrl-C, a closed terminal) ends the step too,
 # as before; one ignored when the run started (nohup) stays ignored.
 UNTOUCHED_OUT=1
-RESOLVED=""; NODE_TMP=""; ORDER_UNPRINTED=""
+RESOLVED=""; NODE_TMP=""; ORDER_UNPRINTED=""; STEP0_WARNINGS=""
 on_exit() {
   [ -z "$RESOLVED" ] || rm -f "$RESOLVED"
+  [ -z "$STEP0_WARNINGS" ] || rm -f "$STEP0_WARNINGS"
   [ -z "$NODE_TMP" ] || rm -rf "$NODE_TMP"
   if [ -n "$UNTOUCHED_OUT" ]; then
     echo "       This run left nothing in $OUT_DIR;" >&2
@@ -196,6 +197,10 @@ on_exit() {
 trap on_exit EXIT
 trap 'trap - TERM; kill -TERM $$' TERM
 trap 'trap - HUP; kill -HUP $$' HUP
+# Set by run_step for each step of WARNING_STEPS alone, and for step 0's
+# call; never the reader's, which would have every other call write its
+# `!!` there too.
+unset PG_GLIBC_AUDIT_WARNINGS
 RESOLVED=$(mktemp "${TMPDIR:-/tmp}/pg-glibc-resolve.XXXXXX")
 python3 "$SCRIPTS/glibc_locale_data.py" resolve --to "$RESOLVED" "$OLD" "$NEW"
 # A build typed as `rpm -q glibc` prints it, with the architecture, is read
@@ -261,7 +266,11 @@ if [ -n "$OLD_NODE" ]; then
       exit 2
     fi
   done
-  NODE_NOTE=$(python3 "$SCRIPTS/glibc_locale_data.py" machines --to "$RESOLVED" \
+  # Its `!!` as data too (glibc_locale_data.WARNINGS_ENV), moved under the
+  # pair's name beside step0's log, below; removed by on_exit.
+  STEP0_WARNINGS=$(mktemp "${TMPDIR:-/tmp}/pg-glibc-step0.XXXXXX")
+  NODE_NOTE=$(PG_GLIBC_AUDIT_WARNINGS="$STEP0_WARNINGS" \
+    python3 "$SCRIPTS/glibc_locale_data.py" machines --to "$RESOLVED" \
     "$OLD" "$NEW" "$(cat "$NODE_TMP/old/build-id")" "$(cat "$NODE_TMP/new/build-id")" \
     "$NODE_TMP/old" "$NODE_TMP/new")
   [ -z "$NODE_NOTE" ] || printf '%s\n' "$NODE_NOTE"
@@ -476,7 +485,8 @@ rm -f "$STEP2_LIST" "$STEP2_NOT_COMPARED" "$STEP2_REMOVED" "$OLD_STEP2_KEYED" \
       "$OLD_STEP4_LIST" "$OLD_STEP4_BYTE_ORDER" "$OLD_STEP1_LIST" \
       "$SIDES_FILE" "$RULES_FILE" \
       "$OUT_DIR/step2_rules_characters.$PAIR.tsv"
-rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log
+rm -f "$OUT_DIR"/step[0-9]*."$PAIR".log \
+      "$OUT_DIR"/step[0-9]*."$PAIR".warnings.jsonl
 # The run's data file (scripts/report_data.py), written at the end from the
 # files this run's steps write: one left by an earlier run is never this
 # run's.
@@ -485,6 +495,9 @@ rm -f "$REPORT_DATA" "$REPORT_DATA.partial"
 # What the machines' files decided, for the warnings block below, which
 # repeats the `!!` blocks of every step*.$PAIR.log.
 [ -z "$NODE_NOTE" ] || printf '%s\n' "$NODE_NOTE" > "$OUT_DIR/step0.$PAIR.log"
+# And the same `!!` as data, for the run's data file (report_data.py): the
+# file is there whenever step 0 ran, empty when it printed none.
+[ -z "$STEP0_WARNINGS" ] || cp "$STEP0_WARNINGS" "$OUT_DIR/step0.$PAIR.warnings.jsonl"
 
 # Step 11 is worked out before the sides are read, so that a measurement the
 # comparison refuses -- measured by another copy of locale_order.py over other
@@ -546,10 +559,25 @@ banner() {
 
 # Each step's output is teed so the summary can quote it back. `set -o pipefail`
 # is what makes the tee'd status the step's own status rather than tee's.
+# For a step of WARNING_STEPS, each `!!` it prints is also written as data
+# to its warnings file (glibc_locale_data.WARNINGS_ENV), created empty
+# first, so that a step that printed none is told apart from one that
+# never ran. Exported in the left side of the pipe only, a subshell: no
+# later command inherits it. Step 2 is not in it: most of its `!!` are not
+# written as data yet (branch 24 of the plan), and a file holding a part
+# of them would read as all of them.
+WARNING_STEPS="1"
 run_step() {
   local num=$1; shift
   local log="$OUT_DIR/step$num.$PAIR.log"
-  "$@" 2>&1 | tee "$log"
+  local warnings="$OUT_DIR/step$num.$PAIR.warnings.jsonl"
+  case " $WARNING_STEPS " in
+    *" $num "*)
+      : > "$warnings"
+      { export PG_GLIBC_AUDIT_WARNINGS="$warnings"; "$@"; } 2>&1 | tee "$log"
+      ;;
+    *) "$@" 2>&1 | tee "$log" ;;
+  esac
 }
 
 # What was compared: each side, where it was read from, where PostgreSQL

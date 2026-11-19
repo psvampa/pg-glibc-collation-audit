@@ -51,6 +51,7 @@ order and pair-slug, and provenance and corpus are kept for a hand run:
 import collections
 import contextlib
 import io
+import json
 import os
 import re
 import subprocess
@@ -429,8 +430,30 @@ def refuse_build_commits(repo, commits):
                 f"instead.")
 
 
-def warn(text, split_words=True):
-    """The `!!` block shape audit.sh collects and repeats at the bottom.
+# The file audit.sh names for a step whose `!!` are all written as data
+# (run_step, WARNING_STEPS; step 0's call), where every warn() also writes
+# one line of JSON: its kind, its data and the block as printed
+# (scripts/report_data.py reads them). Unset, nothing is written.
+WARNINGS_ENV = 'PG_GLIBC_AUDIT_WARNINGS'
+
+
+def record_warning(kind, data, text):
+    """Append the `!!` block `text`, as printed, with its kind and data to
+    the file WARNINGS_ENV names. A file that cannot be written ends the
+    step: a block printed and not written would be a warning the data
+    file leaves out."""
+    path = os.environ.get(WARNINGS_ENV)
+    if not path:
+        return
+    with open(path, 'a', encoding='utf-8') as f:
+        f.write(json.dumps({'kind': kind, 'data': data, 'text': text})
+                + '\n')
+
+
+def warn(text, kind, data, split_words=True):
+    """The `!!` block shape audit.sh collects and repeats at the bottom,
+    printed, and written as data under `kind` (record_warning); kind and
+    data have no default, so that no block goes unwritten.
 
     One copy, in the shared module, because two copies of a formatter drift and
     this repository has already paid for that: the suite's `flat()` exists
@@ -444,10 +467,12 @@ def warn(text, split_words=True):
     default, so every other block wraps exactly as the published transcripts
     show it.
     """
-    print(textwrap.fill(text, width=78,
-                        initial_indent='!! ', subsequent_indent='   ',
-                        break_on_hyphens=split_words,
-                        break_long_words=split_words))
+    block = textwrap.fill(text, width=78,
+                          initial_indent='!! ', subsequent_indent='   ',
+                          break_on_hyphens=split_words,
+                          break_long_words=split_words)
+    print(block)
+    record_warning(kind, data, block)
 
 
 def require_full_history(repo, step, why):
@@ -943,23 +968,26 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
             if machines else
             _NOTHING_COMPARED_BUILDS.format(noun=noun, one=one))
     source = 'upstream source' if noun == 'tags' else 'that commit'
+    charmaps = machines and machines_charmaps(old, new)
     old, new = label(old), label(new)
+    pair = {'old': old, 'new': new}
     if nothing == 'commit':
         warn(f"{old} and {new} are the same commit. Step 2 compares "
              f"nothing: it would compare {source} against itself. {rest}",
-             split_words=False)
+             'same_commit', pair, split_words=False)
     elif nothing == 'tree' and machines:
         warn(f"{old} and {new}: {rest[0].lower()}{rest[1:]}",
+             'same_tree_machines', {**pair, 'charmaps': charmaps},
              split_words=False)
     elif nothing == 'tree':
         warn(f"{old} and {new} are two commits of one source tree. Step 2 "
              f"compares nothing: it would compare that tree against "
-             f"itself. {rest}", split_words=False)
+             f"itself. {rest}", 'same_tree', pair, split_words=False)
     if status == 'reversed':
         warn(f"REVERSED PAIR, allowed on request: {detail}. Every finding "
              f"below has old and new the other way round -- what reads as "
              f"added was deleted in the real upgrade. Not an audit of an "
-             f"upgrade.")
+             f"upgrade.", 'reversed_allowed', {**pair, 'detail': detail})
     elif status == 'undetermined':
         # The summary repeats this block at its end, and it is all the
         # summary says of the direction: "below" would be false there.
@@ -968,7 +996,8 @@ def pair_check(repo, old, new, allow_reverse=False, commits=None):
              f"the wrong way round, every "
              f"step still runs, and step 2 reports "
              f"a deleted locale as a harmless addition. "
-             f"Confirm which {one} is the older one.")
+             f"Confirm which {one} is the older one.",
+             'direction_undetermined', {**pair, 'detail': detail})
     return status, nothing
 
 
@@ -1098,7 +1127,7 @@ def report_tag_provenance(repo, *tags):
     print(textwrap.fill("Tag provenance (this audit reads a third-party "
                         "mirror; a tag is a mutable pointer):", width=78))
     worst = 'good'
-    unchecked = []
+    unchecked = {}
     for tag in dict.fromkeys(tags):
         status, detail = verify_tag(repo, tag)
         sha = run_git(['rev-parse', f'{tag}^{{commit}}'],
@@ -1116,8 +1145,7 @@ def report_tag_provenance(repo, *tags):
         elif status != 'good':
             if worst == 'good':
                 worst = status
-            if tag not in unchecked:
-                unchecked.append(tag)
+            unchecked.setdefault(tag, status)
     if worst == 'bad':
         die("a tag's signature is INVALID. The source this would audit is not "
             "what the glibc maintainers released. Refusing to continue.")
@@ -1132,6 +1160,8 @@ def report_tag_provenance(repo, *tags):
              f"compared'). The commit ids printed there are what was read; "
              f"compare them against a source you trust "
              f"(sourceware.org/git/glibc.git) if it matters.",
+             'signatures_unchecked',
+             {'refs': [{'ref': r, 'status': s} for r, s in unchecked.items()]},
              split_words=False)
 
 
@@ -1547,7 +1577,10 @@ def machine_sides(given, words, no_sources=(None, None)):
     with contextlib.redirect_stdout(out):
         warn(f"{said[0].upper()}{said[1:]}. So step 2 reads the tags "
              f"{tags[0]} and {tags[1]}, which hold neither build's patches.",
-             split_words=False)
+             'machine_falls_back_to_tags',
+             {'unread': [{'side': side, 'build': b, 'why': why}
+                         for side, b, why in unread],
+              'tags': list(tags)}, split_words=False)
     return [(t, 'tag', t) for t in tags], out.getvalue().rstrip('\n').split('\n')
 
 
@@ -2435,9 +2468,12 @@ def compared_sides(here, old, new):
             report_build_provenance(rebuilt)
     print_collation_version(repo, sides[0], sides[1])
     if tags:
-        warn(tag_sides_text(tags, [side_class(repo, t) for t in tags]),
+        classes = [side_class(repo, t) for t in tags]
+        warn(tag_sides_text(tags, classes), 'sides_read_as_tags',
+             {'refs': list(tags), 'classes': classes, 'ask': tag_ask()},
              split_words=False)
-    warn(CODE_NOT_COMPARED, split_words=False)
+    warn(CODE_NOT_COMPARED, 'code_not_compared',
+         {'step11': step11_compared()}, split_words=False)
     # The corpus floor: both tags must hold a real locale corpus, or the
     # diff is empty for a reason that has nothing to do with collation and
     # reads as "nothing changed". A build was held to it by build_side.
@@ -2513,16 +2549,18 @@ def print_collation_version(repo, old, new):
     version that never warns."""
     ov, nv = side_glibc_version(repo, old), side_glibc_version(repo, new)
     if ov is None or nv is None:
-        which = ', '.join(_ref(s) if _is_tag(s) else s.build
-                          for s, v in ((old, ov), (new, nv)) if v is None)
+        which = [_ref(s) if _is_tag(s) else s.build
+                 for s, v in ((old, ov), (new, nv)) if v is None]
         warn("Whether PostgreSQL warns about a collation's version is NOT "
-             f"known: no glibc version could be read for {which}.",
+             f"known: no glibc version could be read for {', '.join(which)}.",
+             'collation_version_unknown', {'sides': which},
              split_words=False)
     elif ov == nv:
         warn("PostgreSQL warns about no libc collation between these two "
              f"sides: both are glibc {nv}, the version a PostgreSQL that "
              "runs it records for a collation and compares. Whatever this "
-             "run finds changed between them, PostgreSQL does not report.")
+             "run finds changed between them, PostgreSQL does not report.",
+             'collation_version_same', {'version': nv})
     else:
         print(textwrap.fill(
             f"glibc {ov} on the old side, {nv} on the new: the version a "
@@ -2589,13 +2627,19 @@ def pair_word(repo, old, new):
             'builds' if classes == {'build'} else 'sides')
 
 
+def tag_ask():
+    """What TAG_ASK_ENV names: 'build' unset, else 'build' or 'none'."""
+    ask = os.environ.get(TAG_ASK_ENV) or 'build'
+    if ask not in ('build', 'none'):
+        die(f"{TAG_ASK_ENV}={ask!r} is not one of build, none.")
+    return ask
+
+
 def tag_sides_text(tags, kinds=None):
     """The `!!` for the sides read as upstream tags: what a tag does not
     hold, said once here (the summary relays it from the log of "What was
     compared"), and what to pass instead, by the route TAG_ASK_ENV names."""
-    ask = os.environ.get(TAG_ASK_ENV) or 'build'
-    if ask not in ('build', 'none'):
-        die(f"{TAG_ASK_ENV}={ask!r} is not one of build, none.")
+    ask = tag_ask()
     one = len(tags) == 1
     kinds = kinds or ['tag'] * len(tags)
     if len(set(kinds)) == 1:
@@ -2664,8 +2708,12 @@ def report_machine_provenance(machines):
                  f"so a locale that is, or copies, one of them is not "
                  f"compared: "
                  + ', '.join(f"{shown(e)} ({why})" for e, why in skipped)
-                 + '.', split_words=False)
-    warn(MACHINE_NOT_CHECKED, split_words=False)
+                 + '.', 'machine_entries_skipped',
+                 {'machine': label(sd),
+                  'entries': [{'entry': shown(e), 'why': why}
+                              for e, why in skipped]},
+                 split_words=False)
+    warn(MACHINE_NOT_CHECKED, 'machine_not_checked', {}, split_words=False)
 
 
 def _checked(text):
@@ -2712,7 +2760,15 @@ def report_build_provenance(builds):
         print(_checked(prov['tarball']))
         for line in prov.get('verified') or ():
             if line.startswith('!!'):
-                warned.append(f"{label(sd)}: {line[2:].strip()}")
+                # build_sources.check_charmaps, the one `!!` it writes.
+                m = re.fullmatch(r'!! charmaps NOT checked against (\S+): '
+                                 r'(.+)', line, re.S)
+                if not m:
+                    die(f"a line of {label(sd)}'s provenance opens with !! "
+                        f"and is not the charmaps one: {line!r}")
+                warned.append((f"{label(sd)}: {line[2:].strip()}",
+                               {'build': label(sd), 'package': m[1],
+                                'why': m[2]}))
             else:
                 print(_checked(line))
         text = (f"patches: {len(prov.get('applied') or ())} of the SRPM's "
@@ -2721,8 +2777,8 @@ def report_build_provenance(builds):
         print(textwrap.fill(text, width=78, initial_indent='    ',
                             subsequent_indent='             ',
                             break_on_hyphens=False, break_long_words=False))
-    for w in warned:
-        warn(w, split_words=False)
+    for w, data in warned:
+        warn(w, 'build_charmaps_unchecked', data, split_words=False)
     items = list(bs.NOT_CHECKED)
     gpg = [i for i, t in enumerate(items) if 'GPG signatures' in t]
     tarball = [i for i, t in enumerate(items)
@@ -2747,6 +2803,10 @@ def report_build_provenance(builds):
                          "package: they are the SRPM's tarball, checked above "
                          "against the upstream tag, and its patches")
     warn("Not checked for these builds: " + '; '.join(items) + '.',
+         'build_not_checked',
+         {'metadata': fetched,
+          'unlisted': [{'build': b, 'folder': where}
+                       for b, where in unlisted]},
          split_words=False)
 
 

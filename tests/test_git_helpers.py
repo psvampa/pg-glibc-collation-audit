@@ -18,7 +18,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from _harness import (EXPECTED_SHA, FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID,
+from _harness import (written_warnings, EXPECTED_SHA, FLOOR_NEW, FLOOR_OLD, GLIBC_CLONE, MID,
                       NEW, OLD, PG_VERSION_DIFFER, PG_VERSION_SAME,
                       PG_VERSION_UNKNOWN,
                       SCRIPTS_DIR, SIGNATURES_UNCHECKED, STEP2_LISTED,
@@ -187,6 +187,27 @@ class CollationVersionOfEachSide(unittest.TestCase):
         for v in ('2.28', '2.34'):
             with self.subTest(v=v):
                 self.assertEqual(self.said(v, v), PG_VERSION_SAME.format(v=v))
+
+    def test_each_warning_is_written_as_data(self):
+        """Unread and equal versions are each a `!!` written with its kind
+        and data; two versions, none."""
+        for old, new, want in (
+                (None, '2.34', [('collation_version_unknown',
+                                 {'sides': ['o']})]),
+                (None, None, [('collation_version_unknown',
+                               {'sides': ['o', 'n']})]),
+                ('2.34', '2.34', [('collation_version_same',
+                                   {'version': '2.34'})]),
+                ('2.28', '2.34', [])):
+            with self.subTest(old=old, new=new):
+                versions = {'o': old, 'n': new}
+                with mock.patch.object(
+                        g, 'side_glibc_version',
+                        side_effect=lambda repo, s: versions[s]):
+                    _, recs = written_warnings(
+                        lambda: g.print_collation_version(GLIBC_CLONE, 'o',
+                                                          'n'))
+                self.assertEqual([(w['kind'], w['data']) for w in recs], want)
 
     def test_a_version_not_read_is_said_never_taken_as_equal(self):
         for old, new, named in ((None, '2.34', 'o'), ('2.34', None, 'n'),
@@ -2983,6 +3004,9 @@ class NothingComparedIsNotTheOrder(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             g.pair_check(self.repo, 't1', 't1')
         self.assertIn('!! t1 and t1 are the same commit.', flat(out.getvalue()))
+        _, recs = written_warnings(lambda: g.pair_check(self.repo, 't1', 't1'))
+        self.assertEqual([(w['kind'], w['data']) for w in recs],
+                         [('same_commit', {'old': 't1', 'new': 't1'})])
 
     def test_two_trees_compare_something(self):
         """Control: t2 renames a file, so it is another tree."""
@@ -3010,6 +3034,10 @@ class NothingComparedIsNotTheOrder(unittest.TestCase):
                       text)
         self.assertIn('The DIRECTION of this pair could not be established',
                       text)
+        _, recs = written_warnings(lambda: g.pair_check(self.repo, 't1', o))
+        self.assertEqual([w['kind'] for w in recs],
+                         ['same_tree', 'direction_undetermined'])
+        self.assertEqual(recs[1]['data']['new'], o)
 
     def test_one_tree_reversed_on_request_compares_nothing(self):
         """--allow-reverse runs a reversed pair; of one tree, it still
@@ -3026,6 +3054,14 @@ class NothingComparedIsNotTheOrder(unittest.TestCase):
         text = flat(out.getvalue())
         self.assertIn('!! t1b and t1 are two commits of one source tree.', text)
         self.assertIn('REVERSED PAIR, allowed on request', text)
+        # Each one written as data, with WARNINGS_ENV set as audit.sh sets
+        # it; audit.sh never runs a reversed pair, so no run of it writes
+        # this one.
+        _, recs = written_warnings(lambda: g.pair_check(
+            self.repo, 't1b', 't1', allow_reverse=True))
+        self.assertEqual([w['kind'] for w in recs],
+                         ['same_tree', 'reversed_allowed'])
+        self.assertEqual(recs[1]['data']['old'], 't1b')
 
     def test_one_tree_reversed_is_refused(self):
         """The order is still asked: one tree given the wrong way round is

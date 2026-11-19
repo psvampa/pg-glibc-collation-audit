@@ -732,8 +732,10 @@ def check_report(returncode, out, out_dir):
     printed: step 2's names, compared and not, or that it compared
     nothing; whether its character set check ran; the Removed rows and
     where they come from; whether step 11 ran and whether its rules were
-    set beside. A run that printed the summary and has no data file fails
-    here, whatever its exit code. No run leaves a report.*.partial.
+    set beside; and every `!!` block of the logs of steps 0 and 1, one by
+    one, as a warning of the data file with the same text. A run that
+    printed the summary and has no data file fails here, whatever its
+    exit code. No run leaves a report.*.partial.
     Called on the runs of run_wrapper (the one with check=False asserts
     that this refuses it), _AuditOnBuilds and the two other runs that
     reach the summary (test_wrapper, test_build_sources), with no run of
@@ -888,6 +890,126 @@ def check_report(returncode, out, out_dir):
                 r['step11']['rules_beside']['why'] + '.' not in tail:
             raise AssertionError(f'{path}: why {r["step11"]["rules_beside"]!r}'
                                  ' is not what the summary says')
+    check_warnings(r, out_dir, path)
+
+
+def check_warnings(r, out_dir, path):
+    """The `!!` of steps 0 and 1 in the report `r` read from `path`: every
+    block each step's log in `out_dir` holds, as audit.sh's warnings
+    block reads it, is a warning of the data file, one by one and in
+    order, with the same text; and each one's data to its text
+    (data_in_text)."""
+    slug = os.path.basename(path)[len('report.'):-len('.json')]
+    for step in ('step0', 'step1'):
+        w = r['warnings'][step]
+        if w['state'] == 'not run':
+            continue
+        if w['state'] != 'reported':
+            raise AssertionError(f'{path}: warnings of {step} {w!r}, but '
+                                 'audit.sh reached its summary')
+        log = os.path.join(out_dir, f'{step}.{slug}.log')
+        blocks = bang_blocks(log)
+        texts = [i['text'] for i in w['items']]
+        if blocks != texts:
+            raise AssertionError(f'{log} holds the !! blocks {blocks!r}, '
+                                 f'{path} the warnings {texts!r}')
+        for i in w['items']:
+            data_in_text(i['kind'], i['data'], i['text'])
+
+
+# Data values that are a word of a closed list, not a name or a reason the
+# block prints: checked by report_data.KINDS, not against the text.
+CLOSED_WORDS = {'status', 'classes', 'ask', 'side'}
+# The side each kind's block names first: "{old} and {new} ...", or "the
+# new side ... against the old side ..." (the direction's and the reversed
+# pair's). Only same_commit names one side twice.
+FIRST_SIDE = {'same_commit': 'old', 'same_tree': 'old',
+              'same_tree_machines': 'old', 'direction_undetermined': 'new',
+              'reversed_allowed': 'new'}
+
+
+def data_in_text(kind, data, text):
+    """Every name and reason a warning's data holds is in the block it was
+    printed in, and its two sides are two names, in the order the block
+    names them (FIRST_SIDE): so a value taken from another variable, or
+    the two sides swapped, does not pass because its
+    shape is right. Compared with every blank removed, as the block wraps
+    at 78 columns and may break a name at a hyphen."""
+    bare = re.sub(r'\s', '', text)
+
+    def leaves(v, key=None):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                yield from leaves(x, k)
+        elif isinstance(v, list):
+            for x in v:
+                yield from leaves(x, key)
+        elif isinstance(v, str) and key not in CLOSED_WORDS:
+            yield key, v
+    for key, v in leaves(data):
+        if re.sub(r'\s', '', v) not in bare:
+            raise AssertionError(f'{kind}: {key} {v!r} is not in its block '
+                                 f'{text!r}')
+    if kind in FIRST_SIDE:
+        if data['old'] == data['new'] and kind != 'same_commit':
+            raise AssertionError(f'{kind}: old and new are both '
+                                 f'{data["old"]!r}')
+        first = FIRST_SIDE[kind]
+        second = 'new' if first == 'old' else 'old'
+        a, b = (bare.find(re.sub(r'\s', '', data[k]))
+                for k in (first, second))
+        if data['old'] != data['new'] and a > b:
+            raise AssertionError(f'{kind}: {first} {data[first]!r} after '
+                                 f'{second} {data[second]!r} in {text!r}')
+
+
+def written_warnings(call):
+    """call() under glibc_locale_data.WARNINGS_ENV, as audit.sh runs a
+    step: (what it printed, each `!!` it wrote as data). Each one written
+    is a block it printed, read by report_data.step_warnings, and its data
+    is in its text (data_in_text)."""
+    import contextlib
+    import tempfile
+    from unittest import mock
+    import glibc_locale_data as g
+    import report_data as rd
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, 'w.jsonl')
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {g.WARNINGS_ENV: path}), \
+                contextlib.redirect_stdout(out):
+            call()
+        recs = (rd.step_warnings(path)['items'] if os.path.exists(path)
+                else [])
+    for w in recs:
+        assert w['text'] + '\n' in out.getvalue(), w['text']
+        data_in_text(w['kind'], w['data'], w['text'])
+    return out.getvalue(), recs
+
+
+def bang_blocks(log):
+    """The `!!` blocks of a step's log as audit.sh's warnings block reads
+    them: a line opening with `!!` and the lines after it that open with
+    three blanks. A log that is not there holds none (step 0's is written
+    only when it printed something)."""
+    if not os.path.exists(log):
+        return []
+    blocks, cur = [], None
+    with open(log, encoding='utf-8') as f:
+        for line in f.read().split('\n'):
+            if line.startswith('!!'):
+                if cur is not None:
+                    blocks.append('\n'.join(cur))
+                cur = [line]
+            elif cur is not None and line.startswith('   '):
+                cur.append(line)
+            else:
+                if cur is not None:
+                    blocks.append('\n'.join(cur))
+                cur = None
+    if cur is not None:
+        blocks.append('\n'.join(cur))
+    return blocks
 
 
 # --- fixtures for C.UTF-8 ----------------------------------------------------

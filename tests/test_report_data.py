@@ -7,7 +7,9 @@ kind of run read back, and what no run reaches: a file a step did not
 write (each one said as 'not reported', never as an empty list), a file
 cut short or two files that do not agree, and a report that load() must
 refuse (a key missing or added, a state outside its list, a null, another
-format, facts that do not hang together)."""
+format, facts that do not hang together). The `!!` of steps 0 and 1: one
+of every kind with its title, and the lines of a step's warnings file
+that are refused."""
 import copy
 import json
 import os
@@ -84,6 +86,66 @@ def step11_files(d):
     write(d, f'measured_order_rules.{PAIR}.txt', '     Each locale...\n')
 
 
+# One `!!` of each kind as a step writes it (kind, data), with the title
+# KINDS makes of it: every kind, so that a title no run of the suite
+# reaches is still read here.
+SAMPLES = {
+    'same_commit': ({'old': 'glibc-2.34', 'new': 'glibc-2.34'},
+                    'Nothing compared: glibc-2.34 and glibc-2.34 are the '
+                    'same commit'),
+    'same_tree_machines': ({'old': 'a', 'new': 'b', 'charmaps': True},
+                           'Nothing compared: the two machines hold the same '
+                           'locale sources'),
+    'same_tree': ({'old': 'a', 'new': 'b'},
+                  'Nothing compared: a and b are one source tree'),
+    'reversed_allowed': ({'old': 'a', 'new': 'b', 'detail': 'd'},
+                         'Old and new run the other way round, on request'),
+    'direction_undetermined': ({'old': 'a', 'new': 'b', 'detail': 'd'},
+                               'Which of a and b is the older one'),
+    'signatures_unchecked': (
+        {'refs': [{'ref': 'glibc-2.28', 'status': 'no-gpg'},
+                  {'ref': 'glibc-2.34', 'status': 'no-gpg'}]},
+        'Tag signatures of glibc-2.28, glibc-2.34 (gpg is not installed)'),
+    'machine_falls_back_to_tags': (
+        {'unread': [{'side': 'old', 'build': 'glibc-2.28-1.el8',
+                     'why': 'w'}], 'tags': ['glibc-2.28', 'glibc-2.34']},
+        "The old machine's build glibc-2.28-1.el8 could not be read; step 2 "
+        "read the tags"),
+    'sides_read_as_tags': (
+        {'refs': ['glibc-2.28', 'glibc-2.34'], 'classes': ['tag', 'tag'],
+         'ask': 'build'},
+        "The distro's own locale files and patches (glibc-2.28 and "
+        "glibc-2.34 are upstream tags)"),
+    'code_not_compared': ({'step11': False},
+                          "glibc's code that compiles and compares the rules"),
+    'collation_version_unknown': (
+        {'sides': ['abc']}, "Whether PostgreSQL warns about a collation's "
+        "version (no glibc version for abc)"),
+    'collation_version_same': (
+        {'version': '2.28'},
+        'PostgreSQL will not warn: both sides are glibc 2.28'),
+    'machine_entries_skipped': (
+        {'machine': 'm', 'entries': [{'entry': 'x', 'why': 'y'},
+                                     {'entry': 'z', 'why': 'y'}]},
+        "2 entries of m's files not read"),
+    'machine_not_checked': (
+        {}, "The machines' locale sources against the package they came "
+        "from"),
+    'build_charmaps_unchecked': (
+        {'build': 'b', 'package': 'p', 'why': 'w'},
+        'The character sets of b against its package'),
+    'build_not_checked': (
+        {'metadata': True, 'unlisted': []},
+        "The builds' compiler, code patches and GPG signatures"),
+}
+
+
+def warnings_file(d, step, kinds):
+    write(d, f'step{step}.{PAIR}.warnings.jsonl', ''.join(
+        json.dumps({'kind': k, 'data': SAMPLES[k][0], 'text': f'!! {k}'})
+        + '\n' for k in kinds))
+
+
 ON_MACHINES = dict(route='builds', old_node='/a', new_node='/b',
                    order_words='forward none build build builds',
                    step11=True)
@@ -142,9 +204,14 @@ class EveryFileWritten(_Folder):
             'state': 'not run', 'why': "no machines' files",
             'not_done': list(rd.STEP11_NOT_DONE)})
         self.assertEqual(r['run']['machines']['state'], 'not given')
-        for part in (r['compared'], r['warnings'], r['step2']['totals'],
-                     r['step2']['character_sets']):
+        for part in (r['compared'], r['step2']['totals'],
+                     r['step2']['character_sets'], r['warnings']['step2'],
+                     r['warnings']['step11']):
             self.assertEqual(part['state'], 'not yet reported')
+        self.assertEqual(r['warnings']['step0']['state'], 'not run')
+        self.assertEqual(r['warnings']['step1'], {
+            'state': 'not reported',
+            'why': f'the step wrote no step1.{PAIR}.warnings.jsonl'})
 
     def test_machines(self):
         step2_files(self.d, **MACHINES)
@@ -244,6 +311,257 @@ class EveryFileWritten(_Folder):
                 self.assertEqual((r['step2']['removed']['source'],
                                   r['step2']['removed']['distro_files']),
                                  want)
+
+
+class Warnings(_Folder):
+    """The `!!` of steps 0 and 1, each read from the file its step wrote
+    beside its log, with its list and its title."""
+
+    def test_every_kind_and_its_title(self):
+        step2_files(self.d)
+        warnings_file(self.d, 1, list(SAMPLES))
+        items = self.written()['warnings']['step1']['items']
+        self.assertEqual([i['kind'] for i in items], list(SAMPLES))
+        for i in items:
+            with self.subTest(kind=i['kind']):
+                self.assertEqual(i['title'], SAMPLES[i['kind']][1])
+                self.assertEqual(i['data'], SAMPLES[i['kind']][0])
+                self.assertEqual(i['text'], f"!! {i['kind']}")
+        self.assertEqual(sorted(SAMPLES), sorted(rd.KINDS))
+
+    def test_every_kind_written_is_a_kind_read(self):
+        """The kinds glibc_locale_data's warn() calls write are KINDS,
+        each once, every one as a literal; a call without one would be a
+        block with no data."""
+        import ast
+        src = os.path.join(os.path.dirname(rd.__file__),
+                           'glibc_locale_data.py')
+        with open(src, encoding='utf-8') as f:
+            tree = ast.parse(f.read())
+        kinds = []
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and getattr(n.func, 'id', '') == 'warn':
+                self.assertTrue(len(n.args) >= 3 and isinstance(
+                    n.args[1], ast.Constant), f'line {n.lineno}')
+                kinds.append(n.args[1].value)
+        self.assertEqual(sorted(kinds), sorted(rd.KINDS))
+
+    def test_the_lists(self):
+        step2_files(self.d)
+        warnings_file(self.d, 1, list(SAMPLES))
+        items = self.written()['warnings']['step1']['items']
+        self.assertEqual([i['kind'] for i in items if i['class'] == 'change'],
+                         ['collation_version_same'])
+
+    def test_titles_by_the_data(self):
+        """What the data changes in a title: two signature statuses and
+        a commit among the refs, both machines unread, one class of side
+        or two, one entry skipped."""
+        t = lambda k, d: rd.KINDS[k][2](d)
+        self.assertEqual(t('signatures_unchecked', {'refs': [
+            {'ref': 'glibc-2.28', 'status': 'no-key'},
+            {'ref': 'abc', 'status': 'not-a-tag'}]}),
+            'Signatures of glibc-2.28, abc (not verified: no signing key, '
+            'or gpg failed; a commit or a lightweight tag, which carries no '
+            'signature)')
+        self.assertEqual(t('machine_falls_back_to_tags', {
+            'unread': [{'side': 'old', 'build': 'x', 'why': 'w'},
+                       {'side': 'new', 'build': 'y', 'why': 'w'}],
+            'tags': ['a', 'b']}),
+            "Neither machine's build could be read; step 2 read the tags")
+        self.assertEqual(t('sides_read_as_tags', {
+            'refs': ['abc'], 'classes': ['commit'], 'ask': 'none'}),
+            "The distro's own locale files and patches (abc is an upstream "
+            "commit)")
+        self.assertEqual(t('sides_read_as_tags', {
+            'refs': ['glibc-2.28', 'abc'], 'classes': ['tag', 'commit'],
+            'ask': 'build'}),
+            "The distro's own locale files and patches (glibc-2.28 and abc "
+            "are an upstream tag and an upstream commit)")
+        self.assertEqual(t('machine_entries_skipped', {
+            'machine': 'm', 'entries': [{'entry': 'x', 'why': 'y'}]}),
+            "1 entry of m's files not read")
+
+    def test_step0_with_the_machines(self):
+        step2_files(self.d, **MACHINES)
+        step11_files(self.d)
+        over = dict(ON_MACHINES)
+        self.assertEqual(self.written(**over)['warnings']['step0'], {
+            'state': 'not reported',
+            'why': f'the step wrote no step0.{PAIR}.warnings.jsonl'})
+        warnings_file(self.d, 0, [])
+        self.assertEqual(self.written(**over)['warnings']['step0'],
+                         {'state': 'reported', 'items': []})
+        warnings_file(self.d, 0, ['machine_falls_back_to_tags'])
+        self.assertEqual(
+            [i['kind'] for i in
+             self.written(**over)['warnings']['step0']['items']],
+            ['machine_falls_back_to_tags'])
+
+    def test_a_step0_file_without_the_machines_is_not_read(self):
+        step2_files(self.d)
+        warnings_file(self.d, 0, ['same_tree'])
+        self.assertEqual(self.written()['warnings']['step0']['state'],
+                         'not run')
+
+    def test_an_empty_file_is_no_warning(self):
+        step2_files(self.d)
+        warnings_file(self.d, 1, [])
+        self.assertEqual(self.written()['warnings']['step1'],
+                         {'state': 'reported', 'items': []})
+
+
+class TheLogAgainstTheFile(_Folder):
+    """_harness.check_warnings, which every audit.sh run of the suite that
+    reaches its summary passes through: the `!!` blocks of each step's
+    log, read as audit.sh's warnings block reads them, are the step's
+    warnings in the data file, one by one."""
+
+    LOG = ('Tag provenance:\n'
+           '!! first block,\n'
+           '   its second line\n'
+           '     an item\n'
+           'a line of no block\n'
+           '!! second block\n')
+    BLOCKS = ['!! first block,\n   its second line\n     an item',
+              '!! second block']
+
+    def report(self, texts, step0=None):
+        item = lambda t: {'kind': 'machine_not_checked', 'data': {},
+                          'text': t}
+        return {'warnings': {
+            'step0': step0 or {'state': 'not run', 'why': 'x'},
+            'step1': {'state': 'reported',
+                      'items': [item(t) for t in texts]}}}
+
+    def check(self, texts, **more):
+        write(self.d, f'step1.{PAIR}.log', self.LOG)
+        _harness.check_warnings(self.report(texts, **more), self.d,
+                                os.path.join(self.d, f'report.{PAIR}.json'))
+
+    def test_the_blocks_as_audit_sh_reads_them(self):
+        write(self.d, 'x.log', self.LOG)
+        self.assertEqual(_harness.bang_blocks(os.path.join(self.d, 'x.log')),
+                         self.BLOCKS)
+        self.assertEqual(_harness.bang_blocks(os.path.join(self.d, 'no.log')),
+                         [])
+
+    def test_the_same_blocks_pass(self):
+        self.check(self.BLOCKS)
+
+    def test_each_difference_is_refused(self):
+        for texts in (self.BLOCKS[:1], self.BLOCKS + ['!! third'],
+                      self.BLOCKS[::-1], ['!! first block,', '!! second block'],
+                      []):
+            with self.subTest(texts=texts):
+                with self.assertRaises(AssertionError):
+                    self.check(texts)
+
+    def test_each_data_value_is_in_its_block(self):
+        """data_in_text: a name or reason not in the block, or old and new
+        swapped, is refused; closed words and a name broken at a hyphen
+        are not."""
+        text = ('!! glibc-2.34-275.el9_8 and glibc-2.34-283.el9_8 are two '
+                'commits of one\n   source tree; why: no zstd reader')
+        ok = {'old': 'glibc-2.34-275.el9_8', 'new': 'glibc-2.34-283.el9_8'}
+        _harness.data_in_text('same_tree', ok, text)
+        _harness.data_in_text('x', {'why': 'no zstd reader', 'ask': 'none',
+                                    'side': 'old'}, text)
+        _harness.data_in_text('x', {'old': 'glibc-2.34-', 'new': 'glibc-2.34-'},
+                              'glibc-2.34-\n   275')
+        for kind, data in (
+                ('same_tree', {'old': ok['new'], 'new': ok['old']}),
+                ('same_tree', {'old': 'qqq', 'new': ok['new']}),
+                ('same_tree', {'old': ok['new'], 'new': ok['new']}),
+                ('direction_undetermined', ok),
+                ('x', {'entries': [{'entry': 'de_IT', 'why': 'symlink'}]}),
+                ('x', {'why': 'qqq'})):
+            with self.subTest(data=data):
+                with self.assertRaises(AssertionError):
+                    _harness.data_in_text(kind, data, text)
+
+    def test_a_step_not_reported_is_refused(self):
+        write(self.d, f'step1.{PAIR}.log', self.LOG)
+        r = self.report(self.BLOCKS)
+        r['warnings']['step1'] = {'state': 'not reported', 'why': 'x'}
+        with self.assertRaises(AssertionError):
+            _harness.check_warnings(r, self.d, os.path.join(
+                self.d, f'report.{PAIR}.json'))
+
+    def test_step0_against_its_own_log(self):
+        """Reported, step 0 is held to its log; with no log, to none."""
+        step0 = {'state': 'reported', 'items': []}
+        self.check(self.BLOCKS, step0=step0)
+        write(self.d, f'step0.{PAIR}.log', '!! fell back\n')
+        with self.assertRaises(AssertionError):
+            self.check(self.BLOCKS, step0=step0)
+
+
+class AWarningRefused(_Folder):
+    """A line of a step's warnings file that is not a known kind with its
+    data: refused, and no report written."""
+
+    def refused(self, line):
+        step2_files(self.d)
+        write(self.d, f'step1.{PAIR}.warnings.jsonl', line)
+        argv = ['--out-dir', self.d, '--pair', PAIR, '--old', 'glibc-2.28',
+                '--new', 'glibc-2.34', '--route', 'tags',
+                '--order-words', 'forward none tag tag tags']
+        self.assertEqual(rd.main(argv), 1)
+        self.assertEqual([n for n in os.listdir(self.d)
+                          if n.startswith('report.')], [])
+
+    def line(self, kind='same_tree', data=None, text='!! x', **more):
+        w = {'kind': kind, 'data': SAMPLES['same_tree'][0] if data is None
+             else data, 'text': text, **more}
+        return json.dumps(w) + '\n'
+
+    def test_the_good_line_is_read(self):
+        step2_files(self.d)
+        write(self.d, f'step1.{PAIR}.warnings.jsonl', self.line())
+        self.assertEqual(len(self.written()['warnings']['step1']['items']), 1)
+
+    def test_an_unknown_kind(self):
+        self.refused(self.line(kind='same_thing'))
+
+    def test_data_of_another_shape(self):
+        self.refused(self.line(data={'old': 'a'}))
+        self.refused(self.line(data={'old': 'a', 'new': 'b', 'x': 1}))
+        self.refused(self.line(data={'old': 'a', 'new': ''}))
+        self.refused(self.line(data={'old': 'a', 'new': 3}))
+        self.refused(self.line(data=['a', 'b']))
+
+    def test_each_value_check(self):
+        """One bad value per kind whose values are more than text."""
+        bad = {
+            'same_tree_machines': {'old': 'a', 'new': 'b', 'charmaps': 'yes'},
+            'signatures_unchecked': {'refs': [{'ref': 'x', 'status': 'good'}]},
+            'machine_falls_back_to_tags': {
+                'unread': [{'side': 'both', 'build': 'x', 'why': 'w'}],
+                'tags': ['a', 'b']},
+            'sides_read_as_tags': {'refs': ['a'], 'classes': ['build'],
+                                   'ask': 'build'},
+            'code_not_compared': {'step11': 1},
+            'collation_version_unknown': {'sides': []},
+            'machine_entries_skipped': {'machine': 'm', 'entries': []},
+            'build_not_checked': {'metadata': True,
+                                  'unlisted': [{'build': 'b'}]},
+        }
+        for kind, data in bad.items():
+            with self.subTest(kind=kind):
+                self.refused(self.line(kind=kind, data=data))
+
+    def test_a_text_that_is_not_a_block(self):
+        self.refused(self.line(text='Not checked'))
+
+    def test_a_key_added_or_missing(self):
+        self.refused(self.line(step=1))
+        self.refused(json.dumps({'kind': 'same_tree',
+                                 'data': SAMPLES['same_tree'][0]}) + '\n')
+
+    def test_not_json_or_cut_short(self):
+        self.refused('{"kind": \n')
+        self.refused(self.line().rstrip('\n'))
 
 
 class AFileNotWritten(_Folder):
@@ -384,6 +702,9 @@ class TheReaderIsStrict(_Folder):
         super().setUp()
         step2_files(self.d, **MACHINES)
         step11_files(self.d)
+        warnings_file(self.d, 0, [])
+        warnings_file(self.d, 1, ['signatures_unchecked',
+                                  'collation_version_same'])
         self.good = self.written(**ON_MACHINES)
 
     def refuses(self, change):
@@ -422,7 +743,8 @@ class TheReaderIsStrict(_Folder):
         for path in (('step2', 'listed'), ('step2', 'removed'),
                      ('step2', 'rules_by_name'), ('step11',),
                      ('step11', 'rules_beside'), ('step11', 'characters'),
-                     ('run', 'machines'), ('warnings',), ('compared',),
+                     ('run', 'machines'), ('warnings', 'step0'),
+                     ('warnings', 'step1'), ('compared',),
                      ('step2', 'totals')):
             with self.subTest(path=path):
                 def change(r):
@@ -502,6 +824,20 @@ class TheReaderIsStrict(_Folder):
         with open(p, 'w', encoding='utf-8') as f:
             json.dump(r, f)
         self.assertEqual(rd.load(p), r)
+
+    def test_a_warning_whose_list_or_title_is_not_its_kinds(self):
+        """Each item is held to KINDS: its list, its title, its data."""
+        item = lambda r: r['warnings']['step1']['items'][1]
+        self.refuses(lambda r: item(r).update({'class': 'not checked'}))
+        self.refuses(lambda r: item(r).update(title='Nothing changed'))
+        self.refuses(lambda r: item(r).update(kind='same_commit'))
+        self.refuses(lambda r: item(r)['data'].update(version=''))
+        self.refuses(lambda r: item(r).pop('title'))
+
+    def test_step0_not_run_with_the_machines_given(self):
+        def change(r):
+            r['warnings']['step0'] = {'state': 'not run', 'why': 'x'}
+        self.refuses(change)
 
     def test_not_run_says_what_it_leaves(self):
         def change(r):

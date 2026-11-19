@@ -2811,6 +2811,36 @@ class TheProvenanceSaysWhatNoMetadataGives(unittest.TestCase):
                       % (self.NAME, self.MIRROR, self.TREE), flat(out))
         self.assertNoOnly(flat(out))
 
+    def test_each_warning_as_data(self):
+        """The builds' two `!!` as data: the folders no metadata lists, the
+        mirror's metadata checked when the files were fetched, and a
+        charmaps line naming its package and why."""
+        from _harness import written_warnings
+
+        def kinds(sides):
+            _, recs = written_warnings(
+                lambda: g.report_build_provenance(sides))
+            return [(w['kind'], w['data']) for w in recs]
+        where = self.MIRROR + self.TREE
+        self.assertEqual(kinds([self.side(False), self.side(False,
+                                                             self.OTHER)]),
+                         [('build_not_checked', {'metadata': True, 'unlisted': [
+                             {'build': self.NAME, 'folder': where},
+                             {'build': self.OTHER, 'folder': where}]})])
+        self.assertEqual(kinds([self.side(True)]), [
+            ('build_not_checked', {'metadata': True, 'unlisted': []})])
+        sd = self.side(True)
+        del sd.prov['fetched']
+        sd.prov['verified'] = ['!! charmaps NOT checked against '
+                               'glibc-locale-source-2.34-83.el9.7: no zstd '
+                               'reader']
+        self.assertEqual(kinds([sd]), [
+            ('build_charmaps_unchecked',
+             {'build': self.NAME,
+              'package': 'glibc-locale-source-2.34-83.el9.7',
+              'why': 'no zstd reader'}),
+            ('build_not_checked', {'metadata': False, 'unlisted': []})])
+
     def test_the_checked_lines_are_cut_under_checked(self):
         """What check_locales and check_charmaps say of a real build
         (glibc-locale-source-2.28-251.el8_10.40) is cut at 78 columns,
