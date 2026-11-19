@@ -5870,8 +5870,12 @@ def refused_sides(d):
 
 
 def refused_lines(items, ctx):
-    out = [fill_columns(REFUSED.format(len(items)), width=78,
-                        subsequent_indent='   ', break_on_hyphens=False)]
+    data = {'locales': [{'name': d['name'], 'side': where.split()[0],
+                         'categories': list(cats)}
+                        for d in items for where, cats in refused_sides(d)]}
+    out = [Bang(fill_columns(REFUSED.format(len(items)), width=78,
+                             subsequent_indent='   ',
+                             break_on_hyphens=False), 'glibc_refused', data)]
     for d in items:
         for where, cats in refused_sides(d):
             out.append(f'  {shown(d["name"])} ({where}): '
@@ -7927,7 +7931,7 @@ def ctype_lines(items, ctx):
             out += wrapped(item + (';' if i + 1 < len(d['items']) else '.'), 5, 7)
         if d['tail']:
             out += wrapped(d['tail'], 3, 3)
-    return out
+    return pending(out)
 
 
 def ctype_summary(items, ctx):
@@ -8118,7 +8122,7 @@ def whole_words(text, indent, more):
 
 
 def other_encoding_lines(items, ctx):
-    return ['\n'.join(whole_words(d['text'], 0, 3)) for d in items]
+    return pending(['\n'.join(whole_words(d['text'], 0, 3)) for d in items])
 
 
 def other_encoding_summary(items, ctx):
@@ -8894,12 +8898,22 @@ def listed_names(names):
                if len(names) > LIST_LIMIT else ''))
 
 
+def listed_data(names):
+    """The data of listed_names: the names it prints, and how many it
+    leaves out."""
+    return {'names': list(names[:LIST_LIMIT]),
+            'more': max(len(names) - LIST_LIMIT, 0)}
+
+
 def tables_not_compared_lines(items, ctx):
     total = sum(len(d['names']) for d in items)
-    out = [fill_columns(
+    out = [Bang(fill_columns(
         f'!! Not compared by their sort tables: {total} locale(s). Each keeps '
         'step 11\'s verdict, and an unchanged one is unchanged only as far as '
-        'step 11 measured:', width=78, subsequent_indent='   ')]
+        'step 11 measured:', width=78, subsequent_indent='   '),
+        'tables_not_compared',
+        {'groups': [dict(listed_data(d['names']), why=d['why'])
+                    for d in items]})]
     for d in items:
         out.append(filled(f'{d["why"]}: {len(d["names"])}: '
                           f'{listed_names(d["names"])}', 2, 4))
@@ -8928,13 +8942,14 @@ def tables_not_compared_rows(items):
 
 def tables_disagree_lines(items, ctx):
     names = [x for d in items for x in d['names']]
-    return [fill_columns(
+    return [Bang(fill_columns(
         f'!! Step 11 found a change in {len(names)} locale(s) whose sort tables '
         'find no change of order. With the same glibc code that cannot happen, so '
         'the two machines compare with different code, and no locale is taken '
         'as unchanged by its sort table alone; they are listed as changed:',
         width=78,
-        subsequent_indent='   '), filled(listed_names(names), 2, 2)]
+        subsequent_indent='   '), 'tables_disagree', listed_data(names)),
+        filled(listed_names(names), 2, 2)]
 
 
 def tables_disagree_summary(items, ctx):
@@ -8999,6 +9014,11 @@ CLOSING_MIXED = ('!! Not measured: whether the two machines compare strings '
                  'reliably, so a change there may go unseen.')
 
 
+# Each closing by the state its block is written under (closing_lines).
+CLOSINGS = {CLOSING: 'plain', CLOSING_TABLES: 'tables',
+            CLOSING_MIXED: 'mixed'}
+
+
 def closing_text(same, firm, by_tables):
     """The closing of a run whose unchanged locales are SAME, FIRM those
     its table decided for any text, BY_TABLES whether one of them has an
@@ -9020,7 +9040,9 @@ def run_findings(o, n, warnings, partly, unmeasured, only_old,
     order (control, money, PostgreSQL processes, how PostgreSQL uses each
     locale), what the order does not place (beside), and what no comparison
     measures."""
-    found = [('warning', {'text': text, 'wrap': wrap}) for text, wrap in warnings]
+    found = [('warning', {'text': text, 'wrap': wrap, 'kind': kind,
+                          'data': data})
+             for text, wrap, kind, data in warnings]
     # A third member names the rows of the characters file the text
     # points at (use_texts).
     found += [(kind, dict({'text': t[0], 'warning': t[1]},
@@ -9052,9 +9074,76 @@ def filled(text, indent=0, more=3):
                         subsequent_indent=' ' * more, break_on_hyphens=False)
 
 
+class Bang(str):
+    """A `!!` line of the report, the first of its block, with the kind
+    and the data the block is written under as data (report_warnings).
+    A str, so that it prints and joins as the text it is."""
+
+    def __new__(cls, text, kind, data):
+        s = str.__new__(cls, text)
+        s.kind, s.data = kind, data
+        return s
+
+
+# The kind a `!!` block of the report is written under while its printer
+# gives it none yet (branch 24 of the plan, 24.1c-2 to 24.1c-4): said by
+# that printer (pending), so that a block no printer marks is an error,
+# never one written as pending.
+PENDING = 'step11_pending'
+
+
+def pending(lines):
+    """The report's lines of a printer whose `!!` have no kind yet, each
+    one that opens a block marked PENDING."""
+    return [Bang(x, PENDING, {}) if x.startswith('!!') else x
+            for x in lines]
+
+
+def report_blocks(report):
+    """[(Bang, block)]: the `!!` blocks of the report's lines, each a
+    `!!` line and every line after it that opens with a blank, up to one
+    that does not or an empty one, with the Bang its first line was
+    printed as. A Bang that does not open a block, or a block whose first
+    line is no Bang, is an error: that block would be written under
+    another kind, or not at all."""
+    lines = []
+    for el in report:
+        parts = str(el).split('\n')
+        if isinstance(el, Bang) and not parts[0].startswith('!!'):
+            raise ValueError(f'a {el.kind} block that is not a !! line: '
+                             f'{parts[0]!r}')
+        lines += [(el if i == 0 and isinstance(el, Bang) else None, p)
+                  for i, p in enumerate(parts)]
+    out, cur = [], None
+    for bang, line in lines:
+        if line.startswith('!!'):
+            if bang is None:
+                raise ValueError(f'a !! block printed with no kind: {line!r}')
+            if cur is not None:
+                out.append(cur)
+            cur = (bang, [line])
+        elif cur is not None and line.startswith(' '):
+            cur[1].append(line)
+        else:
+            if cur is not None:
+                out.append(cur)
+            cur = None
+    if cur is not None:
+        out.append(cur)
+    return [(bang, '\n'.join(block)) for bang, block in out]
+
+
+def report_warnings(blocks, g):
+    """Write each block of report_blocks as data (g.record_warning), once
+    the report is printed, under its Bang's kind and data."""
+    for bang, text in blocks:
+        g.record_warning(bang.kind, bang.data, text)
+
+
 def warning_lines(items, ctx):
-    return [fill_columns(d['text'], width=78, subsequent_indent='   ')
-            if d['wrap'] else d['text'] for d in items]
+    return [Bang(fill_columns(d['text'], width=78, subsequent_indent='   ')
+                 if d['wrap'] else d['text'], d['kind'], d['data'])
+            for d in items]
 
 
 def warning_summary(items, ctx):
@@ -9066,13 +9155,15 @@ def notes(items):
 
 
 def partly_lines(items, ctx):
-    return [fill_columns(
+    return [Bang(fill_columns(
         f'!! Unchanged only as far as measured: {len(items)} of them. In '
         'each, the pairs of neighbours counted in brackets were not measured '
         'at every level, so a change in how they are told apart would not '
         'show: they differ by less than a letter, and no pair could be found '
         'there to tell whether by an accent or by case:', width=78,
-        subsequent_indent='   '),
+        subsequent_indent='   '), 'partly_measured',
+        {'locales': [{'name': d['name'], 'count': d['count']}
+                     for d in items]}),
         filled(', '.join(f'{shown(d["name"])} ({d["count"]})' for d in items),
                2, 2)]
 
@@ -9102,16 +9193,6 @@ def such_as(seqs):
 
 def in_part_lines(items, ctx):
     where = ctx.get('characters_to')
-    out = [fill_columns(
-        f'!! Measured in part: {len(items)} locale(s). The machine\'s '
-        'character set gives a character to byte sequences that are not '
-        'among the strings measured, so a change in where those sort would '
-        'not show; an unchanged one among them is unchanged only as far as '
-        'measured. ' + ('Every such sequence is in:' if where else
-                        'Pass --characters-to FILE for every such sequence.'),
-        width=78, subsequent_indent='   ')]
-    if where:
-        out.append(f'  {where}')
     # The locales of one machine's charmap together: every locale of an
     # encoding reads the same file.
     together = {}
@@ -9119,7 +9200,22 @@ def in_part_lines(items, ctx):
         for side, charmap, seqs in d['sides']:
             together.setdefault((side, charmap, tuple(seqs)), []).append(
                 d['name'])
-    for (side, charmap, seqs), names in sorted(together.items()):
+    together = sorted(together.items())
+    out = [Bang(fill_columns(
+        f'!! Measured in part: {len(items)} locale(s). The machine\'s '
+        'character set gives a character to byte sequences that are not '
+        'among the strings measured, so a change in where those sort would '
+        'not show; an unchanged one among them is unchanged only as far as '
+        'measured. ' + ('Every such sequence is in:' if where else
+                        'Pass --characters-to FILE for every such sequence.'),
+        width=78, subsequent_indent='   '), 'measured_in_part',
+        {'groups': [{'names': names, 'side': side, 'charmap': charmap,
+                     'count': len(seqs),
+                     'examples': [spaced(x) for x in seqs[:3]]}
+                    for (side, charmap, seqs), names in together]})]
+    if where:
+        out.append(f'  {where}')
+    for (side, charmap, seqs), names in together:
         out.append(filled(f'{", ".join(map(shown, names))} ({side} machine): '
                           f'{charmap} gives a character to {len(seqs)} '
                           f'sequence(s) not measured{such_as(seqs)}', 2, 4))
@@ -9147,7 +9243,8 @@ def unchecked_charmaps_lines(items, ctx):
     # that a path is not cut where it can no longer be copied.
     out = []
     for d in items:
-        out.append('\n'.join(whole_words(d['text'], 0, 3)))
+        out.append(Bang('\n'.join(whole_words(d['text'], 0, 3)), d['kind'],
+                        d['data']))
         out += ['\n'.join(whole_words(f'{", ".join(map(shown, names))}: {why}',
                                       2, 4)) for names, why in d['names']]
     return out
@@ -9165,25 +9262,41 @@ def unchecked_charmaps_notes(items):
                     ).translate(TEXT_ESCAPES) for d in items]
 
 
+def unmeasured_data(d):
+    """The lines unmeasured_lines prints of one locale, as data: its
+    name, the kind of reason ('different strings' or 'error'), the side
+    the line names (both, old or new), or both for different strings,
+    whose line names none, and why it was not measured, whole."""
+    name, o_, n_ = d['name'], d['old'], d['new']
+    before, now = o_.get('error'), n_.get('error')
+    if not before and not now:
+        return [{'name': name, 'reason': 'different strings', 'side': 'both',
+                 'why': f'measured over different strings on the two '
+                        f'machines ({o_["chars"]:,} as {o_["codeset"]}, then '
+                        f'{n_["chars"]:,} as {n_["codeset"]}), so the orders '
+                        f'cannot be compared'}]
+    if before == now:
+        return [{'name': name, 'reason': 'error', 'side': 'both',
+                 'why': before}]
+    return [{'name': name, 'reason': 'error', 'side': side, 'why': error}
+            for side, error in (('old', before), ('new', now)) if error]
+
+
 def unmeasured_lines(items, ctx):
-    out = [f'!! Could not be measured, so NOT known to be unchanged: '
-           f'{len(items)} locale(s):']
+    out = [Bang(f'!! Could not be measured, so NOT known to be unchanged: '
+                f'{len(items)} locale(s):', 'not_measured',
+                {'locales': [x for d in items for x in unmeasured_data(d)]})]
     for d in items:
-        name, o_, n_ = d['name'], d['old'], d['new']
-        before, now = o_.get('error'), n_.get('error')
-        if not before and not now:
-            out.append(filled(f'{shown(name)}: measured over different '
-                              f'strings on the two machines ({o_["chars"]:,} '
-                              f'as {o_["codeset"]}, then {n_["chars"]:,} as '
-                              f'{n_["codeset"]}), so the orders cannot be '
-                              'compared', 2, 4))
-        elif before == now:
-            out.append(filled(f'{shown(name)} (both machines): {before}', 2, 4))
-        else:
-            for side, error in (('old', before), ('new', now)):
-                if error:
-                    out.append(filled(f'{shown(name)} ({side} machine): '
-                                      f'{error}', 2, 4))
+        name = d['name']
+        for x in unmeasured_data(d):
+            if x['reason'] == 'different strings':
+                out.append(filled(f'{shown(name)}: {x["why"]}', 2, 4))
+            elif x['side'] == 'both':
+                out.append(filled(f'{shown(name)} (both machines): '
+                                  f'{x["why"]}', 2, 4))
+            else:
+                out.append(filled(f'{shown(name)} ({x["side"]} machine): '
+                                  f'{x["why"]}', 2, 4))
         also = also_known_as([name], ctx['pg_names'], ctx['o'])
         if also:
             out.append(filled(also, 4, 6))
@@ -9219,13 +9332,14 @@ def unmeasured_rows(items):
 def only_old_lines(items, ctx):
     # Not measured on the new machine is not measured: a machine missing
     # its language packs would otherwise look like a clean upgrade.
-    out = [fill_columns(
+    out = [Bang(fill_columns(
         f'!! Not on the new machine, so NOT known to be unchanged: '
         f'{len(items)} locale(s). Either the upgrade removes them or '
         'their language pack is not installed there; a database or '
         'collation that uses one cannot use it on the new machine. If a '
         'language pack is missing, install it and measure the new machine '
-        'again.', width=78, subsequent_indent='   ')]
+        'again.', width=78, subsequent_indent='   '), 'not_on_new_machine',
+        {'locales': [d['name'] for d in items]})]
     for d in items:
         out.append(f'  {shown(d["name"])}')
         also = also_known_as([d['name']], ctx['pg_names'], ctx['o'])
@@ -9251,7 +9365,7 @@ def only_old_rows(items):
 
 
 def check_lines(items, ctx):
-    return [filled(d['text']) for d in items]
+    return pending([filled(d['text']) for d in items])
 
 
 def check_summary(items, ctx):
@@ -9269,7 +9383,8 @@ def use_where(d, ctx):
 
 
 def use_lines(items, ctx):
-    return ['\n'.join(whole_words(use_where(d, ctx), 0, 3)) for d in items]
+    return pending(['\n'.join(whole_words(use_where(d, ctx), 0, 3))
+                    for d in items])
 
 
 def use_summary(items, ctx):
@@ -9283,8 +9398,8 @@ def use_notes(items):
 
 
 def closing_lines(items, ctx):
-    return [fill_columns(d['text'], width=78, subsequent_indent='   ')
-            for d in items]
+    return [Bang(fill_columns(d['text'], width=78, subsequent_indent='   '),
+                 'closing', {'state': CLOSINGS[d['text']]}) for d in items]
 
 
 def closing_summary(items, ctx):
@@ -9738,13 +9853,17 @@ def charmap_findings(old, new, charmaps, compared, firm=(), named=()):
         if by_why:
             bytes_too = side == 'old' and any(
                 name in named for names in by_why.values() for name in names)
+            groups = sorted((names, why) for why, names in by_why.items())
             found.append(('charmaps not checked', {
                 'text': '!! NOT checked whether their character set gives a '
                         'character to byte sequences that are not among the '
                         f'strings measured, for {sum(map(len, by_why.values()))} '
                         f'locale(s) of the {side} machine'
                         + (NAMED_BY_BYTES_LOCALES if bytes_too else '') + ':',
-                'names': sorted((names, why) for why, names in by_why.items())}))
+                'names': groups, 'kind': 'charmaps_not_checked',
+                'data': {'side': side, 'named_by_bytes': bytes_too,
+                         'groups': [{'names': names, 'why': why}
+                                    for names, why in groups]}}))
     if [why for side, why in whole] == [ALONE, ALONE]:
         whole = [('either', ALONE_BOTH)]
     # A reason given with --old-no-charmaps can end its own sentence.
@@ -9757,7 +9876,10 @@ def charmap_findings(old, new, charmaps, compared, firm=(), named=()):
                 'measured' + (', unless its sort table found it unchanged.'
                               if other else '.')
                 + (NAMED_BY_BYTES_MACHINE if named and side != 'new' else ''),
-        'names': []}) for side, why in whole]
+        'names': [], 'kind': 'charmaps_machine_not_checked',
+        'data': {'side': side, 'why': why.rstrip('.'),
+                 'named_by_bytes': bool(named) and side != 'new'}})
+        for side, why in whole]
     found += [('in part', {'name': name, 'sides': lacking[name]})
               for name in sorted(lacking)]
     if not found:
@@ -10273,9 +10395,10 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     for side, data, tag in zip(('OLD', 'NEW'), (old, new), tags or ()):
         wanted = tag_version(tag)
         if wanted is None:
-            unchecked.append(
+            unchecked.append((
                 f'!! The {side} tag, {tag}, names no glibc release, so nothing '
-                f'checked that the {side} file was measured on that glibc.')
+                f'checked that the {side} file was measured on that glibc.',
+                'tag_names_no_release', {'side': side.lower(), 'tag': tag}))
         elif wanted != version_tuple(data['glibc_version']):
             die(f'the {side} file, {data["path"]}, was measured on '
                 f'{data["glibc_version"]}, and the {side} tag is {tag}: pass '
@@ -10284,10 +10407,13 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
             # version_tuple reads 'glibc 2.34.9000', a development snapshot on
             # the way to 2.35, as 2.34: agreeing on those two numbers does not
             # make it the release the tag names.
-            unchecked.append(
+            unchecked.append((
                 f'!! The {side} file was measured on {data["glibc_version"]}, '
                 'which names no glibc release, so nothing checked that it is '
-                f'the glibc of the {side} tag, {tag}.')
+                f'the glibc of the {side} tag, {tag}.',
+                'version_names_no_release',
+                {'side': side.lower(), 'version': data['glibc_version'],
+                 'tag': tag}))
 
     o, n = old['locales'], new['locales']
     both = sorted(set(o) & set(n))
@@ -10430,18 +10556,21 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     totals = (f'Of the {len(o)} locale(s) on the old machine: {len(changed)} '
               f'changed, {len(same)} unchanged{in_part}, {len(unmeasured)} not '
               f'measured, {in_refused}{len(only_old)} not on the new machine.')
-    warnings = []   # (text, wrapped in the report)
+    # (text, wrapped in the report, kind, data: report_warnings)
+    warnings = []
     if direction == 'same':
         warnings.append(('!! Both machines run the same glibc build. This '
-                         'compares two machines, not an upgrade.', True))
+                         'compares two machines, not an upgrade.', True,
+                         'same_build', {}))
     elif direction == 'undetermined':
         warnings.append((
             f'!! Both machines run {old["glibc_version"]} and the build of at '
             'least one is unknown or cannot be read, so which one is older '
             'cannot be told: check that the machine you upgrade FROM was given '
             'first. This may also compare two machines rather than an upgrade.',
-            True))
-    warnings += [(text, True) for text in unchecked]
+            True, 'machines_order_undetermined',
+            {'version': old['glibc_version']}))
+    warnings += [(text, True, kind, data) for text, kind, data in unchecked]
     libc = libc_texts(old, new)
     checks = (('control', control_texts(old, new)),
               ('postgres libc above',
@@ -10531,6 +10660,10 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     report += run('other encoding')
     report += run('closing')
     run.done()
+    # Its `!!` blocks, each with its kind (report_blocks), cut before any
+    # file is written, so that a block with no kind stops the comparison
+    # with none written.
+    blocks = report_blocks(report)
     brief = None
     if summary_to:
         brief = summary_lines(
@@ -10654,8 +10787,12 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
         except OSError as e:
             give_up(f'cannot write {final}: {e}')
 
+    # Each `!!` block is written as data once it is printed, never before:
+    # a run that stops before the report would have written a block it
+    # never printed.
     for line in report:
         print(line)
+    report_warnings(blocks, g)
     return 0
 
 

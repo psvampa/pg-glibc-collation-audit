@@ -431,9 +431,11 @@ def refuse_build_commits(repo, commits):
 
 
 # The file audit.sh names for a step whose `!!` are all written as data
-# (run_step, WARNING_STEPS; step 0's call), where every warn() also writes
-# one line of JSON: its kind, its data and the block as printed
-# (scripts/report_data.py reads them). Unset, nothing is written.
+# (run_step, WARNING_STEPS; the calls of step 0 and step 11), where every
+# warn(), and step 11's report (locale_order.report_warnings), also writes
+# one line of JSON a block: its kind, its data and the block as printed
+# (scripts/report_data.py reads those of steps 0, 1 and 2; step 11's not
+# yet). Unset, nothing is written.
 WARNINGS_ENV = 'PG_GLIBC_AUDIT_WARNINGS'
 
 

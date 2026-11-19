@@ -342,8 +342,12 @@ def run_compare(old, new, *more):
 
 def run_script(*args):
     env = dict(os.environ, PYTHONIOENCODING='utf-8')
-    p = subprocess.run([sys.executable, SCRIPT, *args],
-                       capture_output=True, env=env)
+    if '--compare' in args:
+        # Every `!!` a comparison prints is one it writes as data.
+        p = _harness.held_compare([sys.executable, SCRIPT, *args], env=env)
+    else:
+        p = subprocess.run([sys.executable, SCRIPT, *args],
+                           capture_output=True, env=env)
     return (p.returncode, p.stdout.decode('utf-8'),
             p.stderr.decode('utf-8', 'replace'))
 
@@ -4242,10 +4246,10 @@ class TagsOfTheAuditedPair(SmallFiles, Variants):
 
         def limit():
             resource.setrlimit(resource.RLIMIT_FSIZE, (100000, 100000))
-        p = subprocess.run([sys.executable, SCRIPT, '--compare', RHEL8, RHEL9,
-                            '--characters-to', chars],
-                           capture_output=True, preexec_fn=limit,
-                           env=dict(os.environ, PYTHONIOENCODING='utf-8'))
+        p = _harness.held_compare(
+            [sys.executable, SCRIPT, '--compare', RHEL8, RHEL9,
+             '--characters-to', chars], preexec_fn=limit,
+            env=dict(os.environ, PYTHONIOENCODING='utf-8'))
         self.assertEqual(p.returncode, 2, p.stderr)
         self.assertEqual(p.stdout, b'')
         self.assertFalse(os.path.exists(chars))
@@ -7863,7 +7867,7 @@ class Checks(Variants):
             with unittest.mock.patch.object(m.sys, 'argv', [SCRIPT] + args), \
                     contextlib.redirect_stdout(stdout), \
                     contextlib.redirect_stderr(stderr):
-                rc = m.main()
+                rc = _harness.held_main(m.main, stdout)
             out, err = stdout.getvalue(), stderr.getvalue()
         self.assertEqual((rc, err), (0, ''))
         report = parse_report(out)['checks']
@@ -8530,7 +8534,7 @@ class CharmapsCheckedInTheComparison(Checks):
         with unittest.mock.patch.object(m.sys, 'argv', argv), \
                 contextlib.redirect_stdout(stdout), \
                 contextlib.redirect_stderr(stderr):
-            rc = m.main()
+            rc = _harness.held_main(m.main, stdout)
         self.assertEqual((rc, stderr.getvalue()), (0, ''))
         with open(summary, encoding='utf-8') as f:
             brief = parse_summary(f.read())
@@ -8609,6 +8613,32 @@ class CharmapsCheckedInTheComparison(Checks):
             "machine's charmaps give a character, in the 1 locale(s) compared, "
             "is among the strings measured. C is not counted: it is built into "
             "glibc, from no charmap.")])
+
+    def test_two_reasons_are_two_groups_of_data(self):
+        """Two codesets no charmap of the machine declares give two
+        reasons: one block on each machine, whose data holds each
+        group's names under its own reason, held to its printed lines
+        (_harness.data_in_text). No comparison of the suite prints two
+        (review of 24.1c-1, round 1)."""
+        root = self.charmaps('x', UTF_8=self.UTF8.format(extra=''))
+        data = self.data({'zh_TW.big5': {'codeset': 'BIG5'},
+                          'ru_RU.koi8r': {'codeset': 'KOI8-R'},
+                          'ru_UA.koi8u': {'codeset': 'KOI8-R'}},
+                         [b'A'])
+        _, found = m.charmap_findings(data, data, (('dir', root),) * 2,
+                                      ['zh_TW.big5', 'ru_RU.koi8r',
+                                       'ru_UA.koi8u'])
+        items = [d for k, d in found if k == 'charmaps not checked']
+        self.assertEqual(len(items), 2)
+        for d in items:
+            (bang, text), = m.report_blocks(m.unchecked_charmaps_lines([d],
+                                                                       {}))
+            _harness.data_in_text(bang.kind, bang.data, text)
+            self.assertEqual(
+                [(g['names'], g['why'].rsplit(', ', 1)[-1])
+                 for g in bang.data['groups']],
+                [(['ru_RU.koi8r', 'ru_UA.koi8u'], 'KOI8-R'),
+                 (['zh_TW.big5'], 'BIG5')])
 
     def test_c_and_posix_are_said_only_where_they_are(self):
         """16.328: the counts leave out C and POSIX, and the line says so
@@ -10304,7 +10334,7 @@ class PostgresUseCompared(Checks):
         with unittest.mock.patch.object(m.sys, 'argv', [
                 SCRIPT, '--compare', old, new, '--summary-to', summary,
                 '--characters-to', chars]), contextlib.redirect_stdout(stdout):
-            self.assertEqual(m.main(), 0)
+            self.assertEqual(_harness.held_main(m.main, stdout), 0)
         with open(summary, encoding='utf-8') as f, \
                 open(chars, encoding='utf-8') as g:
             return parse_report(stdout.getvalue()), parse_summary(f.read()), \
@@ -10314,7 +10344,7 @@ class PostgresUseCompared(Checks):
         stdout = io.StringIO()
         with unittest.mock.patch.object(m.sys, 'argv', [SCRIPT, '--compare', old, new]), \
                 contextlib.redirect_stdout(stdout):
-            self.assertEqual(m.main(), 0)
+            self.assertEqual(_harness.held_main(m.main, stdout), 0)
         return stdout.getvalue()
 
     def pair(self, old_use, new_use, old_edits=(), new_edits=(), form=m.FORMAT,
@@ -11128,7 +11158,7 @@ class CtypeCompared(Checks):
         with unittest.mock.patch.object(m.sys, 'argv', [
                 SCRIPT, '--compare', old, new, '--summary-to', summary,
                 '--characters-to', chars]), contextlib.redirect_stdout(stdout):
-            self.assertEqual(m.main(), 0)
+            self.assertEqual(_harness.held_main(m.main, stdout), 0)
         return stdout.getvalue()
 
     def every(self, table, byte=SMALL_BYTES):
@@ -11472,7 +11502,7 @@ class CtypeCompared(Checks):
         stdout = io.StringIO()
         with unittest.mock.patch.object(m.sys, 'argv', [SCRIPT, '--compare', old, new]), \
                 contextlib.redirect_stdout(stdout):
-            m.main()
+            _harness.held_main(m.main, stdout)
         self.assertIn('Pass --characters-to FILE for every such character.',
                       stdout.getvalue())
 
@@ -11947,7 +11977,7 @@ class ConverterCompared(PostgresUseCompared):
         with unittest.mock.patch.object(m.sys, 'argv', [
                 SCRIPT, '--compare', old, new, '--summary-to', summary,
                 '--characters-to', chars]), contextlib.redirect_stdout(stdout):
-            self.assertEqual(m.main(), 0)
+            self.assertEqual(_harness.held_main(m.main, stdout), 0)
         with open(summary, encoding='utf-8') as f:
             brief = f.read()
         for text in (stdout.getvalue(), brief):
@@ -12367,7 +12397,7 @@ class ConverterCompared(PostgresUseCompared):
         with unittest.mock.patch.object(m.sys, 'argv', [
                 SCRIPT, '--compare', old, new, '--characters-to', chars,
                 '--summary-to', summary]), contextlib.redirect_stdout(stdout):
-            self.assertEqual(m.main(), 0)
+            self.assertEqual(_harness.held_main(m.main, stdout), 0)
         # In the summary too, which audit.sh relays (review of PR 3).
         with open(summary, encoding='utf-8') as f:
             lines = f.read().split('\n')
@@ -12390,7 +12420,7 @@ class ConverterCompared(PostgresUseCompared):
         stdout = io.StringIO()
         with unittest.mock.patch.object(m.sys, 'argv', [SCRIPT, '--compare', old, new]), \
                 contextlib.redirect_stdout(stdout):
-            m.main()
+            _harness.held_main(m.main, stdout)
         self.assertTrue(flat(' '.join(paragraph(stdout.getvalue()))).endswith(
             'Pass --characters-to FILE for every such byte sequence.'))
 
@@ -15659,7 +15689,7 @@ class SortTablesCompared(Checks):
                     if verdicts else [])), \
                 contextlib.redirect_stdout(stdout), \
                 contextlib.redirect_stderr(stderr):
-            self.assertEqual(m.main(), 0)
+            self.assertEqual(_harness.held_main(m.main, stdout), 0)
         self.assertEqual(stderr.getvalue(), '')
         self.printed = stdout.getvalue()
         self.sql_prefix = os.path.join(self.tmp, tag)
@@ -17250,6 +17280,147 @@ class WrapsByColumns(unittest.TestCase):
         lines = m.wrap_columns(text, 78)
         self.assertEqual(' '.join(lines), text)
         self.assertLessEqual(max(map(_harness.columns, lines)), 78)
+
+
+class ReportBlocksAreWrittenWithTheirKind(unittest.TestCase):
+    """Each `!!` block of step 11's report is cut with its lists and
+    written under the kind its first line was printed with
+    (report_blocks); a block printed with none, or a kind on a line that
+    opens none, is refused rather than written under another kind."""
+
+    def test_a_block_holds_its_lists(self):
+        report = ['Unchanged: 3 locale(s).',
+                  m.Bang('!! Head of one\n   wrapped', 'not_on_new_machine',
+                         {'locales': ['a']}),
+                  '  a', '    also, in PostgreSQL: x', 'Plain line.',
+                  m.Bang('!! Second', 'closing', {'state': 'plain'}),
+                  '', '  not of it']
+        got = [(b.kind, t) for b, t in m.report_blocks(report)]
+        self.assertEqual(got, [
+            ('not_on_new_machine', '!! Head of one\n   wrapped\n  a\n'
+             '    also, in PostgreSQL: x'),
+            ('closing', '!! Second')])
+
+    def test_a_block_with_no_kind_is_refused(self):
+        for report in (['!! no kind'], ['x', '!! no kind\n   more'],
+                       [m.Bang('!! one\n!! two', 'closing', {})]):
+            with self.subTest(report=report), \
+                    self.assertRaisesRegex(ValueError, 'with no kind'):
+                m.report_blocks(report)
+
+    def test_a_kind_that_opens_no_block_is_refused(self):
+        with self.assertRaisesRegex(ValueError, 'not a !! line'):
+            m.report_blocks([m.Bang('  a', 'closing', {})])
+
+    def test_a_list_cut_short_says_how_many_it_leaves_out(self):
+        """A list longer than LIST_LIMIT prints its first names and "and N
+        more": its data holds those names and N, which data_in_text holds
+        to the block. No comparison of the suite prints so long a list."""
+        names = [f'xx_{i:02}' for i in range(m.LIST_LIMIT + 5)]
+        cases = (
+            (m.tables_not_compared_lines(
+                [{'why': 'w', 'names': names, 'unchanged': []},
+                 {'why': 'v', 'names': ['yy'], 'unchanged': []}], {}),
+             lambda d: [(g['names'], g['more']) for g in d['groups']]),
+            (m.tables_disagree_lines([{'names': names}], {}),
+             lambda d: [(d['names'], d['more'])]))
+        for lines, got in cases:
+            with self.subTest(kind=lines[0].kind):
+                (bang, text), = m.report_blocks(lines)
+                _harness.data_in_text(bang.kind, bang.data, text)
+                self.assertEqual(got(bang.data)[0],
+                                 (names[:m.LIST_LIMIT], 5))
+                self.assertIn('and 5 more', flat(text))
+
+    def test_each_entry_keeps_its_own_values(self):
+        """Each entry of a list is held to the line that prints it: two
+        entries whose values are swapped are refused, although each value
+        is somewhere in the block (review of 24.1c-1, round 1). Lists of
+        two groups, which no comparison of the suite prints."""
+        cases = (
+            (m.partly_lines([{'name': 'aa_AA', 'count': 1},
+                             {'name': 'bb_BB', 'count': 2}], {}),
+             lambda d: d['locales'], 'count'),
+            (m.in_part_lines(
+                [{'name': 'aa_AA', 'sides': [('old', 'X', [b'\x80'])]},
+                 {'name': 'bb_BB', 'sides': [('new', 'Y', [b'\x81',
+                                                          b'\x82'])]}],
+                {'characters_to': '/x/c.tsv'}),
+             lambda d: d['groups'], 'examples'),
+            (m.unchecked_charmaps_lines(
+                [{'text': '!! NOT checked whether ... for 3 locale(s) of '
+                          'the old machine:',
+                  'names': [(['aa_AA'], 'why one'),
+                            (['bb_BB', 'cc_CC'], 'why two')],
+                  'kind': 'charmaps_not_checked',
+                  'data': {'side': 'old', 'named_by_bytes': False,
+                           'groups': [{'names': ['aa_AA'],
+                                       'why': 'why one'},
+                                      {'names': ['bb_BB', 'cc_CC'],
+                                       'why': 'why two'}]}}], {}),
+             lambda d: d['groups'], 'why'),
+            (m.tables_not_compared_lines(
+                [{'why': 'why one', 'names': ['aa_AA'], 'unchanged': []},
+                 {'why': 'why two', 'names': ['bb_BB', 'cc_CC'],
+                  'unchanged': []}], {}),
+             lambda d: d['groups'], 'why'))
+        for lines, entries, key in cases:
+            with self.subTest(kind=lines[0].kind):
+                (bang, text), = m.report_blocks(lines)
+                _harness.data_in_text(bang.kind, bang.data, text)
+                swapped = json.loads(json.dumps(bang.data))
+                one, two = entries(swapped)[:2]
+                one[key], two[key] = two[key], one[key]
+                with self.assertRaises(AssertionError):
+                    _harness.data_in_text(bang.kind, swapped, text)
+
+    def test_an_entry_short_of_its_first_name_is_refused(self):
+        """A locale short on both machines is in two groups; a group whose
+        data leaves it out, its other names still in the line, is
+        refused (review of 24.1c-1, round 2)."""
+        lines = m.in_part_lines(
+            [{'name': 'aa_AA', 'sides': [('old', 'X', [b'\x80']),
+                                          ('new', 'Y', [b'\x81'])]},
+             {'name': 'bb_BB', 'sides': [('new', 'Y', [b'\x81'])]}],
+            {'characters_to': '/x/c.tsv'})
+        (bang, text), = m.report_blocks(lines)
+        _harness.data_in_text(bang.kind, bang.data, text)
+        short = json.loads(json.dumps(bang.data))
+        group, = [g for g in short['groups'] if g['side'] == 'new']
+        self.assertEqual(group['names'], ['aa_AA', 'bb_BB'])
+        group['names'] = ['bb_BB']
+        with self.assertRaises(AssertionError):
+            _harness.data_in_text(bang.kind, short, text)
+
+    def test_a_block_with_no_kind_leaves_no_file(self):
+        """A `!!` block printed with no kind stops the comparison before
+        it writes its summary, characters file, SQL files or verdicts."""
+        def unmarked(items, ctx):
+            return ['!! a block with no kind']
+        out = tempfile.mkdtemp(prefix='locale_order_nokind_')
+        self.addCleanup(shutil.rmtree, out)
+        paths = {k: os.path.join(out, k) for k in (
+            'summary', 'chars', 'verdicts')}
+        argv = [SCRIPT, '--compare', RHEL8, RHEL9,
+                '--summary-to', paths['summary'],
+                '--characters-to', paths['chars'],
+                '--verdicts-to', paths['verdicts'],
+                '--sql-to', os.path.join(out, 'sql')]
+        stdout = io.StringIO()
+        with unittest.mock.patch.dict(m.RUN_KINDS, {'closing': (
+                unmarked, m.closing_summary, m.notes)}), \
+                unittest.mock.patch.object(m.sys, 'argv', argv), \
+                contextlib.redirect_stdout(stdout), \
+                self.assertRaisesRegex(ValueError, 'with no kind'):
+            m.main()
+        self.assertEqual(os.listdir(out), [])
+        self.assertEqual(stdout.getvalue(), '')
+
+    def test_pending_marks_only_the_blocks(self):
+        got = m.pending(['!! x\n   y', 'Plain.', '!! z'])
+        self.assertEqual([getattr(x, 'kind', None) for x in got],
+                         [m.PENDING, None, m.PENDING])
+        self.assertEqual(got, ['!! x\n   y', 'Plain.', '!! z'])
 
 
 if __name__ == '__main__':

@@ -7,12 +7,14 @@ Every section is always there. What a run did not do is a state with its
 reason, never an absent key or a null, so that a reader cannot take "this
 was not looked at" for "nothing was found". What the steps hold today
 only inside a sentence (step 2's totals and character sets, step 11's
-counts and findings, the provenance of each side, the `!!` notices of
-step 11) is 'not yet reported': a later step of the work turns each one
-into data (branch 24 of the plan). The `!!` notices of steps 0, 1 and 2
+counts and findings, the provenance of each side) is 'not yet
+reported': a later step of the work turns each one into data (branch
+24 of the plan). The `!!` notices of steps 0, 1 and 2
 are data: a file beside each step's log holds them (step 0's copied
 there by audit.sh), and KINDS gives each kind its list and its short
-title.
+title. Step 11 writes its file too, step11.<pair>.warnings.jsonl, with
+the blocks whose printer gives no kind yet under 'step11_pending'; this
+file reads it once none is.
 
 load() is the strict reader: a key missing or added, or a state outside
 its list, is an error, never a default.
@@ -404,6 +406,15 @@ def _is_strs(v):
     return isinstance(v, list) and bool(v) and all(_is_str(x) for x in v)
 
 
+def _is_count(v):
+    """A whole number, 0 or more (a bool is not one)."""
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
+def _is_positive(v):
+    return _is_count(v) and v > 0
+
+
 def _objects(**spec):
     """A list, not empty, of objects with exactly spec's keys."""
     def check(v):
@@ -471,9 +482,34 @@ def _skipped_title(d):
 
 
 _PAIR = {'old': _is_str, 'new': _is_str}
-# Every kind of `!!` the steps write as data: its list, the exact keys of
-# its data with a check for each value, and its short title, made from the
-# data alone. A kind not here, or data of another shape, is refused.
+_SIDE = _one_of_f('old', 'new')
+
+
+def _locales(names):
+    """'1 locale' or 'N locales', of the names in `names`."""
+    return _n(len(names), 'locale', 'locales')
+
+
+def _listed(d):
+    """How many names a list cut at the step's limit holds: those it
+    prints and those it leaves out."""
+    return len(d['names']) + d['more']
+
+
+# Step 11's closing, by the state locale_order.py writes it under.
+CLOSING_TITLES = {
+    'plain': "Rules that show only in strings of several letters, and "
+             "characters glibc ignores",
+    'tables': "Whether the two machines compare strings with the same glibc "
+              "code",
+    'mixed': "Whether the two machines compare strings with the same glibc "
+             "code, and rules of several letters",
+}
+# Every kind of `!!` the steps write as data, but step 11's provisional
+# 'step11_pending', which this file does not read yet: its list, the exact
+# keys of its data with a check for each value, and its short title, made
+# from the data alone. A kind not here, or data of another shape, is
+# refused.
 KINDS = {
     'same_commit': (
         'not checked', _PAIR,
@@ -610,6 +646,83 @@ KINDS = {
         lambda d: f"Collating elements built out of transliterations, of "
                   f"{_n(len(d['builds']), 'locale build', 'locale builds')}"
                   f", listed in the summary"),
+    # Step 11's (locale_order.py, its report's head, its lists of locales
+    # and its closing).
+    'tag_names_no_release': (
+        'not checked', {'side': _SIDE, 'tag': _is_str},
+        lambda d: f"Whether the {d['side']} machine runs the glibc of "
+                  f"{d['tag']}"),
+    'version_names_no_release': (
+        'not checked', {'side': _SIDE, 'version': _is_str, 'tag': _is_str},
+        lambda d: f"Whether {d['version']}, measured on the {d['side']} "
+                  f"machine, is the glibc of {d['tag']}"),
+    'same_build': (
+        'not checked', {},
+        lambda d: "Two machines on the same glibc build, not an upgrade"),
+    'machines_order_undetermined': (
+        'not checked', {'version': _is_str},
+        lambda d: f"Which machine is the older one (both run "
+                  f"{d['version']})"),
+    'tables_disagree': (
+        'not checked', {'names': _is_strs, 'more': _is_count},
+        lambda d: f"{_n(_listed(d), 'locale', 'locales')} changed whose "
+                  f"sort tables find no change: the machines compare with "
+                  f"different code"),
+    'tables_not_compared': (
+        'not checked',
+        {'groups': _objects(why=_is_str, names=_is_strs, more=_is_count)},
+        lambda d: f"Sort tables of "
+                  f"{_n(sum(map(_listed, d['groups'])), 'locale', 'locales')}"
+                  f" not compared"),
+    'partly_measured': (
+        'not checked', {'locales': _objects(name=_is_str, count=_is_positive)},
+        lambda d: f"{_n(len(d['locales']), 'locale', 'locales')} unchanged "
+                  f"only as far as measured: some neighbours not measured at "
+                  f"every level"),
+    'measured_in_part': (
+        'not checked',
+        {'groups': _objects(names=_is_strs, side=_SIDE, charmap=_is_str,
+                            count=_is_positive, examples=_is_strs)},
+        lambda d: f"{_locales({x for g in d['groups'] for x in g['names']})}"
+                  f" measured in part: their character set has sequences "
+                  f"not measured"),
+    'charmaps_not_checked': (
+        'not checked',
+        {'side': _SIDE, 'named_by_bytes': _is_bool,
+         'groups': _objects(names=_is_strs, why=_is_str)},
+        lambda d: f"The character sets of "
+                  f"{_locales([x for g in d['groups'] for x in g['names']])}"
+                  f" of the {d['side']} machine"),
+    'charmaps_machine_not_checked': (
+        'not checked',
+        {'side': _one_of_f('old', 'new', 'either'), 'why': _is_str,
+         'named_by_bytes': _is_bool},
+        lambda d: "The character sets of " + (
+            'either machine' if d['side'] == 'either'
+            else f"the {d['side']} machine")),
+    'glibc_refused': (
+        'change',
+        {'locales': _objects(name=_is_str,
+                             side=_one_of_f('both', 'old', 'new'),
+                             categories=_is_strs)},
+        lambda d: f"{_locales({x['name'] for x in d['locales']})} glibc "
+                  f"refuses: a database that uses one does not open"),
+    'not_measured': (
+        'not checked',
+        {'locales': _objects(name=_is_str,
+                             reason=_one_of_f('different strings', 'error'),
+                             side=_one_of_f('both', 'old', 'new'),
+                             why=_is_str)},
+        lambda d: f"{_locales({x['name'] for x in d['locales']})} that "
+                  f"could not be measured"),
+    'not_on_new_machine': (
+        'change', {'locales': _is_strs},
+        lambda d: f"{_n(len(d['locales']), 'locale', 'locales')} not on the "
+                  f"new machine: a database that uses one cannot use it "
+                  f"there"),
+    'closing': (
+        'not checked', {'state': _one_of_f(*CLOSING_TITLES)},
+        lambda d: CLOSING_TITLES[d['state']]),
 }
 
 
@@ -651,7 +764,8 @@ def step_warnings(path):
 
 def warnings_section(a):
     """Steps 0, 1 and 2 from their files (step 0 runs only for the
-    machines' files); step 11 not yet."""
+    machines' files); step 11 not yet, as some of its blocks have no
+    kind yet ('step11_pending')."""
     f = lambda n: _file(a.out_dir, f'step{n}.{a.pair}.warnings.jsonl')
     step0 = (step_warnings(f(0)) if a.old_node else
              {'state': 'not run', 'why': 'no --old-node and --new-node'})

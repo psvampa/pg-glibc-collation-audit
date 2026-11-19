@@ -197,9 +197,9 @@ on_exit() {
 trap on_exit EXIT
 trap 'trap - TERM; kill -TERM $$' TERM
 trap 'trap - HUP; kill -HUP $$' HUP
-# Set by run_step for each step of WARNING_STEPS alone, and for step 0's
-# call; never the reader's, which would have every other call write its
-# `!!` there too.
+# Set by run_step for each step of WARNING_STEPS alone, and for the calls
+# of step 0 and step 11; never the reader's, which would have every other
+# call write its `!!` there too.
 unset PG_GLIBC_AUDIT_WARNINGS
 RESOLVED=$(mktemp "${TMPDIR:-/tmp}/pg-glibc-resolve.XXXXXX")
 python3 "$SCRIPTS/glibc_locale_data.py" resolve --to "$RESOLVED" "$OLD" "$NEW"
@@ -510,6 +510,11 @@ rm -f "$REPORT_DATA" "$REPORT_DATA.partial"
 # the lists under them cut off. Its summary block carries each of them, names
 # included.
 ORDER_LOG="$OUT_DIR/measured_order.$PAIR.log"
+# Its `!!` as data too (glibc_locale_data.WARNINGS_ENV), each block of its
+# report as printed, lists included. Created empty before the comparison,
+# so that one that printed none is told apart from one that never ran; an
+# earlier run's is removed with the steps' warnings files, above.
+STEP11_WARNINGS="$OUT_DIR/step11.$PAIR.warnings.jsonl"
 ORDER_SUMMARY="$OUT_DIR/measured_order_summary.$PAIR.txt"
 # Every character, other string and pair step 11 found, and every sequence
 # a changed sort table names; its report and summary name it.
@@ -532,7 +537,9 @@ rm -f "$ORDER_LOG" "$ORDER_SUMMARY" "$ORDER_CHARACTERS" \
 # (16.109).
 python3 "$SCRIPTS/locale_order.py" --remove-sql "$ORDER_SQL"
 if [ -n "$OLD_ORDER" ]; then
-  if ! python3 "$SCRIPTS/locale_order.py" --compare "$OLD_ORDER" "$NEW_ORDER" \
+  : > "$STEP11_WARNINGS"
+  if ! PG_GLIBC_AUDIT_WARNINGS="$STEP11_WARNINGS" \
+       python3 "$SCRIPTS/locale_order.py" --compare "$OLD_ORDER" "$NEW_ORDER" \
        --tags "$OLD_TAG" "$NEW_TAG" --summary-to "$ORDER_SUMMARY" \
        --characters-to "$ORDER_CHARACTERS" --sql-to "$ORDER_SQL" \
        --verdicts-to "$VERDICTS" \
@@ -563,8 +570,8 @@ banner() {
 # to its warnings file (glibc_locale_data.WARNINGS_ENV), created empty
 # first, so that a step that printed none is told apart from one that
 # never ran. Exported in the left side of the pipe only, a subshell: no
-# later command inherits it. Step 11 does not run through run_step, and
-# its `!!` are not written as data yet (branch 24 of the plan).
+# later command inherits it. Step 11 does not run through run_step: its
+# call is given its own file, above.
 WARNING_STEPS="1 2"
 run_step() {
   local num=$1; shift

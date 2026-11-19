@@ -7,9 +7,9 @@ kind of run read back, and what no run reaches: a file a step did not
 write (each one said as 'not reported', never as an empty list), a file
 cut short or two files that do not agree, and a report that load() must
 refuse (a key missing or added, a state outside its list, a null, another
-format, facts that do not hang together). The `!!` of steps 0, 1 and 2:
-one of every kind with its title, and the lines of a step's warnings file
-that are refused."""
+format, facts that do not hang together). The `!!` of steps 0, 1, 2 and
+11: one of every kind with its title, and the lines of a step's warnings
+file that are refused."""
 import copy
 import json
 import os
@@ -185,6 +185,67 @@ SAMPLES = {
                     {'build': 'y', 'charmap': 'UTF-8', 'why': 'w'}]},
         'Collating elements built out of transliterations, of 2 locale '
         'builds, listed in the summary'),
+    # Step 11's.
+    'tag_names_no_release': (
+        {'side': 'old', 'tag': 'abc'},
+        'Whether the old machine runs the glibc of abc'),
+    'version_names_no_release': (
+        {'side': 'new', 'version': 'glibc 2.34.9000', 'tag': 'glibc-2.34'},
+        'Whether glibc 2.34.9000, measured on the new machine, is the glibc '
+        'of glibc-2.34'),
+    'same_build': ({}, 'Two machines on the same glibc build, not an '
+                   'upgrade'),
+    'machines_order_undetermined': (
+        {'version': 'glibc 2.34'},
+        'Which machine is the older one (both run glibc 2.34)'),
+    'tables_disagree': (
+        {'names': ['a', 'b'], 'more': 3},
+        '5 locales changed whose sort tables find no change: the machines '
+        'compare with different code'),
+    'tables_not_compared': (
+        {'groups': [{'why': 'w', 'names': ['a'], 'more': 0},
+                    {'why': 'v', 'names': ['b', 'c'], 'more': 1}]},
+        'Sort tables of 4 locales not compared'),
+    'partly_measured': (
+        {'locales': [{'name': 'a', 'count': 2}, {'name': 'b', 'count': 1}]},
+        '2 locales unchanged only as far as measured: some neighbours not '
+        'measured at every level'),
+    'measured_in_part': (
+        {'groups': [{'names': ['a', 'b'], 'side': 'old', 'charmap': 'X',
+                     'count': 4, 'examples': ['bytes 80']},
+                    {'names': ['b'], 'side': 'new', 'charmap': 'Y',
+                     'count': 1, 'examples': ['bytes 81']}]},
+        '2 locales measured in part: their character set has sequences not '
+        'measured'),
+    'charmaps_not_checked': (
+        {'side': 'new', 'named_by_bytes': False,
+         'groups': [{'names': ['a', 'b'], 'why': 'w'},
+                    {'names': ['c'], 'why': 'v'}]},
+        'The character sets of 3 locales of the new machine'),
+    'charmaps_machine_not_checked': (
+        {'side': 'either', 'why': 'w', 'named_by_bytes': True},
+        'The character sets of either machine'),
+    'glibc_refused': (
+        {'locales': [{'name': 'a', 'side': 'old',
+                      'categories': ['LC_COLLATE']},
+                     {'name': 'a', 'side': 'new',
+                      'categories': ['LC_CTYPE']},
+                     {'name': 'b', 'side': 'both',
+                      'categories': ['LC_COLLATE', 'LC_CTYPE']}]},
+        '2 locales glibc refuses: a database that uses one does not open'),
+    'not_measured': (
+        {'locales': [{'name': 'a', 'reason': 'error', 'side': 'old',
+                      'why': 'w'},
+                     {'name': 'b', 'reason': 'different strings',
+                      'side': 'both', 'why': 'v'}]},
+        '2 locales that could not be measured'),
+    'not_on_new_machine': (
+        {'locales': ['a', 'b']},
+        '2 locales not on the new machine: a database that uses one cannot '
+        'use it there'),
+    'closing': ({'state': 'mixed'},
+                'Whether the two machines compare strings with the same glibc '
+                'code, and rules of several letters'),
 }
 
 
@@ -364,7 +425,8 @@ class EveryFileWritten(_Folder):
 
 class Warnings(_Folder):
     """The `!!` of steps 0, 1 and 2, each read from the file its step
-    wrote beside its log, with its list and its title."""
+    wrote beside its log, with its list and its title; and every kind
+    of step 11, read the same way from a step's file."""
 
     def test_every_kind_and_its_title(self):
         step2_files(self.d)
@@ -408,10 +470,11 @@ class Warnings(_Folder):
 
     def test_every_kind_written_is_a_kind_read(self):
         """The kinds the calls that print a `!!` write are KINDS, every
-        one as a literal: glibc_locale_data's warn() (each once), and
-        step 2's _warn_block and _bang (node_charmaps,
-        filter_lc_collate_changes); a call without one would be a block
-        with no data."""
+        one as a literal: glibc_locale_data's warn() (each once), step
+        2's _warn_block and _bang (node_charmaps,
+        filter_lc_collate_changes), and step 11's (step11_kinds, whose
+        three that are not a literal it names); a call without one would
+        be a block with no data."""
         import ast
         where = {'warn': 1, '_warn_block': 2, '_bang': 0}
         kinds = []
@@ -437,7 +500,47 @@ class Warnings(_Folder):
                     kinds.append((name, n.args[i].value))
         gld = [k for f, k in kinds if f == 'glibc_locale_data.py']
         self.assertEqual(len(gld), len(set(gld)))
+        kinds += [('locale_order.py', k) for k in self.step11_kinds()]
         self.assertEqual(sorted({k for _, k in kinds}), sorted(rd.KINDS))
+
+    def step11_kinds(self):
+        """The kinds step 11 writes (locale_order.py), each a literal: the
+        kind of every Bang, but the two that take their item's
+        (`d['kind']`) and the one of the printers whose blocks have no
+        kind yet (`PENDING`); and the kinds those items carry, under the
+        key 'kind' of the charmaps' items and as the next to last member
+        of the warnings compare() appends to `unchecked` and `warnings`."""
+        import ast
+        src = os.path.join(os.path.dirname(rd.__file__), 'locale_order.py')
+        with open(src, encoding='utf-8') as f:
+            tree = ast.parse(f.read())
+        kinds, passed = [], []
+        charmaps = {id(x) for d in ast.walk(tree)
+                    if isinstance(d, ast.FunctionDef)
+                    and d.name == 'charmap_findings' for x in ast.walk(d)}
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and getattr(n.func, 'id', '') == 'Bang':
+                k = n.args[1]
+                if isinstance(k, ast.Constant):
+                    kinds.append(k.value)
+                else:
+                    passed.append(ast.unparse(k))
+            elif isinstance(n, ast.Dict) and id(n) in charmaps:
+                for key, v in zip(n.keys, n.values):
+                    if isinstance(key, ast.Constant) and key.value == 'kind':
+                        self.assertIsInstance(v, ast.Constant, n.lineno)
+                        kinds.append(v.value)
+            elif (isinstance(n, ast.Call)
+                  and getattr(n.func, 'attr', '') == 'append'
+                  and getattr(n.func.value, 'id', '') in ('unchecked',
+                                                          'warnings')):
+                t = n.args[0]
+                self.assertIsInstance(t, ast.Tuple, n.lineno)
+                self.assertIsInstance(t.elts[-2], ast.Constant, n.lineno)
+                kinds.append(t.elts[-2].value)
+        # warning_lines, unchecked_charmaps_lines; pending.
+        self.assertEqual(sorted(passed), ['PENDING', "d['kind']", "d['kind']"])
+        return kinds
 
     def test_the_lists(self):
         step2_files(self.d)
@@ -445,7 +548,8 @@ class Warnings(_Folder):
         items = self.written()['warnings']['step1']['items']
         self.assertEqual([i['kind'] for i in items if i['class'] == 'change'],
                          ['collation_version_same', 'c_utf8_differs',
-                          'charmap_distro_buildable'])
+                          'charmap_distro_buildable', 'glibc_refused',
+                          'not_on_new_machine'])
 
     def test_titles_by_the_data(self):
         """What the data changes in a title: two signature statuses and
