@@ -732,8 +732,9 @@ def check_report(returncode, out, out_dir):
     printed: step 2's names, compared and not, or that it compared
     nothing; whether its character set check ran; the Removed rows and
     where they come from; whether step 11 ran and whether its rules were
-    set beside; and every `!!` block of the logs of steps 0 and 1, one by
-    one, as a warning of the data file with the same text. A run that
+    set beside; every `!!` block of the logs of steps 0, 1 and 2, one by
+    one, as a warning of the data file with the same text; and the
+    summary's warnings block, those warnings once each. A run that
     printed the summary and has no data file fails here, whatever its
     exit code. No run leaves a report.*.partial.
     Called on the runs of run_wrapper (the one with check=False asserts
@@ -891,16 +892,17 @@ def check_report(returncode, out, out_dir):
             raise AssertionError(f'{path}: why {r["step11"]["rules_beside"]!r}'
                                  ' is not what the summary says')
     check_warnings(r, out_dir, path)
+    check_summary_warnings(r, out, path)
 
 
 def check_warnings(r, out_dir, path):
-    """The `!!` of steps 0 and 1 in the report `r` read from `path`: every
-    block each step's log in `out_dir` holds, as audit.sh's warnings
+    """The `!!` of steps 0, 1 and 2 in the report `r` read from `path`:
+    every block each step's log in `out_dir` holds, as audit.sh's warnings
     block reads it, is a warning of the data file, one by one and in
     order, with the same text; and each one's data to its text
     (data_in_text)."""
     slug = os.path.basename(path)[len('report.'):-len('.json')]
-    for step in ('step0', 'step1'):
+    for step in ('step0', 'step1', 'step2'):
         w = r['warnings'][step]
         if w['state'] == 'not run':
             continue
@@ -917,6 +919,59 @@ def check_warnings(r, out_dir, path):
             data_in_text(i['kind'], i['data'], i['text'])
 
 
+WARNINGS_END = '(see docs/limitations.md)'
+
+
+def summary_warning_blocks(out):
+    """The `!!` blocks of the summary's warnings block of a run's output,
+    as printed; [] when the run printed no such block. A heading with no
+    end or over no block, a second heading, or a line of no block is
+    refused: a block cut short would hold fewer warnings than the run
+    printed."""
+    tail = out.split('AUDIT SUMMARY', 1)[-1].split('\n')
+    heads = [i for i, ln in enumerate(tail) if ln == SUMMARY_WARNINGS]
+    if not heads:
+        return []
+    if len(heads) != 1:
+        raise AssertionError(f'{len(heads)} warnings headings in the summary')
+    rest = tail[heads[0] + 1:]
+    if WARNINGS_END not in rest:
+        raise AssertionError('the summary\'s warnings block has no end')
+    blocks, cur = [], None
+    for line in rest[:rest.index(WARNINGS_END)]:
+        if line.startswith('!!'):
+            if cur is not None:
+                blocks.append('\n'.join(cur))
+            cur = [line]
+        elif cur is not None and line.startswith('   '):
+            cur.append(line)
+        else:
+            raise AssertionError(f'not a line of a !! block in the '
+                                 f'summary\'s warnings: {line!r}')
+    if cur is not None:
+        blocks.append('\n'.join(cur))
+    if not blocks:
+        raise AssertionError('the summary prints its warnings heading over '
+                             'no warning')
+    return blocks
+
+
+def check_summary_warnings(r, out, path):
+    """The summary's warnings block of the run `out` is the warnings of
+    steps 0, 1 and 2 of the report `r` read from `path`, in order, each
+    text once (audit.sh repeats a block two steps printed once)."""
+    texts = []
+    for step in ('step0', 'step1', 'step2'):
+        w = r['warnings'][step]
+        if w['state'] == 'reported':
+            texts += [i['text'] for i in w['items']]
+    want = list(dict.fromkeys(texts))
+    got = summary_warning_blocks(out)
+    if got != want:
+        raise AssertionError(f'the summary repeats the warnings {got!r}, '
+                             f'{path} holds {want!r}')
+
+
 # Data values that are a word of a closed list, not a name or a reason the
 # block prints: checked by report_data.KINDS, not against the text.
 CLOSED_WORDS = {'status', 'classes', 'ask', 'side'}
@@ -925,7 +980,7 @@ CLOSED_WORDS = {'status', 'classes', 'ask', 'side'}
 # pair's). Only same_commit names one side twice.
 FIRST_SIDE = {'same_commit': 'old', 'same_tree': 'old',
               'same_tree_machines': 'old', 'direction_undetermined': 'new',
-              'reversed_allowed': 'new'}
+              'reversed_allowed': 'new', 'added_rules_unknown': 'new'}
 
 
 def data_in_text(kind, data, text):
@@ -987,6 +1042,18 @@ def written_warnings(call):
     return out.getvalue(), recs
 
 
+def held_warnings(call):
+    """written_warnings, and the converse: every `!!` block call() printed,
+    as audit.sh's warnings block reads it, is one it wrote, in order. For
+    a step 2 printer called directly, whose blocks no audit.sh run of the
+    suite reaches."""
+    out, recs = written_warnings(call)
+    blocks = text_bang_blocks(out)
+    texts = [w['text'] for w in recs]
+    assert blocks == texts, (blocks, texts)
+    return out, recs
+
+
 def bang_blocks(log):
     """The `!!` blocks of a step's log as audit.sh's warnings block reads
     them: a line opening with `!!` and the lines after it that open with
@@ -994,19 +1061,24 @@ def bang_blocks(log):
     only when it printed something)."""
     if not os.path.exists(log):
         return []
-    blocks, cur = [], None
     with open(log, encoding='utf-8') as f:
-        for line in f.read().split('\n'):
-            if line.startswith('!!'):
-                if cur is not None:
-                    blocks.append('\n'.join(cur))
-                cur = [line]
-            elif cur is not None and line.startswith('   '):
-                cur.append(line)
-            else:
-                if cur is not None:
-                    blocks.append('\n'.join(cur))
-                cur = None
+        return text_bang_blocks(f.read())
+
+
+def text_bang_blocks(text):
+    """bang_blocks of a step's output."""
+    blocks, cur = [], None
+    for line in text.split('\n'):
+        if line.startswith('!!'):
+            if cur is not None:
+                blocks.append('\n'.join(cur))
+            cur = [line]
+        elif cur is not None and line.startswith('   '):
+            cur.append(line)
+        else:
+            if cur is not None:
+                blocks.append('\n'.join(cur))
+            cur = None
     if cur is not None:
         blocks.append('\n'.join(cur))
     return blocks

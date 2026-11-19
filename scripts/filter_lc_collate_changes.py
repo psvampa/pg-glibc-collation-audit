@@ -32,7 +32,9 @@ the characters named) and step2_rules_by_name.<pair>.json (what was
 compared, what became of the character set check, and, for two machines'
 files whose sources it compared, the rules of every locale name measured
 on either machine, which audit.sh sets beside step 11's verdict:
-rules_by_name).
+rules_by_name). Under audit.sh, each `!!` it prints is also written as
+data to the file PG_GLIBC_AUDIT_WARNINGS names
+(glibc_locale_data.record_warning).
 
 Usage:
   python3 filter_lc_collate_changes.py <old_tag> <new_tag> [--repo <path>]
@@ -730,7 +732,7 @@ def print_added(added, renamed_from, supported, old_side, old_name,
             tail += f"; renamed from {shown_name(renamed_from[name])}"
         lines.append((name, f"{shown_name(name)} -> {tail}"))
     if g._is_tag(old_side):
-        rest = [line for name, line in lines if name != 'C']
+        rest = [(name, line) for name, line in lines if name != 'C']
         if rest:
             _warn_block(
                 f"Not compared, no file at {old_name} ({len(rest)}). A file "
@@ -739,7 +741,10 @@ def print_added(added, renamed_from, supported, old_side, old_name,
                 f"system, and an upstream {named} cannot establish that -- "
                 f"distros backport. Confirm with `locale -a` on the OLD "
                 f"machine, under the names on each line, before treating "
-                f"these as out of scope:", rest)
+                f"these as out of scope:", [line for _, line in rest],
+                'added_not_at_old',
+                {'at': old_name, 'named': named,
+                 'locales': [shown_name(name) for name, _ in rest]})
     else:
         print()
         print(f"Not compared, no file at {old_name} ({len(added)}):")
@@ -756,7 +761,11 @@ def print_added(added, renamed_from, supported, old_side, old_name,
             f"Sort rules not known, of the locale files at {new_name} and "
             f"not at {old_name} ({len(unread)}), for the reason on each "
             f"line:",
-            [f"{shown_name(n)}: {unread[n]}" for n in added if n in unread])
+            [f"{shown_name(n)}: {unread[n]}" for n in added if n in unread],
+            'added_rules_unknown',
+            {'old': old_name, 'new': new_name,
+             'locales': [{'name': shown_name(n), 'why': unread[n]}
+                         for n in added if n in unread]})
 
 
 def print_c_utf8(sides, differs):
@@ -774,10 +783,11 @@ def print_c_utf8(sides, differs):
                     f"{'holds' if len(lacking) == 1 else 'hold'} no "
                     f"localedata/locales/C, the file C.UTF-8 is built from, "
                     f"and a distro's build can ship its own, so C.UTF-8's "
-                    f"sort rules were not compared. {c_no_version()}", [])
+                    f"sort rules were not compared. {c_no_version()}", [],
+                    'c_utf8_no_source', {'sides': lacking})
     elif 'C' in differs:
         _warn_block(f"C.UTF-8's sort rules differ, and it is listed in the "
-                    f"summary. {c_no_version()}", [])
+                    f"summary. {c_no_version()}", [], 'c_utf8_differs', {})
 
 
 def print_removed(removed, renamed_to, new_side, new_name, named='tag'):
@@ -819,7 +829,10 @@ def print_listed(got, listed):
         f"LC_COLLATE is stored on one side only, or an alias does not "
         f"resolve on both sides:",
         [f"{', '.join(shown_name(n) for n in names)}: {why}"
-         for why, names in whys.items()])
+         for why, names in whys.items()],
+        'rules_not_compared',
+        {'groups': [{'names': [shown_name(n) for n in names], 'why': why}
+                    for why, names in whys.items()]})
 
 
 def main(argv):
@@ -1041,7 +1054,11 @@ def _main(opts):
                             f"could not be traced to the charmap they are "
                             f"built with, so their character set is not "
                             f"compared:",
-                            [f"{n}: {w}" for n, w in names_])
+                            [f"{n}: {w}" for n, w in names_],
+                            'names_untraced',
+                            {'machine': who,
+                             'names': [{'name': n, 'why': w}
+                                       for n, w in names_]})
             if why:
                 _charmaps_not_run(why)
                 keyed, cm_why, settled = {}, why, {}

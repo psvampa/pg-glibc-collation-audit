@@ -368,20 +368,28 @@ def print_characters(chars, indent='      ', width=78,
     """`W (U+0057)  w (U+0077)`, wrapped, never splitting one character's
     entry. A character a terminal would not show -- a control character, a
     space -- is printed as its code point alone."""
+    print('\n'.join(characters_lines(chars, indent, width, label)))
+
+
+def characters_lines(chars, indent='      ', width=78,
+                     label='characters in the changed rules'):
+    """The lines print_characters prints."""
     entries = [f'U+{c:X}' if isinstance(c, int)
                else f'{c} (U+{ord(c):04X})' if c.isprintable()
                and not c.isspace() else f'U+{ord(c):04X}' for c in chars]
     from locale_order import columns
+    lines = []
     line = f'{indent}{label} ({len(chars)}):'
     sep = ' '
     for entry in entries:
         if columns(line) + len(sep) + columns(entry) > width:
-            print(line)
+            lines.append(line)
             line = indent + entry
         else:
             line += sep + entry
         sep = '  '
-    print(line)
+    lines.append(line)
+    return lines
 
 
 def _named_under(ids, directory):
@@ -435,28 +443,37 @@ def _said(words, field, old, new, **more):
     return getattr(words, field).format(old=old, new=new, **more)
 
 
+def _bang(kind, data, lines):
+    """A `!!` block of step 2, its lines as printed, after a blank line:
+    printed, and written as data under `kind`
+    (glibc_locale_data.record_warning). kind and data have no default, so
+    that no block goes unwritten."""
+    text = '\n'.join(lines)
+    print()
+    print(text)
+    g.record_warning(kind, data, text)
+
+
 def _charmaps_not_run(reason, subject=STEP2_WORDS.subject,
                       label=STEP2_WORDS.label):
-    """The check's NOT RUN."""
-    print()
-    print(textwrap.fill(
+    """The check's NOT RUN, with its reason."""
+    _bang('charmaps_not_run', {'why': reason}, [textwrap.fill(
         f"NOT RUN: the comparison of {subject} ({label}). {reason}. A rule "
         f"that names a character whose bytes changed in its charmap, and a "
         f"collating element built out of a transliteration, are not covered "
         f"by this result.",
-        width=78, initial_indent='!! ', subsequent_indent='   '))
+        width=78, initial_indent='!! ', subsequent_indent='   ')])
 
 
-def _warn_block(head, items):
+def _warn_block(head, items, kind, data):
     """A `!!` block audit.sh repeats in its summary: the first line opens
     with `!!`, every other with three blanks or more (audit.sh's warnings
-    block reads exactly that)."""
-    print()
-    print(textwrap.fill(head, width=78, initial_indent='!! ',
-                        subsequent_indent='   '))
-    for item in items:
-        print(textwrap.fill(item, width=78, initial_indent='     ',
-                            subsequent_indent='       '))
+    block reads exactly that); written as data under `kind` (_bang)."""
+    _bang(kind, data,
+          [textwrap.fill(head, width=78, initial_indent='!! ',
+                         subsequent_indent='   ')]
+          + [textwrap.fill(item, width=78, initial_indent='     ',
+                           subsequent_indent='       ') for item in items])
 
 
 _CHANGED_IN_CHARMAP = 'characters its character set changed'
@@ -471,9 +488,14 @@ def _chars_phrase(f):
 def _print_chars(f, indent='      '):
     """f's characters, in code point order; one beyond U+10FFFF, which a
     `<U........>` name can spell, as its number."""
+    print('\n'.join(_chars_lines(f, indent)))
+
+
+def _chars_lines(f, indent):
+    """The lines _print_chars prints."""
     cps = sorted(f.chars)
-    print_characters([chr(c) if c < 0x110000 else c for c in cps],
-                     indent=indent, label=_CHANGED_IN_CHARMAP)
+    return characters_lines([chr(c) if c < 0x110000 else c for c in cps],
+                            indent=indent, label=_CHANGED_IN_CHARMAP)
 
 
 def print_charmap_report(report, old, new, words=STEP2_WORDS):
@@ -487,7 +509,8 @@ def print_charmap_report(report, old, new, words=STEP2_WORDS):
     if not report.builds:
         _warn_block(f"NOT RUN: the comparison of {w('subject')}, and of the "
                     f"collating elements they build out of "
-                    f"transliterations. {w('none_compared')}", [])
+                    f"transliterations. {w('none_compared')}", [],
+                    'charmaps_not_run', {'why': w('none_compared')})
     elif not changed:
         print(textwrap.fill(
             f"Character sets ({w('label')}): the "
@@ -546,25 +569,35 @@ def print_charmap_report(report, old, new, words=STEP2_WORDS):
                     f"their LC_COLLATE names, so they are "
                     f"{w('listed_for')}:",
                     [f"{f.entry or f.source} ({f.charmaps[1]}): {f.reason}"
-                     for f in unsettled])
+                     for f in unsettled],
+                    'charmap_builds_unsettled',
+                    {'builds': [{'build': f.entry or f.source,
+                                 'charmap': f.charmaps[1], 'why': f.reason}
+                                for f in unsettled]})
     distro = [f for f in report.found if not f.entry and not f.reason]
     if distro:
-        print()
-        print(textwrap.fill(
+        lines = [textwrap.fill(
             f"!! {len(distro)} locale(s) that SUPPORTED never builds in a "
             f"charmap that changed name one of the characters it changed. A "
             f"distro can build them in it (Red Hat builds en_US in "
             f"ISO-8859-15), so they are {w('listed_for')}:",
-            width=78, subsequent_indent='   '))
+            width=78, subsequent_indent='   ')]
         for f in distro:
-            print(f"     {f.source} ({f.charmaps[1]}): {_chars_phrase(f)}")
-            _print_chars(f, indent='       ')
+            lines.append(f"     {f.source} ({f.charmaps[1]}): "
+                         f"{_chars_phrase(f)}")
+            lines += _chars_lines(f, '       ')
+        _bang('charmap_distro_buildable',
+              {'locales': [{'source': f.source, 'charmap': f.charmaps[1]}
+                           for f in distro]}, lines)
     if report.unsearched:
         _warn_block("The search for locales a distro can build in a changed "
                     "charmap, which SUPPORTED does not build in it, did not "
                     "run for these charmaps, so no such locale is listed for "
                     "them:", [f"{name}: {why}"
-                              for name, why in report.unsearched])
+                              for name, why in report.unsearched],
+                    'charmap_search_not_run',
+                    {'charmaps': [{'charmap': name, 'why': why}
+                                  for name, why in report.unsearched]})
     print_translit_report(report, new, words, old)
     if report.not_compared:
         n = len(report.not_compared)
@@ -572,7 +605,11 @@ def print_charmap_report(report, old, new, words=STEP2_WORDS):
         _warn_block(w('not_compared', n=n, y_ies='y' if one else 'ies',
                       s='' if one else 's', is_are='is' if one else 'are',
                       its_their='its' if one else 'their'),
-                    [', '.join(report.not_compared)])
+                    [', '.join(report.not_compared)],
+                    'charmap_sources_missing',
+                    {'entries': list(report.not_compared),
+                     'basis': ('measured' if words.builds.startswith(
+                         'measured') else 'SUPPORTED')})
 
 
 def print_translit_report(report, new, words=STEP2_WORDS, old=None):
@@ -643,7 +680,10 @@ def print_translit_report(report, new, words=STEP2_WORDS, old=None):
                     f"for the collating elements they build out of "
                     f"transliterations, so they are {w('listed_for')}:",
                     [f"{f.entry} ({f.charmaps[1]}): {f.reason}"
-                     for f in unsettled])
+                     for f in unsettled],
+                    'translit_unsettled',
+                    {'builds': [{'build': f.entry, 'charmap': f.charmaps[1],
+                                 'why': f.reason} for f in unsettled]})
 
 
 def _tag_charmaps(repo, tag):
