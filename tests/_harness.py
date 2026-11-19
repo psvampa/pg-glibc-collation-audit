@@ -976,9 +976,10 @@ def check_summary_warnings(r, out, path):
 
 
 # Data keys whose value is a word of a closed list (a side, a state, the
-# kind of reason; the reason printed is under 'why'), not a name the block
-# prints: checked by report_data.KINDS, not as a name of the text; step
-# 11's kinds hold each such word to its block too (closed_phrases).
+# kind of reason, or a reason the block prints in fixed words, as
+# libc_not_checked's), not a name the block prints: checked by
+# report_data.KINDS, not as a name of the text; step 11's kinds hold each
+# such word to its block too (closed_phrases).
 CLOSED_WORDS = {'status', 'classes', 'ask', 'side', 'state', 'reason'}
 # The side each kind's block names first: "{old} and {new} ...", or "the
 # new side ... against the old side ..." (the direction's and the reversed
@@ -993,11 +994,12 @@ def closed_phrases(kind, data):
     of each closed word or flag its data holds (CLOSED_WORDS: a side, a
     state, a reason; named_by_bytes), of how many names its lists hold,
     and each entry of a list as the line that prints it, from that
-    entry's own values: so that the word itself is checked too, as
-    data_in_text checks a name, a list of data that leaves one out does
-    not pass because each name it holds is in the block, and two entries
-    that swap a value (a count, a reason, a name) do not pass because
-    each value is somewhere in it."""
+    entry's own values, and, for the checks beside the order, the
+    block's words around its data (_check_phrases): so that the word
+    itself is checked too, as data_in_text checks a name, a list of data
+    that leaves one out does not pass because each name it holds is in
+    the block, and two entries that swap a value (a count, a reason, a
+    name) do not pass because each value is somewhere in it."""
     import locale_order as lo
 
     def on(side):
@@ -1105,6 +1107,88 @@ def _closed_words(kind, data, lo, on):
         # written with is what this checks.
         return [({'plain': lo.CLOSING, 'tables': lo.CLOSING_TABLES,
                   'mixed': lo.CLOSING_MIXED}[data['state']], True)]
+    return [(x, True) for x in _check_phrases(kind, data)]
+
+
+def _check_phrases(kind, data):
+    """closed_phrases of step 11's control, decimals of money and
+    PostgreSQL processes (control_texts, money_texts, libc_texts): each
+    block's words around its data, written out here from the data alone,
+    from its `!!` (and money_changed's list from the words opening it) to
+    the fixed words after the last value the data gives, so that a
+    value cut short, a name left out or two entries that swap a value
+    are not in it."""
+    def up(side):
+        return side.upper()
+
+    def machines(side):
+        return 'both machines' if side == 'both' else f"the {up(side)} machine"
+
+    def earlier(side):
+        files = ('the OLD and NEW files were' if side == 'both'
+                 else f"the {up(side)} file was")
+        return (f"{files} written by an earlier version of locale_order.py, "
+                f"which did not measure this; run it again on "
+                f"{machines(side)}.")
+    if kind == 'control_failed':
+        return [f"!! Control FAILED on the {up(data['side'])} machine: "
+                f"{' and '.join(data['names'])} did not measure as byte "
+                f"order,"]
+    if kind == 'control_not_checked':
+        # In the order the control reads them: the old machine first, C
+        # before POSIX.
+        said = {(x['side'], x['name']): f"{x['name']} is not in the "
+                f"{up(x['side'])} file" for x in data['absent']}
+        said.update({(x['side'], x['name']): f"{x['name']} could not be "
+                     f"measured on the {up(x['side'])} machine "
+                     f"({x['error']})" for x in data['unmeasured']})
+        order = [(s, n) for s in ('old', 'new') for n in ('C', 'POSIX')]
+        if len(said) != len(data['absent']) + len(data['unmeasured']):
+            # One locale twice, or in both lists: an entry the block
+            # cannot hold (review of 24.1c-2, round 1).
+            raise AssertionError(f'{kind}: an entry twice in {data!r}')
+        return ["!! Control NOT checked: "
+                + '; '.join(said[k] for k in order if k in said) + '.']
+    if kind == 'money_earlier_format':
+        return ["!! Decimals of money NOT checked: " + earlier(data['side'])]
+    if kind == 'money_changed':
+        return [f"!! Decimals of money CHANGE in {len(data['locales'])} "
+                f"locale(s):",
+                "larger or smaller: " + ', '.join(
+                    f"{x['name']} ({x['old']} -> {x['new']})"
+                    for x in data['locales']) + '.']
+    if kind == 'money_not_checked':
+        names = {x['name'] for x in data['locales']}
+        return [f"!! Decimals of money NOT checked in {len(names)} "
+                f"locale(s): " + '; '.join(
+                    f"{x['name']} ({x['side']} machine): {x['why']}"
+                    for x in data['locales']) + '.']
+    if kind == 'libc_earlier_format':
+        return [f"!! PostgreSQL processes NOT checked on "
+                f"{machines(data['side'])}: " + earlier(data['side'])]
+    if kind == 'glibc_replaced':
+        return [f"!! The glibc of the {up(data['side'])} machine was "
+                f"replaced on disk"]
+    if kind == 'libc_stale':
+        return [f"!! PostgreSQL on the {up(data['side'])} machine: "
+                f"{data['processes']} process(es) still run the glibc"]
+    if kind == 'libc_other':
+        return [f"!! PostgreSQL on the {up(data['side'])} machine: "
+                f"{data['processes']} process(es) run another C library"]
+    if kind == 'libc_not_checked':
+        why = list(data['machine'])
+        why += [f"{x['count']} of {x['processes']} process(es) named "
+                f"{' or '.join(x['looked_for'])} {x['reason']}"
+                for x in data['named']]
+        if data['unnamed']:
+            why.append(f"the name of {data['unnamed']} other process(es) "
+                       f"could not be read")
+        return [f"!! PostgreSQL processes NOT checked on the "
+                f"{up(data['side'])} machine: " + '; '.join(why)
+                + ". Run locale_order.py there"]
+    if kind == 'libc_no_process':
+        return [f"!! PostgreSQL on the {up(data['side'])} machine: no "
+                f"process named {' or '.join(data['looked_for'])} was found,"]
     return []
 
 

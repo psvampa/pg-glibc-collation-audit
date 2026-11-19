@@ -490,6 +490,37 @@ def _locales(names):
     return _n(len(names), 'locale', 'locales')
 
 
+def _maybe(check):
+    """check, or an empty list."""
+    return lambda v: v == [] or check(v)
+
+
+# Step 11's sides in one word (both machines too), the two locales of
+# its control, and the decimals cash.c keeps (money_scale).
+_SIDES = _one_of_f('old', 'new', 'both')
+_CONTROL = _one_of_f('C', 'POSIX')
+
+
+def _SCALE(v):
+    return _is_count(v) and v <= 10
+
+
+def _machines(sides):
+    """'both machines' or 'the old machine', of the sides named."""
+    sides = set(sides)
+    if sides == {'both'} or sides == {'old', 'new'}:
+        return 'both machines'
+    return f"the {sides.pop()} machine"
+
+
+def _processes(d):
+    return _n(d['processes'], 'PostgreSQL process', 'PostgreSQL processes')
+
+
+def _run(d):
+    return 'runs' if d['processes'] == 1 else 'run'
+
+
 def _listed(d):
     """How many names a list cut at the step's limit holds: those it
     prints and those it leaves out."""
@@ -723,6 +754,87 @@ KINDS = {
     'closing': (
         'not checked', {'state': _one_of_f(*CLOSING_TITLES)},
         lambda d: CLOSING_TITLES[d['state']]),
+    # Step 11's checks beside the order (control_texts, money_texts,
+    # libc_texts).
+    'control_failed': (
+        'not checked',
+        {'side': _SIDE,
+         'names': lambda v: v in (['C'], ['POSIX'], ['C', 'POSIX'])},
+        lambda d: f"What was measured on the {d['side']} machine: the "
+                  f"control failed ({' and '.join(d['names'])} did not "
+                  f"measure as byte order)"),
+    'control_not_checked': (
+        'not checked',
+        {'absent': _maybe(_objects(name=_CONTROL, side=_SIDE)),
+         'unmeasured': _maybe(_objects(name=_CONTROL, side=_SIDE,
+                                       error=_is_str))},
+        lambda d: "The control of the measurement on " + _machines(
+            x['side'] for x in d['absent'] + d['unmeasured'])
+        + ": C and POSIX as byte order"),
+    'money_earlier_format': (
+        'not checked', {'side': _SIDES},
+        lambda d: f"Decimals of money on {_machines([d['side']])} (a file "
+                  f"of an earlier version)"),
+    'money_changed': (
+        'change',
+        {'locales': _objects(name=_is_str, old=_SCALE, new=_SCALE)},
+        lambda d: f"Decimals of money change in "
+                  f"{_locales({x['name'] for x in d['locales']})}"),
+    'money_not_checked': (
+        'not checked',
+        {'locales': _objects(name=_is_str, side=_SIDE, why=_is_str)},
+        lambda d: f"Decimals of money of "
+                  f"{_locales({x['name'] for x in d['locales']})}"),
+    'libc_earlier_format': (
+        'not checked', {'side': _SIDES},
+        lambda d: f"Which C library PostgreSQL runs on "
+                  f"{_machines([d['side']])} (a file of an earlier version)"),
+    'glibc_replaced': (
+        'not checked', {'side': _SIDE},
+        lambda d: f"What the {d['side']} machine runs now: its glibc was "
+                  f"replaced while it was measured"),
+    'libc_stale': (
+        'change', {'side': _SIDE, 'processes': _is_positive},
+        lambda d: f"{_processes(d)} of the {d['side']} machine still "
+                  f"{_run(d)} the glibc replaced on disk"),
+    'libc_other': (
+        'change', {'side': _SIDE, 'processes': _is_positive},
+        lambda d: f"{_processes(d)} of the {d['side']} machine {_run(d)} "
+                  f"another C library than the one measured"),
+    'libc_not_checked': (
+        'not checked',
+        {'side': _SIDE,
+         'machine': lambda v: v == [] or (_is_strs(v) and len(v) == 1),
+         'named': _maybe(_objects(
+             reason=_one_of_f('could not be read', 'show no C library'),
+             count=_is_positive, processes=_is_positive,
+             looked_for=_is_strs)),
+         'unnamed': _is_count},
+        lambda d: f"Which C library every PostgreSQL process of the "
+                  f"{d['side']} machine runs"),
+    'libc_no_process': (
+        'not checked', {'side': _SIDE, 'looked_for': _is_strs},
+        lambda d: f"Which C library PostgreSQL runs on the {d['side']} "
+                  f"machine: no process named {' or '.join(d['looked_for'])} "
+                  f"found"),
+}
+
+
+def _control_entries(d):
+    """The control's locales, each machine's C and POSIX named once at
+    most, in one list or the other, and one at least."""
+    said = [(x['side'], x['name']) for x in d['absent'] + d['unmeasured']]
+    return bool(said) and len(said) == len(set(said))
+
+
+# What a kind's values say together, beside each one's check in KINDS:
+# what the step cannot write is refused.
+WHOLE = {
+    'control_not_checked': _control_entries,
+    'money_changed': lambda d: all(x['old'] != x['new']
+                                   for x in d['locales']),
+    'libc_not_checked': lambda d: bool(d['machine'] or d['named']
+                                       or d['unnamed']),
 }
 
 
@@ -738,6 +850,8 @@ def warning_item(where, kind, data, text):
     for k, ok in spec.items():
         if not ok(data[k]):
             raise ReportError(f'{where}: {kind} data {k} is {data[k]!r}')
+    if kind in WHOLE and not WHOLE[kind](data):
+        raise ReportError(f'{where}: {kind} data {data!r} cannot be written')
     if not (isinstance(text, str) and text.startswith('!! ')):
         raise ReportError(f'{where}: {kind} text {text!r} is not a !! block')
     return {'kind': kind, 'class': cls, 'title': title(data), 'data': data,

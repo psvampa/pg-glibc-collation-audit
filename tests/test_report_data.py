@@ -246,6 +246,53 @@ SAMPLES = {
     'closing': ({'state': 'mixed'},
                 'Whether the two machines compare strings with the same glibc '
                 'code, and rules of several letters'),
+    'control_failed': (
+        {'side': 'new', 'names': ['C', 'POSIX']},
+        'What was measured on the new machine: the control failed (C and '
+        'POSIX did not measure as byte order)'),
+    'control_not_checked': (
+        {'absent': [{'name': 'C', 'side': 'old'}],
+         'unmeasured': [{'name': 'POSIX', 'side': 'new', 'error': 'e'}]},
+        'The control of the measurement on both machines: C and POSIX as '
+        'byte order'),
+    'money_earlier_format': (
+        {'side': 'both'},
+        'Decimals of money on both machines (a file of an earlier '
+        'version)'),
+    'money_changed': (
+        {'locales': [{'name': 'a', 'old': 2, 'new': 3},
+                     {'name': 'b', 'old': 0, 'new': 2}]},
+        'Decimals of money change in 2 locales'),
+    'money_not_checked': (
+        {'locales': [{'name': 'a', 'side': 'old', 'why': 'w'},
+                     {'name': 'a', 'side': 'new', 'why': 'v'}]},
+        'Decimals of money of 1 locale'),
+    'libc_earlier_format': (
+        {'side': 'old'},
+        'Which C library PostgreSQL runs on the old machine (a file of an '
+        'earlier version)'),
+    'glibc_replaced': (
+        {'side': 'new'},
+        'What the new machine runs now: its glibc was replaced while it '
+        'was measured'),
+    'libc_stale': (
+        {'side': 'new', 'processes': 2},
+        '2 PostgreSQL processes of the new machine still run the glibc '
+        'replaced on disk'),
+    'libc_other': (
+        {'side': 'old', 'processes': 3},
+        '3 PostgreSQL processes of the old machine run another C library '
+        'than the one measured'),
+    'libc_not_checked': (
+        {'side': 'old', 'machine': ['m'],
+         'named': [{'reason': 'could not be read', 'count': 1,
+                    'processes': 2, 'looked_for': ['postgres']}],
+         'unnamed': 0},
+        'Which C library every PostgreSQL process of the old machine runs'),
+    'libc_no_process': (
+        {'side': 'new', 'looked_for': ['postgres', 'postmaster']},
+        'Which C library PostgreSQL runs on the new machine: no process '
+        'named postgres or postmaster found'),
 }
 
 
@@ -472,9 +519,9 @@ class Warnings(_Folder):
         """The kinds the calls that print a `!!` write are KINDS, every
         one as a literal: glibc_locale_data's warn() (each once), step
         2's _warn_block and _bang (node_charmaps,
-        filter_lc_collate_changes), and step 11's (step11_kinds, whose
-        three that are not a literal it names); a call without one would
-        be a block with no data."""
+        filter_lc_collate_changes), and step 11's (step11_kinds, which
+        names those that are not a literal); a call without one would be
+        a block with no data."""
         import ast
         where = {'warn': 1, '_warn_block': 2, '_bang': 0}
         kinds = []
@@ -506,8 +553,9 @@ class Warnings(_Folder):
     def step11_kinds(self):
         """The kinds step 11 writes (locale_order.py), each a literal: the
         kind of every Bang, but the two that take their item's
-        (`d['kind']`) and the one of the printers whose blocks have no
-        kind yet (`PENDING`); and the kinds those items carry, under the
+        (`d['kind']`), check_lines' that takes its text's (`d['text'].
+        kind`) and the one of the printers whose blocks have no kind yet
+        (`PENDING`); and the kinds those items carry, under the
         key 'kind' of the charmaps' items and as the next to last member
         of the warnings compare() appends to `unchecked` and `warnings`."""
         import ast
@@ -538,8 +586,9 @@ class Warnings(_Folder):
                 self.assertIsInstance(t, ast.Tuple, n.lineno)
                 self.assertIsInstance(t.elts[-2], ast.Constant, n.lineno)
                 kinds.append(t.elts[-2].value)
-        # warning_lines, unchecked_charmaps_lines; pending.
-        self.assertEqual(sorted(passed), ['PENDING', "d['kind']", "d['kind']"])
+        # warning_lines, unchecked_charmaps_lines; pending; check_lines.
+        self.assertEqual(sorted(passed), ['PENDING', "d['kind']", "d['kind']",
+                                          "d['text'].kind"])
         return kinds
 
     def test_the_lists(self):
@@ -549,7 +598,8 @@ class Warnings(_Folder):
         self.assertEqual([i['kind'] for i in items if i['class'] == 'change'],
                          ['collation_version_same', 'c_utf8_differs',
                           'charmap_distro_buildable', 'glibc_refused',
-                          'not_on_new_machine'])
+                          'not_on_new_machine', 'money_changed', 'libc_stale',
+                          'libc_other'])
 
     def test_titles_by_the_data(self):
         """What the data changes in a title: two signature statuses and
@@ -601,6 +651,49 @@ class Warnings(_Folder):
         self.assertEqual(t('charmap_search_not_run', {
             'charmaps': [{'charmap': 'A', 'why': 'w'}]}),
             'Locales a distro can build in 1 changed character set')
+        # Step 11's checks: one machine, the other or both; one process.
+        self.assertEqual(t('control_not_checked', {
+            'absent': [], 'unmeasured': [
+                {'name': 'C', 'side': 'old', 'error': 'e'},
+                {'name': 'POSIX', 'side': 'old', 'error': 'e'}]}),
+            'The control of the measurement on the old machine: C and POSIX '
+            'as byte order')
+        self.assertEqual(t('money_earlier_format', {'side': 'new'}),
+                         'Decimals of money on the new machine (a file of an '
+                         'earlier version)')
+        self.assertEqual(t('libc_earlier_format', {'side': 'both'}),
+                         'Which C library PostgreSQL runs on both machines (a '
+                         'file of an earlier version)')
+        self.assertEqual(t('libc_stale', {'side': 'old', 'processes': 1}),
+                         '1 PostgreSQL process of the old machine still runs '
+                         'the glibc replaced on disk')
+        self.assertEqual(t('libc_other', {'side': 'new', 'processes': 1}),
+                         '1 PostgreSQL process of the new machine runs '
+                         'another C library than the one measured')
+
+    def test_what_a_step_cannot_write_is_refused(self):
+        """Values each right alone and wrong together: the control's
+        lists holding no locale, one twice or one in both; a decimals of
+        money that does not change; processes not checked for no reason
+        (review of 24.1c-2, round 1)."""
+        c = {'name': 'C', 'side': 'old'}
+        e = dict(c, error='e')
+        for kind, data in (
+                ('control_not_checked', {'absent': [], 'unmeasured': []}),
+                ('control_not_checked', {'absent': [c, c], 'unmeasured': []}),
+                ('control_not_checked', {'absent': [c], 'unmeasured': [e]}),
+                ('money_changed', {'locales': [
+                    {'name': 'a', 'old': 2, 'new': 3},
+                    {'name': 'b', 'old': 2, 'new': 2}]}),
+                ('libc_not_checked', {'side': 'old', 'machine': [],
+                                      'named': [], 'unnamed': 0})):
+            with self.subTest(kind=kind, data=data), \
+                    self.assertRaisesRegex(rd.ReportError,
+                                           'cannot be written'):
+                rd.warning_item('w', kind, data, '!! x')
+        for kind in ('control_not_checked', 'money_changed',
+                     'libc_not_checked'):
+            rd.warning_item('w', kind, SAMPLES[kind][0], '!! x')
 
     def test_step0_with_the_machines(self):
         step2_files(self.d, **MACHINES)
