@@ -8,11 +8,11 @@ reason, never an absent key or a null, so that a reader cannot take "this
 was not looked at" for "nothing was found". What the steps hold today
 only inside a sentence (step 2's totals and character sets, step 11's
 counts and findings, the provenance of each side, the `!!` notices of
-steps 2 and 11) is 'not yet reported': a later step of the work turns
-each one into data (branch 24 of the plan). The `!!` notices of steps 0
-and 1 are data: a file beside each step's log holds them (step 0's
-copied there by audit.sh), and KINDS gives each kind its list and its
-short title.
+step 11) is 'not yet reported': a later step of the work turns each one
+into data (branch 24 of the plan). The `!!` notices of steps 0, 1 and 2
+are data: a file beside each step's log holds them (step 0's copied
+there by audit.sh), and KINDS gives each kind its list and its short
+title.
 
 load() is the strict reader: a key missing or added, or a state outside
 its list, is an error, never a default.
@@ -460,6 +460,10 @@ def _tags_title(d):
             f"({' and '.join(refs)} {what})")
 
 
+def _n(n, one, many):
+    return f"{n} {one if n == 1 else many}"
+
+
 def _skipped_title(d):
     n = len(d['entries'])
     return (f"{n} entr{'y' if n == 1 else 'ies'} of {d['machine']}'s files "
@@ -537,6 +541,75 @@ KINDS = {
          'unlisted': lambda v: v == [] or _objects(build=_is_str,
                                                    folder=_is_str)(v)},
         lambda d: "The builds' compiler, code patches and GPG signatures"),
+    # Step 2's (filter_lc_collate_changes, node_charmaps).
+    'added_not_at_old': (
+        'not checked',
+        {'at': _is_str, 'named': _one_of_f('tag', 'commit'),
+         'locales': _is_strs},
+        lambda d: f"Whether {_n(len(d['locales']), 'locale', 'locales')} "
+                  f"with no file at {d['at']} existed on the old system"),
+    'added_rules_unknown': (
+        'not checked',
+        {**_PAIR, 'locales': _objects(name=_is_str, why=_is_str)},
+        lambda d: f"Sort rules of "
+                  f"{_n(len(d['locales']), 'locale file', 'locale files')} "
+                  f"at {d['new']} and not at {d['old']}"),
+    'c_utf8_no_source': (
+        'not checked', {'sides': _is_strs},
+        lambda d: f"C.UTF-8's sort rules (no source file at "
+                  f"{' and '.join(d['sides'])})"),
+    'c_utf8_differs': (
+        'change', {},
+        lambda d: "C.UTF-8's sort rules differ"),
+    'rules_not_compared': (
+        'not checked',
+        {'groups': _objects(names=_is_strs, why=_is_str)},
+        lambda d: "Sort rules of " + _n(
+            sum(len(x['names']) for x in d['groups']), 'locale', 'locales')
+        + ", listed in the summary"),
+    'names_untraced': (
+        'not checked',
+        {'machine': _is_str, 'names': _objects(name=_is_str, why=_is_str)},
+        lambda d: f"Character set of "
+                  f"{_n(len(d['names']), 'locale name', 'locale names')} "
+                  f"measured on {d['machine']}"),
+    'charmaps_not_run': (
+        'not checked', {'why': _is_str},
+        lambda d: "The character sets locales are built with, and the "
+                  "collating elements built out of transliterations"),
+    'charmap_builds_unsettled': (
+        'not checked',
+        {'builds': _objects(build=_is_str, charmap=_is_str, why=_is_str)},
+        lambda d: f"What the character set does to "
+                  f"{_n(len(d['builds']), 'locale build', 'locale builds')}"
+                  f", listed in the summary"),
+    'charmap_distro_buildable': (
+        'change',
+        {'locales': _objects(source=_is_str, charmap=_is_str)},
+        lambda d: f"{_n(len(d['locales']), 'locale', 'locales')} a distro "
+                  f"can build in a changed character set, listed in the "
+                  f"summary"),
+    'charmap_search_not_run': (
+        'not checked',
+        {'charmaps': _objects(charmap=_is_str, why=_is_str)},
+        lambda d: "Locales a distro can build in " + _n(
+            len(d['charmaps']), 'changed character set',
+            'changed character sets')),
+    'charmap_sources_missing': (
+        'not checked',
+        {'entries': _is_strs, 'basis': _one_of_f('SUPPORTED', 'measured')},
+        lambda d: f"Character sets of "
+                  + (_n(len(d['entries']), 'SUPPORTED entry',
+                        'SUPPORTED entries') if d['basis'] == 'SUPPORTED'
+                     else _n(len(d['entries']), 'locale build',
+                             'locale builds'))
+                  + " whose source file is not on both sides"),
+    'translit_unsettled': (
+        'not checked',
+        {'builds': _objects(build=_is_str, charmap=_is_str, why=_is_str)},
+        lambda d: f"Collating elements built out of transliterations, of "
+                  f"{_n(len(d['builds']), 'locale build', 'locale builds')}"
+                  f", listed in the summary"),
 }
 
 
@@ -577,13 +650,13 @@ def step_warnings(path):
 
 
 def warnings_section(a):
-    """Steps 0 and 1 from their files (step 0 runs only for the machines'
-    files); steps 2 and 11 not yet."""
+    """Steps 0, 1 and 2 from their files (step 0 runs only for the
+    machines' files); step 11 not yet."""
     f = lambda n: _file(a.out_dir, f'step{n}.{a.pair}.warnings.jsonl')
     step0 = (step_warnings(f(0)) if a.old_node else
              {'state': 'not run', 'why': 'no --old-node and --new-node'})
     return {'step0': step0, 'step1': step_warnings(f(1)),
-            'step2': NOT_YET, 'step11': NOT_YET}
+            'step2': step_warnings(f(2)), 'step11': NOT_YET}
 
 
 # ---------------------------------------------------------------- whole
@@ -707,7 +780,7 @@ def load(path):
         raise ReportError('warnings.step0 is not run exactly when no '
                           'machine files were given')
     _stated('warnings.step1', w['step1'], ('reported', 'not reported'), wr)
-    _not_yet('warnings.step2', w['step2'])
+    _stated('warnings.step2', w['step2'], ('reported', 'not reported'), wr)
     _not_yet('warnings.step11', w['step11'])
 
     s2 = r['step2']

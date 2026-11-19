@@ -442,10 +442,11 @@ class Wrapper(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
             OLD, MID, out_dir=cls.out_dir,
             env_extra={g.STEP11_ENV: '1', **NO_GPG})
 
-    def test_the_warnings_of_steps_0_and_1_as_data(self):
-        """Step 0 did not run (no machine files); step 1's three `!!`,
-        each its kind and data. Step 11 set in the reader's shell is not
-        this run's: code_not_compared says it did not measure."""
+    def test_the_warnings_of_steps_0_to_2_as_data(self):
+        """Step 0 did not run (no machine files); step 1's three `!!` and
+        step 2's two, each its kind and data. Step 11 set in the reader's
+        shell is not this run's: code_not_compared says it did not
+        measure."""
         self.assertEqual(warnings_data(self.out_dir, 'step0'), 'not run')
         self.assertEqual(warnings_data(self.out_dir, 'step1'), [
             ('signatures_unchecked',
@@ -455,10 +456,10 @@ class Wrapper(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
              {'refs': [OLD, MID], 'classes': ['tag', 'tag'],
               'ask': 'build'}),
             ('code_not_compared', {'step11': False})])
-        # Step 2 writes no warnings file while only some of its `!!` are
-        # data (audit.sh's WARNING_STEPS): a part would read as all.
-        self.assertEqual(glob.glob(os.path.join(
-            self.out_dir, 'step2.*.warnings.jsonl')), [])
+        self.assertEqual(warnings_data(self.out_dir, 'step2'), [
+            ('added_not_at_old',
+             {'at': OLD, 'named': 'tag', 'locales': ['ckb_IQ', 'mnw_MM']}),
+            ('c_utf8_no_source', {'sides': [OLD, MID]})])
 
     def test_check_report_holds_each_warning_to_the_log(self):
         """The same run with a warning dropped from its data file:
@@ -477,6 +478,21 @@ class Wrapper(_CodeNotComparedAndNoDeletedStep, unittest.TestCase):
             json.dump(r, f)
         with self.assertRaises(AssertionError):
             check_report(self.rc, self.out, copy)
+
+    def test_check_report_holds_the_summary_to_the_warnings(self):
+        """The same run's output with step 2's last warning taken out of
+        the summary's warnings block, its data file as it is:
+        check_report refuses it."""
+        last = warnings_data(self.out_dir, 'step2')
+        self.assertEqual(last[-1][0], 'c_utf8_no_source')
+        head = '-- Warnings the clean results above do NOT cover\n'
+        before, after = self.out.split(head)
+        block, rest = after.split('!! glibc-2.28 and glibc-2.34 hold no', 1)
+        rest = rest.split('\n(see docs/limitations.md)', 1)[1]
+        cut = before + head + block + '(see docs/limitations.md)' + rest
+        check_report(self.rc, self.out, self.out_dir)
+        with self.assertRaises(AssertionError):
+            check_report(self.rc, cut, self.out_dir)
 
     def test_prints_the_published_example_whole(self):
         """examples/rhel8-to-rhel9-tags-only.txt is this run's output."""
@@ -2758,7 +2774,9 @@ class WrapperWarningsKeepEachBlockOnce(unittest.TestCase):
     block: two identical blocks are one warning, and two that open with the
     same line and go on otherwise are two (a key on the `!!` line alone
     would eat the second). No step prints such blocks on its own, so step
-    2's are injected by a sitecustomize on PYTHONPATH."""
+    2's are injected by a sitecustomize on PYTHONPATH, each written as
+    data too, as step 2 writes its own (check_report holds the log to the
+    data file)."""
 
     @classmethod
     def setUpClass(cls):
@@ -2767,13 +2785,19 @@ class WrapperWarningsKeepEachBlockOnce(unittest.TestCase):
         os.makedirs(hook)
         with open(os.path.join(hook, 'sitecustomize.py'), 'w',
                   encoding='utf-8') as fh:
-            fh.write("import sys\n"
+            fh.write("import json, os, sys\n"
                      "if sys.argv[0].endswith(\n"
                      "        'filter_lc_collate_changes.py'):\n"
                      "    for tail in ('tail A.', 'tail A.', 'tail B.'):\n"
-                     "        print('!! Injected: one opening line.')\n"
-                     "        print('   ' + tail)\n"
-                     "        print()\n")
+                     "        text = ('!! Injected: one opening line.\\n'\n"
+                     "                '   ' + tail)\n"
+                     "        print(text)\n"
+                     "        print()\n"
+                     "        with open(os.environ["
+                     "'PG_GLIBC_AUDIT_WARNINGS'], 'a') as f:\n"
+                     "            f.write(json.dumps({'kind': "
+                     "'c_utf8_differs', 'data': {}, 'text': text}) "
+                     "+ '\\n')\n")
         cls.rc, cls.out = run_wrapper(NEW, NEW, out_dir=cls.out_dir,
                                       env_extra={'PYTHONPATH': hook})
 

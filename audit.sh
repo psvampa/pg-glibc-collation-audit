@@ -563,10 +563,9 @@ banner() {
 # to its warnings file (glibc_locale_data.WARNINGS_ENV), created empty
 # first, so that a step that printed none is told apart from one that
 # never ran. Exported in the left side of the pipe only, a subshell: no
-# later command inherits it. Step 2 is not in it: most of its `!!` are not
-# written as data yet (branch 24 of the plan), and a file holding a part
-# of them would read as all of them.
-WARNING_STEPS="1"
+# later command inherits it. Step 11 does not run through run_step, and
+# its `!!` are not written as data yet (branch 24 of the plan).
+WARNING_STEPS="1 2"
 run_step() {
   local num=$1; shift
   local log="$OUT_DIR/step$num.$PAIR.log"

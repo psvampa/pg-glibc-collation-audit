@@ -7,8 +7,8 @@ kind of run read back, and what no run reaches: a file a step did not
 write (each one said as 'not reported', never as an empty list), a file
 cut short or two files that do not agree, and a report that load() must
 refuse (a key missing or added, a state outside its list, a null, another
-format, facts that do not hang together). The `!!` of steps 0 and 1: one
-of every kind with its title, and the lines of a step's warnings file
+format, facts that do not hang together). The `!!` of steps 0, 1 and 2:
+one of every kind with its title, and the lines of a step's warnings file
 that are refused."""
 import copy
 import json
@@ -17,6 +17,7 @@ import shutil
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 import _harness  # noqa: F401  (puts scripts/ on the path)
 import report_data as rd
@@ -137,6 +138,53 @@ SAMPLES = {
     'build_not_checked': (
         {'metadata': True, 'unlisted': []},
         "The builds' compiler, code patches and GPG signatures"),
+    'added_not_at_old': (
+        {'at': 'glibc-2.28', 'named': 'tag', 'locales': ['ab_CD', 'ef_GH']},
+        'Whether 2 locales with no file at glibc-2.28 existed on the old '
+        'system'),
+    'added_rules_unknown': (
+        {'old': 'a', 'new': 'b', 'locales': [{'name': 'x', 'why': 'w'},
+                                             {'name': 'y', 'why': 'w'}]},
+        'Sort rules of 2 locale files at b and not at a'),
+    'c_utf8_no_source': (
+        {'sides': ['glibc-2.28', 'glibc-2.34']},
+        "C.UTF-8's sort rules (no source file at glibc-2.28 and "
+        "glibc-2.34)"),
+    'c_utf8_differs': ({}, "C.UTF-8's sort rules differ"),
+    'rules_not_compared': (
+        {'groups': [{'names': ['a', 'b'], 'why': 'w'},
+                    {'names': ['c'], 'why': 'v'}]},
+        'Sort rules of 3 locales, listed in the summary'),
+    'names_untraced': (
+        {'machine': 'm', 'names': [{'name': 'x', 'why': 'w'},
+                                   {'name': 'y', 'why': 'w'}]},
+        'Character set of 2 locale names measured on m'),
+    'charmaps_not_run': (
+        {'why': 'w'}, 'The character sets locales are built with, and the '
+        'collating elements built out of transliterations'),
+    'charmap_builds_unsettled': (
+        {'builds': [{'build': 'x', 'charmap': 'UTF-8', 'why': 'w'},
+                    {'build': 'y', 'charmap': 'UTF-8', 'why': 'w'}]},
+        'What the character set does to 2 locale builds, listed in the '
+        'summary'),
+    'charmap_distro_buildable': (
+        {'locales': [{'source': 'x', 'charmap': 'ISO-8859-15'},
+                     {'source': 'y', 'charmap': 'ISO-8859-15'}]},
+        '2 locales a distro can build in a changed character set, listed '
+        'in the summary'),
+    'charmap_search_not_run': (
+        {'charmaps': [{'charmap': 'A', 'why': 'w'},
+                      {'charmap': 'B', 'why': 'w'}]},
+        'Locales a distro can build in 2 changed character sets'),
+    'charmap_sources_missing': (
+        {'entries': ['x', 'y'], 'basis': 'SUPPORTED'},
+        'Character sets of 2 SUPPORTED entries whose source file is not on '
+        'both sides'),
+    'translit_unsettled': (
+        {'builds': [{'build': 'x', 'charmap': 'UTF-8', 'why': 'w'},
+                    {'build': 'y', 'charmap': 'UTF-8', 'why': 'w'}]},
+        'Collating elements built out of transliterations, of 2 locale '
+        'builds, listed in the summary'),
 }
 
 
@@ -205,13 +253,14 @@ class EveryFileWritten(_Folder):
             'not_done': list(rd.STEP11_NOT_DONE)})
         self.assertEqual(r['run']['machines']['state'], 'not given')
         for part in (r['compared'], r['step2']['totals'],
-                     r['step2']['character_sets'], r['warnings']['step2'],
+                     r['step2']['character_sets'],
                      r['warnings']['step11']):
             self.assertEqual(part['state'], 'not yet reported')
         self.assertEqual(r['warnings']['step0']['state'], 'not run')
-        self.assertEqual(r['warnings']['step1'], {
-            'state': 'not reported',
-            'why': f'the step wrote no step1.{PAIR}.warnings.jsonl'})
+        for n in (1, 2):
+            self.assertEqual(r['warnings'][f'step{n}'], {
+                'state': 'not reported',
+                'why': f'the step wrote no step{n}.{PAIR}.warnings.jsonl'})
 
     def test_machines(self):
         step2_files(self.d, **MACHINES)
@@ -314,8 +363,8 @@ class EveryFileWritten(_Folder):
 
 
 class Warnings(_Folder):
-    """The `!!` of steps 0 and 1, each read from the file its step wrote
-    beside its log, with its list and its title."""
+    """The `!!` of steps 0, 1 and 2, each read from the file its step
+    wrote beside its log, with its list and its title."""
 
     def test_every_kind_and_its_title(self):
         step2_files(self.d)
@@ -329,29 +378,74 @@ class Warnings(_Folder):
                 self.assertEqual(i['text'], f"!! {i['kind']}")
         self.assertEqual(sorted(SAMPLES), sorted(rd.KINDS))
 
+    def test_a_build_is_written_by_its_name(self):
+        """A build's commit id in a block or its data is written as the
+        build's name, as the screen shows it (glibc_locale_data.named):
+        step 2 reads a build by its commit (review of 24.1b-2, round 1)."""
+        import glibc_locale_data as g
+        sha = 'a' * 40
+        text = f'!! NOT RUN: ... KOI8-R at {sha}.'
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(g._NAMES, {sha: 'glibc-2.34-100.el9'}), \
+                mock.patch.dict(os.environ, {
+                    g.WARNINGS_ENV: os.path.join(tmp, 'w')}):
+            g.record_warning('charmaps_not_run',
+                             {'why': f'KOI8-R at {sha}'}, text)
+            g.record_warning('charmap_builds_unsettled', {'builds': [
+                {'build': 'x', 'charmap': 'UTF-8', 'why': f'at {sha}'}]},
+                f'!! x (UTF-8): at {sha}')
+            g.record_warning('c_utf8_no_source', {'sides': (sha,)},
+                             f'!! {sha} holds no C')
+            with open(os.path.join(tmp, 'w'), encoding='utf-8') as f:
+                w, w2, w3 = (json.loads(ln) for ln in f.read().splitlines())
+        self.assertEqual(w2['data']['builds'][0]['why'],
+                         'at glibc-2.34-100.el9')
+        self.assertEqual(w3['data'], {'sides': ['glibc-2.34-100.el9']})
+        self.assertEqual(w, {'kind': 'charmaps_not_run',
+                             'data': {'why': 'KOI8-R at glibc-2.34-100.el9'},
+                             'text': '!! NOT RUN: ... KOI8-R at '
+                                     'glibc-2.34-100.el9.'})
+
     def test_every_kind_written_is_a_kind_read(self):
-        """The kinds glibc_locale_data's warn() calls write are KINDS,
-        each once, every one as a literal; a call without one would be a
-        block with no data."""
+        """The kinds the calls that print a `!!` write are KINDS, every
+        one as a literal: glibc_locale_data's warn() (each once), and
+        step 2's _warn_block and _bang (node_charmaps,
+        filter_lc_collate_changes); a call without one would be a block
+        with no data."""
         import ast
-        src = os.path.join(os.path.dirname(rd.__file__),
-                           'glibc_locale_data.py')
-        with open(src, encoding='utf-8') as f:
-            tree = ast.parse(f.read())
+        where = {'warn': 1, '_warn_block': 2, '_bang': 0}
         kinds = []
-        for n in ast.walk(tree):
-            if isinstance(n, ast.Call) and getattr(n.func, 'id', '') == 'warn':
-                self.assertTrue(len(n.args) >= 3 and isinstance(
-                    n.args[1], ast.Constant), f'line {n.lineno}')
-                kinds.append(n.args[1].value)
-        self.assertEqual(sorted(kinds), sorted(rd.KINDS))
+        for name in ('glibc_locale_data.py', 'node_charmaps.py',
+                     'filter_lc_collate_changes.py'):
+            src = os.path.join(os.path.dirname(rd.__file__), name)
+            with open(src, encoding='utf-8') as f:
+                tree = ast.parse(f.read())
+            # _warn_block hands its own kind on to _bang.
+            inner = {id(x) for d in ast.walk(tree)
+                     if isinstance(d, ast.FunctionDef)
+                     and d.name == '_warn_block' for x in ast.walk(d)}
+            for n in ast.walk(tree):
+                if id(n) in inner:
+                    continue
+                fn = n.func if isinstance(n, ast.Call) else None
+                fn = getattr(fn, 'id', getattr(fn, 'attr', ''))
+                if fn in where and not (name == 'glibc_locale_data.py'
+                                        and fn != 'warn'):
+                    i = where[fn]
+                    self.assertTrue(len(n.args) > i and isinstance(
+                        n.args[i], ast.Constant), f'{name}:{n.lineno}')
+                    kinds.append((name, n.args[i].value))
+        gld = [k for f, k in kinds if f == 'glibc_locale_data.py']
+        self.assertEqual(len(gld), len(set(gld)))
+        self.assertEqual(sorted({k for _, k in kinds}), sorted(rd.KINDS))
 
     def test_the_lists(self):
         step2_files(self.d)
         warnings_file(self.d, 1, list(SAMPLES))
         items = self.written()['warnings']['step1']['items']
         self.assertEqual([i['kind'] for i in items if i['class'] == 'change'],
-                         ['collation_version_same'])
+                         ['collation_version_same', 'c_utf8_differs',
+                          'charmap_distro_buildable'])
 
     def test_titles_by_the_data(self):
         """What the data changes in a title: two signature statuses and
@@ -381,6 +475,28 @@ class Warnings(_Folder):
         self.assertEqual(t('machine_entries_skipped', {
             'machine': 'm', 'entries': [{'entry': 'x', 'why': 'y'}]}),
             "1 entry of m's files not read")
+        # Step 2's, with one member, and the builds measured on two
+        # machines.
+        self.assertEqual(t('added_not_at_old', {
+            'at': 'abc', 'named': 'commit', 'locales': ['x']}),
+            'Whether 1 locale with no file at abc existed on the old system')
+        self.assertEqual(t('c_utf8_no_source', {'sides': ['glibc-2.34']}),
+                         "C.UTF-8's sort rules (no source file at "
+                         "glibc-2.34)")
+        self.assertEqual(t('rules_not_compared', {
+            'groups': [{'names': ['a'], 'why': 'w'}]}),
+            'Sort rules of 1 locale, listed in the summary')
+        self.assertEqual(t('charmap_sources_missing', {
+            'entries': ['x'], 'basis': 'measured'}),
+            'Character sets of 1 locale build whose source file is not on '
+            'both sides')
+        self.assertEqual(t('charmap_sources_missing', {
+            'entries': ['x'], 'basis': 'SUPPORTED'}),
+            'Character sets of 1 SUPPORTED entry whose source file is not on '
+            'both sides')
+        self.assertEqual(t('charmap_search_not_run', {
+            'charmaps': [{'charmap': 'A', 'why': 'w'}]}),
+            'Locales a distro can build in 1 changed character set')
 
     def test_step0_with_the_machines(self):
         step2_files(self.d, **MACHINES)
@@ -412,10 +528,12 @@ class Warnings(_Folder):
 
 
 class TheLogAgainstTheFile(_Folder):
-    """_harness.check_warnings, which every audit.sh run of the suite that
-    reaches its summary passes through: the `!!` blocks of each step's
-    log, read as audit.sh's warnings block reads them, are the step's
-    warnings in the data file, one by one."""
+    """_harness.check_warnings and check_summary_warnings, which every
+    audit.sh run of the suite that reaches its summary passes through: the
+    `!!` blocks of each step's log, read as audit.sh's warnings block
+    reads them, are the step's warnings in the data file, one by one; and
+    the summary's warnings block is those of steps 0, 1 and 2, each text
+    once, in order."""
 
     LOG = ('Tag provenance:\n'
            '!! first block,\n'
@@ -426,13 +544,15 @@ class TheLogAgainstTheFile(_Folder):
     BLOCKS = ['!! first block,\n   its second line\n     an item',
               '!! second block']
 
-    def report(self, texts, step0=None):
+    def report(self, texts, step0=None, step2=()):
         item = lambda t: {'kind': 'machine_not_checked', 'data': {},
                           'text': t}
         return {'warnings': {
             'step0': step0 or {'state': 'not run', 'why': 'x'},
             'step1': {'state': 'reported',
-                      'items': [item(t) for t in texts]}}}
+                      'items': [item(t) for t in texts]},
+            'step2': {'state': 'reported',
+                      'items': [item(t) for t in step2]}}}
 
     def check(self, texts, **more):
         write(self.d, f'step1.{PAIR}.log', self.LOG)
@@ -487,6 +607,52 @@ class TheLogAgainstTheFile(_Folder):
         with self.assertRaises(AssertionError):
             _harness.check_warnings(r, self.d, os.path.join(
                 self.d, f'report.{PAIR}.json'))
+
+    def test_step2_against_its_own_log(self):
+        """Step 2 is held to its log like step 1: a block of its log the
+        data file lacks, or one it adds, is refused."""
+        write(self.d, f'step2.{PAIR}.log', 'Rules:\n!! two\n   lines\n')
+        self.check(self.BLOCKS, step2=['!! two\n   lines'])
+        for step2 in ([], ['!! two'], ['!! two\n   lines', '!! more']):
+            with self.subTest(step2=step2):
+                with self.assertRaises(AssertionError):
+                    self.check(self.BLOCKS, step2=step2)
+
+    SUMMARY = ('== AUDIT SUMMARY  a -> b\n'
+               'Listed:\n'
+               '!! not this one, above the block\n'
+               '\n'
+               '-- Warnings the clean results above do NOT cover\n'
+               '{}'
+               '(see docs/limitations.md)\n')
+
+    def summary(self, step1, step2, printed):
+        _harness.check_summary_warnings(
+            self.report(step1, step2=step2),
+            self.SUMMARY.format(''.join(b + '\n' for b in printed)), 'r')
+
+    def test_the_summary_repeats_steps_0_to_2_once_each(self):
+        """In order, a text two steps printed once; no warning, no block.
+        A block missing, added, out of order or repeated is refused, and
+        so is a block with no end or a line that is not of a block."""
+        one, two = '!! one\n   wrapped', '!! two'
+        self.summary([one], [two, one], [one, two])
+        _harness.check_summary_warnings(self.report([]), 'x\n', 'r')
+        for printed in ([one], [two, one], [one, two, one],
+                        [one, two, '!! three'], []):
+            with self.subTest(printed=printed):
+                with self.assertRaises(AssertionError):
+                    self.summary([one], [two, one], printed)
+        with self.assertRaises(AssertionError):
+            _harness.check_summary_warnings(
+                self.report([]), self.SUMMARY.format(''), 'r')
+        for out in (self.SUMMARY.format(one + '\n').replace(
+                        '(see docs/limitations.md)\n', ''),
+                    self.SUMMARY.format(one + '\nnot a block line\n')):
+            with self.subTest(out=out):
+                with self.assertRaises(AssertionError):
+                    _harness.check_summary_warnings(self.report([one]), out,
+                                                    'r')
 
     def test_step0_against_its_own_log(self):
         """Reported, step 0 is held to its log; with no log, to none."""
@@ -705,6 +871,7 @@ class TheReaderIsStrict(_Folder):
         warnings_file(self.d, 0, [])
         warnings_file(self.d, 1, ['signatures_unchecked',
                                   'collation_version_same'])
+        warnings_file(self.d, 2, ['c_utf8_differs', 'names_untraced'])
         self.good = self.written(**ON_MACHINES)
 
     def refuses(self, change):
@@ -744,7 +911,8 @@ class TheReaderIsStrict(_Folder):
                      ('step2', 'rules_by_name'), ('step11',),
                      ('step11', 'rules_beside'), ('step11', 'characters'),
                      ('run', 'machines'), ('warnings', 'step0'),
-                     ('warnings', 'step1'), ('compared',),
+                     ('warnings', 'step1'), ('warnings', 'step2'),
+                     ('compared',),
                      ('step2', 'totals')):
             with self.subTest(path=path):
                 def change(r):
@@ -833,6 +1001,10 @@ class TheReaderIsStrict(_Folder):
         self.refuses(lambda r: item(r).update(kind='same_commit'))
         self.refuses(lambda r: item(r)['data'].update(version=''))
         self.refuses(lambda r: item(r).pop('title'))
+        step2 = lambda r: r['warnings']['step2']['items'][1]
+        self.refuses(lambda r: step2(r).update(title='Nothing changed'))
+        self.refuses(lambda r: step2(r)['data']['names'].pop())
+        self.refuses(lambda r: r['warnings'].update(step2=rd.NOT_YET))
 
     def test_step0_not_run_with_the_machines_given(self):
         def change(r):

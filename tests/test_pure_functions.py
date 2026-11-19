@@ -1364,6 +1364,47 @@ class CompareBuilds(unittest.TestCase):
                          ['sv_SE.UTF-8'])
 
 
+class StepTwoWarningsAsData(unittest.TestCase):
+    """print_added's and print_listed's `!!`, each printed as before and
+    written with its data (_harness.held_warnings): two members each."""
+
+    def test_the_files_only_the_new_side_has(self):
+        """An upstream tag on the old side: the files it lacks but C, and
+        those whose rules are not known at the new side, C among them,
+        each with its reason. A build on the old side: the second only."""
+        added = ['C', 'ab_CD', 'ef_GH']
+        unread = {'C': 'why c', 'ef_GH': 'why ef'}
+        rules = ('added_rules_unknown', {
+            'old': 'glibc-2.28', 'new': 'glibc-2.34',
+            'locales': [{'name': 'C.UTF-8', 'why': 'why c'},
+                        {'name': 'ef_GH', 'why': 'why ef'}]})
+        for old_side, named, want in (
+                ('glibc-2.28', 'tag', [
+                    ('added_not_at_old', {
+                        'at': 'glibc-2.28', 'named': 'tag',
+                        'locales': ['ab_CD', 'ef_GH']}), rules]),
+                (mock.Mock(kind='build'), 'build', [rules])):
+            with self.subTest(named=named):
+                _, recs = _harness.held_warnings(lambda: f.print_added(
+                    added, {'ef_GH': 'ef_OLD'}, {'ab_CD': ['ab_CD.UTF-8']},
+                    old_side, 'glibc-2.28', '(not in SUPPORTED)', unread,
+                    'glibc-2.34', named))
+                self.assertEqual([(w['kind'], w['data']) for w in recs],
+                                 want)
+
+    def test_the_rules_not_compared(self):
+        """Grouped by reason, a reason both sides give said once."""
+        got = {'a': mock.Mock(why='old side: x; new side: x'),
+               'b': mock.Mock(why='old side: x; new side: x'),
+               'c': mock.Mock(why='r')}
+        _, recs = _harness.held_warnings(
+            lambda: f.print_listed(got, ['a', 'b', 'c']))
+        self.assertEqual([(w['kind'], w['data']) for w in recs], [
+            ('rules_not_compared', {'groups': [
+                {'names': ['a', 'b'], 'why': 'both sides: x'},
+                {'names': ['c'], 'why': 'r'}]})])
+
+
 class CharmapReportLines(unittest.TestCase):
     """Lines print_charmap_report writes that no real pair reaches."""
 
@@ -1386,6 +1427,70 @@ class CharmapReportLines(unittest.TestCase):
         self.assertIn('!! 1 SUPPORTED entry at both tags is not compared',
                       out)
         self.assertIn("No build's LC_COLLATE", self.lines())
+
+    def test_each_warning_is_written_as_data(self):
+        """Every `!!` the report prints, each written with its data (no
+        audit.sh run of the suite reaches these): builds it could not
+        settle, sources a distro can build in a changed charmap, the
+        charmaps the search skipped, entries not compared, and the
+        transliteration's builds it could not settle; two of each."""
+        found = [ck.Found('a', 'a.UTF-8', ('UTF-8', 'UTF-8'), {0xe9},
+                          ['a'], 'its LC_COLLATE could not be read'),
+                 ck.Found('b', None, ('UTF-8', 'ISO-8859-15'), {0xe9},
+                          ['b'], 'a reason of b'),
+                 ck.Found('c', None, ('UTF-8', 'ISO-8859-15'), {0xe9},
+                          ['c'], None),
+                 ck.Found('d', None, ('UTF-8', 'ISO-8859-15'), {0x41},
+                          ['d'], None)]
+        tr = [ck.Translit('t', 't.UTF-8', ('UTF-8', 'UTF-8'), 0, set(),
+                          ['t'], 'why t'),
+              ck.Translit('u', 'u.UTF-8', ('UTF-8', 'UTF-8'), 0, set(),
+                          ['u'], 'why u')]
+        base = dict(not_run=None, builds=2, charmaps=['UTF-8'],
+                    changed=[('UTF-8', 'UTF-8')],
+                    sizes={('UTF-8', 'UTF-8'): (1, 1, 0)}, found=found,
+                    skipped=[], not_compared=['x.UTF-8', 'y.UTF-8'],
+                    unsearched=[('KOI8-R', 'why k'), ('CP1251', 'why c')],
+                    translit=ck.TranslitReport(1, 2, 0, tr),
+                    translit_skipped=[])
+        _, recs = _harness.held_warnings(
+            lambda: f.print_charmap_report(ck.Report(**base), 't1', 't2'))
+        self.assertEqual([(w['kind'], w['data']) for w in recs], [
+            ('charmap_builds_unsettled', {'builds': [
+                {'build': 'a.UTF-8', 'charmap': 'UTF-8',
+                 'why': 'its LC_COLLATE could not be read'},
+                {'build': 'b', 'charmap': 'ISO-8859-15',
+                 'why': 'a reason of b'}]}),
+            ('charmap_distro_buildable', {'locales': [
+                {'source': 'c', 'charmap': 'ISO-8859-15'},
+                {'source': 'd', 'charmap': 'ISO-8859-15'}]}),
+            ('charmap_search_not_run', {'charmaps': [
+                {'charmap': 'KOI8-R', 'why': 'why k'},
+                {'charmap': 'CP1251', 'why': 'why c'}]}),
+            ('translit_unsettled', {'builds': [
+                {'build': 't.UTF-8', 'charmap': 'UTF-8', 'why': 'why t'},
+                {'build': 'u.UTF-8', 'charmap': 'UTF-8', 'why': 'why u'}]}),
+            ('charmap_sources_missing',
+             {'entries': ['x.UTF-8', 'y.UTF-8'], 'basis': 'SUPPORTED'})])
+        # The distro block holds its characters' lines.
+        self.assertIn('\xe9 (U+00E9)', recs[1]['text'])
+        self.assertIn('A (U+0041)', recs[1]['text'])
+        # Its two NOT RUN: the report's own, and no build compared, on
+        # the machines' words.
+        for fields, words, why in (
+                ({'not_run': 'UTF-8 at t2 is missing'}, f.STEP2_WORDS,
+                 'UTF-8 at t2 is missing'),
+                ({'builds': 0, 'found': [], 'unsearched': [],
+                  'not_compared': [], 'translit': None},
+                 f.step2_words('builds', machines=True),
+                 f.step2_words('builds', machines=True).none_compared)):
+            with self.subTest(why=why):
+                _, recs = _harness.held_warnings(
+                    lambda: f.print_charmap_report(
+                        ck.Report(**dict(base, **fields)), 't1', 't2',
+                        words))
+                self.assertEqual([(w['kind'], w['data']) for w in recs],
+                                 [('charmaps_not_run', {'why': why})])
 
     def test_a_code_point_beyond_unicode_is_printed_as_a_number(self):
         found = ck.Found('loc', 'loc.UTF-8', ('UTF-8', 'UTF-8'),
@@ -3001,6 +3106,24 @@ class CharmapCheckSaysWhyItDidNotRun(unittest.TestCase):
                                        side('n'), sup, set())
                 self.assertEqual(got, ({}, why, {}))
                 said.assert_called_once_with(why)
+
+    def test_its_own_not_run_is_written_as_data(self):
+        """The same two NOT RUN, unpatched: printed and written with the
+        reason (SUPPORTED missing is refused by step 2 before it gets
+        here, so no run reaches it)."""
+        side = lambda tag: mock.Mock(tag=tag)
+        for sup, why in (
+                ({'o': None, 'n': None},
+                 f"{g.SUPPORTED} does not exist at o and n"),
+                ({'o': 'text', 'n': None},
+                 f"a line of {g.SUPPORTED} at o this tool does not read: "
+                 "'text'")):
+            with self.subTest(why=why):
+                _, recs = _harness.held_warnings(
+                    lambda: f.check_charmaps(mock.Mock(), None, side('o'),
+                                             side('n'), sup, set()))
+                self.assertEqual([(w['kind'], w['data']) for w in recs],
+                                 [('charmaps_not_run', {'why': why})])
 
     def test_each_source_with_what_was_settled_of_it(self):
         """The report's own findings, through collation_keys.listed_sources

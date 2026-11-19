@@ -441,13 +441,25 @@ def record_warning(kind, data, text):
     """Append the `!!` block `text`, as printed, with its kind and data to
     the file WARNINGS_ENV names. A file that cannot be written ends the
     step: a block printed and not written would be a warning the data
-    file leaves out."""
+    file leaves out. A build's commit id in the text or in a value of the
+    data is written as its name, as _Named prints it (named): step 2
+    reads a build by its commit, and a reason that names the side names
+    the commit."""
     path = os.environ.get(WARNINGS_ENV)
     if not path:
         return
+
+    def by_name(v):
+        if isinstance(v, str):
+            return named(v)
+        if isinstance(v, dict):
+            return {k: by_name(x) for k, x in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [by_name(x) for x in v]
+        return v
     with open(path, 'a', encoding='utf-8') as f:
-        f.write(json.dumps({'kind': kind, 'data': data, 'text': text})
-                + '\n')
+        f.write(json.dumps({'kind': kind, 'data': by_name(data),
+                            'text': named(text)}) + '\n')
 
 
 def warn(text, kind, data, split_words=True):
@@ -2055,9 +2067,7 @@ class _Named(io.TextIOBase):
         self.out, self.names = out, names
 
     def write(self, text):
-        for sha, name in self.names.items():
-            text = text.replace(sha, name)
-        return self.out.write(text)
+        return self.out.write(named(text, self.names))
 
     def writable(self):
         return True
@@ -2076,11 +2086,20 @@ class _Named(io.TextIOBase):
 _NAMES = {}
 
 
+def named(text, names=None):
+    """`text` with each build commit of `names` (name_commits' by default)
+    replaced by its name: what _Named prints, and what record_warning
+    writes."""
+    for sha, name in (_NAMES if names is None else names).items():
+        text = text.replace(sha, name)
+    return text
+
+
 def name_commits(names):
     """From now on the build commits of {commit: name} are printed by name,
-    on stdout and stderr: the one place a step turns what git read into
-    what its reader is told. Installed once per process; a later call adds
-    names."""
+    on stdout and stderr, and written by name in the warnings file
+    (record_warning): both through named(). Installed once per process; a
+    later call adds names."""
     if not names:
         return
     _NAMES.update(names)
