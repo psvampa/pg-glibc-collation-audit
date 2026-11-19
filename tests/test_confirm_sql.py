@@ -193,12 +193,11 @@ class WrittenFromTheRecordedMeasurements(unittest.TestCase):
         for pair, (a, b) in (('89', (8, 9)), ('910', (9, 10))):
             prefix = os.path.join(cls.dir, f'confirm.{pair}')
             # The characters file of the same run, for the 8 -> 9 check below.
-            p = subprocess.run(
+            p = _harness.held_compare(
                 [sys.executable, LOCALE_ORDER, '--compare', measurement(a),
                  measurement(b), '--sql-to', prefix, '--characters-to',
                  os.path.join(cls.dir, f'chars.{pair}.tsv')],
-                capture_output=True, text=True,
-                env=dict(os.environ, PYTHONIOENCODING='utf-8'))
+                text=True, env=dict(os.environ, PYTHONIOENCODING='utf-8'))
             cls.runs[pair] = (p.returncode, p.stdout, p.stderr, prefix)
 
     def written(self, pair):
@@ -505,9 +504,9 @@ class StaleFiles(unittest.TestCase):
         for name in ('x.LATIN2.sql', 'x.UTF8.sql.partial', 'y.UTF8.sql'):
             with open(os.path.join(d, name), 'w') as f:
                 f.write('old')
-        p = subprocess.run([sys.executable, LOCALE_ORDER, '--compare',
-                            measurement(8), measurement(8), '--sql-to',
-                            prefix], capture_output=True, text=True)
+        p = _harness.held_compare([sys.executable, LOCALE_ORDER, '--compare',
+                                   measurement(8), measurement(8), '--sql-to',
+                                   prefix], text=True)
         self.assertEqual(p.returncode, 2)
         self.assertIn('the two files hold the same measurement', p.stderr)
         self.assertEqual(os.listdir(d), ['y.UTF8.sql'])

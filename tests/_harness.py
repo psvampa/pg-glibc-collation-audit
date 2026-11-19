@@ -8,6 +8,7 @@ import atexit
 import functools
 import gzip
 import io
+import json
 import os
 import re
 import shutil
@@ -733,8 +734,9 @@ def check_report(returncode, out, out_dir):
     nothing; whether its character set check ran; the Removed rows and
     where they come from; whether step 11 ran and whether its rules were
     set beside; every `!!` block of the logs of steps 0, 1 and 2, one by
-    one, as a warning of the data file with the same text; and the
-    summary's warnings block, those warnings once each. A run that
+    one, as a warning of the data file with the same text; the
+    summary's warnings block, those warnings once each; and step 11's
+    log against its warnings file (check_step11_warnings). A run that
     printed the summary and has no data file fails here, whatever its
     exit code. No run leaves a report.*.partial.
     Called on the runs of run_wrapper (the one with check=False asserts
@@ -893,6 +895,7 @@ def check_report(returncode, out, out_dir):
                                  ' is not what the summary says')
     check_warnings(r, out_dir, path)
     check_summary_warnings(r, out, path)
+    check_step11_warnings(r, out_dir, path)
 
 
 def check_warnings(r, out_dir, path):
@@ -972,9 +975,11 @@ def check_summary_warnings(r, out, path):
                              f'{path} holds {want!r}')
 
 
-# Data values that are a word of a closed list, not a name or a reason the
-# block prints: checked by report_data.KINDS, not against the text.
-CLOSED_WORDS = {'status', 'classes', 'ask', 'side'}
+# Data keys whose value is a word of a closed list (a side, a state, the
+# kind of reason; the reason printed is under 'why'), not a name the block
+# prints: checked by report_data.KINDS, not as a name of the text; step
+# 11's kinds hold each such word to its block too (closed_phrases).
+CLOSED_WORDS = {'status', 'classes', 'ask', 'side', 'state', 'reason'}
 # The side each kind's block names first: "{old} and {new} ...", or "the
 # new side ... against the old side ..." (the direction's and the reversed
 # pair's). Only same_commit names one side twice.
@@ -983,9 +988,133 @@ FIRST_SIDE = {'same_commit': 'old', 'same_tree': 'old',
               'reversed_allowed': 'new', 'added_rules_unknown': 'new'}
 
 
+def closed_phrases(kind, data):
+    """[(phrase, whether the block holds it)]: what step 11's block says
+    of each closed word or flag its data holds (CLOSED_WORDS: a side, a
+    state, a reason; named_by_bytes), of how many names its lists hold,
+    and each entry of a list as the line that prints it, from that
+    entry's own values: so that the word itself is checked too, as
+    data_in_text checks a name, a list of data that leaves one out does
+    not pass because each name it holds is in the block, and two entries
+    that swap a value (a count, a reason, a name) do not pass because
+    each value is somewhere in it."""
+    import locale_order as lo
+
+    def on(side):
+        return 'both machines' if side == 'both' else f'{side} machine'
+
+    def names(d):
+        return len(d['names']) + d['more']
+    counted = {
+        'not_on_new_machine': lambda: [
+            f"NOT known to be unchanged: {len(data['locales'])} locale(s). "
+            f"Either"],
+        'partly_measured': lambda: [
+            f"Unchanged only as far as measured: {len(data['locales'])} of "
+            f"them."],
+        'glibc_refused': lambda: [
+            f"does not open: {len({x['name'] for x in data['locales']})} "
+            f"locale(s)."],
+        'not_measured': lambda: [
+            f"NOT known to be unchanged: "
+            f"{len({x['name'] for x in data['locales']})} locale(s):"],
+        'tables_disagree': lambda: [
+            f"found a change in {names(data)} locale(s) whose"],
+        'tables_not_compared': lambda: [
+            f"sort tables: {sum(map(names, data['groups']))} locale(s)."]
+            + [f"{g['why']}: {names(g)}:" for g in data['groups']],
+        'measured_in_part': lambda: [
+            f"Measured in part: "
+            f"{len({x for g in data['groups'] for x in g['names']})} "
+            f"locale(s)."],
+        'charmaps_not_checked': lambda: [
+            f"for {sum(len(g['names']) for g in data['groups'])} locale(s) "
+            f"of the"],
+    }
+    out = [(x, True) for x in counted.get(kind, lambda: [])()]
+    return out + [(x, True) for x in _entry_lines(kind, data, on)] \
+        + _closed_words(kind, data, lo, on)
+
+
+# Opens a phrase that is an entry line of its own, printed at two blanks
+# with its continuation at four: it is matched only from where such a
+# line starts to where it ends (data_in_text), so that an entry that
+# leaves out its first name, or cuts its last value short, is not found
+# inside the line that names it.
+LINE = '\0'
+
+
+def _entry_lines(kind, data, on):
+    """closed_phrases' entries: each one's printed line, rebuilt from its
+    own values (the printers of step 11's lists; locale_order.py); LINE
+    before those printed as a line of their own. The lists of
+    partly_measured and tables_disagree are one line each, wrapped at two
+    blanks, and their counts hold their length."""
+    def listed(d):
+        return ', '.join(d['names']) + (f", and {d['more']} more"
+                                        if d['more'] else '')
+
+    def such_as(ex, count):
+        said = (', '.join(ex[:-1]) + ' and ' + ex[-1] if len(ex) > 1
+                else ex[0])
+        return (', such as ' if count > 3 else ': ') + said
+    if kind == 'partly_measured':
+        return [', '.join(f"{x['name']} ({x['count']})"
+                          for x in data['locales'])]
+    if kind == 'tables_disagree':
+        return [listed(data)]
+    if kind == 'tables_not_compared':
+        return [LINE + f"{g['why']}: {len(g['names']) + g['more']}: "
+                f"{listed(g)}" for g in data['groups']]
+    if kind == 'measured_in_part':
+        return [LINE + f"{', '.join(g['names'])} ({g['side']} machine): "
+                f"{g['charmap']} gives a character to {g['count']} "
+                f"sequence(s) not measured{such_as(g['examples'], g['count'])}"
+                for g in data['groups']]
+    if kind == 'charmaps_not_checked':
+        return [LINE + f"{', '.join(g['names'])}: {g['why']}"
+                for g in data['groups']]
+    if kind == 'glibc_refused':
+        return [LINE + f"{x['name']} ({on(x['side'])}): "
+                f"{' and '.join(x['categories'])} refused"
+                for x in data['locales']]
+    if kind == 'not_measured':
+        return [LINE + (f"{x['name']}: {x['why']}"
+                        if x['reason'] == 'different strings'
+                        else f"{x['name']} ({on(x['side'])}): {x['why']}")
+                for x in data['locales']]
+    return []
+
+
+def _closed_words(kind, data, lo, on):
+    """closed_phrases' words."""
+    if kind == 'tag_names_no_release':
+        return [(f"The {data['side'].upper()} tag, {data['tag']},", True)]
+    if kind == 'version_names_no_release':
+        return [(f"The {data['side'].upper()} file was measured on "
+                 f"{data['version']},", True)]
+    if kind == 'charmaps_not_checked':
+        return [(f"of the {data['side']} machine", True),
+                (lo.NAMED_BY_BYTES_LOCALES, data['named_by_bytes'])]
+    if kind == 'charmaps_machine_not_checked':
+        return [('either machine' if data['side'] == 'either'
+                 else f"the {data['side']} machine", True),
+                (lo.NAMED_BY_BYTES_MACHINE, data['named_by_bytes'])]
+    if kind == 'closing':
+        # Written out here, not read from lo.CLOSINGS: the map the block was
+        # written with is what this checks.
+        return [({'plain': lo.CLOSING, 'tables': lo.CLOSING_TABLES,
+                  'mixed': lo.CLOSING_MIXED}[data['state']], True)]
+    return []
+
+
 def data_in_text(kind, data, text):
     """Every name and reason a warning's data holds is in the block it was
-    printed in, and its two sides are two names, in the order the block
+    printed in, every count above 0 is a number of it, what
+    closed_phrases rebuilds from the data is in it (an entry line whole,
+    from where its line opens to where the next one opens, the line of
+    the names PostgreSQL also knows it by opens, or the block ends), and
+    its two sides are two names, in the order the block
     names them (FIRST_SIDE): so a value taken from another variable, or
     the two sides swapped, does not pass because its
     shape is right. Compared with every blank removed, as the block wraps
@@ -1001,10 +1130,35 @@ def data_in_text(kind, data, text):
                 yield from leaves(x, key)
         elif isinstance(v, str) and key not in CLOSED_WORDS:
             yield key, v
+        elif isinstance(v, int) and not isinstance(v, bool) and v > 0:
+            # A count, written as the block prints it (0 is a part the
+            # block leaves out, as "and N more" with none more).
+            yield key, v
     for key, v in leaves(data):
-        if re.sub(r'\s', '', v) not in bare:
+        if isinstance(v, int):
+            if not re.search(rf'(?<![\d,]){v}(?![\d,])', text):
+                raise AssertionError(f'{kind}: {key} {v} is not a number '
+                                     f'of its block {text!r}')
+        elif re.sub(r'\s', '', v) not in bare:
             raise AssertionError(f'{kind}: {key} {v!r} is not in its block '
                                  f'{text!r}')
+    # Each line that opens at two blanks and no third, marked LINE; an
+    # entry ends where the next one opens, at the end of the block, or at
+    # the line of the names PostgreSQL also knows it by (ALSO).
+    import locale_order as lo
+    lines = re.sub(r'\s', '', re.sub(r'\n  (?! )', LINE, '\n' + text))
+    ends = '(?=' + '|'.join([re.escape(LINE), '$', re.escape(
+        re.sub(r'\s', '', lo.ALSO))]) + ')'
+    for phrase, held in closed_phrases(kind, data):
+        p = re.sub(r'\s', '', phrase)
+        if phrase.startswith(LINE):
+            found = re.search(re.escape(p) + ends, lines) is not None
+        else:
+            found = p in bare
+        if found != held:
+            said = 'holds' if held else 'does not hold'
+            raise AssertionError(f'{kind}: its data says its block {said} '
+                                 f'{phrase!r}: {text!r}')
     if kind in FIRST_SIDE:
         if data['old'] == data['new'] and kind != 'same_commit':
             raise AssertionError(f'{kind}: old and new are both '
@@ -1052,6 +1206,117 @@ def held_warnings(call):
     texts = [w['text'] for w in recs]
     assert blocks == texts, (blocks, texts)
     return out, recs
+
+
+# The kind step 11 writes a `!!` block under while its printer gives it
+# none yet (locale_order.PENDING; branch 24 of the plan).
+STEP11_PENDING = 'step11_pending'
+
+
+def step11_blocks(text):
+    """The `!!` blocks of step 11's report: a line opening with `!!` and
+    every line after it that opens with a blank (its lists among them), up
+    to one that does not or an empty one."""
+    blocks, cur = [], None
+    for line in text.split('\n'):
+        if line.startswith('!!'):
+            if cur is not None:
+                blocks.append('\n'.join(cur))
+            cur = [line]
+        elif cur is not None and line.startswith(' '):
+            cur.append(line)
+        else:
+            if cur is not None:
+                blocks.append('\n'.join(cur))
+            cur = None
+    if cur is not None:
+        blocks.append('\n'.join(cur))
+    return blocks
+
+
+def step11_written(text, path, where):
+    """The `!!` step 11 printed in `text` against what it wrote to the
+    warnings file `path`, one by one and in order, with the same text;
+    each one not pending is read by report_data.warning_item (a kind it
+    does not know is refused) and its data is in its text
+    (data_in_text), and one written as pending has no data. A file that
+    is not there
+    holds none. Returns the records."""
+    import report_data as rd
+    recs = []
+    if os.path.exists(path):
+        with open(path, encoding='utf-8') as f:
+            recs = [json.loads(ln) for ln in f.read().split('\n') if ln]
+    texts = [w['text'] for w in recs]
+    blocks = step11_blocks(text)
+    if blocks != texts:
+        raise AssertionError(f'{where} prints the !! blocks {blocks!r}, '
+                             f'{path} holds {texts!r}')
+    for w in recs:
+        if set(w) != {'kind', 'data', 'text'}:
+            raise AssertionError(f'{path}: not a warning: {w!r}')
+        if w['kind'] == STEP11_PENDING:
+            if w['data'] != {}:
+                raise AssertionError(f'{path}: pending with data: {w!r}')
+            continue
+        rd.warning_item(path, w['kind'], w['data'], w['text'])
+        data_in_text(w['kind'], w['data'], w['text'])
+    return recs
+
+
+def check_step11_warnings(r, out_dir, path):
+    """Step 11's `!!` in the run of the report `r` read from `path`: its
+    log's blocks are the warnings file's, one by one (step11_written); no
+    file where step 11 did not run."""
+    slug = os.path.basename(path)[len('report.'):-len('.json')]
+    f = os.path.join(out_dir, f'step11.{slug}.warnings.jsonl')
+    if r['step11']['state'] == 'not run':
+        if os.path.exists(f):
+            raise AssertionError(f'{f} written, but step 11 did not run')
+        return
+    if not os.path.exists(f):
+        raise AssertionError(f'step 11 ran and wrote no {f}')
+    log = os.path.join(out_dir, f'measured_order.{slug}.log')
+    with open(log, encoding='utf-8') as fh:
+        step11_written(fh.read(), f, log)
+
+
+def held_main(main, stdout):
+    """main() of locale_order.py, run in process with its stdout sent to
+    the StringIO `stdout`, under glibc_locale_data.WARNINGS_ENV: what it
+    printed and what it wrote of its `!!` agree (step11_written), on a
+    refusal too. Returns what main() returns."""
+    import tempfile
+    from unittest import mock
+    import glibc_locale_data as g
+    start = len(stdout.getvalue())
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, 'w.jsonl')
+        with mock.patch.dict(os.environ, {g.WARNINGS_ENV: path}):
+            try:
+                rc = main()
+            finally:
+                step11_written(stdout.getvalue()[start:], path, 'main()')
+    return rc
+
+
+def held_compare(argv, **kw):
+    """subprocess.run(argv, capture_output=True, **kw) of a
+    `locale_order.py --compare`, under glibc_locale_data.WARNINGS_ENV: what
+    it printed and what it wrote of its `!!` agree (step11_written), on a
+    refusal too. Returns the CompletedProcess."""
+    import tempfile
+    import glibc_locale_data as g
+    env = dict(kw.pop('env', None) or os.environ)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, 'w.jsonl')
+        env[g.WARNINGS_ENV] = path
+        p = subprocess.run(argv, capture_output=True, env=env, **kw)
+        out = p.stdout
+        if isinstance(out, bytes):
+            out = out.decode('utf-8')
+        step11_written(out, path, ' '.join(map(str, argv)))
+    return p
 
 
 def bang_blocks(log):
