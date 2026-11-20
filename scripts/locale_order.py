@@ -5975,13 +5975,27 @@ def spaced(data):
     return ' '.join(f'{b:02X}' for b in data)
 
 
-def by_codeset(names, codesets):
-    """'EUC-JP: ja_JP, ja_JP.eucjp; EUC-KR: ko_KR', by encoding."""
+def by_codeset_data(names, codesets):
+    """[{'encoding', 'names'}]: the names by encoding, in the order
+    by_codeset prints them; a name codesets gives no encoding is under
+    'unknown'."""
     groups = {}
     for name in sorted(names):
-        groups.setdefault(codesets.get(name) or 'unknown', []).append(shown(name))
-    return '; '.join(f'{cs}: {", ".join(group)}'
-                     for cs, group in sorted(groups.items()))
+        groups.setdefault(codesets.get(name) or 'unknown', []).append(name)
+    return [{'encoding': cs, 'names': group}
+            for cs, group in sorted(groups.items())]
+
+
+def codeset_said(groups):
+    """by_codeset, printed from by_codeset_data's groups."""
+    return '; '.join(f'{g["encoding"]}: {", ".join(map(shown, g["names"]))}'
+                     for g in groups)
+
+
+def by_codeset(names, codesets):
+    """'EUC-JP: ja_JP, ja_JP.eucjp; EUC-KR: ko_KR', by encoding. Printed
+    from its data (by_codeset_data)."""
+    return codeset_said(by_codeset_data(names, codesets))
 
 
 def postgres_codesets():
@@ -6986,6 +7000,48 @@ class TextModel:
         return out
 
 
+# The machines a line of use_texts names, and the side its data says it
+# with; SIDE_WHERE as where_text says it.
+WHERE_SIDE = {'both machines': 'both', 'the old machine': 'old',
+              'the new machine': 'new'}
+SIDE_WHERE = {side: 'on ' + where for where, side in WHERE_SIDE.items()}
+
+
+def entries_said(entries, said):
+    """The entries of a line of use_texts, each as said() prints its data
+    and its names after it: 'EUC-JP: 3 character(s) (ja_JP, ja_JP.eucjp);
+    ...'."""
+    return '; '.join(f'{said(e)} ({", ".join(map(shown, e["names"]))})'
+                     for e in entries)
+
+
+def partial_said(d):
+    """What one entry of the line on part of the text says glibc refuses:
+    each part (lacking_data), and each side whose file cannot say."""
+    return (' and '.join(lacking_said(p, 'sequence(s)') for p in d['parts'])
+            + ''.join(f', not known on the {side} machine'
+                      for side in d['unknown_on']))
+
+
+def wrong_said(d):
+    """What one entry of the line on a wrong result says: the characters
+    each machine does not turn back (lacking_data), and how many of them
+    through lower(): one count where the machines name one set of
+    characters, else one count a machine."""
+    text = ' and '.join(lacking_said(p, 'character(s)') for p in d['parts'])
+    if len(d['lower']) == 1:
+        k = d['lower'][0]['count']
+        return text + (f', {k} of them through lower()' if k
+                       else ', none through lower()')
+    return text + ', through lower(): ' + ' and '.join(
+        f'{x["count"]} on the {x["side"]} machine' for x in d['lower'])
+
+
+def changed_said(d):
+    """What one entry of the line on other bytes says."""
+    return f'{d["encoding"]}: {d["count"]} character(s)'
+
+
 def use_texts(model):
     """([(text, is a warning)], [file rows]): what upper(), lower(),
     initcap(), ILIKE and full-text search do with each locale, from the
@@ -7013,7 +7069,8 @@ def use_texts(model):
     side, or, when the old machine refused it, beside a NOT checked of the
     new one; a locale only on the new machine only where its databases
     made there give an error, were not checked, or are of an encoding
-    PostgreSQL does not know."""
+    PostgreSQL does not know. A `!!` is a Bang with its kind and data
+    (report_warnings), its lists printed from that data."""
     old, new = model.old.data, model.new.data
     earlier = [side for side, data in zip(('OLD', 'NEW'), (old, new))
                if 'postgres_use' not in data['held']]
@@ -7021,8 +7078,10 @@ def use_texts(model):
     if earlier:
         files = ('the OLD and NEW files were' if len(earlier) == 2
                  else f'the {earlier[0]} file was')
-        out.append((f'!! {FN} NOT checked: {files} '
-                    + EARLIER.format(which_machines(earlier)) + '.', True))
+        out.append((Bang(f'!! {FN} NOT checked: {files} '
+                         + EARLIER.format(which_machines(earlier)) + '.',
+                         'use_earlier_format', {'side': side_of(earlier)}),
+                    True))
         if len(earlier) == 2:
             return out, []
     groups = {k: [] for k in ('changed', 'back', 'both', 'converts', 'one byte',
@@ -7121,45 +7180,59 @@ def use_texts(model):
         elif line is not None:
             groups[line].append(name)
     if groups['changed']:
-        out.append((f'!! {FN} give an ERROR on the new machine in '
-                    f'{len(groups["changed"])} locale(s) whose encoding the old '
-                    'machine\'s glibc can convert. In a database of the locale\'s '
-                    'own encoding, any '
-                    'text that is not ASCII stops them with "ERROR: invalid '
-                    'multibyte character for locale", and initcap() and '
-                    'full-text search too, because the new machine\'s glibc '
-                    'cannot convert that encoding. ' + GCONV + ' '
-                    + by_codeset(groups['changed'], codesets) + '.', True))
+        listed = by_codeset_data(groups['changed'], codesets)
+        out.append((Bang(f'!! {FN} give an ERROR on the new machine in '
+                         f'{len(groups["changed"])} locale(s) whose encoding '
+                         'the old machine\'s glibc can convert. In a database '
+                         'of the locale\'s own encoding, any '
+                         'text that is not ASCII stops them with "ERROR: '
+                         'invalid multibyte character for locale", and '
+                         'initcap() and full-text search too, because the new '
+                         'machine\'s glibc cannot convert that encoding. '
+                         + GCONV + ' ' + codeset_said(listed) + '.',
+                         'use_error_new', {'groups': listed}), True))
     if groups['back']:
         out.append((f'{FN} convert text on the new machine in '
                     f'{len(groups["back"])} locale(s) whose encoding the old '
                     'machine\'s glibc could not convert: '
                     + by_codeset(groups['back'], codesets) + '.', False))
     if groups['both']:
-        out.append((f'!! {FN} give an ERROR on both machines in '
-                    f'{len(groups["both"])} locale(s), as before the upgrade: in '
-                    'a database of the locale\'s own encoding, any text that is '
-                    'not ASCII stops them with "ERROR: invalid multibyte '
-                    'character for locale". ' + GCONV + ' '
-                    + by_codeset(groups['both'], codesets) + '.', True))
+        listed = by_codeset_data(groups['both'], codesets)
+        out.append((Bang(f'!! {FN} give an ERROR on both machines in '
+                         f'{len(groups["both"])} locale(s), as before the '
+                         'upgrade: in a database of the locale\'s own '
+                         'encoding, any text that is not ASCII stops them with '
+                         '"ERROR: invalid multibyte character for locale". '
+                         + GCONV + ' ' + codeset_said(listed) + '.',
+                         'use_error_both', {'groups': listed}), True))
     for (where, x, y, why), group in sorted(moved.items()):
         before = (f'; what they do on the old machine is not known ({why})'
                   if why else '')
-        out.append((f'!! {FN} give an ERROR on {where} in {len(group)} '
-                    f'locale(s) whose encoding changed from {x} on the old '
-                    f'machine to {y} on the new one: a database of {x} made on '
-                    f'the old machine opens there under {y}, and a glibc that '
-                    f'cannot convert {y} converts no text that is not ASCII '
-                    f'("ERROR: invalid multibyte character for locale"){before}. '
-                    + GCONV + ' ' + by_codeset(group, codesets) + '.', True))
-    for (where, why), group in sorted(anydb.items()):
-        out.append((f'!! {FN} give an ERROR on {where} in {len(group)} '
-                    f'locale(s) that databases of an encoding not known here '
-                    f'may use ({why}): in such a database of more than one '
-                    'byte per character, a glibc that cannot convert the '
-                    'locale\'s own converts no text that is not ASCII ("ERROR: '
-                    'invalid multibyte character for locale"). ' + GCONV + ' ' + by_codeset(group, codesets) + '.',
+        listed = by_codeset_data(group, codesets)
+        out.append((Bang(f'!! {FN} give an ERROR on {where} in {len(group)} '
+                         f'locale(s) whose encoding changed from {x} on the '
+                         f'old machine to {y} on the new one: a database of '
+                         f'{x} made on the old machine opens there under {y}, '
+                         f'and a glibc that cannot convert {y} converts no '
+                         f'text that is not ASCII ("ERROR: invalid multibyte '
+                         f'character for locale"){before}. '
+                         + GCONV + ' ' + codeset_said(listed) + '.',
+                         'use_error_moved',
+                         {'side': WHERE_SIDE[where], 'from': x, 'to': y,
+                          'why': [why] if why else [], 'groups': listed}),
                     True))
+    for (where, why), group in sorted(anydb.items()):
+        listed = by_codeset_data(group, codesets)
+        out.append((Bang(f'!! {FN} give an ERROR on {where} in {len(group)} '
+                         f'locale(s) that databases of an encoding not known '
+                         f'here may use ({why}): in such a database of more '
+                         'than one byte per character, a glibc that cannot '
+                         'convert the locale\'s own converts no text that is '
+                         'not ASCII ("ERROR: invalid multibyte character for '
+                         'locale"). ' + GCONV + ' ' + codeset_said(listed)
+                         + '.', 'use_error_any_db',
+                         {'side': WHERE_SIDE[where], 'why': why,
+                          'groups': listed}), True))
     for (side, kind, why), group in sorted(one_side.items()):
         other = 'old' if side == 'new' else 'new'
         if kind == 'refused':
@@ -7170,33 +7243,39 @@ def use_texts(model):
         else:
             said = (f', where it is not known what they do on the {other} '
                     f'machine ({why})')
-        out.append((f'!! {FN} give an ERROR on the {side} machine in '
-                    f'{len(group)} locale(s){said}. In a database of the '
-                    'locale\'s own encoding, any text that is not ASCII stops '
-                    'them there with "ERROR: invalid multibyte character for '
-                    'locale". ' + GCONV + ' ' + by_codeset(group, codesets) + '.',
-                    True))
+        listed = by_codeset_data(group, codesets)
+        out.append((Bang(f'!! {FN} give an ERROR on the {side} machine in '
+                         f'{len(group)} locale(s){said}. In a database of the '
+                         'locale\'s own encoding, any text that is not ASCII '
+                         'stops them there with "ERROR: invalid multibyte '
+                         'character for locale". ' + GCONV + ' '
+                         + codeset_said(listed) + '.', 'use_error_one_side',
+                         {'side': side, 'reason': kind,
+                          'why': [why] if kind == 'unknown' else [],
+                          'groups': listed}), True))
     if partial:
         # Grouped by what each machine refuses, the locales of one
         # encoding together: one converter per encoding on a machine.
         said = {}
         for name, sides in partial.items():
             encs = {enc for enc, _ in sides.values()}
-            text = (lacking_text(next(iter(encs)), {s: r for s, (e, r) in sides.items()},
-                                 'sequence(s)') if len(encs) == 1 else
-                    ' and '.join(lacking_text(e, {s: r}, 'sequence(s)')
-                                 for s, (e, r) in sorted(sides.items())))
-            for side in sorted(unsaid.get(name, ())):
-                text += f', not known on the {side} machine'
-            said.setdefault(text, []).append(name)
-        out.append((f'!! {FN} give an ERROR on part of the text in '
-                    f'{len(partial)} locale(s): in a database of the locale\'s '
-                    'own encoding, text holding a byte sequence that such a '
-                    'database accepts and glibc\'s converter of that encoding '
-                    'does not convert stops them with "ERROR: invalid multibyte '
-                    'character for locale". '
-                    + '; '.join(f'{text} ({", ".join(map(shown, sorted(group)))})'
-                                for text, group in sorted(said.items())) + '.',
+            parts = ([lacking_data(next(iter(encs)),
+                                   {s: r for s, (e, r) in sides.items()})]
+                     if len(encs) == 1 else
+                     [lacking_data(e, {s: r})
+                      for s, (e, r) in sorted(sides.items())])
+            d = {'parts': parts, 'unknown_on': sorted(unsaid.get(name, ()))}
+            said.setdefault(partial_said(d), (d, []))[1].append(name)
+        entries = [dict(d, names=sorted(group))
+                   for _, (d, group) in sorted(said.items())]
+        out.append((Bang(f'!! {FN} give an ERROR on part of the text in '
+                         f'{len(partial)} locale(s): in a database of the '
+                         'locale\'s own encoding, text holding a byte sequence '
+                         'that such a database accepts and glibc\'s converter '
+                         'of that encoding does not convert stops them with '
+                         '"ERROR: invalid multibyte character for locale". '
+                         + entries_said(entries, partial_said) + '.',
+                         'use_error_partial', {'entries': entries}),
                     True, 'byte sequence'))
         rows += refused_rows_of(partial, views, model.machines)
         # Counted there, never as converting.
@@ -7205,10 +7284,11 @@ def use_texts(model):
         said = {}
         for name, (sides, _) in back_error.items():
             encs = {enc for enc, _ in sides.values()}
-            text = (lacking_text(next(iter(encs)), {s: set(r) for s, (e, r) in sides.items()},
-                                 'character(s)') if len(encs) == 1 else
-                    ' and '.join(lacking_text(e, {s: set(r)}, 'character(s)')
-                                 for s, (e, r) in sorted(sides.items())))
+            parts = ([lacking_data(next(iter(encs)),
+                                   {s: set(r) for s, (e, r) in sides.items()})]
+                     if len(encs) == 1 else
+                     [lacking_data(e, {s: set(r)})
+                      for s, (e, r) in sorted(sides.items())])
             # lower() and what reads it fail only where the lower case
             # does not convert back.
             lowered = {s: {c for c, fns in r.items()
@@ -7216,14 +7296,16 @@ def use_texts(model):
                        for s, (_, r) in sides.items()}
             if len({frozenset(r) for _, r in sides.values()}) == 1:
                 # One set of characters, on one machine or both: one count.
-                k = len(next(iter(lowered.values())))
-                text += f', {k} of them through lower()' if k else ', none through lower()'
+                lower = [{'side': side_of(sorted(lowered, reverse=True)),
+                          'count': len(next(iter(lowered.values())))}]
             else:
-                text += ', through lower(): ' + ' and '.join(
-                    f'{len(lowered[s])} on the {s} machine' for s in ('old', 'new')
-                    if s in lowered)
-            said.setdefault(text, []).append(name)
-        out.append((f'!! {FN} give a wrong result on part of the text in '
+                lower = [{'side': s, 'count': len(lowered[s])}
+                         for s in ('old', 'new') if s in lowered]
+            d = {'parts': parts, 'lower': lower}
+            said.setdefault(wrong_said(d), (d, []))[1].append(name)
+        entries = [dict(d, names=sorted(group))
+                   for _, (d, group) in sorted(said.items())]
+        out.append((Bang(f'!! {FN} give a wrong result on part of the text in '
                     f'{len(back_error)} locale(s): in a database of more than one '
                     'byte per character, glibc\'s converter of the locale\'s '
                     'encoding does not turn back into the database\'s bytes the '
@@ -7237,23 +7319,26 @@ def use_texts(model):
                     'PostgreSQL 18 none checks it, and the result is not defined (measured: the '
                     'server process crashed, "ERROR: pfree called with invalid '
                     'pointer", or the text came back unchanged or as other '
-                    'bytes). '
-                    + '; '.join(f'{text} ({", ".join(map(shown, sorted(group)))})'
-                                for text, group in sorted(said.items())) + '.',
+                    'bytes). ' + entries_said(entries, wrong_said) + '.',
+                    'use_wrong_result', {'entries': entries}),
                     True, 'character'))
         rows += back_rows_of(back_error)
         groups['converts'] = [n for n in groups['converts'] if n not in back_error]
     if back_change:
         said = {}
         for name, chg in back_change.items():
-            enc = views[name][1][1] or views[name][0][1]
-            said.setdefault(f'{enc}: {len(chg)} character(s)', []).append(name)
-        out.append((f'!! {FN} CHANGE on part of the text in {len(back_change)} '
-                    'locale(s): glibc\'s converter of the locale\'s encoding turns '
-                    'some characters their result can hold back into other bytes '
-                    'on the new machine than on the old one. '
-                    + '; '.join(f'{text} ({", ".join(map(shown, sorted(group)))})'
-                                for text, group in sorted(said.items())) + '.',
+            d = {'encoding': views[name][1][1] or views[name][0][1],
+                 'count': len(chg)}
+            said.setdefault(changed_said(d), (d, []))[1].append(name)
+        entries = [dict(d, names=sorted(group))
+                   for _, (d, group) in sorted(said.items())]
+        out.append((Bang(f'!! {FN} CHANGE on part of the text in '
+                         f'{len(back_change)} locale(s): glibc\'s converter of '
+                         'the locale\'s encoding turns some characters their '
+                         'result can hold back into other bytes on the new '
+                         'machine than on the old one. '
+                         + entries_said(entries, changed_said) + '.',
+                         'use_back_changed', {'entries': entries}),
                     True, 'character'))
         rows += [{'names': [name], 'rows': [(
             'upper/lower back changed', f'U+{c:04X}',
@@ -7277,14 +7362,20 @@ def use_texts(model):
             untold.setdefault(where_text(sides), {})[name] = (
                 views[name][1][1] or views[name][0][1])
     if untold:
-        out.append((f'!! {FN}: whether they give an ERROR on part of the text is '
-                    f'NOT known in {sum(map(len, untold.values()))} locale(s): a '
-                    'file written by an earlier version of locale_order.py tried '
-                    'one character of their encoding, and glibc\'s converter can '
-                    'refuse others. '
-                    + ' '.join(f'{where[:1].upper() + where[1:]}: '
-                               f'{by_codeset(group, group)}.'
-                               for where, group in sorted(untold.items())), True))
+        places = [{'side': WHERE_SIDE[where[3:]],
+                   'groups': by_codeset_data(group, group)}
+                  for where, group in sorted(untold.items())]
+        out.append((Bang(f'!! {FN}: whether they give an ERROR on part of the '
+                         f'text is NOT known in '
+                         f'{sum(map(len, untold.values()))} locale(s): a file '
+                         'written by an earlier version of locale_order.py '
+                         'tried one character of their encoding, and glibc\'s '
+                         'converter can refuse others. '
+                         + ' '.join(f'{SIDE_WHERE[p["side"]][:1].upper()}'
+                                    f'{SIDE_WHERE[p["side"]][1:]}: '
+                                    f'{codeset_said(p["groups"])}.'
+                                    for p in places),
+                         'use_partial_unknown', {'places': places}), True))
         rows += [{'names': [n], 'rows': [(
             'upper/lower/ILIKE not checked', '-',
             f'whether part of the text gives an error: not known {where}',
@@ -7309,15 +7400,21 @@ def use_texts(model):
         for name in either:
             enc = views[name][1][1] or views[name][0][1]
             counts[enc] = counts.get(enc, 0) + 1
+        encodings = [{'encoding': enc, 'count': n}
+                     for enc, n in sorted(counts.items())]
         nor = (f', nor, in {len(utf8_earlier)} of UTF-8, whether glibc reads all '
                'their text as it is' if utf8_earlier else '')
-        out.append((f'!! {FN}: whether their result converts back to the '
-                    f'database\'s bytes is NOT checked in {len(either)} '
-                    f'locale(s){nor}: {files} '
-                    + EARLIER.format(which_machines([s.upper() for s in sides]))
-                    + '. ' + '; '.join(f'{enc}: {n} locale(s)'
-                                       for enc, n in sorted(counts.items()))
-                    + '.', True, 'locale'))
+        out.append((Bang(f'!! {FN}: whether their result converts back to the '
+                         f'database\'s bytes is NOT checked in '
+                         f'{sum(x["count"] for x in encodings)} '
+                         f'locale(s){nor}: {files} '
+                         + EARLIER.format(which_machines([s.upper()
+                                                          for s in sides]))
+                         + '. ' + '; '.join(f'{x["encoding"]}: {x["count"]} '
+                                            f'locale(s)' for x in encodings)
+                         + '.', 'use_back_not_checked',
+                         {'side': side_of(sides), 'utf8': len(utf8_earlier),
+                          'encodings': encodings}), True, 'locale'))
         rows.extend({'names': [n], 'rows': [(
             'upper/lower back not checked', '-',
             ('whether glibc reads all the text as it is, and ' if n in utf8_earlier
@@ -7330,10 +7427,13 @@ def use_texts(model):
         compact()
         return out, rows
     if unknown:
-        out.append((f'!! {FN} NOT checked in '
-                    f'{sum(map(len, unknown.values()))} locale(s): '
-                    + ' '.join(f'{why}: {by_codeset(group, codesets)}.'
-                               for why, group in sorted(unknown.items())), True))
+        reasons = [{'why': why, 'groups': by_codeset_data(group, codesets)}
+                   for why, group in sorted(unknown.items())]
+        out.append((Bang(f'!! {FN} NOT checked in '
+                         f'{sum(map(len, unknown.values()))} locale(s): '
+                         + ' '.join(f'{x["why"]}: {codeset_said(x["groups"])}.'
+                                    for x in reasons),
+                         'use_not_checked', {'reasons': reasons}), True))
     compact()
     line = (f'{FN}: text that is not ASCII converts on both machines in '
             f'{len(groups["converts"])} locale(s); in the '
@@ -8019,22 +8119,48 @@ def where_text(sides):
             else f'on the {next(iter(sides))} machine')
 
 
+def lacking_data(codeset, got):
+    """What lacking_text says, as data, from {side: what glibc refuses}:
+    the encoding, how many each side refuses (old first), and how the two
+    sides' compare (alike): 'same' ones, 'as many' and not the same ones,
+    'mixed' where neither refuses every one the other does, 'within' where
+    one does, or 'one side' where one side alone refuses."""
+    if len(got) < 2:
+        alike = 'one side'
+    elif got['old'] == got['new']:
+        alike = 'same'
+    elif len(got['old']) == len(got['new']):
+        alike = 'as many'
+    elif (not set(got['old']) <= set(got['new'])
+          and not set(got['new']) <= set(got['old'])):
+        alike = 'mixed'
+    else:
+        alike = 'within'
+    return {'encoding': codeset, 'alike': alike,
+            'sides': [{'side': side, 'count': len(got[side])}
+                      for side in ('old', 'new') if side in got]}
+
+
+def lacking_said(d, unit='byte(s)'):
+    """lacking_text, printed from lacking_data's d."""
+    cs, sides = d['encoding'], d['sides']
+    if d['alike'] == 'same':
+        return f'{cs}: {sides[0]["count"]} {unit} on both machines'
+    if d['alike'] == 'as many':
+        return (f'{cs}: {sides[0]["count"]} {unit} on each machine, not the '
+                'same ones')
+    return f'{cs}: ' + ' and '.join(
+        f'{x["count"]} {unit} on the {x["side"]} machine' for x in sides) + (
+            ', not all the same' if d['alike'] == 'mixed' else '')
+
+
 def lacking_text(codeset, got, unit='byte(s)'):
     """'TIS-620: 41 byte(s) on both machines', from {side: what glibc
     refuses}; two machines that refuse as many, not the same ones, are told
     apart, and so are two that refuse a different number where neither
-    refuses every one the other does."""
-    if len(got) == 2 and got['old'] == got['new']:
-        return f'{codeset}: {len(got["old"])} {unit} on both machines'
-    if len(got) == 2 and len(got['old']) == len(got['new']):
-        return (f'{codeset}: {len(got["old"])} {unit} on each machine, not the '
-                'same ones')
-    mixed = (len(got) == 2 and not set(got['old']) <= set(got['new'])
-             and not set(got['new']) <= set(got['old']))
-    return f'{codeset}: ' + ' and '.join(
-        f'{len(got[side])} {unit} on the {side} machine'
-        for side in ('old', 'new') if side in got) + (
-            ', not all the same' if mixed else '')
+    refuses every one the other does. Printed from its data
+    (lacking_data)."""
+    return lacking_said(lacking_data(codeset, got), unit)
 
 
 def other_encoding_text(names, model, firm):
@@ -9145,7 +9271,7 @@ class Bang(str):
 
 
 # The kind a `!!` block of the report is written under while its printer
-# gives it none yet (branch 24 of the plan, 24.1c-3 to 24.1c-4): said by
+# gives it none yet (branch 24 of the plan, 24.1c-4): said by
 # that printer (pending), so that a block no printer marks is an error,
 # never one written as pending.
 PENDING = 'step11_pending'
@@ -9448,8 +9574,15 @@ def use_where(d, ctx):
 
 
 def use_lines(items, ctx):
-    return pending(['\n'.join(whole_words(use_where(d, ctx), 0, 3))
-                    for d in items])
+    """The lines on upper(), lower() and ILIKE; each `!!` of them is a
+    Bang with its kind (use_texts), and one that is not stops
+    report_blocks."""
+    out = []
+    for d in items:
+        text = '\n'.join(whole_words(use_where(d, ctx), 0, 3))
+        out.append(Bang(text, d['text'].kind, d['text'].data)
+                   if isinstance(d['text'], Bang) else text)
+    return out
 
 
 def use_summary(items, ctx):

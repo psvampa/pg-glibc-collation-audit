@@ -293,6 +293,69 @@ SAMPLES = {
         {'side': 'new', 'looked_for': ['postgres', 'postmaster']},
         'Which C library PostgreSQL runs on the new machine: no process '
         'named postgres or postmaster found'),
+    # Step 11's lines on upper(), lower() and ILIKE.
+    'use_earlier_format': (
+        {'side': 'old'},
+        'upper(), lower() and ILIKE on the old machine (a file of an earlier '
+        'version)'),
+    'use_error_new': (
+        {'groups': [{'encoding': 'EUC-JP', 'names': ['ja_JP', 'japanese']},
+                    {'encoding': 'EUC-KR', 'names': ['ko_KR']}]},
+        'upper(), lower() and ILIKE give an error on the new machine in 3 '
+        'locales: its glibc cannot convert their encoding'),
+    'use_error_both': (
+        {'groups': [{'encoding': 'EUC-TW', 'names': ['zh_TW.euctw']}]},
+        'upper(), lower() and ILIKE give an error on both machines in 1 '
+        'locale, as before the upgrade'),
+    'use_error_moved': (
+        {'side': 'new', 'from': 'EUC-JP', 'to': 'BIG5', 'why': [],
+         'groups': [{'encoding': 'BIG5', 'names': ['zh_TW']}]},
+        'upper(), lower() and ILIKE give an error on the new machine in 1 '
+        'locale whose encoding changed from EUC-JP to BIG5'),
+    'use_error_any_db': (
+        {'side': 'both', 'why': 'w',
+         'groups': [{'encoding': 'TIS-620', 'names': ['th_TH', 'thai']}]},
+        'upper(), lower() and ILIKE give an error on both machines in 2 '
+        'locales that a database of any encoding may use'),
+    'use_error_one_side': (
+        {'side': 'new', 'reason': 'refused', 'why': [],
+         'groups': [{'encoding': 'EUC-JP', 'names': ['ja_JP']}]},
+        'upper(), lower() and ILIKE give an error on the new machine in 1 '
+        'locale that glibc refused on the old machine'),
+    'use_error_partial': (
+        {'entries': [{'parts': [{'encoding': 'EUC-JP', 'alike': 'one side',
+                                 'sides': [{'side': 'old', 'count': 4726}]}],
+                      'unknown_on': ['new'], 'names': ['ja_JP']}]},
+        'upper(), lower() and ILIKE give an error on part of the text in 1 '
+        'locale'),
+    'use_wrong_result': (
+        {'entries': [{'parts': [{'encoding': 'GB2312', 'alike': 'same',
+                                 'sides': [{'side': 'old', 'count': 38},
+                                           {'side': 'new', 'count': 38}]}],
+                      'lower': [{'side': 'both', 'count': 12}],
+                      'names': ['zh_CN', 'zh_SG']}]},
+        'upper(), lower() and ILIKE give a wrong result on part of the text '
+        'in 2 locales'),
+    'use_back_changed': (
+        {'entries': [{'encoding': 'EUC-KR', 'count': 2,
+                      'names': ['ko_KR']}]},
+        'upper(), lower() and ILIKE give another result on part of the text '
+        'in 1 locale'),
+    'use_partial_unknown': (
+        {'places': [{'side': 'new', 'groups': [
+            {'encoding': 'EUC-JP', 'names': ['ja_JP']}]}]},
+        'Whether upper(), lower() and ILIKE give an error on part of the '
+        'text in 1 locale (a file of an earlier version)'),
+    'use_back_not_checked': (
+        {'side': 'both', 'utf8': 1,
+         'encodings': [{'encoding': 'EUC-JP', 'count': 2},
+                       {'encoding': 'UTF-8', 'count': 1}]},
+        "Whether the result of upper(), lower() and ILIKE converts back to "
+        "the database's bytes in 3 locales (a file of an earlier version)"),
+    'use_not_checked': (
+        {'reasons': [{'why': 'w', 'groups': [
+            {'encoding': 'EUC-JP', 'names': ['ja_JP']}]}]},
+        'upper(), lower() and ILIKE in 1 locale'),
 }
 
 
@@ -553,8 +616,9 @@ class Warnings(_Folder):
     def step11_kinds(self):
         """The kinds step 11 writes (locale_order.py), each a literal: the
         kind of every Bang, but the two that take their item's
-        (`d['kind']`), check_lines' that takes its text's (`d['text'].
-        kind`) and the one of the printers whose blocks have no kind yet
+        (`d['kind']`), check_lines' and use_lines' that take their text's
+        (`d['text'].kind`) and the one of the printers whose blocks have
+        no kind yet
         (`PENDING`); and the kinds those items carry, under the
         key 'kind' of the charmaps' items and as the next to last member
         of the warnings compare() appends to `unchecked` and `warnings`."""
@@ -586,9 +650,10 @@ class Warnings(_Folder):
                 self.assertIsInstance(t, ast.Tuple, n.lineno)
                 self.assertIsInstance(t.elts[-2], ast.Constant, n.lineno)
                 kinds.append(t.elts[-2].value)
-        # warning_lines, unchecked_charmaps_lines; pending; check_lines.
+        # warning_lines, unchecked_charmaps_lines; pending; check_lines,
+        # use_lines.
         self.assertEqual(sorted(passed), ['PENDING', "d['kind']", "d['kind']",
-                                          "d['text'].kind"])
+                                          "d['text'].kind", "d['text'].kind"])
         return kinds
 
     def test_the_lists(self):
@@ -599,7 +664,10 @@ class Warnings(_Folder):
                          ['collation_version_same', 'c_utf8_differs',
                           'charmap_distro_buildable', 'glibc_refused',
                           'not_on_new_machine', 'money_changed', 'libc_stale',
-                          'libc_other'])
+                          'libc_other', 'use_error_new', 'use_error_both',
+                          'use_error_moved', 'use_error_any_db',
+                          'use_error_one_side', 'use_error_partial',
+                          'use_wrong_result', 'use_back_changed'])
 
     def test_titles_by_the_data(self):
         """What the data changes in a title: two signature statuses and
@@ -670,12 +738,34 @@ class Warnings(_Folder):
         self.assertEqual(t('libc_other', {'side': 'new', 'processes': 1}),
                          '1 PostgreSQL process of the new machine runs '
                          'another C library than the one measured')
+        # upper(), lower() and ILIKE: each reason of one machine, both
+        # machines, and a locale named in two places counted once.
+        g = [{'encoding': 'EUC-JP', 'names': ['a', 'b']}]
+        for reason, side, said in (
+                ('refused', 'old', 'that glibc refused on the new machine'),
+                ('absent', 'new', 'the old machine does not have'),
+                ('unknown', 'new', 'not known on the old machine')):
+            self.assertEqual(t('use_error_one_side', {
+                'side': side, 'reason': reason, 'why': [], 'groups': g}),
+                f'upper(), lower() and ILIKE give an error on the {side} '
+                f'machine in 2 locales {said}')
+        self.assertEqual(t('use_error_moved', {
+            'side': 'both', 'from': 'X', 'to': 'Y', 'why': [], 'groups': g}),
+            'upper(), lower() and ILIKE give an error on both machines in 2 '
+            'locales whose encoding changed from X to Y')
+        self.assertEqual(t('use_earlier_format', {'side': 'both'}),
+                         'upper(), lower() and ILIKE on both machines (a file '
+                         'of an earlier version)')
+        self.assertEqual(t('use_not_checked', {'reasons': [
+            {'why': 'w', 'groups': g}, {'why': 'v', 'groups': g}]}),
+            'upper(), lower() and ILIKE in 2 locales')
 
     def test_what_a_step_cannot_write_is_refused(self):
         """Values each right alone and wrong together: the control's
         lists holding no locale, one twice or one in both; a decimals of
         money that does not change; processes not checked for no reason
-        (review of 24.1c-2, round 1)."""
+        (review of 24.1c-2, round 1); and the lines on upper(), lower()
+        and ILIKE (use_impossible)."""
         c = {'name': 'C', 'side': 'old'}
         e = dict(c, error='e')
         for kind, data in (
@@ -686,14 +776,65 @@ class Warnings(_Folder):
                     {'name': 'a', 'old': 2, 'new': 3},
                     {'name': 'b', 'old': 2, 'new': 2}]}),
                 ('libc_not_checked', {'side': 'old', 'machine': [],
-                                      'named': [], 'unnamed': 0})):
+                                      'named': [], 'unnamed': 0})) + \
+                self.use_impossible():
             with self.subTest(kind=kind, data=data), \
                     self.assertRaisesRegex(rd.ReportError,
                                            'cannot be written'):
                 rd.warning_item('w', kind, data, '!! x')
         for kind in ('control_not_checked', 'money_changed',
-                     'libc_not_checked'):
+                     'libc_not_checked') + tuple(rd.KINDS)[-12:]:
             rd.warning_item('w', kind, SAMPLES[kind][0], '!! x')
+
+    def use_impossible(self):
+        """The lines on upper(), lower() and ILIKE: one locale twice, an
+        encoding that does not change, a reason where none is given or
+        none where one is, a locale the old machine lacks named on the old
+        one, what two machines refuse told apart against their counts, two
+        parts of one encoding or of one machine, counts through lower() of
+        a machine the
+        parts do not name (two of one machine, one of the old machine
+        where both refuse, one of both or two where one refuses),
+        more of UTF-8 than in all."""
+        def lack(alike, *counts, enc='E'):
+            return {'encoding': enc, 'alike': alike, 'sides': [
+                {'side': s, 'count': n} for s, n in zip(('old', 'new'),
+                                                        counts)]}
+        two = [{'encoding': 'E', 'names': ['a']},
+               {'encoding': 'F', 'names': ['a']}]
+        g = [{'encoding': 'E', 'names': ['a']}]
+        out = [(k, {'groups': two}) for k in ('use_error_new',
+                                              'use_error_both')]
+        out += [
+            ('use_error_moved', {'side': 'new', 'from': 'E', 'to': 'E',
+                                 'why': [], 'groups': g}),
+            ('use_error_one_side', {'side': 'new', 'reason': 'refused',
+                                    'why': ['w'], 'groups': g}),
+            ('use_error_one_side', {'side': 'new', 'reason': 'unknown',
+                                    'why': [], 'groups': g}),
+            ('use_error_one_side', {'side': 'old', 'reason': 'absent',
+                                    'why': [], 'groups': g}),
+            ('use_back_not_checked', {'side': 'old', 'utf8': 3, 'encodings': [
+                {'encoding': 'UTF-8', 'count': 2}]})]
+        for parts in ([lack('same', 2, 3)], [lack('mixed', 2, 2)],
+                      [lack('one side', 2, 2)], [lack('within', 2)],
+                      [lack('one side', 2), lack('one side', 3)],
+                      [lack('one side', 2), lack('one side', 3, enc='F')]):
+            out.append(('use_error_partial', {'entries': [
+                {'parts': parts, 'unknown_on': [], 'names': ['a']}]}))
+        for lower, part in (
+                ([{'side': 'old', 'count': 1}, {'side': 'old', 'count': 1}],
+                 lack('within', 2, 3)),
+                ([{'side': 'old', 'count': 1}], lack('within', 2, 3)),
+                ([{'side': 'both', 'count': 1}], lack('one side', 2)),
+                ([{'side': 'old', 'count': 1}, {'side': 'new', 'count': 1}],
+                 lack('one side', 2))):
+            out.append(('use_wrong_result', {'entries': [
+                {'parts': [part], 'lower': lower, 'names': ['a']}]}))
+        out.append(('use_back_changed', {'entries': [
+            {'encoding': 'E', 'count': 1, 'names': ['a']},
+            {'encoding': 'F', 'count': 1, 'names': ['a']}]}))
+        return tuple(out)
 
     def test_step0_with_the_machines(self):
         step2_files(self.d, **MACHINES)
