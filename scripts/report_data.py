@@ -6,14 +6,18 @@ change.
 Every section is always there. What a run did not do is a state with its
 reason, never an absent key or a null, so that a reader cannot take "this
 was not looked at" for "nothing was found". What the steps hold today
-only inside a sentence (step 2's totals and character sets, step 11's
-findings, the provenance of each side) is 'not yet reported': a later
-step of the work turns each one into data (branch 24 of the plan).
+only inside a sentence (step 2's totals and character sets, the
+provenance of each side, and of step 11's findings each sort table,
+the probe pairs that changed, the levels left out and the pairs told
+apart differently) is 'not yet reported': a
+later step of the work turns each one into data (branch 24 of the
+plan).
 The `!!` notices of steps 0, 1, 2 and 11
 are data: a file beside each step's log holds them (step 0's copied
 there by audit.sh, step 11's step11.<pair>.warnings.jsonl), and KINDS
 gives each kind its list and its short title. Step 11's counts are
-data too: step11.<pair>.data.json.
+data too, and so is each group of locales it found changed, with what
+moved in it: step11.<pair>.data.json.
 
 load() is the strict reader: a key missing or added, or a state outside
 its list, is an error, never a default.
@@ -331,6 +335,8 @@ def step11_section(a, by_name):
     dpath = _file(d, f'step11.{a.pair}.data.json')
     counts = (step11_counts(dpath) if os.path.isfile(dpath)
               else not_reported(dpath))
+    findings = (step11_findings(dpath) if os.path.isfile(dpath)
+                else not_reported(dpath))
     cpath = _file(d, f'measured_order_characters.{a.pair}.tsv')
     if os.path.isfile(cpath):
         head, rows, tail = tsv_rows(cpath, CHARACTER_COLUMNS)
@@ -383,7 +389,7 @@ def step11_section(a, by_name):
         'sql_files': sql_files,
         'rules_beside': beside,
         'counts': counts,
-        'findings': NOT_YET,
+        'findings': findings,
     }
 
 
@@ -392,18 +398,33 @@ COUNT_KEYS = ['changed', 'unchanged', 'unchanged_as_far_as_measured',
               'not_measured', 'refused', 'only_old', 'only_new']
 
 
-def step11_counts(path):
-    """The counts step 11 wrote to PATH (locale_order.write_counts), as a
-    block of the report: load() checks every one of them."""
+def step11_data(path):
+    """The file step 11 wrote to PATH (locale_order.write_counts): its
+    counts and its findings."""
     try:
         got = json.loads(_read(path))
     except ValueError as e:
         raise ReportError(f'{path} is not what step 11 writes: {e}')
-    if not (isinstance(got, dict) and set(got) == {'step', 'counts'}
+    if not (isinstance(got, dict)
+            and set(got) == {'step', 'counts', 'findings'}
             and got['step'] == 11 and isinstance(got['counts'], dict)
-            and 'state' not in got['counts']):
+            and 'state' not in got['counts']
+            and isinstance(got['findings'], dict)
+            and got['findings'].get('state') == 'reported'):
         raise ReportError(f'{path} is not what step 11 writes')
-    return {'state': 'reported', **got['counts']}
+    return got
+
+
+def step11_counts(path):
+    """The counts step 11 wrote to PATH, as a block of the report: load()
+    checks every one of them."""
+    return {'state': 'reported', **step11_data(path)['counts']}
+
+
+def step11_findings(path):
+    """The findings step 11 wrote to PATH (locale_order.change_groups), as
+    a block of the report: load() checks every one of them."""
+    return step11_data(path)['findings']
 
 
 # ---------------------------------------------------------------- warnings
@@ -1334,6 +1355,173 @@ def _not_yet(where, obj):
         raise ReportError(f'{where} is {obj!r}')
 
 
+# What step 11 finds in a changed locale, in the order it finds it
+# (locale_order.LOCALE_KINDS); FINDING_DATA are those written as data,
+# the others not yet reported.
+FINDING_KINDS = ('moved', 'reversed', 'probes changed', 'left out',
+                 'told apart', 'did not move', 'undecided')
+FINDING_DATA = ('moved', 'reversed', 'did not move', 'undecided')
+FOUND_BY = ('step 11', 'its sort table alone')
+REACHES = ('imported', 'anywhere', 'superuser')
+STRING = re.compile(r'U\+([0-9A-F]{4,6})|bytes ([0-9A-F]{2}(?: [0-9A-F]{2})*)')
+
+
+def _string(where, tok):
+    """A string as step 11's data name it, as (0, code point) or (1,
+    length, its bytes as a number)."""
+    m = STRING.fullmatch(tok) if isinstance(tok, str) else None
+    if not m:
+        raise ReportError(f'{where} is not a string step 11 names: {tok!r}')
+    if m[1]:
+        return (0, int(m[1], 16))
+    b = bytes.fromhex(m[2])
+    return (1, len(b), int.from_bytes(b, 'big'))
+
+
+def _run_size(where, run):
+    """How many strings a run [first, last] holds: two strings of one
+    kind and one length, the first not after the last."""
+    if not (isinstance(run, list) and len(run) == 2):
+        raise ReportError(f'{where} is not a run: {run!r}')
+    a, b = (_string(where, x) for x in run)
+    if a[:-1] != b[:-1] or a[-1] > b[-1]:
+        raise ReportError(f'{where} is not a run: {run!r}')
+    return b[-1] - a[-1] + 1
+
+
+def _finding(where, x):
+    """One finding of a changed locale (locale_order.change_data)."""
+    if not isinstance(x, dict):
+        raise ReportError(f'{where} is not an object: {x!r}')
+    _one_of(f'{where}.kind', x.get('kind'), FINDING_KINDS)
+    kind = x['kind']
+    if kind not in FINDING_DATA:
+        _keys(where, x, ['kind', 'state', 'why'])
+        _not_yet(f'{where} ({kind})', {'state': x['state'],
+                                      'why': x['why']})
+        return
+    if kind == 'undecided':
+        _keys(where, x, ['kind', 'count', 'pairs'])
+        if not (_is_positive(x['count']) and isinstance(x['pairs'], list)
+                and len(x['pairs']) == x['count']):
+            raise ReportError(f'{where} counts {x["count"]!r} pairs and '
+                              'lists otherwise')
+        for i, pair in enumerate(x['pairs']):
+            if not (isinstance(pair, list) and len(pair) == 2):
+                raise ReportError(f'{where}.pairs[{i}] is {pair!r}')
+            for t in pair:
+                _string(f'{where}.pairs[{i}]', t)
+        return
+    more = {'moved': ['listed'], 'reversed': ['all'],
+            'did not move': ['listed']}[kind]
+    _keys(where, x, ['kind', 'count', 'characters', 'other_strings',
+                     'runs', *more])
+    if not all(_is_count(x[k]) for k in ('count', 'characters',
+                                          'other_strings')) or \
+            x['count'] != x['characters'] + x['other_strings']:
+        raise ReportError(f'{where}: {x["count"]!r} strings are not its '
+                          'characters and other strings')
+    if not isinstance(x['runs'], list):
+        raise ReportError(f'{where}.runs is {x["runs"]!r}')
+    held, last = 0, None
+    for i, run in enumerate(x['runs']):
+        held += _run_size(f'{where}.runs[{i}]', run)
+        first = _string(f'{where}.runs[{i}]', run[0])
+        if last is not None and first <= last:
+            raise ReportError(f'{where}.runs[{i}] is not after the run '
+                              'before it')
+        last = _string(f'{where}.runs[{i}]', run[1])
+    if held != x['count']:
+        raise ReportError(f'{where} counts {x["count"]} strings and its '
+                          f'runs hold {held}')
+    if kind == 'moved':
+        _one_of(f'{where}.listed', x['listed'],
+                ('none', 'each', 'runs', 'too many'))
+        if (x['listed'] == 'none') != (x['count'] == 0):
+            raise ReportError(f'{where} is listed {x["listed"]!r} with '
+                              f'{x["count"]} strings')
+    elif kind == 'did not move':
+        _one_of(f'{where}.listed', x['listed'], ('runs', 'too many'))
+    if kind != 'moved' and not x['count']:
+        raise ReportError(f'{where} holds no string')
+    if kind == 'reversed' and not _is_bool(x['all']):
+        raise ReportError(f'{where}.all is {x["all"]!r}')
+
+
+def _findings(where, f, verdicts):
+    """step 11's findings (locale_order.change_groups): each changed locale
+    of VERDICTS in one group and none other, the groups sorted by their
+    names, the headings they print under numbered from 0 with none
+    skipped, and each group's findings in the order step 11 finds them."""
+    _keys(where, f, ['state', 'groups'])
+    if not isinstance(f['groups'], list):
+        raise ReportError(f'{where}.groups is {f["groups"]!r}')
+    seen, printed, before = set(), set(), None
+    for i, g in enumerate(f['groups']):
+        w = f'{where}.groups[{i}]'
+        _keys(w, g, ['locales', 'printed_under', 'found_by', 'findings',
+                     'names_bytes', 'sort_table'])
+        if not (isinstance(g['locales'], dict) and g['locales']):
+            raise ReportError(f'{w}.locales is {g["locales"]!r}')
+        names = sorted(g['locales'])
+        if before is not None and names <= before:
+            raise ReportError(f'{w} is not after the group before it')
+        before = names
+        for name, e in g['locales'].items():
+            lw = f'{w}.locales[{name!r}]'
+            if name in seen:
+                raise ReportError(f'{lw} is in two groups')
+            seen.add(name)
+            _keys(lw, e, ['codeset', 'postgres'])
+            _keys(f'{lw}.codeset', e['codeset'], ['old', 'new'])
+            _keys(f'{lw}.postgres', e['postgres'],
+                  ['alias', 'spelling', 'reach'])
+            if not all(_is_str(v) for v in (*e['codeset'].values(),
+                                            e['postgres']['alias'],
+                                            e['postgres']['spelling'])):
+                raise ReportError(f'{lw} is {e!r}')
+            _one_of(f'{lw}.postgres.reach', e['postgres']['reach'], REACHES)
+        if not _is_count(g['printed_under']):
+            raise ReportError(f'{w}.printed_under is {g["printed_under"]!r}')
+        printed.add(g['printed_under'])
+        _one_of(f'{w}.found_by', g['found_by'], FOUND_BY)
+        if not _is_bool(g['names_bytes']):
+            raise ReportError(f'{w}.names_bytes is {g["names_bytes"]!r}')
+        _not_yet(f'{w}.sort_table', g['sort_table'])
+        found = g['findings']
+        if not isinstance(found, list):
+            raise ReportError(f'{w}.findings is {found!r}')
+        if g['found_by'] == 'its sort table alone':
+            if found or g['names_bytes']:
+                raise ReportError(f'{w}: step 11 found nothing in a change '
+                                  'its sort table alone found')
+            continue
+        for k, x in enumerate(found):
+            _finding(f'{w}.findings[{k}]', x)
+        kinds = [x['kind'] for x in found]
+        if kinds != sorted(set(kinds), key=FINDING_KINDS.index) or \
+                kinds[:1] != ['moved']:
+            raise ReportError(f'{w}.findings are {kinds!r}, not in the '
+                              'order step 11 finds them')
+        moved = found[0]['count']
+        if ('reversed' in kinds) != bool(moved) or \
+                ('did not move' in kinds and not (
+                    moved and 'told apart' in kinds)):
+            raise ReportError(f'{w}.findings are {kinds!r} with '
+                              f'{moved} strings moved')
+        if any(x.get('other_strings') or x['kind'] == 'undecided'
+               and any(t.startswith('bytes ') for p in x['pairs'] for t in p)
+               for x in found) and not g['names_bytes']:
+            raise ReportError(f'{w} counts a string by its bytes and says '
+                              'it names none')
+    changed = {n for n, v in verdicts.items() if v['verdict'] == 'changed'}
+    if seen != changed:
+        raise ReportError(f'{where} groups {sorted(seen ^ changed)[:5]} '
+                          'otherwise than the verdicts')
+    if printed != set(range(len(printed))):
+        raise ReportError(f'{where}: the headings are {sorted(printed)}')
+
+
 def load(path):
     """The report at PATH, checked whole: every key, and every state from
     its list. Raises ReportError on anything else."""
@@ -1565,7 +1753,10 @@ def load(path):
                                   f'otherwise: {wrong}')
         _stated(f'{where}.counts', o['counts'], ('reported', 'not reported'),
                 {'reported': counts, **nr})
-        _not_yet(f'{where}.findings', o['findings'])
+        _stated(f'{where}.findings', o['findings'],
+                ('reported', 'not reported'),
+                {'reported': lambda w, f: _findings(w, f, o['verdicts']),
+                 **nr})
     _stated('step11', r['step11'], ('not run', 'reported', 'not reported'),
             {'not run': s11_not_run, 'reported': s11, **nr})
     if ((r['warnings']['step11']['state'] == 'not run')

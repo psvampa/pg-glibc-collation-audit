@@ -13,6 +13,7 @@ file that are refused."""
 import copy
 import json
 import os
+import re
 import shutil
 import tempfile
 import unittest
@@ -86,7 +87,30 @@ def step11_files(d):
     write(d, f'measured_order_confirm.{PAIR}.1.UTF8.sql', 'select 1;\n')
     write(d, f'measured_order_rules.{PAIR}.txt', '     Each locale...\n')
     write(d, f'step11.{PAIR}.data.json',
-          json.dumps({'step': 11, 'counts': COUNTS}) + '\n')
+          json.dumps({'step': 11, 'counts': COUNTS,
+                      'findings': FINDINGS}) + '\n')
+
+
+# The findings of step11_files' changed locale, sv_SE, as
+# locale_order.change_groups writes them: one of each kind written as
+# data, and a pair named by its bytes.
+FINDINGS = {'state': 'reported', 'groups': [{
+    'locales': {'sv_SE': {
+        'codeset': {'old': 'ISO-8859-1', 'new': 'ISO-8859-1'},
+        'postgres': {'alias': 'none', 'spelling': 'none',
+                     'reach': 'imported'}}},
+    'printed_under': 0, 'found_by': 'step 11',
+    'findings': [
+        {'kind': 'moved', 'count': 1, 'characters': 1, 'other_strings': 0,
+         'runs': [['U+00E5', 'U+00E5']], 'listed': 'each'},
+        {'kind': 'reversed', 'count': 2, 'characters': 2,
+         'other_strings': 0, 'all': False, 'runs': [['U+00E4', 'U+00E5']]},
+        {'kind': 'told apart', **rd.NOT_YET},
+        {'kind': 'did not move', 'count': 1, 'characters': 1,
+         'other_strings': 0, 'runs': [['U+00E4', 'U+00E4']],
+         'listed': 'runs'},
+        {'kind': 'undecided', 'count': 1, 'pairs': [['U+0061', 'bytes 80']]}],
+    'names_bytes': True, 'sort_table': rd.NOT_YET}]}
 
 
 # The counts of step11_files' two locales, C unchanged (firm, built into
@@ -521,6 +545,7 @@ class EveryFileWritten(_Folder):
              'file': f'measured_order_confirm.{PAIR}.UTF8.sql'}])
         self.assertEqual(s11['rules_beside']['state'], 'set beside')
         self.assertEqual(s11['counts'], {'state': 'reported', **COUNTS})
+        self.assertEqual(s11['findings'], FINDINGS)
         self.assertEqual(r['step2']['rules_by_name']['locales'], {
             'state': 'reported', 'by_name': {
                 'C': {'key': 'none', 'rules': 'built in',
@@ -1260,7 +1285,7 @@ class AFileNotWritten(_Folder):
                 ('measured_order_summary', '.txt', None),
                 ('measured_order_verdicts', '.json', None),
                 ('measured_order_characters', '.tsv', 'characters'),
-                ('step11', '.data.json', 'counts')):
+                ('step11', '.data.json', ('counts', 'findings'))):
             with self.subTest(name=name):
                 step2_files(self.d, **MACHINES)
                 step11_files(self.d)
@@ -1269,9 +1294,11 @@ class AFileNotWritten(_Folder):
                     route='builds', old_node='/a', new_node='/b',
                     order_words='forward none build build builds',
                     step11=True)['step11']
-                got = s11[part] if part else s11
-                self.assertEqual(got['state'], 'not reported')
-                self.assertIn(name, got['why'])
+                for got in ([s11[x] for x in part]
+                            if isinstance(part, tuple)
+                            else [s11[part] if part else s11]):
+                    self.assertEqual(got['state'], 'not reported')
+                    self.assertIn(name, got['why'])
 
     def test_rules_beside_not_set(self):
         """No rules file: why is the log's lines, as audit.sh prints them;
@@ -1391,6 +1418,105 @@ class TheReaderIsStrict(_Folder):
         with self.assertRaises(rd.ReportError):
             rd.load(p)
 
+    def test_findings_that_do_not_hang_together(self):
+        """Step 11's findings, each written wrong alone, refused for the
+        reason named: a count that is not its characters and other
+        strings, or not what its runs or pairs hold; a run backwards, out
+        of order or naming no string; a kind unknown, out of order, or
+        where what moved says it cannot be; a finding not yet reported
+        that says otherwise; a pair in bytes the group says it names
+        none of; a change its sort table alone found with findings; a
+        locale in two groups or in none, groups out of order, a heading
+        skipped; and a value outside its list."""
+        def group(r):
+            return r['step11']['findings']['groups'][0]
+
+        def found(r, kind):
+            return next(x for x in group(r)['findings']
+                        if x['kind'] == kind)
+
+        def drop(r, kind):
+            group(r)['findings'].remove(found(r, kind))
+
+        def swap(r):
+            f = group(r)['findings']
+            f[1], f[2] = f[2], f[1]
+
+        def two(r):
+            g = copy.deepcopy(group(r))
+            g['locales']['zz'] = g['locales']['sv_SE']
+            r['step11']['findings']['groups'].append(g)
+        cases = [
+            ('a count', lambda r: found(r, 'moved').update(count=2),
+             'are not its characters and other strings'),
+            ('runs short', lambda r: found(r, 'moved').update(
+                count=2, characters=2), 'its runs hold 1'),
+            ('a run backwards', lambda r: found(r, 'reversed').update(
+                runs=[['U+00E5', 'U+00E4']]), 'is not a run'),
+            ('a run of two kinds', lambda r: found(r, 'reversed').update(
+                runs=[['U+0041', 'bytes 80']]), 'is not a run'),
+            ('a run of two lengths', lambda r: found(r, 'reversed').update(
+                runs=[['bytes 80', 'bytes 80 81']]), 'is not a run'),
+            ('a count below zero', lambda r: found(r, 'moved').update(
+                characters=-1, other_strings=2),
+             'are not its characters and other strings'),
+            ('runs out of order', lambda r: found(r, 'did not move').update(
+                count=2, characters=2,
+                runs=[['U+00E4', 'U+00E4'], ['U+00E1', 'U+00E1']]),
+             'is not after the run before it'),
+            ('no string', lambda r: found(r, 'moved').update(
+                runs=[['X+00E5', 'X+00E5']]), 'is not a string step 11'),
+            ('an unknown kind', lambda r: found(r, 'reversed').update(
+                kind='sorted'), 'none of'),
+            ('kinds out of order', swap, 'not in the order step 11'),
+            ('moved and nothing sorts differently',
+             lambda r: drop(r, 'reversed'), 'with 1 strings moved'),
+            ('did not move with no pairs', lambda r: drop(r, 'told apart'),
+             'with 1 strings moved'),
+            ('pairs miscounted', lambda r: found(r, 'undecided').update(
+                count=2), 'lists otherwise'),
+            ('a pair of one', lambda r: found(r, 'undecided').update(
+                pairs=[['U+0061']]), 'pairs[0] is'),
+            ('not yet reported, otherwise', lambda r: found(
+                r, 'told apart').update(why='x'), 'told apart'),
+            ('listed as none', lambda r: found(r, 'moved').update(
+                listed='none'), "is listed 'none' with 1 strings"),
+            ('bytes and no note', lambda r: group(r).update(
+                names_bytes=False), 'says it names none'),
+            ('a table change with findings', lambda r: group(r).update(
+                found_by='its sort table alone', names_bytes=False),
+             'its sort table alone'),
+            ('a table change naming bytes', lambda r: group(r).update(
+                found_by='its sort table alone', findings=[]),
+             'its sort table alone'),
+            ('in two groups', two, 'is in two groups'),
+            ('in no group', lambda r: group(r).update(locales={
+                'sv_FI': group(r)['locales']['sv_SE']}),
+             'otherwise than the verdicts'),
+            ('groups out of order', lambda r: r['step11']['findings'][
+                'groups'].append(copy.deepcopy(group(r))),
+             'is not after the group before it'),
+            ('a heading skipped', lambda r: group(r).update(printed_under=1),
+             'the headings are [1]'),
+            ('a reach', lambda r: group(r)['locales']['sv_SE']['postgres']
+             .update(reach='nowhere'), 'none of'),
+            ('no codeset', lambda r: group(r)['locales']['sv_SE']['codeset']
+             .update(old=''), "locales['sv_SE'] is"),
+            ('the sort table', lambda r: group(r).update(sort_table={
+                'state': 'reported', 'why': 'x'}), 'sort_table is'),
+            ('a key less', lambda r: group(r).pop('names_bytes'),
+             'has the keys'),
+        ]
+        for name, change, msg in cases:
+            with self.subTest(case=name):
+                r = copy.deepcopy(self.good)
+                change(r)
+                p = os.path.join(self.d, 'changed.json')
+                with open(p, 'w', encoding='utf-8') as f:
+                    json.dump(r, f)
+                with self.assertRaisesRegex(rd.ReportError, re.escape(msg)):
+                    rd.load(p)
+
     def test_the_unchanged_report_is_read(self):
         p = os.path.join(self.d, 'same.json')
         with open(p, 'w', encoding='utf-8') as f:
@@ -1480,10 +1606,15 @@ class TheReaderIsStrict(_Folder):
 
     def test_the_counts_file_is_read_whole(self):
         """A file step 11 did not write as it writes it: refused, never
-        read as counts."""
+        read as counts or findings."""
+        whole = {'step': 11, 'counts': COUNTS, 'findings': FINDINGS}
         for text in ('{"step": 11}\n', '{"step": 2, "counts": {}}\n',
                      '{"step": 11, "counts": {"state": "reported"}}\n',
-                     '{"step": 11, "counts": []}\n', '{"step": 11, "co'):
+                     '{"step": 11, "counts": []}\n', '{"step": 11, "co',
+                     json.dumps({'step': 11, 'counts': COUNTS}),
+                     json.dumps({**whole, 'findings': []}),
+                     json.dumps({**whole, 'findings': rd.NOT_YET}),
+                     json.dumps({**whole, 'more': 1})):
             with self.subTest(text=text):
                 write(self.d, f'step11.{PAIR}.data.json', text)
                 with self.assertRaises(rd.ReportError):

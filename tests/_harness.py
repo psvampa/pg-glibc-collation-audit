@@ -737,9 +737,10 @@ def check_report(returncode, out, out_dir):
     one, as a warning of the data file with the same text; the
     summary's warnings block, those warnings once each; and step 11's
     log against its warnings file, and that file against the report's
-    warnings of step 11 (check_step11_warnings); step 11's log and
-    summary against its counts file, and that file against the report's
-    step11.counts (check_step11_counts). A run that
+    warnings of step 11 (check_step11_warnings); step 11's log, summary
+    and characters file against its data file, and that file against
+    the report's step11.counts and step11.findings
+    (check_step11_counts). A run that
     printed the summary and has no data file fails here, whatever its
     exit code. No run leaves a report.*.partial.
     Called on the runs of run_wrapper (the one with check=False asserts
@@ -1706,10 +1707,11 @@ def check_step11_warnings(r, out_dir, path):
 
 
 def check_step11_counts(r, out_dir, path):
-    """Step 11's counts in the run of the report `r` read from `path`: the
-    data file step 11 wrote holds what its log and its summary print
-    (step11_counts_held), and the report's step11.counts is that file's;
-    no file where step 11 did not run."""
+    """Step 11's counts and findings in the run of the report `r` read
+    from `path`: the data file step 11 wrote holds what its log and its
+    summary print (step11_counts_held), and the report's step11.counts
+    and step11.findings are that file's; no file where step 11 did not
+    run."""
     import report_data as rd
     slug = os.path.basename(path)[len('report.'):-len('.json')]
     f = os.path.join(out_dir, f'step11.{slug}.data.json')
@@ -1727,18 +1729,31 @@ def check_step11_counts(r, out_dir, path):
         report = fh.read()
     with open(summary, encoding='utf-8') as fh:
         brief = fh.read()
-    step11_counts_held(report, brief, f, log)
+    # audit.sh always asks step 11 for its characters file, written
+    # before the report: one that is not there fails here.
+    chars = os.path.join(out_dir, f'measured_order_characters.{slug}.tsv')
+    with open(chars, encoding='utf-8') as fh:
+        text = fh.read()
+    step11_counts_held(report, brief, f, log, characters=text)
     if s11['counts'] != rd.step11_counts(f):
         raise AssertionError(f'{path}: step 11 counts {s11["counts"]!r}, '
                              f'{f} holds {rd.step11_counts(f)!r}')
+    if s11['findings'] != rd.step11_findings(f):
+        raise AssertionError(f'{path}: step 11 findings '
+                             f'{s11["findings"]!r}, {f} holds '
+                             f'{rd.step11_findings(f)!r}')
 
 
-def step11_counts_held(report, summary, path, where, *, unread=None):
+def step11_counts_held(report, summary, path, where, *, unread=None,
+                       characters=None):
     """The counts step 11 wrote to `path` (locale_order.write_counts)
     against what test_locale_order's readers take from the text it
     printed: parse_report of its report (`report`), and parse_summary of
     its summary (`summary`, None where it wrote none). Each count, each
-    machine's name and number of locales, and the line of totals of both.
+    machine's name and number of locales, and the line of totals of both;
+    then the findings it wrote beside them (step11_groups_held), with
+    the characters file's text (`characters`, None where none was
+    written).
     A file that is not there is right only where no report was printed
     (a comparison refused). UNREAD is why the readers cannot read this
     report (a test whose locale names they cannot split): then the file
@@ -1796,7 +1811,256 @@ def step11_counts_held(report, summary, path, where, *, unread=None):
         if got != want:
             raise AssertionError(f'the summary of {where} prints the counts '
                                  f'{got!r}, {path} holds {want!r}')
+    step11_groups_held(r, s if summary is not None else None,
+                       rd.step11_findings(path), path, where,
+                       t.parse_characters(characters)
+                       if characters is not None else None, characters)
     return c
+
+
+def _codeset_label(cs):
+    # heading()'s label of a locale's two encodings, 'unknown' as data
+    # writes a codeset it did not read.
+    a, b = (None if x == 'unknown' else x for x in (cs['old'], cs['new']))
+    if a == b:
+        return a or 'encoding unknown'
+    return f'{a or "encoding unknown"} before, {b or "unknown"} now'
+
+
+def _also_of(names, locales):
+    """What parse_also reads of the 'also, in PostgreSQL' line of the
+    locales NAMES, from their entries of step 11's data (None where the
+    line has nothing to say)."""
+    aliases, spellings, who = {}, [], {'anywhere': [], 'superuser': []}
+    spelt = []
+    for x in sorted(names):
+        cs = locales[x]['codeset']['old']
+        p = locales[x]['postgres']
+        if p['alias'] != 'none':
+            aliases.setdefault(cs, []).append(p['alias'])
+        sp = p['spelling']
+        if p['reach'] == 'superuser':
+            if sp != 'none' and sp not in names:
+                spelt.append(sp)
+        elif sp != 'none' and sp not in names and sp not in spellings:
+            spellings.append(sp)
+        if p['reach'] != 'imported':
+            who[p['reach']].append(x)
+    out = {'aliases': aliases, 'spellings': spellings}
+    for reach, group in who.items():
+        if not group:
+            continue
+        if len(group) < len(names):
+            w = ', '.join(group)
+        else:
+            w = 'this name' if len(group) == 1 else 'these names'
+        out[reach] = [w] if reach == 'anywhere' else [(w, spelt)]
+    return out if (aliases or spellings or len(out) > 2) else None
+
+
+# The rows of the characters file that step 11's findings of a change
+# write (locale_order.LOCALE_KINDS' rows), not those of its sort table.
+STEP11_ROWS = ('moved', 'sorts differently', 'pairs changed',
+               'not compared', 'told apart differently', 'not decided')
+
+
+def step11_groups_held(r, s, findings, path, where, files=None,
+                       text=None):
+    """step 11's findings, as it wrote them to PATH (change_groups),
+    against what test_locale_order's readers take from the text: each
+    group's locales under one heading of the report (parse_report) and
+    of the summary (parse_summary), with the encodings and the PostgreSQL
+    names the heading prints, the groups that share a heading exactly
+    those that say so; and what moved, what sorts differently, what did
+    not move and the pairs no measurement decides, counted and named as
+    parse_details and parse_brief read them; and the note on names in
+    bytes where a group names one; and, where the run wrote its
+    characters file (TEXT, and FILES, parse_characters of it; else None),
+    every run that moved or sorts differently and every pair no
+    measurement decides, as its rows name them, what did not move, as the
+    strings of its chains that no moved row names, and each group's
+    names_bytes, as whether its rows of step 11 name a string by its
+    bytes. What did not move is counted, not named, where the report
+    lists too many; then only the characters file holds it. S is None
+    where no summary was written."""
+    import test_locale_order as t
+    import locale_order as lo
+    by = t.by_name(r)
+    groups = findings['groups']
+    # Whether each group's rows of step 11 name a string by its bytes,
+    # the separator of a test pair aside (two U+0001, named alike on
+    # every machine): the characters file names every string the report
+    # and the summary name or count, and more.
+    in_bytes = {}
+    if text is not None:
+        sep = 'bytes ' + lo.spaced(lo.SEPARATOR)
+        for line in text.split('\n'):
+            f_ = line.split('\t')
+            if len(f_) == 8 and f_[1] in STEP11_ROWS:
+                in_bytes[f_[0]] = in_bytes.get(f_[0], False) or any(
+                    x != sep for x in re.findall(
+                        r'\bbytes [0-9A-F]{2}(?: [0-9A-F]{2})*',
+                        '\t'.join(f_[2:])))
+    printed = {}
+    for g in groups:
+        names = sorted(g['locales'])
+        heads = {id(by.get(x)) for x in names}
+        if any(x not in by for x in names) or len(heads) != 1:
+            raise AssertionError(f'{where}: {path} groups {names}, which the '
+                                 'report does not print under one heading')
+        printed.setdefault(g['printed_under'], set()).update(heads)
+    if any(len(v) != 1 for v in printed.values()) or \
+            len({next(iter(v)) for v in printed.values()}) != len(printed) \
+            or len(printed) != len(r['changes']):
+        raise AssertionError(f'{where}: {path} puts its groups under '
+                             f'{len(printed)} heading(s), the report prints '
+                             f'{len(r["changes"])}')
+    for g in groups:
+        names = sorted(g['locales'])
+        ch = by[names[0]]
+        k = g['printed_under']
+        if k >= len(r['changes']) or r['changes'][k] is not ch:
+            raise AssertionError(f'{where}: {path} puts {names} under '
+                                 f'heading {k}, the report under another')
+        union = sorted(x for h in groups
+                       if h['printed_under'] == g['printed_under']
+                       for x in h['locales'])
+        locales = {x: e for h in groups for x, e in h['locales'].items()
+                   if x in union}
+        want = {x: _codeset_label(g['locales'][x]['codeset']) for x in names}
+        got = {x: ch['names'][x] for x in names}
+        if got != want:
+            raise AssertionError(f'{where}: the heading of {names} prints '
+                                 f'{got!r}, {path} holds {want!r}')
+        also = _also_of(union, locales)
+        if ch['also'] != also:
+            raise AssertionError(f'{where}: the PostgreSQL names of {union} '
+                                 f'print {ch["also"]!r}, {path} holds '
+                                 f'{also!r}')
+        if s is not None:
+            sa = s['changes'][names[0]]['also']
+            if sa != also:
+                raise AssertionError(f'{where}: the summary prints the '
+                                     f'PostgreSQL names of {union} as '
+                                     f'{sa!r}, {path} holds {also!r}')
+        if g['found_by'] == 'its sort table alone':
+            if ch['moved'] is not None or ch['moved_count'] is not None:
+                raise AssertionError(f'{where}: the report prints what moved '
+                                     f'in {names}, which {path} says its '
+                                     'sort table alone found')
+            continue
+        f = {x['kind']: x for x in g['findings']}
+        m = f['moved']
+
+        def runs(x):
+            return [(t.element(a), t.element(b)) for a, b in x['runs']]
+
+        def strings(x):
+            return [e for a, b in runs(x) for e in t.run_elements(a, b)]
+
+        want = {'moved_count': m['count'], 'moved': None, 'moved_runs': None,
+                'moved_others': None, 'reversed': None,
+                'reversed_others': None, 'all_reversed': False,
+                'still_count': None, 'still_others': None, 'still': None,
+                'undecided': 0}
+        if m['listed'] == 'none':
+            want['moved'] = []
+        elif m['listed'] == 'each':
+            want['moved'] = strings(m)
+        else:
+            want['moved_others'] = m['other_strings']
+            if m['listed'] == 'runs':
+                want['moved_runs'] = runs(m)
+        if 'reversed' in f:
+            want.update(reversed=f['reversed']['count'],
+                        reversed_others=f['reversed']['other_strings'],
+                        all_reversed=f['reversed']['all'])
+        if 'did not move' in f:
+            d = f['did not move']
+            want.update(still_count=d['count'],
+                        still_others=d['other_strings'])
+            if d['listed'] == 'runs':
+                want['still'] = runs(d)
+        if 'undecided' in f:
+            want['undecided'] = f['undecided']['count']
+        got = {k: ch.get(k) for k in want}
+        if m['listed'] == 'each':
+            got['moved_others'] = None
+            if sum(isinstance(e, bytes) for e in ch['moved']) != \
+                    m['other_strings']:
+                raise AssertionError(f'{where}: the report names other '
+                                     f'strings that moved in {names} '
+                                     f'otherwise than {path}')
+        if got != want:
+            raise AssertionError(f'{where}: the report prints what changed in '
+                                 f'{names} as {got!r}, {path} holds {want!r}')
+        if files is not None:
+            rows = files.get(tuple(names), [])
+
+            def pair_key(p):
+                return (t.run_key(p[0]), t.run_key(p[1]))
+            in_data = {'moved': runs(m),
+                       'sorts differently': (runs(f['reversed'])
+                                             if 'reversed' in f else []),
+                       'not decided': sorted(
+                           ([t.element(a), t.element(b)]
+                            for a, b in (f['undecided']['pairs']
+                                         if 'undecided' in f else [])),
+                           key=pair_key)}
+            in_rows = {'moved': [x for r_ in rows if r_['finding'] == 'moved'
+                                 for x in r_['runs']],
+                       'sorts differently': [
+                           x for r_ in rows
+                           if r_['finding'] == 'sorts differently'
+                           for x in r_['runs']],
+                       'not decided': sorted(
+                           (r_['chars'] for r_ in rows
+                            if r_['finding'] == 'not decided'),
+                           key=pair_key)}
+            if in_rows != in_data:
+                raise AssertionError(f'{where}: the characters file names '
+                                     f'what changed in {names} otherwise '
+                                     f'than {path}')
+            # Asked only where something moved (locale_findings).
+            moved = set(strings(m))
+            still = sorted({e for r_ in rows
+                            if r_['finding'] == 'told apart differently'
+                            for e in r_['chars']} - moved,
+                           key=t.run_key) if moved else []
+            dn = f.get('did not move')
+            if still != (strings(dn) if dn else []):
+                raise AssertionError(f'{where}: the chains of the characters '
+                                     f'file leave {len(still)} string(s) of '
+                                     f'{names} that did not move, {path} '
+                                     'says otherwise')
+            if g['names_bytes'] != in_bytes.get(','.join(names), False):
+                raise AssertionError(f'{where}: {path} says {names} name a '
+                                     f'string by its bytes: '
+                                     f'{g["names_bytes"]}, its rows say '
+                                     'otherwise')
+        if s is not None:
+            b = t.parse_brief(s['changes'][names[0]]['brief'])
+            want = {'moved_count': m['count'],
+                    'moved': (strings(m) if m['listed'] in ('none', 'each')
+                              else None),
+                    'reversed': want['reversed'],
+                    'still_count': want['still_count'],
+                    'still_others': want['still_others'],
+                    'still': want['still'], 'undecided': want['undecided']}
+            got = {k: b.get(k) for k in want}
+            if got != want:
+                raise AssertionError(f'{where}: the summary prints what '
+                                     f'changed in {names} as {got!r}, {path} '
+                                     f'holds {want!r}')
+    if any(g['names_bytes'] for g in groups):
+        for text, said in (('report', r.get('others_note')),
+                           ('summary', s and s.get('others_note'))):
+            if text == 'summary' and s is None:
+                continue
+            if not (said or '').startswith(t.OTHERS_NOTE):
+                raise AssertionError(f'{where}: {path} names a string by its '
+                                     f'bytes and the {text} does not say how '
+                                     'such a string is named')
 
 
 def _summary_of(argv, out, where):
@@ -1817,12 +2081,28 @@ def _summary_of(argv, out, where):
         return f.read()
 
 
+def _characters_of(argv, out):
+    """The characters file a comparison wrote to its argv's
+    --characters-to; None where it was given none, or printed no report
+    (refused). compare writes it before the report, so one asked for and
+    not there beside a printed report raises in open()."""
+    argv = [str(x) for x in argv]
+    if '--characters-to' not in argv:
+        return None
+    if not any(ln.startswith('Old machine: ') for ln in out.split('\n')):
+        return None
+    with open(argv[argv.index('--characters-to') + 1],
+              encoding='utf-8') as f:
+        return f.read()
+
+
 def held_main(main, stdout):
     """main() of locale_order.py, run in process with its stdout sent to
     the StringIO `stdout`, under glibc_locale_data.WARNINGS_ENV and
     locale_order.STEP11_DATA_ENV: what it printed and what it wrote of its
-    `!!` agree (step11_written), and so do its counts (step11_counts_held,
-    its summary read from the --summary-to of sys.argv), on a refusal too.
+    `!!` agree (step11_written), and so do its counts and findings
+    (step11_counts_held, its summary and characters file read from the
+    --summary-to and --characters-to of sys.argv), on a refusal too.
     Returns what main() returns."""
     import tempfile
     from unittest import mock
@@ -1841,7 +2121,8 @@ def held_main(main, stdout):
                 out = stdout.getvalue()[start:]
                 step11_written(out, path, 'main()')
                 step11_counts_held(out, _summary_of(argv, out, 'main()'),
-                                   data, 'main()')
+                                   data, 'main()',
+                                   characters=_characters_of(argv, out))
     return rc
 
 
@@ -1849,8 +2130,9 @@ def held_compare(argv, *, counts_unread=None, **kw):
     """subprocess.run(argv, capture_output=True, **kw) of a
     `locale_order.py --compare`, under glibc_locale_data.WARNINGS_ENV and
     locale_order.STEP11_DATA_ENV: what it printed and what it wrote of its
-    `!!` agree (step11_written), and so do its counts (step11_counts_held,
-    with the summary of its --summary-to), on a refusal too.
+    `!!` agree (step11_written), and so do its counts and findings
+    (step11_counts_held, with the summary of its --summary-to and the
+    characters file of its --characters-to), on a refusal too.
     COUNTS_UNREAD is why the readers cannot read its report
     (step11_counts_held's unread). Returns the CompletedProcess."""
     import tempfile
@@ -1869,7 +2151,8 @@ def held_compare(argv, *, counts_unread=None, **kw):
         where = ' '.join(map(str, argv))
         step11_written(out, path, where)
         step11_counts_held(out, _summary_of(argv, out, where), data, where,
-                           unread=counts_unread)
+                           unread=counts_unread,
+                           characters=_characters_of(argv, out))
     return p
 
 

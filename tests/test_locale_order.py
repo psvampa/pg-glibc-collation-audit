@@ -4345,6 +4345,72 @@ class TheCountsFile(SmallFiles, Variants):
                     uses += [name for _ in given.finditer(f.read())]
         self.assertEqual(uses, ['test_locale_order.py'])
 
+    def test_a_string_in_bytes_the_rule_misses_stops_the_run(self):
+        """names_bytes alone decides the note on names in bytes: a change
+        whose lines name a string by its bytes that the rule does not see
+        stops the comparison before a line is printed (RHEL8 to RHEL9
+        names some by their bytes)."""
+        out = io.StringIO()
+        with unittest.mock.patch.object(m, 'names_bytes', lambda *a: False), \
+                contextlib.redirect_stdout(out):
+            with self.assertRaisesRegex(LookupError,
+                                        'names_bytes does not count'):
+                m.compare(RHEL8, RHEL9)
+        self.assertEqual(out.getvalue(), '')
+
+
+class NamesBytesEachRoute(unittest.TestCase):
+    """names_bytes, the one rule for the note on names in bytes, sees a
+    string that is not a character on each route a finding names one by,
+    alone: what moved, the string a run is tested against, what sorts
+    differently, what did not move, a pair no measurement decides, a
+    probe pair that changed, a chain of neighbours, and the probe pair
+    its test takes. No comparison of the suite reaches every route alone,
+    since another route of the same change names one too."""
+
+    def setUp(self):
+        # 'a', 'b', 'c' and byte 80, which UTF-8 reads as no character.
+        names = m.Names([b'a', b'b', b'\x80', b'c'], 'UTF-8')
+        self.naming = m.Naming(names)
+        self.other = 2
+        self.assertEqual([names.other[i] for i in range(4)], [0, 0, 1, 0])
+
+    def says(self, kind, d, probes='61.62> ? none'):
+        return m.names_bytes([(kind, d)], self.naming, probes)
+
+    def test_each_route_alone(self):
+        x = self.other
+        cases = [
+            ('moved', {'moved': [x], 'runs': [(x, x)],
+                       'partner': {x: (0, '<')}},
+             {'moved': [0], 'runs': [(0, 0)], 'partner': {0: (1, '<')}}),
+            ('moved', {'moved': [0], 'runs': [(0, 0)],
+                       'partner': {0: (x, '<')}},
+             {'moved': [0], 'runs': [(0, 0)], 'partner': {0: (3, '<')}}),
+            ('reversed', {'flagged': [0, x]}, {'flagged': [0, 1]}),
+            ('did not move', {'still': [x]}, {'still': [3]}),
+            ('undecided', {'pairs': [(0, x)]}, {'pairs': [(0, 1)]}),
+            ('probes changed', {'before': '61.80> ? none',
+                                'now': '61.62> ? none'},
+             {'before': '61.63> ? none', 'now': '61.62> ? none'}),
+            ('told apart', {'chains': [([(0, 0), (x, x)], 0, 0, None, None,
+                                        'both')], 'levels': [0]},
+             {'chains': [([(0, 1)], 0, 0, None, None, 'both')],
+              'levels': [0]}),
+        ]
+        for kind, with_other, without in cases:
+            with self.subTest(kind=kind, data=with_other):
+                self.assertTrue(self.says(kind, with_other))
+                self.assertFalse(self.says(kind, without))
+
+    def test_the_probe_pair_of_a_chain_s_test(self):
+        """A chain whose test takes a probe pair (test_level): the pair's
+        string that is no character is named in the characters file."""
+        chain = {'chains': [([(0, 1)], 0b10, 0b00, None, None, 'both')],
+                 'levels': [0]}
+        self.assertTrue(self.says('told apart', chain, '61.80> ? none'))
+        self.assertFalse(self.says('told apart', chain, '61.63> ? none'))
+
 
 class Refusals(SmallFiles, Variants):
     """A measurement that is not whole is refused: exit 2, a message, and not
@@ -6463,7 +6529,8 @@ class FindingKinds(unittest.TestCase):
         for limit in (m.LIST_LIMIT, 0):
             with unittest.mock.patch.object(m, 'LIST_LIMIT', limit):
                 for name, args in self.changes().items():
-                    lines, brief, rows, others, sql = m.describe_change(*args)
+                    lines, brief, rows, others, sql, data = \
+                        m.describe_change(*args)
                     # Code points in UTF-8: every string a character.
                     self.assertFalse(others)
                     old, nw, o, n = args
@@ -17423,13 +17490,12 @@ class WrapsByColumns(unittest.TestCase):
                       key=lambda c: len(unicodedata.name(chr(c), '')))
 
         class Naming:
-            def counted(self, moved):
-                return f'{len(moved)} character(s)'
-
             long = staticmethod(m.character)
 
         lines = m.moved_lines({'moved': [longest, 0x57], 'runs': [],
-                               'naming': Naming()})
+                               'naming': Naming(),
+                               'data': {'listed': 'each', 'characters': 2,
+                                        'other_strings': 0}})
         self.assertEqual(_harness.wide_lines(
             '\n'.join('    ' + x for x in lines)), [])
         self.assertGreater(len(lines), 3, lines)
