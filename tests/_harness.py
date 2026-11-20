@@ -737,7 +737,9 @@ def check_report(returncode, out, out_dir):
     one, as a warning of the data file with the same text; the
     summary's warnings block, those warnings once each; and step 11's
     log against its warnings file, and that file against the report's
-    warnings of step 11 (check_step11_warnings). A run that
+    warnings of step 11 (check_step11_warnings); step 11's log and
+    summary against its counts file, and that file against the report's
+    step11.counts (check_step11_counts). A run that
     printed the summary and has no data file fails here, whatever its
     exit code. No run leaves a report.*.partial.
     Called on the runs of run_wrapper (the one with check=False asserts
@@ -897,6 +899,7 @@ def check_report(returncode, out, out_dir):
     check_warnings(r, out_dir, path)
     check_summary_warnings(r, out, path)
     check_step11_warnings(r, out_dir, path)
+    check_step11_counts(r, out_dir, path)
 
 
 def check_warnings(r, out_dir, path):
@@ -1702,41 +1705,171 @@ def check_step11_warnings(r, out_dir, path):
                              f'{recs!r}')
 
 
+def check_step11_counts(r, out_dir, path):
+    """Step 11's counts in the run of the report `r` read from `path`: the
+    data file step 11 wrote holds what its log and its summary print
+    (step11_counts_held), and the report's step11.counts is that file's;
+    no file where step 11 did not run."""
+    import report_data as rd
+    slug = os.path.basename(path)[len('report.'):-len('.json')]
+    f = os.path.join(out_dir, f'step11.{slug}.data.json')
+    s11 = r['step11']
+    if s11['state'] == 'not run':
+        if os.path.exists(f):
+            raise AssertionError(f'{f} written, but step 11 did not run')
+        return
+    if s11['state'] != 'reported':
+        raise AssertionError(f'{path}: step 11 is {s11["state"]!r}, but '
+                             'audit.sh reached its summary')
+    log = os.path.join(out_dir, f'measured_order.{slug}.log')
+    summary = os.path.join(out_dir, f'measured_order_summary.{slug}.txt')
+    with open(log, encoding='utf-8') as fh:
+        report = fh.read()
+    with open(summary, encoding='utf-8') as fh:
+        brief = fh.read()
+    step11_counts_held(report, brief, f, log)
+    if s11['counts'] != rd.step11_counts(f):
+        raise AssertionError(f'{path}: step 11 counts {s11["counts"]!r}, '
+                             f'{f} holds {rd.step11_counts(f)!r}')
+
+
+def step11_counts_held(report, summary, path, where, *, unread=None):
+    """The counts step 11 wrote to `path` (locale_order.write_counts)
+    against what test_locale_order's readers take from the text it
+    printed: parse_report of its report (`report`), and parse_summary of
+    its summary (`summary`, None where it wrote none). Each count, each
+    machine's name and number of locales, and the line of totals of both.
+    A file that is not there is right only where no report was printed
+    (a comparison refused). UNREAD is why the readers cannot read this
+    report (a test whose locale names they cannot split): then the file
+    is only read, by report_data's reader."""
+    import report_data as rd
+    printed = any(ln.startswith('Old machine: ')
+                  for ln in report.split('\n'))
+    if not os.path.exists(path):
+        if printed:
+            raise AssertionError(f'{where} printed a report and wrote no '
+                                 f'{path}')
+        return None
+    if not printed:
+        raise AssertionError(f'{where} wrote {path} and printed no report')
+    c = rd.step11_counts(path)
+    if unread is not None:
+        if not (isinstance(unread, str) and unread):
+            raise AssertionError(f'no reason why {where} is not read')
+        return c
+    import test_locale_order as t
+    m = c['machines']
+    totals = {'old': m['old']['locales'], 'changed': c['changed'],
+              'unchanged': c['unchanged'],
+              'partly': c['unchanged_as_far_as_measured'],
+              'not measured': c['not_measured'], 'refused': c['refused'],
+              'not on new': c['only_old']}
+    r = t.parse_report(report)
+    got = {'old': r['old'], 'new': r['new'],
+           'changed': len({x for ch in r['changes'] for x in ch['names']}),
+           'unchanged': r['unchanged'], 'totals': r['totals'],
+           'not measured': len(r['unmeasured']), 'refused': len(r['refused']),
+           'not on new': len(r['not_on_new']),
+           'only new': len(r['only_new'])}
+    want = {'old': (m['old']['label'], m['old']['locales']),
+            'new': (m['new']['label'], m['new']['locales']),
+            'changed': c['changed'], 'unchanged': c['unchanged'],
+            'totals': totals, 'not measured': c['not_measured'],
+            'refused': c['refused'], 'not on new': c['only_old'],
+            'only new': c['only_new']}
+    if got != want:
+        raise AssertionError(f'{where} prints the counts {got!r}, {path} '
+                             f'holds {want!r}')
+    if summary is not None:
+        s = t.parse_summary(summary)
+        got = {'machines': s['machines'], 'changed': len(s['changes']),
+               'not known': len(s['refused']) + len(s['unmeasured'])
+               + len(s['not_on_new']),
+               'only new': len(s['only_new']),
+               'totals': t.totals_of(s['totals'])}
+        want = {'machines': (m['old']['label'], m['new']['label']),
+                'changed': c['changed'],
+                'not known': c['refused'] + c['not_measured']
+                + c['only_old'],
+                'only new': c['only_new'], 'totals': totals}
+        if got != want:
+            raise AssertionError(f'the summary of {where} prints the counts '
+                                 f'{got!r}, {path} holds {want!r}')
+    return c
+
+
+def _summary_of(argv, out, where):
+    """The summary a comparison wrote to the file its argv's --summary-to
+    names; None where it was given none, or printed no report (refused).
+    A summary asked for and not written beside a printed report raises:
+    compare writes it before the report."""
+    argv = [str(x) for x in argv]
+    if '--summary-to' not in argv:
+        return None
+    if not any(ln.startswith('Old machine: ') for ln in out.split('\n')):
+        return None
+    path = argv[argv.index('--summary-to') + 1]
+    if not os.path.exists(path):
+        raise AssertionError(f'{where} printed a report and wrote no '
+                             f'summary to {path}')
+    with open(path, encoding='utf-8') as f:
+        return f.read()
+
+
 def held_main(main, stdout):
     """main() of locale_order.py, run in process with its stdout sent to
-    the StringIO `stdout`, under glibc_locale_data.WARNINGS_ENV: what it
-    printed and what it wrote of its `!!` agree (step11_written), on a
-    refusal too. Returns what main() returns."""
+    the StringIO `stdout`, under glibc_locale_data.WARNINGS_ENV and
+    locale_order.STEP11_DATA_ENV: what it printed and what it wrote of its
+    `!!` agree (step11_written), and so do its counts (step11_counts_held,
+    its summary read from the --summary-to of sys.argv), on a refusal too.
+    Returns what main() returns."""
     import tempfile
     from unittest import mock
     import glibc_locale_data as g
+    import locale_order
     start = len(stdout.getvalue())
+    argv = list(sys.argv)
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, 'w.jsonl')
-        with mock.patch.dict(os.environ, {g.WARNINGS_ENV: path}):
+        data = os.path.join(tmp, 'data.json')
+        with mock.patch.dict(os.environ, {g.WARNINGS_ENV: path,
+                                          locale_order.STEP11_DATA_ENV: data}):
             try:
                 rc = main()
             finally:
-                step11_written(stdout.getvalue()[start:], path, 'main()')
+                out = stdout.getvalue()[start:]
+                step11_written(out, path, 'main()')
+                step11_counts_held(out, _summary_of(argv, out, 'main()'),
+                                   data, 'main()')
     return rc
 
 
-def held_compare(argv, **kw):
+def held_compare(argv, *, counts_unread=None, **kw):
     """subprocess.run(argv, capture_output=True, **kw) of a
-    `locale_order.py --compare`, under glibc_locale_data.WARNINGS_ENV: what
-    it printed and what it wrote of its `!!` agree (step11_written), on a
-    refusal too. Returns the CompletedProcess."""
+    `locale_order.py --compare`, under glibc_locale_data.WARNINGS_ENV and
+    locale_order.STEP11_DATA_ENV: what it printed and what it wrote of its
+    `!!` agree (step11_written), and so do its counts (step11_counts_held,
+    with the summary of its --summary-to), on a refusal too.
+    COUNTS_UNREAD is why the readers cannot read its report
+    (step11_counts_held's unread). Returns the CompletedProcess."""
     import tempfile
     import glibc_locale_data as g
+    import locale_order
     env = dict(kw.pop('env', None) or os.environ)
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, 'w.jsonl')
+        data = os.path.join(tmp, 'data.json')
         env[g.WARNINGS_ENV] = path
+        env[locale_order.STEP11_DATA_ENV] = data
         p = subprocess.run(argv, capture_output=True, env=env, **kw)
         out = p.stdout
         if isinstance(out, bytes):
             out = out.decode('utf-8')
-        step11_written(out, path, ' '.join(map(str, argv)))
+        where = ' '.join(map(str, argv))
+        step11_written(out, path, where)
+        step11_counts_held(out, _summary_of(argv, out, where), data, where,
+                           unread=counts_unread)
     return p
 
 

@@ -515,6 +515,10 @@ ORDER_LOG="$OUT_DIR/measured_order.$PAIR.log"
 # so that one that printed none is told apart from one that never ran; an
 # earlier run's is removed with the steps' warnings files, above.
 STEP11_WARNINGS="$OUT_DIR/step11.$PAIR.warnings.jsonl"
+# Its counts as data (locale_order.STEP11_DATA_ENV), written once its
+# report is printed; removed below, so that one an earlier run left is
+# never this run's.
+STEP11_DATA="$OUT_DIR/step11.$PAIR.data.json"
 ORDER_SUMMARY="$OUT_DIR/measured_order_summary.$PAIR.txt"
 # Every character, other string and pair step 11 found, and every sequence
 # a changed sort table names; its report and summary name it.
@@ -530,7 +534,7 @@ VERDICTS="$OUT_DIR/measured_order_verdicts.$PAIR.json"
 CROSS="$OUT_DIR/measured_order_rules.$PAIR.txt"
 CROSS_LOG="$OUT_DIR/measured_order_rules.$PAIR.log"
 rm -f "$ORDER_LOG" "$ORDER_SUMMARY" "$ORDER_CHARACTERS" \
-      "$VERDICTS" "$CROSS" "$CROSS_LOG"
+      "$VERDICTS" "$CROSS" "$CROSS_LOG" "$STEP11_DATA" "$STEP11_DATA.partial"
 # This pair's SQL files, by the rule step 11 writes them with: not
 # "$ORDER_SQL".*.sql, which also took those of another pair of the same old
 # side whose new side is this one's with ".N" after it, as builds are named
@@ -539,6 +543,7 @@ python3 "$SCRIPTS/locale_order.py" --remove-sql "$ORDER_SQL"
 if [ -n "$OLD_ORDER" ]; then
   : > "$STEP11_WARNINGS"
   if ! PG_GLIBC_AUDIT_WARNINGS="$STEP11_WARNINGS" \
+       PG_GLIBC_AUDIT_STEP11_DATA="$STEP11_DATA" \
        python3 "$SCRIPTS/locale_order.py" --compare "$OLD_ORDER" "$NEW_ORDER" \
        --tags "$OLD_TAG" "$NEW_TAG" --summary-to "$ORDER_SUMMARY" \
        --characters-to "$ORDER_CHARACTERS" --sql-to "$ORDER_SQL" \

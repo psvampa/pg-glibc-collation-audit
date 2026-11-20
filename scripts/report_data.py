@@ -7,12 +7,13 @@ Every section is always there. What a run did not do is a state with its
 reason, never an absent key or a null, so that a reader cannot take "this
 was not looked at" for "nothing was found". What the steps hold today
 only inside a sentence (step 2's totals and character sets, step 11's
-counts and findings, the provenance of each side) is 'not yet
-reported': a later step of the work turns each one into data (branch
-24 of the plan). The `!!` notices of steps 0, 1, 2 and 11
+findings, the provenance of each side) is 'not yet reported': a later
+step of the work turns each one into data (branch 24 of the plan).
+The `!!` notices of steps 0, 1, 2 and 11
 are data: a file beside each step's log holds them (step 0's copied
 there by audit.sh, step 11's step11.<pair>.warnings.jsonl), and KINDS
-gives each kind its list and its short title.
+gives each kind its list and its short title. Step 11's counts are
+data too: step11.<pair>.data.json.
 
 load() is the strict reader: a key missing or added, or a state outside
 its list, is an error, never a default.
@@ -327,6 +328,9 @@ def step11_section(a, by_name):
                 and got[0] in VERDICTS):
             raise ReportError(f'{vpath}: {name} has the verdict {got!r}')
         verdicts[name] = {'verdict': got[0], 'words': got[1]}
+    dpath = _file(d, f'step11.{a.pair}.data.json')
+    counts = (step11_counts(dpath) if os.path.isfile(dpath)
+              else not_reported(dpath))
     cpath = _file(d, f'measured_order_characters.{a.pair}.tsv')
     if os.path.isfile(cpath):
         head, rows, tail = tsv_rows(cpath, CHARACTER_COLUMNS)
@@ -378,9 +382,28 @@ def step11_section(a, by_name):
         'characters': characters,
         'sql_files': sql_files,
         'rules_beside': beside,
-        'counts': NOT_YET,
+        'counts': counts,
         'findings': NOT_YET,
     }
+
+
+# The counts step 11 writes (locale_order.step11_counts), beside the state.
+COUNT_KEYS = ['changed', 'unchanged', 'unchanged_as_far_as_measured',
+              'not_measured', 'refused', 'only_old', 'only_new']
+
+
+def step11_counts(path):
+    """The counts step 11 wrote to PATH (locale_order.write_counts), as a
+    block of the report: load() checks every one of them."""
+    try:
+        got = json.loads(_read(path))
+    except ValueError as e:
+        raise ReportError(f'{path} is not what step 11 writes: {e}')
+    if not (isinstance(got, dict) and set(got) == {'step', 'counts'}
+            and got['step'] == 11 and isinstance(got['counts'], dict)
+            and 'state' not in got['counts']):
+        raise ReportError(f'{path} is not what step 11 writes')
+    return {'state': 'reported', **got['counts']}
 
 
 # ---------------------------------------------------------------- warnings
@@ -1502,7 +1525,46 @@ def load(path):
             if rb['measurements'] != o['measurements']:
                 raise ReportError('step 2 and step 11 are of different '
                                   'measurements')
-        _not_yet(f'{where}.counts', o['counts'])
+        def counts(w, c):
+            # Every count, each machine's, and that they add up as the
+            # report's line of totals says and as the verdicts above
+            # count them: a count that does not add up, or that the
+            # verdicts of the same run count otherwise, is refused here.
+            _keys(w, c, ['state', 'machines', *COUNT_KEYS])
+            _keys(f'{w}.machines', c['machines'], ['old', 'new'])
+            for side, m in c['machines'].items():
+                _keys(f'{w}.machines.{side}', m, ['label', 'locales'])
+                if not (_is_str(m['label']) and _is_count(m['locales'])):
+                    raise ReportError(f'{w}.machines.{side} is {m!r}')
+            for k in COUNT_KEYS:
+                if not _is_count(c[k]):
+                    raise ReportError(f'{w}.{k} is {c[k]!r}')
+            old = c['machines']['old']['locales']
+            new = c['machines']['new']['locales']
+            if old != (c['changed'] + c['unchanged'] + c['not_measured']
+                       + c['refused'] + c['only_old']):
+                raise ReportError(f"{w}: the old machine's {old} locale(s) "
+                                  'are not the sum of its counts')
+            if new != old - c['only_old'] + c['only_new']:
+                raise ReportError(f"{w}: the new machine's {new} locale(s) "
+                                  'are not the old ones less those only on '
+                                  'the old and more those only on the new')
+            tally = {v: 0 for v in VERDICTS}
+            for x in o['verdicts'].values():
+                tally[x['verdict']] += 1
+            told = {'changed': tally['changed'],
+                    'unchanged': tally['firm'] + tally['far'],
+                    'unchanged_as_far_as_measured': tally['far'],
+                    'not_measured': tally['unmeasured'],
+                    'refused': tally['refused'],
+                    'only_old': tally['only old'],
+                    'only_new': tally['only new']}
+            wrong = {k: (c[k], v) for k, v in told.items() if c[k] != v}
+            if wrong:
+                raise ReportError(f'{w} and {where}.verdicts count '
+                                  f'otherwise: {wrong}')
+        _stated(f'{where}.counts', o['counts'], ('reported', 'not reported'),
+                {'reported': counts, **nr})
         _not_yet(f'{where}.findings', o['findings'])
     _stated('step11', r['step11'], ('not run', 'reported', 'not reported'),
             {'not run': s11_not_run, 'reported': s11, **nr})

@@ -9856,7 +9856,7 @@ def sql_lines(prefix, files, not_checked, also=lambda names: None):
     return out
 
 
-def summary_lines(old, new, groups, run, totals, characters_to=None,
+def summary_lines(counts, groups, run, totals, o, n, characters_to=None,
                   note=None, only_new=()):
     """The report in brief, for the summary audit.sh prints at the end.
 
@@ -9869,16 +9869,17 @@ def summary_lines(old, new, groups, run, totals, characters_to=None,
     A locale only on the new machine is named too, with why it changes
     nothing made on the old machine (16.143), on a line of its own: never
     under "NOT known to be unchanged" nor under "sort differently".
+    The machines and the counts are compare's (step11_counts); O and N
+    are the two machines' locales.
     """
-    o, n = old['locales'], new['locales']
-    out = [f'   ({machine_label(old)} -> {machine_label(new)})']
+    m = counts['machines']
+    out = [f'   ({m["old"]["label"]} -> {m["new"]["label"]})']
     out += run('warning')
     out += run('tables disagree')
     out += run('control')
     out += run('postgres libc above')
-    count = sum(len(names) for names, brief in groups)
     if groups:
-        out.append(f'     {count} locale(s) sort differently:')
+        out.append(f'     {counts["changed"]} locale(s) sort differently:')
         for names, brief in groups:
             # Wrapped at the same indent, as in the report, so that where the
             # names end and what moved begins is plain.
@@ -9895,8 +9896,7 @@ def summary_lines(old, new, groups, run, totals, characters_to=None,
             out += wrapped(note, 7, 7)
     else:
         out.append('     no locale measured on both machines sorts differently')
-    unknown = (run.count('refused') + run.count('not measured')
-               + run.count('not on the new machine'))
+    unknown = counts['refused'] + counts['not_measured'] + counts['only_old']
     if unknown:
         out.append(f'     NOT known to be unchanged: {unknown} locale(s)')
     out += run('refused')
@@ -9908,7 +9908,7 @@ def summary_lines(old, new, groups, run, totals, characters_to=None,
         # (dbcommands.c:397-405@REL_13_23), a database opens only where it
         # does (postinit.c:399-411), and CREATE COLLATION loads it
         # (collationcmds.c:256-261).
-        out += wrapped(f'Only on the new machine: {len(only_new)} locale(s), '
+        out += wrapped(f'Only on the new machine: {counts["only_new"]} locale(s), '
                        'which nothing made on the old machine uses: '
                        + ', '.join(shown(name) for name in only_new), 5, 7)
     out += run('tables not compared')
@@ -10479,6 +10479,60 @@ def verdicts_by_name(changed, same, firm, unmeasured, refused, only_old,
     return out
 
 
+def step11_counts(old, new, changed, same, far, unmeasured, refused,
+                  only_old, only_new):
+    """How many locales each machine holds, and how many fall under each of
+    compare()'s lists: the counts of the report's header, of its CHANGED,
+    Unchanged and Only on the new machine lines and of its line of totals;
+    of the summary's machines, sort differently, NOT known, Only on the new
+    machine and totals lines (summary_lines); and the data write_counts
+    writes. FAR is how many of SAME are unchanged only as far as step 11
+    measured them (their sort table did not decide)."""
+    return {'machines': {side: {'label': machine_label(d),
+                                'locales': len(d['locales'])}
+                         for side, d in (('old', old), ('new', new))},
+            'changed': len(changed), 'unchanged': len(same),
+            'unchanged_as_far_as_measured': far,
+            'not_measured': len(unmeasured), 'refused': len(refused),
+            'only_old': len(only_old), 'only_new': len(only_new)}
+
+
+def totals_text(c):
+    """The line of totals the report and the summary print, from the
+    counts of step11_counts."""
+    far = c['unchanged_as_far_as_measured']
+    in_part = f' ({far} of them only as far as measured)' if far else ''
+    in_refused = (f'{c["refused"]} refused by glibc, ' if c['refused']
+                  else '')
+    return (f'Of the {c["machines"]["old"]["locales"]} locale(s) on the old '
+            f'machine: {c["changed"]} changed, {c["unchanged"]} '
+            f'unchanged{in_part}, {c["not_measured"]} not measured, '
+            f'{in_refused}{c["only_old"]} not on the new machine.')
+
+
+# The file compare() writes its counts to, once its report is printed, for
+# the run's data file (scripts/report_data.py); unset, nothing is written.
+STEP11_DATA_ENV = 'PG_GLIBC_AUDIT_STEP11_DATA'
+
+
+def write_counts(counts):
+    """Write COUNTS to the file STEP11_DATA_ENV names, as {'step': 11,
+    'counts': ...}: first under another name, then given its own, so that
+    a file cut short is never there under it. A file that cannot be
+    written ends the comparison: counts printed and not written would be
+    a report the data file says nothing of."""
+    path = os.environ.get(STEP11_DATA_ENV)
+    if not path:
+        return
+    try:
+        with open(path + '.partial', 'w', encoding='utf-8') as f:
+            json.dump({'step': 11, 'counts': counts}, f, sort_keys=True)
+            f.write('\n')
+        os.replace(path + '.partial', path)
+    except OSError as e:
+        die(f'cannot write {path}: {e}')
+
+
 RULES_LEAD = ('Each locale of the old machine step 11 names, beside its '
               'rules (step 2):')
 RULES_NONE = ('No locale of the old machine gets a line beside its rules '
@@ -10647,7 +10701,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
             remove_sql(sql_to)
         except OSError as e:
             die(f'cannot write {sql_to}.*.sql: {e}')
-    for path in (characters_to, verdicts_to):
+    for path in (characters_to, verdicts_to,
+                 os.environ.get(STEP11_DATA_ENV)):
         # An earlier run's file under this name would read as this run's
         # answer if this one is refused or gives up: it goes first.
         if not path:
@@ -10851,11 +10906,14 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     verdicts = verdicts_by_name(changed, same, firm, unmeasured, refused,
                                 only_old, only_new, table_found,
                                 {x for x, r in routes.items() if r == 'bytes'})
-    in_part = f' ({far} of them only as far as measured)' if far else ''
-    in_refused = f'{len(refused)} refused by glibc, ' if refused else ''
-    totals = (f'Of the {len(o)} locale(s) on the old machine: {len(changed)} '
-              f'changed, {len(same)} unchanged{in_part}, {len(unmeasured)} not '
-              f'measured, {in_refused}{len(only_old)} not on the new machine.')
+    # How many locales of each machine fall under each verdict: the report's
+    # header, its CHANGED, Unchanged and Only on the new machine lines and
+    # its line of totals, and the summary's machines, sort differently, NOT
+    # known, Only on the new machine and totals lines, are printed from it,
+    # and it is written as data once the report is printed (write_counts).
+    counts = step11_counts(old, new, changed, same, far, unmeasured, refused,
+                           only_old, only_new)
+    totals = totals_text(counts)
     # (text, wrapped in the report, kind, data: report_warnings)
     warnings = []
     if direction == 'same':
@@ -10909,14 +10967,14 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
                          refused, beside, closing_text(same, firm, by_tables))
     ctx = {'pg_names': pg_names, 'o': o, 'characters_to': characters_to}
 
-    report = [f'Old machine: {machine_label(old)}, {len(old["locales"])} locale(s)',
-              f'New machine: {machine_label(new)}, {len(new["locales"])} locale(s)']
+    report = [f'{side.capitalize()} machine: {m["label"]}, {m["locales"]} '
+              'locale(s)' for side, m in counts['machines'].items()]
     run = Drawn(found, REPORT, ctx)
     report += run('warning')
     report += run('tables disagree')
     report += run('control')
     report += run('postgres libc above')
-    report += ['', f'Sort order CHANGED in {len(changed)} locale(s):']
+    report += ['', f'Sort order CHANGED in {counts["changed"]} locale(s):']
     for lines, names in groups:
         report += ['', filled(heading(names, o, n), 2, 2)]
         also = also_known_as(names, pg_names, o)
@@ -10938,7 +10996,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
         report += [''] + sql_lines(
             sql_to, sql_files, sql_not_checked,
             lambda names: also_of_written(names, pg_names, o))
-    report += ['', f'Unchanged: {len(same)} locale(s).']
+    report += ['', f'Unchanged: {counts["unchanged"]} locale(s).']
     report += run('tables only')
     report += run('tables not compared')
     report += run('partly')
@@ -10947,7 +11005,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     report += run('refused')
     report += run('not measured')
     report += run('not on the new machine')
-    report.append(f'Only on the new machine: {len(only_new)} locale(s).')
+    report.append(f'Only on the new machine: {counts["only_new"]} locale(s).')
     report += [f'  {shown(name)}' for name in only_new]
     report += ['', filled(totals, 0, 3)]
     report += run('money')
@@ -10967,8 +11025,8 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     brief = None
     if summary_to:
         brief = summary_lines(
-            old, new, [(names, briefs[lines]) for lines, names in groups],
-            Drawn(found, SUMMARY, ctx), totals, characters_to, note,
+            counts, [(names, briefs[lines]) for lines, names in groups],
+            Drawn(found, SUMMARY, ctx), totals, o, n, characters_to, note,
             only_new)
     file_notes = []
     if characters_to:
@@ -11093,6 +11151,7 @@ def compare(old_path, new_path, tags=None, summary_to=None, characters_to=None,
     for line in report:
         print(line)
     report_warnings(blocks, g)
+    write_counts(counts)
     return 0
 
 
